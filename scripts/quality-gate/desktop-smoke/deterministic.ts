@@ -2,6 +2,7 @@ import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileS
 import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { runDesktopUiTeamPlanSmoke, TEAM_SMOKE_MODEL, TEAM_SMOKE_PROVIDER } from './team-plan'
 import { buildMockToolPrompt } from '../agent-flow/scenarios'
 import { applyUserStateGuard, createQualityGateSandbox } from '../sandbox'
 import type { LaneResult } from '../types'
@@ -89,8 +90,11 @@ export function seedDesktopUiSmokeProvider(configDir: string) {
         sonnet: SMOKE_MODEL_ID,
         opus: SMOKE_MODEL_ID,
       },
+    }, {
+      id: TEAM_SMOKE_PROVIDER, presetId: 'custom', name: 'Economy UI Smoke (isolated)', apiKey: 'fake-economy-key', baseUrl: 'http://127.0.0.1:2', apiFormat: 'anthropic',
+      models: { main: TEAM_SMOKE_MODEL, haiku: TEAM_SMOKE_MODEL, sonnet: TEAM_SMOKE_MODEL, opus: TEAM_SMOKE_MODEL },
     }],
-    providerOrder: ['claude-official', 'openai-official', 'grok-official', SMOKE_PROVIDER_ID],
+    providerOrder: ['claude-official', 'openai-official', 'grok-official', SMOKE_PROVIDER_ID, TEAM_SMOKE_PROVIDER],
   }, null, 2) + '\n')
 }
 
@@ -177,6 +181,7 @@ export async function executeDeterministicDesktopSmoke(
     envOverrides: {
       CLAUDE_CLI_PATH: resolve(rootDir, MOCK_CLI),
       CC_HAHA_DISABLE_TERMINAL_SHELL_ENV: '1',
+      MOCK_SDK_TEAM_WORKER_AUDIT: join(workRoot, 'team-worker-audit.jsonl'),
     },
   })
   seedDesktopUiSmokeProvider(sandbox.configDir)
@@ -272,6 +277,8 @@ export async function executeDeterministicDesktopSmoke(
       throw new Error(`the UI never rendered the tool call for ${TARGET_FILE}`)
     }
     await browserStep(['screenshot', join(artifactDir, 'final.png')], { allowFailure: true })
+
+    await runDesktopUiTeamPlanSmoke({ configDir: sandbox.configDir, sessionId: session.sessionId, projectDir, baseUrl, artifactDir, auditPath: join(workRoot, 'team-worker-audit.jsonl'), browserStep })
 
     return applyUserStateGuard({
       id: resultId,

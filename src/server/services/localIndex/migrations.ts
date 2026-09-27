@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
 
-export const LOCAL_INDEX_SCHEMA_VERSION = 5
+export const LOCAL_INDEX_SCHEMA_VERSION = 6
 export const LOCAL_INDEX_SCHEMA_UNSUPPORTED =
   'LOCAL_INDEX_SCHEMA_UNSUPPORTED' as const
 
@@ -188,12 +188,19 @@ const SCHEMA_V5 = `
 ALTER TABLE sessions ADD COLUMN session_api_format TEXT;
 `
 
+// Hide independently persisted team workers from the task sidebar without
+// removing their transcript lookup or entry locators. Older sessions remain visible.
+const SCHEMA_V6 = `
+ALTER TABLE sessions ADD COLUMN is_team_worker INTEGER NOT NULL DEFAULT 0 CHECK (is_team_worker IN (0, 1));
+`
+
 const MIGRATIONS = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
   { version: 3, sql: SCHEMA_V3 },
   { version: 4, sql: SCHEMA_V4 },
   { version: 5, sql: SCHEMA_V5 },
+  { version: 6, sql: SCHEMA_V6 },
 ] as const
 
 export class UnsupportedLocalIndexSchemaError extends Error {

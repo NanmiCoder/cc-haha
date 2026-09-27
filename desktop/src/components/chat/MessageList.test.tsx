@@ -1,3 +1,4 @@
+import { openSideChat } from '@/lib/workspace/openSideChat'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import {
@@ -21,19 +22,28 @@ import {
 } from './virtualHeightCache'
 import { relativizeWorkspacePath } from './CurrentTurnChangeCard'
 import { sessionsApi } from '../../api/sessions'
+import { ApiError } from '../../api/client'
+import { subagentsApi, type SubagentRunResponse } from '../../api/subagents'
 import { teamsApi } from '../../api/teams'
+import { resetAgentRunActivityCache } from './useAgentRunActivity'
 import { useChatStore } from '../../stores/chatStore'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { initializeChatAppearance, useChatAppearanceStore } from '../../stores/chatAppearanceStore'
+import { CHAT_APPEARANCE_STORAGE_KEY } from '../../lib/chatAppearance'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTeamStore } from '../../stores/teamStore'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
 import type { UIMessage } from '../../types/chat'
+import type { MessageEntry } from '../../types/session'
 import type { PerSessionState } from '../../stores/chatStore'
 import { FindInPageModal } from '../search/FindInPageModal'
+import { getConversationFindController } from '../search/conversationFindBridge'
+
+vi.mock('@/lib/workspace/openSideChat', () => ({ openSideChat: vi.fn(async () => 'tab-side') }))
 
 const ACTIVE_TAB = 'active-tab'
 
@@ -50,6 +60,8 @@ function makeSessionState(overrides: Partial<PerSessionState> = {}): PerSessionS
     messages: [],
     chatState: 'idle',
     connectionState: 'connected',
+    historyStatus: 'ready',
+    historyHydrated: true,
     streamingText: '',
     streamingToolInput: '',
     activeToolUseId: null,
@@ -335,6 +347,57 @@ describe('MessageList nested tool calls', () => {
     vi.useRealTimers()
   })
 
+  it('does not load checkpoints from stale cached rows before history hydration completes', async () => {
+    const messages: UIMessage[] = [
+      { id: 'cached-user', type: 'user_text', content: 'Cached prompt', timestamp: 1 },
+      { id: 'cached-reply', type: 'assistant_text', content: 'Cached reply', timestamp: 2 },
+    ]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
+      messages, historyStatus: 'idle', historyHydrated: false,
+    }) } })
+    render(<MessageList />)
+    expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
+      messages, historyStatus: 'loading', historyHydrated: false,
+    }) } }))
+    expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
+      messages, historyStatus: 'ready', historyHydrated: false,
+    }) } }))
+    expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
+    const partialPage = { nextCursor: 'older', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 }
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
+      messages, historyStatus: 'ready', historyHydrated: true, historyPage: partialPage,
+    }) } }))
+    await waitFor(() => expect(sessionsApi.getTurnCheckpoints).toHaveBeenCalledTimes(1))
+  })
+
+
+
+  it('mounts older history ahead of the live rows only when the user asks for it', async () => {
+    const page = { nextCursor: 'older-cursor', hasMore: true, historyComplete: false, sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 }
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ historyWindowed: true, historyPage: page, messages: [{ id: 'live', type: 'assistant_text', content: 'current live message', timestamp: 1 }] }) } })
+    const getPage = vi.spyOn(sessionsApi, 'getHistoryPage')
+      .mockResolvedValueOnce({ messages: [{ id: 'old', type: 'assistant', content: 'older page message', timestamp: '2020-01-01T00:00:00Z' }], page: { ...page, nextCursor: null, hasMore: false, historyComplete: true } })
+    render(<MessageList />)
+    expect(screen.queryByText('older page message')).toBeNull()
+    expect(getPage).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }))
+    expect(await screen.findByText('older page message')).toBeTruthy()
+    expect(getPage).toHaveBeenCalledWith(ACTIVE_TAB, { cursor: 'older-cursor' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(useChatStore.getState().sessions[ACTIVE_TAB]?.messages.map((message) => message.id)).toEqual(['old', 'live'])
+  })
+
+
+  it('does not render internal recovery state as a history banner', () => {
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ historyWindowed: true, historyRecoveryStatus: 'incomplete' }) } })
+    render(<MessageList />)
+    expect(screen.queryByTestId('history-window-notice')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Latest messages' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Load undo checkpoints' })).toBeNull()
+    expect(screen.queryByText(/Session state recovery/)).toBeNull()
+  })
+
   it('windows long transcripts instead of mounting every historical message at once', () => {
     useChatStore.setState({
       sessions: {
@@ -507,6 +570,71 @@ describe('MessageList nested tool calls', () => {
     expect(assistant!.querySelectorAll('img[alt="图B"]')).toHaveLength(1)
     expect(assistant!.querySelectorAll('img[alt="图C"]')).toHaveLength(1)
     expect(assistant!.querySelector('img[alt="remote"], img[alt="loopback"]')).toBeNull()
+  })
+
+  it('measures newly mounted virtual rows before waiting for ResizeObserver delivery', () => {
+    const sessionId = 'initial-virtual-measurement'
+    dropSession(sessionId)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: 0, bottom: 180, width: 800, height: this.hasAttribute('data-virtual-message-item') ? 180 : 0 } as DOMRect
+    })
+    useChatStore.setState({ sessions: { [sessionId]: makeSessionState({
+      messages: Array.from({ length: 220 }, (_, index) => ({
+        id: `initial-measure-${index}`, type: 'assistant_text' as const,
+        content: `transcript line ${index}`, timestamp: index,
+      })),
+    }) } })
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const rows = Array.from(container.querySelectorAll<HTMLElement>('[data-virtual-message-item]'))
+    expect(rows.length).toBeGreaterThan(0)
+    for (const row of rows) expect(getHeightsForSession(sessionId).get(row.dataset.virtualMessageItem!)).toBe(180)
+    dropSession(sessionId)
+  })
+
+  it.each(['local', 'other window'])('retains the reading row and invalidates measurements after a font change from %s', async (source) => {
+    const sessionId = 'appearance-anchor'
+    dropSession(sessionId)
+    useChatAppearanceStore.setState({ appearance: { font: 'system', fontSize: 14, width: 'standard' } })
+    localStorage.setItem(CHAT_APPEARANCE_STORAGE_KEY, JSON.stringify({ version: 1, font: 'system', fontSize: 14, width: 'standard' }))
+    const dispose = initializeChatAppearance()
+    let rowHeight = 100
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: 0, bottom: rowHeight, width: 800, height: this.hasAttribute('data-virtual-message-item') ? rowHeight : 0 } as DOMRect
+    })
+    useChatStore.setState({ sessions: { [sessionId]: makeSessionState({
+      messages: Array.from({ length: 220 }, (_, index) => ({
+        id: `appearance-row-${index}`, type: 'assistant_text' as const,
+        content: `transcript line ${index}`, timestamp: index,
+      })),
+    }) } })
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector<HTMLElement>('.chat-scroll-area')!
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 22000 })
+    await waitForProgrammaticScrollReset()
+    fireEvent.wheel(scroller, { deltaY: -100 })
+    scroller.scrollTop = 0
+    fireEvent.scroll(scroller)
+    scroller.scrollTop = 150
+    fireEvent.scroll(scroller)
+    expect(container.querySelector('[data-virtual-message-item="appearance-row-1"]')).not.toBeNull()
+    getHeightsForSession(sessionId).set('appearance-row-100', 987)
+    rowHeight = 200
+    act(() => {
+      if (source === 'local') useChatAppearanceStore.getState().setAppearance({ fontSize: 24 })
+      else {
+        localStorage.setItem(CHAT_APPEARANCE_STORAGE_KEY, JSON.stringify({ version: 1, fontSize: 24 }))
+        window.dispatchEvent(new StorageEvent('storage', { key: CHAT_APPEARANCE_STORAGE_KEY, storageArea: localStorage }))
+      }
+    })
+    // Row 1 remains the reading anchor, 50px below its top, despite row 0 growing.
+    expect(scroller.scrollTop).toBe(250)
+    expect(getHeightsForSession(sessionId).has('appearance-row-100')).toBe(false)
+    expect(getHeightsForSession(sessionId).get('appearance-row-1')).toBe(200)
+    act(() => useChatAppearanceStore.setState({ appearance: { font: 'system', fontSize: 14, width: 'standard' } }))
+    dispose()
+    localStorage.removeItem(CHAT_APPEARANCE_STORAGE_KEY)
+    dropSession(sessionId)
   })
 
   it('keeps fractional border-box jitter from invalidating a settled virtual row', async () => {
@@ -1008,6 +1136,59 @@ describe('MessageList nested tool calls', () => {
     ))).toBe(true)
   })
 
+  it.each(['navigator', 'find', 'workspace'] as const)('replaces an existing reading anchor during %s navigation', async (entry) => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => { frames.push(callback); return frames.length }))
+    const frame = async (time: number) => {
+      const scheduled = frames.splice(0)
+      await act(async () => { scheduled.forEach((callback) => callback(time)); await Promise.resolve() })
+    }
+    let scroller: HTMLElement | null = null
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const key = this.dataset.chatRenderItemKey
+      const top = key?.startsWith('navigation-anchor-') ? Number(key.split('-').at(-1)) * 200 - (scroller?.scrollTop ?? 0) : 0
+      const height = key ? 200 : 300
+      return { top, bottom: top + height, height, left: 0, right: 900, width: 900 } as DOMRect
+    })
+    const messages: UIMessage[] = Array.from({ length: 10 }, (_, index) => ({
+      id: `navigation-anchor-${index}`, type: 'user_text', content: `Unique prompt ${index}`, timestamp: index,
+    }))
+    const getPage = vi.spyOn(sessionsApi, 'getHistoryPage').mockImplementation(() => new Promise(() => {}))
+    const historyPage = { nextCursor: 'older-navigation', previousCursor: null, hasMore: true, historyComplete: false, sourceVersion: 'nav', scannedBytes: 10, omittedOversizedEntries: 0 }
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages, historyPage }) } })
+    const { container } = render(<MessageList />)
+    scroller = container.querySelector<HTMLElement>('.chat-scroll-area')!
+    Object.defineProperties(scroller, { clientHeight: { configurable: true, value: 300 }, scrollHeight: { configurable: true, value: 2000 } })
+    await frame(0)
+    act(() => { scroller!.scrollTop = 800; fireEvent.wheel(scroller!, { deltaY: -1 }); fireEvent.scroll(scroller!) })
+    await frame(16)
+    const original = container.querySelector<HTMLElement>('[data-chat-render-item-key="navigation-anchor-4"]')!
+    expect(original.getBoundingClientRect().top).toBe(0)
+    const target = container.querySelector<HTMLElement>('[data-chat-render-item-key="navigation-anchor-0"]')!
+    const opener = target.querySelector<HTMLButtonElement>('[aria-label="Copy prompt"]')!
+    opener.id = 'navigation-anchor-opener'
+    Object.defineProperty(target, 'scrollIntoView', { value: () => { scroller!.scrollTop = 0 } })
+    await act(async () => {
+      if (entry === 'navigator') fireEvent.click(screen.getByRole('button', { name: /Turn 1 of 10: Unique prompt 0/ }))
+      else if (entry === 'find') getConversationFindController()!.search('Unique prompt 0')
+      else {
+        useWorkspaceStore.getState().openTarget(ACTIVE_TAB, { kind: 'file', path: 'a.ts' })
+        useWorkspaceStore.getState().setOrigin(ACTIVE_TAB, { sourceTurnKey: 'navigation-anchor-0', sourceElementId: opener.id })
+        useWorkspaceStore.getState().setLayout(ACTIVE_TAB, 'hidden')
+      }
+      await Promise.resolve()
+    })
+    await frame(32)
+    await frame(48)
+    expect(scroller.scrollTop).toBe(0)
+    expect(target.getBoundingClientRect().top).toBe(0)
+    if (entry === 'workspace') expect(document.activeElement).toBe(opener)
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: { ...useChatStore.getState().sessions[ACTIVE_TAB]!, statusVerb: 'updated' } } }))
+    await frame(64)
+    expect(scroller.scrollTop).toBe(0)
+    expect(getPage).not.toHaveBeenCalled()
+  })
+
   it('mounts and highlights a far virtualized message selected from the navigator', async () => {
     const messages: UIMessage[] = Array.from({ length: 220 }, (_, index) => ({
       id: `${index % 2 === 0 ? 'user' : 'assistant'}-${index}`,
@@ -1203,6 +1384,29 @@ describe('MessageList nested tool calls', () => {
         toolUseId: 'active-tool',
       },
     })
+  })
+
+  // A question the user has already spoken past cannot still be waiting on a live
+  // permission request, so the card has to read as history even while the new turn
+  // it was superseded by is still running.
+  it('marks an unresolved AskUserQuestion superseded once a user message follows it', () => {
+    const askMessage = (toolUseId: string, timestamp: number): UIMessage => ({
+      id: `ask-${toolUseId}`,
+      type: 'tool_use',
+      toolName: 'AskUserQuestion',
+      toolUseId,
+      input: { questions: [{ question: 'Which scope?', options: [{ label: 'A' }, { label: 'B' }] }] },
+      timestamp,
+    })
+
+    const { supersededAskUserQuestionIds } = buildRenderModel([
+      askMessage('abandoned-tool', 1),
+      { id: 'user-1', type: 'user_text', content: 'never mind, do it this way', timestamp: 2 },
+      askMessage('latest-tool', 3),
+    ])
+
+    expect(supersededAskUserQuestionIds.has('abandoned-tool')).toBe(true)
+    expect(supersededAskUserQuestionIds.has('latest-tool')).toBe(false)
   })
 
   it('keeps resolved AskUserQuestion history visible when filtering active duplicates', () => {
@@ -2355,6 +2559,27 @@ describe('MessageList nested tool calls', () => {
     expect(group.querySelector('.thinking-dots')).toBeNull()
   })
 
+  it('keeps an expanded tool group mounted when older and newer pages extend it', () => {
+    const tool = (index: number): UIMessage => ({
+      id: `group-page-${index}`, type: 'tool_use', toolUseId: `group-page-${index}`,
+      toolName: 'Read', input: { file_path: `/tmp/file-${index}` }, timestamp: index,
+    })
+    const messages = [tool(1), tool(2)]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages,  }) } })
+    render(<MessageList sessionId={ACTIVE_TAB} />)
+    const group = screen.getByTestId('activity-group')
+    fireEvent.click(group.querySelector('[data-chat-disclosure]')!)
+    expect(group.getAttribute('data-expanded')).toBe('true')
+    const row = group.querySelector('[data-chat-anchor-id="group-page-1"]')
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [tool(0), ...messages],  }) } }))
+    expect(screen.getByTestId('activity-group')).toBe(group)
+    expect(group.getAttribute('data-expanded')).toBe('true')
+    expect(group.querySelector('[data-chat-anchor-id="group-page-1"]')).toBe(row)
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [tool(0), ...messages, tool(3)],  }) } }))
+    expect(screen.getByTestId('activity-group')).toBe(group)
+    expect(group.getAttribute('data-expanded')).toBe('true')
+  })
+
   it('summarizes repeated Edit events for one path as one changed file', () => {
     render(<MessageList sessionId={ACTIVE_TAB} />)
     const store = useChatStore.getState()
@@ -3421,6 +3646,21 @@ describe('MessageList nested tool calls', () => {
     expect(document.activeElement).not.toBe(copyButton)
   })
 
+  it('opens a side chat with a selected quote without adding it to the main composer', async () => {
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [{
+      id: 'assistant-side', type: 'assistant_text', content: 'Explain this isolated selection.', timestamp: 1,
+    }] }) } })
+    render(<MessageList />)
+    await selectMessageText(screen.getByText('Explain this isolated selection.'), 'isolated selection')
+    fireEvent.click(screen.getByRole('button', { name: 'Ask in side chat' }))
+    expect(openSideChat).toHaveBeenCalledWith(ACTIVE_TAB, { reference: {
+      kind: 'chat-selection', path: 'chat://assistant/assistant-side', name: 'Assistant message',
+      quote: 'isolated selection', sourceRole: 'assistant', messageId: 'assistant-side',
+    } })
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB] ?? []).toEqual([])
+    expect(window.getSelection()?.toString()).toBe('')
+  })
+
   it('adds selected user message text to the composer context', async () => {
     useChatStore.setState({
       sessions: {
@@ -3441,8 +3681,8 @@ describe('MessageList nested tool calls', () => {
     await selectMessageText(userText, 'workspace selection behavior')
     const floatingAddButton = screen.getByRole('button', { name: 'Add to chat' })
 
-    expect(floatingAddButton.style.left).toBe('141px')
-    expect(floatingAddButton.style.top).toBe('26px')
+    expect((floatingAddButton.closest('[role=toolbar]') as HTMLElement).style.left).toBe('40px')
+    expect((floatingAddButton.closest('[role=toolbar]') as HTMLElement).style.top).toBe('26px')
 
     fireEvent.click(floatingAddButton)
 
@@ -3627,8 +3867,8 @@ describe('MessageList nested tool calls', () => {
     })
     const floatingAddButton = screen.getByRole('button', { name: 'Add to chat' })
 
-    expect(floatingAddButton.style.left).toBe('290px')
-    expect(floatingAddButton.style.top).toBe('12px')
+    expect((floatingAddButton.closest('[role=toolbar]') as HTMLElement).style.left).toBe('290px')
+    expect((floatingAddButton.closest('[role=toolbar]') as HTMLElement).style.top).toBe('12px')
   })
 
   it('adds multi-line assistant reply selections across markdown blocks to the composer context', async () => {
@@ -3664,8 +3904,8 @@ describe('MessageList nested tool calls', () => {
     )
     const floatingAddButton = screen.getByRole('button', { name: 'Add to chat' })
 
-    expect(floatingAddButton.style.left).toBe('530px')
-    expect(floatingAddButton.style.top).toBe('129px')
+    expect((floatingAddButton.closest('[role=toolbar]') as HTMLElement).style.left).toBe('530px')
+    expect((floatingAddButton.closest('[role=toolbar]') as HTMLElement).style.top).toBe('129px')
 
     fireEvent.click(floatingAddButton)
 
@@ -5889,6 +6129,28 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByLabelText('Turn changed files')).toBeNull()
   })
 
+  it('does not show the checkpoint preview budget as a chat error', async () => {
+    vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockRejectedValue(new ApiError(413, {
+      error: 'HISTORY_CHECKPOINT_PREVIEW_LIMIT',
+      message: 'This transcript exceeds the full checkpoint preview budget. Chat history remains available in pages.',
+    }))
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
+      messages: [
+        { id: 'user-1', type: 'user_text', content: 'Continue the work', timestamp: 1 },
+        { id: 'assistant-1', type: 'assistant_text', content: 'Done', timestamp: 2 },
+      ],
+    }) } })
+
+    await act(async () => {
+      render(<MessageList />)
+      await Promise.resolve()
+    })
+
+    expect(sessionsApi.getTurnCheckpoints).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Done')).toBeTruthy()
+    expect(screen.queryByText(/This transcript exceeds the full checkpoint preview budget/)).toBeNull()
+  })
+
   it('renders multiple historical turn change cards across three turns', async () => {
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
       checkpoints: [
@@ -6079,6 +6341,26 @@ describe('MessageList nested tool calls', () => {
   })
 
   it('preserves the expanded change card through virtual unmount and returns to its file opener', async () => {
+    const frames = new Map<number, FrameRequestCallback>()
+    let nextFrameId = 0
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback: FrameRequestCallback) => {
+      const id = ++nextFrameId
+      frames.set(id, callback)
+      return id
+    }))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn((id: number) => frames.delete(id)))
+    const advanceFrame = async (time: number) => {
+      const scheduled = [...frames.keys()]
+      await act(async () => {
+        for (const id of scheduled) {
+          const callback = frames.get(id)
+          frames.delete(id)
+          callback?.(time)
+        }
+        await Promise.resolve()
+      })
+    }
+
     vi.mocked(sessionsApi.getTurnCheckpoints).mockResolvedValue({ checkpoints: [{
       target: { targetUserMessageId: 'user-virtual-file', userMessageIndex: 0, userMessageCount: 221 },
       code: { available: true, filesChanged: ['src/virtual.ts'], insertions: 1, deletions: 0 },
@@ -6100,7 +6382,7 @@ describe('MessageList nested tool calls', () => {
     const scrollArea = container.querySelector<HTMLElement>('.chat-scroll-area')!
     Object.defineProperty(scrollArea, 'clientHeight', { configurable: true, value: 500 })
     Object.defineProperty(scrollArea, 'scrollHeight', { configurable: true, value: 222 * 112 })
-    await waitForProgrammaticScrollReset()
+    await advanceFrame(0)
     scrollArea.scrollTop = 0
     fireEvent.scroll(scrollArea)
     fireEvent.click(await screen.findByRole('button', { name: 'Show 1 changed files' }))
@@ -6109,15 +6391,19 @@ describe('MessageList nested tool calls', () => {
     await waitFor(() => expect(useWorkspaceStore.getState().getSession(ACTIVE_TAB).origin)
       .toEqual({ sourceTurnKey: 'assistant-virtual-file', sourceElementId: opener.id }))
 
-    await waitForProgrammaticScrollReset()
+    await advanceFrame(16)
     scrollArea.scrollTop = 222 * 112 - 500
     fireEvent.scroll(scrollArea)
     await waitFor(() => expect(container.querySelector('[data-chat-render-item-key="assistant-virtual-file"]')).toBeNull())
     act(() => useWorkspaceStore.getState().setLayout(ACTIVE_TAB, 'hidden'))
 
-    const remountedOpener = await screen.findByRole('button', { name: 'Open src/virtual.ts in workspace' })
+    // The first frame remounts the virtual row; the next frame restores focus.
+    // Flush React between frames instead of racing real rAF against role queries.
+    await advanceFrame(32)
+    const remountedOpener = screen.getByRole('button', { name: 'Open src/virtual.ts in workspace' })
     expect(remountedOpener).not.toBe(opener)
-    await waitFor(() => expect(document.activeElement).toBe(remountedOpener))
+    await advanceFrame(48)
+    expect(document.activeElement).toBe(remountedOpener)
     expect(screen.getByRole('button', { name: 'Hide changed files' }).getAttribute('aria-expanded')).toBe('true')
     expect(useWorkspaceStore.getState().getSession(ACTIVE_TAB).origin).toBeNull()
   })
@@ -6786,7 +7072,8 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByText(`Session not found: ${subagentTabId}`)).toBeNull()
   })
 
-  it('confirms before rewinding to an earlier turn from a historical change card', async () => {
+  it('confirms rewind and restores the complete prompt', async () => {
+    const prompt = '做一个页面'
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
       checkpoints: [
         {
@@ -6853,6 +7140,9 @@ describe('MessageList nested tool calls', () => {
       })
     const reloadHistory = vi.fn().mockResolvedValue(undefined)
     const queueComposerPrefill = vi.fn()
+    const reviewTabId = useWorkspaceStore.getState().openTarget(ACTIVE_TAB, {
+      kind: 'review', source: { kind: 'turn', turnKey: 'user-1', userMessageIndex: 0 },
+    })!
 
     useChatStore.setState({
       reloadHistory,
@@ -6863,7 +7153,7 @@ describe('MessageList nested tool calls', () => {
             {
               id: 'user-1',
               type: 'user_text',
-              content: '做一个页面',
+              content: prompt,
               timestamp: 1,
             },
             {
@@ -6889,16 +7179,14 @@ describe('MessageList nested tool calls', () => {
       },
     })
 
+    const current = useChatStore.getState().sessions[ACTIVE_TAB]!
+    useChatStore.getState().applyBoundedUpdate(() => ({ sessions: { [ACTIVE_TAB]: { ...current, historyWindowed: false } } }))
     render(<MessageList />)
 
     await expandChangedFileCards()
     const historicalCard = (await screen.findByText('first.ts')).closest('section')
     expect(historicalCard).toBeTruthy()
-    fireEvent.click(
-      within(historicalCard as HTMLElement).getByRole('button', {
-        name: 'Rewind to before this turn',
-      }),
-    )
+    fireEvent.click(within(historicalCard as HTMLElement).getByRole('button', { name: 'Rewind to before this turn' }))
 
     expect(sessionsApi.rewind).not.toHaveBeenCalled()
     const dialog = await screen.findByRole('dialog', { name: 'Rewind to before this turn?' })
@@ -6914,13 +7202,14 @@ describe('MessageList nested tool calls', () => {
       expect(sessionsApi.rewind).toHaveBeenLastCalledWith(ACTIVE_TAB, {
         targetUserMessageId: 'user-1',
         userMessageIndex: 0,
-        expectedContent: '做一个页面',
+        expectedContent: prompt,
         mode: 'both',
       })
     })
     expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB)
+    expect(useWorkspaceStore.getState().getTab(ACTIVE_TAB, reviewTabId)).toBeNull()
     expect(queueComposerPrefill).toHaveBeenCalledWith(ACTIVE_TAB, {
-      text: '做一个页面',
+      text: prompt,
       attachments: undefined,
     })
   })
@@ -7127,7 +7416,7 @@ describe('MessageList nested tool calls', () => {
       unverifiedChangeSources: [],
       mode: 'conversation',
     })
-    vi.spyOn(sessionsApi, 'getMessages').mockResolvedValue({
+    vi.spyOn(sessionsApi, 'getFullHistory').mockResolvedValue({
       messages: [
         {
           id: 'transcript-user-first',
@@ -7770,19 +8059,22 @@ describe('MessageList nested tool calls', () => {
       await Promise.resolve()
     })
 
-    await act(async () => {
-      frames.shift()?.(0)
-      await Promise.resolve()
-    })
+    // A browser runs all callbacks registered for a frame. Paging/layout
+    // callbacks share the frame; callbacks they register belong to the next one.
+    const advanceFrame = async (time: number) => {
+      const scheduled = frames.splice(0)
+      await act(async () => {
+        scheduled.forEach((callback) => callback(time))
+        await Promise.resolve()
+      })
+    }
+    await advanceFrame(0)
     const restoredItem = container.querySelector<HTMLElement>('[data-chat-render-item-key="virtual-origin-0"]')
     expect(restoredItem).not.toBeNull()
     const opener = restoredItem!.querySelector<HTMLButtonElement>('[aria-label="Copy prompt"]')!
     opener.id = 'virtual-origin-opener'
 
-    await act(async () => {
-      frames.shift()?.(16)
-      await Promise.resolve()
-    })
+    await advanceFrame(16)
 
     expect(document.activeElement).toBe(opener)
     expect(useWorkspaceStore.getState().getSession(ACTIVE_TAB).origin).toBeNull()
@@ -8841,5 +9133,203 @@ describe('Agent Teams chat projection', () => {
       title: 'reused-team',
       teamLeadSessionId: ACTIVE_TAB,
     }))
+  })
+})
+
+describe('MessageList agent card activity', () => {
+  const AGENT_TOOL_USE_ID = 'agent-1'
+
+  const runWithActivity = (activityMessages: MessageEntry[]): SubagentRunResponse => ({
+    sessionId: ACTIVE_TAB,
+    toolUseId: AGENT_TOOL_USE_ID,
+    agentId: 'agent-abc',
+    status: 'completed',
+    messages: [],
+    activityMessages,
+    truncated: false,
+    source: 'subagent-jsonl',
+  })
+
+  const CHILD_ACTIVITY: MessageEntry[] = [
+    {
+      id: 'child-tool',
+      type: 'tool_use',
+      content: [
+        { type: 'tool_use', id: 'Read:0', name: 'Read', input: { file_path: '/tmp/alpha.txt' } },
+      ],
+      timestamp: '2026-01-01T00:00:01.000Z',
+    },
+    {
+      id: 'child-result',
+      type: 'tool_result',
+      content: [
+        { type: 'tool_result', tool_use_id: 'Read:0', content: 'alpha body' },
+      ],
+      timestamp: '2026-01-01T00:00:02.000Z',
+    },
+  ]
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+    resetAgentRunActivityCache()
+    resetSessionScrollSnapshotsForTests()
+    useSettingsStore.setState({ locale: 'en' })
+    useUIStore.setState({ pendingSettingsTab: null })
+    useTabStore.setState({
+      activeTabId: ACTIVE_TAB,
+      tabs: [{ sessionId: ACTIVE_TAB, title: 'Test', type: 'session' as const, status: 'idle' }],
+    })
+    useSessionStore.setState({ sessions: [], activeSessionId: null, isLoading: false, error: null })
+    useTeamStore.getState().clearTeam()
+    useWorkspaceChatContextStore.setState(useWorkspaceChatContextStore.getInitialState(), true)
+    useWorkspaceStore.setState(useWorkspaceStore.getInitialState(), true)
+    vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockImplementation(
+      () => new Promise(() => {}),
+    )
+    vi.spyOn(sessionsApi, 'getWorkspaceStatus').mockResolvedValue({
+      state: 'ok',
+      workDir: '/tmp/example-project',
+      repoName: 'example-project',
+      branch: null,
+      isGitRepo: false,
+      changedFiles: [],
+    })
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    resetAgentRunActivityCache()
+  })
+
+  function renderDispatchedAgent() {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'tool-agent',
+              type: 'tool_use',
+              toolName: 'Agent',
+              toolUseId: AGENT_TOOL_USE_ID,
+              input: { description: 'Inspect alpha' },
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+    return render(<MessageList sessionId={ACTIVE_TAB} />)
+  }
+
+  /** The card lives one disclosure level below the agent group header. */
+  function openAgentCard() {
+    fireEvent.click(screen.getByRole('button', { name: /dispatched an agent/ }))
+    fireEvent.click(screen.getByRole('button', { name: /Expand agent/ }))
+  }
+
+  it('fetches a run’s tool stream only once its Agent card is expanded', async () => {
+    const getRunByTool = vi.spyOn(subagentsApi, 'getRunByTool')
+      .mockResolvedValue(runWithActivity(CHILD_ACTIVITY))
+
+    renderDispatchedAgent()
+
+    // Expanding the group mounts the card — that alone must not fetch.
+    fireEvent.click(screen.getByRole('button', { name: /dispatched an agent/ }))
+    expect(screen.getByRole('button', { name: /Expand agent/ })).toBeTruthy()
+    expect(getRunByTool).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Expand agent/ }))
+    await waitFor(() => {
+      expect(getRunByTool).toHaveBeenCalledWith(ACTIVE_TAB, AGENT_TOOL_USE_ID, undefined)
+    })
+    expect(await screen.findByTestId('agent-call-activity')).toBeTruthy()
+    expect(screen.getByText('alpha.txt')).toBeTruthy()
+  })
+
+  it('renders the live child stream instead of fetching when the card already has one', async () => {
+    const getRunByTool = vi.spyOn(subagentsApi, 'getRunByTool')
+      .mockResolvedValue(runWithActivity(CHILD_ACTIVITY))
+
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'tool-agent',
+              type: 'tool_use',
+              toolName: 'Agent',
+              toolUseId: AGENT_TOOL_USE_ID,
+              input: { description: 'Inspect alpha' },
+              timestamp: 1,
+            },
+            {
+              id: 'child-tool',
+              type: 'tool_use',
+              toolName: 'Read',
+              toolUseId: 'Read:0',
+              parentToolUseId: AGENT_TOOL_USE_ID,
+              input: { file_path: '/tmp/live-child.txt' },
+              timestamp: 2,
+            },
+          ],
+        }),
+      },
+    })
+    render(<MessageList sessionId={ACTIVE_TAB} />)
+    openAgentCard()
+
+    // Live runs stream their children into the timeline; that stays the source
+    // of truth, and the run's own endpoint is not asked again.
+    expect(screen.getByText('live-child.txt')).toBeTruthy()
+    expect(getRunByTool).not.toHaveBeenCalled()
+  })
+
+  it('keeps the run’s tool stream out of the request once it has been fetched', async () => {
+    const getRunByTool = vi.spyOn(subagentsApi, 'getRunByTool')
+      .mockResolvedValue(runWithActivity(CHILD_ACTIVITY))
+
+    renderDispatchedAgent()
+    openAgentCard()
+    await screen.findByTestId('agent-call-activity')
+
+    fireEvent.click(screen.getByRole('button', { name: /Collapse agent/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand agent' }))
+    await screen.findByTestId('agent-call-activity')
+
+    expect(getRunByTool).toHaveBeenCalledTimes(1)
+  })
+
+  it('offers a retry when the run’s tool stream cannot be loaded', async () => {
+    const getRunByTool = vi.spyOn(subagentsApi, 'getRunByTool')
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce(runWithActivity(CHILD_ACTIVITY))
+
+    renderDispatchedAgent()
+    openAgentCard()
+
+    const failed = await screen.findByTestId('agent-call-activity-error')
+    fireEvent.click(within(failed).getByRole('button', { name: /Retry/ }))
+
+    expect(await screen.findByTestId('agent-call-activity')).toBeTruthy()
+    expect(getRunByTool).toHaveBeenCalledTimes(2)
+  })
+
+  it('trims an oversized run and says so', async () => {
+    const manyMessages: MessageEntry[] = Array.from({ length: 1001 }, (_, index) => ({
+      id: `child-${index}`,
+      type: 'tool_use' as const,
+      content: [
+        { type: 'tool_use', id: `Read:${index}`, name: 'Read', input: { file_path: `/tmp/f${index}.txt` } },
+      ],
+      timestamp: '2026-01-01T00:00:01.000Z',
+    }))
+    vi.spyOn(subagentsApi, 'getRunByTool').mockResolvedValue(runWithActivity(manyMessages))
+
+    renderDispatchedAgent()
+    openAgentCard()
+
+    expect(await screen.findByTestId('agent-call-activity')).toBeTruthy()
+    expect(screen.getByText(/Showing the start and end of this run/)).toBeTruthy()
   })
 })

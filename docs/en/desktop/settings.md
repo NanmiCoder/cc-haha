@@ -1,13 +1,13 @@
 ---
-title: Settings reference
+title: Settings guide
 nav_title: Settings
-description: All 16 settings tabs — what each one configures and when you'd need it.
+description: Choose the settings needed for a first session, then find advanced options by task.
 order: 6
 ---
 
-# Settings reference
+# Settings guide
 
-Click **Settings** at the bottom of the sidebar. Sixteen tabs on the left, in a fixed order. This page walks through them in that order: what each one configures, and when you'd actually need to touch it.
+Click **Settings** at the bottom of the sidebar. For your first session, connect a model in **Providers**, check permissions and language in **General**, then follow [Your first session](../start/first-session.md). Open the other tabs when a task calls for them.
 
 ## Providers
 
@@ -17,23 +17,51 @@ You'll come here once during setup and rarely again. Full steps in [Connecting a
 
 ## General
 
-The tab you'll open most often — everything about how the app feels.
+General covers four areas: appearance and replies, how the agent works, network and notifications, and local data. Check the first two before your first session; adjust the others when you need them.
 
-![Settings → General: color themes, language, output style, default permissions](../../images/app/en/settings-general.webp)
+![Settings → General: color themes, language, output style, default permissions (Chinese interface)](../../images/app/en/settings-general.webp)
 
-- **Color theme** — six of them: Pure White (default), Paper, Warm Classic, Celadon, Ink Night, Ink Blue. There's also **Follow the system**, which lets you pick which theme to use in light mode and which in dark mode.
-- **Language** — the interface language.
-- **Response Language** — makes Claude always reply in a given language, set independently of the interface.
-- **Output Style** — Default, Explanatory, or Learning. Explanatory adds reasoning about implementation choices and codebase patterns; Learning pauses and asks you to write small pieces yourself. Running sessions keep their current prompt; the change applies to new sessions.
-- **Default Session Permissions** — which permission mode new sessions start in. Each session can still be changed individually.
-- **Effort Level** and **Thinking Mode** — defaults for new sessions. Turning thinking off sends an explicit non-thinking parameter to providers like DeepSeek that need one.
-- **Message Sending** — Enter to send (Shift+Enter for a newline), or `Ctrl/Cmd+Enter` to send.
-- **System Notifications** — route permission prompts, completed replies, and scheduled task results to the OS notification center. Enabling it requests system permission.
-- **Network** — three modes: Direct connection (explicitly bypass the system proxy), System proxy (follow system or PAC rules per destination), or Manual proxy (a URL like `http://user:password@127.0.0.1:7890`). Below that, **AI request timeout**, which can go up to 1800 seconds when a provider is slow to first byte. App updates use their own proxy setting, over in About.
-- **WebSearch** — how web search is routed. Auto prefers Claude's native WebSearch for Claude models and falls back to Tavily or Brave otherwise; those two need API keys you supply.
-- **Auto-dream** — periodically tidies and compresses memory files in the background. Off by default, because it spends tokens.
-- **UI Zoom** — scale the whole interface, also bound to `⌘+` / `⌘-`, with `⌘0` back to 100%.
-- **Data Storage Location** — an advanced, rarely-touched setting. Defaults to the system directory `~/.claude`, or point it at an absolute path of your own. After switching, sessions, skills, MCP, plugins, and provider config are all read from the new directory; it needs a restart, and the two directories are never merged or migrated automatically.
+### Before your first session: permissions and replies
+
+| Setting | What to choose | When it takes effect |
+|---|---|---|
+| Default session permissions | Keep the default **Ask for permission** at first. Inspect the target file or command before approving edits or higher-risk commands. You can change any session separately with the composer control; see [the five modes](./sessions.md#the-five-permission-modes). | Default for new chat sessions; change an existing session in its composer. |
+| Response language | Choose a language if you want consistent replies in it. This is independent of the interface language and is unset by default. | Subsequent replies; earlier messages are unchanged. |
+| Output style | **Default** is concise; **Explanatory** explains implementation choices; **Learning** asks you to write small pieces. Installed custom styles can also appear here. | New sessions, sessions resumed in a new process, or restarted sessions. A running session keeps its current prompt. |
+| Effort level and Thinking Mode | Start with the supported model default. Adjust for speed, cost, or provider compatibility; disabling thinking sends a non-thinking parameter to compatible providers that require one. | Defaults for new sessions; available effort levels depend on the selected model. |
+
+**Try it:** Choose a disposable Git project and ask: “List the files you plan to change, make one small edit, then tell me how to verify it.” Inspect any permission prompt, then [review the Diff](./workspace.md#diff-review-leaving-a-note-on-a-line) file by file.
+
+### Appearance and input
+
+- **Color theme:** Pure White, Paper, Warm Classic, Celadon, Ink Night, or Ink Blue. **Follow the system** lets you choose separate light and dark themes.
+- **Language:** changes only the interface, with English, Simplified and Traditional Chinese, Japanese, and Korean choices. It does not set the response language.
+- **UI Zoom:** scales the whole window. Use `⌘+` / `⌘-` on macOS or `Ctrl+` / `Ctrl-` on Windows; press `0` to reset to 100%.
+- **Message sending:** defaults to Enter to send and Shift+Enter for a newline. If you write long prompts, choose `Ctrl/Cmd+Enter` to send.
+- **Default editor:** chooses which detected local editor appears as the default under a file's **Open with** menu.
+
+### For more involved agent workflows
+
+| Setting | When to use it |
+|---|---|
+| Ultracode | On by default. A standalone keyword triggers dynamic Workflow orchestration; the same text in code blocks, quotes, or paths keeps its literal meaning. |
+| Agent Teams | On by default. Use it when a larger task needs several agents working together. New sessions pick it up; existing sessions do after an app restart. See [Subagents](./agents.md) first. |
+| Auto-answer questions | Off by default. After 1, 5, 10, or 30 minutes without an answer to an agent's multiple-choice question, it can choose a recommended option. If it cannot choose reliably, it keeps waiting. Use only when you want unattended work to continue. |
+| Auto-dream | Off by default. After enough sessions have accumulated, it can organize auto-memory in the background, using additional model calls and tokens. |
+| Agent Trace | On by default. New sessions write condensed request, response, and status events to a local traces directory. Use the **Trace** tab to investigate a failure; turning it off stops new records, while old ones remain readable. |
+
+### Network, web search, and notifications
+
+- **System Notifications** are off by default. Enable them and grant OS permission when you need alerts for permission requests, completed replies, or scheduled tasks away from the app.
+- **Network** uses the system proxy by default. **Direct** bypasses system and inherited process proxies; **Manual** accepts an HTTP/HTTPS URL such as `http://user:password@127.0.0.1:7890`. Click **Save**. New requests use the new route; requests already in flight keep their old route. Model services, account sign-in, MCP, and agent tools use this setting. App updates have a separate proxy under **About**.
+- **AI request timeout** defaults to 1800 seconds and accepts at least 30 seconds. Raise it only when the first model response or connection test really times out. For a local model that thinks for a long time, you can enter 14400 seconds (four hours).
+- **WebFetch preflight** skips the upstream domain check by default to avoid false failures with third-party providers or restricted networks. Turn this off only when you specifically want the upstream check.
+- **WebSearch** defaults to **Auto**: Claude models try native search first, then Tavily or Brave on failure or with non-Claude models. You can force Claude, Tavily, Brave, or Off. Tavily and Brave require your own API keys and a click on **Save**.
+
+### Local data: check the effect before changing it
+
+- **Session retention** defaults to 365 days and accepts 0–3650 days. Reducing it immediately removes older records; setting 0 removes all existing records and stops recording session contents. The UI previews and confirms the change. This is not a backup system.
+- **Data Storage Location** defaults to `~/.claude` (`%USERPROFILE%\\.claude` on Windows). Portable mode takes an absolute path outside the app installation folder. After an app restart, sessions, configuration, tasks, skills, and plugins are read from the new location. The two directories are not merged or migrated automatically. If `CLAUDE_CONFIG_DIR` is set at launch, remove that environment variable before switching locations in the UI.
 
 Product screenshots in this guide consistently use the **Pure White** theme so the interface can be compared without palette changes.
 
@@ -43,7 +71,7 @@ Continue the same session in your phone's browser. Off by default. See [Phone (H
 
 ## IM Adapters
 
-Talk to Claude from WeChat, DingTalk, WhatsApp, Telegram, or Feishu, and manage paired users. See [Phone (H5) and IM](./remote.md) and [IM integrations](../im/index.md).
+Talk to Claude from WeChat, DingTalk, WhatsApp, Telegram, Feishu, WeCom, QQ, or Slack, and manage paired users. See [Phone (H5) and IM](./remote.md) and [IM integrations](../im/index.md).
 
 ## Terminal
 
@@ -87,11 +115,11 @@ A little robot floating on your desktop. Off by default. See [Desktop pet](./pet
 
 ## Computer Use
 
-Let Claude read the screen, click, and type. Unusable until you install the runtime environment and grant system permissions. See [Computer Use](./computer-use.md).
+Let Claude read the screen, click, and type. Enable it, confirm the global consent, and satisfy the OS permission checks; setup steps vary by platform. See [Computer Use](./computer-use.md).
 
 ## Token usage
 
-![Settings → Token usage: heatmap and stat cards](../../images/app/en/settings-usage.webp)
+![Settings → Token usage: heatmap and stat cards (Chinese interface)](../../images/app/en/settings-usage.webp)
 
 A usage dashboard computed from the Claude Code session records on this machine. Everything is calculated locally and nothing is uploaded.
 
@@ -101,7 +129,7 @@ A usage dashboard computed from the Claude Code session records on this machine.
 
 ## Trace
 
-Records the model request chain for each session — requests, responses, status events, timings — for debugging stalls, failures, and unexplained waits. The switch isn't on this tab: turn on **Agent trace** in **Settings → General** first, and this tab fills up.
+Records the model request chain for each session — requests, responses, status events, timings — for debugging stalls, failures, and unexplained waits. The switch is in **Settings → General** and is on by default; new sessions produce new records.
 
 Once enabled, new sessions write condensed records to a local traces directory. Existing records stay readable after you turn it off; only new ones stop being written. The trace list supports search, filtering (all / LLM / tools / errors), opening a trace in its own window, and deleting a session's trace without touching its chat history.
 

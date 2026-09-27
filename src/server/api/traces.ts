@@ -197,6 +197,8 @@ async function getTraceSessionMeta(sessionId: string): Promise<{
   projectPath: string
   workDir: string | null
 } | null> {
+  const indexed = sessionService.getIndexedSessionMetaById(sessionId)
+  if (indexed) return indexed
   const found = await sessionService.findSessionFile(sessionId)
   if (!found) return null
   const meta = await sessionService.getSessionTitleAndMeta(found.filePath)

@@ -28,7 +28,7 @@ import {
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
 import { createAdapterClient } from '../common/adapter-client.js'
-import { restoreStoredSessionBinding } from '../common/session-recovery.js'
+import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
 import { SessionSelectionController } from '../common/session-selection.js'
 import { syncImPermissionState } from '../common/permission-sync.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
@@ -150,7 +150,7 @@ async function handlePermissionDecision(chatId: string, decision: PermissionDeci
   )
 }
 
-async function ensureExistingSession(chatId: string): Promise<{ sessionId: string; workDir: string } | null> {
+async function ensureExistingSession(chatId: string): Promise<SessionRestoreResult> {
   return await restoreStoredSessionBinding({
     chatId,
     bridge,
@@ -163,8 +163,10 @@ async function ensureExistingSession(chatId: string): Promise<{ sessionId: strin
 }
 
 async function buildStatusText(chatId: string): Promise<string> {
-  const stored = await ensureExistingSession(chatId)
-  if (!stored) return formatImStatus(null)
+  const result = await ensureExistingSession(chatId)
+  if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+  if (result.status === 'missing') return formatImStatus(null)
+  const stored = result.session
 
   const runtime = getRuntimeState(chatId)
   let projectName = path.basename(stored.workDir) || stored.workDir
@@ -216,8 +218,12 @@ async function buildStatusText(chatId: string): Promise<string> {
 // ---------- session management ----------
 
 async function ensureSession(chatId: string): Promise<boolean> {
-  const stored = await ensureExistingSession(chatId)
-  if (stored) return true
+  const result = await ensureExistingSession(chatId)
+  if (result.status === 'restored') return true
+  if (result.status === 'unavailable') {
+    await bot.api.sendMessage(Number(chatId), SESSION_RECONNECT_NOTICE)
+    return false
+  }
 
   const workDir = defaultWorkDir
   if (workDir) {
@@ -486,9 +492,9 @@ const isAuthorizedTelegramUser = (userId: number) => isAllowedUser('telegram', u
 registerAuthorizedTelegramCommand(bot, 'stop', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
   void (async () => {
-    const stored = await ensureExistingSession(chatId)
-    if (!stored) {
-      await ctx.reply(formatImStatus(null))
+    const result = await ensureExistingSession(chatId)
+    if (result.status !== 'restored') {
+      await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
       return
     }
     bridge.sendStopGeneration(chatId)
@@ -504,9 +510,9 @@ registerAuthorizedTelegramCommand(bot, 'status', isAuthorizedTelegramUser, async
 registerAuthorizedTelegramCommand(bot, 'clear', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
   void (async () => {
-    const stored = await ensureExistingSession(chatId)
-    if (!stored) {
-      await ctx.reply(formatImStatus(null))
+    const result = await ensureExistingSession(chatId)
+    if (result.status !== 'restored') {
+      await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
       return
     }
     clearTransientChatState(chatId)

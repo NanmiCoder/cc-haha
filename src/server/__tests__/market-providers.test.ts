@@ -96,6 +96,34 @@ describe('clawhubProvider', () => {
     expect(page.items[0]!.author.handle.length).toBeGreaterThan(0)
   })
 
+  it('filters aggregated external search results before applying the limit', async () => {
+    stubFetch(() => ({ body: JSON.stringify({ results: [
+      { slug: 'typesafe-ai', source: 'skills-sh', install: { kind: 'skills-sh' } },
+      { slug: 'external', source: 'other-registry' },
+      { slug: 'external-install', install: { kind: 'skills-sh' } },
+      { slug: 'oo-typesafe-ai', source: 'clawhub', install: { kind: 'clawhub' } },
+      { slug: 'legacy-native' },
+    ] }) }))
+
+    const page = await clawhubProvider.search({ q: 'typesafe', limit: 2 })
+
+    expect(page.items.map((item) => item.id)).toEqual([
+      'clawhub:oo-typesafe-ai',
+      'clawhub:legacy-native',
+    ])
+    expect(page.nextCursor).toBeUndefined()
+  })
+
+  it('returns no installable entries when search only contains external sources', async () => {
+    stubFetch(() => ({ body: JSON.stringify({ results: [
+      { slug: 'typesafe-ai', source: 'skills-sh', install: { kind: 'skills-sh' } },
+    ] }) }))
+
+    const page = await clawhubProvider.search({ q: 'typesafe', limit: 24 })
+
+    expect(page.items).toEqual([])
+  })
+
   it('builds detail with files, license and security from the version endpoint', async () => {
     const detailBody = await fixture('clawhub-detail.json')
     const versionBody = await fixture('clawhub-version-detail.json')

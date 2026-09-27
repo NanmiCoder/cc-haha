@@ -1619,6 +1619,19 @@ button, input, textarea, select, a, [role="button"] {
   -webkit-app-region: no-drag;
 }
 
+/* Scrolled-out tabs must not subtract native drag regions from the sidebar.
+   Reset every descendant, including buttons covered by the global rules.
+   The stationary sibling below supplies the visible no-drag rectangle. */
+.tab-strip-scroll .tab-bar-interactive,
+.tab-strip-scroll .tab-bar-interactive * {
+  app-region: initial;
+  -webkit-app-region: initial;
+}
+.tab-strip-hit-region {
+  app-region: no-drag;
+  -webkit-app-region: no-drag;
+}
+
 /* Chrome's hairline between two neighbouring idle tabs — the thing that keeps
    a row of untitled sessions from reading as one continuous smear.
    It belongs to the *gap*, not to either tab, so it has to vanish the moment
@@ -2063,6 +2076,44 @@ body.sidebar-resizing * {
   border-spacing: 0;
 }
 
+/* Explicit conversation scope: unlayered rules override Tailwind prose-sm and
+   document typography without resizing tool controls or non-chat Markdown. */
+:root {
+  --chat-font-family: var(--font-body);
+  --chat-font-size: 14px;
+  --chat-content-max-width: 900px;
+}
+
+.chat-reading-text,
+.markdown-prose.chat-reading-markdown {
+  font-family: var(--chat-font-family);
+  font-size: var(--chat-font-size);
+  line-height: 1.625;
+}
+
+.markdown-prose.chat-reading-markdown {
+  --code-viewer-font-size: calc(var(--chat-font-size) * 0.928571);
+}
+
+.markdown-prose.chat-reading-markdown :is(p, li, table, blockquote) {
+  font-size: 1em;
+  line-height: 1.625;
+}
+
+.markdown-prose.chat-reading-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--chat-font-family);
+  line-height: 1.35;
+}
+
+.markdown-prose.chat-reading-markdown h1 { font-size: 1.75em; }
+.markdown-prose.chat-reading-markdown h2 { font-size: 1.5em; }
+.markdown-prose.chat-reading-markdown h3 { font-size: 1.25em; }
+.markdown-prose.chat-reading-markdown :is(h4, h5, h6) { font-size: 1em; }
+.markdown-prose.chat-reading-markdown code {
+  font-family: var(--font-mono);
+  font-size: var(--code-viewer-font-size);
+}
+
 .markdown-prose {
   --tw-prose-body: var(--color-text-primary);
   --tw-prose-headings: var(--color-text-primary);
@@ -2404,6 +2455,11 @@ html[data-touch-h5] input,
 html[data-touch-h5] textarea,
 html[data-touch-h5] select {
   font-size: 16px;
+}
+
+/* A small desktop reading preference must not trigger iOS focus zoom. */
+html[data-touch-h5] .composer-pm.chat-reading-text {
+  font-size: max(16px, var(--chat-font-size));
 }
 
 /* Long-press text selection on iOS WebKit fights content-visibility: auto —

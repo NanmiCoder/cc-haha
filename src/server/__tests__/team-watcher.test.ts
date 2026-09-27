@@ -2,8 +2,9 @@
  * Unit tests for TeamWatcher — real-time team status push via WebSocket
  */
 
-import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test'
 import * as fs from 'node:fs/promises'
+import * as syncFs from 'node:fs'
 import * as path from 'node:path'
 import * as os from 'node:os'
 import type { ServerMessage } from '../ws/events.js'
@@ -663,4 +664,47 @@ describe('TeamWatcher broadcast', () => {
     watcher.reset()
     await cleanupTmpDir()
   })
+})
+
+// A sparse fixture catches read-all-then-slice without retaining a large test string.
+it('reads only the subagent name prefix of a large transcript', async () => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'watcher-prefix-'))
+  const file = path.join(directory, 'agent.jsonl')
+  await fs.writeFile(file, JSON.stringify({ agentName: 'bounded-agent' }) + '\n')
+  await fs.truncate(file, 64 * 1024 * 1024)
+  const readAll = spyOn(syncFs, 'readFileSync').mockImplementation(() => { throw new Error('Unbounded transcript read') })
+  try {
+    const watcher = new TeamWatcher()
+    expect((watcher as unknown as { extractSubagentName(path: string): string | null }).extractSubagentName(file)).toBe('bounded-agent')
+    expect(readAll).not.toHaveBeenCalled()
+  } finally {
+    readAll.mockRestore()
+    await fs.rm(directory, { recursive: true, force: true })
+  }
+})
+
+it('broadcasts plan-only CLI writes to the owning leader without duplicate events', async () => {
+  await setupTmpConfigDir()
+  const deliveries: Array<{ message: ServerMessage; sessionId?: string }> = []
+  const watcher = new TeamWatcher((message, sessionId) => deliveries.push({ message, sessionId }), {
+    getWorkbench: async () => { throw new Error('not needed for plan event') },
+    markWorkbenchArchiveDeleted: async () => undefined,
+  })
+  try {
+    const { ensureTeamDraft, stageMember } = await import('../../utils/swarm/teamPlanStore.js')
+    await writeTeamConfig('plan-fixture', makeTeamConfig({ name: 'plan-fixture', leadSessionId: 'plan-owner' }))
+    const runtime = { providerId: 'fake', modelId: 'fixture' }
+    await ensureTeamDraft('plan-fixture', 'plan-owner', runtime)
+    await watcher.checkNow()
+    await watcher.checkNow()
+    expect(deliveries.filter(item => item.message.type === 'team_plan_updated')).toHaveLength(1)
+    await stageMember('plan-fixture', { id: 'worker', name: 'worker', agentType: 'general-purpose', prompt: 'fixture', runtime })
+    await watcher.checkNow()
+    const updates = deliveries.filter(item => item.message.type === 'team_plan_updated')
+    expect(updates).toHaveLength(2)
+    expect(updates.every(item => item.sessionId === 'plan-owner')).toBe(true)
+  } finally {
+    watcher.stop()
+    await cleanupTmpDir()
+  }
 })

@@ -20,7 +20,26 @@ const ProviderRegionalEndpointSchema = z.object({
   baseUrl: z.string().url(),
 })
 
-const ProviderPresetSchema = z.object({
+/**
+ * RFC 9110 field-name token. A preset that spells a header name wrong — a stray
+ * space, an embedded newline — would otherwise only surface as a `fetch`
+ * TypeError on every request at runtime, so it fails at module load instead.
+ */
+const UPSTREAM_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+
+/**
+ * Ordered first-match-wins rules for gateways that bind the wire format to the
+ * request path instead of translating between formats (see shared/modelApiFormats).
+ * Only the exceptions need listing — a model matching no rule uses the preset's
+ * own `apiFormat`.
+ */
+const ModelApiFormatRuleSchema = z.object({
+  prefixes: z.array(z.string().min(1)).min(1),
+  apiFormat: ApiFormatSchema,
+})
+
+/** Exported so a preset edit can be validated against the rules the bundle loads under. */
+export const ProviderPresetSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   baseUrl: z.string(),
@@ -37,6 +56,7 @@ const ProviderPresetSchema = z.object({
   apiKeyUrl: z.string().optional(),
   promoText: z.string().optional(),
   featured: z.boolean().optional(),
+  isNew: z.boolean().optional(),
   // Retired sponsor/provider: filtered out of the "add provider" choices, but the entry
   // MUST stay in this list — deleting it silently degrades providers already saved
   // against it, because three things are resolved from the preset, never from the
@@ -53,6 +73,17 @@ const ProviderPresetSchema = z.object({
   modelContextWindows: z.record(
     z.string().min(1),
     z.number().int().min(16000).max(10000000),
+  ).optional(),
+  /** Per-model protocol overrides for path-bound gateways (see shared/modelApiFormats). */
+  modelApiFormats: z.array(ModelApiFormatRuleSchema).min(1).optional(),
+  /**
+   * Headers to send upstream on every protocol path. Supports `$SESSION_ID`
+   * (inbound conversation id) and `$VERSION` placeholders. Credentials and
+   * framing headers are rejected by the resolver.
+   */
+  upstreamHeaders: z.record(
+    z.string().regex(UPSTREAM_HEADER_NAME_RE, 'must be a valid HTTP header name'),
+    z.string(),
   ).optional(),
 })
 

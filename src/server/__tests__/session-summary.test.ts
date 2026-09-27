@@ -46,6 +46,30 @@ function requestSummary(sessionId: string, method = 'GET') {
 }
 
 describe('session summary', () => {
+  it('shares unchanged title metadata scans across trace polling and session summaries', async () => {
+    const fixture = await seedSession()
+    const service = new SessionService()
+    const internals = service as unknown as {
+      scanSessionListSummary: (...args: unknown[]) => Promise<unknown>
+    }
+    const scan = spyOn(internals, 'scanSessionListSummary')
+    try {
+      const [first, second] = await Promise.all([
+        service.getSessionTitleAndMeta(fixture.filePath),
+        service.getSessionTitleAndMeta(fixture.filePath),
+      ])
+      expect(first).toEqual(second)
+      expect(first.title).toBe('Old conversation')
+      expect((await service.getSessionSummary(SESSION_ID))?.title).toBe(first.title)
+      expect(scan).toHaveBeenCalledTimes(1)
+      await fs.appendFile(fixture.filePath, `${JSON.stringify({ type: 'custom-title', customTitle: 'Updated title' })}\n`)
+      expect((await service.getSessionTitleAndMeta(fixture.filePath)).title).toBe('Updated title')
+      expect(scan).toHaveBeenCalledTimes(2)
+    } finally {
+      scan.mockRestore()
+    }
+  })
+
   it('reads only the selected old transcript with list-equivalent runtime and workspace metadata', async () => {
     const fixture = await seedSession()
     await seedSession('12870001-bbbb-cccc-dddd-eeeeeeeeeeee')

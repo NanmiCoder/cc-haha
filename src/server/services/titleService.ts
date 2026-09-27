@@ -8,7 +8,12 @@
 
 import { ProviderService } from './providerService.js'
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
-import { getPresetAuthStrategy } from './providerRuntimeEnv.js'
+import {
+  getPresetAuthStrategy,
+  providerNeedsProxy,
+  resolveProviderApiFormat,
+} from './providerRuntimeEnv.js'
+import { handleProxyRequest } from '../proxy/handler.js'
 import {
   getNetworkProxyFetchOptions,
   loadNetworkSettings,
@@ -162,6 +167,8 @@ export async function generateTitle(
   conversationText: string,
   providerId?: string | null,
   languagePreference?: TitleLanguagePreference | null,
+  /** Conversation the title belongs to; forwarded so gateways can route the call. */
+  sessionId?: string,
 ): Promise<string | null> {
   const trimmed = cleanSessionTitleSource(conversationText)
   if (!trimmed) return null
@@ -204,21 +211,27 @@ export async function generateTitle(
       max_tokens: TITLE_MAX_OUTPUT_TOKENS,
       system: SESSION_TITLE_PROMPT,
     }
+    // Providers that need local request handling answer on their own wire format.
+    // Talking to them in Anthropic Messages would ignore the preset's per-model
+    // rules and the client headers some gateways require, so these go through the
+    // same proxy the CLI uses instead of a second, parallel code path.
+    const usesLocalProxy = providerNeedsProxy(
+      resolveProviderApiFormat(resolvedProvider),
+      resolvedProvider.supportsNestedToolResultMedia,
+    )
 
     return await generateTitleWithLanguageRetry(
       async (strictLanguage) => {
-        const response = await fetchAnthropicTitleResponse(
-          url,
-          requestHeaders,
-          {
-            ...requestBody,
-            messages: [{
-              role: 'user',
-              content: buildTitleUserPrompt(trimmed, languagePreference, strictLanguage),
-            }],
-          },
-          networkSettings,
-        )
+        const body = {
+          ...requestBody,
+          messages: [{
+            role: 'user',
+            content: buildTitleUserPrompt(trimmed, languagePreference, strictLanguage),
+          }],
+        }
+        const response = usesLocalProxy
+          ? await fetchProxiedTitleResponse(resolvedProvider.id, sessionId, body)
+          : await fetchAnthropicTitleResponse(url, requestHeaders, body, networkSettings)
         if (!response) return null
         return parseGeneratedTitleText(response)
       },
@@ -285,6 +298,41 @@ async function generateOpenAIOfficialTitle(
     },
     languagePreference,
   )
+}
+
+/**
+ * Sends the title request through the in-process proxy, which owns the per-model
+ * protocol decision and the preset's upstream headers. Keeps the same
+ * disabled-thinking-then-retry shape as the direct path so both behave alike.
+ */
+async function fetchProxiedTitleResponse(
+  providerId: string,
+  sessionId: string | undefined,
+  requestBody: Record<string, unknown>,
+): Promise<string | null> {
+  const url = `http://127.0.0.1/proxy/providers/${encodeURIComponent(providerId)}/v1/messages`
+  const send = (body: Record<string, unknown>) => handleProxyRequest(
+    new Request(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sessionId ? { 'x-claude-code-session-id': sessionId } : {}),
+      },
+      body: JSON.stringify(body),
+    }),
+    new URL(url),
+  )
+
+  let response = await send({ ...requestBody, thinking: { type: 'disabled' } })
+  if (!response.ok && response.status >= 400 && response.status < 500) {
+    response = await send(requestBody)
+  }
+  if (!response.ok) return null
+
+  const body = (await response.json()) as {
+    content?: Array<{ type: string; text?: string }>
+  }
+  return body.content?.find((block) => block.type === 'text')?.text ?? null
 }
 
 async function fetchAnthropicTitleResponse(

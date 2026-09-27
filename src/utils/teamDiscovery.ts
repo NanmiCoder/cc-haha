@@ -59,7 +59,7 @@ export function getTeammateStatuses(teamName: string): TeammateStatus[] {
       name: member.name,
       agentId: member.agentId,
       agentType: member.agentType,
-      model: member.model,
+      ...(member.model ? { model: member.model } : {}),
       prompt: member.prompt,
       status,
       color: member.color,

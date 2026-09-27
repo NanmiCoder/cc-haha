@@ -2,11 +2,11 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { SKILL_CONNECTORS, SKILL_RECIPES, getSkillRecipe } from './skillCatalog.js'
 
-const expectedFiles: Record<string, number> = { hyperframes: 61, obsidian: 12, drawio: 2, 'frontend-design': 2, 'canvas-design': 83, 'algorithmic-art': 4, 'webapp-testing': 6, 'mcp-builder': 10 }
+const expectedFiles: Record<string, number> = { hyperframes: 61, obsidian: 12, drawio: 2, 'frontend-design': 2, 'canvas-design': 83, 'algorithmic-art': 4, 'webapp-testing': 6, 'mcp-builder': 10, remotion: 256 }
 
 test('skill bundles use fixed commits, unique safe file mappings and complete upstream payloads', () => {
-  expect(SKILL_RECIPES).toHaveLength(8)
-  expect(SKILL_CONNECTORS).toHaveLength(8)
+  expect(SKILL_RECIPES).toHaveLength(9)
+  expect(SKILL_CONNECTORS).toHaveLength(9)
   for (const recipe of SKILL_RECIPES) {
     expect(recipe.files).toHaveLength(expectedFiles[recipe.id]!)
     expect(recipe.commit).toMatch(/^[a-f0-9]{40}$/)
@@ -38,6 +38,8 @@ test('skill bundles use fixed commits, unique safe file mappings and complete up
 test('skill bundles retain cross-skill routes, examples, scripts and font licenses', () => {
   const paths = (id: string) => getSkillRecipe(id)!.files.map(file => file.target)
   for (const name of ['hyperframes', 'hyperframes-cli', 'hyperframes-registry', 'gsap', 'website-to-hyperframes']) expect(paths('hyperframes')).toContain(`skills/${name}/SKILL.md`)
+  for (const name of ['remotion-best-practices', 'remotion-captions', 'remotion-create', 'remotion-docs', 'remotion-interactivity', 'remotion-maps', 'remotion-markup', 'remotion-multimedia', 'remotion-render', 'remotion-saas', 'remotion-studio', 'remotion-upgrade']) expect(paths('remotion')).toContain(`skills/${name}/SKILL.md`)
+  expect(paths('remotion')).toContain('LICENSE')
   for (let step = 1; step <= 7; step++) expect(paths('hyperframes').some(path => path.startsWith(`skills/website-to-hyperframes/references/step-${step}-`))).toBe(true)
   expect(paths('algorithmic-art')).toContain('skills/algorithmic-art/templates/viewer.html')
   expect(paths('algorithmic-art')).toContain('skills/algorithmic-art/templates/generator_template.js')

@@ -1,5 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 
+import { FolderOpen } from 'lucide-react'
+import { getDesktopHost } from '@/lib/desktopHost'
 import { DirectoryPicker } from '@/components/composite/DirectoryPicker'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
@@ -66,6 +68,8 @@ export function ProjectEditorModal(props: ProjectEditorModalProps) {
     onClose,
     onSubmit,
   } = props
+  const host = getDesktopHost()
+  const useNativeFolderDialog = host.isDesktop && host.capabilities.dialogs
   const sourceFolder = mode === 'create' ? props.sourceFolder : logicalRoot ?? ''
   const suggestedFolderName = suggestedName?.trim() || folderName(logicalRoot || sourceFolder)
   const [name, setName] = useState(() => initialName ?? suggestedFolderName)
@@ -155,6 +159,20 @@ export function ProjectEditorModal(props: ProjectEditorModalProps) {
     }))
   }
 
+  const handleChooseSourceFolder = () => {
+    if (mode !== 'create') return
+    void runAction(async () => {
+      const selected = await host.dialogs.open({
+        directory: true,
+        multiple: false,
+        title: t('dirPicker.chooseProjectFolder'),
+      })
+      if (typeof selected === 'string' && selected.length > 0) {
+        props.onSourceFolderChange(selected)
+      }
+    })
+  }
+
   const handleRestoreFolderName = () => {
     if (mode !== 'edit' || !props.onRestoreFolderName) return
     void runAction(props.onRestoreFolderName, () => {
@@ -220,7 +238,21 @@ export function ProjectEditorModal(props: ProjectEditorModalProps) {
                 {t('sidebar.projectEditor.sourceFolder')}
                 <span className="ml-0.5 text-[var(--color-error)]">*</span>
               </span>
-              <DirectoryPicker value={sourceFolder} onChange={props.onSourceFolderChange} variant="workbar" />
+              {useNativeFolderDialog ? (
+                <Button
+                  variant="secondary"
+                  onClick={handleChooseSourceFolder}
+                  disabled={busy}
+                  title={sourceFolder || undefined}
+                  aria-label={t('dirPicker.chooseProjectFolder')}
+                  className="min-w-0 self-start max-w-full"
+                >
+                  <FolderOpen size={16} className="shrink-0" aria-hidden="true" />
+                  <span className="truncate">{sourceFolder || t('dirPicker.chooseProjectFolder')}</span>
+                </Button>
+              ) : (
+                <DirectoryPicker value={sourceFolder} onChange={props.onSourceFolderChange} variant="workbar" />
+              )}
               {showValidation && sourceFolderError && (
                 <p id="project-editor-source-folder-error" role="alert" className="text-xs text-[var(--color-error)]">
                   {sourceFolderError}

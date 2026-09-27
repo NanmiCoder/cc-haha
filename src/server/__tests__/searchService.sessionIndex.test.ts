@@ -24,6 +24,7 @@ function gateway(page: SessionEntryLocatorPage): LocalIndexGateway {
     isSessionScopeReady: () => true,
     listSessions: () => ({ sessions: [], total: 0 }),
     findSessionFiles: () => [],
+    getSession: () => null,
     getSessionEntryLocators: () => page,
     async rebuild() { return this.getPublicStatus() },
   }

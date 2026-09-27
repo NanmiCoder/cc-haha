@@ -5,6 +5,7 @@ import '@testing-library/jest-dom'
 import { NewTaskModal } from './NewTaskModal'
 import { useAdapterStore } from '../../stores/adapterStore'
 import { useProviderStore } from '../../stores/providerStore'
+import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTaskStore } from '../../stores/taskStore'
 
@@ -12,6 +13,7 @@ afterEach(() => {
   cleanup()
   useAdapterStore.setState(useAdapterStore.getInitialState(), true)
   useProviderStore.setState(useProviderStore.getInitialState(), true)
+  useSessionStore.setState(useSessionStore.getInitialState(), true)
   useSettingsStore.setState(useSettingsStore.getInitialState(), true)
   useTaskStore.setState(useTaskStore.getInitialState(), true)
 })
@@ -89,6 +91,52 @@ describe('NewTaskModal', () => {
       permissionMode: 'bypassPermissions',
       enabled: true,
       recurring: true,
+    }))
+  })
+
+  it('defaults the folder to the project root when the active session ran in an isolated worktree', async () => {
+    const createTask = vi.fn(async () => {})
+    useTaskStore.setState({ createTask } as Partial<ReturnType<typeof useTaskStore.getState>>)
+    useAdapterStore.setState({
+      fetchConfig: vi.fn(async () => {}),
+      config: {},
+    } as Partial<ReturnType<typeof useAdapterStore.getState>>)
+    useSettingsStore.setState({ locale: 'en' })
+    useSessionStore.setState({
+      sessions: [{
+        id: 'wt-1',
+        title: 'Worktree Session',
+        createdAt: '2026-05-01T00:00:00.000Z',
+        modifiedAt: '2026-05-01T00:00:00.000Z',
+        messageCount: 3,
+        projectPath: '/workspace/repo',
+        projectRoot: '/workspace/repo',
+        workDir: '/workspace/repo/.claude/worktrees/desktop-main-12345678',
+        workDirExists: true,
+      }],
+      activeSessionId: 'wt-1',
+    })
+
+    render(<NewTaskModal open onClose={vi.fn()} />)
+
+    fireEvent.change(screen.getByLabelText(/^Name/), {
+      target: { value: 'worktree cron' },
+    })
+    fireEvent.change(screen.getByLabelText(/^Description/), {
+      target: { value: 'exercise worktree folder default' },
+    })
+    fireEvent.change(screen.getByPlaceholderText(/Look at the commits/i), {
+      target: { value: 'Say hello from the scheduled task.' },
+    })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Create task' }))
+      await Promise.resolve()
+    })
+
+    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1))
+    expect(createTask).toHaveBeenCalledWith(expect.objectContaining({
+      folderPath: '/workspace/repo',
     }))
   })
 

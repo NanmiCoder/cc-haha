@@ -12,6 +12,22 @@ function Fixture() {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('WorkspaceTreeSidebar', () => {
+  it('keeps tree-only mode full width and visible even in a narrow panel', () => {
+    let resize: ResizeObserverCallback = () => {}
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: ResizeObserverCallback) { resize = callback }
+      observe() {}
+      disconnect() {}
+    })
+    const onOpenChange = vi.fn()
+    render(<div><WorkspaceTreeSidebar open fullWidth onOpenChange={onOpenChange}>file rows</WorkspaceTreeSidebar></div>)
+    act(() => resize([{ contentRect: { width: 400 } } as ResizeObserverEntry], {} as ResizeObserver))
+    expect(onOpenChange).not.toHaveBeenCalled()
+    expect(screen.getByTestId('workspace-tree-sidebar')).toHaveAttribute('data-overlay', 'false')
+    expect(screen.getByTestId('workspace-tree-sidebar')).toHaveStyle({ width: '100%', maxWidth: '100%' })
+    expect(screen.queryByRole('separator')).toBeNull()
+  })
+
   it('collapses at narrow content widths and can explicitly reopen as an overlay', () => {
     let resize: ResizeObserverCallback = () => {}
     const disconnect = vi.fn()

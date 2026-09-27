@@ -82,7 +82,9 @@ export function useWorkspaceShortcuts({ sessionId, cwd, enabled }: WorkspaceShor
           const activeSideTabId = store.getSession(session).activeSideTabId
           // Empty workspace is a no-op; it must never hide the main window.
           if (!activeSideTabId) return false
-          store.closeTab(session, activeSideTabId)
+          if (store.getTab(session, activeSideTabId)?.kind === 'side-chat') {
+            window.dispatchEvent(new CustomEvent('workspace-close-request', { detail: { sessionId: session, tabId: activeSideTabId } }))
+          } else store.closeTab(session, activeSideTabId)
           break
         }
         case 'next-tab':

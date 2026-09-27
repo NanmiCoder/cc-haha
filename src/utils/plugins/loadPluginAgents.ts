@@ -1,4 +1,5 @@
 import memoize from 'lodash-es/memoize.js'
+import { createHash } from 'node:crypto'
 import { basename } from 'path'
 import { isAutoMemoryEnabled } from '../../memdir/paths.js'
 import type { AgentColorName } from '../../tools/AgentTool/agentColorManager.js'
@@ -62,7 +63,7 @@ async function loadAgentsFromDirectory(
   return agents
 }
 
-async function loadAgentFromFile(
+export async function loadAgentFromFile(
   filePath: string,
   pluginName: string,
   namespace: string[],
@@ -202,6 +203,7 @@ async function loadAgentFromFile(
       tools,
       ...(disallowedTools !== undefined ? { disallowedTools } : {}),
       ...(skills !== undefined ? { skills } : {}),
+      rawSystemPrompt: systemPrompt,
       getSystemPrompt: () => {
         if (isAutoMemoryEnabled() && memory) {
           const memoryPrompt = loadAgentMemoryPrompt(agentType, memory)
@@ -210,6 +212,8 @@ async function loadAgentFromFile(
         return systemPrompt
       },
       source: 'plugin' as const,
+      sourceFilePath: filePath,
+      sourceContentHash: createHash('sha256').update(content).digest('hex'),
       color,
       model,
       filename: baseAgentName,

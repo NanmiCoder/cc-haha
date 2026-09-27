@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 
-import { buildPostCompactMessages, type CompactionResult } from './compact.js'
+import { buildPostCompactMessages, truncateHeadForPTLRetry, type CompactionResult } from './compact.js'
 import { getCurrentUsage } from '../../utils/tokens.js'
-import type { Message } from '../../types/message.js'
+import type { AssistantMessage, Message } from '../../types/message.js'
 
 const PRE_COMPACT_USAGE = {
   input_tokens: 150_000,
@@ -122,5 +122,70 @@ describe('buildPostCompactMessages stale-usage stripping (#743)', () => {
     const result = buildPostCompactMessages(makeResult())
     expect(result).toHaveLength(2)
     expect(getCurrentUsage(result)).toBeNull()
+  })
+})
+
+describe('oversized compaction recovery (#1373)', () => {
+  function toolHistory(rounds: number): Message[] {
+    const content = 'historical log data '.repeat(28_000)
+    const messages: Message[] = [makePreservedUser()]
+    for (let index = 0; index < rounds; index++) {
+      messages.push({
+        ...makePreservedAssistant(),
+        uuid: crypto.randomUUID(),
+        message: {
+          id: `round-${index}`, role: 'assistant', model: 'deepseek-flash',
+          content: [{ type: 'tool_use', id: `read-${index}`, name: 'Read', input: { file_path: `/fixture/${index}` } }],
+          stop_reason: 'tool_use', usage: { input_tokens: 0, output_tokens: 0 },
+        },
+      } as Message, {
+        ...makePreservedUser(),
+        uuid: crypto.randomUUID(),
+        message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `read-${index}`, content }] },
+      } as Message)
+    }
+    messages.push(makePreservedAssistant(), makePreservedUser())
+    return messages
+  }
+
+  function overflow(errorDetails: string): AssistantMessage {
+    return {
+      ...makePreservedAssistant(), isApiErrorMessage: true, errorDetails,
+      message: { ...(makePreservedAssistant() as AssistantMessage).message,
+        content: [{ type: 'text', text: 'Prompt is too long' }] },
+    } as AssistantMessage
+  }
+
+  test('fits the provider budget despite an overestimated local tokenizer, preserving recent tool pairs', () => {
+    const messages = toolHistory(44)
+    // Counts captured from the real DeepSeek request: chars/4 estimates this
+    // repeated log much higher than the provider. Subtracting its raw token
+    // gap from our estimate leaves too many rounds and exhausts the retries.
+    const error = overflow("This model's maximum context length is 1048576 tokens. However, you requested 3763011 tokens (3731011 in the messages, 32000 in the completion).")
+    const result = truncateHeadForPTLRetry(messages, error)!
+    const uses = result.flatMap(message => message.type === 'assistant'
+      ? message.message.content.filter(block => block.type === 'tool_use') : [])
+    const results = result.flatMap(message => message.type === 'user' && Array.isArray(message.message.content)
+      ? message.message.content.filter(block => block.type === 'tool_result') : [])
+    // Real fixture rounds cost about 84k tokens each, plus fixed request
+    // overhead. A retry must actually fit, not merely become smaller.
+    expect(62_000 + uses.length * 84_114).toBeLessThan(1_048_576)
+    expect(uses.length).toBeGreaterThan(0)
+    expect(uses.map(block => block.id)).toEqual(results.map(block => block.tool_use_id))
+    expect(uses.at(-1)?.id).toBe('read-43')
+    expect(result.at(-1)).toBe(messages.at(-1))
+    expect(messages).toHaveLength(91)
+    expect(result[0]?.type).toBe('user')
+  })
+
+  test('unparseable overflow still makes progress across retries and keeps the newest round', () => {
+    const messages = toolHistory(8)
+    const error = overflow('Provider rejected the prompt without token counts')
+    const first = truncateHeadForPTLRetry(messages, error)!
+    const second = truncateHeadForPTLRetry(first, error)!
+    expect(first.length).toBeLessThan(messages.length)
+    expect(second.length).toBeLessThan(first.length)
+    expect(second.at(-1)).toBe(messages.at(-1))
+    expect(second[0]?.type).toBe('user')
   })
 })

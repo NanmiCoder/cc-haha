@@ -9,7 +9,7 @@ import {
 } from '../providerModelContext'
 
 function inputs(overrides: Partial<ModelContextInputs> = {}): ModelContextInputs {
-  return { main: '', haiku: '', sonnet: '', opus: '', ...overrides }
+  return { main: '', fable: '', haiku: '', sonnet: '', opus: '', ...overrides }
 }
 
 describe('1M support and the context window field', () => {
@@ -87,6 +87,7 @@ describe('1M support and the context window field', () => {
 
     const next = apply1mSupportToContextInputs(before, {
       main: true,
+      fable: false,
       haiku: false,
       sonnet: false,
       opus: false,

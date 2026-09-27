@@ -128,7 +128,7 @@ describe('bundled provider presets', () => {
 
   it('keeps active sponsors selectable and ordered like the README', () => {
     expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).filter((preset) => preset.featured).map((preset) => preset.id))
-      .toEqual(['atlascloud', 'apismart'])
+      .toEqual(['aruhub', 'atlascloud', 'apismart'])
   })
 
   it('keeps the retired 接口AI preset resolvable but not selectable', () => {
@@ -145,5 +145,25 @@ describe('bundled provider presets', () => {
 
   it('does not bundle the removed TeamoRouter preset', () => {
     expect(BUNDLED_PROVIDER_PRESETS.some((preset) => preset.id === 'teamorouter')).toBe(false)
+  })
+
+  // The bundle ships the same JSON the server parses, so a field the desktop type
+  // forgot to mirror would be invisible in the form while still steering requests.
+  it('bundles the OpenCode Go rules the server resolves from', () => {
+    const preset = BUNDLED_PROVIDER_PRESETS.find((candidate) => candidate.id === 'opencode-go')
+
+    expect(preset?.baseUrl).toBe('https://opencode.ai/zen/go/v1')
+    expect(preset?.apiFormat).toBe('openai_chat')
+    expect(preset?.authStrategy).toBe('api_key')
+    expect(preset?.modelApiFormats).toEqual([
+      { prefixes: ['grok-', 'gpt-', 'muse-spark-'], apiFormat: 'openai_responses' },
+      { prefixes: ['minimax-', 'qwen', 'union-alpha'], apiFormat: 'anthropic' },
+    ])
+    expect(preset?.upstreamHeaders).toEqual({
+      'User-Agent': 'cc-haha/$VERSION',
+      'x-opencode-session': '$SESSION_ID',
+    })
+    expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((candidate) => candidate.id))
+      .toContain('opencode-go')
   })
 })

@@ -104,18 +104,16 @@ describe('normalizeRuntimeSelection', () => {
     })
   })
 
-  it('removes effort from a non-reasoning Grok model', () => {
+  it('keeps xhigh for Grok models that support it', () => {
     expect(normalizeRuntimeSelection({
       providerId: 'grok-official',
-      modelId: 'grok-composer-2.5-fast',
+      modelId: 'grok-4.7',
       effortLevel: 'xhigh',
     })).toEqual({
       providerId: 'grok-official',
-      modelId: 'grok-composer-2.5-fast',
+      modelId: 'grok-4.7',
+      effortLevel: 'xhigh',
     })
-  })
-
-  it('keeps xhigh for grok-4.6 which supports it', () => {
     expect(normalizeRuntimeSelection({
       providerId: 'grok-official',
       modelId: 'grok-4.6',
@@ -146,7 +144,7 @@ describe('provider 1M runtime selection', () => {
     id: 'provider', name: 'Provider', presetId: 'custom', apiKey: 'fixture',
     baseUrl: 'http://127.0.0.1:9999', apiFormat: 'anthropic',
     models: { main: ' main-model ', haiku: 'fast-model', sonnet: 'balanced-model', opus: 'large-model' },
-    model1mSupport: { main: true, haiku: false, sonnet: true, opus: false },
+    model1mSupport: { main: true, fable: false, haiku: false, sonnet: true, opus: false },
   }
 
   it('materializes the active provider main slot by id and by legacy name', () => {

@@ -23,7 +23,7 @@ import { getDesktopHost } from '../../lib/desktopHost'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { formatBytes } from '../../lib/formatBytes'
 import { classifyPreviewLink } from '../../lib/previewLinkRouter'
-import { isAbsoluteLocalPath, localFileUrl, previewFsUrl } from '../../lib/handlePreviewLink'
+import { isRootedLocalPath, localFileUrl, previewFsUrl } from '../../lib/handlePreviewLink'
 import {
   isWorkspaceBrowserAvailable,
   workspaceBrowserHost,
@@ -59,7 +59,7 @@ function resolveNavigationUrl(input: string, sessionId: string): string {
   const classified = classifyPreviewLink(value)
   if (classified.kind === 'browser-file' && classified.path) {
     const base = getServerBaseUrl()
-    return isAbsoluteLocalPath(classified.path)
+    return isRootedLocalPath(classified.path)
       ? localFileUrl(base, classified.path)
       : previewFsUrl(base, sessionId, classified.path)
   }

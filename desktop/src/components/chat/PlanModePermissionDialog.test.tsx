@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 const { sendMock } = vi.hoisted(() => ({
   sendMock: vi.fn(),
@@ -22,6 +22,9 @@ vi.mock('../../api/websocket', () => ({
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
+import { useProviderStore } from '../../stores/providerStore'
+import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
+import { useHahaOAuthStore } from '../../stores/hahaOAuthStore'
 import { PermissionDialog } from './PermissionDialog'
 import { ToolCallBlock } from './ToolCallBlock'
 
@@ -85,6 +88,50 @@ describe('plan mode permission UI', () => {
       tabs: [{ sessionId: 'session-1', title: 'Test', type: 'session' as const, status: 'idle' }],
     })
     seedPendingPlanPermission()
+    useProviderStore.setState({
+      providers: [{
+        id: 'deepseek',
+        presetId: 'custom',
+        name: 'DeepSeek',
+        apiKey: '***',
+        baseUrl: 'https://api.deepseek.com',
+        apiFormat: 'anthropic',
+        models: {
+          main: 'deepseek-v4-pro',
+          haiku: '',
+          sonnet: '',
+          opus: '',
+        },
+      }],
+      activeId: 'deepseek',
+      hasLoadedProviders: true,
+      isLoading: false,
+      fetchProviders: async () => {},
+    })
+    useSessionRuntimeStore.setState({ selections: {} })
+    useHahaOAuthStore.setState({
+      status: {
+        loggedIn: true,
+        expiresAt: null,
+        scopes: [],
+        subscriptionType: 'pro',
+      },
+      fetchStatus: async () => {},
+    })
+    useSettingsStore.setState({
+      currentModel: {
+        id: 'claude-opus-4-8',
+        name: 'Opus 4.8',
+        description: '',
+        context: '',
+      },
+      activeProviderName: null,
+      availableModels: [
+        { id: 'claude-opus-4-8', name: 'Opus 4.8', description: '', context: '' },
+        { id: 'claude-sonnet-5', name: 'Sonnet 5', description: '', context: '' },
+        { id: 'claude-haiku-4-5', name: 'Haiku 4.5', description: '', context: '' },
+      ],
+    })
   })
 
   it('renders ExitPlanMode as a plan preview instead of raw tool input', () => {
@@ -292,5 +339,138 @@ describe('plan mode permission UI', () => {
     expect(container.textContent).not.toContain('Tool Output')
     expect(container.textContent).not.toContain('Thoroughly explore the codebase')
     expect(container.textContent).not.toContain('Remember: DO NOT write or edit files')
+  })
+
+  it('sends runtimeOverride with the staged execution model on approve', async () => {
+    useProviderStore.setState({
+      providers: [{
+        id: 'deepseek',
+        presetId: 'custom',
+        name: 'DeepSeek',
+        apiKey: '***',
+        baseUrl: 'https://api.deepseek.com',
+        apiFormat: 'anthropic',
+        models: {
+          main: 'deepseek-v4-pro',
+          haiku: '',
+          sonnet: '',
+          opus: '',
+        },
+      }],
+      activeId: 'deepseek',
+      hasLoadedProviders: true,
+      isLoading: false,
+    })
+    useSettingsStore.setState({
+      currentModel: { id: 'deepseek-v4-pro', name: 'deepseek-v4-pro', description: '', context: '' },
+      activeProviderName: 'DeepSeek',
+    })
+    useSessionRuntimeStore.setState({
+      selections: {
+        'session-1': { providerId: 'deepseek', modelId: 'deepseek-v4-pro' },
+      },
+    })
+
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{ plan: PLAN, planFilePath: '/tmp/claude-plan.md' }}
+      />,
+    )
+
+    // The chip shows the planning model by default and no staged badge.
+    expect(screen.getByTestId('plan-execution-model').textContent).toContain('deepseek-v4-pro')
+    expect(screen.getByTestId('plan-execution-model').textContent).not.toContain('applies on approve')
+    expect(screen.getByText('Execution model')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('model-selector-dropdown')).toBeTruthy()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Sonnet 5/ }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-execution-model').textContent).toContain('applies on approve')
+    })
+    expect(screen.getByTestId('plan-execution-model').textContent).toContain('Sonnet 5')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve plan' }))
+
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: true,
+      runtimeOverride: {
+        providerId: null,
+        modelId: 'claude-sonnet-5',
+      },
+    })
+    // Local echo: the composer pill now reflects the staged execution model.
+    expect(useSessionRuntimeStore.getState().selections['session-1']).toEqual({
+      providerId: null,
+      modelId: 'claude-sonnet-5',
+    })
+    useChatStore.getState().handleServerMessage('session-1', {
+      type: 'runtime_config_applied', providerId: null, modelId: 'claude-sonnet-5',
+    })
+    useSessionRuntimeStore.getState().syncFromSessions([{
+      id: 'session-1', runtimeProviderId: 'deepseek', runtimeModelId: 'deepseek-v4-flash',
+    } as never])
+    expect(useSessionRuntimeStore.getState().selections['session-1']?.modelId).toBe('deepseek-v4-flash')
+  })
+
+  it('keeps the approval plain when the user re-selects the current model', async () => {
+    useSessionRuntimeStore.setState({
+      selections: {
+        'session-1': { providerId: null, modelId: 'claude-opus-4-8' },
+      },
+    })
+    useSettingsStore.setState({
+      currentModel: { id: 'claude-opus-4-8', name: 'Opus 4.8', description: '', context: '' },
+      activeProviderName: null,
+    })
+
+    render(
+      <PermissionDialog
+        sessionId="session-1"
+        requestId="perm-plan"
+        toolName="ExitPlanMode"
+        input={{ plan: PLAN, planFilePath: '/tmp/claude-plan.md' }}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('model-selector-dropdown')).toBeTruthy()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Sonnet 5/ }))
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-execution-model').textContent).toContain('applies on approve')
+    })
+
+    // Open again and pick the current model back.
+    fireEvent.click(screen.getByRole('button', { name: 'Execution model' }))
+    await waitFor(() => {
+      expect(screen.getByTestId('model-selector-dropdown')).toBeTruthy()
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Opus 4\.8/ }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('plan-execution-model').textContent).not.toContain('applies on approve')
+    })
+    expect(screen.getByTestId('plan-execution-model').textContent).toContain('Opus 4.8')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve plan' }))
+
+    expect(sendMock).toHaveBeenCalledWith('session-1', {
+      type: 'permission_response',
+      requestId: 'perm-plan',
+      allowed: true,
+    })
+    expect(sendMock).not.toHaveBeenCalledWith('session-1', expect.objectContaining({
+      runtimeOverride: expect.anything(),
+    }))
   })
 })

@@ -7,6 +7,7 @@ import * as fs from 'fs/promises'
 import * as path from 'path'
 import * as os from 'os'
 import { ProviderService } from '../services/providerService.js'
+import { readActiveProviderManagedEnv } from '../services/providerRuntimeEnv.js'
 import { handleProvidersApi } from '../api/providers.js'
 import { handleProxyRequest } from '../proxy/handler.js'
 import {
@@ -424,6 +425,40 @@ describe('ProviderService', () => {
       expect(runtimeEnv.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('claude-opus-4-7[1m]')
     })
 
+    test('preserves a Fable-only 1M setting after saving and reloading a provider', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        models: {
+          main: 'claude-sonnet-4-6',
+          fable: 'claude-opus-4-7',
+          haiku: 'claude-haiku-4-5',
+          sonnet: 'claude-sonnet-4-6',
+          opus: 'claude-opus-4-7',
+        },
+        model1mSupport: {
+          main: false,
+          fable: true,
+          haiku: false,
+          sonnet: false,
+          opus: false,
+        },
+      }))
+
+      const initiallySaved = await readProvidersConfig()
+      const initialProvider = (initiallySaved.providers as Array<{ model1mSupport?: { fable?: boolean } }>)[0]
+      expect(initialProvider.model1mSupport?.fable).toBe(true)
+      await svc.activateProvider(provider.id)
+
+      const saved = await readProvidersConfig()
+      const savedProvider = (saved.providers as Array<{ model1mSupport?: { fable?: boolean } }>)[0]
+      expect(savedProvider.model1mSupport?.fable).toBe(true)
+
+      const reloaded = await new ProviderService().getProvider(provider.id)
+      expect(reloaded.model1mSupport?.fable).toBe(true)
+      expect(readActiveProviderManagedEnv(tmpDir)?.ANTHROPIC_DEFAULT_FABLE_MODEL)
+        .toBe('claude-opus-4-7[1m]')
+    })
+
     test('DeepSeek preset follows the global thinking toggle instead of forcing disabled thinking', async () => {
       const svc = new ProviderService()
       const provider = await svc.addProvider(sampleInput({
@@ -554,10 +589,72 @@ describe('ProviderService', () => {
           apiFormat: 'openai_responses',
           runtimeKind: 'openai_oauth',
           models: {
-            main: 'gpt-5.6-sol',
-            haiku: 'gpt-5.6-luna',
-            sonnet: 'gpt-5.6-terra',
-            opus: 'gpt-5.6-sol',
+            main: 'gpt-6-sol',
+            haiku: 'gpt-6-luna',
+            sonnet: 'gpt-6-sol',
+            opus: 'gpt-6-astra',
+          },
+        })
+      })
+
+      test('persists OAuth model mappings and restores them when the provider is activated again', async () => {
+        const svc = new ProviderService()
+        const configured = {
+          main: 'gpt-6-astra',
+          fable: 'gpt-6-luna',
+          haiku: 'gpt-6-luna',
+          sonnet: 'gpt-6-astra',
+          opus: 'gpt-6-astra',
+        }
+
+        await svc.updateOfficialProviderModels('openai-official', configured)
+        await svc.activateProvider('openai-official')
+
+        expect(await svc.getOfficialProviderModels('openai-official')).toEqual(configured)
+        expect((await readProvidersConfig()).officialProviderModels).toEqual({
+          'openai-official': configured,
+        })
+        const settings = await readSettings()
+        expect(settings.model).toBe('gpt-6-astra')
+        expect(settings.env).toMatchObject({
+          ANTHROPIC_MODEL: 'gpt-6-astra',
+          ANTHROPIC_DEFAULT_FABLE_MODEL: 'gpt-6-luna',
+          ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gpt-6-luna',
+          ANTHROPIC_DEFAULT_SONNET_MODEL: 'gpt-6-astra',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'gpt-6-astra',
+        })
+        expect(readActiveProviderManagedEnv(tmpDir)).toMatchObject({
+          ANTHROPIC_MODEL: 'gpt-6-astra',
+          ANTHROPIC_DEFAULT_OPUS_MODEL: 'gpt-6-astra',
+        })
+      })
+
+      test('updates Claude OAuth aliases without replacing unrelated user env', async () => {
+        await fs.writeFile(
+          path.join(tmpDir, 'settings.json'),
+          JSON.stringify({ env: { USER_CUSTOM_ENV: 'keep-me' }, futureSetting: true }),
+        )
+        const svc = new ProviderService()
+
+        await svc.updateOfficialProviderModels('claude-official', {
+          main: 'claude-sonnet-5',
+          fable: 'claude-fable-5-1',
+          haiku: 'claude-haiku-4-5',
+          sonnet: 'claude-sonnet-5',
+          opus: 'claude-opus-5-5',
+        })
+
+        const userSettings = JSON.parse(
+          await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf8'),
+        ) as Record<string, unknown>
+        expect(userSettings).toMatchObject({
+          model: 'claude-sonnet-5',
+          futureSetting: true,
+          env: {
+            USER_CUSTOM_ENV: 'keep-me',
+            ANTHROPIC_MODEL: 'claude-sonnet-5',
+            ANTHROPIC_DEFAULT_FABLE_MODEL: 'claude-fable-5-1',
+            ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5-5',
           },
         })
       })
@@ -575,12 +672,14 @@ describe('ProviderService', () => {
         expect(env.OPENAI_CODEX_OAUTH_FILE).toBe(
           path.join(tmpDir, 'cc-haha', 'openai-oauth.json'),
         )
-        expect(env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol')
-        expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('gpt-5.6-luna')
-        expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('gpt-5.6-terra')
-        expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('gpt-5.6-sol')
+        expect(env.ANTHROPIC_MODEL).toBe('gpt-6-sol')
+        expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('gpt-6-luna')
+        expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('gpt-6-sol')
+        expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('gpt-6-astra')
         expect(typeof env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBe('string')
         expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toEqual({
+          'gpt-6-sol': 258_400,
+          'gpt-6-luna': 258_400,
           'gpt-5.6-sol': 353_400,
           'gpt-5.6-terra': 353_400,
           'gpt-5.6-luna': 353_400,
@@ -588,7 +687,7 @@ describe('ProviderService', () => {
           'gpt-5.4': 950_000,
           'gpt-5.5': 258_400,
           'gpt-5.4-mini': 258_400,
-          'gpt-6-astra': 997_500,
+          'gpt-6-astra': 258_400,
         })
         expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
         expect(env.ANTHROPIC_API_KEY).toBeUndefined()
@@ -733,10 +832,10 @@ describe('ProviderService', () => {
           apiFormat: 'openai_chat',
           runtimeKind: 'grok_oauth',
           models: {
-            main: 'grok-4.6',
-            haiku: 'grok-4.6',
-            sonnet: 'grok-4.6',
-            opus: 'grok-4.6',
+            main: 'grok-4.7',
+            haiku: 'grok-4.7',
+            sonnet: 'grok-4.7',
+            opus: 'grok-4.7',
           },
         })
 
@@ -750,10 +849,10 @@ describe('ProviderService', () => {
         expect(env.GROK_OAUTH_FILE).toBe(
           path.join(tmpDir, 'cc-haha', 'grok-oauth.json'),
         )
-        expect(env.ANTHROPIC_MODEL).toBe('grok-4.6')
-        expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('grok-4.6')
-        expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('grok-4.6')
-        expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('grok-4.6')
+        expect(env.ANTHROPIC_MODEL).toBe('grok-4.7')
+        expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('grok-4.7')
+        expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('grok-4.7')
+        expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('grok-4.7')
         expect(env.CC_HAHA_OPENAI_OAUTH_PROVIDER).toBeUndefined()
         expect(env.OPENAI_CODEX_OAUTH_FILE).toBeUndefined()
       })
@@ -2259,6 +2358,29 @@ describe('ProviderService', () => {
       expect(JSON.stringify(body)).not.toContain('Image omitted:')
     })
 
+    test.each(['user', 'tool'] as const)('forwards Kimi K3 images through OpenCode Go from %s content (#1368)', async (contentSource) => {
+      const body = await captureOpenAIChatRequest({
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+        model: 'kimi-k3',
+        contentSource,
+        content: [
+          { type: 'text', text: 'Describe these pictures.' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'k3-picture-one' } },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'k3-picture-two' } },
+        ],
+      })
+
+      const images = ['one', 'two'].map(suffix => ({
+        type: 'image_url', image_url: { url: `data:image/png;base64,k3-picture-${suffix}` },
+      }))
+      expect(body.messages).toEqual(contentSource === 'user'
+        ? [{ role: 'user', content: [{ type: 'text', text: 'Describe these pictures.' }, ...images] }]
+        : [
+            { role: 'tool', tool_call_id: 'computer_1', content: 'Describe these pictures.' },
+            { role: 'user', content: [{ type: 'text', text: '[Media content for tool call computer_1]' }, ...images] },
+          ])
+    })
+
     test('keeps generic OpenAI Chat providers vision-capable by default', async () => {
       const body = await captureOpenAIChatRequest({
         baseUrl: 'https://chat.example.test',
@@ -3181,6 +3303,61 @@ describe('Providers API', () => {
     expect(res.status).toBe(200)
   })
 
+  test('GET and PUT /api/providers/:id/models configure a built-in OAuth provider', async () => {
+    const getRequest = makeRequest('GET', '/api/providers/openai-official/models')
+    const initial = await handleProvidersApi(
+      getRequest.req,
+      getRequest.url,
+      getRequest.segments,
+    )
+    expect(initial.status).toBe(200)
+    expect(await initial.json()).toMatchObject({
+      models: { main: 'gpt-6-sol', opus: 'gpt-6-astra' },
+    })
+
+    const configured = {
+      main: 'gpt-6-astra',
+      haiku: 'gpt-6-luna',
+      sonnet: 'gpt-6-astra',
+      opus: 'gpt-6-astra',
+    }
+    const putRequest = makeRequest('PUT', '/api/providers/openai-official/models', {
+      models: configured,
+    })
+    const updated = await handleProvidersApi(
+      putRequest.req,
+      putRequest.url,
+      putRequest.segments,
+    )
+    expect(updated.status).toBe(200)
+    expect(await updated.json()).toEqual({ models: configured })
+  })
+
+  test('PUT /api/providers/:id/models rejects saved providers', async () => {
+    const svc = new ProviderService()
+    const provider = await svc.addProvider(sampleInput())
+    const request = makeRequest('PUT', `/api/providers/${provider.id}/models`, {
+      models: provider.models,
+    })
+
+    const response = await handleProvidersApi(request.req, request.url, request.segments)
+    expect(response.status).toBe(404)
+  })
+
+  test('PUT /api/providers/:id/models rejects an empty main model', async () => {
+    const request = makeRequest('PUT', '/api/providers/openai-official/models', {
+      models: {
+        main: '   ',
+        haiku: '',
+        sonnet: '',
+        opus: '',
+      },
+    })
+
+    const response = await handleProvidersApi(request.req, request.url, request.segments)
+    expect(response.status).toBe(400)
+  })
+
   // ─── Method not allowed ──────────────────────────────────────────────────
 
   test('should return 405 for unsupported methods', async () => {
@@ -3347,4 +3524,340 @@ describe('ApiSmart preset request contract (offline fixtures)', () => {
       globalThis.fetch = originalFetch
     }
   })
+})
+
+/**
+ * OpenCode Go binds the wire format to the URL path and does no cross-protocol
+ * translation, so one provider record has to reach three different endpoints
+ * depending on the model. These tests pin that contract: which URL each model
+ * family reaches, which credential header goes with it, and the client-identity
+ * headers the gateway refuses to serve without.
+ */
+describe('OpenCode Go preset request contract', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  const apiKey = 'sk-opencode-go-offline-fixture'
+  const SESSION_ID = 'session-opencode-go-1'
+
+  async function loadPreset() {
+    const { PROVIDER_PRESETS } = await import('../config/providerPresets.js')
+    const preset = PROVIDER_PRESETS.find(item => item.id === 'opencode-go')
+    expect(preset).toBeDefined()
+    return preset!
+  }
+
+  async function createProvider(overrides?: { presetId?: string; apiFormat?: string }) {
+    const preset = await loadPreset()
+    const { req, url, segments } = makeRequest('POST', '/api/providers', {
+      presetId: overrides?.presetId ?? preset.id,
+      name: preset.name,
+      baseUrl: preset.baseUrl,
+      apiFormat: overrides?.apiFormat ?? preset.apiFormat,
+      apiKey,
+      models: preset.defaultModels,
+    })
+    const result = await handleProvidersApi(req, url, segments)
+    expect(result.status).toBe(201)
+    const saved = await result.json()
+    return { preset, provider: saved.provider as { id: string } }
+  }
+
+  type UpstreamCall = { url: string; headers: Headers; body: any }
+
+  /**
+   * Records every upstream call and answers with a payload matching the endpoint
+   * that was reached, so a misrouted request surfaces as a transform failure
+   * rather than being masked by a permissive stub.
+   */
+  function stubUpstream(calls: UpstreamCall[]) {
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      const body = init?.body ? JSON.parse(String(init.body)) : undefined
+      calls.push({ url, headers: new Headers(init?.headers), body })
+      if (url.endsWith('/chat/completions')) {
+        return Response.json({
+          id: 'chatcmpl-offline', object: 'chat.completion', model: body?.model,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+        })
+      }
+      if (url.endsWith('/responses')) {
+        return Response.json({
+          id: 'resp-offline', object: 'response', status: 'completed', model: body?.model,
+          output: [{ type: 'message', id: 'msg-1', role: 'assistant', status: 'completed',
+            content: [{ type: 'output_text', text: 'ok', annotations: [] }] }],
+          usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 },
+        })
+      }
+      if (url.endsWith('/messages')) {
+        return Response.json({
+          id: 'msg-offline', type: 'message', role: 'assistant', model: body?.model,
+          stop_reason: 'end_turn',
+          content: [{ type: 'text', text: 'ok' }],
+          usage: { input_tokens: 3, output_tokens: 1 },
+        })
+      }
+      return Response.json({ error: 'Wrong request endpoint' }, { status: 404 })
+    }) as typeof fetch
+    return () => { globalThis.fetch = originalFetch }
+  }
+
+  async function proxy(providerId: string, body: Record<string, unknown>, headers?: Record<string, string>) {
+    const req = new Request(`http://localhost:3456/proxy/providers/${providerId}/v1/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-claude-code-session-id': SESSION_ID, ...headers },
+      body: JSON.stringify(body),
+    })
+    return handleProxyRequest(req, new URL(req.url))
+  }
+
+  test('routes each model family to the endpoint the gateway serves it on, with that endpoint credential', async () => {
+    const { provider } = await createProvider()
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      const cases = [
+        { model: 'glm-5.3', endpoint: '/zen/go/v1/chat/completions', credential: 'bearer' },
+        { model: 'kimi-k3', endpoint: '/zen/go/v1/chat/completions', credential: 'bearer' },
+        { model: 'minimax-m3', endpoint: '/zen/go/v1/messages', credential: 'x-api-key' },
+        { model: 'qwen3.8-max', endpoint: '/zen/go/v1/messages', credential: 'x-api-key' },
+        { model: 'union-alpha', endpoint: '/zen/go/v1/messages', credential: 'x-api-key' },
+        { model: 'grok-4.6', endpoint: '/zen/go/v1/responses', credential: 'bearer' },
+        { model: 'gpt-5.6-luna', endpoint: '/zen/go/v1/responses', credential: 'bearer' },
+      ] as const
+
+      for (const { model, endpoint, credential } of cases) {
+        calls.length = 0
+        const response = await proxy(provider.id, {
+          model, max_tokens: 32, messages: [{ role: 'user', content: 'hello' }],
+        })
+        expect(response.status, `${model} status`).toBe(200)
+        // The response is transformed back into an Anthropic message for the CLI.
+        expect(await response.json(), `${model} body`).toMatchObject({
+          type: 'message', model, content: [{ type: 'text', text: 'ok' }],
+        })
+        expect(calls, `${model} calls`).toHaveLength(1)
+        expect(new URL(calls[0].url).pathname, `${model} endpoint`).toBe(endpoint)
+        expect(calls[0].body.model, `${model} upstream model`).toBe(model)
+
+        const headers = calls[0].headers
+        if (credential === 'x-api-key') {
+          expect(headers.get('x-api-key'), `${model} x-api-key`).toBe(apiKey)
+          // The Messages path parses only x-api-key; a Bearer there is ignored.
+          expect(headers.get('authorization'), `${model} must not send Bearer`).toBeNull()
+        } else {
+          expect(headers.get('authorization'), `${model} bearer`).toBe(`Bearer ${apiKey}`)
+          expect(headers.get('x-api-key'), `${model} must not send x-api-key`).toBeNull()
+        }
+      }
+    } finally {
+      restore()
+    }
+  })
+
+  test('sends the per-conversation session id and own client id on every path', async () => {
+    const { provider } = await createProvider()
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      for (const model of ['glm-5.3', 'minimax-m3', 'grok-4.6']) {
+        calls.length = 0
+        const response = await proxy(provider.id, {
+          model, max_tokens: 32, messages: [{ role: 'user', content: 'hello' }],
+        })
+        expect(response.status, `${model} status`).toBe(200)
+        // Without this the gateway answers 400 MissingSessionID on every path.
+        expect(calls[0].headers.get('x-opencode-session'), `${model} session`).toBe(SESSION_ID)
+        // Identify as this client, never as a generic HTTP library or the CLI we fork.
+        expect(calls[0].headers.get('user-agent'), `${model} ua`).toMatch(/^cc-haha\//)
+        expect(calls[0].headers.get('user-agent'), `${model} ua`).not.toContain('claude-cli/')
+      }
+    } finally {
+      restore()
+    }
+  })
+
+  test('omits the session header rather than sending an empty one without a conversation', async () => {
+    const { provider } = await createProvider()
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      const req = new Request(`http://localhost:3456/proxy/providers/${provider.id}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model: 'glm-5.3', max_tokens: 32, messages: [{ role: 'user', content: 'hi' }] }),
+      })
+      expect((await handleProxyRequest(req, new URL(req.url))).status).toBe(200)
+      expect(calls[0].headers.get('x-opencode-session')).toBeNull()
+    } finally {
+      restore()
+    }
+  })
+
+  test('does not run the nested-media compatibility rewrite on a per-model Messages route', async () => {
+    const { provider } = await createProvider()
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      const response = await proxy(provider.id, {
+        model: 'minimax-m3',
+        max_tokens: 32,
+        messages: [{
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: 'tool-1',
+            content: [
+              { type: 'text', text: 'screenshot' },
+              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+            ],
+          }],
+        }],
+      })
+      expect(response.status).toBe(200)
+      // A native Messages endpoint accepts nested media, so lifting it out would
+      // be an unrequested rewrite of the caller's request.
+      expect(calls[0].body.messages[0].content[0]).toMatchObject({
+        type: 'tool_result',
+        content: [
+          { type: 'text', text: 'screenshot' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+        ],
+      })
+    } finally {
+      restore()
+    }
+  })
+
+  test('keeps forwarding an anthropic-format provider without per-model rules as before', async () => {
+    const { provider } = await createProvider({ presetId: 'custom', apiFormat: 'anthropic' })
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      // No per-model override and nesting supported: the CLI talks to the
+      // upstream directly, so the proxy is not the right entry point.
+      const response = await proxy(provider.id, {
+        model: 'glm-5.3', max_tokens: 32, messages: [{ role: 'user', content: 'hi' }],
+      })
+      expect(response.status).toBe(400)
+      expect(calls).toHaveLength(0)
+    } finally {
+      restore()
+    }
+  })
+
+  test('does not leak the gateway client headers onto an unrelated provider', async () => {
+    const { provider } = await createProvider({ presetId: 'custom', apiFormat: 'openai_chat' })
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      const response = await proxy(provider.id, {
+        model: 'glm-5.3', max_tokens: 32, messages: [{ role: 'user', content: 'hi' }],
+      })
+      expect(response.status).toBe(200)
+      expect(calls[0].url).toBe('https://opencode.ai/zen/go/v1/chat/completions')
+      expect(calls[0].headers.get('x-opencode-session')).toBeNull()
+      expect(calls[0].headers.get('user-agent') ?? '').not.toMatch(/^cc-haha\//)
+    } finally {
+      restore()
+    }
+  })
+
+  test('the connectivity probe resolves the per-model protocol and sends the session header', async () => {
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      const service = new ProviderService()
+      for (const [model, endpoint] of [
+        ['glm-5.3', '/chat/completions'],
+        ['minimax-m3', '/messages'],
+        ['grok-4.6', '/responses'],
+      ] as const) {
+        calls.length = 0
+        const result = await service.testProviderConfig({
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          apiKey,
+          modelId: model,
+          apiFormat: 'openai_chat',
+          presetId: 'opencode-go',
+        })
+        expect(result.connectivity.success, `${model} connectivity`).toBe(true)
+        expect(result.proxy?.success, `${model} pipeline`).toBe(true)
+        expect(calls.every(call => call.url.endsWith(endpoint)), `${model} endpoints`).toBe(true)
+        expect(calls.every(call => call.headers.get('x-opencode-session')), `${model} session`).toBe(true)
+      }
+    } finally {
+      restore()
+    }
+  })
+
+  test('a record apiFormat that contradicts the preset cannot disable per-model routing', async () => {
+    // cc-switch imports default the record to anthropic, and the edit form lets it
+    // be changed by hand. Either way the preset owns the decision, because one
+    // recorded value cannot express a per-model split — and a record that won would
+    // send every model down one endpoint with no session header.
+    const { provider } = await createProvider({ presetId: 'opencode-go', apiFormat: 'anthropic' })
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      for (const [model, endpoint] of [
+        ['glm-5.3', '/zen/go/v1/chat/completions'],
+        ['minimax-m3', '/zen/go/v1/messages'],
+      ] as const) {
+        calls.length = 0
+        const response = await proxy(provider.id, {
+          model, max_tokens: 32, messages: [{ role: 'user', content: 'hello' }],
+        })
+        expect(response.status, `${model} status`).toBe(200)
+        expect(new URL(calls[0].url).pathname, `${model} endpoint`).toBe(endpoint)
+        expect(calls[0].headers.get('x-opencode-session'), `${model} session`).toBe(SESSION_ID)
+      }
+    } finally {
+      restore()
+    }
+  })
+
+  test('preset client headers win over headers the caller passed in', async () => {
+    // The anthropic path forwards the caller's custom headers, so a client that
+    // sends its own user agent or session id would otherwise out-rank the values
+    // the gateway requires.
+    const { provider } = await createProvider()
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      const response = await proxy(
+        provider.id,
+        { model: 'minimax-m3', max_tokens: 32, messages: [{ role: 'user', content: 'hello' }] },
+        { 'user-agent': 'some-third-party-sdk/1.0', 'x-opencode-session': 'caller-supplied-bogus' },
+      )
+      expect(response.status).toBe(200)
+      expect(calls[0].headers.get('user-agent')).toMatch(/^cc-haha\//)
+      expect(calls[0].headers.get('x-opencode-session')).toBe(SESSION_ID)
+    } finally {
+      restore()
+    }
+  })
+
+  test('resolves the probe format from the preset even when the payload contradicts it', async () => {
+    const calls: UpstreamCall[] = []
+    const restore = stubUpstream(calls)
+    try {
+      const result = await new ProviderService().testProviderConfig({
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+        apiKey,
+        modelId: 'glm-5.3',
+        apiFormat: 'anthropic',
+        presetId: 'opencode-go',
+      })
+      expect(result.connectivity.success).toBe(true)
+      expect(result.proxy?.success).toBe(true)
+      expect(calls.every(call => call.url.endsWith('/chat/completions'))).toBe(true)
+      expect(calls.every(call => call.headers.get('x-opencode-session'))).toBe(true)
+    } finally {
+      restore()
+    }
+  })
+
 })

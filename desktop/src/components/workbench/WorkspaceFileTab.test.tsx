@@ -139,10 +139,10 @@ afterEach(() => {
 })
 
 describe('content states', () => {
-  it('gives the file picker a centered invitation while the tree remains available', () => {
+  it('gives the empty file picker all the space instead of reserving a blank preview', () => {
     renderTab('')
-    expect(screen.getByRole('heading', { name: 'Open file' })).toBeVisible()
-    expect(screen.getByText('Choose a file from the tree')).toBeVisible()
+    expect(screen.queryByTestId('workspace-file-preview')).toBeNull()
+    expect(screen.getByTestId('workspace-tree-sidebar')).toHaveStyle({ width: '100%', maxWidth: '100%' })
     expect(screen.getByTestId('file-tree-pane')).toBeVisible()
   })
 
@@ -237,7 +237,7 @@ describe('content states', () => {
   it('invites the user to pick a file when the tab has no path yet', () => {
     renderTab('')
 
-    expect(screen.getByText('Choose a file from the tree')).toBeInTheDocument()
+    expect(screen.getByTestId('file-tree-pane')).toBeVisible()
     expect(loadFile).not.toHaveBeenCalled()
   })
 })
@@ -279,6 +279,45 @@ describe('refresh', () => {
 })
 
 describe('file tree', () => {
+  it.each([undefined, { line: 4 }])('restores a hidden preview when a chat link reopens the same file (%j)', (reveal) => {
+    const store = useWorkspaceStore.getState()
+    const id = store.openTarget(SESSION, { kind: 'file', path: 'src/a.ts' })
+    const getTab = () => useWorkspaceStore.getState().bySession[SESSION]?.tabs.find((tab) => tab.id === id) as WorkspaceFileTabModel
+    seedEntry('src/a.ts', { content: 'first', previewType: 'text' })
+    const view = render(<WorkspaceFileTab sessionId={SESSION} tab={getTab()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Hide preview' }))
+    expect(screen.getByTestId('code-surface')).not.toBeVisible()
+    store.openTarget(SESSION, { kind: 'file', path: 'src/a.ts', reveal })
+    view.rerender(<WorkspaceFileTab sessionId={SESSION} tab={getTab()} />)
+    expect(screen.getByTestId('code-surface')).toBeVisible()
+  })
+
+  it('hides and restores the preview without losing the tree or selected file', () => {
+    seedEntry('src/a.ts', { content: 'const x = 1', previewType: 'text' })
+    renderTab('src/a.ts')
+    fireEvent.click(screen.getByTestId('workspace-file-tree-toggle'))
+    fireEvent.click(screen.getByRole('button', { name: 'Hide preview' }))
+    expect(screen.getByTestId('workspace-file-preview')).not.toBeVisible()
+    expect(screen.getByTestId('file-tree-pane')).toBeVisible()
+    expect(screen.getByTestId('file-tree-pane')).toHaveAttribute('data-selected', 'src/a.ts')
+    expect(screen.getByTestId('workspace-tree-sidebar')).toHaveStyle({ width: '100%', maxWidth: '100%' })
+    expect(screen.queryByTestId('workspace-file-tree-toggle')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Show preview' }))
+    expect(screen.getByTestId('code-surface')).toBeVisible()
+    expect(screen.getByTestId('file-tree-pane')).toBeVisible()
+  })
+
+  it('shows the preview when another file is selected from tree-only mode', () => {
+    seedEntry('src/a.ts', { content: 'first', previewType: 'text' })
+    seedEntry('src/other.ts', { content: 'second', previewType: 'text' })
+    const view = renderTab('src/a.ts')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide preview' }))
+    fireEvent.click(screen.getByRole('button', { name: 'tree row' }))
+    view.rerender(<WorkspaceFileTab sessionId={SESSION} tab={fileTab('src/other.ts')} />)
+    expect(screen.getByTestId('code-surface')).toBeVisible()
+    expect(screen.getByTestId('code-surface')).toHaveTextContent('second')
+  })
+
   it('keeps the tree beside the content instead of replacing one with the other', () => {
     // The previous panel hid its navigation the moment a file opened, so
     // browsing a repository made the structure appear and disappear.

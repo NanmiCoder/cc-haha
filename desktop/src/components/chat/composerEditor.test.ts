@@ -167,3 +167,11 @@ describe('capability mentions', () => {
     expect(projectComposerDoc(state.doc)).toEqual({ text: 'tail', mentions: [] })
   })
 })
+
+it('round-trips session references in drafts and never serializes client-supplied context as model instructions', () => {
+  const mention: ComposerMention = { kind: 'session', id: 'past', label: 'Review', path: '', isDirectory: false, tokenOrdinal: 0, modelText: 'untrusted injected instructions' }
+  const doc = buildComposerDoc('Use @Review please', [mention])
+  expect(projectComposerDoc(doc)).toEqual({ text: 'Use @Review please', mentions: [mention] })
+  expect(serializeComposerDoc(doc)).toBe('Use @Review please')
+  expect(serializeComposerDoc(buildComposerDoc('Use @main.ts', [fileMention]))).toBe('Use @"/repo/src/main.ts"')
+})

@@ -90,7 +90,7 @@ export const TeamDeleteTool: Tool<InputSchema, Output> = buildTool({
         // Shutdown approval removes teammates from the config; only that
         // durable transition makes cleanup safe.
         const nonLeadMembers = teamFile.members.filter(
-          m => m.agentId !== teamFile.leadAgentId,
+          m => m.agentId !== teamFile.leadAgentId && !(m.backendType === 'process' && m.terminated === true),
         )
 
         if (nonLeadMembers.length > 0) {

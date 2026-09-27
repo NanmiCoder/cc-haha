@@ -354,4 +354,51 @@ describe('AgentTeamsCanvas', () => {
       /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.agent-teams-task-running-fill\s*\{[^}]*opacity:\s*0;/,
     )
   })
+
+  it('chips each member card with its model family and keeps the full id on hover', () => {
+    const current = snapshot('current')
+    const withModels: TeamWorkbenchSnapshot = {
+      ...current,
+      team: {
+        ...current.team,
+        members: current.team.members.map(member => (
+          member.agentId === 'team-lead@canvas-team'
+            ? { ...member, model: 'claude-opus-4-8' }
+            : member.agentId === 'builder@canvas-team'
+              ? { ...member, model: 'claude-sonnet-5' }
+              : member
+        )),
+      },
+    }
+
+    render(<AgentTeamsCanvas {...props({
+      snapshots: [withModels],
+      selectedIndex: 0,
+      snapshot: withModels,
+      previousSnapshot: undefined,
+      activeMessageId: null,
+    })} />)
+
+    // A member with its own model shows the short family, full id on hover.
+    const builder = screen.getByTestId('agent-teams-canvas-member-model-builder@canvas-team')
+    expect(builder.textContent).toBe('sonnet')
+    expect(builder.getAttribute('title')).toBe('claude-sonnet-5')
+    expect(builder.getAttribute('data-model-inherited')).toBe('false')
+
+    // The lead shows its own model, and a member with none inherits it.
+    const lead = screen.getByTestId('agent-teams-canvas-member-model-team-lead@canvas-team')
+    expect(lead.textContent).toBe('opus')
+    const reviewer = screen.getByTestId('agent-teams-canvas-member-model-reviewer@canvas-team')
+    expect(reviewer.textContent).toBe('opus')
+    expect(reviewer.getAttribute('data-model-inherited')).toBe('true')
+  })
+
+  it('renders no model chip at all when neither the member nor the lead has one', () => {
+    render(<AgentTeamsCanvas {...props()} />)
+
+    const builder = screen.queryByTestId('agent-teams-canvas-member-model-builder@canvas-team')
+    expect(builder).toBeNull()
+    const lead = screen.queryByTestId('agent-teams-canvas-member-model-team-lead@canvas-team')
+    expect(lead).toBeNull()
+  })
 })

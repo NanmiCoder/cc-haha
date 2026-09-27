@@ -124,6 +124,25 @@ test('cancelling a first install leaves no installed or failed connector behind'
     expect(f.service.get('feishu').failedPhase).toBeUndefined()
     expect(f.calls).not.toContain('install')
     expect(f.calls).not.toContain('enabled:true')
+    // No enabled=false tombstone either: the plugin was never published to a
+    // marketplace, so a settings entry would surface as plugin-not-found in
+    // every later plugin load and fail unrelated reloads.
+    expect(f.calls).not.toContain('enabled:false')
+  } finally { f.cleanup() }
+})
+
+test('a failed first install writes no disabled plugin tombstone into settings', async () => {
+  const f = fixture()
+  try {
+    const baseInstall = f.deps.bridge.installConnectorPlugin
+    f.deps.bridge.installConnectorPlugin = async (def, installation) => { await baseInstall(def, installation); throw new Error('simulated bridge failure') }
+    f.service.action('feishu', 'prepare')
+    await settled(f.service)
+    expect(f.service.get('feishu')).toMatchObject({ installed: false, status: 'error' })
+    expect(f.calls).toContain('install')
+    // The failure path must not disable an unpublished plugin: that settings
+    // key refers to a plugin no marketplace knows and never gets cleaned up.
+    expect(f.calls).not.toContain('enabled:false')
   } finally { f.cleanup() }
 })
 

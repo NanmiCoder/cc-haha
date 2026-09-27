@@ -66,6 +66,22 @@ const DEFAULT_MODELS = [
     context: '1m',
   },
   {
+    id: 'claude-opus-5-5',
+    name: 'Opus 5.5',
+    description: 'Best for complex agentic coding and enterprise work',
+    context: '1m',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
+    id: 'claude-opus-5',
+    name: 'Opus 5',
+    description: 'Best for complex agentic coding and enterprise work',
+    context: '1m',
+    defaultReasoningEffort: 'high',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: 'claude-opus-4-8',
     name: 'Opus 4.8',
     description: 'Best for complex agentic coding and enterprise work',
@@ -91,7 +107,7 @@ const DEFAULT_MODELS = [
 
 const EFFORT_LEVELS = MODEL_REASONING_EFFORTS
 
-const DEFAULT_MODEL = 'claude-opus-4-8'
+const DEFAULT_MODEL = 'claude-opus-5'
 const DEFAULT_EFFORT = 'max'
 
 const settingsService = new SettingsService()

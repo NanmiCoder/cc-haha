@@ -226,6 +226,7 @@ describe('in-process teammate task claiming', () => {
         const toolContext = {
           agentId: 'idle-agent@task-update-owner-race',
           abortController: new AbortController(),
+          getAppState: () => ({}),
           setAppState: () => {},
         } as unknown as ToolUseContext
         const teammateUpdate = runWithTeammateContext(
@@ -276,6 +277,7 @@ describe('in-process teammate task claiming', () => {
       const toolContext = {
         agentId: 'worker@task-update-auto-owner',
         abortController: new AbortController(),
+        getAppState: () => ({}),
         setAppState: () => {},
       } as unknown as ToolUseContext
 
@@ -401,6 +403,7 @@ describe('in-process teammate task claiming', () => {
       process.env.CLAUDE_CODE_TASK_LIST_ID = taskListId
       const toolContext = {
         abortController: new AbortController(),
+        getAppState: () => ({}),
         setAppState: () => {},
       } as unknown as ToolUseContext
 

@@ -125,6 +125,7 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
       editorClassName,
       aria,
       rootRef,
+      disabled,
     } = props
 
     const containerRef = useRef<HTMLDivElement | null>(null)
@@ -285,6 +286,16 @@ export const MentionComposer = forwardRef<MentionComposerHandle, MentionComposer
         workflowKeywordTriggerEnabled,
       ))
     }, [workflowKeywordTriggerEnabled])
+
+    // ProseMirror only re-reads `editable` while updating the view, so a disabled
+    // flip that changes nothing else (no new value, same placeholder) used to
+    // leave the editor typing-editable. An empty transaction forces the
+    // recompute — same trick as the workflow gate above.
+    useEffect(() => {
+      const view = viewRef.current
+      if (!view) return
+      view.dispatch(view.state.tr)
+    }, [disabled])
 
     // Dynamic editor chrome: classes and aria attributes are not part of the
     // document, so they are applied straight to the editable element.

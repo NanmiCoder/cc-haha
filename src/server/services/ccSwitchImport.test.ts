@@ -1062,6 +1062,7 @@ describe('cc-switch candidate mapping', () => {
     })
     expect(candidate.model1mSupport).toEqual({
       main: false,
+      fable: false,
       haiku: false,
       sonnet: false,
       opus: false,
@@ -1093,6 +1094,7 @@ describe('cc-switch candidate mapping', () => {
         ANTHROPIC_BASE_URL: 'https://api.example.com',
         ANTHROPIC_AUTH_TOKEN: FULL_KEY,
         ANTHROPIC_MODEL: 'gemini-3.6-flash-high[1M]',
+        ANTHROPIC_DEFAULT_FABLE_MODEL: 'gemini-3.6-pro:1m',
         ANTHROPIC_DEFAULT_HAIKU_MODEL: 'gemini-3.6-flash-lite',
         ANTHROPIC_DEFAULT_SONNET_MODEL: 'gemini-3.6-flash-high:1m',
         ANTHROPIC_DEFAULT_OPUS_MODEL: 'gemini-3.6-pro[1m]',
@@ -1103,12 +1105,14 @@ describe('cc-switch candidate mapping', () => {
 
     expect(candidate.models).toEqual({
       main: 'gemini-3.6-flash-high',
+      fable: 'gemini-3.6-pro',
       haiku: 'gemini-3.6-flash-lite',
       sonnet: 'gemini-3.6-flash-high',
       opus: 'gemini-3.6-pro',
     })
     expect(candidate.model1mSupport).toEqual({
       main: true,
+      fable: true,
       haiku: false,
       sonnet: true,
       opus: true,

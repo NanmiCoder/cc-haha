@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import { ExternalLink, RefreshCw, Trash2, Workflow } from 'lucide-react'
 import { tracesApi } from '../api/traces'
@@ -35,6 +35,7 @@ export function TraceList() {
   const [isLoadingMore, setIsLoadingMore] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<TraceSessionListItem | null>(null)
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null)
+  const activeRequest = useRef<AbortController | null>(null)
   const host = getDesktopHost()
 
   useEffect(() => {
@@ -50,16 +51,20 @@ export function TraceList() {
     offset?: number
     silent?: boolean
   }) => {
+    if (options?.silent && activeRequest.current) return
+    activeRequest.current?.abort()
+    const controller = new AbortController()
+    activeRequest.current = controller
     const append = options?.append === true
     const offset = options?.offset ?? 0
     const limit = options?.limit ?? PAGE_SIZE
     try {
-      if (append) {
-        setIsLoadingMore(true)
-      } else if (!options?.silent) {
+      setIsLoadingMore(append)
+      if (!append && !options?.silent) {
         setState({ status: 'loading' })
       }
-      const data = await tracesApi.list({ limit, offset, query })
+      const data = await tracesApi.list({ limit, offset, query }, { signal: controller.signal })
+      if (controller.signal.aborted || activeRequest.current !== controller) return
       setState((previous) => {
         if (!append || previous.status !== 'ready') {
           return { status: 'ready', data }
@@ -73,17 +78,25 @@ export function TraceList() {
         }
       })
     } catch (error) {
+      if (controller.signal.aborted || activeRequest.current !== controller) return
       setState({
         status: 'error',
         message: error instanceof Error ? error.message : t('trace.list.loadFailed'),
       })
     } finally {
-      if (append) setIsLoadingMore(false)
+      if (activeRequest.current === controller) {
+        activeRequest.current = null
+        setIsLoadingMore(false)
+      }
     }
   }, [query, t])
 
   useEffect(() => {
     void load()
+    return () => {
+      activeRequest.current?.abort()
+      activeRequest.current = null
+    }
   }, [load])
 
   useEffect(() => {

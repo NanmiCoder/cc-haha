@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { calculateCurrentContextTokenTotal } from '../context.js'
+import { calculateCurrentContextTokenTotal, getContextWindowForModel, getModelMaxOutputTokens, modelSupports1M } from '../context.js'
 
 describe('calculateCurrentContextTokenTotal', () => {
   test('includes assistant output tokens in the current context total', () => {
@@ -93,4 +93,11 @@ describe('calculateCurrentContextTokenTotal', () => {
       canonicalTokens: 221_000,
     })).toBe(30_000)
   })
+})
+
+test('Opus 5 uses its native context and output limits', () => {
+  expect(modelSupports1M('claude-opus-5')).toBe(true)
+  expect(getContextWindowForModel('claude-opus-5')).toBe(1_000_000)
+  expect(getContextWindowForModel('anthropic/claude-opus-5')).toBe(1_000_000)
+  expect(getModelMaxOutputTokens('claude-opus-5')).toEqual({ default: 64_000, upperLimit: 128_000 })
 })

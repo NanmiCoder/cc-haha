@@ -654,8 +654,8 @@ describe('local index database', () => {
     try {
       expect(reopened.read(operation => operation.get<{ user_version: number }>(
         'PRAGMA user_version',
-      )?.user_version)).toBe(5)
-      expect(reopened.read(operation => operation.all('SELECT * FROM sessions'))).toEqual(originalSessions)
+      )?.user_version)).toBe(LOCAL_INDEX_SCHEMA_VERSION)
+      expect(reopened.read(operation => operation.all('SELECT * FROM sessions'))).toEqual(originalSessions.map(row => ({ ...row, is_team_worker: 0 })))
       expect(reopened.read(operation => operation.all('SELECT * FROM activity_sessions'))).toEqual(originalActivity)
       expect(reopened.read(operation => operation.get<{ value: string }>(
         "SELECT value FROM schema_meta WHERE key = 'future-extension'",

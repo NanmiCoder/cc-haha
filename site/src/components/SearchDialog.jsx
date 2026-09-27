@@ -1,10 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Icon from './icons'
-import { getSections, toSiteHref } from '../content/docs'
+import { getAllDocs, getSections, toSiteHref } from '../content/docs'
+import { highlightParts, queryTerms, searchEntries, shouldOpenSearchResult } from './searchResults'
+import './search-dialog.css'
 
 const copy = {
   zh: {
     close: '关闭搜索',
+    clear: '清空搜索',
+    loading: '正在载入文档…',
+    failed: '搜索暂时无法加载，请关闭后重试。',
+    popular: '从这里开始',
+    title: '找到下一步',
+    count: (total, shown) => total > shown ? `显示前 ${shown} 篇 · 共 ${total} 篇` : `${total} 篇文档`,
     empty: '没有匹配的文档',
     hint: '搜标题、摘要和正文',
     label: '搜索文档',
@@ -14,6 +22,12 @@ const copy = {
   },
   en: {
     close: 'Close search',
+    clear: 'Clear search',
+    loading: 'Loading documentation…',
+    failed: 'Search could not load. Close and try again.',
+    popular: 'Start exploring',
+    title: 'Find your next step',
+    count: (total, shown) => total > shown ? `Top ${shown} of ${total} results` : `${total} documents`,
     empty: 'Nothing matched',
     hint: 'Searches titles, summaries and body text',
     label: 'Search docs',
@@ -25,38 +39,16 @@ const copy = {
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input, [tabindex]'
 
-function score(entry, terms) {
-  const title = entry.t.toLowerCase()
-  const description = (entry.d || '').toLowerCase()
-  const body = (entry.x || '').toLowerCase()
-  let total = 0
-
-  for (const term of terms) {
-    if (title.includes(term)) total += title.startsWith(term) ? 12 : 8
-    else if (description.includes(term)) total += 4
-    else if (body.includes(term)) total += 2
-    else return 0
-  }
-
-  return total
-}
-
-/** 取正文里第一处命中的上下文，让结果能自我解释。 */
-function excerpt(entry, terms) {
-  const body = entry.x || ''
-  if (!body) return entry.d || ''
-
-  const lower = body.toLowerCase()
-  const at = terms.map((term) => lower.indexOf(term)).filter((index) => index >= 0).sort((a, b) => a - b)[0]
-  if (at === undefined) return entry.d || body.slice(0, 110)
-
-  const start = Math.max(0, at - 40)
-  return `${start > 0 ? '…' : ''}${body.slice(start, start + 120).trim()}…`
+function Highlight({ text, terms }) {
+  return highlightParts(text, terms).map((part, index) => part.match
+    ? <mark key={index}>{part.text}</mark>
+    : part.text)
 }
 
 export default function SearchDialog({ locale = 'zh', onClose }) {
   const [query, setQuery] = useState('')
   const [index, setIndex] = useState(null)
+  const [loadFailed, setLoadFailed] = useState(false)
   const [active, setActive] = useState(0)
   const inputRef = useRef(null)
   const listRef = useRef(null)
@@ -73,6 +65,8 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
     let cancelled = false
     import('../generated/search-index').then((module) => {
       if (!cancelled) setIndex(module.default)
+    }).catch(() => {
+      if (!cancelled) setLoadFailed(true)
     })
     inputRef.current?.focus()
     return () => {
@@ -98,25 +92,25 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
     if (opener instanceof HTMLElement && document.contains(opener)) opener.focus()
   }, [])
 
-  const results = useMemo(() => {
-    const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-    if (!index || terms.length === 0) return []
+  const terms = useMemo(() => queryTerms(query), [query])
+  const searching = terms.length > 0
+  const matches = useMemo(() => searchEntries(index, locale, terms), [index, locale, terms])
+  const suggestions = useMemo(() => {
+    const routes = ['/start/install', '/start/first-session', '/desktop', '/desktop/computer-use']
+    const docs = getAllDocs(locale)
+    return routes.map((route) => docs.find((doc) => doc.path === `${locale === 'en' ? '/en' : ''}${route}`))
+      .filter(Boolean)
+      .map((doc) => ({ path: doc.path, title: doc.title, section: doc.section, excerpt: doc.description || '' }))
+  }, [locale])
+  const results = searching ? matches.results : suggestions
+  const selected = Math.min(active, Math.max(0, results.length - 1))
 
-    return index
-      .filter((entry) => entry.l === locale)
-      .map((entry) => ({ entry, value: score(entry, terms) }))
-      .filter((item) => item.value > 0)
-      .sort((left, right) => right.value - left.value)
-      .slice(0, 12)
-      .map(({ entry }) => ({
-        excerpt: excerpt(entry, terms),
-        path: entry.p,
-        section: sectionLabels.get(entry.s) || entry.s,
-        title: entry.t
-      }))
-  }, [index, locale, query, sectionLabels])
+  useEffect(() => setActive(0), [query, locale])
 
-  useEffect(() => setActive(0), [query])
+  function clearQuery() {
+    setQuery('')
+    inputRef.current?.focus()
+  }
 
   function open(path) {
     window.history.pushState({}, '', toSiteHref(path))
@@ -156,13 +150,15 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
 
     if (event.key === 'ArrowDown') {
       event.preventDefault()
+      inputRef.current?.focus()
       setActive((value) => (value + 1) % results.length)
     } else if (event.key === 'ArrowUp') {
       event.preventDefault()
+      inputRef.current?.focus()
       setActive((value) => (value - 1 + results.length) % results.length)
-    } else if (event.key === 'Enter') {
+    } else if (shouldOpenSearchResult(event.key, event.target)) {
       event.preventDefault()
-      open(results[active].path)
+      open(results[selected].path)
     }
   }
 
@@ -173,7 +169,7 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
   const hasResults = results.length > 0
 
   return (
-    <div className="search-scrim" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <div className="search-scrim grove-search" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <div
         aria-label={c.label}
         aria-modal="true"
@@ -182,10 +178,17 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
         ref={dialogRef}
         role="dialog"
       >
+        <div className="search-dialog__heading">
+          <span className="search-dialog__eyebrow">cc-haha / {c.label}</span>
+          <button aria-label={c.close} className="icon-btn" onClick={onClose} type="button">
+            <Icon name="close" size={18} />
+          </button>
+          <h2>{c.title}</h2>
+        </div>
         <div className="search-dialog__field">
           <Icon name="search" />
           <input
-            aria-activedescendant={hasResults ? `search-result-${active}` : undefined}
+            aria-activedescendant={hasResults ? `search-result-${selected}` : undefined}
             aria-autocomplete="list"
             aria-controls="search-results"
             aria-expanded={hasResults}
@@ -197,23 +200,24 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
             type="search"
             value={query}
           />
-          <button aria-label={c.close} className="icon-btn" onClick={onClose} type="button">
-            <Icon name="close" size={16} />
-          </button>
+          {query && <button className="search-dialog__clear" onClick={clearQuery} type="button">{c.clear}</button>}
+          <kbd aria-hidden="true">↵</kbd>
         </div>
 
         <div className="search-dialog__body" ref={listRef}>
-          {query.trim() === '' && <p className="search-dialog__hint">{c.hint}</p>}
-          {query.trim() !== '' && !hasResults && (
-            <p className="search-dialog__hint">{c.empty}</p>
+          <div className="search-dialog__status" aria-live="polite" role="status">
+            {!searching ? c.popular : loadFailed ? c.failed : !index ? c.loading : c.count(matches.total, results.length)}
+          </div>
+          {searching && index && !hasResults && (
+            <div className="search-dialog__empty"><Icon name="search" size={28} /><strong>{c.empty}</strong><p>{c.hint}</p></div>
           )}
           {/* 选中项靠 aria-activedescendant 汇报，所以结果本身不进 Tab 序列。 */}
           <div aria-label={c.results} id="search-results" role="listbox">
             {results.map((result, position) => (
               <button
-                aria-selected={position === active}
+                aria-selected={position === selected}
                 className="search-result"
-                data-active={position === active}
+                data-active={position === selected}
                 id={`search-result-${position}`}
                 key={result.path}
                 onClick={() => open(result.path)}
@@ -222,9 +226,10 @@ export default function SearchDialog({ locale = 'zh', onClose }) {
                 tabIndex={-1}
                 type="button"
               >
-                <span className="search-result__section">{result.section}</span>
-                <span className="search-result__title">{result.title}</span>
-                <span className="search-result__excerpt">{result.excerpt}</span>
+                <span className="search-result__section">{sectionLabels.get(result.section) || result.section}</span>
+                <span className="search-result__title"><Highlight text={result.title} terms={terms} /></span>
+                <span className="search-result__excerpt"><Highlight text={result.excerpt} terms={terms} /></span>
+                <Icon className="search-result__arrow" name="arrow" size={18} />
               </button>
             ))}
           </div>

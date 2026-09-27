@@ -68,7 +68,7 @@ order: 3
 
 ## 4. 看它干活
 
-![完整一轮：工具调用折叠卡、思考、权限询问卡、内联 diff](../images/app/zh-CN/session-main.webp)
+![真实项目中的发布说明会话：工具调用、回复与完整会话列表](../images/app/zh-CN/session-main.webp)
 
 它会先摸清情况再动手，你能看到几种不同的卡片：
 

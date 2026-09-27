@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from 'react'
+import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { CircleX } from 'lucide-react'
 import { ToolCallBlock, formatDuration } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -30,6 +31,8 @@ type Props = {
    * one tool resolving and the next starting, many times inside a single run.
    */
   isLive?: boolean
+  /** Stable key that survives virtualized row unmount/remount. */
+  disclosureKey?: string
 }
 
 /**
@@ -56,10 +59,18 @@ export const ActivityGroup = memo(function ActivityGroup({
   activeThinkingId,
   isStreaming,
   isLive = false,
+  disclosureKey,
 }: Props) {
   const t = useTranslation()
   /** null = follow the run's own state; set = the reader decided. */
-  const [pinnedCollapsed, setPinnedCollapsed] = useState<boolean | null>(null)
+  const [pinnedCollapsedLocal, setPinnedCollapsedLocal] = useState<boolean | null>(null)
+  const pinnedCollapsed = disclosureKey
+    ? (getDisclosure(disclosureKey) ?? pinnedCollapsedLocal)
+    : pinnedCollapsedLocal
+  const setPinnedCollapsed = (next: boolean | null) => {
+    setPinnedCollapsedLocal(next)
+    if (disclosureKey && next !== null) setDisclosure(disclosureKey, next)
+  }
 
   const toolCalls = useMemo(() => activityStepToolCalls(steps), [steps])
   const failedCount = countFailedToolCalls(toolCalls, resultMap, childToolCallsByParent)
@@ -176,7 +187,7 @@ function ActivityToolRow({
   const childToolCalls = childToolCallsByParent.get(toolCall.toolUseId) ?? []
 
   return (
-    <div>
+    <div data-chat-anchor-id={toolCall.id}>
       <ToolCallBlock
         chrome="row"
         toolName={toolCall.toolName}

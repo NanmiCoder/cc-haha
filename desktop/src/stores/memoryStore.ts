@@ -177,8 +177,7 @@ export const useMemoryStore = create<MemoryStore>((set, get) => ({
       if (
         request !== saveRequest ||
         !current.selectedFile ||
-        `${current.selectedProjectId}\0${current.selectedFile.path}` !== identity ||
-        current.draftContent !== draftContent
+        `${current.selectedProjectId}\0${current.selectedFile.path}` !== identity
       ) {
         if (request === saveRequest) set({ isSaving: false })
         return false

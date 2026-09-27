@@ -53,6 +53,50 @@ import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mo
 import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
 import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
 
+// Presentation only: classifiers, retries and diagnostic metadata keep the
+// original SDK error. Decode envelopes structurally so escaped quotes/newlines
+// survive, and only suppress HTML documents (not markup mentioned in prose).
+function getAPIErrorDetail(error: APIError): string {
+  const raw = error.message ?? ''
+  const prefix = error.status === undefined ? '' : `${error.status} `
+  const stripped = prefix && raw.startsWith(prefix) ? raw.slice(prefix.length) : raw
+  let body: unknown = error.error
+  if ((body === undefined || body === null) && /^\s*(?:\{|\[|")/.test(stripped)) {
+    try {
+      body = JSON.parse(stripped)
+    } catch {
+      // A malformed envelope is still useful as plain-text diagnostic output.
+    }
+  }
+  let detail = stripped
+  if (body !== undefined && body !== null) {
+    let current: unknown = body
+    detail = 'Request failed'
+    for (let depth = 0; depth < 5; depth++) {
+      if (typeof current === 'string') {
+        detail = current
+        break
+      }
+      if (!current || typeof current !== 'object' || Array.isArray(current)) break
+      const record = current as Record<string, unknown>
+      if (typeof record.message === 'string') {
+        detail = record.message
+        break
+      }
+      current = record.error
+    }
+  }
+  if (/^\s*(?:<!doctype\s+html\b|<html\b|<head\b|<body\b)/i.test(detail)) {
+    return 'Received an HTML error response from the server.'
+  }
+  return detail.trimEnd()
+}
+
+function formatAPIErrorForDisplay(error: APIError): string {
+  const detail = getAPIErrorDetail(error)
+  return error.status === undefined ? detail : `${error.status}${detail ? ` ${detail}` : ''}`
+}
+
 export const API_ERROR_MESSAGE_PREFIX = 'API Error'
 
 export function startsWithApiErrorPrefix(text: string): boolean {
@@ -102,7 +146,8 @@ export function isPromptTooLongMessage(msg: AssistantMessage): boolean {
 
 /**
  * Parse actual/limit token counts from a raw prompt-too-long API error
- * message like "prompt is too long: 137500 tokens > 135000 maximum".
+ * message in Anthropic or OpenAI-compatible format. Requested tokens include
+ * the completion allowance so compaction also leaves room for the response.
  * The raw string may be wrapped in SDK prefixes or JSON envelopes, or
  * have different casing (Vertex), so this is intentionally lenient.
  */
@@ -110,12 +155,19 @@ export function parsePromptTooLongTokenCounts(rawMessage: string): {
   actualTokens: number | undefined
   limitTokens: number | undefined
 } {
-  const match = rawMessage.match(
+  const anthropic = rawMessage.match(
     /prompt is too long[^0-9]*(\d+)\s*tokens?\s*>\s*(\d+)/i,
   )
+  const openAI = anthropic ? null : rawMessage.match(
+    /maximum context length is\s+(\d+)\s+tokens?\.\s*(?:however,\s*)you requested\s+(\d+)\s+tokens?\b/i,
+  )
+  const actualTokens = Number(anthropic?.[1] ?? openAI?.[2])
+  const limitTokens = Number(anthropic?.[2] ?? openAI?.[1])
+  const valid = Number.isSafeInteger(actualTokens) && actualTokens > 0 &&
+    Number.isSafeInteger(limitTokens) && limitTokens > 0
   return {
-    actualTokens: match ? parseInt(match[1]!, 10) : undefined,
-    limitTokens: match ? parseInt(match[2]!, 10) : undefined,
+    actualTokens: valid ? actualTokens : undefined,
+    limitTokens: valid ? limitTokens : undefined,
   }
 }
 
@@ -655,11 +707,7 @@ export function getAssistantMessageFromError(
         error: 'rate_limit',
       })
     }
-    // SDK's APIError.makeMessage prepends "429 " and JSON-stringifies the body
-    // when there's no top-level .message — extract the inner error.message.
-    const stripped = error.message.replace(/^429\s+/, '')
-    const innerMessage = stripped.match(/"message"\s*:\s*"([^"]*)"/)?.[1]
-    const detail = innerMessage || stripped
+    const detail = getAPIErrorDetail(error)
     return createAssistantAPIErrorMessage({
       content: `${API_ERROR_MESSAGE_PREFIX}: Request rejected (429) · ${detail || 'this may be a temporary capacity issue — check status.anthropic.com'}`,
       error: 'rate_limit',
@@ -993,8 +1041,8 @@ export function getAssistantMessageFromError(
     return createAssistantAPIErrorMessage({
       error: 'authentication_failed',
       content: getIsNonInteractiveSession()
-        ? `Failed to authenticate. ${API_ERROR_MESSAGE_PREFIX}: ${error.message}`
-        : `Please run /login · ${API_ERROR_MESSAGE_PREFIX}: ${error.message}`,
+        ? `Failed to authenticate. ${API_ERROR_MESSAGE_PREFIX}: ${formatAPIErrorForDisplay(error)}`
+        : `Please run /login · ${API_ERROR_MESSAGE_PREFIX}: ${formatAPIErrorForDisplay(error)}`,
     })
   }
 
@@ -1071,7 +1119,7 @@ export function getAssistantMessageFromError(
 
   if (error instanceof Error) {
     return createAssistantAPIErrorMessage({
-      content: `${API_ERROR_MESSAGE_PREFIX}: ${error.message}`,
+      content: `${API_ERROR_MESSAGE_PREFIX}: ${error instanceof APIError ? formatAPIErrorForDisplay(error) : error.message}`,
       error: 'unknown',
     })
   }

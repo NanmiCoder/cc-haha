@@ -15,6 +15,9 @@ test('remote settings boundary permits only intended provider routes and General
   expect(validateRemoteSettingsPatch({ alwaysThinkingEnabled: 'true' })).toBe(false)
   expect(validateRemoteSettingsPatch({ chatSendBehavior: 'modifierEnter' })).toBe(true)
   expect(validateRemoteSettingsPatch({ language: '' })).toBe(true)
+  expect(validateRemoteSettingsPatch({ autoQuestion: { enabled: true, timeoutMinutes: 5 } })).toBe(true)
+  expect(validateRemoteSettingsPatch({ autoQuestion: { enabled: true, timeoutMinutes: 3 } })).toBe(false)
+  expect(validateRemoteSettingsPatch({ autoQuestion: { enabled: true, timeoutMinutes: 5, future: true } })).toBe(false)
 })
 
 test('LAN and public provider CRUD redact and preserve keys; General edits isolate desktop secrets', async () => {

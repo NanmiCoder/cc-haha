@@ -79,7 +79,7 @@ describe('Grok model catalog', () => {
       forceRefresh: true,
       fetchOverride: async () => new Response('nope', { status: 503 }),
     })
-    expect(models[0]?.value).toBe('grok-4.6')
+    expect(models[0]?.value).toBe('grok-4.7')
     expect(models.some((model) => model.value === 'grok-4.5')).toBe(true)
   })
 

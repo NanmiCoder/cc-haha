@@ -76,7 +76,6 @@ const LEGACY_ROUTES = new Map(Object.entries({
   '/desktop/08-electron-migration-tasks': '/internals/desktop',
   '/desktop/09-electron-migration-validation-checklist': '/internals/desktop',
   '/desktop/10-release-auto-update': '/internals/contributing',
-  '/docs': '/start',
   '/features/computer-use': '/desktop/computer-use',
   '/features/computer-use-architecture': '/internals/computer-use',
   '/guide/cli-reference': '/cli/reference',
@@ -102,6 +101,7 @@ export function resolveLegacyRoute(pathname) {
   const route = withoutSiteBase(pathname)
   const isEnglish = route === '/en' || route.startsWith('/en/')
   const bare = isEnglish ? route.slice(3) || '/' : route
+  if (bare.toLowerCase() === '/docs') return '/en/start'
   const target = LEGACY_ROUTES.get(bare.toLowerCase())
 
   if (!target) return null

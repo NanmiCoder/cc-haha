@@ -1,8 +1,16 @@
-import { useMemo, useRef, useState } from 'react'
-import { listPendingPermissions, useChatStore } from '../../stores/chatStore'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import {
+  listPendingPermissions,
+  useChatStore,
+  type AskUserQuestionDraft,
+} from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useTranslation } from '../../i18n'
 import { Button } from '@/components/ui/Button'
+import {
+  ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX,
+  ASK_USER_QUESTION_EXPIRED_ANSWER_PREFIX,
+} from '../../../../src/constants/messages'
 
 type QuestionOption = {
   label: string
@@ -29,6 +37,12 @@ type Props = {
   toolUseId: string
   input: unknown
   result?: unknown
+  /**
+   * A user message exists after this question in the transcript — the user has
+   * already moved past it, so no live permission request can still be on its way.
+   * Computed by buildRenderModel, the only place that sees the whole list.
+   */
+  supersededByUserMessage?: boolean
 }
 
 /**
@@ -64,7 +78,13 @@ function getSelectedAnswer(question: Question, selected: string[] | undefined) {
   return question.multiSelect ? selected.join(', ') : selected[0] ?? ''
 }
 
-export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) {
+export function AskUserQuestion({
+  sessionId,
+  toolUseId,
+  input,
+  result,
+  supersededByUserMessage,
+}: Props) {
   const { respondToPermission } = useChatStore()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const targetSessionId = sessionId ?? activeTabId
@@ -72,15 +92,41 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
     ? listPendingPermissions(s.sessions[targetSessionId])
       .find((permission) => permission.toolUseId === toolUseId) ?? null
     : null)
+  // The card is rendered from the transcript, but answering it needs the live
+  // permission request. Both facts below come from the session, never from the
+  // transcript, and they are what tells a live question from an expired one.
+  const sessionChatState = useChatStore((s) =>
+    targetSessionId ? s.sessions[targetSessionId]?.chatState : undefined)
+  const sessionConnectionState = useChatStore((s) =>
+    targetSessionId ? s.sessions[targetSessionId]?.connectionState : undefined)
   const t = useTranslation()
   const questions = parseInput(input)
   const inputObject = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
-  const [activeTab, setActiveTab] = useState(0)
-  const [selections, setSelections] = useState<QuestionSelections>({})
-  const [freeTexts, setFreeTexts] = useState<QuestionFreeTexts>({})
+  // Read once instead of subscribing: this card writes the draft on every
+  // change, and a subscription would feed its own writes back as re-renders.
+  const storedDraft = targetSessionId
+    ? useChatStore.getState().askUserQuestionDrafts[targetSessionId]?.[toolUseId]
+    : undefined
+  const [activeTab, setActiveTab] = useState(storedDraft?.activeTab ?? 0)
+  const [selections, setSelections] = useState<QuestionSelections>(storedDraft?.selections ?? {})
+  const [freeTexts, setFreeTexts] = useState<QuestionFreeTexts>(storedDraft?.freeTexts ?? {})
   const [hasSubmitted, setHasSubmitted] = useState(false)
-  const [hasRequestedChat, setHasRequestedChat] = useState(false)
+  const [hasRequestedChat, setHasRequestedChat] = useState(storedDraft?.handedOff === true)
+  // The question had no live request left, so the answers went out as a message.
+  const [hasSentAsMessage, setHasSentAsMessage] = useState(storedDraft?.sentAsMessage === true)
   const composingRef = useRef(false)
+  const activitySentForRequest = useRef<string | null>(null)
+
+  // A choice can be made before the SDK permission request reaches the UI.
+  // Protect that draft as soon as the matching request arrives.
+  useEffect(() => {
+    if (!targetSessionId || !pendingRequest || hasSubmitted ||
+      activitySentForRequest.current === pendingRequest.requestId) return
+    if (!Object.values(selections).some((labels) => labels.length > 0) &&
+      !Object.values(freeTexts).some((value) => value.trim())) return
+    activitySentForRequest.current = pendingRequest.requestId
+    useChatStore.getState().recordAskUserQuestionActivity(targetSessionId, pendingRequest.requestId)
+  }, [freeTexts, hasSubmitted, pendingRequest, selections, targetSessionId])
 
   const resultAnswers = useMemo(() => {
     if (!result || typeof result !== 'object') return {}
@@ -90,6 +136,8 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
       : {}
   }, [result])
   const resultText = typeof result === 'string' && result.trim().length > 0 ? result.trim() : ''
+  const automaticallyAnswered = Boolean(result && typeof result === 'object' &&
+    (result as { selectionSource?: unknown }).selectionSource === 'automatic')
   const hasStructuredAnswers = Object.keys(resultAnswers).length > 0
   const hasTerminalResult = hasStructuredAnswers || resultText.length > 0
 
@@ -107,6 +155,40 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
       .join('; ')
   }, [freeTexts, hasStructuredAnswers, questions, resultAnswers, resultText, selections])
 
+  // Hand the card's state to the store so it survives the unmounts that tab
+  // switches and the virtualized window cause — the answers are the user's work.
+  // Terminal states it can prove locally win over the ones the server records:
+  // `sentAsMessage` and the handoff leave no trace on the server, and dropping
+  // them would resurrect an answerable form that could deliver twice.
+  useEffect(() => {
+    if (!targetSessionId) return
+    const store = useChatStore.getState()
+    const draft: AskUserQuestionDraft = { activeTab, selections, freeTexts }
+    if (hasSentAsMessage) {
+      store.setAskUserQuestionDraft(targetSessionId, toolUseId, { ...draft, sentAsMessage: true })
+      return
+    }
+    if (hasRequestedChat) {
+      store.setAskUserQuestionDraft(targetSessionId, toolUseId, { ...draft, handedOff: true })
+      return
+    }
+    if (hasSubmitted || hasTerminalResult) {
+      store.clearAskUserQuestionDraft(targetSessionId, toolUseId)
+      return
+    }
+    store.setAskUserQuestionDraft(targetSessionId, toolUseId, draft)
+  }, [
+    activeTab,
+    freeTexts,
+    hasRequestedChat,
+    hasSentAsMessage,
+    hasSubmitted,
+    hasTerminalResult,
+    selections,
+    targetSessionId,
+    toolUseId,
+  ])
+
   // Every hook above this line runs unconditionally, and it has to stay that way.
   // `input` is not fixed for the lifetime of the instance: chatStore rebuilds tool_use
   // messages from the transcript under a stable id (`${messageId}-block-${index}`), so
@@ -117,11 +199,74 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
   const safeActiveTab = Math.min(activeTab, questions.length - 1)
   const activeQuestion = questions[safeActiveTab]
 
-  const submitted = hasTerminalResult || hasSubmitted || hasRequestedChat
+  const submitted = hasTerminalResult || hasSubmitted || hasRequestedChat || hasSentAsMessage
   const terminalWithoutAnswers = submitted && !hasStructuredAnswers && resultText.length > 0
+
+  // Mid-turn states. Here "no request yet" means "not yet", not "never": the card
+  // renders as soon as the tool_use block is complete (`tool_use_complete` clears
+  // isPending), while the can_use_tool request only lands afterwards. Judging that
+  // window as expired would flash a bogus notice on every live question.
+  const sessionBusy =
+    sessionChatState === 'thinking' ||
+    sessionChatState === 'streaming' ||
+    sessionChatState === 'tool_executing' ||
+    sessionChatState === 'compacting' ||
+    sessionChatState === 'permission_pending'
+  // Delivering an expired answer means sending a message, which needs a connected
+  // session. While reconnecting, the permission snapshot may not have arrived yet,
+  // so stay neutral rather than declaring the question dead.
+  const canSendAsMessage = Boolean(targetSessionId) && sessionConnectionState === 'connected'
+  /**
+   * The question outlived its live permission request: whoever was waiting for it
+   * is gone (renderer was away, CLI reclaimed, turn interrupted) or the user has
+   * already replied in the composer. `respondToPermission` has nothing left to
+   * answer, so the card must say so instead of pretending to be a live prompt.
+   *
+   * `!pendingRequest` comes first and is absolute: while a request exists the
+   * answer MUST travel as a permission response — routing it to a message would
+   * drop the real prompt and can cancel the turn waiting on it.
+   */
+  const expired = !submitted && !pendingRequest && canSendAsMessage &&
+    (supersededByUserMessage === true || !sessionBusy)
+
+  /** The `- "question"\n  Answer: …` block every AskUserQuestion handoff uses. */
+  const describeAnswers = () => questions
+    .map((question, index) => {
+      const answer = freeTexts[index]?.trim() || getSelectedAnswer(question, selections[index])
+      return answer
+        ? `- "${question.question}"\n  Answer: ${answer}`
+        : `- "${question.question}"\n  (No answer provided)`
+    })
+    .join('\n')
+
+  /**
+   * Delivers text to the model as an ordinary user message — only ever reached
+   * when no permission request is left to answer. Mirrors ChatInput's
+   * send-or-queue decision so a session that started a new turn between render
+   * and click is not interrupted mid-turn.
+   */
+  const sendAsMessage = (content: string, displayContent: string) => {
+    const sessionId = targetSessionId
+    if (!sessionId) return
+    const store = useChatStore.getState()
+    const liveChatState = store.sessions[sessionId]?.chatState ?? 'idle'
+    if (liveChatState !== 'idle') {
+      store.queueUserMessage(sessionId, { content, displayContent })
+      return
+    }
+    store.sendMessage(sessionId, content, undefined, { displayContent })
+  }
+
+  const markUserActivity = () => {
+    if (!targetSessionId || !pendingRequest || submitted ||
+      activitySentForRequest.current === pendingRequest.requestId) return
+    activitySentForRequest.current = pendingRequest.requestId
+    useChatStore.getState().recordAskUserQuestionActivity(targetSessionId, pendingRequest.requestId)
+  }
 
   const handleSelect = (qIndex: number, label: string) => {
     if (submitted) return
+    markUserActivity()
     // Computed from the render snapshot rather than inside the updater: React
     // may run a state updater twice, and advancing the tab is a side effect.
     // Clicking an already-selected option deselects it — that is not a step
@@ -164,6 +309,7 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
 
   const handleFreeTextChange = (qIndex: number, value: string) => {
     if (submitted) return
+    markUserActivity()
     setFreeTexts((prev) => {
       const next = { ...prev }
       if (value) {
@@ -194,6 +340,15 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
     const response = parts.join('; ')
     if (!response) return
 
+    if (expired) {
+      setHasSentAsMessage(true)
+      sendAsMessage(
+        `${ASK_USER_QUESTION_EXPIRED_ANSWER_PREFIX}\n\n${describeAnswers()}`,
+        response,
+      )
+      return
+    }
+
     if (!targetSessionId || !pendingRequest) return
 
     const answers = questions.reduce<Record<string, string>>((acc, question, index) => {
@@ -208,10 +363,14 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
     }, {})
 
     setHasSubmitted(true)
+    const metadata = inputObject.metadata
     respondToPermission(targetSessionId, pendingRequest.requestId, true, {
       updatedInput: {
         ...inputObject,
         answers,
+        ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+          ? { metadata: Object.fromEntries(Object.entries(metadata).filter(([key]) => key !== 'autoAnswered')) }
+          : {}),
       },
     })
   }
@@ -225,25 +384,32 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
    * "ask them what they'd like to clarify" rather than the usual "STOP and
    * wait". Deliberately not gated on `allAnswered`: not recognising your own
    * question in any of the options is exactly when nothing is filled in.
+   *
+   * With no request left to deny (see `expired`), the same wording is sent as
+   * an ordinary message instead — the model still gets asked to follow up.
    */
   const handleChatAboutThis = () => {
     if (submitted) return
-    if (!targetSessionId || !pendingRequest) return
 
-    // Carry whatever was already picked, so switching to a conversation isn't
-    // punished by losing the partial answers.
-    const questionsWithAnswers = questions
-      .map((question, index) => {
-        const answer = freeTexts[index]?.trim() || getSelectedAnswer(question, selections[index])
-        return answer
-          ? `- "${question.question}"\n  Answer: ${answer}`
-          : `- "${question.question}"\n  (No answer provided)`
-      })
-      .join('\n')
+    if (expired) {
+      const questionsWithAnswers = describeAnswers()
+      setHasRequestedChat(true)
+      // No request left to deny, so this goes out as an ordinary message and
+      // carries the same wording the server would have written for the denial.
+      sendAsMessage(
+        `${ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX}${questionsWithAnswers}`,
+        questionsWithAnswers,
+      )
+      return
+    }
+
+    if (!targetSessionId || !pendingRequest) return
 
     setHasRequestedChat(true)
     respondToPermission(targetSessionId, pendingRequest.requestId, false, {
-      denyMessage: questionsWithAnswers,
+      // Carry whatever was already picked, so switching to a conversation isn't
+      // punished by losing the partial answers.
+      denyMessage: describeAnswers(),
     })
   }
 
@@ -280,13 +446,18 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
           <span className="text-sm font-semibold text-[var(--color-text-primary)]">
             {t('question.needsInput')}
           </span>
-          {submitted && (
+          {(submitted || expired) && (
             <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-[var(--color-surface-container-high)] text-[var(--color-text-tertiary)]">
               {/* handing the question back is not an answer — saying "answered"
-                  there misreports what the user did */}
-              {t(hasRequestedChat
-                ? 'question.chatBadge'
-                : terminalWithoutAnswers ? 'question.completed' : 'question.answered')}
+                  there misreports what the user did; and an expired question was
+                  never answered at all, whatever happened to the answers */}
+              {t(automaticallyAnswered
+                ? 'question.autoAnswered'
+                : hasSentAsMessage || expired
+                ? 'question.expiredBadge'
+                : hasRequestedChat
+                  ? 'question.chatBadge'
+                  : terminalWithoutAnswers ? 'question.completed' : 'question.answered')}
             </span>
           )}
         </div>
@@ -324,6 +495,21 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
 
       {/* Active question content */}
       <div className="px-4 py-3">
+        {/* Nothing is waiting on this question any more. The form below stays
+            usable on purpose — the answers are still worth sending — but which
+            channel they take changes, and that has to be visible. */}
+        {expired && (
+          <div
+            role="status"
+            aria-live="polite"
+            className="mb-3 flex items-start gap-2 text-xs text-[var(--color-text-secondary)]"
+          >
+            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-tertiary)]" aria-hidden="true">
+              info
+            </span>
+            <span>{t('question.expiredNotice')}</span>
+          </div>
+        )}
         <p className="text-sm font-medium text-[var(--color-text-primary)] mb-3">
           {activeQuestion.question}
         </p>
@@ -407,7 +593,14 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
 
         {/* Submitted answer display — the chat handoff wins over any terminal
             result, whose text is the deny payload and not worth showing. */}
-        {submitted && (hasRequestedChat ? (
+        {submitted && (hasSentAsMessage ? (
+          <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
+            <span className="material-symbols-outlined text-[14px] text-[var(--color-secondary)]">send</span>
+            <span>
+              {t('question.sentAsMessagePrefix')}<strong>{answeredText}</strong>
+            </span>
+          </div>
+        ) : hasRequestedChat ? (
           <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
             <span className="material-symbols-outlined text-[14px] text-[var(--color-secondary)]">forum</span>
             <span>{t('question.chatRequested')}</span>
@@ -431,18 +624,20 @@ export function AskUserQuestion({ sessionId, toolUseId, input, result }: Props) 
           <Button
             variant="primary"
             size="sm"
-            disabled={!allAnswered || !pendingRequest}
+            // `expired` is the one state where a button may work without a live
+            // request: it sends the answers as a message instead of answering.
+            disabled={!allAnswered || (!expired && !pendingRequest)}
             onClick={handleSubmit}
             icon={
               <span className="material-symbols-outlined text-[14px]">send</span>
             }
           >
-            {t('question.submit')}
+            {t(expired ? 'question.sendAsMessage' : 'question.submit')}
           </Button>
           <Button
             variant="secondary"
             size="sm"
-            disabled={!pendingRequest}
+            disabled={!expired && !pendingRequest}
             onClick={handleChatAboutThis}
             title={t('question.chatAboutThisHint')}
             icon={

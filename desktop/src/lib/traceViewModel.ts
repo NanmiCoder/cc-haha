@@ -153,12 +153,13 @@ export function buildTraceViewModel(
     })
   }
 
+  const findTurn = createTurnLookup(turns)
   const toolSpanIds = new Map<string, string>()
   const resultBlocksByToolUseId = new Map<string, ToolResultOccurrence[]>()
   const deferredToolResultSpans: Array<{ parentId: string; message: MessageEntry; block: ToolResultBlock }> = []
 
   for (const message of messages) {
-    const turn = findTurnForTimestamp(turns, message.timestamp)
+    const turn = findTurn(message.timestamp)
     const turnId = turn.id
 
     if (message.type === 'tool_result') {
@@ -238,14 +239,14 @@ export function buildTraceViewModel(
   }
 
   for (const item of deferredToolResultSpans) {
-    const turn = findTurnForTimestamp(turns, item.message.timestamp)
+    const turn = findTurn(item.message.timestamp)
     const spanId = `tool_result:${item.message.id}:${item.block.tool_use_id ?? turn.spanIds.length}`
     addToolResultSpan(spans, spanId, item.parentId, turn.index, item.message, item.block)
     turn.spanIds.push(spanId)
   }
 
   for (const call of trace.calls) {
-    const turn = findTurnForTimestamp(turns, call.startedAt)
+    const turn = findTurn(call.startedAt)
     const spanId = `llm:${call.id}`
     const status = getCallStatus(call)
     const derivedCallTiming = call.durationMs !== undefined
@@ -274,7 +275,7 @@ export function buildTraceViewModel(
   }
 
   for (const event of traceEvents) {
-    const turn = findTurnForTimestamp(turns, event.timestamp)
+    const turn = findTurn(event.timestamp)
     const callParentId = event.callId ? `llm:${event.callId}` : undefined
     const parentId = callParentId && spans.has(callParentId) ? callParentId : turn.id
     const spanId = `event:${event.id}`
@@ -353,9 +354,8 @@ function buildDiagnosis(
     .sort((a, b) => compareSpanActivityTime(a, b))
     .at(-1)
   const lastTurn = turns.at(-1)
-  const lastTurnSpans = lastTurn
-    ? lastTurn.spanIds.map((spanId) => spans.find((span) => span.id === spanId)).filter(Boolean) as TraceSpan[]
-    : []
+  const lastTurnIds = new Set(lastTurn?.spanIds ?? [])
+  const lastTurnSpans = spans.filter((span) => lastTurnIds.has(span.id))
   const lastTurnHasUser = lastTurnSpans.some((span) => span.message?.type === 'user')
   const lastTurnHasAgentWork = lastTurnSpans.some((span) =>
     span.kind === 'llm' ||
@@ -655,17 +655,29 @@ function createTurnTitle(index: number, content: unknown): string {
   return preview === 'empty' ? `Turn ${index + 1}` : preview
 }
 
-function findTurnForTimestamp(turns: TraceTurn[], timestamp: string): TraceTurn {
-  const time = new Date(timestamp).getTime()
-  if (!Number.isFinite(time)) return turns[0]!
-  let current = turns[0]!
-  for (const turn of turns) {
-    const turnTime = new Date(turn.timestamp).getTime()
-    if (Number.isFinite(turnTime) && turnTime <= time) {
-      current = turn
+function createTurnLookup(turns: TraceTurn[]): (timestamp: string) => TraceTurn {
+  // Preserve last-matching-turn semantics for out-of-order child activity
+  // without scanning every turn for every message, call, and event.
+  const entries = turns.map((turn, index) => ({ time: new Date(turn.timestamp).getTime(), index }))
+    .filter((entry) => Number.isFinite(entry.time))
+    .sort((a, b) => a.time - b.time)
+  let latestIndex = 0
+  const latestTurns = entries.map((entry) => {
+    latestIndex = Math.max(latestIndex, entry.index)
+    return turns[latestIndex]!
+  })
+  return (timestamp) => {
+    const time = new Date(timestamp).getTime()
+    if (!Number.isFinite(time)) return turns[0]!
+    let lo = 0
+    let hi = entries.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if (entries[mid]!.time <= time) lo = mid + 1
+      else hi = mid
     }
+    return lo === 0 ? turns[0]! : latestTurns[lo - 1]!
   }
-  return current
 }
 
 function earliestTimestamp(

@@ -100,6 +100,7 @@ export function normalizeAskUserQuestionToolResult(content: unknown, toolUseResu
   return {
     questions: result.questions,
     answers,
+    ...(result.selectionSource === 'automatic' ? { selectionSource: 'automatic' } : {}),
   }
 }
 

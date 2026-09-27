@@ -9,6 +9,14 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Agent Teams plan sidecar compatibility and approval recovery',
+    command: ['bun', 'test', './src/utils/swarm/teamPlanStore.test.ts', './src/server/services/teamPlanService.test.ts'],
+  },
+  {
+    title: 'Session collaboration state migration and recovery',
+    command: ['bun', 'test', './src/server/services/sessionCollaborationService.test.ts', '--test-name-pattern', 'migrat|recover'],
+  },
+  {
     title: 'Connector installation state migrations',
     command: ['bun', 'test', './src/server/services/connectorsPersistence.test.ts'],
   },
@@ -27,6 +35,10 @@ const checks: Check[] = [
       'bun', 'test', './src/server/services/localIndex/database.test.ts',
       '--test-name-pattern', 'frozen v[45]',
     ],
+  },
+  {
+    title: 'Trace projection resource-window schema migrations',
+    command: ['bun', 'test', './src/server/services/localIndex/traceIndex.test.ts'],
   },
   {
     title: 'Server persistent JSON migrations',

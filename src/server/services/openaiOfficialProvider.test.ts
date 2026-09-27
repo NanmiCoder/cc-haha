@@ -3,12 +3,17 @@ import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWin
 import { buildOpenAIOfficialRuntimeEnv } from './openaiOfficialProvider.js'
 
 describe('ChatGPT Official runtime environment', () => {
-  test('includes the Astra effective context window without changing the default model', () => {
+  test('includes current Codex OAuth windows and defaults', () => {
     const env = buildOpenAIOfficialRuntimeEnv()
     const windows = JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV_KEY]!) as Record<string, number>
 
-    expect(windows['gpt-6-astra']).toBe(997_500)
+    expect(windows['gpt-6-astra']).toBe(258_400)
+    expect(windows['gpt-6-sol']).toBe(258_400)
+    expect(windows['gpt-6-luna']).toBe(258_400)
     expect(windows['gpt-5.6-sol']).toBe(353_400)
-    expect(env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol')
+    expect(env.ANTHROPIC_MODEL).toBe('gpt-6-sol')
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('gpt-6-sol')
+    expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('gpt-6-luna')
+    expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('gpt-6-astra')
   })
 })

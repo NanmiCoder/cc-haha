@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@/lib/workspace/useWorkspaceFileWatch', () => ({ useWorkspaceFileWatch: () => null }))
 
 const mocks = vi.hoisted(() => ({
+  closeSideChat: vi.fn(async () => {}),
   subscribeWorkspaceBrowserEvents: vi.fn(),
   releaseWorkspaceBrowserTab: vi.fn(),
   isWorkspaceBrowserAvailable: vi.fn(() => false),
@@ -17,6 +18,9 @@ const mocks = vi.hoisted(() => ({
     snapshot: vi.fn(async (): Promise<string | null> => null),
   },
 }))
+
+vi.mock('@/stores/sideChatStore', () => ({ useSideChatStore: { getState: () => ({ close: mocks.closeSideChat }) } }))
+vi.mock('@/components/sideChat/SideChatSurface', () => ({ SideChatSurface: ({ sideChatId }: { sideChatId: string }) => <div data-testid="side-chat-surface">{sideChatId}</div> }))
 
 vi.mock('../../lib/workspace/browserHost', () => ({
   subscribeWorkspaceBrowserEvents: mocks.subscribeWorkspaceBrowserEvents,
@@ -156,7 +160,7 @@ describe('WorkspaceSurface', () => {
     fireEvent.click(add)
     const menu = screen.getByRole('menu', { name: 'Open in workspace' })
     expect(menu).toHaveStyle({ position: 'fixed' })
-    expect(within(menu).getAllByRole('menuitem')).toHaveLength(4)
+    expect(within(menu).getAllByRole('menuitem')).toHaveLength(dock === 'side' ? 5 : 4)
     expect(screen.getByTestId(`workspace-terminal-${id}`)).toBe(content)
     expect(content).toBeVisible()
     expect(add).toHaveAttribute('aria-expanded', 'true')
@@ -615,4 +619,32 @@ describe('useWorkspaceBrowserEventBridge', () => {
     // event must not repaint it.
     expect(useWorkspaceStore.getState().getTab(SESSION, second)).toMatchObject({ url: 'http://b.test/' })
   })
+})
+
+
+it('places side chat in the workspace tabs and confirms destructive close', () => {
+  const id = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'side-chat', sideChatId: 'side-child' })!
+  renderSurface()
+  expect(screen.getByTestId('side-chat-surface')).toHaveTextContent('side-child')
+  const tab = screen.getByRole('tab', { name: 'Side chat' })
+  fireEvent.click(within(tab.parentElement!).getByRole('button', { name: /Close/ }))
+  expect(screen.getByRole('dialog')).toHaveTextContent('This temporary conversation will be deleted')
+  expect(mocks.closeSideChat).not.toHaveBeenCalled()
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Cancel' }))
+  expect(useWorkspaceStore.getState().getTab(SESSION, id)).not.toBeNull()
+  fireEvent.click(within(tab.parentElement!).getByRole('button', { name: /Close/ }))
+  fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }))
+  expect(mocks.closeSideChat).toHaveBeenCalledWith('side-child')
+  expect(useWorkspaceStore.getState().getTab(SESSION, id)).toBeNull()
+})
+
+
+it('confirms a keyboard close request and ignores requests for other parents', () => {
+  const tabId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'side-chat', sideChatId: 'side-child' })!
+  renderSurface()
+  act(() => { window.dispatchEvent(new CustomEvent('workspace-close-request', { detail: { sessionId: 'other', tabId } })) })
+  expect(screen.queryByRole('dialog')).toBeNull()
+  act(() => { window.dispatchEvent(new CustomEvent('workspace-close-request', { detail: { sessionId: SESSION, tabId } })) })
+  expect(screen.getByRole('dialog')).toHaveTextContent('Close side chat?')
+  expect(useWorkspaceStore.getState().getTab(SESSION, tabId)).not.toBeNull()
 })

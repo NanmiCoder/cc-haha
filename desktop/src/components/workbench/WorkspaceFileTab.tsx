@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, ExternalLink, FolderClosed, FolderOpen } from 'lucide-react'
+import { ChevronDown, ChevronRight, ExternalLink, FolderClosed, FolderOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { TargetIcon } from '@/components/composite/TargetIcon'
 import { useWorkspaceFileOpenTargets } from '@/components/workspace/workspaceFileOpenTargets'
@@ -73,6 +73,10 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
   const restoredSurface = useRef<{ node: HTMLElement; revealNonce: number | undefined }>()
   const [consumedReveal, setConsumedReveal] = useState<string | null>(null)
   const viewKey = `${sessionId}::${path}`
+  // Explicit file opens replace the tab model, including same-path chat links.
+  // Keep collapse local to this activation so a later open can reveal content.
+  const [hiddenPreviewTab, setHiddenPreviewTab] = useState<WorkspaceFileTabModel | null>(null)
+  const previewVisible = !!path && hiddenPreviewTab !== tab
   const revealKey = `${viewKey}::${tab.reveal?.nonce}`
   const restoredView = useRef<{ key: string; view: WorkspaceFileView | undefined }>()
   if (restoredView.current?.key !== viewKey) {
@@ -202,7 +206,7 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
             ))
           )}
         </nav>
-        <IconButton
+        {previewVisible ? <IconButton
           ref={treeToggleRef}
           icon={treeOpen
             ? <FolderOpen size={18} strokeWidth={1.8} />
@@ -213,9 +217,20 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
           pressed={treeOpen}
           data-testid="workspace-file-tree-toggle"
           onClick={() => setTreeOpen((open) => !open)}
-        />
+        /> : null}
         {path ? (
           <>
+            <IconButton
+              icon={previewVisible ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+              label={t(previewVisible ? 'workspace.files.hidePreview' : 'workspace.files.showPreview')}
+              size="sm"
+              tone="muted"
+              pressed={previewVisible}
+              onClick={() => {
+                setHiddenPreviewTab(previewVisible ? tab : null)
+                if (previewVisible) setTreeOpen(true)
+              }}
+            />
             <span className="relative flex h-8 shrink-0 items-stretch rounded-[var(--radius-md)] border border-[var(--color-border)]">
               <button
                 type="button"
@@ -268,7 +283,7 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
       </div>
 
       <div data-testid="workspace-file-body" className="relative flex min-h-0 flex-1">
-        <div key={viewKey} ref={fileContentRef} className="flex min-h-0 min-w-0 flex-1 flex-col" onScrollCapture={(event) => {
+        {path ? <div key={viewKey} ref={fileContentRef} data-testid="workspace-file-preview" hidden={!previewVisible} className={`${previewVisible ? 'flex' : 'hidden'} min-h-0 min-w-0 flex-1 flex-col`} onScrollCapture={(event) => {
           const surface = event.target
           if (!(surface instanceof HTMLElement) || !surface.hasAttribute('data-workspace-scroll-surface')) return
           setConsumedReveal(revealKey)
@@ -278,13 +293,7 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
             revealNonce: tab.reveal?.nonce,
           })
         }}>
-          {!path ? (
-            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-5 text-center">
-              <FolderOpen size={32} strokeWidth={1.7} aria-hidden="true" className="mb-1 text-[var(--color-text-tertiary)]" />
-              <h3 className="text-[18px] font-medium text-[var(--color-text-primary)]">{t('workspace.files.openTitle')}</h3>
-              <p className="text-[16px] text-[var(--color-text-tertiary)]">{t('workspace.files.pickAFile')}</p>
-            </div>
-          ) : !entry || entry.state === 'loading' ? (
+          {!entry || entry.state === 'loading' ? (
             <PanelMessage icon="hourglass_empty" message={t('workspace.previewState.loading')} />
           ) : entry.state === 'missing' ? (
             <PanelMessage icon="search_off" message={t('workspace.previewState.missing')} />
@@ -322,18 +331,20 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
               {t('workspace.files.refreshFailed', { reason: entry.refreshError })}
             </p>
           ) : null}
-        </div>
+        </div> : null}
 
-      <WorkspaceTreeSidebar open={treeOpen} onOpenChange={setTreeOpen} collapseOnNarrow={!!path}>
+      <WorkspaceTreeSidebar open={!previewVisible || treeOpen} onOpenChange={setTreeOpen} fullWidth={!previewVisible}>
           <WorkspaceFileTreePane
             sessionId={sessionId}
             selectedPath={path || null}
             autoFocus={!path}
-            onOpen={(nextPath) =>
+            onOpen={(nextPath) => {
+              setHiddenPreviewTab(null)
               // A pick from the tree is a permanent tab of its own. Only the
               // empty Files launcher this tree is hosted in gets replaced —
               // everything else adds, so ten picks mean ten tabs.
-              workspaceOpen.file(sessionId, nextPath, { replaceBlankPlaceholder: true })}
+              workspaceOpen.file(sessionId, nextPath, { replaceBlankPlaceholder: true })
+            }}
           />
       </WorkspaceTreeSidebar>
       </div>

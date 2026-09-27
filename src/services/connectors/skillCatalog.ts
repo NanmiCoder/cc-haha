@@ -14,6 +14,7 @@ const details: Array<{ id: string, name: string, category: ConnectorCategory, de
   { id: 'algorithmic-art', name: '生成式艺术', category: 'design', description: '用 p5.js 创建可调参数的算法艺术与交互画面。', example: '制作一个可调整颜色与密度的流场艺术页面。', requirements: '包含示例模板和参考代码。预览需要浏览器及 p5.js 资源；安装不执行脚本，也不调用生成模型。' },
   { id: 'webapp-testing', name: '网页测试工具包', category: 'development', description: '使用 Playwright 检查本地网页、交互行为与截图。', example: '检查本地应用的登录表单校验和页面布局。', requirements: '包含测试技能、Python 辅助脚本及示例。实际运行需要 Python、Playwright 和浏览器，以及待测应用；安装不会自动下载浏览器。' },
   { id: 'mcp-builder', name: 'MCP 开发工具包', category: 'development', description: '构建与评估 MCP 服务，提供 TypeScript 和 Python 参考。', example: '为我们的内部知识库设计一个 MCP 服务。', requirements: '包含协议设计参考和评估脚本。开发需 Node.js 或 Python 及 MCP SDK；模型评估、第三方 API 使用需用户自行配置凭据，可能产生费用。' },
+  { id: 'remotion', name: 'Remotion', category: 'design', description: '用 React 制作程序化视频，涵盖动画、音频、字幕和渲染。', example: '用 Remotion 制作一段带字幕和配乐的 20 秒产品介绍视频。', requirements: '安装 Remotion 官方的 12 项技能及参考资料，不安装 Remotion 运行库或渲染器。创建和渲染视频需要目标项目依赖、Node.js 与浏览器；Remotion 运行库适用单独的许可条款。' },
 ]
 
 export const SKILL_CONNECTORS: ConnectorDefinition[] = details.map(item => {

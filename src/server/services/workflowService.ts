@@ -34,6 +34,7 @@ import type {
   WorkflowPhaseMeta,
   WorkflowProgressEvent,
 } from '../../utils/workflows/types.js'
+import { readWorkflowTranscriptProjection } from './workflowTranscriptProjection.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import {
   sessionService,
@@ -941,24 +942,25 @@ class WorkflowService {
     }
 
     const seenPaths = new Set<string>()
+    let evidenceBytes = 0
+    let evidenceRecords = 0
     for (const file of files.sort((left, right) => left.modifiedAt - right.modifiedAt)) {
       if (seenPaths.has(file.filePath)) continue
       seenPaths.add(file.filePath)
-      let raw: string
+      let projection
       try {
-        raw = await fs.readFile(file.filePath, 'utf8')
-      } catch {
-        continue
+        projection = await readWorkflowTranscriptProjection(file.filePath)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue
+        throw error
       }
-      for (const line of raw.split('\n')) {
-        if (!line.trim()) continue
-        let entry: Record<string, unknown>
-        try {
-          const parsed = JSON.parse(line)
-          if (!isObjectRecord(parsed)) continue
-          entry = parsed
-        } catch {
-          continue
+      if (!projection.complete) {
+        throw new ApiError(503, 'Workflow history exceeds the bounded reconstruction budget', 'WORKFLOW_HISTORY_INCOMPLETE')
+      }
+      for (const entry of projection.messages) {
+        evidenceBytes += Buffer.byteLength(JSON.stringify(entry))
+        if (++evidenceRecords > 10_000 || evidenceBytes > 3 * 1024 * 1024) {
+          throw new ApiError(503, 'Workflow history exceeds the bounded reconstruction budget', 'WORKFLOW_HISTORY_INCOMPLETE')
         }
         this.collectWorkflowLifecycleEntry(entry, file.ownerAgentId, lifecycle)
       }

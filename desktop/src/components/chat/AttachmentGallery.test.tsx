@@ -473,3 +473,10 @@ describe('AttachmentGallery', () => {
     expect(view.getByRole('button', { name: '移除 a.ts' })).toBeInTheDocument()
   })
 })
+
+it.each(['composer', 'message'] as const)('labels a selected-text reference as text instead of a file in %s', (variant) => {
+  useSettingsStore.setState({ locale: 'en' })
+  const view = render(<AttachmentGallery variant={variant} attachments={[{ type: 'file', name: 'AI reply', quote: 'quoted text', referenceKind: 'chat-selection' }]} />)
+  expect(view.getByText('Selected text')).toBeInTheDocument()
+  expect(view.queryByText('File')).not.toBeInTheDocument()
+})

@@ -82,7 +82,7 @@ const findGitRootImpl = memoizeWithLRU(
     return GIT_ROOT_NOT_FOUND
   },
   path => path,
-  50,
+  512,
 )
 
 /**
@@ -90,9 +90,11 @@ const findGitRootImpl = memoizeWithLRU(
  * Looks for a .git directory or file (worktrees/submodules use a file).
  * Returns the directory containing .git, or null if not found.
  *
- * Memoized per startPath with an LRU cache (max 50 entries) to prevent
+ * Memoized per startPath with an LRU cache (max 512 entries) to prevent
  * unbounded growth — gitDiff calls this with dirname(file), so editing many
  * files across different directories would otherwise accumulate entries forever.
+ * Sidebar hydration walks up to 400 workDirs; 50 was smaller than that page.
+ * Sidebar hydration walks up to 400 workDirs; 50 was smaller than that page.
  */
 export const findGitRoot = createFindGitRoot()
 

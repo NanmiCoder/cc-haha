@@ -374,10 +374,12 @@ describe('Business Flow: Models & Effort', () => {
 
   it('should return available fallback models', async () => {
     const { data } = await api('GET', '/api/models')
-    expect(data.models.length).toBe(5)
+    expect(data.models.length).toBe(7)
     const names = data.models.map((m: any) => m.name)
     expect(names).toContain('Fable 5.1')
     expect(names).toContain('Fable 5')
+    expect(names).toContain('Opus 5.5')
+    expect(names).toContain('Opus 5')
     expect(names).toContain('Opus 4.8')
     expect(names).toContain('Sonnet 5')
     expect(names).toContain('Haiku 4.5')
@@ -385,7 +387,7 @@ describe('Business Flow: Models & Effort', () => {
 
   it('should default to Opus model', async () => {
     const { data } = await api('GET', '/api/models/current')
-    expect(data.model.id).toBe('claude-opus-4-8')
+    expect(data.model.id).toBe('claude-opus-5')
   })
 
   it('should switch to Opus 4.8', async () => {
@@ -407,6 +409,32 @@ describe('Business Flow: Models & Effort', () => {
     const { data } = await api('GET', '/api/models/current')
     expect(data.model).toMatchObject({
       id: 'claude-fable-5-1', name: 'Fable 5.1', context: '1m',
+      defaultReasoningEffort: 'high',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
+  })
+
+  it('should select Opus 5.5 with its reasoning catalog intact', async () => {
+    const { status } = await api('PUT', '/api/models/current', {
+      modelId: 'claude-opus-5-5',
+    })
+    expect(status).toBe(200)
+    const { data } = await api('GET', '/api/models/current')
+    expect(data.model).toMatchObject({
+      id: 'claude-opus-5-5', name: 'Opus 5.5', context: '1m',
+      defaultReasoningEffort: 'medium',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
+  })
+
+  it('should select Opus 5 with its reasoning catalog intact', async () => {
+    const { status } = await api('PUT', '/api/models/current', {
+      modelId: 'claude-opus-5',
+    })
+    expect(status).toBe(200)
+    const { data } = await api('GET', '/api/models/current')
+    expect(data.model).toMatchObject({
+      id: 'claude-opus-5', name: 'Opus 5', context: '1m',
       defaultReasoningEffort: 'high',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     })

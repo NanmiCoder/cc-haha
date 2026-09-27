@@ -273,11 +273,12 @@ it('shows loaded skills and prepares an unsent ordinary task for tool plugins', 
   expect(mocks.draft).toHaveBeenCalledWith('skill-task', { input: 'Use this skill', attachments: [] })
 })
 
-it('renders the complete catalog as 49 plugins and five pure skills without duplicated tool packages', () => {
+it('renders Remotion in the plugin catalog without duplicating it among pure skills', () => {
   useConnectorStore.setState({ items: ALL_CONNECTORS.map(definition => ({ ...definition, supported: true, installed: false, enabled: false, connection: 'disconnected', runtime: 'missing', status: 'not-installed' })) })
   const view = render(<Connectors />)
   const rows = () => view.container.querySelectorAll('img').length
-  expect(rows()).toBe(49)
+  expect(rows()).toBe(50)
+  expect(screen.getByRole('button', { name: 'Remotion' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'extensions.filter' }))
   fireEvent.change(screen.getByRole('combobox', { name: 'connectors.region' }), { target: { value: 'china' } })
   expect(rows()).toBe(22)
@@ -285,6 +286,7 @@ it('renders the complete catalog as 49 plugins and five pure skills without dupl
   expect(rows()).toBe(24)
   view.rerender(<Connectors mode="skills" />)
   expect(rows()).toBe(5)
+  expect(screen.queryByRole('button', { name: 'Remotion' })).not.toBeInTheDocument()
   for (const category of ['development', 'design']) expect(screen.getByRole('option', { name: `connectors.category.${category}` })).toBeInTheDocument()
   for (const category of ['office', 'search', 'maps', 'data', 'finance', 'legal', 'productivity']) expect(screen.queryByRole('option', { name: `connectors.category.${category}` })).not.toBeInTheDocument()
 })

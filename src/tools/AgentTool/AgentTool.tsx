@@ -160,7 +160,7 @@ type Output = z.input<OutputSchema>;
 // Private type for teammate spawn results - excluded from exported schema for dead code elimination
 // The 'teammate_spawned' status string is only included when ENABLE_AGENT_SWARMS is true
 type TeammateSpawnedOutput = {
-  status: 'teammate_spawned';
+  status: 'teammate_spawned' | 'teammate_staged';
   prompt: string;
   teammate_id: string;
   agent_id: string;
@@ -306,7 +306,7 @@ export const AgentTool = buildTool({
       // Cast through unknown because TeammateSpawnedOutput is intentionally
       // not part of the exported Output union (for dead code elimination purposes).
       const spawnResult: TeammateSpawnedOutput = {
-        status: 'teammate_spawned' as const,
+        status: result.data.staged ? 'teammate_staged' : 'teammate_spawned',
         prompt,
         ...result.data
       };

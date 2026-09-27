@@ -51,6 +51,7 @@ function gateway(rows: IndexedSessionRow[], mode: LocalIndexMode, state: LocalIn
     start: async () => {}, stop: async () => {}, rebuild: async () => status,
     listSessions: (options) => ({ sessions: rows.slice(options?.offset ?? 0, (options?.offset ?? 0) + (options?.limit ?? 50)), total: rows.length }),
     findSessionFiles: (id) => rows.filter(row => row.id === id).map(row => ({ filePath: row.transcriptPath, projectDir: row.projectPath })),
+    getSession: (id) => rows.find(row => row.id === id) ?? null,
   }
 }
 
@@ -59,7 +60,57 @@ function request(params: Record<string, string>, method = 'GET') {
   return handleSessionsApi(new Request(url, { method }), url, ['api', 'sessions', 'project-history'])
 }
 
+function sidebarRequest(params: Record<string, string>) {
+  const url = new URL(`http://127.0.0.1/api/sessions?${new URLSearchParams(params)}`)
+  return handleSessionsApi(new Request(url), url, ['api', 'sessions'])
+}
+
 describe('logical project session history', () => {
+  it('hydrates only a bounded preview for every logical project', async () => {
+    const anotherRoot = path.join(configDir, 'another-project')
+    const rows = await Promise.all([
+      seed(0),
+      seed(1),
+      seed(2),
+      seed(3, { root: anotherRoot }),
+      seed(4, { root: anotherRoot }),
+      seed(5, { root: anotherRoot }),
+    ])
+    const service = new SessionService(gateway(rows, 'on'))
+    const internals = service as unknown as { hydrateIndexedSession: (...args: unknown[]) => Promise<unknown> }
+    const hydrate = spyOn(internals, 'hydrateIndexedSession')
+    try {
+      const preview = await service.listProjectPreviews(2)
+
+      expect(preview.sessions.map(session => session.id)).toEqual([
+        idFor(0), idFor(1), idFor(3), idFor(4),
+      ])
+      expect(preview.projects).toEqual([
+        { projectRoot, total: 3 },
+        { projectRoot: anotherRoot, total: 3 },
+      ])
+      expect(preview.total).toBe(6)
+      expect(hydrate).toHaveBeenCalledTimes(4)
+    } finally { hydrate.mockRestore() }
+  })
+
+  it('validates sidebar preview limits at the API boundary', async () => {
+    await seed(0)
+    const response = await sidebarRequest({ view: 'sidebar', perProjectLimit: '1' })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      sessions: [expect.objectContaining({ id: idFor(0) })],
+      projects: [{ projectRoot, total: 1 }],
+      total: 1,
+    })
+    for (const params of [
+      { view: 'unknown' },
+      { view: 'sidebar', perProjectLimit: '0' },
+      { view: 'sidebar', perProjectLimit: '2junk' },
+    ]) expect((await sidebarRequest(params)).status).toBe(400)
+  })
+
   it.each(['off', 'on', 'shadow'] as const)('groups root, external and removed worktree transcripts in %s mode', async (mode) => {
     const rows = [
       await seed(0),
@@ -115,15 +166,28 @@ describe('logical project session history', () => {
     } finally { validate.mockRestore() }
   })
 
-  it.each(['building', 'degraded'] as const)('uses complete file metadata while the on index is %s', async (state) => {
+  it('uses complete file metadata while the on index is degraded', async () => {
     const rows = await Promise.all([0, 1, 2].map(n => seed(n)))
-    const index = gateway(rows.slice(0, 1), 'on', state)
+    const index = gateway(rows.slice(0, 1), 'on', 'degraded')
     const readIndex = spyOn(index, 'listSessions')
     try {
       const page = await new SessionService(index).listProjectHistory({ projectRoot })
       expect(page.sessions.map(session => session.id)).toEqual(rows.map(row => row.id))
       expect(readIndex).not.toHaveBeenCalled()
     } finally { readIndex.mockRestore() }
+  })
+
+  it('keeps building project history on indexed rows instead of scanning every JSONL', async () => {
+    const rows = await Promise.all([0, 1, 2].map(n => seed(n)))
+    const index = gateway(rows.slice(0, 1), 'on', 'building')
+    const service = new SessionService(index)
+    const internals = service as unknown as { scanSessionListSummary: (...args: unknown[]) => Promise<unknown> }
+    const scan = spyOn(internals, 'scanSessionListSummary')
+    try {
+      const page = await service.listProjectHistory({ projectRoot })
+      expect(page.sessions.map(session => session.id)).toEqual([rows[0]!.id])
+      expect(scan).not.toHaveBeenCalled()
+    } finally { scan.mockRestore() }
   })
 
   it('discards a catalog built across a metadata mutation from another service', async () => {

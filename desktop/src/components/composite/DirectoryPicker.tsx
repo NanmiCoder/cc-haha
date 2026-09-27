@@ -1,12 +1,17 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useId, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { useDismissable } from '@/hooks/useDismissable'
 import { sessionsApi, type RecentProject } from '../../api/sessions'
 import { filesystemApi } from '../../api/filesystem'
 import { useTranslation } from '../../i18n'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
-import { useProjectDisplayName } from '../../stores/projectDisplayNameStore'
+import {
+  resolveProjectDisplayName,
+  useProjectDisplayName,
+  useProjectDisplayNameRevision,
+} from '../../stores/projectDisplayNameStore'
 import { getDesktopHost } from '../../lib/desktopHost'
+import { fuzzyFilter } from '../../lib/fuzzyScore'
 import {
   getCachedRecentProjects,
   invalidateRecentProjectsCache,
@@ -45,14 +50,22 @@ function projectNameFromPath(filePath: string) {
 }
 
 function RecentProjectItem({
+  id,
   project,
   value,
   touch,
+  highlighted,
+  itemRef,
+  onHover,
   onSelect,
 }: {
+  id: string
   project: RecentProject
   value: string
   touch: boolean
+  highlighted: boolean
+  itemRef: (el: HTMLButtonElement | null) => void
+  onHover: () => void
   onSelect: (path: string) => void
 }) {
   const displayName = useProjectDisplayName(project.realPath)
@@ -61,11 +74,17 @@ function RecentProjectItem({
 
   return (
     <button
+      id={id}
+      ref={itemRef}
+      type="button"
+      role="option"
+      aria-selected={isSelected}
+      onMouseEnter={onHover}
       onClick={() => onSelect(project.realPath)}
       className={`flex w-full items-center gap-3 px-4 text-left transition-colors hover:bg-[var(--color-surface-hover)] ${
         touch ? 'min-h-[72px] py-3.5' : 'py-3'
       } ${
-        isSelected ? 'bg-[var(--color-surface-selected)]' : ''
+        isSelected ? 'bg-[var(--color-surface-selected)]' : highlighted ? 'bg-[var(--color-surface-hover)]' : ''
       }`}
     >
       {project.isGit ? (
@@ -116,6 +135,14 @@ type PanelProps = {
    * is the only thing that fetches them.
    */
   onProjectsChange?: (projects: RecentProject[]) => void
+  /**
+   * Shows the "new project" row when set. The host owns the editor modal —
+   * this panel unmounts when the host's overlay closes, so the modal cannot
+   * live here. Hosts whose picker is itself a folder field inside the editor
+   * (`ProjectEditorModal`) pass nothing, which is what keeps create dialogs
+   * from stacking ad infinitum.
+   */
+  onCreateProject?: () => void
 }
 
 /**
@@ -136,6 +163,7 @@ export function RecentProjectsPanel({
   onBeforeNativeDialog,
   onModeChange,
   onProjectsChange,
+  onCreateProject,
 }: PanelProps) {
   const t = useTranslation()
   const [mode, setMode] = useState<DirectoryPanelMode>('recent')
@@ -144,6 +172,13 @@ export function RecentProjectsPanel({
   const [browsePath, setBrowsePath] = useState('')
   const [browseParent, setBrowseParent] = useState('')
   const [loading, setLoading] = useState(false)
+  const [query, setQuery] = useState('')
+  const [selectedIndex, setSelectedIndex] = useState(0)
+  const searchRef = useRef<HTMLInputElement>(null)
+  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
+  const searchInputId = useId()
+  const listboxId = useId()
+  const displayNameRevision = useProjectDisplayNameRevision()
 
   // Both callbacks fire from effects. Holding them in a ref means an inline
   // arrow from the caller cannot re-trigger the project load on every render.
@@ -159,7 +194,9 @@ export function RecentProjectsPanel({
   }, [mode])
 
   // The panel only exists while its host is open, so mounting is the load
-  // signal — no `isOpen` to thread through.
+  // signal — no `isOpen` to thread through. The deep scan asks the server for
+  // every project in the session history, not just the latest handful; the
+  // 30s caches on both sides keep repeat opens cheap.
   useEffect(() => {
     if (mode !== 'recent') return
     const cachedProjects = getCachedRecentProjects()
@@ -169,7 +206,7 @@ export function RecentProjectsPanel({
       return
     }
     setLoading(true)
-    sessionsApi.getRecentProjects()
+    sessionsApi.getRecentProjects(500, 5000)
       .then(({ projects: p }) => {
         setCachedRecentProjects(p)
         setProjects(p)
@@ -178,6 +215,51 @@ export function RecentProjectsPanel({
       .catch(() => setProjects([]))
       .finally(() => setLoading(false))
   }, [mode])
+
+  // Pointer users get a focused search box on open; on touch that would only
+  // pop the software keyboard over the list they came for.
+  useEffect(() => {
+    if (touch || mode !== 'recent') return
+    const frame = requestAnimationFrame(() => searchRef.current?.focus())
+    return () => cancelAnimationFrame(frame)
+  }, [mode, touch])
+
+  const filteredProjects = useMemo(() => {
+    // Recompute when a rename lands even though `projects` itself is unchanged.
+    void displayNameRevision
+    return fuzzyFilter(projects, query, (project) => [
+      resolveProjectDisplayName(project.realPath) || project.repoName || project.projectName,
+      project.realPath,
+    ])
+  }, [projects, query, displayNameRevision])
+
+  useEffect(() => {
+    setSelectedIndex(0)
+  }, [query])
+
+  // Keep the keyboard-highlighted row visible while ArrowUp/Down move it.
+  useEffect(() => {
+    itemRefs.current[selectedIndex]?.scrollIntoView({ block: 'nearest' })
+  }, [selectedIndex])
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setSelectedIndex((prev) => Math.min(prev + 1, Math.max(filteredProjects.length - 1, 0)))
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setSelectedIndex((prev) => Math.max(prev - 1, 0))
+      return
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      const candidate = filteredProjects[selectedIndex]
+      if (candidate) handleSelect(candidate.realPath)
+    }
+    // Escape intentionally falls through to the host's dismiss handler.
+  }
 
   const loadBrowseDir = async (path?: string) => {
     setLoading(true)
@@ -290,24 +372,65 @@ export function RecentProjectsPanel({
           {t('dirPicker.recent')}
         </div>
       )}
-      <div className={`${touch ? '' : 'max-h-[300px]'} overflow-y-auto`}>
+      <div className="px-3 pb-2">
+        <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
+          <span aria-hidden="true" className="material-symbols-outlined shrink-0 text-[16px] text-[var(--color-text-tertiary)]">search</span>
+          <input
+            id={searchInputId}
+            ref={searchRef}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            aria-controls={listboxId}
+            aria-activedescendant={filteredProjects[selectedIndex] ? `${listboxId}-option-${selectedIndex}` : undefined}
+            placeholder={t('dirPicker.searchProjects')}
+            autoComplete="off"
+            spellCheck={false}
+            className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+          />
+        </div>
+      </div>
+      <div
+        id={listboxId}
+        role="listbox"
+        aria-label={t('dirPicker.selectProject')}
+        className={`${touch ? '' : 'max-h-[300px]'} overflow-y-auto`}
+      >
         {loading ? (
           <LoadingState label={t('common.loading')} variant="block" size="sm" />
         ) : projects.length === 0 ? (
           <EmptyState description={t('dirPicker.noRecent')} variant="plain" size="sm" />
+        ) : filteredProjects.length === 0 ? (
+          <EmptyState description={t('dirPicker.noMatches')} variant="plain" size="sm" />
         ) : (
-          projects.map((project) => (
+          filteredProjects.map((project, index) => (
             <RecentProjectItem
               key={project.projectPath}
+              id={`${listboxId}-option-${index}`}
               project={project}
               value={value}
               touch={touch}
+              highlighted={index === selectedIndex}
+              itemRef={(el) => { itemRefs.current[index] = el }}
+              onHover={() => setSelectedIndex(index)}
               onSelect={handleSelect}
             />
           ))
         )}
       </div>
+      {/* Action rows stay out of the listbox: an `option` role would announce
+          them as projects. */}
       <div className="border-t border-[var(--color-border)]">
+        {onCreateProject && (
+          <button
+            type="button"
+            onClick={onCreateProject}
+            className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+          >
+            <span className="material-symbols-outlined text-[20px] text-[var(--color-text-tertiary)]">add</span>
+            <span className="text-sm text-[var(--color-text-secondary)]">{t('sidebar.newProject')}</span>
+          </button>
+        )}
         <button
           onClick={handleChooseFolder}
           className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface-hover)]"

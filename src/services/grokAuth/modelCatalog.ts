@@ -6,6 +6,7 @@ import { createModelCatalogCache } from '../modelCatalogCache.js'
 import { ensureFreshGrokTokens } from './refresh.js'
 import {
   GROK_MODEL_CATALOG,
+  setGrokRuntimeModelCatalog,
   type GrokModelCatalogEntry,
 } from './models.js'
 
@@ -16,7 +17,6 @@ const catalogCache = createModelCatalogCache<GrokModelCatalogEntry[]>({
   ttlMs: MODEL_CATALOG_TTL_MS,
   failureBackoffMs: MODEL_CATALOG_FAILURE_BACKOFF_MS,
 })
-let runtimeCatalog: readonly GrokModelCatalogEntry[] = GROK_MODEL_CATALOG
 
 export async function fetchGrokModelCatalog(
   fetchOverride: typeof fetch = globalThis.fetch,
@@ -38,7 +38,7 @@ export async function fetchGrokModelCatalog(
     .map(normalizeRemoteModel)
     .filter((model): model is GrokModelCatalogEntry => model !== null)
   if (!models.length) throw new Error('Grok models endpoint returned no models')
-  runtimeCatalog = models
+  setGrokRuntimeModelCatalog(models)
   return models
 }
 
@@ -55,17 +55,13 @@ export async function getGrokModelCatalog(options?: {
     fallback: GROK_MODEL_CATALOG,
     ...(options?.forceRefresh ? { forceRefresh: true } : {}),
   })
-  runtimeCatalog = models
+  setGrokRuntimeModelCatalog(models)
   return models
-}
-
-export function getGrokRuntimeModelCatalog(): readonly GrokModelCatalogEntry[] {
-  return runtimeCatalog
 }
 
 export function clearGrokModelCatalogCache(): void {
   catalogCache.clear()
-  runtimeCatalog = GROK_MODEL_CATALOG
+  setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
 }
 
 function extractModelRows(body: unknown): unknown[] {

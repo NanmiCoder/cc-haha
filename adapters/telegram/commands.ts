@@ -1,5 +1,6 @@
 import { formatImHelp } from '../common/format.js'
 import { listProjectSessionHistory, restoreSelectedSession } from '../common/session-selection.js'
+import { SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
 import type { SessionEntry } from '../common/session-store.js'
 import type { ServerMessage } from '../common/ws-bridge.js'
 import {
@@ -70,7 +71,7 @@ export type TelegramCommandControllerDeps = {
   httpClient: AdapterHttpClient
   defaultWorkDir: string
   isAllowedUser: (userId: number) => boolean
-  ensureExistingSession: (chatId: string) => Promise<{ sessionId: string; workDir: string } | null>
+  ensureExistingSession: (chatId: string) => Promise<SessionRestoreResult>
   clearTransientChatState: (chatId: string) => void
   clearOtherSelections: (chatId: string) => void
   isBusy: (chatId: string) => boolean
@@ -240,7 +241,7 @@ export type TelegramRuntimeCommandControllerDeps = {
     delete: (chatId: string) => void
   }
   isAllowedUser: (userId: number) => boolean
-  ensureExistingSession: (chatId: string) => Promise<{ sessionId: string; workDir: string } | null>
+  ensureExistingSession: (chatId: string) => Promise<SessionRestoreResult>
   clearTransientChatState: (chatId: string) => void
   clearOtherSelections: (chatId: string) => void
   isBusy: (chatId: string) => boolean
@@ -527,8 +528,12 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
   }
 
   const showSkills = async (chatId: string): Promise<void> => {
-    const stored = await deps.ensureExistingSession(chatId)
-    const cwd = stored?.workDir || deps.defaultWorkDir
+    const restored = await deps.ensureExistingSession(chatId)
+    if (restored.status === 'unavailable') {
+      await deps.api.sendMessage(Number(chatId), SESSION_RECONNECT_NOTICE)
+      return
+    }
+    const cwd = restored.status === 'restored' ? restored.session.workDir : deps.defaultWorkDir
     if (!cwd) {
       await deps.api.sendMessage(Number(chatId), '请先发送 /new 选择项目，再查看 Skills。')
       return
@@ -565,8 +570,12 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
     const chatId = getCallbackChatId(ctx)
     if (!chatId) return
 
-    const stored = await deps.ensureExistingSession(chatId)
-    if (!stored) {
+    const restored = await deps.ensureExistingSession(chatId)
+    if (restored.status === 'unavailable') {
+      await deps.api.sendMessage(Number(chatId), SESSION_RECONNECT_NOTICE)
+      return
+    }
+    if (restored.status === 'missing') {
       pendingSelections.delete(chatId)
       await ctx.editMessageText('⚠️ 会话已失效，请发送 /new 重新选择项目后再调用 Skill。')
       return
@@ -574,7 +583,7 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
 
     const invocation = `/${item.value}`
     if (!deps.sendUserMessage(chatId, invocation)) {
-      await ctx.editMessageText('⚠️ Skill 发送失败，连接可能已断开。请发送 /new 重新连接会话。')
+      await ctx.editMessageText(`⚠️ Skill 发送失败。${SESSION_RECONNECT_NOTICE}`)
       return
     }
 

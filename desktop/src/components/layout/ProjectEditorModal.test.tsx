@@ -1,11 +1,30 @@
 import '@testing-library/jest-dom'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
+
+const nativeDialog = vi.hoisted(() => ({
+  isDesktop: false,
+  open: vi.fn(),
+}))
+
+vi.mock('@/lib/desktopHost', () => ({
+  getDesktopHost: () => ({
+    isDesktop: nativeDialog.isDesktop,
+    capabilities: { dialogs: true },
+    dialogs: { open: nativeDialog.open },
+  }),
+}))
+
+beforeEach(() => {
+  nativeDialog.isDesktop = false
+  nativeDialog.open.mockReset()
+})
 
 vi.mock('../../i18n', () => ({
   useTranslation: () => (key: string, params?: Record<string, string | number>) => {
     const translations: Record<string, string> = {
+      'dirPicker.chooseProjectFolder': 'Choose project folder',
       'common.cancel': 'Cancel',
       'common.save': 'Save',
       'sidebar.projectEditor.createTitle': 'Create project',
@@ -71,6 +90,40 @@ function CreateHarness({
 afterEach(cleanup)
 
 describe('ProjectEditorModal', () => {
+  it('opens the native folder dialog directly and preserves the selected path', async () => {
+    nativeDialog.isDesktop = true
+    nativeDialog.open.mockResolvedValue('/workspace/selected  ')
+    const onSourceFolderChange = vi.fn()
+    const onSubmit = vi.fn()
+    render(<CreateHarness onSubmit={onSubmit} onSourceFolderChange={onSourceFolderChange} />)
+
+    expect(screen.queryByRole('button', { name: 'Choose source folder' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Choose project folder' }))
+    await waitFor(() => expect(onSourceFolderChange).toHaveBeenCalledWith('/workspace/selected  '))
+    expect(nativeDialog.open).toHaveBeenCalledWith({
+      directory: true,
+      multiple: false,
+      title: 'Choose project folder',
+    })
+    expect(screen.getByText('/workspace/selected')).toBeInTheDocument()
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('leaves the source unchanged on cancellation and reports dialog failures', async () => {
+    nativeDialog.isDesktop = true
+    nativeDialog.open.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('Dialog unavailable'))
+    const onSourceFolderChange = vi.fn()
+    render(<CreateHarness onSubmit={vi.fn()} onSourceFolderChange={onSourceFolderChange} />)
+
+    const choose = screen.getByRole('button', { name: 'Choose project folder' })
+    fireEvent.click(choose)
+    await waitFor(() => expect(choose).not.toBeDisabled())
+    expect(onSourceFolderChange).not.toHaveBeenCalled()
+    fireEvent.click(choose)
+    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Dialog unavailable'))
+    expect(onSourceFolderChange).not.toHaveBeenCalled()
+  })
+
   it('validates normalized names and preserves exact source and logical paths', async () => {
     const onSubmit = vi.fn()
     const onSourceFolderChange = vi.fn()

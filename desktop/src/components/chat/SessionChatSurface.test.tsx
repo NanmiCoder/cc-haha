@@ -31,7 +31,7 @@ describe('SessionChatSurface', () => {
     expect(screen.getByText('Activity')).toBeInTheDocument()
 
     const header = screen.getByTestId('session-header')
-    expect(header.firstElementChild).toHaveClass('max-w-[900px]')
+    expect(header.firstElementChild).toHaveClass('max-w-[var(--chat-content-max-width)]')
     expect(within(header).getByRole('heading', { name: 'Child run' })).toHaveClass('truncate')
     expect(header.querySelectorAll('[aria-hidden="true"]')).toHaveLength(1)
   })

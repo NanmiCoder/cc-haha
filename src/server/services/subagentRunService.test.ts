@@ -11,7 +11,7 @@ import {
   resolveSubagentRunFromMessages,
   truncateSubagentMessages,
 } from './subagentRunService.js'
-import type { MessageEntry } from './sessionService.js'
+import { sessionService, type MessageEntry } from './sessionService.js'
 
 let tmpDir: string | null = null
 
@@ -311,6 +311,165 @@ describe('getSubagentRunByTool', () => {
     delete process.env.CLAUDE_CONFIG_DIR
   })
 
+  for (const damaged of ['oversized', 'malformed'] as const) {
+    it(`keeps valid Agent evidence when unrelated ${damaged} records are skipped`, async () => {
+      await setupTmpConfigDir()
+      const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+      const projectDir = '-tmp-subagent-partial'
+      await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry('tool-1'), makeAgentToolResultEntry('tool-1', 'abc123')])
+      const file = path.join(tmpDir!, 'projects', projectDir, `${sessionId}.jsonl`)
+      await fs.appendFile(file, damaged === 'oversized' ? JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: 'x'.repeat(9 * 1024 * 1024) } }) + '\n' : '{bad json\n')
+      const result = await getSubagentRunByTool(sessionId, 'tool-1')
+      expect(result).toMatchObject({ agentId: 'abc123', status: 'completed', historyComplete: false, truncated: true })
+      expect(result?.result).toContain('Finished exploring')
+    })
+  }
+
+  it('returns unknown recoverable evidence when the addressed record was omitted', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-missing-partial'
+    const entry = makeAgentToolUseEntry('tool-1')
+    ;(entry.message as any).content[0].input.prompt = 'x'.repeat(9 * 1024 * 1024)
+    await writeSessionFile(projectDir, sessionId, [entry])
+    expect(await getSubagentRunByTool(sessionId, 'tool-1')).toMatchObject({ status: 'unknown', historyComplete: false, activityComplete: false, truncated: true, canSendMessage: false })
+    await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry('tool-1'), makeOneShotAgentToolResultEntry('tool-1')])
+    expect(await getSubagentRunByTool(sessionId, 'tool-1')).toMatchObject({ status: 'completed', historyComplete: true })
+    expect(await getSubagentRunByTool(sessionId, 'missing')).toBeNull()
+  })
+
+  it('keeps incomplete nested lookups unknown instead of reporting absence', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-nested-partial'
+    await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry('parent-tool')])
+    await writeSubagentTranscriptFile(projectDir, sessionId, 'parent123', [{ type: 'assistant', message: { role: 'assistant', content: 'x'.repeat(9 * 1024 * 1024) } }])
+    expect(await getSubagentRunByTool(sessionId, 'parent-tool/parent123/missing')).toMatchObject({ status: 'unknown', historyComplete: false, canSendMessage: false })
+  })
+
+  it('retains an unreadable child transcript without inferring workflow completion', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-child-partial'
+    await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry('tool-1')])
+    await writeSubagentTranscriptFile(projectDir, sessionId, 'child123', [{ type: 'assistant', message: { role: 'assistant', content: 'x'.repeat(9 * 1024 * 1024) } }])
+    expect(await getSubagentRunByAgentId(sessionId, 'child123')).toMatchObject({ agentId: 'child123', status: 'unknown', historyComplete: false, messages: [] })
+  })
+
+  it('retains a complete child message above one MiB in the small transcript reader', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-small-large-message'
+    const agentId = 'child-large-message'
+    const content = 'START' + 'x'.repeat(1100 * 1024) + 'END'
+    await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry('tool-1')])
+    await writeSubagentTranscriptFile(projectDir, sessionId, agentId, [{
+      type: 'assistant', uuid: 'child-reply', isSidechain: true,
+      message: { role: 'assistant', content },
+    }])
+    const result = await getSubagentRunByAgentId(sessionId, agentId)
+    expect(result).toMatchObject({ agentId, historyComplete: true })
+    expect(result?.messages).toHaveLength(1)
+    expect(result?.messages[0]?.content).toBe(content)
+  })
+
+  it('keeps the visible tail of a large sidechain transcript inside its own agent run', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-large-sidechain'
+    const agentId = 'sidechain123'
+    await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry('tool-1')])
+    const entries = Array.from({ length: 220 }, (_, index) => ({
+      type: index === 0 ? 'user' : 'assistant',
+      uuid: `sidechain-${index}`,
+      parentUuid: index ? `sidechain-${index - 1}` : null,
+      isSidechain: true,
+      message: { role: index === 0 ? 'user' : 'assistant', content: index === 219 ? 'Latest visible child reply' : 'x'.repeat(8192) },
+      timestamp: '2026-01-01T00:00:00.000Z',
+    }))
+    await writeSubagentTranscriptFile(projectDir, sessionId, agentId, entries)
+    const result = await getSubagentRunByAgentId(sessionId, agentId)
+    expect(result?.messages.length).toBeGreaterThan(0)
+    expect(result?.messages.at(-1)?.content).toBe('Latest visible child reply')
+    expect(result).toMatchObject({ historyComplete: false, activityComplete: false, truncated: true })
+    expect(result!.messages.length).toBeLessThan(entries.length)
+  })
+
+  it('previews a large addressed call and result while retaining their identity', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-large-target'
+    const call = makeAgentToolUseEntry('tool-1')
+    ;(call.message as any).content[0].input = { prompt: 'Investigate this code: ' + 'x'.repeat(1100 * 1024), description: 'Large target', subagent_type: 'Explore' }
+    const result = makeOneShotAgentToolResultEntry('tool-1')
+    ;(result.message as any).content[0].content[0].text = 'Investigation finished: ' + 'x'.repeat(1100 * 1024)
+    await writeSessionFile(projectDir, sessionId, [call, result])
+    const run = await getSubagentRunByTool(sessionId, 'tool-1')
+    expect(run).toMatchObject({ historyComplete: false, truncated: true })
+    expect(run?.description).toBe('Large target')
+    const lookup = await sessionService.getSubagentRunLookup(sessionId, 'tool-1')
+    expect((lookup.messages[0]?.content as any[])[0]).toMatchObject({ id: 'tool-1', name: 'Agent', input: { description: 'Large target', subagent_type: 'Explore' } })
+    expect(run?.prompt).toContain('Investigate this code:')
+    expect(run?.result).toContain('Investigation finished:')
+    expect(Buffer.byteLength(JSON.stringify(run))).toBeLessThan(128 * 1024)
+  })
+
+  it('returns bounded evidence when addressed entries exceed the aggregate count budget', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-many-targets'
+    await writeSessionFile(projectDir, sessionId, Array.from({ length: 2050 }, (_, index) => ({ ...makeAgentToolUseEntry('tool-1'), uuid: `call-${index}` })))
+    const run = await getSubagentRunByTool(sessionId, 'tool-1')
+    expect(run).toMatchObject({ status: 'unknown', historyComplete: false, truncated: true })
+    expect(run?.prompt).toBeTruthy()
+  })
+
+  it('preserves bounded previews when addressed payloads exceed the aggregate byte budget', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-many-bytes'
+    await writeSessionFile(projectDir, sessionId, Array.from({ length: 160 }, (_, index) => {
+      const entry = makeAgentToolUseEntry('tool-1')
+      ;(entry.message as any).content[0].input.prompt = 'x'.repeat(16 * 1024)
+      return { ...entry, uuid: `call-${index}` }
+    }))
+    const lookup = await sessionService.getSubagentRunLookup(sessionId, 'tool-1')
+    expect(lookup.historyComplete).toBe(false)
+    expect(lookup.messages.length).toBeGreaterThan(0)
+    expect(lookup.messages.length).toBeLessThan(160)
+    expect(Buffer.byteLength(JSON.stringify(lookup))).toBeLessThan(2 * 1024 * 1024)
+  })
+
+  it('bounds parent lookup and large child display without claiming complete activity or partial token totals', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-large'
+    const body = Array.from({ length: 24 }, (_, index) => ({ type: 'assistant', uuid: `body-${index}`, timestamp: '2026-01-01T00:00:05.000Z', message: { role: 'assistant', content: 'x'.repeat(256 * 1024) } }))
+    await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry('tool-1'), ...body, makeAgentToolResultEntry('tool-1', 'abc123')])
+    await writeSubagentTranscriptFile(projectDir, sessionId, 'abc123', body)
+    const original = (sessionService as any).readJsonlFile
+    ;(sessionService as any).readJsonlFile = () => { throw new Error('unbounded transcript read') }
+    try {
+      const result = await getSubagentRunByTool(sessionId, 'tool-1')
+      expect(result).toMatchObject({ agentId: 'abc123', truncated: true, historyComplete: false, activityComplete: false })
+      expect(result!.messages.length).toBeGreaterThan(0)
+      expect(result!.messages.length).toBeLessThan(24)
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(2 * 1024 * 1024)
+      expect(result!.messages.at(-1)!.id).toBe('body-23')
+    } finally {
+      ;(sessionService as any).readJsonlFile = original
+    }
+  })
+
+  it('rejects oversized launch sidecars before parsing them', async () => {
+    await setupTmpConfigDir()
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const projectDir = '-tmp-subagent-sidecar'
+    await writeSessionFile(projectDir, sessionId, [makeAgentToolUseEntry('tool-1')])
+    await writeSubagentLaunchMetadata(projectDir, sessionId, 'abc123', { agentType: 'general', toolUseId: 'tool-1', description: 'x'.repeat(128 * 1024) })
+    await expect(getSubagentRunByTool(sessionId, 'tool-1')).rejects.toMatchObject({ statusCode: 413, code: 'SUBAGENT_METADATA_LIMIT' })
+  })
+
   it('returns parent metadata and visible persisted subagent transcript messages', async () => {
     await setupTmpConfigDir()
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
@@ -379,7 +538,11 @@ describe('getSubagentRunByTool', () => {
       content: [{ type: 'text', text: 'Found the service seam' }],
       usage: { input_tokens: 13, output_tokens: 17 },
     })
-    expect(result?.activityMessages).toEqual(result?.messages)
+    // Below the truncation threshold the Activity projection IS `messages`, so
+    // the server omits it rather than shipping the same array twice. The text
+    // check catches a re-introduced duplicate even if the field name changes.
+    expect(result?.activityMessages).toBeUndefined()
+    expect(JSON.stringify(result).split('Found the service seam')).toHaveLength(2)
   })
 
   it('keeps Activity complete when the conversation projection crosses 1000 messages', async () => {
@@ -1217,7 +1380,7 @@ describe('getSubagentRunByTool', () => {
       `${latestAgentId}/${nestedToolUseId}`,
     ]
     expect(agentIds(result?.messages)).toEqual(scopedIds)
-    expect(agentIds(result?.activityMessages)).toEqual(scopedIds)
+    expect(agentIds(result?.activityMessages ?? result?.messages)).toEqual(scopedIds)
     const resultIds = result?.messages.flatMap((message) => (
       Array.isArray(message.content)
         ? message.content.flatMap((block) => (

@@ -48,3 +48,14 @@ test('one chat failing to obtain tools prevents connector readiness; stopped cha
   reload.mockResolvedValue({ applied: false, reason: 'not_running', commands: 0, agents: 0, plugins: 0, mcpServers: 0, errors: 0 })
   await expect(reloadConnectorSessions(undefined, remote)).resolves.toBeUndefined()
 })
+
+test('an unrelated plugin load error in a chat does not veto the connector reload', async () => {
+  spyOn(conversationService, 'getActiveSessions').mockReturnValue(['chat-a'])
+  // error_count > 0 from a foreign plugin (e.g. stale enabledPlugins tombstone)
+  // must not fail this connector's refresh; the connector itself is proven by
+  // requiredPlugin/requiredMcpServer inside reloadSessionComponents.
+  spyOn(sessionReload, 'reloadSessionComponents').mockResolvedValue({
+    applied: true, commands: 1, agents: 0, plugins: 1, mcpServers: 0, errors: 1,
+  })
+  await expect(reloadConnectorSessions(undefined, remote)).resolves.toBeUndefined()
+})

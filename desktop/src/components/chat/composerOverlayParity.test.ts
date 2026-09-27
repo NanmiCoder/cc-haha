@@ -26,6 +26,7 @@ const COMPOSERS = {
   EmptySession: source('../../pages/EmptySession.tsx'),
   PermissionModeSelector: source('../controls/PermissionModeSelector.tsx'),
   ModelSelector: source('../controls/ModelSelector.tsx'),
+  ComposerCapabilityMenu: source('./ComposerCapabilityMenu.tsx'),
 }
 const SLASH_COMMAND_MENU = source('./SlashCommandMenu.tsx')
 
@@ -41,6 +42,13 @@ describe('composer overlay chrome', () => {
   for (const [name, code] of Object.entries(COMPOSERS)) {
     it(`keeps every floating panel in ${name} at the card corner`, () => {
       const panels = overlayPanelClassNames(code)
+      // The two composers delegate their overlays to shared components: any
+      // inline panel in them is a regression toward the duplicated chrome this
+      // file exists to prevent.
+      if (name === 'ChatInput' || name === 'EmptySession') {
+        expect(panels, `${name} should not render inline overlay panels; use the shared components`).toEqual([])
+        return
+      }
 
       expect(panels.length).toBeGreaterThan(0)
       for (const panel of panels) {
@@ -50,16 +58,19 @@ describe('composer overlay chrome', () => {
     })
   }
 
-  it('renders the same slash-menu chrome in both composers', () => {
+  it('renders the same slash menu and capability menu in both composers', () => {
     for (const [name, code] of Object.entries({
       ChatInput: COMPOSERS.ChatInput,
       EmptySession: COMPOSERS.EmptySession,
     })) {
       expect(code, `${name} must render the shared slash menu`).toContain('<SlashCommandMenu')
+      expect(code, `${name} must render the shared capability menu`).toContain('<ComposerCapabilityMenu')
+      expect(code, `${name} must build capability sections through the shared hook`).toContain('useCapabilityMenu')
     }
 
     for (const token of [OVERLAY_RADIUS, 'border-[var(--color-border)]', 'bg-[var(--color-surface-container-lowest)]']) {
       expect(SLASH_COMMAND_MENU).toContain(token)
+      expect(COMPOSERS.ComposerCapabilityMenu).toContain(token)
     }
   })
 })

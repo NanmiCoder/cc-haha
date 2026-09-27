@@ -34,7 +34,7 @@ import {
   parsePermissionCommand,
   type PermissionDecision,
 } from './permission.js'
-import { restoreStoredSessionBinding } from './session-recovery.js'
+import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from './session-recovery.js'
 import { SessionSelectionController } from './session-selection.js'
 import { syncImPermissionState } from './permission-sync.js'
 import type { SessionStore } from './session-store.js'
@@ -300,9 +300,9 @@ export class ImChatRuntime {
       return true
     }
     if (STOP_ALIASES.has(text)) {
-      const stored = await this.ensureExistingSession(chatId)
-      if (!stored) {
-        await this.port.sendNotice(chatId, formatImStatus(null))
+      const result = await this.ensureExistingSession(chatId)
+      if (result.status !== 'restored') {
+        await this.port.sendNotice(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
         return true
       }
       this.bridge.sendStopGeneration(chatId)
@@ -310,9 +310,9 @@ export class ImChatRuntime {
       return true
     }
     if (CLEAR_ALIASES.has(text)) {
-      const stored = await this.ensureExistingSession(chatId)
-      if (!stored) {
-        await this.port.sendNotice(chatId, formatImStatus(null))
+      const result = await this.ensureExistingSession(chatId)
+      if (result.status !== 'restored') {
+        await this.port.sendNotice(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
         return true
       }
       this.clearTransientChatState(chatId)
@@ -502,7 +502,7 @@ export class ImChatRuntime {
 
   // ---------- sessions ----------
 
-  async ensureExistingSession(chatId: string): Promise<{ sessionId: string; workDir: string } | null> {
+  async ensureExistingSession(chatId: string): Promise<SessionRestoreResult> {
     return await restoreStoredSessionBinding({
       chatId,
       bridge: this.bridge,
@@ -515,8 +515,12 @@ export class ImChatRuntime {
   }
 
   private async ensureSession(chatId: string): Promise<boolean> {
-    const stored = await this.ensureExistingSession(chatId)
-    if (stored) return true
+    const result = await this.ensureExistingSession(chatId)
+    if (result.status === 'restored') return true
+    if (result.status === 'unavailable') {
+      await this.port.sendNotice(chatId, SESSION_RECONNECT_NOTICE)
+      return false
+    }
 
     if (this.defaultWorkDir) {
       return await this.createSessionForChat(chatId, this.defaultWorkDir)
@@ -621,8 +625,10 @@ export class ImChatRuntime {
   }
 
   async buildStatusText(chatId: string): Promise<string> {
-    const stored = await this.ensureExistingSession(chatId)
-    if (!stored) return formatImStatus(null)
+    const result = await this.ensureExistingSession(chatId)
+    if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+    if (result.status === 'missing') return formatImStatus(null)
+    const stored = result.session
 
     const runtime = this.getRuntimeState(chatId)
     let projectName = path.basename(stored.workDir) || stored.workDir

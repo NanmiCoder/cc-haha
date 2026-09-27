@@ -34,9 +34,11 @@ type ScoredFilesystemEntry = FilesystemEntry & {
 }
 
 const FILE_SEARCH_TIMEOUT_MS = 10_000
+const INTERACTIVE_FILE_SEARCH_TIMEOUT_MS = 2_000
 const FILE_SEARCH_FALLBACK_MAX_DIRECTORIES = 5_000
 const FILE_SEARCH_FALLBACK_MAX_FILES = 20_000
 const VCS_METADATA_DIRECTORY_NAMES = new Set(['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'])
+const activeInteractiveSearches = new Map<string, AbortController>()
 
 type ProjectSearchDependencies = {
   ripGrepFn?: (
@@ -50,6 +52,7 @@ type ProjectSearchDependencies = {
     maxDirectories?: number
     maxFiles?: number
   }
+  signal?: AbortSignal
 }
 
 type SearchIgnoreContext = {
@@ -98,9 +101,9 @@ export function isAllowedFilesystemPath(targetPath: string): boolean {
   return false
 }
 
-export async function handleFilesystemRoute(pathname: string, url: URL): Promise<Response> {
+export async function handleFilesystemRoute(pathname: string, url: URL, signal?: AbortSignal): Promise<Response> {
   if (pathname === '/api/filesystem/browse') {
-    return handleBrowse(url)
+    return handleBrowse(url, signal)
   }
 
   if (pathname === '/api/filesystem/file') {
@@ -159,7 +162,7 @@ async function handleServeFile(url: URL): Promise<Response> {
   }
 }
 
-async function handleBrowse(url: URL): Promise<Response> {
+async function handleBrowse(url: URL, requestSignal?: AbortSignal): Promise<Response> {
   const targetPath = url.searchParams.get('path') || os.homedir() || '/'
   const resolvedPath = path.resolve(normalizeDriveRootPathForPlatform(targetPath))
   const canonicalPath = await canonicalizeExistingFilesystemPath(resolvedPath)
@@ -184,10 +187,27 @@ async function handleBrowse(url: URL): Promise<Response> {
     }
 
     if (searchQuery) {
-      const results = await searchFilesystemEntries(canonicalPath, searchQuery, {
-        includeFiles,
-        maxResults,
-      })
+      // Composer searches supersede one another while the user types. Abort the
+      // older scan before starting another one for the same root so broad roots
+      // such as /tmp cannot accumulate a process and a large candidate array
+      // for every keystroke.
+      activeInteractiveSearches.get(canonicalPath)?.abort()
+      const searchController = new AbortController()
+      activeInteractiveSearches.set(canonicalPath, searchController)
+      const signal = combineAbortSignals(requestSignal, searchController.signal)
+      let results: FilesystemEntry[]
+      try {
+        results = await searchFilesystemEntries(canonicalPath, searchQuery, {
+          includeFiles,
+          maxResults,
+          signal,
+          timeoutMs: INTERACTIVE_FILE_SEARCH_TIMEOUT_MS,
+        })
+      } finally {
+        if (activeInteractiveSearches.get(canonicalPath) === searchController) {
+          activeInteractiveSearches.delete(canonicalPath)
+        }
+      }
 
       return json({
         currentPath: canonicalPath,
@@ -230,7 +250,13 @@ async function handleBrowse(url: URL): Promise<Response> {
 export async function searchFilesystemEntries(
   rootPath: string,
   searchQuery: string,
-  options: { includeFiles: boolean; includeDirectories?: boolean; maxResults: number },
+  options: {
+    includeFiles: boolean
+    includeDirectories?: boolean
+    maxResults: number
+    signal?: AbortSignal
+    timeoutMs?: number
+  },
 ): Promise<FilesystemEntry[]> {
   const normalizedQuery = normalizeSearchText(searchQuery)
   if (!normalizedQuery) return []
@@ -240,7 +266,10 @@ export async function searchFilesystemEntries(
     options.includeFiles,
     options.includeDirectories ?? true,
     normalizedQuery,
+    options.signal,
+    options.timeoutMs,
   )
+  options.signal?.throwIfAborted()
   const results = candidates
     .map((entry): ScoredFilesystemEntry | null => {
       const relativePath = entry.relativePath ?? entry.name
@@ -269,13 +298,17 @@ async function getSearchCandidates(
   includeFiles: boolean,
   includeDirectories: boolean,
   searchQuery: string,
+  signal?: AbortSignal,
+  timeoutMs?: number,
 ): Promise<FilesystemEntry[]> {
   const files = await getProjectSearchFiles(rootPath, {
-    fallbackOptions: { searchQuery },
+    fallbackOptions: { searchQuery, timeoutMs },
+    signal,
   })
   const entries = new Map<string, FilesystemEntry>()
 
   for (const filePath of files) {
+    signal?.throwIfAborted()
     const normalizedFile = normalizeRelativePath(filePath)
     if (!normalizedFile || !isRelativeInsideRoot(normalizedFile)) continue
 
@@ -311,10 +344,24 @@ export async function getProjectSearchFiles(
   rootPath: string,
   dependencies: ProjectSearchDependencies = {},
 ): Promise<string[]> {
+  dependencies.signal?.throwIfAborted()
   const respectGitignore = shouldRespectGitignore()
-  const gitFiles = await getFilesUsingGit(rootPath, respectGitignore)
+  const gitFiles = await getFilesUsingGit(rootPath, respectGitignore, dependencies.signal)
   if (gitFiles !== null && gitFiles.length > 0) {
     return gitFiles
+  }
+
+  // For a non-repository interactive search, scanning every file into rg's
+  // stdout before applying the query is both slower and far more memory hungry.
+  // The bounded fallback applies the query while walking and stops at its
+  // deadline/budget.
+  if (dependencies.fallbackOptions?.searchQuery) {
+    return getFilesUsingFilesystem(
+      rootPath,
+      respectGitignore,
+      dependencies.fallbackOptions,
+      dependencies.signal,
+    )
   }
 
   try {
@@ -322,12 +369,15 @@ export async function getProjectSearchFiles(
       rootPath,
       respectGitignore,
       dependencies.ripGrepFn ?? ripGrep,
+      dependencies.signal,
     )
   } catch {
+    dependencies.signal?.throwIfAborted()
     return getFilesUsingFilesystem(
       rootPath,
       respectGitignore,
       dependencies.fallbackOptions,
+      dependencies.signal,
     )
   }
 }
@@ -338,15 +388,16 @@ function shouldRespectGitignore(): boolean {
   return projectSettings.respectGitignore ?? globalConfig.respectGitignore ?? true
 }
 
-async function getFilesUsingGit(rootPath: string, respectGitignore: boolean): Promise<string[] | null> {
+async function getFilesUsingGit(rootPath: string, respectGitignore: boolean, signal?: AbortSignal): Promise<string[] | null> {
   const repoRoot = findGitRoot(rootPath)
   if (!repoRoot) return null
 
   const trackedResult = await execFileNoThrowWithCwd(
     gitExe(),
     ['-c', 'core.quotepath=false', 'ls-files', '--recurse-submodules'],
-    { timeout: FILE_SEARCH_TIMEOUT_MS, cwd: repoRoot },
+    { timeout: FILE_SEARCH_TIMEOUT_MS, cwd: repoRoot, abortSignal: signal },
   )
+  signal?.throwIfAborted()
   if (trackedResult.code !== 0) return null
 
   const untrackedArgs = respectGitignore
@@ -355,7 +406,9 @@ async function getFilesUsingGit(rootPath: string, respectGitignore: boolean): Pr
   const untrackedResult = await execFileNoThrowWithCwd(gitExe(), untrackedArgs, {
     timeout: FILE_SEARCH_TIMEOUT_MS,
     cwd: repoRoot,
+    abortSignal: signal,
   })
+  signal?.throwIfAborted()
 
   const files = [
     ...lines(trackedResult.stdout),
@@ -377,6 +430,7 @@ async function getFilesUsingRipgrep(
   rootPath: string,
   respectGitignore: boolean,
   ripGrepFn: NonNullable<ProjectSearchDependencies['ripGrepFn']>,
+  signal?: AbortSignal,
 ): Promise<string[]> {
   const rgArgs = [
     '--files',
@@ -402,8 +456,9 @@ async function getFilesUsingRipgrep(
   const files = await ripGrepFn(
     rgArgs,
     rootPath,
-    AbortSignal.timeout(FILE_SEARCH_TIMEOUT_MS),
+    combineAbortSignals(signal, AbortSignal.timeout(FILE_SEARCH_TIMEOUT_MS)),
   )
+  signal?.throwIfAborted()
   let normalized = files
     .map(filePath => normalizeRipgrepPath(filePath, rootPath))
     .filter((filePath): filePath is string => filePath !== null)
@@ -420,6 +475,7 @@ async function getFilesUsingFilesystem(
   rootPath: string,
   respectGitignore: boolean,
   options: NonNullable<ProjectSearchDependencies['fallbackOptions']> = {},
+  signal?: AbortSignal,
 ): Promise<string[]> {
   const deadline = Date.now() + (options.timeoutMs ?? FILE_SEARCH_TIMEOUT_MS)
   const maxDirectories = options.maxDirectories ?? FILE_SEARCH_FALLBACK_MAX_DIRECTORIES
@@ -440,6 +496,7 @@ async function getFilesUsingFilesystem(
     files.length < maxFiles &&
     Date.now() < deadline
   ) {
+    signal?.throwIfAborted()
     const current = directories[directoryIndex]
     directoryIndex += 1
     if (!current) continue
@@ -453,6 +510,7 @@ async function getFilesUsingFilesystem(
     } catch {
       continue
     }
+    signal?.throwIfAborted()
 
     entries.sort((left, right) => {
       if (left.isDirectory() !== right.isDirectory()) {
@@ -506,6 +564,13 @@ async function getFilesUsingFilesystem(
   }
 
   return files
+}
+
+function combineAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+  const available = signals.filter((signal): signal is AbortSignal => signal !== undefined)
+  if (available.length === 0) return new AbortController().signal
+  if (available.length === 1) return available[0]!
+  return AbortSignal.any(available)
 }
 
 function loadDirectorySearchIgnorePatterns(

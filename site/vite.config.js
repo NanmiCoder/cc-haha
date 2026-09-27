@@ -60,6 +60,7 @@ function docsManifestPlugin() {
 }
 
 export default defineConfig({
+  resolve: { alias: { '@': path.resolve(import.meta.dirname, 'src') } },
   plugins: [docsManifestPlugin()],
   build: {
     outDir: 'dist',

@@ -8,14 +8,38 @@ export const BUILT_IN_PROVIDER_IDS = [
   OPENAI_OFFICIAL_PROVIDER_ID,
   GROK_OFFICIAL_PROVIDER_ID,
 ] as const
-export const OPENAI_OFFICIAL_DEFAULT_MODEL_ID = 'gpt-5.6-sol'
+export const OPENAI_OFFICIAL_DEFAULT_MODEL_ID = 'gpt-6-sol'
 export const OPENAI_OFFICIAL_PROVIDER_NAME = 'ChatGPT Official'
 
 export const OPENAI_OFFICIAL_MODELS: ModelInfo[] = [
   {
+    id: 'gpt-6-astra',
+    name: 'GPT-6 Astra',
+    description: 'Frontier model for complex reasoning and agentic work',
+    context: '258400',
+    defaultReasoningEffort: 'low',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: OPENAI_OFFICIAL_DEFAULT_MODEL_ID,
+    name: 'GPT-6-Sol',
+    description: 'Workhorse model for coding and everyday work',
+    context: '258400',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
+    id: 'gpt-6-luna',
+    name: 'GPT-6-Luna',
+    description: 'Fast and affordable model for easier tasks',
+    context: '258400',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
+    id: 'gpt-5.6-sol',
     name: 'GPT-5.6-Sol',
-    description: 'Latest frontier agentic coding model',
+    description: 'Frontier agentic coding model',
     context: '353400',
     defaultReasoningEffort: 'low',
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],

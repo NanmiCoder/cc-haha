@@ -73,6 +73,7 @@ type SlashCommandMenuProps = {
   onSelect: (commandName: string) => void
   onHighlight: (index: number) => void
   showKeyboardHints: boolean
+  isSearching?: boolean
   references?: ComposerReferenceCandidate[]
 }
 
@@ -87,6 +88,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
       onHighlight,
       showKeyboardHints,
       references = [],
+      isSearching = false,
     },
     ref,
   ) {
@@ -101,6 +103,9 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
           role="option"
           tabIndex={-1}
           aria-selected={index === selectedIndex}
+          aria-labelledby={`${id}-label-${index}`}
+          aria-describedby={`${id}-description-${index}`}
+          title={[`/${command.name}`, command.argumentHint, command.description].filter(Boolean).join(' — ')}
           ref={(element) => { itemRefs.current[index] = element }}
           onClick={() => onSelect(command.name)}
           onMouseEnter={() => onHighlight(index)}
@@ -108,26 +113,24 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
             index === selectedIndex
               ? 'bg-[var(--color-surface-hover)]'
               : 'hover:bg-[var(--color-surface-hover)]'
-          }`}
+          } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`}
         >
           <Icon
             aria-hidden="true"
             className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]"
             strokeWidth={1.8}
           />
-          <span className="flex min-w-0 max-w-[52%] shrink-0 items-baseline gap-1.5">
-            <span className="shrink-0 text-sm font-medium text-[var(--color-text-primary)]">
-              {command.name}
-            </span>
-            {command.argumentHint ? (
-              <span className="min-w-0 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">
-                {command.argumentHint}
-              </span>
-            ) : null}
+          <span id={`${id}-label-${index}`} className="min-w-0 max-w-[60%] flex-none truncate text-sm font-medium text-[var(--color-text-primary)]">
+            /{command.name}
           </span>
-          <span className="min-w-0 flex-1 truncate text-left text-xs text-[var(--color-text-tertiary)]">
+          <span id={`${id}-description-${index}`} className="min-w-0 flex-1 truncate text-sm text-[var(--color-text-tertiary)]">
             {command.description}
           </span>
+          {isSearching && command.argumentHint ? (
+            <span className="max-w-[30%] shrink truncate font-mono text-[11px] text-[var(--color-text-tertiary)]" title={command.argumentHint}>
+              {command.argumentHint}
+            </span>
+          ) : null}
         </div>
       )
     }
@@ -138,17 +141,23 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
         onMouseDown={event => event.preventDefault()}
         className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)]"
       >
+        {isSearching ? <div className="px-4 pb-1 pt-3 text-xs font-medium text-[var(--color-text-tertiary)]">
+          {t('chat.slashSearchResults')}
+        </div> : null}
         <div
           id={id}
           role="listbox"
           aria-label={t('chat.slashCommands')}
-          className="max-h-[420px] overflow-y-auto p-1.5"
+          className="max-h-[min(360px,45vh)] overflow-y-auto p-1.5"
         >
-          {groups.system.map(renderSystemCommand)}
+          {groups.system.length > 0 ? <div role="group" aria-label={t(isSearching ? 'chat.slashCommands' : 'chat.slashFrequent')}>
+            {!isSearching ? <div className="px-3 pb-1 pt-2 text-xs font-medium text-[var(--color-text-tertiary)]">{t('chat.slashFrequent')}</div> : null}
+            {groups.system.map(renderSystemCommand)}
+          </div> : null}
 
           {([
-            { kind: 'plugin' as const, items: groups.plugins ?? [], label: t('chat.referencePlugins'), offset: groups.system.length },
-            { kind: 'skill' as const, items: groups.skills, label: t('sidebar.skills'), offset: groups.system.length + (groups.plugins?.length ?? 0) },
+            { kind: 'skill' as const, items: groups.skills, label: t('sidebar.skills'), offset: groups.system.length },
+            { kind: 'plugin' as const, items: groups.plugins ?? [], label: t('chat.referencePlugins'), offset: groups.system.length + groups.skills.length },
           ]).map(group => group.items.length > 0 ? (
             <div key={group.kind} role="group" aria-label={group.label}>
               <div className="px-3 pb-1 pt-2 text-xs font-medium text-[var(--color-text-tertiary)]">{group.label}</div>
@@ -161,21 +170,23 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
                 return <div
                   id={getSlashCommandOptionId(id, index)} key={command.name} role="option" tabIndex={-1}
                   aria-selected={index === selectedIndex} aria-labelledby={`${id}-label-${index}`} aria-describedby={`${id}-description-${index}`}
+                  title={[candidate?.displayName || command.name, command.argumentHint, command.description].filter(Boolean).join(' — ')}
                   ref={element => { itemRefs.current[index] = element }}
                   onClick={() => onSelect(command.name)} onMouseEnter={() => onHighlight(index)}
                   className={`flex w-full cursor-default items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${index === selectedIndex ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'}`}>
                   {icon ? <img src={publicAssetPath(icon)} alt="" className="h-5 w-5 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]" strokeWidth={1.8} />}
-                  <span id={`${id}-label-${index}`} className="min-w-0 max-w-[45%] shrink-0 truncate text-sm font-medium text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
-                  <span id={`${id}-description-${index}`} className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-tertiary)]">{command.description}</span>
+                  <span id={`${id}-label-${index}`} className="min-w-0 max-w-[60%] flex-none truncate text-sm font-medium text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
+                  <span id={`${id}-description-${index}`} className="min-w-0 flex-1 truncate text-sm text-[var(--color-text-tertiary)]">{command.description}</span>
                   {sourceLabel ? <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
                 </div>
               })}
             </div>
           ) : null)}
         </div>
+        {!isSearching ? <div className="px-4 pb-2 text-xs text-[var(--color-text-tertiary)]">{t('chat.slashSearchHint')}</div> : null}
         {showKeyboardHints ? (
           <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-tertiary)]">
-            <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-[10px]">Up/Down</kbd>
+            <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-[10px]">↑↓</kbd>
             <span>{t('chat.navigate')}</span>
             <kbd className="ml-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-[10px]">Enter</kbd>
             <span>{t('chat.select')}</span>

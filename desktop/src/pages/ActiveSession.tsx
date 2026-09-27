@@ -1,6 +1,9 @@
+import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import { GitFork, Target } from 'lucide-react'
+import { ArrowLeft, GitFork, Target, MessageCircleQuestion } from 'lucide-react'
+import { IconButton } from '@/components/ui/IconButton'
+import { openSideChat } from '@/lib/workspace/openSideChat'
 import {
   SCHEDULED_TAB_ID,
   SETTINGS_TAB_ID,
@@ -316,11 +319,12 @@ function TerminalResizeHandle() {
   )
 }
 
-export function ActiveSession() {
+export function ActiveSession({ sessionId, active = true }: { sessionId?: string; active?: boolean } = {}) {
   const isMobileLayout = useMobileViewport() && !isDesktopRuntime()
   const workbenchPanelRef = useRef<HTMLElement>(null)
-  const activeTabId = useTabStore((s) => s.activeTabId)
-  const activeTabType = useTabStore((s) => s.tabs.find((tab) => tab.sessionId === s.activeTabId)?.type ?? null)
+  const selectedTabId = useTabStore((s) => s.activeTabId)
+  const activeTabId = sessionId ?? selectedTabId
+  const activeTabType = useTabStore((s) => s.tabs.find((tab) => tab.sessionId === (sessionId ?? s.activeTabId))?.type ?? null)
   const sessions = useSessionStore((s) => s.sessions)
   const connectToSession = useChatStore((s) => s.connectToSession)
   const stopBackgroundTask = useChatStore((s) => s.stopBackgroundTask)
@@ -367,18 +371,26 @@ export function ActiveSession() {
     sessionId: string
     info: SessionGitInfo
   } | null>(null)
+  const activeWorkspaceIsSideChat = useWorkspaceStore(state => {
+    const workspace = activeTabId ? state.bySession[activeTabId] : undefined
+    return Boolean(workspace?.tabs.some(tab => tab.id === workspace.activeSideTabId && tab.kind === 'side-chat'))
+  })
   const workspaceEnabled = Boolean(activeTabId) &&
     isSessionTabState(activeTabId, activeTabType) &&
-    !isMobileLayout
+    (!isMobileLayout || activeWorkspaceIsSideChat)
   const workspaceLayout = useWorkspaceStore((state) =>
     workspaceEnabled && activeTabId ? state.bySession[activeTabId]?.layout ?? 'hidden' : 'hidden',
   )
   const showWorkbench = workspaceLayout !== 'hidden'
+  const sideChatOpen = useWorkspaceStore(state => {
+    const workspace = activeTabId ? state.bySession[activeTabId] : undefined
+    return Boolean(showWorkbench && workspace?.tabs.some(tab => tab.id === workspace.activeSideTabId && tab.kind === 'side-chat'))
+  })
   const showRightPanel = showWorkbench
   // `full` still renders the same panel; the chat column is what gives way, so
   // no tab is recreated and no page or PTY restarts on the way in or out.
   const compactWorkspace = useWorkspaceAdaptiveLayout(workbenchPanelRef, showWorkbench)
-  const isWorkspaceFull = workspaceLayout === 'full' || compactWorkspace
+  const isWorkspaceFull = workspaceLayout === 'full' || compactWorkspace || (showWorkbench && isMobileLayout)
   const rightPanelWidth = useWorkspaceStore((state) => state.sideWidth)
   const showTerminalPanel = useWorkspaceStore((state) =>
     workspaceEnabled && activeTabId ? state.bySession[activeTabId]?.bottomOpen ?? false : false,
@@ -408,12 +420,12 @@ export function ActiveSession() {
 
   // Subscribed once for the app, not per task: the owner of each event is
   // resolved from the page id, so a background task's pages keep reporting.
-  useWorkspaceBrowserEventBridge(!isMobileLayout)
-  useWorkspaceFocusReturn(workspaceEnabled ? activeTabId : null)
+  useWorkspaceBrowserEventBridge(active && !isMobileLayout)
+  useWorkspaceFocusReturn(active && workspaceEnabled ? activeTabId : null)
   useWorkspaceShortcuts({
     sessionId: activeTabId,
     cwd: getSessionTerminalCwd(session) ?? '',
-    enabled: workspaceEnabled,
+    enabled: active && workspaceEnabled,
   })
 
   useEffect(() => {
@@ -780,7 +792,8 @@ export function ActiveSession() {
         />
       ) : null}
       chatColumnHidden={isWorkspaceFull}
-      sidePanel={showWorkbench ? (
+      sidePanel={<>
+        {showWorkbench ? (
         <>
           {isWorkspaceFull ? null : <WorkspaceResizeHandle panelRef={workbenchPanelRef} />}
           <aside
@@ -792,6 +805,11 @@ export function ActiveSession() {
               ? { flex: '1 1 auto' }
               : { width: rightPanelWidth, flex: '0 0 auto', maxWidth: '70%', minWidth: 'min(420px, 54%)' }}
           >
+            {isMobileLayout && sideChatOpen && <div className="flex shrink-0 items-center border-b border-[var(--color-border)] px-2 py-1">
+              <IconButton icon={<ArrowLeft size={18} />} label={t('tabs.hideWorkspace')} size="2xl"
+                onClick={() => useWorkspaceStore.getState().setLayout(activeTabId, 'hidden')} />
+              <span className="text-sm text-[var(--color-text-secondary)]">{t('sideChat.title')}</span>
+            </div>}
             <WorkspaceSurface
               sessionId={activeTabId}
               dock="side"
@@ -800,8 +818,14 @@ export function ActiveSession() {
             />
           </aside>
         </>
-      ) : null}
+      ) : null}</>}
     >
+          {(isEmpty || isMobileLayout) && (
+            <div className="flex justify-end px-4 py-2">
+              <IconButton icon={<MessageCircleQuestion size={18} />} label={t('sideChat.title')}
+                pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />
+            </div>
+          )}
           {isEmpty ? (
             <div
               data-testid="empty-session-hero"
@@ -833,6 +857,8 @@ export function ActiveSession() {
                   title={headerTitle}
                   compact={showRightPanel}
                   metadata={headerMetadata}
+                  actions={<IconButton icon={<MessageCircleQuestion size={18} />} label={t('sideChat.title')}
+                    pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />}
                 >
                   {session && getSessionWorkspaceState(session) !== 'available' && (
                     <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-3 py-1.5 text-[11px] ${
@@ -877,7 +903,7 @@ export function ActiveSession() {
                   {historyError}
                 </div>
               ) : (
-                <MessageList compact={showRightPanel} mobileLayout={isMobileLayout} />
+                <MessageList sessionId={activeTabId ?? undefined} compact={showRightPanel} mobileLayout={isMobileLayout} />
               )}
             </>
           )}
@@ -896,7 +922,13 @@ export function ActiveSession() {
             />
           ) : null}
 
+          {active && activeTabId && <div className="mx-auto w-full max-w-[900px] shrink-0 px-4">
+            <AgentTeamsPlanCard key={activeTabId} sessionId={activeTabId} />
+          </div>}
+
           <ChatInput
+            sessionId={activeTabId ?? undefined}
+            visible={active}
             variant={isEmpty && !showRightPanel ? 'hero' : 'default'}
             compact={showRightPanel}
           />

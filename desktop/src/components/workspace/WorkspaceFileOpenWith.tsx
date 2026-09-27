@@ -8,8 +8,10 @@ import { TargetIcon } from '@/components/composite/TargetIcon'
 import type { OpenTarget } from '@/api/openTargets'
 import { fileApplicationTargets, useWorkspaceFileOpenTargets } from '@/components/workspace/workspaceFileOpenTargets'
 
-export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, onAfterSelect, targets: suppliedTargets, loading, error, onRefresh }: {
+export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, onAfterSelect, targets: suppliedTargets, loading, error, onRefresh, isDirectory = false, onPreview }: {
   absolutePath: string
+  isDirectory?: boolean
+  onPreview?: () => void
   sessionId?: string
   workspacePath?: string
   onAfterSelect?: () => void
@@ -22,7 +24,7 @@ export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, 
   const discovery = useWorkspaceFileOpenTargets(suppliedTargets === undefined ? absolutePath : null)
   const targets = suppliedTargets ?? discovery.targets
   const applications = fileApplicationTargets(absolutePath, targets)
-  const context = sessionId && workspacePath
+  const context = !isDirectory && sessionId && workspacePath
     ? openWithContextForWorkspaceFile(workspacePath, absolutePath, { sessionId, serverBaseUrl: getServerBaseUrl() })
     : { kind: 'file' as const, absolutePath, previewable: false }
   const actions = buildOpenWithMenuItems(context, targets, {
@@ -30,7 +32,9 @@ export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, 
   }).filter((item) => item.icon === 'copy' || item.id === 'in-app' || item.id === 'preview')
   // Previewing again inside an already-open file has no effect. HTML browser
   // and clipboard actions remain available because they have distinct results.
-  const usefulActions = actions.filter((item) => item.id !== 'preview' || suppliedTargets === undefined)
+  const usefulActions = actions.filter((item) =>
+    (!isDirectory || item.id === 'copy-path') && (item.id !== 'preview' || suppliedTargets === undefined),
+  )
   const folders = targets.filter((target) => target.kind === 'file_manager')
   const selectTarget = (target: OpenTarget) => {
     void useOpenTargetStore.getState().openTarget(target.id, absolutePath).catch(() => reportOpenFailure(absolutePath))
@@ -50,7 +54,7 @@ export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, 
       ))}
       {applications.length > 0 && (folders.length > 0 || usefulActions.length > 0 || onRefresh) ? <div className="mx-2 my-1 border-t border-[var(--color-border)]" role="separator" /> : null}
       {folders.map((target) => <button key={target.id} type="button" role="menuitem" onClick={() => selectTarget(target)} className={itemClass}>{t('workspace.files.openContainingFolder')}</button>)}
-      {usefulActions.map((item) => <button key={item.id} type="button" role="menuitem" onClick={() => { item.onSelect(); onAfterSelect?.() }} className={itemClass}><span className="truncate">{item.label}</span></button>)}
+      {usefulActions.map((item) => <button key={item.id} type="button" role="menuitem" onClick={() => { if (item.id === 'preview' && onPreview) onPreview(); else item.onSelect(); onAfterSelect?.() }} className={itemClass}><span className="truncate">{item.label}</span></button>)}
       {onRefresh ? <button type="button" role="menuitem" className={itemClass} onClick={() => { onRefresh(); onAfterSelect?.() }}>{t('workspace.refresh')}</button> : null}
     </>
   )

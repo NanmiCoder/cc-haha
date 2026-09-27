@@ -10,6 +10,12 @@ import {
 } from './loadAgentsDir.js'
 
 describe('official Agent definition fields', () => {
+  test('JSON snapshots retain built-in instruction scope and tool restrictions', () => {
+    expect(parseAgentFromJson('review-worker', {
+      description: 'Approved preset snapshot', prompt: 'Read-only fixture',
+      omitClaudeMd: true, tools: ['Read'], disallowedTools: ['Edit', 'Write'],
+    })).toMatchObject({ omitClaudeMd: true, tools: ['Read'], disallowedTools: ['Edit', 'Write'] })
+  })
   test('JSON agents preserve hooks, isolation, color, and trimmed strings', () => {
     const hooks = {
       PreToolUse: [

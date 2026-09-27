@@ -56,12 +56,18 @@ describe('composerUtils', () => {
     )
   })
 
+  it('keeps the desktop-owned /clear command searchable without recommending it by default', () => {
+    const commands = mergeSlashCommands([])
+    expect(filterSlashCommands(commands, '').map(command => command.name)).not.toContain('clear')
+    expect(filterSlashCommands(commands, 'clear').map(command => command.name)).toEqual(['clear'])
+  })
+
   it('never falls back to commands this desktop cannot run', () => {
     // The headless CLI answers these with "Unknown skill", so offering them in
     // the menu is a dead end. They regressing back in means the fallback list
     // drifted away from what the session can actually execute.
     const names = FALLBACK_SLASH_COMMANDS.map(command => command.name)
-    for (const dead of ['clear', 'vim', 'terminal-setup', 'permissions', 'commit', 'pr', 'bug', 'login', 'logout']) {
+    for (const dead of ['vim', 'terminal-setup', 'permissions', 'commit', 'pr', 'bug', 'login', 'logout']) {
       expect(names).not.toContain(dead)
     }
   })
@@ -159,7 +165,7 @@ describe('composerUtils', () => {
     expect(replaceSlashCommand('/goal sta', 9, 'goal status')).toBeNull()
   })
 
-  it('ranks slash command name matches before broad description matches', () => {
+  it('keeps name matches free of broad description-only matches', () => {
     expect(
       filterSlashCommands([
         { name: 'lark-calendar', description: 'Includes shortcuts and suggestion helpers' },
@@ -170,32 +176,40 @@ describe('composerUtils', () => {
     ).toEqual([
       'superpowers:brainstorming',
       'superpowers:systematic-debugging',
-      'lark-calendar',
-      'agent-team-orchestrator',
     ])
   })
 
-  it('opens on the commands the desktop owns instead of the CLI registration order', () => {
-    // The CLI lists its bundled skills first, so an unprioritised menu opens on
-    // `update-config` / `debug` / `batch`. Desktop-owned commands lead instead,
-    // and everything else keeps the order its source gave it.
-    const commands = [
+  it('opens with frequent commands followed by skills and plugins regardless of CLI registration order', () => {
+    const commands = mergeSlashCommands([
       { name: 'update-config', description: 'Configure' },
       { name: 'debug', description: 'Debug' },
-      { name: 'compact', description: 'Compact conversation context' },
-      { name: 'help', description: 'Show available commands' },
-      { name: 'model', description: 'Switch AI model' },
-    ]
-    expect(filterSlashCommands(commands, '').map((command) => command.name)).toEqual([
-      'help',
-      'model',
-      'update-config',
-      'debug',
-      'compact',
+      { name: 'heapdump', description: 'Heap dump' },
+      { name: 'video', description: 'Make videos', kind: 'skill' },
+      { name: 'draw', description: 'Draw diagrams', kind: 'plugin' },
     ])
+    expect(filterSlashCommands(commands, '').map(command => command.name)).toEqual([
+      'compact', 'context', 'status', 'init', 'review', 'model', 'video', 'draw',
+    ])
+    expect(filterSlashCommands(commands, '  ')).toEqual(filterSlashCommands(commands, ''))
+    for (const name of ['update-config', 'debug', 'heapdump', 'video', 'draw', 'config', 'help']) {
+      expect(filterSlashCommands(commands, name).map(command => command.name)).toContain(name)
+    }
   })
 
-  it('leaves match ranking alone once a query is typed', () => {
+  it('keeps a same-named skill in its skill group without duplicating it as a frequent command', () => {
+    const skill = { name: 'review', description: 'Custom review', kind: 'skill' as const }
+    const groups = groupSlashCommands(filterSlashCommands([skill], ''))
+    expect(groups.system).toEqual([])
+    expect(groups.skills).toEqual([skill])
+    expect(groups.ordered).toEqual([skill])
+  })
+
+  it('keeps CLI-reported frequent commands available in the default list', () => {
+    const commands = mergeSlashCommands([{ name: 'status', description: 'CLI status', kind: 'command' }])
+    expect(filterSlashCommands(commands, '').map(command => command.name)).toContain('status')
+  })
+
+  it('keeps the named command instead of description-only matches', () => {
     const commands = [
       { name: 'help', description: 'Show available commands' },
       { name: 'compact', description: 'Compact conversation context' },
@@ -203,7 +217,26 @@ describe('composerUtils', () => {
     ]
     expect(filterSlashCommands(commands, 'comp').map((command) => command.name)).toEqual([
       'compact',
-      'update-config',
+    ])
+  })
+
+  it('falls back to descriptions and arguments when no command name matches', () => {
+    const commands = [
+      { name: 'compact', description: 'Reduce conversation size' },
+      { name: 'run', description: 'Run a task', argumentHint: '<conversation>' },
+    ]
+    expect(filterSlashCommands(commands, 'conversation').map(command => command.name)).toEqual(['compact', 'run'])
+  })
+
+  it('ranks exact names, prefixes and name segments before substrings', () => {
+    const commands = [
+      { name: 'decompact', description: '' },
+      { name: 'workspace:compact', description: '' },
+      { name: 'compactor', description: '' },
+      { name: 'compact', description: '' },
+    ]
+    expect(filterSlashCommands(commands, 'compact').map(command => command.name)).toEqual([
+      'compact', 'compactor', 'workspace:compact', 'decompact',
     ])
   })
 
@@ -326,5 +359,5 @@ it('orders plugin mentions between commands and skills without changing their ca
     { name: 'help', description: 'Help', kind: 'command' },
   ])
   expect(groups.plugins?.map(item => item.name)).toEqual(['plugin:hyperframes'])
-  expect(groups.ordered.map(item => item.name)).toEqual(['help', 'plugin:hyperframes', 'skill:video'])
+  expect(groups.ordered.map(item => item.name)).toEqual(['help', 'skill:video', 'plugin:hyperframes'])
 })

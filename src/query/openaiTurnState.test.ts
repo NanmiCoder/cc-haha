@@ -8,6 +8,7 @@ import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environmen
 import type { Tool, ToolUseContext } from '../Tool.js'
 import type { QueryParams } from '../query.js'
 import type { OpenAICodexTurnState } from '../services/openaiAuth/turnState.js'
+import { requestTeamPlanTurnPause } from '../utils/swarm/teamPlanTurnBoundary.js'
 
 let query: typeof import('../query.js')['query']
 let getDefaultAppState: typeof import('../state/AppStateStore.js')['getDefaultAppState']
@@ -106,6 +107,40 @@ async function drain(generator: ReturnType<typeof query>) {
 }
 
 describe('query OpenAI routing state lifetime', () => {
+  test('team review submission yields all tool results and ends before another model request without aborting the session', async () => {
+    let calls = 0
+    let executions = 0
+    const tool = {
+      name: 'FixtureSubmitTeamPlan', inputSchema: z.object({}), maxResultSizeChars: 1000,
+      isConcurrencySafe: () => false, isReadOnly: () => false, isEnabled: () => true,
+      userFacingName: () => 'submit team plan', description: async () => 'fixture',
+      call: async (_input: unknown, ctx: ToolUseContext) => {
+        executions++
+        requestTeamPlanTurnPause(ctx.abortController)
+        return { data: 'review_pending' }
+      },
+      mapToolResultToToolResultBlockParam: (data: string, id: string) => ({ type: 'tool_result', tool_use_id: id, content: data }),
+    } as unknown as Tool
+    const ctx = context([tool])
+    const model: NonNullable<QueryParams['deps']>['callModel'] = async function* () {
+      calls++
+      yield createAssistantMessage({ content: calls === 1 ? [{ type: 'tool_use', id: 'submit-plan', name: tool.name, input: {} }] : 'continued after human input' })
+    }
+    const output: unknown[] = []
+    const run = query(params(ctx, model))
+    while (true) {
+      const next = await run.next()
+      if (next.done) { expect(next.value).toEqual({ reason: 'completed' }); break }
+      output.push(next.value)
+    }
+    expect(executions).toBe(1)
+    expect(calls).toBe(1)
+    expect(JSON.stringify(output)).toContain('review_pending')
+    expect(ctx.abortController.signal.aborted).toBe(false)
+    expect(await drain(query(params(ctx, model)))).toEqual({ reason: 'completed' })
+    expect(calls).toBe(2)
+  })
+
   test('keeps routing state through a real tool continuation and resets it for the next user turn', async () => {
     let toolCalls = 0
     const tool = {

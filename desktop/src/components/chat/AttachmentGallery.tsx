@@ -28,6 +28,7 @@ export type AttachmentPreview = {
   diffSide?: 'old' | 'new'
   hunkId?: string
   note?: string
+  referenceKind?: 'chat-selection'
   quote?: string
   selectionNumber?: number
 }
@@ -357,7 +358,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
           const hasQuotePreview = !!quotePreview
           const typeInfo = describeFileType(attachment.path || attachment.name)
           const fileIcon = attachment.isDirectory ? 'folder' : typeInfo.icon
-          const typeLabel = attachment.isDirectory
+          const typeLabel = attachment.referenceKind === 'chat-selection' ? t('chat.selectedText') : attachment.isDirectory
             ? t('openWith.fileType.file')
             : typeInfo.ext || t(typeInfo.categoryKey as TranslationKey)
           const canOpenLocally =

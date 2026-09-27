@@ -767,6 +767,7 @@ describe('SearchService.searchSessions', () => {
       isSessionScopeReady: () => true,
       listSessions: () => ({ sessions: [], total: 0 }),
       findSessionFiles: () => [],
+      getSession: () => null,
       findSearchCandidates: () => {
         throw new Error('date-only search must preserve recursive canonical scope')
       },

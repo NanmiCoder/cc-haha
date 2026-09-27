@@ -1,3 +1,4 @@
+import { ApiError } from '../middleware/errorHandler.js'
 import * as fs from 'node:fs/promises'
 import { watch, type FSWatcher } from 'node:fs'
 import { execFile as execFileCallback } from 'node:child_process'
@@ -791,7 +792,8 @@ export class WorkspaceService {
     let messages: MessageEntry[]
     try {
       messages = await this.resolveSessionMessages(sessionId)
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 413) throw error
       return []
     }
 
@@ -841,7 +843,8 @@ export class WorkspaceService {
     let snapshots: FileHistorySnapshot[]
     try {
       snapshots = await this.resolveSessionFileHistorySnapshots(sessionId)
-    } catch {
+    } catch (error) {
+      if (error instanceof ApiError && error.statusCode === 413) throw error
       return []
     }
     if (snapshots.length === 0) return []

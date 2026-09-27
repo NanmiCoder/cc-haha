@@ -4,7 +4,7 @@ import { getAttributionHeader } from './system.js'
 
 describe('getAttributionHeader', () => {
   test('tracks the audited upstream Claude Code compatibility release', () => {
-    expect(CLAUDE_CODE_COMPAT_VERSION).toBe('2.1.220')
+    expect(CLAUDE_CODE_COMPAT_VERSION).toBe('2.1.281')
   })
 
   test('uses Claude Code compatibility version and always includes CCH placeholder', () => {
@@ -13,7 +13,7 @@ describe('getAttributionHeader', () => {
 
     try {
       expect(getAttributionHeader('abc')).toBe(
-        'x-anthropic-billing-header: cc_version=2.1.220.abc; cc_entrypoint=cli; cch=00000;',
+        'x-anthropic-billing-header: cc_version=2.1.281.abc; cc_entrypoint=cli; cch=00000;',
       )
     } finally {
       if (originalEntrypoint === undefined) delete process.env.CLAUDE_CODE_ENTRYPOINT

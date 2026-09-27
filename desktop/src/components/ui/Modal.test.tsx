@@ -5,6 +5,12 @@ import { ConfirmDialog } from './ConfirmDialog'
 import { Modal } from './Modal'
 
 describe('Modal', () => {
+  it('supports a scoped interface treatment without changing other dialog defaults', () => {
+    render(<Modal open onClose={vi.fn()} title="Roster" className="team-plan-dialog" typography="interface">Team</Modal>)
+    expect(screen.getByRole('dialog')).toHaveClass('team-plan-dialog', 'dialog-panel')
+    expect(screen.getByRole('heading', { name: 'Roster' })).toHaveStyle({ fontFamily: 'inherit' })
+  })
+
   it('portals the dialog to body so the scrim covers the full app shell', () => {
     const onClose = vi.fn()
     const { container } = render(

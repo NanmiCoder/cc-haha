@@ -134,7 +134,7 @@ function expectSharedSessionSurface(agentRunKind: 'subagent' | 'team-member') {
     agentRunKind,
   )
   expect(screen.getByTestId('agent-run-conversation-column')).toHaveClass('min-w-[360px]')
-  expect(screen.getByTestId('session-header').firstElementChild).toHaveClass('max-w-[900px]')
+  expect(screen.getByTestId('session-header').firstElementChild).toHaveClass('max-w-[var(--chat-content-max-width)]')
 }
 
 describe('SubagentRunPage', () => {
@@ -166,6 +166,29 @@ describe('SubagentRunPage', () => {
     vi.mocked(subagentsApi.getRunByAgent).mockReset()
     vi.mocked(subagentsApi.sendMessage).mockReset()
     useTeamStore.getState().clearTeam()
+  })
+
+  it('shows incomplete evidence without hiding content and can recover on refresh', async () => {
+    vi.mocked(subagentsApi.getRunByTool)
+      .mockResolvedValueOnce(subagentRun({ historyComplete: false, activityComplete: false, truncated: true, status: 'unknown' }))
+      .mockResolvedValue(subagentRun({ historyComplete: true }))
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Partial Agent" />)
+    expect(await screen.findByText('Some history could not be read. Available content is shown; refresh to retry.')).toBeInTheDocument()
+    expect(screen.getByTestId('subagent-conversation')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+    await waitFor(() => expect(screen.queryByText('Some history could not be read. Available content is shown; refresh to retry.')).not.toBeInTheDocument())
+    expect(screen.getByTestId('subagent-conversation')).toBeInTheDocument()
+  })
+
+  it('preserves displayed messages when a refresh cannot read any history', async () => {
+    vi.mocked(subagentsApi.getRunByTool)
+      .mockResolvedValueOnce(subagentRun({ messages: [{ id: 'retained', type: 'assistant', content: 'Previously readable answer', timestamp: TRANSCRIPT_TIMESTAMP }] }))
+      .mockResolvedValue(subagentRun({ messages: [], prompt: undefined, result: undefined, summary: undefined, historyComplete: false, activityComplete: false, status: 'unknown' }))
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Partial Agent" />)
+    await screen.findByText('Previously readable answer')
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh SubAgent run' }))
+    await screen.findByText('Some history could not be read. Available content is shown; refresh to retry.')
+    expect(screen.getByText('Previously readable answer')).toBeInTheDocument()
   })
 
   it('returns to the parent session and closes its own tab via the back button', async () => {
@@ -444,6 +467,46 @@ describe('SubagentRunPage', () => {
     expectSharedSessionSurface('subagent')
   })
 
+  it('shows the model the newest transcript turn answered on, not an earlier one', async () => {
+    vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun({
+      messages: [
+        { id: 'msg-user', type: 'user', content: 'Read files', timestamp: TRANSCRIPT_TIMESTAMP },
+        {
+          id: 'msg-assistant-1',
+          type: 'assistant',
+          content: [{ type: 'text', text: 'First pass' }],
+          model: 'claude-haiku-4-5',
+          timestamp: TRANSCRIPT_TIMESTAMP,
+        },
+        {
+          id: 'msg-assistant-2',
+          type: 'assistant',
+          content: [{ type: 'text', text: 'Second pass' }],
+          model: 'claude-sonnet-5',
+          timestamp: TRANSCRIPT_TIMESTAMP,
+        },
+      ],
+    }))
+
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Kuhn" />)
+
+    await screen.findByTestId('subagent-conversation')
+    const header = screen.getByTestId('session-header')
+    expect(within(header).getByText('claude-sonnet-5')).toBeInTheDocument()
+    expect(within(header).queryByText('claude-haiku-4-5')).not.toBeInTheDocument()
+  })
+
+  it('omits the model badge while no turn has reported one', async () => {
+    vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun())
+
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="Kuhn" />)
+
+    await screen.findByTestId('subagent-conversation')
+    const header = screen.getByTestId('session-header')
+    expect(within(header).queryByTitle('Model')).not.toBeInTheDocument()
+    expect(within(header).getByText('Completed')).toBeInTheDocument()
+  })
+
   it('uses compact main-session chrome and mobile transcript behavior on narrow screens', async () => {
     viewportMocks.isMobile = true
     vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun({
@@ -461,6 +524,16 @@ describe('SubagentRunPage', () => {
     expect(screen.getByTestId('session-header')).toHaveClass('px-4', 'py-2.5')
     expect(screen.getByTestId('agent-run-conversation-column')).toHaveClass('flex-1')
     expect(screen.queryByTestId('conversation-navigator')).not.toBeInTheDocument()
+  })
+
+  it('does not replace authoritative activity with a partial transcript tail', async () => {
+    const tabId = `${SUBAGENT_TAB_PREFIX}session-1__tool-1`
+    const tasks = { running: { taskId: 'running', toolUseId: 'owned-tool', status: 'running' as const, description: 'Live owned task', startedAt: 1, updatedAt: 2 } }
+    useChatStore.setState({ sessions: { [tabId]: { ...createDefaultSessionState(), backgroundAgentTasks: tasks } } })
+    vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun({ activityComplete: false, historyComplete: false, truncated: true }))
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" title="SubAgent" />)
+    await screen.findByTestId('subagent-conversation')
+    expect(useChatStore.getState().sessions[tabId]?.backgroundAgentTasks).toBe(tasks)
   })
 
   it('auto-opens the owning SubAgent Task and Bash activity without another click', async () => {
@@ -2135,6 +2208,7 @@ describe('SubagentRunPage', () => {
       useChatStore.setState({
         sessions: {
           'session-1': {
+            ...createDefaultSessionState(),
             backgroundAgentTasks: {
               'agent-1': {
                 taskId: 'agent-1',

@@ -1,4 +1,8 @@
-import { open, type FileHandle } from 'node:fs/promises'
+import { mkdtemp, open, rm, type FileHandle } from 'node:fs/promises'
+import { Database } from 'bun:sqlite'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { commitSearchContentSpool, withSearchProjectionBudget } from './searchContentCommitWorker.js'
 import {
   getCommandMetadataDisplayText,
   shouldHideCommandMetadataContent,
@@ -66,7 +70,7 @@ export interface SearchContentProjector {
   projectSource(
     candidate: SearchContentSourceCandidate,
   ): Promise<SearchContentProjectResult>
-  deleteSource(path: string): { kind: 'deleted' }
+  deleteSource(path: string): { kind: 'deleted' } | Promise<{ kind: 'deleted' }>
 }
 
 export type SearchContentProjectorOptions = {
@@ -77,9 +81,13 @@ export type SearchContentProjectorOptions = {
   signal?: AbortSignal
   verifyFingerprint?: typeof verifySourceFingerprint
   maxJsonlLineBytes?: number
+  onBatch?: (batch: { bytes: number; documents: number }) => void
+  onCommitStarted?: () => void
 }
 
 const READ_BUFFER_BYTES = 256 * 1024
+export const SEARCH_CONTENT_BATCH_BYTES = 4 * 1024 * 1024
+const SEARCH_CONTENT_BATCH_DOCUMENTS = 256
 
 function extractPlainTextBlocks(content: unknown): string[] {
   if (typeof content === 'string') {
@@ -232,13 +240,26 @@ async function readCompleteLines(options: {
   maxJsonlLineBytes: number
   /** §8.4 sensitivity policy: keep only the user-visible projection. */
   safeProjectionOnly?: boolean
+  writeBatch: (documents: SearchContentDocumentWrite[], bytes: number) => void
 }): Promise<{
-  documents: SearchContentDocumentWrite[]
+  documentCount: number
   indexedBytes: number
   indexedLines: number
   lineTooLarge: boolean
 }> {
-  const documents: SearchContentDocumentWrite[] = []
+  let documents: SearchContentDocumentWrite[] = []
+  let batchBytes = 0
+  let documentCount = 0
+  const flush = async () => {
+    if (!documents.length) return
+    throwIfAborted(options.signal)
+    options.writeBatch(documents, batchBytes)
+    documentCount += documents.length
+    documents = []
+    batchBytes = 0
+    await new Promise<void>(resolve => setImmediate(resolve))
+    throwIfAborted(options.signal)
+  }
   const pendingParts: Buffer[] = []
   let pendingBytes = 0
   let position = options.start
@@ -259,8 +280,9 @@ async function readCompleteLines(options: {
       if (newline < 0) {
         const remainder = chunk.subarray(cursor)
         if (pendingBytes + remainder.length > options.maxJsonlLineBytes) {
+          await flush()
           return {
-            documents,
+            documentCount,
             indexedBytes: lineStart,
             indexedLines: jsonlLine,
             lineTooLarge: true,
@@ -273,8 +295,9 @@ async function readCompleteLines(options: {
 
       const tail = chunk.subarray(cursor, newline + 1)
       if (pendingBytes + tail.length > options.maxJsonlLineBytes) {
+        await flush()
         return {
-          documents,
+          documentCount,
           indexedBytes: lineStart,
           indexedLines: jsonlLine,
           lineTooLarge: true,
@@ -284,12 +307,15 @@ async function readCompleteLines(options: {
         ? Buffer.concat([...pendingParts, tail], pendingBytes + tail.length)
         : tail
       jsonlLine += 1
-      documents.push(...parseCompleteLine({
-        bytes: lineBytes,
-        byteStart: lineStart,
-        jsonlLine,
-        safeProjectionOnly: options.safeProjectionOnly,
-      }))
+      for (const document of parseCompleteLine({ bytes: lineBytes, byteStart: lineStart, jsonlLine, safeProjectionOnly: options.safeProjectionOnly })) {
+        const bytes = Buffer.byteLength(document.body) + Buffer.byteLength(document.normalizedBody)
+        if (documents.length && (batchBytes + bytes > SEARCH_CONTENT_BATCH_BYTES || documents.length >= SEARCH_CONTENT_BATCH_DOCUMENTS)) await flush()
+        documents.push(document)
+        batchBytes += bytes
+        // A single document may exceed the batch target, but its source line
+        // remains bounded by maxJsonlLineBytes; never truncate searchable text.
+        if (batchBytes >= SEARCH_CONTENT_BATCH_BYTES) await flush()
+      }
       lineStart += lineBytes.length
       pendingParts.length = 0
       pendingBytes = 0
@@ -298,8 +324,9 @@ async function readCompleteLines(options: {
     position += bytesRead
   }
 
+  await flush()
   return {
-    documents,
+    documentCount,
     indexedBytes: lineStart,
     indexedLines: jsonlLine,
     lineTooLarge: false,
@@ -325,145 +352,170 @@ export function createSearchContentProjector(
 
   return {
     async projectSource(candidate) {
-      throwIfAborted(options.signal)
-      const existing = options.index.getSource(candidate.path)
-      let action: 'full' | 'append' | 'rebuild' = existing ? 'rebuild' : 'full'
-      let start = 0
-      let startingLine = 0
+      return withSearchProjectionBudget(options.signal, async () => {
+        throwIfAborted(options.signal)
+        const existing = options.index.getSource(candidate.path)
+        let action: 'full' | 'append' | 'rebuild' = existing ? 'rebuild' : 'full'
+        let start = 0
+        let startingLine = 0
 
-      if (existing) {
-        const previous = deserializeSourceFingerprint(existing.fingerprint)
-        const change = previous
-          ? await detectSourceChange({
+        if (existing) {
+          const previous = deserializeSourceFingerprint(existing.fingerprint)
+          const change = previous
+            ? await detectSourceChange({
+              path: candidate.path,
+              previous,
+              parserVersion,
+            })
+            : { kind: 'rebuild', reason: 'rewrite' } as const
+          if (change.kind === 'retry') return change
+          if (change.kind === 'deleted') return remove(candidate.path)
+          if (change.kind === 'unchanged') {
+            if (
+              existing.projectPath !== candidate.projectPath ||
+              existing.ownerSessionId !== candidate.ownerSessionId ||
+              existing.ownerTranscriptPath !== candidate.ownerTranscriptPath ||
+              existing.modifiedAtMs !== candidate.modifiedAtMs
+            ) {
+              options.index.appendSource({
+                ...existing,
+                projectPath: candidate.projectPath,
+                ownerSessionId: candidate.ownerSessionId,
+                ownerTranscriptPath: candidate.ownerTranscriptPath,
+                modifiedAtMs: candidate.modifiedAtMs,
+                updatedAtMs: now(),
+              }, [])
+            }
+            return {
+              kind: 'indexed',
+              action: 'unchanged',
+              state: existing.state,
+              indexedBytes: existing.indexedBytes,
+              indexedLines: existing.indexedLines,
+              documentCount: 0,
+            }
+          }
+          if (change.kind === 'append') {
+            action = 'append'
+            start = change.readFrom
+            startingLine = existing.indexedLines
+          }
+        }
+
+        let handle: FileHandle | undefined
+        let spool: Database | undefined
+        let spoolDirectory: string | undefined
+        try {
+          const readSnapshot = await captureSourceFingerprint({
             path: candidate.path,
-            previous,
+            indexedBytes: start,
             parserVersion,
           })
-          : { kind: 'rebuild', reason: 'rewrite' } as const
-        if (change.kind === 'retry') return change
-        if (change.kind === 'deleted') return remove(candidate.path)
-        if (change.kind === 'unchanged') {
-          if (
-            existing.projectPath !== candidate.projectPath ||
-            existing.ownerSessionId !== candidate.ownerSessionId ||
-            existing.ownerTranscriptPath !== candidate.ownerTranscriptPath ||
-            existing.modifiedAtMs !== candidate.modifiedAtMs
-          ) {
-            options.index.appendSource({
-              ...existing,
-              projectPath: candidate.projectPath,
-              ownerSessionId: candidate.ownerSessionId,
-              ownerTranscriptPath: candidate.ownerTranscriptPath,
-              modifiedAtMs: candidate.modifiedAtMs,
-              updatedAtMs: now(),
-            }, [])
+          throwIfAborted(options.signal)
+          handle = await open(candidate.path, 'r')
+          const before = await handle.stat()
+          if (!snapshotMatchesFingerprint(before, readSnapshot)) {
+            return { kind: 'retry', reason: 'changed-during-read' }
+          }
+          spoolDirectory = await mkdtemp(join(tmpdir(), 'claude-search-spool-'))
+          const spoolPath = join(spoolDirectory, 'documents.sqlite')
+          spool = new Database(spoolPath)
+          spool.exec('PRAGMA journal_mode=OFF; PRAGMA cache_size=-512; PRAGMA temp_store=FILE; CREATE TABLE documents (seq INTEGER PRIMARY KEY, jsonlLine INTEGER, byteStart INTEGER, byteLength INTEGER, segmentIndex INTEGER, role TEXT, messageId TEXT, timestamp TEXT, body TEXT, normalizedBody TEXT)')
+          const insert = spool.query('INSERT INTO documents (jsonlLine, byteStart, byteLength, segmentIndex, role, messageId, timestamp, body, normalizedBody) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          const activeSpool = spool
+          const reduced = await readCompleteLines({
+            handle,
+            start,
+            end: readSnapshot.size,
+            startingLine,
+            signal: options.signal,
+            maxJsonlLineBytes,
+            safeProjectionOnly: shouldSuppressSearchContentCapture(candidate.ownerSessionId),
+            writeBatch(documents, bytes) {
+              options.onBatch?.({ documents: documents.length, bytes })
+              throwIfAborted(options.signal)
+              activeSpool.transaction(() => {
+                for (const document of documents) insert.run(document.jsonlLine, document.byteStart, document.byteLength, document.segmentIndex, document.role, document.messageId, document.timestamp, document.body, document.normalizedBody)
+              })()
+            },
+          })
+          const after = await handle.stat()
+          if (!snapshotMatchesFingerprint(after, readSnapshot)) {
+            return { kind: 'retry', reason: 'changed-during-read' }
+          }
+          await handle.close()
+          handle = undefined
+
+          const commitSnapshot = await captureSourceFingerprint({
+            path: candidate.path,
+            indexedBytes: reduced.indexedBytes,
+            parserVersion,
+          })
+          if (!sameReadSnapshot(readSnapshot, commitSnapshot)) {
+            return { kind: 'retry', reason: 'changed-during-read' }
+          }
+          const verified = await verifyFingerprint({
+            path: candidate.path,
+            expected: commitSnapshot,
+          })
+          if (verified.kind !== 'unchanged') {
+            return verified.kind === 'retry'
+              ? verified
+              : { kind: 'retry', reason: 'changed-during-read' }
+          }
+          throwIfAborted(options.signal)
+
+          const state: SearchContentSourceState = reduced.lineTooLarge
+            ? 'degraded'
+            : reduced.indexedBytes < commitSnapshot.size ? 'pending' : 'ready'
+          const source: SearchContentSourceWrite = {
+            path: candidate.path,
+            projectPath: candidate.projectPath,
+            ownerSessionId: candidate.ownerSessionId,
+            ownerTranscriptPath: candidate.ownerTranscriptPath,
+            modifiedAtMs: candidate.modifiedAtMs,
+            sizeBytes: commitSnapshot.size,
+            mtimeMs: commitSnapshot.mtimeMs,
+            fileIdentity: commitSnapshot.fileIdentity,
+            fingerprint: serializeSourceFingerprint(commitSnapshot),
+            indexedBytes: reduced.indexedBytes,
+            indexedLines: reduced.indexedLines,
+            parserVersion,
+            state,
+            lastErrorCode: reduced.lineTooLarge
+              ? SEARCH_CONTENT_LINE_TOO_LARGE
+              : null,
+            updatedAtMs: now(),
+          }
+          if (options.database.path) {
+            spool.close()
+            spool = undefined
+            await commitSearchContentSpool({ databasePath: options.database.path, spoolPath, source, append: action === 'append', signal: options.signal, onStarted: options.onCommitStarted })
+          } else {
+            // Custom/in-memory databases cannot be reopened in another thread.
+            // They retain the same bounded iterator and atomic transaction API.
+            const documents = spool.query('SELECT jsonlLine, byteStart, byteLength, segmentIndex, role, messageId, timestamp, body, normalizedBody FROM documents ORDER BY seq').iterate() as Iterable<SearchContentDocumentWrite>
+            if (action === 'append') options.index.appendSource(source, documents)
+            else options.index.replaceSource(source, documents)
           }
           return {
             kind: 'indexed',
-            action: 'unchanged',
-            state: existing.state,
-            indexedBytes: existing.indexedBytes,
-            indexedLines: existing.indexedLines,
-            documentCount: 0,
+            action,
+            state,
+            indexedBytes: reduced.indexedBytes,
+            indexedLines: reduced.indexedLines,
+            documentCount: reduced.documentCount,
           }
+        } catch (error) {
+          if (isMissing(error)) return remove(candidate.path)
+          return retry()
+        } finally {
+          await handle?.close().catch(() => {})
+          spool?.close()
+          if (spoolDirectory) await rm(spoolDirectory, { recursive: true, force: true })
         }
-        if (change.kind === 'append') {
-          action = 'append'
-          start = change.readFrom
-          startingLine = existing.indexedLines
-        }
-      }
-
-      let handle: FileHandle | undefined
-      try {
-        const readSnapshot = await captureSourceFingerprint({
-          path: candidate.path,
-          indexedBytes: start,
-          parserVersion,
-        })
-        throwIfAborted(options.signal)
-        handle = await open(candidate.path, 'r')
-        const before = await handle.stat()
-        if (!snapshotMatchesFingerprint(before, readSnapshot)) {
-          return { kind: 'retry', reason: 'changed-during-read' }
-        }
-        const reduced = await readCompleteLines({
-          handle,
-          start,
-          end: readSnapshot.size,
-          startingLine,
-          signal: options.signal,
-          maxJsonlLineBytes,
-          safeProjectionOnly: shouldSuppressSearchContentCapture(candidate.ownerSessionId),
-        })
-        const after = await handle.stat()
-        if (!snapshotMatchesFingerprint(after, readSnapshot)) {
-          return { kind: 'retry', reason: 'changed-during-read' }
-        }
-        await handle.close()
-        handle = undefined
-
-        const commitSnapshot = await captureSourceFingerprint({
-          path: candidate.path,
-          indexedBytes: reduced.indexedBytes,
-          parserVersion,
-        })
-        if (!sameReadSnapshot(readSnapshot, commitSnapshot)) {
-          return { kind: 'retry', reason: 'changed-during-read' }
-        }
-        const verified = await verifyFingerprint({
-          path: candidate.path,
-          expected: commitSnapshot,
-        })
-        if (verified.kind !== 'unchanged') {
-          return verified.kind === 'retry'
-            ? verified
-            : { kind: 'retry', reason: 'changed-during-read' }
-        }
-        throwIfAborted(options.signal)
-
-        const state: SearchContentSourceState = reduced.lineTooLarge
-          ? 'degraded'
-          : reduced.indexedBytes < commitSnapshot.size ? 'pending' : 'ready'
-        const source: SearchContentSourceWrite = {
-          path: candidate.path,
-          projectPath: candidate.projectPath,
-          ownerSessionId: candidate.ownerSessionId,
-          ownerTranscriptPath: candidate.ownerTranscriptPath,
-          modifiedAtMs: candidate.modifiedAtMs,
-          sizeBytes: commitSnapshot.size,
-          mtimeMs: commitSnapshot.mtimeMs,
-          fileIdentity: commitSnapshot.fileIdentity,
-          fingerprint: serializeSourceFingerprint(commitSnapshot),
-          indexedBytes: reduced.indexedBytes,
-          indexedLines: reduced.indexedLines,
-          parserVersion,
-          state,
-          lastErrorCode: reduced.lineTooLarge
-            ? SEARCH_CONTENT_LINE_TOO_LARGE
-            : null,
-          updatedAtMs: now(),
-        }
-        if (action === 'append') {
-          options.index.appendSource(source, reduced.documents)
-        } else {
-          options.index.replaceSource(source, reduced.documents)
-        }
-        return {
-          kind: 'indexed',
-          action,
-          state,
-          indexedBytes: reduced.indexedBytes,
-          indexedLines: reduced.indexedLines,
-          documentCount: reduced.documents.length,
-        }
-      } catch (error) {
-        if (isMissing(error)) return remove(candidate.path)
-        return retry()
-      } finally {
-        await handle?.close().catch(() => {})
-      }
+      })
     },
-    deleteSource: remove,
+    deleteSource: path => withSearchProjectionBudget(options.signal, async () => remove(path)),
   }
 }

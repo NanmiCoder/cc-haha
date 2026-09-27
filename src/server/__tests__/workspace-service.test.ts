@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises'
 import { execFileSync } from 'node:child_process'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { ApiError } from '../middleware/errorHandler.js'
 import { WorkspaceService } from '../services/workspaceService.js'
 import {
   clearFilesystemAccessRootsForTests,
@@ -144,6 +145,15 @@ describe('WorkspaceService outside-workspace preview', () => {
 })
 
 describe('WorkspaceService', () => {
+  it('surfaces bounded transcript failures instead of reporting a clean workspace', async () => {
+    const workDir = await makeTempDir('workspace-history-budget-')
+    const failure = new ApiError(413, 'History viewing budget exceeded', 'HISTORY_WORKSPACE_LIMIT')
+    const messages = new WorkspaceService(async () => workDir, async () => { throw failure })
+    const snapshots = new WorkspaceService(async () => workDir, async () => [], async () => { throw failure })
+    await expect(messages.getStatus('session')).rejects.toBe(failure)
+    await expect(snapshots.getStatus('session')).rejects.toBe(failure)
+  })
+
   it('returns git status for modified, added, deleted, and untracked files', async () => {
     const repoDir = await createGitWorkspace()
     const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? repoDir : null)

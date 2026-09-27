@@ -33,7 +33,7 @@ function runsQuery(options: RunsOptions): string {
 
 export const tasksApi = {
   list() {
-    return api.get<TasksResponse>('/api/scheduled-tasks')
+    return api.get<TasksResponse>('/api/scheduled-tasks', { timeout: 15_000 })
   },
 
   create(input: CreateTaskInput) {

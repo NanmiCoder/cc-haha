@@ -1,3 +1,4 @@
+import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { BrandSeal } from '@/components/composite/BrandSeal'
@@ -63,8 +64,11 @@ import {
   insertSlashTrigger,
   mergeSlashCommands,
   replaceSlashCommand,
+  replaceSlashToken,
   resolveSlashUiAction,
 } from '../components/chat/composerUtils'
+import { ComposerCapabilityMenu } from '@/components/chat/ComposerCapabilityMenu'
+import { useCapabilityMenu } from '@/components/chat/useCapabilityMenu'
 import type { AttachmentRef } from '../types/chat'
 import type { PermissionMode } from '../types/settings'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
@@ -155,6 +159,7 @@ export function EmptySession() {
   const slashItemRefs = useRef<(HTMLElement | null)[]>([])
   const slashMenuId = useId()
   const referenceMenuId = useId()
+  const capabilityMenuId = useId()
   const createSession = useSessionStore((state) => state.createSession)
   const sendMessage = useChatStore((state) => state.sendMessage)
   const connectToSession = useChatStore((state) => state.connectToSession)
@@ -170,17 +175,17 @@ export function EmptySession() {
   const [draftPermissionMode, setDraftPermissionMode] = useState<PermissionMode>(defaultPermissionMode)
   const lastPluginReloadSummary = usePluginStore((state) => state.lastReloadSummary)
   const referenceCurrent = referenceState?.cwd === workDir ? referenceState : null
-  const composerReferences = referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES
+  const composerReferences = useMemo(() => (referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES).filter(isComposerReferenceVisible), [referenceCurrent?.items])
   useEffect(() => {
     let active = true
-    setReferenceState(previous => ({ cwd: workDir, items: previous?.cwd === workDir ? previous.items : [], loading: true, error: false }))
+    setReferenceState({ cwd: workDir, items: [], loading: true, error: false })
     void composerReferencesApi.list(workDir || undefined).then(data => {
       if (active) setReferenceState({ cwd: workDir, items: [...data.plugins, ...data.skills], loading: false, error: false })
     }).catch(() => {
       if (active) setReferenceState({ cwd: workDir, items: [], loading: false, error: true })
     })
     return () => { active = false }
-  }, [workDir, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen])
+  }, [workDir, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen, plusMenuOpen])
   useEffect(() => {
     setReferenceDetail(null)
     setReferenceOptionId(undefined)
@@ -300,7 +305,7 @@ export function EmptySession() {
       names.add(name.toLowerCase())
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
-    return commands
+    return commands.filter(isComposerSlashCommandVisible)
   }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, t])
 
   const handleWorkDirChange = (newWorkDir: string) => {
@@ -705,6 +710,49 @@ export function EmptySession() {
     })
   }
 
+  // The "+" capability menu: the shared hook owns data and navigation actions,
+  // these handlers are only the composer-local edits. Kept identical to
+  // ChatInput's block on purpose — the two composers are one control.
+  const capabilityMenu = useCapabilityMenu({
+    open: plusMenuOpen,
+    cwd: workDir,
+    references: composerReferences,
+    handlers: {
+      onInsertMention: (reference) => {
+        const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
+        const mention = composerReferenceToMention(reference)
+        const inserted = insertMentionIntoText(input, mentions, cursorPos, cursorPos, mention)
+        setInput(inserted.text)
+        setMentions(inserted.mentions)
+        requestAnimationFrame(() => {
+          composerRef.current?.focus()
+          composerRef.current?.setSelectionOffsets(inserted.cursorPos)
+        })
+      },
+      onInsertSlashText: (command) => {
+        const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
+        const replacement = replaceSlashToken(input, cursorPos, command)
+        setInput(replacement.value)
+        requestAnimationFrame(() => {
+          composerRef.current?.focus()
+          composerRef.current?.setSelectionOffsets(replacement.cursorPos)
+        })
+      },
+      onInsertPromptSeed: (text) => {
+        const next = input.trim() ? `${input}\n${text}` : text
+        setInput(next)
+        requestAnimationFrame(() => {
+          composerRef.current?.focus()
+          composerRef.current?.setSelectionOffsets(next.length)
+        })
+      },
+      onAttachment: openAttachmentPicker,
+      onSlashTrigger: insertSlashCommand,
+      onSaveWorkflow: () => setLocalSlashPanel('save-workflow'),
+      onClose: () => setPlusMenuOpen(false),
+    },
+  })
+
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
       <div className={`brand-seal-glow flex flex-1 flex-col items-center justify-center ${
@@ -816,6 +864,7 @@ export function EmptySession() {
                   ref={slashMenuRef}
                   id={slashMenuId}
                   groups={filteredCommandGroups}
+                  isSearching={Boolean(slashFilter.trim())}
                   references={composerReferences}
                   selectedIndex={slashSelectedIndex}
                   itemRefs={slashItemRefs}
@@ -842,7 +891,9 @@ export function EmptySession() {
                   onCompositionStart={() => { composingRef.current = true }}
                   onCompositionEnd={() => { composingRef.current = false }}
                   placeholder={t('empty.placeholder')}
-                  className="flex-1"
+                  // `min-w-0`: see ChatInput — an unbreakable long run (URL,
+                  // hash) otherwise grows this flex item past the panel.
+                  className="flex-1 min-w-0"
                   editorClassName={`overflow-y-auto leading-relaxed text-[var(--color-text-primary)] ${
                     isMobileComposer ? 'max-h-[132px] min-h-[72px] py-1.5 text-base' : 'max-h-[200px] py-2'
                   }`}
@@ -870,29 +921,32 @@ export function EmptySession() {
                       tone="secondary"
                       size={isMobileComposer ? 'xl' : 'md'}
                       className={isMobileComposer ? 'h-11 w-11' : undefined}
+                      aria-haspopup="menu"
                       aria-expanded={plusMenuOpen}
                       onClick={() => setPlusMenuOpen((prev) => !prev)}
                     />
 
                     {plusMenuOpen && (
-                      <div className={`absolute bottom-full left-0 mb-2 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1 shadow-[var(--shadow-dropdown)] ${
-                        isMobileComposer ? 'w-[min(240px,calc(100vw-32px))]' : 'w-[240px]'
-                      }`}>
-                        <button
-                          onClick={openAttachmentPicker}
-                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
-                        >
-                          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">attach_file</span>
-                          {t('empty.addFiles')}
-                        </button>
-                        <button
-                          onClick={insertSlashCommand}
-                          className="flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
-                        >
-                          <span className="w-5 text-center text-[18px] font-bold text-[var(--color-text-secondary)]">/</span>
-                          {t('empty.slashCommands')}
-                        </button>
-                      </div>
+                      <ComposerCapabilityMenu
+                        cwd={workDir}
+                        referencesLoading={referenceCurrent?.loading ?? true}
+                        referencesError={referenceCurrent?.error}
+                        onSelectFile={mention => {
+                          const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
+                          const inserted = insertMentionIntoText(input, mentions, cursorPos, cursorPos, mention)
+                          setInput(inserted.text)
+                          setMentions(inserted.mentions)
+                          requestAnimationFrame(() => {
+                            composerRef.current?.focus()
+                            composerRef.current?.setSelectionOffsets(inserted.cursorPos)
+                          })
+                        }}
+                        id={capabilityMenuId}
+                        sections={capabilityMenu.sections}
+                        onAction={capabilityMenu.onAction}
+                        onClose={() => setPlusMenuOpen(false)}
+                        mobile={isMobileComposer}
+                      />
                     )}
                   </div>
 

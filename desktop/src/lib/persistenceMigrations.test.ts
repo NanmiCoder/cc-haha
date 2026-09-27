@@ -5,10 +5,34 @@ import {
   runDesktopPersistenceMigrations,
 } from './persistenceMigrations'
 import { WORKSPACE_STORAGE_VERSION } from './workspace/storageKey'
+import { CHAT_APPEARANCE_STORAGE_KEY, DEFAULT_CHAT_APPEARANCE } from './chatAppearance'
 
 describe('desktop persistence migrations', () => {
   beforeEach(() => {
     window.localStorage.clear()
+  })
+
+  test('upgrades a frozen schema-4 install with reading defaults without changing zoom or theme', () => {
+    localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '4')
+    localStorage.setItem('cc-haha-app-zoom', '1.25')
+    localStorage.setItem('cc-haha-theme', 'ink-blue')
+    localStorage.setItem('unrelated-user-key', 'keep')
+    runDesktopPersistenceMigrations()
+    expect(JSON.parse(localStorage.getItem(CHAT_APPEARANCE_STORAGE_KEY)!)).toEqual({ version: 1, ...DEFAULT_CHAT_APPEARANCE })
+    expect(localStorage.getItem('cc-haha-app-zoom')).toBe('1.25')
+    expect(localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(CHAT_APPEARANCE_STORAGE_KEY)
+  })
+
+  test('normalizes unversioned reading preferences and preserves a future schema', () => {
+    localStorage.setItem(CHAT_APPEARANCE_STORAGE_KEY, JSON.stringify({ font: 'serif', fontSize: 80, extra: true }))
+    runDesktopPersistenceMigrations()
+    expect(JSON.parse(localStorage.getItem(CHAT_APPEARANCE_STORAGE_KEY)!)).toEqual({ version: 1, font: 'serif', fontSize: 24, width: 'standard', extra: true })
+    const future = '{"version":2,"font":"future","extra":true}'
+    localStorage.setItem(CHAT_APPEARANCE_STORAGE_KEY, future)
+    runDesktopPersistenceMigrations()
+    expect(localStorage.getItem(CHAT_APPEARANCE_STORAGE_KEY)).toBe(future)
   })
 
   test('migrates legacy open-tab arrays into the current tab persistence shape', () => {

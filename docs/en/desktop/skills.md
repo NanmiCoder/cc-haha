@@ -13,7 +13,7 @@ A skill is a procedure someone else already worked out. Install it and Claude fo
 
 ## The Skills Market
 
-![The Skills Market: cards, security badges, source filters](../../images/app/en/skill-market.webp)
+![The Skills Market: cards, security badges, source filters (Chinese interface)](../../images/app/en/skill-market.webp)
 
 Click **Skills Market** in the sidebar. It aggregates two sources, **ClawHub** and **SkillHub**, and loads more as you scroll — there is no "load more" button.
 

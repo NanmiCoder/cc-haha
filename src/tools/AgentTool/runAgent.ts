@@ -136,7 +136,7 @@ export function selectInitialTranscriptMessages(
  * @param parentClients MCP clients inherited from parent context
  * @returns Merged clients (parent + agent-specific), agent MCP tools, and cleanup function
  */
-async function initializeAgentMcpServers(
+export async function initializeAgentMcpServers(
   agentDefinition: AgentDefinition,
   parentClients: MCPServerConnection[],
 ): Promise<{
@@ -1079,7 +1079,7 @@ async function getAgentSystemPrompt(
  * 2. Prefix with agent's plugin name (e.g., "my-skill" → "my-plugin:my-skill")
  * 3. Suffix match — find any command whose name ends with ":skillName"
  */
-function resolveSkillName(
+export function resolveSkillName(
   skillName: string,
   allSkills: Command[],
   agentDefinition: AgentDefinition,

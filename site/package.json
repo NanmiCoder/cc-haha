@@ -12,17 +12,27 @@
     "preview": "vite preview --host 0.0.0.0",
     "check:docs": "node scripts/check-docs.mjs",
     "test": "node --test \"src/**/*.test.js\"",
-    "check": "npm run check:docs && npm test"
+    "check": "npm run typecheck && npm run check:docs && npm test",
+    "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
     "dompurify": "^3.3.0",
+    "gsap": "^3.15.0",
     "highlight.js": "^11.11.1",
+    "lucide-react": "^1.48.0",
     "marked": "^17.0.5",
     "mermaid": "^11.14.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "three": "^0.186.1"
   },
   "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^7.0.2",
     "vite": "^8.0.10"
   }
 }

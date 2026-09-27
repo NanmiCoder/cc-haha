@@ -34,7 +34,7 @@ import {
   formatProjectSelectionOutcome,
   ProjectSelectionController,
 } from '../common/project-selection-router.js'
-import { restoreStoredSessionBinding } from '../common/session-recovery.js'
+import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { extractInboundPayload } from './extract-payload.js'
 import { FeishuMediaService } from './media.js'
@@ -220,7 +220,7 @@ function clearTransientChatState(chatId: string): void {
   pendingPermissions.delete(chatId)
 }
 
-async function ensureExistingSession(chatId: string): Promise<{ sessionId: string; workDir: string } | null> {
+async function ensureExistingSession(chatId: string): Promise<SessionRestoreResult> {
   return await restoreStoredSessionBinding({
     chatId,
     bridge,
@@ -233,8 +233,10 @@ async function ensureExistingSession(chatId: string): Promise<{ sessionId: strin
 }
 
 async function buildStatusText(chatId: string): Promise<string> {
-  const stored = await ensureExistingSession(chatId)
-  if (!stored) return formatImStatus(null)
+  const result = await ensureExistingSession(chatId)
+  if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+  if (result.status === 'missing') return formatImStatus(null)
+  const stored = result.session
 
   const runtime = getRuntimeState(chatId)
   let projectName = path.basename(stored.workDir) || stored.workDir
@@ -647,8 +649,12 @@ function buildPermissionCard(
 // ---------- session management ----------
 
 async function ensureSession(chatId: string): Promise<boolean> {
-  const stored = await ensureExistingSession(chatId)
-  if (stored) return true
+  const result = await ensureExistingSession(chatId)
+  if (result.status === 'restored') return true
+  if (result.status === 'unavailable') {
+    await sendText(chatId, SESSION_RECONNECT_NOTICE)
+    return false
+  }
 
   const workDir = defaultWorkDir
   if (workDir) {
@@ -1000,9 +1006,9 @@ async function handleMessage(data: any): Promise<void> {
       return
     }
     if (!hasAttachments && (msgText === '/clear' || msgText === '清空')) {
-      const stored = await ensureExistingSession(chatId)
-      if (!stored) {
-        await sendText(chatId, formatImStatus(null))
+      const result = await ensureExistingSession(chatId)
+      if (result.status !== 'restored') {
+        await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
         return
       }
       clearTransientChatState(chatId)
@@ -1016,9 +1022,9 @@ async function handleMessage(data: any): Promise<void> {
       return
     }
     if (!hasAttachments && (msgText === '/stop' || msgText === '停止')) {
-      const stored = await ensureExistingSession(chatId)
-      if (!stored) {
-        await sendText(chatId, formatImStatus(null))
+      const result = await ensureExistingSession(chatId)
+      if (result.status !== 'restored') {
+        await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
         return
       }
       bridge.sendStopGeneration(chatId)

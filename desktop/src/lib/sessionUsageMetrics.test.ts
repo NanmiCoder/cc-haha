@@ -17,7 +17,7 @@ function usage(overrides: Partial<Parameters<typeof deriveSessionUsageMetrics>[0
 }
 
 describe('deriveSessionUsageMetrics', () => {
-  it('counts each of the four buckets exactly once', () => {
+  it('counts new tokens as uncached input plus output, not every cache hit', () => {
     const metrics = deriveSessionUsageMetrics(usage({
       totalInputTokens: 1_000,
       totalOutputTokens: 200,
@@ -25,10 +25,11 @@ describe('deriveSessionUsageMetrics', () => {
       totalCacheCreationInputTokens: 500,
     }))
 
-    // The buckets are disjoint, so the total is a plain sum — if a provider ever reported
-    // cache reads inside input_tokens this would double-count them.
-    expect(metrics.totalTokens).toBe(9_700)
+    // Cache reads are the same prompt seen again. Folding them into the headline made a
+    // 270k-window agent loop read as tens of millions of "total tokens".
+    expect(metrics.totalTokens).toBe(1_200)
     expect(metrics.promptTokens).toBe(9_500)
+    expect(metrics.cachedTokens).toBe(8_000)
   })
 
   it('measures cache hits against the prompt side, never against output', () => {
@@ -47,24 +48,43 @@ describe('deriveSessionUsageMetrics', () => {
     expect(deriveSessionUsageMetrics(usage({ totalOutputTokens: 500 })).cacheHitRate).toBeNull()
   })
 
-  it('derives tokens per second from the decode span only', () => {
+  it('derives tokens per second from API wall-clock, including prefill', () => {
     const metrics = deriveSessionUsageMetrics(usage({
       totalOutputTokens: 1_000,
-      totalDecodeDuration: 5_000,
+      totalAPIDuration: 5_000,
+      totalDecodeDuration: 2_000,
     }))
 
+    // Decode-only would report 500 here and ignore the wait the user actually sat through.
     expect(metrics.tokensPerSecond).toBe(200)
   })
 
-  it('withholds tokens per second when no decode span was reported', () => {
-    // Transcript-sourced usage has no generation timing. Falling back to wall clock would
+  it('withholds tokens per second when no API duration was reported', () => {
+    // Transcript-sourced usage has no request timing. Falling back to session wall clock would
     // divide by a span that includes tool execution and invent a rate.
     const metrics = deriveSessionUsageMetrics(usage({
       totalOutputTokens: 1_000,
-      totalDecodeDuration: 0,
+      totalAPIDuration: 0,
+      totalDecodeDuration: 5_000,
     }))
 
     expect(metrics.tokensPerSecond).toBeNull()
+  })
+
+  it('does not treat a long cached agent loop as tens of millions of new tokens', () => {
+    // Session 34680654: 223 API rounds, ~270k window, 98% cache hits. The old headline
+    // summed cache reads and printed 40M; the speed used decode-only and printed 512 tok/s.
+    const metrics = deriveSessionUsageMetrics(usage({
+      totalInputTokens: 225_888,
+      totalOutputTokens: 166_998,
+      totalCacheReadInputTokens: 53_480_064,
+      totalAPIDuration: 1_480_000,
+      totalDecodeDuration: 326_000,
+    }))
+
+    expect(metrics.totalTokens).toBe(392_886)
+    expect(metrics.cacheHitRate).toBeCloseTo(53_480_064 / (225_888 + 53_480_064), 10)
+    expect(metrics.tokensPerSecond).toBeCloseTo(166_998 / 1_480, 6)
   })
 
   it('treats missing and non-finite fields as zero rather than NaN', () => {
@@ -73,7 +93,7 @@ describe('deriveSessionUsageMetrics', () => {
       totalOutputTokens: 100,
       totalCacheReadInputTokens: undefined as unknown as number,
       totalCacheCreationInputTokens: -5,
-      totalDecodeDuration: undefined,
+      totalAPIDuration: undefined,
     })
 
     expect(metrics.totalTokens).toBe(100)

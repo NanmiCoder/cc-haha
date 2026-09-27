@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { createHash } from 'node:crypto'
 import { statSync } from 'fs'
 import { lstat, readdir, readFile, realpath, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
@@ -39,6 +40,7 @@ export type ClaudeConfigDirectory = (typeof CLAUDE_CONFIG_DIRECTORIES)[number]
 
 export type MarkdownFile = {
   filePath: string
+  sourceContentHash?: string
   baseDir: string
   frontmatter: FrontmatterData
   content: string
@@ -564,6 +566,7 @@ async function findMarkdownFilesNative(
 async function loadMarkdownFiles(dir: string): Promise<
   {
     filePath: string
+    sourceContentHash: string
     frontmatter: FrontmatterData
     content: string
   }[]
@@ -604,6 +607,7 @@ async function loadMarkdownFiles(dir: string): Promise<
 
         return {
           filePath,
+          sourceContentHash: createHash('sha256').update(rawContent).digest('hex'),
           frontmatter,
           content,
         }

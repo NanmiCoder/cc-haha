@@ -37,6 +37,7 @@ const SLASH_CMD_DESCRIPTION_KEYS: Record<string, TranslationKey> = {
   config: 'slashCmd.config.description',
   login: 'slashCmd.login.description',
   logout: 'slashCmd.logout.description',
+  btw: 'sideQuestion.commandDescription',
   model: 'slashCmd.model.description',
   permissions: 'slashCmd.permissions.description',
   'terminal-setup': 'slashCmd.terminal-setup.description',
@@ -68,43 +69,17 @@ export const SLASH_COMMAND_ALIASES = [
   { name: 'settings', target: 'config' },
 ] as const
 
-/**
- * Commands the desktop owns, in the order the slash menu should lead with them.
- * The order is the one the panel and settings tables declare, so the first
- * screen stays the same no matter how the CLI happened to register its list.
- */
+/** A short, predictable entry point; typing searches the complete registry. */
+export const FREQUENT_SLASH_COMMAND_NAMES = [
+  'compact', 'context', 'status', 'init', 'review', 'model',
+] as const
+
 const DESKTOP_SLASH_COMMAND_NAMES: readonly string[] = [
   ...PANEL_SLASH_COMMANDS.map(command => command.name),
   ...SETTINGS_SLASH_COMMANDS.map(command => command.name),
   ...SLASH_COMMAND_ALIASES.map(command => command.name),
   'model',
 ]
-
-/**
- * A session's command list is stitched together from the CLI's own registration
- * (its bundled skills first) and the desktop fallback, which leaves entries such
- * as `update-config`, `debug` and `batch` above the fold while the commands a
- * user reaches for sit below it. Desktop-owned commands are unconditional — the
- * client runs them itself — so they lead, and everything else keeps the order
- * its source gave it.
- */
-const PREFERRED_SLASH_COMMAND_RANKS = new Map(
-  DESKTOP_SLASH_COMMAND_NAMES.map((name, index) => [name.toLowerCase(), index] as const),
-)
-
-function prioritizeSlashCommands(commands: SlashCommandOption[]): SlashCommandOption[] {
-  const rankOf = (command: SlashCommandOption): number | undefined =>
-    PREFERRED_SLASH_COMMAND_RANKS.get(command.name.trim().toLowerCase())
-  const preferred = commands
-    .map((command, index) => ({ command, index, rank: rankOf(command) }))
-    .filter((entry): entry is { command: SlashCommandOption, index: number, rank: number } => entry.rank !== undefined)
-    .sort((a, b) => a.rank - b.rank || a.index - b.index)
-  if (!preferred.length || preferred.length === commands.length) return commands
-  return [
-    ...preferred.map(entry => entry.command),
-    ...commands.filter(command => rankOf(command) === undefined),
-  ]
-}
 
 /** Commands the desktop reserves for itself; new workflows must not claim them. */
 const DESKTOP_RESERVED_SLASH_COMMAND_NAMES = new Set(DESKTOP_SLASH_COMMAND_NAMES.map(name => name.toLowerCase()))
@@ -129,11 +104,11 @@ export function getSlashCommandNameConflict(
  *
  * Only commands this desktop can actually run belong here. The list is merged
  * into the slash menu for sessions whose CLI has not reported its own commands
- * yet, and every entry either resolves locally (see `resolveSlashUiAction`) or
- * runs in the headless CLI. Interactive-TUI-only commands (`clear`, `vim`,
- * `terminal-setup`, `permissions`), internal commands (`commit`, `pr`, `bug`)
- * and sign-in commands are deliberately absent: the headless CLI answers them
- * with "Unknown skill" instead of doing anything.
+ * yet, and every entry either resolves locally (see `resolveSlashUiAction`),
+ * is handled by the desktop server (`clear`), or runs in the headless CLI.
+ * Interactive-TUI-only commands (`vim`, `terminal-setup`, `permissions`),
+ * internal commands (`commit`, `pr`, `bug`) and sign-in commands are deliberately
+ * absent: the headless CLI answers them with "Unknown skill" instead of doing anything.
  */
 export const FALLBACK_SLASH_COMMANDS: SlashCommandOption[] = [
   { name: 'agent', description: 'Run a prompt with a selected Agent', argumentHint: '<agent> <prompt>' },
@@ -148,8 +123,10 @@ export const FALLBACK_SLASH_COMMANDS: SlashCommandOption[] = [
   { name: 'memory', description: 'Open project memory files in Settings' },
   { name: 'doctor', description: 'Open Doctor in Diagnostics' },
   { name: 'compact', description: 'Compact conversation context' },
+  { name: 'clear', description: 'Clear conversation history and free up context' },
   { name: 'goal', description: 'Set a completion goal', argumentHint: '[<condition> | clear]' },
   { name: 'review', description: 'Review code changes' },
+  { name: 'btw', description: 'Ask a side question without interrupting this task', argumentHint: '[question]' },
   { name: 'init', description: 'Initialize project CLAUDE.md' },
   { name: 'config', description: 'Open configuration' },
   { name: 'model', description: 'Switch AI model' },
@@ -214,7 +191,7 @@ export function groupSlashCommands(
     system,
     skills,
     plugins,
-    ordered: [...system, ...plugins, ...skills],
+    ordered: [...system, ...skills, ...plugins],
   }
 }
 
@@ -359,18 +336,27 @@ export function filterSlashCommands(
   commands: ReadonlyArray<SlashCommandOption>,
   filter: string,
 ): SlashCommandOption[] {
-  const normalized = filter.toLowerCase()
-  // No query yet: this is the order the menu opens on, so lead with the
-  // commands the desktop owns instead of whatever the CLI registered first.
-  if (!normalized.trim()) return prioritizeSlashCommands([...commands])
+  const normalized = filter.trim().toLowerCase()
+  if (!normalized.trim()) {
+    return [
+      ...FREQUENT_SLASH_COMMAND_NAMES.flatMap(name => commands.filter(command =>
+        command.name.trim().toLowerCase() === name && (!command.kind || command.kind === 'command'),
+      )),
+      ...commands.filter(command => command.kind === 'skill'),
+      ...commands.filter(command => command.kind === 'plugin'),
+    ]
+  }
 
-  return commands
-    .map((command, index) => ({
-      command,
-      index,
-      rank: getSlashCommandMatchRank(command, normalized),
-    }))
-    .filter((item) => Number.isFinite(item.rank))
+  const matches = commands.map((command, index) => ({
+    command,
+    index,
+    rank: getSlashCommandMatchRank(command, normalized),
+  })).filter(item => Number.isFinite(item.rank))
+  // Broad descriptions are useful as a fallback, but must not crowd out a
+  // command the user is naming — especially after grouping by command kind.
+  const hasNameMatch = matches.some(item => item.rank < 4)
+  return matches
+    .filter(item => !hasNameMatch || item.rank < 4)
     .sort((a, b) => a.rank - b.rank || a.index - b.index)
     .map((item) => item.command)
 }
@@ -475,3 +461,8 @@ export type {
   ContextSlashTrigger,
   ContextTriggerOptions,
 } from '../../features/managed-resources/integration/parserBridge'
+
+export function parseSideQuestionCommand(input: string): string | null {
+  const match = /^\/btw(?:\s+([\s\S]*))?$/i.exec(input.trim())
+  return match ? (match[1] ?? '').trim() : null
+}

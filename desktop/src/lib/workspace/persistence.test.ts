@@ -488,3 +488,30 @@ describe('primary-window gate', () => {
   })
 
 })
+
+
+it('omits temporary side chats and restores the existing workspace tab', () => {
+  const store = useWorkspaceStore.getState()
+  const fileId = store.openTarget('parent', { kind: 'file', path: '/repo/a.ts' })!
+  store.openTarget('parent', { kind: 'side-chat', sideChatId: 'side-child' })
+  store.openTarget('only-side', { kind: 'side-chat', sideChatId: 'side-only' })
+  const state = useWorkspaceStore.getState()
+  const saved = serializeWorkspace(state.bySession, state)
+  expect(JSON.stringify(saved)).not.toContain('side-child')
+  expect(saved.sessions['only-side']).toBeUndefined()
+  expect(saved.sessions.parent?.activeSideTabId).toBe(fileId)
+  const restored = hydrateWorkspace(saved, prefix => `${prefix}-restored`)
+  expect(restored.bySession.parent?.tabs.map(tab => tab.kind)).toEqual(['file'])
+})
+
+
+it('does not restore an empty side panel when only a temporary chat and bottom terminal were open', () => {
+  const store = useWorkspaceStore.getState()
+  store.openTarget('parent', { kind: 'terminal', dock: 'bottom', cwd: '/repo' })
+  store.openTarget('parent', { kind: 'side-chat', sideChatId: 'side-child' })
+  const state = useWorkspaceStore.getState()
+  const saved = serializeWorkspace(state.bySession, state)
+  expect(saved.sessions.parent?.layout).toBe('hidden')
+  expect(saved.sessions.parent?.bottomOpen).toBe(true)
+  expect(saved.sessions.parent?.activeSideTabId).toBeNull()
+})

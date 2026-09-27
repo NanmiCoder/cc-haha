@@ -7,7 +7,7 @@ order: 2
 
 # Environment Variables
 
-Claude Code Haha has two configuration paths:
+cc-haha has two configuration paths:
 
 - Desktop users should select, test, and activate a provider under **Settings → Providers**. The app manages authentication, model mappings, and protocol translation.
 - When running the CLI from source, use a repository `.env`, shell variables, or Claude Code `settings.json`.

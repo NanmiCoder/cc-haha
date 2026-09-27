@@ -12,6 +12,7 @@ export const OPENAI_OFFICIAL_PROVIDER_ID = 'openai-official'
 export const GROK_OFFICIAL_PROVIDER_ID = 'grok-official'
 export const PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION = 4
 export const PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION = 5
+export const PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION = 6
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -53,8 +54,17 @@ export const ModelMappingSchema = z.object({
   opus: z.string(),
 })
 
+export const OfficialProviderModelsSchema = z.object({
+  [CLAUDE_OFFICIAL_PROVIDER_ID]: ModelMappingSchema.optional(),
+  [OPENAI_OFFICIAL_PROVIDER_ID]: ModelMappingSchema.optional(),
+  [GROK_OFFICIAL_PROVIDER_ID]: ModelMappingSchema.optional(),
+}).passthrough()
+
 export const Model1mSupportSchema = z.object({
   main: z.boolean(),
+  // Defaulted rather than required: providers saved before the Fable slot
+  // existed carry no `fable` key, and a required field would reject them.
+  fable: z.boolean().default(false),
   haiku: z.boolean(),
   sonnet: z.boolean(),
   opus: z.boolean(),
@@ -118,6 +128,7 @@ export const ProvidersIndexSchema = z.object({
   activeId: z.string().nullable(),
   providers: z.array(SavedProviderSchema),
   providerOrder: z.array(z.string()).default([]),
+  officialProviderModels: OfficialProviderModelsSchema.default({}),
 })
 
 export const CreateProviderSchema = z.object({
@@ -167,6 +178,12 @@ export const TestProviderSchema = z.object({
   apiFormat: ApiFormatSchema.default('anthropic'),
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.optional(),
+  /**
+   * Preset the config derives from, so an unsaved test resolves the same per-model
+   * protocol rules and upstream headers the proxy would. Only an id crosses the
+   * wire — the rules themselves stay server-side.
+   */
+  presetId: z.string().optional(),
 })
 
 export const ReorderProvidersSchema = z.object({
@@ -177,6 +194,7 @@ export const ReorderProvidersSchema = z.object({
 
 // TypeScript types
 export type ModelMapping = z.infer<typeof ModelMappingSchema>
+export type OfficialProviderModels = z.infer<typeof OfficialProviderModelsSchema>
 export type Model1mSupport = z.infer<typeof Model1mSupportSchema>
 export type ImageGenerationConfig = z.infer<typeof ImageGenerationConfigSchema>
 export type SavedProvider = z.infer<typeof SavedProviderSchema>

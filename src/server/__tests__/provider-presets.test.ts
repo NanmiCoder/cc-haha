@@ -4,7 +4,10 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { handleProvidersApi } from '../api/providers.js'
-import { PROVIDER_PRESETS } from '../config/providerPresets.js'
+import { PROVIDER_PRESETS, ProviderPresetSchema } from '../config/providerPresets.js'
+import { buildProviderManagedEnv, providerNeedsProxy } from '../services/providerRuntimeEnv.js'
+import { resolveModelApiFormat } from '../../shared/modelApiFormats.js'
+import { resolveUpstreamHeaders } from '../proxy/upstreamHeaders.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
@@ -41,6 +44,37 @@ function makeRequest(
 }
 
 describe('provider presets API', () => {
+  test('exposes AruHub first among sponsors with signup copy and the new badge', async () => {
+    const { req, url, segments } = makeRequest('GET', '/api/providers/presets')
+    const response = await handleProvidersApi(req, url, segments)
+    const { presets } = await response.json()
+    const sponsors = presets.filter((preset: { featured?: boolean }) => preset.featured)
+    expect(sponsors[0]).toMatchObject({
+      id: 'aruhub',
+      baseUrl: 'https://direct.aruhub.com:8443',
+      apiFormat: 'anthropic',
+      authStrategy: 'api_key',
+      apiKeyUrl: 'https://aruhub.com/sign-up?aff=Z54g',
+      isNew: true,
+      needsApiKey: true,
+      defaultModels: { main: 'claude-opus-5', haiku: 'claude-sonnet-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5' },
+    })
+    expect(sponsors[0].promoText).toContain('注册即送 1 美元全模型通用额度')
+    const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === 'aruhub')!
+    expect(buildProviderManagedEnv({
+      id: 'aruhub-test', presetId: preset.id, name: preset.name,
+      baseUrl: preset.baseUrl, apiFormat: preset.apiFormat,
+      authStrategy: preset.authStrategy, apiKey: 'fake-aruhub-key',
+      models: preset.defaultModels,
+    })).toMatchObject({
+      ANTHROPIC_MODEL: 'claude-opus-5',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'claude-opus-5',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-sonnet-5',
+      // This gateway has no Haiku; use its supported Sonnet for background work.
+      ANTHROPIC_DEFAULT_HAIKU_MODEL: 'claude-sonnet-5',
+    })
+  })
+
   // ApiSmart /v1/models and live calls verified these exact IDs on 2026-09-09.
   // The unsuffixed names in its docs return 503 provider_not_available.
   test('exposes ApiSmart with its live-verified Chat Completions defaults and sponsor link', async () => {
@@ -350,6 +384,84 @@ describe('provider presets API', () => {
     for (const id of ['deepseek', 'zhipuglm', 'kimi', 'minimax']) {
       const preset = byId.get(id)!
       expect(preset.modelContextWindows?.[preset.defaultModels.main]).toBeGreaterThan(0)
+    }
+  })
+
+  /**
+   * OpenCode Go binds the wire format to the URL path and does no translation, so
+   * these three facts are what make the provider work at all: an OpenAI format on
+   * the record (otherwise the CLI bypasses the proxy and the per-model routing
+   * never runs), the rules that pick the endpoint per model, and the client
+   * identity headers the gateway refuses to serve without.
+   */
+  describe('OpenCode Go preset', () => {
+    const opencodeGo = PROVIDER_PRESETS.find((preset) => preset.id === 'opencode-go')!
+
+    test('links API key signup to the referral page with concise setup guidance', () => {
+      expect(opencodeGo.apiKeyUrl).toBe('https://opencode.ai/go?ref=3RK0WVVCGD')
+      expect(opencodeGo.promoText).toBe('订阅后填入 API Key，即可获取并选择模型。')
+    })
+
+    test('is selectable and declares an OpenAI format so requests reach the proxy', () => {
+      expect(opencodeGo).toBeDefined()
+      expect(opencodeGo.deprecated).toBeUndefined()
+      expect(opencodeGo.needsApiKey).toBe(true)
+      expect(opencodeGo.baseUrl).toBe('https://opencode.ai/zen/go/v1')
+      expect(providerNeedsProxy(opencodeGo.apiFormat, undefined)).toBe(true)
+      // Every model on this gateway that is not reached through the paths below
+      // arrives over Bearer, and the Messages path alone reads x-api-key.
+      expect(opencodeGo.authStrategy).toBe('api_key')
+    })
+
+    test('routes only the families that need a non-chat endpoint', () => {
+      expect(opencodeGo.modelApiFormats).toEqual([
+        { prefixes: ['grok-', 'gpt-', 'muse-spark-'], apiFormat: 'openai_responses' },
+        { prefixes: ['minimax-', 'qwen', 'union-alpha'], apiFormat: 'anthropic' },
+      ])
+      // Everything else must fall through to the provider format rather than being
+      // pinned by a rule, so the default only advertises what was verified.
+      for (const model of ['glm-5.3', 'kimi-k3', 'deepseek-v4-pro', 'longcat-2.0']) {
+        expect(resolveModelApiFormat(opencodeGo.modelApiFormats, model), model).toBeUndefined()
+      }
+    })
+
+    test('sends the session id the gateway requires plus a client-identifying user agent', () => {
+      expect(opencodeGo.upstreamHeaders).toEqual({
+        'User-Agent': 'cc-haha/$VERSION',
+        'x-opencode-session': '$SESSION_ID',
+      })
+      const resolved = resolveUpstreamHeaders(opencodeGo.upstreamHeaders, { sessionId: 's-1' })
+      expect(resolved['x-opencode-session']).toBe('s-1')
+      expect(resolved['User-Agent']).toMatch(/^cc-haha\//)
+    })
+
+    test('publishes a context window for every model it offers as a default', () => {
+      for (const model of Object.values(opencodeGo.defaultModels)) {
+        expect(opencodeGo.modelContextWindows?.[model], model).toBeGreaterThan(0)
+      }
+    })
+
+    test('stays ordered before the local endpoints so the catalog layout is stable', () => {
+      const ids = PROVIDER_PRESETS.map((preset) => preset.id)
+      expect(ids.indexOf('opencode-go')).toBeGreaterThan(-1)
+      expect(ids.indexOf('opencode-go')).toBeLessThan(ids.indexOf('lmstudio'))
+    })
+  })
+
+  test('rejects an upstream header name that would break the upstream request', () => {
+    const base = {
+      id: 'probe', name: 'Probe', baseUrl: 'https://probe.test', apiFormat: 'anthropic',
+      defaultModels: { main: 'm', haiku: 'm', sonnet: 'm', opus: 'm' },
+      needsApiKey: true, websiteUrl: '',
+    }
+    expect(ProviderPresetSchema.safeParse({ ...base, upstreamHeaders: { 'x-ok': 'v' } }).success).toBe(true)
+    // A malformed name only surfaces as a fetch TypeError on every request at
+    // runtime, so the bundle must refuse to load it instead.
+    for (const name of ['x-bad\nx-leak: 1', 'has space', 'colon:yes', '']) {
+      expect(
+        ProviderPresetSchema.safeParse({ ...base, upstreamHeaders: { [name]: 'v' } }).success,
+        JSON.stringify(name),
+      ).toBe(false)
     }
   })
 })

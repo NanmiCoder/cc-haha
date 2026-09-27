@@ -319,6 +319,29 @@ describe('ContentRouter tab surfaces', () => {
     render(<ContentRouter />)
     expect(screen.getByTestId('hosts-workspace')).toBeInTheDocument()
   })
+
+  it('keeps the current conversation mounted while settings is open', () => {
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
+        { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings', status: 'idle' },
+      ],
+      activeTabId: 'session-1',
+    })
+
+    render(<ContentRouter />)
+    const conversation = screen.getByTestId('active-session')
+
+    act(() => useTabStore.getState().setActiveTab(SETTINGS_TAB_ID))
+    expect(screen.getByTestId('settings-page')).toBeInTheDocument()
+    expect(conversation).toBeInTheDocument()
+    expect(conversation.closest('[aria-hidden]')).toHaveAttribute('aria-hidden', 'true')
+    expect(conversation.closest('[aria-hidden]')).toHaveAttribute('inert')
+
+    act(() => useTabStore.getState().setActiveTab('session-1'))
+    expect(screen.getByTestId('active-session')).toBe(conversation)
+    expect(screen.queryByTestId('settings-page')).not.toBeInTheDocument()
+  })
 })
 
 it('routes the independent connectors tab', () => {

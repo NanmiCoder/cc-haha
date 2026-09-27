@@ -1,4 +1,5 @@
-import { formatDurationMs } from '../../lib/trace/formatters'
+import { useState } from 'react'
+import { ChevronRight } from 'lucide-react'
 import {
   formatCacheHitRate,
   formatCompactTokens,
@@ -8,18 +9,20 @@ import {
 type ContextCategory = {
   name: string
   tokens: number
+  /** Server-assigned segment color; the segmented bar paints it directly. */
+  color?: string
 }
 
 /**
  * Lifetime figures for the whole session, as opposed to `categories` which describe only what
  * currently occupies the context window. Kept as raw numbers so the formatting rules (never
- * rounding a cache hit up to 100%, withholding a speed with no decode span) stay in one place.
+ * rounding a cache hit up to 100%, withholding a speed with no API duration) stay in one place.
  */
 export type ContextUsageSessionStats = {
-  totalTokens: number
   cacheHitRate: number | null
   tokensPerSecond: number | null
-  apiDurationMs: number
+  /** Pre-formatted by the server (unknown-model sessions included), displayed verbatim. */
+  costDisplay: string
 }
 
 export type ContextUsageDetailsStatus = 'ready' | 'pending' | 'loading' | 'unavailable'
@@ -27,9 +30,9 @@ export type ContextUsageDetailsStatus = 'ready' | 'pending' | 'loading' | 'unava
 export type ContextUsageDetailsProps = {
   variant: 'popover' | 'sheet'
   modelLabel: string
-  percentageLabel: string
+  /** Remaining-window headline (e.g. "79%") — the number the user actually budgets against. */
+  remainingLabel: string
   usedTokens: number
-  freeTokens: number
   maxTokens: number
   categories: ContextCategory[]
   sessionStats?: ContextUsageSessionStats | null
@@ -38,20 +41,18 @@ export type ContextUsageDetailsProps = {
   status: ContextUsageDetailsStatus
   labels: {
     title: string
+    remaining: string
     used: string
-    free: string
     window: string
     estimate: string
     pendingDetail: string
     loading: string
     unavailableDetail: string
-    sessionUsage: string
-    sessionTotalTokens: string
+    breakdown: string
     sessionCacheHit: string
     sessionSpeed: string
-    sessionApiDuration: string
+    sessionCost: string
     sessionSpeedUnit: string
-    sessionScopeNote: string
   }
 }
 
@@ -60,10 +61,47 @@ function formatNumber(value: number) {
 }
 
 /**
- * Lifetime session totals. Rendered below the window breakdown because the two answer different
- * questions: the bars say what is in the context right now, this says what the session has spent.
+ * One fill for the whole window, in the app's brand color, sized by how much of the window is
+ * used. Category colors cannot paint this: the CLI names them with terminal theme keys
+ * (`promptBorder`, `inactive`), which are not CSS colors, so a segment styled with one renders
+ * transparent and the track looks empty no matter how full the window is. The per-category
+ * split stays behind the breakdown toggle.
  */
-function SessionUsage({
+function UsageMeter({
+  usedTokens,
+  maxTokens,
+  label,
+}: {
+  usedTokens: number
+  maxTokens: number
+  label: string
+}) {
+  if (maxTokens <= 0) return null
+  const percent = Math.max(0, Math.min(100, (usedTokens / maxTokens) * 100))
+  return (
+    <div
+      role="progressbar"
+      aria-label={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(percent)}
+      className="h-[6px] overflow-hidden rounded-full bg-[var(--color-surface-hover)]"
+      data-testid="context-segmented-bar"
+    >
+      <div
+        data-testid="context-usage-fill"
+        className="h-full rounded-full bg-[var(--color-brand)]"
+        style={{ width: `${percent}%` }}
+      />
+    </div>
+  )
+}
+
+/**
+ * The three numbers a user watches while a session runs: how fast it is generating, how much of
+ * the prompt is being served from cache, and what the session has cost so far.
+ */
+function SessionStatGrid({
   stats,
   labels,
   density,
@@ -75,51 +113,31 @@ function SessionUsage({
   const labelClass = density === 'compact'
     ? 'text-[12.5px] text-[var(--color-text-tertiary)]'
     : 'text-xs text-[var(--color-text-tertiary)]'
-  const valueClass = 'font-mono text-sm text-[var(--color-text-primary)]'
+  const valueClass = 'mt-[3px] font-mono text-sm text-[var(--color-text-primary)]'
 
   return (
-    <div className="mt-4 border-t border-[var(--color-border)] pt-3">
-      <div className={labelClass}>{labels.sessionUsage}</div>
-
-      <div className="mt-2 flex items-baseline justify-between gap-3">
-        <span className="text-[13.5px] text-[var(--color-text-primary)]">{labels.sessionTotalTokens}</span>
-        <span
-          className="shrink-0 font-mono text-[15px] font-semibold text-[var(--color-text-primary)]"
-          title={formatNumber(stats.totalTokens)}
-          data-testid="session-total-tokens"
-        >
-          {formatCompactTokens(stats.totalTokens)}
-        </span>
-      </div>
-
-      <div className="mt-3 grid grid-cols-2 gap-3">
-        <div>
-          <div className={labelClass}>{labels.sessionCacheHit}</div>
-          <div className={`mt-[3px] ${valueClass}`} data-testid="session-cache-hit">
-            {stats.cacheHitRate === null ? '--' : formatCacheHitRate(stats.cacheHitRate)}
-          </div>
-        </div>
-        <div>
-          <div className={labelClass}>{labels.sessionSpeed}</div>
-          <div className={`mt-[3px] ${valueClass}`} data-testid="session-speed">
-            {formatTokensPerSecond(stats.tokensPerSecond ?? 0)}
-            {stats.tokensPerSecond !== null && (
-              <span className="ml-1 text-[11px] text-[var(--color-text-tertiary)]">{labels.sessionSpeedUnit}</span>
-            )}
-          </div>
+    <div className="mt-4 grid grid-cols-3 gap-3">
+      <div>
+        <div className={labelClass}>{labels.sessionSpeed}</div>
+        <div className={valueClass} data-testid="session-speed">
+          {formatTokensPerSecond(stats.tokensPerSecond ?? 0)}
+          {stats.tokensPerSecond !== null && (
+            <span className="ml-1 text-[11px] text-[var(--color-text-tertiary)]">{labels.sessionSpeedUnit}</span>
+          )}
         </div>
       </div>
-
-      <div className="mt-3 flex items-baseline justify-between gap-3">
-        <span className="text-[13.5px] text-[var(--color-text-primary)]">{labels.sessionApiDuration}</span>
-        <span className="shrink-0 font-mono text-[13px] text-[var(--color-text-secondary)]">
-          {formatDurationMs(stats.apiDurationMs)}
-        </span>
+      <div>
+        <div className={labelClass}>{labels.sessionCacheHit}</div>
+        <div className={valueClass} data-testid="session-cache-hit">
+          {stats.cacheHitRate === null ? '--' : formatCacheHitRate(stats.cacheHitRate)}
+        </div>
       </div>
-
-      {/* Subagent transcripts are separate files and are never folded in here; saying so beats
-          letting the number quietly disagree with the user's bill. */}
-      <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">{labels.sessionScopeNote}</div>
+      <div>
+        <div className={labelClass}>{labels.sessionCost}</div>
+        <div className={`${valueClass} truncate`} data-testid="session-cost" title={stats.costDisplay}>
+          {stats.costDisplay}
+        </div>
+      </div>
     </div>
   )
 }
@@ -136,7 +154,7 @@ function CategoryBars({
   if (categories.length === 0) return null
 
   return (
-    <div className={density === 'compact' ? 'mt-[18px] flex flex-col gap-3' : 'mt-5 space-y-3'}>
+    <div className={density === 'compact' ? 'mt-3 flex flex-col gap-3' : 'mt-4 space-y-3'}>
       {categories.map((category) => {
         const percent = maxTokens > 0
           ? Math.max(0.5, Math.min(100, (category.tokens / maxTokens) * 100))
@@ -152,12 +170,102 @@ function CategoryBars({
               </span>
             </div>
             <div className={`overflow-hidden rounded-full bg-[var(--color-surface-hover)] ${density === 'compact' ? 'mt-[7px] h-[3px]' : 'mt-1.5 h-1.5'}`}>
-              <div className="h-full rounded-full bg-[var(--color-brand)]" style={{ width: `${percent}%` }} />
+              <div
+                className="h-full rounded-full"
+                style={{ width: `${percent}%`, backgroundColor: category.color || 'var(--color-brand)' }}
+              />
             </div>
           </div>
         )
       })}
     </div>
+  )
+}
+
+/**
+ * Ready-state body shared by both shells. Order is the user's question order: how much window is
+ * left, how the session is performing, then (collapsed) what the window is made of.
+ */
+function ReadyBody({
+  variant,
+  remainingLabel,
+  usedTokens,
+  maxTokens,
+  categories,
+  sessionStats,
+  updatedAtLabel,
+  labels,
+}: {
+  variant: 'popover' | 'sheet'
+} & Pick<
+  ContextUsageDetailsProps,
+  'remainingLabel' | 'usedTokens' | 'maxTokens' | 'categories' | 'sessionStats' | 'updatedAtLabel' | 'labels'
+>) {
+  const density = variant === 'sheet' ? 'comfortable' : 'compact'
+  const [breakdownOpen, setBreakdownOpen] = useState(false)
+
+  return (
+    <>
+      <div className="mt-3 flex items-baseline justify-between gap-3">
+        <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{labels.remaining}</div>
+        {/* The headline serif carries the one large number on the panel —
+            the same treatment the handoff gives every hero statistic. */}
+        <div
+          className="shrink-0 text-[27px] font-bold leading-none text-[var(--color-text-primary)]"
+          style={{ fontFamily: 'var(--font-headline)' }}
+          data-testid="context-remaining"
+        >
+          {remainingLabel}
+        </div>
+      </div>
+
+      <div className="mt-3">
+        <UsageMeter usedTokens={usedTokens} maxTokens={maxTokens} label={labels.used} />
+      </div>
+
+      {/* This timestamp describes the window composition, so it sits with the used/window figures
+          rather than next to the live session totals. */}
+      <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
+        {labels.used} {formatNumber(usedTokens)}
+        {' · '}
+        {labels.window} {maxTokens > 0 ? formatNumber(maxTokens) : '--'}
+        {updatedAtLabel && (
+          <>
+            {' · '}
+            {updatedAtLabel}
+          </>
+        )}
+      </div>
+
+      {sessionStats && (
+        <SessionStatGrid stats={sessionStats} labels={labels} density={density} />
+      )}
+
+      {categories.length > 0 && (
+        <div className="mt-3 border-t border-[var(--color-border)] pt-2.5">
+          <button
+            type="button"
+            aria-expanded={breakdownOpen}
+            onClick={() => setBreakdownOpen((open) => !open)}
+            data-testid="context-breakdown-toggle"
+            className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-sm)] text-left text-[12.5px] text-[var(--color-text-secondary)] transition-colors duration-150 hover:text-[var(--color-text-primary)]"
+          >
+            <span className="flex items-center gap-1.5">
+              <ChevronRight
+                className={`h-3.5 w-3.5 transition-transform duration-150 ${breakdownOpen ? 'rotate-90' : ''}`}
+              />
+              {labels.breakdown}
+            </span>
+            <span className="shrink-0 font-mono text-[11px] text-[var(--color-text-tertiary)]">
+              {formatCompactTokens(usedTokens)}
+            </span>
+          </button>
+          {breakdownOpen && (
+            <CategoryBars categories={categories} maxTokens={maxTokens} density={density} />
+          )}
+        </div>
+      )}
+    </>
   )
 }
 
@@ -168,9 +276,8 @@ function CategoryBars({
 export function ContextUsageDetails({
   variant,
   modelLabel,
-  percentageLabel,
+  remainingLabel,
   usedTokens,
-  freeTokens,
   maxTokens,
   categories,
   sessionStats,
@@ -179,60 +286,42 @@ export function ContextUsageDetails({
   status,
   labels,
 }: ContextUsageDetailsProps) {
+  const statusMessage = status === 'pending'
+    ? labels.pendingDetail
+    : status === 'loading'
+      ? labels.loading
+      : labels.unavailableDetail
+
+  const body = status === 'ready' ? (
+    <ReadyBody
+      variant={variant}
+      remainingLabel={remainingLabel}
+      usedTokens={usedTokens}
+      maxTokens={maxTokens}
+      categories={categories}
+      sessionStats={sessionStats}
+      updatedAtLabel={updatedAtLabel}
+      labels={labels}
+    />
+  ) : (
+    <div className={variant === 'sheet'
+      ? 'mt-5 rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]'
+      : 'mt-4 text-sm leading-6 text-[var(--color-text-secondary)]'
+    }>
+      {statusMessage}
+    </div>
+  )
+
   if (variant === 'sheet') {
+    // The sheet shell already shows title + model in its header, so the body skips them.
     return (
       <div data-testid="context-usage-details" data-variant="sheet">
-        <div className="flex items-end justify-between gap-4">
-          <div
-            className="text-4xl font-bold leading-none text-[var(--color-text-primary)]"
-            style={{ fontFamily: 'var(--font-headline)' }}
-          >
-            {percentageLabel}
-          </div>
-          {estimate && status === 'ready' && (
-            <span className="mb-1 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-              {labels.estimate}
-            </span>
-          )}
-        </div>
-
-        {status === 'ready' ? (
-          <div className="mt-5">
-            <div className="grid grid-cols-3 gap-2 font-mono text-xs">
-              <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
-                <div className="text-[var(--color-text-tertiary)]">{labels.used}</div>
-                <div className="mt-1 text-[var(--color-text-primary)]">{formatNumber(usedTokens)}</div>
-              </div>
-              <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
-                <div className="text-[var(--color-text-tertiary)]">{labels.free}</div>
-                <div className="mt-1 text-[var(--color-text-primary)]">{formatNumber(freeTokens)}</div>
-              </div>
-              <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
-                <div className="text-[var(--color-text-tertiary)]">{labels.window}</div>
-                <div className="mt-1 text-[var(--color-text-primary)]">{maxTokens > 0 ? formatNumber(maxTokens) : '--'}</div>
-              </div>
-            </div>
-            <CategoryBars categories={categories} maxTokens={maxTokens} density="comfortable" />
-            {/* Above the session block on purpose: this timestamp describes the window
-                breakdown, which refreshes on a much slower cadence than the live totals. */}
-            {updatedAtLabel && (
-              <div className="mt-4 text-[11px] text-[var(--color-text-tertiary)]">
-                {updatedAtLabel}
-              </div>
-            )}
-            {sessionStats && (
-              <SessionUsage stats={sessionStats} labels={labels} density="comfortable" />
-            )}
-          </div>
-        ) : (
-          <div className="mt-5 rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-            {status === 'pending'
-              ? labels.pendingDetail
-              : status === 'loading'
-                ? labels.loading
-                : labels.unavailableDetail}
-          </div>
+        {estimate && status === 'ready' && (
+          <span className="inline-flex rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+            {labels.estimate}
+          </span>
         )}
+        {body}
       </div>
     )
   }
@@ -248,58 +337,13 @@ export function ContextUsageDetails({
             {modelLabel}
           </div>
         </div>
-        {/* The headline serif carries the one large number on the panel —
-            the same treatment the handoff gives every hero statistic. */}
-        <div
-          className="shrink-0 text-[27px] font-bold leading-none text-[var(--color-text-primary)]"
-          style={{ fontFamily: 'var(--font-headline)' }}
-        >
-          {percentageLabel}
-        </div>
+        {estimate && status === 'ready' && (
+          <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+            {labels.estimate}
+          </span>
+        )}
       </div>
-
-      {status === 'ready' ? (
-        <>
-          <div className="mt-4 grid grid-cols-2 gap-2">
-            <div>
-              <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{labels.used}</div>
-              <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{formatNumber(usedTokens)}</div>
-            </div>
-            <div>
-              <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{labels.free}</div>
-              <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{formatNumber(freeTokens)}</div>
-            </div>
-            <div className="col-span-2 mt-1">
-              <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{labels.window}</div>
-              <div className="mt-[3px] font-mono text-sm font-medium text-[var(--color-text-primary)]">{maxTokens > 0 ? formatNumber(maxTokens) : '--'}</div>
-            </div>
-          </div>
-          <CategoryBars categories={categories} maxTokens={maxTokens} density="compact" />
-          {/* Above the session block on purpose: this timestamp describes the window
-              breakdown, which refreshes on a much slower cadence than the live totals. */}
-          {updatedAtLabel && (
-            <div className="mt-4 text-xs text-[var(--color-text-tertiary)]">
-              {updatedAtLabel}
-              {estimate && (
-                <span className="ml-2 inline-flex rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]">
-                  {labels.estimate}
-                </span>
-              )}
-            </div>
-          )}
-          {sessionStats && (
-            <SessionUsage stats={sessionStats} labels={labels} density="compact" />
-          )}
-        </>
-      ) : status === 'pending' ? (
-        <div className="mt-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-          {labels.pendingDetail}
-        </div>
-      ) : (
-        <div className="mt-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-          {status === 'loading' ? labels.loading : labels.unavailableDetail}
-        </div>
-      )}
+      {body}
     </div>
   )
 }

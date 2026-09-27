@@ -19,8 +19,13 @@ import {
 } from '../../api/sessions'
 import { useTranslation } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
-import { useProjectDisplayName } from '../../stores/projectDisplayNameStore'
+import { setProjectDisplayName, useProjectDisplayName } from '../../stores/projectDisplayNameStore'
 import { RecentProjectsPanel } from '@/components/composite/DirectoryPicker'
+import {
+  ProjectEditorModal,
+  type ProjectEditorSubmission,
+} from '@/components/layout/ProjectEditorModal'
+import { invalidateRecentProjectsCache } from '../../lib/recentProjectsCache'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
@@ -162,6 +167,8 @@ export function RepositoryLaunchControls({
   const [newBranchName, setNewBranchName] = useState('')
   const [creatingBranch, setCreatingBranch] = useState(false)
   const [createBranchError, setCreateBranchError] = useState<string | null>(null)
+  const [projectCreateOpen, setProjectCreateOpen] = useState(false)
+  const [projectCreateFolder, setProjectCreateFolder] = useState('')
   const [menuPos, setMenuPos] = useState<{ top: number; left: number; direction: 'up' | 'down' } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const pillRef = useRef<HTMLButtonElement>(null)
@@ -460,6 +467,22 @@ export function RepositoryLaunchControls({
     // already is; if it does not, `revealAfterPick` closes the menu instead.
     setRevealAfterPick(path)
     setView('root')
+  }
+
+  // The editor modal lives here, not in the panel: the menu (and with it the
+  // panel) unmounts once it closes. Submitting names the project and makes its
+  // folder the launch directory; the session is still only created on send.
+  const handleProjectCreateOpen = () => {
+    closeMenu()
+    setProjectCreateFolder('')
+    setProjectCreateOpen(true)
+  }
+
+  const handleProjectCreateSubmit = async (submission: ProjectEditorSubmission) => {
+    await setProjectDisplayName(submission.sourceFolder, submission.name)
+    invalidateRecentProjectsCache()
+    setProjectCreateOpen(false)
+    onWorkDirChange(submission.sourceFolder)
   }
 
   const handleBranchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
@@ -818,6 +841,7 @@ export function RepositoryLaunchControls({
       onSelect={handleWorkDirChange}
       touch={isMobileBrowser}
       showRecentHeading={!isMobileBrowser}
+      onCreateProject={handleProjectCreateOpen}
     />
   )
 
@@ -1055,6 +1079,15 @@ export function RepositoryLaunchControls({
           document.body,
         )
       )}
+
+      <ProjectEditorModal
+        open={projectCreateOpen}
+        mode="create"
+        sourceFolder={projectCreateFolder}
+        onSourceFolderChange={setProjectCreateFolder}
+        onClose={() => setProjectCreateOpen(false)}
+        onSubmit={handleProjectCreateSubmit}
+      />
     </div>
   )
 }

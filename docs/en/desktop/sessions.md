@@ -19,7 +19,7 @@ The small line under the session title is metadata: project path, branch, model.
 
 ## Reading the conversation
 
-![A full session: a question, tool cards, a thinking block, a file edit with an inline diff](../../images/app/en/session-main.webp)
+![A release-notes conversation in the real project, with tool calls and the session list (Chinese interface)](../../images/app/en/session-main.webp)
 
 Claude doesn't just reply with a paragraph. Several kinds of card appear along the way:
 
@@ -32,8 +32,6 @@ In a long conversation, `⌘F` opens find-in-page and jumps between matches in t
 
 ## The permission prompt: which button?
 
-![The "Allow Claude to Edit index.html?" prompt with a preview of the change](../../images/app/en/session-permission.webp)
-
 In the default permission mode, Claude stops and asks before editing a file or running a risky command. The dialog previews the change, then offers three buttons:
 
 - **Allow** — just this once. The same operation will ask again next time.
@@ -43,6 +41,8 @@ In the default permission mode, Claude stops and asks before editing a file or r
 When in doubt, pick **Allow** — being asked a few extra times costs nothing. If you can't tell what it's about to do, click **Show full input** to see the raw arguments.
 
 ### The five permission modes
+
+![The five permission modes in the composer (Chinese interface)](../../images/app/en/permission-modes.webp)
 
 The permission button in the composer toolbar sets the overall strictness:
 
@@ -90,16 +90,38 @@ Tool activity from background subagents bubbles up here too, so you don't have t
 
 ## What the composer can do
 
-![The slash-command panel that opens when you type `/`](../../images/app/en/composer-slash.webp)
+![The slash-command panel that opens when you type `/` (Chinese interface)](../../images/app/en/composer-slash.webp)
 
 - **`/` slash commands** — type `/` for the command panel. `/status` for session state and usage, `/context` for context breakdown, `/compact` to compress, `/review` to review changes, `/commit`, `/memory` to open project memory, `/doctor` to open the diagnostics check.
-- **`@` file references** — type `@` for file search; the file you pick is attached to the message as a path.
+- **`@` file and session references** — type `@` to search files and past sessions. Files are attached as paths; sessions appear as clickable references.
 - **Attachments** — click `+`, drag files in, or paste a screenshot. Images, PDFs, and directories all work.
 - **Context usage ring** — the small ring shows how much of the context window is used; hover it for used, free, and window size. When it fills up, run `/compact`.
 - **Model and effort** — switch models at any time. Effort has five levels — low, medium, high, xhigh, max — and models that don't support a level ignore it.
 - **Location** — shows the current project and branch. In a Git project you can switch branches here, or turn on **Isolated worktree** to keep an experiment off your main branch. See [Workspace](./workspace.md).
 
 Enter sends and Shift+Enter inserts a newline by default; **Settings → General** can swap that to `Ctrl/Cmd+Enter`. `⌘.` stops the current generation.
+
+## Referencing sessions and delegating work
+
+Type `@`, select a past session, and explain what to reuse: for example, “Use the conclusions from @Login design to add a sign-out flow.” A reference does not copy the full history or generate a summary. Claude reads a page of the referenced conversation when needed and can request more pages. Click a reference in a message to open its source. Referencing a session does not message it or restart its work.
+
+To work in parallel, ask: “Create two independent sessions: one to review the API and one to review the tests. Share findings and report back here.” Claude can use these tools:
+
+| Tool | Purpose |
+|---|---|
+| `ListSessions` | Find existing sessions |
+| `ReadSession` | Read conversation content in pages |
+| `CreateSession` | Create an independent session and assign work |
+| `SendSessionMessage` | Send a message to another session |
+| `WaitSessions` | Wait for task status changes |
+
+New sessions appear in the session list and can be opened for direct follow-up. The collaboration panel shows members and messages, with links to each conversation. Queued, accepted, and consumed messages represent delivery stages, not successful task completion.
+
+Each collaboration group runs up to three worker sessions at a time; additional workers wait in the queue. The coordinating session does not count toward those three slots. Manual messages to queued workers follow the same limit: when all slots are occupied, the app asks you to retry later and keeps the original assignment queued. New workers in Git projects use separate worktrees. Outside Git, they use the specified directory, so simultaneous edits to the same file still need coordination. Include necessary background in each task prompt: new workers do not automatically inherit the coordinator’s full history.
+
+**Stop group** cancels unconsumed messages and queued assignments, stops the whole group, and prevents completion reports from waking it automatically. To continue a member, open its session and send a new user message; this does not resume the entire group. The ordinary Stop button stops only the current session. Each session still applies its own permissions, and a peer message cannot grant approval on your behalf.
+
+Collaboration is limited to local sessions managed by this desktop app. It does not connect to Claude Code or Codex sessions on other machines.
 
 ## Forking a conversation
 

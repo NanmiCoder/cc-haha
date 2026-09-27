@@ -19,6 +19,7 @@ import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { addFileGlobRuleToGitignore } from '../../utils/git/gitignore.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { getProcessEnvWithTerminalShellEnvironment } from '../../utils/terminalShellEnvironment.js'
+import type { ModelMapping } from '../types/provider.js'
 
 export const VALID_PERMISSION_MODES = [
   'default',
@@ -205,6 +206,38 @@ export class SettingsService {
         )
       }
       await this.writeJsonFile(filePath, merged)
+    })
+  }
+
+  /**
+   * Persist the model aliases owned by the built-in Claude OAuth provider while
+   * preserving unrelated user env keys. The provider picker writes all aliases
+   * as one locked update so two settings actions cannot lose each other's env.
+   */
+  async updateOfficialModelMapping(models: ModelMapping): Promise<void> {
+    const filePath = this.getUserSettingsPath()
+    await this.withWriteLock(filePath, async () => {
+      const current = await this.readJsonFile(filePath)
+      const env = {
+        ...(normalizeJsonObject(current.env) as Record<string, string> | undefined),
+        ANTHROPIC_MODEL: models.main,
+        ANTHROPIC_DEFAULT_HAIKU_MODEL: models.haiku,
+        ANTHROPIC_DEFAULT_SONNET_MODEL: models.sonnet,
+        ANTHROPIC_DEFAULT_OPUS_MODEL: models.opus,
+      }
+      if (models.fable) {
+        env.ANTHROPIC_DEFAULT_FABLE_MODEL = models.fable
+      } else {
+        delete env.ANTHROPIC_DEFAULT_FABLE_MODEL
+      }
+
+      const next = {
+        ...current,
+        model: models.main,
+        env,
+      }
+      delete next.modelContext
+      await this.writeJsonFile(filePath, next)
     })
   }
 

@@ -15,7 +15,7 @@ import type { TraceCallRecord, TraceSession as TraceSessionData } from '../types
 vi.mock('../api/sessions', () => ({
   sessionsApi: {
     getTrace: vi.fn(),
-    getMessages: vi.fn(),
+    getHistoryPage: vi.fn(),
     getTraceCall: vi.fn(),
   },
 }))
@@ -173,7 +173,7 @@ describe('TraceSession', () => {
     window.localStorage.clear()
     useSettingsStore.setState({ locale: 'en' })
     vi.mocked(sessionsApi.getTrace).mockResolvedValue(baseTrace)
-    vi.mocked(sessionsApi.getMessages).mockResolvedValue({ messages: baseMessages })
+    vi.mocked(sessionsApi.getHistoryPage).mockResolvedValue({ messages: baseMessages })
     vi.mocked(sessionsApi.getTraceCall).mockResolvedValue({ call: fullCall })
     vi.mocked(tracesApi.getRevision).mockResolvedValue({
       sessionId: SESSION_ID,
@@ -205,6 +205,25 @@ describe('TraceSession', () => {
     useSettingsStore.setState({ locale: 'en' })
   })
 
+  it('does not attribute old trace calls to an unrelated partial transcript tail', async () => {
+    vi.mocked(sessionsApi.getHistoryPage).mockResolvedValue({ messages: [{ id: 'tail', type: 'user', timestamp: '2026-06-10T00:00:00Z', content: 'Unrelated later question' }], page: { historyComplete: false, hasMore: true, nextCursor: 'older', sourceVersion: 'v1', scannedBytes: 1024, omittedOversizedEntries: 0 } })
+    await renderReady()
+    expect(screen.queryByText('Unrelated later question')).not.toBeInTheDocument()
+    expect(screen.getByTestId('trace-split-layout')).toBeInTheDocument()
+  })
+
+  it('replaces bounded trace pages and forwards snapshot and scan cursors', async () => {
+    const window = { offset: 0, limit: 100, totalCalls: 201, totalEvents: 0, hasMore: true, revisionToken: 'snapshot-v1', state: 'limited' as const, oversizedRecords: 1, startByte: 0, scannedBytes: 64 * 1024 * 1024, fileBytes: 500 * 1024 * 1024, recordLimit: 10000, recordBytesLimit: 2 * 1024 * 1024, nextScanCursor: 'next-segment' }
+    vi.mocked(sessionsApi.getTrace).mockResolvedValue({ ...baseTrace, window })
+    await renderReady()
+    fireEvent.click(screen.getByRole('button', { name: /^Next page$/ }))
+    await waitFor(() => expect(sessionsApi.getTrace).toHaveBeenLastCalledWith(SESSION_ID, expect.objectContaining({ signal: expect.any(AbortSignal) }), { offset: 100, revisionToken: 'snapshot-v1' }))
+    await screen.findByRole('button', { name: 'Scan next segment' })
+    fireEvent.click(screen.getByRole('button', { name: 'Scan next segment' }))
+    await waitFor(() => expect(sessionsApi.getTrace).toHaveBeenLastCalledWith(SESSION_ID, expect.objectContaining({ signal: expect.any(AbortSignal) }), { scanCursor: 'next-segment' }))
+    expect(screen.queryByText('Some records exceed the viewing limit; the original file is unchanged.')).toBeInTheDocument()
+  })
+
   it('renders the two-pane layout with tree and detail', async () => {
     await renderReady()
 
@@ -232,7 +251,7 @@ describe('TraceSession', () => {
   })
 
   it('groups timeline rows by turn with user message previews', async () => {
-    vi.mocked(sessionsApi.getMessages).mockResolvedValue({
+    vi.mocked(sessionsApi.getHistoryPage).mockResolvedValue({
       messages: [
         ...baseMessages,
         { id: 'msg-5', type: 'user', content: 'Second question', timestamp: '2026-06-09T10:05:00.000Z' },
@@ -512,20 +531,22 @@ describe('TraceSession', () => {
       fireEvent.click(within(screen.getByTestId('trace-tree')).getByText('claude-sonnet-4-5'))
       await waitFor(() => expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1))
       expect(sessionsApi.getTrace).toHaveBeenCalledTimes(1)
-      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+      expect(sessionsApi.getHistoryPage).toHaveBeenCalledTimes(1)
 
       for (const expectedTraceCalls of [2, 3]) {
         await act(async () => { await vi.advanceTimersByTimeAsync(20) })
         expect(sessionsApi.getTrace).toHaveBeenCalledTimes(expectedTraceCalls)
-        expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+        expect(sessionsApi.getHistoryPage).toHaveBeenCalledTimes(1)
         expect(screen.queryByText('claude-sonnet-4-5 x2')).not.toBeInTheDocument()
       }
 
       await act(async () => { await vi.advanceTimersByTimeAsync(20) })
       expect(sessionsApi.getTrace).toHaveBeenCalledTimes(4)
-      expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2)
+      expect(sessionsApi.getHistoryPage).toHaveBeenCalledTimes(2)
       expect(screen.getByText('claude-sonnet-4-5 x2')).toBeInTheDocument()
-      expect(vi.mocked(sessionsApi.getTraceCall).mock.calls.length).toBeGreaterThan(1)
+      // The new span is a sibling. The call the reader has open did not change,
+      // so its detail must not be refetched.
+      expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(1)
       const detail = within(screen.getByTestId('trace-detail'))
       expect(detail.getByRole('heading', { level: 2, name: 'claude-sonnet-4-5' })).toBeInTheDocument()
     } finally {
@@ -541,7 +562,42 @@ describe('TraceSession', () => {
 
     await waitFor(() => expect(vi.mocked(tracesApi.getRevision).mock.calls.length).toBeGreaterThanOrEqual(3))
     expect(sessionsApi.getTrace).toHaveBeenCalledTimes(1)
-    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
+    expect(sessionsApi.getHistoryPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses message history when only trace calls change', async () => {
+    vi.mocked(sessionsApi.getTrace)
+      .mockResolvedValueOnce({ ...baseTrace, messageSignature: 'unchanged-transcript' })
+      .mockResolvedValue({
+        ...baseTrace,
+        messageSignature: 'unchanged-transcript',
+        summary: { ...baseTrace.summary, models: [{ model: 'updated-model', calls: 1 }] },
+      })
+    vi.mocked(tracesApi.getRevision)
+      .mockResolvedValueOnce({ sessionId: SESSION_ID, revision: 1, changed: true, reset: false })
+      .mockResolvedValue({ sessionId: SESSION_ID, revision: 2, changed: true, reset: false })
+    await renderReady(20)
+    expect(await screen.findByText('updated-model x1')).toBeInTheDocument()
+    expect(sessionsApi.getHistoryPage).toHaveBeenCalledTimes(1)
+  })
+
+  it('aborts in-flight trace data requests when the page is closed', async () => {
+    vi.mocked(sessionsApi.getTrace).mockImplementation(() => new Promise(() => {}))
+    const { unmount } = render(<TraceSession sessionId={SESSION_ID} />)
+    const signal = vi.mocked(sessionsApi.getTrace).mock.calls[0]?.[1]?.signal
+    expect(signal?.aborted).toBe(false)
+    unmount()
+    expect(signal?.aborted).toBe(true)
+  })
+
+  it('aborts an outstanding revision probe when the page closes', async () => {
+    vi.mocked(tracesApi.getRevision).mockImplementation(() => new Promise(() => {}))
+    const { unmount } = render(<TraceSession sessionId={SESSION_ID} />)
+    await waitFor(() => expect(tracesApi.getRevision).toHaveBeenCalled())
+    const signal = vi.mocked(tracesApi.getRevision).mock.calls[0]?.[3]?.signal
+    expect(signal?.aborted).toBe(false)
+    unmount()
+    expect(signal?.aborted).toBe(true)
   })
 
   it('uses the revision cursor for unchanged polls without refetching the full trace', async () => {
@@ -549,8 +605,8 @@ describe('TraceSession', () => {
 
     await waitFor(() => expect(vi.mocked(tracesApi.getRevision).mock.calls.length).toBeGreaterThanOrEqual(2))
     expect(sessionsApi.getTrace).toHaveBeenCalledTimes(1)
-    expect(sessionsApi.getMessages).toHaveBeenCalledTimes(1)
-    expect(tracesApi.getRevision).toHaveBeenLastCalledWith(SESSION_ID, 1, undefined)
+    expect(sessionsApi.getHistoryPage).toHaveBeenCalledTimes(1)
+    expect(tracesApi.getRevision).toHaveBeenLastCalledWith(SESSION_ID, 1, undefined, expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 
   it('serializes slow revision probes so stale polls cannot overwrite newer state', async () => {
@@ -589,7 +645,7 @@ describe('TraceSession', () => {
     vi.mocked(tracesApi.getRevision)
       .mockResolvedValueOnce({ sessionId: SESSION_ID, revision: 1, changed: true, reset: false })
       .mockResolvedValue({ sessionId: SESSION_ID, revision: 2, changed: true, reset: false })
-    vi.mocked(sessionsApi.getMessages)
+    vi.mocked(sessionsApi.getHistoryPage)
       .mockResolvedValueOnce({ messages: pendingMessages })
       .mockReturnValue(refreshedMessages)
 
@@ -599,7 +655,7 @@ describe('TraceSession', () => {
     fireEvent.click(tree.getByText('Bash'))
     expect(within(screen.getByTestId('trace-detail')).queryByText('file.txt')).not.toBeInTheDocument()
 
-    await waitFor(() => expect(sessionsApi.getMessages).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(sessionsApi.getHistoryPage).toHaveBeenCalledTimes(2))
     resolveRefreshedMessages({ messages: baseMessages })
     expect(await within(screen.getByTestId('trace-detail')).findByText('file.txt')).toBeInTheDocument()
   })
@@ -638,7 +694,66 @@ describe('TraceSession', () => {
     expect(diagnosis.getByText('Model call failed')).toBeInTheDocument()
   })
 
-  it('refetches a terminal call detail when the trace revision token changes', async () => {
+  it('keeps an open call detail stable when only a sibling span changes', async () => {
+    let resolveUpdatedRevision: ((revision: TraceSessionRevision) => void) | undefined
+    const updatedRevision = new Promise<TraceSessionRevision>((resolve) => {
+      resolveUpdatedRevision = resolve
+    })
+    const siblingCall = makeCall({
+      id: 'call-2',
+      startedAt: '2026-06-09T10:00:07.000Z',
+      completedAt: '2026-06-09T10:00:08.000Z',
+      request: {
+        method: 'POST',
+        url: 'https://api.anthropic.com/v1/messages',
+        headers: { 'content-type': 'application/json' },
+        body: {
+          contentType: 'json',
+          bytes: 12,
+          sha256: 'd'.repeat(64),
+          preview: '{"model":"claude-sonnet-4-5"}',
+          truncated: true,
+        },
+      },
+    })
+    vi.mocked(tracesApi.getRevision)
+      .mockResolvedValueOnce({
+        sessionId: SESSION_ID,
+        revision: 1,
+        revisionToken: 'epoch-a:1',
+        changed: true,
+        reset: false,
+      })
+      .mockReturnValue(updatedRevision)
+    vi.mocked(sessionsApi.getTrace)
+      .mockResolvedValueOnce(baseTrace)
+      .mockResolvedValue({
+        ...baseTrace,
+        summary: { ...baseTrace.summary, apiCalls: 2 },
+        calls: [...baseTrace.calls, siblingCall],
+      })
+
+    await renderReady(20)
+    fireEvent.click(within(screen.getByTestId('trace-tree')).getAllByText('claude-sonnet-4-5')[0]!)
+    expect(await screen.findByText('Hi from the full record')).toBeInTheDocument()
+    const callsBeforeSibling = vi.mocked(sessionsApi.getTraceCall).mock.calls.length
+
+    resolveUpdatedRevision?.({
+      sessionId: SESSION_ID,
+      revision: 2,
+      revisionToken: 'epoch-a:2',
+      changed: true,
+      reset: false,
+    })
+
+    await waitFor(() => expect(sessionsApi.getTrace).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(within(screen.getByTestId('trace-tree')).getAllByText('claude-sonnet-4-5')).toHaveLength(2))
+    expect(screen.getByText('Hi from the full record')).toBeInTheDocument()
+    expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(callsBeforeSibling)
+    expect(screen.queryByText('Legacy truncated record; the semantic view is unavailable. See Raw below.')).not.toBeInTheDocument()
+  })
+
+  it('refetches a terminal call detail when that call content changes', async () => {
     let resolveUpdatedRevision: ((revision: TraceSessionRevision) => void) | undefined
     const updatedRevision = new Promise<TraceSessionRevision>((resolve) => {
       resolveUpdatedRevision = resolve
@@ -687,6 +802,7 @@ describe('TraceSession', () => {
       () => expect(screen.getByText('Hi from the full record')).toBeInTheDocument(),
       { timeout: 5_000 },
     )
+    const callsBeforeUpdate = vi.mocked(sessionsApi.getTraceCall).mock.calls.length
 
     resolveUpdatedRevision?.({
       sessionId: SESSION_ID,
@@ -697,7 +813,7 @@ describe('TraceSession', () => {
     })
 
     await waitFor(
-      () => expect(sessionsApi.getTraceCall).toHaveBeenCalledTimes(2),
+      () => expect(vi.mocked(sessionsApi.getTraceCall).mock.calls.length).toBeGreaterThan(callsBeforeUpdate),
       { timeout: 5_000 },
     )
     expect(await screen.findByText('Updated full record')).toBeInTheDocument()
@@ -774,7 +890,7 @@ describe('TraceSession', () => {
       },
       calls: [],
     })
-    vi.mocked(sessionsApi.getMessages).mockResolvedValue({ messages: [] })
+    vi.mocked(sessionsApi.getHistoryPage).mockResolvedValue({ messages: [] })
 
     render(<TraceSession sessionId={SESSION_ID} pollIntervalMs={60_000} />)
 
@@ -881,7 +997,7 @@ describe('TraceSession', () => {
   })
 
   it('says what an assistant turn did when the provider withheld its reasoning', async () => {
-    vi.mocked(sessionsApi.getMessages).mockResolvedValue({
+    vi.mocked(sessionsApi.getHistoryPage).mockResolvedValue({
       messages: [
         baseMessages[0]!,
         {

@@ -188,3 +188,17 @@ describe('useWorkspaceShortcuts', () => {
     expect(useWorkspaceStore.getState().getTabs(SESSION, 'side')).toHaveLength(0)
   })
 })
+
+
+it('requests confirmation for a side-chat close shortcut instead of destroying its runtime', () => {
+  mount()
+  const tabId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'side-chat', sideChatId: 'side-child' })!
+  const requests: unknown[] = []
+  const listener = (event: Event) => requests.push((event as CustomEvent).detail)
+  window.addEventListener('workspace-close-request', listener)
+  try {
+    press('w', { ctrlKey: true })
+    expect(requests).toEqual([{ sessionId: SESSION, tabId }])
+    expect(useWorkspaceStore.getState().getTab(SESSION, tabId)).not.toBeNull()
+  } finally { window.removeEventListener('workspace-close-request', listener) }
+})

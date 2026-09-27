@@ -116,7 +116,7 @@ describe('fetchTraceCallDetail', () => {
     expect(traceCallRequests(fetchMock)).toHaveLength(2)
   })
 
-  it('keeps same-revision terminal calls cached and refetches after the revision token changes', async () => {
+  it('keeps a call cached while its content key is unchanged and refetches when that key changes', async () => {
     let version = 'old'
     const fetchMock = mockFetch(() => jsonResponse({
       call: makeCall({
@@ -191,4 +191,23 @@ describe('fetchTraceCallDetail', () => {
 
     expect(traceCallRequests(fetchMock)).toHaveLength(34)
   })
+  it('does not retain a single oversized semantic request', async () => {
+    const call = makeCall()
+    call.request.semantic = { version: 1, request: { prompt: 'x'.repeat(9 * 1024 * 1024) } }
+    const fetchMock = mockFetch(() => jsonResponse({ call }))
+    await fetchTraceCallDetail('session-1', 'call-1')
+    await fetchTraceCallDetail('session-1', 'call-1')
+    expect(traceCallRequests(fetchMock)).toHaveLength(2)
+  })
+
+  it('evicts by retained bytes before the entry-count limit', async () => {
+    const fetchMock = mockFetch((url) => {
+      const call = makeCall({ id: url.split('/').at(-1)! })
+      call.request.body.preview = 'x'.repeat(3 * 1024 * 1024)
+      return jsonResponse({ call })
+    })
+    for (const id of ['a', 'b', 'c', 'b', 'a']) await fetchTraceCallDetail('session-1', id)
+    expect(traceCallRequests(fetchMock)).toHaveLength(4)
+  })
+
 })

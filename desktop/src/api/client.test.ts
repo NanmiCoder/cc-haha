@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   api,
+  ApiResponseParseError,
   getApiUrl,
   getDefaultBaseUrl,
   rawRecordDiagnosticEvent,
@@ -59,6 +60,28 @@ describe('api diagnostics reporting', () => {
       `${firstUrl}/api/sessions/session-1/messages`,
       `${recoveredUrl}/api/sessions/session-1/messages`,
     ])
+  })
+
+  it('times out a GET while desktop server recovery is still pending', async () => {
+    let releaseRecovery!: (url: string) => void
+    const getServerUrl = vi.fn(() => new Promise<string>(resolve => { releaseRecovery = resolve }))
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'electron',
+      isDesktop: true,
+      runtime: { ...browserHost.runtime, getServerUrl },
+    }
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('Failed to fetch'))
+
+    try {
+      await expect(api.get('/api/scheduled-tasks', { timeout: 20 }))
+        .rejects.toThrow('Request timed out')
+      expect(getServerUrl).toHaveBeenCalledTimes(1)
+    } finally {
+      releaseRecovery('http://127.0.0.1:49232')
+      await Promise.resolve()
+      await Promise.resolve()
+    }
   })
 
   it('does not replay a desktop mutation after a transport failure', async () => {
@@ -288,7 +311,8 @@ describe('api diagnostics reporting', () => {
         return Promise.resolve({
           ok: true,
           status: 200,
-          json: () => new Promise((_resolve, reject) => {
+          headers: new Headers(),
+          text: () => new Promise((_resolve, reject) => {
             bodyReadStarted = true
             requestSignal?.addEventListener('abort', () => {
               reject(new DOMException('The operation was aborted.', 'AbortError'))
@@ -385,5 +409,53 @@ describe('api diagnostics reporting', () => {
 
     expect(signal?.aborted).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('flags an oversized 200 body as too large without downloading it', async () => {
+    let bodyRead = false
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock.mockImplementation(() => Promise.resolve({
+      ok: true,
+      status: 200,
+      headers: new Headers({
+        'content-length': '541817705',
+        'content-type': 'application/json',
+      }),
+      text: () => {
+        bodyRead = true
+        return Promise.resolve('')
+      },
+    } as unknown as Response))
+
+    const error = await api.get('/api/sessions/huge/messages').catch((err: unknown) => err)
+
+    expect(error).toBeInstanceOf(ApiResponseParseError)
+    expect((error as ApiResponseParseError).tooLarge).toBe(true)
+    expect((error as ApiResponseParseError).bytes).toBe(541_817_705)
+    // Reading it would only burn memory: this runtime cannot make a string
+    // that long, so the answer is already known.
+    expect(bodyRead).toBe(false)
+  })
+
+  it('reports a truncated 200 body with byte counts instead of a bare SyntaxError', async () => {
+    const truncated = '{"messages":['
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+    fetchMock.mockResolvedValue(new Response(truncated, {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }))
+
+    const error = await api.get('/api/sessions/truncated/messages').catch((err: unknown) => err)
+
+    expect(error).toBeInstanceOf(ApiResponseParseError)
+    expect((error as ApiResponseParseError).tooLarge).toBe(false)
+    expect((error as ApiResponseParseError).readChars).toBe(truncated.length)
+
+    const diagnosticCall = fetchMock.mock.calls.find(
+      ([url]) => String(url).endsWith('/api/diagnostics/events'),
+    )
+    const details = JSON.parse(String((diagnosticCall?.[1] as RequestInit | undefined)?.body)).details
+    expect(details.readChars).toBe(truncated.length)
+    expect(details.contentType).toBe('application/json')
   })
 })

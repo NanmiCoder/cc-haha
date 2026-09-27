@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { FolderClosed, Globe, MoreHorizontal, Plus, SquareTerminal, SquareSplitVertical } from 'lucide-react'
+import { MessageCircle, FolderClosed, Globe, MoreHorizontal, Plus, SquareTerminal, SquareSplitVertical } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
@@ -13,6 +13,7 @@ import type { WorkspaceDock, WorkspaceTab } from '../../lib/workspace/types'
 const DRAG_START_THRESHOLD = 4
 
 const KIND_ICON = {
+  'side-chat': MessageCircle,
   file: FolderClosed,
   browser: Globe,
   review: SquareSplitVertical,
@@ -229,6 +230,7 @@ export function WorkspaceTabStrip({
             const title = runtime?.title?.trim() || workspaceTabTitle(tab, {
               newTab: t('workspace.newTabTitle'),
               review: t('workspace.reviewTabTitle'),
+              sideChat: t('sideChat.title'),
               files: t('workspace.files.openTitle'),
               terminal: (ordinal) => t('workspace.terminalTabTitle', { n: ordinal }),
             })

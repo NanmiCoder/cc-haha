@@ -160,6 +160,7 @@ type WorkspaceReviewStore = {
   stageHunk: (sessionId: string, source: WorkspaceReviewSource, patch: string) => Promise<WorkspaceReviewWriteOutcome>
   unstageHunk: (sessionId: string, source: WorkspaceReviewSource, patch: string) => Promise<WorkspaceReviewWriteOutcome>
   clearSession: (sessionId: string) => void
+  clearTurnReviews: (sessionId: string, fromUserMessageIndex: number) => void
 }
 
 /** `turn` history is not Git data and never reaches this service. */
@@ -403,6 +404,23 @@ export const useWorkspaceReviewStore = create<WorkspaceReviewStore>((set, get) =
         revisionBySession,
         byKey: Object.fromEntries(
           Object.entries(state.byKey).filter(([key]) => !key.startsWith(prefix)),
+        ),
+      }
+    }),
+  clearTurnReviews: (sessionId, fromUserMessageIndex) =>
+    set((state) => {
+      const prefix = `${sessionId}::turn:`
+      const invalid = (key: string) => {
+        if (!key.startsWith(prefix)) return false
+        const index = key.slice(prefix.length).match(/:(\d+)$/)?.[1]
+        return index === undefined || Number(index) >= fromUserMessageIndex
+      }
+      for (const key of requests.keys()) {
+        if (invalid(key)) nextRequest(key)
+      }
+      return {
+        byKey: Object.fromEntries(
+          Object.entries(state.byKey).filter(([key]) => !invalid(key)),
         ),
       }
     }),

@@ -147,25 +147,31 @@ describe('Content-only pages render without errors', () => {
 
     setComposerText('/', 1)
 
+    expect(await screen.findByRole('option', { name: '/init' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '/context' })).toBeInTheDocument()
     expect(await screen.findByText('lark-mail')).toBeInTheDocument()
-    expect(screen.getByText('mcp')).toBeInTheDocument()
-    expect(screen.getByText('skills')).toBeInTheDocument()
-    expect(screen.getByText('help')).toBeInTheDocument()
-    expect(screen.getByText('plugin')).toBeInTheDocument()
-    expect(screen.getByText('context')).toBeInTheDocument()
-    expect(screen.queryByText('plugins')).not.toBeInTheDocument()
     expect(screen.queryByText('internal-only')).not.toBeInTheDocument()
+
+    // Dynamic skills remain searchable before a session has been created.
+    setComposerText('/lark', 5)
+    expect(await screen.findByRole('option', { name: 'lark-mail' })).toBeInTheDocument()
+    setComposerText('/internal', 9)
+    expect(screen.queryByText('internal-only')).not.toBeInTheDocument()
+
+    // Commands with a permanent GUI home remain available through search.
+    setComposerText('/help', 5)
+    expect(await screen.findByRole('option', { name: '/help' })).toBeInTheDocument()
   })
 
-  it('EmptySession shows /goal as one command with argument hints, not pseudo subcommands', async () => {
+  it('EmptySession search shows /goal as one command, not pseudo subcommands', async () => {
     vi.mocked(skillsApi.list).mockResolvedValueOnce({ skills: [] })
 
     render(<EmptySession />)
 
     setComposerText('/goal', 5)
 
-    expect(await screen.findByRole('option', { name: /^goal / })).toBeInTheDocument()
-    expect(screen.getByText('[<condition> | clear]')).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: '/goal' })).toBeInTheDocument()
+    expect(screen.getAllByRole('option', { name: '/goal' })).toHaveLength(1)
     expect(screen.getByText('Set a completion goal')).toBeInTheDocument()
     expect(screen.queryByText('/goal status')).not.toBeInTheDocument()
     expect(screen.queryByText('/goal --tokens')).not.toBeInTheDocument()
@@ -237,6 +243,7 @@ describe('Content-only pages render without errors', () => {
       await Promise.resolve()
     })
     expect(screen.getByText('Add files or photos')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: 'More tools' }))
     expect(screen.getByText('Slash commands')).toBeInTheDocument()
   })
 
@@ -629,7 +636,7 @@ describe('Content-only pages render without errors', () => {
     expect(screen.getByText('Slash commands')).toBeInTheDocument()
     expect(screen.getByText('/compact')).toBeInTheDocument()
     expect(screen.getByText('/cost')).toBeInTheDocument()
-    expect(screen.getByText('9 more commands available. Type / to search the full command list.')).toBeInTheDocument()
+    expect(screen.getByText('10 more commands available. Type / to search the full command list.')).toBeInTheDocument()
 
     resetPageStores()
   })

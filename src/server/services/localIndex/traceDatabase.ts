@@ -33,6 +33,7 @@ export type TraceIndexDatabase = {
 }
 
 type OwnedStatement = {
+  finalize(): void
   get(...bindings: TraceIndexBinding[]): unknown
   all(...bindings: TraceIndexBinding[]): unknown[]
   run(...bindings: TraceIndexBinding[]): {

@@ -161,6 +161,9 @@ function hangingToolResponse(model: string): Response {
   })
 }
 
+const PROGRESS_EVENT_DELAY_MS = 50
+const PROGRESS_IDLE_BUDGET_MS = PROGRESS_EVENT_DELAY_MS * 4
+
 function progressingToolResponse(model: string): Response {
   const events = [
     sseEvent('message_start', {
@@ -206,7 +209,7 @@ function progressingToolResponse(model: string): Response {
 
   return new Response(new ReadableStream({
     async pull(controller) {
-      if (nextEvent > 0) await Bun.sleep(10)
+      if (nextEvent > 0) await Bun.sleep(PROGRESS_EVENT_DELAY_MS)
       if (cancelled) return
       controller.enqueue(new TextEncoder().encode(events[nextEvent]))
       nextEvent += 1
@@ -707,7 +710,9 @@ test('allows a progressing tool input to outlive its inactivity budget', async (
       CLAUDE_ENABLE_STREAM_WATCHDOG: '1',
       CLAUDE_STREAM_IDLE_TIMEOUT_MS: '1000',
       CLAUDE_STREAM_MAX_DURATION_MS: '1000',
-      CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS: '40',
+      // Five JSON chunks plus the closing event outlive this idle budget,
+      // while individual gaps tolerate instrumentation/scheduler overhead.
+      CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS: String(PROGRESS_IDLE_BUDGET_MS),
     },
   })
 
@@ -785,4 +790,65 @@ test('invalid global output overrides fall back to the configured provider budge
     expect(result.requests[0]?.max_tokens).toBe(globalBudget === '64' ? 64 : 96_000)
     expect(result.requestHeaders[0]?.get('x-cc-haha-output-budget-source')).toBe('explicit')
   }
+}, 10_000)
+
+for (const effortValue of ['low', 'high', 'xhigh', 'max'] as const) {
+  test(`Opus 5 caps ${effortValue} effort when thinking is disabled`, async () => {
+    const { requests } = await captureQueryRequest({
+      model: 'claude-opus-5',
+      capabilities: 'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
+      effortValue,
+    })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.thinking).toEqual({ type: 'disabled' })
+    expect(requests[0]?.output_config).toEqual({
+      effort: effortValue === 'xhigh' || effortValue === 'max' ? 'high' : effortValue,
+    })
+  }, 10_000)
+}
+
+test('Opus 5 preserves max effort with adaptive thinking enabled', async () => {
+  const { requests } = await captureQueryRequest({
+    model: 'claude-opus-5',
+    capabilities: 'thinking,required_thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
+    effortValue: 'max',
+  })
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.thinking).toEqual({ type: 'adaptive' })
+  expect(requests[0]?.output_config).toEqual({ effort: 'max' })
+}, 10_000)
+
+for (const disableAdaptive of [false, true]) {
+  test(`Opus 5.5 requires adaptive thinking with optional adaptive disabled=${disableAdaptive}`, async () => {
+    const { content, requests, requestHeaders } = await captureQueryRequest({
+      model: 'claude-opus-5-5',
+      configureCapabilityOverrides: false,
+      globalThinkingEnabled: false,
+      env: {
+        CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: disableAdaptive ? '1' : undefined,
+        CLAUDE_CODE_ATTRIBUTION_HEADER: '1',
+        CLAUDE_CODE_ALWAYS_ENABLE_EFFORT: '1',
+      },
+    })
+    expect(content).toContainEqual({ type: 'text', text: 'OK' })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]?.model).toBe('claude-opus-5-5')
+    expect(requests[0]?.thinking).toEqual({ type: 'adaptive' })
+    expect(requests[0]?.max_tokens).toBe(128_000)
+    expect(requests[0]?.output_config).toEqual({ effort: 'medium' })
+    expect(requestHeaders[0]?.get('anthropic-beta')).not.toContain('thinking-binding-controls-2026-08-01')
+    expect(requestHeaders[0]?.get('user-agent')).toContain('claude-cli/2.1.281')
+    expect(JSON.stringify(requests[0]?.system)).toContain('cc_version=2.1.281')
+  }, 10_000)
+}
+
+test('Opus 5.5 respects an explicit third-party capability opt-out', async () => {
+  const { requests } = await captureQueryRequest({
+    model: 'claude-opus-5-5',
+    capabilities: '',
+    globalThinkingEnabled: false,
+  })
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.thinking).toBeUndefined()
+  expect(requests[0]?.output_config).toBeUndefined()
 }, 10_000)

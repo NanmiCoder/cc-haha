@@ -38,6 +38,9 @@ export function openWorkspaceTarget(request: WorkspaceOpenRequest): string | nul
 
 /** Convenience wrappers so call sites read as the action the user took. */
 export const workspaceOpen = {
+  sideChat(sessionId: string, sideChatId: string) {
+    return openWorkspaceTarget({ sessionId, target: { kind: 'side-chat', sideChatId } })
+  },
   file(sessionId: string, path: string, options?: {
     line?: number
     column?: number

@@ -55,6 +55,12 @@ vi.mock('@/components/composite/DirectoryPicker', () => ({
   ),
 }))
 
+// Project creation is covered by the picker's own tests; here the editor would
+// only pull the mocked picker module back in through its folder field.
+vi.mock('@/components/layout/ProjectEditorModal', () => ({
+  ProjectEditorModal: () => null,
+}))
+
 vi.mock('../../i18n', () => ({
   useTranslation: () => (key: string, params?: Record<string, string | number>) => {
     const text = {

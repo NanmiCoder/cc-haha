@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, it } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, it, spyOn } from 'bun:test'
 import {
   mkdirSync,
   mkdtempSync,
@@ -7,7 +7,8 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { homedir } from 'node:os'
+import * as os from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { handleLocalFile, reconstructAbsolutePath } from '../localFile'
 import { isAllowedFilesystemPath } from '../filesystem'
@@ -15,13 +16,28 @@ import { isAllowedFilesystemPath } from '../filesystem'
 // Deterministic 256-byte payload (bytes 0..255) so range slices are checkable.
 const VIDEO_BYTES = Uint8Array.from({ length: 256 }, (_, i) => i)
 
-// Build the work area under $HOME so it is inside isAllowedFilesystemPath's
-// allow-list (HOME / tmp / registered roots). tmpdir() on macOS resolves to
-// /private/tmp via realpath which is also allowed, but $HOME is the most
-// portable choice across platforms for an "inside the sandbox" fixture.
-const SANDBOX_ROOTS = mkdtempSync(path.join(homedir(), '.lf-test-'))
+// Keep both home-relative files and any configuration reads in disposable state.
+const SANDBOX_ROOTS = mkdtempSync(path.join(tmpdir(), 'lf-test-'))
+const homeSpy = spyOn(os, 'homedir')
+const originalHome = process.env.HOME
+const originalUserProfile = process.env.USERPROFILE
+const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+
+beforeAll(() => {
+  homeSpy.mockReturnValue(SANDBOX_ROOTS)
+  process.env.HOME = SANDBOX_ROOTS
+  process.env.USERPROFILE = SANDBOX_ROOTS
+  process.env.CLAUDE_CONFIG_DIR = path.join(SANDBOX_ROOTS, '.claude')
+})
 
 afterAll(() => {
+  homeSpy.mockRestore()
+  if (originalHome === undefined) delete process.env.HOME
+  else process.env.HOME = originalHome
+  if (originalUserProfile === undefined) delete process.env.USERPROFILE
+  else process.env.USERPROFILE = originalUserProfile
+  if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   rmSync(SANDBOX_ROOTS, { recursive: true, force: true })
 })
 
@@ -73,6 +89,11 @@ describe('reconstructAbsolutePath', () => {
   it('keeps a Windows drive path absolute', () => {
     expect(reconstructAbsolutePath('C:/Users/me/page.html')).toBe('C:/Users/me/page.html')
   })
+  it('expands home-relative paths after decoding', () => {
+    expect(reconstructAbsolutePath('~/Desktop/page.html')).toBe(path.join(homedir(), 'Desktop/page.html'))
+    expect(reconstructAbsolutePath('%7E/Desktop/with%20space.html')).toBe(path.join(homedir(), 'Desktop/with space.html'))
+    expect(reconstructAbsolutePath('~other/page.html')).toBe('/~other/page.html')
+  })
   it('returns null for an empty remainder', () => {
     expect(reconstructAbsolutePath('')).toBeNull()
   })
@@ -92,6 +113,59 @@ describe('handleLocalFile', () => {
     expect(csp).toContain("default-src 'none'")
     expect(csp).toContain("connect-src 'none'")
     expect(await res.text()).toBe('<h1>ok</h1>')
+  })
+
+  it('serves home-relative HTML and its relative assets', async () => {
+    const root = setupFiles()
+    const homePath = `~/${path.relative(SANDBOX_ROOTS, root).replace(/\\/g, '/')}/with space.html`
+    const pageUrl = localFileRequestUrl(homePath)
+    const page = await handleLocalFile(pageUrl)
+    expect(page.status).toBe(200)
+    expect(await page.text()).toBe('<h1>spaced</h1>')
+    const asset = await handleLocalFile(new URL('./assets/a.css', pageUrl))
+    expect(asset.status).toBe(200)
+    expect(asset.headers.get('content-type')).toBe('text/css; charset=utf-8')
+    expect(await asset.text()).toBe('body{}')
+  })
+
+  it('rejects home-relative symlinks that escape the sandbox', async () => {
+    if (process.platform === 'win32') return
+    const root = setupFiles()
+    symlinkSync('/etc', path.join(root, 'outside'), 'dir')
+    const homePath = `~/${path.relative(SANDBOX_ROOTS, root)}/outside/hosts`
+    const response = await handleLocalFile(localFileRequestUrl(homePath))
+    expect(response.status).toBe(403)
+  })
+
+  it('decodes home-relative filenames only once and ignores URL query/hash when resolving assets', async () => {
+    const root = setupFiles()
+    const name = '发布清单 #100%25.html'
+    writeFileSync(path.join(root, name), '<h1>encoded name</h1>')
+    const homePath = `~/${path.relative(SANDBOX_ROOTS, root)}/${name}`
+    const pageUrl = localFileRequestUrl(homePath)
+    const page = await handleLocalFile(pageUrl)
+    expect(page.status).toBe(200)
+    expect(await page.text()).toBe('<h1>encoded name</h1>')
+    const asset = await handleLocalFile(new URL('./assets/a.css?v=1#theme', pageUrl))
+    expect(asset.status).toBe(200)
+    expect(await asset.text()).toBe('body{}')
+  })
+
+  it('preserves media range responses and missing-file errors for home-relative paths', async () => {
+    const root = setupFiles()
+    const homeDir = `~/${path.relative(SANDBOX_ROOTS, root)}`
+    const media = await handleLocalFile(localFileRequestUrl(`${homeDir}/clip.mp4`), new Headers({ Range: 'bytes=10-19' }))
+    expect(media.status).toBe(206)
+    expect(media.headers.get('content-range')).toBe('bytes 10-19/256')
+    expect(new Uint8Array(await media.arrayBuffer())).toEqual(VIDEO_BYTES.slice(10, 20))
+    const missing = await handleLocalFile(localFileRequestUrl(`${homeDir}/missing.html`))
+    expect(missing.status).toBe(404)
+  })
+
+  it('rejects encoded traversal outside the home sandbox', async () => {
+    const escapedPath = encodeURIComponent(`~/${'../'.repeat(20)}etc/hosts`)
+    const response = await handleLocalFile(new URL(`http://127.0.0.1/local-file/${escapedPath}`))
+    expect(response.status).toBe(403)
   })
 
   it('serves nested assets with the right content-type', async () => {

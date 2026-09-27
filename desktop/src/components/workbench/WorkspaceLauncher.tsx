@@ -1,4 +1,4 @@
-import { FolderClosed, Globe, SquareTerminal, SquareSplitVertical } from 'lucide-react'
+import { MessageCircle, FolderClosed, Globe, SquareTerminal, SquareSplitVertical } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import {
   detectPlatform,
@@ -9,8 +9,8 @@ import type { WorkspaceDock, WorkspaceTabKind } from '../../lib/workspace/types'
 
 type LauncherEntry = {
   kind: WorkspaceTabKind
-  labelKey: 'workspace.launcher.review' | 'workspace.launcher.terminal' | 'workspace.launcher.browser' | 'workspace.launcher.files'
-  shortcut: WorkspaceShortcutAction
+  labelKey: 'workspace.launcher.review' | 'workspace.launcher.terminal' | 'workspace.launcher.browser' | 'workspace.launcher.files' | 'sideChat.title'
+  shortcut?: WorkspaceShortcutAction
   Icon: typeof Globe
 }
 
@@ -20,6 +20,7 @@ type LauncherEntry = {
  * "look at anything", which is the order the work itself tends to go in.
  */
 const ENTRIES: readonly LauncherEntry[] = [
+  { kind: 'side-chat', labelKey: 'sideChat.title', Icon: MessageCircle },
   { kind: 'review', labelKey: 'workspace.launcher.review', shortcut: 'open-review', Icon: SquareSplitVertical },
   { kind: 'terminal', labelKey: 'workspace.launcher.terminal', shortcut: 'toggle-terminal', Icon: SquareTerminal },
   { kind: 'browser', labelKey: 'workspace.launcher.browser', shortcut: 'new-browser-tab', Icon: Globe },
@@ -60,10 +61,10 @@ export function WorkspaceLauncher({
       className={menu ? '' : `flex min-h-0 flex-1 items-start justify-center overflow-y-auto ${compact ? 'px-4 py-2' : 'px-6 py-10'}`}
     >
       <ul className={menu ? 'space-y-0.5' : 'my-auto w-full max-w-[640px] space-y-0.5'} role={menu ? 'presentation' : undefined} aria-label={menu ? undefined : t('workspace.launcher.label')}>
-        {ENTRIES.map(({ kind, labelKey, shortcut, Icon }) => {
+        {ENTRIES.filter(entry => dock !== 'bottom' || entry.kind !== 'side-chat').map(({ kind, labelKey, shortcut, Icon }) => {
           const disabledReason = kind === 'review' ? reviewUnavailableReason ?? null : null
           // The hint advertises the app command; a pointer choice uses this dock.
-          const hint = formatWorkspaceShortcut(shortcut, platform)
+          const hint = shortcut ? formatWorkspaceShortcut(shortcut, platform) : null
           return (
             <li key={kind} role={menu ? 'presentation' : undefined}>
               <button

@@ -1,4 +1,4 @@
-import { Check, Copy, GitFork } from 'lucide-react'
+import { Check, Copy, GitFork, Undo2 } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
@@ -9,6 +9,12 @@ export type MessageBranchAction = {
   label: string
   loading?: boolean
   onBranch: () => void
+}
+
+export type MessageRewindAction = {
+  label: string
+  loading?: boolean
+  onRewind: () => void
 }
 
 /**
@@ -27,6 +33,7 @@ type Props = {
   copyText?: string
   copyLabel: string
   branchAction?: MessageBranchAction
+  rewindAction?: MessageRewindAction
   align?: 'start' | 'end'
   timestamp?: number
   /** Inline metadata that shares the same compact row as the actions. */
@@ -43,6 +50,7 @@ export function MessageActionBar({
   copyText,
   copyLabel,
   branchAction,
+  rewindAction,
   align = 'start',
   timestamp,
   metadata,
@@ -57,7 +65,7 @@ export function MessageActionBar({
     ? formatExactMessageTimestamp(timestamp, locale)
     : ''
 
-  if (!hasCopy && !branchAction && !metadata) return null
+  if (!hasCopy && !branchAction && !rewindAction && !metadata) return null
 
   return (
     <div
@@ -89,6 +97,18 @@ export function MessageActionBar({
             shape="circle"
             disabled={branchAction.loading}
             onClick={branchAction.onBranch}
+            onPointerUp={(event) => event.currentTarget.blur()}
+          />
+        ) : null}
+        {rewindAction ? (
+          <IconButton
+            icon={<Undo2 size={13} strokeWidth={2.2} aria-hidden="true" />}
+            label={rewindAction.label}
+            size="sm"
+            tone="muted"
+            shape="circle"
+            disabled={rewindAction.loading}
+            onClick={rewindAction.onRewind}
             onPointerUp={(event) => event.currentTarget.blur()}
           />
         ) : null}

@@ -12,6 +12,7 @@ const MAX_TRACKED_SESSIONS = 16
 
 const sessionHeightCache = new Map<string, Map<string, number>>()
 const sessionMetricCache = new Map<string, Map<string, VirtualRenderItemMetric>>()
+const sessionAppearanceSignatures = new Map<string, string>()
 
 function touchSession(sessionId: string, map: Map<string, Map<string, unknown>>) {
   // Reinsert to move to LRU tail.
@@ -28,10 +29,11 @@ function evictSessionsBeyondLimit(): void {
     if (typeof oldest !== 'string') break
     sessionHeightCache.delete(oldest)
     sessionMetricCache.delete(oldest)
+    sessionAppearanceSignatures.delete(oldest)
   }
 }
 
-export function getHeightsForSession(sessionId: string): Map<string, number> {
+export function getHeightsForSession(sessionId: string, appearanceSignature?: string): Map<string, number> {
   let heights = sessionHeightCache.get(sessionId)
   if (!heights) {
     heights = new Map<string, number>()
@@ -39,6 +41,11 @@ export function getHeightsForSession(sessionId: string): Map<string, number> {
     evictSessionsBeyondLimit()
   } else {
     touchSession(sessionId, sessionHeightCache as Map<string, Map<string, unknown>>)
+  }
+  if (appearanceSignature !== undefined) {
+    const previous = sessionAppearanceSignatures.get(sessionId)
+    if (previous !== undefined && previous !== appearanceSignature) heights.clear()
+    sessionAppearanceSignatures.set(sessionId, appearanceSignature)
   }
   return heights
 }
@@ -57,6 +64,7 @@ export function getMetricsForSession(sessionId: string): Map<string, VirtualRend
 export function dropSession(sessionId: string): void {
   sessionHeightCache.delete(sessionId)
   sessionMetricCache.delete(sessionId)
+  sessionAppearanceSignatures.delete(sessionId)
 }
 
 export const __virtualHeightCacheInternals = {
@@ -64,5 +72,6 @@ export const __virtualHeightCacheInternals = {
   reset: () => {
     sessionHeightCache.clear()
     sessionMetricCache.clear()
+    sessionAppearanceSignatures.clear()
   },
 }

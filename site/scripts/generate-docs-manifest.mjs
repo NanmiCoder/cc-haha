@@ -25,6 +25,7 @@ const excludedFiles = new Set(['AGENTS.md'])
 /** 分区顺序与标题。新增一个 docs/ 顶层目录时在这里登记，否则会排到最后并显示裸目录名。 */
 export const sections = [
   { id: 'start', zh: '开始使用', en: 'Get started' },
+  { id: 'cases', zh: '实战案例', en: 'Practical guides' },
   { id: 'desktop', zh: '桌面端功能', en: 'Desktop app' },
   { id: 'im', zh: 'IM 接入', en: 'Messaging' },
   { id: 'cli', zh: '命令行', en: 'Command line' },

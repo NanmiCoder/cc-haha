@@ -77,13 +77,13 @@ describe('openWithContextForHref', () => {
     expect(result).toEqual({
       kind: 'file',
       absolutePath: '~/reports/a.html',
-      inAppBrowserUrl: previewFsUrl(BASE, SESSION, '~/reports/a.html'),
+      inAppBrowserUrl: localFileUrl(BASE, '~/reports/a.html'),
     })
   })
 
   it('Windows backslash tilde html path → absolutePath passed through', () => {
     const result = openWithContextForHref('~\\reports\\a.html', { sessionId: SESSION, serverBaseUrl: BASE, workDir: 'C:/w' })
-    expect(result).toMatchObject({ kind: 'file', absolutePath: '~\\reports\\a.html' })
+    expect(result).toMatchObject({ kind: 'file', absolutePath: '~\\reports\\a.html', inAppBrowserUrl: localFileUrl(BASE, '~/reports/a.html') })
   })
 
   it('tilde markdown path → absolutePath passed through in file-preview context', () => {
@@ -93,6 +93,20 @@ describe('openWithContextForHref', () => {
 })
 
 describe('openWithContextForWorkspaceFile', () => {
+  it('home-relative changed HTML uses the supplied absolute path outside the workspace', () => {
+    const result = openWithContextForWorkspaceFile('~/Desktop/page.html', '/home/me/Desktop/page.html', {
+      sessionId: SESSION,
+      serverBaseUrl: BASE,
+    })
+    expect(result).toEqual({
+      kind: 'file',
+      absolutePath: '/home/me/Desktop/page.html',
+      relPath: '~/Desktop/page.html',
+      previewable: true,
+      inAppBrowserUrl: localFileUrl(BASE, '/home/me/Desktop/page.html'),
+    })
+  })
+
   it('.md rel path → { kind:"file", absolutePath, relPath, previewable:true } with no inAppBrowserUrl', () => {
     const result = openWithContextForWorkspaceFile('README.md', '/w/proj/README.md', { sessionId: SESSION, serverBaseUrl: BASE })
     expect(result).toEqual({ kind: 'file', absolutePath: '/w/proj/README.md', relPath: 'README.md', previewable: true })

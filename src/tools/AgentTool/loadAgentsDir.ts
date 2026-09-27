@@ -92,6 +92,7 @@ const AgentJsonSchema = lazySchema(() =>
     initialPrompt: z.string().optional(),
     memory: z.enum(['user', 'project', 'local']).optional(),
     background: z.boolean().optional(),
+    omitClaudeMd: z.boolean().optional(),
     color: z.enum(AGENT_COLORS).optional(),
     isolation: (process.env.USER_TYPE === 'ant'
       ? z.enum(['worktree', 'remote'])
@@ -128,8 +129,10 @@ export type BaseAgentDefinition = {
   maxTurns?: number // Maximum number of agentic turns before stopping
   filename?: string // Original filename without .md extension (for user/project/managed agents)
   baseDir?: string
-  /** Exact source path for Markdown custom agents; absent for JSON/built-in/plugin agents. */
+  /** Exact source path for Markdown custom/plugin agents; absent for JSON and built-in agents. */
   readonly sourceFilePath?: string
+  /** Hash of exactly the source bytes that produced this parsed definition. */
+  readonly sourceContentHash?: string
   criticalSystemReminder_EXPERIMENTAL?: string // Short message re-injected at every user turn
   requiredMcpServers?: string[] // MCP server name patterns that must be configured for agent to be available
   background?: boolean // Always run as background task when spawned
@@ -328,13 +331,14 @@ export const getAgentDefinitionsWithOverrides = memoize(
 
       const failedFiles: Array<{ path: string; error: string }> = []
       const customAgents = markdownFiles
-        .map(({ filePath, baseDir, frontmatter, content, source }) => {
+        .map(({ filePath, sourceContentHash, baseDir, frontmatter, content, source }) => {
           const agent = parseAgentFromMarkdown(
             filePath,
             baseDir,
             frontmatter,
             content,
             source,
+            sourceContentHash,
           )
           if (!agent) {
             // Skip non-agent markdown files silently (e.g., reference docs
@@ -536,6 +540,7 @@ export function parseAgentFromJson(
         : {}),
       ...(parsed.initialPrompt ? { initialPrompt: parsed.initialPrompt } : {}),
       ...(parsed.background ? { background: parsed.background } : {}),
+      ...(parsed.omitClaudeMd !== undefined ? { omitClaudeMd: parsed.omitClaudeMd } : {}),
       ...(parsed.memory ? { memory: parsed.memory } : {}),
       ...(parsed.isolation ? { isolation: parsed.isolation } : {}),
       ...(parsed.color ? { color: parsed.color } : {}),
@@ -579,6 +584,7 @@ export function parseAgentFromMarkdown(
   frontmatter: Record<string, unknown>,
   content: string,
   source: SettingSource,
+  sourceContentHash?: string,
 ): CustomAgentDefinition | null {
   try {
     const agentType = frontmatter['name']
@@ -757,6 +763,7 @@ export function parseAgentFromMarkdown(
     const agentDef: CustomAgentDefinition = {
       baseDir,
       sourceFilePath: filePath,
+      ...(sourceContentHash ? { sourceContentHash } : {}),
       agentType: agentType,
       whenToUse: whenToUse,
       rawSystemPrompt: systemPrompt,

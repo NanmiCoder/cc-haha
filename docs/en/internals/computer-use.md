@@ -21,7 +21,7 @@ Session authorization and safe dispatch
   src/vendor/computer-use-mcp/toolCalls.ts
   src/vendor/computer-use-mcp/mcpServer.ts
   ↓
-Claude Code Haha integration
+cc-haha integration
   src/utils/computerUse/
   ↓
 Python bridge

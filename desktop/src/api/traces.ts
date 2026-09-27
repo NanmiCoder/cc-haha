@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, type ApiRequestOptions } from './client'
 import type { TraceCaptureSettings, TraceSessionDeleteResult, TraceSessionList } from '../types/trace'
 
 export type TraceSessionRevision = {
@@ -10,22 +10,23 @@ export type TraceSessionRevision = {
 }
 
 export const tracesApi = {
-  list(options?: { limit?: number; offset?: number; query?: string }) {
+  list(options?: { limit?: number; offset?: number; query?: string }, requestOptions?: ApiRequestOptions) {
     const params = new URLSearchParams()
     if (options?.limit !== undefined) params.set('limit', String(options.limit))
     if (options?.offset !== undefined) params.set('offset', String(options.offset))
     if (options?.query) params.set('q', options.query)
     const suffix = params.toString() ? `?${params}` : ''
-    return api.get<TraceSessionList>(`/api/traces${suffix}`)
+    return api.get<TraceSessionList>(`/api/traces${suffix}`, requestOptions)
   },
 
-  getRevision(sessionId: string, sinceRevision?: number, sinceRevisionToken?: string) {
+  getRevision(sessionId: string, sinceRevision?: number, sinceRevisionToken?: string, options?: ApiRequestOptions) {
     const params = new URLSearchParams()
     if (sinceRevision !== undefined) params.set('sinceRevision', String(sinceRevision))
     if (sinceRevisionToken !== undefined) params.set('sinceRevisionToken', sinceRevisionToken)
     const suffix = params.toString() ? `?${params}` : ''
     return api.get<TraceSessionRevision>(
       `/api/traces/${encodeURIComponent(sessionId)}/revision${suffix}`,
+      options,
     )
   },
 

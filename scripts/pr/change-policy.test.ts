@@ -35,7 +35,7 @@ describe('evaluateChangePolicy', () => {
       'docs/index.md',
       'site/src/App.tsx',
       'README.md',
-      'README.en.md',
+      'README.zh-CN.md',
     ])
 
     expect(result.blocked).toBe(false)

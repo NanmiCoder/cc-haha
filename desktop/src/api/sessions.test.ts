@@ -36,6 +36,23 @@ describe('sessionsApi', () => {
     expect(init).toMatchObject({ method: 'GET' })
   })
 
+  it('requests one bounded sidebar preview per project', async () => {
+    const response = {
+      sessions: [],
+      projects: [{ projectRoot: '/workspace/repo', total: 42 }],
+      total: 42,
+    }
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    expect(await sessionsApi.list({ view: 'sidebar', perProjectLimit: 6 })).toEqual(response)
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      'http://127.0.0.1:3456/api/sessions?view=sidebar&perProjectLimit=6',
+    )
+  })
+
   it('fetches one historical session summary without requesting its messages', async () => {
     const summary = {
       id: 'historical-session',
@@ -258,5 +275,112 @@ describe('sessionsApi', () => {
       discovered: 12,
       indexed: 4,
     })
+  })
+})
+
+describe('full session history assembly', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  const page = (id: string, cursor: string | null, extra = {}) => ({
+    messages: [{ id, type: 'assistant', content: id }],
+    taskNotifications: [{ taskId: id }],
+    page: {
+      nextCursor: cursor,
+      hasMore: cursor !== null,
+      historyComplete: false,
+      sourceVersion: 'fixture-version',
+      scannedBytes: 10,
+      omittedOversizedEntries: 0,
+      ...extra,
+    },
+  })
+  const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+
+  it('joins every raw page chronologically before returning and clears transport cursors', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response(page('result', 'middle')))
+      .mockResolvedValueOnce(response(page('call', 'oldest', { previousCursor: 'newer' })))
+      .mockResolvedValueOnce(response(page('user', null, { previousCursor: 'middle' })))
+    const result = await sessionsApi.getFullHistory('fixture')
+    expect(result.messages.map(message => message.id)).toEqual(['user', 'call', 'result'])
+    expect(result.taskNotifications?.map(notice => notice.taskId)).toEqual(['user', 'call', 'result'])
+    expect(result.page).toMatchObject({ nextCursor: null, hasMore: false, historyComplete: true, scannedBytes: 30 })
+    expect(fetchMock.mock.calls.map(call => call[0])).toEqual([
+      'http://127.0.0.1:3456/api/sessions/fixture/messages?mode=full',
+      'http://127.0.0.1:3456/api/sessions/fixture/messages?cursor=middle',
+      'http://127.0.0.1:3456/api/sessions/fixture/messages?cursor=oldest',
+    ])
+  })
+
+  it('keeps the single-request fast path', async () => {
+    const original = page('all', null, { historyComplete: true })
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(response(original))
+    expect(await sessionsApi.getFullHistory('fixture')).toEqual(original)
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    [{ omittedOversizedEntries: 2 }, { omittedOversizedEntries: 3 }, 5, false],
+    [{}, { contentTruncated: true }, 0, true],
+  ])('retains incomplete-content evidence after exhausting cursors', async (newestExtra, oldestExtra, omitted, truncated) => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response(page('new', 'older', newestExtra)))
+      .mockResolvedValueOnce(response(page('old', null, oldestExtra)))
+    expect((await sessionsApi.getFullHistory('fixture')).page).toMatchObject({
+      hasMore: false, historyComplete: false, omittedOversizedEntries: omitted, contentTruncated: truncated,
+    })
+  })
+
+  it('rejects a changed source instead of returning a mixed transcript', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response(page('new', 'older')))
+      .mockResolvedValueOnce(response(page('old', null, { sourceVersion: 'changed' })))
+    await expect(sessionsApi.getFullHistory('fixture')).rejects.toThrow('Session history changed')
+  })
+
+  it('rejects a cursor cycle instead of looping forever', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response(page('new', 'older')))
+      .mockResolvedValueOnce(response(page('old', 'older')))
+    await expect(sessionsApi.getFullHistory('fixture')).rejects.toThrow('cursor did not advance')
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects a failed continuation without exposing its successfully loaded tail', async () => {
+    vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response(page('new', 'older')))
+      .mockResolvedValueOnce(response({ error: 'HISTORY_CHANGED', message: 'Rewritten' }, 409))
+    await expect(sessionsApi.getFullHistory('fixture')).rejects.toThrow()
+  })
+
+  it('forwards cancellation into an in-flight continuation', async () => {
+    const controller = new AbortController()
+    let continuationStarted!: () => void
+    const started = new Promise<void>(resolve => { continuationStarted = resolve })
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response(page('new', 'older')))
+      .mockImplementationOnce((_url, init) => new Promise<Response>((_resolve, reject) => {
+        expect(init?.signal).toBeDefined()
+        init?.signal?.addEventListener('abort', () => reject(controller.signal.reason), { once: true })
+        continuationStarted()
+      }))
+    const request = sessionsApi.getFullHistory('fixture', { signal: controller.signal })
+    await started
+    controller.abort()
+    await expect(request).rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('honors cancellation before starting a continuation', async () => {
+    const controller = new AbortController()
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementationOnce(async () => {
+      controller.abort()
+      return response(page('new', 'older'))
+    })
+    await expect(sessionsApi.getFullHistory('fixture', { signal: controller.signal })).rejects.toThrow()
+    expect(fetchMock).toHaveBeenCalledOnce()
   })
 })

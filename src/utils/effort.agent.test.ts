@@ -9,6 +9,10 @@ import {
   resolveAppliedEffort,
   toPersistableEffort,
 } from './effort.js'
+import {
+  GROK_MODEL_CATALOG,
+  setGrokRuntimeModelCatalog,
+} from 'src/services/grokAuth/models.js'
 
 describe('agent effort values', () => {
   test('accepts all named agent effort levels including xhigh', () => {
@@ -65,15 +69,51 @@ describe('agent effort values', () => {
     const originalOverride = process.env.CLAUDE_CODE_EFFORT_LEVEL
     delete process.env.CLAUDE_CODE_EFFORT_LEVEL
     try {
-      expect(modelSupportsEffort('grok-4.6')).toBe(true)
-      expect(modelSupportsXHighEffort('grok-4.6')).toBe(true)
-      expect(resolveAppliedEffort('grok-4.6', 'xhigh')).toBe('xhigh')
-      expect(resolveAppliedEffort('grok-4.6', 'max')).toBe('high')
+      expect(modelSupportsEffort('grok-4.7')).toBe(true)
+      expect(modelSupportsXHighEffort('grok-4.7')).toBe(true)
+      expect(resolveAppliedEffort('grok-4.7', 'xhigh')).toBe('xhigh')
+      expect(resolveAppliedEffort('grok-4.7', 'max')).toBe('high')
+      expect(modelSupportsXHighEffort('grok-4.7-build-fast')).toBe(true)
       expect(modelSupportsXHighEffort('grok-4.5')).toBe(false)
       expect(resolveAppliedEffort('grok-4.5', 'xhigh')).toBe('high')
-      expect(modelSupportsEffort('grok-composer-2.5-fast')).toBe(false)
-      expect(resolveAppliedEffort('grok-composer-2.5-fast', 'xhigh')).toBe('high')
     } finally {
+      if (originalOverride === undefined) {
+        delete process.env.CLAUDE_CODE_EFFORT_LEVEL
+      } else {
+        process.env.CLAUDE_CODE_EFFORT_LEVEL = originalOverride
+      }
+    }
+  })
+
+  test('reads Grok effort capability from the live catalog for an unknown model', () => {
+    // Regression: an ID absent from the bundled catalog used to fall through to
+    // the Claude heuristics, which report a third-party model as
+    // effort-incapable and strip the parameter entirely.
+    const originalOverride = process.env.CLAUDE_CODE_EFFORT_LEVEL
+    delete process.env.CLAUDE_CODE_EFFORT_LEVEL
+    setGrokRuntimeModelCatalog([
+      {
+        value: 'grok-4.8',
+        label: 'Grok 4.8',
+        description: '',
+        supportsReasoningEffort: true,
+        reasoningEffort: 'high',
+        reasoningEfforts: ['xhigh', 'high', 'low'],
+      },
+      {
+        value: 'grok-4.8-non-reasoning',
+        label: 'Grok 4.8 Non-Reasoning',
+        description: '',
+        supportsReasoningEffort: false,
+      },
+    ])
+    try {
+      expect(modelSupportsEffort('grok-4.8')).toBe(true)
+      expect(modelSupportsXHighEffort('grok-4.8')).toBe(true)
+      expect(resolveAppliedEffort('grok-4.8', 'xhigh')).toBe('xhigh')
+      expect(modelSupportsEffort('grok-4.8-non-reasoning')).toBe(false)
+    } finally {
+      setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
       if (originalOverride === undefined) {
         delete process.env.CLAUDE_CODE_EFFORT_LEVEL
       } else {
@@ -115,6 +155,7 @@ describe('agent effort values', () => {
       'claude-opus-4-5',
       'claude-opus-4-6',
       'claude-opus-4-7',
+      'claude-opus-5',
       'claude-opus-4-8',
       'claude-sonnet-4-6',
       'claude-sonnet-5',
@@ -124,6 +165,7 @@ describe('agent effort values', () => {
     ]
     const xhighModels = [
       'claude-opus-4-7',
+      'claude-opus-5',
       'claude-opus-4-8',
       'claude-sonnet-5',
       'claude-fable-5',
@@ -132,6 +174,7 @@ describe('agent effort values', () => {
     const maxModels = [
       'claude-opus-4-6',
       'claude-opus-4-7',
+      'claude-opus-5',
       'claude-opus-4-8',
       'claude-sonnet-4-6',
       'claude-sonnet-5',

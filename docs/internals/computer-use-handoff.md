@@ -8,7 +8,7 @@
 
 ## 1. 这是什么 / 目标
 
-给 Electron 桌面应用 **"Claude Code Haha"**(Claude Code 的 fork,桌面端是 **Electron 0.4.0**,不是 Tauri)做一个原生 macOS **Computer Use**(让模型操控本机 App)。
+给 Electron 桌面应用 **"cc-haha"**(Claude Code 的 fork,桌面端是 **Electron 0.4.0**,不是 Tauri)做一个原生 macOS **Computer Use**(让模型操控本机 App)。
 
 **核心目标 = 完美复刻 Codex 的 Computer Use:① 好用 ② 复刻全部功能 ③ 快。** 不写兼容/补丁代码,接口层到 helper 层都可重设计。
 

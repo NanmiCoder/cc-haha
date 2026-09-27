@@ -30,7 +30,7 @@ function makeCandidate(overrides: Partial<CcSwitchCandidate> = {}): CcSwitchCand
       sonnet: 'relay-sonnet',
       opus: 'relay-opus',
     },
-    model1mSupport: { main: false, haiku: false, sonnet: false, opus: false },
+    model1mSupport: { main: false, fable: false, haiku: false, sonnet: false, opus: false },
     apiFormat: 'anthropic',
     authStrategy: 'auth_token',
     presetId: 'custom',

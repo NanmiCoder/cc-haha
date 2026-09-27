@@ -36,11 +36,15 @@ import { generateWordSlug } from '../../utils/words.js'
 import { TEAM_CREATE_TOOL_NAME } from './constants.js'
 import { getPrompt } from './prompt.js'
 import { renderToolUseMessage } from './UI.js'
+import { getTeamLeaderRuntime, isTeamReviewRequired } from '../../utils/swarm/teamPlanPolicy.js'
+import { ensureTeamDraft, validateTeamPlanGraph } from '../../utils/swarm/teamPlanStore.js'
+import { proposedTeamPlanSchema, resolveProposedTeamPlan, snapshotTeamAgents, teamPlanToolResult } from '../TeamPlanTool/context.js'
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
     team_name: z.string().describe('Name for the new team to create.'),
     description: z.string().optional().describe('Team description/purpose.'),
+    plan: proposedTeamPlanSchema.optional().describe('Complete proposed roster and tasks. Saved as a draft for human review; does not start members.'),
     agent_type: z
       .string()
       .optional()
@@ -56,6 +60,7 @@ export type Output = {
   team_name: string
   team_file_path: string
   lead_agent_id: string
+  plan?: ReturnType<typeof teamPlanToolResult>
 }
 
 export type Input = z.infer<InputSchema>
@@ -135,6 +140,15 @@ export const TeamCreateTool: Tool<InputSchema, Output> = buildTool({
         appState.mainLoopModel ??
         getDefaultMainLoopModel(),
     )
+    // Resolve before creating any durable team state so invalid preset/runtime
+    // input cannot leave a half-created desktop team behind.
+    const reviewRequired = isTeamReviewRequired()
+    const proposedPlan = reviewRequired && input.plan
+      ? resolveProposedTeamPlan(input.plan, context) : undefined
+    const agentCatalog = reviewRequired ? proposedPlan?.agentCatalog ?? snapshotTeamAgents(context) : undefined
+    if (proposedPlan) validateTeamPlanGraph(proposedPlan)
+    const leaderRuntime = reviewRequired ? getTeamLeaderRuntime(leadModel) : undefined
+    if (input.plan && !reviewRequired) throw new Error('Team plan review requires a desktop session.')
 
     let candidateName = team_name
     let created: {
@@ -202,6 +216,11 @@ export const TeamCreateTool: Tool<InputSchema, Output> = buildTool({
 
     const { finalTeamName, leadAgentId, teamFile } = created
     const teamFilePath = getTeamFilePath(finalTeamName)
+    const draft = leaderRuntime ? await ensureTeamDraft(finalTeamName, getSessionId(), leaderRuntime, {
+      workDir: getCwd(),
+      agentCatalog,
+      ...proposedPlan,
+    }) : undefined
 
     // Register the team name so getTaskListId() returns it for the leader.
     // Without this, the leader falls through to getSessionId() and writes tasks
@@ -250,6 +269,7 @@ export const TeamCreateTool: Tool<InputSchema, Output> = buildTool({
         team_name: finalTeamName,
         team_file_path: teamFilePath,
         lead_agent_id: leadAgentId,
+        ...(draft ? { plan: teamPlanToolResult(draft) } : {}),
       },
     }
   },

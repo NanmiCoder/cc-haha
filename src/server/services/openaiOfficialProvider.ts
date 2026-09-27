@@ -3,6 +3,7 @@ import {
   OPENAI_CODEX_MODEL_CATALOG,
   OPENAI_DEFAULT_HAIKU_MODEL,
   OPENAI_DEFAULT_MAIN_MODEL,
+  OPENAI_DEFAULT_OPUS_MODEL,
   OPENAI_DEFAULT_SONNET_MODEL,
   getOpenAICodexContextWindowForModel,
 } from '../../services/openaiAuth/models.js'
@@ -34,7 +35,7 @@ const openAIModels: SavedProvider['models'] = {
   main: OPENAI_DEFAULT_MAIN_MODEL,
   haiku: OPENAI_DEFAULT_HAIKU_MODEL,
   sonnet: OPENAI_DEFAULT_SONNET_MODEL,
-  opus: OPENAI_DEFAULT_MAIN_MODEL,
+  opus: OPENAI_DEFAULT_OPUS_MODEL,
 }
 
 const modelContextWindows = Object.fromEntries(
@@ -60,7 +61,9 @@ export const OPENAI_OFFICIAL_PROVIDER: SavedProvider = {
   modelContextWindows,
 }
 
-export function buildOpenAIOfficialRuntimeEnv(): Record<string, string> {
+export function buildOpenAIOfficialRuntimeEnv(
+  models: SavedProvider['models'] = OPENAI_OFFICIAL_PROVIDER.models,
+): Record<string, string> {
   const modelContextWindows = OPENAI_OFFICIAL_PROVIDER.modelContextWindows ?? {}
   return {
     [OPENAI_OAUTH_PROVIDER_ENV_KEY]: '1',
@@ -71,9 +74,10 @@ export function buildOpenAIOfficialRuntimeEnv(): Record<string, string> {
     ...(Object.keys(modelContextWindows).length > 0 && {
       [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(modelContextWindows),
     }),
-    ANTHROPIC_MODEL: OPENAI_OFFICIAL_PROVIDER.models.main,
-    ANTHROPIC_DEFAULT_HAIKU_MODEL: OPENAI_OFFICIAL_PROVIDER.models.haiku,
-    ANTHROPIC_DEFAULT_SONNET_MODEL: OPENAI_OFFICIAL_PROVIDER.models.sonnet,
-    ANTHROPIC_DEFAULT_OPUS_MODEL: OPENAI_OFFICIAL_PROVIDER.models.opus,
+    ANTHROPIC_MODEL: models.main,
+    ...(models.fable && { ANTHROPIC_DEFAULT_FABLE_MODEL: models.fable }),
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: models.haiku,
+    ANTHROPIC_DEFAULT_SONNET_MODEL: models.sonnet,
+    ANTHROPIC_DEFAULT_OPUS_MODEL: models.opus,
   }
 }

@@ -118,6 +118,8 @@ function asReviewSource(value: unknown): WorkspaceReviewSource | null {
 
 export function serializeWorkspaceTab(tab: WorkspaceTab): PersistedWorkspaceTab | null {
   switch (tab.kind) {
+    case 'side-chat':
+      return null
     case 'file':
       return {
         kind: 'file',
@@ -162,15 +164,18 @@ export function serializeWorkspace(
   const sessions: Record<string, PersistedWorkspaceSession> = {}
   for (const [sessionId, state] of Object.entries(bySession)) {
     if (!state || state.tabs.length === 0) continue
+    const tabs = state.tabs.map(serializeWorkspaceTab).filter((tab): tab is PersistedWorkspaceTab => tab !== null)
+    if (tabs.length === 0) continue
+    const sideTabs = tabs.filter(tab => tab.kind !== 'terminal' || tab.dock !== 'bottom')
+    const activeSideTabId = sideTabs.some(tab => tab.id === state.activeSideTabId)
+      ? state.activeSideTabId : sideTabs[0]?.id ?? null
     sessions[sessionId] = {
-      layout: state.layout,
+      layout: sideTabs.length === 0 && state.tabs.some(tab => tab.kind === 'side-chat') ? 'hidden' : state.layout,
       bottomOpen: state.bottomOpen,
-      activeSideTabId: state.activeSideTabId,
+      activeSideTabId,
       activeBottomTabId: state.activeBottomTabId,
       nextTerminalOrdinal: state.nextTerminalOrdinal,
-      tabs: state.tabs
-        .map(serializeWorkspaceTab)
-        .filter((tab): tab is PersistedWorkspaceTab => tab !== null),
+      tabs,
     }
   }
   return {

@@ -221,6 +221,25 @@ export const goldenScenarios: GoldenScenario[] = [
     ],
   },
   {
+    id: 'teammate-permission-request',
+    description:
+      'A teammate can_use_tool prompt keeps display_name so the lead session can label the member.',
+    messages: [
+      {
+        type: 'control_request',
+        request_id: 'req_teammate_perm',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Bash',
+          tool_use_id: 'toolu_teammate_perm',
+          input: { command: 'ls' },
+          description: 'list files',
+          display_name: 'researcher',
+        },
+      },
+    ],
+  },
+  {
     id: 'system-init-and-slash',
     description: 'Session init advertises slash commands; local command output renders separately.',
     messages: [

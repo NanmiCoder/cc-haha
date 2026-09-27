@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   getWorkspaceTree: vi.fn(),
   searchWorkspace: vi.fn(),
   getWorkspaceStatus: vi.fn(),
+  openTarget: vi.fn().mockResolvedValue(undefined),
+  copyText: vi.fn().mockResolvedValue(true),
 }))
 
 vi.mock('../../api/sessions', () => ({
@@ -17,8 +19,19 @@ vi.mock('../../api/sessions', () => ({
   },
 }))
 
+vi.mock('@/lib/clipboard', () => ({ copyTextToClipboard: mocks.copyText }))
+vi.mock('@/stores/openTargetStore', () => {
+  const targets = [
+    { id: 'system-default', kind: 'system_default', label: 'System default', platform: 'win32' },
+    { id: 'explorer', kind: 'file_manager', label: 'Explorer', platform: 'win32' },
+  ]
+  const state = { targets, getTargetsForPath: () => new Promise(() => {}), openTarget: mocks.openTarget }
+  return { useOpenTargetStore: Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state }) }
+})
+
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { WorkspaceFileTreePane } from './WorkspaceFileTreePane'
+import { useWorkspaceChatContextStore } from '@/stores/workspaceChatContextStore'
 
 const SESSION = 'session-a'
 const originalScrollIntoView = HTMLElement.prototype.scrollIntoView
@@ -61,7 +74,7 @@ beforeEach(() => {
     expandedBySession: {},
     treeViewBySession: {},
     fileViewByKey: {},
-    statusBySession: {},
+    statusBySession: { [SESSION]: { state: 'ok', workDir: '/repo', repoName: 'repo', branch: 'main', isGitRepo: true, changedFiles: [] } },
   })
   mocks.getWorkspaceTree.mockReset()
   mocks.getWorkspaceTree.mockImplementation(async (_session: string, path: string) =>
@@ -458,5 +471,79 @@ describe('filter field', () => {
       await Promise.resolve()
     })
     expect(screen.getByTestId('workspace-file-tree-filter')).toHaveValue('')
+  })
+})
+
+// #1322: a whole file must be attachable without opening it and selecting lines.
+describe('file chat references', () => {
+  beforeEach(() => useWorkspaceChatContextStore.setState({ referencesBySession: {} }))
+
+  it('adds a right-clicked file to its own session without opening it', async () => {
+    const { onOpen } = await renderPane()
+    fireEvent.contextMenu(screen.getByTestId('workspace-tree-row-README.md'), { clientX: 30, clientY: 40 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add to chat' }))
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[SESSION]).toEqual([
+      expect.objectContaining({ kind: 'file', path: 'README.md', name: 'README.md' }),
+    ])
+    expect(onOpen).not.toHaveBeenCalled()
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+
+  it('supports keyboard invocation and dismisses without adding', async () => {
+    await renderPane()
+    const file = screen.getByTestId('workspace-tree-row-README.md')
+    fireEvent.keyDown(file, { key: 'F10', shiftKey: true })
+    expect(screen.getByRole('menuitem', { name: 'Add to chat' })).toHaveFocus()
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Add to chat' }), { key: 'Escape' })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[SESSION]).toBeUndefined()
+  })
+
+  it('closes an old session menu when switching sessions', async () => {
+    const view = await renderPane()
+    fireEvent.contextMenu(screen.getByTestId('workspace-tree-row-README.md'))
+    expect(screen.getByRole('menuitem', { name: 'Add to chat' })).toBeInTheDocument()
+    await act(async () => {
+      view.rerender(<WorkspaceFileTreePane sessionId="session-b" selectedPath={null} onOpen={vi.fn()} />)
+      await Promise.resolve()
+    })
+    expect(screen.queryByRole('menu')).toBeNull()
+    expect(useWorkspaceChatContextStore.getState().referencesBySession).toEqual({})
+  })
+})
+
+// #1361: the unified tree dropped the existing native-open and copy actions.
+describe('file tree open actions', () => {
+  it.each([
+    ['README.md', false], ['src', true],
+  ])('opens and copies the exact absolute path for %s without previewing it', async (path, isDirectory) => {
+    mocks.openTarget.mockClear()
+    mocks.copyText.mockClear()
+    useWorkspaceContentStore.setState({ statusBySession: { [SESSION]: { state: 'ok', workDir: 'C:\\repo', repoName: 'repo', branch: 'main', isGitRepo: true, changedFiles: [] } } })
+    const { onOpen } = await renderPane()
+    const openMenu = async () => {
+      fireEvent.contextMenu(screen.getByTestId(`workspace-tree-row-${path}`))
+      await waitFor(() => expect(screen.getByRole('menuitem', { name: 'Default application' })).toBeInTheDocument())
+    }
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Default application' }))
+    expect(mocks.openTarget).toHaveBeenLastCalledWith('system-default', `C:\\repo/${path}`)
+    expect(screen.queryByRole('menu')).toBeNull()
+    await openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Open containing folder' }))
+    expect(mocks.openTarget).toHaveBeenLastCalledWith('explorer', `C:\\repo/${path}`)
+    await openMenu()
+    if (isDirectory) expect(screen.queryByRole('menuitem', { name: 'Copy file contents' })).toBeNull()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy path' }))
+    expect(mocks.copyText).toHaveBeenLastCalledWith(`C:\\repo/${path}`)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('routes a tree context-menu preview through the pane activation callback', async () => {
+    const { onOpen } = await renderPane()
+    fireEvent.contextMenu(screen.getByTestId('workspace-tree-row-README.md'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Workspace preview' }))
+    expect(onOpen).toHaveBeenCalledWith('README.md')
+    expect(screen.queryByRole('menu')).toBeNull()
   })
 })

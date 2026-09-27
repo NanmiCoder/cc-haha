@@ -664,8 +664,9 @@ export function getRetryDelay(
 ): number {
   if (retryAfterHeader) {
     const seconds = parseInt(retryAfterHeader, 10)
-    if (!isNaN(seconds)) {
-      return seconds * 1000
+    if (Number.isFinite(seconds)) {
+      // A zero (or negative) hint must not turn capacity retries into a hot loop.
+      return Math.max(BASE_DELAY_MS, seconds * 1000)
     }
   }
 
@@ -941,8 +942,9 @@ function getRetryAfterMs(error: APIError): number | null {
   const retryAfter = getRetryAfter(error)
   if (retryAfter) {
     const seconds = parseInt(retryAfter, 10)
-    if (!isNaN(seconds)) {
-      return seconds * 1000
+    if (Number.isFinite(seconds)) {
+      // A zero (or negative) hint must not turn capacity retries into a hot loop.
+      return Math.max(BASE_DELAY_MS, seconds * 1000)
     }
   }
   return null

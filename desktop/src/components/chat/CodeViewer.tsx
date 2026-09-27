@@ -155,7 +155,7 @@ function PrismCodeContent({
             margin: 0,
             padding: CODE_AREA_PADDING,
             fontFamily: 'var(--font-mono)',
-            fontSize: '13px',
+            fontSize: 'var(--code-viewer-font-size, 13px)',
             lineHeight: String(CODE_LINE_HEIGHT),
             whiteSpace: wrapLongLines ? 'pre-wrap' : 'pre',
             wordBreak: wrapLongLines ? 'break-word' : 'normal',
@@ -272,7 +272,7 @@ function CodeArea({
             style={{
               margin: 0,
               fontFamily: 'var(--font-mono)',
-              fontSize: '13px',
+              fontSize: 'var(--code-viewer-font-size, 13px)',
               lineHeight: String(CODE_LINE_HEIGHT),
               whiteSpace: wrapLongLines ? 'pre-wrap' : 'pre',
               wordBreak: wrapLongLines ? 'break-word' : 'normal',
@@ -311,6 +311,7 @@ export function CodeViewer({
   return (
     <div
       data-code-viewer-chrome={chrome}
+      style={{ fontFamily: 'var(--font-body)' }}
       className={
         isEmbedded
           ? 'overflow-hidden bg-[var(--color-code-bg)]'

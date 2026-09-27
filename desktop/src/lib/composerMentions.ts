@@ -12,7 +12,7 @@
 
 export type ComposerMention = {
   /** Missing kind is a legacy file reference. Drafts remain backwards compatible. */
-  kind?: 'skill' | 'plugin'
+  kind?: 'skill' | 'plugin' | 'session'
   id?: string
   description?: string
   icon?: string
@@ -146,4 +146,11 @@ export function composerReferenceToMention(reference: import('../types/composerR
     description: reference.description, icon: safeMentionIcon(reference.icon),
     modelText: reference.modelText, path: '', isDirectory: false,
   }
+}
+
+/** Only live structured pills grant a session reference; typed @text never does. */
+export function getSessionReferences(text: string, mentions: ComposerMention[]): Array<{ sessionId: string }> {
+  return [...new Set(findMentionRanges(text, mentions)
+    .filter(({ mention }) => mention.kind === 'session' && mention.id)
+    .map(({ mention }) => mention.id!))].map(sessionId => ({ sessionId }))
 }

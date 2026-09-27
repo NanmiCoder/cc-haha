@@ -96,8 +96,11 @@ export async function handleConversationsApi(
 // ============================================================================
 
 async function sendMessage(req: Request, sessionId: string): Promise<Response> {
-  // Validate session exists
-  const session = await sessionService.getSession(sessionId)
+  // Validate session exists. Materializing the full detail here would merge
+  // every linked subagent transcript just to answer a boolean; the summary
+  // reads list metadata instead (its own stream scan, but no subagent merge).
+  // Same existence gate either way: both go through `findSessionFile`.
+  const session = await sessionService.getSessionSummary(sessionId)
   if (!session) {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }

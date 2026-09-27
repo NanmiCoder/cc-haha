@@ -45,12 +45,12 @@ const officialEndpoints: Record<string, string> = {
   figma: 'https://mcp.figma.com/mcp', stripe: 'https://mcp.stripe.com',
 }
 
-test('all 54 services and tool packages have unique plugin identities and packaged icons', () => {
+test('all 55 services and tool packages have unique plugin identities and packaged icons', () => {
   expect(CONNECTORS).toHaveLength(3)
   expect(REMOTE_CONNECTORS).toHaveLength(43)
-  expect(ALL_CONNECTORS).toHaveLength(54)
-  expect(new Set(ALL_CONNECTORS.map(item => item.id)).size).toBe(54)
-  expect(new Set(ALL_CONNECTORS.map(item => item.pluginId)).size).toBe(54)
+  expect(ALL_CONNECTORS).toHaveLength(55)
+  expect(new Set(ALL_CONNECTORS.map(item => item.id)).size).toBe(55)
+  expect(new Set(ALL_CONNECTORS.map(item => item.pluginId)).size).toBe(55)
   for (const def of ALL_CONNECTORS) {
     expect(getConnectorDefinition(def.id)).toEqual(def)
     expect(def.pluginId).toBe(`office-${def.id}@haha-connectors`)

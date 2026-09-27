@@ -244,3 +244,75 @@ describe('search content index', () => {
     }
   })
 })
+
+it('bounds Chinese broad-match suggestions to distinct owners without materializing transcript bodies', async () => {
+  const { database, index } = await setup()
+  try {
+    const body = '修复中文协作问题 '.repeat(160)
+    for (let owner = 0; owner < 120; owner++) {
+      index.replaceSource(source({ path: `/fixture/${owner}.jsonl`, ownerSessionId: `owner-${owner}`,
+        ownerTranscriptPath: `/fixture/${owner}.jsonl`, modifiedAtMs: owner }),
+      Array.from({ length: 100 }, (_, line) => ({ jsonlLine: line + 1, byteStart: line * 100,
+        byteLength: 100, segmentIndex: 0, role: 'user' as const, messageId: null,
+        timestamp: null, body, normalizedBody: normalizeSearchContent(body) })))
+    }
+    index.replaceSource(source({ path: '/fixture/subagent.jsonl', ownerSessionId: 'owner-119',
+      ownerTranscriptPath: '/fixture/119.jsonl', modifiedAtMs: 119 }), [{ jsonlLine: 1,
+      byteStart: 0, byteLength: 100, segmentIndex: 0, role: 'assistant', messageId: null,
+      timestamp: null, body, normalizedBody: normalizeSearchContent(body) }])
+    expect(index.querySessionSuggestions('修复', 20)).toBeNull()
+    index.setReadiness({ state: 'ready', discovered: 121, indexed: 121 })
+    const start = performance.now()
+    const result = index.querySessionSuggestions('修复', 20)!
+    const elapsed = performance.now() - start
+    console.log(`[suggestion benchmark] 12001 matching Chinese documents: ${elapsed.toFixed(1)}ms, ${JSON.stringify(result).length} response chars`)
+    expect(result.sessions).toHaveLength(20)
+    expect(result.truncated).toBe(true)
+    expect(new Set(result.sessions.map(row => row.ownerSessionId)).size).toBe(20)
+    expect(result.sessions[0]?.ownerSessionId).toBe('owner-119')
+    expect(JSON.stringify(result)).not.toContain('修复')
+    expect(elapsed).toBeLessThan(1000)
+    expect(index.querySessionSuggestions('中文协作', 5)?.sessions).toHaveLength(5)
+    expect(index.querySessionSuggestions('不存在', 5)?.sessions).toHaveLength(0)
+  } finally { database.close() }
+})
+
+it('scans global FTS once for common and rare long queries across a thousand sources', async () => {
+  const { database, index } = await setup()
+  try {
+    for (let owner = 0; owner < 1000; owner++) {
+      const body = '修复一下这些中文协作问题 '.repeat(80) + (owner === 999 ? '稀有字符串专用' : '')
+      index.replaceSource(source({ path: `/fixture/${owner}.jsonl`, ownerSessionId: `owner-${owner}`,
+        ownerTranscriptPath: `/fixture/${owner}.jsonl`, modifiedAtMs: owner }),
+      Array.from({ length: 10 }, (_, line) => ({ jsonlLine: line + 1, byteStart: line * 100,
+        byteLength: 100, segmentIndex: 0, role: 'user' as const, messageId: null,
+        timestamp: null, body, normalizedBody: normalizeSearchContent(body) })))
+    }
+    index.setReadiness({ state: 'ready', discovered: 1000, indexed: 1000 })
+    const plans: string[][] = []
+    const inspected = createSearchContentIndex({ ...database,
+      read: operation => database.read(reader => operation({ ...reader,
+        all: (sql, ...bindings) => {
+          if (sql.includes('search_documents_fts MATCH')) {
+            plans.push(reader.all<{ detail: string }>(`EXPLAIN QUERY PLAN ${sql}`, ...bindings).map(row => row.detail))
+          }
+          return reader.all(sql, ...bindings)
+        },
+      })),
+    }, { scope: index.getReadiness()!.scope })
+    for (const [query, count] of [['修复一下', 60], ['稀有字符串专用', 1]] as const) {
+      const start = performance.now()
+      const result = inspected.querySessionSuggestions(query, 60)!
+      console.log(`[FTS suggestion benchmark] 1000 sources / 10000 documents, ${query}: ${(performance.now() - start).toFixed(1)}ms`)
+      expect(result.sessions).toHaveLength(count)
+      expect(result.sessions[0]?.ownerSessionId).toBe('owner-999')
+      expect(result.truncated).toBe(count === 60)
+      expect(new Set(result.sessions.map(item => item.ownerSessionId)).size).toBe(count)
+    }
+    expect(plans).toHaveLength(2)
+    for (const plan of plans) {
+      expect(plan.some(step => step.includes('CORRELATED'))).toBe(false)
+      expect(plan.filter(step => step.includes('search_documents_fts'))).toHaveLength(1)
+    }
+  } finally { database.close() }
+})

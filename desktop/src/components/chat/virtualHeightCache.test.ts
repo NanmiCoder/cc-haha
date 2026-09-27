@@ -26,6 +26,17 @@ describe('virtualHeightCache', () => {
     expect(getHeightsForSession('s2').get('x')).toBe(99)
   })
 
+  it('invalidates an inactive session on return after reading preferences change', () => {
+    const first = getHeightsForSession('first', 'system:14:standard')
+    first.set('row', 200)
+    getHeightsForSession('second', 'system:14:standard').set('row', 300)
+    getHeightsForSession('second', 'serif:24:wide')
+    expect(getHeightsForSession('first', 'serif:24:wide')).toBe(first)
+    expect(first.size).toBe(0)
+    first.set('row', 400)
+    expect(getHeightsForSession('first', 'serif:24:wide').get('row')).toBe(400)
+  })
+
   it('evicts the least recently used session beyond the LRU bound', () => {
     for (let i = 0; i < 18; i++) {
       getHeightsForSession(`session-${i}`).set('marker', i)

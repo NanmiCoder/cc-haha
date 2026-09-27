@@ -15,6 +15,7 @@ import {
   inferTaskOwner,
   layoutWorkbenchTasks,
   parseWorkbenchMessageBody,
+  resolveMemberModel,
   resolveTeamMemberIdentity,
   taskOwnedByMember,
   type MemberWorkState,
@@ -437,6 +438,7 @@ function MemberNode({
   hasActiveMessage,
   waitingDependency,
   leadStatus,
+  leadModel,
   onSelect,
   t,
 }: {
@@ -445,10 +447,12 @@ function MemberNode({
   hasActiveMessage: boolean
   waitingDependency?: string
   leadStatus?: string
+  leadModel?: string
   onSelect: () => void
   t: TranslationFn
 }) {
   const { member, isLead, centerX, accent, workState: state } = position
+  const model = resolveMemberModel(member, isLead ? undefined : leadModel)
   const top = isLead ? LEAD_TOP : MEMBER_TOP
   const avatarSize = isLead ? 96 : 84
   const identityWidth = isLead ? 28 : 24
@@ -519,6 +523,16 @@ function MemberNode({
         <span className="truncate font-mono text-[10.5px] font-extrabold text-[var(--color-text-primary)]">
           {memberName(member)}
         </span>
+        {model ? (
+          <span
+            className="max-w-[54px] shrink-0 truncate rounded-full border border-[var(--color-border)] px-1.5 py-px text-[9px] font-extrabold text-[var(--color-text-tertiary)]"
+            title={model.full}
+            data-testid={`agent-teams-canvas-member-model-${member.agentId}`}
+            data-model-inherited={model.inherited ? 'true' : 'false'}
+          >
+            {model.label}
+          </span>
+        ) : null}
         {isLead ? (
           <span className="shrink-0 rounded-full border border-[var(--color-brand)] bg-[var(--color-brand-soft)] px-1.5 py-px text-[9px] font-extrabold text-[var(--color-brand)]">
             {t('agentTeams.leader')}
@@ -714,6 +728,7 @@ export function AgentTeamsCanvas({
   const leadMember = uniqueMembers.find(member => member.agentId === snapshot.team.leadAgentId)
     ?? uniqueMembers.find(member => aliases(member.name).includes('team-lead'))
     ?? uniqueMembers[0]
+  const leadModel = leadMember?.model
   const workers = uniqueMembers.filter(member => member !== leadMember)
   const naturalWidth = Math.max(CANVAS_MIN_WIDTH, 460 + Math.max(0, workers.length - 1) * MEMBER_PITCH)
   const layout = useMemo(
@@ -1033,6 +1048,7 @@ export function AgentTeamsCanvas({
               hasActiveMessage={activeParticipants.has(position.member.agentId)}
               waitingDependency={waitingDependency}
               leadStatus={position.isLead ? leadStatusLabel(snapshot, t) : undefined}
+              leadModel={leadModel}
               onSelect={() => onSelectMember(position.member, position.isLead)}
               t={t}
             />

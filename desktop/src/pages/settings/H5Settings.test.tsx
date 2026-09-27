@@ -101,11 +101,12 @@ it('routes the actual Settings page to the browser-safe panels', async () => {
   expect(await screen.findByTestId('provider-fixture-provider')).toBeInTheDocument()
 })
 
-it.each([true, false])('wraps the long beta environment variable only in browser forms (browserMode=%s)', async (browserMode) => {
+it.each([true, false])('shows beta details on focus without overflowing narrow forms (browserMode=%s)', async (browserMode) => {
   render(<ProviderSettings browserMode={browserMode} />)
   fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
-  const description = within(screen.getByRole('dialog')).getByText(/CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1/)
-  // At 320px the checkbox description has less than 180px available. This
-  // unbroken identifier previously expanded the modal's horizontal scroll area.
-  expect(description.classList.contains('[overflow-wrap:anywhere]')).toBe(browserMode)
+  expect(screen.queryByText(/CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1/)).not.toBeInTheDocument()
+  fireEvent.focus(within(screen.getByRole('dialog')).getByRole('button', { name: 'Disable experimental beta headers' }))
+  const description = await screen.findByRole('tooltip')
+  expect(description).toHaveTextContent('CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1')
+  expect(description.classList.contains('[overflow-wrap:anywhere]')).toBe(true)
 })

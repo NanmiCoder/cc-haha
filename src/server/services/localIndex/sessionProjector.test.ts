@@ -18,6 +18,8 @@ import { openLocalIndexDatabase } from './database.js'
 import { createSessionIndex, type SessionIndex } from './sessionIndex.js'
 import {
   SESSION_SUMMARY_PARSER_VERSION,
+  MAX_PROJECTION_RECORD_BYTES,
+  MAX_PROJECTION_RECORDS,
   createSessionProjector,
   type SessionSourceCandidate,
 } from './sessionProjector.js'
@@ -86,6 +88,82 @@ async function sourceHash(path: string): Promise<string> {
 }
 
 describe('session projector', () => {
+  it('persists an immediate title patch without waiting for transcript reprojection', async () => {
+    const root = await createTempDir('projector-title-patch')
+    const databasePath = join(root, 'index.sqlite')
+    const placeholder = await createCandidate({
+      root,
+      projectPath: '-repo-placeholder',
+      sessionId: 'titled-child',
+      content: line(user('Initial child title', '2026-01-01T00:00:00Z')),
+    })
+    const moved = await createCandidate({
+      root,
+      projectPath: '-repo-worktree',
+      sessionId: 'titled-child',
+      content: line(user('Initial child title', '2026-01-01T00:00:01Z')),
+    })
+    const database = openLocalIndexDatabase({ path: databasePath })
+    const index = createSessionIndex(database)
+    try {
+      const projector = createSessionProjector({ database, index, scope: root })
+      expect((await projector.projectSource(placeholder)).kind).toBe('indexed')
+      expect((await projector.projectSource(moved)).kind).toBe('indexed')
+      await appendFile(moved.path, line({
+        type: 'custom-title',
+        customTitle: '最终子会话标题',
+      }))
+
+      expect(index.updateSessionTitle?.(moved.sessionId, '最终子会话标题')).toBe(true)
+    } finally {
+      database.close()
+    }
+
+    const restarted = openLocalIndexDatabase({ path: databasePath })
+    try {
+      const sessions = createSessionIndex(restarted).listSessions().sessions
+      expect(sessions).toHaveLength(2)
+      expect(sessions.every(session => session.title === '最终子会话标题')).toBe(true)
+    } finally {
+      restarted.close()
+    }
+  })
+
+  it('rejects oversized records before concatenation and preserves the canonical file', async () => {
+    const root = await createTempDir('projector-record-budget')
+    const candidate = await createCandidate({ root, projectPath: '-repo', sessionId: 'large', content: line(user('x'.repeat(MAX_PROJECTION_RECORD_BYTES + 1), '2026-01-01T00:00:00Z')) })
+    const before = await sourceHash(candidate.path)
+    const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+    try {
+      const projector = createSessionProjector({ database, index: createSessionIndex(database), scope: root })
+      await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
+      expect(await sourceHash(candidate.path)).toBe(before)
+    } finally { database.close() }
+  })
+
+  it('bounds locator and reducer growth for arbitrarily many tiny records', async () => {
+    const root = await createTempDir('projector-count-budget')
+    const candidate = await createCandidate({ root, projectPath: '-repo', sessionId: 'many', content: line({ type: 'unknown' }).repeat(MAX_PROJECTION_RECORDS + 1) })
+    const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+    try {
+      const projector = createSessionProjector({ database, index: createSessionIndex(database), scope: root })
+      await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
+    } finally { database.close() }
+  })
+
+  it('keeps the record budget across incremental appends', async () => {
+    const root = await createTempDir('projector-append-budget')
+    const item = line({ type: 'unknown' })
+    const candidate = await createCandidate({ root, projectPath: '-repo', sessionId: 'append', content: item.repeat(MAX_PROJECTION_RECORDS) })
+    const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+    try {
+      const projector = createSessionProjector({ database, index: createSessionIndex(database), scope: root })
+      expect((await projector.projectSource(candidate)).kind).toBe('indexed')
+      await appendFile(candidate.path, item)
+      await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
+    } finally { database.close() }
+  })
+
   it('fully builds without changing JSONL and preserves malformed/pending semantics', async () => {
     const root = await createTempDir('projector-full')
     const candidate = await createCandidate({
@@ -349,7 +427,7 @@ describe('session projector', () => {
       expect(result.projection.summary).not.toHaveProperty('sessionApiFormat')
       expect(database.read(operation => operation.get<{ parser_version: number }>(
         'SELECT parser_version FROM source_files WHERE path = ?', candidate.path,
-      )?.parser_version)).toBe(6)
+      )?.parser_version)).toBe(SESSION_SUMMARY_PARSER_VERSION)
       expect(database.read(operation => operation.get<{ session_api_format: string }>(
         'SELECT session_api_format FROM sessions WHERE transcript_path = ?', candidate.path,
       )?.session_api_format)).toBe('unknown')
@@ -900,4 +978,53 @@ describe('session projector', () => {
       database.close()
     }
   })
+  it('rejects oversized retained identities while accepting large discarded bodies', async () => {
+    const root = await createTempDir('metadata-budget')
+    const candidate = await createCandidate({ root, projectPath: '-repo-a', sessionId: 'metadata',
+      content: line({ ...user('x'.repeat(2 * 1024 * 1024), '2026-01-01T00:00:00.000Z'), uuid: 'ordinary' }),
+    })
+    const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+    const index = createSessionIndex(database)
+    const projector = createSessionProjector({ database, index, scope: root })
+    try {
+      expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'indexed' })
+      await appendFile(candidate.path, line({ ...user('small', '2026-01-01T00:00:01.000Z'), uuid: 'x'.repeat(4097) }))
+      await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
+    } finally { database.close() }
+  })
+
+  it('enforces aggregate retained metadata across appended windows', async () => {
+    const root = await createTempDir('metadata-total-budget')
+    const record = (index: number) => line({ ...user('small', '2026-01-01T00:00:00.000Z'), uuid: `${index}:` + 'x'.repeat(3000) })
+    const candidate = await createCandidate({ root, projectPath: '-repo-a', sessionId: 'metadata-total',
+      content: Array.from({ length: 3000 }, (_, index) => record(index)).join(''),
+    })
+    const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+    const index = createSessionIndex(database)
+    const projector = createSessionProjector({ database, index, scope: root })
+    try {
+      expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'indexed' })
+      await appendFile(candidate.path, Array.from({ length: 3000 }, (_, index) => record(index + 3000)).join(''))
+      await expect(projector.projectSource(candidate)).rejects.toMatchObject({ code: 'LOCAL_INDEX_SOURCE_LIMIT' })
+    } finally { database.close() }
+  })
+
+})
+
+it('excludes desktop team workers from sidebar pages while retaining indexed transcript lookup', async () => {
+  const root = await createTempDir('team-worker-sidebar')
+  const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+  const index = createSessionIndex(database)
+  try {
+    const projector = createSessionProjector({ database, index, scope: root })
+    const worker = await createCandidate({ root, projectPath: '-repo', sessionId: 'worker-session', content: line({ ...user('worker work', '2026-01-03T00:00:00Z'), entrypoint: 'claude-desktop-team-worker', teamName: 'team', agentName: 'worker' }) })
+    const ordinary = await createCandidate({ root, projectPath: '-repo', sessionId: 'ordinary-session', content: line({ ...user('ordinary', '2026-01-02T00:00:00Z'), teamName: 'team', agentName: 'legacy-agent' }) })
+    const sibling = await createCandidate({ root, projectPath: '-repo', sessionId: 'sibling-session', content: line({ ...user('sibling', '2026-01-01T00:00:00Z'), entrypoint: 'claude-desktop' }) })
+    for (const candidate of [worker, ordinary, sibling]) await projector.projectSource(candidate)
+    expect(index.listSessions({ limit: 1 }).sessions.map(item => item.id)).toEqual(['ordinary-session'])
+    expect(index.listSessions({ project: '-repo', limit: 1, offset: 1 }).sessions.map(item => item.id)).toEqual(['sibling-session'])
+    expect(index.listSessions().total).toBe(2)
+    expect(index.findSessionFiles('worker-session')).toHaveLength(1)
+    expect(index.getSession?.('worker-session')?.id).toBe('worker-session')
+  } finally { database.close() }
 })

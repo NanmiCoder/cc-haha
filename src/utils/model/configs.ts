@@ -110,6 +110,22 @@ export const CLAUDE_OPUS_4_6_CONFIG = {
   azureOpenAI: 'claude-opus-4-7',
 } as const satisfies ModelConfig
 
+export const CLAUDE_OPUS_5_CONFIG = {
+  firstParty: 'claude-opus-5',
+  bedrock: 'anthropic.claude-opus-5',
+  vertex: 'claude-opus-5',
+  foundry: 'claude-opus-5',
+  azureOpenAI: 'claude-opus-5',
+} as const satisfies ModelConfig
+
+export const CLAUDE_OPUS_5_5_CONFIG = {
+  firstParty: 'claude-opus-5-5',
+  bedrock: 'us.anthropic.claude-opus-5-5',
+  vertex: 'claude-opus-5-5',
+  foundry: 'claude-opus-5-5',
+  azureOpenAI: 'claude-opus-5-5',
+} as const satisfies ModelConfig
+
 export const CLAUDE_OPUS_4_8_CONFIG = {
   firstParty: 'claude-opus-4-8',
   bedrock: 'anthropic.claude-opus-4-8',
@@ -167,6 +183,8 @@ export const ALL_MODEL_CONFIGS = {
   opus45: CLAUDE_OPUS_4_5_CONFIG,
   opus46: CLAUDE_OPUS_4_6_CONFIG,
   opus48: CLAUDE_OPUS_4_8_CONFIG,
+  opus50: CLAUDE_OPUS_5_CONFIG,
+  opus55: CLAUDE_OPUS_5_5_CONFIG,
   gpt52codex: GPT_5_2_CODEX_CONFIG,
   gpt53codex: GPT_5_3_CODEX_CONFIG,
   gpt54codex: GPT_5_4_CODEX_CONFIG,

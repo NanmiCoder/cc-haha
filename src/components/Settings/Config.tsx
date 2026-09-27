@@ -27,7 +27,7 @@ import { Dialog } from '../design-system/Dialog.js';
 import { Select } from '../CustomSelect/index.js';
 import { OutputStylePicker } from '../OutputStylePicker.js';
 import { LanguagePicker } from '../LanguagePicker.js';
-import { getExternalClaudeMdIncludes, getMemoryFiles, hasExternalClaudeMdIncludes } from 'src/utils/claudemd.js';
+import { clearMemoryFileCaches, getExternalClaudeMdIncludes, getMemoryFiles, hasExternalClaudeMdIncludes } from 'src/utils/claudemd.js';
 import { KeyboardShortcutHint } from '../design-system/KeyboardShortcutHint.js';
 import { ConfigurableShortcutHint } from '../ConfigurableShortcutHint.js';
 import { Byline } from '../design-system/Byline.js';
@@ -44,11 +44,12 @@ import type { LocalJSXCommandContext, CommandResultDisplay } from '../../command
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js';
 import { getCliTeammateModeOverride, clearCliTeammateModeOverride } from '../../utils/swarm/backends/teammateModeSnapshot.js';
-import { getHardcodedTeammateModelFallback } from '../../utils/swarm/teammateModel.js';
 import { useSearchInput } from '../../hooks/useSearchInput.js';
 import { useTerminalSize } from '../../hooks/useTerminalSize.js';
 import { clearFastModeCooldown, FAST_MODE_MODEL_DISPLAY, isFastModeAvailable, isFastModeEnabled, getFastModeModel, isFastModeSupportedByModel } from '../../utils/fastMode.js';
 import { isFullscreenEnvEnabled } from '../../utils/fullscreen.js';
+import { getUserContext } from '../../context.js';
+import { getInstructionFilesMode, INSTRUCTION_FILE_MODES, INSTRUCTION_FILES_PLUGIN, instructionFilesSettingsPatch } from '../../utils/instructionFiles.js';
 type Props = {
   onClose: (result?: string, options?: {
     display?: CommandResultDisplay;
@@ -190,9 +191,10 @@ export function Config({
   });
 
   // Tell the parent when Config's own Esc handler is active so Settings cedes
-  // confirm:no. Only true when search mode owns the keyboard — not when the
-  // tab header is focused (then Settings must handle Esc-to-close).
-  const ownsEsc = isSearchMode && !headerFocused;
+  // confirm:no. Config owns both search and list input: list Escape must
+  // revert immediate settings writes before closing. The tab header still
+  // delegates Escape to Settings.
+  const ownsEsc = !headerFocused;
   React.useEffect(() => {
     onIsSearchModeChange?.(ownsEsc);
   }, [ownsEsc, onIsSearchModeChange]);
@@ -433,6 +435,22 @@ export function Config({
       });
     }
   }] : []), {
+    id: 'instructionFiles',
+    label: 'Project instructions',
+    value: getInstructionFilesMode(),
+    options: [...INSTRUCTION_FILE_MODES],
+    type: 'enum' as const,
+    onChange(value: string) {
+      const result = updateSettingsForSource('userSettings', instructionFilesSettingsPatch(value));
+      if (result.error) {
+        logError(result.error);
+        return;
+      }
+      clearMemoryFileCaches();
+      getUserContext.cache.clear?.();
+      setSettingsData(getInitialSettings());
+    }
+  }, {
     id: 'workflows',
     label: 'Dynamic workflows',
     value: settingsData?.disableWorkflows === true ? false : settingsData?.enableWorkflows ?? true,
@@ -1250,6 +1268,9 @@ export function Config({
       outputStyle: il?.outputStyle
     });
     const iu = initialUserSettings;
+    updateSettingsForSource('userSettings', instructionFilesSettingsPatch(iu?.pluginConfigs?.[INSTRUCTION_FILES_PLUGIN]?.options?.instructionFiles as string | undefined, iu?.pluginConfigs?.[INSTRUCTION_FILES_PLUGIN]?.options?.projectInstructions as string | undefined));
+    clearMemoryFileCaches();
+    getUserContext.cache.clear?.();
     updateSettingsForSource('userSettings', {
       alwaysThinkingEnabled: iu?.alwaysThinkingEnabled,
       fastMode: iu?.fastMode,
@@ -1540,8 +1561,8 @@ export function Config({
         setShowSubmenu(null);
         setTabsHidden(false);
         // First-open-then-Enter from unset: picker highlights "Default"
-        // (initial=null) and confirming would write null, silently
-        // switching Opus-fallback → follow-leader. Treat as no-op.
+        // (initial=null) and confirming would write null. Unset already
+        // follows the leader, so treat as no-op.
         if (globalConfig.teammateDefaultModel === undefined && model_1 === null) {
           return;
         }
@@ -1789,10 +1810,7 @@ export function Config({
     </Box>;
 }
 function teammateModelDisplayString(value: string | null | undefined): string {
-  if (value === undefined) {
-    return modelDisplayString(getHardcodedTeammateModelFallback());
-  }
-  if (value === null) return "Default (leader's model)";
+  if (value === undefined || value === null) return "Default (leader's model)";
   return modelDisplayString(value);
 }
 const THEME_LABELS: Record<string, string> = {

@@ -101,9 +101,9 @@ export function modelSupportsThinking(model: string): boolean {
   // IMPORTANT: Do not change thinking support without notifying the model
   // launch DRI and research. This can greatly affect model quality and bashing.
   const canonical = getCanonicalName(model)
-  // Fable uses always-on adaptive thinking. Keep this after the provider
+  // Fable and Opus 5.5 use always-on adaptive thinking. Keep this after the provider
   // capability override so an explicitly incompatible 3P route can opt out.
-  if (canonical.includes('claude-fable-5')) {
+  if (canonical.includes('claude-fable-5') || canonical === 'claude-opus-5-5') {
     return true
   }
   const provider = getAPIProvider()
@@ -126,7 +126,8 @@ export function modelRequiresThinking(model: string): boolean {
   if (required3P !== undefined) {
     return required3P
   }
-  return getCanonicalName(model).includes('claude-fable-5')
+  const canonical = getCanonicalName(model)
+  return canonical.includes('claude-fable-5') || canonical === 'claude-opus-5-5'
 }
 
 /** Fable 5.1 binds replayed thinking to the preceding system, tools and history. */
@@ -153,9 +154,9 @@ export function modelSupportsAdaptiveThinking(model: string): boolean {
     return supported3P
   }
   const canonical = getCanonicalName(model)
-  // Fable rejects disabled/manual thinking and always uses adaptive thinking.
+  // Fable and Opus 5.5 reject disabled/manual thinking and require adaptive thinking.
   // Explicit 3P capability declarations above remain authoritative.
-  if (canonical.includes('claude-fable-5')) {
+  if (canonical.includes('claude-fable-5') || canonical === 'claude-opus-5-5') {
     return true
   }
   const provider = getAPIProvider()
@@ -169,6 +170,7 @@ export function modelSupportsAdaptiveThinking(model: string): boolean {
   // Supported by current Claude Code flagship models.
   if (
     canonical.includes('sonnet-5') ||
+    canonical.includes('opus-5') ||
     canonical.includes('opus-4-8') ||
     canonical.includes('opus-4-7') ||
     canonical.includes('opus-4-6') ||

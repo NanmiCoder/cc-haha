@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   classifyH5Request,
+  resolveTrustedRendererOrigin,
   isLocalCredentialOnlyPath,
   isLoopbackHost,
   requiresLocalAccessCredential,
@@ -16,6 +17,22 @@ const localContext = { clientAddress: '127.0.0.1' }
 const remoteContext = { clientAddress: '192.168.0.44' }
 
 describe('h5AccessPolicy', () => {
+  test('validates the development renderer origin before granting a preflight exception', () => {
+    expect(resolveTrustedRendererOrigin('http://localhost:1420/app')).toBe('http://localhost:1420')
+    for (const value of [undefined, '', 'invalid', 'file://', 'https://remote.example', 'http://user:pass@localhost:1420']) {
+      expect(resolveTrustedRendererOrigin(value)).toBeNull()
+    }
+    const request = req('http://127.0.0.1:3456/api/settings', {
+      method: 'OPTIONS',
+      headers: { Origin: 'http://localhost:1420', 'Access-Control-Request-Method': 'GET' },
+    })
+    const context = { ...localContext, localAccessTokenConfigured: true, trustedRendererOrigin: 'http://localhost:1420' }
+    expect(classifyH5Request(request, new URL(request.url), context)).toBe('local-trusted')
+    expect(classifyH5Request(request, new URL(request.url), { ...context, ...remoteContext })).toBe('h5-browser')
+    request.headers.set('X-Forwarded-For', '192.168.0.44')
+    expect(classifyH5Request(request, new URL(request.url), context)).toBe('h5-browser')
+  })
+
   test('recognizes loopback hosts as local trusted requests', () => {
     expect(isLoopbackHost('localhost')).toBe(true)
     expect(isLoopbackHost('127.0.0.1')).toBe(true)

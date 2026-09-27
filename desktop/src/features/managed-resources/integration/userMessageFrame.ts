@@ -25,6 +25,7 @@ export type UserMessageFrame = {
   content: string
   /** Passed through verbatim, including `undefined` — the pre-M7 frame shape. */
   attachments?: AttachmentRef[]
+  sessionReferences?: Array<{ sessionId: string }>
   requestId?: string
   contextTicket?: ContextTicketRef
 }
@@ -32,6 +33,7 @@ export type UserMessageFrame = {
 export function buildUserMessageFrame(input: {
   content: string
   attachments?: AttachmentRef[]
+  sessionReferences?: Array<{ sessionId: string }>
   submission?: ManagedContextSubmission | null
   /** Present once the renderer has staged the selection on the sidecar. */
   ticket?: ContextTicketRef | null
@@ -39,12 +41,16 @@ export function buildUserMessageFrame(input: {
   if (!input.submission) {
     // No selection: the original frame, key for key (`JSON.stringify` drops the
     // `undefined` attachments exactly as it did before this batch).
-    return { type: 'user_message', content: input.content, attachments: input.attachments }
+    return {
+      type: 'user_message', content: input.content, attachments: input.attachments,
+      ...(input.sessionReferences?.length ? { sessionReferences: input.sessionReferences } : {}),
+    }
   }
   return {
     type: 'user_message',
     content: input.content,
     requestId: input.submission.submissionId,
+    ...(input.sessionReferences?.length ? { sessionReferences: input.sessionReferences } : {}),
     ...(input.ticket ? {
       contextTicket: {
         ticketId: input.ticket.ticketId,

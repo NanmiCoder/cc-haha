@@ -6,7 +6,7 @@ import type { AgentColorName } from '../../../tools/AgentTool/agentColorManager.
  * - 'iterm2': Uses iTerm2 native split panes via the it2 CLI
  * - 'in-process': Runs teammate in the same Node.js process with isolated context
  */
-export type BackendType = 'tmux' | 'iterm2' | 'in-process'
+export type BackendType = 'tmux' | 'iterm2' | 'in-process' | 'process'
 
 /**
  * Subset of BackendType for pane-based backends only.

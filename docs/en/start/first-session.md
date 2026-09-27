@@ -13,7 +13,7 @@ Your model is connected. Now let it actually do something. Find a project you do
 
 Click "New session" in the sidebar, or press `Cmd/Ctrl + N`.
 
-![Empty session, with permission mode, launch location, and model controls in the composer](../../images/app/en/session-new.webp)
+![Empty session, with permission mode, launch location, and model controls in the composer (Chinese interface)](../../images/app/en/session-new.webp)
 
 Look at the row along the bottom of the composer: `+` for attachments, then **permission mode**, **launch location**, **model and effort**, and finally "Run".
 
@@ -25,7 +25,7 @@ If the folder is a Git repository, the same pill also lets you choose a branch a
 
 Click the permission mode button and all five levels open up.
 
-![The five permission modes](../../images/app/en/permission-modes.webp)
+![The five permission modes (Chinese interface)](../../images/app/en/permission-modes.webp)
 
 | Mode | What the app says it does |
 |---|---|
@@ -68,7 +68,7 @@ Press `Enter` to send (`Shift + Enter` for a newline).
 
 ## 4. Watch it work
 
-![A full turn: collapsed tool calls, thinking, a permission prompt, an inline diff](../../images/app/en/session-main.webp)
+![A release-notes conversation in the real project, with tool calls and the session list (Chinese interface)](../../images/app/en/session-main.webp)
 
 It orients itself before it starts editing, and you'll see several kinds of card go by:
 

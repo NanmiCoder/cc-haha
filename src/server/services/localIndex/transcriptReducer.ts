@@ -73,6 +73,7 @@ type ReducerEntry = {
 }
 
 type ReducerState = {
+  isTeamWorker: boolean
   fallbackCreatedAt: string
   fallbackModifiedAt: string
   fallbackWorkDir: string | null
@@ -121,6 +122,7 @@ type ReducerState = {
 
 export type TranscriptReductionOptions = {
   isSubagent?: boolean
+  validateRetainedMetadata?: (entry: Record<string, unknown>) => void
 }
 
 const projectionStates = new WeakMap<TranscriptProjection, ReducerState>()
@@ -252,6 +254,7 @@ function createInitialState(
     runtimeProviderId: undefined,
     runtimeModelId: undefined,
     effortLevel: undefined,
+    isTeamWorker: false,
     repository: undefined,
     worktreeSession: undefined,
     nextOrdinal: 0,
@@ -510,6 +513,7 @@ function applyActivityEntry(state: ReducerState, entry: ReducerEntry): void {
 }
 
 function applyEntry(state: ReducerState, entry: ReducerEntry): void {
+  if (entry.entrypoint === 'claude-desktop-team-worker') state.isTeamWorker = true
   applyActivityEntry(state, entry)
   if (!state.hasCreatedAt && entry.timestamp) {
     state.createdAt = entry.timestamp
@@ -616,6 +620,7 @@ function summaryFromState(state: ReducerState): SessionListSummary {
       : {}),
     ...(state.runtimeModelId ? { runtimeModelId: state.runtimeModelId } : {}),
     ...(state.effortLevel ? { effortLevel: state.effortLevel } : {}),
+    ...(state.isTeamWorker ? { isTeamWorker: true } : {}),
     ...(state.repository ? { repository: { ...state.repository } } : {}),
     ...(state.worktreeSession !== undefined
       ? {
@@ -759,6 +764,9 @@ export function reduceTranscriptWithLocators(
     } catch {
       malformedLineCount += 1
       continue
+    }
+    if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+      options.validateRetainedMetadata?.(entry)
     }
     applyEntry(state, entry)
     const locator = locatorFromEntry(entry, chunk, state, jsonlLine)

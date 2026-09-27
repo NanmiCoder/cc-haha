@@ -1031,4 +1031,44 @@ describe('chat blocks', () => {
     expect(screen.getByRole('button', { name: 'Allow: /outside/two.ts' })).toBeTruthy()
     expect(screen.queryByText('Responded')).toBeNull()
   })
+
+  it('labels teammate permission prompts with the member name on the lead session', () => {
+    const teammatePermission = {
+      requestId: 'perm-teammate-1',
+      toolName: 'Bash',
+      toolUseId: 'tool-teammate-1',
+      input: { command: 'ls' },
+      displayName: 'researcher',
+    }
+    useChatStore.setState({
+      sessions: {
+        'active-tab': {
+          messages: [],
+          chatState: 'permission_pending',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: teammatePermission,
+          pendingPermissions: {
+            [teammatePermission.requestId]: teammatePermission,
+          },
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    render(<PermissionDialog {...teammatePermission} />)
+
+    expect(screen.getByText('Allow researcher to run this command?')).toBeTruthy()
+  })
 })

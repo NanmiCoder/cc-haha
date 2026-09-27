@@ -31,7 +31,7 @@ function useActiveHeading(headings) {
   return active
 }
 
-export function DocToc({ headings, locale, onAnchorNavigate }) {
+export function DocToc({ headings, locale, onAnchorNavigate, progress = 0 }) {
   const active = useActiveHeading(headings)
   const scope = useRef(null)
 
@@ -58,6 +58,7 @@ export function DocToc({ headings, locale, onAnchorNavigate }) {
 
   return (
     <nav aria-label={title} className="doc-toc" ref={scope}>
+      <div className="doc-toc__reading"><span>{locale === 'en' ? 'READING PROGRESS' : '阅读进度'}</span><strong>{progress}<small>%</small></strong><div role="progressbar" aria-label={locale === 'en' ? 'Reading progress' : '阅读进度'} aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}><i style={{ width: `${progress}%` }} /></div></div>
       <div className="doc-toc__title">{title}</div>
       <ul className="doc-toc__list">
         {headings.map((heading) => (

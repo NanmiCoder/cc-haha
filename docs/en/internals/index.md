@@ -7,7 +7,7 @@ order: 0
 
 # Architecture Overview
 
-Claude Code Haha looks like one desktop app, but it is five pieces of code that each run on their own. Before reading source or opening a PR, get the boundaries straight — every other page in this section lives inside one of them.
+cc-haha looks like one desktop app, but it is five pieces of code that each run on their own. Before reading source or opening a PR, get the boundaries straight — every other page in this section lives inside one of them.
 
 ```text
 desktop/src/          Frontend — React + Zustand. Draws the UI, touches no native capability.

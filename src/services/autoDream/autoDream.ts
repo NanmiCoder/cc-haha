@@ -40,6 +40,7 @@ import {
   listSessionsTouchedSince,
   tryAcquireConsolidationLock,
   rollbackConsolidationLock,
+  completeConsolidationLock,
 } from './consolidationLock.js'
 import {
   registerDreamTask,
@@ -232,6 +233,7 @@ ${sessionIds.map(id => `- ${id}`).join('\n')}`
         onMessage: makeDreamProgressWatcher(taskId, setAppState),
       })
 
+      await completeConsolidationLock()
       completeDreamTask(taskId, setAppState)
       // Inline completion summary in the main transcript (same surface as
       // extractMemories's "Saved N memories" message).

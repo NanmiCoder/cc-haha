@@ -223,8 +223,8 @@ function getOpus46Option(fastMode = false): ModelOption {
   return {
     value: is3P ? getModelStrings().opus46 : 'opus',
     label: 'Opus',
-    description: `${is3P ? 'Opus 4.7' : 'Opus 4.8'} · Most capable for complex work${getOpus46PricingSuffix(fastMode)}`,
-    descriptionForModel: `${is3P ? 'Opus 4.7' : 'Opus 4.8'} - most capable for complex work`,
+    description: `${is3P ? 'Opus 4.7' : 'Opus 5'} · Most capable for complex work${getOpus46PricingSuffix(fastMode)}`,
+    descriptionForModel: `${is3P ? 'Opus 4.7' : 'Opus 5'} - most capable for complex work`,
   }
 }
 
@@ -242,7 +242,7 @@ export function getSonnet46_1MOption(): ModelOption {
 
 export function getOpus46_1MOption(fastMode = false): ModelOption {
   const is3P = shouldUseThirdPartyAnthropicOptions()
-  const modelName = is3P ? 'Opus 4.7' : 'Opus 4.8'
+  const modelName = is3P ? 'Opus 4.7' : 'Opus 5'
   return {
     value: is3P ? getModelStrings().opus46 + '[1m]' : 'opus[1m]',
     label: 'Opus (1M context)',
@@ -302,7 +302,7 @@ function getMaxOpusOption(fastMode = false): ModelOption {
   return {
     value: 'opus',
     label: 'Opus',
-    description: `Opus 4.8 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`,
+    description: `Opus 5 · Most capable for complex work${fastMode ? getOpus46PricingSuffix(true) : ''}`,
   }
 }
 
@@ -321,7 +321,7 @@ export function getMaxOpus46_1MOption(fastMode = false): ModelOption {
   return {
     value: 'opus[1m]',
     label: 'Opus (1M context)',
-    description: `Opus 4.8 with 1M context${billingInfo}${getOpus46PricingSuffix(fastMode)}`,
+    description: `Opus 5 with 1M context${billingInfo}${getOpus46PricingSuffix(fastMode)}`,
   }
 }
 
@@ -330,9 +330,9 @@ function getMergedOpus1MOption(fastMode = false): ModelOption {
   return {
     value: is3P ? getModelStrings().opus46 + '[1m]' : 'opus[1m]',
     label: 'Opus (1M context)',
-    description: `${is3P ? 'Opus 4.7' : 'Opus 4.8'} with 1M context · Most capable for complex work${!is3P && fastMode ? getOpus46PricingSuffix(fastMode) : ''}`,
+    description: `${is3P ? 'Opus 4.7' : 'Opus 5'} with 1M context · Most capable for complex work${!is3P && fastMode ? getOpus46PricingSuffix(fastMode) : ''}`,
     descriptionForModel:
-      `${is3P ? 'Opus 4.7' : 'Opus 4.8'} with 1M context - most capable for complex work`,
+      `${is3P ? 'Opus 4.7' : 'Opus 5'} with 1M context - most capable for complex work`,
   }
 }
 
@@ -476,8 +476,8 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
     return standardOptions
   }
 
-  // PAYG 1P API: Default (Opus 4.8) + Fable + Sonnet + Haiku.
-  // Opus 4.8 and Sonnet 5 already have native 1M context windows.
+  // PAYG 1P API: Default (Opus 5) + Fable + Sonnet + Haiku.
+  // Opus 5 and Sonnet 5 already have native 1M context windows.
   if (!shouldUseThirdPartyAnthropicOptions()) {
     const payg1POptions = [getDefaultOptionForUser(fastMode)]
     pushUniqueOption(payg1POptions, getFable5Option())

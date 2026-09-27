@@ -4,11 +4,12 @@ import { X } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 
 /** The tree collapses before the main split does, but its toolbar can always reopen it. */
-export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnNarrow = true }: {
+export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnNarrow = true, fullWidth = false }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   children: ReactNode
   collapseOnNarrow?: boolean
+  fullWidth?: boolean
 }) {
   const t = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -24,12 +25,12 @@ export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnN
       if (!entry || entry.contentRect.width === 0) return
       const next = entry.contentRect.width < 660
       setNarrow(next)
-      if (next && !wasNarrow && collapseOnNarrow) onOpenChange(false)
+      if (next && !wasNarrow && collapseOnNarrow && !fullWidth) onOpenChange(false)
       wasNarrow = next
     })
     observer.observe(parent)
     return () => observer.disconnect()
-  }, [collapseOnNarrow, onOpenChange])
+  }, [collapseOnNarrow, fullWidth, onOpenChange])
 
   useEffect(() => {
     const move = (event: PointerEvent) => {
@@ -46,26 +47,28 @@ export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnN
     }
   }, [])
 
+  const overlay = narrow && !fullWidth
+
   return (
     <div
       ref={ref}
       data-testid="workspace-tree-sidebar"
-      data-overlay={narrow}
+      data-overlay={overlay}
       hidden={!open}
-      className={`${open ? 'flex' : 'hidden'} min-h-0 shrink-0 flex-col bg-[var(--color-surface)] ${narrow ? 'absolute inset-y-0 right-0 z-[var(--z-drawer)] shadow-[var(--shadow-dropdown)]' : 'relative'}`}
-      style={{ width, maxWidth: narrow ? '85%' : '48%' }}
+      className={`${open ? 'flex' : 'hidden'} min-h-0 shrink-0 flex-col bg-[var(--color-surface)] ${overlay ? 'absolute inset-y-0 right-0 z-[var(--z-drawer)] shadow-[var(--shadow-dropdown)]' : 'relative'}`}
+      style={{ width: fullWidth ? '100%' : width, maxWidth: fullWidth ? '100%' : overlay ? '85%' : '48%' }}
       onKeyDown={(event) => {
-        if (open && narrow && event.key === 'Escape') {
+        if (open && overlay && event.key === 'Escape') {
           event.preventDefault()
           event.stopPropagation()
           onOpenChange(false)
         }
       }}
     >
-      {narrow ? <div className="flex shrink-0 justify-end border-b border-[var(--color-border)] px-2 py-1">
+      {overlay ? <div className="flex shrink-0 justify-end border-b border-[var(--color-border)] px-2 py-1">
         <IconButton icon={<X size={14} />} size="xs" tone="muted" label={t('common.close')} data-testid="workspace-tree-overlay-close" onClick={() => onOpenChange(false)} />
       </div> : null}
-        <div
+        {!fullWidth ? <div
           role="separator"
           aria-orientation="vertical"
           aria-label={t('workspace.resizePanel')}
@@ -85,7 +88,7 @@ export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnN
           }}
           onDoubleClick={() => setWidth(300)}
           className="absolute inset-y-0 -left-1 w-2 cursor-col-resize outline-none focus-visible:bg-[var(--color-border-focus)]"
-        />
+        /> : null}
         {children}
     </div>
   )

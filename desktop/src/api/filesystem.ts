@@ -1,4 +1,4 @@
-import { api } from './client'
+import { api, type ApiRequestOptions } from './client'
 
 type DirEntry = {
   name: string
@@ -15,17 +15,17 @@ type BrowseResult = {
 }
 
 export const filesystemApi = {
-  browse(path?: string, options?: { includeFiles?: boolean }) {
+  browse(path?: string, options?: { includeFiles?: boolean } & ApiRequestOptions) {
     const q = new URLSearchParams()
     if (path) q.set('path', path)
     if (options?.includeFiles) q.set('includeFiles', 'true')
     const qs = q.toString()
-    return api.get<BrowseResult>(`/api/filesystem/browse${qs ? `?${qs}` : ''}`)
+    return api.get<BrowseResult>(`/api/filesystem/browse${qs ? `?${qs}` : ''}`, options)
   },
 
-  search(query: string, cwd?: string) {
+  search(query: string, cwd?: string, options?: ApiRequestOptions) {
     const q = new URLSearchParams({ search: query, maxResults: '200', includeFiles: 'true' })
     if (cwd) q.set('path', cwd)
-    return api.get<BrowseResult>(`/api/filesystem/browse?${q}`)
+    return api.get<BrowseResult>(`/api/filesystem/browse?${q}`, options)
   },
 }

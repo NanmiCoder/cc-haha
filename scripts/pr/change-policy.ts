@@ -177,7 +177,7 @@ const policyExactPaths = new Set([
 
 const docsExactPaths = new Set([
   'README.md',
-  'README.en.md',
+  'README.zh-CN.md',
   'package.json',
   'package-lock.json',
   '.github/workflows/deploy-docs.yml',

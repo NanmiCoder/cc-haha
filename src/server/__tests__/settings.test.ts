@@ -945,6 +945,22 @@ describe('Models API', () => {
         context: '1m',
       },
       {
+        id: 'claude-opus-5-5',
+        name: 'Opus 5.5',
+        description: 'Best for complex agentic coding and enterprise work',
+        context: '1m',
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+      {
+        id: 'claude-opus-5',
+        name: 'Opus 5',
+        description: 'Best for complex agentic coding and enterprise work',
+        context: '1m',
+        defaultReasoningEffort: 'high',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+      {
         id: 'claude-opus-4-8',
         name: 'Opus 4.8',
         description: 'Best for complex agentic coding and enterprise work',
@@ -1161,7 +1177,7 @@ describe('Models API', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.model.id).toBe('claude-opus-4-8')
+    expect(body.model.id).toBe('claude-opus-5')
   })
 
   it('GET /api/models/current should replace the legacy opus[1m] default with the Claude OAuth Pro default', async () => {
@@ -1198,6 +1214,8 @@ describe('Models API', () => {
     expect(listBody.models.map((model: { id: string }) => model.id)).toEqual([
       'claude-fable-5-1',
       'claude-fable-5',
+      'claude-opus-5-5',
+      'claude-opus-5',
       'claude-opus-4-8',
       'claude-sonnet-5',
       'claude-haiku-4-5',
@@ -1219,8 +1237,9 @@ describe('Models API', () => {
     const body = await response.json()
 
     expect(body.model).toMatchObject({
-      id: 'claude-opus-4-8',
-      name: 'Opus 4.8',
+      id: 'claude-opus-5-5',
+      name: 'Opus 5.5',
+      defaultReasoningEffort: 'medium',
     })
   })
 
@@ -1364,6 +1383,9 @@ describe('Models API', () => {
       name: 'ChatGPT Official',
     })
     expect(body.models.map((model) => model.id)).toEqual([
+      'gpt-6-astra',
+      'gpt-6-sol',
+      'gpt-6-luna',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
@@ -1371,11 +1393,15 @@ describe('Models API', () => {
       'gpt-5.4',
       'gpt-5.5',
       'gpt-5.4-mini',
-      'gpt-6-astra',
     ])
     expect(body.models[0]).toMatchObject({
-      id: 'gpt-5.6-sol',
+      id: 'gpt-6-astra',
       defaultReasoningEffort: 'low',
+      supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+    })
+    expect(body.models[1]).toMatchObject({
+      id: 'gpt-6-sol',
+      defaultReasoningEffort: 'medium',
       supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
     })
   })
@@ -1476,10 +1502,13 @@ describe('Models API', () => {
     }
     expect(body.provider).toEqual({ id: 'grok-official', name: 'Grok Official' })
     expect(body.models.map((model) => model.id)).toEqual([
+      'grok-4.7',
+      'grok-4.7-build-fast',
       'grok-4.6',
       'grok-4.5',
-      'grok-composer-2.5-fast',
     ])
+    expect(body.models.find((model) => model.id === 'grok-4.7')?.context).toBe('500000')
+    expect(body.models.find((model) => model.id === 'grok-4.7-build-fast')?.context).toBe('500000')
     expect(body.models.find((model) => model.id === 'grok-4.6')?.context).toBe('500000')
     expect(body.models.find((model) => model.id === 'grok-4.5')?.context).toBe('500000')
   })
@@ -1545,15 +1574,15 @@ describe('Model Options', () => {
   beforeEach(setup)
   afterEach(teardown)
 
-  it('defaults Anthropic API users to Opus 4.8 and exposes the current official options once', () => {
+  it('defaults Anthropic API users to Opus 5 and exposes the current official options once', () => {
     process.env.ANTHROPIC_API_KEY = 'test-api-key'
 
-    expect(getDefaultMainLoopModelSetting()).toBe('claude-opus-4-8')
+    expect(getDefaultMainLoopModelSetting()).toBe('claude-opus-5')
 
     const options = getModelOptions()
     const values = options.map(option => option.value)
 
-    expect(options[0]?.description).toContain('Opus 4.8')
+    expect(options[0]?.description).toContain('Opus 5')
     expect(options[0]?.description).toContain('$5')
     expect(values).toContain('fable')
     expect(values).toContain('sonnet')
@@ -1595,9 +1624,9 @@ describe('Model Options', () => {
     process.env.ANTHROPIC_API_KEY = 'test-api-key'
 
     expect(getSonnet46_1MOption().description).toContain('Sonnet 5')
-    expect(getOpus46_1MOption().description).toContain('Opus 4.8')
+    expect(getOpus46_1MOption().description).toContain('Opus 5')
     expect(getMaxSonnet46_1MOption().description).toContain('Sonnet 5')
-    expect(getMaxOpus46_1MOption().description).toContain('Opus 4.8')
+    expect(getMaxOpus46_1MOption().description).toContain('Opus 5')
 
     process.env.ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic'
 
@@ -1617,11 +1646,11 @@ describe('Model Options', () => {
 
     process.env.ANTHROPIC_MODEL = 'opus'
     expect(getModelOptions().find(option => option.value === 'opus')?.description)
-      .toContain('Opus 4.8')
+      .toContain('Opus 5')
 
     process.env.ANTHROPIC_MODEL = 'opus[1m]'
     expect(getModelOptions().find(option => option.value === 'opus[1m]')?.description)
-      .toContain('Opus 4.8')
+      .toContain('Opus 5')
 
     process.env.ANTHROPIC_MODEL = 'claude-fable-5'
     expect(getModelOptions()).toContainEqual(expect.objectContaining({
@@ -1651,6 +1680,8 @@ describe('Model Options', () => {
     const labels = options.map(option => option.label)
 
     expect(values).toContain('gpt-5.3-codex')
+    expect(values).toContain('gpt-6-sol')
+    expect(values).toContain('gpt-6-luna')
     expect(values).toContain('gpt-5.6-sol')
     expect(values).toContain('gpt-5.6-terra')
     expect(values).toContain('gpt-5.6-luna')

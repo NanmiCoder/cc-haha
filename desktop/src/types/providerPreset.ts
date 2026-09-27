@@ -1,5 +1,6 @@
 import type { ApiFormat, ProviderAuthStrategy } from './provider'
 import type { ModelReasoningProviderKind } from '../../../src/shared/modelReasoning'
+import type { ModelApiFormatRule } from '../../../src/shared/modelApiFormats'
 
 export type ModelMapping = {
   main: string
@@ -28,9 +29,19 @@ export type ProviderPreset = {
   apiKeyUrl?: string
   promoText?: string
   featured?: boolean
+  isNew?: boolean
   /** Retired preset: hidden from the "add provider" choices, still resolves saved providers. */
   deprecated?: boolean
   authStrategy?: ProviderAuthStrategy
   defaultEnv?: Record<string, string>
   modelContextWindows?: Record<string, number>
+  /**
+   * Per-model protocol overrides for gateways that bind the wire format to the
+   * request path (OpenCode Go). Only the exceptions are listed; a model matching
+   * no rule uses the preset's own `apiFormat`. Display-only on this side — the
+   * server resolves the authoritative rules from its own preset bundle.
+   */
+  modelApiFormats?: ModelApiFormatRule<ApiFormat>[]
+  /** Upstream headers the proxy sends, with `$SESSION_ID` / `$VERSION` placeholders. */
+  upstreamHeaders?: Record<string, string>
 }

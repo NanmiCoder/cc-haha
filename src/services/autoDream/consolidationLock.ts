@@ -1,4 +1,6 @@
-// Lock file whose mtime IS lastConsolidatedAt. Body is the holder's PID.
+// Lock file whose mtime is the consolidation timestamp. Legacy PID-only and
+// empty bodies retain that meaning. New attempts explicitly record their
+// in-progress state and prior timestamp, so crashes can be recovered safely.
 //
 // Lives inside the memory dir (getAutoMemPath) so it keys on git-root
 // like memory does, and so it's writable even when the memory path comes
@@ -15,6 +17,18 @@ import { getProjectDir } from '../../utils/sessionStorage.js'
 
 const LOCK_FILE = '.consolidate-lock'
 
+type InProgressLock = { pid: number; priorMtime: number }
+
+function parseInProgressLock(raw: string): InProgressLock | null {
+  const match = /^(\d+) auto-dream-v1 (\d+(?:\.\d+)?)$/.exec(raw.trim())
+  if (!match) return null
+  const pid = Number(match[1])
+  const priorMtime = Number(match[2])
+  return Number.isSafeInteger(pid) && pid > 1 && Number.isFinite(priorMtime)
+    ? { pid, priorMtime }
+    : null
+}
+
 // Stale past this even if the PID is live (PID reuse guard).
 const HOLDER_STALE_MS = 60 * 60 * 1000
 
@@ -24,11 +38,14 @@ function lockPath(): string {
 
 /**
  * mtime of the lock file = lastConsolidatedAt. 0 if absent.
- * Per-turn cost: one stat.
+ * Only explicitly marked attempts can be identified as interrupted. A legacy
+ * dead PID may represent a successful run, so its timestamp stays authoritative.
  */
 export async function readLastConsolidatedAt(): Promise<number> {
   try {
-    const s = await stat(lockPath())
+    const [s, raw] = await Promise.all([stat(lockPath()), readFile(lockPath(), 'utf8')])
+    const attempt = parseInProgressLock(raw)
+    if (attempt && !isProcessRunning(attempt.pid)) return attempt.priorMtime
     return s.mtimeMs
   } catch {
     return 0
@@ -36,10 +53,10 @@ export async function readLastConsolidatedAt(): Promise<number> {
 }
 
 /**
- * Acquire: write PID → mtime = now. Returns the pre-acquire mtime
+ * Acquire: write a versioned PID + prior timestamp → mtime = now. Returns the pre-acquire mtime
  * (for rollback), or null if blocked / lost a race.
  *
- *   Success → do nothing. mtime stays at now.
+ *   Success → completeConsolidationLock() clears PID, keeping mtime.
  *   Failure → rollbackConsolidationLock(priorMtime) rewinds mtime.
  *   Crash   → mtime stuck, dead PID → next process reclaims.
  */
@@ -48,9 +65,12 @@ export async function tryAcquireConsolidationLock(): Promise<number | null> {
 
   let mtimeMs: number | undefined
   let holderPid: number | undefined
+  let priorMtime = 0
   try {
     const [s, raw] = await Promise.all([stat(path), readFile(path, 'utf8')])
     mtimeMs = s.mtimeMs
+    // Upgrade lazily on acquisition; never reinterpret a legacy PID as failure.
+    priorMtime = parseInProgressLock(raw)?.priorMtime ?? s.mtimeMs
     const parsed = parseInt(raw.trim(), 10)
     holderPid = Number.isFinite(parsed) ? parsed : undefined
   } catch {
@@ -69,7 +89,8 @@ export async function tryAcquireConsolidationLock(): Promise<number | null> {
 
   // Memory dir may not exist yet.
   await mkdir(getAutoMemPath(), { recursive: true })
-  await writeFile(path, String(process.pid))
+  const record = `${process.pid} auto-dream-v1 ${priorMtime}`
+  await writeFile(path, record)
 
   // Two reclaimers both write → last wins the PID. Loser bails on re-read.
   let verify: string
@@ -78,9 +99,22 @@ export async function tryAcquireConsolidationLock(): Promise<number | null> {
   } catch {
     return null
   }
-  if (parseInt(verify.trim(), 10) !== process.pid) return null
+  if (verify !== record) return null
 
-  return mtimeMs ?? 0
+  return priorMtime
+}
+
+/** Mark success without leaving a dead PID that looks like an interrupted run. */
+export async function completeConsolidationLock(): Promise<void> {
+  const path = lockPath()
+  try {
+    const [s, raw] = await Promise.all([stat(path), readFile(path, 'utf8')])
+    if (parseInProgressLock(raw)?.pid !== process.pid) return
+    await writeFile(path, '')
+    await utimes(path, s.atimeMs / 1000, s.mtimeMs / 1000)
+  } catch (e: unknown) {
+    logForDebugging(`[autoDream] completion stamp failed: ${(e as Error).message}`)
+  }
 }
 
 /**
@@ -131,7 +165,7 @@ export async function recordConsolidation(): Promise<void> {
   try {
     // Memory dir may not exist yet (manual /dream before any auto-trigger).
     await mkdir(getAutoMemPath(), { recursive: true })
-    await writeFile(lockPath(), String(process.pid))
+    await writeFile(lockPath(), '')
   } catch (e: unknown) {
     logForDebugging(
       `[autoDream] recordConsolidation write failed: ${(e as Error).message}`,

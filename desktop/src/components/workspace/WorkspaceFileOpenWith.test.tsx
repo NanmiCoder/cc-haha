@@ -211,4 +211,12 @@ describe('WorkspaceFileOpenWith', () => {
 
     expect(openPreview).toHaveBeenCalledWith('s1', 'report.md')
   })
+
+  it('omits file-only actions for directories, even with a file-like name', () => {
+    const { queryByRole, getByRole } = render(<WorkspaceFileOpenWith absolutePath="/w/docs.html" workspacePath="docs.html" sessionId="s1" isDirectory />)
+    expect(queryByRole('menuitem', { name: 'openWith.copyFileContent' })).toBeNull()
+    expect(queryByRole('menuitem', { name: 'openWith.workspacePreview' })).toBeNull()
+    expect(queryByRole('menuitem', { name: 'openWith.inAppBrowser' })).toBeNull()
+    expect(getByRole('menuitem', { name: 'openWith.copyPath' })).toBeInTheDocument()
+  })
 })

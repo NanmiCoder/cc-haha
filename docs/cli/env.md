@@ -7,7 +7,7 @@ order: 2
 
 # 环境变量
 
-Claude Code Haha 有两条配置路径：
+cc-haha 有两条配置路径：
 
 - 桌面端用户优先在 **设置 → 服务商** 中选择、测试并激活提供商。应用会管理对应的认证、模型映射和协议代理。
 - 从源码运行 CLI 时，可以使用 `.env`、Shell 环境变量或 Claude Code 的 `settings.json`。

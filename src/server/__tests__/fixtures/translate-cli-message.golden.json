@@ -389,6 +389,24 @@
       ]
     }
   ],
+  "teammate-permission-request": [
+    {
+      "in": "control_request/can_use_tool",
+      "out": [
+        {
+          "type": "permission_request",
+          "requestId": "req_teammate_perm",
+          "toolName": "Bash",
+          "toolUseId": "toolu_teammate_perm",
+          "input": {
+            "command": "ls"
+          },
+          "description": "list files",
+          "displayName": "researcher"
+        }
+      ]
+    }
+  ],
   "system-init-and-slash": [
     {
       "in": "system/init",

@@ -15,6 +15,10 @@ export type TraceSourceInput = {
   fingerprint?: string | null
   pendingTailBytes?: number
   nextOrdinal?: number
+  oversizedRecords?: number
+  scanTruncated?: boolean
+  windowStartByte?: number
+  oversizedContinuation?: boolean
 }
 
 export type TraceCallLocator = {
@@ -33,6 +37,10 @@ export type TraceCallLocator = {
   failed: boolean
   inputTokens: number
   outputTokens: number
+  /** Body facts surfaced on the trace tree without reading the JSONL. */
+  requestBytes?: number | null
+  responseBytes?: number | null
+  responseStatus?: number | null
   revision?: number
 }
 
@@ -47,6 +55,8 @@ export type TraceEventLocator = {
   callId: string | null
   source: string | null
   model: string | null
+  title?: string | null
+  message?: string | null
   revision?: number
 }
 
@@ -71,6 +81,9 @@ export type TraceSourceRecord = Required<Pick<
   revision: number
   lastResetRevision: number
   resetToken: string
+  oversizedRecords: number
+  scanTruncated: boolean
+  windowStartByte: number
   state: 'ready' | 'degraded'
   lastErrorCode: string | null
 }
@@ -114,6 +127,7 @@ export interface TraceIndex {
     event: TraceEventLocator
   }): TraceSourceRecord
   getSession(sessionId: string): TraceSessionProjection | null
+  getSessionPage(sessionId: string, offset: number, limit: number): (TraceSessionProjection & { totalCalls: number; totalEvents: number }) | null
   getCallLocator(sessionId: string, callId: string): {
     source: TraceSourceRecord
     call: TraceCallLocator
@@ -143,6 +157,9 @@ type SourceRow = {
   next_ordinal: number
   state: 'ready' | 'degraded'
   last_error_code: string | null
+  oversized_records: number
+  scan_truncated: number
+  window_start_byte: number
 }
 
 type SummaryRow = SourceRow & {
@@ -170,6 +187,9 @@ type CallRow = {
   failed: number
   input_tokens: number
   output_tokens: number
+  request_bytes: number | null
+  response_bytes: number | null
+  response_status: number | null
 }
 
 type EventRow = {
@@ -184,6 +204,8 @@ type EventRow = {
   call_id: string | null
   source: string | null
   model: string | null
+  title: string | null
+  message: string | null
 }
 
 const SOURCE_COLUMNS = `
@@ -200,7 +222,10 @@ const SOURCE_COLUMNS = `
   session.reset_token,
   session.next_ordinal,
   source.state,
-  source.last_error_code
+  source.last_error_code,
+  source.oversized_records,
+  source.scan_truncated,
+  source.window_start_byte
 `
 
 const SUMMARY_COLUMNS = `
@@ -217,8 +242,8 @@ const UPSERT_SOURCE_SQL = `
 INSERT INTO trace_sources (
   session_id, file_path, size_bytes, mtime_ms, indexed_bytes,
   revision, last_reset_revision, state, last_error_code, updated_at_ms,
-  file_identity, fingerprint, pending_tail_bytes
-) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', NULL, ?, ?, ?, ?)
+  file_identity, fingerprint, pending_tail_bytes, oversized_records, scan_truncated, window_start_byte
+) VALUES (?, ?, ?, ?, ?, ?, ?, 'ready', ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id) DO UPDATE SET
   file_path = excluded.file_path,
   size_bytes = excluded.size_bytes,
@@ -227,11 +252,14 @@ ON CONFLICT(session_id) DO UPDATE SET
   revision = excluded.revision,
   last_reset_revision = excluded.last_reset_revision,
   state = 'ready',
-  last_error_code = NULL,
+  last_error_code = excluded.last_error_code,
   updated_at_ms = excluded.updated_at_ms,
   file_identity = excluded.file_identity,
   fingerprint = excluded.fingerprint,
-  pending_tail_bytes = excluded.pending_tail_bytes
+  pending_tail_bytes = excluded.pending_tail_bytes,
+  oversized_records = excluded.oversized_records,
+  scan_truncated = excluded.scan_truncated,
+  window_start_byte = excluded.window_start_byte
 `
 
 const UPSERT_SESSION_SQL = `
@@ -251,8 +279,9 @@ const UPSERT_CALL_SQL = `
 INSERT INTO trace_calls (
   session_id, call_id, ordinal, first_ordinal, byte_start, byte_length, revision,
   started_at, completed_at, status, source, model, duration_ms,
-  failed, input_tokens, output_tokens
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  failed, input_tokens, output_tokens,
+  request_bytes, response_bytes, response_status
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id, call_id) DO UPDATE SET
   ordinal = excluded.ordinal,
   byte_start = excluded.byte_start,
@@ -266,14 +295,17 @@ ON CONFLICT(session_id, call_id) DO UPDATE SET
   duration_ms = excluded.duration_ms,
   failed = excluded.failed,
   input_tokens = excluded.input_tokens,
-  output_tokens = excluded.output_tokens
+  output_tokens = excluded.output_tokens,
+  request_bytes = excluded.request_bytes,
+  response_bytes = excluded.response_bytes,
+  response_status = excluded.response_status
 `
 
 const INSERT_EVENT_SQL = `
 INSERT INTO trace_events (
   session_id, ordinal, event_id, byte_start, byte_length, revision,
-  timestamp, phase, severity, call_id, source, model
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  timestamp, phase, severity, call_id, source, model, title, message
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(session_id, ordinal) DO UPDATE SET
   event_id = excluded.event_id,
   byte_start = excluded.byte_start,
@@ -284,7 +316,9 @@ ON CONFLICT(session_id, ordinal) DO UPDATE SET
   severity = excluded.severity,
   call_id = excluded.call_id,
   source = excluded.source,
-  model = excluded.model
+  model = excluded.model,
+  title = excluded.title,
+  message = excluded.message
 `
 
 function sourceFromRow(row: SourceRow): TraceSourceRecord {
@@ -303,6 +337,9 @@ function sourceFromRow(row: SourceRow): TraceSourceRecord {
     resetToken: row.reset_token,
     state: row.state,
     lastErrorCode: row.last_error_code,
+    oversizedRecords: row.oversized_records,
+    scanTruncated: row.scan_truncated === 1,
+    windowStartByte: row.window_start_byte,
   }
 }
 
@@ -321,6 +358,9 @@ function callFromRow(row: CallRow): TraceCallLocator {
     failed: row.failed === 1,
     inputTokens: row.input_tokens,
     outputTokens: row.output_tokens,
+    requestBytes: row.request_bytes,
+    responseBytes: row.response_bytes,
+    responseStatus: row.response_status,
     revision: row.revision,
   }
 }
@@ -337,6 +377,8 @@ function eventFromRow(row: EventRow): TraceEventLocator {
     callId: row.call_id,
     source: row.source,
     model: row.model,
+    title: row.title,
+    message: row.message,
     revision: row.revision,
   }
 }
@@ -363,7 +405,7 @@ function modelsForSession(
     `SELECT model, call_count
      FROM trace_session_models
      WHERE session_id = ?
-     ORDER BY first_started_at, first_ordinal, model`,
+     ORDER BY first_started_at, first_ordinal, model LIMIT 64`,
     sessionId,
   ).map(row => ({ model: row.model, calls: row.call_count }))
 }
@@ -410,12 +452,11 @@ function resolvedNextOrdinal(
   events: TraceEventLocator[],
   floor = 0,
 ): number {
-  const derived = Math.max(
-    floor,
-    ...calls.map(call => call.ordinal + 1),
-    ...events.map(event => event.ordinal + 1),
-  )
-  return source.nextOrdinal ?? derived
+  if (source.nextOrdinal !== undefined) return source.nextOrdinal
+  let derived = floor
+  for (const call of calls) derived = Math.max(derived, call.ordinal + 1)
+  for (const event of events) derived = Math.max(derived, event.ordinal + 1)
+  return derived
 }
 
 function normalizeSource(
@@ -433,7 +474,11 @@ function normalizeSource(
     !safeInteger(pendingTailBytes) ||
     pendingTailBytes !== source.size - source.indexedBytes ||
     !safeInteger(nextOrdinal) ||
-    !Number.isFinite(source.mtimeMs)
+    !Number.isFinite(source.mtimeMs) ||
+    !safeInteger(source.oversizedRecords ?? 0) ||
+    !safeInteger(source.windowStartByte ?? 0) ||
+    (source.windowStartByte ?? 0) > source.indexedBytes ||
+    (source.scanTruncated !== undefined && typeof source.scanTruncated !== 'boolean')
   ) {
     throw new Error('Invalid trace source progress')
   }
@@ -443,6 +488,10 @@ function normalizeSource(
     fingerprint: source.fingerprint ?? null,
     pendingTailBytes,
     nextOrdinal,
+    oversizedRecords: source.oversizedRecords ?? 0,
+    scanTruncated: source.scanTruncated ?? false,
+    windowStartByte: source.windowStartByte ?? 0,
+    oversizedContinuation: source.oversizedContinuation ?? false,
   }
 }
 
@@ -482,10 +531,14 @@ function writeSource(
     source.indexedBytes,
     revision,
     lastResetRevision,
+    source.oversizedContinuation ? 'TRACE_OVERSIZED_RECORD_CONTINUATION' : null,
     Date.now(),
     source.fileIdentity,
     source.fingerprint,
     source.pendingTailBytes,
+    source.oversizedRecords,
+    source.scanTruncated ? 1 : 0,
+    source.windowStartByte,
   )
   operation.run(
     UPSERT_SESSION_SQL,
@@ -526,6 +579,9 @@ function writeCall(
     call.failed ? 1 : 0,
     call.inputTokens,
     call.outputTokens,
+    call.requestBytes ?? null,
+    call.responseBytes ?? null,
+    call.responseStatus ?? null,
   )
 }
 
@@ -549,6 +605,8 @@ function writeEvent(
     event.callId,
     event.source,
     event.model,
+    event.title ?? null,
+    event.message ?? null,
   )
 }
 
@@ -573,17 +631,20 @@ function adjustModelCount(
     )
     return
   }
+  // Delete-before-decrement: the call_count > 0 CHECK rejects an UPDATE that
+  // lands on zero, so rows reaching zero must be removed, not updated.
+  operation.run(
+    `DELETE FROM trace_session_models
+     WHERE session_id = ? AND model = ? AND call_count + ? <= 0`,
+    sessionId,
+    model,
+    delta,
+  )
   operation.run(
     `UPDATE trace_session_models
      SET call_count = call_count + ?
      WHERE session_id = ? AND model = ?`,
     delta,
-    sessionId,
-    model,
-  )
-  operation.run(
-    `DELETE FROM trace_session_models
-     WHERE session_id = ? AND model = ? AND call_count <= 0`,
     sessionId,
     model,
   )
@@ -681,25 +742,57 @@ function resetSummary(operation: TraceIndexWriteOperation, sessionId: string): v
   operation.run('DELETE FROM trace_session_models WHERE session_id = ?', sessionId)
 }
 
+// A rebuild already has the final LWW rows. Recomputing model order and the
+// latest call after every insertion repeatedly scans/sorts the growing table.
+function rebuildSummary(operation: TraceIndexWriteOperation, sessionId: string): void {
+  operation.run(
+    `UPDATE trace_sessions SET
+       (api_calls, failed_calls, total_duration_ms, total_input_tokens, total_output_tokens) = (
+         SELECT COUNT(*), COALESCE(SUM(failed), 0), COALESCE(SUM(duration_ms), 0),
+           COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0)
+         FROM trace_calls WHERE session_id = ?
+       ),
+       summary_updated_at = (
+         SELECT COALESCE(completed_at, started_at) FROM trace_calls
+         WHERE session_id = ? ORDER BY started_at DESC, first_ordinal DESC LIMIT 1
+       )
+     WHERE session_id = ?`,
+    sessionId, sessionId, sessionId,
+  )
+  operation.run(
+    `INSERT INTO trace_session_models (session_id, model, call_count, first_started_at, first_ordinal)
+     SELECT ?, model, call_count, started_at, first_ordinal FROM (
+       SELECT model, started_at, first_ordinal,
+         COUNT(*) OVER (PARTITION BY model) AS call_count,
+         ROW_NUMBER() OVER (PARTITION BY model ORDER BY started_at, first_ordinal) AS position
+       FROM trace_calls WHERE session_id = ? AND model IS NOT NULL AND model != ''
+     ) WHERE position = 1`,
+    sessionId, sessionId,
+  )
+}
+
 function locatorRows(
   operation: TraceIndexReadOperation,
   sessionId: string,
   revisionFloor?: number,
+  page?: { offset: number; limit: number },
 ): { calls: TraceCallLocator[]; events: TraceEventLocator[] } {
   const revisionWhere = revisionFloor === undefined ? '' : ' AND revision > ?'
   const bindings = revisionFloor === undefined
     ? [sessionId] as const
     : [sessionId, revisionFloor] as const
+  const pageSql = page ? ' LIMIT ? OFFSET ?' : ''
+  const pageBindings = page ? [page.limit, page.offset] : []
   return {
     calls: operation.all<CallRow>(
       `SELECT * FROM trace_calls
        WHERE session_id = ?${revisionWhere}
-       ORDER BY started_at, first_ordinal`,
-      ...bindings,
+       ORDER BY started_at, first_ordinal${pageSql}`,
+      ...bindings, ...pageBindings,
     ).map(callFromRow),
     events: operation.all<EventRow>(
-      `SELECT * FROM trace_events WHERE session_id = ?${revisionWhere} ORDER BY timestamp, ordinal`,
-      ...bindings,
+      `SELECT * FROM trace_events WHERE session_id = ?${revisionWhere} ORDER BY timestamp, ordinal${pageSql}`,
+      ...bindings, ...pageBindings,
     ).map(eventFromRow),
   }
 }
@@ -730,8 +823,8 @@ function replaceProjection(
     for (const call of input.calls) {
       validateLocator(call, source)
       writeCall(operation, source.sessionId, call, revision)
-      updateSummaryForCall(operation, source.sessionId, null, call)
     }
+    rebuildSummary(operation, source.sessionId)
     for (const event of input.events) {
       validateLocator(event, source)
       writeEvent(operation, source.sessionId, event, revision)
@@ -767,13 +860,17 @@ function appendProjection(
     )
     for (const call of input.calls) {
       validateLocator(call, source)
-      const previous = operation.get<CallRow>(
+      const previous = input.calls.length === 1 ? operation.get<CallRow>(
         'SELECT * FROM trace_calls WHERE session_id = ? AND call_id = ?',
         source.sessionId,
         call.id,
-      )
+      ) : null
       writeCall(operation, source.sessionId, call, revision)
-      updateSummaryForCall(operation, source.sessionId, previous, call)
+      if (input.calls.length === 1) updateSummaryForCall(operation, source.sessionId, previous, call)
+    }
+    if (input.calls.length > 1) {
+      resetSummary(operation, source.sessionId)
+      rebuildSummary(operation, source.sessionId)
     }
     for (const event of input.events) {
       validateLocator(event, source)
@@ -816,6 +913,19 @@ export function createTraceIndex(database: TraceIndexDatabase): TraceIndex {
         const overview = readOverview(operation, sessionId)
         if (!overview) return null
         return { ...overview, ...locatorRows(operation, sessionId) }
+      })
+    },
+    getSessionPage(sessionId, offset, limit) {
+      return database.read(operation => {
+        const overview = readOverview(operation, sessionId)
+        if (!overview) return null
+        const page = { offset: Math.max(0, Math.trunc(offset)), limit: Math.max(1, Math.min(100, Math.trunc(limit))) }
+        return {
+          ...overview,
+          ...locatorRows(operation, sessionId, undefined, page),
+          totalCalls: overview.summary.apiCalls,
+          totalEvents: operation.get<{ count: number }>('SELECT COUNT(*) AS count FROM trace_events WHERE session_id = ?', sessionId)?.count ?? 0,
+        }
       })
     },
     getCallLocator(sessionId, callId) {

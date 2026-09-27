@@ -87,6 +87,22 @@ export type TraceSessionSummary = {
 }
 
 export type TraceSession = {
+  window?: {
+    offset: number
+    limit: number
+    totalCalls: number
+    totalEvents: number
+    hasMore: boolean
+    revisionToken: string
+    state: 'ready' | 'indexing' | 'limited'
+    oversizedRecords: number
+    startByte: number
+    scannedBytes: number
+    fileBytes: number
+    recordLimit: number
+    recordBytesLimit: number
+    nextScanCursor?: string
+  }
   sessionId: string
   messageSignature?: string | null
   session?: {

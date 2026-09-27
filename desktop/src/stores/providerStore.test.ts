@@ -21,6 +21,8 @@ const {
     reorder: vi.fn(),
     activate: vi.fn(),
     activateOfficial: vi.fn(),
+    getOfficialModels: vi.fn(),
+    updateOfficialModels: vi.fn(),
     test: vi.fn(),
     testConfig: vi.fn(),
     scanCcSwitch: vi.fn(),
@@ -107,6 +109,13 @@ describe('providerStore runtime refresh', () => {
     chatStoreState.sessions = {}
     runtimeStoreState.selections = {}
     providersApiMock.list.mockResolvedValue({ providers: [], activeId: null })
+    providersApiMock.getOfficialModels.mockImplementation(async (id: string) => ({
+      models: id === 'openai-official'
+        ? { main: 'gpt-6-astra', haiku: 'gpt-6-luna', sonnet: 'gpt-6-sol', opus: 'gpt-6-astra' }
+        : id === 'grok-official'
+          ? { main: 'grok-4.7-fast', haiku: 'grok-4.7-mini', sonnet: 'grok-4.7-fast', opus: 'grok-4.7' }
+          : { main: 'claude-sonnet-5', haiku: 'claude-haiku-4-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5-5' },
+    }))
   })
 
   it('reapplies an updated active provider to idle connected sessions using default runtime', async () => {
@@ -152,7 +161,7 @@ describe('providerStore runtime refresh', () => {
   })
 
   it.each([true, false])('refreshes saved model capabilities for idle, disconnected and draft selections (1m=%s)', async (enabled) => {
-    const provider = makeProvider({ model1mSupport: { main: enabled, haiku: false, sonnet: false, opus: enabled } })
+    const provider = makeProvider({ model1mSupport: { main: enabled, fable: false, haiku: false, sonnet: false, opus: enabled } })
     providersApiMock.update.mockResolvedValue({ provider })
     providersApiMock.list.mockResolvedValue({ providers: [provider], activeId: provider.id })
     chatStoreState.sessions = {
@@ -197,7 +206,7 @@ describe('providerStore runtime refresh', () => {
   })
 
   it('reconciles restored selections when provider capabilities arrive after connection', async () => {
-    const provider = makeProvider({ model1mSupport: { main: true, haiku: false, sonnet: false, opus: false } })
+    const provider = makeProvider({ model1mSupport: { main: true, fable: false, haiku: false, sonnet: false, opus: false } })
     providersApiMock.list.mockResolvedValue({ providers: [provider], activeId: provider.id })
     chatStoreState.sessions = { restored: { connectionState: 'connected', chatState: 'idle' } }
     runtimeStoreState.selections = { restored: { providerId: provider.id, modelId: 'model-main' } }
@@ -210,7 +219,7 @@ describe('providerStore runtime refresh', () => {
     expect(setSelectionMock).toHaveBeenCalledWith('restored', { providerId: provider.id, modelId: 'model-main[1m]' })
   })
 
-  it('sets the OpenAI default model when activating built-in ChatGPT Official', async () => {
+  it('restores the configured OpenAI model when activating built-in ChatGPT Official', async () => {
     providersApiMock.activate.mockResolvedValue({ ok: true })
     providersApiMock.list.mockResolvedValue({
       providers: [],
@@ -220,18 +229,29 @@ describe('providerStore runtime refresh', () => {
     const { useProviderStore } = await import('./providerStore')
     await useProviderStore.getState().activateProvider('openai-official')
 
-    expect(settingsSetModelMock).toHaveBeenCalledWith('gpt-5.6-sol')
+    expect(settingsSetModelMock).toHaveBeenCalledWith('gpt-6-astra')
     expect(settingsFetchAllMock).toHaveBeenCalled()
   })
 
-  it('sets the Grok default model when activating built-in Grok Official', async () => {
+  it('restores the configured Grok model when activating built-in Grok Official', async () => {
     providersApiMock.activate.mockResolvedValue({ ok: true })
     providersApiMock.list.mockResolvedValue({ providers: [], activeId: 'grok-official' })
 
     const { useProviderStore } = await import('./providerStore')
     await useProviderStore.getState().activateProvider('grok-official')
 
-    expect(settingsSetModelMock).toHaveBeenCalledWith('grok-4.6')
+    expect(settingsSetModelMock).toHaveBeenCalledWith('grok-4.7-fast')
+    expect(settingsFetchAllMock).toHaveBeenCalled()
+  })
+
+  it('restores the configured Claude model when activating Claude Official', async () => {
+    providersApiMock.activateOfficial.mockResolvedValue({ ok: true })
+    providersApiMock.list.mockResolvedValue({ providers: [], activeId: null })
+
+    const { useProviderStore } = await import('./providerStore')
+    await useProviderStore.getState().activateOfficial()
+
+    expect(settingsSetModelMock).toHaveBeenCalledWith('claude-sonnet-5')
     expect(settingsFetchAllMock).toHaveBeenCalled()
   })
 

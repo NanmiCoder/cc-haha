@@ -9,9 +9,12 @@ if (typeof (vi as HoistedVi).hoisted !== 'function') {
 }
 
 const mocks = vi.hoisted(() => ({
+  closeSideChat: vi.fn(async () => {}),
   destroyTerminalRuntime: vi.fn(),
   releaseWorkspaceBrowserTab: vi.fn(),
 }))
+
+vi.mock('@/stores/sideChatStore', () => ({ useSideChatStore: { getState: () => ({ close: mocks.closeSideChat }) } }))
 
 vi.mock('../lib/terminalRuntime', () => ({
   destroyTerminalRuntime: mocks.destroyTerminalRuntime,
@@ -388,6 +391,28 @@ describe('undo close', () => {
 })
 
 describe('review viewed paths', () => {
+  it('removes rewound turn reviews from open and reopenable tabs', () => {
+    const file = openFile('src/keep.ts')
+    const rewound = store().openTarget(SESSION, { kind: 'review', source: { kind: 'turn', turnKey: 'second', userMessageIndex: 1 } })!
+
+    store().pruneTurnReviewTabs(SESSION, 1)
+
+    expect(sideTabs().map(tab => tab.id)).toEqual([file])
+    expect(store().getTab(SESSION, rewound)).toBeNull()
+    expect(store().getSession(SESSION).closed).toEqual([])
+    expect(store().reopenClosedTab(SESSION)).toBeNull()
+
+    const older = store().openTarget(SESSION, { kind: 'review', source: { kind: 'turn', turnKey: 'first', userMessageIndex: 0 } })!
+    store().closeTab(SESSION, older)
+    store().pruneTurnReviewTabs(SESSION, 1)
+    expect(store().reopenClosedTab(SESSION)).toBe(older)
+
+    store().setReviewSource(SESSION, older, { kind: 'turn', turnKey: 'third', userMessageIndex: 2 })
+    store().closeTab(SESSION, older)
+    store().pruneTurnReviewTabs(SESSION, 1)
+    expect(store().reopenClosedTab(SESSION)).toBeNull()
+  })
+
   it('keeps viewed files for the same source and clears them when the comparison changes', () => {
     const source = { kind: 'turn' as const, turnKey: 'message-1', userMessageIndex: 0 }
     const id = store().openTarget(SESSION, { kind: 'review', source })!
@@ -663,4 +688,18 @@ describe('tab ceiling', () => {
     expect(sideTabs().map((tab) => tab.id)).toEqual(before)
     expect(mocks.releaseWorkspaceBrowserTab).not.toHaveBeenCalled()
   })
+})
+
+
+it('keeps side chats alive on navigation and releases them only on close without undo', () => {
+  const sideId = store().openTarget(SESSION, { kind: 'side-chat', sideChatId: 'side-child' })!
+  const fileId = store().openTarget(SESSION, { kind: 'file', path: '/repo/a.ts' })!
+  store().setLayout(SESSION, 'hidden')
+  expect(mocks.closeSideChat).not.toHaveBeenCalled()
+  expect(store().openTarget(SESSION, { kind: 'side-chat', sideChatId: 'side-child' })).toBe(sideId)
+  expect(store().getTabs(SESSION, 'side')).toHaveLength(2)
+  store().closeTab(SESSION, sideId)
+  expect(mocks.closeSideChat).toHaveBeenCalledWith('side-child')
+  expect(store().getTab(SESSION, fileId)).not.toBeNull()
+  expect(store().bySession[SESSION]?.closed.flatMap(group => group.tabs)).toEqual([])
 })

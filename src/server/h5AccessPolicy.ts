@@ -1,6 +1,7 @@
 export type H5RequestKind = 'local-trusted' | 'internal-sdk' | 'h5-browser'
 export type H5RequestContext = {
   clientAddress: string | null
+  trustedRendererOrigin?: string | null
   localAccessTokenConfigured?: boolean
   localAccessAuthorized?: boolean
   internalSdkAuthorized?: boolean
@@ -74,6 +75,14 @@ function isLoopbackBrowserOrigin(origin: string): boolean {
   }
 
   return isLoopbackHost(parsed.hostname)
+}
+
+/** Accept only an explicitly configured loopback web origin from the dev launcher. */
+export function resolveTrustedRendererOrigin(value: string | undefined): string | null {
+  if (!value || !isLoopbackBrowserOrigin(value)) return null
+  const parsed = new URL(value)
+  if (parsed.username || parsed.password) return null
+  return parsed.origin
 }
 
 function pathnameDirectory(pathname: string): string {
@@ -187,6 +196,12 @@ function isLocalDesktopOrNavigationOrigin(
 ): boolean {
   if (!origin) return !isCrossSiteSubresource(request.headers)
   if (LOCAL_DESKTOP_ORIGINS.has(origin)) return true
+  // Chromium omits Authorization on CORS preflight. Exempt only the dev
+  // launcher's exact origin and only OPTIONS; real requests still need the
+  // desktop process credential, including the H5 control plane.
+  if (request.method === 'OPTIONS' &&
+    origin === context.trustedRendererOrigin &&
+    request.headers.has('Access-Control-Request-Method')) return true
 
   // A configured process credential distinguishes the Electron renderer from
   // arbitrary pages served by another loopback process. Keep tokenless

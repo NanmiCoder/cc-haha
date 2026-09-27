@@ -1,5 +1,7 @@
-import { mkdir, appendFile, readFile, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
+import { mkdir, appendFile, readFile, writeFile, readdir } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { dirname, join } from 'node:path'
+import { formatSessionCollaborationPrompt } from '../../../utils/sessionCollaborationEnvelope.js'
 
 const args = process.argv.slice(2)
 
@@ -27,6 +29,14 @@ function extractUserText(message: any): string {
 
 const sdkUrl = getArg('--sdk-url')
 const sessionId = getArg('--session-id') || getArg('--resume') || crypto.randomUUID()
+const sideChatHistory = args.includes('--no-session-persistence') && getArg('--resume')
+  ? readFile(getArg('--resume')!, 'utf8').then(raw => {
+      const entries = raw.split('\n').filter(Boolean).map(line => JSON.parse(line))
+      const end = entries.findIndex(entry => entry.uuid === getArg('--resume-session-at'))
+      return entries.slice(0, end + 1).filter(entry => entry.type === 'user' || entry.type === 'assistant').map(entry => transcriptText(entry))
+    })
+  : undefined
+const sideChatTurns: string[] = []
 const initMode = process.env.MOCK_SDK_INIT_MODE || 'on_open'
 const initDelayMs = Number(process.env.MOCK_SDK_INIT_DELAY_MS || '0')
 const streamDelayMs = Number(process.env.MOCK_SDK_STREAM_DELAY_MS || '0')
@@ -38,6 +48,71 @@ const resumeTranscriptPath = process.env.MOCK_SDK_RESUME_TRANSCRIPT_PATH
 const resumeUpstreamUrl = process.env.MOCK_SDK_RESUME_UPSTREAM_URL
 let initSent = false
 let firstUserExitScheduled = false
+let releaseReconnectStream: (() => void) | undefined
+const sideQuestions = new Map<string, { requestId: string; timer: ReturnType<typeof setTimeout> }>()
+let guideReplayInitial: any | undefined
+let guideReplayInputs: string[] = []
+
+// Opt-in reproduction of QueryEngine's delayed initial ACK: partial thinking
+// streams before the first complete assistant block, so an intervening guide
+// can already be visible when the original user message is acknowledged.
+async function handleGuideReplay(message: any): Promise<boolean> {
+  const text = extractUserText(message)
+  if (!guideReplayInitial && !text.startsWith('MOCK_GUIDE_REPLAY')) return false
+  guideReplayInputs.push(text)
+  if (process.env.MOCK_SDK_GUIDE_REPLAY_LOG) {
+    await appendFile(process.env.MOCK_SDK_GUIDE_REPLAY_LOG, `${JSON.stringify({ uuid: message.uuid, text })}\n`)
+  }
+  if (!guideReplayInitial) {
+    guideReplayInitial = message
+    emit(ws, { type: 'stream_event', event: { type: 'message_start' }, session_id: sessionId })
+    emit(ws, { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } }, session_id: sessionId })
+    emit(ws, { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'Waiting for a guide message before acknowledging the original prompt.' } }, session_id: sessionId })
+    return true
+  }
+  emit(ws, { type: 'stream_event', event: { type: 'content_block_stop', index: 0 }, session_id: sessionId })
+  for (const input of [guideReplayInitial, message]) {
+    emit(ws, { type: 'user', message: input.message, uuid: input.uuid, isReplay: true, parent_tool_use_id: null, session_id: sessionId })
+  }
+  const reply = `GUIDE_REPLAY_RECEIVED ${JSON.stringify(guideReplayInputs)}`
+  await appendGuideReplayHistory([guideReplayInitial, message], reply)
+  emit(ws, { type: 'stream_event', event: { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }, session_id: sessionId })
+  emit(ws, { type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: reply } }, session_id: sessionId })
+  emit(ws, { type: 'stream_event', event: { type: 'content_block_stop', index: 1 }, session_id: sessionId })
+  emit(ws, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] }, session_id: sessionId })
+  emit(ws, { type: 'result', subtype: 'success', is_error: false, result: reply, usage: { input_tokens: 3, output_tokens: 2 }, session_id: sessionId })
+  guideReplayInitial = undefined
+  guideReplayInputs = []
+  return true
+}
+
+async function appendGuideReplayHistory(inputs: any[], reply: string): Promise<void> {
+  if (!process.env.CLAUDE_CONFIG_DIR) return
+  const projects = join(process.env.CLAUDE_CONFIG_DIR, 'projects')
+  for (const directory of await readdir(projects).catch(() => [])) {
+    const file = join(projects, directory, `${sessionId}.jsonl`)
+    try { await readFile(file) } catch { continue }
+    let parentUuid: string | null = null
+    const now = Date.now()
+    const records = inputs.map((input, index) => {
+      const uuid = input.uuid || crypto.randomUUID()
+      const record = {
+        type: 'user', uuid, parentUuid, sessionId, userType: 'external',
+        isSidechain: false, cwd: process.cwd(), message: input.message,
+        timestamp: new Date(now + index).toISOString(),
+      }
+      parentUuid = uuid
+      return record
+    })
+    const assistant = {
+      type: 'assistant', uuid: crypto.randomUUID(), parentUuid, sessionId,
+      timestamp: new Date(now + inputs.length).toISOString(),
+      message: { id: `msg_${crypto.randomUUID()}`, type: 'message', role: 'assistant', model: 'mock-opus', content: [{ type: 'text', text: reply }] },
+    }
+    await appendFile(file, `${[...records, assistant].map(record => JSON.stringify(record)).join('\n')}\n`)
+    return
+  }
+}
 
 /**
  * Deterministic tool-use support.
@@ -243,6 +318,57 @@ if (!sdkUrl) {
 
 const ws = new WebSocket(sdkUrl)
 
+const collaborationInbox = new Map<string, { input: any; status: 'queued' | 'consumed' }>()
+const collaborationQueue: any[] = []
+let collaborationRunning = false
+let normalRunning = false
+let collaborationEpoch = 0
+
+function collaborationUuid(id: string): string {
+  const hash = createHash('sha256').update('desktop-session-message:' + id).digest('hex')
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-5${hash.slice(13, 16)}-a${hash.slice(17, 20)}-${hash.slice(20, 32)}`
+}
+
+async function appendCollaborationHistory(input: any, reply?: string) {
+  const projects = join(process.env.CLAUDE_CONFIG_DIR!, 'projects')
+  for (const directory of await readdir(projects).catch(() => [])) {
+    const file = join(projects, directory, `${sessionId}.jsonl`)
+    try { await readFile(file) } catch { continue }
+    const uuid = collaborationUuid(input.message_id)
+    const record = reply === undefined
+      // Mirror the real CLI: consumed session messages persist as isMeta user
+      // entries whose content is the collaboration envelope, not bare text.
+      ? { type: 'user', uuid, sessionId, isMeta: true, message: { role: 'user', content: formatSessionCollaborationPrompt({ senderSessionId: input.sender_session_id, messageId: input.message_id, text: input.text }) }, timestamp: new Date().toISOString() }
+      : { type: 'assistant', uuid: crypto.randomUUID(), parentUuid: uuid, sessionId, message: { role: 'assistant', content: [{ type: 'text', text: reply }] }, timestamp: new Date().toISOString() }
+    await appendFile(file, JSON.stringify(record) + '\n')
+    return
+  }
+}
+
+async function drainCollaboration() {
+  if (normalRunning || collaborationRunning) return
+  collaborationRunning = true
+  const epoch = collaborationEpoch
+  try {
+    while (collaborationQueue.length && epoch === collaborationEpoch) {
+      const input = collaborationQueue.shift()
+      const record = collaborationInbox.get(input.message_id)!
+      await appendCollaborationHistory(input)
+      record.status = 'consumed'
+      emit(ws, { type: 'system', subtype: 'session_message_receipt', message_id: input.message_id, source_uuid: collaborationUuid(input.message_id), status: 'consumed', duplicate: false, session_id: sessionId, uuid: crypto.randomUUID() })
+      emit(ws, { type: 'stream_event', event: { type: 'message_start' }, session_id: sessionId })
+      if (streamDelayMs > 0) await delay(streamDelayMs)
+      if (epoch !== collaborationEpoch) break
+      const reply = `Echo: ${input.text}`
+      await appendCollaborationHistory(input, reply)
+      emit(ws, { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: reply }] }, session_id: sessionId })
+      emit(ws, { type: 'result', subtype: 'success', is_error: false, result: reply, usage: { input_tokens: 3, output_tokens: 2 }, session_id: sessionId, uuid: crypto.randomUUID() })
+    }
+  } finally { collaborationRunning = false }
+}
+
+
+
 function sendInit() {
   if (initSent) return
   initSent = true
@@ -255,7 +381,14 @@ function sendInit() {
   })
 }
 
+function auditTeamWorker(phase: 'boot' | 'release') {
+  const path = process.env.MOCK_SDK_TEAM_WORKER_AUDIT
+  if (!path || process.env.CC_HAHA_TEAM_WORKER !== '1') return
+  void appendFile(path, JSON.stringify({ phase, sessionId, model: getArg('--model'), baseUrl: process.env.ANTHROPIC_BASE_URL }) + '\n')
+}
+
 ws.addEventListener('open', () => {
+  auditTeamWorker('boot')
   if (initMode !== 'on_first_user') {
     if (initDelayMs > 0) {
       setTimeout(sendInit, initDelayMs)
@@ -275,8 +408,58 @@ ws.addEventListener('message', (event) => {
   void (async () => {
     for (const line of lines) {
       const parsed = JSON.parse(line)
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'side_question') {
+        const { question_id: questionId, question, history = [] } = parsed.request
+        const timer = setTimeout(() => {
+          sideQuestions.delete(questionId)
+          emit(ws, { type: 'control_response', response: {
+            subtype: 'success', request_id: parsed.request_id,
+            response: { response: `Side answer: ${question}\n\nPrevious side questions: ${history.length}. Main task ${normalRunning ? 'is still running' : 'is idle'}.` },
+          }, session_id: sessionId })
+        }, question.startsWith('MOCK_SLOW') ? 30_000 : 100)
+        sideQuestions.set(questionId, { requestId: parsed.request_id, timer })
+        continue
+      }
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'cancel_side_question') {
+        const pending = sideQuestions.get(parsed.request.question_id)
+        if (pending) {
+          clearTimeout(pending.timer)
+          sideQuestions.delete(parsed.request.question_id)
+          emit(ws, { type: 'control_response', response: { subtype: 'error', request_id: pending.requestId, error: 'Side question cancelled' }, session_id: sessionId })
+        }
+        emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: { cancelled: Boolean(pending) } }, session_id: sessionId })
+        continue
+      }
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'mock_release_reconnect_stream') {
+        releaseReconnectStream?.()
+        releaseReconnectStream = undefined
+        emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: {} }, session_id: sessionId })
+        continue
+      }
+
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'mock_exit_after_api_error_ack') {
+        process.exit(1)
+      }
+
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'enqueue_session_message') {
+        sendInit()
+        const input = parsed.request
+        const previous = collaborationInbox.get(input.message_id)
+        if (!previous) {
+          collaborationInbox.set(input.message_id, { input, status: 'queued' })
+          collaborationQueue.push(input)
+        }
+        emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: { message_id: input.message_id, status: previous?.status ?? 'queued', duplicate: !!previous } }, session_id: sessionId })
+        if (input.start_if_idle) void drainCollaboration()
+        continue
+      }
 
       if (parsed.type === 'user') {
+        auditTeamWorker('release')
+        sendInit()
+        if (await handleGuideReplay(parsed)) continue
+        normalRunning = true
+        try {
         sendInit()
         if (exitAfterFirstUserMs > 0 && !firstUserExitScheduled) {
           firstUserExitScheduled = true
@@ -286,6 +469,13 @@ ws.addEventListener('message', (event) => {
         const text = extractUserText(parsed)
         if (resumeTranscriptPath && resumeUpstreamUrl) {
           await runResumeTurn(ws, text)
+          continue
+        }
+        if (sideChatHistory && text.startsWith('MOCK_SIDE_CONTEXT')) {
+          sideChatTurns.push(text)
+          const answer = JSON.stringify({ inherited: await sideChatHistory, turns: sideChatTurns, boundary: getArg('--append-system-prompt'), ephemeral: args.includes('--no-session-persistence'), fork: args.includes('--fork-session') })
+          emit(ws, { type: 'assistant', message: { id: crypto.randomUUID(), role: 'assistant', content: [{ type: 'text', text: answer }] }, uuid: crypto.randomUUID(), session_id: sessionId })
+          emit(ws, { type: 'result', subtype: 'success', is_error: false, result: answer, usage: { input_tokens: 0, output_tokens: 0 }, session_id: sessionId })
           continue
         }
         const toolStep = parseMockToolStep(text)
@@ -340,7 +530,10 @@ ws.addEventListener('message', (event) => {
             session_id: sessionId,
           })
           if (text.includes('then exit')) {
-            setTimeout(() => process.exit(1), 10)
+            // Wait for the test client's acknowledgment that the API error
+            // was reported. A 10ms exit could outrun the async SDK handler.
+            // Bound fixture lifetime if that acknowledgment never arrives.
+            setTimeout(() => process.exit(1), 5_000)
             continue
           }
           emit(ws, {
@@ -376,6 +569,11 @@ ws.addEventListener('message', (event) => {
           },
           session_id: sessionId,
         })
+        // A reconnect test controls this boundary explicitly, so scheduler load
+        // cannot let the text finish before its replacement socket attaches.
+        if (text.startsWith('MOCK_RECONNECT_GATE ')) {
+          await new Promise<void>(resolve => { releaseReconnectStream = resolve })
+        }
         if (streamDelayMs > 0) await delay(streamDelayMs)
         emit(ws, {
           type: 'stream_event',
@@ -400,6 +598,7 @@ ws.addEventListener('message', (event) => {
           usage: { input_tokens: 3, output_tokens: 2 },
           session_id: sessionId,
         })
+        } finally { normalRunning = false; void drainCollaboration() }
       }
 
       if (parsed.type === 'control_response' && typeof parsed.response?.request_id === 'string') {
@@ -417,7 +616,14 @@ ws.addEventListener('message', (event) => {
         }
       }
 
+      if (parsed.type === 'control_request' && ['set_model', 'team_runtime_snapshot'].includes(parsed.request?.subtype)) {
+        emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: {} }, session_id: sessionId })
+        continue
+      }
       if (parsed.type === 'control_request' && parsed.request?.subtype === 'interrupt') {
+        collaborationEpoch++
+        for (const message of collaborationQueue) collaborationInbox.delete(message.message_id)
+        collaborationQueue.length = 0
         emit(ws, {
           type: 'result',
           subtype: 'success',

@@ -1,3 +1,4 @@
+import { getSessionReferences } from './composerMentions'
 import { describe, expect, it } from 'vitest'
 import {
   findMentionRanges,
@@ -85,4 +86,12 @@ describe('insertMentionIntoText', () => {
     expect(result.text).toBe(`${mentionToken(fileMention)} `)
     expect(result.cursorPos).toBe(result.text.length)
   })
+})
+
+it('collects only structured session references, deduplicating repeated pills and ignoring deleted or literal mentions', () => {
+  const reference: ComposerMention = { kind: 'session', id: 'past', label: 'Review', path: '', isDirectory: false, tokenOrdinal: 1 }
+  expect(getSessionReferences('@Review then @Review', [reference])).toEqual([{ sessionId: 'past' }])
+  expect(getSessionReferences('@Review', [reference])).toEqual([])
+  expect(getSessionReferences('@Review', [])).toEqual([])
+  expect(getSessionReferences('@Review @Review', [{ ...reference, tokenOrdinal: 0 }, reference])).toEqual([{ sessionId: 'past' }])
 })

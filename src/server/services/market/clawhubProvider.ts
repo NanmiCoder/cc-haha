@@ -45,6 +45,8 @@ type ClawhubListItem = {
 
 type ClawhubSearchResult = {
   slug: string
+  source?: string
+  install?: { kind?: string }
   displayName?: string
   summary?: string
   downloads?: number
@@ -206,8 +208,13 @@ export const clawhubProvider: MarketProvider = {
     if (!Array.isArray(data.results)) {
       throw new MarketUpstreamError('clawhub', MARKET_ERROR_CODES.upstreamBadResponse, 'clawhub search missing results')
     }
-    // ClawHub search has no pagination — cap and mark exhausted.
-    return { items: data.results.filter((r) => r?.slug).slice(0, limit).map(normalizeSearchResult) }
+    // Search also aggregates external registries, which cannot use ClawHub's
+    // detail/file endpoints. Older native results omit source/install metadata.
+    // Filter before capping so external results do not consume native slots.
+    const nativeResults = data.results.filter((result) => result?.slug
+      && (result.source === undefined || result.source === 'clawhub')
+      && (result.install?.kind === undefined || result.install.kind === 'clawhub'))
+    return { items: nativeResults.slice(0, limit).map(normalizeSearchResult) }
   },
 
   async detail(slug): Promise<NormalizedSkillDetail> {

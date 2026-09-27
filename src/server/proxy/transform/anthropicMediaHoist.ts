@@ -116,6 +116,27 @@ function mediaMarker(
   }
 }
 
+/**
+ * Whether a request needs the media hoist.
+ *
+ * `supportsNestedToolResultMedia === false` is a statement about the provider's
+ * own upstream. When per-model rules route this request to a *different*
+ * endpoint, the declaration does not describe it, so the rewrite must not run:
+ * a native Messages endpoint accepts nested media as-is. Only when the resolved
+ * route lands back on the provider's own anthropic endpoint does it apply.
+ *
+ * Shared with the connectivity probe so a passing test means what it says.
+ */
+export function shouldHoistNestedToolResultMedia(input: {
+  providerApiFormat: string
+  resolvedApiFormat: string
+  supportsNestedToolResultMedia?: boolean | null
+}): boolean {
+  return input.supportsNestedToolResultMedia === false
+    && input.providerApiFormat === 'anthropic'
+    && input.resolvedApiFormat === 'anthropic'
+}
+
 export function hoistToolResultMediaForCompatibility(
   body: AnthropicRequest,
 ): AnthropicRequest {

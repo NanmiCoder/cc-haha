@@ -106,17 +106,23 @@ export type SearchContentQueryOptions = {
   caseSensitive?: boolean
 }
 
+export type SearchContentSuggestions = {
+  sessions: Array<{ ownerSessionId: string; ownerTranscriptPath: string; projectPath: string; modifiedAtMs: number }>
+  truncated: boolean
+}
+
 export interface SearchContentIndex {
+  querySessionSuggestions(query: string, limit?: number): SearchContentSuggestions | null
   getSource(path: string): SearchContentSource | null
   listSources(): SearchContentSource[]
   countSources(): number
   replaceSource(
     source: SearchContentSourceWrite,
-    documents: SearchContentDocumentWrite[],
+    documents: Iterable<SearchContentDocumentWrite>,
   ): void
   appendSource(
     source: SearchContentSourceWrite,
-    documents: SearchContentDocumentWrite[],
+    documents: Iterable<SearchContentDocumentWrite>,
   ): void
   deleteSource(path: string): void
   getReadiness(): SearchContentReadiness | null
@@ -278,7 +284,7 @@ function upsertSource(
 function insertDocuments(
   writer: SearchContentWriteOperation,
   sourcePath: string,
-  documents: SearchContentDocumentWrite[],
+  documents: Iterable<SearchContentDocumentWrite>,
 ): void {
   for (const document of documents) {
     writer.run(`
@@ -298,6 +304,26 @@ function insertDocuments(
     document.body,
     document.normalizedBody)
   }
+}
+
+// Keep these functions closed over their explicit arguments so the exact same
+// SQL implementation can run in the inline compiled-safe commit worker.
+function applySearchSource(
+  writer: SearchContentWriteOperation,
+  source: SearchContentSourceWrite,
+  documents: Iterable<SearchContentDocumentWrite>,
+  append: boolean,
+  upsert: typeof upsertSource,
+  insert: typeof insertDocuments,
+): void {
+  if (append && !writer.get('SELECT path FROM search_sources WHERE path = ?', source.path)) throw new Error('Cannot append an unindexed search source')
+  upsert(writer, source)
+  if (!append) writer.run('DELETE FROM search_documents WHERE source_path = ?', source.path)
+  insert(writer, source.path, documents)
+}
+
+export function searchContentCommitFunctions(): string {
+  return `const upsert = (${upsertSource.toString()}); const insert = (${insertDocuments.toString()}); const applySource = (${applySearchSource.toString()});`
 }
 
 function ftsPhrase(value: string): string {
@@ -329,22 +355,10 @@ export function createSearchContentIndex(
       ))?.total ?? 0
     },
     replaceSource(source, documents) {
-      database.transaction(writer => {
-        upsertSource(writer, source)
-        writer.run('DELETE FROM search_documents WHERE source_path = ?', source.path)
-        insertDocuments(writer, source.path, documents)
-      })
+      database.transaction(writer => applySearchSource(writer, source, documents, false, upsertSource, insertDocuments))
     },
     appendSource(source, documents) {
-      database.transaction(writer => {
-        const existing = writer.get<{ path: string }>(
-          'SELECT path FROM search_sources WHERE path = ?',
-          source.path,
-        )
-        if (!existing) throw new Error('Cannot append an unindexed search source')
-        upsertSource(writer, source)
-        insertDocuments(writer, source.path, documents)
-      })
+      database.transaction(writer => applySearchSource(writer, source, documents, true, upsertSource, insertDocuments))
     },
     deleteSource(path) {
       database.transaction(writer => {
@@ -387,6 +401,45 @@ export function createSearchContentIndex(
         readiness.lastErrorCode ?? null,
         readiness.updatedAtMs ?? now())
       })
+    },
+    querySessionSuggestions(query, requestedLimit) {
+      const normalized = normalizeSearchContent(query.trim())
+      if (!normalized) return { sessions: [], truncated: false }
+      const ready = database.read(reader => reader.get<ReadinessRow>(
+        'SELECT * FROM search_backfill_state WHERE scope = ?', options.scope,
+      ))
+      if (ready?.state !== 'ready') return null
+      const limit = clampInteger(requestedLimit, DEFAULT_SESSION_LIMIT, MAX_SESSION_LIMIT)
+      const useFts = Array.from(normalized).length >= 3
+      // Scan global FTS matches once. Correlating MATCH with each source
+      // repeats that global scan for every transcript on common long queries.
+      // Short queries instead seek each source and stop at its first segment.
+      const selection = useFts
+        ? `FROM search_documents_fts
+           JOIN search_documents AS document ON document.id = search_documents_fts.rowid
+           JOIN search_sources AS source ON source.path = document.source_path
+           WHERE search_documents_fts MATCH ? AND source.state = 'ready'
+             AND instr(document.normalized_body, ?) > 0`
+        : `FROM search_sources AS source
+           WHERE source.state = 'ready' AND EXISTS (
+             SELECT 1 FROM search_documents AS document
+             WHERE document.source_path = source.path AND instr(document.normalized_body, ?) > 0
+           )`
+      const rows = database.read(reader => reader.all<{
+        owner_session_id: string; owner_transcript_path: string; project_path: string; modified_at_ms: number
+      }>(`
+        SELECT source.owner_session_id, source.owner_transcript_path,
+          source.project_path, MAX(source.modified_at_ms) AS modified_at_ms
+        ${selection}
+        GROUP BY source.owner_transcript_path
+        ORDER BY modified_at_ms DESC, source.owner_transcript_path
+        LIMIT ?
+      `, ...(useFts ? [ftsPhrase(normalized)] : []), normalized, limit + 1))
+      return {
+        sessions: rows.slice(0, limit).map(row => ({ ownerSessionId: row.owner_session_id,
+          ownerTranscriptPath: row.owner_transcript_path, projectPath: row.project_path, modifiedAtMs: row.modified_at_ms })),
+        truncated: rows.length > limit,
+      }
     },
     query(query, queryOptions = {}) {
       const literalQuery = query.trim()

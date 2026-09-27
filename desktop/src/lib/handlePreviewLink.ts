@@ -31,9 +31,15 @@ export function isAbsoluteLocalPath(p: string): boolean {
   return p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p)
 }
 
+/** Paths rooted outside the workspace, including the server-expanded home alias. */
+export function isRootedLocalPath(p: string): boolean {
+  return isAbsoluteLocalPath(p) || /^~(?:[\\/]|$)/.test(p)
+}
+
 /**
  * Build a `/local-file/<absolute-path>` URL for the local server so an absolute
- * file outside the session workspace can open in the in-app browser.
+ * file outside the session workspace can open in the in-app browser. Home aliases
+ * (`~/...`) are expanded by the server before the same filesystem checks.
  *
  * The path is appended PATH-style (not as a query param) so relative asset URLs
  * inside served HTML resolve against the same directory. Each path segment is
@@ -66,14 +72,14 @@ export function handlePreviewLink(href: string, deps: PreviewLinkDeps): boolean 
       return true
     case 'browser-file': {
       const filePath = cls.path!
-      // Absolute paths (incl. file:// → absolute) may live OUTSIDE the session
+      // Absolute and home-relative paths may live OUTSIDE the session
       // workspace, so serve them via the $HOME-sandboxed /local-file route.
       // Relative paths stay workspace-scoped via /preview-fs.
-      if (!isAbsoluteLocalPath(filePath) && !shouldOfferStaticHtmlPreview(filePath)) {
+      if (!isRootedLocalPath(filePath) && !shouldOfferStaticHtmlPreview(filePath)) {
         deps.openFilePreview(deps.sessionId, filePath, reveal)
         return true
       }
-      const url = isAbsoluteLocalPath(filePath)
+      const url = isRootedLocalPath(filePath)
         ? localFileUrl(deps.serverBaseUrl, filePath)
         : previewFsUrl(deps.serverBaseUrl, deps.sessionId, filePath)
       deps.openBrowser(deps.sessionId, url)

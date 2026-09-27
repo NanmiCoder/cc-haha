@@ -3,10 +3,12 @@ import { APIError } from '@anthropic-ai/sdk'
 import { BUSINESS_ERROR_CODES } from '../../constants/businessErrors.js'
 import {
   getAssistantMessageFromError,
+  getPromptTooLongTokenGap,
   getImageUnsupportedErrorMessage,
   isContextOverflowErrorText,
   isUnsupportedImageInputErrorMessage,
   PROMPT_TOO_LONG_ERROR_MESSAGE,
+  parsePromptTooLongTokenCounts,
 } from './errors.js'
 
 describe('image unsupported API errors', () => {
@@ -142,6 +144,50 @@ describe('image unsupported API errors', () => {
 })
 
 describe('context overflow errors', () => {
+  test('uses the full requested DeepSeek token count to recover an oversized session (#1373)', () => {
+    const message = "This model's maximum context length is 1048576 tokens. However, you requested 3763011 tokens (3731011 in the messages, 32000 in the completion)."
+    const error = new APIError(400, {
+      error: { type: 'invalid_request_error', message },
+    }, message, undefined)
+    const assistant = getAssistantMessageFromError(error, 'deepseek-v4-flash')
+
+    expect(parsePromptTooLongTokenCounts(message)).toEqual({
+      actualTokens: 3763011,
+      limitTokens: 1048576,
+    })
+    expect(getPromptTooLongTokenGap(assistant)).toBe(2714435)
+  })
+
+  test('parses wrapped and case-insensitive Anthropic and OpenAI token counts', () => {
+    for (const message of [
+      '400 {"error":{"message":"PROMPT IS TOO LONG: 137500 tokens > 135000 maximum"}}',
+      '400 {"error":{"message":"This model\'s MAXIMUM CONTEXT LENGTH IS 135000 tokens. However, you REQUESTED 137500 tokens."}}',
+    ]) {
+      expect(parsePromptTooLongTokenCounts(message)).toEqual({
+        actualTokens: 137500,
+        limitTokens: 135000,
+      })
+    }
+  })
+
+  test('leaves missing, malformed, and invalid token counts unparsed', () => {
+    for (const message of [
+      'Prompt is too long',
+      'maximum context length is 1048576 tokens',
+      'you requested 3763011 tokens',
+      'maximum context length is -1 tokens. However, you requested 3 tokens.',
+      'maximum context length is 1.5 tokens. However, you requested 3 tokens.',
+      'maximum context length is 0 tokens. However, you requested 3 tokens.',
+      'maximum context length is 1 tokens. However, you requested 9007199254740992 tokens.',
+      'prompt is too long: 0 tokens > 135000 maximum',
+    ]) {
+      expect(parsePromptTooLongTokenCounts(message)).toEqual({
+        actualTokens: undefined,
+        limitTokens: undefined,
+      })
+    }
+  })
+
   test('matches provider-specific overflow wordings', () => {
     const overflowMessages = [
       'prompt is too long: 137500 tokens > 135000 maximum',

@@ -7,7 +7,7 @@ import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environmen
 import type { Tool, ToolUseContext } from '../Tool.js'
 import type { QueryParams } from '../query.js'
 
-const scenarios = ['chat-eof', 'chat-length', 'chat-error', 'chat-completed', 'responses-incomplete', 'responses-failed', 'responses-done-only'] as const
+const scenarios = ['chat-eof', 'chat-length', 'chat-error', 'chat-completed', 'responses-incomplete', 'responses-failed', 'responses-done-only', 'anthropic-duplicate', 'anthropic-eof', 'anthropic-truncated'] as const
 type Scenario = typeof scenarios[number]
 const resultPrefix = 'PROXY_TOOL_COMMIT_RESULT:'
 const childScenario = process.env.CC_HAHA_PROXY_TOOL_COMMIT_SCENARIO
@@ -35,6 +35,7 @@ async function runScenario(root: string, scenario: Scenario) {
   const { enableConfigs } = await import('../utils/config.js')
   enableConfigs()
   let executions = 0
+  const committedToolIds: string[] = []
   let requests = 0
   const target = join(root, `${scenario}.txt`)
   const input = { file_path: target, content: 'written exactly once' }
@@ -43,12 +44,25 @@ async function runScenario(root: string, scenario: Scenario) {
   let wire = isChat
     ? chatTool(args, scenario === 'chat-completed' ? 'tool_calls' : scenario === 'chat-length' ? 'length' : undefined)
     : responsesTool(args, scenario === 'responses-done-only' ? 'completed' : scenario === 'responses-failed' ? 'failed' : 'incomplete', scenario === 'responses-done-only')
+  if (scenario.startsWith('anthropic-')) {
+    wire = event('message_start', { message: { id: 'msg_fixture', type: 'message', role: 'assistant', model: 'fixture-model',
+      content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } })
+    const blocks = scenario === 'anthropic-duplicate' ? [0, 1] : [0]
+    for (const index of blocks) {
+      wire += event('content_block_start', { index, content_block: { type: 'tool_use', id: 'call_fixture', name: 'FixtureWrite', input: {} } })
+        + event('content_block_delta', { index, delta: { type: 'input_json_delta', partial_json: args } })
+        + event('content_block_stop', { index })
+        + event('content_block_stop', { index })
+    }
+    wire += event('message_delta', { delta: { stop_reason: scenario === 'anthropic-truncated' ? 'max_tokens' : 'tool_use', stop_sequence: null }, usage: { output_tokens: 5 } })
+    if (scenario === 'anthropic-duplicate') wire += event('message_stop', {})
+  }
   if (scenario === 'chat-error') wire += `data: ${JSON.stringify({ error: { type: 'server_error', message: 'fixture upstream failure' } })}\n\n`
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
     await request.json()
     requests++
     const stream = requests === 1
-      ? (isChat ? openaiChatStreamToAnthropic(upstream(wire), 'fixture-model') : openaiResponsesStreamToAnthropic(upstream(wire), 'fixture-model'))
+      ? (scenario.startsWith('anthropic-') ? upstream(wire) : isChat ? openaiChatStreamToAnthropic(upstream(wire), 'fixture-model') : openaiResponsesStreamToAnthropic(upstream(wire), 'fixture-model'))
       : openaiChatStreamToAnthropic(upstream(`data: ${JSON.stringify({ choices: [{ delta: { content: 'complete' }, finish_reason: 'stop' }] })}\n\n`), 'fixture-model')
     return new Response(stream, { headers: { 'content-type': 'text/event-stream' } })
   } })
@@ -82,10 +96,14 @@ async function runScenario(root: string, scenario: Scenario) {
     deps: { callModel, microcompact: async messages => ({ messages }), autocompact: async () => ({}), uuid: randomUUID },
   }
   try {
-    for await (const _message of query(params)) {
-      // Drain the production query loop, including tool execution and continuation.
+    for await (const message of query(params)) {
+      if (message.type === 'assistant') {
+        for (const block of message.message.content) {
+          if (block.type === 'tool_use') committedToolIds.push(block.id)
+        }
+      }
     }
-    return { executions, requests }
+    return { executions, requests, committedToolIds }
   } finally {
     toolUseContext.abortController.abort()
     server.stop(true)
@@ -162,8 +180,9 @@ for (const scenario of scenarios) {
       const resultLine = stdout.split('\n').find(line => line.startsWith(resultPrefix))
       expect(resultLine, stdout + stderr).toBeDefined()
       const result = JSON.parse(resultLine!.slice(resultPrefix.length))
-      const success = scenario === 'chat-completed' || scenario === 'responses-done-only'
+      const success = scenario === 'chat-completed' || scenario === 'responses-done-only' || scenario === 'anthropic-duplicate'
       expect(result.executions).toBe(success ? 1 : 0)
+      expect(result.committedToolIds).toEqual(success ? ['call_fixture'] : [])
       const target = join(root, `${scenario}.txt`)
       if (success) expect(await readFile(target, 'utf8')).toBe('written exactly once')
       else expect(await Bun.file(target).exists()).toBe(false)

@@ -3,9 +3,11 @@
  *
  * The four buckets the CLI reports are disjoint: `input_tokens` never includes cached tokens, so
  * summing them counts each token exactly once. (Providers whose wire format folds cache hits into
- * the prompt total are adapted on the way in — see `src/server/proxy/transform/usage.ts`.) That
- * invariant is the reason this file can add first and ask questions later; a source that ever
- * reports inclusive input would silently inflate both the total and the cache hit rate.
+ * the prompt total are adapted on the way in — see `src/server/proxy/transform/usage.ts`.)
+ *
+ * The headline number is *new* tokens (uncached input + output), not every cache hit replayed
+ * across a long agent loop. Counting cache reads as spend made a 270k-window session look like
+ * 40M "total tokens" — the same prompt billed once per tool round.
  */
 
 export type SessionUsageLike = {
@@ -14,17 +16,24 @@ export type SessionUsageLike = {
   totalCacheReadInputTokens: number
   totalCacheCreationInputTokens: number
   totalDecodeDuration?: number
+  totalAPIDuration?: number
 }
 
 export type SessionUsageMetrics = {
-  /** Every token the session moved, counting a cached token once. */
+  /**
+   * Uncached input + output. Cache hits are not spend — they are the same prompt seen again —
+   * so they stay out of this number.
+   */
   totalTokens: number
   /** Prompt-side tokens only: the denominator a cache hit rate is meaningful against. */
   promptTokens: number
   cachedTokens: number
   /** `null` when the session has sent no prompt tokens yet. */
   cacheHitRate: number | null
-  /** `null` when no decode span was reported — see below. */
+  /**
+   * Output tokens over API wall-clock. `null` when no API duration was reported.
+   * Decode-only spans exclude TTFT and read as a peak the user never felt.
+   */
   tokensPerSecond: number | null
 }
 
@@ -35,25 +44,24 @@ function finite(value: number | undefined): number {
 /**
  * Derives the panel's headline numbers.
  *
- * `tokensPerSecond` divides output tokens by the time the model actually spent emitting them, so
- * tool execution and prefill wait are excluded. A caller that only has a transcript (no decode
- * spans) gets `null` rather than a rate computed against wall clock: dividing by a span that
- * includes 40 seconds of `Bash` would report a speed the model never ran at.
+ * `tokensPerSecond` divides output tokens by the time the API was actually running, including
+ * prefill. A caller that only has a transcript (no API duration) gets `null` rather than a rate
+ * computed against wall clock that includes `Bash`.
  */
 export function deriveSessionUsageMetrics(usage: SessionUsageLike): SessionUsageMetrics {
   const input = finite(usage.totalInputTokens)
   const output = finite(usage.totalOutputTokens)
   const cacheRead = finite(usage.totalCacheReadInputTokens)
   const cacheWrite = finite(usage.totalCacheCreationInputTokens)
-  const decodeMs = finite(usage.totalDecodeDuration)
+  const apiMs = finite(usage.totalAPIDuration)
 
   const promptTokens = input + cacheRead + cacheWrite
   return {
-    totalTokens: promptTokens + output,
+    totalTokens: input + output,
     promptTokens,
     cachedTokens: cacheRead,
     cacheHitRate: promptTokens > 0 ? cacheRead / promptTokens : null,
-    tokensPerSecond: decodeMs > 0 && output > 0 ? output / (decodeMs / 1000) : null,
+    tokensPerSecond: apiMs > 0 && output > 0 ? output / (apiMs / 1000) : null,
   }
 }
 

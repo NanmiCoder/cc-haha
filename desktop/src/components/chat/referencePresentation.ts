@@ -1,4 +1,4 @@
-import { Box, File, Folder, Package, type LucideIcon } from 'lucide-react'
+import { Box, File, Folder, Package, MessagesSquare, type LucideIcon } from 'lucide-react'
 import type { TranslationKey } from '@/i18n'
 
 /**
@@ -9,7 +9,8 @@ import type { TranslationKey } from '@/i18n'
  * outline box the Codex composer uses for `SKILL.md`, plugins use the package
  * glyph, and filesystem rows fall back to folder/file.
  */
-export function referenceFallbackIcon(kind: 'skill' | 'plugin' | 'file' | 'directory'): LucideIcon {
+export function referenceFallbackIcon(kind: 'skill' | 'plugin' | 'file' | 'directory' | 'session'): LucideIcon {
+  if (kind === 'session') return MessagesSquare
   if (kind === 'plugin') return Package
   if (kind === 'skill') return Box
   if (kind === 'directory') return Folder

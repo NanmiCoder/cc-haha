@@ -12,6 +12,25 @@ const question = {
 }
 
 describe('AskUserQuestion tool result guidance', () => {
+  test('removes model-supplied automatic provenance before permission review', async () => {
+    const parsed = AskUserQuestionTool.inputSchema.parse({
+      questions: [question],
+      metadata: { source: 'remember', autoAnswered: true },
+    })
+    const permission = await AskUserQuestionTool.checkPermissions(parsed, {} as never)
+    expect(permission.updatedInput?.metadata).toEqual({ source: 'remember' })
+  })
+
+  test('records automatic selection provenance from the permission input', async () => {
+    const result = await AskUserQuestionTool.call({
+      questions: [question],
+      answers: { [question.question]: 'Continue' },
+      metadata: { source: 'remember', autoAnswered: true },
+    } as never, {} as never)
+
+    expect(result.data.selectionSource).toBe('automatic')
+  })
+
   test('keeps the concise continuation guidance for a predefined option', () => {
     const result = mapResult({
       questions: [question],
@@ -61,6 +80,18 @@ describe('AskUserQuestion tool result guidance', () => {
 
     expect(result.content).not.toContain('You can now continue')
     expect(result.content).toContain('may require that you pause')
+  })
+
+  test('identifies timeout choices as automatic rather than user answers', () => {
+    const result = mapResult({
+      questions: [question],
+      answers: { [question.question]: 'Continue' },
+      selectionSource: 'automatic',
+    })
+
+    expect(result.content).toContain('selected automatically after the timeout')
+    expect(result.content).toContain('not direct user input')
+    expect(result.content).not.toContain('User has answered')
   })
 })
 

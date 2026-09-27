@@ -1,6 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { AppState } from '../../state/AppState.js'
 import type { ToolUseContext } from '../../Tool.js'
+import { parseUserSpecifiedModel } from '../../utils/model/model.js'
 import type {
   CustomAgentDefinition,
   PluginAgentDefinition,
@@ -38,6 +39,7 @@ const startInProcessTeammateMock = mock((_config: unknown) => {})
 const execFileNoThrowModule = await import('../../utils/execFileNoThrow.js')
 const taskFrameworkModule = await import('../../utils/task/framework.js')
 const teamHelpersModule = await import('../../utils/swarm/teamHelpers.js')
+const originalTeamHelpers = { ...teamHelpersModule }
 const mutateTeamFileAsyncActual = teamHelpersModule.mutateTeamFileAsync
 const readTeamFileAsyncActual = teamHelpersModule.readTeamFileAsync
 
@@ -123,6 +125,7 @@ beforeEach(() => {
 })
 
 afterAll(() => {
+  mock.module('../../utils/swarm/teamHelpers.js', () => originalTeamHelpers)
   if (originalSubagentModel === undefined) {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
   } else {
@@ -213,7 +216,7 @@ describe('Agent Teams custom Agent runtime call sites', () => {
       makeContext(pluginAgent),
     )
 
-    expect(result.data.model).toBe('opus')
+    expect(result.data.model).toBe(parseUserSpecifiedModel('opus'))
     const runnerConfig = startInProcessTeammateMock.mock.calls[0]?.[0] as {
       agentDefinition?: PluginAgentDefinition
     }

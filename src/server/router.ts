@@ -1,3 +1,5 @@
+import { handleSessionCollaborationUiApi } from './api/sessionCollaboration.js'
+import { getSessionCollaborationService } from './services/sessionCollaborationHost.js'
 /**
  * API Router — 将请求路由到对应的 API handler
  */
@@ -31,6 +33,7 @@ import { handleDesktopUiApi } from './api/desktop-ui.js'
 import { handleTracesApi } from './api/traces.js'
 import { handleWorkflowsApi } from './api/workflows.js'
 import { handleManagedContextApi } from './features/managedContext/api.js'
+import { apiPerformanceMonitor } from './services/apiPerformanceMonitor.js'
 
 import { remoteProviderRouteAllowed, remoteSettingsRouteAllowed, projectRemoteProvider, projectRemoteSettings, replaceRemoteCompatibility, validateRemoteSettingsPatch, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import { ProviderService } from './services/providerService.js'
@@ -41,7 +44,17 @@ import { remoteProviderNeedsCredentials } from './remoteProviderCredentials.js'
 export type ApiRequestOptions = ApiRequestContext & { clientAddress?: string | null }
 
 export async function handleApiRequest(req: Request, url: URL, context: ApiRequestOptions = {}): Promise<Response> {
-  // Apply the same empty-segment normalization as routeApiRequest before authorizing.
+  const span = apiPerformanceMonitor.begin(req.method, url.pathname)
+  try {
+    return span.complete(await handleApiRequestWithoutPerformance(req, url, context))
+  } catch (error) {
+    span.fail()
+    throw error
+  }
+}
+
+async function handleApiRequestWithoutPerformance(req: Request, url: URL, context: ApiRequestOptions = {}): Promise<Response> {
+  // Normalize before checking the desktop-only managed-context capability.
   if (context.remoteBrowser && url.pathname.split('/').filter(Boolean)[1] === 'context-tickets') return Response.json({ error: 'Desktop-only capability' }, { status: 403 })
   if (!context.remoteBrowser) return routeApiRequest(req, url, context)
   const parts = url.pathname.split('/').filter(Boolean)
@@ -101,6 +114,8 @@ async function routeApiRequest(req: Request, url: URL, options: ApiRequestOption
   const resource = segments[1]
 
   switch (resource) {
+    case 'session-collaboration':
+      return handleSessionCollaborationUiApi(req, url, await getSessionCollaborationService())
     case 'sessions': {
       // Route /api/sessions/:id/chat/* to conversations handler
       const subResource = segments[3]
@@ -207,7 +222,7 @@ async function routeApiRequest(req: Request, url: URL, options: ApiRequestOption
       })
 
     case 'filesystem':
-      return handleFilesystemRoute(url.pathname, url)
+      return handleFilesystemRoute(url.pathname, url, req.signal)
 
     default:
       return Response.json(

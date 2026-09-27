@@ -28,6 +28,7 @@ describe('resolveCors', () => {
         'Access-Control-Allow-Origin': 'https://example.com',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Expose-Headers': 'Server-Timing, X-Request-Id',
         'Access-Control-Max-Age': '86400',
         Vary: 'Origin',
       },
@@ -46,6 +47,7 @@ describe('resolveCors', () => {
       headers: {
         'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Expose-Headers': 'Server-Timing, X-Request-Id',
         'Access-Control-Max-Age': '86400',
         Vary: 'Origin',
       },
@@ -65,6 +67,7 @@ describe('resolveCors', () => {
         'Access-Control-Allow-Origin': 'https://allowed.example.com',
         'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
         'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Expose-Headers': 'Server-Timing, X-Request-Id',
         'Access-Control-Max-Age': '86400',
         Vary: 'Origin',
       },

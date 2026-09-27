@@ -140,6 +140,83 @@ describe('memoryStore request ownership', () => {
     })
   })
 
+  it('advances the saved revision without discarding edits made while saving', async () => {
+    const firstSave = deferred<{
+      ok: true
+      file: { path: string; updatedAt: string; bytes: number }
+    }>()
+    const secondSave = deferred<{
+      ok: true
+      file: { path: string; updatedAt: string; bytes: number }
+    }>()
+    memoryApiMock.saveFile.mockReturnValueOnce(firstSave.promise)
+    memoryApiMock.listFiles.mockResolvedValue({ files: [file('MEMORY.md')] })
+    useMemoryStore.setState({
+      projects: [project('demo')],
+      selectedProjectId: 'demo',
+      selectedFile: {
+        ...file('MEMORY.md'),
+        content: '# Original',
+      },
+      draftContent: '# First edit',
+    })
+
+    const firstRequest = useMemoryStore.getState().saveFile()
+    useMemoryStore.getState().updateDraft('# First edit\n\nContinued typing')
+    firstSave.resolve({
+      ok: true,
+      file: {
+        path: 'MEMORY.md',
+        updatedAt: '2026-07-24T00:01:00.000Z',
+        bytes: 12,
+      },
+    })
+
+    await expect(firstRequest).resolves.toBe(true)
+    expect(useMemoryStore.getState()).toMatchObject({
+      selectedFile: {
+        path: 'MEMORY.md',
+        content: '# First edit',
+        updatedAt: '2026-07-24T00:01:00.000Z',
+        bytes: 12,
+      },
+      draftContent: '# First edit\n\nContinued typing',
+      isSaving: false,
+      lastSavedAt: '2026-07-24T00:01:00.000Z',
+    })
+
+    memoryApiMock.saveFile.mockReturnValueOnce(secondSave.promise)
+    const secondRequest = useMemoryStore.getState().saveFile()
+    expect(memoryApiMock.saveFile).toHaveBeenLastCalledWith({
+      projectId: 'demo',
+      path: 'MEMORY.md',
+      content: '# First edit\n\nContinued typing',
+      expectedUpdatedAt: '2026-07-24T00:01:00.000Z',
+      expectedBytes: 12,
+    })
+    secondSave.resolve({
+      ok: true,
+      file: {
+        path: 'MEMORY.md',
+        updatedAt: '2026-07-24T00:02:00.000Z',
+        bytes: 30,
+      },
+    })
+
+    await expect(secondRequest).resolves.toBe(true)
+    expect(useMemoryStore.getState()).toMatchObject({
+      selectedFile: {
+        path: 'MEMORY.md',
+        content: '# First edit\n\nContinued typing',
+        updatedAt: '2026-07-24T00:02:00.000Z',
+        bytes: 30,
+      },
+      draftContent: '# First edit\n\nContinued typing',
+      isSaving: false,
+      lastSavedAt: '2026-07-24T00:02:00.000Z',
+    })
+  })
+
   it('serializes saves, sends the loaded revision, and does not cross project context', async () => {
     const save = deferred<{
       ok: true

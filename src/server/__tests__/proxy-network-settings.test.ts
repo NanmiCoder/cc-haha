@@ -608,3 +608,54 @@ describe('proxy network settings', () => {
     expect(cancelReason).toBe('downstream closed')
   })
 })
+
+/**
+ * Gateways that route on a client-supplied session id make that id part of the
+ * request, and the OpenAI paths hand their outgoing headers to trace capture
+ * verbatim. A trace is meant to be shareable when reporting a bug, so the id has
+ * to be redacted alongside the credential.
+ */
+describe('gateway client headers in trace capture', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  test('redacts the routing session id on the OpenAI Chat path', async () => {
+    const provider = await new ProviderService().addProvider({
+      presetId: 'opencode-go',
+      name: 'OpenCode Go',
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      apiKey: 'sk-opencode-trace',
+      apiFormat: 'openai_chat',
+      models: { main: 'glm-5.3', haiku: 'glm-5.3-flash', sonnet: 'glm-5.3', opus: 'glm-5.3' },
+    })
+
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = mock(async () => Response.json({
+      id: 'chatcmpl-trace',
+      object: 'chat.completion',
+      model: 'glm-5.3',
+      choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+    })) as typeof fetch
+
+    try {
+      const sessionId = 'session-opencode-trace'
+      const req = new Request(`http://localhost:3456/proxy/providers/${provider.id}/v1/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-claude-code-session-id': sessionId },
+        body: JSON.stringify({ model: 'glm-5.3', max_tokens: 64, messages: [{ role: 'user', content: 'hello' }] }),
+      })
+      expect((await handleProxyRequest(req, new URL(req.url))).status).toBe(200)
+
+      const trace = await waitForTraceCall(sessionId)
+      expect(trace.calls).toHaveLength(1)
+      const headers = trace.calls[0]!.request.headers
+      expect(headers['x-opencode-session']).toBe('[redacted]')
+      expect(headers.Authorization).toBe('[redacted]')
+      // Non-sensitive headers still survive, so the trace stays useful.
+      expect(headers['Content-Type']).toBe('application/json')
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})

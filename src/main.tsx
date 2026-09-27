@@ -52,6 +52,7 @@ import { getSubscriptionType, isClaudeAISubscriber, prefetchAwsCredentialsAndBed
 import { checkHasTrustDialogAccepted, getGlobalConfig, getRemoteControlAtStartup, isAutoUpdaterDisabled, saveGlobalConfig } from './utils/config.js';
 import { seedEarlyInput, stopCapturingEarlyInput } from './utils/earlyInput.js';
 import { getInitialEffortSetting, parseEffortValue } from './utils/effort.js';
+import { initialRuntimeEffort } from './utils/swarm/teamWorkerRuntime.js';
 import { ULTRACODE_EFFORT_ARG, ULTRACODE_EFFORT_LEVEL } from './utils/workflows/ultracode.js';
 import { getInitialFastModeSetting, isFastModeEnabled, prefetchFastModeStatus, resolveFastModeStatusFromCache } from './utils/fastMode.js';
 import { applyConfigEnvironmentVariables } from './utils/managedEnv.js';
@@ -2143,7 +2144,7 @@ async function run(): Promise<CommanderCommand> {
     // raises a separate session flag, so every model-capability check keeps
     // reasoning about the five real levels.
     const ultracodeRequested = String(options.effort ?? '').toLowerCase() === ULTRACODE_EFFORT_ARG;
-    const effectiveEffort = ultracodeRequested ? ULTRACODE_EFFORT_LEVEL : parseEffortValue(options.effort) ?? mainThreadAgentDefinition?.effort ?? getInitialEffortSetting();
+    const effectiveEffort = ultracodeRequested ? ULTRACODE_EFFORT_LEVEL : parseEffortValue(options.effort) ?? mainThreadAgentDefinition?.effort ?? initialRuntimeEffort(getInitialEffortSetting);
 
     // Compute resolved model for hooks (use user-specified model at launch)
     setInitialMainLoopModel(getUserSpecifiedModelSetting() || null);

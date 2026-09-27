@@ -101,6 +101,45 @@ describe('trace index', () => {
     expect(allColumns.map(row => row.name)).not.toContain('pending_tail')
   })
 
+  test('aggregates large replacement and append batches once after resolving duplicate calls', async () => {
+    await createTestIndex()
+    const target = database!
+    let summaryUpdates = 0
+    const index = createTraceIndex({
+      ...target,
+      transaction: callback => target.transaction(operation => callback({
+        ...operation,
+        run(statement, ...bindings) {
+          if (statement.includes('UPDATE trace_sessions SET')) summaryUpdates += 1
+          return operation.run(statement, ...bindings)
+        },
+      })),
+    })
+    const calls = Array.from({ length: 2_000 }, (_, ordinal) => ({
+      id: `call-${ordinal}`, ordinal, byteStart: ordinal, byteLength: 1,
+      startedAt: '2026-07-15T01:00:00.000Z', completedAt: null,
+      status: 'ok', source: 'proxy', model: ordinal % 2 ? 'model-b' : 'model-a',
+      durationMs: 2, failed: false, inputTokens: 3, outputTokens: 4,
+    }))
+    const source = { sessionId: 'batch', filePath: '/tmp/batch.jsonl', size: 2_002, indexedBytes: 2_002, mtimeMs: 1 }
+    index.replaceSession({ source, calls, events: [] })
+    expect(summaryUpdates).toBeLessThanOrEqual(2)
+    expect(index.getSummary('batch')?.summary).toMatchObject({
+      apiCalls: 2_000, totalInputTokens: 6_000,
+      models: [{ model: 'model-a', calls: 1_000 }, { model: 'model-b', calls: 1_000 }],
+    })
+    summaryUpdates = 0
+    index.appendEntries({ source, calls: [
+      { ...calls[0]!, ordinal: 2_000, byteStart: 2_000, failed: true, inputTokens: 5 },
+      { ...calls[1]!, ordinal: 2_001, byteStart: 2_001, model: 'model-a' },
+    ], events: [] })
+    expect(summaryUpdates).toBeLessThanOrEqual(2)
+    expect(index.getSummary('batch')?.summary).toMatchObject({
+      apiCalls: 2_000, failedCalls: 1, totalInputTokens: 6_002,
+      models: [{ model: 'model-a', calls: 1_001 }, { model: 'model-b', calls: 999 }],
+    })
+  })
+
   test('keeps the latest call locator and exposes revision-based changes without duplicates', async () => {
     const index = await createTestIndex()
 
@@ -299,7 +338,7 @@ describe('trace index', () => {
     const index = createTraceIndex(database)
 
     expect(database.read(operation => operation.get<{ user_version: number }>('PRAGMA user_version')))
-      .toEqual({ user_version: 4 })
+      .toEqual({ user_version: 6 })
     expect(index.getSession('frozen')).toMatchObject({
       revision: 7,
       lastResetRevision: 3,
@@ -314,7 +353,7 @@ describe('trace index', () => {
     })
   })
 
-  test('migrates frozen v2 and v3 databases to v4 with safe ordering reconstruction', async () => {
+  test('migrates frozen v2 and v3 databases forward with safe ordering reconstruction', async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'trace-index-v2-v3-'))
 
     for (const version of [2, 3]) {
@@ -366,10 +405,20 @@ describe('trace index', () => {
 
       const frozen = new Database(databasePath)
       frozen.exec(`
+        DROP INDEX trace_calls_page_order_idx;
+        DROP INDEX trace_calls_model_order_idx;
+        ALTER TABLE trace_sources DROP COLUMN oversized_records;
+        ALTER TABLE trace_sources DROP COLUMN scan_truncated;
+        ALTER TABLE trace_sources DROP COLUMN window_start_byte;
         DROP INDEX trace_session_models_order_idx;
         ALTER TABLE trace_session_models DROP COLUMN first_started_at;
         ALTER TABLE trace_session_models DROP COLUMN first_ordinal;
         ALTER TABLE trace_calls DROP COLUMN first_ordinal;
+        ALTER TABLE trace_calls DROP COLUMN request_bytes;
+        ALTER TABLE trace_calls DROP COLUMN response_bytes;
+        ALTER TABLE trace_calls DROP COLUMN response_status;
+        ALTER TABLE trace_events DROP COLUMN title;
+        ALTER TABLE trace_events DROP COLUMN message;
         ${version === 2 ? 'ALTER TABLE trace_sessions DROP COLUMN reset_token;' : ''}
         PRAGMA user_version = ${version};
       `)
@@ -379,14 +428,14 @@ describe('trace index', () => {
       const migrated = createTraceIndex(candidate)
       expect(candidate.read(operation => operation.get<{ user_version: number }>(
         'PRAGMA user_version',
-      ))).toEqual({ user_version: 4 })
+      ))).toEqual({ user_version: 6 })
       expect(migrated.getSummary(`frozen-v${version}`)?.summary.models).toEqual([
         { model: 'z-model', calls: 1 },
         { model: 'a-model', calls: 1 },
       ])
       expect(migrated.getSource(`frozen-v${version}`)).toMatchObject({
         state: 'degraded',
-        lastErrorCode: 'TRACE_INDEX_V4_REBUILD_REQUIRED',
+        lastErrorCode: 'TRACE_INDEX_V6_REBUILD_REQUIRED',
       })
       expect(candidate.read(operation => operation.all<{
         ordinal: number
@@ -399,6 +448,35 @@ describe('trace index', () => {
     }
   })
 
+  test('migrates a v5 fixture to bounded windows while preserving existing rows and unknown tables', async () => {
+    const index = await createTestIndex()
+    index.replaceSession({
+      source: { sessionId: 'v5', filePath: '/tmp/v5.jsonl', size: 100, indexedBytes: 100, mtimeMs: 1 },
+      calls: [], events: [],
+    })
+    database!.write(operation => operation.exec(`
+      CREATE TABLE future_extension (value TEXT);
+      INSERT INTO future_extension VALUES ('preserve-me');
+      DROP INDEX trace_calls_page_order_idx;
+      DROP INDEX trace_calls_model_order_idx;
+      ALTER TABLE trace_sources DROP COLUMN oversized_records;
+      ALTER TABLE trace_sources DROP COLUMN scan_truncated;
+      ALTER TABLE trace_sources DROP COLUMN window_start_byte;
+      PRAGMA user_version = 5;
+    `))
+    database!.close()
+    database = openTraceIndexDatabase({ path: path.join(tmpDir!, 'trace-index-v1.sqlite') })
+    const upgraded = createTraceIndex(database)
+    expect(upgraded.getSource('v5')).toMatchObject({
+      size: 100, indexedBytes: 100, oversizedRecords: 0, scanTruncated: false, windowStartByte: 0,
+      state: 'degraded', lastErrorCode: 'TRACE_INDEX_V6_REBUILD_REQUIRED',
+    })
+    expect(database.read(operation => operation.get<{ value: string }>('SELECT value FROM future_extension')))
+      .toEqual({ value: 'preserve-me' })
+    expect(database.read(operation => operation.get<{ user_version: number }>('PRAGMA user_version')))
+      .toEqual({ user_version: 6 })
+  })
+
   test('rolls back every v4 schema change when migration fails partway through', async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'trace-index-v4-rollback-'))
     const databasePath = path.join(tmpDir, 'trace-index-v3-broken.sqlite')
@@ -406,7 +484,12 @@ describe('trace index', () => {
     initial.close()
     const frozen = new Database(databasePath)
     frozen.exec(`
-      DROP INDEX trace_session_models_order_idx;
+      DROP INDEX trace_calls_page_order_idx;
+        DROP INDEX trace_calls_model_order_idx;
+        ALTER TABLE trace_sources DROP COLUMN oversized_records;
+        ALTER TABLE trace_sources DROP COLUMN scan_truncated;
+        ALTER TABLE trace_sources DROP COLUMN window_start_byte;
+        DROP INDEX trace_session_models_order_idx;
       ALTER TABLE trace_session_models DROP COLUMN first_started_at;
       ALTER TABLE trace_session_models DROP COLUMN first_ordinal;
       ALTER TABLE trace_calls DROP COLUMN first_ordinal;
@@ -424,4 +507,15 @@ describe('trace index', () => {
       .map(column => column.name)).not.toContain('first_ordinal')
     inspected.close()
   })
+})
+
+test('strictly closes owned statements after Bun query-cache eviction', async () => {
+  await createTestIndex()
+  // Bun's internal query cache is bounded; our owned cache can outlive its entries.
+  for (let index = 0; index < 256; index += 1) {
+    expect(database!.read(operation => operation.get<{ value: number }>(`SELECT ${index} AS value`))).toEqual({ value: index })
+  }
+  expect(() => database!.close()).not.toThrow()
+  expect(() => database!.close()).not.toThrow()
+  expect(() => database!.read(operation => operation.get('SELECT 1'))).toThrow('Trace index database is closed')
 })

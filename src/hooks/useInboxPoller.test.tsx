@@ -14,6 +14,7 @@ const appStateModule = await import('../state/AppState.js')
 const teammateModule = await import('../utils/teammate.js')
 const teammateContextModule = await import('../utils/teammateContext.js')
 const teamHelpersModule = await import('../utils/swarm/teamHelpers.js')
+const originalTeamHelpers = { ...teamHelpersModule }
 const backendRegistryModule = await import(
   '../utils/swarm/backends/registry.js'
 )
@@ -185,6 +186,8 @@ beforeEach(() => {
 })
 
 afterAll(() => {
+  // Bun's mock.restore does not undo mock.module export replacements.
+  mock.module('../utils/swarm/teamHelpers.js', () => originalTeamHelpers)
   mock.restore()
 })
 

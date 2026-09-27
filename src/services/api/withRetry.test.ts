@@ -1,8 +1,11 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import type Anthropic from '@anthropic-ai/sdk'
-import { APIConnectionError, APIError } from '@anthropic-ai/sdk'
+import { APIConnectionError, APIError, APIUserAbortError } from '@anthropic-ai/sdk'
+import { clearFastModeCooldown, getFastModeRuntimeState } from '../../utils/fastMode.js'
 import { _resetKeepAliveForTesting, getProxyFetchOptions } from '../../utils/proxy.js'
 import {
+  BASE_DELAY_MS,
+  getRetryDelay,
   CannotRetryError,
   getMaxStreamTransientRetries,
   isRetryableStreamError,
@@ -427,5 +430,149 @@ describe('policy rejection retry boundaries', () => {
     }
     const error = Object.assign(new Error('Disconnected'), { code: 'ECONNRESET', cause: { error: { code: 'cyber_policy' } } })
     expect(isRetryableStreamTransportError(error)).toBe(false)
+  })
+})
+
+describe('Retry-After minimum backoff', () => {
+  test('zero seconds cannot bypass the ordinary retry backoff floor', () => {
+    expect(getRetryDelay(1, '0')).toBeGreaterThanOrEqual(BASE_DELAY_MS)
+  })
+})
+
+
+describe('Retry-After compatibility and retry loop boundaries', () => {
+  test('preserves positive seconds, missing/invalid/date fallback, jitter and cap', () => {
+    const random = spyOn(Math, 'random').mockReturnValue(0.2)
+    try {
+      expect(getRetryDelay(1, '2')).toBe(2000)
+      expect(getRetryDelay(1, '60')).toBe(60000)
+      expect(getRetryDelay(1, '-1')).toBe(BASE_DELAY_MS)
+      expect(getRetryDelay(1, '0.5')).toBe(BASE_DELAY_MS)
+      for (const header of [undefined, null, '', 'invalid', 'Wed, 21 Oct 2037 07:28:00 GMT']) {
+        // HTTP dates were not interpreted by this retry layer; retain its backoff.
+        expect(getRetryDelay(2, header)).toBe(1050)
+      }
+      expect(getRetryDelay(20)).toBe(33600)
+    } finally {
+      random.mockRestore()
+    }
+  })
+
+  for (const fastMode of [false, true]) {
+    for (const status of [429, 529]) {
+      test(`${fastMode ? 'fast' : 'ordinary'} HTTP ${status} zero hint sleeps before retry and remains bounded`, async () => {
+        const savedDisable = process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+        delete process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+        clearFastModeCooldown()
+        const delays: number[] = []
+        const nativeTimeout = globalThis.setTimeout
+        const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => {
+          if (ms <= BASE_DELAY_MS) {
+            delays.push(ms)
+            queueMicrotask(() => callback(...args))
+            return 0
+          }
+          return nativeTimeout(callback, ms, ...args)
+        }) as typeof setTimeout)
+        let attempts = 0
+        const error = new APIError(status, {}, 'capacity', new Headers({ 'retry-after': '0' }))
+        const generator = withRetry(
+          async () => ({} as Anthropic),
+          async () => { attempts++; throw error },
+          { model: 'claude-sonnet-4-6', thinkingConfig: { type: 'disabled' }, fastMode, maxRetries: 1 },
+        )
+        let caught: unknown
+        try {
+          try { while (!(await generator.next()).done) {} } catch (error) { caught = error }
+          expect(caught).toBeInstanceOf(CannotRetryError)
+          expect((caught as CannotRetryError).originalError).toBe(error)
+          expect(attempts).toBe(2)
+          expect(delays.length).toBeGreaterThanOrEqual(1)
+          expect(delays.every(delay => delay === BASE_DELAY_MS)).toBe(true)
+          expect(getFastModeRuntimeState().status).toBe('active')
+        } finally {
+          timer.mockRestore()
+          if (savedDisable === undefined) delete process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+          else process.env.CLAUDE_CODE_DISABLE_FAST_MODE = savedDisable
+          clearFastModeCooldown()
+        }
+      })
+    }
+
+    test(`${fastMode ? 'fast' : 'ordinary'} zero-hint backoff is abortable`, async () => {
+      const savedDisable = process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+      delete process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+      clearFastModeCooldown()
+      const controller = new AbortController()
+      const nativeTimeout = globalThis.setTimeout
+      const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => {
+        const handle = nativeTimeout(callback, ms, ...args)
+        if (ms <= BASE_DELAY_MS) queueMicrotask(() => controller.abort())
+        return handle
+      }) as typeof setTimeout)
+      let attempts = 0
+      const generator = withRetry(
+        async () => ({} as Anthropic),
+        async () => {
+          attempts++
+          throw new APIError(429, {}, 'capacity', new Headers({ 'retry-after': '0' }))
+        },
+        { model: 'claude-sonnet-4-6', thinkingConfig: { type: 'disabled' }, fastMode, maxRetries: 2, signal: controller.signal },
+      )
+      let caught: unknown
+      try {
+        try { while (!(await generator.next()).done) {} } catch (error) { caught = error }
+        expect(caught).toBeInstanceOf(APIUserAbortError)
+        expect(attempts).toBe(1)
+      } finally {
+        timer.mockRestore()
+        if (savedDisable === undefined) delete process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+        else process.env.CLAUDE_CODE_DISABLE_FAST_MODE = savedDisable
+        clearFastModeCooldown()
+      }
+    })
+  }
+})
+
+describe('fast Retry-After compatibility', () => {
+  test.each([
+    ['2', true, 2000],
+    ['60', false, null],
+    ['invalid', false, null],
+    ['Wed, 21 Oct 2037 07:28:00 GMT', false, null],
+  ] as const)('preserves fast-mode decision for %s', async (header, expectedFast, expectedDelay) => {
+    const savedDisable = process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+    delete process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+    clearFastModeCooldown()
+    const delays: number[] = []
+    const nativeTimeout = globalThis.setTimeout
+    const timer = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: unknown[]) => void, ms: number, ...args: unknown[]) => {
+      if (ms === 2000) {
+        delays.push(ms)
+        queueMicrotask(() => callback(...args))
+        return 0
+      }
+      return nativeTimeout(callback, ms, ...args)
+    }) as typeof setTimeout)
+    const seenFast: Array<boolean | undefined> = []
+    const generator = withRetry(
+      async () => ({} as Anthropic),
+      async (_client, attempt, context) => {
+        seenFast.push(context.fastMode)
+        if (attempt === 1) throw new APIError(429, {}, 'capacity', new Headers({ 'retry-after': header }))
+        return 'ok'
+      },
+      { model: 'claude-sonnet-4-6', thinkingConfig: { type: 'disabled' }, fastMode: true, maxRetries: 1 },
+    )
+    try {
+      expect(await generator.next()).toEqual({ done: true, value: 'ok' })
+      expect(seenFast).toEqual([true, expectedFast])
+      expect(delays).toEqual(expectedDelay === null ? [] : [expectedDelay])
+    } finally {
+      timer.mockRestore()
+      if (savedDisable === undefined) delete process.env.CLAUDE_CODE_DISABLE_FAST_MODE
+      else process.env.CLAUDE_CODE_DISABLE_FAST_MODE = savedDisable
+      clearFastModeCooldown()
+    }
   })
 })

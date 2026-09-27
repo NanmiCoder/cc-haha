@@ -10,3 +10,12 @@ test('model metadata advertises Auto by feature instead of provider or model', (
   )
   expect(source).toContain('const hasAutoMode = autoModeSupported')
 })
+
+test('print mode routes teammate permission mailbox messages to the host instead of the model', () => {
+  expect(source).toContain('partitionLeadMailboxMessages')
+  expect(source).toContain('resolveTeammatePermissionRequests')
+  expect(source).toContain('hostPermissionPromptAvailable')
+  expect(source).not.toMatch(
+    /formatted = unread\s*\.map/,
+  )
+})

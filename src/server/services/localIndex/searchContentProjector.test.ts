@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, test } from 'bun:test'
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -251,4 +251,94 @@ describe('search content projector', () => {
       database.close()
     }
   })
+})
+
+
+describe('bounded search projection', () => {
+  it('flushes bounded batches without exposing a partially replaced source', async () => {
+    const { database, index, projector, candidate, sourcePath } = await setup()
+    try {
+      await writeFile(sourcePath, line({ type: 'user', message: { role: 'user', content: 'old stable body' } }))
+      await projector.projectSource(candidate)
+      const batches: Array<{ bytes: number; documents: number }> = []
+      const bounded = createSearchContentProjector({ database, index, onBatch: batch => {
+        batches.push(batch)
+        expect(database.read(reader => reader.get<{ count: number }>('SELECT COUNT(*) AS count FROM search_documents'))?.count).toBe(1)
+      } })
+      await writeFile(sourcePath, Array.from({ length: 24 }, (_, index) => line({ type: 'assistant', uuid: String(index), message: { role: 'assistant', content: 'new searchable ' + 'x'.repeat(256 * 1024) } })).join(''))
+      const result = await bounded.projectSource(candidate)
+      expect(result).toMatchObject({ kind: 'indexed', documentCount: 24 })
+      expect(batches.length).toBeGreaterThan(1)
+      expect(Math.max(...batches.map(batch => batch.bytes))).toBeLessThanOrEqual(4 * 1024 * 1024)
+      expect(database.read(reader => reader.get<{ count: number }>('SELECT COUNT(*) AS count FROM search_documents'))?.count).toBe(24)
+    } finally { database.close() }
+  })
+
+  it('cancels a partially spooled replacement without changing its old source or documents', async () => {
+    const { database, index, projector, candidate, sourcePath } = await setup()
+    try {
+      await writeFile(sourcePath, line({ type: 'user', message: { role: 'user', content: 'old stable body' } }))
+      await projector.projectSource(candidate)
+      const before = index.getSource(sourcePath)
+      const controller = new AbortController()
+      const bounded = createSearchContentProjector({ database, index, signal: controller.signal, onBatch: () => controller.abort() })
+      await writeFile(sourcePath, Array.from({ length: 24 }, () => line({ type: 'assistant', message: { role: 'assistant', content: 'x'.repeat(256 * 1024) } })).join(''))
+      expect(await bounded.projectSource(candidate)).toMatchObject({ kind: 'retry' })
+      expect(index.getSource(sourcePath)).toEqual(before)
+      expect(database.read(reader => reader.get<{ body: string }>('SELECT body FROM search_documents'))?.body).toBe('old stable body')
+    } finally { database.close() }
+  })
+})
+
+
+test.each(['append', 'rewrite'] as const)('worker insertion failure rolls back %s metadata and all new rows', async mode => {
+  const { database, index, projector, candidate, sourcePath } = await setup()
+  try {
+    await writeFile(sourcePath, line({ type: 'user', message: { role: 'user', content: 'old stable body' } }))
+    await projector.projectSource(candidate)
+    const before = index.getSource(sourcePath)
+    database.write(writer => writer.exec("CREATE TRIGGER reject_bad_search_doc BEFORE INSERT ON search_documents WHEN new.body = 'reject this row' BEGIN SELECT RAISE(ABORT, 'fixture insertion failure'); END"))
+    await (mode === 'append' ? appendFile : writeFile)(sourcePath, line({ type: 'user', message: { role: 'user', content: 'new successful first row' } }) + line({ type: 'user', message: { role: 'user', content: 'reject this row' } }))
+    expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'retry' })
+    expect(index.getSource(sourcePath)).toEqual(before)
+    expect(database.read(reader => reader.all<{ body: string }>('SELECT body FROM search_documents'))).toEqual([{ body: 'old stable body' }])
+  } finally { database.close() }
+})
+
+test('abort after worker BEGIN preserves the complete old search snapshot', async () => {
+  const { database, index, projector, candidate, sourcePath } = await setup()
+  try {
+    await writeFile(sourcePath, line({ type: 'user', message: { role: 'user', content: 'old stable body' } }))
+    await projector.projectSource(candidate)
+    const before = index.getSource(sourcePath)
+    const controller = new AbortController()
+    const aborting = createSearchContentProjector({ database, index, signal: controller.signal, onCommitStarted() {
+      expect(index.getSource(sourcePath)).toEqual(before)
+      controller.abort()
+    } })
+    await writeFile(sourcePath, line({ type: 'user', message: { role: 'user', content: 'new replacement row' } }))
+    expect(await aborting.projectSource(candidate)).toMatchObject({ kind: 'retry' })
+    expect(index.getSource(sourcePath)).toEqual(before)
+    expect(database.read(reader => reader.all<{ body: string }>('SELECT body FROM search_documents'))).toEqual([{ body: 'old stable body' }])
+  } finally { database.close() }
+})
+
+
+test.each(['worker', 'custom'] as const)('preserves a single document exceeding the batch target through %s commit', async mode => {
+  const { database, index, candidate, sourcePath } = await setup()
+  try {
+    const body = 'large searchable ' + 'x'.repeat(5 * 1024 * 1024) + ' end marker'
+    await writeFile(sourcePath, line({ type: 'user', message: { role: 'user', content: body } }))
+    const batches: Array<{ bytes: number; documents: number }> = []
+    const projector = createSearchContentProjector({
+      database: mode === 'custom' ? { ...database, path: undefined } : database,
+      index,
+      onBatch: batch => batches.push(batch),
+    })
+    expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'indexed', state: 'ready', documentCount: 1 })
+    expect(batches).toHaveLength(1)
+    expect(batches[0]?.documents).toBe(1)
+    expect(batches[0]?.bytes).toBeGreaterThan(4 * 1024 * 1024)
+    expect(database.read(reader => reader.get<{ body: string }>('SELECT body FROM search_documents'))?.body).toBe(body)
+  } finally { database.close() }
 })

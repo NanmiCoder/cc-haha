@@ -19,6 +19,8 @@ type ModalProps = {
   width?: number
   footer?: ReactNode
   variant?: 'dialog' | 'media'
+  className?: string
+  typography?: 'editorial' | 'interface'
 }
 
 export function Modal({
@@ -30,6 +32,8 @@ export function Modal({
   width = 560,
   footer,
   variant = 'dialog',
+  className = '',
+  typography = 'editorial',
 }: ModalProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
 
@@ -96,9 +100,9 @@ export function Modal({
         // 24px — the top of the handoff's corner scale, reserved for modals.
         // `dialog-panel`, not `glass-panel`: the fill has to be opaque on its
         // own rather than leaning on a blur that may never run.
-        className={variant === 'media'
+        className={(variant === 'media'
           ? 'relative flex h-[calc(100dvh-24px)] w-[calc(100vw-24px)] flex-col overflow-hidden rounded-[var(--radius-2xl)] bg-[var(--color-media-bg)] text-[var(--color-media-fg)]'
-          : 'dialog-panel relative flex max-h-[85vh] flex-col rounded-[var(--radius-3xl)]'}
+          : 'dialog-panel relative flex max-h-[85vh] flex-col rounded-[var(--radius-3xl)]') + (className ? ` ${className}` : '')}
         style={variant === 'media'
           ? { maxHeight: 'calc(100dvh - 24px)', maxWidth: 'calc(100vw - 24px)' }
           : { width, maxWidth: 'calc(100vw - 48px)' }}
@@ -113,7 +117,7 @@ export function Modal({
               // 22px serif — dialog titles are headings, and headings carry the
               // 「墨」 identity (handoff §7, every modal comp).
               className="text-[22px] font-bold tracking-tight text-[var(--color-text-primary)]"
-              style={{ fontFamily: 'var(--font-headline)' }}
+              style={{ fontFamily: typography === 'interface' ? 'inherit' : 'var(--font-headline)' }}
             >
               {title}
             </h2>

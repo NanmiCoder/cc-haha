@@ -47,6 +47,7 @@ export type SearchContentStorageStats = {
 }
 
 export type SearchContentDatabase = {
+  readonly path?: string
   read<T>(operation: (database: SearchContentReadOperation) => T): T
   write<T>(operation: (database: SearchContentWriteOperation) => T): T
   transaction<T>(operation: (database: SearchContentWriteOperation) => T): T
@@ -163,6 +164,7 @@ export function openSearchContentDatabase(options?: {
   })
 
   return {
+    path: databasePath === ':memory:' ? undefined : databasePath,
     read(operation) {
       assertOpen()
       return operation(createReadOperation())

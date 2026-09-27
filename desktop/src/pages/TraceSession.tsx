@@ -62,15 +62,18 @@ export function TraceSession({
   const [state, setState] = useState<LoadState>({ status: 'loading' })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [refreshNonce, setRefreshNonce] = useState(0)
+  const [tracePage, setTracePage] = useState<{ offset?: number; revisionToken?: string; scanCursor?: string }>({})
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [clockNowMs, setClockNowMs] = useState(() => Date.now())
-  const [revisionKey, setRevisionKey] = useState<string | undefined>()
   const snapshotSignatureRef = useRef<string | null>(null)
   const lastSpanIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
+    const controller = new AbortController()
+    let loadedMessages: MessageEntry[] | undefined
+    let loadedMessageSignature: string | null | undefined
     let loadInFlight = false
     let revisionPollingAvailable = true
     let currentRevision: number | undefined
@@ -92,6 +95,7 @@ export function TraceSession({
               sessionId,
               currentRevision,
               currentRevisionToken,
+              { signal: controller.signal },
             )
             if (cancelled || requestGeneration !== revisionRequestGeneration) return
             if (!revision.changed) {
@@ -108,18 +112,17 @@ export function TraceSession({
         }
 
         if (silent) setRefreshing(true)
-        const trace = await sessionsApi.getTrace(sessionId)
+        const trace = await sessionsApi.getTrace(sessionId, { signal: controller.signal }, tracePage)
         if (!isTraceSessionData(trace)) {
           throw new Error(t('trace.snapshotEmpty'))
         }
         if (cancelled) return
         if (!silent && revisionPollingAvailable) {
           const requestGeneration = ++revisionRequestGeneration
-          void tracesApi.getRevision(sessionId).then((revision) => {
+          void tracesApi.getRevision(sessionId, undefined, undefined, { signal: controller.signal }).then((revision) => {
             if (cancelled || requestGeneration !== revisionRequestGeneration) return
             currentRevision = revision.revision
             currentRevisionToken = revision.revisionToken
-            setRevisionKey(traceRevisionKey(revision))
           }).catch(() => {
             if (cancelled || requestGeneration !== revisionRequestGeneration) return
             revisionPollingAvailable = false
@@ -129,14 +132,25 @@ export function TraceSession({
           currentRevisionToken = pendingRevisionKey?.startsWith('token:')
             ? pendingRevisionKey.slice('token:'.length)
             : undefined
-          setRevisionKey(pendingRevisionKey)
         }
         const signature = traceSnapshotSignature(trace)
         if (silent && snapshotSignatureRef.current === signature) return
-        const messageResponse = await sessionsApi.getMessages(sessionId).catch(() => ({ messages: [] }))
+        // Trace calls/events often advance without any transcript mutation.
+        // Reuse the transcript until its independent revision changes.
+        if (!loadedMessages || trace.messageSignature == null || trace.messageSignature !== loadedMessageSignature) {
+          const messageResponse = await sessionsApi.getHistoryPage(sessionId, {}, { signal: controller.signal })
+            .catch(() => null)
+          if (cancelled) return
+          if (messageResponse) {
+            // A tail page cannot assign historical calls to their original turns.
+            // Keep those calls under session activity instead of inventing an association.
+            loadedMessages = messageResponse.page?.historyComplete === false ? [] : messageResponse.messages
+            loadedMessageSignature = trace.messageSignature
+          }
+        }
         if (cancelled) return
-        snapshotSignatureRef.current = signature
-        setState({ status: 'ready', trace, messages: messageResponse.messages })
+        snapshotSignatureRef.current = loadedMessages ? signature : null
+        setState({ status: 'ready', trace, messages: loadedMessages ?? [] })
         setClockNowMs(Date.now())
         setLastLoadedAt(new Date().toISOString())
       } catch (error) {
@@ -154,16 +168,21 @@ export function TraceSession({
     lastSpanIdRef.current = null
     void load(false)
     const interval = window.setInterval(() => {
-      void load(true)
+      // Keep a historical page stable. Returning to the first page resumes live polling.
+      if (!tracePage.offset && !tracePage.scanCursor) void load(true)
     }, pollIntervalMs)
 
     return () => {
       cancelled = true
+      controller.abort()
       window.clearInterval(interval)
     }
-  }, [sessionId, refreshNonce, pollIntervalMs, t])
+  }, [sessionId, refreshNonce, pollIntervalMs, t, tracePage])
 
-  const refresh = () => setRefreshNonce((value) => value + 1)
+  const refresh = () => {
+    setTracePage({})
+    setRefreshNonce((value) => value + 1)
+  }
 
   const openWindow = () => {
     const host = getDesktopHost()
@@ -266,6 +285,14 @@ export function TraceSession({
   const hasTraceContent = trace.calls.length > 0 || (trace.events?.length ?? 0) > 0 || messages.length > 0
   const selectedSpan = selectedId ? viewModel.spansById.get(selectedId) : undefined
   const activeSpan = selectedSpan ?? viewModel.spansById.get(viewModel.rootId) ?? viewModel.spans[0] ?? null
+  // An open record follows its own content, not the session revision. A sibling
+  // span arriving must not clear and refetch the record the reader is looking at.
+  const detailRevisionKey = spanContentKey(activeSpan)
+  // The overview reads the opening call, so it must use that call's content key.
+  // A different key misses the detail cache and refetches the same body.
+  const overviewRevisionKey = spanContentKey(
+    viewModel.spans.find((span) => span.kind === 'llm') ?? null,
+  )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-[var(--color-surface)] text-[var(--color-text-primary)]">
@@ -281,6 +308,17 @@ export function TraceSession({
         refreshing={refreshing}
         updatedAt={lastLoadedAt}
       />
+      {trace.window && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border)] px-4 py-2 text-xs" role="status">
+          <span>{t('trace.windowNotice')}</span>
+          <span>{trace.window.offset + 1}–{trace.window.offset + Math.max(trace.calls.length, trace.events?.length ?? 0)} / {Math.max(trace.window.totalCalls, trace.window.totalEvents)}</span>
+          {(trace.window.state === 'limited' || trace.window.oversizedRecords > 0) && <span>{t('trace.windowLimited')}</span>}
+          <Button size="sm" variant="ghost" disabled={!tracePage.offset && !tracePage.scanCursor} onClick={() => setTracePage({})}>{t('trace.windowFirst')}</Button>
+          <Button size="sm" variant="ghost" disabled={!tracePage.offset} onClick={() => setTracePage({ ...tracePage, offset: Math.max(0, (tracePage.offset ?? 0) - trace.window!.limit) })}>{t('trace.windowPrevious')}</Button>
+          <Button size="sm" variant="ghost" disabled={!trace.window.hasMore} onClick={() => setTracePage({ ...tracePage, offset: trace.window!.offset + trace.window!.limit, revisionToken: trace.window!.revisionToken })}>{t('trace.windowNext')}</Button>
+          {trace.window.nextScanCursor && <Button size="sm" variant="ghost" onClick={() => setTracePage({ scanCursor: trace.window!.nextScanCursor })}>{t('trace.windowScanNext')}</Button>}
+        </div>
+      )}
       <DiagnosisBanner viewModel={viewModel} onSelect={setSelectedId} />
       {hasTraceContent && activeSpan ? (
         <div className="flex min-h-0 flex-1 flex-col">
@@ -298,7 +336,8 @@ export function TraceSession({
                   span={activeSpan}
                   viewModel={viewModel}
                   sessionId={sessionId}
-                  revisionKey={revisionKey}
+                  revisionKey={detailRevisionKey}
+                  overviewRevisionKey={overviewRevisionKey}
                   onSelect={setSelectedId}
                 />
               }
@@ -310,6 +349,29 @@ export function TraceSession({
       )}
     </div>
   )
+}
+
+function spanContentKey(span: TraceSpan | null): string | undefined {
+  if (!span) return undefined
+  const call = span.call
+  if (call) {
+    return [
+      call.id,
+      call.status ?? span.status,
+      call.completedAt ?? '',
+      call.durationMs ?? '',
+      call.request.body.sha256,
+      call.response?.body.sha256 ?? '',
+      call.error?.name ?? '',
+      call.error?.message ?? '',
+    ].join(':')
+  }
+  return [
+    span.id,
+    span.status,
+    span.completedAt ?? '',
+    span.durationMs ?? '',
+  ].join(':')
 }
 
 function traceRevisionKey(revision: {

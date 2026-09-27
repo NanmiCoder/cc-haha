@@ -215,6 +215,31 @@ type RunsFileMutationTarget = {
   projectionTarget: ScheduledRunReadModelTarget
 }
 
+// Two tasks can finish in the same second. Serialize the whole read/modify/write
+// cycle per log file so neither completion can replace the other's record.
+const runLogMutationQueues = new Map<string, Promise<void>>()
+
+function mutateRunsFile(
+  target: RunsFileMutationTarget,
+  mutation: (data: RunsFile) => void,
+): Promise<void> {
+  const previous = runLogMutationQueues.get(target.sourcePath) ?? Promise.resolve()
+  const result = previous.then(async () => {
+    const data = await readRunsFile(target.sourcePath)
+    mutation(data)
+    trimRuns(data)
+    await writeRunsFile(data, target)
+  })
+  const settled = result.catch(() => {})
+  runLogMutationQueues.set(target.sourcePath, settled)
+  void settled.then(() => {
+    if (runLogMutationQueues.get(target.sourcePath) === settled) {
+      runLogMutationQueues.delete(target.sourcePath)
+    }
+  })
+  return result
+}
+
 function getLogFilePath(): string {
   const configDir =
     process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
@@ -271,7 +296,7 @@ async function writeRunsFile(
   const dir = path.dirname(filePath)
   await fs.mkdir(dir, { recursive: true })
 
-  const tmpFile = `${filePath}.tmp.${Date.now()}`
+  const tmpFile = `${filePath}.tmp.${process.pid}.${crypto.randomBytes(6).toString('hex')}`
   const serialized = JSON.stringify(data, null, 2) + '\n'
   try {
     await fs.writeFile(tmpFile, serialized, 'utf-8')
@@ -370,10 +395,7 @@ async function appendRun(
   run: TaskRun,
   target = captureRunsFileMutationTarget(),
 ): Promise<void> {
-  const data = await readRunsFile(target.sourcePath)
-  data.runs.push(run)
-  trimRuns(data)
-  await writeRunsFile(data, target)
+  await mutateRunsFile(target, data => { data.runs.push(run) })
 }
 
 /** Update an existing run in the log (matched by run.id). */
@@ -381,15 +403,11 @@ async function updateRun(
   run: TaskRun,
   target = captureRunsFileMutationTarget(),
 ): Promise<void> {
-  const data = await readRunsFile(target.sourcePath)
-  const idx = data.runs.findIndex((r) => r.id === run.id)
-  if (idx !== -1) {
-    data.runs[idx] = run
-  } else {
-    data.runs.push(run)
-  }
-  trimRuns(data)
-  await writeRunsFile(data, target)
+  await mutateRunsFile(target, data => {
+    const idx = data.runs.findIndex((r) => r.id === run.id)
+    if (idx !== -1) data.runs[idx] = run
+    else data.runs.push(run)
+  })
 }
 
 const MAX_RUNS_PER_TASK = 100

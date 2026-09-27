@@ -124,7 +124,7 @@ export function MemorySettings() {
   ])
 
   const canLeaveDirtyEdit = () => {
-    if (!isEditing || !isDirty) return true
+    if (!isDirty) return true
     return window.confirm(t('settings.memory.discardUnsavedConfirm'))
   }
 
@@ -161,7 +161,13 @@ export function MemorySettings() {
       return
     }
     const saved = await saveFile()
-    if (saved) {
+    const current = useMemoryStore.getState()
+    if (
+      saved &&
+      current.selectedProjectId === selectedProjectId &&
+      current.selectedFile?.path === selectedFile.path &&
+      current.draftContent === current.selectedFile.content
+    ) {
       setIsEditing(false)
     }
   }

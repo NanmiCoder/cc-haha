@@ -36,6 +36,8 @@ export type {
   TraceRequestSemantic,
   TraceResponseCapture,
   TraceSession,
+  TraceOverviewOptions,
+  TraceSessionWindow,
   TraceSessionDeleteResult,
   TraceSessionFileItem,
   TraceSessionFileList,

@@ -1,5 +1,5 @@
 /* ============================================================================
-   Claude Code Haha — 文档站设计系统
+   cc-haha — 文档站设计系统
    色板取自桌面端「纸·墨·印」的「纯白」与「墨夜」两套主题，
    保证网站和应用是同一个产品。字体自托管，零 CDN 依赖。
    ========================================================================== */
@@ -587,122 +587,6 @@ main[tabindex='-1']:focus-visible {
   }
 }
 
-/* ── 搜索 ───────────────────────────────────────────────────── */
-
-.search-scrim {
-  position: fixed;
-  z-index: var(--z-dialog);
-  inset: 0;
-  display: flex;
-  justify-content: center;
-  padding: clamp(48px, 10vh, 120px) var(--sp-5) var(--sp-5);
-  background: var(--scrim);
-  backdrop-filter: blur(2px);
-}
-
-.search-dialog {
-  display: flex;
-  flex-direction: column;
-  width: min(620px, 100%);
-  max-height: min(540px, 100%);
-  border: 1px solid var(--border);
-  border-radius: var(--r-xl);
-  background: var(--bg);
-  box-shadow: var(--shadow-lg);
-  overflow: hidden;
-}
-
-.search-dialog__field {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  padding: var(--sp-4) var(--sp-5);
-  border-bottom: 1px solid var(--border);
-  color: var(--text-3);
-}
-
-.search-dialog__field input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: none;
-  color: var(--text);
-  font-size: var(--fs-lg);
-}
-
-/* 输入框一打开就自动聚焦，整行都套个焦点环反而吵。
-   焦点落在它身上时给整条 field 一道底边，键盘用户仍看得到落点。 */
-.search-dialog__field:focus-within {
-  border-bottom-color: var(--brand);
-  box-shadow: inset 0 -1px 0 var(--brand);
-}
-
-.search-dialog__field input:focus-visible {
-  outline: none;
-}
-
-.search-dialog__field input::-webkit-search-cancel-button {
-  display: none;
-}
-
-.search-dialog__body {
-  flex: 1;
-  padding: var(--sp-2);
-  overflow-y: auto;
-}
-
-.search-dialog__hint {
-  padding: var(--sp-8) var(--sp-4);
-  color: var(--text-3);
-  font-size: var(--fs-base);
-  text-align: center;
-}
-
-.search-result {
-  display: block;
-  width: 100%;
-  padding: var(--sp-3) var(--sp-4);
-  border-radius: var(--r-md);
-  text-align: left;
-}
-
-.search-result[data-active='true'] {
-  background: var(--surface-hover);
-}
-
-.search-result__section {
-  display: block;
-  color: var(--text-3);
-  font-size: var(--fs-xs);
-}
-
-.search-result__title {
-  display: block;
-  margin: 1px 0 3px;
-  color: var(--text);
-  font-size: var(--fs-md);
-  font-weight: 500;
-}
-
-.search-result__excerpt {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--text-2);
-  font-size: var(--fs-sm);
-  line-height: 1.55;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.search-dialog__foot {
-  display: flex;
-  gap: var(--sp-4);
-  padding: var(--sp-3) var(--sp-5);
-  border-top: 1px solid var(--border);
-  color: var(--text-3);
-  font-size: var(--fs-xs);
-}
-
 /* ── 加载态与 404 ───────────────────────────────────────────── */
 
 .page-loading {
@@ -747,4 +631,146 @@ main[tabindex='-1']:focus-visible {
   gap: var(--sp-3);
   justify-content: center;
   margin-top: var(--sp-8);
+}
+
+/* Grove shared palette — the same warm paper and forest greens throughout. */
+:root, :root[data-theme='light'] {
+  --font-serif: 'Inter', -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+  --bg: #f5f4ed;
+  --surface: #fbfbf6;
+  --surface-sunken: #efefe6;
+  --surface-muted: #e9ece1;
+  --surface-hover: #e3e8da;
+  --surface-active: #dce4d1;
+  --text: #25382e;
+  --text-2: #536153;
+  --text-3: #65705f;
+  --border: #e0e4d7;
+  --border-strong: #cdd5c3;
+  --border-control: #7c8c71;
+  --brand: #3d614c;
+  --brand-hover: #213e2d;
+  --brand-soft: #e3e9d8;
+  --brand-soft-hover: #d6e0c9;
+  --brand-border: #9aaf87;
+  --on-brand: #fffef6;
+  --on-brand-soft: #304b36;
+  --ink: #25382e;
+  --on-ink: #fffef6;
+  --ok: #3d6849;
+  --ok-soft: #e7eedd;
+  --ok-ink: #36553c;
+  --warn: #977027;
+  --warn-soft: #f5eedb;
+  --warn-ink: #78561a;
+  --danger: #a04433;
+  --danger-soft: #f5e7de;
+  --danger-ink: #913828;
+  --info: #4d7265;
+  --info-soft: #e8eee5;
+  --info-ink: #375d50;
+  --code-bg: #eef0e6;
+  --code-border: #d3dac9;
+  --scrim: rgba(12, 27, 18, .65);
+  --glass: rgba(245, 244, 237, .94);
+  --shadow-sm: 0 3px 15px rgba(30, 50, 30, .05);
+  --shadow-md: 0 12px 32px rgba(30, 50, 30, .09);
+  --shadow-lg: 0 25px 80px rgba(15, 35, 21, .22);
+  --c-comment: #69745d;
+  --c-string: #477135;
+  --c-keyword: #8c4a3c;
+  --c-function: #2b6560;
+  --c-number: #8d651f;
+  --c-property: #536838;
+  --c-type: #735241;
+  --c-punct: #5d6b55;
+  --w-page: 1300px;
+  --w-prose: 760px;
+  --w-sidebar: 238px;
+  --w-toc: 195px;
+  --h-header: 76px;
+  --forest-deep: #17281f;
+  --forest-light: #fffef6;
+  --forest-muted: #ced8c5;
+  --forest-gold: #dfca99;
+  --forest-line: rgba(245, 244, 230, .18);
+}
+:root[data-theme='dark'] {
+  --bg: #14211b;
+  --surface: #1b2b22;
+  --surface-sunken: #111d17;
+  --surface-muted: #223329;
+  --surface-hover: #2b3e2f;
+  --surface-active: #344b37;
+  --text: #edf0e4;
+  --text-2: #c0caba;
+  --text-3: #a8b5a3;
+  --border: #2d4131;
+  --border-strong: #40553e;
+  --border-control: #859b76;
+  --brand: #b6cda2;
+  --brand-hover: #dde9cd;
+  --brand-soft: #2b402b;
+  --brand-soft-hover: #354e32;
+  --brand-border: #67825b;
+  --on-brand: #182a1e;
+  --on-brand-soft: #c8ddb4;
+  --ink: #c9d8b8;
+  --on-ink: #17281f;
+  --ok: #a6c78e;
+  --ok-soft: #293e28;
+  --ok-ink: #bed4a8;
+  --warn: #d8bc79;
+  --warn-soft: #3c3520;
+  --warn-ink: #e3ce97;
+  --danger: #dc9c84;
+  --danger-soft: #432e25;
+  --danger-ink: #e8b39d;
+  --info: #a3c4ad;
+  --info-soft: #253d2e;
+  --info-ink: #bed7c5;
+  --code-bg: #17251c;
+  --code-border: #3b5038;
+  --scrim: rgba(4, 14, 8, .76);
+  --glass: rgba(20, 33, 27, .95);
+  --shadow-sm: 0 3px 15px rgba(0, 0, 0, .13);
+  --shadow-md: 0 12px 32px rgba(0, 0, 0, .2);
+  --shadow-lg: 0 25px 80px rgba(0, 0, 0, .4);
+  --c-comment: #9cae8d;
+  --c-string: #b2cd8b;
+  --c-keyword: #dfab8b;
+  --c-function: #a3c9b5;
+  --c-number: #dfc482;
+  --c-property: #c6d6a6;
+  --c-type: #ccb394;
+  --c-punct: #abbba0;
+}
+body { font-size: 15px; }
+h1, h2, h3, h4 { font-family: var(--font-sans); letter-spacing: -.035em; }
+.btn { border-radius: 40px; font-weight: 550; }
+.btn--primary { background: var(--ink); color: var(--on-ink); }
+.btn--primary:hover { background: var(--brand); color: var(--on-brand); }
+.site-header { background: var(--forest-deep); border-bottom-color: var(--forest-line); color: var(--forest-light); }
+.site-header__inner { max-width: 1536px; padding-inline: 32px; }
+.brand { font-size: 23px; font-weight: 600; letter-spacing: -.065em; }
+.brand img { border-radius: 8px; }
+.site-nav { gap: 3px; }
+.site-nav a { color: var(--forest-muted); font-size: 13px; font-weight: 450; border-radius: 40px; padding: 9px 15px; }
+.site-nav a:hover, .site-nav a[aria-current='page'] { background: var(--forest-line); color: var(--forest-light); }
+.header-tools { border-color: var(--forest-line); }
+.header-tools .icon-btn { color: var(--forest-muted); }
+.header-tools .icon-btn:hover { color: var(--forest-light); background: var(--forest-line); }
+.icon-btn { width: 40px; height: 40px; border-radius: 50%; }
+.header-download { min-height: 40px; padding-inline: 20px; background: var(--forest-light); color: var(--forest-deep); }
+.header-download:hover { background: var(--forest-gold); color: var(--forest-deep); }
+@media (max-width: 900px) {
+  .site-nav { left: 16px; right: 16px; border: 1px solid var(--forest-line); border-radius: 16px; background: var(--forest-deep); padding: 10px; }
+  .site-nav a { min-height: 44px; padding: 12px 15px; }
+}
+@media (max-width: 620px) {
+  .site-header__inner { padding-inline: 20px; gap: 8px; }
+  .brand { font-size: 21px; gap: 9px; }
+  .header-tools { gap: 0; padding-left: 4px; }
+  .header-tools .icon-btn { width: 44px; height: 44px; }
+  .header-tools > a[aria-label='GitHub'] { display: none; }
 }

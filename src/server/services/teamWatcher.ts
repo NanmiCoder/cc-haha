@@ -10,6 +10,7 @@
  *   - team_deleted  : a previously-seen team directory disappears
  */
 
+import { readTeamPlan } from '../../utils/swarm/teamPlanStore.js'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
@@ -41,6 +42,7 @@ type WatchedTeamIdentity = {
 export class TeamWatcher {
   private intervalId: ReturnType<typeof setInterval> | null = null
   private checkPromise: Promise<void> | null = null
+  private lastPlanRevisions = new Map<string, string>()
   private lastSnapshots = new Map<string, string>() // teamName -> raw config JSON
   private lastWorkbenchFingerprints = new Map<string, string>()
   private lastLeadSessionIds = new Map<string, string>()
@@ -83,6 +85,7 @@ export class TeamWatcher {
 
   /** Clear internal snapshot state (useful in tests). */
   reset(): void {
+    this.lastPlanRevisions.clear()
     this.lastSnapshots.clear()
     this.lastWorkbenchFingerprints.clear()
     this.lastLeadSessionIds.clear()
@@ -121,7 +124,8 @@ export class TeamWatcher {
           identity?.leadSessionId ?? this.lastLeadSessionIds.get(name),
         )
       }
-      this.lastSnapshots.clear()
+      this.lastPlanRevisions.clear()
+    this.lastSnapshots.clear()
       this.lastWorkbenchFingerprints.clear()
       this.lastLeadSessionIds.clear()
       this.lastTeamIdentities.clear()
@@ -143,6 +147,20 @@ export class TeamWatcher {
         // config.json not readable (missing / permissions) -- skip
         continue
       }
+
+      // plan.json changes independently of config.json while the CLI drafts a team.
+      try {
+        const plan = await readTeamPlan(teamName)
+        const config = JSON.parse(content) as { name: string; leadSessionId?: string; createdAt: number }
+        const incarnation = crypto.createHash('sha256').update(JSON.stringify([config.name, config.leadSessionId ?? '', config.createdAt])).digest('hex')
+        if (plan && plan.sessionId === config.leadSessionId && plan.incarnationId === incarnation) {
+          const fingerprint = `${plan.planId}:${plan.revision}:${plan.state}`
+          if (this.lastPlanRevisions.get(teamName) !== fingerprint) {
+            this.lastPlanRevisions.set(teamName, fingerprint)
+            this.broadcast({ type: 'team_plan_updated', teamName, sessionId: plan.sessionId, planId: plan.planId, incarnationId: plan.incarnationId, revision: plan.revision, state: plan.state }, plan.sessionId)
+          }
+        }
+      } catch { /* A malformed sidecar must not suppress normal team events. */ }
 
       const lastContent = this.lastSnapshots.get(teamName)
       const currentIdentity = this.readTeamIdentity(teamName, content)
@@ -528,7 +546,11 @@ export class TeamWatcher {
 
   private extractSubagentName(filePath: string): string | null {
     try {
-      const head = fs.readFileSync(filePath, 'utf-8').slice(0, 8192)
+      const fd = fs.openSync(filePath, 'r')
+      const prefix = Buffer.allocUnsafe(8192)
+      let length: number
+      try { length = fs.readSync(fd, prefix, 0, prefix.length, 0) } finally { fs.closeSync(fd) }
+      const head = prefix.toString('utf8', 0, length)
       const lines = head.split('\n').filter((line) => line.trim().length > 0)
 
       for (const line of lines) {

@@ -187,6 +187,100 @@ async function send(platform: Platform, text: string, options: { unauthorized?: 
 
 for (const platform of platforms) {
   describe(`${platform} actual module session selection`, () => {
+    it.each(['/status', '/stop', '/clear'])('preserves the binding when %s cannot reconnect and retries the command', async (command) => {
+      const adapter = adapterFor(platform)
+      const chatId = chatFor(platform)
+      const originalProject = path.join(temporaryRoot, `${platform}-command-project`)
+      fs.mkdirSync(originalProject, { recursive: true })
+      adapter.bridge.resetSession(chatId)
+      adapter.clearTransientChatState(chatId)
+      adapter.sessionStore.set(chatId, 'old-cmd', originalProject)
+      const originalBinding = adapter.sessionStore.get(chatId)
+      const creationsBefore = newSessionCount
+      const noticesBefore = notices.length
+      const failedOpen = spyOn(adapter.bridge, 'waitForOpen').mockImplementationOnce(async () => {
+        adapter.bridge.resetSession(chatId)
+        return false
+      })
+      const sendSpy = spyOn(adapter.bridge, 'sendUserMessage')
+      const stopSpy = spyOn(adapter.bridge, 'sendStopGeneration')
+      try {
+        await send(platform, command)
+
+        expect(adapter.sessionStore.get(chatId)).toEqual(originalBinding)
+        expect(newSessionCount).toBe(creationsBefore)
+        expect(sendSpy).not.toHaveBeenCalled()
+        expect(stopSpy).not.toHaveBeenCalled()
+        expect(notices).toHaveLength(noticesBefore + 1)
+        expect(notices.at(-1)).toContain('已保留会话和工作目录')
+        expect(notices.at(-1)).toContain('重试')
+        expect(notices.at(-1)).not.toContain('当前没有活动会话')
+
+        await send(platform, command)
+
+        expect(adapter.bridge.getSessionId(chatId)).toBe('old-cmd')
+        expect(adapter.sessionStore.get(chatId)).toEqual(originalBinding)
+        expect(newSessionCount).toBe(creationsBefore)
+        if (command === '/clear') {
+          expect(sendSpy).toHaveBeenCalledTimes(1)
+          expect(sendSpy).toHaveBeenCalledWith(chatId, '/clear')
+          expect(stopSpy).not.toHaveBeenCalled()
+        } else if (command === '/stop') {
+          expect(stopSpy).toHaveBeenCalledTimes(1)
+          expect(stopSpy).toHaveBeenCalledWith(chatId)
+          expect(sendSpy).not.toHaveBeenCalled()
+        } else {
+          expect(notices.at(-1)).toContain('old-cmd')
+          expect(sendSpy).not.toHaveBeenCalled()
+          expect(stopSpy).not.toHaveBeenCalled()
+        }
+      } finally {
+        failedOpen.mockRestore()
+        sendSpy.mockRestore()
+        stopSpy.mockRestore()
+        adapter.bridge.resetSession(chatId)
+        adapter.clearTransientChatState(chatId)
+      }
+    })
+
+    it('keeps the original session and project after reconnect timeout and resumes it on retry', async () => {
+      const adapter = adapterFor(platform)
+      const chatId = chatFor(platform)
+      const originalProject = path.join(temporaryRoot, `${platform}-original`)
+      fs.mkdirSync(originalProject)
+      adapter.bridge.resetSession(chatId)
+      adapter.clearTransientChatState(chatId)
+      adapter.sessionStore.set(chatId, 'original-session', originalProject)
+      const originalBinding = adapter.sessionStore.get(chatId)
+      const creationsBefore = newSessionCount
+      const failedPrompt = `${platform}: Continue after reconnect`
+      const failedOpen = spyOn(adapter.bridge, 'waitForOpen').mockImplementationOnce(async () => {
+        adapter.bridge.resetSession(chatId)
+        return false
+      })
+      const sendSpy = spyOn(adapter.bridge, 'sendUserMessage')
+      try {
+        await send(platform, failedPrompt)
+        expect(adapter.sessionStore.get(chatId)).toEqual(originalBinding)
+        expect(newSessionCount).toBe(creationsBefore)
+        expect(sentPrompts.some((prompt) => prompt.content === failedPrompt)).toBe(false)
+        expect(sendSpy).not.toHaveBeenCalled()
+        expect(notices.at(-1)).toContain('已保留会话和工作目录')
+        expect(notices.at(-1)).not.toContain('/new')
+
+        await send(platform, 'Retry the original conversation')
+        expect(adapter.bridge.getSessionId(chatId)).toBe('original-session')
+        expect(adapter.sessionStore.get(chatId)).toEqual(originalBinding)
+        expect(newSessionCount).toBe(creationsBefore)
+        expect(sendSpy).toHaveBeenCalledWith(chatId, 'Retry the original conversation', undefined)
+      } finally {
+        failedOpen.mockRestore()
+        sendSpy.mockRestore()
+        adapter.bridge.resetSession(chatId)
+        adapter.clearTransientChatState(chatId)
+      }
+    })
+
     it('restores original history and honors the real initial active-turn snapshot', async () => {
       const adapter = adapterFor(platform)
       const chatId = chatFor(platform)

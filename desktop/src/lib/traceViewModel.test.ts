@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { buildTraceViewModel } from './traceViewModel'
 import type { MessageEntry } from '../types/session'
 import type { TraceSession } from '../types/trace'
@@ -300,5 +300,34 @@ describe('traceViewModel', () => {
       focusSpanId: 'llm:call-aborted',
       pendingModelCalls: 0,
     })
+  })
+})
+
+
+describe('large trace turn lookup', () => {
+  it('does not rescan all turn timestamps for each history message', () => {
+    const messages: MessageEntry[] = Array.from({ length: 1000 }, (_, index) => ({
+      id: `user-${index}`, type: 'user', content: `Turn ${index}`,
+      timestamp: new Date(1_700_000_000_000 + index * 1000).toISOString(),
+    }))
+    const getTime = vi.spyOn(Date.prototype, 'getTime')
+    try {
+      const result = buildTraceViewModel({ ...trace, calls: [], events: [] }, messages)
+      expect(result.spansById.get('message:user-999')?.turnIndex).toBe(999)
+      // The previous quadratic lookup exceeded a million conversions.
+      expect(getTime.mock.calls.length).toBeLessThan(100_000)
+    } finally {
+      getTime.mockRestore()
+    }
+  })
+
+  it('preserves the last matching turn for out-of-order and duplicate timestamps', () => {
+    const messages: MessageEntry[] = [3, 1, 2, 2].map((second, index) => ({
+      id: `user-${index}`, type: 'user', content: `Turn ${index}`,
+      timestamp: `2026-06-09T10:00:0${second}.000Z`,
+    }))
+    messages.push({ id: 'reply', type: 'assistant', content: 'Reply', timestamp: '2026-06-09T10:00:02.500Z' })
+    const result = buildTraceViewModel({ ...trace, calls: [], events: [] }, messages)
+    expect(result.spansById.get('message:reply')?.turnIndex).toBe(3)
   })
 })

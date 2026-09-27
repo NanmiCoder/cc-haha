@@ -39,7 +39,7 @@ describe('WorkspaceAddMenu', () => {
     render(<Harness />)
     fireEvent.click(screen.getByText('Add'))
     expect(hiddenAttempts).toHaveLength(0)
-    expect(screen.getByTestId('workspace-menu-review')).toHaveFocus()
+    expect(screen.getByTestId('workspace-menu-side-chat')).toHaveFocus()
   })
 
   it('portals next to the actual trigger, shifting away from the viewport edge', () => {
@@ -55,19 +55,22 @@ describe('WorkspaceAddMenu', () => {
     expect(container).not.toContainElement(menu)
     expect(menu).toHaveStyle({ position: 'fixed', top: '49px', left: `${window.innerWidth - 286}px` })
     expect(within(menu).getAllByRole('menuitem').map(item => item.getAttribute('data-testid')))
-      .toEqual(['workspace-menu-review', 'workspace-menu-terminal', 'workspace-menu-browser', 'workspace-menu-file'])
+      .toEqual(['workspace-menu-side-chat', 'workspace-menu-review', 'workspace-menu-terminal', 'workspace-menu-browser', 'workspace-menu-file'])
   })
 
   it('navigates enabled actions without wrapping at the ends and supports Home/End', () => {
     render(<Harness disabled />)
     fireEvent.click(screen.getByText('Add'))
     const menu = screen.getByRole('menu')
+    const sideChat = screen.getByTestId('workspace-menu-side-chat')
     const terminal = screen.getByTestId('workspace-menu-terminal')
     const browser = screen.getByTestId('workspace-menu-browser')
     const file = screen.getByTestId('workspace-menu-file')
     expect(screen.getByTestId('workspace-menu-review')).toBeDisabled()
-    expect(terminal).toHaveFocus()
+    expect(sideChat).toHaveFocus()
     fireEvent.keyDown(menu, { key: 'ArrowUp' })
+    expect(sideChat).toHaveFocus()
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
     expect(terminal).toHaveFocus()
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
     expect(browser).toHaveFocus()
@@ -76,7 +79,7 @@ describe('WorkspaceAddMenu', () => {
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
     expect(file).toHaveFocus()
     fireEvent.keyDown(menu, { key: 'Home' })
-    expect(terminal).toHaveFocus()
+    expect(sideChat).toHaveFocus()
   })
 
   it('opens on the last action when requested and returns focus on Escape', () => {

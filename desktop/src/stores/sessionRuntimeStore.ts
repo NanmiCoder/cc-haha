@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { isSideChatSession } from '../lib/sideChatSessions'
 import type { RuntimeSelection } from '../types/runtime'
 import type { SessionListItem } from '../types/session'
 import {
@@ -9,12 +10,20 @@ import {
 import { normalizeRuntimeSelection } from '../lib/runtimeSelection'
 
 const STORAGE_KEY = 'cc-haha-session-runtime'
+// Session-list metadata can lag behind runtime changes or arrive out of order.
+// Protect local choices until the server confirms them. Object identity also
+// lets callers discard list responses started before a choice/confirmation.
+// This transient state follows moveSelection without changing persisted JSON.
+const pendingRuntimes = new WeakSet<RuntimeSelection>()
 const RETIRED_GROK_MODEL_IDS = new Set([
   'grok-build',
   'grok-build-0.1',
   'grok-4.3',
   'grok-4.20-reasoning',
   'grok-4.20-non-reasoning',
+  // Dropped from the live /v1/models feed, so a session still pinned to it
+  // would send an ID the gateway no longer serves.
+  'grok-composer-2.5-fast',
 ])
 
 export const DRAFT_RUNTIME_SELECTION_KEY = '__draft__'
@@ -24,7 +33,8 @@ type SessionRuntimeStore = {
   setSelection: (key: string, selection: RuntimeSelection) => void
   clearSelection: (key: string) => void
   moveSelection: (fromKey: string, toKey: string) => void
-  syncFromSessions: (sessions: SessionListItem[]) => void
+  settleSelection: (key: string) => void
+  syncFromSessions: (sessions: SessionListItem[], startedWith?: Record<string, RuntimeSelection>) => void
 }
 
 function normalizeSelection(selection: RuntimeSelection): RuntimeSelection | null {
@@ -63,6 +73,10 @@ function normalizeSelections(
   let changed = false
   const normalized: Record<string, RuntimeSelection> = {}
   for (const [key, selection] of Object.entries(selections)) {
+    if (isSideChatSession(key)) {
+      changed = true
+      continue
+    }
     const next = normalizeSelection(selection)
     if (!next) {
       changed = true
@@ -92,7 +106,9 @@ function loadSelections(): Record<string, RuntimeSelection> {
 function persistSelections(selections: Record<string, RuntimeSelection>) {
   if (typeof localStorage === 'undefined') return
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(selections))
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(
+      Object.entries(selections).filter(([key]) => !isSideChatSession(key)),
+    )))
   } catch {
     // noop
   }
@@ -105,8 +121,10 @@ export const useSessionRuntimeStore = create<SessionRuntimeStore>((set) => ({
     set((state) => {
       const normalized = normalizeSelection(selection)
       const selections = { ...state.selections }
-      if (normalized) selections[key] = normalized
-      else delete selections[key]
+      if (normalized) {
+        pendingRuntimes.add(normalized)
+        selections[key] = normalized
+      } else delete selections[key]
       persistSelections(selections)
       return { selections }
     }),
@@ -132,28 +150,39 @@ export const useSessionRuntimeStore = create<SessionRuntimeStore>((set) => ({
       return { selections }
     }),
 
-  syncFromSessions: (sessions) =>
+  settleSelection: (key) =>
+    set((state) => {
+      const current = state.selections[key]
+      if (!current || !pendingRuntimes.has(current)) return state
+      // A new identity invalidates requests started before confirmation/failure.
+      return { selections: { ...state.selections, [key]: { ...current } } }
+    }),
+
+  syncFromSessions: (sessions, startedWith) =>
     set((state) => {
       let selections = state.selections
       for (const session of sessions) {
+        const current = selections[session.id]
+        if (startedWith && startedWith[session.id] !== current) continue
         if (!session.runtimeModelId || session.runtimeProviderId === undefined) continue
         const selection = normalizeSelection({
           providerId: session.runtimeProviderId,
           modelId: session.runtimeModelId,
           ...(session.effortLevel ? { effortLevel: session.effortLevel } : {}),
         })
+        const matchesCurrent = selection &&
+          current?.providerId === selection.providerId &&
+          current.modelId === selection.modelId &&
+          current.effortLevel === selection.effortLevel
+        const pending = current && pendingRuntimes.has(current)
+        if (pending && !matchesCurrent) continue
         if (!selection) {
           if (!(session.id in selections)) continue
           if (selections === state.selections) selections = { ...state.selections }
           delete selections[session.id]
           continue
         }
-        const current = selections[session.id]
-        if (
-          current?.providerId === selection.providerId &&
-          current.modelId === selection.modelId &&
-          current.effortLevel === selection.effortLevel
-        ) {
+        if (matchesCurrent && !pending) {
           continue
         }
         if (selections === state.selections) selections = { ...state.selections }

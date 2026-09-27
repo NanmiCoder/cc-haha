@@ -31,6 +31,7 @@ const ENV_KEYS = [
   'ANTHROPIC_MODEL',
   'ANTHROPIC_DEFAULT_FABLE_MODEL',
   'ANTHROPIC_DEFAULT_FABLE_MODEL_SUPPORTED_CAPABILITIES',
+  'ANTHROPIC_DEFAULT_OPUS_MODEL',
   'CLAUDE_CODE_DISABLE_1M_CONTEXT',
   'CLAUDE_CODE_USE_BEDROCK',
   'CLAUDE_CODE_SUBAGENT_MODEL',
@@ -128,7 +129,7 @@ describe('Fable model configuration', () => {
     expect(getMarketingNameForModel('claude-opus-4-8')).toBe('Opus 4.8')
     expect(getMarketingNameForModel('claude-sonnet-5')).toBe('Sonnet 5')
     expect(renderDefaultModelSetting('opusplan')).toBe(
-      'Opus 4.8 in plan mode, else Sonnet 5',
+      'Opus 5 in plan mode, else Sonnet 5',
     )
   })
 
@@ -181,6 +182,10 @@ describe('Fable model configuration', () => {
     expect(sanitizeModelName('claude-opus-4-8-experimental')).toBe('claude-opus-4-8')
     expect(sanitizeModelName('claude-sonnet-5-experimental')).toBe('claude-sonnet-5')
     expect(getHardcodedTeammateModelFallback()).toBe('claude-opus-4-8')
+
+    process.env.ANTHROPIC_DEFAULT_OPUS_MODEL = 'deepseek-flash'
+    expect(getHardcodedTeammateModelFallback()).toBe('deepseek-flash')
+    delete process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
 
     process.env.CLAUDE_CODE_USE_BEDROCK = '1'
     expect(getHardcodedTeammateModelFallback()).toBe(

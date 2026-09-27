@@ -49,6 +49,59 @@ function makeBridge(options?: { currentSessionId?: string | null; open?: boolean
 }
 
 describe('restoreStoredSessionBinding', () => {
+  it.each(['timeout', 'connect error', 'wait error'])('preserves the binding and transient state after a %s', async (failure) => {
+    const entry = { sessionId: 'stored-session', workDir: '/original-project', updatedAt: 1 }
+    const store = makeStore(entry)
+    const bridge = makeBridge()
+    const connect = bridge.connectSession
+    const wait = bridge.waitForOpen
+    if (failure === 'connect error') bridge.connectSession = () => { throw new Error('connect failed') }
+    else bridge.waitForOpen = async () => {
+      if (failure === 'wait error') throw new Error('wait failed')
+      return false
+    }
+    let cleared = 0
+    const options = {
+      chatId: 'chat-1',
+      bridge,
+      sessionStore: store,
+      httpClient: { sessionExists: async () => true },
+      onServerMessage: () => {},
+      logPrefix: '[Test]',
+      clearTransientState: () => { cleared += 1 },
+    }
+
+    expect(await restoreStoredSessionBinding(options)).toEqual({ status: 'unavailable', session: entry })
+    expect(store.current()).toEqual(entry)
+    expect(cleared).toBe(0)
+    expect(bridge.calls).not.toContain('reset')
+
+    bridge.connectSession = connect
+    bridge.waitForOpen = wait
+    expect(await restoreStoredSessionBinding(options)).toEqual({ status: 'restored', session: entry })
+    expect(store.current()).toEqual(entry)
+  })
+
+  it.each([false, true])('keeps the binding when verification fails and reconnect returns %s', async (opened) => {
+    const entry = { sessionId: 'stored-session', workDir: '/original-project', updatedAt: 1 }
+    const store = makeStore(entry)
+    const bridge = makeBridge()
+    bridge.waitForOpen = async () => opened
+
+    const result = await restoreStoredSessionBinding({
+      chatId: 'chat-1',
+      bridge,
+      sessionStore: store,
+      httpClient: { sessionExists: async () => { throw new Error('HTTP timeout') } },
+      onServerMessage: () => {},
+      logPrefix: '[Test]',
+    })
+
+    expect(result).toEqual({ status: opened ? 'restored' : 'unavailable', session: entry })
+    expect(store.current()).toEqual(entry)
+    expect(bridge.calls).toEqual(['connect:stored-session', 'handler'])
+  })
+
   it('resets stale bridge memory when server-side delete removed the stored mapping', async () => {
     const store = makeStore(null)
     const bridge = makeBridge({ currentSessionId: 'deleted-session', hasSession: true })
@@ -66,7 +119,7 @@ describe('restoreStoredSessionBinding', () => {
       },
     })
 
-    expect(restored).toBeNull()
+    expect(restored).toEqual({ status: 'missing' })
     expect(bridge.calls).toEqual(['reset'])
     expect(cleared).toBe(1)
   })
@@ -89,7 +142,7 @@ describe('restoreStoredSessionBinding', () => {
       },
     })
 
-    expect(restored).toBeNull()
+    expect(restored).toEqual({ status: 'missing' })
     expect(store.current()).toBeNull()
     expect(bridge.calls).toEqual([])
     expect(cleared).toBe(1)
@@ -113,7 +166,7 @@ describe('restoreStoredSessionBinding', () => {
       },
     })
 
-    expect(restored).toEqual(entry)
+    expect(restored).toEqual({ status: 'restored', session: entry })
     expect(bridge.calls).toEqual(['reset', 'connect:stored-session', 'handler', 'wait'])
     expect(cleared).toBe(1)
   })
@@ -138,7 +191,7 @@ describe('restoreStoredSessionBinding', () => {
       logPrefix: '[Test]',
     })
 
-    expect(restored).toEqual(entry)
+    expect(restored).toEqual({ status: 'restored', session: entry })
     expect(checked).toBe(0)
     expect(bridge.calls).toEqual([])
   })
@@ -157,7 +210,7 @@ describe('restoreStoredSessionBinding', () => {
       logPrefix: '[Test]',
     })
 
-    expect(restored).toEqual(entry)
+    expect(restored).toEqual({ status: 'restored', session: entry })
     expect(bridge.calls).toEqual(['connect:stored-session', 'handler', 'wait'])
   })
 })

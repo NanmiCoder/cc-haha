@@ -2073,6 +2073,12 @@ async function loadPluginsFromMarketplaces({
       }
 
       if (!result) {
+        // An explicitly disabled entry for a plugin that is not in its
+        // marketplace (uninstalled, delisted, or a failed-install leftover)
+        // is an inert state, not a load error. Reporting it as
+        // plugin-not-found makes every reload's error_count non-zero, which
+        // unrelated flows (e.g. connector session refresh) treat as failure.
+        if (!isEnabledPluginSettingValue(enabledValue)) return null
         errors.push({
           type: 'plugin-not-found',
           source: pluginId,

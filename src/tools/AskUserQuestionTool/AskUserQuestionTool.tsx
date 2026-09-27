@@ -1,4 +1,3 @@
-import { c as _c } from "react/compiler-runtime";
 import { feature } from 'bun:bundle';
 import * as React from 'react';
 import { getAllowedChannels, getQuestionPreviewFormat } from 'src/bootstrap/state.js';
@@ -69,7 +68,8 @@ type InputSchema = ReturnType<typeof inputSchema>;
 const outputSchema = lazySchema(() => z.object({
   questions: z.array(questionSchema()).describe('The questions that were asked'),
   answers: z.record(z.string(), z.string()).describe('The answers provided by the user (question text -> answer string; multi-select answers are comma-separated)'),
-  annotations: annotationsSchema()
+  annotations: annotationsSchema(),
+  selectionSource: z.literal('automatic').optional()
 }));
 type OutputSchema = ReturnType<typeof outputSchema>;
 
@@ -80,27 +80,11 @@ export const _sdkOutputSchema = outputSchema;
 export type Question = z.infer<ReturnType<typeof questionSchema>>;
 export type QuestionOption = z.infer<ReturnType<typeof questionOptionSchema>>;
 export type Output = z.infer<OutputSchema>;
-function AskUserQuestionResultMessage(t0) {
-  const $ = _c(3);
-  const {
-    answers
-  } = t0;
-  let t1;
-  if ($[0] === Symbol.for("react.memo_cache_sentinel")) {
-    t1 = <Box flexDirection="row"><Text color={getModeColor("default")}>{BLACK_CIRCLE} </Text><Text>User answered Claude's questions:</Text></Box>;
-    $[0] = t1;
-  } else {
-    t1 = $[0];
-  }
-  let t2;
-  if ($[1] !== answers) {
-    t2 = <Box flexDirection="column" marginTop={1}>{t1}<MessageResponse><Box flexDirection="column">{Object.entries(answers).map(_temp)}</Box></MessageResponse></Box>;
-    $[1] = answers;
-    $[2] = t2;
-  } else {
-    t2 = $[2];
-  }
-  return t2;
+function AskUserQuestionResultMessage({ answers, selectionSource }: Pick<Output, 'answers' | 'selectionSource'>) {
+  return <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="row"><Text color={getModeColor('default')}>{BLACK_CIRCLE} </Text><Text>{selectionSource === 'automatic' ? 'Answers selected automatically after the timeout:' : "User answered Claude's questions:"}</Text></Box>
+    <MessageResponse><Box flexDirection="column">{Object.entries(answers).map(_temp)}</Box></MessageResponse>
+  </Box>;
 }
 function _temp(t0) {
   const [questionText, answer] = t0;
@@ -183,6 +167,8 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
     return {
       behavior: 'ask' as const,
       message: 'Answer questions?',
+      // The public input schema drops unknown metadata, including any
+      // model-supplied provenance marker.
       updatedInput: input
     };
   },
@@ -193,9 +179,10 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
     return null;
   },
   renderToolResultMessage({
-    answers
+    answers,
+    selectionSource
   }, _toolUseID) {
-    return <AskUserQuestionResultMessage answers={answers} />;
+    return <AskUserQuestionResultMessage answers={answers} selectionSource={selectionSource} />;
   },
   renderToolUseRejectedMessage() {
     return <Box flexDirection="row" marginTop={1}>
@@ -209,12 +196,15 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
   async call({
     questions,
     answers = {},
-    annotations
+    annotations,
+    metadata
   }, _context) {
     return {
       data: {
         questions,
         answers,
+        ...((metadata as { autoAnswered?: boolean } | undefined)?.autoAnswered === true
+          ? { selectionSource: 'automatic' as const } : {}),
         ...(annotations && {
           annotations
         })
@@ -224,7 +214,8 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
   mapToolResultToToolResultBlockParam({
     questions,
     answers,
-    annotations
+    annotations,
+    selectionSource
   }, toolUseID) {
     const answersText = Object.entries(answers).map(([questionText, answer]) => {
       const annotation = annotations?.[questionText];
@@ -249,10 +240,14 @@ export const AskUserQuestionTool: Tool<InputSchema, Output> = buildTool({
       return selectedLabels.length > 0 && selectedLabels.every(label => question.options.some(option => option.label === label));
     });
     const hasUserNotes = Object.values(annotations ?? {}).some(annotation => Boolean(annotation.notes?.trim()));
-    const guidance = allQuestionsAnswered && answersOnlyUseOptions && !hasUserNotes ? "You can now continue with the user's answers in mind." : "Carefully consider the user's answers before proceeding. The answers may require that you pause, clarify, or change your approach.";
+    const guidance = selectionSource === 'automatic'
+      ? 'These are automatic selections, not direct user input. Use them as defaults where appropriate; do not treat them as approval for irreversible actions.'
+      : allQuestionsAnswered && answersOnlyUseOptions && !hasUserNotes
+        ? "You can now continue with the user's answers in mind."
+        : "Carefully consider the user's answers before proceeding. The answers may require that you pause, clarify, or change your approach.";
     return {
       type: 'tool_result',
-      content: `User has answered your questions: ${answersText}. ${guidance}`,
+      content: `${selectionSource === 'automatic' ? 'Answers were selected automatically after the timeout' : 'User has answered your questions'}: ${answersText}. ${guidance}`,
       tool_use_id: toolUseID
     };
   }

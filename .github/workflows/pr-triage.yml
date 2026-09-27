@@ -59,7 +59,7 @@ jobs:
               'src/tools/',
               'src/utils/',
             ]
-            const docsExact = new Set(['README.md', 'README.en.md', 'package.json', 'package-lock.json', '.github/workflows/deploy-docs.yml'])
+            const docsExact = new Set(['README.md', 'README.zh-CN.md', 'package.json', 'package-lock.json', '.github/workflows/deploy-docs.yml'])
             const releaseExact = new Set([
               '.github/workflows/pr-quality.yml',
               '.github/workflows/pr-triage.yml',

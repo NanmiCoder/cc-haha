@@ -115,6 +115,53 @@ describe('projectDiagnosticEventForSharing', () => {
     expect(projected.omittedFields).toContain('details.error.message')
     expect(projected.omittedFields).toContain('details.error.stack')
   })
+
+  test('keeps share-safe performance timings while omitting request paths', () => {
+    const projected = projectDiagnosticEventForSharing({
+      id: 'event-performance-1',
+      timestamp: '2026-09-21T22:15:00.000Z',
+      type: 'client_api_request_slow',
+      severity: 'warn',
+      summary: 'GET /api/private took 7736ms',
+      details: {
+        method: 'GET',
+        path: '/api/filesystem/browse?path=%2FUsers%2Falice%2Fprivate',
+        route: '/api/filesystem/browse',
+        durationMs: 7736,
+        fetchMs: 7735.6,
+        responseReadMs: 0.4,
+        responseChars: 200600,
+        recoveryMs: 0,
+        attempts: 1,
+        recovered: false,
+        requestId: 'api-60114-1tq5-3122',
+        serverTiming: 'app;dur=0.2',
+        serverAppMs: 0.2,
+        declaredBytes: 211758,
+        status: 200,
+      },
+    })
+
+    expect(projected.details).toEqual({
+      method: 'GET',
+      route: '/api/filesystem/browse',
+      durationMs: 7736,
+      fetchMs: 7735.6,
+      responseReadMs: 0.4,
+      responseChars: 200600,
+      recoveryMs: 0,
+      attempts: 1,
+      recovered: false,
+      requestId: 'api-60114-1tq5-3122',
+      serverAppMs: 0.2,
+      declaredBytes: 211758,
+      status: 200,
+    })
+    expect(projected.omittedFields).toContain('summary')
+    expect(projected.omittedFields).toContain('details.path')
+    expect(projected.omittedFields).toContain('details.serverTiming')
+    expect(JSON.stringify(projected)).not.toContain('/Users/alice')
+  })
 })
 
 describe('buildDiagnosticsIssueReport', () => {

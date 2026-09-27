@@ -217,7 +217,16 @@ const DEFAULT_MCP_TOOL_TIMEOUT_MS = 100_000_000
  * OpenAPI-generated MCP servers have been observed dumping 15-60KB of endpoint
  * docs into tool.description; this caps the p95 tail without losing the intent.
  */
-const MAX_MCP_DESCRIPTION_LENGTH = 2048
+const DEFAULT_MAX_MCP_DESCRIPTION_LENGTH = 2048
+
+function getMaxMcpDescriptionLength(): number {
+  const configured = process.env.CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH?.trim() ?? ''
+  if (!/^\d+$/.test(configured)) return DEFAULT_MAX_MCP_DESCRIPTION_LENGTH
+  const limit = Number(configured)
+  return Number.isSafeInteger(limit) && limit > 0
+    ? limit
+    : DEFAULT_MAX_MCP_DESCRIPTION_LENGTH
+}
 
 /**
  * Gets the timeout for MCP tool calls in milliseconds.
@@ -1242,16 +1251,17 @@ const connectToServerMemoized = memoize(
       const capabilities = client.getServerCapabilities()
       const serverVersion = client.getServerVersion()
       const rawInstructions = client.getInstructions()
+      const maxDescriptionLength = getMaxMcpDescriptionLength()
       let instructions = rawInstructions
       if (
         rawInstructions &&
-        rawInstructions.length > MAX_MCP_DESCRIPTION_LENGTH
+        rawInstructions.length > maxDescriptionLength
       ) {
         instructions =
-          rawInstructions.slice(0, MAX_MCP_DESCRIPTION_LENGTH) + '… [truncated]'
+          rawInstructions.slice(0, maxDescriptionLength) + '… [truncated]'
         logMCPDebug(
           name,
-          `Server instructions truncated from ${rawInstructions.length} to ${MAX_MCP_DESCRIPTION_LENGTH} chars`,
+          `Server instructions truncated from ${rawInstructions.length} to ${maxDescriptionLength} chars`,
         )
       }
 
@@ -1912,8 +1922,9 @@ export const fetchToolsForClient = memoizeWithLRU(
             },
             async prompt() {
               const desc = tool.description ?? ''
-              return desc.length > MAX_MCP_DESCRIPTION_LENGTH
-                ? desc.slice(0, MAX_MCP_DESCRIPTION_LENGTH) + '… [truncated]'
+              const maxDescriptionLength = getMaxMcpDescriptionLength()
+              return desc.length > maxDescriptionLength
+                ? desc.slice(0, maxDescriptionLength) + '… [truncated]'
                 : desc
             },
             isConcurrencySafe() {

@@ -7,11 +7,11 @@ import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { isGrokOfficialProviderId } from './grokOfficialProvider.js'
 import {
   BUILT_IN_PROVIDER_IDS,
+  PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION,
   PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION,
-  PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION,
 } from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION
 
 type MigrationReport = {
   migratedEntries: string[]
@@ -65,6 +65,17 @@ function isSavedProvider(value: unknown): value is JsonObject {
     typeof value.baseUrl === 'string' &&
     isProviderModels(value.models)
   )
+}
+
+function normalizeOfficialProviderModels(value: unknown): JsonObject {
+  if (!isRecord(value)) return {}
+  const normalized: JsonObject = { ...value }
+  for (const id of BUILT_IN_PROVIDER_IDS) {
+    if (!isProviderModels(value[id])) {
+      delete normalized[id]
+    }
+  }
+  return normalized
 }
 
 function isLegacyProviderModel(value: unknown): value is LegacyProviderModel {
@@ -164,12 +175,14 @@ function migrateProvidersIndex(value: unknown): JsonObject {
       activeId: null,
       providers: [],
       providerOrder: [...BUILT_IN_PROVIDER_IDS],
+      officialProviderModels: {},
     }
   }
 
   const {
     activeProviderId: _legacyActiveProviderId,
     providerOrder: rawProviderOrder,
+    officialProviderModels: rawOfficialProviderModels,
     ...rest
   } = value
   const sourceSchemaVersion = typeof value.schemaVersion === 'number' ? value.schemaVersion : 1
@@ -201,6 +214,7 @@ function migrateProvidersIndex(value: unknown): JsonObject {
     activeId,
     providers,
     providerOrder: normalizeProviderOrder(rawProviderOrder, providers),
+    officialProviderModels: normalizeOfficialProviderModels(rawOfficialProviderModels),
   }
 }
 

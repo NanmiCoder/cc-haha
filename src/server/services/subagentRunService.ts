@@ -28,12 +28,22 @@ export type SubagentRunResponse = {
   outputFile?: string
   usage?: SubagentRunUsage
   messages: MessageEntry[]
-  /** Complete, untruncated transcript projection used to rebuild Activity. */
-  activityMessages: MessageEntry[]
+  /**
+   * Complete, untruncated transcript projection used to rebuild Activity.
+   *
+   * Only sent when `truncated` is true — that is, only when it actually
+   * differs from `messages`. Below the truncation threshold the two fields held
+   * the same array, so every run payload shipped its contents twice (measured:
+   * exactly 2× on a synthetic fixture). Clients already fall back to
+   * `messages`, which is identical in that case.
+   */
+  activityMessages?: MessageEntry[]
   taskNotifications: SessionTaskNotification[]
   /** Notifications whose nested Agent ids match `activityMessages`. */
   activityTaskNotifications: SessionTaskNotification[]
   truncated: boolean
+  historyComplete?: boolean
+  activityComplete?: boolean
   updatedAt?: string
   source: SubagentRunSource
   /**
@@ -510,14 +520,15 @@ async function resolveTranscript(
   agentId: string | null
   messages: MessageEntry[]
   taskNotifications: SessionTaskNotification[]
+  historyComplete?: boolean
 }> {
   const seen = new Set<string>()
   for (const candidate of candidates) {
     const agentId = normalizeAgentIdHint(candidate ?? undefined)
     if (!agentId || seen.has(agentId)) continue
     seen.add(agentId)
-    const transcript = await sessionService.getSubagentTranscript(sessionId, agentId)
-    if (transcript.messages.length > 0 || transcript.taskNotifications.length > 0) {
+    const transcript = await sessionService.getSubagentTranscript(sessionId, agentId, { bounded: true })
+    if (transcript.messages.length > 0 || transcript.taskNotifications.length > 0 || transcript.historyComplete === false) {
       return { agentId, ...transcript }
     }
   }
@@ -528,17 +539,21 @@ async function resolveRunFromToolRef(
   sessionId: string,
   rootMessages: MessageEntry[],
   toolRef: string,
+  rootComplete = true,
 ): Promise<{
+  historyComplete: boolean
   resolution: SubagentRunResolution
   lookupToolUseId: string
   expectedOwnerAgentId: string | null
 } | null> {
+  const unknownResolution: SubagentRunResolution = { agentId: null, hasResult: false, isAsyncLaunch: false, isError: false }
   const exactResolution = resolveSubagentRunFromMessages(rootMessages, toolRef)
   const nestedRef = parseCanonicalNestedAgentToolRef(toolRef)
   if (!nestedRef) {
-    if (!exactResolution) return null
+    if (!exactResolution && rootComplete) return null
     return {
-      resolution: exactResolution,
+      historyComplete: rootComplete,
+      resolution: exactResolution ?? unknownResolution,
       lookupToolUseId: toolRef,
       expectedOwnerAgentId: null,
     }
@@ -548,6 +563,7 @@ async function resolveRunFromToolRef(
   if (strictParentAgentId) {
     if (exactResolution) {
       return {
+        historyComplete: rootComplete,
         resolution: exactResolution,
         lookupToolUseId: nestedRef.leafToolUseId,
         expectedOwnerAgentId: strictParentAgentId,
@@ -556,14 +572,16 @@ async function resolveRunFromToolRef(
     const parentTranscript = await sessionService.getSubagentTranscript(
       sessionId,
       strictParentAgentId,
+      { bounded: true, toolUseId: nestedRef.leafToolUseId },
     )
     const nestedResolution = resolveSubagentRunFromMessages(
       parentTranscript.messages,
       nestedRef.leafToolUseId,
     )
-    return nestedResolution
+    return nestedResolution || parentTranscript.historyComplete === false || !rootComplete
       ? {
-          resolution: nestedResolution,
+          historyComplete: rootComplete && parentTranscript.historyComplete !== false,
+          resolution: nestedResolution ?? unknownResolution,
           lookupToolUseId: nestedRef.leafToolUseId,
           expectedOwnerAgentId: strictParentAgentId,
         }
@@ -582,6 +600,7 @@ async function resolveRunFromToolRef(
   const fragments = await sessionService.getSubagentTranscriptFragmentsByAgentType(
     sessionId,
     teammateName,
+    { bounded: true, toolUseId: nestedRef.leafToolUseId },
   )
   for (let index = fragments.length - 1; index >= 0; index -= 1) {
     const fragment = fragments[index]!
@@ -591,13 +610,16 @@ async function resolveRunFromToolRef(
     )
     if (nestedResolution) {
       return {
+        historyComplete: rootComplete && fragments.every(fragment => fragment.historyComplete !== false),
         resolution: nestedResolution,
         lookupToolUseId: nestedRef.leafToolUseId,
         expectedOwnerAgentId: fragment.agentId,
       }
     }
   }
-  return null
+  return fragments.some(fragment => fragment.historyComplete === false) || !rootComplete
+    ? { historyComplete: false, resolution: unknownResolution, lookupToolUseId: nestedRef.leafToolUseId, expectedOwnerAgentId: nestedRef.parentAgentId }
+    : null
 }
 
 function notificationForToolRef(
@@ -651,7 +673,7 @@ export async function getSubagentRunByAgentId(
     taskNotifications: transcript.taskNotifications,
   })
   const truncated = truncateSubagentMessages(activity.messages)
-  const usage = usageFromTranscriptMessages(messages)
+  const usage = transcript.historyComplete === false ? undefined : usageFromTranscriptMessages(messages)
   const updatedAt = latestTimestamp(
     ...messages.map(message =>
       isRecord(message) && typeof message.timestamp === 'string'
@@ -671,7 +693,7 @@ export async function getSubagentRunByAgentId(
         : workflowState.agent.state === 'error' || workflowState.run.status === 'failed'
           ? 'failed'
           : 'running'
-    : 'completed'
+    : transcript.historyComplete === false ? 'unknown' : 'completed'
 
   return {
     sessionId,
@@ -682,10 +704,12 @@ export async function getSubagentRunByAgentId(
     status,
     ...(usage ? { usage } : {}),
     messages: truncated.messages,
-    activityMessages: activity.messages,
+    ...(truncated.truncated ? { activityMessages: activity.messages } : {}),
     taskNotifications: transcript.taskNotifications,
     activityTaskNotifications: activity.taskNotifications,
-    truncated: truncated.truncated,
+    truncated: truncated.truncated || transcript.historyComplete === false,
+    historyComplete: transcript.historyComplete !== false,
+    activityComplete: transcript.historyComplete !== false,
     ...(updatedAt ? { updatedAt } : {}),
     source: 'subagent-jsonl',
     // A workflow agent answers once into its script and is gone; there is no
@@ -699,11 +723,12 @@ export async function getSubagentRunByTool(
   toolUseId: string,
   liveTaskId?: string,
 ): Promise<SubagentRunResponse | null> {
-  const [parentMessages, taskNotifications] = await Promise.all([
-    sessionService.getSessionMessages(sessionId),
-    sessionService.getSessionTaskNotifications(sessionId),
-  ])
-  const resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId)
+  // Only the root-level `Agent` tool call is resolved here — its child
+  // transcript is read separately below. Pulling the merged view instead would
+  // re-materialize every linked subagent on each card open.
+  const parentLookup = await sessionService.getSubagentRunLookup(sessionId, toolUseId)
+  const { messages: parentMessages, taskNotifications } = parentLookup
+  const resolvedToolRef = await resolveRunFromToolRef(sessionId, parentMessages, toolUseId, parentLookup.historyComplete !== false)
   if (!resolvedToolRef) return null
   const { resolution, lookupToolUseId, expectedOwnerAgentId } = resolvedToolRef
 
@@ -717,7 +742,7 @@ export async function getSubagentRunByTool(
     ? resolution.agentId.split('@')[0]
     : undefined
   const teammateFragments = teammateName
-    ? await sessionService.getSubagentTranscriptFragmentsByAgentType(sessionId, teammateName)
+    ? await sessionService.getSubagentTranscriptFragmentsByAgentType(sessionId, teammateName, { bounded: true })
     : []
   // Sidecar metadata is written before the agent starts, so it is the only
   // hint that exists while the run is still streaming. The other candidates
@@ -731,6 +756,7 @@ export async function getSubagentRunByTool(
   )
   const transcript = teammateFragments.length > 0
     ? {
+        historyComplete: teammateFragments.every(fragment => fragment.historyComplete !== false),
         agentId: teammateFragments[teammateFragments.length - 1]!.agentId,
         messages: mergeTeammateTranscriptFragments(teammateFragments),
         taskNotifications: mergeTeammateTranscriptTaskNotifications(teammateFragments),
@@ -753,7 +779,9 @@ export async function getSubagentRunByTool(
           messages: transcript.messages,
           taskNotifications: transcript.taskNotifications,
         }
-  const status = statusFromResolution(resolution, notification)
+  const historyComplete = resolvedToolRef.historyComplete && transcript.historyComplete !== false
+  const status = !resolvedToolRef.historyComplete && !resolution.hasResult && !notification?.status
+    ? 'unknown' : statusFromResolution(resolution, notification)
   const resolvedAgentId = transcript.agentId
     ?? metadataAgentId
     ?? normalizeAgentIdHint(resolution.agentId ?? undefined)
@@ -767,7 +795,7 @@ export async function getSubagentRunByTool(
   )
   const transcriptMessages = transcript.messages
   const truncated = truncateSubagentMessages(activity.messages)
-  const transcriptUsage = usageFromTranscriptMessages(transcriptMessages)
+  const transcriptUsage = transcript.historyComplete === false ? undefined : usageFromTranscriptMessages(transcriptMessages)
   const usage = mergeUsage(resolution.usage, transcriptUsage)
   const latestTranscriptTimestamp = latestTimestamp(
     ...transcriptMessages.map((message) => (
@@ -795,10 +823,12 @@ export async function getSubagentRunByTool(
     ...(notification?.outputFile ? { outputFile: notification.outputFile } : {}),
     ...(usage ? { usage } : {}),
     messages: truncated.messages,
-    activityMessages: activity.messages,
+    ...(truncated.truncated ? { activityMessages: activity.messages } : {}),
     taskNotifications: transcript.taskNotifications,
     activityTaskNotifications: activity.taskNotifications,
-    truncated: truncated.truncated,
+    truncated: truncated.truncated || !historyComplete,
+    historyComplete,
+    activityComplete: historyComplete,
     ...(latestTimestamp(resolution.updatedAt, notification?.timestamp, latestTranscriptTimestamp)
       ? { updatedAt: latestTimestamp(resolution.updatedAt, notification?.timestamp, latestTranscriptTimestamp) }
       : {}),

@@ -5,6 +5,8 @@ export const MODEL_CONTEXT_WINDOW_MAX = 10_000_000
 const DIRECT_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   'claude-fable-5-1': 1_000_000,
   'claude-fable-5': 1_000_000,
+  'claude-opus-5-5': 1_000_000,
+  'claude-opus-5': 1_000_000,
   'claude-opus-4-8': 1_000_000,
   'claude-opus-4-7': 1_000_000,
   'claude-sonnet-5': 1_000_000,
@@ -44,6 +46,7 @@ const DIRECT_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 }
 
 const PATTERN_MODEL_CONTEXT_WINDOWS: Array<[RegExp, number]> = [
+  [/^anthropic\/claude-opus-5\b/i, 1_000_000],
   [/^anthropic\/claude-fable-5\b/i, 1_000_000],
   [/^anthropic\/claude-opus-4\.8\b/i, 1_000_000],
   [/^anthropic\/claude-sonnet-5\b/i, 1_000_000],

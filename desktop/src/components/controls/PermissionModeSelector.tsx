@@ -1,3 +1,4 @@
+import { useSideChatStore } from '@/stores/sideChatStore'
 import { useState, useRef, useEffect, useCallback, useId } from 'react'
 import DOMPurify from 'dompurify'
 import { useDismissable } from '@/hooks/useDismissable'
@@ -40,6 +41,7 @@ const MODE_ICONS: Record<PermissionMode, string> = {
 }
 
 type Props = {
+  sessionId?: string
   workDir?: string
   compact?: boolean
   menuPlacement?: 'top' | 'bottom'
@@ -49,7 +51,7 @@ type Props = {
   onChange?: (mode: PermissionMode) => void
 }
 
-export function PermissionModeSelector({ workDir: workDirProp, compact = false, menuPlacement = 'top', value, onChange }: Props = {}) {
+export function PermissionModeSelector({ sessionId, workDir: workDirProp, compact = false, menuPlacement = 'top', value, onChange }: Props = {}) {
   const t = useTranslation()
   const isMobile = useMobileViewport() && !isDesktopRuntime()
   const {
@@ -58,7 +60,10 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
     acceptAutoModeOptIn,
   } = useSettingsStore()
   const setSessionPermissionMode = useChatStore((s) => s.setSessionPermissionMode)
-  const activeTabId = useTabStore((s) => s.activeTabId)
+  const selectedTabId = useTabStore((s) => s.activeTabId)
+  const activeTabId = sessionId ?? selectedTabId
+  const livePermissionMode = useChatStore(s => activeTabId ? s.sessions[activeTabId]?.permissionMode : undefined)
+  const sideChat = useSideChatStore(s => activeTabId ? s.entries[activeTabId] : undefined)
   const sessions = useSessionStore((s) => s.sessions)
   const chatState = useChatStore((s) =>
     activeTabId ? s.sessions[activeTabId]?.chatState ?? 'idle' : 'idle',
@@ -137,8 +142,8 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
     : null
   const currentMode = isControlled
     ? value
-    : (activeSession?.permissionMode as PermissionMode | undefined) || storeMode
-  const workDir = workDirProp || activeSession?.workDir || '~'
+    : livePermissionMode || (activeSession?.permissionMode as PermissionMode | undefined) || sideChat?.permissionMode || storeMode
+  const workDir = workDirProp || activeSession?.workDir || sideChat?.workDir || '~'
   const compactButtonClass = compact
     ? isMobile
       ? 'h-11 w-11 justify-center rounded-[var(--radius-md)] p-0 border border-[var(--color-border)] bg-[var(--color-surface)]'
@@ -192,7 +197,7 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
           key={item.value}
           role="menuitem"
           onClick={() => {
-            const actionTabId = useTabStore.getState().activeTabId
+            const actionTabId = sessionId ?? useTabStore.getState().activeTabId
             if (
               actionTabId !== interactionTabIdRef.current ||
               isTurnActiveNow(actionTabId)
@@ -261,7 +266,7 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
     <div ref={ref} className="relative">
       <button
         onClick={() => {
-          const actionTabId = useTabStore.getState().activeTabId
+          const actionTabId = sessionId ?? useTabStore.getState().activeTabId
           if (isTurnActiveNow(actionTabId)) return
           if (open) {
             setOpen(false)
@@ -372,7 +377,7 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
           {
             label: t('permMode.enableBypassBtn'),
             onClick: () => {
-              const actionTabId = useTabStore.getState().activeTabId
+              const actionTabId = sessionId ?? useTabStore.getState().activeTabId
               if (
                 actionTabId !== interactionTabIdRef.current ||
                 isTurnActiveNow(actionTabId)
@@ -403,7 +408,7 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
           interactionTabIdRef.current = null
         }}
         onConfirm={async () => {
-          const actionTabId = useTabStore.getState().activeTabId
+          const actionTabId = sessionId ?? useTabStore.getState().activeTabId
           if (
             actionTabId !== interactionTabIdRef.current ||
             isTurnActiveNow(actionTabId)
@@ -418,7 +423,7 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
             if (!autoModeOptInAccepted) {
               await acceptAutoModeOptIn()
             }
-            const confirmedTabId = useTabStore.getState().activeTabId
+            const confirmedTabId = sessionId ?? useTabStore.getState().activeTabId
             if (
               confirmedTabId !== interactionTabIdRef.current ||
               isTurnActiveNow(confirmedTabId)

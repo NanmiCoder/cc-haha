@@ -13,6 +13,7 @@ import { PromptEditor } from './PromptEditor'
 import { DayOfWeekPicker } from './DayOfWeekPicker'
 import { useTranslation } from '../../i18n'
 import { describeCron, isValidCron, parseCron, type FrequencyKey } from '../../lib/cronDescribe'
+import { getSessionSeedWorkDir } from '../../lib/sessionWorkspace'
 import type { CronTask } from '../../types/task'
 
 type NotificationChannel = 'desktop' | 'telegram' | 'feishu'
@@ -64,7 +65,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
   const sessions = useSessionStore((s) => s.sessions)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
   const activeSession = sessions.find((s) => s.id === activeSessionId)
-  const defaultWorkDir = activeSession?.workDir || ''
+  const defaultWorkDir = getSessionSeedWorkDir(activeSession) || ''
   const adapterConfig = useAdapterStore((s) => s.config)
   const fetchAdapterConfig = useAdapterStore((s) => s.fetchConfig)
 

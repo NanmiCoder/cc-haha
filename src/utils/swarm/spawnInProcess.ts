@@ -41,6 +41,8 @@ import {
   unregisterAgent as unregisterPerfettoAgent,
 } from '../telemetry/perfettoTracing.js'
 import { removeMemberByAgentId } from './teamHelpers.js'
+import { isTeamReviewRequired } from './teamPlanPolicy.js'
+import { readTeamPlan } from './teamPlanStore.js'
 
 type SetAppStateFn = (updater: (prev: AppState) => AppState) => void
 
@@ -107,6 +109,9 @@ export async function spawnInProcessTeammate(
 ): Promise<InProcessSpawnOutput> {
   const { name, teamName, prompt, color, planModeRequired, model } = config
   const { setAppState } = context
+  if (isTeamReviewRequired() || await readTeamPlan(teamName)) {
+    return { success: false, agentId: formatAgentId(name, teamName), error: 'Reviewed teams must start from the approved server snapshot, never the in-process backend.' }
+  }
 
   // Generate deterministic agent ID
   const agentId = formatAgentId(name, teamName)

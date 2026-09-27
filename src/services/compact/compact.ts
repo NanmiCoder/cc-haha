@@ -101,7 +101,8 @@ import {
   queryModelWithStreaming,
 } from '../api/claude.js'
 import {
-  getPromptTooLongTokenGap,
+  isPromptTooLongMessage,
+  parsePromptTooLongTokenCounts,
   PROMPT_TOO_LONG_ERROR_MESSAGE,
   startsWithApiErrorPrefix,
 } from '../api/errors.js'
@@ -228,7 +229,9 @@ const MAX_PTL_RETRIES = 3
 const PTL_RETRY_MARKER = '[earlier conversation truncated for compaction retry]'
 
 /**
- * Drops the oldest API-round groups from messages until tokenGap is covered.
+ * Drops the oldest API-round groups to fit the provider's reported budget.
+ * Local token estimates only weight the groups: their absolute scale can be
+ * very different from the provider's tokenizer, especially for large logs.
  * Falls back to dropping 20% of groups when the gap is unparseable (some
  * Vertex/Bedrock error formats). Returns null when nothing can be dropped
  * without leaving an empty summarize set.
@@ -257,15 +260,26 @@ export function truncateHeadForPTLRetry(
   const groups = groupMessagesByApiRound(input)
   if (groups.length < 2) return null
 
-  const tokenGap = getPromptTooLongTokenGap(ptlResponse)
+  const { actualTokens, limitTokens } = parsePromptTooLongTokenCounts(ptlResponse.errorDetails ?? '')
   let dropCount: number
-  if (tokenGap !== undefined) {
+  if (
+    isPromptTooLongMessage(ptlResponse) &&
+    actualTokens !== undefined &&
+    limitTokens !== undefined &&
+    actualTokens > limitTokens
+  ) {
+    // Reserve room for the summary prompt, fixed request overhead and rounding
+    // at API-round boundaries. Subtracting an actual token gap directly from
+    // chars/4 estimates can leave oversized DeepSeek histories over limit
+    // even after retries (3.76M requested tokens for a 1.05M window in #1373).
+    const estimatedTokens = roughTokenCountEstimationForMessages(input)
+    const tokensToDrop = estimatedTokens * (1 - (limitTokens * 0.9) / actualTokens)
     let acc = 0
     dropCount = 0
     for (const g of groups) {
       acc += roughTokenCountEstimationForMessages(g)
       dropCount++
-      if (acc >= tokenGap) break
+      if (acc >= tokensToDrop) break
     }
   } else {
     dropCount = Math.max(1, Math.floor(groups.length * 0.2))

@@ -236,7 +236,15 @@ export class ConnectorService {
       }
       let cleanupFailed = false
       if (!restored) {
-        try { await bridge.setConnectorPluginEnabled(def, false); await bridge.reloadConnectorSessions(options.sessionId) } catch { cleanupFailed = true }
+        // A first install that never published has no settings entry to clear:
+        // writing enabled=false here would leave a permanent plugin-not-found
+        // tombstone in enabledPlugins (the plugin is not in any marketplace),
+        // poisoning every later reload's error_count.
+        const publishedToSettings = published || !!previous.installation
+        try {
+          if (publishedToSettings) await bridge.setConnectorPluginEnabled(def, false)
+          await bridge.reloadConnectorSessions(options.sessionId)
+        } catch { cleanupFailed = true }
       }
       if (cancelled && !restored) { try { await adapter?.deactivate() } catch { cleanupFailed = true } }
       if (cancelled && !persistenceFailed && !cleanupFailed) {

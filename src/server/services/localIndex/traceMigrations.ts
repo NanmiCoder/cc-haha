@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
 
-export const TRACE_INDEX_SCHEMA_VERSION = 4
+export const TRACE_INDEX_SCHEMA_VERSION = 6
 export const TRACE_INDEX_SCHEMA_UNSUPPORTED =
   'TRACE_INDEX_SCHEMA_UNSUPPORTED' as const
 
@@ -180,11 +180,39 @@ UPDATE trace_sources
 SET state = 'degraded', last_error_code = 'TRACE_INDEX_V4_REBUILD_REQUIRED';
 `
 
+const SCHEMA_V5 = `
+-- Session overviews are served from locators without re-reading the JSONL, so
+-- the locator has to carry the few body facts the trace tree header shows.
+ALTER TABLE trace_calls ADD COLUMN request_bytes INTEGER;
+ALTER TABLE trace_calls ADD COLUMN response_bytes INTEGER;
+ALTER TABLE trace_calls ADD COLUMN response_status INTEGER;
+ALTER TABLE trace_events ADD COLUMN title TEXT;
+ALTER TABLE trace_events ADD COLUMN message TEXT;
+
+-- Pre-existing locator rows have NULL body facts; a shell built from them
+-- would look permanently pending (no response) or sizeless. The projection is
+-- disposable: force a one-time rebuild from JSONL on next access instead of
+-- serving shells that misreport completed calls.
+UPDATE trace_sources
+SET state = 'degraded', last_error_code = 'TRACE_INDEX_V5_REBUILD_REQUIRED';
+`
+
+const SCHEMA_V6 = `
+ALTER TABLE trace_sources ADD COLUMN oversized_records INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE trace_sources ADD COLUMN scan_truncated INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE trace_sources ADD COLUMN window_start_byte INTEGER NOT NULL DEFAULT 0;
+CREATE INDEX trace_calls_page_order_idx ON trace_calls(session_id, started_at, first_ordinal);
+CREATE INDEX trace_calls_model_order_idx ON trace_calls(session_id, model, started_at, first_ordinal);
+UPDATE trace_sources SET state = 'degraded', last_error_code = 'TRACE_INDEX_V6_REBUILD_REQUIRED';
+`
+
 const MIGRATIONS = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
   { version: 3, sql: SCHEMA_V3 },
   { version: 4, sql: SCHEMA_V4 },
+  { version: 5, sql: SCHEMA_V5 },
+  { version: 6, sql: SCHEMA_V6 },
 ] as const
 
 export class UnsupportedTraceIndexSchemaError extends Error {

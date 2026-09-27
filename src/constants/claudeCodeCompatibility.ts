@@ -4,7 +4,7 @@
  * License: LGPL-3.0-or-later, Copyright (c) 2026 Wesley Liddick.
  */
 // Keep in sync with the Claude Code version accepted by upstream billing validation.
-export const CLAUDE_CODE_COMPAT_VERSION = '2.1.220'
+export const CLAUDE_CODE_COMPAT_VERSION = '2.1.281'
 export const CLAUDE_CODE_BILLING_HEADER_PREFIX = 'x-anthropic-billing-header:'
 
 export function formatClaudeCodeBillingHeader(options: {

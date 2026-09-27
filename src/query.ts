@@ -1,3 +1,4 @@
+import { isPendingSessionMessage } from './utils/sessionMessageInbox.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { OpenAICodexTurnState } from './services/openaiAuth/turnState.js'
 import type {
@@ -106,6 +107,7 @@ import { handleStopHooks } from './query/stopHooks.js'
 import { buildQueryConfig } from './query/config.js'
 import { productionDeps, type QueryDeps } from './query/deps.js'
 import type { Terminal, Continue } from './query/transitions.js'
+import { consumeTeamPlanTurnPause } from './utils/swarm/teamPlanTurnBoundary.js'
 import { feature } from 'bun:bundle'
 import {
   getCurrentTurnTokenBudget,
@@ -1424,6 +1426,12 @@ async function* queryLoop(
     }
     queryCheckpoint('query_tool_execution_end')
 
+    // All tool results must be yielded before ending the planning turn. Do not
+    // ask the model (or a tool-summary model) to continue while humans review.
+    if (consumeTeamPlanTurnPause(toolUseContext.abortController)) {
+      return { reason: 'completed' }
+    }
+
     // Generate tool use summary after tool batch completes — passed to next recursive call
     let nextPendingToolUseSummary:
       | Promise<ToolUseSummaryMessage | null>
@@ -1601,6 +1609,10 @@ async function* queryLoop(
       [...messagesForQuery, ...assistantMessages, ...toolResults],
       querySource,
     )) {
+      // Stop may remove a peer command while attachment discovery is awaiting.
+      if (attachment.type === 'attachment' && attachment.attachment.type === 'queued_command' &&
+        attachment.attachment.origin?.kind === 'channel' && attachment.attachment.origin.server === 'session-collaboration' &&
+        !isPendingSessionMessage(attachment.attachment.source_uuid)) continue
       yield attachment
       toolResults.push(attachment)
     }

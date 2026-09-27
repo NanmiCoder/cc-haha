@@ -16,6 +16,10 @@ describe('CodeViewer', () => {
     expect(contentWrapper?.style.padding).toBe('0.5rem 12px')
     expect(contentWrapper?.style.whiteSpace).toBe('pre')
     expect(contentWrapper?.style.wordBreak).toBe('normal')
+    expect(contentWrapper?.style.fontSize).toBe('var(--code-viewer-font-size, 13px)')
+    expect(contentWrapper?.style.fontFamily).toBe('var(--font-mono)')
+    // Reading preferences resize code content, while the toolbar retains UI typography.
+    expect((container.firstElementChild as HTMLElement).style.fontFamily).toBe('var(--font-body)')
 
     const codeArea = container.querySelector('.code-viewer-area') as HTMLElement | null
     expect(codeArea?.getAttribute('data-has-line-numbers')).toBe('true')

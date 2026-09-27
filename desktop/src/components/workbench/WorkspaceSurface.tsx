@@ -1,3 +1,6 @@
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { SideChatSurface } from '@/components/sideChat/SideChatSurface'
+import { openSideChat } from '@/lib/workspace/openSideChat'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useWorkspaceHeaderTarget } from '../layout/WorkspaceHeaderContext'
@@ -10,7 +13,7 @@ import { useWorkspaceBrowserStore } from '../../stores/workspaceBrowserStore'
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { openWorkspaceTarget, workspaceOpen } from '../../lib/workspace/openTarget'
 import { subscribeWorkspaceBrowserEvents } from '../../lib/workspace/browserHost'
-import type { WorkspaceDock, WorkspaceTabKind } from '../../lib/workspace/types'
+import type { WorkspaceCloseScope, WorkspaceDock, WorkspaceTabKind } from '../../lib/workspace/types'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import { WorkspaceLauncher } from './WorkspaceLauncher'
 import { WorkspaceAddMenu } from './WorkspaceAddMenu'
@@ -53,6 +56,7 @@ export function WorkspaceSurface({
   const surfaceRef = useRef<HTMLDivElement>(null)
   const headerTarget = useWorkspaceHeaderTarget(surfaceRef, sessionId, dock === 'side' && visible)
   const [menuOpen, setMenuOpen] = useState(false)
+  const [pendingClose, setPendingClose] = useState<{ sessionId: string; tabId: string; scope: WorkspaceCloseScope } | null>(null)
   const menuId = useId()
   const initialMenuFocus = useRef<'first' | 'last'>('first')
   const pendingMenuSelection = useRef<WorkspaceTabKind | null>(null)
@@ -84,6 +88,7 @@ export function WorkspaceSurface({
     // A chooser belongs to the dock and task where it was opened. A reused
     // surface must show the next task's content, not the previous task's menu.
     setMenuOpen(false)
+    setPendingClose(null)
     menuTriggerRef.current = null
     pendingMenuSelection.current = null
   }, [dock, sessionId, visible])
@@ -112,6 +117,9 @@ export function WorkspaceSurface({
     // A + action adds a resource; even an uncommitted browser page belongs
     // to its existing tab and must not be consumed as a blank placeholder.
     switch (kind) {
+      case 'side-chat':
+        void openSideChat(sessionId)
+        break
       case 'review':
         openWorkspaceTarget({ sessionId, target: { kind: 'review' } })
         break
@@ -150,6 +158,30 @@ export function WorkspaceSurface({
     setMenuOpen(false)
   }, [])
 
+  useEffect(() => {
+    if (!visible || dock !== 'side') return
+    const request = (event: Event) => {
+      const detail = (event as CustomEvent<{ sessionId: string; tabId: string }>).detail
+      if (detail?.sessionId === sessionId && tabs.some(tab => tab.id === detail.tabId && tab.kind === 'side-chat')) {
+        setPendingClose({ sessionId, tabId: detail.tabId, scope: 'current' })
+      }
+    }
+    window.addEventListener('workspace-close-request', request)
+    return () => window.removeEventListener('workspace-close-request', request)
+  }, [dock, sessionId, tabs, visible])
+
+  const requestClose = (tabId: string, scope: WorkspaceCloseScope = 'current') => {
+    const index = tabs.findIndex(tab => tab.id === tabId)
+    const affected = tabs.filter((tab, position) => scope === 'all' ||
+      (scope === 'current' && tab.id === tabId) || (scope === 'others' && tab.id !== tabId) ||
+      (scope === 'left' && position < index) || (scope === 'right' && position > index))
+    if (affected.some(tab => tab.kind === 'side-chat')) {
+      setPendingClose({ sessionId, tabId, scope })
+      return
+    }
+    useWorkspaceStore.getState().closeTabs(sessionId, tabId, scope)
+  }
+
   const tabStrip = tabs.length > 0 ? (
       <WorkspaceTabStrip
         dock={dock}
@@ -163,8 +195,8 @@ export function WorkspaceSurface({
           useWorkspaceStore.getState().activateTab(sessionId, tabId)
         }}
         onPin={(tabId) => useWorkspaceStore.getState().pinTab(sessionId, tabId)}
-        onClose={(tabId) => useWorkspaceStore.getState().closeTab(sessionId, tabId)}
-        onCloseScope={(tabId, scope) => useWorkspaceStore.getState().closeTabs(sessionId, tabId, scope)}
+        onClose={(tabId) => requestClose(tabId)}
+        onCloseScope={requestClose}
         onReorder={(tabId, index) => useWorkspaceStore.getState().moveTab(sessionId, tabId, index)}
         onMoveDock={(tabId, nextDock) =>
           useWorkspaceStore.getState().moveTabToDock(sessionId, tabId, nextDock)}
@@ -205,7 +237,9 @@ export function WorkspaceSurface({
             dock={dock}
             reviewUnavailableReason={reviewUnavailableReason}
           />
-        ) : activeTab === null ? null : activeTab.kind === 'browser' ? (
+        ) : activeTab === null ? null : activeTab.kind === 'side-chat' ? (
+          <SideChatSurface parentSessionId={sessionId} sideChatId={activeTab.sideChatId} visible={visible} />
+        ) : activeTab.kind === 'browser' ? (
           <WorkspaceBrowserTab sessionId={sessionId} tab={activeTab} active={visible} />
         ) : activeTab.kind === 'terminal' ? (
           <WorkspaceTerminalTab sessionId={sessionId} tab={activeTab} active={visible} />
@@ -220,6 +254,13 @@ export function WorkspaceSurface({
           />
         )}
       </div>
+      <ConfirmDialog open={Boolean(pendingClose && pendingClose.sessionId === sessionId && visible)}
+        title={t('sideChat.closeTitle')} body={t('sideChat.closeBody')}
+        confirmLabel={t('common.close')} cancelLabel={t('common.cancel')}
+        onClose={() => setPendingClose(null)} onConfirm={() => {
+          if (pendingClose) useWorkspaceStore.getState().closeTabs(pendingClose.sessionId, pendingClose.tabId, pendingClose.scope)
+          setPendingClose(null)
+        }} />
       {menuOpen && visible ? (
         <WorkspaceAddMenu
           id={menuId}

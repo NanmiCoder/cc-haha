@@ -30,6 +30,8 @@ describe('Grok Official runtime environment', () => {
 
     expect(windows['grok-next-preview']).toBe(375_000)
     expect(windows['grok-window-unknown']).toBeUndefined()
+    expect(windows['grok-4.7']).toBe(500_000)
+    expect(windows['grok-4.7-build-fast']).toBe(500_000)
     expect(windows['grok-4.6']).toBe(500_000)
     expect(windows['grok-4.5']).toBe(500_000)
   })

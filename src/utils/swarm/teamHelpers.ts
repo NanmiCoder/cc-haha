@@ -73,6 +73,7 @@ export type TeamAllowedPath = {
 }
 
 export type TeamFile = {
+  reviewRequired?: boolean
   name: string
   description?: string
   createdAt: number
@@ -85,6 +86,11 @@ export type TeamFile = {
     name: string
     agentType?: string
     model?: string
+    providerId?: string | null
+    providerName?: string
+    effortLevel?: string
+    planMemberId?: string
+    terminated?: boolean
     prompt?: string
     color?: string
     planModeRequired?: boolean

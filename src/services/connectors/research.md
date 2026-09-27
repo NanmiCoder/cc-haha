@@ -106,7 +106,11 @@ HyperFrames 选官方 v0.4.0 的完整历史包而非裁断最新 router：最�
 
 ### 本机 Codex 缓存核验与未直接搬运的插件
 
-已只读检查 `/Users/nanmi/.codex/plugins/cache/openai-curated-remote/*/*/.codex-plugin/plugin.json`。本机 HyperFrames 0.1.2 manifest 指向 HeyGen 上游、Apache-2.0、skills 目录，证明其本身是技能包；本批以公开固定 commit 构建，不复制本机缓存。缓存中 Remotion 1.0.7 manifest 声明 MIT，但其公开 `remotion-dev/skills` 当前仓库未找到独立 LICENSE，且 runtime 另有许可条件，因此不据缓存声明直接分发公开仓库文件。
+已只读检查 `/Users/nanmi/.codex/plugins/cache/openai-curated-remote/*/*/.codex-plugin/plugin.json`。本机 HyperFrames 0.1.2 manifest 指向 HeyGen 上游、Apache-2.0、skills 目录，证明其本身是技能包；本批以公开固定 commit 构建，不复制本机缓存。缓存中 Remotion 1.0.7 manifest 声明 MIT，但当时公开 `remotion-dev/skills` 仓库未找到独立 LICENSE，且 runtime 另有许可条件，因此当时未据缓存声明直接分发其文件。
+
+### Remotion 增补（2026-09-25）
+
+Remotion 官方已发布带 MIT LICENSE 的 [Codex 插件独立仓库](https://github.com/remotion-dev/codex-plugin/tree/0e97f3ec3f52692460f3a57d0e3babcfc86f64d5)。本目录固定该提交的 `skills/` 完整子树（12 项技能、255 个文件）及根 LICENSE，共 256 个文件，逐文件 SHA-256 见 lock。Codex 当前插件是纯技能包，未声明 MCP 或服务授权；本应用同样作为插件展示，安装技能资料，不安装 Remotion runtime，不声称已具备视频渲染环境。Remotion runtime 的[单独许可](https://www.remotion.dev/docs/license/)由实际项目使用者按其场景判断。
 
 Vercel 公共插件 [固定 commit](https://github.com/vercel/vercel-plugin/tree/df0f55213f7b8db23a3ee7f27511ed344cdb2c74) 的 LICENSE 正文为 Apache-2.0，可作为后续候选；Codex 包附 `.app.json`，移植应使用上游 Claude 包并单独处理 Vercel 登录。Superpowers [6.3.0 固定 commit](https://github.com/obra/superpowers/tree/b36e0829c6d0140e93cfef2ca599b1b07d4a7797) 为 MIT 且有 Claude plugin，但包含会改变全局工作方式的 hook 与流程，本批不为了数量默认接入。
 

@@ -20,7 +20,7 @@ The pet is **off by default**:
 3. Pick one from **Built-in pets**.
 4. Turn on **Show desktop pet**.
 
-![Settings → Pets: four built-in pets and appearance controls](../../images/app/en/settings-pets.webp)
+![Settings → Pets: four built-in pets and appearance controls (Chinese interface)](../../images/app/en/settings-pets.webp)
 
 ## The four built-in pets
 
@@ -34,8 +34,6 @@ The pet is **off by default**:
 Switching characters updates an already-open pet window immediately.
 
 ## Interacting with it
-
-![The pet floating on the desktop](../../images/app/en/pet-desktop.webp)
 
 - **Hover** — while idle it hops, and its gaze follows your pointer.
 - **Click** — brings the main window forward with a wave. Note that it only raises the window; it doesn't jump into a particular session.
@@ -58,6 +56,8 @@ Clicking a row raises the main window and opens that session. Permissions are st
 - **Collapsed by default** — show just the pet and expand the task panel only when you want it.
 
 ## Making your own
+
+![Add a pet: three ways to create your own (Chinese interface)](../../images/app/en/pet-create.webp)
 
 Click **Add pet** to the right of **Your pets**. Every image is processed on your own machine — nothing is uploaded, and nothing costs conversation credits.
 

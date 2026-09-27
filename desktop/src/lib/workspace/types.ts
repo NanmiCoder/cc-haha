@@ -16,7 +16,7 @@
  * up destroying a page whenever the panel switched modes.
  */
 
-export type WorkspaceTabKind = 'file' | 'browser' | 'review' | 'terminal'
+export type WorkspaceTabKind = 'file' | 'browser' | 'review' | 'terminal' | 'side-chat'
 
 /** Where a tab is parked. Only terminals may use `bottom`. */
 export type WorkspaceDock = 'side' | 'bottom'
@@ -138,7 +138,14 @@ export type WorkspaceTerminalTab = WorkspaceTabBase & {
   ordinal: number
 }
 
+export type WorkspaceSideChatTab = WorkspaceTabBase & {
+  kind: 'side-chat'
+  dock: 'side'
+  sideChatId: string
+}
+
 export type WorkspaceTab =
+  | WorkspaceSideChatTab
   | WorkspaceFileTab
   | WorkspaceBrowserTab
   | WorkspaceReviewTab
@@ -146,6 +153,7 @@ export type WorkspaceTab =
 
 /** What `openWorkspaceTarget` accepts from every entry point in the app. */
 export type WorkspaceTarget =
+  | { kind: 'side-chat'; sideChatId: string }
   | {
       kind: 'file'
       path: string

@@ -764,6 +764,8 @@ describe('buildOpenAICodexFetch', () => {
       })
     }
 
+    await send('gpt-6-sol')
+    await send('gpt-6-luna', 'max')
     await send('gpt-5.6-sol')
     await send('gpt-5.6-terra')
     await send('gpt-5.6-sol', 'xhigh')
@@ -772,6 +774,8 @@ describe('buildOpenAICodexFetch', () => {
     await send('gpt-5.5', 'xhigh', 'max')
 
     expect(upstreamBodies.map((body) => body.reasoning)).toEqual([
+      { effort: 'medium' },
+      { effort: 'max' },
       { effort: 'low' },
       { effort: 'medium' },
       { effort: 'xhigh' },

@@ -7,7 +7,7 @@ import {
 import type { AppState } from '../state/AppState.js'
 import type { SessionId } from '../types/ids.js'
 import { drainSdkEvents } from '../utils/sdkEventQueue.js'
-import { stopTask } from './stopTask.js'
+import { stopTask, stopTaskFromControlRequest } from './stopTask.js'
 
 function makeShellTaskHarness(agentId?: string) {
   let killed = false
@@ -96,5 +96,47 @@ describe('stopTask SDK events', () => {
     expect(harness.killed).toBe(true)
     expect(harness.state.tasks.btask123?.status).toBe('killed')
     expect(drainSdkEvents()).toEqual([])
+  })
+})
+
+describe('stopTaskFromControlRequest', () => {
+  test('reports a successful stop for a running task', async () => {
+    const harness = makeShellTaskHarness()
+
+    const result = await stopTaskFromControlRequest('btask123', {
+      getAppState: () => harness.state,
+      setAppState: harness.setAppState,
+    })
+
+    expect(result).toEqual({ ok: true, alreadyGone: false })
+    expect(harness.killed).toBe(true)
+  })
+
+  test('treats an unknown task id as an already-achieved stop, not an error', async () => {
+    const harness = makeShellTaskHarness()
+
+    const result = await stopTaskFromControlRequest('evicted-task', {
+      getAppState: () => harness.state,
+      setAppState: harness.setAppState,
+    })
+
+    expect(result).toEqual({ ok: true, alreadyGone: true })
+    expect(harness.killed).toBe(false)
+  })
+
+  test('keeps surfacing genuine stop failures', async () => {
+    const harness = makeShellTaskHarness()
+    harness.state.tasks.btask123.status = 'completed'
+
+    const result = await stopTaskFromControlRequest('btask123', {
+      getAppState: () => harness.state,
+      setAppState: harness.setAppState,
+    })
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'Task btask123 is not running (status: completed)',
+    })
+    expect(harness.killed).toBe(false)
   })
 })

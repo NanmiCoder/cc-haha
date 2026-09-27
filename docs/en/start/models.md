@@ -7,7 +7,7 @@ order: 2
 
 # Connect a model
 
-Claude Code Haha ships without a model. It's the shell that does the work; you have to give it a brain first.
+cc-haha ships without a model. It's the shell that does the work; you have to give it a brain first.
 
 Click "Settings" at the bottom of the sidebar, then pick the first tab, "Providers". From there you have three routes:
 
@@ -31,7 +31,7 @@ Click the sign-in button on the card ("Sign in to Claude" / "Sign in with ChatGP
 
 Three things to watch for:
 
-- Leave Claude Code Haha running for the whole flow — the callback has to land in the running app.
+- Leave cc-haha running for the whole flow — the callback has to land in the running app.
 - If the browser doesn't open by itself, click "Copy authorization link" and paste it in manually.
 - Proxies and blocking browser extensions can intercept either the authorization page or the local callback. Turn them off before retrying.
 
@@ -70,7 +70,7 @@ Whether a local model can complete an agent workflow depends on its tool-calling
 
 ## The Add Provider dialog, field by field
 
-![Add Provider dialog: preset, base URL, auth variable, API key, model mapping](../../images/app/en/settings-provider-add.webp)
+![Add Provider dialog: preset, base URL, auth variable, API key, model mapping (Chinese interface)](../../images/app/en/settings-provider-add.webp)
 
 **Name** (required) — how this provider appears in the list. A preset fills it in; rename it to something you'll recognize, like "DeepSeek — work account".
 

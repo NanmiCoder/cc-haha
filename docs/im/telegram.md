@@ -21,7 +21,7 @@ order: 2
 
 按提示走完两步：
 
-1. 取一个机器人名称，例如 `ClaudeCodeHaha机器人`。
+1. 取一个机器人名称，例如 `cc-haha 机器人`。
 2. 取一个用户名，全英文且必须以 `_bot` 结尾，例如 `jiang_cc_hah_bot`。
 
 创建成功后复制 BotFather 返回的**Bot Token**。这枚 Token 等同于机器人的密码，别贴到公开的地方。

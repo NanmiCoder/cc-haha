@@ -111,6 +111,9 @@ async function handleUserSettings(req: Request): Promise<Response> {
     const body = await parseJsonBody(req)
     await settingsService.updateUserSettings(body)
     syncThinkingSettingToActiveSessions(body)
+    if (Object.prototype.hasOwnProperty.call(body, 'autoQuestion')) {
+      conversationService.refreshAutoQuestionSettings()
+    }
     return Response.json({ ok: true })
   }
 

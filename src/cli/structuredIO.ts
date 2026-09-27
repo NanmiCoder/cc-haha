@@ -752,22 +752,48 @@ export class StructuredIO {
   }) => Promise<boolean> {
     return async (hostPattern): Promise<boolean> => {
       try {
-        const result = await this.sendRequest<PermissionToolOutput>(
-          {
-            subtype: 'can_use_tool',
-            tool_name: SANDBOX_NETWORK_ACCESS_TOOL_NAME,
-            input: { host: hostPattern.host },
-            tool_use_id: randomUUID(),
-            description: `Allow network connection to ${hostPattern.host}?`,
-          },
-          permissionToolOutputSchema(),
-        )
+        const result = await this.askHostForToolPermission({
+          toolName: SANDBOX_NETWORK_ACCESS_TOOL_NAME,
+          input: { host: hostPattern.host },
+          toolUseId: randomUUID(),
+          description: `Allow network connection to ${hostPattern.host}?`,
+        })
         return result.behavior === 'allow'
       } catch {
         // If the request fails (stream closed, abort, etc.), deny the connection
         return false
       }
     }
+  }
+
+  /**
+   * Prompt the SDK host for a tool permission without going through a live
+   * tool-use context. Used by teammate mailbox requests in --print: the worker
+   * already decided it needs a human, so the lead session just forwards that
+   * ask onto the existing can_use_tool protocol.
+   */
+  askHostForToolPermission(params: {
+    toolName: string
+    input: Record<string, unknown>
+    toolUseId: string
+    description?: string
+    displayName?: string
+    permissionSuggestions?: unknown[]
+  }): Promise<PermissionToolOutput> {
+    return this.sendRequest<PermissionToolOutput>(
+      {
+        subtype: 'can_use_tool',
+        tool_name: params.toolName,
+        input: params.input,
+        tool_use_id: params.toolUseId,
+        ...(params.description ? { description: params.description } : {}),
+        ...(params.displayName ? { display_name: params.displayName } : {}),
+        ...(Array.isArray(params.permissionSuggestions)
+          ? { permission_suggestions: params.permissionSuggestions }
+          : {}),
+      },
+      permissionToolOutputSchema(),
+    )
   }
 
   /**

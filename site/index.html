@@ -1,42 +1,37 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
-    <meta name="theme-color" content="#201d17" media="(prefers-color-scheme: dark)">
-    <meta name="description" content="Claude Code Haha — Claude Code 的本地优先桌面客户端。会话、改动、Agent、定时任务都摆在明处，接哪个模型你说了算。">
+    <meta name="theme-color" content="#f5f4ed" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#14211b" media="(prefers-color-scheme: dark)">
+    <meta name="description" content="Write code, work across apps, and review every change. Give cc-haha a goal and put your ideas in motion.">
     <link rel="icon" href="/images/app-icon.png" type="image/png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Special+Elite&family=Geist:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="/fonts/noto-serif-sc-latin.woff2" as="font" type="font/woff2" crossorigin>
     <meta property="og:type" content="website">
-    <meta property="og:site_name" content="Claude Code Haha">
-    <meta property="og:title" content="Claude Code Haha — Claude Code 的本地优先桌面客户端">
-    <meta property="og:description" content="会话、改动、Agent、定时任务都摆在明处。接哪个模型你说了算，改哪一行你点头才算。">
+    <meta property="og:site_name" content="cc-haha">
+    <meta property="og:title" content="cc-haha — Less busywork. More room for life.">
+    <meta property="og:description" content="Write code, work across apps, and review every change. Give cc-haha a goal and put your ideas in motion.">
     <meta property="og:image" content="https://cchaha.ai/images/banner.png">
     <meta name="twitter:card" content="summary_large_image">
-    <title>Claude Code Haha — Claude Code 的本地优先桌面客户端</title>
+    <title>cc-haha — Less busywork. More room for life.</title>
     <script>
-      // 首帧就把语言定下来：中文浏览器留在中文站，其余跳英文站。等 React 起来再跳的话，
-      // 英文用户会先看到一整屏中文。只认根路径，带语言前缀的地址是用户的明确意图。
-      // 判定规则与 src/lib/locale.js 是同一套，check-docs.mjs 盯着两处不漂移。
+      // 首帧就把语言定下来：没有保存的选择时按浏览器首选语言。只认根路径，带语言前缀
+      // 的地址是用户的明确意图。规则与 src/lib/locale.js 保持一致。
       (function () {
+        if (window.location.pathname.replace(/\/+$/, '') !== '') return
+        var preferredLanguage = (navigator.languages && navigator.languages[0]) || navigator.language || ''
+        var locale = /^zh(?:[-_]|$)/i.test(preferredLanguage) ? 'zh' : 'en'
         try {
-          if (window.location.pathname.replace(/\/+$/, '') !== '') return
-
           var stored = localStorage.getItem('cch-locale')
-          var locale = stored === 'en' || stored === 'zh'
-            ? stored
-            : ((navigator.languages || [navigator.language || '']).some(function (tag) {
-              return /^zh(?:-|$)/i.test(String(tag).trim())
-            }) ? 'zh' : 'en')
-
-          if (locale === 'en') {
-            window.location.replace('/en' + window.location.search + window.location.hash)
-          }
-        } catch (error) {
-          // 读不到偏好就维持中文站，别让语言分流把首页整个拦死。
-        }
+          if (stored === 'en' || stored === 'zh') locale = stored
+        } catch (error) { /* 私密模式下仍按浏览器语言 */ }
+        if (locale === 'en') window.location.replace('/en' + window.location.search + window.location.hash)
+        else document.documentElement.lang = 'zh-CN'
       })()
     </script>
     <script>

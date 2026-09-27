@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 
+import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
+import { installTeamPlanGalleryFixture, TEAM_PLAN_GALLERY_SESSION } from './teamPlanGalleryFixture'
 import { AgentTeamsWorkbench } from '@/components/agentTeams/AgentTeamsWorkbench'
 import { SessionChatHeader, SessionChatSurface } from '@/components/chat/SessionChatSurface'
 import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
@@ -99,6 +101,7 @@ function galleryTeam(
     agentId: string,
     role: string,
     status: TeamDetail['members'][number]['status'],
+    model?: string,
   ): TeamDetail['members'][number] => ({
     agentId,
     name: agentId,
@@ -108,6 +111,7 @@ function galleryTeam(
     currentTask: activeTaskByMember[agentId],
     color: AGENT_TEAMS_GALLERY_COLORS[agentId],
     sessionId: `gallery-${agentId}`,
+    ...(model ? { model } : {}),
   })
 
   return {
@@ -117,11 +121,11 @@ function galleryTeam(
     leadSessionId: AGENT_TEAMS_GALLERY_SESSION_ID,
     createdAt,
     members: [
-      member('team-lead', '队长', 'running'),
-      member('backend-dev', '后端实现', 'running'),
-      member('frontend-dev', '前端实现', 'running'),
-      member('ui-reviewer', 'UI 走查', 'running'),
-      member('code-reviewer', '代码审查', 'running'),
+      member('team-lead', '队长', 'running', 'claude-opus-4-8'),
+      member('backend-dev', '后端实现', 'running', 'claude-sonnet-5'),
+      member('frontend-dev', '前端实现', 'running', 'claude-sonnet-5'),
+      member('ui-reviewer', 'UI 走查', 'running', 'claude-haiku-4-5'),
+      member('code-reviewer', '代码审查', 'running', 'qwen3.7-plus[1m]'),
       member('test-runner', '测试验证', 'running'),
     ],
   }
@@ -388,6 +392,12 @@ function SessionSurfacePreview({ kind }: { kind: 'main' | 'agent' }) {
 }
 
 export function ComponentGallery() {
+  const [planFixture, setPlanFixture] = useState<ReturnType<typeof installTeamPlanGalleryFixture> | null>(null)
+  useEffect(() => {
+    const fixture = installTeamPlanGalleryFixture()
+    setPlanFixture(fixture)
+    return () => fixture.dispose()
+  }, [])
   const [theme, setTheme] = useState<(typeof THEMES)[number]>('white')
   const [agentTeamsSnapshots] = useState(createAgentTeamsGallerySnapshots)
   const [modalOpen, setModalOpen] = useState(false)
@@ -456,6 +466,15 @@ export function ComponentGallery() {
           />
         </div>
       </header>
+
+      <Section title="Team plan review" note="In-memory providers and plan API only. No credentials, model calls or real team launches.">
+        <div id="team-plan-review" className="flex flex-wrap gap-2">
+          <Button variant="secondary" onClick={() => planFixture?.reset()}>Reset plan fixture</Button>
+          <Button variant="secondary" onClick={() => planFixture?.conflict()}>Simulate remote revision</Button>
+          <Button variant="secondary" onClick={() => planFixture?.interrupt()}>Simulate interruption</Button>
+        </div>
+        {planFixture && <AgentTeamsPlanCard sessionId={TEAM_PLAN_GALLERY_SESSION} />}
+      </Section>
 
       <Section
         title="AgentTeamsWorkbench"

@@ -16,6 +16,8 @@ const testFiles = [
   'src/server/services/ccSwitchImport.test.ts',
   'src/server/services/providerModelCatalog.test.ts',
   'src/shared/modelReasoning.test.ts',
+  'src/shared/modelApiFormats.test.ts',
+  'src/server/proxy/upstreamHeaders.test.ts',
   'src/services/api/client.test.ts',
   'src/services/api/claudeRequiredThinking.test.ts',
   'src/services/compact/autoCompact.test.ts',

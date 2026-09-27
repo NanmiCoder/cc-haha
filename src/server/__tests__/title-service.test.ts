@@ -12,6 +12,7 @@ import {
   saveAiTitle,
 } from '../services/titleService.js'
 import { sessionService } from '../services/sessionService.js'
+import { drainTraceCaptureForTests } from '../services/traceCaptureService.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import { SYSTEM_PROXY_URL_ENV } from '../services/networkSettings.js'
 
@@ -509,3 +510,101 @@ function restoreEnv(key: string, value: string | undefined) {
     process.env[key] = value
   }
 }
+
+/**
+ * Title generation builds its own upstream request instead of going through the
+ * CLI, so it has to make the same per-model protocol decision the proxy makes.
+ * Otherwise a provider that only answers on a non-Anthropic path silently gets no
+ * AI titles at all — the request fails, the failure is swallowed, and the user
+ * only sees the derived placeholder.
+ */
+describe('titleService protocol routing', () => {
+  let tmpDir: string
+  let originalConfigDir: string | undefined
+  let originalFetch: typeof globalThis.fetch
+
+  beforeEach(async () => {
+    originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+    originalFetch = globalThis.fetch
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'title-service-routing-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpDir
+    // The proxy records traces for a session-scoped request; give them a home so
+    // the background writer does not fail the run with an unhandled ENOENT.
+    await fs.mkdir(path.join(tmpDir, 'cc-haha', 'traces'), { recursive: true })
+  })
+
+  afterEach(async () => {
+    globalThis.fetch = originalFetch
+    // Let the background trace writer finish before the directory it targets goes
+    // away, otherwise it fails the run with an unhandled ENOENT.
+    await drainTraceCaptureForTests()
+    restoreEnv('CLAUDE_CONFIG_DIR', originalConfigDir)
+    await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  test('uses the endpoint and client headers the provider actually requires', async () => {
+    const calls: Array<{ url: string; headers: Headers; body: any }> = []
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        headers: new Headers(init?.headers),
+        body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      })
+      return Response.json({
+        id: 'chatcmpl-title',
+        object: 'chat.completion',
+        model: 'glm-5.3-flash',
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: '{"title":"Routed title"}' },
+          finish_reason: 'stop',
+        }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      })
+    }) as typeof fetch
+
+    const provider = await new ProviderService().addProvider({
+      presetId: 'opencode-go',
+      name: 'OpenCode Go',
+      apiKey: 'sk-opencode-title',
+      baseUrl: 'https://opencode.ai/zen/go/v1',
+      apiFormat: 'openai_chat',
+      models: { main: 'glm-5.3', haiku: 'glm-5.3-flash', sonnet: 'glm-5.3', opus: 'glm-5.3' },
+    })
+
+    expect(await generateTitle('Explain endpoint compatibility', provider.id, null, 'session-title-1'))
+      .toBe('Routed title')
+
+    expect(calls).toHaveLength(1)
+    // The haiku model is a chat model: Anthropic Messages would be rejected outright.
+    expect(new URL(calls[0]!.url).pathname).toBe('/zen/go/v1/chat/completions')
+    expect(calls[0]!.body.model).toBe('glm-5.3-flash')
+    // The gateway refuses any request without this, so a title call without it can
+    // never succeed.
+    expect(calls[0]!.headers.get('x-opencode-session')).toBe('session-title-1')
+    expect(calls[0]!.headers.get('authorization')).toBe('Bearer sk-opencode-title')
+  })
+
+  test('still talks to an Anthropic-format provider directly', async () => {
+    const paths: string[] = []
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch(req) {
+        paths.push(new URL(req.url).pathname)
+        return Response.json({ content: [{ type: 'text', text: '{"title":"Direct title"}' }] })
+      },
+    })
+    try {
+      const provider = await new ProviderService().addProvider({
+        presetId: 'custom', name: 'Direct Anthropic', apiKey: 'test-key',
+        baseUrl: `http://127.0.0.1:${server.port}`, apiFormat: 'anthropic',
+        models: { main: 'm', haiku: 'm', sonnet: 'm', opus: 'm' },
+      })
+      expect(await generateTitle('Explain endpoint compatibility', provider.id)).toBe('Direct title')
+      expect(paths).toEqual(['/v1/messages'])
+    } finally {
+      server.stop(true)
+    }
+  })
+})

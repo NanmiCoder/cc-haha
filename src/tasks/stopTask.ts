@@ -102,3 +102,35 @@ export async function stopTask(
 
   return { taskId, taskType: task.type, command }
 }
+
+export type StopTaskControlResult =
+  | { ok: true; alreadyGone: boolean }
+  | { ok: false; message: string }
+
+/**
+ * stop_task control-request variant of {@link stopTask}. The LLM-facing
+ * TaskStop tool must keep erroring on unknown ids so the model learns its
+ * handle is stale, but the control channel is driven by UI Stop buttons whose
+ * view of the task list lags the registry: shell tasks are evicted the turn
+ * after they terminate, and a process restart clears the registry entirely.
+ * A not_found there means the stop's goal state — not running — already
+ * holds, so it reports success instead of an error. Callers key off
+ * `alreadyGone` to converge any still-"running" entry of their own.
+ */
+export async function stopTaskFromControlRequest(
+  taskId: string,
+  context: StopTaskContext,
+): Promise<StopTaskControlResult> {
+  try {
+    await stopTask(taskId, context)
+    return { ok: true, alreadyGone: false }
+  } catch (error) {
+    if (error instanceof StopTaskError && error.code === 'not_found') {
+      return { ok: true, alreadyGone: true }
+    }
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+    }
+  }
+}

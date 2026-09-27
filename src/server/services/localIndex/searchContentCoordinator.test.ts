@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
+import { Worker } from 'node:worker_threads'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -174,16 +175,21 @@ describe('search content coordinator', () => {
 
     await coordinator.start()
     expect(coordinator.search('sqlite')).toBeNull()
+    expect(coordinator.suggestSessions('sqlite')).toBeNull()
     await waitForStatus(coordinator.getStatus, 'ready')
     expect(coordinator.search('sqlite')?.sessions[0]).toMatchObject({
       ownerSessionId: 'owner-session',
       matchCount: 1,
     })
 
+    expect(coordinator.suggestSessions('sqlite')?.sessions[0]?.ownerSessionId).toBe('owner-session')
+    expect(coordinator.suggestSessions('sqlite', { signal: AbortSignal.abort() })).toBeNull()
+
     await mkdir(join(nested, '..'), { recursive: true })
     await writeFile(nested, userLine('nested workflow needle', 'nested-message'))
     watcherOptions?.onDirty?.()
     expect(coordinator.search('needle')).toBeNull()
+    expect(coordinator.suggestSessions('needle')).toBeNull()
     await watcherOptions?.onBatch({ paths: [nested], fullSweep: false } satisfies ReconciliationBatch)
     await waitForStatus(coordinator.getStatus, 'ready')
 
@@ -629,5 +635,76 @@ describe('search content coordinator', () => {
     await Bun.sleep(20)
     expect(removals).toBe(0)
     await coordinator.stop()
+  })
+})
+
+
+describe('worker write-lock coordination', () => {
+  test.each(['finish', 'shutdown'] as const)('coalesces dirty notifications outside the worker lock during %s', async mode => {
+    const scope = await createTempScope()
+    const source = join(scope, 'projects', '-repo', 'session.jsonl')
+    await mkdir(join(source, '..'), { recursive: true })
+    await writeFile(source, userLine('lock fixture'))
+    const databasePath = join(scope, 'cc-haha', 'db', 'search-index-v1.sqlite')
+    let watcherOptions: ReconciliationWatcherOptions | undefined
+    let worker: Worker | undefined
+    let locked!: () => void
+    const lockHeld = new Promise<void>(resolve => { locked = resolve })
+    let writes = 0
+    let activeIndex: ReturnType<typeof createSearchContentIndex> | undefined
+    const coordinator = createSearchContentCoordinator({
+      resolveScope: () => scope,
+      resolveDatabasePath: () => databasePath,
+      createIndex: (database, owner) => {
+        const index = createSearchContentIndex(database, { scope: owner })
+        activeIndex = index
+        return { ...index, setReadiness(value) { writes++; index.setReadiness(value) } }
+      },
+      createWatcher: options => { watcherOptions = options; return noOpWatcher() },
+      createProjector: ({ signal }) => ({
+        async projectSource() {
+          worker = new Worker(`
+            const { parentPort, workerData } = require('node:worker_threads');
+            const { Database } = require('bun:sqlite');
+            const database = new Database(workerData);
+            database.exec('BEGIN IMMEDIATE');
+            parentPort.postMessage('locked');
+            parentPort.once('message', () => { database.exec('ROLLBACK'); database.close(); parentPort.close() });
+          `, { eval: true, workerData: databasePath })
+          const current = worker
+          const abort = () => { void current.terminate() }
+          signal.addEventListener('abort', abort, { once: true })
+          current.once('message', locked)
+          try { await new Promise<void>((resolve, reject) => { current.once('exit', () => resolve()); current.once('error', reject) }) }
+          finally { signal.removeEventListener('abort', abort) }
+          return { kind: 'indexed', action: 'full', state: 'ready', indexedBytes: 0, indexedLines: 0, documentCount: 0 }
+        },
+        deleteSource: () => ({ kind: 'deleted' }),
+      }),
+    })
+    try {
+      await coordinator.start()
+      await lockHeld
+      const before = writes
+      const started = performance.now()
+      for (let event = 0; event < 20; event++) watcherOptions!.onDirty!()
+      expect(writes).toBe(before)
+      expect(performance.now() - started).toBeLessThan(100)
+      expect(coordinator.getStatus()).toMatchObject({ state: 'building', lastErrorCode: null })
+      expect(coordinator.search('lock')).toBeNull()
+      if (mode === 'shutdown') {
+        await coordinator.stop()
+        expect(writes).toBe(before)
+      } else {
+        worker!.postMessage('release')
+        await waitFor(() => writes === before + 2) // old sweep status + one coalesced dirty persistence
+        expect(activeIndex!.getReadiness()).toMatchObject({ state: 'building', generation: 21 })
+        await watcherOptions!.onBatch({ paths: [], fullSweep: false })
+        expect(coordinator.getStatus()).toMatchObject({ state: 'ready', lastErrorCode: null })
+        expect(activeIndex!.getReadiness()?.state).toBe('ready')
+      }
+    } finally {
+      await coordinator.stop()
+    }
   })
 })

@@ -1387,6 +1387,49 @@ describe('teamStore workbench timeline', () => {
     useTeamStore.getState().clearTeam()
   })
 
+  it('keeps each member model through the roster read instead of dropping it', async () => {
+    const snapshot = workbench('v1', 'in_progress')
+    getWorkbenchForSessionMock.mockResolvedValue({
+      sessionId: 'lead-session',
+      teamName: 'team-workbench',
+      snapshots: [{
+        ...snapshot,
+        team: {
+          ...snapshot.team,
+          members: [
+            { ...snapshot.team.members[0]!, model: 'claude-opus-4-8' },
+            // A mapped provider id is not a known family — it must still survive
+            // verbatim rather than being normalised away.
+            { ...snapshot.team.members[1]!, model: 'qwen3.7-plus[1m]' },
+          ],
+        },
+      }],
+      source: 'live',
+    })
+
+    await useTeamStore.getState().fetchTeamForSession('lead-session', { force: true })
+
+    const members = useTeamStore.getState()
+      .workbenchesBySession['lead-session']?.snapshots.at(-1)?.team.members ?? []
+    expect(members.map(member => member.model)).toEqual(['claude-opus-4-8', 'qwen3.7-plus[1m]'])
+  })
+
+  it('reports no model rather than inventing one when the roster omits it', async () => {
+    const snapshot = workbench('v1', 'in_progress')
+    getWorkbenchForSessionMock.mockResolvedValue({
+      sessionId: 'lead-session',
+      teamName: 'team-workbench',
+      snapshots: [snapshot],
+      source: 'live',
+    })
+
+    await useTeamStore.getState().fetchTeamForSession('lead-session', { force: true })
+
+    const members = useTeamStore.getState()
+      .workbenchesBySession['lead-session']?.snapshots.at(-1)?.team.members ?? []
+    expect(members.map(member => member.model)).toEqual([undefined, undefined])
+  })
+
   it('keeps unknown watcher identities out of each roster and refreshes authoritative data', () => {
     getTeamMock.mockReturnValue(new Promise(() => {}))
     getWorkbenchMock.mockReturnValue(new Promise(() => {}))
@@ -1896,5 +1939,19 @@ describe('teamStore workbench timeline', () => {
     expect(
       useTeamStore.getState().getMemberBySessionId('team-member:lead@team-workbench'),
     ).toMatchObject({ agentId: 'lead@team-workbench' })
+  })
+})
+
+describe('teamStore execution provider snapshots', () => {
+  it('preserves the actual provider and model when hydrating team detail', async () => {
+    useTeamStore.getState().clearTeam()
+    getTeamMock.mockResolvedValue({
+      name: 'provider-snapshot-team',
+      members: [{ agentId: 'worker@provider-snapshot-team', name: 'worker', role: 'engineer', status: 'running', model: 'same-model-id', providerId: 'second-provider', providerName: 'Execution provider' }],
+    })
+    await useTeamStore.getState().fetchTeamDetail('provider-snapshot-team')
+    expect(useTeamStore.getState().activeTeam?.members[0]).toMatchObject({
+      model: 'same-model-id', providerId: 'second-provider', providerName: 'Execution provider',
+    })
   })
 })

@@ -198,6 +198,21 @@ describe('sessionStore', () => {
     expect(useSessionStore.getState().sessions[0]?.title).toBe('开始优化UI')
   })
 
+  it('applies a collaboration title that arrives before the indexed session row', async () => {
+    useSessionStore.getState().updateSessionTitle('session-late-index', '安全相关更新分析')
+    listMock.mockResolvedValue({
+      sessions: [{
+        ...makeSession('session-late-index', '2026-09-22T00:00:01.000Z'),
+        title: 'Untitled Session',
+      }],
+      total: 1,
+    })
+
+    await useSessionStore.getState().fetchSessions()
+
+    expect(useSessionStore.getState().sessions[0]?.title).toBe('安全相关更新分析')
+  })
+
   it('syncs refreshed session titles into already-open tabs', async () => {
     useTabStore.getState().openTab('session-title-2', '```json {"title":')
     listMock.mockResolvedValue({
@@ -220,11 +235,12 @@ describe('sessionStore', () => {
   })
 
   it('syncs transcript runtime metadata before a session is opened from the sidebar', async () => {
-    useSessionRuntimeStore.getState().setSelection('session-runtime-1', {
+    // Simulate a selection loaded from storage, not a choice made this run.
+    useSessionRuntimeStore.setState({ selections: { 'session-runtime-1': {
       providerId: null,
       modelId: 'gpt-5.4',
       effortLevel: 'max',
-    })
+    } } })
     listMock.mockResolvedValue({
       sessions: [{
         ...makeSession('session-runtime-1', '2026-07-13T05:57:05.818Z'),
@@ -242,6 +258,26 @@ describe('sessionStore', () => {
       modelId: 'anthropic/claude-opus-4.7',
       effortLevel: 'max',
     })
+  })
+
+  it('does not roll back a model selected while a session-list request is in flight', async () => {
+    const response = {
+      sessions: [{
+        ...makeSession('model-switch', '2026-09-20T00:00:00Z'),
+        runtimeProviderId: 'kimi', runtimeModelId: 'k3[1m]',
+      }],
+      total: 1,
+    }
+    const request = createDeferred<typeof response>()
+    listMock.mockReturnValueOnce(request.promise)
+    const refresh = useSessionStore.getState().fetchSessions()
+    const selection = { providerId: 'deepseek', modelId: 'deepseek-v4-flash' }
+    useSessionRuntimeStore.getState().setSelection('model-switch', selection)
+    request.resolve(response)
+    await refresh
+
+    expect(useSessionRuntimeStore.getState().selections['model-switch']).toEqual(selection)
+    expect(useSessionStore.getState().sessions[0]?.id).toBe('model-switch')
   })
 
   it('updates a session message count without changing other metadata', () => {
@@ -270,10 +306,10 @@ describe('sessionStore', () => {
       runtimeModelId: 'model-current',
       effortLevel: 'high' as const,
     }
-    useSessionRuntimeStore.getState().setSelection(historical.id, {
+    useSessionRuntimeStore.setState({ selections: { [historical.id]: {
       providerId: 'provider-stale',
       modelId: 'model-stale',
-    })
+    } } })
     let observedAtActivation: unknown
     const unsubscribe = useTabStore.subscribe((state) => {
       if (state.activeTabId !== historical.id) return
@@ -351,13 +387,13 @@ describe('sessionStore', () => {
       recent,
       { ...historical, permissionMode: 'plan' },
     ])
-    expect(listMock).toHaveBeenLastCalledWith({ limit: 400 })
+    expect(listMock).toHaveBeenLastCalledWith({ view: 'sidebar', perProjectLimit: 6 })
 
     useTabStore.getState().closeTab(historical.id)
     await useSessionStore.getState().fetchSessions()
     expect(useSessionStore.getState().sessions).toEqual([recent])
     expect(useSessionStore.getState().historicalSessionIds).toEqual(new Set())
-    expect(listMock).toHaveBeenLastCalledWith({ limit: 400 })
+    expect(listMock).toHaveBeenLastCalledWith({ view: 'sidebar', perProjectLimit: 6 })
   })
 
   it('uses fresh recent metadata when an opened historical session reenters the recent page', async () => {
@@ -395,15 +431,19 @@ describe('sessionStore', () => {
     expect(useSessionStore.getState().sessions).toEqual([])
   })
 
-  it('requests a large default session page for noisy history directories', async () => {
+  it('requests a bounded preview for every project instead of a large global page', async () => {
     listMock.mockResolvedValue({
       sessions: [makeSession('session-newest', '2026-05-07T00:00:03.000Z')],
       total: 474,
+      projects: [{ projectRoot: '/workspace/project', total: 474 }],
     })
 
     await useSessionStore.getState().fetchSessions()
 
-    expect(listMock).toHaveBeenCalledWith({ limit: 400 })
+    expect(listMock).toHaveBeenCalledWith({ view: 'sidebar', perProjectLimit: 6 })
+    expect(useSessionStore.getState().projectSessionTotals).toEqual({
+      '/workspace/project': 474,
+    })
   })
 
   it('loads one project below its recent boundary without skipping restored old tabs and retains pages on refresh', async () => {
@@ -434,7 +474,7 @@ describe('sessionStore', () => {
       isLoading: false,
       error: null,
     })
-    expect(listMock).toHaveBeenLastCalledWith({ limit: 400 })
+    expect(listMock).toHaveBeenLastCalledWith({ view: 'sidebar', perProjectLimit: 6 })
   })
 
   it('uses cursor pages once, deduplicates overlapping rows, and keeps current titles and runtime metadata', async () => {

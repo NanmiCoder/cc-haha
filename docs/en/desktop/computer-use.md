@@ -1,29 +1,27 @@
 ---
 title: Computer Use
 nav_title: Computer Use
-description: Let Claude read your screen, move the mouse, and type into other apps.
+description: Let Claude use other apps on macOS without taking over your physical mouse or keyboard.
 order: 7
 ---
 
 # Computer Use
 
-With Computer Use enabled, Claude can take screenshots of your screen, move the mouse, click, and type — driving applications that have no API at all: system settings, native note apps, Finder, third-party desktop software.
+With Computer Use enabled, Claude can take screenshots, click, and type in applications that have no API at all: system settings, native note apps, Finder, and third-party desktop software.
+
+**On macOS, it does not take over your physical mouse or keyboard.** The native runtime sends actions to the target app and displays a separate virtual cursor. Your real pointer stays in place, so you can keep using your own mouse and keyboard for other work. Actions still change the target app, and some may change app focus. The Windows compatibility executor moves the real pointer, so this benefit is specific to macOS.
 
 It acts on this computer, so read what you're authorizing before you turn it on.
 
 macOS and Windows are supported. There is no Linux executor yet.
 
-## Preparing the environment
+## Check the environment
 
-![Settings → Computer Use: environment and Python runtime checks](../../images/app/en/settings-computer-use.webp)
+![Settings → Computer Use: enable switch and OS permission status (Chinese interface)](../../images/app/en/settings-computer-use.webp)
 
-Open **Settings → Computer Use**. The top of the page is a row of environment checks:
+Open **Settings → Computer Use**. On macOS 14.4 or later, the app prefers the native runtime component and shows OS permission status. Windows and other compatible runtime paths show checks for Python 3, a virtual environment, and dependencies. Follow the checks shown on your own screen; the native macOS page does not require a Python setup step.
 
-1. **Python 3** — required on your machine. If it isn't found, click **Download Python 3**. If your Python lives in conda, pyenv, or another custom environment, pick the executable under **Python interpreter path** and it will be preferred from then on.
-2. **Virtual environment** and **Dependencies** — click **Install Environment** and the app creates an isolated venv and installs the platform dependencies. Your global Python is left alone.
-3. When everything is green the page says all checks passed and Computer Use is ready.
-
-**Re-check** re-runs the detection at any time.
+If the page shows Python checks, install Python 3 if needed. For conda, pyenv, or another custom installation, select **Python interpreter path**, then click **Install Environment** to create the isolated venv and dependencies. Click **Re-check** when finished. If the native runtime component is missing, update or reinstall the app and check again.
 
 ## The two macOS permissions
 
@@ -31,7 +29,7 @@ macOS additionally requires two system permissions. Neither is optional:
 
 | Permission | What it's for |
 |---|---|
-| Accessibility | Moving the mouse, clicking, typing |
+| Accessibility | Sending clicks and typing to the target app without moving the physical pointer |
 | Screen Recording | Taking screenshots — i.e. letting it see |
 
 The page has **Open accessibility settings** and **Open screen recording settings** buttons that jump straight to the right pane.
@@ -40,22 +38,13 @@ The page has **Open accessibility settings** and **Open screen recording setting
 After granting either one you must **fully quit and reopen the app**. macOS reads these permissions once at process start, so without a restart the page will keep reporting them as not granted.
 :::
 
-Make sure you're granting the permission to the app that actually launches Claude Code Haha. Screen Recording detection is occasionally unreliable — if the system settings clearly show it granted but the page still says otherwise, it generally works anyway.
+Make sure you're granting the permission to the app that actually launches cc-haha. Screen Recording detection is occasionally unreliable — if the system settings clearly show it granted but the page still says otherwise, it generally works anyway.
 
-## Pre-authorized apps
+## Enable Computer Use
 
-By default, every time Claude wants to control a new app it raises a "Computer Use wants to control these apps" prompt naming the apps and the reason. You can **Allow for session** or **Deny**.
+Turn on **Enable** and read the confirmation dialog. **Once you confirm, Computer Use may control every supported app on this computer without another approval for each app.** macOS Accessibility and Screen Recording are still granted separately by the OS. The global switch, OS permissions, and target-process checks continue to apply.
 
-For apps you keep approving, tick them under **Authorized Apps** in settings and Claude will control them without prompting. The search box filters your installed apps.
-
-Two more grants are separate and never come along with an app authorization:
-
-- **Clipboard access** — reading and writing the system clipboard.
-- **System key combos** — sending system-level shortcuts.
-
-:::danger
-Pre-authorization is permanent approval. Keep password managers, banking apps, and corporate chat off that list — make it ask, every time.
-:::
+Before starting, close windows with information you do not want shown, state the task's boundaries clearly, and use the session stop button or Esc to interrupt control when needed. Turn **Enable** off here when you are finished.
 
 ## Getting started
 
@@ -69,24 +58,24 @@ Find the Displays pane in System Settings, but don't change anything.
 
 Claude works in a screenshot → decide → act → screenshot loop, so it's slower than you are and will occasionally misclick. Explicit boundaries ("only inside app X", "don't save") work far better than a broad goal.
 
-Only one session can drive the mouse and keyboard at a time. If you see that another session holds it, stop or finish that session first.
+Only one session can use Computer Use at a time. If another session holds the control lock, stop or finish it first. On macOS, this does not mean your physical mouse or keyboard is occupied.
 
 ## Known limits
 
-- **There is no global abort hotkey.** Use the stop button in the session (`⌘.`).
-- **Windows screenshots aren't filtered.** On macOS a screenshot keeps only authorized apps and the desktop; on Windows every visible window is captured. Close or minimize anything sensitive first.
-- **Browsers and terminals are restricted.** Browsers are read-only (visible but not clickable) and terminals and IDEs are click-only (no typing). Use the browser extension for web pages and the Bash tool for commands.
-- **Re-screenshot after the UI changes.** Old coordinates don't survive a page change.
+- **Only one session can use Computer Use at a time.** Let another session finish or stop it before trying to take control.
+- **Screenshots can contain sensitive information.** Every visible window may appear in a Windows screenshot; tidy windows and the desktop on any platform before capture.
+- **Observe again after the UI changes.** Old coordinates or element state may no longer be valid.
+- **To stop control,** use the session stop button, Esc, or the **Enable** switch in Settings.
 
 ## Troubleshooting
 
 **The page keeps saying permissions are missing**
-Confirm you granted them to the app that actually launches Claude Code Haha, fully quit and reopen, then click **Re-check**.
+Confirm you granted them to the app that actually launches cc-haha, fully quit and reopen, then click **Re-check**.
 
 **The environment won't install**
-Pick an explicit Python 3 under **Python interpreter path**, confirm it supports `venv`, and click **Install Environment** again. If it still fails, check the install log in **Settings → Diagnostics**.
+If your page shows Python checks, choose a Python 3 installation that supports `venv` and click **Install Environment** again. If the native runtime component is missing, update or reinstall the app. For other failures, check **Settings → Diagnostics**.
 
 **Screenshots work but clicks don't**
-Make sure the target app is in the authorized list and is currently in the foreground. Browsers and terminals are subject to the tier restrictions above.
+Check that Computer Use is still enabled, that macOS Accessibility permission is granted, and that the target app is still running. After changing OS permissions, fully quit and reopen the app, then click **Re-check**.
 
-For the permission tiers, the Python bridge, and the executors, see [Computer Use architecture](../internals/computer-use.md).
+For global consent, the native runtime component, and compatible executors, see [Computer Use architecture](../internals/computer-use.md).

@@ -54,14 +54,42 @@ import {
 } from './UI.js'
 
 const inputSchema = lazySchema(() =>
-  z.strictObject({
+  z.preprocess((value, ctx) => {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return value
+    const input = { ...value } as Record<string, unknown>
+    // Normalize only known spelling variants. Keep unknown keys for the strict
+    // canonical schema to reject, and never choose between conflicting values.
+    for (const names of [['file_path', 'path'], ['content', 'file_text', 'file_content']]) {
+      const present = names.filter(name => Object.hasOwn(input, name))
+      for (const name of present) {
+        if (typeof input[name] !== 'string') {
+          ctx.addIssue({ code: 'custom', path: [name], message: `${name} must be a string` })
+        }
+      }
+      const first = present[0]
+      if (first !== undefined) {
+        if (present.some(name => input[name] !== input[first])) {
+          ctx.addIssue({ code: 'custom', path: [names[0]!], message: `Conflicting values for ${present.join(', ')}` })
+        }
+        input[names[0]!] = input[first]
+      }
+      for (const alias of names.slice(1)) delete input[alias]
+    }
+    if (Object.hasOwn(input, 'description')) {
+      if (typeof input.description !== 'string') {
+        ctx.addIssue({ code: 'custom', path: ['description'], message: 'description must be a string' })
+      }
+      delete input.description
+    }
+    return input
+  }, z.strictObject({
     file_path: z
       .string()
       .describe(
         'The absolute path to the file to write (must be absolute, not relative)',
       ),
     content: z.string().describe('The content to write to the file'),
-  }),
+  })),
 )
 type InputSchema = ReturnType<typeof inputSchema>
 

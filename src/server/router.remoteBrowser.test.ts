@@ -110,6 +110,24 @@ describe('remote browser API routing', () => {
     expect(SettingsService.prototype.updateUserSettings).toHaveBeenCalledWith(patch)
   })
 
+  test('rechecks waiting questions after automatic answer settings are saved', async () => {
+    const refresh = spyOn(conversationService, 'refreshAutoQuestionSettings').mockImplementation(() => {})
+    const patch = { autoQuestion: { enabled: true, timeoutMinutes: 5 } }
+    expect((await request('/api/settings/user', 'PUT', patch)).status).toBe(200)
+    expect(SettingsService.prototype.updateUserSettings).toHaveBeenCalledWith(patch)
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
+  test('projects automatic answer settings into remote General reads', async () => {
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({
+      autoQuestion: { enabled: true, timeoutMinutes: 10 },
+      env: { API_KEY: 'fake-never-expose' },
+    })
+    expect(await (await request('/api/settings/user')).json()).toEqual({
+      autoQuestion: { enabled: true, timeoutMinutes: 10 },
+    })
+  })
+
   test('rejects protected routes and malformed patches before touching persistence', async () => {
     for (const pathname of ['/api/providers/settings', '/api/providers/cc-switch/scan', '/api/settings/project', '/api/settings/user/extra']) {
       expect((await request(pathname)).status).toBe(403)

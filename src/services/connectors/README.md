@@ -1,6 +1,6 @@
 # Desktop office connectors
 
-The application ships 54 entries: 46 service connectors and 8 skill tool bundles.
+The application ships 55 entries: 46 service connectors and 9 skill tool bundles.
 Service connectors use either a pinned native CLI or an official remote MCP
 endpoint. Tool bundles contain pinned upstream skills and supporting files.
 `pluginBridge.ts` reuses plugin caching, marketplace registration, enablement,
@@ -189,13 +189,13 @@ asset provenance is recorded in desktop/public/connectors/SOURCES.md.
 
 ## 2026-09-14：服务与工具目录
 
-当前内置 54 项：22 个国内服务、24 个全球服务，以及 8 个技能工具包（其中 3 个在插件目录展示，5 个在技能目录展示）。此轮增加 30 项，按供应商和工作流归类，不把同一家数据平台的多个子接口重复计为多家服务。
+当前内置 55 项：22 个国内服务、24 个全球服务，以及 9 个技能工具包（其中 4 个在插件目录展示，5 个在技能目录展示）。此前增补的服务按供应商和工作流归类，不把同一家数据平台的多个子接口重复计为多家服务。
 
 目录是随应用发布的只读定义：
 
 - `catalog.ts`：汇总及原三家 CLI。
 - `remoteCatalog.ts`、`domesticCatalog.ts`、`globalCatalog.ts`：服务展示与执行配方，仍只有一份 endpoint/auth 来源。
-- `skillCatalog.ts`、`skillBundles.lock.json`：工具介绍、公开仓库固定 commit、许可及逐文件 SHA-256。HyperFrames 使用完整 v0.4.0 五技能包，避免复制 Codex 私有宿主能力。
+- `skillCatalog.ts`、`skillBundles.lock.json`：工具介绍、公开仓库固定 commit、许可及逐文件 SHA-256。HyperFrames 使用完整 v0.4.0 五技能包；Remotion 使用其官方 MIT 许可的 Codex 插件技能树，均由本应用的 Claude 插件桥接加载。
 - `desktop/public/connectors/`：本地图标及来源记录。
 
 添加后的状态继续由 `<Claude 配置目录>/connectors/state.json` 管理，插件注册与启用沿用现有插件设置；密钥沿用敏感配置存储，OAuth 沿用现有 OAuth 存储。目录扩展和 UI 筛选不写用户状态，也没有向共享 settings.json 增加全局 schema 字段。此轮没有更改持久化形状。

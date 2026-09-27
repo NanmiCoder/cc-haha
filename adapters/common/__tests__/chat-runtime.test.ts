@@ -266,6 +266,69 @@ describe('ImChatRuntime authorization', () => {
 })
 
 describe('ImChatRuntime session lifecycle', () => {
+  it.each(['/status', '/stop', '/clear'])('reports a retryable disconnect for %s without changing the binding', async (command) => {
+    const { runtime, bridge, httpClient, sessionStore, notices } = createRuntime()
+    sessionStore.set(CHAT_ID, 'old-session', path.join(tmpDir, 'original-project'))
+    httpClient.existingSessions.add('old-session')
+    const original = sessionStore.get(CHAT_ID)
+    bridge.waitForOpen = async () => false
+
+    await inbound(runtime, command)
+
+    expect(sessionStore.get(CHAT_ID)).toEqual(original)
+    expect(httpClient.createdSessions).toEqual([])
+    expect(bridge.sent).toEqual([])
+    expect(bridge.stopped).toEqual([])
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain('重试')
+    expect(notices[0]).not.toContain('当前没有活动会话')
+  })
+
+  it.each(['timeout', 'error'])('preserves the stored session and project after a reconnect %s, then retries it', async (failure) => {
+    const { runtime, bridge, httpClient, sessionStore, notices } = createRuntime()
+    const workDir = path.join(tmpDir, 'original-project')
+    sessionStore.set(CHAT_ID, 'old-session', workDir)
+    httpClient.existingSessions.add('old-session')
+    const original = sessionStore.get(CHAT_ID)
+    let attempts = 0
+    bridge.isSessionOpen = () => false
+    bridge.waitForOpen = async () => {
+      attempts += 1
+      if (attempts === 1) {
+        if (failure === 'error') throw new Error('connection failed')
+        return false
+      }
+      return true
+    }
+
+    await inbound(runtime, 'continue')
+
+    expect(sessionStore.get(CHAT_ID)).toEqual(original)
+    expect(new SessionStore(path.join(tmpDir, 'adapter-sessions.json')).get(CHAT_ID)).toEqual(original)
+    expect(httpClient.createdSessions).toEqual([])
+    expect(bridge.sent).toEqual([])
+    expect(notices.join('\n')).toContain('重试')
+
+    await inbound(runtime, 'continue')
+
+    expect(attempts).toBe(2)
+    expect(bridge.getSessionId(CHAT_ID)).toBe('old-session')
+    expect(sessionStore.get(CHAT_ID)).toEqual(original)
+    expect(httpClient.createdSessions).toEqual([])
+    expect(bridge.sent.map((item) => item.content)).toEqual(['continue'])
+  })
+
+  it('creates a replacement only when the stored session is confirmed missing', async () => {
+    const { runtime, bridge, httpClient, sessionStore } = createRuntime()
+    sessionStore.set(CHAT_ID, 'deleted-session', path.join(tmpDir, 'original-project'))
+
+    await inbound(runtime, 'continue')
+
+    expect(httpClient.createdSessions).toEqual([tmpDir])
+    expect(sessionStore.get(CHAT_ID)?.sessionId).not.toBe('deleted-session')
+    expect(bridge.sent.map((item) => item.content)).toEqual(['continue'])
+  })
+
   it('creates a session on the first message and reuses it for the second', async () => {
     const { runtime, httpClient, bridge } = createRuntime()
 

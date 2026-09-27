@@ -100,6 +100,19 @@ describe('PermissionModeSelector', () => {
     useUIStore.setState({ toasts: [] })
   })
 
+  it('explicit child scope ignores a busy selected parent and updates only the child', () => {
+    const update = vi.fn()
+    useTabStore.setState({ activeTabId: 'parent' })
+    useChatStore.setState({ sessions: { parent: makeChatSession('streaming'), child: { ...makeChatSession('idle'), permissionMode: 'default' } }, setSessionPermissionMode: update })
+    render(<PermissionModeSelector sessionId="child" workDir="/child" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Auto accept edits/ }))
+    expect(update).toHaveBeenCalledWith('child', 'acceptEdits')
+    expect(update).toHaveBeenCalledTimes(1)
+    act(() => useChatStore.setState({ sessions: { child: { ...makeChatSession('idle'), permissionMode: 'acceptEdits' } } }))
+    expect(screen.getByRole('button', { name: 'Auto accept edits' })).toBeInTheDocument()
+  })
+
   it('updates the active session without writing the global default mode', () => {
     const setGlobalPermissionMode = vi.fn()
     const setSessionPermissionMode = vi.fn()

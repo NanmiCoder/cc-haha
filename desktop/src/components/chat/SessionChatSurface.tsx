@@ -30,7 +30,7 @@ export function SessionChatHeader({
         compact ? 'px-4 py-2.5' : 'px-9 py-3',
       ].join(' ')}
     >
-      <div className="mx-auto w-full min-w-0 max-w-[900px]">
+      <div className="mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)]">
         <div className="flex min-w-0 items-start gap-3">
           {leading}
           <div className="min-w-0 flex-1">

@@ -1,3 +1,5 @@
+import { resolveTeammateModel } from '../../utils/swarm/resolveTeammateModel.js'
+export { resolveTeammateModel } from '../../utils/swarm/resolveTeammateModel.js'
 /**
  * Shared spawn module for teammate creation.
  * Extracted from TeammateTool to allow reuse by AgentTool.
@@ -19,13 +21,11 @@ import type { InProcessTeammateTaskState } from '../../tasks/InProcessTeammateTa
 import { formatAgentId } from '../../utils/agentId.js'
 import { quote } from '../../utils/bash/shellQuote.js'
 import { isInBundledMode } from '../../utils/bundledMode.js'
-import { getGlobalConfig } from '../../utils/config.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
 import type { EffortValue } from '../../utils/effort.js'
 import { errorMessage } from '../../utils/errors.js'
 import { execFileNoThrow } from '../../utils/execFileNoThrow.js'
-import { parseUserSpecifiedModel } from '../../utils/model/model.js'
 import type { PermissionMode } from '../../utils/permissions/PermissionMode.js'
 import { isTmuxAvailable } from '../../utils/swarm/backends/detection.js'
 import {
@@ -64,10 +64,12 @@ import {
   isInsideTmux,
   sendCommandToPane,
 } from '../../utils/swarm/teammateLayoutManager.js'
-import { getHardcodedTeammateModelFallback } from '../../utils/swarm/teammateModel.js'
 import { registerTask } from '../../utils/task/framework.js'
 import { writeToMailbox } from '../../utils/teammateMailbox.js'
 import type { ThinkingConfig } from '../../utils/thinking.js'
+import { getTeamLeaderRuntime, isTeamReviewRequired } from '../../utils/swarm/teamPlanPolicy.js'
+import { ensureTeamDraft, readTeamPlan, stageMember } from '../../utils/swarm/teamPlanStore.js'
+import { snapshotTeamAgents } from '../TeamPlanTool/context.js'
 import type {
   CustomAgentDefinition,
   PluginAgentDefinition,
@@ -77,81 +79,15 @@ import {
   isPluginAgent,
 } from '../AgentTool/loadAgentsDir.js'
 
-function getDefaultTeammateModel(leaderModel: string | null): string {
-  const configured = getGlobalConfig().teammateDefaultModel
-  if (configured === null) {
-    // User picked "Default" in the /config picker — follow the leader.
-    return leaderModel ?? getHardcodedTeammateModelFallback()
-  }
-  if (configured !== undefined) {
-    return parseUserSpecifiedModel(configured)
-  }
-  return getHardcodedTeammateModelFallback()
-}
-
-/**
- * Resolve a teammate model using the same precedence for tmux and in-process
- * teammates: concrete env override, invocation override, selected Agent
- * definition, then leader/default. `inherit` is never forwarded literally;
- * it falls through to the next source. gh-31069 documents why passing it to
- * --model is invalid.
- *
- * Exported for testing.
- */
-export function resolveTeammateModel(
-  inputModel: string | undefined,
-  leaderModel: string | null,
-  agentModel?: string,
-  hasAgentDefinition = agentModel !== undefined,
-): string {
-  const normalizeModelSpec = (
-    value: string | undefined,
-  ): string | undefined => {
-    const trimmed = value?.trim()
-    return trimmed || undefined
-  }
-
-  const configuredSubagentModel = normalizeModelSpec(
-    process.env.CLAUDE_CODE_SUBAGENT_MODEL,
-  )
-  if (
-    configuredSubagentModel &&
-    configuredSubagentModel.toLowerCase() !== 'inherit'
-  ) {
-    return parseUserSpecifiedModel(configuredSubagentModel)
-  }
-
-  const invocationModel = normalizeModelSpec(inputModel)
-  if (invocationModel) {
-    if (invocationModel.toLowerCase() === 'inherit') {
-      return leaderModel ?? getDefaultTeammateModel(leaderModel)
-    }
-    return invocationModel
-  }
-
-  if (hasAgentDefinition) {
-    const definitionModel = normalizeModelSpec(agentModel)
-    if (
-      definitionModel &&
-      definitionModel.toLowerCase() !== 'inherit'
-    ) {
-      return definitionModel
-    }
-    // Official Agent frontmatter defaults to `inherit`, so a selected Agent
-    // follows the leader when its model is omitted or explicitly inherit.
-    return leaderModel ?? getDefaultTeammateModel(leaderModel)
-  }
-
-  // Plain teammates retain the existing /config teammateDefaultModel
-  // contract. Do not let the presence of a leader bypass that setting.
-  return getDefaultTeammateModel(leaderModel)
-}
-
 // ============================================================================
 // Types
 // ============================================================================
 
 export type SpawnOutput = {
+  staged?: boolean
+  plan_id?: string
+  revision?: number
+  message?: string
   teammate_id: string
   agent_id: string
   agent_type?: string
@@ -1180,5 +1116,48 @@ export async function spawnTeammate(
   config: SpawnTeammateConfig,
   context: ToolUseContext,
 ): Promise<{ data: SpawnOutput }> {
+  const teamName = config.team_name ?? context.getAppState().teamContext?.teamName
+  const existingPlan = teamName ? await readTeamPlan(teamName) : null
+  if (isTeamReviewRequired() || existingPlan) {
+    if (!teamName) throw new Error('Create a team before proposing teammates.')
+    if (existingPlan && existingPlan.sessionId !== getSessionId()) {
+      throw new Error('Only the owning team leader can propose members.')
+    }
+    const agentCatalog = snapshotTeamAgents(context)
+    const agentType = config.agent_type || 'general-purpose'
+    const agentSnapshot = agentCatalog[agentType]
+    if (!agentSnapshot) throw new Error(`Agent preset '${agentType}' is unavailable.`)
+    if (agentSnapshot.configurationError) throw new Error(agentSnapshot.configurationError)
+    const leaderRuntime = existingPlan?.leaderRuntime ?? getTeamLeaderRuntime(context.getAppState().mainLoopModel ?? '')
+    await ensureTeamDraft(teamName, getSessionId(), leaderRuntime, { workDir: getCwd(), agentCatalog })
+    const modelId = resolveTeammateModel(config.model, leaderRuntime.modelId, agentSnapshot.model, true)
+    const runtime = { ...leaderRuntime, modelId }
+    if (agentSnapshot.effortLevel !== undefined) runtime.effortLevel = agentSnapshot.effortLevel
+    else if (modelId !== leaderRuntime.modelId) delete runtime.effortLevel
+    const draft = await stageMember(teamName, {
+      id: config.name,
+      name: config.name,
+      agentType,
+      prompt: config.prompt,
+      runtime,
+      suggestedRuntime: { ...runtime },
+      agentSnapshot,
+    })
+    return { data: {
+      staged: true,
+      plan_id: draft.planId,
+      revision: draft.revision,
+      message: 'Member recorded in the team draft, NOT started. Complete all members and tasks, then submit the whole plan with TeamPlan. Only human confirmation starts execution.',
+      teammate_id: '',
+      agent_id: '',
+      agent_type: agentType,
+      name: config.name,
+      team_name: teamName,
+      model: modelId,
+      tmux_session_name: '',
+      tmux_window_name: '',
+      tmux_pane_id: '',
+    } }
+  }
   return handleSpawn(config, context)
 }

@@ -25,13 +25,15 @@ Sidebar grouping comes from the `sections` array in the generator — register a
 
 ## Design system
 
-`src/styles/base.css` holds every token. The palette is lifted from the desktop app's 「纸·墨·印」 themes — light mirrors 纯白, dark mirrors 墨夜 — so the site and the app read as one product. Rules:
+`src/styles/base.css` holds shared tokens. The landing page uses the user-provided Wandor direction throughout: warm paper illustrations, a white-faded ambient video, Geist typography, Special Elite wordmark, liquid glass surfaces and black capsule controls. Keep the entire landing journey consistent, including features, onboarding, FAQ and download. Documentation uses the same paper, illustration, typography and terracotta palette, scoped through `src/docs/doc-wandor.css` so its reading surfaces remain legible in both themes. The public display name is `cc-haha`; preserve legacy executable paths and release filenames when they must match actual artifacts. Rules:
+
+On a first visit to `/`, show Chinese when the browser's preferred language is Chinese; use English for every other language. `/en` and `/en/start` are the English entries; `/` and `/start` remain Chinese routes. A saved manual language choice takes precedence when opening `/`.
 
 - Use tokens (`--surface-*`, `--text-*`, `--border*`, `--brand*`, `--sp-*`, `--fs-*`, `--r-*`) rather than literal values. A raw hex in a component is a bug.
-- The primary button is ink (`--ink`), turning terracotta (`--brand`) on hover. It is not brand-coloured at rest.
-- Depth comes from 1px borders and surface layering, not heavy shadows.
+- Keep screenshots flat and legible. Never stack, tilt, blur, or auto-rotate product UI as the main evidence.
+- Animation should explain a task stage or reading transition; the page must remain complete with reduced motion or paused motion.
 - Both themes must work. `data-theme` on `<html>` is set by the bootstrap script in `index.html` before first paint.
-- Breakpoints are 1180 / 900 / 620 across both stylesheets. Do not introduce a fourth.
+- Breakpoints are 1180 / 900 / 620 across the stylesheets. Do not introduce a fourth.
 
 ## Mermaid
 
@@ -39,4 +41,4 @@ Sidebar grouping comes from the `sections` array in the generator — register a
 
 ## Fonts
 
-Self-hosted in `public/fonts/`, copied from `desktop/public/fonts/`. **Never add a Google Fonts `@import` or `<link>`** — it is unreachable from mainland China and would leave every heading in a fallback serif. Only the latin subsets are hosted; Chinese glyphs fall through to the platform font on purpose, exactly as the desktop app does.
+Self-hosted in `public/fonts/`, copied from `desktop/public/fonts/`. The landing reference explicitly requests the Geist and Special Elite Google Fonts link. Keep local font fallbacks so the layout still works when the font CDN is unreachable. Only the latin subsets are hosted; Chinese glyphs fall through to the platform font on purpose, exactly as the desktop app does.

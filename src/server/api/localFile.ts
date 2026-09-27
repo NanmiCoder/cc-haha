@@ -1,4 +1,5 @@
 import * as path from 'node:path'
+import { expandTilde } from '../../utils/permissions/pathValidation.js'
 import { isAllowedFilesystemPath } from './filesystem.js'
 import { serveFileWithRange } from './previewFs.js'
 import { canonicalizeExistingFilesystemPath } from '../services/filesystemPathSecurity.js'
@@ -14,6 +15,7 @@ const PREFIX = '/local-file/'
  * path with its leading separator dropped by the prefix slice. We URL-decode
  * each segment (so spaces / unicode names survive) and re-add the root:
  *
+ *   - Home-relative: `~/Desktop/page.html` → `$HOME/Desktop/page.html`
  *   - POSIX: `Users/me/page.html`     → `/Users/me/page.html`
  *   - Windows drive: `C:/me/page.html` → `C:/me/page.html` (already rooted)
  *   - Windows drive (with leading `/`, e.g. from `file:///C:/...`):
@@ -44,6 +46,10 @@ export function reconstructAbsolutePath(rest: string): string | null {
 
   if (!decoded) return null
 
+  if (decoded === '~' || decoded.startsWith('~/')) {
+    return expandTilde(decoded)
+  }
+
   // Windows drive form: `C:/...` or `C:\...` is already absolute.
   if (/^[a-zA-Z]:[\\/]/.test(decoded) || /^[a-zA-Z]:$/.test(decoded)) {
     return decoded
@@ -59,7 +65,8 @@ export function reconstructAbsolutePath(rest: string): string | null {
  *
  * URL shape: `/local-file/<absolute-path>` where the path after the prefix is
  * the on-disk absolute path (its leading separator dropped by the prefix, or a
- * `C:/...` drive form on Windows). This is PATH-based, not query-param based,
+ * `C:/...` drive form on Windows, or `~/...` relative to the user home). This
+ * is PATH-based, not query-param based,
  * so relative asset URLs (`./app.css`, `img/logo.png`) inside served HTML
  * resolve against the same `/local-file/...` directory.
  *

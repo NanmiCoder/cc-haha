@@ -131,7 +131,7 @@ function createController(overrides?: Record<string, unknown>) {
     },
     defaultWorkDir: '/work/repo',
     isAllowedUser: mock(() => true),
-    ensureExistingSession: mock(async () => ({ sessionId: 'active', workDir: '/work/repo' })),
+    ensureExistingSession: mock(async () => ({ status: 'restored' as const, session: { sessionId: 'active', workDir: '/work/repo', updatedAt: 1 } })),
     clearTransientChatState: mock((chatId: string) => bridgeEvents.push(`clear:${chatId}`)),
     clearOtherSelections: mock(() => {}),
     isBusy: mock(() => false),
@@ -372,7 +372,7 @@ describe('Telegram command controller helpers', () => {
   it('reports empty lists and command failures without throwing', async () => {
     const { controller, sent } = createController({
       defaultWorkDir: '',
-      ensureExistingSession: mock(async () => null),
+      ensureExistingSession: mock(async () => ({ status: 'missing' })),
       httpClient: {
         listProviders: mock(async () => { throw new Error('providers down') }),
         activateOfficialProvider: mock(async () => {}),
@@ -516,7 +516,7 @@ describe('Telegram command controller helpers', () => {
 
   it('does not claim a selected skill ran when the agent session is unavailable', async () => {
     const unavailable = createController({
-      ensureExistingSession: mock(async () => null),
+      ensureExistingSession: mock(async () => ({ status: 'missing' })),
     })
     await unavailable.controller.handleSkillsCommand(createCommandContext().ctx)
     expect(unavailable.sent.at(-1)?.text).toContain('当前项目可用 Skills')
@@ -530,6 +530,46 @@ describe('Telegram command controller helpers', () => {
 
     expect(unavailable.sentUserMessages).toEqual([])
     expect(callback.edits[0]).toContain('会话已失效')
+  })
+
+  it('keeps skill listing on the original project after a temporary reconnect failure', async () => {
+    const session = { sessionId: 'original', workDir: '/work/original', updatedAt: 1 }
+    const restore = mock(async () => ({ status: 'restored', session }))
+      .mockResolvedValueOnce({ status: 'unavailable', session })
+    const { controller, deps, sent } = createController({ ensureExistingSession: restore })
+
+    await controller.handleSkillsCommand(createCommandContext().ctx)
+    expect(sent.at(-1)?.text).toContain('已保留会话和工作目录')
+    expect(sent.at(-1)?.text).not.toContain('/new')
+    expect(deps.httpClient.listSkills).not.toHaveBeenCalled()
+    expect(deps.setStoredSession).not.toHaveBeenCalled()
+    expect(deps.deleteStoredSession).not.toHaveBeenCalled()
+
+    await controller.handleSkillsCommand(createCommandContext().ctx)
+    expect(deps.httpClient.listSkills).toHaveBeenCalledWith('/work/original')
+    expect(sent.at(-1)?.text).toContain('/work/original')
+  })
+
+  it('retains the skill selection for retry when the original session temporarily cannot reconnect', async () => {
+    const session = { sessionId: 'original', workDir: '/work/original', updatedAt: 1 }
+    const restore = mock(async () => ({ status: 'restored', session }))
+    const { controller, deps, sent, sentUserMessages } = createController({ ensureExistingSession: restore })
+    await controller.handleSkillsCommand(createCommandContext().ctx)
+    restore.mockResolvedValueOnce({ status: 'unavailable', session })
+
+    const failed = createCommandContext()
+    await controller.handleSelectionCallback(failed.ctx, { kind: 'skill', action: 'pick', index: 0 })
+    expect(sent.at(-1)?.text).toContain('已保留会话和工作目录')
+    expect(sent.at(-1)?.text).not.toContain('/new')
+    expect(failed.edits).toEqual([])
+    expect(sentUserMessages).toEqual([])
+    expect(deps.setStoredSession).not.toHaveBeenCalled()
+    expect(deps.deleteStoredSession).not.toHaveBeenCalled()
+
+    const retry = createCommandContext()
+    await controller.handleSelectionCallback(retry.ctx, { kind: 'skill', action: 'pick', index: 0 })
+    expect(sentUserMessages).toEqual([{ chatId: '42', content: '/skill-a' }])
+    expect(retry.edits[0]).toContain('已调用 Skill')
   })
 
   it('reports a disconnected bridge instead of dropping a selected skill', async () => {
@@ -827,7 +867,7 @@ describe('Telegram command controller helpers', () => {
         delete: (chatId) => events.push(`delete:${chatId}`),
       },
       isAllowedUser: () => allowPermissionUser,
-      ensureExistingSession: mock(async () => ({ sessionId: 'active', workDir: '/work/repo' })),
+      ensureExistingSession: mock(async () => ({ status: 'restored' as const, session: { sessionId: 'active', workDir: '/work/repo', updatedAt: 1 } })),
       clearTransientChatState: (chatId) => events.push(`clear:${chatId}`),
       clearOtherSelections: () => {},
       isBusy: () => false,

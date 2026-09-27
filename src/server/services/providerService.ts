@@ -17,7 +17,7 @@ import { ManagedSettingsService } from './managedSettingsService.js'
 import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
 import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
 import { resolveRequestCompatibility } from '../proxy/transform/requestCompatibility.js'
-import { hoistToolResultMediaForCompatibility } from '../proxy/transform/anthropicMediaHoist.js'
+import { hoistToolResultMediaForCompatibility, shouldHoistNestedToolResultMedia } from '../proxy/transform/anthropicMediaHoist.js'
 import { openaiChatToAnthropic } from '../proxy/transform/openaiChatToAnthropic.js'
 import { openaiResponsesToAnthropic } from '../proxy/transform/openaiResponsesToAnthropic.js'
 import type { AnthropicRequest } from '../proxy/transform/types.js'
@@ -31,6 +31,10 @@ import {
   GROK_OFFICIAL_PROVIDER,
   isGrokOfficialProviderId,
 } from './grokOfficialProvider.js'
+import {
+  CLAUDE_OFFICIAL_DEFAULT_MODELS,
+} from './claudeOfficialRuntime.js'
+import { SettingsService } from './settingsService.js'
 import { hahaGrokOAuthService } from './hahaGrokOAuthService.js'
 import {
   CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
@@ -42,12 +46,18 @@ import {
   getManagedEnvKeys,
   getPresetAuthStrategy,
   getPresetDefaultEnv,
+  getPresetModelApiFormats,
+  getPresetUpstreamHeaders,
   normalizeImageGeneration,
   normalizeModelMapping,
   normalizeProvidersIndex,
   providerNeedsProxy,
+  resolveProviderApiFormat,
+  resolveProviderModelApiFormat,
   resolveProviderApiKey,
 } from './providerRuntimeEnv.js'
+import { resolveModelApiFormat, type ModelApiFormatRule } from '../../shared/modelApiFormats.js'
+import { applyUpstreamHeaders, resolveUpstreamHeaders } from '../proxy/upstreamHeaders.js'
 import {
   getNetworkProxyFetchOptions,
   loadNetworkSettings,
@@ -63,11 +73,16 @@ import type {
   ProviderTestResult,
   ProviderTestStepResult,
   ApiFormat,
+  ModelMapping,
   ProviderAuthStrategy,
   RequestCompatibility,
 } from '../types/provider.js'
 import {
   BUILT_IN_PROVIDER_IDS,
+  CLAUDE_OFFICIAL_PROVIDER_ID,
+  GROK_OFFICIAL_PROVIDER_ID,
+  OPENAI_OFFICIAL_PROVIDER_ID,
+  isBuiltInProviderId,
 } from '../types/provider.js'
 
 const DEFAULT_INDEX: ProvidersIndex = {
@@ -75,6 +90,7 @@ const DEFAULT_INDEX: ProvidersIndex = {
   activeId: null,
   providers: [],
   providerOrder: [...BUILT_IN_PROVIDER_IDS],
+  officialProviderModels: {},
 }
 
 function isPermutation(candidateIds: string[], expectedIds: string[]): boolean {
@@ -165,6 +181,7 @@ function appendNewProviderToOrder(providerOrder: string[], providerId: string, e
 export class ProviderService {
   private static serverPort = 3456
   private managedSettingsService = new ManagedSettingsService()
+  private settingsService = new SettingsService()
 
   static setServerPort(port: number): void {
     ProviderService.serverPort = port
@@ -237,17 +254,76 @@ export class ProviderService {
   }
 
   async getProvider(id: string): Promise<SavedProvider> {
+    const index = await this.readIndex()
     if (isOpenAIOfficialProviderId(id)) {
-      return OPENAI_OFFICIAL_PROVIDER
+      return {
+        ...OPENAI_OFFICIAL_PROVIDER,
+        models: this.resolveOfficialProviderModels(index, OPENAI_OFFICIAL_PROVIDER_ID),
+      }
     }
     if (isGrokOfficialProviderId(id)) {
-      return GROK_OFFICIAL_PROVIDER
+      return {
+        ...GROK_OFFICIAL_PROVIDER,
+        models: this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
+      }
     }
 
-    const index = await this.readIndex()
     const provider = index.providers.find((p) => p.id === id)
     if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
     return provider
+  }
+
+  private resolveOfficialProviderModels(
+    index: ProvidersIndex,
+    id: (typeof BUILT_IN_PROVIDER_IDS)[number],
+  ): ModelMapping {
+    const configured = index.officialProviderModels[id]
+    if (configured) return normalizeModelMapping(configured)
+    if (id === OPENAI_OFFICIAL_PROVIDER_ID) return OPENAI_OFFICIAL_PROVIDER.models
+    if (id === GROK_OFFICIAL_PROVIDER_ID) return GROK_OFFICIAL_PROVIDER.models
+    return CLAUDE_OFFICIAL_DEFAULT_MODELS
+  }
+
+  async getOfficialProviderModels(id: string): Promise<ModelMapping> {
+    if (!isBuiltInProviderId(id)) {
+      throw ApiError.notFound(`Official provider not found: ${id}`)
+    }
+    const index = await this.readIndex()
+    return this.resolveOfficialProviderModels(index, id)
+  }
+
+  async updateOfficialProviderModels(
+    id: string,
+    models: ModelMapping,
+  ): Promise<ModelMapping> {
+    if (!isBuiltInProviderId(id)) {
+      throw ApiError.notFound(`Official provider not found: ${id}`)
+    }
+
+    const index = await this.readIndex()
+    const normalized = normalizeModelMapping(models)
+    index.officialProviderModels = {
+      ...index.officialProviderModels,
+      [id]: normalized,
+    }
+    await this.writeIndex(index)
+
+    if (id === CLAUDE_OFFICIAL_PROVIDER_ID) {
+      if (index.activeId === null) {
+        await this.settingsService.updateOfficialModelMapping(normalized)
+      }
+      return normalized
+    }
+
+    if (index.activeId === id) {
+      const provider = id === OPENAI_OFFICIAL_PROVIDER_ID
+        ? { ...OPENAI_OFFICIAL_PROVIDER, models: normalized }
+        : { ...GROK_OFFICIAL_PROVIDER, models: normalized }
+      await this.syncToSettings(provider)
+      await this.updateManagedSettings({ model: normalized.main, modelContext: undefined })
+    }
+
+    return normalized
   }
 
   async addProvider(input: CreateProviderInput): Promise<SavedProvider> {
@@ -392,9 +468,15 @@ export class ProviderService {
   async activateProvider(id: string): Promise<void> {
     const index = await this.readIndex()
     const provider = isOpenAIOfficialProviderId(id)
-      ? OPENAI_OFFICIAL_PROVIDER
+      ? {
+          ...OPENAI_OFFICIAL_PROVIDER,
+          models: this.resolveOfficialProviderModels(index, OPENAI_OFFICIAL_PROVIDER_ID),
+        }
       : isGrokOfficialProviderId(id)
-        ? GROK_OFFICIAL_PROVIDER
+        ? {
+            ...GROK_OFFICIAL_PROVIDER,
+            models: this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
+          }
         : index.providers.find((p) => p.id === id)
     if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
 
@@ -403,6 +485,7 @@ export class ProviderService {
 
     if (provider.runtimeKind === 'openai_oauth' || provider.runtimeKind === 'grok_oauth') {
       await this.syncToSettings(provider)
+      await this.updateManagedSettings({ model: provider.models.main, modelContext: undefined })
     } else if (provider.presetId === 'official') {
       await this.clearProviderFromSettings()
     } else {
@@ -415,6 +498,9 @@ export class ProviderService {
     index.activeId = null
     await this.writeIndex(index)
     await this.clearProviderFromSettings()
+    await this.settingsService.updateOfficialModelMapping(
+      this.resolveOfficialProviderModels(index, CLAUDE_OFFICIAL_PROVIDER_ID),
+    )
   }
 
   // --- Settings sync ---
@@ -586,6 +672,8 @@ export class ProviderService {
     apiFormat: ApiFormat
     supportsNestedToolResultMedia: boolean
     authStrategy: ProviderAuthStrategy
+    modelApiFormats: ModelApiFormatRule<ApiFormat>[]
+    upstreamHeaders: Record<string, string>
     requestCompatibility?: RequestCompatibility
   } | null> {
     const toProxyConfig = (provider: SavedProvider) => {
@@ -595,9 +683,11 @@ export class ProviderService {
         name: provider.name,
         baseUrl: provider.baseUrl,
         apiKey: resolveProviderApiKey(provider, presetDefaultEnv),
-        apiFormat: provider.apiFormat ?? 'anthropic',
+        apiFormat: resolveProviderApiFormat(provider),
         supportsNestedToolResultMedia: provider.supportsNestedToolResultMedia ?? true,
         authStrategy: provider.authStrategy ?? getPresetAuthStrategy(provider.presetId),
+        modelApiFormats: getPresetModelApiFormats(provider.presetId),
+        upstreamHeaders: getPresetUpstreamHeaders(provider.presetId),
         ...(provider.requestCompatibility !== undefined && { requestCompatibility: provider.requestCompatibility }),
       }
     }
@@ -623,6 +713,8 @@ export class ProviderService {
     apiFormat: ApiFormat
     supportsNestedToolResultMedia: boolean
     authStrategy: ProviderAuthStrategy
+    modelApiFormats: ModelApiFormatRule<ApiFormat>[]
+    upstreamHeaders: Record<string, string>
     requestCompatibility?: RequestCompatibility
   } | null> {
     return this.getProviderForProxy()
@@ -637,7 +729,7 @@ export class ProviderService {
     const provider = await this.getProvider(id)
     const baseUrl = provider.baseUrl
     const modelId = overrides?.modelId || provider.models.main
-    const apiFormat = provider.apiFormat ?? 'anthropic'
+    const apiFormat = resolveProviderModelApiFormat(provider, modelId)
     const authStrategy = provider.authStrategy ?? getPresetAuthStrategy(provider.presetId)
     const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
     const apiKey = resolveProviderApiKey(provider, presetDefaultEnv)
@@ -652,28 +744,43 @@ export class ProviderService {
       modelId,
       authStrategy,
       apiFormat,
+      presetId: provider.presetId,
       supportsNestedToolResultMedia: provider.supportsNestedToolResultMedia,
       requestCompatibility: provider.requestCompatibility,
     })
   }
 
   async testProviderConfig(input: TestProviderInput): Promise<ProviderTestResult> {
-    const format: ApiFormat = input.apiFormat ?? 'anthropic'
+    const modelId = normalizeModelStringForAPI(input.modelId)
     const authStrategy = input.authStrategy ?? 'api_key'
     const base = input.baseUrl.replace(/\/+$/, '')
-    const modelId = normalizeModelStringForAPI(input.modelId)
     const networkSettings = await loadNetworkSettings()
+
+    // The unsaved-config test has no saved provider to read a preset from, so the
+    // caller passes its presetId and the server resolves the same rules the proxy
+    // would. Keeps the probe honest without accepting rule data over HTTP.
+    const presetId = input.presetId ?? ''
+    const modelApiFormats = presetId ? getPresetModelApiFormats(presetId) : []
+    const upstreamHeaders = resolveUpstreamHeaders(
+      presetId ? getPresetUpstreamHeaders(presetId) : {},
+      { sessionId: connectivityProbeSessionId() },
+    )
+    // Same resolution the proxy performs, so the probe reaches what production
+    // would. Whether the *provider* needs local request handling is independent of
+    // the protocol this particular model routes to.
+    const providerFormat = resolveProviderApiFormat({ presetId, apiFormat: input.apiFormat })
+    const format: ApiFormat = resolveModelApiFormat(modelApiFormats, modelId) ?? providerFormat
 
     // ── Step 1: Basic connectivity ───────────────────────────
     // Directly call the upstream API to verify URL, key, and model.
-    const step1 = await this.testConnectivity(base, input.apiKey, modelId, format, authStrategy, networkSettings, input.requestCompatibility)
+    const step1 = await this.testConnectivity(base, input.apiKey, modelId, format, authStrategy, networkSettings, input.requestCompatibility, upstreamHeaders)
 
     // If connectivity failed, no point running step 2
     if (!step1.success) {
       return { connectivity: step1 }
     }
 
-    if (!providerNeedsProxy(format, input.supportsNestedToolResultMedia)) {
+    if (!providerNeedsProxy(providerFormat, input.supportsNestedToolResultMedia)) {
       return { connectivity: step1 }
     }
 
@@ -687,6 +794,12 @@ export class ProviderService {
       authStrategy,
       networkSettings,
       input.requestCompatibility,
+      upstreamHeaders,
+      shouldHoistNestedToolResultMedia({
+        providerApiFormat: providerFormat,
+        resolvedApiFormat: format,
+        supportsNestedToolResultMedia: input.supportsNestedToolResultMedia,
+      }),
     )
 
     return { connectivity: step1, proxy: step2 }
@@ -701,10 +814,11 @@ export class ProviderService {
     authStrategy: ProviderAuthStrategy,
     networkSettings: NetworkSettings,
     requestCompatibility?: RequestCompatibility,
+    upstreamHeaders: Record<string, string> = {},
   ): Promise<ProviderTestStepResult> {
     const start = Date.now()
     try {
-      const { url, headers, body } = buildDirectTestRequest(base, apiKey, modelId, format, authStrategy, requestCompatibility)
+      const { url, headers, body } = buildDirectTestRequest(base, apiKey, modelId, format, authStrategy, requestCompatibility, upstreamHeaders)
       const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
       const response = await fetch(url, {
         method: 'POST',
@@ -750,6 +864,8 @@ export class ProviderService {
     authStrategy: ProviderAuthStrategy,
     networkSettings: NetworkSettings,
     requestCompatibility?: RequestCompatibility,
+    upstreamHeaders: Record<string, string> = {},
+    hoistNestedMedia = true,
   ): Promise<ProviderTestStepResult> {
     const start = Date.now()
     try {
@@ -766,15 +882,22 @@ export class ProviderService {
       if (format === 'openai_chat') {
         transformedBody = anthropicToOpenaiChat(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
         upstreamUrl = buildOpenaiEndpoint(base, 'chat/completions')
-        headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
+        headers = {}
+        applyUpstreamHeaders(headers, upstreamHeaders)
+        headers['Content-Type'] = 'application/json'
+        headers.Authorization = `Bearer ${apiKey}`
       } else if (format === 'openai_responses') {
         transformedBody = anthropicToOpenaiResponses(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
         upstreamUrl = buildOpenaiEndpoint(base, 'responses')
-        headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` }
+        headers = {}
+        applyUpstreamHeaders(headers, upstreamHeaders)
+        headers['Content-Type'] = 'application/json'
+        headers.Authorization = `Bearer ${apiKey}`
       } else {
-        transformedBody = hoistToolResultMediaForCompatibility(anthropicReq)
+        transformedBody = hoistNestedMedia ? hoistToolResultMediaForCompatibility(anthropicReq) : anthropicReq
         upstreamUrl = `${normalizeAnthropicBaseUrl(base)}/v1/messages`
         headers = {
+          ...applyUpstreamHeaders({}, upstreamHeaders),
           'Content-Type': 'application/json',
           'anthropic-version': '2023-06-01',
           ...buildAnthropicAuthHeaders(apiKey, authStrategy),
@@ -827,6 +950,16 @@ export class ProviderService {
 
 // ─── Helpers ───────────────────────────────────────────────
 
+/**
+ * A connectivity probe is not part of a conversation, but gateways that bind the
+ * wire format to the path (OpenCode Go) reject a request carrying no session id.
+ * Probes get a fresh one so the test sends the same header shape production does.
+ */
+function connectivityProbeSessionId(): string {
+  const random = globalThis.crypto?.randomUUID?.()
+  return random ? `cc-haha-probe-${random}` : 'cc-haha-probe'
+}
+
 function buildDirectTestRequest(
   base: string,
   apiKey: string,
@@ -834,6 +967,7 @@ function buildDirectTestRequest(
   format: ApiFormat,
   authStrategy: ProviderAuthStrategy,
   requestCompatibility?: RequestCompatibility,
+  upstreamHeaders: Record<string, string> = {},
 ): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
   const prompt = 'Say "ok" and nothing else.'
   const outputBudget = format !== 'anthropic'
@@ -847,17 +981,22 @@ function buildDirectTestRequest(
     ? { [outputBudget.field]: outputBudget.effective }
     : {}
 
+  // Preset-declared headers first, so the credential and the framing headers added
+  // below always win over them.
+  const baseHeaders = applyUpstreamHeaders<Record<string, string>>({}, upstreamHeaders)
+  baseHeaders['Content-Type'] = 'application/json'
+
   if (format === 'openai_chat') {
     return {
       url: buildOpenaiEndpoint(base, 'chat/completions'),
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      headers: { ...baseHeaders, Authorization: `Bearer ${apiKey}` },
       body: { model: modelId, ...budgetParams, stream: false, messages: [{ role: 'user', content: prompt }] },
     }
   }
   if (format === 'openai_responses') {
     return {
       url: buildOpenaiEndpoint(base, 'responses'),
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      headers: { ...baseHeaders, Authorization: `Bearer ${apiKey}` },
       body: { model: modelId, ...budgetParams, input: [{ type: 'message', role: 'user', content: prompt }] },
     }
   }
@@ -865,7 +1004,7 @@ function buildDirectTestRequest(
   return {
     url: `${normalizeAnthropicBaseUrl(base)}/v1/messages`,
     headers: {
-      'Content-Type': 'application/json',
+      ...baseHeaders,
       'anthropic-version': '2023-06-01',
       ...buildAnthropicAuthHeaders(apiKey, authStrategy),
     },

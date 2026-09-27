@@ -25,6 +25,7 @@ export type ClientMessage =
       type: 'user_message'
       content: string
       attachments?: AttachmentRef[]
+      sessionReferences?: { sessionId: string }[]
       /**
        * M7-B §8.1 request identity. Both fields are present only when a context
        * selection exists; a no-selection frame stays byte-identical to the
@@ -41,6 +42,12 @@ export type ClientMessage =
       updatedInput?: Record<string, unknown>
       denyMessage?: string
       permissionUpdates?: unknown[]
+      // Optional execution-model switch applied together with an approval
+      // (currently honored for ExitPlanMode only): same-provider switches are
+      // applied in-process via the SDK set_model control request before the
+      // allow response; cross-provider switches approve → interrupt → restart
+      // the CLI with the new env → auto-continue execution.
+      runtimeOverride?: { providerId: string | null; modelId: string; effortLevel?: string }
     }
   | {
       type: 'computer_use_permission_response'
@@ -50,6 +57,7 @@ export type ClientMessage =
   | { type: 'set_permission_mode'; mode: PermissionMode }
   | { type: 'set_runtime_config'; providerId: string | null; modelId: string; effortLevel?: string }
   | { type: 'stop_generation' }
+  | { type: 'ask_user_question_activity'; requestId: string }
   | { type: 'stop_background_task'; taskId: string }
   | { type: 'ping' }
 
@@ -94,6 +102,7 @@ export type ServerMessage =
       toolUseId?: string
       input: unknown
       description?: string
+      displayName?: string
     }
   | {
       type: 'computer_use_permission_request'
@@ -112,7 +121,7 @@ export type ServerMessage =
       computerUseRequestIds: string[]
       turnActive: boolean
     }
-  | { type: 'user_message_replay'; content: string }
+  | { type: 'user_message_replay'; content: string; sessionReferences?: { sessionId: string }[] }
   | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
   /**
    * M7-B §8.3 receipt ack: exactly one is emitted for every `user_message`
@@ -177,6 +186,7 @@ export type ServerMessage =
   | { type: 'system_notification'; subtype: string; message?: string; data?: unknown }
   | { type: 'pong' }
   | { type: 'team_update'; teamName: string; members: TeamMemberStatus[]; incarnationId?: string; leadSessionId?: string; createdAt?: number }
+  | { type: 'team_plan_updated'; teamName: string; sessionId: string; planId: string; incarnationId: string; revision: number; state: string }
   | { type: 'team_created'; teamName: string; incarnationId?: string; leadSessionId?: string; createdAt?: number }
   | { type: 'team_workbench_updated'; teamName: string; incarnationId?: string; leadSessionId?: string; createdAt?: number }
   | { type: 'team_deleted'; teamName: string; incarnationId?: string; leadSessionId?: string; createdAt?: number }

@@ -120,16 +120,16 @@ describe('OpenAI Codex model catalog', () => {
     expect(models).toEqual(OPENAI_CODEX_MODEL_CATALOG)
   })
 
-  test('falls back to the bundled GPT-5.6 catalog when the endpoint fails', async () => {
+  test('falls back to the bundled Codex catalog when the endpoint fails', async () => {
     const models = await getOpenAICodexModelCatalog({
       forceRefresh: true,
       fetchOverride: async () => new Response('unavailable', { status: 503 }),
     })
 
     expect(models.slice(0, 3).map((model) => model.value)).toEqual([
-      'gpt-5.6-sol',
-      'gpt-5.6-terra',
-      'gpt-5.6-luna',
+      'gpt-6-astra',
+      'gpt-6-sol',
+      'gpt-6-luna',
     ])
   })
 

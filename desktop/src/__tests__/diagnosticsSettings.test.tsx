@@ -116,6 +116,10 @@ vi.mock('../components/settings/ClaudeOfficialLogin', () => ({
   ClaudeOfficialLogin: () => <div />,
 }))
 
+vi.mock('../components/settings/OfficialProviderModelSettings', () => ({
+  OfficialProviderModelSettings: () => <div />,
+}))
+
 vi.mock('../pages/AdapterSettings', () => ({
   AdapterSettings: () => <div />,
 }))

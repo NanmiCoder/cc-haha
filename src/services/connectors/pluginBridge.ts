@@ -264,7 +264,12 @@ export async function reloadConnectorSessions(sessionId?: string, requiredConnec
   const sessions = new Set(conversationService.getActiveSessions())
   if (sessionId && conversationService.hasSession(sessionId)) sessions.add(sessionId)
   const results = await Promise.all([...sessions].map(id => reloadSessionComponents(id, requiredMcpServer, requiredPlugin)))
-  if (results.some(result => result.reason === 'failed' || result.errors > 0)) {
+  // error_count covers ALL plugins in the session, including unrelated ones
+  // with stale settings entries. The connector itself is verified by
+  // requiredPlugin/requiredMcpServer inside reloadSessionComponents and by
+  // isConnectorPluginReady after this call; a foreign plugin's load error
+  // must not veto this connector's install.
+  if (results.some(result => result.reason === 'failed')) {
     throw new Error('Connector changed on disk, but an active task could not refresh its tools and skills. Retry the connection check before use.')
   }
 }

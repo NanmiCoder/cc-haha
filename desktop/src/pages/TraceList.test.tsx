@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { TraceList } from './TraceList'
@@ -104,11 +104,46 @@ describe('TraceList', () => {
     useSettingsStore.setState({ locale: 'en' })
   })
 
+  it('keeps one poll in flight and aborts it when the settings page closes', async () => {
+    vi.useFakeTimers()
+    try {
+      let signal: AbortSignal | undefined
+      vi.mocked(tracesApi.list).mockResolvedValueOnce(traceList).mockImplementationOnce((_query, options) => {
+        signal = options?.signal
+        return new Promise(() => {})
+      })
+      const view = render(<TraceList />)
+      await act(async () => { await Promise.resolve() })
+      await act(async () => { await vi.advanceTimersByTimeAsync(20_000) })
+      expect(tracesApi.list).toHaveBeenCalledTimes(2)
+      expect(signal?.aborted).toBe(false)
+      view.unmount()
+      expect(signal?.aborted).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts an obsolete search and ignores its late response', async () => {
+    let firstSignal: AbortSignal | undefined
+    let resolveFirst!: (data: TraceSessionList) => void
+    vi.mocked(tracesApi.list).mockImplementationOnce((_query, options) => {
+      firstSignal = options?.signal
+      return new Promise((resolve) => { resolveFirst = resolve })
+    }).mockResolvedValueOnce(secondTraceList)
+    render(<TraceList />)
+    fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'second' } })
+    await findTraceRow(/Second trace session/)
+    expect(firstSignal?.aborted).toBe(true)
+    await act(async () => { resolveFirst(traceList) })
+    expect(screen.queryByRole('listitem', { name: /Debug stuck agent/ })).not.toBeInTheDocument()
+  })
+
   it('renders rows with title, model chips, failure count and metrics', async () => {
     render(<TraceList />)
 
     const row = await findTraceRow(/Debug stuck agent/)
-    expect(tracesApi.list).toHaveBeenCalledWith({ limit: 50, offset: 0, query: '' })
+    expect(tracesApi.list).toHaveBeenCalledWith({ limit: 50, offset: 0, query: '' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
 
     // header: storage dir + collection badge + aggregate chips
     expect(screen.getByText('/tmp/cc-haha/traces')).toBeInTheDocument()
@@ -230,7 +265,7 @@ describe('TraceList', () => {
     await waitFor(() => {
       expect(screen.queryByText('Debug stuck agent')).not.toBeInTheDocument()
     })
-    expect(tracesApi.list).toHaveBeenNthCalledWith(2, { limit: 50, offset: 0, query: '' })
+    expect(tracesApi.list).toHaveBeenNthCalledWith(2, { limit: 50, offset: 0, query: '' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     expect(useTabStore.getState().activeTabId).toBeNull()
   })
 
@@ -273,8 +308,8 @@ describe('TraceList', () => {
 
     expect(await screen.findByText('Second trace session')).toBeInTheDocument()
     expect(screen.getByText('Showing 2 of 2')).toBeInTheDocument()
-    expect(tracesApi.list).toHaveBeenNthCalledWith(1, { limit: 50, offset: 0, query: '' })
-    expect(tracesApi.list).toHaveBeenNthCalledWith(2, { limit: 50, offset: 1, query: '' })
+    expect(tracesApi.list).toHaveBeenNthCalledWith(1, { limit: 50, offset: 0, query: '' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(tracesApi.list).toHaveBeenNthCalledWith(2, { limit: 50, offset: 1, query: '' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
   })
 
   it('sends title search text to the trace list API', async () => {
@@ -286,7 +321,7 @@ describe('TraceList', () => {
     })
 
     await waitFor(() => {
-      expect(tracesApi.list).toHaveBeenLastCalledWith({ limit: 50, offset: 0, query: 'stuck agent' })
+      expect(tracesApi.list).toHaveBeenLastCalledWith({ limit: 50, offset: 0, query: 'stuck agent' }, expect.objectContaining({ signal: expect.any(AbortSignal) }))
     })
   })
 

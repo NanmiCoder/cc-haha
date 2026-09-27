@@ -138,9 +138,10 @@ export const AssistantMessage = memo(function AssistantMessage({
           // what says who is speaking (see the note above), so a border here
           // repeats that at the cost of ~50px per reply and makes prose look
           // like the tool rows it sits between. The turn rail groups it now.
-          className="w-full text-[14.5px] text-[var(--color-text-primary)]"
+          className="w-full text-[var(--color-text-primary)]"
         >
           <MarkdownRenderer
+            className="chat-reading-markdown"
             content={content}
             variant={documentLayout ? 'document' : 'default'}
             streaming={isStreaming}

@@ -34,7 +34,7 @@ const PHASE_KEYS: Record<string, TranslationKey> = {
   check: 'connectors.action.check', deactivate: 'connectors.action.deactivate', remove: 'connectors.action.remove',
 }
 
-const TOOL_PLUGIN_IDS = new Set(['hyperframes', 'obsidian', 'drawio'])
+const TOOL_PLUGIN_IDS = new Set(['hyperframes', 'obsidian', 'drawio', 'remotion'])
 
 export function Connectors({ mode = 'plugins', embedded = false, externalQuery, installedFilter = 'all', management = false }: { mode?: 'plugins' | 'skills', embedded?: boolean, externalQuery?: string, installedFilter?: 'all' | 'installed' | 'installable', management?: boolean } = {}) {
   const t = useTranslation()

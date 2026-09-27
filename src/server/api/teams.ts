@@ -10,6 +10,8 @@
  * DELETE /api/teams/:name                          — 删除团队
  */
 
+import { teamPlanActionSchema, teamPlanPatchRequestSchema, teamPlanService } from '../services/teamPlanService.js'
+import { TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
 import { teamService } from '../services/teamService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 
@@ -21,6 +23,29 @@ export async function handleTeamsApi(
   try {
     const method = req.method
     const teamName = segments[2] ? decodeURIComponent(segments[2]) : undefined
+
+    if (method === 'GET' && teamName === 'session' && segments[3] && segments[4] === 'plan') {
+      return Response.json({ plan: await teamPlanService.getForSession(decodeURIComponent(segments[3])) })
+    }
+    if (teamName && segments[3] === 'plan' && (method === 'PATCH' || method === 'POST')) {
+      let raw: unknown
+      try { raw = await req.json() } catch { throw ApiError.badRequest('Invalid JSON body') }
+      if (method === 'PATCH') {
+        const parsed = teamPlanPatchRequestSchema.safeParse(raw)
+        if (!parsed.success) throw ApiError.badRequest('Invalid team plan update')
+        const { members, tasks, ...identity } = parsed.data
+        const plan = await teamPlanService.update(teamName, identity, {
+          ...(members ? { members } : {}), ...(tasks ? { tasks } : {}),
+        })
+        return Response.json({ plan })
+      }
+      const parsed = teamPlanActionSchema.safeParse(raw)
+      if (!parsed.success) throw ApiError.badRequest('Invalid team plan action')
+      const action = segments[4]
+      if (action === 'approve') return Response.json({ plan: await teamPlanService.approve(teamName, parsed.data) })
+      if (action === 'return' || action === 'cancel' || action === 'retry') return Response.json({ plan: await teamPlanService.action(teamName, action, parsed.data) })
+      throw ApiError.badRequest('Unknown team plan action')
+    }
 
     // ── GET /api/teams ────────────────────────────────────────────────────
     if (method === 'GET' && !teamName) {
@@ -132,6 +157,7 @@ export async function handleTeamsApi(
       'METHOD_NOT_ALLOWED',
     )
   } catch (error) {
+    if (error instanceof TeamPlanError) return errorResponse(new ApiError(error.status, error.message, 'TEAM_PLAN_CONFLICT'))
     return errorResponse(error)
   }
 }

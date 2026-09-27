@@ -64,6 +64,7 @@ const CONTAINERS: Record<string, Classification> = {
   sessionStopRequested: { kind: 'cleared' },
   sessionStreamStates: { kind: 'cleared' },
   sessionTitleState: { kind: 'cleared' },
+  sessionTurnObservers: { kind: 'cleared' },
   taskNotificationPersistence: { kind: 'cleared' },
   terminalSessionChatStates: { kind: 'cleared' },
 
@@ -209,6 +210,12 @@ describe('handler session-state cleanup', () => {
       if (value.kind === 'cleared') continue
       expect(value.reason.length, `${name} needs a reason a reader can evaluate`).toBeGreaterThan(40)
     }
+  })
+
+  test('unregisters turn observers from the runtime on cleanup and reset', () => {
+    expect(functionBody('clearSessionTurnObserver')).toContain('conversationService.removeOutputCallback(sessionId, callback)')
+    expect(functionBody('__resetWebSocketHandlerStateForTests')).toContain('conversationService.removeOutputCallback(sessionId, callback)')
+    expect(functionBody('bindSessionTurnObserver')).toContain('sessionTurnObservers.get(sessionId) === callback')
   })
 
   test('keeps the test-only reset aligned with the cleanup closure', () => {

@@ -2,7 +2,7 @@
  * Tests for CronScheduler — cron matching, task execution, log storage, and API endpoints
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import * as fs from 'fs/promises'
 import * as path from 'path'
@@ -328,6 +328,29 @@ describe('CronScheduler', () => {
       'db',
       'scheduled-runs-v1.sqlite',
     ))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('keeps both same-second task completions and leaves the task list readable', async () => {
+    const first = await cronService.createTask({ cron: '* * * * *', prompt: 'first', recurring: true })
+    const second = await cronService.createTask({ cron: '* * * * *', prompt: 'second', recurring: true })
+    const now = spyOn(Date, 'now').mockReturnValue(1_790_331_340_000)
+    try {
+      const results = await Promise.all([
+        scheduler.executeTask(first),
+        scheduler.executeTask(second),
+      ])
+      expect(results.map(result => result.status)).toEqual(['completed', 'completed'])
+
+      const runs = await scheduler.getRecentRuns()
+      expect(runs).toHaveLength(2)
+      expect(runs.map(run => run.taskId).sort()).toEqual([first.id, second.id].sort())
+      expect(runs.every(run => run.status === 'completed')).toBe(true)
+      const tasks = await cronService.listTasks()
+      expect(tasks).toHaveLength(2)
+      expect(tasks.every(task => task.lastFiredAt)).toBe(true)
+    } finally {
+      now.mockRestore()
+    }
   })
 
   it('keeps one execution lifecycle canonical and projected writes in its original scope', async () => {

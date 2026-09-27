@@ -1,3 +1,4 @@
+import { closeSideChatsForParent, getSideChat, isSideChatId, SIDE_CHAT_BOUNDARY } from './sideChatRegistry.js'
 /**
  * ConversationService — CLI subprocess manager
  *
@@ -31,7 +32,7 @@ import {
   IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
 } from '../../services/imageGeneration/config.js'
-import { sessionService } from './sessionService.js'
+import { sessionService, type MessageEntry } from './sessionService.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
   isMaterializedWorktreeLaunch,
@@ -66,6 +67,8 @@ import {
 import { readTraceCaptureSettings } from './traceCaptureService.js'
 import { logError } from '../../utils/log.js'
 import { composeUserContent } from '../features/managedContext/composer.js'
+import { normalizeAutoQuestionSettings } from '../../shared/autoQuestionSettings.js'
+import { decideAutoQuestionAnswers, getRecommendedQuestionAnswers, type AutoQuestion } from './autoQuestionDecisionService.js'
 import {
   createImageMetadataText,
   maybeResizeAndDownsampleImageBuffer,
@@ -185,6 +188,73 @@ type MaterializedAttachments = {
 
 type SessionOutputCallback = (msg: any) => void
 
+type TrackedPermissionRequest = {
+  toolName: string
+  agentId?: string
+  toolUseId?: string
+  description?: string
+  displayName?: string
+  input: Record<string, unknown>
+  permissionSuggestions?: unknown[]
+  autoAnswerTimer?: ReturnType<typeof setTimeout>
+  autoAnswerAbortController?: AbortController
+  autoAnswerCancelled?: boolean
+  autoAnswerCreatedAt?: number
+  autoAnswerGeneration?: number
+}
+
+function stripAutomaticQuestionMarker(input: Record<string, unknown>): Record<string, unknown> {
+  const metadata = input.metadata
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return input
+  const { autoAnswered: _untrusted, ...rest } = metadata as Record<string, unknown>
+  return { ...input, metadata: rest }
+}
+
+function parseAutoQuestions(input: Record<string, unknown>): AutoQuestion[] | null {
+  if (!Array.isArray(input.questions) || input.questions.length < 1 || input.questions.length > 4) return null
+  const questions: AutoQuestion[] = []
+  const seenQuestions = new Set<string>()
+  for (const value of input.questions) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const question = value as Record<string, unknown>
+    if (typeof question.question !== 'string' || !question.question.trim() ||
+      seenQuestions.has(question.question) || !Array.isArray(question.options) ||
+      question.options.length < 2 || question.options.length > 4) return null
+    seenQuestions.add(question.question)
+    const options: AutoQuestion['options'] = []
+    const seenLabels = new Set<string>()
+    for (const item of question.options) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null
+      const option = item as Record<string, unknown>
+      if (typeof option.label !== 'string' || !option.label.trim() || seenLabels.has(option.label)) return null
+      seenLabels.add(option.label)
+      options.push({ label: option.label, ...(typeof option.description === 'string' ? { description: option.description } : {}) })
+    }
+    questions.push({
+      question: question.question,
+      options,
+      multiSelect: question.multiSelect === true,
+    })
+  }
+  return questions
+}
+
+function autoQuestionConversationText(messages: MessageEntry[], includeSidechain = false): string {
+  const parts = messages.flatMap((message) => {
+    if ((message.type !== 'user' && message.type !== 'assistant') ||
+      (!includeSidechain && (message.isSidechain || message.parentToolUseId))) return []
+    if (typeof message.content === 'string') return [`${message.type}: ${message.content}`]
+    if (!Array.isArray(message.content)) return []
+    const text = message.content.flatMap((block) =>
+      block && typeof block === 'object' &&
+      'type' in block && block.type === 'text' &&
+      'text' in block && typeof block.text === 'string' ? [block.text] : [],
+    ).join('\n')
+    return text ? [`${message.type}: ${text}`] : []
+  })
+  return parts.join('\n').slice(-4_000)
+}
+
 function networkRoutingFingerprint(
   settings: NetworkSettings,
   env: NodeJS.ProcessEnv = process.env,
@@ -206,6 +276,9 @@ type SessionProcess = {
   outputCallbacks: SessionOutputCallback[]
   workDir: string
   permissionMode: string
+  teamWorker?: TeamWorkerStart
+  providerId?: string | null
+  providerConfigFingerprint?: string
   networkRoutingFingerprint: string
   networkDerivedFirstTokenTimeout: boolean
   networkDerivedStreamMaxDuration: boolean
@@ -230,28 +303,33 @@ type SessionProcess = {
   usesOfficialOAuth: boolean
   officialOAuthToken: string | null
   officialOAuthRefreshPromise?: Promise<void>
-  pendingPermissionRequests: Map<
-    string,
-    {
-      toolName: string
-      toolUseId?: string
-      description?: string
-      input: Record<string, unknown>
-      permissionSuggestions?: unknown[]
-    }
-  >
+  pendingPermissionRequests: Map<string, TrackedPermissionRequest>
+  autoResolvedRequestIds?: Set<string>
   pendingControlRequests: Map<string, (reason: Error) => void>
 }
 
 export type PendingPermissionRequest = {
   requestId: string
+  agentId?: string
   toolName: string
   toolUseId?: string
   input: Record<string, unknown>
   description?: string
+  displayName?: string
 }
 
-type SessionStartOptions = {
+export type TeamWorkerStart = {
+  parentSessionId: string
+  teamName: string
+  memberId: string
+  name: string
+  systemPrompt: string
+  tools?: string[]
+  agentDefinition?: Record<string, unknown>
+}
+
+export type SessionStartOptions = {
+  teamWorker?: TeamWorkerStart
   permissionMode?: string
   model?: string
   effort?: string
@@ -279,9 +357,157 @@ export class ConversationStartupError extends Error {
 
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
+  private teamStopOperations = new Map<string, Promise<void>>()
   private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
+
+  private clearAutoAnswerWait(request: TrackedPermissionRequest | undefined): void {
+    if (request?.autoAnswerTimer) clearTimeout(request.autoAnswerTimer)
+    request?.autoAnswerAbortController?.abort()
+  }
+
+  private clearSessionAutoAnswerWaits(session: SessionProcess): void {
+    for (const request of session.pendingPermissionRequests.values()) {
+      this.clearAutoAnswerWait(request)
+    }
+  }
+
+  cancelAutoQuestionAnswer(sessionId: string, requestId: string): void {
+    const request = this.sessions.get(sessionId)?.pendingPermissionRequests.get(requestId)
+    if (request?.toolName !== 'AskUserQuestion') return
+    this.clearAutoAnswerWait(request)
+    request.autoAnswerTimer = undefined
+    request.autoAnswerAbortController = undefined
+    request.autoAnswerCancelled = true
+    request.autoAnswerGeneration = (request.autoAnswerGeneration ?? 0) + 1
+  }
+
+  /** Apply setting changes to questions that are already waiting. */
+  refreshAutoQuestionSettings(): void {
+    for (const [sessionId, session] of this.sessions) {
+      for (const [requestId, request] of session.pendingPermissionRequests) {
+        if (request.toolName !== 'AskUserQuestion' || request.autoAnswerCancelled) continue
+        this.clearAutoAnswerWait(request)
+        request.autoAnswerGeneration = (request.autoAnswerGeneration ?? 0) + 1
+        request.autoAnswerTimer = undefined
+        request.autoAnswerAbortController = undefined
+        void this.scheduleAutoQuestionAnswer(sessionId, session, requestId, request)
+      }
+    }
+  }
+
+  private async scheduleAutoQuestionAnswer(
+    sessionId: string,
+    session: SessionProcess,
+    requestId: string,
+    request: TrackedPermissionRequest,
+  ): Promise<void> {
+    if (request.toolName !== 'AskUserQuestion') return
+    const generation = request.autoAnswerGeneration ?? 0
+    try {
+      const settings = normalizeAutoQuestionSettings(
+        (await new SettingsService().getUserSettings()).autoQuestion,
+      )
+      if (!settings.enabled || request.autoAnswerCancelled ||
+        (request.autoAnswerGeneration ?? 0) !== generation || this.sessions.get(sessionId) !== session ||
+        session.pendingPermissionRequests.get(requestId) !== request) return
+
+      const remainingMs = Math.max(0, (request.autoAnswerCreatedAt ?? Date.now()) +
+        settings.timeoutMinutes * 60_000 - Date.now())
+      request.autoAnswerTimer = setTimeout(() => {
+        request.autoAnswerTimer = undefined
+        void this.autoAnswerQuestion(sessionId, session, requestId, request)
+      }, remainingMs)
+    } catch (error) {
+      console.warn(`[ConversationService] Cannot schedule automatic answer for ${sessionId}:`, error)
+    }
+  }
+
+  private async autoAnswerQuestion(
+    sessionId: string,
+    session: SessionProcess,
+    requestId: string,
+    request: TrackedPermissionRequest,
+  ): Promise<void> {
+    if (request.autoAnswerCancelled || this.sessions.get(sessionId) !== session ||
+      session.pendingPermissionRequests.get(requestId) !== request) return
+    const controller = new AbortController()
+    request.autoAnswerAbortController = controller
+    try {
+      const settings = normalizeAutoQuestionSettings(
+        (await new SettingsService().getUserSettings()).autoQuestion,
+      )
+      if (!settings.enabled) return
+      const questions = parseAutoQuestions(request.input)
+      if (!questions) return
+      const { messages } = await sessionService.getSessionHistoryPage(sessionId, {
+        limit: 60,
+        projectContext: false,
+      }).catch(() => ({ messages: [] }))
+      const rootContext = autoQuestionConversationText(messages)
+      const agentContext = request.agentId
+        ? autoQuestionConversationText(
+            (await sessionService.getSubagentTranscript(sessionId, request.agentId, { bounded: true })
+              .catch(() => ({ messages: [] }))).messages.slice(-60),
+            true,
+          )
+        : ''
+      const conversationText = request.agentId
+        ? `${rootContext.slice(-2_000)}\n${agentContext.slice(-2_000)}`
+        : rootContext
+      if (Object.keys(getRecommendedQuestionAnswers(questions)).length !== questions.length &&
+        !(request.agentId ? agentContext.trim() : rootContext.trim())) return
+      const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+      const providerId = session.providerId !== undefined
+        ? session.providerId
+        : launchInfo?.runtimeProviderId ?? null
+      if (providerId === null && session.usesOfficialOAuth === false &&
+        Object.keys(getRecommendedQuestionAnswers(questions)).length !== questions.length) return
+      // The CLI keeps its launch-time provider configuration. Never send its
+      // conversation to a provider address or account edited while it waited.
+      if (providerId && session.providerConfigFingerprint &&
+        Object.keys(getRecommendedQuestionAnswers(questions)).length !== questions.length) {
+        const current = await this.providerService.getProvider(providerId)
+        if (JSON.stringify(current) !== session.providerConfigFingerprint) return
+      }
+      const answers = await decideAutoQuestionAnswers({
+        questions,
+        conversationText,
+        providerId,
+        sessionId,
+        signal: controller.signal,
+      })
+      if (!answers || request.autoAnswerCancelled || controller.signal.aborted || this.sessions.get(sessionId) !== session ||
+        session.pendingPermissionRequests.get(requestId) !== request) return
+      if (!normalizeAutoQuestionSettings(
+        (await new SettingsService().getUserSettings()).autoQuestion,
+      ).enabled || controller.signal.aborted) return
+
+      const metadata = request.input.metadata
+      const resolved = this.respondToPermission(sessionId, requestId, true, undefined, {
+        ...request.input,
+        answers,
+        metadata: {
+          ...(metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}),
+          autoAnswered: true,
+        },
+      }, undefined, undefined, true)
+      if (!resolved) return
+      session.autoResolvedRequestIds ??= new Set()
+      session.autoResolvedRequestIds.add(requestId)
+      this.notifyOutputCallbacks(sessionId, session.outputCallbacks, {
+        type: 'control_response',
+        response: { request_id: requestId, response: { behavior: 'allow' } },
+      })
+    } catch (error) {
+      console.warn(`[ConversationService] Automatic answer failed for ${sessionId}:`, error)
+    } finally {
+      if (request.autoAnswerAbortController === controller) {
+        request.autoAnswerAbortController = undefined
+      }
+    }
+  }
 
   private trackPendingPermissionModeChange(sessionId: string, mode: string, delta: 1 | -1): void {
     const sessionChanges = this.pendingPermissionModeChanges.get(sessionId) ?? new Map<string, number>()
@@ -308,6 +534,7 @@ export class ConversationService {
     options?: SessionStartOptions,
     repository?: PreparedSessionWorkspace['repository'],
   ): string[] {
+    const side = getSideChat(sessionId)
     const dangerousMode = process.env.CLAUDE_DANGEROUS_MODE === '1'
     const worktreeArgs =
       !shouldResume && repository?.worktree
@@ -332,7 +559,24 @@ export class ConversationService {
       // Desktop chat depends on partial assistant deltas; without this the
       // server only sees the completed assistant message at turn end.
       '--include-partial-messages',
-      ...(shouldResume ? ['--resume', sessionId] : ['--session-id', sessionId]),
+      ...(side ? ['--resume', side.resumePath, '--resume-session-at', side.resumeAt, '--fork-session', '--session-id', side.cliSessionId, '--no-session-persistence', '--append-system-prompt', SIDE_CHAT_BOUNDARY] : shouldResume ? ['--resume', sessionId] : ['--session-id', sessionId]),
+      ...(options?.teamWorker ? [
+        '--agent-id', `${options.teamWorker.name}@${options.teamWorker.teamName}`,
+        '--agent-name', options.teamWorker.name,
+        '--team-name', options.teamWorker.teamName,
+        '--parent-session-id', options.teamWorker.parentSessionId,
+        '--agents', JSON.stringify({ [options.teamWorker.name]: { ...options.teamWorker.agentDefinition, description: 'Approved team member', prompt: options.teamWorker.systemPrompt, model: options?.model, tools: options.teamWorker.tools } }),
+        '--agent', options.teamWorker.name,
+        ...(Array.isArray(options.teamWorker.agentDefinition?.disallowedTools) && options.teamWorker.agentDefinition.disallowedTools.length
+          ? ['--disallowedTools', options.teamWorker.agentDefinition.disallowedTools.join(',')]
+          : []),
+        ...(typeof options.teamWorker.agentDefinition?.maxTurns === 'number'
+          ? ['--max-turns', String(options.teamWorker.agentDefinition.maxTurns)]
+          : []),
+        ...(options.teamWorker.tools && !options.teamWorker.tools.includes('*')
+          ? ['--tools', [...new Set([...options.teamWorker.tools, 'SendMessage', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate'])].join(',')]
+          : []),
+      ] : []),
       ...worktreeArgs,
       '--replay-user-messages',
       ...this.getRuntimeArgs(options),
@@ -354,10 +598,14 @@ export class ConversationService {
     }
     if (this.sessions.has(sessionId)) return
 
-    const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
+    const side = getSideChat(sessionId)
+    if (isSideChatId(sessionId) && (!side || side.closed || side.started)) {
+      throw new ConversationStartupError('This temporary side chat has expired. Open a new side chat.', 'SESSION_DELETED')
+    }
+    const launchInfo = options?.teamWorker ? null : await sessionService.getSessionLaunchInfo(sessionId)
     const shouldResume = !!launchInfo && launchInfo.transcriptMessageCount > 0
     const shouldReplacePlaceholder =
-      !!launchInfo && launchInfo.transcriptMessageCount === 0
+      !side && !!launchInfo && launchInfo.transcriptMessageCount === 0
     const shouldCreateWorktree =
       !!launchInfo && shouldCreateWorktreeForSessionLaunch(launchInfo)
     const hasMaterializedWorktree =
@@ -378,7 +626,16 @@ export class ConversationService {
     }
 
     if (shouldReplacePlaceholder) {
-      await sessionService.clearSessionTranscript(sessionId, workDir)
+      // A collaboration session is named before its first turn starts. Replacing
+      // that empty launch placeholder must not erase the only title copy before
+      // the CLI creates the real worktree transcript. User-initiated /clear does
+      // not pass a title and therefore keeps its existing reset semantics.
+      await sessionService.clearSessionTranscript(
+        sessionId,
+        workDir,
+        undefined,
+        launchInfo.customTitle,
+      )
     }
 
     let launchWorkDir = workDir
@@ -439,18 +696,37 @@ export class ConversationService {
       firstTokenTimeoutDerived: false,
       streamMaxDurationDerived: false,
     }
+    const providerCapture: { fingerprint?: string } = {}
     const childEnv = await this.buildChildEnv(
       launchWorkDir,
       sdkUrl,
       options,
       networkSettings,
       networkRuntimeMetadata,
+      providerCapture,
     )
+    if (options?.teamWorker) {
+      delete childEnv.CLAUDE_CODE_SUBAGENT_MODEL
+      delete childEnv.CLAUDE_CODE_EFFORT_LEVEL
+      delete childEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
+      childEnv.CC_HAHA_TEAM_WORKER = '1'
+      childEnv.CC_HAHA_TEAM_WORKER_PRESET_TYPE = typeof options.teamWorker.agentDefinition?.agentType === 'string' ? options.teamWorker.agentDefinition.agentType : options.teamWorker.name
+      childEnv.CC_HAHA_TEAM_WORKER_PRESET_SOURCE = typeof options.teamWorker.agentDefinition?.source === 'string' ? options.teamWorker.agentDefinition.source : 'flagSettings'
+      childEnv.CC_HAHA_TEAM_WORKER_OMIT_CLAUDE_MD = options.teamWorker.agentDefinition?.omitClaudeMd === true ? '1' : '0'
+      childEnv.CC_HAHA_TRANSCRIPT_ENTRYPOINT = 'claude-desktop-team-worker'
+    }
+    if (side) {
+      delete childEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
+      delete childEnv.CC_HAHA_TRACE_API_CALLS
+      delete childEnv.CLAUDE_CODE_DIAGNOSTICS_FILE
+    }
+    if (side?.closed) throw new ConversationStartupError('This temporary side chat has expired. Open a new side chat.', 'SESSION_DELETED')
     const usesOfficialOAuth = this.shouldMarkManagedOAuth(options?.providerId)
 
     let proc: ReturnType<typeof Bun.spawn>
     try {
       proc = Bun.spawn(args, buildConversationCliSpawnOptions(launchWorkDir, childEnv))
+      if (side) side.started = true
     } catch (spawnErr) {
       void diagnosticsService.recordEvent({
         type: 'cli_spawn_failed',
@@ -479,9 +755,12 @@ export class ConversationService {
     })
     const session: SessionProcess = {
       proc,
+      teamWorker: options?.teamWorker,
       outputCallbacks: [],
       workDir: launchWorkDir,
       permissionMode: options?.permissionMode || 'default',
+      providerId: options?.providerId,
+      providerConfigFingerprint: providerCapture.fingerprint,
       networkRoutingFingerprint: networkRoutingFingerprint(networkSettings, childEnv),
       networkDerivedFirstTokenTimeout: networkRuntimeMetadata.firstTokenTimeoutDerived,
       networkDerivedStreamMaxDuration: networkRuntimeMetadata.streamMaxDurationDerived,
@@ -502,6 +781,7 @@ export class ConversationService {
       usesOfficialOAuth,
       officialOAuthToken: childEnv.CLAUDE_CODE_OAUTH_TOKEN ?? null,
       pendingPermissionRequests: new Map(),
+      autoResolvedRequestIds: new Set(),
       pendingControlRequests: new Map(),
     }
     this.sessions.set(sessionId, session)
@@ -530,6 +810,7 @@ export class ConversationService {
     if (startupExitCode !== null) {
       await this.waitForProcessOutputDrain(session)
       const startupError = this.buildStartupError(sessionId, startupExitCode)
+      this.clearSessionAutoAnswerWaits(session)
       this.sessions.delete(sessionId)
 
       if (this.clearStaleLock(sessionId)) {
@@ -568,9 +849,13 @@ export class ConversationService {
       options?.providerId !== undefined ||
       !!options?.model ||
       !!options?.effort
-    if (shouldReplacePlaceholder || !launchInfo || shouldPersistRuntimeMetadata) {
+    if (!options?.teamWorker && (shouldReplacePlaceholder || !launchInfo || shouldPersistRuntimeMetadata)) {
+      // system/init can move a newly-created session into its worktree while
+      // startup is still awaiting the SDK. Once that authoritative cwd is
+      // known, never recreate a late metadata placeholder in launchWorkDir.
+      const metadataWorkDir = this.getSessionWorkDir(sessionId) || launchWorkDir
       await sessionService.appendSessionMetadata(sessionId, {
-        workDir: launchWorkDir,
+        workDir: metadataWorkDir,
         customTitle: launchInfo?.customTitle ?? null,
         repository: launchRepository,
         permissionMode: options?.permissionMode || launchInfo?.permissionMode,
@@ -707,9 +992,14 @@ export class ConversationService {
     updatedInput?: Record<string, unknown>,
     denyMessage?: string,
     permissionUpdates?: unknown[],
+    automaticQuestionAnswer = false,
   ): boolean {
+    const child = [...this.sessions.entries()].find(([, entry]) => entry.teamWorker?.parentSessionId === sessionId && entry.pendingPermissionRequests.has(requestId))
+    if (child) return this.respondToPermission(child[0], requestId, allowed, rule, updatedInput, denyMessage, permissionUpdates, automaticQuestionAnswer)
     const session = this.sessions.get(sessionId)
+    if (session?.autoResolvedRequestIds?.has(requestId)) return false
     const pendingRequest = session?.pendingPermissionRequests.get(requestId)
+    this.clearAutoAnswerWait(pendingRequest)
     if (session) {
       session.pendingPermissionRequests.delete(requestId)
     }
@@ -722,7 +1012,9 @@ export class ConversationService {
         response: allowed
           ? {
               behavior: 'allow',
-              updatedInput: updatedInput ?? {},
+              updatedInput: pendingRequest?.toolName === 'AskUserQuestion' && !automaticQuestionAnswer
+                ? stripAutomaticQuestionMarker(updatedInput ?? {})
+                : updatedInput ?? {},
               ...(Array.isArray(permissionUpdates) && permissionUpdates.length > 0
                 ? { updatedPermissions: permissionUpdates }
                 : rule === 'always' && pendingRequest
@@ -822,6 +1114,28 @@ export class ConversationService {
     return true
   }
 
+  getPendingPermissionToolName(sessionId: string, requestId: string): string | undefined {
+    return this.sessions.get(sessionId)?.pendingPermissionRequests.get(requestId)?.toolName
+      ?? [...this.sessions.values()].find(child => child.teamWorker?.parentSessionId === sessionId && child.pendingPermissionRequests.has(requestId))?.pendingPermissionRequests.get(requestId)?.toolName
+  }
+
+  /**
+   * In-process main-loop model switch via the SDK set_model control request.
+   * Only the model name changes — provider env is fixed at process spawn, so
+   * this is only valid when the target model belongs to the session's current
+   * provider. The ack resolves before the CLI's next API request is built, so
+   * sending this while the CLI is blocked on a permission decision is
+   * race-free (unlike sending it after the allow response).
+   */
+  async setModel(sessionId: string, model: string, timeoutMs = 10_000): Promise<boolean> {
+    if (!this.sessions.has(sessionId)) return false
+    await this.requestControl(sessionId, {
+      subtype: 'set_model',
+      model,
+    }, timeoutMs)
+    return this.sessions.has(sessionId)
+  }
+
   setMaxThinkingTokens(sessionId: string, maxThinkingTokens: number | null): boolean {
     return this.sendSdkMessage(sessionId, {
       type: 'control_request',
@@ -844,11 +1158,27 @@ export class ConversationService {
   }
 
   sendInterrupt(sessionId: string): boolean {
+    for (const [childId, child] of this.sessions) {
+      if (child.teamWorker?.parentSessionId === sessionId) this.stopSession(childId)
+    }
+    const stop = (this.teamStopOperations.get(sessionId) ?? Promise.resolve()).then(async () => {
+      const runtime = await import('./teamPlanRuntime.js')
+      await runtime.stopTeamPlanRuntimesForParent(sessionId)
+    }).catch(error => {
+      console.error('[ConversationService] Failed to revoke interrupted team launch', error)
+    }).finally(() => {
+      if (this.teamStopOperations.get(sessionId) === stop) this.teamStopOperations.delete(sessionId)
+    })
+    this.teamStopOperations.set(sessionId, stop)
     return this.sendSdkMessage(sessionId, {
       type: 'control_request',
       request_id: crypto.randomUUID(),
       request: { subtype: 'interrupt' },
     })
+  }
+
+  async waitForTeamWorkersStopped(sessionId: string): Promise<void> {
+    await this.teamStopOperations.get(sessionId)
   }
 
   private isControlChannelReady(session: SessionProcess): boolean {
@@ -882,6 +1212,7 @@ export class ConversationService {
     request: Record<string, unknown>,
     timeoutMs = 10_000,
     signal?: AbortSignal,
+    canSend?: () => boolean,
   ): Promise<Record<string, unknown>> {
     if (signal?.aborted) {
       return Promise.reject(controlRequestAbortReason(signal))
@@ -952,7 +1283,7 @@ export class ConversationService {
         handleAbort()
         return
       }
-      const sent = this.sessions.get(sessionId) === session && this.sendSdkMessage(sessionId, {
+      const sent = (!canSend || canSend()) && this.sessions.get(sessionId) === session && this.sendSdkMessage(sessionId, {
         type: 'control_request',
         request_id: requestId,
         request,
@@ -987,12 +1318,14 @@ export class ConversationService {
     const session = this.sessions.get(sessionId)
     if (!session) return []
 
-    return Array.from(session.pendingPermissionRequests.entries()).map(([requestId, request]) => ({
+    return [...session.pendingPermissionRequests.entries(), ...[...this.sessions.values()].filter(child => child.teamWorker?.parentSessionId === sessionId).flatMap(child => [...child.pendingPermissionRequests.entries()])].map(([requestId, request]) => ({
       requestId,
+      ...(request.agentId ? { agentId: request.agentId } : {}),
       toolName: request.toolName,
       ...(request.toolUseId ? { toolUseId: request.toolUseId } : {}),
       input: request.input,
       ...(request.description ? { description: request.description } : {}),
+      ...(request.displayName ? { displayName: request.displayName } : {}),
     }))
   }
 
@@ -1117,39 +1450,59 @@ export class ConversationService {
           msg.request?.subtype === 'can_use_tool' &&
           typeof msg.request_id === 'string'
         ) {
-          session.pendingPermissionRequests.set(msg.request_id, {
+          const request: TrackedPermissionRequest = {
             toolName:
               typeof msg.request.tool_name === 'string'
                 ? msg.request.tool_name
                 : 'Unknown',
+            agentId: session.teamWorker ? `${session.teamWorker.name}@${session.teamWorker.teamName}` : typeof msg.request.agent_id === 'string' && msg.request.agent_id.trim()
+              ? msg.request.agent_id.trim()
+              : undefined,
             toolUseId:
               typeof msg.request.tool_use_id === 'string' && msg.request.tool_use_id.trim()
                 ? msg.request.tool_use_id
                 : undefined,
-            input:
+            input: stripAutomaticQuestionMarker(
               msg.request.input && typeof msg.request.input === 'object'
                 ? (msg.request.input as Record<string, unknown>)
                 : {},
+            ),
             description:
               typeof msg.request.description === 'string' && msg.request.description.trim()
                 ? msg.request.description
                 : undefined,
+            displayName: session.teamWorker ? session.teamWorker.name :
+              typeof msg.request.display_name === 'string' && msg.request.display_name.trim()
+                ? msg.request.display_name.trim()
+                : undefined,
             permissionSuggestions: Array.isArray(msg.request.permission_suggestions)
               ? msg.request.permission_suggestions
               : undefined,
-          })
+            autoAnswerCreatedAt: Date.now(),
+          }
+          this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.request_id))
+          session.pendingPermissionRequests.set(msg.request_id, request)
+          void this.scheduleAutoQuestionAnswer(sessionId, session, msg.request_id, request)
         }
         if (
           (msg?.type === 'control_cancel_request' || msg?.type === 'control_response') &&
           typeof msg.request_id === 'string'
         ) {
+          this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.request_id))
           session.pendingPermissionRequests.delete(msg.request_id)
         }
         if (
           msg?.type === 'control_response' &&
           typeof msg.response?.request_id === 'string'
         ) {
+          this.clearAutoAnswerWait(session.pendingPermissionRequests.get(msg.response.request_id))
           session.pendingPermissionRequests.delete(msg.response.request_id)
+        }
+        if (session.teamWorker && msg?.type === 'control_request' && msg.request?.subtype === 'can_use_tool') {
+          const parent = this.sessions.get(session.teamWorker.parentSessionId)
+          if (parent) this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, {
+            ...msg, request: { ...msg.request, agent_id: `${session.teamWorker.name}@${session.teamWorker.teamName}`, display_name: session.teamWorker.name },
+          })
         }
         this.notifyOutputCallbacks(sessionId, session.outputCallbacks, msg)
       } catch {
@@ -1271,6 +1624,14 @@ export class ConversationService {
     session: SessionProcess,
     reason = new Error('CLI session stopped'),
   ): void {
+    if (session.teamWorker) {
+      const parent = this.sessions.get(session.teamWorker.parentSessionId)
+      if (parent) {
+        for (const requestId of session.pendingPermissionRequests.keys()) {
+          this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, { type: 'control_cancel_request', request_id: requestId })
+        }
+      }
+    }
     const pending = session.pendingControlRequests
     if (!pending || pending.size === 0) return
     for (const cancel of [...pending.values()]) {
@@ -1280,10 +1641,14 @@ export class ConversationService {
   }
 
   stopSession(sessionId: string): void {
+    for (const [childId, child] of this.sessions) {
+      if (child.teamWorker?.parentSessionId === sessionId) this.stopSession(childId)
+    }
     const session = this.sessions.get(sessionId)
     if (!session) return
 
     this.cancelPendingControlRequests(session)
+    this.clearSessionAutoAnswerWaits(session)
     this.sessions.delete(sessionId)
     this.killProcess(sessionId, session)
   }
@@ -1292,10 +1657,14 @@ export class ConversationService {
     sessionId: string,
     timeoutMs = DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
   ): Promise<void> {
+    for (const [childId, child] of this.sessions) {
+      if (child.teamWorker?.parentSessionId === sessionId) await this.stopSessionAndWait(childId, timeoutMs)
+    }
     const session = this.sessions.get(sessionId)
     if (!session) return
 
     this.cancelPendingControlRequests(session)
+    this.clearSessionAutoAnswerWaits(session)
     this.sessions.delete(sessionId)
     await this.stopProcessAndWait(sessionId, session, timeoutMs)
   }
@@ -1361,6 +1730,7 @@ export class ConversationService {
   }
 
   markSessionDeleted(sessionId: string): void {
+    for (const childId of closeSideChatsForParent(sessionId)) this.stopSession(childId)
     this.deletedSessions.add(sessionId)
     this.stopSession(sessionId)
   }
@@ -1468,6 +1838,9 @@ export class ConversationService {
 
     const activeSession = this.sessions.get(sessionId)
     if (activeSession?.proc === proc) {
+      for (const [childId, child] of this.sessions) {
+        if (child.teamWorker?.parentSessionId === sessionId) this.stopSession(childId)
+      }
       this.cancelPendingControlRequests(
         activeSession,
         new Error('CLI session exited before the control request completed'),
@@ -1492,6 +1865,7 @@ export class ConversationService {
         },
       })
       const callbacks = [...activeSession.outputCallbacks]
+      this.clearSessionAutoAnswerWaits(activeSession)
       this.sessions.delete(sessionId)
       this.notifyOutputCallbacks(sessionId, callbacks, {
         type: 'result',
@@ -1552,6 +1926,7 @@ export class ConversationService {
       firstTokenTimeoutDerived: boolean
       streamMaxDurationDerived: boolean
     },
+    providerCapture?: { fingerprint?: string },
   ): Promise<Record<string, string>> {
     // Provider isolation: when Desktop has its own provider config/index,
     // strip inherited provider env vars so the child CLI reads fresh values
@@ -1600,6 +1975,8 @@ export class ConversationService {
       networkRuntimeMetadata.streamMaxDurationDerived =
         !cleanEnv.CLAUDE_STREAM_MAX_DURATION_MS
     }
+    delete cleanEnv.CC_HAHA_SESSION_COLLABORATION_TOKEN
+    delete cleanEnv.CC_HAHA_SESSION_ID
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
     if (options?.resumeInterruptedTurn === false) {
       delete cleanEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
@@ -1627,6 +2004,9 @@ export class ConversationService {
       typeof options?.providerId === 'string'
         ? await this.providerService.getProvider(options.providerId)
         : null
+    if (explicitProvider && providerCapture) {
+      providerCapture.fingerprint = JSON.stringify(explicitProvider)
+    }
     const explicitProviderEnv = explicitProvider
       ? await this.providerService.getProviderRuntimeEnv(explicitProvider.id)
       : null
@@ -1667,6 +2047,8 @@ export class ConversationService {
       CLAUDE_CODE_ENABLE_TASKS: '1',
       // Resolve the same preference shown in General before launching the CLI.
       CC_HAHA_AGENT_TEAMS_ENABLED: agentTeamsEnabled ? '1' : '0',
+      CC_HAHA_TEAM_REVIEW_REQUIRED: sdkUrl ? '1' : cleanEnv.CC_HAHA_TEAM_REVIEW_REQUIRED || '0',
+      CC_HAHA_TEAM_LEADER_RUNTIME: JSON.stringify({ providerId: options?.providerId ?? 'claude-official', modelId: options?.model || explicitProviderEnv?.ANTHROPIC_MODEL || cleanEnv.ANTHROPIC_MODEL || 'default', ...(options?.effort ? { effortLevel: options.effort } : {}) }),
       CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING: '1',
       // Desktop must fail stuck provider streams instead of leaving the UI running forever.
       CLAUDE_ENABLE_STREAM_WATCHDOG: cleanEnv.CLAUDE_ENABLE_STREAM_WATCHDOG || '1',
@@ -1738,7 +2120,11 @@ export class ConversationService {
           }
         : {}),
       ...(desktopServerUrl
-        ? { CC_HAHA_DESKTOP_SERVER_URL: desktopServerUrl }
+        ? {
+            CC_HAHA_DESKTOP_SERVER_URL: desktopServerUrl,
+            CC_HAHA_SESSION_COLLABORATION_TOKEN: new URL(sdkUrl!).searchParams.get('token') ?? '',
+            CC_HAHA_SESSION_ID: new URL(sdkUrl!).pathname.split('/').pop() ?? '',
+          }
         : {}),
       ...(sdkUrl
         ? {

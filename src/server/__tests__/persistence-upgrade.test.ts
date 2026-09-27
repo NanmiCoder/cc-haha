@@ -218,6 +218,7 @@ describe('persistent storage upgrade migrations', () => {
           },
         }],
         providerOrder: ['provider-current', 'claude-official', 'openai-official', 'grok-official'],
+        officialProviderModels: {},
       }, null, 2),
       'utf-8',
     )
@@ -455,6 +456,7 @@ describe('persistent storage upgrade migrations', () => {
     expect(migrated.providers[0].futureProvider).toBe('keep')
     expect(migrated.futureRoot).toEqual({ keep: true })
     expect(migrated.providers[1].requestCompatibility.futureParameter).toBe('keep')
+    expect(migrated.officialProviderModels).toEqual({})
     const backups = (await fs.readdir(dir)).filter(name => name.startsWith('providers.json.bak-before-migration-'))
     expect(backups).toHaveLength(1)
     expect(JSON.parse(await fs.readFile(path.join(dir, backups[0]!), 'utf8'))).toEqual(legacy)
@@ -465,5 +467,41 @@ describe('persistent storage upgrade migrations', () => {
     const rewritten = JSON.parse(await fs.readFile(file, 'utf8'))
     expect(rewritten.providers[1].requestCompatibility.futureParameter).toBe('keep')
     expect(rewritten.providers[0].futureProvider).toBe('keep')
+  })
+
+  test('preserves valid OAuth model mappings and unknown future entries while dropping malformed known entries', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    await fs.writeFile(file, JSON.stringify({
+      schemaVersion: 5,
+      activeId: 'openai-official',
+      providers: [],
+      providerOrder: ['openai-official'],
+      officialProviderModels: {
+        'openai-official': {
+          main: 'gpt-6-astra',
+          haiku: 'gpt-6-luna',
+          sonnet: 'gpt-6-sol',
+          opus: 'gpt-6-astra',
+        },
+        'grok-official': { main: 42 },
+        'future-official': { main: 'future-model' },
+      },
+    }))
+
+    const report = await ensurePersistentStorageUpgraded()
+    expect(report.failures).toEqual([])
+    const migrated = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(migrated.schemaVersion).toBe(CURRENT_PROVIDER_INDEX_SCHEMA_VERSION)
+    expect(migrated.officialProviderModels).toEqual({
+      'openai-official': {
+        main: 'gpt-6-astra',
+        haiku: 'gpt-6-luna',
+        sonnet: 'gpt-6-sol',
+        opus: 'gpt-6-astra',
+      },
+      'future-official': { main: 'future-model' },
+    })
   })
 })

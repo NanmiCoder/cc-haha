@@ -66,7 +66,6 @@ vi.mock('../../i18n', () => ({
       'sidebar.noMatching': 'No matching sessions',
       'sidebar.sessionListFailed': 'Session list failed',
       'sidebar.refreshSessions': 'Refresh sessions',
-      'sidebar.indexDegraded': 'Using standard history loading',
       'search.global.trigger': 'Search chats',
       'sidebar.projects': 'Projects',
       'sidebar.projectMenu': 'Project menu',
@@ -464,6 +463,7 @@ describe('Sidebar', () => {
     useSessionStore.setState({
       sessions: [],
       projectHistory: {},
+      projectSessionTotals: {},
       recentSessionIds: new Set(),
       recentProjectBoundaries: {},
       historicalSessionIds: new Set(),
@@ -773,6 +773,37 @@ describe('Sidebar', () => {
 
     expect(screen.getByTestId('sidebar-project-session-list-workspace-alpha')).toHaveClass('max-h-[420px]', 'overflow-y-auto')
     expect(screen.getByRole('button', { name: 'Collapse display' })).toHaveAttribute('aria-expanded', 'true')
+  })
+
+  it('offers automatic history expansion when the preview contains exactly six rows', async () => {
+    const base = new Date('2026-05-15T10:00:00.000Z').getTime()
+    useSessionStore.setState({
+      sessions: Array.from({ length: 6 }, (_, index) => (
+        makeSession(`alpha-${index + 1}`, `Alpha ${index + 1}`, '/workspace/alpha', new Date(base - index * 1000).toISOString())
+      )),
+      projectSessionTotals: { '/workspace/alpha': 42 },
+    })
+
+    render(<Sidebar />)
+
+    const expandButton = screen.getByRole('button', { name: 'Expand display' })
+    const scroller = screen.getByTestId('sidebar-project-session-list-workspace-alpha')
+    const outer = screen.getByTestId('sidebar-session-scroll-area')
+    outer.getBoundingClientRect = () => ({ top: 0, bottom: 900 } as DOMRect)
+    scroller.getBoundingClientRect = () => ({ top: 100, bottom: 400 } as DOMRect)
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, value: 420 },
+      scrollHeight: { configurable: true, value: 300 },
+    })
+    fireEvent.click(expandButton)
+
+    expect(scroller).toHaveClass('max-h-[420px]', 'overflow-y-auto')
+    await waitFor(() => {
+      expect(sessionsApiMock.listProjectHistory).toHaveBeenCalledWith(
+        expect.objectContaining({ projectRoot: '/workspace/alpha', limit: 50 }),
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      )
+    })
   })
 
   it('scrolls older sessions into their existing project and releases them on collapse', async () => {
@@ -1794,6 +1825,31 @@ describe('Sidebar', () => {
     expect(desktopUiPreferencesApiMock.updateSidebarPreferences).not.toHaveBeenCalled()
   })
 
+  it('starts a new session in the project root when the active session ran in an isolated worktree', async () => {
+    createSession.mockResolvedValue('new-from-worktree')
+    const now = new Date().toISOString()
+    useSessionStore.setState({
+      sessions: [{
+        ...makeSession('worktree-active', 'Worktree Session', '/workspace/repo/.claude/worktrees/desktop-main-12345678', now),
+        projectRoot: '/workspace/repo',
+      }],
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId: 'worktree-active', title: 'Worktree Session', type: 'session', status: 'idle' }],
+      activeTabId: 'worktree-active',
+    })
+
+    render(<Sidebar />)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
+    })
+
+    await waitFor(() => {
+      expect(createSession).toHaveBeenCalledWith('/workspace/repo')
+    })
+  })
+
   it('right-aligns running status, worktree marker, and update time on session rows', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-05-19T12:00:00.000Z'))
@@ -2188,7 +2244,7 @@ describe('Sidebar', () => {
     expect(screen.getByRole('button', { name: /Indexed row/ })).toBeInTheDocument()
     expect(screen.queryByTestId('sidebar-index-progress')).not.toBeInTheDocument()
     expect(screen.queryByText(/2\s*\/\s*10/)).not.toBeInTheDocument()
-    expect(screen.getByRole('status')).toBeEmptyDOMElement()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it.each(['ready', 'off'] as const)('hides visible index status when state is %s', (state) => {
@@ -2233,33 +2289,35 @@ describe('Sidebar', () => {
     render(<Sidebar />)
 
     expect(screen.getByRole('button', { name: /Fallback row/ })).toBeInTheDocument()
-    expect(screen.getByTestId('sidebar-index-degraded')).toHaveTextContent('Using standard history loading')
+    expect(screen.queryByTestId('sidebar-index-degraded')).not.toBeInTheDocument()
+    expect(screen.queryByText('Using standard history loading')).not.toBeInTheDocument()
     expect(screen.queryByText('Session list failed')).not.toBeInTheDocument()
     expect(addToast).not.toHaveBeenCalled()
   })
 
-  it('announces a session list failure and offers a retry', () => {
-    useSessionStore.setState({ sessions: [], isLoading: false, error: 'upstream exploded' })
+  it('keeps a failed refresh off the sidebar so polling cannot flash a banner', () => {
+    useSessionStore.setState({
+      sessions: [makeSession('kept-row', 'Kept row', '/workspace/alpha', '2026-07-15T00:00:00.000Z')],
+      isLoading: false,
+      error: 'upstream exploded',
+    })
 
     render(<Sidebar />)
 
-    const alert = screen.getByRole('alert')
-    expect(alert).toHaveTextContent('Session list failed')
-    expect(alert).toHaveTextContent('upstream exploded')
-
-    fetchSessions.mockClear()
-    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
-    expect(fetchSessions).toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: /Kept row/ })).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText('Session list failed')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
   })
 
-  it('does not claim there are no sessions while the list is failing', () => {
+  it('does not replace an empty list with a failure banner', () => {
     useSessionStore.setState({ sessions: [], isLoading: false, error: 'upstream exploded' })
 
     render(<Sidebar />)
 
-    // Showing "no sessions" next to the failure reads as "the list is empty",
-    // which is a different fact from "we could not load the list".
-    expect(screen.queryByText('No sessions')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByText('Session list failed')).not.toBeInTheDocument()
+    expect(screen.getByText('No sessions')).toBeInTheDocument()
   })
 
   it('says there are no sessions once the list loads empty', () => {
@@ -2440,52 +2498,31 @@ describe('Sidebar', () => {
     }
   })
 
-  // The live region exists for the one transition a user can perceive: history
-  // is being served the slow way. Building/ready/off are silent there too, so a
+  // No index state is announced. Even the degraded fallback only swaps the
+  // source the list is read from — the rows themselves do not change — so a
   // screen reader is not told about work that needs no reaction.
-  it.each(['building', 'ready', 'off'] as const)('stays silent in the live region while %s', (state) => {
+  it.each(['building', 'ready', 'off', 'degraded'] as const)('stays silent while the index is %s', (state) => {
     useSessionStore.setState({
       sessions: [makeSession('live-row', 'Live row', '/workspace/alpha', '2026-07-15T00:00:00.000Z')],
       indexStatus: {
         mode: state === 'off' ? 'off' : 'on',
         state,
         discovered: 10,
-        indexed: state === 'building' ? 2 : 10,
-        degradedSources: 0,
+        indexed: state === 'ready' ? 10 : 2,
+        degradedSources: state === 'degraded' ? 1 : 0,
         databaseBytes: 4096,
         walBytes: 0,
         lastUpdatedAt: '2026-07-15T00:00:00.000Z',
-        lastErrorCode: null,
+        lastErrorCode: state === 'degraded' ? 'source_unreadable' : null,
       },
     })
 
     render(<Sidebar />)
 
-    expect(screen.getByRole('status')).toBeEmptyDOMElement()
-  })
-
-  it('announces the degraded fallback in the live region', () => {
-    useSessionStore.setState({
-      sessions: [makeSession('live-row', 'Live row', '/workspace/alpha', '2026-07-15T00:00:00.000Z')],
-      indexStatus: {
-        mode: 'on',
-        state: 'degraded',
-        discovered: 10,
-        indexed: 2,
-        degradedSources: 1,
-        databaseBytes: 4096,
-        walBytes: 0,
-        lastUpdatedAt: '2026-07-15T00:00:00.000Z',
-        lastErrorCode: 'source_unreadable',
-      },
-    })
-
-    render(<Sidebar />)
-
-    const liveRegion = screen.getByRole('status')
-    expect(liveRegion).toHaveTextContent('Using standard history loading')
-    expect(liveRegion).not.toHaveTextContent('2/10')
-    expect(screen.getByTestId('sidebar-index-degraded')).toHaveAttribute('aria-hidden', 'true')
+    expect(screen.getByRole('button', { name: /Live row/ })).toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-index-degraded')).not.toBeInTheDocument()
+    expect(screen.queryByText('Using standard history loading')).not.toBeInTheDocument()
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
   it('refreshes sessions manually and through low-frequency visible polling', async () => {

@@ -179,6 +179,31 @@ describe('Plugins API', () => {
     expect(typeof body.summary.errors).toBe('number')
   })
 
+  it('a disabled settings entry for a missing plugin is inert, not a load error', async () => {
+    const marketplaceRoot = path.join(tmpDir, 'marketplace-root')
+    const pluginsDir = path.join(tmpDir, 'plugins')
+    const marketplaceFile = path.join(marketplaceRoot, '.claude-plugin', 'marketplace.json')
+    await fs.mkdir(path.dirname(marketplaceFile), { recursive: true })
+    await fs.mkdir(pluginsDir, { recursive: true })
+    await fs.writeFile(marketplaceFile, JSON.stringify({ name: 'test-market', owner: { name: 'Test' }, plugins: [] }), 'utf-8')
+    await fs.writeFile(
+      path.join(pluginsDir, 'known_marketplaces.json'),
+      JSON.stringify({ 'test-market': { source: { source: 'directory', path: marketplaceRoot }, installLocation: marketplaceRoot, lastUpdated: new Date(0).toISOString() } }),
+      'utf-8',
+    )
+    // Tombstone left behind by a failed install or uninstall: explicitly
+    // disabled, but the plugin no longer exists in the marketplace.
+    await fs.writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ enabledPlugins: { 'gone@test-market': false, 'kept@test-market': true } }),
+      'utf-8',
+    )
+
+    const result = await loadAllPluginsCacheOnly()
+    expect(result.errors.some(error => error.source === 'gone@test-market')).toBe(false)
+    expect(result.errors.some(error => error.source === 'kept@test-market')).toBe(true)
+  })
+
   it('POST /api/plugins/reload hot-reloads an active CLI session and updates slash commands', async () => {
     const controlRequests: Array<{ sessionId: string; request: Record<string, unknown> }> = []
     conversationService.hasSession = ((sessionId: string) => sessionId === 'session-plugins') as typeof conversationService.hasSession

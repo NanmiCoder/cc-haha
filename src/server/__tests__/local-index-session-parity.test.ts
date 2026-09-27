@@ -40,6 +40,7 @@ class FakeLocalIndexGateway implements LocalIndexGateway {
   buildOnList = false
   listCalls = 0
   findCalls = 0
+  titleWrites: Array<{ sessionId: string; title: string }> = []
   lastListOptions: { project?: string; limit?: number; offset?: number } | undefined
 
   async start(): Promise<void> {}
@@ -63,6 +64,22 @@ class FakeLocalIndexGateway implements LocalIndexGateway {
   findSessionFiles(): SessionFileMatch[] {
     this.findCalls += 1
     return this.matches
+  }
+  getSession(sessionId: string): IndexedSessionRow | null {
+    return this.page.sessions.find(session => session.id === sessionId) ?? null
+  }
+  updateSessionTitle(sessionId: string, title: string): boolean {
+    this.titleWrites.push({ sessionId, title })
+    let changed = false
+    this.page = {
+      ...this.page,
+      sessions: this.page.sessions.map(session => {
+        if (session.id !== sessionId) return session
+        changed = true
+        return { ...session, title }
+      }),
+    }
+    return changed
   }
 
   setReady(mode: LocalIndexMode = 'on'): void {
@@ -198,7 +215,7 @@ describe('SessionService local-index routing parity', () => {
     const result = await service.listSessions()
     expect(gateway.listCalls).toBe(1)
     expect(result.total).toBe(2)
-    expect(result.sessions.map((session) => session.title)).toEqual(['File A', 'File B'])
+    expect(result.sessions.map((session) => session.title)).toEqual(['Indexed A'])
   })
 
   it('stats every indexed find match, drops stale paths, and sorts by actual mtime', async () => {
@@ -502,17 +519,17 @@ describe('SessionService local-index routing parity', () => {
     gateway.status = { ...gateway.status, mode: 'on', state: 'building' }
     const service = new SessionService(gateway)
 
-    expect((await service.listSessions()).sessions[0]?.title).toBe('File fallback')
-    expect(gateway.listCalls).toBe(0)
+    expect((await service.listSessions()).sessions).toEqual([])
+    expect(gateway.listCalls).toBe(1)
 
     gateway.ready = true
-    expect((await service.listSessions()).sessions[0]?.title).toBe('File fallback')
-    expect(gateway.listCalls).toBe(1)
+    expect((await service.listSessions()).sessions).toEqual([])
+    expect(gateway.listCalls).toBe(2)
 
     gateway.status = { ...gateway.status, state: 'ready' }
     gateway.degradeOnList = true
     expect((await service.listSessions()).sessions[0]?.title).toBe('File fallback')
-    expect(gateway.listCalls).toBe(2)
+    expect(gateway.listCalls).toBe(3)
   })
 
   it('keeps list and find on files after mutation until the status marker changes', async () => {
@@ -654,6 +671,42 @@ describe('SessionService local-index routing parity', () => {
     }
     expect((await reader.listSessions()).sessions[0]?.title).toBe('Reconciled indexed title')
     expect(gateway.listCalls).toBe(2)
+  })
+
+  it('persists a collaboration metadata title into the index before a cold restart', async () => {
+    const projectDir = '-tmp-project'
+    const filePath = await writeSession(
+      projectDir,
+      SESSION_A,
+      'Initial child title',
+      '2026-07-15T00:00:00.000Z',
+    )
+    const gateway = new FakeLocalIndexGateway()
+    gateway.setReady()
+    gateway.page = {
+      sessions: [indexedRow(filePath, projectDir, SESSION_A, 'Initial child title')],
+      total: 1,
+    }
+    gateway.matches = [{ filePath, projectDir }]
+    const writer = new SessionService(gateway)
+
+    await writer.appendSessionMetadata(SESSION_A, {
+      workDir: configDir,
+      customTitle: '最终子会话标题',
+    })
+
+    expect(gateway.titleWrites).toContainEqual({
+      sessionId: SESSION_A,
+      title: '最终子会话标题',
+    })
+    const restartedGateway = new FakeLocalIndexGateway()
+    restartedGateway.setReady()
+    restartedGateway.page = {
+      sessions: gateway.page.sessions.map(session => ({ ...session })),
+      total: gateway.page.total,
+    }
+    const restarted = new SessionService(restartedGateway)
+    expect((await restarted.listSessions()).sessions[0]?.title).toBe('最终子会话标题')
   })
 
   it('isolates shared mutation epochs between different gateways', async () => {
@@ -968,7 +1021,7 @@ describe('SessionService local-index routing parity', () => {
     expect((await restarted.listSessions()).sessions.map(session => session.title)).toEqual(['File A'])
 
     gateway.page = { sessions: [], total: 0 }
-    expect((await restarted.listSessions()).sessions.map(session => session.title)).toEqual(['File A', 'File B'])
+    expect((await restarted.listSessions()).sessions).toEqual([])
 
     gateway.status = {
       ...gateway.status,
@@ -984,5 +1037,40 @@ describe('SessionService local-index routing parity', () => {
       total: 2,
     }
     expect((await restarted.listSessions()).sessions.map(session => session.title)).toEqual(['File A', 'File B'])
+  })
+
+  it('does not scan JSONL bodies for an empty building page', async () => {
+    await writeSession(
+      '-tmp-project',
+      SESSION_A,
+      'File fallback',
+      '2026-07-15T00:00:00.000Z',
+    )
+    const gateway = new FakeLocalIndexGateway()
+    gateway.mode = 'on'
+    gateway.ready = true
+    gateway.status = {
+      ...gateway.status,
+      mode: 'on',
+      state: 'building',
+      discovered: 40,
+      indexed: 0,
+    }
+    const service = new SessionService(gateway)
+    const internals = service as unknown as {
+      scanSessionListSummary: (...args: unknown[]) => Promise<unknown>
+    }
+    let scans = 0
+    const original = internals.scanSessionListSummary.bind(service)
+    internals.scanSessionListSummary = async (...args) => {
+      scans += 1
+      return original(...args)
+    }
+
+    const result = await service.listSessions({ limit: 400 })
+
+    expect(result).toEqual({ sessions: [], total: 0 })
+    expect(gateway.listCalls).toBe(1)
+    expect(scans).toBe(0)
   })
 })

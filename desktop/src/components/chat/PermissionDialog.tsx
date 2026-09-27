@@ -1,10 +1,17 @@
 import { useState } from 'react'
 import { getPendingPermission, useChatStore } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
+import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
+import { useSettingsStore } from '../../stores/settingsStore'
+import { useProviderStore } from '../../stores/providerStore'
 import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
 import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { ModelSelector } from '../controls/ModelSelector'
+import { resolveDefaultRuntimeSelection } from '../../lib/runtimeSelection'
+import type { RuntimeSelection } from '../../types/runtime'
+import type { PermissionUpdate } from '../../types/chat'
 import { DiffViewer } from './DiffViewer'
 import {
   PlanPreviewCard,
@@ -21,6 +28,7 @@ type Props = {
   toolName: string
   input: unknown
   description?: string
+  displayName?: string
 }
 
 /**
@@ -80,19 +88,27 @@ function extractToolDetails(toolName: string, input: unknown, t: (key: Translati
   }
 }
 
-function getPermissionTitle(toolName: string, input: unknown, t: (key: TranslationKey, params?: Record<string, string | number>) => string) {
+function getPermissionTitle(
+  toolName: string,
+  input: unknown,
+  t: (key: TranslationKey, params?: Record<string, string | number>) => string,
+  displayName?: string,
+) {
   const obj = (input && typeof input === 'object') ? input as Record<string, unknown> : {}
   const filePath = typeof obj.file_path === 'string' ? obj.file_path : ''
   const fileName = filePath ? filePath.split('/').pop() || filePath : ''
+  const actor = displayName || 'Claude'
 
   switch (toolName) {
     case 'Edit':
     case 'Write':
-      return fileName ? t('permission.allowEditFile', { toolName, fileName }) : t('permission.allowEditFileGeneric', { toolName: toolName.toLowerCase() })
+      return fileName
+        ? t('permission.allowEditFile', { actor, toolName, fileName })
+        : t('permission.allowEditFileGeneric', { actor, toolName: toolName.toLowerCase() })
     case 'Bash':
-      return t('permission.allowBash')
+      return t('permission.allowBash', { actor })
     default:
-      return t('permission.allowTool', { toolName })
+      return t('permission.allowTool', { actor, toolName })
   }
 }
 
@@ -121,7 +137,7 @@ function renderPermissionPreview(toolName: string, input: unknown) {
   return null
 }
 
-export function PermissionDialog({ sessionId, requestId, toolName, input, description }: Props) {
+export function PermissionDialog({ sessionId, requestId, toolName, input, description, displayName }: Props) {
   const { respondToPermission } = useChatStore()
   const activeTabId = useTabStore((s) => s.activeTabId)
   const targetSessionId = sessionId ?? activeTabId
@@ -148,7 +164,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
   const details = extractToolDetails(toolName, input, t)
   const rawInput = typeof input === 'string' ? input : JSON.stringify(input, null, 2)
   const preview = renderPermissionPreview(toolName, input)
-  const title = getPermissionTitle(toolName, input, t)
+  const title = getPermissionTitle(toolName, input, t, displayName)
   const allowRawToggle = !preview
   const permissionContext = (details.primary || description || toolName).slice(0, 160)
 
@@ -318,19 +334,67 @@ function ExitPlanModePermissionDialog({
   const { respondToPermission } = useChatStore()
   const t = useTranslation()
   const [feedback, setFeedback] = useState('')
+  // null = execute on the planning model (unchanged); non-null = the staged
+  // execution-model switch sent with the approval as runtimeOverride.
+  const [executionRuntime, setExecutionRuntime] = useState<RuntimeSelection | null>(null)
+  const sessionRuntimeSelection = useSessionRuntimeStore((state) =>
+    sessionId ? state.selections[sessionId] : undefined,
+  )
+  const providers = useProviderStore((state) => state.providers)
+  const activeProviderId = useProviderStore((state) => state.activeId)
+  const activeProviderName = useSettingsStore((state) => state.activeProviderName)
+  const currentModel = useSettingsStore((state) => state.currentModel)
+  const currentRuntime = sessionRuntimeSelection ?? resolveDefaultRuntimeSelection(
+    activeProviderId,
+    activeProviderName,
+    providers,
+    currentModel?.id,
+  )
   const preview = extractPlanPreview(input)
   const permissionUpdates = buildPromptPermissionUpdates(preview.allowedPrompts)
   const trimmedFeedback = feedback.trim()
+
+  // The chip edits no effort level (the controlled selector hides that popover
+  // without a runtimeKey), so any effortLevel on the selection is a
+  // normalization artifact — strip it and let the server apply the target
+  // provider's default instead of forcing the restart path.
+  const handleExecutionRuntimeChange = (selection: RuntimeSelection) => {
+    const unchanged =
+      selection.providerId === currentRuntime.providerId &&
+      selection.modelId === currentRuntime.modelId
+    setExecutionRuntime(unchanged ? null : selection)
+  }
+
+  const approve = (options?: { permissionUpdates?: PermissionUpdate[] }) => {
+    if (!sessionId) return
+    if (executionRuntime) {
+      // Local echo so the composer pill reflects the switch immediately; the
+      // server already received the override inside the permission_response,
+      // so deliberately do NOT also send set_runtime_config.
+      useSessionRuntimeStore.getState().setSelection(sessionId, {
+        providerId: executionRuntime.providerId,
+        modelId: executionRuntime.modelId,
+      })
+    }
+    respondToPermission(sessionId, requestId, true, {
+      ...options,
+      ...(executionRuntime
+        ? {
+            runtimeOverride: {
+              providerId: executionRuntime.providerId,
+              modelId: executionRuntime.modelId,
+            },
+          }
+        : {}),
+    })
+  }
 
   // Without an explicit mode the CLI resumes with whatever the session had
   // before planning, falling back to `default` when there was nothing to
   // restore (a session launched in plan mode) — which is why implementation
   // used to start by asking for every tool. Approving with a mode pins it.
   const approveWithMode = (mode: PlanApprovalMode) => {
-    if (!sessionId) return
-    respondToPermission(sessionId, requestId, true, {
-      permissionUpdates: buildPlanApprovalPermissionUpdates(mode, preview.allowedPrompts),
-    })
+    approve({ permissionUpdates: buildPlanApprovalPermissionUpdates(mode, preview.allowedPrompts) })
   }
 
   return (
@@ -393,18 +457,48 @@ function ExitPlanModePermissionDialog({
       </div>
 
       {isPending ? (
+        <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-container)] px-4 py-3">
+          <div className="flex items-center justify-between gap-3">
+            <span className="shrink-0 text-xs font-medium text-[var(--color-text-secondary)]">
+              {t('permission.planExecutionModel')}
+            </span>
+            <div
+              className={`flex min-w-0 items-center gap-1.5 rounded-[var(--radius-md)] px-2 py-1 ${
+                executionRuntime
+                  ? 'border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)]'
+                  : ''
+              }`}
+              data-testid="plan-execution-model"
+            >
+              <ModelSelector
+                compact
+                ariaLabel={t('permission.planExecutionModel')}
+                runtimeSelection={executionRuntime ?? currentRuntime}
+                onRuntimeSelectionChange={handleExecutionRuntimeChange}
+              />
+              {executionRuntime ? (
+                <span className="shrink-0 text-[10px] font-medium text-[var(--color-brand)]">
+                  {t('permission.planExecutionModelPending')}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {isPending ? (
         <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
           <Button
             variant="primary"
-            size="sm"
-            onClick={() => sessionId && respondToPermission(sessionId, requestId, true, permissionUpdates.length ? { permissionUpdates } : undefined)}
+            size="base"
+            onClick={() => approve(permissionUpdates.length ? { permissionUpdates } : undefined)}
             icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">check</span>}
           >
             {t('permission.planApprove')}
           </Button>
           <Button
             variant="secondary"
-            size="sm"
+            size="base"
             onClick={() => approveWithMode('acceptEdits')}
             icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">bolt</span>}
           >
@@ -412,7 +506,7 @@ function ExitPlanModePermissionDialog({
           </Button>
           <Button
             variant="danger-outline"
-            size="sm"
+            size="base"
             onClick={() => approveWithMode('bypassPermissions')}
             icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">gavel</span>}
           >
@@ -421,7 +515,7 @@ function ExitPlanModePermissionDialog({
           <div className="flex-1" />
           <Button
             variant="ghost"
-            size="sm"
+            size="base"
             onClick={() => sessionId && respondToPermission(sessionId, requestId, false, trimmedFeedback ? { denyMessage: trimmedFeedback } : undefined)}
             icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">edit_note</span>}
           >

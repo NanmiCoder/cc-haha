@@ -9,8 +9,8 @@ import { ALL_CONNECTORS } from '../../../../src/services/connectors/catalog'
 // Catalog definitions contain only data; no adapter or user-state access runs here.
 const connectorIds = ALL_CONNECTORS.map(item => item.id)
 
-it('translates all 54 services and skill plugins in all five locales, including legal search', () => {
-  expect(connectorIds).toHaveLength(54)
+it('translates all 55 services and skill plugins in all five locales, including Remotion', () => {
+  expect(connectorIds).toHaveLength(55)
   for (const id of connectorIds) {
     for (const field of ['name', 'description', 'example', 'requirements']) {
       const key = `connectors.${id}.${field}`

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { seedDesktopUiTeamPlan } from './team-plan'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,17 +46,33 @@ describe('deterministic desktop UI smoke setup', () => {
     expect(payload.write.content).toBe('written-through-the-desktop-ui')
   })
 
-  test('seeds only a fake provider inside the sandbox', () => {
+  test('seeds only fake providers inside the sandbox', () => {
     const configDir = mkdtempSync(join(tmpdir(), 'cc-haha-ui-smoke-provider-'))
     try {
       seedDesktopUiSmokeProvider(configDir)
       const index = JSON.parse(readFileSync(join(configDir, 'cc-haha', 'providers.json'), 'utf8'))
       expect(index.activeId).toBe('desktop-ui-smoke-provider')
-      expect(index.providers).toHaveLength(1)
+      expect(index.providers).toHaveLength(2)
       expect(index.providers[0]).toMatchObject({
         apiKey: 'desktop-ui-smoke-fake-key',
         baseUrl: 'http://127.0.0.1:1',
       })
+    } finally {
+      rmSync(configDir, { recursive: true, force: true })
+    }
+  })
+
+  test('seeds a pending plan with no child workers before browser approval', () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'cc-haha-team-review-smoke-'))
+    try {
+      const plan = seedDesktopUiTeamPlan(configDir, 'leader-session', '/tmp/disposable-project')
+      const config = JSON.parse(readFileSync(join(configDir, 'teams', plan.teamName, 'config.json'), 'utf8'))
+      expect(plan.state).toBe('review_pending')
+      expect(plan.approvedSnapshot).toBeUndefined()
+      expect(plan.members).toHaveLength(2)
+      expect(config.members.map((member: { name: string }) => member.name)).toEqual(['team-lead'])
+      expect(plan.tasks.every(task => plan.members.some(member => member.id === task.ownerId))).toBe(true)
+      expect(JSON.parse(readFileSync(join(configDir, 'teams', plan.teamName, 'plan.json'), 'utf8'))).toEqual(plan)
     } finally {
       rmSync(configDir, { recursive: true, force: true })
     }

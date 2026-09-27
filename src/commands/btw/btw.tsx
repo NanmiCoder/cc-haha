@@ -14,14 +14,12 @@ import ScrollBox, { type ScrollBoxHandle } from '../../ink/components/ScrollBox.
 import type { KeyboardEvent } from '../../ink/events/keyboard-event.js';
 import { Box, Text } from '../../ink.js';
 import type { LocalJSXCommandOnDone } from '../../types/command.js';
-import type { Message } from '../../types/message.js';
 import { createAbortController } from '../../utils/abortController.js';
 import { saveGlobalConfig } from '../../utils/config.js';
 import { errorMessage } from '../../utils/errors.js';
 import { type CacheSafeParams, getLastCacheSafeParams } from '../../utils/forkedAgent.js';
-import { getMessagesAfterCompactBoundary } from '../../utils/messages.js';
 import type { ProcessUserInputContext } from '../../utils/processUserInput/processUserInput.js';
-import { runSideQuestion } from '../../utils/sideQuestion.js';
+import { prepareSideQuestionContext, runSideQuestion } from '../../utils/sideQuestion.js';
 import { asSystemPrompt } from '../../utils/systemPromptType.js';
 type BtwComponentProps = {
   question: string;
@@ -91,6 +89,7 @@ function BtwSideQuestion(t0) {
           const cacheSafeParams = await buildCacheSafeParams(context);
           const result = await runSideQuestion({
             question,
+            signal: abortController.signal,
             cacheSafeParams
           });
           if (!abortController.signal.aborted) {
@@ -198,15 +197,8 @@ function BtwSideQuestion(t0) {
 function _temp(f) {
   return f + 1;
 }
-function stripInProgressAssistantMessage(messages: Message[]): Message[] {
-  const last = messages.at(-1);
-  if (last?.type === 'assistant' && last.message.stop_reason === null) {
-    return messages.slice(0, -1);
-  }
-  return messages;
-}
 async function buildCacheSafeParams(context: ProcessUserInputContext): Promise<CacheSafeParams> {
-  const forkContextMessages = getMessagesAfterCompactBoundary(stripInProgressAssistantMessage(context.messages));
+  const forkContextMessages = prepareSideQuestionContext(context.messages);
   const saved = getLastCacheSafeParams();
   if (saved) {
     return {

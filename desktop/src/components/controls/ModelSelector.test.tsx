@@ -79,7 +79,7 @@ describe('ModelSelector', () => {
         id: 'provider-1m', presetId: 'custom', name: 'Provider 1M',
         apiFormat: 'anthropic', apiKey: 'fixture', baseUrl: 'http://127.0.0.1:9999',
         models: { main: 'main-model', haiku: 'haiku-model', sonnet: 'sonnet-model', opus: 'opus-model' },
-        model1mSupport: { main: enabled, haiku: enabled, sonnet: enabled, opus: enabled },
+        model1mSupport: { main: enabled, fable: enabled, haiku: enabled, sonnet: enabled, opus: enabled },
       }],
     })
     const runtimeChange = vi.fn()
@@ -158,14 +158,21 @@ describe('ModelSelector', () => {
       isLoading: false,
     })
 
-    render(<ModelSelector runtimeKey="session-claude-legacy" />)
+    const onRuntimeChange = vi.fn()
+    render(<ModelSelector runtimeKey="session-claude-legacy" onRuntimeSelectionChange={onRuntimeChange} />)
 
     await clickByRole(/Opus 4\.7/i)
 
     expect(screen.getByRole('button', { name: /Fable 5\.1/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Opus 5\.5/ })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /^Opus 5 / })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Opus 4\.8/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Sonnet 5/ })).toBeInTheDocument()
     expect(screen.getAllByRole('button', { name: /Opus 4\.7/ }).length).toBeGreaterThan(0)
+    await clickByRole(/Opus 5\.5/)
+    expect(onRuntimeChange).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: null, modelId: 'claude-opus-5-5',
+    }))
   })
 
   it('does not query official OAuth status when mounted', () => {
@@ -1348,8 +1355,8 @@ describe('ModelSelector', () => {
 
   it('replaces a stale Grok runtime model with the current official default', async () => {
     const grokModels: ModelInfo[] = [{
-      id: 'grok-4.6',
-      name: 'Grok 4.6',
+      id: 'grok-4.7',
+      name: 'Grok 4.7',
       description: "SpaceXAI's latest frontier model",
       context: '500000',
       defaultReasoningEffort: 'high',
@@ -1380,14 +1387,29 @@ describe('ModelSelector', () => {
     render(<ModelSelector runtimeKey="session-stale-grok" />)
 
     expect(screen.queryByText('grok-build')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Grok 4.6, Grok Official' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Grok 4.7, Grok Official' })).toBeInTheDocument()
     await waitFor(() => {
       expect(useSessionRuntimeStore.getState().selections['session-stale-grok']).toEqual({
         providerId: 'grok-official',
-        modelId: 'grok-4.6',
+        modelId: 'grok-4.7',
         effortLevel: 'high',
       })
     })
+  })
+
+  it('keeps temporary side chat model choices within its inherited provider', async () => {
+    useProviderStore.setState({ providers: ['a', 'b'].map(id => ({ id, presetId: 'custom', name: `Provider ${id}`, apiKey: 'fixture', baseUrl: 'https://fixture.invalid', apiFormat: 'anthropic' as const, models: { main: `model-${id}`, sonnet: `alternate-${id}`, haiku: '', opus: '' } })), activeId: 'a', hasLoadedProviders: true })
+    useSessionRuntimeStore.getState().setSelection('side-model', { providerId: 'a', modelId: 'model-a', effortLevel: 'high' })
+    render(<ModelSelector runtimeKey="side-model" lockedProviderId="a" />)
+    await clickByRole(/model-a/i)
+    const dropdown = screen.getByTestId('model-selector-dropdown')
+    expect(dropdown.textContent).toContain('alternate-a')
+    expect(dropdown.textContent).not.toContain('Provider b')
+    expect(dropdown.textContent).not.toContain('Claude Official')
+    await clickByRole(/alternate-a/i)
+    expect(useSessionRuntimeStore.getState().selections['side-model']?.effortLevel).toBe('high')
+    const effort = screen.queryByRole('button', { name: /effort:/i })
+    if (effort) expect(effort).toBeDisabled()
   })
 
   it('hides official provider sections when OAuth is not logged in', async () => {

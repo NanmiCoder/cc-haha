@@ -11,6 +11,7 @@ import {
 } from './activityGroupModel'
 import { ImageGenerationGroup, type ImageGenerationItem } from './ImageGenerationBlock'
 import { isImageGenerationToolName } from './imageGenerationTools'
+import { useAgentRunActivity } from './useAgentRunActivity'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { Badge, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -67,9 +68,26 @@ function useExpandableCardState() {
   return { expanded, toggleExpanded }
 }
 
+export type AgentActivityTarget = {
+  sessionId: string
+  toolUseId: string
+  taskId?: string
+}
+
+/**
+ * Maps a card's own ids onto the run that `/subagents/by-tool` can resolve.
+ *
+ * The session timeline addresses an Agent card with the session it is rendered
+ * in; an agent run's own page renders the same cards but its tab id is
+ * `subagent:*`, and a nested child has to be addressed through its parent's
+ * tool ref. Without this hook the detail fetch would 404 for both.
+ */
+export type ResolveAgentActivityTarget = (input: AgentActivityTarget) => AgentActivityTarget | null
+
 type Props = {
   sessionId?: string | null
   onOpenAgentRun?: (payload: OpenAgentRunPayload) => void
+  resolveAgentActivityTarget?: ResolveAgentActivityTarget
   toolCalls: ToolCall[]
   /**
    * The run in transcript order, including any thinking blocks that happened
@@ -88,6 +106,8 @@ type Props = {
   isStreaming?: boolean
   /** This run is the tail of a turn that is still producing into it. */
   isLive?: boolean
+  /** Stable key that survives virtualized row unmount/remount. */
+  disclosureKey?: string
 }
 
 export type OpenAgentRunPayload = {
@@ -99,6 +119,7 @@ export type OpenAgentRunPayload = {
 export const ToolCallGroup = memo(function ToolCallGroup({
   sessionId,
   onOpenAgentRun,
+  resolveAgentActivityTarget,
   toolCalls,
   steps,
   resultMap,
@@ -109,6 +130,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
   showOpenRun = true,
   isStreaming,
   isLive = false,
+  disclosureKey,
 }: Props) {
   const resolvedSteps = useMemo(() => steps ?? toActivitySteps(toolCalls), [steps, toolCalls])
   const memoryActivity = getMemoryToolActivity(toolCalls, resultMap)
@@ -132,6 +154,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
           <ToolCallGroupContent
             sessionId={sessionId}
             onOpenAgentRun={onOpenAgentRun}
+            resolveAgentActivityTarget={resolveAgentActivityTarget}
             steps={regularSteps}
             resultMap={resultMap}
             childToolCallsByParent={childToolCallsByParent}
@@ -140,6 +163,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
             activeThinkingId={activeThinkingId}
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
+            disclosureKey={disclosureKey}
           />
         ) : null}
       </div>
@@ -150,6 +174,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
     <ToolCallGroupContent
       sessionId={sessionId}
       onOpenAgentRun={onOpenAgentRun}
+      resolveAgentActivityTarget={resolveAgentActivityTarget}
       steps={resolvedSteps}
       resultMap={resultMap}
       childToolCallsByParent={childToolCallsByParent}
@@ -159,6 +184,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
       showOpenRun={showOpenRun}
       isStreaming={isStreaming}
       isLive={isLive}
+      disclosureKey={disclosureKey}
     />
   )
 })
@@ -168,6 +194,7 @@ type ContentProps = Omit<Props, 'toolCalls' | 'steps'> & { steps: ActivityStep[]
 function ToolCallGroupContent({
   sessionId,
   onOpenAgentRun,
+  resolveAgentActivityTarget,
   steps,
   resultMap,
   childToolCallsByParent,
@@ -177,6 +204,7 @@ function ToolCallGroupContent({
   showOpenRun = true,
   isStreaming,
   isLive = false,
+  disclosureKey,
 }: ContentProps) {
   const toolCalls = activityStepToolCalls(steps)
   const hasImageGeneration = toolCalls.some((toolCall) => isImageGenerationToolName(toolCall.toolName))
@@ -225,6 +253,7 @@ function ToolCallGroupContent({
             key={`regular-${index}`}
             sessionId={sessionId}
             onOpenAgentRun={onOpenAgentRun}
+            resolveAgentActivityTarget={resolveAgentActivityTarget}
             steps={segment.steps}
             resultMap={resultMap}
             childToolCallsByParent={childToolCallsByParent}
@@ -260,6 +289,7 @@ function ToolCallGroupContent({
       <AgentToolGroup
         sessionId={sessionId}
         onOpenAgentRun={onOpenAgentRun}
+        resolveAgentActivityTarget={resolveAgentActivityTarget}
         toolCalls={toolCalls}
         resultMap={resultMap}
         childToolCallsByParent={childToolCallsByParent}
@@ -285,6 +315,7 @@ function ToolCallGroupContent({
       activeThinkingId={activeThinkingId}
       isStreaming={isStreaming}
       isLive={isLive}
+      disclosureKey={disclosureKey}
     />
   )
 }
@@ -413,6 +444,7 @@ function MemoryToolActivityGroup({
 function AgentToolGroup({
   sessionId,
   onOpenAgentRun,
+  resolveAgentActivityTarget,
   toolCalls,
   resultMap,
   childToolCallsByParent,
@@ -478,6 +510,7 @@ function AgentToolGroup({
                 key={toolCall.id}
                 sessionId={sessionId}
                 onOpenAgentRun={onOpenAgentRun}
+                resolveAgentActivityTarget={resolveAgentActivityTarget}
                 toolCall={toolCall}
                 resultMap={resultMap}
                 childToolCallsByParent={childToolCallsByParent}
@@ -496,6 +529,7 @@ function AgentToolGroup({
 function AgentCallCard({
   sessionId,
   onOpenAgentRun,
+  resolveAgentActivityTarget,
   toolCall,
   resultMap,
   childToolCallsByParent,
@@ -505,6 +539,7 @@ function AgentCallCard({
 }: {
   sessionId?: string | null
   onOpenAgentRun?: (payload: OpenAgentRunPayload) => void
+  resolveAgentActivityTarget?: ResolveAgentActivityTarget
   toolCall: ToolCall
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
@@ -522,11 +557,31 @@ function AgentCallCard({
   const childToolCalls = childToolCallsByParent.get(toolCall.toolUseId) ?? []
   const isLaunchResult = isAgentLaunchResult(result?.content)
   const recentToolCalls = childToolCalls.slice(-2)
+  // The timeline no longer carries child tool messages, so a card that has none
+  // reads the run from its own endpoint the moment it is expanded. Live cards
+  // still stream children in, and those stay the source of truth.
+  const activityTarget = useMemo(() => {
+    if (!sessionId) return null
+    const target = { sessionId, toolUseId: toolCall.toolUseId, taskId: agentTaskNotification?.taskId }
+    return resolveAgentActivityTarget ? resolveAgentActivityTarget(target) : target
+  }, [agentTaskNotification?.taskId, resolveAgentActivityTarget, sessionId, toolCall.toolUseId])
+  const { state: activityState, retry: retryActivity } = useAgentRunActivity({
+    enabled: expanded && childToolCalls.length === 0 && activityTarget !== null,
+    sessionId: activityTarget?.sessionId,
+    toolUseId: activityTarget?.toolUseId,
+    taskId: activityTarget?.taskId,
+  })
+  const lazyActivity = activityState.status === 'ready' ? activityState.activity : null
+  // The hook starts in `idle` and only flips to `loading` after paint; without
+  // this the expanded panel would flash "No tool activity yet" for one frame.
+  const showActivityLoading =
+    expanded && childToolCalls.length === 0 && activityTarget !== null &&
+    lazyActivity === null && activityState.status !== 'error'
   const status = getAgentStatus({
     hasResult: !!result,
     isError: !!result?.isError,
     isLaunchResult,
-    childCount: childToolCalls.length,
+    childCount: childToolCalls.length || (lazyActivity?.toolCalls.length ?? 0),
     taskStatus: agentTaskNotification?.status ?? agentTaskStatus,
   })
   const statusTone = getAgentStatusTone(status)
@@ -659,6 +714,41 @@ function AgentCallCard({
                   chrome="row"
                 />
               ))}
+            </div>
+          ) : showActivityLoading ? (
+            <div
+              data-testid="agent-call-activity-loading"
+              className="px-2 py-1 text-[11px] text-[var(--color-text-tertiary)]"
+            >
+              {t('agentActivity.loading')}
+            </div>
+          ) : activityState.status === 'error' ? (
+            <div
+              data-testid="agent-call-activity-error"
+              className="flex items-center gap-2 px-2 py-1 text-[11px] text-[var(--color-text-tertiary)]"
+            >
+              <span>{t('agentActivity.failed')}</span>
+              <Button variant="ghost" size="sm" onClick={retryActivity}>
+                {t('agentActivity.retry')}
+              </Button>
+            </div>
+          ) : lazyActivity && lazyActivity.toolCalls.length > 0 ? (
+            <div className="space-y-0.5" data-testid="agent-call-activity">
+              {lazyActivity.toolCalls.map((childToolCall) => (
+                <ToolCallTree
+                  key={childToolCall.id}
+                  toolCall={childToolCall}
+                  resultMap={lazyActivity.resultMap}
+                  childToolCallsByParent={lazyActivity.childToolCallsByParent}
+                  compact
+                  chrome="row"
+                />
+              ))}
+              {lazyActivity.truncated && (
+                <div className="px-2 py-1 text-[11px] text-[var(--color-text-tertiary)]">
+                  {t('agentActivity.truncated')}
+                </div>
+              )}
             </div>
           ) : outputSummary ? (
             <div className="px-2 py-1 text-[11px] text-[var(--color-text-tertiary)]">

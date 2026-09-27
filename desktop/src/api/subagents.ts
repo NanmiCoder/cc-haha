@@ -24,13 +24,19 @@ export type SubagentRunResponse = {
   outputFile?: string
   usage?: SubagentRunUsage
   messages: MessageEntry[]
-  /** Full Activity projection; conversation messages may be truncated. */
+  /**
+   * Full Activity projection, sent only when `truncated` is true — otherwise
+   * `messages` already is that projection, and the server does not ship the
+   * same array twice. Callers fall back to `messages`.
+   */
   activityMessages?: MessageEntry[]
   /** Structured terminal events hidden from the visible transcript. */
   taskNotifications?: AgentTaskNotification[]
   /** Terminal events with the same fragment-scoped ids as activityMessages. */
   activityTaskNotifications?: AgentTaskNotification[]
   truncated: boolean
+  historyComplete?: boolean
+  activityComplete?: boolean
   updatedAt?: string
   source: SubagentRunSource
   /**

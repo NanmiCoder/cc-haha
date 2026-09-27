@@ -9,11 +9,12 @@ import { jp } from '../../i18n/locales/jp'
 import { kr } from '../../i18n/locales/kr'
 
 describe('WorkspaceLauncher', () => {
-  it('offers the four content kinds in the reference order', () => {
+  it('offers side chat alongside the existing workspace kinds', () => {
     render(<WorkspaceLauncher onSelect={vi.fn()} />)
 
     const items = screen.getAllByRole('button')
     expect(items.map((item) => item.getAttribute('data-testid'))).toEqual([
+      'workspace-launcher-side-chat',
       'workspace-launcher-review',
       'workspace-launcher-terminal',
       'workspace-launcher-browser',

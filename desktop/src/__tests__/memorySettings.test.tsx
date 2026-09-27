@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { MemorySettings } from '../pages/MemorySettings'
@@ -270,6 +270,91 @@ describe('MemorySettings', () => {
     expect(memoryApiMock.readFile).not.toHaveBeenCalledWith('-workspace-demo', 'notes/manual.md')
     expect(screen.getByLabelText('Editor')).toHaveValue('# Unsaved Memory\n')
 
+    confirmSpy.mockRestore()
+  })
+
+  it('keeps edits made during a save in the editor until they are saved', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    memoryApiMock.listFiles.mockResolvedValue({
+      files: [
+        {
+          path: 'MEMORY.md',
+          name: 'MEMORY.md',
+          title: 'MEMORY.md',
+          bytes: 18,
+          updatedAt: '2026-05-01T00:00:00.000Z',
+          isIndex: true,
+        },
+        {
+          path: 'notes/manual.md',
+          name: 'manual.md',
+          title: 'Manual',
+          bytes: 18,
+          updatedAt: '2026-05-01T00:00:00.000Z',
+          isIndex: false,
+        },
+      ],
+    })
+    memoryApiMock.readFile.mockImplementation((_projectId: string, path: string) => Promise.resolve({
+      file: {
+        path,
+        content: path === 'MEMORY.md' ? '# Project Memory\n' : '# Manual\n',
+        updatedAt: '2026-05-01T00:00:00.000Z',
+        bytes: 18,
+      },
+    }))
+    let resolveFirstSave!: (value: { ok: true; file: { path: string; updatedAt: string; bytes: number } }) => void
+    memoryApiMock.saveFile.mockReturnValueOnce(new Promise((resolve) => { resolveFirstSave = resolve }))
+
+    render(<MemorySettings />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit' }))
+    fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# First edit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    fireEvent.change(screen.getByLabelText('Editor'), { target: { value: '# First edit\nContinued typing' } })
+
+    await act(async () => {
+      resolveFirstSave({
+        ok: true,
+        file: { path: 'MEMORY.md', updatedAt: '2026-05-01T00:01:00.000Z', bytes: 12 },
+      })
+    })
+
+    expect(screen.getByLabelText('Editor')).toHaveValue('# First edit\nContinued typing')
+    expect(screen.getByText('Unsaved')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Manual'))
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(memoryApiMock.readFile).not.toHaveBeenCalledWith('-workspace-demo', 'notes/manual.md')
+    expect(useMemoryStore.getState().draftContent).toBe('# First edit\nContinued typing')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(memoryApiMock.saveFile).toHaveBeenLastCalledWith({
+      projectId: '-workspace-demo',
+      path: 'MEMORY.md',
+      content: '# First edit\nContinued typing',
+      expectedUpdatedAt: '2026-05-01T00:01:00.000Z',
+      expectedBytes: 12,
+    }))
+    await waitFor(() => expect(screen.queryByLabelText('Editor')).not.toBeInTheDocument())
+    expect(screen.queryByText('Unsaved')).not.toBeInTheDocument()
+    confirmSpy.mockRestore()
+  })
+
+  it('asks before leaving a dirty file even when showing its preview', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    memoryApiMock.listFiles.mockResolvedValue({ files: [
+      { path: 'MEMORY.md', name: 'MEMORY.md', title: 'MEMORY.md', bytes: 18, updatedAt: '2026-05-01T00:00:00.000Z', isIndex: true },
+      { path: 'notes/manual.md', name: 'manual.md', title: 'Manual', bytes: 18, updatedAt: '2026-05-01T00:00:00.000Z', isIndex: false },
+    ] })
+
+    render(<MemorySettings />)
+    await screen.findByTestId('markdown-preview')
+    act(() => useMemoryStore.setState({ draftContent: '# Unsaved preview' }))
+
+    expect(screen.getByText('Unsaved')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Manual'))
+    expect(confirmSpy).toHaveBeenCalled()
+    expect(memoryApiMock.readFile).not.toHaveBeenCalledWith('-workspace-demo', 'notes/manual.md')
+    expect(useMemoryStore.getState().draftContent).toBe('# Unsaved preview')
     confirmSpy.mockRestore()
   })
 

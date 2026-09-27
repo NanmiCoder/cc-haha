@@ -1,6 +1,6 @@
 import type { ModelInfo } from '../types/settings'
 
-export const OFFICIAL_DEFAULT_MODEL_ID = 'claude-opus-4-8'
+export const OFFICIAL_DEFAULT_MODEL_ID = 'claude-opus-5-5'
 
 export const OFFICIAL_MODELS: ModelInfo[] = [
   {
@@ -16,6 +16,22 @@ export const OFFICIAL_MODELS: ModelInfo[] = [
     name: 'Fable 5',
     description: 'Highest capability for long-running tasks',
     context: '1m',
+  },
+  {
+    id: 'claude-opus-5-5',
+    name: 'Opus 5.5',
+    description: 'Best for complex agentic coding and enterprise work',
+    context: '1m',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
+    id: 'claude-opus-5',
+    name: 'Opus 5',
+    description: 'Best for complex agentic coding and enterprise work',
+    context: '1m',
+    defaultReasoningEffort: 'high',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   {
     id: 'claude-opus-4-8',

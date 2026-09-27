@@ -738,6 +738,39 @@ describe('frozen turn identity and stale generations', () => {
     expect(sessionsApi.getWorkspaceStatus).not.toHaveBeenCalled()
   })
 
+  it('clears stale turn totals and rejects an in-flight diff after rewind', async () => {
+    sessionsApi.getTurnCheckpoints.mockResolvedValue(workspaceStatus([{ path: 'src/a.ts' }]))
+    await store().load(SESSION, TURN)
+    const pending = deferred<{ state: 'ok'; path: string; diff: string }>()
+    sessionsApi.getTurnCheckpointDiff.mockReturnValue(pending.promise)
+    const loading = store().loadDiff(SESSION, TURN, 'src/a.ts')
+    expect(entry(SESSION, TURN).status?.totals.files).toBe(1)
+
+    store().clearTurnReviews(SESSION, 0)
+    pending.resolve({ state: 'ok', path: 'src/a.ts', diff: '--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old\n+new\n' })
+    await loading
+
+    expect(entry(SESSION, TURN).status).toBeNull()
+    expect(entry(SESSION, TURN).diffsByPath).toEqual({})
+  })
+
+  it('keeps the review cache for turns before the rewind target', async () => {
+    const older = { kind: 'turn' as const, turnKey: 'first', userMessageIndex: 0 }
+    const later = { kind: 'turn' as const, turnKey: 'second', userMessageIndex: 1 }
+    const checkpoint = workspaceStatus([{ path: 'src/a.ts' }]).checkpoints[0]!
+    sessionsApi.getTurnCheckpoints.mockResolvedValue({ checkpoints: [
+      { ...checkpoint, target: { targetUserMessageId: 'first', userMessageIndex: 0 } },
+      { ...checkpoint, target: { targetUserMessageId: 'second', userMessageIndex: 1 } },
+    ] })
+    await store().load(SESSION, older)
+    await store().load(SESSION, later)
+
+    store().clearTurnReviews(SESSION, 1)
+
+    expect(entry(SESSION, older).status?.totals.files).toBe(1)
+    expect(entry(SESSION, later).status).toBeNull()
+  })
+
   it('does not recreate a cleared task from a delayed diff', async () => {
     reviewApi.getStatus.mockResolvedValue(status('snap-1'))
     await store().load(SESSION, UNSTAGED)

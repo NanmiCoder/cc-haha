@@ -1287,8 +1287,8 @@ describe('ConversationService', () => {
     expect(env.OPENAI_CODEX_OAUTH_FILE).toBe(
       path.join(tmpDir, 'cc-haha', 'openai-oauth.json'),
     )
-    expect(env.ANTHROPIC_MODEL).toBe('gpt-5.6-sol')
-    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('gpt-5.6-terra')
+    expect(env.ANTHROPIC_MODEL).toBe('gpt-6-sol')
+    expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('gpt-6-sol')
     expect(env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST).toBe('1')
     expect(env.CLAUDE_CODE_ENTRYPOINT).toBeUndefined()
     expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined()
@@ -1628,6 +1628,39 @@ describe('ConversationService', () => {
         response: expect.objectContaining({ behavior: 'deny' }),
       }),
     }))
+  })
+
+  test('retains teammate display_name on pending permission requests', () => {
+    const service = new ConversationService() as any
+    service.sessions.set('lead-session', {
+      outputCallbacks: [],
+      seenSdkMessageUuids: new Set<string>(),
+      sdkMessages: [],
+      initMessage: null,
+      pendingPermissionRequests: new Map(),
+    })
+
+    service.handleSdkPayload('lead-session', JSON.stringify({
+      type: 'control_request',
+      request_id: 'teammate-perm',
+      request: {
+        subtype: 'can_use_tool',
+        tool_name: 'Bash',
+        tool_use_id: 'toolu_teammate',
+        input: { command: 'ls' },
+        description: 'list files',
+        display_name: 'researcher',
+      },
+    }))
+
+    expect(service.getPendingPermissionRequests('lead-session')).toEqual([{
+      requestId: 'teammate-perm',
+      toolName: 'Bash',
+      toolUseId: 'toolu_teammate',
+      input: { command: 'ls' },
+      description: 'list files',
+      displayName: 'researcher',
+    }])
   })
 
   // CLI 的 WebSocketTransport 每次重连成功都会把整个发送缓冲区重放一遍，并假定
