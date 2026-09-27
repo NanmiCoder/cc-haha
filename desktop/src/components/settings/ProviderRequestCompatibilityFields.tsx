@@ -31,7 +31,6 @@ export function ProviderRequestCompatibilityFields({ value, apiFormat, onChange 
     else options[key] = next
     onChange({ ...value, options })
   }
-  if (apiFormat === 'anthropic') return null
   return (
     <section className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-3">
       <Input
@@ -43,6 +42,7 @@ export function ProviderRequestCompatibilityFields({ value, apiFormat, onChange 
         hint={t('settings.providers.compatibilityBudgetHint')}
         error={invalidCompatibilityNumber(value.maxOutputTokens) ? t('settings.providers.compatibilityNumberError') : undefined}
       />
+      {apiFormat !== 'anthropic' && <>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button variant="ghost" size="sm" aria-expanded={expanded} aria-controls={detailsId} onClick={() => setExpanded(!expanded)}>
           {t('settings.providers.compatibilityAdvanced')}
@@ -80,6 +80,7 @@ export function ProviderRequestCompatibilityFields({ value, apiFormat, onChange 
           onChange={next => updateOption(key, next)}
         />)}
       </div>}
+      </>}
     </section>
   )
 }

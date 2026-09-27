@@ -32,6 +32,28 @@ export function parseCompatibilityForm(form: RequestCompatibilityForm): RequestC
   return Object.keys(result).length > 0 ? result : undefined
 }
 
+/**
+ * An Anthropic-format provider honours only the reply output budget: the
+ * OpenAI-compatibility knobs (capabilities, outputTokenField, the endpoint
+ * output cap) are neither shown in the editor nor applied by the native
+ * Messages request path. Reduce the form to just `maxOutputTokens` so the
+ * budget survives a save while stale advanced values — left behind when the
+ * user switches api format mid-edit, since the format handler does not reset
+ * the form state — cannot leak into an Anthropic provider.
+ */
+export function parseAnthropicBudgetForm(form: RequestCompatibilityForm): RequestCompatibility | undefined {
+  if (invalidCompatibilityNumber(form.maxOutputTokens)) {
+    throw new Error('settings.providers.compatibilityNumberError')
+  }
+  return form.maxOutputTokens.trim() ? { maxOutputTokens: Number(form.maxOutputTokens) } : undefined
+}
+
+/** Same reduction as parseAnthropicBudgetForm, for an already-parsed object
+ *  coming from the raw Settings JSON editor rather than the form controls. */
+export function pickOutputBudget(value: RequestCompatibility | undefined): RequestCompatibility | undefined {
+  return value?.maxOutputTokens !== undefined ? { maxOutputTokens: value.maxOutputTokens } : undefined
+}
+
 export function readCompatibilityJson(value: unknown): RequestCompatibility | undefined {
   if (value === undefined || value === null) return undefined
   if (typeof value !== 'object' || Array.isArray(value)) throw new Error('settings.providers.compatibilityJsonError')

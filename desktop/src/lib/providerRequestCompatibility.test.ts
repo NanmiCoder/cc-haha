@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compatibilityForm, parseCompatibilityForm, readCompatibilityEditorJson, readCompatibilityJson, writeCompatibilityJson, PROVIDER_OUTPUT_BUDGET_ENV_KEY } from './providerRequestCompatibility'
+import { compatibilityForm, parseAnthropicBudgetForm, parseCompatibilityForm, pickOutputBudget, readCompatibilityEditorJson, readCompatibilityJson, writeCompatibilityJson, PROVIDER_OUTPUT_BUDGET_ENV_KEY } from './providerRequestCompatibility'
 
 describe('provider compatibility editor contract', () => {
   it('preserves unknown config and env values through a form edit', () => {
@@ -27,5 +27,28 @@ describe('provider compatibility editor contract', () => {
   it('validates known raw options without discarding unknown keys', () => {
     expect(readCompatibilityJson({ outputTokenField: 'omit', future: 1 })).toEqual({ outputTokenField: 'omit', future: 1 })
     for (const value of [{ sampling: false }, { maxOutputTokens: '32' }, { outputTokenField: 'max_output_tokens' }, []]) expect(() => readCompatibilityJson(value)).toThrow()
+  })
+})
+
+describe('Anthropic budget-only reduction', () => {
+  it('keeps the reply output budget and drops every advanced compat option', () => {
+    const form = compatibilityForm({ maxOutputTokens: 64000, outputTokenLimit: 8000, sampling: 'unsupported', outputTokenField: 'max_tokens', futureOption: { keep: true } })
+    expect(parseAnthropicBudgetForm(form)).toEqual({ maxOutputTokens: 64000 })
+  })
+  it('returns undefined when the budget is blank even if stale options remain', () => {
+    expect(parseAnthropicBudgetForm(compatibilityForm({ sampling: 'unsupported' }))).toBeUndefined()
+  })
+  it.each(['0', '-3', '1.5', 'NaN', '1e5'])('rejects invalid budget %s', value => {
+    expect(() => parseAnthropicBudgetForm({ ...compatibilityForm(), maxOutputTokens: value })).toThrow()
+  })
+})
+
+describe('pickOutputBudget', () => {
+  it('reduces a parsed object to the budget alone', () => {
+    expect(pickOutputBudget({ maxOutputTokens: 4096, reasoning: 'unsupported' })).toEqual({ maxOutputTokens: 4096 })
+  })
+  it('drops objects that carry no budget', () => {
+    expect(pickOutputBudget({ reasoning: 'unsupported' })).toBeUndefined()
+    expect(pickOutputBudget(undefined)).toBeUndefined()
   })
 })

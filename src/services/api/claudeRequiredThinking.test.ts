@@ -781,6 +781,15 @@ test('does not attach internal budget provenance to direct provider requests', a
   expect(requestHeaders[0]?.has('x-cc-haha-output-budget-source')).toBe(false)
 }, 10_000)
 
+test('honors explicit provider output budget on direct requests without leaking provenance', async () => {
+  const { requests, requestHeaders } = await captureQueryRequest({ model: 'fixture-output-model',
+    configureCapabilityOverrides: false,
+    env: { CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '131072', CLAUDE_CODE_MAX_OUTPUT_TOKENS: undefined },
+  })
+  expect(requests[0]?.max_tokens).toBe(131_072)
+  expect(requestHeaders[0]?.has('x-cc-haha-output-budget-source')).toBe(false)
+}, 10_000)
+
 test('invalid global output overrides fall back to the configured provider budget', async () => {
   for (const globalBudget of ['0', 'NaN', 'garbage', '1.5', '123bad', '64']) {
     const result = await captureQueryRequest({ model: 'fixture-output-model', localProxy: true,

@@ -22,11 +22,11 @@ test('explicit provenance is not guessed from the default numeric value', () => 
   })
 })
 
-test('provider budgets accept only positive safe integers and only affect proxy clients', () => {
+test('provider budgets accept only positive safe integers on any base URL', () => {
   const base = { ANTHROPIC_BASE_URL: 'http://127.0.0.1:3131/proxy/providers/test' }
   expect(getConfiguredProviderOutputBudget({ ...base, CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '131072' })).toBe(131072)
   for (const value of ['0', '-1', 'NaN', '1.5', '123bad', '9007199254740992', '']) {
     expect(getConfiguredProviderOutputBudget({ ...base, CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: value })).toBeUndefined()
   }
-  expect(getConfiguredProviderOutputBudget({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com', CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '131072' })).toBeUndefined()
+  expect(getConfiguredProviderOutputBudget({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com', CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '131072' })).toBe(131072)
 })

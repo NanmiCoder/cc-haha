@@ -31,7 +31,7 @@ import { OfficialProviderModelSettings } from '../../components/settings/Officia
 import { CcSwitchImportModal } from '../../components/settings/CcSwitchImportModal'
 import { ModelIdCombobox } from '../../components/settings/ModelIdCombobox'
 import { ProviderRequestCompatibilityFields } from '@/components/settings/ProviderRequestCompatibilityFields'
-import { compatibilityForm, invalidCompatibilityNumber, parseCompatibilityForm, readCompatibilityEditorJson, writeCompatibilityJson, type RequestCompatibilityForm } from '../../lib/providerRequestCompatibility'
+import { compatibilityForm, invalidCompatibilityNumber, parseCompatibilityForm, parseAnthropicBudgetForm, pickOutputBudget, readCompatibilityEditorJson, writeCompatibilityJson, type RequestCompatibilityForm } from '../../lib/providerRequestCompatibility'
 import { ProviderImageGenerationFields, type ImageGenerationFormValue } from '../../components/settings/ProviderImageGenerationFields'
 import { BUILT_IN_PROVIDER_IDS, CLAUDE_OFFICIAL_PROVIDER_ID, OPENAI_OFFICIAL_PROVIDER_ID } from '../../constants/openaiOfficialProvider'
 import { GROK_OFFICIAL_PROVIDER_ID } from '../../constants/grokOfficialProvider'
@@ -1177,7 +1177,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         // (or whatever was last selected) and saving would write that back.
         delete merged.model
         delete merged.modelContext
-        setSettingsJson(JSON.stringify(writeCompatibilityJson(merged, apiFormat === 'anthropic' ? undefined : parseCompatibilityForm(compatibility)), null, 2))
+        setSettingsJson(JSON.stringify(writeCompatibilityJson(merged, apiFormat === 'anthropic' ? parseAnthropicBudgetForm(compatibility) : parseCompatibilityForm(compatibility)), null, 2))
       }).catch(() => {
         if (!cancelled && !settingsJsonUserEditedRef.current) {
           setSettingsJson((current) => current.trim() ? current : JSON.stringify({}, null, 2))
@@ -1239,7 +1239,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const requiresApiKey = selectedPreset.needsApiKey !== false
   const autoCompactWindowErrorKey = getAutoCompactWindowErrorKey(autoCompactWindow)
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
-  const compatibilityInvalid = apiFormat !== 'anthropic' && (invalidCompatibilityNumber(compatibility.maxOutputTokens) || invalidCompatibilityNumber(compatibility.outputTokenLimit))
+  const compatibilityInvalid = invalidCompatibilityNumber(compatibility.maxOutputTokens)
+    || (apiFormat !== 'anthropic' && invalidCompatibilityNumber(compatibility.outputTokenLimit))
   const canSubmit = !compatibilityInvalid && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
   const normalizedBaseUrl = normalizeProviderBaseUrl(baseUrl)
   const isPresetDefaultEndpoint = normalizedBaseUrl === normalizeProviderBaseUrl(selectedPreset.baseUrl)
@@ -1357,10 +1358,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   }
   const handleCompatibilityChange = (value: RequestCompatibilityForm) => {
     setCompatibility(value)
-    if (invalidCompatibilityNumber(value.maxOutputTokens) || invalidCompatibilityNumber(value.outputTokenLimit)) return
+    if (invalidCompatibilityNumber(value.maxOutputTokens) || (apiFormat !== 'anthropic' && invalidCompatibilityNumber(value.outputTokenLimit))) return
     setSettingsJson((current) => {
       try {
-        return JSON.stringify(writeCompatibilityJson(JSON.parse(current || '{}'), parseCompatibilityForm(value)), null, 2)
+        return JSON.stringify(writeCompatibilityJson(JSON.parse(current || '{}'), apiFormat === 'anthropic' ? parseAnthropicBudgetForm(value) : parseCompatibilityForm(value)), null, 2)
       } catch {
         return current
       }
@@ -1371,7 +1372,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
     setSettingsJson((current) => {
       const connected = updateSettingsJsonProviderConnection(current, value, authStrategy, apiKey, selectedPreset, baseUrl, providerProxyBaseUrl, toolSearchEnabled, disableExperimentalBetas, supportsNestedToolResultMedia)
       try {
-        return JSON.stringify(writeCompatibilityJson(JSON.parse(connected), value === 'anthropic' ? undefined : parseCompatibilityForm(compatibility)), null, 2)
+        return JSON.stringify(writeCompatibilityJson(JSON.parse(connected), value === 'anthropic' ? parseAnthropicBudgetForm(compatibility) : parseCompatibilityForm(compatibility)), null, 2)
       } catch {
         return connected
       }
@@ -1564,7 +1565,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
 
   const handleSubmit = async () => {
     if (!canSubmit || isSubmitting) return
-    const storedCompatibility = apiFormat === 'anthropic' ? undefined : parseCompatibilityForm(compatibility)
+    const storedCompatibility = apiFormat === 'anthropic' ? parseAnthropicBudgetForm(compatibility) : parseCompatibilityForm(compatibility)
     const normalizedModels = normalizeModelMapping(models)
     const parsedAutoCompactWindow = parseAutoCompactWindowInput(autoCompactWindow)
     const parsedModelContextWindows = buildModelContextWindows(models, modelContextInputs)
@@ -1661,6 +1662,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
 
   const handleTest = async () => {
     if (!baseUrl.trim() || !models.main.trim() || compatibilityInvalid) return
+    const formCompatibility = apiFormat === 'anthropic' ? parseAnthropicBudgetForm(compatibility) : parseCompatibilityForm(compatibility)
     setIsTesting(true)
     setTestResult(null)
     try {
@@ -1670,7 +1672,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         apiFormat === provider.apiFormat &&
         authStrategy === provider.authStrategy &&
         supportsNestedToolResultMedia === (provider.supportsNestedToolResultMedia ?? true) &&
-        JSON.stringify(parseCompatibilityForm(compatibility)) === JSON.stringify(provider.requestCompatibility)
+        JSON.stringify(formCompatibility) === JSON.stringify(provider.requestCompatibility)
       if (savedConfigUnchanged && provider) {
         result = await useProviderStore.getState().testProvider(provider.id, {
           modelId: models.main.trim(),
@@ -1685,7 +1687,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           apiFormat,
           supportsNestedToolResultMedia,
           presetId: selectedPreset.id,
-          ...(apiFormat !== 'anthropic' ? { requestCompatibility: parseCompatibilityForm(compatibility) } : {}),
+          ...(formCompatibility ? { requestCompatibility: formCompatibility } : {}),
         })
       }
       setTestResult(result)
@@ -2129,7 +2131,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
                 const parsed = restoreSettingsJsonSecrets(JSON.parse(raw), settingsJson, apiKey)
                 const nextCompatibility = readCompatibilityEditorJson(parsed, settingsJson)
                 setCompatibility(compatibilityForm(nextCompatibility))
-                const synchronized = writeCompatibilityJson(parsed, apiFormat === 'anthropic' ? undefined : nextCompatibility)
+                const synchronized = writeCompatibilityJson(parsed, apiFormat === 'anthropic' ? pickOutputBudget(nextCompatibility) : nextCompatibility)
                 setSettingsJson(JSON.stringify(synchronized, null, 2))
                 setSettingsJsonError(null)
                 // Auto-fill form fields from parsed JSON env

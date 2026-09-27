@@ -31,7 +31,6 @@ export function getOutputBudgetHeaders(
 }
 
 export function getConfiguredProviderOutputBudget(env: NodeJS.ProcessEnv = process.env): number | undefined {
-  if (!isLocalProtocolProxy(env.ANTHROPIC_BASE_URL)) return undefined
   const raw = env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS
   if (!raw || !/^\d+$/.test(raw)) return undefined
   const value = Number(raw)
