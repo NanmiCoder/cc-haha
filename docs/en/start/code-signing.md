@@ -1,13 +1,13 @@
 ---
 title: Code signing policy
 nav_title: Signing policy
-description: Signing scope, responsible roles, approval, verification, and revocation rules for official Claude Code Haha releases.
+description: Signing scope, responsible roles, approval, verification, and revocation rules for official cc-haha releases.
 order: 5
 ---
 
 # Code signing policy
 
-This policy applies to official Windows releases of Claude Code Haha. The project is applying for free code signing through the SignPath Foundation. Until onboarding is complete, the Windows download page will continue to identify installers as unsigned. After onboarding, only artifacts that comply with this policy will be submitted for signing.
+This policy applies to official Windows releases of cc-haha. The project is applying for free code signing through the SignPath Foundation. Until onboarding is complete, the Windows download page will continue to identify installers as unsigned. After onboarding, only artifacts that comply with this policy will be submitted for signing.
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
@@ -17,7 +17,7 @@ The service is provided by [SignPath.io](https://about.signpath.io) and the [Sig
 
 Signing is limited to the Windows desktop application, project-owned sidecars, and final x64 and ARM64 NSIS installers built from source owned by this project in [NanmiCoder/cc-haha](https://github.com/NanmiCoder/cc-haha).
 
-Release packages may include third-party or upstream open-source components distributed under their respective licenses. Those components may be bundled unchanged, but they will not be signed as binaries owned by Claude Code Haha. The certificate will not be used for other projects, personal builds, debug builds, or files of unknown origin.
+Release packages may include third-party or upstream open-source components distributed under their respective licenses. Those components may be bundled unchanged, but they will not be signed as binaries owned by cc-haha. The certificate will not be used for other projects, personal builds, debug builds, or files of unknown origin.
 
 ## Trusted source and build
 

@@ -11,6 +11,8 @@ The desktop app puts "talking to Claude" and "seeing what it actually changed" i
 
 This page is a map, not a manual. One line per feature — click through for the details. If you haven't installed it or connected a model yet, start with [Get started](../start/index.md).
 
+To learn by doing, choose a task from the [practical guides](../cases/index.md).
+
 ## Three places to know
 
 - **Sidebar** — under the brand seal: New session, Scheduled, Skills Market. Below that, the search bar and your projects and past sessions. Settings sits at the bottom. Drag the edge to resize it.
@@ -28,7 +30,7 @@ This page is a map, not a manual. One line per feature — click through for the
 - [Subagents](./agents.md) — when to delegate, which agents ship built in, how to write your own.
 - [Skills and the Skills Market](./skills.md) — what a skill is, how it differs from an agent, what to check before installing one.
 - [Scheduled tasks](./schedule.md) — have Claude review yesterday's commits every morning.
-- [Computer Use](./computer-use.md) — let it read the screen, move the mouse, and type into other apps.
+- [Computer Use](./computer-use.md) — control other apps on macOS without taking over your physical mouse or keyboard.
 
 ## Continuing somewhere else
 

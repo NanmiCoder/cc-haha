@@ -143,7 +143,7 @@
 
 | # | 步骤 | 期望 |
 |---|---|---|
-| 5.1 | 让 agent 操控 **Claude Code Haha 自己** | 拒绝：`Computer Use is not allowed to use the app '…' for safety reasons.` |
+| 5.1 | 让 agent 操控 **cc-haha 自己** | 拒绝：`Computer Use is not allowed to use the app '…' for safety reasons.` |
 | 5.2 | 操控 Terminal / iTerm / Chrome | 同样拒绝 |
 | 5.3 | 未开 systemKeyCombos 时按 `cmd+q` | 拒绝，提示 `Enable system key combinations in Computer Use settings, then retry.` |
 | 5.4 | 开了之后再按 | 放行 |

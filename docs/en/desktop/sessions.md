@@ -19,7 +19,7 @@ The small line under the session title is metadata: project path, branch, model.
 
 ## Reading the conversation
 
-![A full session: a question, tool cards, a thinking block, a file edit with an inline diff](../../images/app/en/session-main.webp)
+![A release-notes conversation in the real project, with tool calls and the session list (Chinese interface)](../../images/app/en/session-main.webp)
 
 Claude doesn't just reply with a paragraph. Several kinds of card appear along the way:
 
@@ -32,8 +32,6 @@ In a long conversation, `⌘F` opens find-in-page and jumps between matches in t
 
 ## The permission prompt: which button?
 
-![The "Allow Claude to Edit index.html?" prompt with a preview of the change](../../images/app/en/session-permission.webp)
-
 In the default permission mode, Claude stops and asks before editing a file or running a risky command. The dialog previews the change, then offers three buttons:
 
 - **Allow** — just this once. The same operation will ask again next time.
@@ -43,6 +41,8 @@ In the default permission mode, Claude stops and asks before editing a file or r
 When in doubt, pick **Allow** — being asked a few extra times costs nothing. If you can't tell what it's about to do, click **Show full input** to see the raw arguments.
 
 ### The five permission modes
+
+![The five permission modes in the composer (Chinese interface)](../../images/app/en/permission-modes.webp)
 
 The permission button in the composer toolbar sets the overall strictness:
 
@@ -90,7 +90,7 @@ Tool activity from background subagents bubbles up here too, so you don't have t
 
 ## What the composer can do
 
-![The slash-command panel that opens when you type `/`](../../images/app/en/composer-slash.webp)
+![The slash-command panel that opens when you type `/` (Chinese interface)](../../images/app/en/composer-slash.webp)
 
 - **`/` slash commands** — type `/` for the command panel. `/status` for session state and usage, `/context` for context breakdown, `/compact` to compress, `/review` to review changes, `/commit`, `/memory` to open project memory, `/doctor` to open the diagnostics check.
 - **`@` file and session references** — type `@` to search files and past sessions. Files are attached as paths; sessions appear as clickable references.

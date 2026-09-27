@@ -9,6 +9,8 @@ order: 1
 
 Install and go. You don't need Node.js, Python, or Claude Code — the CLI engine and the ripgrep binary used for file search are both bundled inside the installer.
 
+The product is now called **cc-haha**. Existing packages, installed apps, and system processes may still use the legacy name `Claude Code Haha`; filenames and commands below match those published packages.
+
 ## Pick the right package
 
 Everything lives on [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest). Choose by operating system and CPU architecture:
@@ -29,7 +31,7 @@ The `.blockmap` and `latest*.yml` files are used by the app's own updater. You d
 ## macOS
 
 1. Open the DMG.
-2. Drag Claude Code Haha into Applications.
+2. Drag cc-haha into Applications.
 3. Launch it from Applications.
 
 ### If macOS says the app is damaged

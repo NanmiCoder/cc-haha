@@ -1,33 +1,26 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { describe, it } from 'node:test'
+import { runInNewContext } from 'node:vm'
 
-import { normalizeStoredLocale, prefersChinese, resolveRootRedirect } from './locale.js'
+import { DEFAULT_LOCALE, normalizeStoredLocale, resolveBrowserLocale, resolveRootRedirect } from './locale.js'
 
-describe('prefersChinese', () => {
-  it('认所有中文变体', () => {
-    for (const tag of ['zh', 'zh-CN', 'zh-TW', 'zh-HK', 'zh-Hans', 'zh-Hant-TW', 'ZH-cn']) {
-      assert.equal(prefersChinese([tag]), true, tag)
-    }
+const html = readFileSync(new URL('../../index.html', import.meta.url), 'utf8')
+const bootstrap = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)]
+  .map((match) => match[1])
+  .find((script) => script.includes('window.location.pathname'))
+
+function runBootstrap({ pathname = '/', stored = null, languages, language = '' }) {
+  let redirectedTo = null
+  const document = { documentElement: { lang: 'en' } }
+  runInNewContext(bootstrap, {
+    document,
+    localStorage: { getItem: () => stored },
+    navigator: { languages, language },
+    window: { location: { pathname, search: '?from=homepage', hash: '#discover', replace: (url) => { redirectedTo = url } } }
   })
-
-  it('不把 zh 开头的其他语言当中文', () => {
-    // zhuang（壮语）真实存在于 BCP-47，前缀匹配写松了会误判。
-    assert.equal(prefersChinese(['zha']), false)
-    assert.equal(prefersChinese(['zhuang']), false)
-  })
-
-  it('列表里任意一项是中文就算中文', () => {
-    assert.equal(prefersChinese(['en-US', 'zh-CN']), true)
-    assert.equal(prefersChinese(['en-US', 'ja', 'ko']), false)
-  })
-
-  it('输入不是数组或含脏值时不炸', () => {
-    assert.equal(prefersChinese(undefined), false)
-    assert.equal(prefersChinese(null), false)
-    assert.equal(prefersChinese([]), false)
-    assert.equal(prefersChinese([null, undefined, 42, ' zh-CN ']), true)
-  })
-})
+  return { redirectedTo, lang: document.documentElement.lang }
+}
 
 describe('normalizeStoredLocale', () => {
   it('只接受 zh / en', () => {
@@ -39,44 +32,68 @@ describe('normalizeStoredLocale', () => {
   })
 })
 
+describe('resolveBrowserLocale', () => {
+  it('浏览器首选语言是中文时选择中文，包括地区与繁简体标记', () => {
+    for (const language of ['zh', 'zh-CN', 'zh-TW', 'zh-Hant', 'ZH-hk']) {
+      assert.equal(resolveBrowserLocale({ languages: [language, 'en-US'] }), 'zh', language)
+    }
+  })
+
+  it('其他语言及缺失的浏览器语言都选择英文', () => {
+    assert.equal(DEFAULT_LOCALE, 'en')
+    for (const language of ['en-US', 'ja-JP', 'fr-FR', '', 'zho']) {
+      assert.equal(resolveBrowserLocale({ languages: [language] }), 'en', language)
+    }
+    assert.equal(resolveBrowserLocale(), 'en')
+  })
+
+  it('优先使用浏览器的语言列表，并在没有列表时回退到 language', () => {
+    assert.equal(resolveBrowserLocale({ languages: ['ja-JP', 'zh-CN'], language: 'zh-CN' }), 'en')
+    assert.equal(resolveBrowserLocale({ languages: [], language: 'zh-CN' }), 'zh')
+  })
+})
+
 describe('resolveRootRedirect', () => {
-  it('中文浏览器留在中文站', () => {
+  it('没有保存偏好时按浏览器首选语言分流', () => {
     assert.equal(resolveRootRedirect({ languages: ['zh-CN'], pathname: '/' }), null)
-  })
-
-  it('非中文浏览器跳英文站', () => {
-    assert.equal(resolveRootRedirect({ languages: ['en-US'], pathname: '/' }), '/en')
+    assert.equal(resolveRootRedirect({ languages: ['zh-TW'], pathname: '/' }), null)
+    assert.equal(resolveRootRedirect({ languages: ['en-US', 'zh-CN'], pathname: '/' }), '/en')
     assert.equal(resolveRootRedirect({ languages: ['ja-JP'], pathname: '/' }), '/en')
-  })
-
-  it('拿不到浏览器语言时按英文兜底', () => {
-    assert.equal(resolveRootRedirect({ languages: [], pathname: '/' }), '/en')
     assert.equal(resolveRootRedirect({ pathname: '/' }), '/en')
   })
 
   it('根路径的尾斜杠和空串都算根', () => {
     for (const pathname of ['/', '', '//']) {
-      assert.equal(resolveRootRedirect({ languages: ['en'], pathname }), '/en', JSON.stringify(pathname))
+      assert.equal(resolveRootRedirect({ pathname }), '/en', JSON.stringify(pathname))
     }
   })
 
-  it('只动根路径，带前缀的地址一概不碰', () => {
-    // 这是整个功能的安全边界：英文用户点开中文文档不该被踢走，反之亦然。
-    const cases = ['/en', '/en/', '/start', '/en/start', '/desktop/pets', '/internals']
-    for (const pathname of cases) {
-      assert.equal(resolveRootRedirect({ languages: ['en-US'], pathname }), null, pathname)
-      assert.equal(resolveRootRedirect({ languages: ['zh-CN'], pathname }), null, pathname)
+  it('只动根路径，明确访问的中英文文档都保持原路由', () => {
+    for (const pathname of ['/en', '/en/', '/start', '/en/start', '/desktop/pets', '/internals']) {
+      assert.equal(resolveRootRedirect({ pathname }), null, pathname)
     }
   })
 
-  it('记住的偏好优先于浏览器语言', () => {
-    // 中文浏览器手动切到英文后，回首页不该被弹回中文，否则切换器等于没用。
-    assert.equal(resolveRootRedirect({ languages: ['zh-CN'], pathname: '/', stored: 'en' }), '/en')
-    assert.equal(resolveRootRedirect({ languages: ['en-US'], pathname: '/', stored: 'zh' }), null)
+  it('手动选择中文后保留中文首页，选择英文后进入英文首页', () => {
+    assert.equal(resolveRootRedirect({ pathname: '/', stored: 'zh', languages: ['ja-JP'] }), null)
+    assert.equal(resolveRootRedirect({ pathname: '/', stored: 'en', languages: ['zh-CN'] }), '/en')
   })
 
-  it('偏好是脏值时退回浏览器语言', () => {
-    assert.equal(resolveRootRedirect({ languages: ['zh-CN'], pathname: '/', stored: 'garbage' }), null)
-    assert.equal(resolveRootRedirect({ languages: ['en-US'], pathname: '/', stored: '' }), '/en')
+  it('保存值无效时仍按浏览器语言处理', () => {
+    assert.equal(resolveRootRedirect({ pathname: '/', stored: 'garbage', languages: ['zh-CN'] }), null)
+    assert.equal(resolveRootRedirect({ pathname: '/', stored: '' }), '/en')
+  })
+})
+
+describe('index.html 首帧语言分流', () => {
+  it('中文浏览器留在中文首页，其他语言带查询和锚点进入英文首页', () => {
+    assert.deepEqual(runBootstrap({ languages: ['zh-CN'] }), { redirectedTo: null, lang: 'zh-CN' })
+    assert.deepEqual(runBootstrap({ languages: ['ja-JP'] }), { redirectedTo: '/en?from=homepage#discover', lang: 'en' })
+  })
+
+  it('手动选择优先于浏览器语言，明确路径不重定向', () => {
+    assert.deepEqual(runBootstrap({ languages: ['zh-CN'], stored: 'en' }), { redirectedTo: '/en?from=homepage#discover', lang: 'en' })
+    assert.deepEqual(runBootstrap({ languages: ['ja-JP'], stored: 'zh' }), { redirectedTo: null, lang: 'zh-CN' })
+    assert.deepEqual(runBootstrap({ pathname: '/start', languages: ['ja-JP'] }), { redirectedTo: null, lang: 'en' })
   })
 })

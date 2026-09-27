@@ -7,7 +7,7 @@ order: 1
 
 # 命令参考
 
-Claude Code Haha 默认启动交互式会话，也可以用 `--print` 作为脚本、CI 或其他程序中的非交互式 Agent。源码仓库中的命令是 `./bin/claude-haha`；安装后的可执行文件名称以安装方式为准。
+cc-haha 默认启动交互式会话，也可以用 `--print` 作为脚本、CI 或其他程序中的非交互式 Agent。源码仓库中的命令是 `./bin/claude-haha`；安装后的可执行文件名称以安装方式为准。
 
 ```bash
 ./bin/claude-haha --help

@@ -233,15 +233,15 @@ async function main() {
       alternate: alternateFor(record, records),
       description: record.description,
       path: record.path,
-      title: `${record.title} · Claude Code Haha`
+      title: `${record.title} · cc-haha`
     })
   }
 
   await createRouteEntry('/en', shell, {
     alternate: '/',
-    description: 'A local-first desktop client for Claude Code. Sessions, diffs, agents and scheduled runs all sit in the open.',
+    description: 'Write code, work across apps, and review every change. Give cc-haha a goal and put your ideas in motion.',
     path: '/en',
-    title: 'Claude Code Haha — a local-first desktop client for Claude Code'
+    title: 'cc-haha — Less busywork. More room for life.'
   })
 
   for (const legacy of legacyRoutes) {

@@ -33,7 +33,7 @@ First, one check: make sure you're on the latest stable build from [GitHub Relea
 
 1. Quit the main window, and quit the tray icon too.
 2. Give background processes a few seconds to exit.
-3. Still stuck? End any remaining Claude Code Haha processes in Task Manager.
+3. Still stuck? End any remaining cc-haha processes in Task Manager; installed versions may still show the legacy name `Claude Code Haha`.
 4. Run the installer again. **Don't** use "Run as administrator", and **don't** manually delete data from the old install directory.
 
 ### The Linux AppImage does nothing when I run it
@@ -188,11 +188,11 @@ Scanning only binds the platform account; it doesn't authorize everyone who can 
 **What to do** — Open Settings → Computer Use and find the first item that isn't green:
 
 1. Is the toggle at the top on? (With it off, new sessions never get these tools at all.)
-2. Did the Python 3 check pass? If not, install it, or point "Python Interpreter Path" at one you already have — conda and pyenv both work.
-3. Are the virtual environment and dependencies ready and installed? If not, click "Install Environment".
+2. Does your page show the native runtime component or the Python compatibility path? macOS 14.4 and later prefer the native component; update or reinstall if it is missing. Install Python 3 or select an existing interpreter only when Python checks are shown.
+3. If the page shows virtual environment and dependency checks, make sure both are ready; otherwise click "Install Environment".
 4. On macOS, both "Accessibility Permission" and "Screen Recording Permission" must show as granted. Grant them under System Settings → Privacy & Security.
-5. **Restart Claude Code Haha after granting them.** System permissions don't apply to an already-running process.
-6. Is the app you want to control listed under "Authorized Apps"?
+5. **Restart cc-haha after granting them.** System permissions don't apply to an already-running process.
+6. Did you confirm the one-time Computer Use consent in the app? It covers all apps; also check that the target app is running and OS permissions are granted.
 
 Full details in [Computer Use](../desktop/computer-use.md).
 

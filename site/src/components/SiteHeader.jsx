@@ -14,29 +14,33 @@ const copy = {
     download: '下载',
     entries: [
       ['/start', '开始使用'],
-      ['/desktop', '桌面端功能'],
-      ['/internals', '深入原理']
+      ['/cases', '实战案例'],
+      ['/desktop/settings', '配置指南'],
+      ['/desktop', '桌面端功能']
     ],
     menu: '打开导航',
     // 页脚也有一栏叫「文档」，主导航得换个名字，否则地标列表里两个 nav 同名。
     nav: '主导航',
     search: '搜索文档',
     theme: '切换深浅色',
-    toEnglish: 'English'
+    switchLanguage: 'EN',
+    switchLanguageLabel: '切换为英文'
   },
   en: {
     docs: 'Docs',
     download: 'Download',
     entries: [
       ['/en/start', 'Get started'],
-      ['/en/desktop', 'Desktop app'],
-      ['/en/internals', 'Internals']
+      ['/en/cases', 'Cases'],
+      ['/en/desktop/settings', 'Settings'],
+      ['/en/desktop', 'Desktop app']
     ],
     menu: 'Open navigation',
     nav: 'Main',
     search: 'Search docs',
     theme: 'Toggle theme',
-    toEnglish: '中文'
+    switchLanguage: '中文',
+    switchLanguageLabel: 'Switch to Chinese'
   }
 }
 
@@ -70,7 +74,7 @@ export default function SiteHeader({ activeSection, locale = 'zh', localeHref })
         <div className="site-header__inner">
           <a className="brand" href={toSiteHref(home)}>
             <img alt="" src={toSiteHref('/images/app-icon.png')} width="26" height="26" />
-            <span>Claude Code <b>Haha</b></span>
+            <span>cc-haha</span>
           </a>
 
           <nav aria-label={c.nav} className="site-nav" data-open={open} id="site-nav">
@@ -84,19 +88,21 @@ export default function SiteHeader({ activeSection, locale = 'zh', localeHref })
                 {label}
               </a>
             ))}
+          </nav>
+
+          <div className="header-tools">
             <a
+              aria-label={c.switchLanguageLabel}
+              className="header-locale"
               href={toSiteHref(switchHref)}
+              lang={locale === 'en' ? 'zh-CN' : 'en'}
               onClick={() => {
-                // 手动切过就记住，别让下次进首页时又被浏览器语言盖回去。
                 rememberLocale(locale === 'en' ? 'zh' : 'en')
                 setOpen(false)
               }}
             >
-              {c.toEnglish}
+              {c.switchLanguage}
             </a>
-          </nav>
-
-          <div className="header-tools">
             <button aria-label={c.search} className="icon-btn" onClick={() => setSearchOpen(true)} type="button">
               <Icon name="search" />
             </button>

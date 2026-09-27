@@ -6,14 +6,14 @@ These rules apply to `docs/` changes in addition to the root instructions.
 
 Two audiences, nothing else. If a page serves neither, it does not belong here.
 
-- **People using the app** — `start/`, `desktop/`, `im/`. No prior code knowledge assumed.
+- **People using the app** — `start/`, `cases/`, `desktop/`, `im/`. No prior code knowledge assumed.
 - **People reading the source** — `internals/`, `cli/`. Architecture, implementation, contributing.
 
 Internal process artefacts (migration task lists, validation checklists, design proposals, release runbooks) are not documentation. Keep them out of `docs/`, or fold the durable part into `internals/contributing.md`.
 
 ## Structure
 
-Five top-level sections: `start/`, `desktop/`, `im/`, `cli/`, `internals/`. Adding a sixth means registering it in the `sections` array of `site/scripts/generate-docs-manifest.mjs`.
+Six top-level sections: `start/`, `cases/`, `desktop/`, `im/`, `cli/`, `internals/`. Register any added section in the `sections` array of `site/scripts/generate-docs-manifest.mjs`.
 
 `docs/en/` mirrors the Chinese tree file for file. Keep Chinese pages and their `docs/en/` counterparts aligned.
 

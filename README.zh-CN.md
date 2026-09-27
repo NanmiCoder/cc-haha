@@ -1,4 +1,4 @@
-# Claude Code Haha
+# cc-haha
 
 <p align="center">
   <img src="docs/images/readme-cover-zh.jpg" alt="cc-haha — Claude Code 开源桌面端" width="960">
@@ -19,7 +19,7 @@
 
 </div>
 
-Claude Code Haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索、分支 / Worktree 启动、Diff 审阅、内置浏览器预览、图形化权限审批、模型自选（Claude / ChatGPT / Grok / 预设 / 本地端点）、图片生成、MCP 与 SubAgent 可视化管理、Agent Teams 协作工作台、动态 Workflow 编排、模型请求追踪、Computer Use、技能市场、多主题、桌面宠物、H5 远程访问、IM 接入和定时任务，集中在一个 macOS / Windows / Linux APP 里。
+cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索、分支 / Worktree 启动、Diff 审阅、内置浏览器预览、图形化权限审批、模型自选（Claude / ChatGPT / Grok / 预设 / 本地端点）、图片生成、MCP 与 SubAgent 可视化管理、Agent Teams 协作工作台、动态 Workflow 编排、模型请求追踪、Computer Use、技能市场、多主题、桌面宠物、H5 远程访问、IM 接入和定时任务，集中在一个 macOS / Windows / Linux APP 里。**在 macOS 上，Computer Use 能操作其他应用，同时不占用你的真实鼠标和键盘。**
 
 <p align="center">
   <a href="#桌面端预览">桌面端预览</a> · <a href="#安装桌面端">安装桌面端</a> · <a href="#桌面端亮点">桌面端亮点</a> · <a href="#更多文档">更多文档</a> · <a href="#赞助与合作">赞助与合作</a> · <a href="#用户交流群">用户交流群</a>
@@ -33,18 +33,24 @@ Claude Code Haha 是一个**桌面端 Claude Code 工作台**：多会话与全�
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_下载桌面端-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="下载桌面端"></a>
 </p>
 
+上排看**上手与日常工作**：新建、权限、改动与 Computer Use；下排看**扩展能力**：模型、技能、定时任务与 IM。截图来自真实项目，保留项目与会话列表。点击缩略图可查看完整界面。
+
 <table>
   <tr>
-    <td align="center" width="33.33%"><img src="docs/images/app/zh-CN/session-new.webp" alt="第一次任务前的空会话"><br><b>从清爽的空会话开始</b><br><sub>项目和权限都在首屏</sub></td>
-    <td align="center" width="33.33%"><img src="docs/images/app/zh-CN/session-main.webp" alt="打开活动面板的真实执行中任务"><br><b>跟着任务一步步往前</b><br><sub>工具调用与阶段进度都留在眼前</sub></td>
-    <td align="center" width="33.33%"><img src="docs/images/app/zh-CN/workspace-diff.webp" alt="工作区 Diff 评审"><br><b>改了什么，逐行看清楚</b><br><sub>放大的高亮 Diff，文字和代码更清楚</sub></td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/session-new.webp"><img src="docs/images/readme-features/zh-CN/session-new.webp" width="100%" alt="新建会话：选择项目、权限和模型"></a><br><b>01 · 新建会话</b><br>从项目与权限开始</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/permission-modes.webp"><img src="docs/images/readme-features/zh-CN/permission-modes.webp" width="100%" alt="真实项目会话中的五档执行权限菜单"></a><br><b>02 · 选择权限</b><br>按任务控制操作范围</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/workspace-diff.webp"><img src="docs/images/readme-features/zh-CN/workspace-diff.webp" width="100%" alt="在工作区逐文件查看代码 Diff"></a><br><b>03 · 审阅改动</b><br>逐文件检查 Diff</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/settings-computer-use.webp"><img src="docs/images/readme-features/zh-CN/computer-use.webp" width="100%" alt="macOS Computer Use 设置：启用状态、辅助功能与屏幕录制权限"></a><br><b>04 · Computer Use</b><br>Mac 上不占用真实鼠标键盘</td>
   </tr>
   <tr>
-    <td align="center" width="33.33%"><img src="docs/images/app/zh-CN/workspace-preview.webp" alt="内置浏览器预览刚改完的页面"><br><b>改完当场验证</b><br><sub>内置浏览器打开真实本地页面</sub></td>
-    <td align="center" width="33.33%"><img src="docs/images/app/zh-CN/model-picker.webp" alt="显示服务商、预设和本地端点的模型选择器"><br><b>每条会话自选模型</b><br><sub>自己的服务商、预设和本地端点都在一个列表里</sub></td>
-    <td align="center" width="33.33%"><img src="docs/images/app/zh-CN/skill-market.webp" alt="技能市场"><br><b>缺什么手艺装什么</b><br><sub>来源和安全状态摆在明处</sub></td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/settings-provider-add.webp"><img src="docs/images/readme-features/zh-CN/settings-provider-add.webp" width="100%" alt="添加模型服务商时选择预设并填写接口地址"></a><br><b>05 · 接入模型</b><br>预设、本地端点都能用</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/skill-market.webp"><img src="docs/images/readme-features/zh-CN/skill-market.webp" width="100%" alt="浏览技能市场并查看技能来源"></a><br><b>06 · 扩展技能</b><br>按任务安装所需能力</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/schedule-create.webp"><img src="docs/images/readme-features/zh-CN/schedule-create.webp" width="100%" alt="创建独立执行的定时任务"></a><br><b>07 · 定时执行</b><br>让重复任务自动跑</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/settings-im.webp"><img src="docs/images/readme-features/zh-CN/settings-im.webp" width="100%" alt="IM 接入页的 Slack 配置表单"></a><br><b>08 · 远程接力</b><br>在 IM 中继续会话</td>
   </tr>
 </table>
+
+从 0 开始：[下载安装](docs/start/install.md) → [连接模型](docs/start/models.md) → [跑通第一条会话](docs/start/first-session.md) → [设置指南](docs/desktop/settings.md) → [实战案例](docs/cases/index.md)。想体验不抢鼠标的跨应用操作，接着看 [Computer Use 指南](docs/desktop/computer-use.md)。
 
 ---
 
@@ -173,7 +179,7 @@ cp .env.example .env
 - **Agent Teams 协作工作台**：桌面端可视化多 Agent 协作团队——成员、任务、通信流和依赖泳道一目了然。
 - **动态 Workflow 编排**：模型当场编写并运行编排脚本，并发或流水线调度多个子代理，支持阶段视图、中断与断点续跑。
 - **模型请求追踪**：本地记录每轮模型请求的状态与耗时，可搜索筛选，快速定位卡死或失败调用。
-- **Computer Use**：让 Agent 在授权后截图、点击、输入并控制桌面应用。
+- **Computer Use**：让 Agent 在授权后截图、点击、输入并控制桌面应用；macOS 原生运行时不占用你的真实鼠标和键盘。
 - **桌面宠物**：搭搭、弧弧、补补、回回随任务状态换动作，也能自己做一只（默认关闭）。
 - **H5 远程访问**：扫码用手机浏览器接入当前会话，锁屏切后台都不打断正在跑的任务。
 - **IM 接入**：通过 Telegram / 飞书 / 微信 / 钉钉 / WhatsApp / 企业微信 / QQ / Slack 远程对话、切换项目和审批权限。
@@ -221,7 +227,7 @@ cp .env.example .env
 
 ## ⭐ Star History
 
-如果这个项目对你有帮助，欢迎点一个 ⭐ Star，让更多人发现 Claude Code Haha。
+如果这个项目对你有帮助，欢迎点一个 ⭐ Star，让更多人发现 cc-haha。
 
 <a href="https://www.repostars.dev/?repos=NanmiCoder%2Fcc-haha&theme=ocean">
   <img alt="Star History Chart" src="https://www.repostars.dev/api/embed?repo=NanmiCoder%2Fcc-haha&theme=ocean" />

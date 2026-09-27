@@ -1,21 +1,21 @@
 ---
-title: Claude Code Haha 是什么
+title: cc-haha 是什么
 nav_title: 这是什么
 description: 跑在你自己电脑上的 AI 编程工作台：模型自己接，改动你审阅。
 order: 0
 ---
 
-# Claude Code Haha 是什么
+# cc-haha 是什么
 
 它是一个装在你电脑上的应用。你把一个项目文件夹交给它，用大白话说出你想要什么，它去读代码、改文件、跑命令——每一处改动都摆在你眼前，等你点头才算数。
 
-![一条完整会话：提问、工具调用、编辑文件、内联 diff](../images/app/zh-CN/session-main.webp)
+![真实项目中的发布说明会话：工具调用、回复与完整会话列表](../images/app/zh-CN/session-main.webp)
 
 上图是一条真实会话：左边是项目和历史，中间是对话，Claude 读完文件后直接改，改了什么就在下面逐行标出来。
 
 ## 和 Claude Code CLI 是什么关系
 
-Claude Code 是 Anthropic 出的命令行编程 Agent，跑在终端里。Claude Code Haha 的内核就是从 Claude Code 源码修复而来的一份 CLI（仓库里叫 `claude-haha`），桌面端是包在它外面的图形界面。
+Claude Code 是 Anthropic 出的命令行编程 Agent，跑在终端里。cc-haha 的内核就是从 Claude Code 源码修复而来的一份 CLI（仓库里叫 `claude-haha`），桌面端是包在它外面的图形界面。
 
 对你来说，这意味着两件事：
 
@@ -52,5 +52,7 @@ Claude Code 是 Anthropic 出的命令行编程 Agent，跑在终端里。Claude
 2. [连接模型服务](./models.md) — 官方账号、第三方 API、本地模型，三种接法挑一种。
 3. [跑通第一条会话](./first-session.md) — 选目录、选权限、说目标、看它干活、审改动。
 4. [桌面端功能地图](../desktop/index.md) — 跑通之后，看看还有哪些能力可以用上。
+
+想带着具体目标练习，接着看[实战案例](../cases/index.md)：从读懂陌生项目到修 Bug、预览页面、定时审查和手机接力。
 
 中途卡住了，去 [装不上 / 打不开 / 连不上](./troubleshooting.md) 按症状找。

@@ -1,0 +1,429 @@
+/* Documentation follows the landing page's paper, illustration and editorial type. */
+.docs-site {
+  --font-sans: 'Geist', 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --bg: #faf9f5;
+  --surface: #fffdf8;
+  --surface-sunken: #f5f0e8;
+  --surface-muted: #f3eee4;
+  --surface-hover: #f5ede2;
+  --surface-active: #f0e2d2;
+  --text: #262720;
+  --text-2: #5f6158;
+  --text-3: #827b6e;
+  --border: #e9e2d6;
+  --border-strong: #d9cdbb;
+  --border-control: #a59886;
+  --brand: #905831;
+  --brand-hover: #744327;
+  --brand-soft: #f4e9db;
+  --brand-soft-hover: #edddcb;
+  --brand-border: #c6a382;
+  --on-brand: #fffaf3;
+  --on-brand-soft: #754327;
+  --ink: #1f211d;
+  --on-ink: #fffaf3;
+  --code-bg: #f5f0e8;
+  --code-border: #e4d9c9;
+  --glass: rgba(250, 249, 245, .9);
+  --scrim: rgba(31, 34, 27, .62);
+  --shadow-sm: 0 5px 20px rgba(70, 51, 31, .05);
+  --shadow-md: 0 17px 44px rgba(70, 51, 31, .09);
+  --shadow-lg: 0 28px 90px rgba(26, 27, 20, .22);
+  min-height: 100svh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+:root[data-theme='dark'] .docs-site {
+  --bg: #211f1a;
+  --surface: #2c2922;
+  --surface-sunken: #25231e;
+  --surface-muted: #363128;
+  --surface-hover: #40372c;
+  --surface-active: #4c3d2d;
+  --text: #f5f0e6;
+  --text-2: #d0c7b7;
+  --text-3: #ad9e8a;
+  --border: #473d32;
+  --border-strong: #62503e;
+  --border-control: #aa937b;
+  --brand: #dfa985;
+  --brand-hover: #f1c3a2;
+  --brand-soft: #493327;
+  --brand-soft-hover: #5a3d2e;
+  --brand-border: #8e6046;
+  --on-brand: #251c17;
+  --on-brand-soft: #f0c3a2;
+  --ink: #f2e9dc;
+  --on-ink: #211f1a;
+  --code-bg: #25241f;
+  --code-border: #54483a;
+  --glass: rgba(33, 31, 26, .93);
+  --scrim: rgba(9, 8, 7, .77);
+  --shadow-sm: 0 5px 20px rgba(0, 0, 0, .13);
+  --shadow-md: 0 17px 44px rgba(0, 0, 0, .2);
+  --shadow-lg: 0 28px 90px rgba(0, 0, 0, .48);
+}
+
+.docs-site :is(a, button, [tabindex='0']):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 4px;
+}
+
+.docs-site .site-header {
+  background: var(--glass);
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+  backdrop-filter: blur(20px) saturate(140%);
+}
+.docs-site .site-header__inner { max-width: 1536px; }
+.docs-site .brand {
+  gap: 10px;
+  color: var(--text);
+  font: 29px/1 'Special Elite', 'Courier New', serif;
+  letter-spacing: -.055em;
+}
+.docs-site .brand img { width: 28px; height: 28px; border-radius: 9px; }
+.docs-site .site-nav { gap: 4px; }
+.docs-site .site-nav a {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .025em;
+}
+.docs-site .site-nav a:hover,
+.docs-site .site-nav a[aria-current='page'] { background: var(--surface-muted); color: var(--text); }
+.docs-site .header-tools { border-left-color: var(--border); }
+.docs-site .header-locale {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 46px;
+  min-height: 38px;
+  margin-right: 5px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background .2s, border-color .2s;
+}
+.docs-site .header-locale:hover { border-color: var(--brand-border); background: var(--brand-soft); }
+.docs-site .header-tools .icon-btn { color: var(--text-2); }
+.docs-site .header-tools .icon-btn:hover { background: var(--surface-muted); color: var(--text); }
+.docs-site .header-download { background: var(--ink); color: var(--on-ink); }
+.docs-site .header-download:hover { background: var(--brand-hover); color: var(--on-brand); }
+
+.docs-site .doc-layout {
+  max-width: 1536px;
+  grid-template-columns: 248px minmax(0, 1fr) 205px;
+  gap: clamp(28px, 3vw, 48px);
+  padding: 30px 32px 100px;
+}
+.docs-site .doc-nav {
+  top: calc(var(--h-header) + 22px);
+  max-height: calc(100svh - var(--h-header) - 34px);
+  padding: 0 6px 30px 0;
+  border-right: 0;
+}
+.docs-site .doc-nav__intro {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  min-height: 237px;
+  margin: 0 0 24px;
+  padding: 22px 21px;
+  overflow: hidden;
+  border: 1px solid #ffffffc9;
+  border-radius: 25px;
+  background: linear-gradient(180deg, #f7f3eac9 4%, #f7f3ea39 67%), url('../pages/home/assets/quiet-moments.webp') center bottom / cover;
+  color: #27281e;
+  box-shadow: var(--shadow-sm);
+}
+.docs-site .doc-nav__intro > span {
+  color: #935d38;
+  font: 18px/1.1 'Special Elite', 'Courier New', serif;
+  letter-spacing: -.035em;
+}
+.docs-site .doc-nav__intro strong {
+  margin-top: 11px;
+  color: #303126;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: -.035em;
+}
+.docs-site .doc-nav__intro small {
+  margin-top: auto;
+  align-self: flex-start;
+  padding: 5px 9px;
+  border: 1px solid #ffffffc7;
+  border-radius: 20px;
+  background: #fffdf8bf;
+  color: #685d47;
+  font: 9px/1.2 var(--font-sans);
+  letter-spacing: .05em;
+  backdrop-filter: blur(8px);
+}
+.docs-site .doc-nav__group + .doc-nav__group { margin-top: 8px; }
+.docs-site .doc-nav__title {
+  gap: 12px;
+  min-height: 45px;
+  padding-inline: 12px;
+  border-radius: 13px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+.docs-site .doc-nav__title:hover { background: var(--surface-muted); }
+.docs-site .doc-nav__number {
+  color: var(--brand);
+  font: 11px/1 'Special Elite', 'Courier New', serif;
+}
+.docs-site .doc-nav__list { padding-bottom: 9px; }
+.docs-site .doc-nav__link {
+  margin-left: 10px;
+  padding: 9px 11px 9px 22px;
+  border-radius: 10px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.docs-site .doc-nav__link[aria-current='page'] {
+  background: var(--surface);
+  color: var(--brand);
+  box-shadow: 0 2px 10px rgba(87, 60, 35, .05);
+  font-weight: 600;
+}
+.docs-site .doc-nav__link[aria-current='page']::before {
+  top: 15px;
+  left: 10px;
+  width: 5px;
+  height: 5px;
+  background: var(--brand);
+}
+
+.docs-site .doc-main {
+  width: 100%;
+  max-width: 900px;
+  min-width: 0;
+  padding: 28px clamp(27px, 3vw, 48px) 48px;
+  border: 1px solid #ffffffdb;
+  border-radius: 30px;
+  background: var(--surface);
+  box-shadow: 0 16px 60px rgba(77, 56, 30, .06);
+}
+:root[data-theme='dark'] .docs-site .doc-main { border-color: var(--border); }
+.docs-site .doc-reading-head {
+  padding: 0 0 15px;
+  border-bottom: 1px solid var(--border);
+  color: var(--brand);
+  font: 600 10px/1.4 var(--font-sans);
+  letter-spacing: .11em;
+}
+.docs-site .doc-reading-head span:last-child { color: var(--text-3); font-size: 10px; }
+.docs-site .doc-cover {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  height: 176px;
+  margin: 19px 0 23px;
+  padding: 22px 24px;
+  overflow: hidden;
+  border: 1px solid #ffffffd9;
+  border-radius: 22px;
+  background: linear-gradient(90deg, #faf8f0f7 0%, #faf8f0a3 42%, #faf8f017 100%), url('../pages/home/assets/quiet-landscape.webp') center 67% / cover;
+  color: #38392a;
+}
+.docs-site .doc-cover span:first-child {
+  color: #8e6546;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: .13em;
+}
+.docs-site .doc-cover span:last-child {
+  max-width: 235px;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -.04em;
+}
+.docs-site .doc-breadcrumb {
+  gap: 11px;
+  margin: 0 0 20px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+}
+.docs-site .doc-breadcrumb a:hover { color: var(--brand); }
+.docs-site .prose {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.87;
+}
+.docs-site .prose h1 {
+  margin-bottom: 17px;
+  color: var(--text);
+  font: 500 clamp(34px, 3vw, 46px)/1.22 var(--font-sans);
+  letter-spacing: -.055em;
+}
+.docs-site .prose h1 + p {
+  margin: 0 0 5px;
+  padding-bottom: 32px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1.8;
+}
+.docs-site .prose h2 {
+  margin-top: 55px;
+  padding-top: 25px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  font: 500 27px/1.32 var(--font-sans);
+  letter-spacing: -.04em;
+}
+.docs-site .prose h1 + p + h2 { margin-top: 46px; padding-top: 0; border-top: 0; }
+.docs-site .prose h2::before {
+  content: 'CHAPTER /';
+  display: block;
+  margin-bottom: 9px;
+  color: var(--brand);
+  font: 12px/1 'Special Elite', 'Courier New', serif;
+  letter-spacing: .05em;
+}
+.docs-site .prose h3 { color: var(--text); font-size: 21px; font-weight: 500; }
+.docs-site .prose :is(p, li) { color: var(--text-2); }
+.docs-site .prose strong { color: var(--text); }
+.docs-site .prose a { color: var(--brand); text-decoration-color: var(--brand-border); }
+.docs-site .prose a:hover { text-decoration-color: var(--brand); }
+.docs-site .prose blockquote {
+  border-left: 3px solid var(--brand);
+  border-radius: 0 15px 15px 0;
+  background: var(--surface-muted);
+}
+.docs-site .prose pre { border-radius: 15px; background: var(--code-bg); }
+.docs-site .prose .doc-code-copy { background: var(--surface); color: var(--brand); }
+.docs-site .prose .doc-code-copy:hover { background: var(--brand-soft); }
+.docs-site .prose img {
+  display: block;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: none;
+  box-shadow: var(--shadow-sm);
+}
+.docs-site .prose img:hover { border-color: var(--brand-border); box-shadow: var(--shadow-md); }
+.docs-site .doc-table-wrap,
+.docs-site .doc-callout,
+.docs-site .doc-mermaid { border-radius: 15px; }
+.docs-site .prose thead th { background: var(--surface-muted); }
+.docs-site .doc-pager { margin-top: 62px; border-top-color: var(--border); }
+.docs-site .doc-pager__link {
+  min-height: 116px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface-sunken);
+  transition: transform .2s, background .2s, border-color .2s;
+}
+.docs-site .doc-pager__link:hover {
+  transform: translateY(-3px);
+  border-color: var(--brand-border);
+  background: var(--brand-soft);
+}
+.docs-site .doc-pager__dir { color: var(--brand); }
+
+.docs-site .doc-toc {
+  top: calc(var(--h-header) + 22px);
+  max-height: calc(100svh - var(--h-header) - 34px);
+  padding: 5px 0 25px;
+}
+.docs-site .doc-toc__reading {
+  margin-bottom: 30px;
+  padding: 18px 18px 21px;
+  border: 1px solid #ffffffce;
+  border-radius: 19px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+:root[data-theme='dark'] .docs-site .doc-toc__reading { border-color: var(--border); }
+.docs-site .doc-toc__reading > span {
+  color: var(--text-3);
+  font: 600 9px var(--font-sans);
+  letter-spacing: .12em;
+}
+.docs-site .doc-toc__reading strong {
+  color: var(--brand);
+  font: 500 36px/1 var(--font-sans);
+}
+.docs-site .doc-toc__reading [role='progressbar'] {
+  height: 4px;
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface-muted);
+}
+.docs-site .doc-toc__reading i { border-radius: inherit; background: var(--brand); }
+.docs-site .doc-toc__title { color: var(--text); font-size: 12px; font-weight: 600; }
+.docs-site .doc-toc__list { border-left: 1px solid var(--border-strong); }
+.docs-site .doc-toc__link { color: var(--text-3); font-size: 11px; line-height: 1.65; }
+.docs-site .doc-toc__link:hover,
+.docs-site .doc-toc__link[aria-current='true'] { color: var(--brand); }
+.docs-site .doc-toc__link[aria-current='true'] { border-left-color: var(--brand); }
+.docs-site .doc-read-progress { background: var(--brand); }
+.docs-site .doc-back-top { border-color: var(--border); background: var(--surface); color: var(--brand); }
+.docs-site .doc-back-top:hover { background: var(--brand-soft); }
+.docs-site .doc-image-viewer { border-color: var(--border); background: var(--surface); }
+.docs-site .doc-image-viewer__bar button { color: var(--brand); }
+.docs-site .doc-image-viewer__bar button:hover { background: var(--brand-soft); }
+
+@media (max-width: 1180px) {
+  .docs-site .doc-layout { grid-template-columns: 230px minmax(0, 1fr); gap: 32px; }
+}
+@media (max-width: 900px) {
+  .docs-site .site-nav { border-color: var(--border); background: var(--surface); }
+  .docs-site .doc-layout { display: block; padding: 22px 24px 72px; }
+  .docs-site .doc-main { max-width: 770px; margin-inline: auto; }
+  .docs-site .doc-mobilebar { border-bottom-color: var(--border); background: var(--glass); backdrop-filter: blur(15px); }
+  .docs-site .doc-mobilebar button { border-color: var(--border); background: var(--surface); color: var(--text); }
+  .docs-site .doc-nav {
+    top: 0;
+    max-height: 100svh;
+    padding: 18px 18px 40px;
+    border-right: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .docs-site .doc-nav__intro { display: none; }
+  .docs-site .doc-nav__mobile-heading { color: var(--text); }
+}
+@media (max-width: 620px) {
+  .docs-site .site-header__inner { padding-inline: 17px; }
+  .docs-site .brand { gap: 7px; font-size: 23px; }
+  .docs-site .brand img { width: 25px; height: 25px; }
+  .docs-site .header-tools .icon-btn { width: 38px; height: 38px; }
+  .docs-site .header-locale { min-width: 42px; min-height: 38px; margin-right: 2px; padding-inline: 7px; font-size: 11px; }
+  .docs-site .doc-layout { padding: 16px 13px 58px; }
+  .docs-site .doc-main { padding: 19px 19px 35px; border-radius: 23px; }
+  .docs-site .doc-cover { height: 133px; margin: 15px 0 19px; padding: 15px; border-radius: 16px; background-position: 60% 66%; }
+  .docs-site .doc-cover span:first-child { font-size: 8px; }
+  .docs-site .doc-cover span:last-child { max-width: 180px; font-size: 16px; }
+  .docs-site .doc-reading-head { font-size: 9px; }
+  .docs-site .doc-breadcrumb { margin-bottom: 15px; }
+  .docs-site .prose { font-size: 14px; }
+  .docs-site .prose h1 { font-size: 33px; }
+  .docs-site .prose h1 + p { font-size: 15px; }
+  .docs-site .prose h2 { margin-top: 44px; font-size: 24px; }
+  .docs-site .prose h3 { font-size: 19px; }
+  .docs-site .prose img { border-radius: 10px; }
+  .docs-site .doc-pager { margin-top: 50px; }
+  .docs-site .doc-mobilebar { padding: 8px 13px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .docs-site .doc-pager__link { transition: none; }
+  .docs-site .doc-pager__link:hover { transform: none; }
+}

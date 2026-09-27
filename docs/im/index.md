@@ -11,7 +11,7 @@ order: 0
 
 对话对象是你自己绑定的机器人或账号，消息只经过你本机的桌面端，没有中间服务器托管你的代码。
 
-![设置里的 IM 接入页，顶部是配对管理，下面是各平台 Tab](../images/app/zh-CN/settings-im.webp)
+![设置 → IM 接入：平台标签与 Slack 配置表单](../images/app/zh-CN/settings-im.webp)
 
 ## 接进来之后能做什么
 

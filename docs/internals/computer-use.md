@@ -21,7 +21,7 @@ order: 12
   src/vendor/computer-use-mcp/toolCalls.ts
   src/vendor/computer-use-mcp/mcpServer.ts
   ↓
-Claude Code Haha 集成
+cc-haha 集成
   src/utils/computerUse/
   ↓
 Python Bridge

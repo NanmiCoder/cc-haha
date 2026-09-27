@@ -1,13 +1,13 @@
 ---
 title: Privacy and network access
 nav_title: Privacy
-description: What Claude Code Haha stores locally, when it uses the network, and how to remove its data.
+description: What cc-haha stores locally, when it uses the network, and how to remove its data.
 order: 6
 ---
 
 # Privacy and network access
 
-Claude Code Haha is a local-first, open-source development tool. The project itself does not operate a cloud backend that receives session content. The application is not fully offline: when you choose a model provider, MCP server, messaging integration, or update feature, relevant data is sent to the third-party service you selected or configured.
+cc-haha is a local-first, open-source development tool. The project itself does not operate a cloud backend that receives session content. The application is not fully offline: when you choose a model provider, MCP server, messaging integration, or update feature, relevant data is sent to the third-party service you selected or configured.
 
 ## Data stored locally
 
@@ -32,7 +32,7 @@ The project maintainers do not sell user data or place advertising based on pers
 
 ## Removing data
 
-Uninstalling the application does not automatically delete sessions and configuration under `~/.claude`. To remove local data completely, first back up anything you want to keep, then manually delete `~/.claude` and the Claude Code Haha data in your operating system's application-data directory. To remove data already sent to a third-party service, follow that provider's process.
+Uninstalling the application does not automatically delete sessions and configuration under `~/.claude`. To remove local data completely, first back up anything you want to keep, then manually delete `~/.claude` and the cc-haha data in your operating system's application-data directory (installed versions may still use the legacy directory name `Claude Code Haha`). To remove data already sent to a third-party service, follow that provider's process.
 
 ## Contact
 

@@ -7,7 +7,7 @@ order: 1
 
 # Command Reference
 
-Claude Code Haha starts an interactive session by default. With `--print`, it can also run as a non-interactive agent in scripts, CI, or another program. The command in a source checkout is `./bin/claude-haha`; the installed executable name depends on the installation method.
+cc-haha starts an interactive session by default. With `--print`, it can also run as a non-interactive agent in scripts, CI, or another program. The command in a source checkout is `./bin/claude-haha`; the installed executable name depends on the installation method.
 
 ```bash
 ./bin/claude-haha --help

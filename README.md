@@ -1,4 +1,4 @@
-# Claude Code Haha
+# cc-haha
 
 <p align="center">
   <img src="docs/images/readme-cover-en.jpg" alt="cc-haha — Open-source desktop for Claude Code" width="960">
@@ -19,7 +19,7 @@
 
 </div>
 
-Claude Code Haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, an Agent Teams workbench, dynamic Workflow orchestration, model trace, Computer Use, skill marketplace, colour themes, desktop pets, H5 remote access, IM integration, and scheduled tasks, all in one app.
+cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, an Agent Teams workbench, dynamic Workflow orchestration, model trace, Computer Use, skill marketplace, colour themes, desktop pets, H5 remote access, IM integration, and scheduled tasks, all in one app. **On macOS, Computer Use can operate other apps without taking over your physical mouse or keyboard.**
 
 <p align="center">
   <a href="#desktop-preview">Desktop Preview</a> · <a href="#install-the-desktop-app">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#more-documentation">More Docs</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#user-group">User Group</a>
@@ -33,18 +33,24 @@ Claude Code Haha is a **desktop Claude Code workspace** for macOS, Windows, and 
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_Download_Desktop-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="Download Desktop"></a>
 </p>
 
+The top row covers **getting started and daily work**: sessions, permissions, changes, and Computer Use. The second shows **extensions**: models, skills, scheduled tasks, and IM. These screenshots show the real project in the Chinese interface. Click a thumbnail to see the full screen.
+
 <table>
   <tr>
-    <td align="center" width="33.33%"><img src="docs/images/app/en/session-new.webp" alt="Empty desktop session before the first task"><br><b>Start with a clear, empty session</b><br><sub>Project and permissions stay visible</sub></td>
-    <td align="center" width="33.33%"><img src="docs/images/app/en/session-main.webp" alt="Real task running with the Activity panel open"><br><b>Follow the task as it runs</b><br><sub>Tool calls and stage-by-stage progress stay in view</sub></td>
-    <td align="center" width="33.33%"><img src="docs/images/app/en/workspace-diff.webp" alt="Workspace diff review"><br><b>See exactly what changed</b><br><sub>A focused, full-width syntax-highlighted diff</sub></td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/en/session-new.webp"><img src="docs/images/readme-features/en/session-new.webp" width="100%" alt="New session with project, permission, and model choices"></a><br><b>01 · Start a session</b><br>Pick a project and permissions</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/en/permission-modes.webp"><img src="docs/images/readme-features/en/permission-modes.webp" width="100%" alt="Choose one of five permission modes in a real project session"></a><br><b>02 · Set permissions</b><br>Control what each task can do</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/en/workspace-diff.webp"><img src="docs/images/readme-features/en/workspace-diff.webp" width="100%" alt="Review a code diff file by file in the workspace"></a><br><b>03 · Review changes</b><br>Inspect each file's diff</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/en/settings-computer-use.webp"><img src="docs/images/readme-features/en/computer-use.webp" width="100%" alt="macOS Computer Use settings with enabled status and Accessibility and Screen Recording permissions"></a><br><b>04 · Computer Use</b><br>Keep your Mac mouse and keyboard free</td>
   </tr>
   <tr>
-    <td align="center" width="33.33%"><img src="docs/images/app/en/workspace-preview.webp" alt="Built-in browser previewing the page that was just changed"><br><b>Verify on the spot</b><br><sub>The real edited page in the built-in browser</sub></td>
-    <td align="center" width="33.33%"><img src="docs/images/app/en/model-picker.webp" alt="Model picker showing providers, presets, and local endpoints"><br><b>Choose the exact model</b><br><sub>Your providers, presets, and local endpoints in one list</sub></td>
-    <td align="center" width="33.33%"><img src="docs/images/app/en/skill-market.webp" alt="Skill marketplace"><br><b>Missing a trick? Install it</b><br><sub>Source and safety status shown up front</sub></td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/en/settings-provider-add.webp"><img src="docs/images/readme-features/en/settings-provider-add.webp" width="100%" alt="Add a model provider using a preset and endpoint URL"></a><br><b>05 · Connect models</b><br>Use presets or local endpoints</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/en/skill-market.webp"><img src="docs/images/readme-features/en/skill-market.webp" width="100%" alt="Browse skills and inspect their sources"></a><br><b>06 · Add skills</b><br>Install what a task needs</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/en/schedule-create.webp"><img src="docs/images/readme-features/en/schedule-create.webp" width="100%" alt="Create a scheduled task in its own session"></a><br><b>07 · Schedule tasks</b><br>Automate recurring work</td>
+    <td align="center" valign="top" width="25%"><a href="docs/images/app/en/settings-im.webp"><img src="docs/images/readme-features/en/settings-im.webp" width="100%" alt="Configure Slack in the IM access settings"></a><br><b>08 · Work remotely</b><br>Continue through IM</td>
   </tr>
 </table>
+
+Start here: [install the app](docs/en/start/install.md) → [connect a model](docs/en/start/models.md) → [run your first session](docs/en/start/first-session.md) → [explore settings](docs/en/desktop/settings.md) → [try real workflows](docs/en/cases/index.md). For hands-free cross-app work on macOS, follow the [Computer Use guide](docs/en/desktop/computer-use.md).
 
 ---
 
@@ -173,7 +179,7 @@ If this project helps you, consider buying me a coffee — every bit of support 
 - **Agent Teams workbench**: visualize multi-agent collaboration in the GUI — members, tasks, a communication feed, and a dependency-lane canvas.
 - **Dynamic Workflow orchestration**: the model writes and runs orchestration scripts on the fly, driving subagents concurrently or in pipelines, with phase views, interrupts, and resume.
 - **Model trace**: every model request is logged locally with status and timing — search and filter to diagnose stuck or failed calls.
-- **Computer Use**: let the agent take screenshots, click, type, and control desktop apps after authorization.
+- **Computer Use**: let the agent take screenshots, click, type, and control desktop apps after authorization; the native macOS runtime does not take over your physical mouse or keyboard.
 - **Desktop pets**: Dada, Huhu, Bubu, and Huihui change what they do with the task at hand — or raise one of your own (off by default).
 - **H5 remote access**: scan a QR code to continue the session in your phone browser; locking the screen won't kill a running task.
 - **IM integration**: chat, switch projects, and approve actions through Telegram / Feishu / WeChat / DingTalk / WhatsApp / WeCom / QQ / Slack.
@@ -221,7 +227,7 @@ Thanks to the following open-source projects and community practices for referen
 
 ## ⭐ Star History
 
-If this project helps you, please support it with a ⭐ Star so more people can discover Claude Code Haha.
+If this project helps you, please support it with a ⭐ Star so more people can discover cc-haha.
 
 <a href="https://www.repostars.dev/?repos=NanmiCoder%2Fcc-haha&theme=ocean">
   <img alt="Star History Chart" src="https://www.repostars.dev/api/embed?repo=NanmiCoder%2Fcc-haha&theme=ocean" />

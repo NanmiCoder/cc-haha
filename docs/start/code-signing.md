@@ -1,13 +1,13 @@
 ---
 title: Code signing policy
 nav_title: 签名政策
-description: Claude Code Haha 正式发布包的签名范围、责任角色、审批、验证与撤销规则。
+description: cc-haha 正式发布包的签名范围、责任角色、审批、验证与撤销规则。
 order: 5
 ---
 
 # Code signing policy
 
-本政策适用于 Claude Code Haha 的正式 Windows 发布包。项目正在申请 SignPath Foundation 免费代码签名；接入完成前，Windows 下载页会继续明确标注安装包尚未签名。接入完成后，只有符合本政策的构建产物才会提交签名。
+本政策适用于 cc-haha 的正式 Windows 发布包。项目正在申请 SignPath Foundation 免费代码签名；接入完成前，Windows 下载页会继续明确标注安装包尚未签名。接入完成后，只有符合本政策的构建产物才会提交签名。
 
 Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
@@ -17,7 +17,7 @@ Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 签名仅用于本项目拥有并从 [NanmiCoder/cc-haha](https://github.com/NanmiCoder/cc-haha) 源码构建的 Windows 桌面程序、项目自有 sidecar，以及最终的 x64 和 ARM64 NSIS 安装包。
 
-发布包可能包含在各自许可证下分发的第三方或上游开源组件。这些组件可以原样打包，但不会以 Claude Code Haha 自有二进制的身份签名。证书不会用于其他项目、个人构建、调试构建或来源不明的文件。
+发布包可能包含在各自许可证下分发的第三方或上游开源组件。这些组件可以原样打包，但不会以 cc-haha 自有二进制的身份签名。证书不会用于其他项目、个人构建、调试构建或来源不明的文件。
 
 ## 可信来源与构建
 

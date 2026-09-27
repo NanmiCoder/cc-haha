@@ -16,7 +16,7 @@ Both require your computer to be on with the app running. Tasks execute on your 
 
 ## H5 Access
 
-![Settings → H5 Access: LAN access toggle and connection settings](../../images/app/en/settings-h5.webp)
+![Settings → H5 Access: LAN access toggle and connection settings (Chinese interface)](../../images/app/en/settings-h5.webp)
 
 ### Turning it on
 
@@ -27,7 +27,7 @@ Both require your computer to be on with the app running. Tasks execute on your 
 
 The scanned link carries the server address and token. Scan with your phone camera and open it in your usual Safari, Chrome, or system browser. Successful verification stores the connection in that browser's localStorage and removes the token from the address bar. Scanning again or opening a bookmark reconnects automatically. Temporary network failures do not forget pairing; choose **Retry** to use the saved credential. A revoked or regenerated token requires a fresh QR code.
 
-![The mobile conversation view with a file-changes card](../../images/app/en/h5-session.webp)
+![Reading a real project conversation on mobile (Chinese interface)](../../images/app/en/h5-session.webp)
 
 ### The token is the credential
 
@@ -88,9 +88,9 @@ Automatic restoration on desktop startup is off by default. Enable it to reconne
 
 ## IM Adapters
 
-![Settings → IM Adapters: pairing and the five platforms](../../images/app/en/settings-im.webp)
+![Settings → IM Adapters: platform tabs and the Slack setup form (Chinese interface)](../../images/app/en/settings-im.webp)
 
-**Settings → IM Adapters** supports five platforms, each connected differently:
+**Settings → IM Adapters** supports eight platforms, each connected differently. These are the common setup paths; see the [messaging guide](../im/index.md) for full steps:
 
 | Platform | How to connect |
 |---|---|
@@ -99,6 +99,9 @@ Automatic restoration on desktop startup is off by default. Enable it to reconne
 | WhatsApp | Generate a QR code and scan it under **Linked devices** in WhatsApp |
 | Telegram | Get a bot token from @BotFather and paste it in |
 | Feishu | Enter an App ID and App Secret; if you don't have a bot, the page can create one from a template |
+| WeCom | Scan in settings to create an intelligent bot |
+| QQ | Scan to authorize, then provide the App ID and App Secret |
+| Slack | Create an app from the supplied manifest, then enter two tokens |
 
 ### Binding an account is not the same as allowing a person
 

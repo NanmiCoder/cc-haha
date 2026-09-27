@@ -11,33 +11,35 @@ The conversation tells you what Claude said. The workspace tells you what it act
 
 ## Opening it
 
-Click the folder icon on the right of the tab bar. Click it again to collapse. Drag the panel's left edge to resize.
+Click **Show Workspace** on the right of the tab bar. Click it again to collapse. Drag the panel's left edge to resize.
 
-At the top of the panel is a **Files / Browser** switch:
+The empty panel offers **Side chat**, **Review**, **Terminal**, **Browser**, and **Files**. Each opens in its own tab. Use the `+` at the top to add more tabs and switch between tools.
 
-- **Files** — project files, Git changes, and diff review.
-- **Browser** — a built-in browser for previewing the page you just changed.
+## Review: choose a comparison
 
-## Changed files and All files
+![The Review file tree showing changed files and line counts in the selected HEAD commit (Chinese interface)](../../images/app/en/workspace-changes.webp)
 
-![The "Changed files" list, each row with a status marker and line counts](../../images/app/en/workspace-changes.webp)
+Open **Review** and use **Comparison** in the toolbar to choose the changes you want to inspect:
 
-In Files mode there are two views:
+- **Unstaged / Staged / All uncommitted** — the corresponding changes in the current working directory.
+- **Branch / Compare branch…** — differences against the selected branch.
+- **View commit…** — enter a commit reference to inspect that commit's changes.
 
-- **Changed files** — only files with uncommitted changes in this Git repo, each row showing its status (modified, added, deleted, renamed, untracked) and lines added or removed. This is where you'll spend review time.
-- **All files** — the full directory tree. The search box above it matches file names across the whole project, including directories you haven't expanded yet.
+Use **Toggle file tree** to show the files changed in the selected comparison. Each row includes a status and line counts; select a file to see its diff. The Review screenshots on this page use **View commit…** to inspect the existing `HEAD` commit in read-only mode.
 
-Click a file name to open a preview: a diff in two columns, or the file itself. Previews accumulate as tabs, like an editor.
+If the folder is not a Git repository, the **Review** entry explains why it is unavailable.
 
-When the directory isn't a Git repo, **Changed files** says so plainly — that isn't an error.
+## Files tabs
+
+**Files** is a separate tab for browsing the project directory and previewing individual files. Use its search box to filter file names, or choose **Open file in tab** from a review. Open tabs work like editor tabs: switch between them as needed.
 
 Any file can have its path copied, or be pushed back into the composer as context with **Add to chat**.
 
 ## Diff review: leaving a note on a line
 
-![Diff review with syntax highlighting, old and new side by side](../../images/app/en/workspace-diff.webp)
+![A read-only review of the HEAD commit with syntax-highlighted diff lines (Chinese interface)](../../images/app/en/workspace-diff.webp)
 
-The diff keeps old and new lines with full syntax highlighting. The genuinely useful part is line-level comments:
+The diff keeps old and new lines with syntax highlighting. The toolbar lets you switch between **Unified diff** and **Split diff** and enable word wrap. When you finish a file, use **Mark as viewed**. To leave feedback, use line-level comments:
 
 1. Click a line — a comment box opens beside it.
 2. To comment on a range, hold `Shift` and click the first and last line. The selection must stay on one side of the diff and inside one hunk.
@@ -49,7 +51,7 @@ This is far more precise than describing "the null check in that one function" i
 If Claude changes the file while you're writing a comment, the panel tells you the diff has updated and asks you to reselect — that's there to stop a comment from landing on the wrong lines.
 
 :::tip
-Denied tool calls never reach disk, so they never show up in Changed files. Even so, give `git diff` one last read before you ship.
+Denied tool calls never reach disk, so they do not create file changes to review. Even so, give `git diff` one last read before you ship.
 :::
 
 ## Isolated worktree: keeping experiments caged
@@ -66,9 +68,9 @@ The temporary worktree is cleaned up when you're done. History stays readable, b
 
 ## Built-in browser
 
-![The built-in browser previewing a page that was just edited](../../images/app/en/workspace-preview.webp)
+![The built-in browser previewing a page that was just edited (Chinese interface)](../../images/app/en/workspace-preview.webp)
 
-Switch the workspace panel to **Browser** and type a local dev address or any URL. Three buttons here exist specifically so Claude can see what you see:
+Open a **Browser** tab from the empty workspace panel or the `+` menu at the top, then type a local dev address or any URL. It stays in its own tab alongside **Files** and **Review**. Three buttons here exist specifically so Claude can see what you see:
 
 - **Capture** — send the current rendering back into the conversation.
 - **Pick element** — click an element on the page; its selector, position, and a screenshot go to Claude as context. This saves an enormous amount of back-and-forth on styling.

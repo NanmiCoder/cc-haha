@@ -1,21 +1,21 @@
 ---
-title: What Claude Code Haha is
+title: What cc-haha is
 nav_title: What it is
 description: An AI coding workbench that runs on your own machine. You pick the model; you approve every change.
 order: 0
 ---
 
-# What Claude Code Haha is
+# What cc-haha is
 
 It's an app on your computer. You hand it a project folder, describe what you want in plain language, and it goes off to read the code, edit files, and run commands — with every change laid out in front of you, waiting for your approval.
 
-![A full session: prompt, tool calls, file edits, inline diff](../../images/app/en/session-main.webp)
+![A release-notes conversation in the real project, with tool calls and the session list (Chinese interface)](../../images/app/en/session-main.webp)
 
 That's a real session. Projects and history on the left, the conversation in the middle, and when Claude edits a file the diff appears right underneath, line by line.
 
 ## How this relates to the Claude Code CLI
 
-Claude Code is Anthropic's command-line coding agent. The engine inside Claude Code Haha is a CLI built from repaired Claude Code sources (it's called `claude-haha` in this repo), and the desktop app is the graphical shell wrapped around it.
+Claude Code is Anthropic's command-line coding agent. The engine inside cc-haha is a CLI built from repaired Claude Code sources (it's called `claude-haha` in this repo), and the desktop app is the graphical shell wrapped around it.
 
 Two practical consequences:
 
@@ -52,5 +52,7 @@ Work through these in order; about twenty minutes gets you to a working first se
 2. [Connect a model](./models.md) — official accounts, third-party APIs, or local models. Pick one.
 3. [Run your first session](./first-session.md) — pick a folder, set permissions, state a goal, watch it work, review the diff.
 4. [Desktop feature map](../desktop/index.md) — once it's running, see what else is in the box.
+
+For a goal you can practice end to end, continue with the [practical guides](../cases/index.md): explore an unfamiliar project, fix a bug, preview a page, schedule a review, and continue on your phone.
 
 Stuck along the way? [Won't install, won't open, won't connect](./troubleshooting.md) is organized by symptom.
