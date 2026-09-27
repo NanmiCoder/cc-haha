@@ -501,6 +501,10 @@ export const sessionsApi = {
     return api.get<SessionListItem>(`/api/sessions/${sessionId}/summary`, options)
   },
 
+  getTranscriptPath(sessionId: string, options?: ApiRequestOptions) {
+    return api.get<{ filePath: string }>(`/api/sessions/${sessionId}/transcript-path`, options)
+  },
+
   getChatStatus(sessionId: string, signal?: AbortSignal) {
     return api.get<SessionChatStatusResponse>(`/api/sessions/${sessionId}/chat/status`, { signal })
   },

@@ -10,6 +10,7 @@ import { handleSideChatsRoute } from './sideChats.js'
  *   GET    /api/sessions/:id        — 获取会话详情
  *   GET    /api/sessions/:id/summary — 获取不含消息的会话元数据
  *   GET    /api/sessions/:id/messages — 获取会话消息
+ *   GET    /api/sessions/:id/transcript-path — 获取会话 .jsonl 的绝对路径
  *   GET    /api/sessions/:id/subagents/by-tool/:toolUseId — 获取 SubAgent 运行详情
  *   POST   /api/sessions/:id/subagents/by-tool/:toolUseId/messages — 继续与 SubAgent 对话
  *   GET    /api/sessions/:id/trace — 获取会话级模型调用 trace（body preview 裁剪后的列表视图）
@@ -190,6 +191,22 @@ export async function handleSessionsApi(
       const summary = await sessionService.getSessionSummary(sessionId)
       if (!summary) throw ApiError.notFound(`Session not found: ${sessionId}`)
       return Response.json(summary)
+    }
+
+    if (subResource === 'transcript-path') {
+      if (req.method !== 'GET') {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      // The renderer needs the absolute path of the session's own `.jsonl` so a
+      // copy action can hand the user something they can paste into a shell.
+      // Resolving it here keeps the layout of the projects directory in one
+      // place instead of re-deriving it in the UI.
+      const found = await sessionService.findSessionFile(sessionId)
+      if (!found) throw ApiError.notFound(`Session not found: ${sessionId}`)
+      return Response.json({ filePath: found.filePath })
     }
 
     if (subResource === 'messages') {

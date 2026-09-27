@@ -27,6 +27,18 @@ import {
 } from './sidebarTaskGroups'
 import { sessionsApi } from '../../api/sessions'
 import type { SessionListItem } from '../../types/session'
+import { copyTextToClipboard } from '@/lib/clipboard'
+import {
+  buildSessionTranscriptMarkdown,
+  groupPinnedAndArchivedSessions,
+  isSyntheticSessionGroupKey,
+  readStoredArchivedSessions,
+  readStoredSessionPins,
+  sessionMarkdownFileName,
+  toggleIdInSet,
+  writeStoredArchivedSessions,
+  writeStoredSessionPins,
+} from './sidebarSessionPins'
 import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID, CONNECTORS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
@@ -160,6 +172,8 @@ export function Sidebar({
   const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(new Set())
   const [projectOrder, setProjectOrder] = useState<string[]>(() => readStoredProjectOrder())
   const [pinnedProjectKeys, setPinnedProjectKeys] = useState<Set<string>>(() => readStoredProjectPins())
+  const [pinnedSessionIds, setPinnedSessionIds] = useState<Set<string>>(() => readStoredSessionPins())
+  const [archivedSessionIds, setArchivedSessionIds] = useState<Set<string>>(() => readStoredArchivedSessions())
   const [hiddenProjectKeys, setHiddenProjectKeys] = useState<Set<string>>(() => readStoredProjectHidden())
   const [projectOrganization, setProjectOrganizationState] = useState<SidebarProjectOrganization>(() => readStoredProjectOrganization())
   const [projectSortBy, setProjectSortByState] = useState<SidebarProjectSortBy>(() => readStoredProjectSortBy())
@@ -265,6 +279,19 @@ export function Sidebar({
       !hiddenProjectKeys.has(project.key)
     ))
   }, [hiddenProjectKeys, orderedProjectGroups])
+  /**
+   * Pinned and archived sessions are lifted out of their project into their own
+   * headings. This runs after the hidden-project filter on purpose: hiding a
+   * project is a request to stop seeing it, so its sessions must not survive in
+   * the pinned group.
+   */
+  const displayedProjectGroups = useMemo(
+    () => groupPinnedAndArchivedSessions(visibleProjectGroups, pinnedSessionIds, archivedSessionIds, {
+      pinned: t('sidebar.pinnedSessionsGroup'),
+      archived: t('sidebar.archivedSessionsGroup'),
+    }),
+    [visibleProjectGroups, pinnedSessionIds, archivedSessionIds, t],
+  )
   /**
    * 任务视图和「整理侧边栏 → 按时间顺序」是同一个状态：铃铛亮 ⟺ 组织方式是
    * `time`。这个选项本来就承诺按时间排，此前却仍旧按工作区分组，两个入口指向
@@ -684,6 +711,122 @@ export function Sidebar({
       return next
     })
   }, [hiddenProjectKeys, persistSidebarProjectPreferences, projectOrder, projectOrganization, projectSortBy])
+
+  const findSessionById = useCallback(
+    (sessionId: string) => sessions.find((session) => session.id === sessionId) ?? null,
+    [sessions],
+  )
+
+  const togglePinnedProjectForSession = useCallback((sessionId: string) => {
+    setContextMenu(null)
+    const session = findSessionById(sessionId)
+    if (!session) return
+    const projectKey = getSessionProjectKey(session)
+    if (!projectKey || projectKey === 'unknown') return
+    setPinnedProjectKeys((current) => {
+      const next = toggleIdInSet(current, projectKey)
+      persistSidebarProjectPreferences(buildSidebarProjectPreferences(
+        projectOrder,
+        next,
+        hiddenProjectKeys,
+        projectOrganization,
+        projectSortBy,
+      ))
+      return next
+    })
+  }, [findSessionById, hiddenProjectKeys, persistSidebarProjectPreferences, projectOrder, projectOrganization, projectSortBy])
+
+  const togglePinnedSession = useCallback((sessionId: string) => {
+    setContextMenu(null)
+    setPinnedSessionIds((current) => {
+      const next = toggleIdInSet(current, sessionId)
+      writeStoredSessionPins(next)
+      return next
+    })
+  }, [])
+
+  const toggleArchivedSession = useCallback((sessionId: string) => {
+    setContextMenu(null)
+    setArchivedSessionIds((current) => {
+      const next = toggleIdInSet(current, sessionId)
+      writeStoredArchivedSessions(next)
+      return next
+    })
+  }, [])
+
+  const copySessionText = useCallback(async (text: string) => {
+    const copied = await copyTextToClipboard(text)
+    addToast(copied
+      ? { type: 'success', message: t('sidebar.copySucceeded') }
+      : { type: 'error', message: t('sidebar.copyFailed') })
+  }, [addToast, t])
+
+  const copySessionId = useCallback((sessionId: string) => {
+    setContextMenu(null)
+    void copySessionText(sessionId)
+  }, [copySessionText])
+
+  const copySessionName = useCallback((sessionId: string) => {
+    setContextMenu(null)
+    const session = findSessionById(sessionId)
+    void copySessionText(session?.title || sessionId)
+  }, [copySessionText, findSessionById])
+
+  const copyProjectPath = useCallback((sessionId: string) => {
+    setContextMenu(null)
+    const session = findSessionById(sessionId)
+    const projectPath = session?.projectRoot || session?.workDir || session?.projectPath || ''
+    void copySessionText(projectPath)
+  }, [copySessionText, findSessionById])
+
+  const copySessionPath = useCallback((sessionId: string) => {
+    setContextMenu(null)
+    void (async () => {
+      try {
+        const { filePath } = await sessionsApi.getTranscriptPath(sessionId)
+        await copySessionText(filePath)
+      } catch {
+        addToast({ type: 'error', message: t('sidebar.sessionPathUnavailable') })
+      }
+    })()
+  }, [addToast, copySessionText, t])
+
+  const exportSessionMarkdown = useCallback((sessionId: string) => {
+    setContextMenu(null)
+    void (async () => {
+      const session = findSessionById(sessionId)
+      if (!session) return
+      try {
+        const [history, transcriptPath] = await Promise.all([
+          sessionsApi.getFullHistory(sessionId),
+          sessionsApi.getTranscriptPath(sessionId).catch(() => null),
+        ])
+        const markdown = buildSessionTranscriptMarkdown(session, history.messages, {
+          projectPath: session.projectRoot || session.workDir || session.projectPath,
+          sessionFilePath: transcriptPath?.filePath ?? null,
+          exportedAt: new Date().toISOString(),
+        })
+        const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' })
+        const objectUrl = URL.createObjectURL(blob)
+        const anchor = document.createElement('a')
+        anchor.href = objectUrl
+        anchor.download = sessionMarkdownFileName(session.title, session.id)
+        anchor.style.display = 'none'
+        document.body.appendChild(anchor)
+        anchor.click()
+        document.body.removeChild(anchor)
+        window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1_000)
+        addToast({ type: 'success', message: t('sidebar.exportMarkdownSucceeded') })
+      } catch (error) {
+        addToast({
+          type: 'error',
+          message: t('sidebar.exportMarkdownFailed', {
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        })
+      }
+    })()
+  }, [addToast, findSessionById, t])
 
   const restoreAllHiddenProjects = useCallback(() => {
     setProjectHeaderMenu(null)
@@ -1207,7 +1350,11 @@ export function Sidebar({
                   onSessionContextMenu={handleContextMenu}
                   t={t}
                 />
-              ) : visibleProjectGroups.map((project) => {
+              ) : displayedProjectGroups.map((project) => {
+                // Pinned and archived headings are containers we render locally,
+                // not projects from the index: they have no workDir to reveal, no
+                // position to reorder, and no project menu to open.
+                const isSyntheticGroup = isSyntheticSessionGroupKey(project.key)
                 const projectCollapsed = collapsedProjectKeys.has(project.key)
                 const sessionsExpanded = expandedProjectKeys.has(project.key)
                 const visibleItems = projectCollapsed
@@ -1224,16 +1371,16 @@ export function Sidebar({
                 const groupSelectedCount = groupIds.filter((id) => selectedSessionIds.has(id)).length
                 const history = projectHistory[project.key]
                 const isProjectDragging = draggingProjectKey === project.key
-                const isProjectPinned = pinnedProjectKeys.has(project.key)
+                const isProjectPinned = !isSyntheticGroup && pinnedProjectKeys.has(project.key)
                 const dropBefore = projectDropTarget?.key === project.key && projectDropTarget.position === 'before'
                 const dropAfter = projectDropTarget?.key === project.key && projectDropTarget.position === 'after'
                 return (
                   <section
                     key={project.key}
                     data-testid={`sidebar-project-group-${domSafeProjectKey(project.key)}`}
-                    onDragOver={(event) => handleProjectDragOver(event, project.key)}
-                    onDrop={(event) => handleProjectDrop(event, project.key)}
-                    onDragLeave={(event) => {
+                    onDragOver={isSyntheticGroup ? undefined : (event) => handleProjectDragOver(event, project.key)}
+                    onDrop={isSyntheticGroup ? undefined : (event) => handleProjectDrop(event, project.key)}
+                    onDragLeave={isSyntheticGroup ? undefined : (event) => {
                       if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
                         setProjectDropTarget((current) => current?.key === project.key ? null : current)
                       }
@@ -1246,12 +1393,12 @@ export function Sidebar({
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
-                        draggable={!isBatchMode}
-                        onDragStart={(event) => handleProjectDragStart(event, project.key)}
-                        onDragEnd={clearProjectDragState}
+                        draggable={!isBatchMode && !isSyntheticGroup}
+                        onDragStart={isSyntheticGroup ? undefined : (event) => handleProjectDragStart(event, project.key)}
+                        onDragEnd={isSyntheticGroup ? undefined : clearProjectDragState}
                         onClick={() => toggleProjectCollapsed(project.key)}
                         data-state={projectCollapsed ? 'closed' : 'open'}
-                        className={`flex min-w-0 flex-1 cursor-grab items-center gap-2 rounded-[var(--radius-md)] px-1.5 text-left transition-[background,color] active:cursor-grabbing hover:bg-[var(--color-sidebar-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${isMobile ? 'min-h-11 py-2.5' : 'py-2'}`}
+                        className={`flex min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-md)] px-1.5 text-left transition-[background,color] hover:bg-[var(--color-sidebar-item-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${isSyntheticGroup ? '' : 'cursor-grab active:cursor-grabbing'} ${isMobile ? 'min-h-11 py-2.5' : 'py-2'}`}
                         aria-expanded={!projectCollapsed}
                         aria-label={t(projectCollapsed ? 'sidebar.expandProject' : 'sidebar.collapseProject', { project: project.title })}
                         title={project.subtitle || project.title}
@@ -1299,7 +1446,7 @@ export function Sidebar({
                               : t('sidebar.batchSelectAll')}
                           </button>
                         )}
-                        {!isBatchMode && (
+                        {!isBatchMode && !isSyntheticGroup && (
                           // Desktop reveals these on row hover. The touch drawer
                           // has neither hover nor a way to focus through
                           // `pointer-events: none`, so there they stay put — two
@@ -1407,6 +1554,9 @@ export function Sidebar({
                                         )}
                                       </span>
                                     ) : null}
+                                    {pinnedSessionIds.has(session.id) && (
+                                      <Pin className="h-3.5 w-3.5 flex-shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.8} aria-hidden="true" />
+                                    )}
                                     <span className="min-w-0 flex-1 truncate font-medium tracking-normal">{session.title || 'Untitled'}</span>
                                     {getSessionWorkspaceState(session) === 'missing' && (
                                       <span
@@ -1478,29 +1628,95 @@ export function Sidebar({
         </div>
       )}
 
-      {contextMenu && (
-        <div
-          ref={sessionContextMenuRef}
-          className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-2 shadow-[var(--shadow-dropdown)]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-        >
-          <button
-            onClick={() => {
-              const session = sessions.find((s) => s.id === contextMenu.id)
-              handleStartRename(contextMenu.id, session?.title || '')
-            }}
-            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+      {contextMenu && (() => {
+        const session = sessions.find((s) => s.id === contextMenu.id) ?? null
+        const projectKey = session ? getSessionProjectKey(session) : ''
+        const hasProject = projectKey !== '' && projectKey !== 'unknown'
+        const projectPinned = hasProject && pinnedProjectKeys.has(projectKey)
+        const sessionPinned = pinnedSessionIds.has(contextMenu.id)
+        const sessionArchived = archivedSessionIds.has(contextMenu.id)
+        const itemClassName = 'w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]'
+        return (
+          <div
+            ref={sessionContextMenuRef}
+            className="fixed z-[var(--z-dropdown)] min-w-[220px] overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-2 shadow-[var(--shadow-dropdown)]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            {t('common.rename')}
-          </button>
-          <button
-            onClick={() => handleDelete(contextMenu.id)}
-            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-error)] transition-colors hover:bg-[var(--color-error-container)]"
-          >
-            {t('common.delete')}
-          </button>
-        </div>
-      )}
+            {hasProject && (
+              <button
+                type="button"
+                onClick={() => togglePinnedProjectForSession(contextMenu.id)}
+                className={itemClassName}
+              >
+                {t(projectPinned ? 'sidebar.unpinProject' : 'sidebar.pinProject')}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => togglePinnedSession(contextMenu.id)}
+              className={itemClassName}
+            >
+              {t(sessionPinned ? 'sidebar.unpinSession' : 'sidebar.pinSession')}
+            </button>
+            <button
+              type="button"
+              onClick={() => copySessionId(contextMenu.id)}
+              className={itemClassName}
+            >
+              {t('sidebar.copySessionId')}
+            </button>
+            <button
+              type="button"
+              onClick={() => copySessionName(contextMenu.id)}
+              className={itemClassName}
+            >
+              {t('sidebar.copySessionName')}
+            </button>
+            <button
+              type="button"
+              onClick={() => copyProjectPath(contextMenu.id)}
+              className={itemClassName}
+            >
+              {t('sidebar.copyProjectPath')}
+            </button>
+            <button
+              type="button"
+              onClick={() => copySessionPath(contextMenu.id)}
+              className={itemClassName}
+            >
+              {t('sidebar.copySessionPath')}
+            </button>
+            <button
+              type="button"
+              onClick={() => exportSessionMarkdown(contextMenu.id)}
+              className={itemClassName}
+            >
+              {t('sidebar.exportMarkdown')}
+            </button>
+            <button
+              type="button"
+              onClick={() => toggleArchivedSession(contextMenu.id)}
+              className={itemClassName}
+            >
+              {t(sessionArchived ? 'sidebar.unarchiveSession' : 'sidebar.archiveSession')}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleStartRename(contextMenu.id, session?.title || '')}
+              className={itemClassName}
+            >
+              {t('common.rename')}
+            </button>
+            <button
+              type="button"
+              onClick={() => handleDelete(contextMenu.id)}
+              className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-error)] transition-colors hover:bg-[var(--color-error-container)]"
+            >
+              {t('common.delete')}
+            </button>
+          </div>
+        )
+      })()}
 
       {projectContextMenu && (() => {
         const project = orderedProjectGroups.find((group) => group.key === projectContextMenu.key)
