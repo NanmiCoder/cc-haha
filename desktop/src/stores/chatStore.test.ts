@@ -285,7 +285,7 @@ describe('managed-context sensitivity receipts', () => {
 describe('Agent Teams workbench invalidation', () => {
   it('refreshes durable plans on reconnect and only accepts matching-session invalidation', () => {
     refreshTeamPlanMock.mockClear()
-    useChatStore.getState().handleServerMessage('lead', { type: 'connected', sessionId: 'lead' })
+    useChatStore.getState().handleServerMessage('lead', { type: 'connected', sessionId: 'lead', runtimeRevision: 1 })
     useChatStore.getState().handleServerMessage('lead', {
       type: 'team_plan_updated', sessionId: 'other', teamName: 'team', planId: 'plan', incarnationId: 'incarnation', revision: 2, state: 'review_pending',
     })

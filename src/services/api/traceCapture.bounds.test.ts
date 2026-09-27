@@ -170,7 +170,7 @@ test('bounds queued cold jobs and cancels queued work before opening source file
   let reads = 0
   const openSpy = spyOn(fs, 'open').mockImplementation(async (...args) => {
     const handle = await originalOpen(...args)
-    if (!String(args[0]).includes('/queued-')) return handle
+    if (!/[\\/]queued-/.test(String(args[0]))) return handle
     return new Proxy(handle, {
       get(target, property) {
         if (property === 'read') return async (buffer: Uint8Array, offset: number, length: number, position: number) => {

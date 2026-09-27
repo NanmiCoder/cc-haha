@@ -437,7 +437,7 @@ describe('M7-A ticket store, receipts and TTL', () => {
       deps,
     )
     expect(receipt.status).toBe(200)
-    const body = await readJson(receipt)
+    const body = await readJson(receipt.clone())
     expect(body).toMatchObject({
       requestId: REQUEST_ID,
       sessionId: SESSION_ID,
