@@ -25,7 +25,16 @@ const argOf = (name: string, fallback: string): string => {
 const COUNT = Number(argOf('count', '8'))
 const ENDPOINT = argOf('endpoint', 'http://127.0.0.1:8000')
 const MODEL = argOf('model', 'zxsv-ai')
-const CORPUS = '/home/zeaxion/.claude/projects'
+// Corpus root, overridable so the path is not baked into the committed sample.
+const CORPUS = argOf('corpus', join(process.env.HOME ?? '', '.claude/projects'))
+
+// Absolute machine paths are stripped from the report and the pinned sample:
+// both are committed, and a verdict that quotes a path (or a sample that records
+// where a session lives) would publish the layout of the machine it ran on.
+const redact = (text: string): string =>
+  text
+    .split(CORPUS).join('<corpus>')
+    .split(process.env.HOME ?? '\u0000').join('~')
 // Anchored to this file's own tree: the repo's preload chdirs to the caller's
 // directory, so a relative output path lands outside the repo depending on
 // where the script was invoked from.
@@ -305,7 +314,7 @@ const sessions = readdirSync(CORPUS)
 // reused, so two measurements differ only by the code under test.
 const SAMPLE_PATH = join(REPO_ROOT, 'modify/reports/vcc-slice-judge.sample.json')
 
-type SampleEntry = { file: string; direction: 'up_to' | 'from'; pivot: number; messages: number }
+type SampleEntry = { session: string; direction: 'up_to' | 'from'; pivot: number; messages: number }
 
 const planSample = (): SampleEntry[] => {
   const out: SampleEntry[] = []
@@ -340,7 +349,11 @@ async function main() {
   const pinned = readPinnedSample()
   let sample: SampleEntry[]
   if (pinned) {
-    sample = pinned.filter((entry) => existsSync(entry.file))
+    // Look the session up by name: the sample holds no directory.
+    const byName = new Map(sessions.map((s) => [s.file.split('/').pop()!, s.file]))
+    sample = pinned
+      .map((entry) => ({ ...entry, file: byName.get(entry.session) }))
+      .filter((entry): entry is SampleEntry & { file: string } => Boolean(entry.file))
     console.log(`[judge] using pinned sample ${SAMPLE_PATH} (${sample.length}/${pinned.length} spans still readable)`)
   } else {
     sample = planSample()
@@ -388,7 +401,7 @@ async function main() {
         `- Slice: ${slice.length} messages (pivot-outward, <=${SLICE_MAX_CHARS} chars), ${render(slice).length} chars rendered · Summary: ${result.summary.length} chars · compression ${(result.summary.length / render(slice).length * 100).toFixed(1)}%`,
         `- Sections: ${JSON.stringify(result.sections)}`,
         judged.ok
-          ? `- Judge: ${parsed ? '```json\n' + JSON.stringify(parsed, null, 2) + '\n```' : 'raw: ' + judged.raw.slice(0, 1200)}`
+          ? `- Judge: ${parsed ? '```json\n' + redact(JSON.stringify(parsed, null, 2)) + '\n```' : 'raw: ' + redact(judged.raw.slice(0, 1200))}`
           : `- Judge FAILED: ${judged.raw}`,
         '',
         // The summary under review is off by default: it quotes the session it

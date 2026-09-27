@@ -171,7 +171,7 @@ bun run scripts/vcc-slice-judge.ts --count 8
   "coverage": 3,
   "missing": [
     "The specific content of the local uncommitted change in `flash_decode_paged.cu` (E4M3 grouped verify relaxation to per-request q<=8) and the fact that it was verified to be absent from `origin/main` (old logic `q.size(0)==8` remained).",
-    "The backup location and files created: `/home/zeaxion/myproject/1cat-vllm-v150/backup/` containing `local-ae75fb9-uncommitted.patch` and `flash_decode_paged.cu.local_modified`.",
+    "The backup location and files created: `~/myproject/1cat-vllm-v150/backup/` containing `local-ae75fb9-uncommitted.patch` and `flash_decode_paged.cu.local_modified`.",
     "The specific git operations performed to upgrade: `git stash push` for the .cu file, `git merge --ff-only origin/main`, and `git stash pop`.",
     "The decision to keep the version number as `1.5.0` using `SETUPTOOLS_SCM_PRETEND_VERSION=1.5.0` despite the code being from `7217bb5d4` (642 commits ahead of v1.5.0 tag).",
     "The background task ID `bwj1uut6i` and the specific output file path for monitoring the build."
