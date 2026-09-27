@@ -318,6 +318,7 @@ async function captureQueryRequest({
   provider,
   responseFactory,
   continuationSystemPrompts,
+  thinkingBudget,
   localProxy = false,
   env,
 }: {
@@ -330,6 +331,7 @@ async function captureQueryRequest({
   provider?: SavedProvider
   responseFactory?: (model: string, body: Record<string, unknown>, headers: Headers) => Response
   continuationSystemPrompts?: string[][]
+  thinkingBudget?: number
   localProxy?: boolean
   env?: Readonly<Record<string, string | undefined>>
 }): Promise<{
@@ -419,15 +421,17 @@ async function captureQueryRequest({
       effortValue,
     }
     let result
-    if (continuationSystemPrompts) {
+    if (continuationSystemPrompts || thinkingBudget !== undefined) {
       const history: Message[] = []
-      for (const [index, systemPrompt] of [[], ...continuationSystemPrompts].entries()) {
+      for (const [index, systemPrompt] of [[], ...(continuationSystemPrompts ?? [])].entries()) {
         history.push(createUserMessage({ content: index === 0 ? 'Reply exactly OK' : 'Continue' }))
         const assistants = []
         for await (const message of queryModelWithStreaming({
           messages: history,
           systemPrompt: asSystemPrompt(systemPrompt),
-          thinkingConfig: { type: 'disabled' },
+          thinkingConfig: thinkingBudget === undefined
+            ? { type: 'disabled' }
+            : { type: 'enabled', budgetTokens: thinkingBudget },
           tools: [],
           signal: new AbortController().signal,
           options: {
@@ -861,3 +865,31 @@ test('Opus 5.5 respects an explicit third-party capability opt-out', async () =>
   expect(requests[0]?.thinking).toBeUndefined()
   expect(requests[0]?.output_config).toBeUndefined()
 }, 10_000)
+
+for (const budget of [1, 100, 1000, 1024, 1025, 4096]) {
+  test(`keeps direct output budget ${budget} compatible with optional manual thinking`, async () => {
+    const { requests, requestHeaders, apiError } = await captureQueryRequest({
+      model: 'claude-sonnet-4-20250514',
+      configureCapabilityOverrides: false,
+      thinkingBudget: 2048,
+      env: { CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: String(budget), CLAUDE_CODE_MAX_OUTPUT_TOKENS: undefined },
+    })
+    expect(apiError).toBeUndefined()
+    expect(requests[0]?.max_tokens).toBe(budget)
+    expect(requests[0]?.thinking).toEqual(budget <= 1024
+      ? { type: 'disabled' }
+      : { type: 'enabled', budget_tokens: Math.min(2048, budget - 1) })
+    expect(requests[0]?.temperature).toBe(budget <= 1024 ? 1 : undefined)
+    expect(requestHeaders[0]?.has('x-cc-haha-output-budget-source')).toBe(false)
+  })
+}
+
+test('retains required adaptive thinking with a small direct output budget', async () => {
+  const { requests } = await captureQueryRequest({
+    model: 'claude-opus-5-5',
+    configureCapabilityOverrides: false,
+    env: { CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '100', CLAUDE_CODE_MAX_OUTPUT_TOKENS: undefined },
+  })
+  expect(requests[0]?.max_tokens).toBe(100)
+  expect(requests[0]?.thinking).toMatchObject({ type: 'adaptive' })
+})

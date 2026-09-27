@@ -1714,7 +1714,20 @@ async function* queryModel(
         : [];
     const extraBodyParams = getExtraBodyParams(bedrockBetas);
 
-    const hasThinking = resolveModelThinkingEnabled(
+    // Resolve the final budget before selecting thinking, including retry overrides.
+    const maxOutputTokens =
+      retryContext?.maxTokensOverride ||
+      options.maxOutputTokensOverride ||
+      getMaxOutputTokensForModel(options.model)
+    const usesAdaptiveThinking =
+      (modelRequiresThinking(options.model) ||
+        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING)) &&
+      modelSupportsAdaptiveThinking(options.model)
+    // Manual thinking needs at least 1024 tokens and room for the answer.
+    // Keep the explicit output cap; disable optional thinking when it cannot fit.
+    const thinkingFitsOutputBudget =
+      usesAdaptiveThinking || modelRequiresThinking(options.model) || maxOutputTokens > 1024
+    const hasThinking = thinkingFitsOutputBudget && resolveModelThinkingEnabled(
       options.model,
       thinkingConfig.type !== 'disabled' &&
         !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING),
@@ -1772,23 +1785,13 @@ async function* queryModel(
       }
     }
 
-    // Retry context gets preference because it tries to course correct if we exceed the context window limit
-    const maxOutputTokens =
-      retryContext?.maxTokensOverride ||
-      options.maxOutputTokensOverride ||
-      getMaxOutputTokensForModel(options.model);
-
     let thinking: BetaMessageStreamParams['thinking'] | undefined = undefined
 
     // IMPORTANT: Do not change the adaptive-vs-budget thinking selection below
     // without notifying the model launch DRI and research. This is a sensitive
     // setting that can greatly affect model quality and bashing.
     if (hasThinking && modelCanThink) {
-      if (
-        (modelRequiresThinking(options.model) ||
-          !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING)) &&
-        modelSupportsAdaptiveThinking(options.model)
-      ) {
+      if (usesAdaptiveThinking) {
         // For models that support adaptive thinking, always use adaptive
         // thinking without a budget.
         thinking = {
