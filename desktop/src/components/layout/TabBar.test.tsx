@@ -140,8 +140,9 @@ vi.mock('../../api/sessions', () => ({
   },
 }))
 
-vi.mock('../../i18n', () => ({
-  useTranslation: () => (key: string, params?: Record<string, string | number>) => {
+vi.mock('../../i18n', () => {
+  // Match the real hook's stable translator identity, including nested async panels.
+  const translate = (key: string, params?: Record<string, string | number>) => {
     const translations: Record<string, string> = {
       'sidebar.extensions': 'Extension Market',
       'tabs.close': 'Close',
@@ -184,8 +185,9 @@ vi.mock('../../i18n', () => ({
       }
     }
     return text
-  },
-}))
+  }
+  return { useTranslation: () => translate }
+})
 
 vi.mock('../../api/sessions', () => ({
   sessionsApi: sessionsApiMock,
@@ -2925,6 +2927,25 @@ describe('TabBar', () => {
 
     expect(screen.getAllByLabelText('Session running')).toHaveLength(3)
     expect(screen.getByText('Idle').closest('[data-dragging]')?.querySelector('[aria-label="Session running"]')).toBeNull()
+  })
+
+  it('opens network configuration from the control immediately beside host management', async () => {
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { TabBar } = await import('./TabBar')
+    const { createNetworkFixture } = await import('../../features/network-manager/testing/networkFixture')
+    const fixture = createNetworkFixture()
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true, networkManager: fixture.api,
+      capabilities: { ...browserHost.capabilities, hostManagement: true } }
+    useTabStore.setState({ tabs: [], activeTabId: null })
+    await act(async () => { render(<TabBar />) })
+    const hosts = screen.getByRole('button', { name: 'managedResources.title' })
+    const network = screen.getByRole('button', { name: 'networkManager.title' })
+    expect(hosts.nextElementSibling).toBe(network)
+    await act(async () => { fireEvent.click(network) })
+    expect(screen.getByRole('dialog', { name: 'networkManager.title' })).toBeInTheDocument()
+    expect(fixture.calls.map(call => call.action)).toEqual(expect.arrayContaining(['list', 'discoverProxy', 'vpnRouteOptions']))
+    expect(fixture.calls.every(call => ['list', 'discoverProxy', 'vpnRouteOptions'].includes(call.action))).toBe(true)
+    expect(useTabStore.getState().tabs).toEqual([])
   })
 
   it('renders a hosts tab with translated title and clicking hosts button activates or creates it', async () => {

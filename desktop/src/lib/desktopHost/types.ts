@@ -9,6 +9,7 @@ import type {
   ConversationContextHostApi,
 } from '../../features/managed-resources/api/hostManagementApi'
 import type { DataConnectionsHostApi } from '../../features/managed-resources/api/dataConnectionsApi'
+import type { NetworkManagerApi } from '../../features/network-manager/networkTypes'
 
 // Version 2 adds remote provider management and selected General settings.
 export const PUBLIC_ACCESS_CONSENT_VERSION = 2
@@ -390,6 +391,8 @@ export type DesktopPublicAccessStatus = {
 }
 
 export type DesktopHost = {
+  /** Local desktop only; absent from the browser host and older preload bridges. */
+  networkManager?: NetworkManagerApi
   publicAccess: {
     getStatus(): Promise<DesktopPublicAccessStatus>
     saveCredential(token: string): Promise<DesktopPublicAccessStatus>

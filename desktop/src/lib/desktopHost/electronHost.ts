@@ -155,6 +155,28 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
   })
 
   return {
+    networkManager: {
+      discoverProxy: proxyPort => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'discoverProxy', proxyPort }),
+      executionCatalog: () => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'executionCatalog' }),
+      openNetworkConnections: () => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'openNetworkConnections' }),
+      list: () => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'list' }),
+      save: (profile, expectedRevision) => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'save', profile, expectedRevision }),
+      inspect: profile => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'inspect', profile }),
+      plan: profile => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'plan', profile }),
+      apply: planId => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'apply', planId }),
+      recover: () => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'recover' }),
+      verify: profile => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'verify', profile }),
+      probeHost: hostId => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'probeHost', hostId }),
+      login: (target, profile) => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'login', target, profile }),
+      vpnRouteOptions: () => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'vpnRouteOptions' }),
+      vpnRoutePreview: target => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'vpnRoutePreview', target }),
+      vpnRouteApply: planId => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'vpnRouteApply', planId }),
+      vpnRouteVerify: target => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'vpnRouteVerify', target }),
+      vpnRouteBatchPreview: input => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'vpnRouteBatchPreview', input }),
+      vpnRouteBatchApply: planId => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'vpnRouteBatchApply', planId }),
+      vpnRouteBatchVerify: input => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'vpnRouteBatchVerify', input }),
+      vpnRouteProbe: input => invoke(ELECTRON_IPC_CHANNELS.networkManager, { action: 'vpnRouteProbe', input }),
+    },
     publicAccess: {
       getStatus: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessGetStatus),
       saveCredential: token => invoke(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, token),

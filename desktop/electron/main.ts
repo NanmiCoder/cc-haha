@@ -1,7 +1,9 @@
 import { PublicAccessManager } from './services/publicAccess'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, session, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, session, shell, WebContentsView } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
+import { createNetworkManagerService } from './services/networkManager/service'
+import { createNetworkManagerHandler } from './ipc/networkManager'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
 import {
   isElectronIpcChannel,
@@ -118,6 +120,7 @@ let quitCleanupStarted = false
 let quitCleanupFinished = false
 let trayController: TrayController | null = null
 let managedResourcesModule: ManagedResourcesModule | null = null
+let networkManagerService: ReturnType<typeof createNetworkManagerService> | null = null
 
 // Must run before anything logs: a Finder/Dock launch inherits unreadable
 // stdio, and an unguarded write failure there surfaces as a crash dialog.
@@ -532,6 +535,13 @@ async function handleCommandInvoke(payload: unknown): Promise<unknown> {
 }
 
 function registerIpcHandlers() {
+  registerHandler(ELECTRON_IPC_CHANNELS.networkManager, createNetworkManagerHandler({
+    getMainWebContents: () => mainWindow?.webContents ?? null,
+    getService: () => {
+      if (!networkManagerService) throw new Error('Network manager is not ready')
+      return networkManagerService
+    },
+  }))
   ipcMain.on(ELECTRON_INTERNAL_CHANNELS.previewMessageFromView, (event, raw) => {
     // Workspace pages and the legacy singleton preview share one preload, so the
     // owner of the sender decides which service receives the message.
@@ -924,6 +934,21 @@ async function createMainWindow() {
       showSaveDialog: (win, opts) => dialog.showSaveDialog(win, opts),
       showOpenDialog: (win, opts) => dialog.showOpenDialog(win, opts),
     },
+  })
+
+  networkManagerService ??= createNetworkManagerService({
+    configDir: getAppMode(app).activeConfigDir || app.getPath('userData'),
+    resolveHost: async id => {
+      const result = await managedResourcesModule?.services.store.load()
+      if (!result || result.status !== 'ready') throw new Error('Host library is not readable')
+      const host = result.document.hosts.find(item => item.id === id)
+      return host ? { id: host.id, name: host.name, address: host.address, port: host.port } : null
+    },
+    openExternal: async url => {
+      if (url !== 'ms-settings:network-vpn') throw new Error('Unsupported network login target')
+      await shell.openExternal(url)
+    },
+    openPath: target => shell.openPath(target),
   })
 
   installWindowLifecycle({

@@ -17,6 +17,11 @@ const checks: Check[] = [
     command: ['bun', 'test', './src/server/services/sessionCollaborationService.test.ts', '--test-name-pattern', 'migrat|recover'],
   },
   {
+    title: 'Desktop network profile migrations',
+    command: [process.execPath, 'run', 'test', '--', '--run', 'src/features/network-manager/networkSchemas.test.ts', '-t', 'persistence migration'],
+    cwd: 'desktop',
+  },
+  {
     title: 'Connector installation state migrations',
     command: ['bun', 'test', './src/server/services/connectorsPersistence.test.ts'],
   },

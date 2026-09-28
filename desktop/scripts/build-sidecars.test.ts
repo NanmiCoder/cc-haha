@@ -19,6 +19,10 @@ function readBuildScript() {
   return readFileSync(path.resolve(import.meta.dirname, 'build-sidecars.ts'), 'utf8')
 }
 
+function readWindowsBuildScript() {
+  return readFileSync(path.resolve(import.meta.dirname, 'build-windows-x64.ps1'), 'utf8')
+}
+
 function readCliLauncher() {
   return readFileSync(
     path.resolve(import.meta.dirname, '../../bin/claude-haha'),
@@ -363,6 +367,22 @@ async function terminateCompiledSidecar(processHandle: SidecarProcess): Promise<
   processHandle.child.kill('SIGKILL')
   await processHandle.exited
 }
+
+describe('build-windows-x64 local Electron packaging', () => {
+  it('reuses the installed Electron distribution before falling back to a GitHub download', () => {
+    const source = readWindowsBuildScript()
+    expect(source).toContain("node_modules\\electron\\dist")
+    expect(source).toContain("Join-Path $localElectronDist 'electron.exe'")
+    expect(source).toContain('--config.electronDist=')
+    expect(source).toContain('Test-Path $localElectronExe')
+  })
+
+  it('keeps an explicit electronDist builder override authoritative', () => {
+    const source = readWindowsBuildScript()
+    expect(source).toContain("$arg -like '--config.electronDist=*'")
+    expect(source).toContain('if (-not $hasElectronDistOverride)')
+  })
+})
 
 describe('build-sidecars Windows x64 target mapping', () => {
   it('uses the running Bun executable when PATH has no bun shim', () => {

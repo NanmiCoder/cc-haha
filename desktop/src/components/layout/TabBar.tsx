@@ -18,6 +18,7 @@ import {
   type TabType,
 } from '../../stores/tabStore'
 import { HostsTabButton } from '../../features/managed-resources/ui/tabIntegration'
+import { NetworkManagerButton } from '@/features/network-manager/ui/NetworkManagerButton'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { isPlaceholderSessionTitle } from '../../lib/sessionTitle'
@@ -684,6 +685,7 @@ export function TabBar() {
           <OpenProjectMenu path={openProjectPath} />
         )}
         <HostsTabButton />
+        <NetworkManagerButton />
         {isActiveSessionTab && activeTabId ? (
           <WorkspaceLayoutControls
             layout={workspaceLayout}

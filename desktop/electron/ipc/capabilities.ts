@@ -1,4 +1,5 @@
 import { PUBLIC_ACCESS_CONSENT_VERSION } from '../../src/lib/desktopHost/types'
+import { NetworkRequestSchema } from '../../src/features/network-manager/networkSchemas'
 import { HostToolsInputSchema } from '../../src/features/managed-resources/api/hostToolsApi'
 import { ApplicationOperationInputSchema } from '../../src/features/managed-resources/api/applicationOperationsApi'
 import { ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './channels'
@@ -496,6 +497,7 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.publicAccessStop]: noPayload,
   [ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart]: booleanPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetServerUrl]: noPayload,
+  [ELECTRON_IPC_CHANNELS.networkManager]: value => NetworkRequestSchema.safeParse(value).success,
   [ELECTRON_IPC_CHANNELS.runtimeGetLocalAccessToken]: noPayload,
   [ELECTRON_IPC_CHANNELS.runtimeGetPetAccessToken]: noPayload,
   [ELECTRON_IPC_CHANNELS.commandInvoke]: commandInvoke,

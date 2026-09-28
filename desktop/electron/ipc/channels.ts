@@ -1,4 +1,5 @@
 export const ELECTRON_IPC_CHANNELS = {
+  networkManager: 'desktop:network-manager:request',
   publicAccessGetStatus: 'desktop:public-access:get-status',
   publicAccessSaveCredential: 'desktop:public-access:save-credential',
   publicAccessDeleteCredential: 'desktop:public-access:delete-credential',

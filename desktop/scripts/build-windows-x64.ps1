@@ -150,6 +150,25 @@ try {
 
   $args = @('electron-builder', '--win', 'nsis', '--x64', '--publish', 'never')
   $remainingArgs = @($BuilderArgs)
+  $hasElectronDistOverride = $false
+  foreach ($arg in $remainingArgs) {
+    if ($arg -like '--config.electronDist=*') {
+      $hasElectronDistOverride = $true
+      break
+    }
+  }
+  if (-not $hasElectronDistOverride) {
+    $localElectronDist = Join-Path $desktopDir 'node_modules\electron\dist'
+    $localElectronExe = Join-Path $localElectronDist 'electron.exe'
+    if (Test-Path $localElectronExe) {
+      # electron-builder otherwise downloads the same Electron runtime again from
+      # GitHub. Prefer the already installed runtime so local/offline builds do not
+      # fail when GitHub is slow or blocked. This remains Windows-only and x64 is
+      # already enforced by this script.
+      $args += "--config.electronDist=$localElectronDist"
+      Write-Step "Using installed Electron distribution: $localElectronDist"
+    }
+  }
   if ($remainingArgs.Count -gt 0) {
     $args += $remainingArgs
   }
