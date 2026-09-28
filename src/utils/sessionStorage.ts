@@ -1,5 +1,5 @@
 import { feature } from 'bun:bundle'
-import type { UUID } from 'crypto'
+import { randomUUID, type UUID } from 'crypto'
 import type { Dirent } from 'fs'
 // Sync fs primitives for readFileTailSync — separate from fs/promises
 // imports above. Named (not wildcard) per CLAUDE.md style; no collisions
@@ -10,6 +10,7 @@ import {
   mkdir,
   readdir,
   readFile,
+  rename,
   stat,
   unlink,
   writeFile,
@@ -330,6 +331,202 @@ export async function readAgentMetadata(
   }
 }
 
+export type LocalShellMetadata = {
+  schemaVersion: 1
+  taskId: string
+  sessionId: string
+  shellType: 'bash' | 'powershell'
+  pid: number
+  startTime: number
+  lastKnownStatus: 'running' | 'completed' | 'failed' | 'killed' | 'unknown'
+  error?: string
+  lastObservedAt: number
+  terminalReason?: string
+  outcomeKnown: boolean
+  exitCode?: number
+}
+
+function getLocalShellsDir(
+  sessionId: string,
+  projectDir: string | null = getSessionProjectDir(),
+): string {
+  return join(projectDir ?? getProjectDir(getOriginalCwd()), sessionId, 'local-shells')
+}
+
+function getLocalShellMetadataPath(
+  taskId: string,
+  sessionId: string,
+  projectDir: string | null = getSessionProjectDir(),
+): string {
+  return join(getLocalShellsDir(sessionId, projectDir), `local-shell-${taskId}.meta.json`)
+}
+
+const SAFE_LOCAL_SHELL_ID = /^[a-zA-Z0-9_-]{1,128}$/
+const LOCAL_SHELL_STATUSES = new Set<LocalShellMetadata['lastKnownStatus']>([
+  'running',
+  'completed',
+  'failed',
+  'killed',
+  'unknown',
+])
+// Per-path promise chain that serializes writes. Entries are dropped once the
+// chain drains, so it never grows with the number of completed tasks.
+const localShellMetadataWrites = new Map<string, Promise<void>>()
+
+function isSafeLocalShellId(value: string): boolean {
+  return SAFE_LOCAL_SHELL_ID.test(value)
+}
+
+function parseLocalShellMetadata(
+  value: unknown,
+  expected?: { taskId?: string; sessionId?: string },
+): LocalShellMetadata | null {
+  if (!value || typeof value !== 'object') return null
+  const metadata = value as Partial<LocalShellMetadata>
+  if (
+    metadata.schemaVersion !== 1 ||
+    typeof metadata.taskId !== 'string' ||
+    !isSafeLocalShellId(metadata.taskId) ||
+    typeof metadata.sessionId !== 'string' ||
+    !isSafeLocalShellId(metadata.sessionId) ||
+    (metadata.shellType !== 'bash' && metadata.shellType !== 'powershell') ||
+    typeof metadata.pid !== 'number' ||
+    !Number.isSafeInteger(metadata.pid) ||
+    metadata.pid <= 1 ||
+    typeof metadata.startTime !== 'number' ||
+    !Number.isFinite(metadata.startTime) ||
+    !LOCAL_SHELL_STATUSES.has(metadata.lastKnownStatus as LocalShellMetadata['lastKnownStatus']) ||
+    (metadata.error !== undefined && typeof metadata.error !== 'string') ||
+    typeof metadata.lastObservedAt !== 'number' ||
+    !Number.isFinite(metadata.lastObservedAt) ||
+    typeof metadata.outcomeKnown !== 'boolean' ||
+    (metadata.lastKnownStatus === 'running' && metadata.outcomeKnown) ||
+    (metadata.lastKnownStatus === 'running' && metadata.exitCode !== undefined) ||
+    (!metadata.outcomeKnown && metadata.exitCode !== undefined) ||
+    (metadata.lastKnownStatus !== 'running' && metadata.outcomeKnown && metadata.exitCode === undefined) ||
+    (metadata.terminalReason !== undefined && typeof metadata.terminalReason !== 'string') ||
+    (metadata.exitCode !== undefined && (!Number.isSafeInteger(metadata.exitCode))) ||
+    (expected?.taskId !== undefined && metadata.taskId !== expected.taskId) ||
+    (expected?.sessionId !== undefined && metadata.sessionId !== expected.sessionId)
+  ) {
+    return null
+  }
+  return { ...metadata, error: metadata.error ?? '' } as LocalShellMetadata
+}
+
+export function writeLocalShellMetadata(
+  metadata: LocalShellMetadata,
+  projectDir?: string | null,
+): Promise<void> {
+  if (!parseLocalShellMetadata(metadata)) {
+    return Promise.reject(new Error('Invalid local shell metadata'))
+  }
+  const resolvedProjectDir = projectDir === undefined ? getSessionProjectDir() : projectDir
+  const path = getLocalShellMetadataPath(metadata.taskId, metadata.sessionId, resolvedProjectDir)
+  const previous = localShellMetadataWrites.get(path) ?? Promise.resolve()
+  const write = previous.catch(() => {}).then(async () => {
+    // Terminal-wins: a late "running" write must not replace terminal metadata,
+    // regardless of whether its command exit outcome is known.
+    const onDisk = await readLocalShellMetadata(metadata.taskId, metadata.sessionId, resolvedProjectDir)
+    if (
+      onDisk &&
+      onDisk.lastKnownStatus !== 'running' &&
+      (metadata.lastKnownStatus === 'running' || metadata.lastKnownStatus === 'unknown')
+    ) return
+    const mergedMetadata = {
+      ...(onDisk ?? {}),
+      ...metadata,
+      terminalReason: metadata.terminalReason,
+      exitCode: metadata.exitCode,
+    }
+    const validatedMetadata = parseLocalShellMetadata(mergedMetadata, {
+      taskId: metadata.taskId,
+      sessionId: metadata.sessionId,
+    })
+    if (!validatedMetadata) {
+      throw new Error('Invalid merged local shell metadata')
+    }
+    await mkdir(dirname(path), { recursive: true })
+    const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`
+    try {
+      await writeFile(tempPath, JSON.stringify(validatedMetadata), { mode: 0o600 })
+      await rename(tempPath, path)
+    } catch (error) {
+      await unlink(tempPath).catch(() => {})
+      throw error
+    }
+  })
+  const tracked = write.finally(() => {
+    if (localShellMetadataWrites.get(path) === tracked) {
+      localShellMetadataWrites.delete(path)
+    }
+  })
+  localShellMetadataWrites.set(path, tracked)
+  return tracked
+}
+
+/** @internal Wait for local-shell sidecar writes before test fixture cleanup. */
+export async function flushLocalShellMetadataWritesForTesting(): Promise<void> {
+  while (localShellMetadataWrites.size > 0) {
+    await Promise.allSettled([...localShellMetadataWrites.values()])
+  }
+}
+
+export async function readLocalShellMetadata(
+  taskId: string,
+  sessionId: string,
+  projectDir?: string | null,
+): Promise<LocalShellMetadata | null> {
+  if (!isSafeLocalShellId(taskId) || !isSafeLocalShellId(sessionId)) return null
+  let handle: Awaited<ReturnType<typeof fsOpen>> | undefined
+  try {
+    handle = await fsOpen(
+      getLocalShellMetadataPath(taskId, sessionId, projectDir),
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0),
+    )
+    const raw = await handle.readFile('utf-8')
+    return parseLocalShellMetadata(JSON.parse(raw), { taskId, sessionId })
+  } catch (e) {
+    if (isFsInaccessible(e)) return null
+    logForDebugging(`readLocalShellMetadata: skipping ${taskId}: ${String(e)}`)
+    return null
+  } finally {
+    await handle?.close()
+  }
+}
+
+export async function listLocalShellMetadata(
+  sessionId: string,
+  projectDir?: string | null,
+): Promise<LocalShellMetadata[]> {
+  if (!isSafeLocalShellId(sessionId)) return []
+  let entries: Dirent[]
+  try {
+    entries = await readdir(getLocalShellsDir(sessionId, projectDir), { withFileTypes: true })
+  } catch (e) {
+    if (isFsInaccessible(e)) return []
+    throw e
+  }
+  const result: LocalShellMetadata[] = []
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.meta.json')) continue
+    try {
+      const metadata = parseLocalShellMetadata(
+        JSON.parse(
+          await readFile(join(getLocalShellsDir(sessionId, projectDir), entry.name), 'utf-8'),
+        ),
+        { sessionId },
+      )
+      if (metadata && entry.name === `local-shell-${metadata.taskId}.meta.json`) {
+        result.push(metadata)
+      }
+    } catch (e) {
+      logForDebugging(`listLocalShellMetadata: skipping ${entry.name}: ${String(e)}`)
+    }
+  }
+  return result
+}
+
 export type RemoteAgentMetadata = {
   taskId: string
   remoteTaskType: string
@@ -512,6 +709,7 @@ export function resetProjectFlushStateForTesting(): void {
  */
 export function resetProjectForTesting(): void {
   project = null
+  getProjectDir.cache?.clear()
 }
 
 export function setSessionFileForTesting(path: string): void {

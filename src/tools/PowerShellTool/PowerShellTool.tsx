@@ -228,6 +228,7 @@ isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS);
 const fullInputSchema = lazySchema(() => z.strictObject({
   command: z.string().describe('The PowerShell command to execute'),
   timeout: semanticNumber(z.number().optional()).describe(`Optional timeout in milliseconds (max ${getMaxTimeoutMs()})`),
+  timeout_behavior: z.enum(['background', 'terminate']).optional().describe('What to do when a foreground command hits its timeout. "background" keeps it running as a background task where that is allowed for this command; otherwise it is terminated. This timeout no longer applies after the command enters the background.'),
   description: z.string().optional().describe('Clear, concise description of what this command does in active voice.'),
   run_in_background: semanticBoolean(z.boolean().optional()).describe(`Set to true to run this command in the background. Use Read to read the output later.`),
   dangerouslyDisableSandbox: semanticBoolean(z.boolean().optional()).describe('Set this to true to dangerously override sandbox mode and run commands without sandboxing.')
@@ -252,7 +253,8 @@ const outputSchema = lazySchema(() => z.object({
   persistedOutputSize: z.number().optional().describe('Total output size in bytes when persisted'),
   backgroundTaskId: z.string().optional().describe('ID of the background task if command is running in background'),
   backgroundedByUser: z.boolean().optional().describe('True if the user manually backgrounded the command with Ctrl+B'),
-  assistantAutoBackgrounded: z.boolean().optional().describe('True if the command was auto-backgrounded by the assistant-mode blocking budget')
+  assistantAutoBackgrounded: z.boolean().optional().describe('True if the command was auto-backgrounded by the assistant-mode blocking budget'),
+  timeoutBehavior: z.enum(['background', 'terminate']).optional()
 }));
 type OutputSchema = ReturnType<typeof outputSchema>;
 export type Out = z.infer<OutputSchema>;
@@ -486,6 +488,13 @@ export const PowerShellTool = buildTool({
       } while (!generatorResult.done);
       const result = generatorResult.value;
 
+      if (result.terminationFailure) {
+        throw new Error(result.stderr);
+      }
+      if (result.code === undefined) {
+        throw new Error('Shell process ended before its exit code was available');
+      }
+
       // Feed git/PR usage metrics (same counters as BashTool). PS invokes
       // git/gh/glab/curl as external binaries with identical syntax, so the
       // shell-agnostic regex detection in trackGitOperations works as-is.
@@ -540,7 +549,8 @@ export const PowerShellTool = buildTool({
             interrupted: false,
             backgroundTaskId: result.backgroundTaskId,
             backgroundedByUser: result.backgroundedByUser,
-            assistantAutoBackgrounded: result.assistantAutoBackgrounded
+            assistantAutoBackgrounded: result.assistantAutoBackgrounded,
+            timeoutBehavior: input.timeout_behavior
           }
         };
       }
@@ -692,6 +702,7 @@ async function* runPowerShellCommand({
     command,
     description,
     timeout,
+    timeout_behavior,
     run_in_background,
     dangerouslyDisableSandbox
   } = input;
@@ -703,6 +714,7 @@ async function* runPowerShellCommand({
   let backgroundShellId: string | undefined = undefined;
   let interruptBackgroundingStarted = false;
   let assistantAutoBackgrounded = false;
+  let foregroundTaskId: string | undefined = undefined;
 
   // Progress signal: resolved when backgroundShellId is set in the async
   // .then() path, waking the generator's Promise.race immediately instead of
@@ -747,7 +759,8 @@ async function* runPowerShellCommand({
         command,
         dangerouslyDisableSandbox
       }),
-      shouldAutoBackground
+      shouldAutoBackground,
+      timeoutBehavior: timeout_behavior
     });
   } catch (e) {
     logError(e);
@@ -760,7 +773,35 @@ async function* runPowerShellCommand({
       interrupted: false
     };
   }
-  const resultPromise = shellCommand.result;
+  const resultPromise = shellCommand.terminationFailureResult
+    ? Promise.race([shellCommand.result, shellCommand.terminationFailureResult])
+    : shellCommand.result;
+  void resultPromise.then(result => {
+    if (!result.terminationFailure) return;
+    const failureMessage = result.stderr;
+    if (!foregroundTaskId) {
+      foregroundTaskId = registerForeground({
+        command,
+        description: description || command,
+        shellCommand,
+        agentId,
+        shellType: 'powershell',
+      }, setAppState, toolUseId);
+    }
+    const taskId = foregroundTaskId;
+    backgroundExistingForegroundTask(taskId, shellCommand, description || command, setAppState, toolUseId, failureMessage);
+    setAppState(previous => {
+      const task = previous.tasks[taskId];
+      if (!task || task.type !== 'local_bash' || task.status !== 'running') return previous;
+      return {
+        ...previous,
+        tasks: {
+          ...previous.tasks,
+          [taskId]: { ...task, error: failureMessage },
+        },
+      };
+    });
+  });
 
   // Helper to spawn a background task and return its ID
   async function spawnBackgroundTask(): Promise<string> {
@@ -769,7 +810,8 @@ async function* runPowerShellCommand({
       description: description || command,
       shellCommand,
       toolUseId,
-      agentId
+      agentId,
+      shellType: 'powershell'
     }, {
       abortController,
       getAppState: () => {
@@ -862,7 +904,6 @@ async function* runPowerShellCommand({
   // Set up progress yielding with periodic checks
   const startTime = Date.now();
   let nextProgressTime = startTime + PROGRESS_THRESHOLD_MS;
-  let foregroundTaskId: string | undefined = undefined;
 
   // Progress loop: wrap in try/finally so stopPolling is called on every exit
   // path — normal completion, timeout/interrupt backgrounding, and Ctrl+B
@@ -961,7 +1002,8 @@ async function* runPowerShellCommand({
             command,
             description: description || command,
             shellCommand,
-            agentId
+            agentId,
+            shellType: 'powershell'
           }, setAppState, toolUseId);
         }
         setToolJSX({

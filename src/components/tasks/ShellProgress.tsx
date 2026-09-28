@@ -18,7 +18,7 @@ export function TaskStatusText(t0) {
     suffix
   } = t0;
   const displayLabel = label ?? status;
-  const color = status === "completed" ? "success" : status === "failed" ? "error" : status === "killed" ? "warning" : undefined;
+  const color = status === "completed" ? "success" : status === "failed" ? "error" : status === "killed" || status === "unknown" ? "warning" : undefined;
   let t1;
   if ($[0] !== color || $[1] !== displayLabel || $[2] !== suffix) {
     t1 = <Text color={color} dimColor={true}>({displayLabel}{suffix})</Text>;
@@ -70,6 +70,8 @@ export function ShellProgress(t0) {
         }
         return t1;
       }
+    case "unknown":
+      return <TaskStatusText status="unknown" label="unknown" />;
     case "running":
     case "pending":
       {
