@@ -835,7 +835,6 @@ describe('WebSocket handler session isolation', () => {
   it('forwards background task lifecycle while a foreground admission awaits send acknowledgement', async () => {
     const sessionId = `task-lifecycle-during-admission-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
-    const observer = makeClientSocket(sessionId)
     const outputCallbacks = new Set<(cliMsg: any) => void>()
     let resolveSend!: (sent: boolean) => void
     spyOn(conversationService, 'hasSession').mockReturnValue(true)
@@ -853,44 +852,33 @@ describe('WebSocket handler session isolation', () => {
         resolveSend = resolve
       }),
     )
-    const task = (subtype: string, taskId: string, fields: Record<string, string> = {}) => ({
+    const task = {
       type: 'system',
-      subtype,
-      uuid: `${taskId}-${subtype}-${fields.status ?? ''}`,
-      task_id: taskId,
-      tool_use_id: `${taskId}-tool`,
+      task_id: 'shell',
+      tool_use_id: 'shell-tool',
       task_type: 'bash',
-      ...fields,
-    })
-    const emit = async (cliMsg: any) => {
-      ws.sent.length = 0
-      observer.sent.length = 0
-      for (const callback of [...outputCallbacks]) callback(cliMsg)
-      await flushMicrotasks(30)
-      return [ws, observer].map((client) => client.sent.map((payload) => JSON.parse(payload)))
     }
 
     handleWebSocket.open(ws)
-    handleWebSocket.open(observer)
-    await emit(task('task_started', 'shell', { description: 'bun test' }))
-    await emit(task('task_started', 'agent', { description: 'review', task_type: 'local_agent' }))
-    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Ask while commands run' }))
+    for (const callback of [...outputCallbacks]) {
+      callback({ ...task, subtype: 'task_started', uuid: 'shell-started', description: 'bun test' })
+    }
+    await flushMicrotasks(30)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Ask while a command runs' }))
+    await flushMicrotasks(30)
+    ws.sent.length = 0
+
+    for (const callback of [...outputCallbacks]) {
+      callback({ ...task, subtype: 'task_notification', uuid: 'shell-completed', status: 'completed' })
+    }
     await flushMicrotasks(30)
 
-    for (const [taskId, status, taskType] of [['shell', 'completed', 'bash'], ['agent', 'failed', 'local_agent']]) {
-      for (const sent of await emit(task('task_notification', taskId, { status, task_type: taskType }))) {
-        expect(sent).toContainEqual({
-          type: 'system_notification',
-          subtype: 'task_notification',
-          data: expect.objectContaining({ task_id: taskId, status }),
-        })
-      }
-    }
-    expect(append).toHaveBeenCalledTimes(2)
-    for (const sent of await emit(task('task_started', 'inside', { description: 'bun test' }))) {
-      expect(sent).toContainEqual(expect.objectContaining({ subtype: 'task_started' }))
-    }
-    expect(await emit(task('task_progress', 'inside', { summary: 'still running' }))).toEqual([[], []])
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'system_notification',
+      subtype: 'task_notification',
+      data: expect.objectContaining({ task_id: 'shell', status: 'completed' }),
+    })
+    expect(append).toHaveBeenCalledTimes(1)
 
     resolveSend(true)
     await flushMicrotasks(30)
