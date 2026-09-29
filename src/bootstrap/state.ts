@@ -56,6 +56,11 @@ type State = {
   // response, and the prefill wait that precedes it. See QueryEngine's per-turn accumulators.
   totalDecodeDuration: number
   totalTtftDuration: number
+  // Output tokens of exactly the calls whose decode span was measured. The numerator that pairs
+  // with `totalDecodeDuration`: a call that reported no span (a non-streamed fallback, a stream
+  // that ended without `message_stop`) contributes tokens to the model totals but no time here, so
+  // dividing the whole session's output by this span would read as a rate nobody ever saw.
+  totalTimedOutputTokens: number
   turnHookDurationMs: number
   turnToolDurationMs: number
   turnClassifierDurationMs: number
@@ -291,6 +296,7 @@ function getInitialState(): State {
     totalToolDuration: 0,
     totalDecodeDuration: 0,
     totalTtftDuration: 0,
+    totalTimedOutputTokens: 0,
     turnHookDurationMs: 0,
     turnToolDurationMs: 0,
     turnClassifierDurationMs: 0,
@@ -557,13 +563,23 @@ export function addToTotalDurationState(
 export function addToTotalGenerationDuration(
   decodeDuration: number,
   ttftDuration: number,
+  outputTokens = 0,
 ): void {
   STATE.totalDecodeDuration += decodeDuration
   STATE.totalTtftDuration += ttftDuration
+  // Pair the time with the tokens it actually covered. Only calls that measured a span reach
+  // here, so this is the numerator `totalDecodeDuration` is a denominator for.
+  if (decodeDuration > 0 && outputTokens > 0) {
+    STATE.totalTimedOutputTokens += outputTokens
+  }
 }
 
 export function getTotalDecodeDuration(): number {
   return STATE.totalDecodeDuration
+}
+
+export function getTotalTimedOutputTokens(): number {
+  return STATE.totalTimedOutputTokens
 }
 
 export function getTotalTtftDuration(): number {
@@ -576,6 +592,7 @@ export function resetTotalDurationStateAndCost_FOR_TESTS_ONLY(): void {
   STATE.totalCostUSD = 0
   STATE.totalDecodeDuration = 0
   STATE.totalTtftDuration = 0
+  STATE.totalTimedOutputTokens = 0
 }
 
 export function addToTotalCostState(
@@ -910,6 +927,7 @@ export function setCostStateForRestore({
   totalAPIDurationWithoutRetries,
   totalDecodeDuration,
   totalTtftDuration,
+  totalTimedOutputTokens,
   totalToolDuration,
   totalLinesAdded,
   totalLinesRemoved,
@@ -921,6 +939,7 @@ export function setCostStateForRestore({
   totalAPIDurationWithoutRetries: number
   totalDecodeDuration: number
   totalTtftDuration: number
+  totalTimedOutputTokens?: number
   totalToolDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -932,6 +951,10 @@ export function setCostStateForRestore({
   STATE.totalAPIDurationWithoutRetries = totalAPIDurationWithoutRetries
   STATE.totalDecodeDuration = totalDecodeDuration
   STATE.totalTtftDuration = totalTtftDuration
+  // Absent in snapshots written before the pairing existed: 0 then means "the tokens behind this
+  // span were never recorded", and the panel falls back to the API span rather than pairing a
+  // session-wide numerator with a partial denominator.
+  STATE.totalTimedOutputTokens = totalTimedOutputTokens ?? 0
   STATE.totalToolDuration = totalToolDuration
   STATE.totalLinesAdded = totalLinesAdded
   STATE.totalLinesRemoved = totalLinesRemoved

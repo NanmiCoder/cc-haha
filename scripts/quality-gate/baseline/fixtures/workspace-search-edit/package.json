@@ -1,8 +1,0 @@
-{
-  "name": "quality-gate-workspace-search-edit-fixture",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "bun test"
-  }
-}

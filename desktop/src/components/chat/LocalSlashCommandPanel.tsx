@@ -12,6 +12,7 @@ import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { mcpStatusTone } from '@/lib/mcpStatus'
+import { formatCacheHitRate, latestTurnCacheHitRate } from '../../lib/sessionUsageMetrics'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
@@ -467,6 +468,12 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
   const usedPercent = Math.min(100, Math.max(0, context.percentage))
   const freeTokens = Math.max(0, context.rawMaxTokens - context.totalTokens)
   const freePercent = context.rawMaxTokens > 0 ? (freeTokens / context.rawMaxTokens) * 100 : 0
+  // Latest-turn cache hit rate from the context snapshot's apiUsage (the newest assistant
+  // request). The headline meter above is window occupancy; this reads how much of the current
+  // turn's prompt was served from cache — the number users actually budget against.
+  const latestCacheRate = context.apiUsage ? latestTurnCacheHitRate(context.apiUsage) : null
+  const latestCacheRead = context.apiUsage ? Math.max(0, context.apiUsage.cache_read_input_tokens) : 0
+  const hasCache = latestCacheRate !== null && latestCacheRead > 0
   return (
     <div className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-panel)] px-5 py-6">
       <div className="mb-8 flex items-start justify-between gap-4">
@@ -478,6 +485,11 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
         <span className="mx-1.5 text-[var(--color-inspector-text)]">/</span>
         <span>{formatNumber(context.rawMaxTokens)}</span>
         <span className="ml-3 align-middle text-sm font-normal text-[var(--color-inspector-accent-secondary)]">[{formatPercent(usedPercent)} {t('slash.inspector.context.used')}]</span>
+        {hasCache && (
+          <span className="ml-3 align-middle text-sm font-normal" style={{ color: '#ea580c' }}>
+            {formatCacheHitRate(latestCacheRate!)} {t('slash.inspector.context.cached')}
+          </span>
+        )}
       </div>
       <div className="mt-7">
         <ContextStackedBar categories={categories} rawMaxTokens={context.rawMaxTokens} />
@@ -493,7 +505,10 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
           <ContextStatPill label={t('slash.inspector.context.toolResults')} value={formatNumber(context.messageBreakdown?.toolResultTokens ?? 0)} />
         </div>
         <div className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-surface)] px-4 py-3">
-          <ContextStatPill label={t('slash.inspector.context.context')} value={formatPercent(usedPercent)} />
+          {hasCache
+            ? <ContextStatPill label={t('slash.inspector.context.cache')} value={formatCacheHitRate(latestCacheRate!)} detail={`${formatNumber(latestCacheRead)} · ${t('slash.inspector.context.cached')}`} />
+            : <ContextStatPill label={t('slash.inspector.context.context')} value={formatPercent(usedPercent)} />
+          }
         </div>
       </div>
     </div>

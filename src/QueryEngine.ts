@@ -870,10 +870,13 @@ export class QueryEngine {
             this.totalDecodeMs += message.decodeMs ?? 0
             this.totalTtftMs += currentMessageTtftMs
             // Session-scoped twin of the turn totals above: survives across turns so the
-            // usage snapshot can report generation speed for the whole conversation.
+            // usage snapshot can report generation speed for the whole conversation. The
+            // call's own output tokens ride along so the speed pairs this span with the
+            // tokens it covered — session totals also carry calls that reported no span.
             addToTotalGenerationDuration(
               message.decodeMs ?? 0,
               currentMessageTtftMs,
+              currentMessageUsage.output_tokens,
             )
           }
 

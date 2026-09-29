@@ -1,5 +1,16 @@
 import { api, type ApiRequestOptions } from './client'
 import type { SlashCommandOption } from '../types/slashCommand'
+
+/**
+ * Bounds on the first history paint. The timeline renders nothing until the
+ * whole stitch resolves, so a deep transcript must not hold it hostage: past
+ * either bound the walk stops and returns what it has, leaving `nextCursor`
+ * for the user-driven "load more" path. 40 pages is well clear of any ordinary
+ * session (which fits in the single `mode=full` response and never enters the
+ * loop at all).
+ */
+const HISTORY_STITCH_MAX_PAGES = 40
+const HISTORY_STITCH_DEADLINE_MS = 12_000
 import type { AgentTaskNotification } from '../types/chat'
 import type { LocalIndexStatus, SessionListItem, MessageEntry } from '../types/session'
 import type { PermissionMode } from '../types/settings'
@@ -33,6 +44,27 @@ export type SessionChatStatusResponse = {
 type MessagesResponse = {
   messages: MessageEntry[]
   taskNotifications?: AgentTaskNotification[]
+  /**
+   * The subagent runs that are still going, keyed by the Agent tool-call id the
+   * UI renders usage under.
+   *
+   * Both ids travel together because neither is derivable from the other, and a
+   * client that opened the session mid-run never saw the `task_started` that
+   * relates them: `taskId` is what the run's live frames are addressed with,
+   * `toolUseId` is what its number must be displayed under. Only in-flight runs
+   * appear, because the client marks whatever it finds here as running.
+   *
+   * `totalTokens` is absent until the run crosses a tool boundary — but the run is
+   * listed regardless, because that boundary-free stretch is exactly when a client
+   * joining now has nothing else to go on.
+   */
+  runningAgentUsage?: Record<string, {
+    taskId: string
+    toolUseId: string
+    totalTokens?: number
+    thinkTokens?: number
+    toolUses?: number
+  }>
 }
 export type SessionHistoryPage = MessagesResponse & {
   page?: {
@@ -192,12 +224,19 @@ export type SessionUsageSnapshot = {
   totalAPIDuration: number
   /**
    * Milliseconds the model spent emitting tokens, excluding prefill and tool execution.
-   * The panel's tok/s uses `totalAPIDuration` instead: decode-only rates ignore TTFT and
-   * read as a peak the user never felt. Kept so resume snapshots still round-trip.
+   * This is the panel's tok/s denominator, paired with `totalTimedOutputTokens`: only the
+   * calls that report a span may have their tokens divided by it. Kept so resume snapshots
+   * still round-trip.
    */
   totalDecodeDuration?: number
   /** Milliseconds spent waiting for the first token, summed over the session's requests. */
   totalTtftDuration?: number
+  /**
+   * Output tokens of the calls `totalDecodeDuration` covers. Absent for transcript-sourced
+   * usage (a transcript has no span to pair with) and in snapshots written before the
+   * pairing existed; the panel then falls back to the API span.
+   */
+  totalTimedOutputTokens?: number
   totalDuration: number
   totalLinesAdded: number
   totalLinesRemoved: number
@@ -443,6 +482,12 @@ export const sessionsApi = {
 
   // The timeline receives one assembled transcript. Ordinary sessions fit in
   // `mode=full`; larger sessions continue within the server's request budgets.
+  //
+  // A deep transcript is walked one page per request and nothing renders until
+  // this resolves, so the walk is bounded and the remaining `nextCursor` is
+  // handed back for the existing "load more" affordance to continue. Stitching
+  // without a bound is what made a large session appear never to open: the
+  // client was still on page N long after the reader had given up on it.
   async getFullHistory(sessionId: string, options?: ApiRequestOptions): Promise<SessionHistoryPage> {
     const newest = await api.get<SessionHistoryPage>(`/api/sessions/${sessionId}/messages?mode=full`, options)
     if (!newest.page?.nextCursor) return newest
@@ -455,9 +500,19 @@ export const sessionsApi = {
     let omitted = newest.page.omittedOversizedEntries
     let truncated = Boolean(newest.page.contentTruncated)
     let scannedBytes = newest.page.scannedBytes
+    const startedAt = Date.now()
     while (cursor) {
       if (options?.signal?.aborted) throw options.signal.reason ?? new DOMException('Aborted', 'AbortError')
       if (seen.has(cursor)) throw new Error('Session history cursor did not advance')
+      // Stop well before the request timeout. `hasMore` below stays true and
+      // `nextCursor` is preserved, which is exactly the state the timeline
+      // already interprets as "history is windowed — offer to load more".
+      if (
+        pages.length >= HISTORY_STITCH_MAX_PAGES ||
+        Date.now() - startedAt >= HISTORY_STITCH_DEADLINE_MS
+      ) {
+        break
+      }
       seen.add(cursor)
       const query: URLSearchParams = new URLSearchParams({ cursor })
       const older: SessionHistoryPage = await api.get<SessionHistoryPage>(`/api/sessions/${sessionId}/messages?${query}`, options)
@@ -472,14 +527,21 @@ export const sessionsApi = {
       cursor = older.page.nextCursor
     }
     pages.reverse()
-    return {
-      messages: pages.flatMap(page => page.messages),
-      taskNotifications: pages.flatMap(page => page.taskNotifications ?? []),
-      page: {
+    // `cursor === null` means the walk reached the head of the transcript, in
+    // which case every field below matches the previous unconditional-`null`
+    // behaviour — early exit is the only new path.
+    const exhausted = cursor === null
+      return {
+        messages: pages.flatMap(page => page.messages),
+        taskNotifications: pages.flatMap(page => page.taskNotifications ?? []),
+        // Not stitched: it describes what is running *now*, so the newest page is
+        // the only one whose answer is still true.
+        runningAgentUsage: newest.runningAgentUsage,
+        page: {
         ...newest.page,
-        nextCursor: null,
-        hasMore: false,
-        historyComplete: omitted === 0 && !truncated && !newest.page.previousCursor,
+        nextCursor: cursor,
+        hasMore: !exhausted,
+        historyComplete: exhausted && omitted === 0 && !truncated && !newest.page.previousCursor,
         contentTruncated: truncated,
         omittedOversizedEntries: omitted,
         scannedBytes,

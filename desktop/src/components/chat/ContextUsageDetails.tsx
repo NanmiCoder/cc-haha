@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import {
   formatCacheHitRate,
+  formatCnyCost,
   formatCompactTokens,
   formatTokensPerSecond,
 } from '../../lib/sessionUsageMetrics'
@@ -19,11 +20,21 @@ type ContextCategory = {
  * rounding a cache hit up to 100%, withholding a speed with no API duration) stay in one place.
  */
 export type ContextUsageSessionStats = {
+  /**
+   * Request-level (latest-turn) hit rate — the headline, because it reflects how the cache
+   * actually performs turn-over-turn rather than a cumulative ratio diluted by replayed prompts.
+   * `null` when the session has never streamed a turn.
+   */
   cacheHitRate: number | null
+  /** Latest-turn cache-read token count, shown next to the rate as the absolute figure. */
+  cacheReadTokens: number
   tokensPerSecond: number | null
   /** Pre-formatted by the server (unknown-model sessions included), displayed verbatim. */
   costDisplay: string
+  /** Raw USD total for the CNY readout beside `costDisplay` (`null` when unknown). */
+  totalCostUSD: number | null
 }
+
 
 export type ContextUsageDetailsStatus = 'ready' | 'pending' | 'loading' | 'unavailable'
 
@@ -113,29 +124,60 @@ function SessionStatGrid({
   const labelClass = density === 'compact'
     ? 'text-[12.5px] text-[var(--color-text-tertiary)]'
     : 'text-xs text-[var(--color-text-tertiary)]'
-  const valueClass = 'mt-[3px] font-mono text-sm text-[var(--color-text-primary)]'
+  // 13/10px uniform — the values read as an even row.
+  const valueClass = 'mt-[3px] font-mono text-[13px] text-[var(--color-text-primary)]'
+  const unitClass = 'text-[10px] text-[var(--color-text-tertiary)]'
 
   return (
-    <div className="mt-4 grid grid-cols-3 gap-3">
-      <div>
+    // Flex with justify-evenly (not a fixed-width grid): each stat group sizes
+    // to its own content and the browser distributes the leftover width into
+    // exactly equal gaps — including the outer margins — so the three fields
+    // stay 间距匀称 no matter how long the live values are (an idle "--" speed
+    // no longer leaves a dead column, a 6-digit cost no longer crowds its
+    // neighbor). Values never wrap (whitespace-nowrap); the 384px popover has
+    // room for the worst cases ($9999.99 · ¥71999.93 ≈ 125px).
+    <div className="mt-4 flex items-start justify-evenly">
+      <div className="flex flex-col items-center">
         <div className={labelClass}>{labels.sessionSpeed}</div>
-        <div className={valueClass} data-testid="session-speed">
+        <div className={`${valueClass} whitespace-nowrap`} data-testid="session-speed">
           {formatTokensPerSecond(stats.tokensPerSecond ?? 0)}
           {stats.tokensPerSecond !== null && (
-            <span className="ml-1 text-[11px] text-[var(--color-text-tertiary)]">{labels.sessionSpeedUnit}</span>
+            <span className={`ml-1 ${unitClass}`}>{labels.sessionSpeedUnit}</span>
           )}
         </div>
       </div>
-      <div>
+      <div className="flex flex-col items-center">
         <div className={labelClass}>{labels.sessionCacheHit}</div>
-        <div className={valueClass} data-testid="session-cache-hit">
+        <div
+          className={`${valueClass} whitespace-nowrap ${stats.cacheHitRate !== null ? 'text-[#ea580c]' : ''}`}
+          data-testid="session-cache-hit"
+          title={stats.cacheHitRate !== null && stats.cacheReadTokens > 0
+            ? `${formatCacheHitRate(stats.cacheHitRate!)} · ${formatCompactTokens(stats.cacheReadTokens)}`
+            : undefined}
+        >
           {stats.cacheHitRate === null ? '--' : formatCacheHitRate(stats.cacheHitRate)}
+          {stats.cacheHitRate !== null && stats.cacheReadTokens > 0 && (
+            <span className={`ml-1 mr-1 ${unitClass}`}>·</span>
+          )}
+          {stats.cacheHitRate !== null && stats.cacheReadTokens > 0 && (
+            <span className={unitClass}>{formatCompactTokens(stats.cacheReadTokens)}</span>
+          )}
         </div>
       </div>
-      <div>
+      <div className="flex flex-col items-center">
         <div className={labelClass}>{labels.sessionCost}</div>
-        <div className={`${valueClass} truncate`} data-testid="session-cost" title={stats.costDisplay}>
+        <div
+          className={`${valueClass} whitespace-nowrap`}
+          data-testid="session-cost"
+          title={stats.totalCostUSD !== null ? `${stats.costDisplay} · ${formatCnyCost(stats.totalCostUSD)}` : stats.costDisplay}
+        >
           {stats.costDisplay}
+          {stats.totalCostUSD !== null && stats.totalCostUSD > 0 && (
+            <span className={`ml-1 mr-1 ${unitClass}`}>·</span>
+          )}
+          {stats.totalCostUSD !== null && stats.totalCostUSD > 0 && (
+            <span className={unitClass}>{formatCnyCost(stats.totalCostUSD)}</span>
+          )}
         </div>
       </div>
     </div>

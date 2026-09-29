@@ -109,13 +109,20 @@ type ReducerState = {
   activityModels: Map<string, ActivityModelProjection>
   activityTools: Map<string, ActivityNamedUsageProjection>
   activitySkills: Map<string, ActivityNamedUsageProjection>
-  // (message.id, requestId) pairs whose usage has already been counted for this source. Claude
-  // Code writes one JSONL line per content block of an assistant message — a turn with thinking,
-  // text and 12 tool_use blocks is 14 lines — and every one of them repeats the same complete
-  // `usage` object. Without this the tokens of a single reply get counted once per block; on real
-  // transcripts that inflated the total by 2.2x. Lives only in memory alongside the projection
-  // Maps: a full re-read starts empty (correct), and an incremental read clones it forward.
-  activityUsageKeys: Set<string>
+  // (message.id, requestId) pairs whose usage has already been counted for this source, mapped to
+  // what each contributed. Claude Code writes one JSONL line per content block of an assistant
+  // message — a turn with thinking, text and 12 tool_use blocks is 14 lines — and every one
+  // repeats `usage`. Without dedup the tokens of a single reply get counted once per block; on
+  // real transcripts that inflated the total by 2.2x.
+  //
+  // The repeats are not identical: measured over 1227 calls, the early lines of a call carry
+  // `output_tokens: 0` and the last line carries the final split (uncached input, cache
+  // read/write, real output). Keeping only the first line is what made every indexed row report
+  // `output_tokens: 0` and `cache_read_input_tokens: 0`; the stored contribution lets a later
+  // line of the same call replace it instead of being dropped. Lives only in memory alongside the
+  // projection Maps: a full re-read starts empty (correct), and an incremental read clones it
+  // forward.
+  activityUsageKeys: Map<string, CountedUsage>
 }
 
 export type TranscriptReductionOptions = {
@@ -221,7 +228,7 @@ function cloneState(state: ReducerState): ReducerState {
     activitySkills: new Map(
       [...state.activitySkills].map(([key, value]) => [key, { ...value }]),
     ),
-    activityUsageKeys: new Set(state.activityUsageKeys),
+    activityUsageKeys: new Map(state.activityUsageKeys),
   }
 }
 
@@ -286,7 +293,7 @@ function createInitialState(
         { ...skill },
       ]),
     ),
-    activityUsageKeys: new Set(),
+    activityUsageKeys: new Map(),
   }
 }
 
@@ -328,16 +335,51 @@ function usageIdentity(entry: ReducerEntry) {
   }
 }
 
+/** What one counted call has already contributed, so a later line can replace it. */
+type CountedUsage = {
+  /** `activityModels` bucket the contribution landed in, `${date}\0${model}`. */
+  bucketKey: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  webSearchRequests: number
+  costUSD: number
+}
+
+/** Which call a line's `usage` describes, and what that call has already contributed. */
+type UsageClaim = {
+  /** `null` when the line has no identity to deduplicate on and is counted as-is. */
+  key: string | null
+  /** Non-null means this line supersedes that contribution rather than adding to it. */
+  previous: CountedUsage | null
+}
+
 /**
- * Claim this usage record, returning false when its key was already counted — i.e. this line is
- * another content block of a reply already accounted for.
+ * Claim this usage record. A key already counted comes back with `previous` so the caller can
+ * take that contribution back before adding this line's numbers — the lines of one call are
+ * successive views of the same request, and the last one is the complete one.
  */
-function claimUsageRecord(state: ReducerState, entry: ReducerEntry, suffix = ''): boolean {
+function claimUsageRecord(
+  state: ReducerState,
+  entry: ReducerEntry,
+  suffix = '',
+): UsageClaim {
   const key = usageRecordKey(usageIdentity(entry), suffix)
-  if (key === null) return true
-  if (state.activityUsageKeys.has(key)) return false
-  state.activityUsageKeys.add(key)
-  return true
+  if (key === null) return { key: null, previous: null }
+  return { key, previous: state.activityUsageKeys.get(key) ?? null }
+}
+
+/** Undo a contribution a later line of the same call is about to replace. */
+function releaseCountedUsage(state: ReducerState, previous: CountedUsage): void {
+  const aggregate = state.activityModels.get(previous.bucketKey)
+  if (!aggregate) return
+  aggregate.inputTokens -= previous.inputTokens
+  aggregate.outputTokens -= previous.outputTokens
+  aggregate.cacheReadInputTokens -= previous.cacheReadInputTokens
+  aggregate.cacheCreationInputTokens -= previous.cacheCreationInputTokens
+  aggregate.webSearchRequests -= previous.webSearchRequests
+  aggregate.costUSD -= previous.costUSD
 }
 
 function cacheCreationTokens(usage: ReducerUsage): number {
@@ -353,7 +395,7 @@ function accumulateUsage(
   date: string,
   model: string,
   usage: ReducerUsage,
-): void {
+): CountedUsage {
   const key = `${date}\0${model}`
   let aggregate = state.activityModels.get(key)
   if (!aggregate) {
@@ -397,6 +439,16 @@ function accumulateUsage(
     usage.speed,
   )
   if (cost !== null) aggregate.costUSD += cost
+
+  return {
+    bucketKey: key,
+    inputTokens,
+    outputTokens,
+    cacheReadInputTokens,
+    cacheCreationInputTokens,
+    webSearchRequests,
+    costUSD: cost ?? 0,
+  }
 }
 
 /**
@@ -421,8 +473,10 @@ function accumulateAdvisorUsage(
     // key as the first line's Nth advisor rather than shifting by the number already claimed.
     const index = advisorIndex
     advisorIndex += 1
-    if (!claimUsageRecord(state, entry, `\0advisor:${index}`)) continue
-    accumulateUsage(state, date, record.model, record)
+    const advisorClaim = claimUsageRecord(state, entry, `\0advisor:${index}`)
+    if (advisorClaim.previous) releaseCountedUsage(state, advisorClaim.previous)
+    const contribution = accumulateUsage(state, date, record.model, record)
+    if (advisorClaim.key !== null) state.activityUsageKeys.set(advisorClaim.key, contribution)
   }
 }
 
@@ -500,9 +554,13 @@ function applyActivityEntry(state: ReducerState, entry: ReducerEntry): void {
   const model = entry.message?.model || 'unknown'
   if (!usage || model === SYNTHETIC_MODEL) return
   if (!isBillableUsageRecord(usageIdentity(entry))) return
-  // Every content-block line of this reply carries the same usage; bill only the first one.
-  if (!claimUsageRecord(state, entry)) return
-  accumulateUsage(state, timestamp.date, model, usage)
+  // Every content-block line of this reply repeats `usage`, and the last one is the complete
+  // view of the call: bill the line, replacing whatever the earlier lines of the same call
+  // contributed (they carry `output_tokens: 0` and no cache read).
+  const claim = claimUsageRecord(state, entry)
+  if (claim.previous) releaseCountedUsage(state, claim.previous)
+  const contribution = accumulateUsage(state, timestamp.date, model, usage)
+  if (claim.key !== null) state.activityUsageKeys.set(claim.key, contribution)
   accumulateAdvisorUsage(state, entry, timestamp.date, usage)
 }
 

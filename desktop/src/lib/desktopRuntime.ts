@@ -246,6 +246,25 @@ async function initializeBrowserServerUrl(fallbackUrl: string) {
     return requestedUrl
   }
 
+  // Tokenless fast path: when the server has requireToken=false (or the client
+  // source is exempt), its capability API answers without a Bearer token. If
+  // the server instead requires one, /api/status returns 401 and we fall
+  // through to the normal token prompt/verify flow below.
+  let tokenlessAccess = false
+  try {
+    await ensureBrowserApiAccessibleWithoutH5(requestedUrl)
+    tokenlessAccess = true
+  } catch (error) {
+    if (!(error instanceof H5ConnectionRequiredError && error.reason === 'missing-token')) {
+      throw normalizeBrowserH5Error(error, requestedUrl)
+    }
+  }
+  if (tokenlessAccess) {
+    setAuthToken(null)
+    markDesktopServerReady()
+    return requestedUrl
+  }
+
   if (!token) {
     // Keep the existing recovery UX for a first-time connection, but never
     // replace a paired server while withholding its token from a new one.

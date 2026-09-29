@@ -1263,6 +1263,64 @@ describe('ConversationService', () => {
     }
   })
 
+  it('should anchor displayed context to the last real usage, not full rough accumulation', async () => {
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousNodeEnv = process.env.NODE_ENV
+    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-transcript-usage-anchored-'))
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-workdir-usage-anchored-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
+    process.env.NODE_ENV = 'development'
+
+    try {
+      const svc = new SessionService()
+      const { sessionId } = await svc.createSession(workDir)
+      const found = await svc.findSessionFile(sessionId)
+      expect(found).not.toBeNull()
+
+      // ~600k chars of text ≈ 150k rough tokens, but the provider reports a
+      // modest 1200-token usage. The displayed total must anchor to that real
+      // usage (plus the rough delta after it, which is 0 here) rather than the
+      // full self-since-boundary rough accumulation — otherwise bc-compressed
+      // transcripts stay pinned at a high percentage.
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'assistant',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-04-27T12:00:00.000Z',
+        cwd: workDir,
+        version: '999.0.0-test',
+        message: {
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'x'.repeat(600_000) }],
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 200,
+          },
+        },
+      }) + '\n')
+
+      const contextEstimate = await svc.getTranscriptContextEstimate(sessionId)
+
+      expect(contextEstimate?.rawMaxTokens).toBe(200_000)
+      // 150k rough tokens must NOT dominate: total anchors to the 1200 real usage.
+      expect(contextEstimate?.totalTokens).toBe(1200)
+      expect(contextEstimate?.percentage).toBe(1)
+    } finally {
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV
+      } else {
+        process.env.NODE_ENV = previousNodeEnv
+      }
+      await fs.rm(tmpConfigDir, { recursive: true, force: true })
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
   it('should fall back to transcript estimates when provider usage is empty or zero', async () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV

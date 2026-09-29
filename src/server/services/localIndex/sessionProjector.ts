@@ -124,7 +124,10 @@ type SourceProjectionBundle = {
 
 export const MAX_PROJECTION_RECORD_BYTES = 8 * 1024 * 1024
 export const MAX_PROJECTION_RECORDS = 50_000
-export const MAX_PROJECTION_METADATA_BYTES = 16 * 1024 * 1024
+export const MAX_PROJECTION_METADATA_BYTES = 32 * 1024 * 1024
+// Per-retained-string cap. Malformed transcripts can carry thinking text
+// mis-parsed into a tool_use name; 4KB was too tight (observed 12KB outlier).
+export const MAX_PROJECTION_METADATA_VALUE_BYTES = 16 * 1024
 const projectionMetadataBytes = new WeakMap<TranscriptProjection, number>()
 const projectionRecordCounts = new WeakMap<TranscriptProjection, number>()
 const MAX_CACHED_PROJECTIONS = 8
@@ -306,7 +309,7 @@ async function streamProjection(options: {
               if (++visited > 16_384) throw new ProjectionLimitError()
               metadataBytes += 64
               if (typeof value === 'string') {
-                if (value.length > 4096) throw new ProjectionLimitError()
+                if (Buffer.byteLength(value) > MAX_PROJECTION_METADATA_VALUE_BYTES) throw new ProjectionLimitError()
                 metadataBytes += Buffer.byteLength(value)
               } else if (typeof value === 'object') {
                 for (const key in value) {

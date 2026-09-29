@@ -4028,6 +4028,60 @@ describe('Sessions API', () => {
     expect(body.usage?.totalInputTokens).toBe(20)
   })
 
+  it('bills the last line of a call, not the first, when the transcript repeats its usage', async () => {
+    // Real transcripts write a call twice: the first line carries the prompt with
+    // `output_tokens: 0` and no cache fields, the last carries the final split (uncached input
+    // + cache read + real output). Keeping the first — which the dedup did — reported 0 output
+    // tokens and a 0% cache hit rate for the whole session.
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-usage-final-'))
+    const sessionId = '33333333-4444-5555-6666-777777777777'
+    const projectDir = '-tmp-api-session-usage-final'
+    const messageId = 'msg_two_phase'
+    const phase = (usage: Record<string, unknown>) => ({
+      parentUuid: null,
+      isSidechain: false,
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-4-7',
+        id: messageId,
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'block' }],
+        usage,
+      },
+      uuid: crypto.randomUUID(),
+      timestamp: '2026-01-01T00:02:00.000Z',
+      sessionId,
+      cwd: workDir,
+    })
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeUserEntry('go', crypto.randomUUID()),
+      // message_start: the prompt total, nothing generated yet.
+      phase({ input_tokens: 30_505, output_tokens: 0 }),
+      // message_stop: uncached input + cache read + the tokens actually emitted.
+      phase({
+        input_tokens: 1_129,
+        output_tokens: 67,
+        cache_read_input_tokens: 29_376,
+        cache_creation_input_tokens: 0,
+      }),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+    const body = await res.json() as {
+      usage?: {
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalCacheReadInputTokens: number
+      }
+    }
+
+    expect(body.usage?.totalOutputTokens).toBe(67)
+    expect(body.usage?.totalCacheReadInputTokens).toBe(29_376)
+    expect(body.usage?.totalInputTokens).toBe(1_129)
+  })
+
   it('GET /api/sessions/repository-context should return branch launch metadata', async () => {
     const workDir = await createCleanGitRepo(tmpDir)
     const res = await fetch(
