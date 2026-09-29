@@ -19,6 +19,8 @@ import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
 import { createAsyncRefreshCoalescer } from '../lib/asyncRefreshCoalescer'
 import { deriveSessionTitle, isPlaceholderSessionTitle } from '../lib/sessionTitle'
+import { TpsMeter, isTpsEnabled, setEstimationCalibration } from '../lib/tpsMeter'
+import { loadTpsCalibration, saveTpsCalibration } from '../lib/tpsCalibration'
 import { t } from '../i18n'
 import {
   VISUAL_SELECTION_BATCH_PROMPT_HEADER,
@@ -1006,6 +1008,387 @@ function markPendingToolUseMessagesStopped(messages: UIMessage[]): UIMessage[] {
   return changed ? stoppedMessages : messages
 }
 
+// Real-time decode-speed (TPS) meters, one per session so parallel sessions
+// each track their own output throughput without cross-talk.
+const tpsMeterBySession = new Map<string, TpsMeter>()
+
+export function getSessionTpsMeter(sessionId: string): TpsMeter {
+  let meter = tpsMeterBySession.get(sessionId)
+  if (!meter) {
+    meter = new TpsMeter()
+    // Seed what earlier sessions with this model measured, so a fresh session
+    // does not under-read until its first call completes.
+    const model = tpsModelFor(sessionId)
+    const seeded = loadTpsCalibration(model)
+    meter.setCalibration(seeded)
+    // The badge/digest estimate from characters, so they want the same learned
+    // coefficients the meter reads its rate with.
+    setEstimationCalibration(seeded)
+    tpsCalibrationModelBySession.set(sessionId, model)
+    tpsMeterBySession.set(sessionId, meter)
+  }
+  return meter
+}
+
+/** Model a session is currently running, for keying the TPS calibration. */
+function tpsModelFor(sessionId: string): string | undefined {
+  return useSessionRuntimeStore.getState().selections[sessionId]?.modelId
+}
+
+/**
+ * The model a session's meter has been learning for. Kept apart from the live
+ * selection because the UI updates the selection before the runtime confirms
+ * it, so on a switch the live selection is already the new model while the
+ * coefficients still describe the old one.
+ */
+const tpsCalibrationModelBySession = new Map<string, string | undefined>()
+
+/**
+ * Sessions whose sidecar relays real per-chunk token counts (`tps_tokens`).
+ * Their text frames duplicate those counts, so they must not also be sampled.
+ * Subagent frames folded into a parent meter are deliberately NOT gated on this
+ * flag: they are measured by the text-based estimator, which needs no per-stream
+ * coefficient.
+ */
+const tpsIdsModeBySession = new Map<string, boolean>()
+
+/**
+ * Feed one of a session's own streamed frames into its TPS meter, opening the
+ * call window on the first frame so endCall() can reconcile it afterwards.
+ */
+function pushTpsFrame(
+  sessionId: string,
+  text: string,
+  options: { wholeBlock?: boolean; generatedAt?: number } = {},
+): void {
+  if (!isTpsEnabled()) return
+  const meter = getSessionTpsMeter(sessionId)
+  if (tpsIdsModeBySession.get(sessionId)) {
+    // The relay already counted these tokens exactly; keep liveness only.
+    meter.touch()
+    return
+  }
+  meter.ensureCall()
+  meter.push(text, options)
+}
+
+/** Drop a session's sampling window (reconnect / retry replays a prefix). */
+function resetTpsWindow(sessionId: string): void {
+  tpsIdsModeBySession.delete(sessionId)
+  tpsMeterBySession.get(sessionId)?.reset()
+}
+
+/**
+ * TPS meter for one subagent run, keyed by the parent session and the relay's
+ * `runAgentId`.
+ *
+ * A run gets its own meter rather than sharing the parent's so that (a) the
+ * run's page can show that run's own decode speed, and (b) the parent's
+ * indicator can add the *concurrently running* runs together (see
+ * aggregateMeterReadings) instead of reporting a single figure that silently
+ * mixes the parent's prose with every subagent's. Keying off the relay id —
+ * not a tab — matters because a background run has no tab: an earlier
+ * tab-keyed lookup could never find one, so the "how many subagents are
+ * decoding" count was permanently zero.
+ */
+const tpsMeterByRun = new Map<string, TpsMeter>()
+
+function tpsRunKey(parentSessionId: string, runAgentId: string): string {
+  return `${parentSessionId}\u0000${runAgentId}`
+}
+
+export function getAgentRunTpsMeter(parentSessionId: string, runAgentId: string): TpsMeter {
+  const key = tpsRunKey(parentSessionId, runAgentId)
+  let meter = tpsMeterByRun.get(key)
+  if (!meter) {
+    // Built-in defaults on purpose: the per-model coefficients a session banks
+    // are learned from *that session's* calls, whose content mix (tool-input
+    // JSON, commands, short replies) is not the prose a subagent writes. Seeding
+    // a run meter from them let one unrepresentative call drag the whole team
+    // reading to a third of the truth, so a run is measured on its own density.
+    meter = new TpsMeter()
+    tpsMeterByRun.set(key, meter)
+  }
+  return meter
+}
+
+/**
+ * Every run meter a parent session owns. Finished runs stay in the list — their
+ * windows drain on their own and `aggregateMeterReadings` skips a meter with no
+ * live samples — so a run's last speed is still held long enough to be read.
+ */
+export function getAgentRunTpsMeters(parentSessionId: string): TpsMeter[] {
+  // The indicator polls this several times a second for as long as a session
+  // page is open, which makes it the one read that keeps happening after the
+  // session stops streaming — so it is also where finished runs are aged off.
+  reapIdleAgentRunState(parentSessionId)
+  const prefix = `${parentSessionId}\u0000`
+  const meters: TpsMeter[] = []
+  for (const [key, meter] of tpsMeterByRun) {
+    if (key.startsWith(prefix)) meters.push(meter)
+  }
+  return meters
+}
+
+/** Drop a session's run meters when the session's own state goes away. */
+function clearAgentRunTpsMeters(parentSessionId: string): void {
+  const prefix = `${parentSessionId}\u0000`
+  for (const key of [...tpsMeterByRun.keys()]) {
+    if (key.startsWith(prefix)) tpsMeterByRun.delete(key)
+  }
+}
+
+/**
+ * Feed a subagent's relayed decode text into **that run's own** meter.
+ *
+ * Runs on the parent socket for every agent_run_event, whether or not that
+ * run's page is open, so the run's meter is live the moment its page opens and
+ * the parent's indicator can add up whatever is decoding right now. Only the
+ * meter is touched — the text never reaches streamingText, so subagent prose
+ * cannot leak into the main conversation.
+ *
+ * The meter is per run, so its window holds one decoder's samples and needs no
+ * stream tag; the parent's meter is left alone and now carries only the
+ * parent's own prose.
+ *
+ * Whole-block `thinking` hand-overs (complete === true) are skipped: their
+ * fragments already arrived as deltas, so counting both would double the
+ * subagent's token rate in the sliding window.
+ */
+function ingestSubagentTps(
+  parentSessionId: string,
+  runAgentId: string | undefined,
+  event: Extract<ServerMessage, { type: 'agent_run_event' }>['event'],
+): void {
+  if (!isTpsEnabled() || !runAgentId) return
+  // `external` keeps these frames out of any call accounting: they belong to
+  // the subagent's own API calls, whose real usage never reaches this socket,
+  // so they may only contribute samples to the sliding window.
+  const meter = getAgentRunTpsMeter(parentSessionId, runAgentId)
+  if (event.type === 'content_delta') {
+    if (event.text) meter.push(event.text, { external: true, generatedAt: event.serverTs })
+    if (event.toolInput) meter.push(event.toolInput, { external: true, generatedAt: event.serverTs })
+    return
+  }
+  if (event.type === 'thinking' && event.complete !== true && event.text) {
+    meter.push(event.text, { external: true, generatedAt: event.serverTs })
+  }
+}
+
+/**
+ * Live output of a running subagent, attributed to the run it came from.
+ *
+ * These deltas are the same relayed text the TPS meter above consumes, and they
+ * arrive while the subagent is still working. The panel's usage, by contrast,
+ * read `task_progress`, which the runtime only emits at tool boundaries and
+ * whose token count only covers *completed* turns — so a subagent writing one
+ * long answer showed nothing at all until the end. Measuring the same deltas
+ * per run is what makes the number move as the work happens.
+ *
+ * The number is `base + estimate(sinceBase)`, where `base` is the authoritative
+ * cumulative total the runtime last reported for the run. Rebasing on every
+ * advance of that total — and zeroing the counters with it — is what makes two
+ * clients agree: each reports the same base plus whatever *it* saw after it,
+ * instead of each reporting its own running sum from the moment it connected.
+ * Before this, a client that opened the session late showed a smaller number
+ * forever and was only corrected abruptly when the run finished.
+ */
+const subagentLiveChars = new Map<
+  string,
+  {
+    text: number
+    thinking: number
+    baseTokens: number
+    /**
+     * The total this accumulator last wrote to the task. Written back into
+     * `task.usage.totalTokens`, which is the same field an authoritative report
+     * arrives in — so without remembering our own last value the next pass reads
+     * the estimate back as if the server had sent it, rebases onto it, and wipes
+     * the text accumulated since. The number then froze instead of climbing.
+     */
+    lastWritten: number
+    wroteAt: number
+    createdAt: number
+  }
+>()
+/**
+ * How often a running subagent's projected usage is written back to its row.
+ *
+ * 4Hz: the cadence the TPS indicator polls at, so the number reads as live rather
+ * than advancing in visible steps. It is a compromise, not a free win — every write
+ * re-derives the session activity model (`ActiveSession`'s selector) and the
+ * `MessageList` live-usage memo, and with it every group that reads them — so the
+ * interval is kept no lower than "reads as real time" requires. 3s, the value this
+ * used to be, is what made the number visibly stair-step.
+ */
+const SUBAGENT_LIVE_WRITE_INTERVAL_MS = 250
+
+/**
+ * How long a finished run's per-run state — its TPS meter (`tpsMeterByRun`) and
+ * its live-usage accumulator (`subagentLiveChars`) — is kept after its last
+ * frame.
+ *
+ * Not an accuracy setting: a run's meter stops contributing to the parent's
+ * total about a second after its last delta, when its window drains. What the
+ * window buys is that the reading stays *readable* — a run that has just
+ * stopped still shows a held number, and a page opened a moment later still finds
+ * a warm meter (deleting on the run's completion event would blank a subagent's
+ * own header the instant it finished). Five minutes matches the indicator's own
+ * idle-hide window, so nothing the UI would still display is discarded.
+ *
+ * Past it nothing can revive the state — a run's frames end when the run does —
+ * and before this existed the two registries only ever grew: one meter and one
+ * accumulator per run, per session, for the life of the process.
+ */
+const AGENT_RUN_STATE_IDLE_MS = 5 * 60 * 1000
+
+/**
+ * Drop a session's long-finished runs from both per-run registries.
+ *
+ * Driven by the relayed-frame path rather than a timer: frames are exactly when
+ * entries are created, so the sweep rides the work that produces the garbage and
+ * costs one pass over a handful of keys. A session that stops receiving frames
+ * keeps at most its last few runs; its whole registry is dropped on teardown
+ * (`clearAgentRunTpsMeters`).
+ */
+function reapIdleAgentRunState(parentSessionId: string): void {
+  const prefix = `${parentSessionId}\u0000`
+  // The meter times samples off performance.now(), the accumulator off
+  // Date.now(); each is compared on its own clock.
+  const perfNow = performance.now()
+  const wallNow = Date.now()
+  for (const [key, meter] of tpsMeterByRun) {
+    if (!key.startsWith(prefix)) continue
+    // A meter with no data yet reports 0, which against any sizeable clock reads
+    // as infinitely stale — and reaping it would drop the very meter the frame
+    // being handled is about to fill (the sweep runs before that frame is fed).
+    // It is new, not idle, so it is left alone; session teardown still clears it.
+    const lastData = meter.lastDataTime()
+    if (lastData > 0 && perfNow - lastData > AGENT_RUN_STATE_IDLE_MS) {
+      tpsMeterByRun.delete(key)
+    }
+  }
+  for (const [key, acc] of subagentLiveChars) {
+    if (!key.startsWith(prefix)) continue
+    // An accumulator whose first write has not happened yet (`wroteAt` 0) is
+    // aged off its creation instead, or it would look infinitely old.
+    if (wallNow - (acc.wroteAt || acc.createdAt) > AGENT_RUN_STATE_IDLE_MS) {
+      subagentLiveChars.delete(key)
+    }
+  }
+}
+
+function ingestSubagentLiveUsage(
+  sessionId: string,
+  agentId: string | undefined,
+  event: Extract<ServerMessage, { type: 'agent_run_event' }>['event'],
+): void {
+  if (!agentId) return
+  const key = `${sessionId}\u0000${agentId}`
+  let acc = subagentLiveChars.get(key)
+  if (!acc) {
+    acc = { text: 0, thinking: 0, baseTokens: 0, lastWritten: 0, wroteAt: 0, createdAt: Date.now() }
+    subagentLiveChars.set(key, acc)
+  }
+  if (event.type === 'content_delta') {
+    acc.text += (event.text?.length ?? 0) + (event.toolInput?.length ?? 0)
+  } else if (event.type === 'thinking' && event.complete !== true && event.text) {
+    acc.thinking += event.text.length
+  } else {
+    return
+  }
+  const now = Date.now()
+  if (now - acc.wroteAt < SUBAGENT_LIVE_WRITE_INTERVAL_MS) return
+
+  // Read the task outside the updater: the rebase below has to mutate the
+  // accumulators, and an updater is expected to be pure.
+  const state = useChatStore.getState()
+  const session = state.sessions[sessionId]
+  if (!session) return
+  const tasks = session.backgroundAgentTasks ?? {}
+  const knownKey = Object.keys(tasks).find(candidate =>
+    candidate === agentId || tasks[candidate]?.toolUseId === agentId)
+  const known = knownKey ? tasks[knownKey] : undefined
+
+  // A frame arriving is proof that this run is running *now*, and that outranks
+  // whatever the row currently says. A client that opened the session mid-run
+  // rebuilds these rows from history, where a run with no closing bookend looks
+  // settled; one that opened before the run started has no row at all. Gating on
+  // the row's status is exactly why such a client showed nothing until the run's
+  // first tool boundary happened to rewrite the row — the number was there to be
+  // measured the whole time.
+  const taskKey = knownKey ?? agentId
+  const task: BackgroundAgentTask = known
+    ? (known.status === 'running' ? known : { ...known, status: 'running', updatedAt: now })
+    : {
+        taskId: agentId,
+        // No `toolUseId`: a frame tells us which *run* this is, not which Agent
+        // tool call spawned it, and those are different ids. Guessing one by
+        // reusing the run id produces a row the UI can never look up — it reads
+        // usage under the tool-call id — so the number stays invisible while the
+        // row looks perfectly healthy. Leaving it unset keeps that honest: the row
+        // fills in the real id when a boundary frame supplies it. The server also
+        // hands the pair over at open time (see seedRunningAgentRows), which is
+        // what makes this branch rare rather than the norm.
+        status: 'running',
+        taskType: 'local_agent',
+        startedAt: now,
+        updatedAt: now,
+      }
+  // Writes even when the usage did not move, when the row itself had to change
+  // (revived, or created so there is something to show the number on).
+  const rowChanged = task !== known
+  acc.wroteAt = now
+
+  // The authoritative total covers the run up to its last message boundary;
+  // everything counted here up to that same moment is already inside it, so
+  // rebasing means starting the counters over rather than adding on top.
+  // Only an *advance past what this accumulator last wrote* counts as
+  // authoritative: the field it arrives in is the same one the estimate is
+  // written to, so comparing against our own last write is what keeps the
+  // estimate from rebasing onto itself.
+  const reported = task.usage?.totalTokens ?? 0
+  if (reported > acc.lastWritten) {
+    acc.baseTokens = reported
+    acc.text = 0
+    acc.thinking = 0
+    // Record the baseline as taken, here rather than only on the write below.
+    // When the reported total is exactly what the counters would recompute to —
+    // which is the normal case for a row seeded from the server, and any row
+    // whose estimate has not moved yet — that write is skipped as a no-op, so
+    // without this the baseline would look untaken on every following frame and
+    // re-base each time, wiping the deltas just counted. The climb would never
+    // start.
+    acc.lastWritten = reported
+  }
+
+  // Output tokens are the whole generation, thinking included. Counting only
+  // the answer text left this at zero for a subagent that streamed its
+  // reasoning first — measured on the local engine, `thinking` is what arrives
+  // and `content_delta` is rare — and a zero total is rendered as "no usage",
+  // which is how a working subagent ended up showing nothing at all.
+  const thinkTokens = Math.round(acc.thinking / 4)
+  const totalTokens = acc.baseTokens + Math.round((acc.text + acc.thinking) / 4)
+  const previous = task.usage
+  if (!rowChanged && totalTokens === (previous?.totalTokens ?? 0) && thinkTokens === (previous?.thinkTokens ?? 0)) return
+  acc.lastWritten = totalTokens
+  useChatStore.setState(current => ({
+    sessions: updateSessionIn(current.sessions, sessionId, () => ({
+      backgroundAgentTasks: {
+        ...(current.sessions[sessionId]?.backgroundAgentTasks ?? tasks),
+        [taskKey]: {
+          ...task,
+          usage: {
+            ...(previous ?? {}),
+            totalTokens,
+            ...(thinkTokens > 0 ? { thinkTokens } : {}),
+          },
+        },
+      },
+    })),
+  }))
+}
+
 // Streaming throttle for content_delta. Buffers must be per-session because
 // multiple desktop tabs can stream at the same time.
 const pendingDeltaBySession = new Map<string, string>()
@@ -1024,12 +1407,14 @@ function consumePendingDelta(sessionId: string): string {
   return text
 }
 
-function appendPendingDelta(sessionId: string, text: string): void {
+function appendPendingDelta(sessionId: string, text: string, generatedAt?: number): void {
   pendingDeltaBySession.set(
     sessionId,
     `${pendingDeltaBySession.get(sessionId) ?? ''}${text}`,
   )
+  pushTpsFrame(sessionId, text, { generatedAt })
 }
+
 
 function clearPendingDelta(sessionId: string): void {
   const flushTimer = flushTimerBySession.get(sessionId)
@@ -1051,11 +1436,14 @@ function consumePendingToolInputDelta(sessionId: string): string {
   return text
 }
 
-function appendPendingToolInputDelta(sessionId: string, text: string): void {
+function appendPendingToolInputDelta(sessionId: string, text: string, generatedAt?: number): void {
   pendingToolInputDeltaBySession.set(
     sessionId,
     `${pendingToolInputDeltaBySession.get(sessionId) ?? ''}${text}`,
   )
+  // Feed streaming tool inputs (Write/Edit/… argument JSON) into the TPS meter
+  // so the decode-speed reflects all output tokens, not just assistant text.
+  pushTpsFrame(sessionId, text, { generatedAt })
 }
 
 function clearPendingToolInputDelta(sessionId: string): void {
@@ -2285,15 +2673,19 @@ async function fetchAndMapSessionHistory(
   // narrower: restoring from that joined stream would put a child's shell
   // jobs and notifications into the parent rail after every reload.
   const rootRunMessages = messages.filter((message) => !message.parentToolUseId)
-  const rootToolUseIds = transcriptToolUseIds(rootRunMessages)
-  const rootRunNotifications = (taskNotifications ?? []).filter(
+  // Notifications this session owns. `ownerAgentId` marks a child run's
+  // terminal, which the parent rail must not adopt.
+  const ownedNotifications = (
+    notifications: typeof response.taskNotifications,
+    toolUseIds: Set<string>,
+  ) => (notifications ?? []).filter(
     (notification) => (
       !notification.ownerAgentId && (
         // workflow_run_id predates owner_agent_id. Keep restoring those
         // legacy root workflow terminals; newly owned child runs carry an
         // explicit owner and are rejected by the guard above.
         Boolean(notification.workflowRunId) ||
-        rootToolUseIds.has(notification.toolUseId) ||
+        toolUseIds.has(notification.toolUseId) ||
         existingOwnedToolUseIds.has(notification.toolUseId) ||
         existingOwnedToolUseIds.has(notification.taskId)
       )
@@ -2301,7 +2693,29 @@ async function fetchAndMapSessionHistory(
   )
   const restoredActivity = reconstructRunActivityFromTranscript(
     rootRunMessages,
-    rootRunNotifications,
+    ownedNotifications(taskNotifications, transcriptToolUseIds(rootRunMessages)),
+  )
+  // Background-task *spans* are per-task facts, so a partial window is enough
+  // to restore them: a task is only reconstructed when both its own start (its
+  // tool call) and its own end (its task notification, or the terminal result
+  // of its tool call) are inside the window, which means a window can omit an
+  // old task but can never invent or stretch a span. Gating them on
+  // completeness bought nothing and cost the entire section: the window was
+  // blanked, so every shell job vanished and a reopened large session showed no
+  // background tasks — with no duration to show — until something ran live.
+  // Goal and todo restoration stays gated below, because those describe the
+  // session as a whole and a tail genuinely cannot support them.
+  const restoredBackgroundTasks = seedRunningAgentRows(
+    historyComplete
+      ? restoredActivity.backgroundAgentTasks
+      : reconstructRunActivityFromTranscript(
+          response.messages.filter((message) => !message.parentToolUseId),
+          ownedNotifications(
+            response.taskNotifications,
+            transcriptToolUseIds(response.messages),
+          ),
+        ).backgroundAgentTasks,
+    response.runningAgentUsage,
   )
   const restoredGoalState = deriveActiveGoalStateFromMessages(historyComplete ? uiMessages : [])
   return {
@@ -2311,7 +2725,7 @@ async function fetchAndMapSessionHistory(
     activeGoal: restoredGoalState.activeGoal,
     hasRestoredGoalState: restoredGoalState.hasStateEvidence,
     restoredNotifications: restoredActivity.agentTaskNotifications,
-    restoredBackgroundTasks: restoredActivity.backgroundAgentTasks,
+    restoredBackgroundTasks,
     lastTodos: extractLastTodoWriteFromHistory(messages),
     hasMessagesAfterTaskCompletion: hasUserMessagesAfterTaskCompletion(messages),
     tokenUsage: summarizeTokenUsageFromHistory(messages),
@@ -3199,6 +3613,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     clearPendingToolInputDelta(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
+  tpsMeterBySession.delete(sessionId)
+  clearAgentRunTpsMeters(sessionId)
     advanceHistoryLifecycle(sessionId)
     wsManager.disconnect(sessionId)
     set((s) => {
@@ -4496,6 +4912,19 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
   handleServerMessage: (sessionId, msg) => {
     if (msg.type === 'agent_run_event') {
+      // Ride the frames that create per-run entries to age off the ones whose
+      // runs finished long ago (see reapIdleAgentRunState).
+      reapIdleAgentRunState(sessionId)
+      // Feed the parent's TPS meter with the subagent's relayed decode text
+      // before routing it. A run page's own meter only exists while that page
+      // is open (registerAgentRunSession is called from SubagentRunPage), and
+      // while it is closed the frames below are buffered instead of applied —
+      // so without this the main indicator would ignore subagent output. The
+      // text is meter-only and never rendered into the main conversation.
+      ingestSubagentTps(sessionId, msg.runAgentId, msg.event)
+      // Attribute the same deltas to the run they belong to, so its usage
+      // climbs while it works instead of appearing only at the end.
+      ingestSubagentLiveUsage(sessionId, msg.runAgentId, msg.event)
       if (!dispatchAgentRunEvent(sessionId, msg)) {
         bufferAgentRunEvent(sessionId, msg)
       }
@@ -4525,6 +4954,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
     switch (msg.type) {
       case 'connected':
+        // A reconnect can replay deltas; start the sampling window clean so the
+        // replayed prefix is not counted on top of what was already sampled.
+        resetTpsWindow(sessionId)
         // Team lifecycle broadcasts are transition-only. A reconnect must
         // reconcile against the durable workbench so missed update/delete or
         // same-name recreate events cannot leave a live cache authoritative.
@@ -4824,6 +5256,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         break
 
       case 'runtime_config_applied': {
+        // The runtime now runs `msg.modelId`. The TPS coefficients describe a
+        // model, so bank what this session learned for the model it was on and
+        // re-seed from whatever is already known about the new one.
+        if (isTpsEnabled() && msg.modelId) {
+          const meter = getSessionTpsMeter(sessionId)
+          saveTpsCalibration(tpsCalibrationModelBySession.get(sessionId), meter.calibration())
+          const next = loadTpsCalibration(msg.modelId)
+          meter.setCalibration(next)
+          setEstimationCalibration(next)
+          tpsCalibrationModelBySession.set(sessionId, msg.modelId)
+        }
         const selected = useSessionRuntimeStore.getState().selections[sessionId]
         const matchesCurrentSelection = Boolean(selected) &&
           (selected?.providerId ?? null) === msg.providerId &&
@@ -4881,6 +5324,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
         if (msg.blockType === 'text') {
           update((s) => ({
+            messages: settleThinkingDurations(s.messages, Date.now()),
             ...(pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
             chatState: 'streaming',
             activeThinkingId: null,
@@ -4888,6 +5332,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             streamingFallback: null,
           }))
         } else if (msg.blockType === 'tool_use') {
+
           clearPendingToolInputDelta(sessionId)
           rememberPendingToolParentUseId(sessionId, msg.toolUseId, msg.parentToolUseId)
           const toolUseId = msg.toolUseId ?? null
@@ -4895,20 +5340,24 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           update((s) => ({
             ...(toolUseId
               ? {
-                  messages: upsertToolUseMessage(s.messages, toolUseId, (existing) => ({
-                    id: existing?.id ?? nextId(),
-                    type: 'tool_use',
-                    toolName,
+                  messages: upsertToolUseMessage(
+                    settleThinkingDurations(s.messages, Date.now()),
                     toolUseId,
-                    originalToolUseId: msg.originalToolUseId ?? existing?.originalToolUseId,
-                    input: existing?.input ?? {},
-                    timestamp: existing?.timestamp ?? Date.now(),
-                    parentToolUseId: msg.parentToolUseId ?? existing?.parentToolUseId,
-                    isPending: true,
-                    partialInput: existing?.partialInput ?? '',
-                  })),
+                    (existing) => ({
+                      id: existing?.id ?? nextId(),
+                      type: 'tool_use',
+                      toolName,
+                      toolUseId,
+                      originalToolUseId: msg.originalToolUseId ?? existing?.originalToolUseId,
+                      input: existing?.input ?? {},
+                      timestamp: existing?.timestamp ?? Date.now(),
+                      parentToolUseId: msg.parentToolUseId ?? existing?.parentToolUseId,
+                      isPending: true,
+                      partialInput: existing?.partialInput ?? '',
+                    }),
+                  ),
                 }
-              : {}),
+              : { messages: settleThinkingDurations(s.messages, Date.now()) }),
             activeToolUseId: toolUseId,
             activeToolName: toolName,
             streamingToolInput: '',
@@ -4927,6 +5376,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const maxRetries = Math.max(attempt, Math.trunc(msg.maxRetries))
         const retryDelayMs = Math.max(0, Math.trunc(msg.retryDelayMs))
         update((session) => ({
+          messages: settleThinkingDurations(session.messages, Date.now()),
           apiRetry: {
             attempt,
             maxRetries,
@@ -4947,6 +5397,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       case 'streaming_fallback': {
         if (msg.cause === 'stream_retry') {
+          // A retry replays the answer from the start; drop the sampled prefix
+          // so the window (and the call being reconciled) does not double it.
+          resetTpsWindow(sessionId)
           consumePendingDelta(sessionId)
           clearPendingToolInputDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
@@ -5014,7 +5467,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         if (msg.text !== undefined) {
           if (!get().sessions[sessionId]) break
           receivedLiveDelta = true
-          appendPendingDelta(sessionId, msg.text)
+          appendPendingDelta(sessionId, msg.text, msg.serverTs)
           if (!flushTimerBySession.has(sessionId)) {
             const timer = setTimeout(() => {
               const text = pendingDeltaBySession.get(sessionId) ?? ''
@@ -5030,7 +5483,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
         if (msg.toolInput !== undefined) {
           receivedLiveDelta = true
-          appendPendingToolInputDelta(sessionId, msg.toolInput)
+          appendPendingToolInputDelta(sessionId, msg.toolInput, msg.serverTs)
           if (!toolInputFlushTimerBySession.has(sessionId)) {
             const timer = setTimeout(() => {
               const text = consumePendingToolInputDelta(sessionId)
@@ -5119,14 +5572,25 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }
           const id = nextId()
           return {
-            messages: [...base, { id, type: 'thinking', content: msg.text, timestamp: Date.now() }],
+            // Anchor the block's clock to the server's first sight of the block
+            // (serverStart) rather than the client's receive moment, so the
+            // ticking elapsed time starts from "generation began", not from
+            // network arrival.
+            messages: [...base, { id, type: 'thinking', content: msg.text, timestamp: typeof msg.serverStart === 'number' ? msg.serverStart : Date.now() }],
             chatState: 'thinking',
             activeThinkingId: id,
             streamingText: '',
             streamingResponseChars: s.streamingResponseChars + msg.text.length,
-          }
-        })
-        if (!skippedThinkingBlock) ensureElapsedTimer()
+          }        })
+        if (!skippedThinkingBlock) {
+          // thinking 流式片段同样是 decode 输出 token，必须喂 TPS 米表：不喂的话
+          // thinking 全程零采样，米表窗口排空后 UI 会冻结在正文结束前的旧速度上
+          // （稀疏边界守卫只保旧值不刷新）。skippedThinkingBlock 的整块重放
+          // （流式累积内容与 complete 块逐字相同）已在上层判重，不喂避免重复计数。
+          // complete 块（非重放）没有帧结构可数，按文本权重计入。
+          pushTpsFrame(sessionId, msg.text, { wholeBlock: msg.complete === true, generatedAt: msg.serverTs })
+          ensureElapsedTimer()
+        }
         break
       }
 
@@ -5398,9 +5862,67 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         })
         break
 
+      case 'tps_tokens': {
+        // The engine reported real per-chunk token ids, tagged with what the
+        // chunk carried. Reasoning tokens belong to the thought block open right
+        // now, and this is the only source of an exact per-thought count: the
+        // transcript has no such field, so the badge otherwise has to infer it
+        // from content (measured ~60% off).
+        //
+        // Attributed only while a thought block is open. A batch arriving after
+        // the block closed belongs to content or tool input by then, so it is
+        // dropped rather than guessed at; batches are 200 ms, so the loss is a
+        // fraction of a thought, not a thought.
+        if (msg.kind === 'thinking') {
+          update((s) => {
+            const activeId = s.activeThinkingId
+            if (!activeId) return {}
+            const index = s.messages.findIndex(
+              (message) => message.id === activeId && message.type === 'thinking',
+            )
+            if (index < 0) return {}
+            const block = s.messages[index]
+            if (!block || block.type !== 'thinking') return {}
+            const messages = [...s.messages]
+            messages[index] = {
+              ...block,
+              thinkingTokens: (block.thinkingTokens ?? 0) + msg.tokens,
+            }
+            return { messages }
+          })
+        }
+        // The same counts are exact feed for the TPS meter, where the sampled
+        // text frames would otherwise double-count them.
+        if (!isTpsEnabled()) break
+        const meter = getSessionTpsMeter(sessionId)
+        if (!tpsIdsModeBySession.get(sessionId)) {
+          // Switching tiers mid-turn: drop the sampled prefix so the window is
+          // not a mix of two different units.
+          meter.reset()
+          tpsIdsModeBySession.set(sessionId, true)
+        }
+        meter.ensureCall()
+        meter.pushTokens(msg.tokens, { generatedAt: msg.serverTs })
+        break
+      }
+
       case 'message_complete': {
         const session = get().sessions[sessionId]
         if (!session) break
+        // Reconcile the call's sampled units against the real token count the
+        // CLI reported: anchors the held speed to the real rate and re-learns
+        // the tokens-per-unit coefficients.
+        if (isTpsEnabled()) {
+          const meter = getSessionTpsMeter(sessionId)
+          const learned = meter.endCall(msg.usage.output_tokens, msg.timing?.decode_ms)
+          // Only bank it when a coefficient actually moved: persisting the
+          // neutral 1.0 values would tell the next session nothing.
+          if (learned) {
+            const calibration = meter.calibration()
+            saveTpsCalibration(tpsCalibrationModelBySession.get(sessionId), calibration)
+            setEstimationCalibration(calibration)
+          }
+        }
         if (consumeAllPendingTaskToolUseIds(sessionId)) {
           const cliTaskStore = useCLITaskStore.getState()
           if (cliTaskStore.sessionId === sessionId) {
@@ -5413,6 +5935,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           if (session.elapsedTimer) clearInterval(session.elapsedTimer)
           const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
           update((current) => ({
+            messages: settleThinkingDurations(current.messages, Date.now()),
             tokenUsage: msg.usage,
             chatState: 'idle',
             activeThinkingId: null,
@@ -5454,7 +5977,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           update(() => ({ streamingText: text }))
         }
         const appendedCompletionMessage = completionMessages !== session.messages
-        const finalMessages = markPendingToolUseMessagesStopped(completionMessages)
+        const finalMessages = settleThinkingDurations(
+          markPendingToolUseMessagesStopped(completionMessages),
+          completedAt,
+        )
         const hasRunningBackgroundAgents = hasRunningBackgroundTasks(session.backgroundAgentTasks)
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
         update((current) => ({
@@ -5897,9 +6423,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               projectedData,
               'task_notification',
             )
-            const toolUseId = readNonEmptyString(projectedData, 'tool_use_id', 'toolUseId')
-            const taskResult = readNonEmptyString(projectedData, 'result')
-            if (!taskEvent || !get().sessions[targetSessionId]) continue
+                const toolUseId = readNonEmptyString(projectedData, 'tool_use_id', 'toolUseId')
+                const taskResult = readNonEmptyString(projectedData, 'result')
+                if (!taskEvent || !get().sessions[targetSessionId]) continue
             const now = Date.now()
             let shouldUpdateIdleTabStatus = false
             let hasRunningBackgroundAgentsAfterUpdate = false
@@ -6349,9 +6875,13 @@ function normalizeBackgroundTaskUsage(value: unknown): BackgroundAgentTaskUsage 
   const totalTokens = record.total_tokens ?? record.totalTokens
   const toolUses = record.tool_uses ?? record.toolUses
   const durationMs = record.duration_ms ?? record.durationMs
+  const outputTokens = record.output_tokens ?? record.outputTokens
+  const thinkTokens = record.think_tokens ?? record.thinkTokens
   if (typeof totalTokens === 'number') usage.totalTokens = totalTokens
   if (typeof toolUses === 'number') usage.toolUses = toolUses
   if (typeof durationMs === 'number') usage.durationMs = durationMs
+  if (typeof outputTokens === 'number') usage.outputTokens = outputTokens
+  if (typeof thinkTokens === 'number') usage.thinkTokens = thinkTokens
   return Object.keys(usage).length > 0 ? usage : undefined
 }
 
@@ -6466,7 +6996,12 @@ function upsertBackgroundAgentTask(
       lastToolName: event.lastToolName ?? existing?.lastToolName,
       outputFile: event.outputFile ?? existing?.outputFile,
       usage: event.usage ?? existing?.usage,
-      startedAt: startsNewLifecycle ? now : existing?.startedAt ?? now,
+      // `now` is only *this* event's time. A caller handing over a whole record
+      // (the restore merge) also knows when the task started, and using `now`
+      // as the start collapsed every restored span to zero — which is why a
+      // background task never showed a duration after a reload. Live events
+      // never set `startedAt`, so this only preserves a reconstructed start.
+      startedAt: startsNewLifecycle ? now : existing?.startedAt ?? event.startedAt ?? now,
       updatedAt: now,
     },
   }
@@ -6496,6 +7031,72 @@ function reconcileBackgroundAgentTasksWithActiveSnapshot(
     }),
   )
   return { tasks: changed ? tasks : current, changed }
+}
+
+/**
+ * Fold the server's in-flight run usage into the rows rebuilt from history.
+ *
+ * Three things leave a mid-run client with nothing to show: a run with no closing
+ * bookend looks settled to a reconstruction made from the transcript; a client that
+ * opened while the run was already going has no counter of its own for it; and —
+ * the one that actually hid the number — it never saw the `task_started` that says
+ * which Agent tool call the run belongs to, so it had no way to file what it
+ * measured under the id the UI reads.
+ *
+ * So each run is filed **keyed by its own id, carrying its spawning tool-call id**.
+ * That layout matches what a client which did see `task_started` ends up with, so
+ * the live writer finds these rows by the run id it has (see
+ * ingestSubagentLiveUsage) and the UI finds the number by the tool-call id it has.
+ * A single row serves both, and no guessed id is ever needed.
+ *
+ * These are exactly the runs the server still counts as active, so they are marked
+ * running. The absolute total is applied when there is one, and the live path then
+ * rebases onto it and carries on — which is what keeps a late client in step with
+ * one that has been watching all along. A run listed without a total yet (it has
+ * not crossed a tool boundary) still gets its row, because that is precisely the
+ * window in which this client would otherwise show nothing at all.
+ */
+function seedRunningAgentRows(
+  tasks: Record<string, BackgroundAgentTask>,
+  runningAgentUsage: Record<string, { taskId: string; toolUseId: string; totalTokens?: number; thinkTokens?: number }> | undefined,
+): Record<string, BackgroundAgentTask> {
+  const runs = Object.values(runningAgentUsage ?? {}).filter(run => Boolean(run.taskId))
+  if (runs.length === 0) return tasks
+  const now = Date.now()
+  const seeded = { ...tasks }
+  for (const run of runs) {
+    const { taskId, toolUseId } = run
+    // Match the row this run already has: under its own id (the canonical key), or
+    // under some other key that already carries the same spawning tool call.
+    const existing = seeded[taskId]
+      ?? (toolUseId ? Object.values(seeded).find(candidate => candidate.toolUseId === toolUseId) : undefined)
+    const totalTokens = run.totalTokens === undefined ? undefined : Math.round(run.totalTokens)
+    const reported = totalTokens !== undefined && Number.isFinite(totalTokens) && totalTokens > 0
+      ? totalTokens
+      : undefined
+    seeded[taskId] = {
+      ...(existing ?? {}),
+      taskId,
+      // Omit rather than invent: a wrong tool-call id is not merely useless, it is
+      // unlookupable, so a row carrying one is invisible while looking present.
+      ...(toolUseId || existing?.toolUseId ? { toolUseId: toolUseId || existing?.toolUseId } : {}),
+      // The server only listed runs it still counts as active.
+      status: 'running',
+      taskType: existing?.taskType ?? 'local_agent',
+      startedAt: existing?.startedAt ?? now,
+      updatedAt: now,
+      ...(reported === undefined ? {} : {
+        usage: {
+          ...(existing?.usage ?? {}),
+          totalTokens: reported,
+          ...(run.thinkTokens !== undefined && run.thinkTokens > 0
+            ? { thinkTokens: run.thinkTokens }
+            : {}),
+        },
+      }),
+    }
+  }
+  return seeded
 }
 
 function clearAgentTaskNotificationsForActiveSnapshot(
@@ -6754,7 +7355,12 @@ function backgroundTaskRecordFromNotifications(
         summary: notification.summary,
         result: notification.result,
         outputFile: notification.outputFile,
-        usage: notification.usage,
+        // Normalize here as well as on the live path: a restored session carries
+        // usage derived server-side from the subagent's own transcript, and its
+        // keys arrive in the wire's snake-case form. Passing it through raw is
+        // why a read-back session could show a single total whose number came
+        // from the old context-based line in the result text.
+        usage: normalizeBackgroundTaskUsage(notification.usage),
       }, now)
     }, {})
 }
@@ -6987,6 +7593,49 @@ function reconstructBackgroundShellTasks(
 }
 
 /**
+ * Give tasks known only from their completion report a start.
+ *
+ * `backgroundTaskRecordFromNotifications` creates such a task with
+ * `startedAt === updatedAt === ` the report's time, because the report is the
+ * only event it has. The span is then zero and the row can never show a
+ * duration, even though the transcript holds the tool call that launched it —
+ * for a background agent the very same window. That call's time is the start.
+ */
+function backfillTaskStartsFromToolCalls(
+  tasks: Record<string, BackgroundAgentTask>,
+  messages: MessageEntry[],
+): Record<string, BackgroundAgentTask> {
+  const launchedAt = new Map<string, number>()
+  for (const message of messages) {
+    if (
+      (message.type !== 'assistant' && message.type !== 'tool_use') ||
+      !Array.isArray(message.content)
+    ) continue
+    for (const block of message.content as AssistantHistoryBlock[]) {
+      if (block.type !== 'tool_use' || !block.id) continue
+      if (!launchedAt.has(block.id)) {
+        launchedAt.set(block.id, transcriptTimestamp(message.timestamp))
+      }
+    }
+  }
+
+  let changed = false
+  const next: Record<string, BackgroundAgentTask> = {}
+  for (const [key, task] of Object.entries(tasks)) {
+    const start = task.toolUseId ? launchedAt.get(task.toolUseId) : undefined
+    // Only when the launch genuinely precedes the report: a start after the
+    // end would invert the span rather than repair it.
+    if (start !== undefined && start < task.updatedAt && start !== task.startedAt) {
+      next[key] = { ...task, startedAt: start }
+      changed = true
+    } else {
+      next[key] = task
+    }
+  }
+  return changed ? next : tasks
+}
+
+/**
  * Project the activity owned by one transcript into the same state shape used
  * by a live session. Callers must pass the complete transcript for that run.
  */
@@ -7015,9 +7664,12 @@ export function reconstructRunActivityFromTranscript(
     }
   }
 
-  const backgroundAgentTasks = mergeBackgroundAgentTaskRecords(
-    reconstructBackgroundShellTasks(messages),
-    backgroundTaskRecordFromNotifications(Object.values(agentTaskNotifications)),
+  const backgroundAgentTasks = backfillTaskStartsFromToolCalls(
+    mergeBackgroundAgentTaskRecords(
+      reconstructBackgroundShellTasks(messages),
+      backgroundTaskRecordFromNotifications(Object.values(agentTaskNotifications)),
+    ),
+    messages,
   )
 
   return { agentTaskNotifications, backgroundAgentTasks }
@@ -7171,11 +7823,34 @@ export function joinThinkingContent(previous: string, next: string, nextIsWholeB
   return `${previous}\n\n${next}`
 }
 
+/**
+ * Stamp the settled duration onto a finished thinking block.
+ *
+ * A thinking UIMessage's `timestamp` is its first delta (the block's start), so
+ * `now - timestamp` at the moment the block stops growing is its wall-clock
+ * thinking span — the same "time the user waited" reading the tool-duration
+ * badge uses. Called at the settle points where `activeThinkingId` is cleared
+ * (a text/tool_use block_start, or message_complete), so a still-growing block
+ * is never frozen with a partial number. Already-settled blocks keep their
+ * value, which matters for turns that interleave several thinking blocks.
+ */
+export function settleThinkingDurations(messages: UIMessage[], now: number): UIMessage[] {
+  let changed = false
+  const next = messages.map((message) => {
+    if (message.type !== 'thinking' || message.thinkingDurationMs !== undefined) return message
+    changed = true
+    const elapsed = now - message.timestamp
+    return { ...message, thinkingDurationMs: Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : 0 }
+  })
+  return changed ? next : messages
+}
+
 function pushAssistantHistoryThinking(
   messages: UIMessage[],
   id: string,
   content: string,
   timestamp: number,
+  thinkingDurationMs?: number,
 ): void {
   // 与流式路径（case 'thinking'）保持同等防护：纯空白块不产生空壳气泡。
   if (!content.trim()) return
@@ -7187,14 +7862,24 @@ function pushAssistantHistoryThinking(
     // 合并时保留首个块的确定性 id，保证轮询重映射时 React key 稳定。
     if (last.content === content) return
     if (content.startsWith(last.content)) {
+      // 同一块的前缀增长快照：耗时取新值（新快照是该块完整生成后的时长）。
       last.content = content
+      if (thinkingDurationMs !== undefined) last.thinkingDurationMs = thinkingDurationMs
       return
     }
+    // 相邻的不同思考块合并：各自的生成时长求和。
     last.content = joinThinkingContent(last.content, content, true)
+    if (thinkingDurationMs !== undefined) {
+      last.thinkingDurationMs = (last.thinkingDurationMs ?? 0) + thinkingDurationMs
+    }
     return
   }
 
-  messages.push({ id, type: 'thinking', content, timestamp })
+  if (thinkingDurationMs !== undefined) {
+    messages.push({ id, type: 'thinking', content, timestamp, thinkingDurationMs })
+  } else {
+    messages.push({ id, type: 'thinking', content, timestamp })
+  }
 }
 
 type HistoryMappingOptions = {
@@ -7687,6 +8372,71 @@ export function reconstructAgentNotifications(messages: MessageEntry[]): Record<
   return notifications
 }
 
+/**
+ * 把一次 API 调用自报的 `usage` 盖到它产出的那些行上。
+ *
+ * transcript 里一条回复被写成十来行（每个内容块一行），每行都重复同一份 `usage`；
+ * 这个数字属于那次调用而不是某个块，所以整段行共用同一个 `usageKey`，轮次合计时
+ * 按 key 只计一次（与 `summarizeTokenUsageFromHistory` 同口径）。
+ *
+ * 行可能并不新增：历史映射会把相邻思考块并成一行、把同一段正文的前缀增长并进上一行
+ * （`pushAssistantHistoryThinking` / `pushAssistantHistoryText`）。那种情况下往回收
+ * 一行来承接用量，而不是丢掉。回退是**有界**的：不越过本轮起点，也不覆盖已经写着
+ * 归属（`usageKey`）的行——那行属于另一次调用，改写它会把那次调用的用量抹掉。
+ */
+function stampResponseUsage(
+  uiMessages: UIMessage[],
+  firstRowIndex: number,
+  msg: MessageEntry,
+): void {
+  const usage = msg.usage
+  if (!usage) return
+  const usageKey = msg.usageKey
+
+  // 收窄必须内联：助手侧只有这三个变体带 `usage`，拆成返回布尔值的辅助函数后 TS
+  // 就无法把 `UIMessage` 联合收窄到可赋值的那几个。
+  const stamp = (index: number): boolean => {
+    const message = uiMessages[index]
+    if (
+      !message ||
+      (message.type !== 'assistant_text' &&
+        message.type !== 'thinking' &&
+        message.type !== 'tool_use')
+    ) {
+      return false
+    }
+    // 已带用量的行属于另一次调用：改写它会把那次调用的数字抹掉，比丢掉本次更糟。
+    if (message.usage) return false
+    uiMessages[index] = { ...message, usage, ...(usageKey ? { usageKey } : {}) }
+    return true
+  }
+
+  let stamped = false
+  for (let index = firstRowIndex; index < uiMessages.length; index += 1) {
+    if (stamp(index)) stamped = true
+  }
+  if (stamped) return
+
+  // 本次调用一行都没新增（整行被并入上一行，或只有空白块被丢弃）：往回收下一行承接。
+  // 只看**最近的**一行助手内容就停下——再往前那是更早的内容，不该承接。本轮起点
+  // （用户消息）是硬边界。
+  for (let index = Math.min(firstRowIndex, uiMessages.length) - 1; index >= 0; index -= 1) {
+    const message = uiMessages[index]
+    if (!message) continue
+    if (message.type === 'user_text') return
+    if (
+      message.type !== 'assistant_text' &&
+      message.type !== 'thinking' &&
+      message.type !== 'tool_use'
+    ) {
+      continue
+    }
+    if (message.usage) return
+    uiMessages[index] = { ...message, usage, ...(usageKey ? { usageKey } : {}) }
+    return
+  }
+}
+
 export function mapHistoryMessagesToUiMessages(
   messages: MessageEntry[],
   options?: HistoryMappingOptions,
@@ -7818,6 +8568,7 @@ export function mapHistoryMessagesToUiMessages(
     }
     if (msg.type === 'assistant' && typeof msg.content === 'string') {
       if (!msg.content.trim()) continue
+      const firstRowIndex = uiMessages.length
       uiMessages.push({
         id: msg.id || nextId(),
         type: 'assistant_text',
@@ -7826,11 +8577,13 @@ export function mapHistoryMessagesToUiMessages(
         timestamp,
         model: msg.model,
       })
+      stampResponseUsage(uiMessages, firstRowIndex, msg)
       continue
     }
     if ((msg.type === 'assistant' || msg.type === 'tool_use') && Array.isArray(msg.content)) {
+      const firstRowIndex = uiMessages.length
       for (const [blockIndex, block] of (msg.content as AssistantHistoryBlock[]).entries()) {
-        if (block.type === 'thinking' && block.thinking) pushAssistantHistoryThinking(uiMessages, `${msg.id}-block-${blockIndex}`, block.thinking, timestamp)
+        if (block.type === 'thinking' && block.thinking) pushAssistantHistoryThinking(uiMessages, `${msg.id}-block-${blockIndex}`, block.thinking, timestamp, msg.thinkingDurationMs)
         else if (block.type === 'text' && block.text) {
           pushAssistantHistoryText(
             uiMessages,
@@ -7843,6 +8596,7 @@ export function mapHistoryMessagesToUiMessages(
         }
         else if (block.type === 'tool_use') uiMessages.push({ id: `${msg.id}-block-${blockIndex}`, type: 'tool_use', toolName: block.name ?? 'unknown', toolUseId: block.id ?? '', originalToolUseId: block.original_tool_use_id, input: block.input, timestamp, parentToolUseId: msg.parentToolUseId })
       }
+      stampResponseUsage(uiMessages, firstRowIndex, msg)
       continue
     }
     if ((msg.type === 'user' || msg.type === 'tool_result') && Array.isArray(msg.content)) {

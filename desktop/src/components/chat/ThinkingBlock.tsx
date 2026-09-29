@@ -2,7 +2,9 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { Brain } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { estimateTokens } from '../../lib/tpsMeter'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 /**
  * One line: the label, a preview of the reasoning, and the full text on demand.
@@ -20,15 +22,58 @@ export function ThinkingBlock({
   content,
   isActive = false,
   disclosureKey,
+  thinkingDurationMs,
+  thinkingTokens,
+  liveStartAt,
 }: {
   content: string
   isActive?: boolean
   /** Stable key that survives virtualized row unmount/remount. */
   disclosureKey?: string
+  /** Wall-clock ms this block spent generating, once finished (live settle or
+   * transcript replay). */
+  thinkingDurationMs?: number
+  /** Exact tokens the engine generated for this block, when the id side channel
+   * reported them. Preferred over the character estimate below. */
+  thinkingTokens?: number
+  /** Wall-clock epoch the block started generating (the message `timestamp`,
+   * anchored to the server's first sight of the block). While the block is
+   * still active the badge ticks against this, refreshed every 3s. */
+  liveStartAt?: number
 }) {
   const t = useTranslation()
+  // 关闭会话扩展信息时隐藏本 fork 新增的思考徽标；思考正文与实时计时不受影响。
+  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
   const [localExpanded, setLocalExpanded] = useState(false)
+  const [liveElapsedMs, setLiveElapsedMs] = useState(0)
   const expanded = disclosureKey ? (getDisclosure(disclosureKey) ?? localExpanded) : localExpanded
+
+  // The badge's clock anchor. A live block's `timestamp` is already the
+  // server's first sight of it; a history-replayed block's `timestamp` is the
+  // block's *end* (the transcript line time), so back off by its recorded
+  // duration to recover the true start — otherwise a replayed still-active
+  // block would tick up from near zero.
+  const liveAnchorMs = liveStartAt === undefined
+    ? undefined
+    : thinkingDurationMs !== undefined
+      ? Math.max(0, liveStartAt - thinkingDurationMs)
+      : liveStartAt
+
+  // Thinking, unlike a tool, runs for a long time, so its elapsed time is shown
+  // from the very first moment and refreshed on a 3s cadence while it is still
+  // generating (not frozen until the block ends, which would read as "not
+  // doing anything"). The clock is anchored to `liveAnchorMs` — the server's
+  // first sight of the block — not the client's render time.
+  useEffect(() => {
+    if (!isActive || liveAnchorMs === undefined) return
+    const refresh = () => {
+      const elapsed = Date.now() - liveAnchorMs
+      setLiveElapsedMs(Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : 0)
+    }
+    refresh()
+    const timer = setInterval(refresh, LIVE_ELAPSED_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [isActive, liveAnchorMs])
   const contentRef = useRef<HTMLDivElement>(null)
   const displayContent = useMemo(() => content.replace(/\r\n?/g, '\n').trimEnd(), [content])
   const hasDisplayContent = displayContent.trim().length > 0
@@ -81,6 +126,14 @@ export function ThinkingBlock({
         ) : (
           <span className="flex-1" />
         )}
+        {sessionExtendedInfo !== false && thinkingBadgeLabel(content, thinkingDurationMs, liveElapsedMs, isActive, liveAnchorMs, thinkingTokens) && (
+          <span
+            data-thinking-usage="true"
+            className="shrink-0 whitespace-nowrap font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]"
+          >
+            {thinkingBadgeLabel(content, thinkingDurationMs, liveElapsedMs, isActive, liveAnchorMs, thinkingTokens)}
+          </span>
+        )}
         <span aria-hidden="true" className="shrink-0 text-[8px] text-[var(--color-text-tertiary)]">
           {expanded ? '▾' : '▸'}
         </span>
@@ -103,6 +156,77 @@ export function ThinkingBlock({
       )}
     </div>
   )
+}
+
+/** Cadence for the live thinking-elapsed refresh while a block is generating. */
+export const LIVE_ELAPSED_REFRESH_MS = 3000
+
+/**
+ * Right-end badge of the thinking row: `1.23k · 12.3s` — estimated tokens of
+ * the block plus how long the reader waited for it. Same "deliberately a
+ * whisper" register as the activity digest: mono, tabular, tertiary.
+ *
+ * While the block is still generating the duration is the live elapsed time
+ * (ticking, from `liveElapsedMs`); once settled it is the fixed
+ * `thinkingDurationMs`. A block that is active but has no start anchor shows
+ * nothing yet, so an empty first frame never prints `0.0s`. A settled block
+ * without a recorded duration (pre-feature transcripts) keeps its token count
+ * on its own, so the badge never disappears just because the wait time was
+ * never measured.
+ */
+export function thinkingBadgeLabel(
+  content: string,
+  thinkingDurationMs: number | undefined,
+  liveElapsedMs: number,
+  isActive: boolean,
+  liveStartAt: number | undefined,
+  thinkingTokens?: number,
+): string {
+  if (content.trim().length === 0) return ''
+  if (isActive) {
+    if (liveStartAt === undefined) return ''
+    return `${formatThinkingTokens(content, thinkingTokens)} · ${formatThinkingDuration(liveElapsedMs)}`
+  }
+  // Missing or non-positive both mean "never measured": older transcripts, and
+  // blocks whose start anchor was never seen (a length of exactly 0 is not a
+  // real generation span). Either way the token count stands alone rather than
+  // pairing with a confident `0.0s`.
+  if (thinkingDurationMs === undefined || thinkingDurationMs <= 0) {
+    return formatThinkingTokens(content, thinkingTokens)
+  }
+  return `${formatThinkingTokens(content, thinkingTokens)} · ${formatThinkingDuration(thinkingDurationMs)}`
+}
+
+/**
+ * Thinking token count as `xx.xk`, two decimals (`1.23k`, `12.50k`).
+ *
+ * An exact count wins when the engine reported one. The fallback is a
+ * character heuristic (CJK one each, others 1/3.5, scaled by the model's
+ * learned coefficients), and it is measurably wrong: across one session's turns
+ * it missed by ~60% at the median, because a turn's real output also carries
+ * reasoning scaffolding and tool-call framing that no character count can see.
+ */
+export function formatThinkingTokens(text: string, thinkingTokens?: number): string {
+  const tokens = typeof thinkingTokens === 'number' && thinkingTokens > 0
+    ? thinkingTokens
+    : estimateTokens(text)
+  return `${(tokens / 1000).toFixed(2)}k`
+}
+
+/**
+ * Three-ladder duration for the thinking badge, deliberately NOT the tool
+ * `formatDuration`: `<60s` → `12.3s` (one decimal), `60s~1h` → `3m05s`
+ * (whole, zero-padded), `>=1h` → `2h05m` (no seconds). Round the seconds once,
+ * then derive the parts — rounding each part independently can print
+ * impossible values like `1m60s`.
+ */
+export function formatThinkingDuration(durationMs: number): string {
+  const totalSeconds = Math.round(durationMs / 1000)
+  if (totalSeconds < 60) return `${(durationMs / 1000).toFixed(1)}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  if (minutes < 60) return `${minutes}m${String(seconds).padStart(2, '0')}s`
+  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, '0')}m`
 }
 
 const THINKING_PREVIEW_MAX_CHARS = 160

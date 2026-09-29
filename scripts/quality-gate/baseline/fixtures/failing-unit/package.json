@@ -1,8 +1,0 @@
-{
-  "name": "quality-gate-failing-unit-fixture",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "test": "bun test"
-  }
-}

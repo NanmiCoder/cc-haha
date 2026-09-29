@@ -12,6 +12,7 @@ import { MessageList } from '../components/chat/MessageList'
 import type { AgentActivityTarget } from '../components/chat/ToolCallGroup'
 import { ChatInput } from '../components/chat/ChatInput'
 import { SessionChatHeader, SessionChatSurface } from '@/components/chat/SessionChatSurface'
+import { TpsIndicator } from '../components/chat/TpsIndicator'
 import { SessionActivityButton } from '../components/activity/SessionActivityButton'
 import { SessionActivityPanel, type OpenSubagentPayload } from '../components/activity/SessionActivityPanel'
 import {
@@ -802,6 +803,15 @@ function AgentSessionView({
         )}
         actions={(
           <>
+            {/*
+              This run's own decode speed, from the meter keyed by the parent
+              session + the relay's run id. Its text only ever reaches the
+              parent socket, so `sourceSessionId` (not this page's sessionId,
+              which is a synthetic tab key) is what the meter is registered
+              under. Team members leave runAgentId undefined — their frames do
+              not carry one — so nothing renders for them.
+            */}
+            {runAgentId ? <TpsIndicator sessionId={sourceSessionId} runAgentId={runAgentId} /> : null}
             {hasVisibleActivity ? <SessionActivityButton sessionId={sessionId} /> : null}
             <IconButton
               icon={<RefreshCw size={15} strokeWidth={2.2} aria-hidden="true" className={loading ? 'animate-spin' : undefined} />}

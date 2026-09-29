@@ -2339,3 +2339,35 @@ describe('prompt caching semantics', () => {
     })
   })
 })
+
+describe('openaiUsageToAnthropic reasoning pass-through', () => {
+  // One total cannot say whether a model spent its tokens deliberating or
+  // answering, and on a reasoning model the two differ by several times. The
+  // engine reports the split; dropping it here would strand it one hop short of
+  // the client that needs it.
+  test('carries the Chat-style reasoning split', () => {
+    const usage = openaiUsageToAnthropic({
+      prompt_tokens: 100,
+      completion_tokens: 600,
+      completion_tokens_details: { reasoning_tokens: 430 },
+    })
+    expect(usage.reasoning_tokens).toBe(430)
+    expect(usage.output_tokens).toBe(600)
+  })
+
+  test('carries the Responses-style reasoning split', () => {
+    const usage = openaiUsageToAnthropic({
+      input_tokens: 100,
+      output_tokens: 600,
+      output_tokens_details: { reasoning_tokens: 430 },
+    })
+    expect(usage.reasoning_tokens).toBe(430)
+  })
+
+  test('omits the field when upstream did not measure one', () => {
+    // Zero and "not reported" mean different things; an absent field is the only
+    // way to say the second.
+    const usage = openaiUsageToAnthropic({ prompt_tokens: 100, completion_tokens: 600 })
+    expect('reasoning_tokens' in usage).toBe(false)
+  })
+})

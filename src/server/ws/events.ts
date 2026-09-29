@@ -78,7 +78,14 @@ export type ServerMessage =
       event: AgentRunStreamMessage
     }
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }
-  | { type: 'content_delta'; text?: string; toolInput?: string }
+  | { type: 'content_delta'; text?: string; toolInput?: string; /** Epoch ms the server received this chunk. The client rates decode off this clock instead of its own receive clock, which a busy main thread compresses when it drains a queue (see TpsClock: the meter buckets frames on whichever clock it settled on). */ serverTs?: number }
+  /**
+   * Real tokens decoded since the previous frame, relayed from the engine's
+   * per-chunk token ids (vLLM `return_token_ids`). Carries no content: the
+   * desktop feeds it to the TPS meter, which then ignores the text frames it
+   * duplicates. Sent only for endpoints that reported token ids.
+   */
+  | { type: 'tps_tokens'; tokens: number; kind: 'thinking' | 'content' | 'tool'; serverTs?: number }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
   | {
@@ -115,7 +122,7 @@ export type ServerMessage =
    * kind and separate the second, so the emit site says which it is instead of leaving
    * the renderer to guess from content.
    */
-  | { type: 'thinking'; text: string; complete?: boolean }
+  | { type: 'thinking'; text: string; complete?: boolean; /** Epoch ms the server first received this thinking block (first delta / block_start). Anchors the block's wall-clock start on the client instead of the client's own receive clock. */ serverStart?: number; serverTs?: number }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
   | {
       type: typeof RUNTIME_CONFIG_APPLIED_EVENT
@@ -152,10 +159,10 @@ export type ServerMessage =
 
 export type AgentRunStreamMessage =
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }
-  | { type: 'content_delta'; text?: string; toolInput?: string }
+  | { type: 'content_delta'; text?: string; toolInput?: string; /** Epoch ms the server received this chunk. The client rates decode off this clock instead of its own receive clock, which a busy main thread compresses when it drains a queue (see TpsClock: the meter buckets frames on whichever clock it settled on). */ serverTs?: number }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
-  | { type: 'thinking'; text: string; complete?: boolean }
+  | { type: 'thinking'; text: string; complete?: boolean; /** Epoch ms the server first received this thinking block (first delta / block_start). Anchors the block's wall-clock start on the client instead of the client's own receive clock. */ serverStart?: number; serverTs?: number }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
   | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string }
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }

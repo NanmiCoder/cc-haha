@@ -64,6 +64,18 @@ type StreamState = {
   // (some providers send finish_reason and usage in separate chunks)
   heldMessageDelta: SseEvent | null
   finishReason: string | null
+
+  /**
+   * Reports the real token count of each streamed chunk, when the engine sends
+   * `token_ids` (vLLM-family `return_token_ids`). Purely a side channel for the
+   * desktop's TPS meter — it never affects the Anthropic stream below.
+   *
+   * The kind is what the chunk carries, taken from the same `delta` the stream
+   * is built from. It is reported because a count on its own cannot answer
+   * "how many tokens did this thought take": a response interleaves reasoning,
+   * content and tool input, and only the chunk knows which one it is.
+   */
+  onTokenIds?: (count: number, kind: TokenChunkKind) => void
 }
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -72,8 +84,9 @@ function formatSse(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }
 
-function createState(model: string): StreamState {
+function createState(model: string, onTokenIds?: (count: number, kind: TokenChunkKind) => void): StreamState {
   return {
+    ...(onTokenIds ? { onTokenIds } : {}),
     queue: [],
     currentBlockType: 'text',
     currentBlockIndex: -1,
@@ -98,10 +111,11 @@ function createState(model: string): StreamState {
 export function openaiChatStreamToAnthropic(
   upstream: ReadableStream<Uint8Array>,
   model: string,
+  options: { onTokenIds?: (count: number, kind: TokenChunkKind) => void } = {},
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
-  const state = createState(model)
+  const state = createState(model, options.onTokenIds)
   const reader = upstream.getReader()
   let cancelled = false
 
@@ -314,6 +328,16 @@ function closeAllOpenBlocks(state: StreamState): void {
 
 // ─── Block type detection (follows LiteLLM priority) ───────
 
+/**
+ * Which part of a response a chunk's tokens belong to. Reported alongside the
+ * count so a consumer can total one part (the thought badge wants reasoning
+ * only) instead of the whole response.
+ */
+export type TokenChunkKind = 'thinking' | 'content' | 'tool'
+
+/** Every kind, so a batcher can drain them without repeating the list. */
+export const TOKEN_CHUNK_KINDS: readonly TokenChunkKind[] = ['thinking', 'content', 'tool']
+
 type DeltaEx = Record<string, unknown> & {
   content?: string | null
   tool_calls?: Array<{
@@ -359,6 +383,21 @@ function extractReasoning(delta: DeltaEx): { thinking: string; signature: string
   return null
 }
 
+/**
+ * What a chunk carries, for attributing its token count.
+ *
+ * Reasoning is checked first: a provider that streams reasoning and content in
+ * the same delta is emitting the thought first, and the thought is the part a
+ * count gets attributed to. Tool input is checked last, because `tool_calls`
+ * rides on argument fragments that carry no `content` of their own.
+ */
+function deltaKind(delta: DeltaEx): TokenChunkKind {
+  if (extractReasoning(delta)) return 'thinking'
+  if (delta.content) return 'content'
+  if (delta.tool_calls?.length) return 'tool'
+  return 'content'
+}
+
 // ─── Main chunk processing ─────────────────────────────────
 
 function processChunk(chunk: OpenAIChatStreamChunk, state: StreamState): void {
@@ -378,6 +417,14 @@ function processChunk(chunk: OpenAIChatStreamChunk, state: StreamState): void {
   ensureMessageStart(state, chunk.id)
 
   const delta = (choice.delta || {}) as DeltaEx
+
+  // Real per-chunk token counts, when the engine reports them. Counted before
+  // the finish-reason guard so the last chunk's ids still land, and tagged with
+  // what this chunk carries so a consumer can attribute them to one part of the
+  // response (the thought badge wants reasoning only).
+  if (choice.token_ids?.length) {
+    state.onTokenIds?.(choice.token_ids.length, deltaKind(delta))
+  }
   if (state.finishReason) {
     if (chunk.usage) mergeUsageIntoHeldDelta(state, chunk.usage)
     if (extractReasoning(delta) || delta.content || delta.tool_calls?.length) {

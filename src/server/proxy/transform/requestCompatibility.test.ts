@@ -136,3 +136,34 @@ describe('request intent survives protocol conversion', () => {
     expect(transformed.messages[0].reasoning_content).toBeUndefined()
   })
 })
+
+describe('per-chunk token ids are asked for only where they are understood', () => {
+  test('the caller may pass it for a local engine, and it reaches the wire body', () => {
+    const streamed = body({ stream: true })
+    expect(anthropicToOpenaiChat(streamed).return_token_ids).toBeUndefined()
+    expect(anthropicToOpenaiChat(streamed, { passTokenIds: true }).return_token_ids).toBe(true)
+    // Not a streaming request: nothing to report per chunk.
+    expect(anthropicToOpenaiChat(body(), { passTokenIds: true }).return_token_ids).toBeUndefined()
+  })
+
+  test('a provider that declares the capability is asked even without the caller hint', () => {
+    const streamed = body({ stream: true })
+    expect(anthropicToOpenaiChat(streamed, { requestCompatibility: { tokenIds: 'supported' } }).return_token_ids).toBe(true)
+    expect(resolveRequestCompatibility(streamed, { protocol: 'openai_chat', requestCompatibility: { tokenIds: 'supported' } }).returnTokenIds).toBe(true)
+  })
+
+  test('an endpoint that rejects unknown parameters is never asked', () => {
+    const streamed = body({ stream: true })
+    // `unsupported` wins over the caller's hint — a strict OpenAI endpoint
+    // would reject the request outright.
+    expect(anthropicToOpenaiChat(streamed, {
+      passTokenIds: true,
+      requestCompatibility: { tokenIds: 'unsupported' },
+    }).return_token_ids).toBeUndefined()
+    expect(resolveRequestCompatibility(streamed, {
+      protocol: 'openai_chat',
+      passTokenIds: true,
+      requestCompatibility: { tokenIds: 'unsupported' },
+    }).returnTokenIds).toBe(false)
+  })
+})

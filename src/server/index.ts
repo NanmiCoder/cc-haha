@@ -8,18 +8,22 @@ import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
  * 读写与 CLI 完全相同的文件系统，确保 CLI/UI 数据互通。
  */
 
+import { existsSync, unlinkSync } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { handleApiRequest } from './router.js'
-import { handleWebSocket, type WebSocketData } from './ws/handler.js'
+import { handleWebSocket, sendToSession, type WebSocketData } from './ws/handler.js'
 import { resolveCors, type CorsResolution } from './middleware/cors.js'
 import { requireAuth, requireH5Token } from './middleware/auth.js'
 import { teamWatcher } from './services/teamWatcher.js'
 import { cronScheduler } from './services/cronScheduler.js'
 import { handleProxyRequest } from './proxy/handler.js'
+import { setTpsTokenSink } from './proxy/tpsTokenSink.js'
+import { withGzipIfEligible } from './responseCompression.js'
 import { ProviderService } from './services/providerService.js'
 import { handleHahaOAuthCallback } from './api/haha-oauth.js'
 import { handleHahaOpenAIOAuthCallback } from './api/haha-openai-oauth.js'
 import { handlePreviewFs } from './api/previewFs.js'
-import { handleLocalFile } from './api/localFile.js'
+import { handleLocalFile, handleBatchLocalFileInfo } from './api/localFile.js'
 import { sessionService } from './services/sessionService.js'
 import { localIndexCoordinator } from './services/localIndex/coordinator.js'
 import { searchContentCoordinator } from './services/localIndex/searchContentCoordinator.js'
@@ -145,6 +149,41 @@ function beginBackgroundIndexStartup(): void {
   })
 }
 
+/**
+ * Transcript size per session, cached briefly.
+ *
+ * Only consulted once a response is otherwise eligible for compression. The H5
+ * history walk issues one request per page and every page asks the same
+ * question, so the cache keeps a deep walk from re-resolving the same file on
+ * each of its (hundreds of) requests. A null result means "unknown" and falls
+ * back to compressing, so a transient stat failure cannot strand large
+ * sessions uncompressed.
+ */
+const SESSION_SIZE_CACHE_TTL_MS = 10_000
+const SESSION_SIZE_CACHE_LIMIT = 64
+const sessionSizeCache = new Map<string, { size: number | null; at: number }>()
+
+async function resolveSessionSizeBytes(sessionId: string): Promise<number | null> {
+  const now = Date.now()
+  const cached = sessionSizeCache.get(sessionId)
+  if (cached && now - cached.at < SESSION_SIZE_CACHE_TTL_MS) return cached.size
+
+  let size: number | null = null
+  try {
+    const found = await sessionService.findSessionFile(sessionId)
+    if (found) size = (await stat(found.filePath)).size
+  } catch {
+    size = null
+  }
+
+  sessionSizeCache.set(sessionId, { size, at: now })
+  if (sessionSizeCache.size > SESSION_SIZE_CACHE_LIMIT) {
+    const oldest = sessionSizeCache.keys().next().value
+    if (oldest !== undefined) sessionSizeCache.delete(oldest)
+  }
+  return size
+}
+
 function withCors(response: Response, cors: CorsResolution): Response {
   const headers = new Headers(response.headers)
   for (const [key, value] of Object.entries(cors.headers)) {
@@ -256,6 +295,13 @@ export function startServer(port = PORT, host = HOST) {
     process.env.SERVER_AUTH_REQUIRED === '1'
   const h5AccessService = new H5AccessService()
 
+  // The proxy reads real per-chunk token counts off local engines and needs to
+  // push them to the session's client. It cannot import the WS layer (that
+  // would close a cycle through titleService), so the wiring lives here.
+  setTpsTokenSink((sessionId, tokens, kind) => {
+    sendToSession(sessionId, { type: 'tps_tokens', tokens, kind })
+  })
+
   const publicAccess = new PublicAccessServer({
     handleApiRequest,
     handleStatic: handleStaticH5Request,
@@ -263,7 +309,12 @@ export function startServer(port = PORT, host = HOST) {
     serverPort: () => serverPort,
   })
   publicAccessServers.add(publicAccess)
-  let server: ReturnType<typeof Bun.serve<WebSocketData>>
+  // Named so `serverFetch` can annotate its handle parameter without writing
+  // `typeof server` inside a parameter that itself shadows `server` — that
+  // self-reference made the annotation unresolvable (TS2502) and silently cost
+  // every `server.upgrade` / `server.requestIP` call in the handler its types.
+  type ServerHandle = ReturnType<typeof Bun.serve<WebSocketData>>
+  let server: ServerHandle
 
   // Open SQLite before the first REST request. Discovery still runs in the
   // background; without this, getPublicStatus() reports `off` and the sidebar
@@ -271,12 +322,12 @@ export function startServer(port = PORT, host = HOST) {
   void localIndexCoordinator.start().catch(() => undefined)
 
   try {
-    server = Bun.serve<WebSocketData>({
-      port,
-      hostname: host,
-      idleTimeout: HTTP_CONNECTION_IDLE_TIMEOUT_SECONDS,
-
-      async fetch(req, server) {
+    // Shared request pipeline. Extracted (rather than inlined in Bun.serve) so a
+    // test-only unix-socket mirror below can reuse the exact same auth/proxy/static
+    // routing. A request over that socket carries no peer address, which H5 auth
+    // treats as a public (non-LAN) source — used by integration tests to exercise
+    // the "remote browser needs the H5 token" path without a real public IP.
+    const serverFetch = async (req: Request, server: ServerHandle): Promise<Response> => {
         const url = new URL(req.url)
         if (isPublicAccessControlPath(url.pathname)) return publicAccess.control(req)
 
@@ -366,6 +417,7 @@ export function startServer(port = PORT, host = HOST) {
           request: req,
           url,
           h5Enabled: h5Settings.enabled,
+          requireToken: h5Settings.requireToken,
           context: h5RequestContext,
         })
         const h5AccessDisabledBlocked = shouldBlockDisabledH5Access({
@@ -395,6 +447,41 @@ export function startServer(port = PORT, host = HOST) {
             return corsRejectedResponse(cors)
           }
           return new Response(null, { status: 204, headers: cors.headers })
+        }
+
+        // Dedicated terminal WebSocket channel for the H5 browser terminal.
+        // The literal path /ws/terminal would otherwise be swallowed by the
+        // generic /ws/{sessionId} branch below, so it must be routed first.
+        if (url.pathname === '/ws/terminal') {
+          if (cors.rejected) {
+            return corsRejectedResponse(cors)
+          }
+
+          if (!petAccessAuthorized && authRequired) {
+            const authError = await requireH5Token(req, url.searchParams.get('token'))
+            if (authError) {
+              return withCors(authError, cors)
+            }
+          } else if (!petAccessAuthorized && forceAuth) {
+            const authError = await requireAuth(req, url.searchParams.get('token'))
+            if (authError) {
+              return withCors(authError, cors)
+            }
+          }
+
+          const upgraded = server.upgrade(req, {
+            data: {
+              sessionId: 'terminal',
+              connectedAt: Date.now(),
+              channel: 'terminal',
+              clientKind: 'full',
+              sdkToken: null,
+              serverPort,
+              serverHost: localConnectHost,
+            },
+          })
+          if (upgraded) return undefined
+          return new Response('WebSocket upgrade failed', { status: 400 })
         }
 
         // WebSocket upgrade
@@ -512,6 +599,33 @@ export function startServer(port = PORT, host = HOST) {
           return withCors(response, cors)
         }
 
+        // Batch file-metadata endpoint for download cards (one request for all
+        // sizes). Must sit BEFORE the `/local-file/` prefix branch since the
+        // path also starts with that prefix.
+        if (url.pathname === '/local-file/info' && req.method === 'POST') {
+          if (cors.rejected) {
+            return corsRejectedResponse(cors)
+          }
+          if (authRequired) {
+            const authError = await requireH5Token(req)
+            if (authError) {
+              return withCors(authError, cors)
+            }
+          } else if (forceAuth) {
+            const authError = await requireAuth(req)
+            if (authError) {
+              return withCors(authError, cors)
+            }
+          }
+          try {
+            const body = await req.json()
+            const response = await handleBatchLocalFileInfo(body)
+            return withCors(response, cors)
+          } catch {
+            return withCors(new Response('bad request', { status: 400 }), cors)
+          }
+        }
+
         // Local filesystem — serve an ABSOLUTE local file ($HOME/tmp/registered
         // roots sandbox) so `file://` links / AI-emitted absolute paths open in
         // the in-app browser. Gated identically to /preview-fs above.
@@ -560,7 +674,13 @@ export function startServer(port = PORT, host = HOST) {
               req,
               handleApiRequest(req, url, { remoteBrowser: classifyH5Request(req, url, h5RequestContext) === 'h5-browser' }),
             )
-            return withCors(response, cors)
+            // Remote API responses are gzip-compressed (transparent to browser
+            // fetch); loopback desktop traffic stays uncompressed, and sessions
+            // below the transport floor skip compression entirely.
+            return withCors(
+              await withGzipIfEligible(req, response, clientAddress, resolveSessionSizeBytes),
+              cors,
+            )
           } catch (error) {
             void diagnosticsService.recordEvent({
               type: 'api_request_failed',
@@ -619,15 +739,46 @@ export function startServer(port = PORT, host = HOST) {
         }
 
         return new Response('Not Found', { status: 404 })
-      },
+    }
+
+    server = Bun.serve<WebSocketData>({
+      port,
+      hostname: host,
+      idleTimeout: HTTP_CONNECTION_IDLE_TIMEOUT_SECONDS,
+
+      fetch: serverFetch,
 
       websocket: handleWebSocket,
     })
+
+    // Test-only unix-socket mirror sharing the same fetch/websocket handlers.
+    // A request over this socket has no peer address, so H5 auth treats it as a
+    // public (non-LAN) source — integration tests use it to assert that a remote
+    // browser must present the H5 token, without needing a real public source IP.
+    const testUnixSocket = process.env.CC_HAHA_TEST_UNIX_SOCKET
+    let testUnixServer: ReturnType<typeof Bun.serve<WebSocketData>> | null = null
+    if (testUnixSocket) {
+      try {
+        if (existsSync(testUnixSocket)) unlinkSync(testUnixSocket)
+        testUnixServer = Bun.serve<WebSocketData>({
+          unix: testUnixSocket,
+          fetch: serverFetch,
+          websocket: handleWebSocket,
+        })
+      } catch (error) {
+        console.warn(
+          `[Server] test unix socket ${testUnixSocket} not started: ` +
+            (error instanceof Error ? error.message : String(error)),
+        )
+      }
+    }
     const disposeCollaboration = configureSessionCollaborationHost(localConnectHost, server.port)
+
     const stop = server.stop.bind(server)
     server.stop = (closeActiveConnections?: boolean) => {
       apiPerformanceMonitor.stop()
       disposeCollaboration()
+      if (testUnixServer) testUnixServer.stop(closeActiveConnections)
       publicAccess.disable()
       publicAccessServers.delete(publicAccess)
       return stop(closeActiveConnections)

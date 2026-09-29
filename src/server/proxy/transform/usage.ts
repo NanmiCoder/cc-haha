@@ -82,5 +82,15 @@ export function openaiUsageToAnthropic(usage: OpenAICompatibleUsage | undefined)
   }
   if (cacheRead > 0) result.cache_read_input_tokens = cacheRead
   if (cacheCreation > 0) result.cache_creation_input_tokens = cacheCreation
+
+  // Pass the reasoning split through when upstream measured one. It is not part
+  // of Anthropic's schema, so a consumer that does not know the field ignores
+  // it; one that does gets the only number that separates thinking from answer.
+  // Both nested spellings are accepted: vLLM's Chat API reports the first, the
+  // Responses API the second.
+  const reasoningTokens = validTokenCount(
+    usage.completion_tokens_details?.reasoning_tokens,
+  ) ?? validTokenCount(usage.output_tokens_details?.reasoning_tokens)
+  if (reasoningTokens !== undefined) result.reasoning_tokens = reasoningTokens
   return result
 }

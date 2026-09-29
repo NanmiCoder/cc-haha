@@ -22,7 +22,14 @@ import {
   useWorkspaceStore,
 } from '../stores/workspaceStore'
 import { useWorkspaceContentStore } from '../stores/workspaceContentStore'
+import { openWorkspaceTarget } from '../lib/workspace/openTarget'
 import { useTranslation } from '../i18n'
+import { Button } from '@/components/ui/Button'
+import { TpsIndicator } from '../components/chat/TpsIndicator'
+import { SessionCostBadge } from '../components/chat/SessionCostBadge'
+import { MobileQuickActions } from '../components/chat/MobileQuickActions'
+import { IconButton } from '@/components/ui/IconButton'
+
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Tooltip } from '@/components/ui/Tooltip'
 import { BrandSeal } from '@/components/composite/BrandSeal'
@@ -393,6 +400,47 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const workspaceIsGitRepo = useWorkspaceContentStore((state) =>
     activeTabId ? state.statusBySession[activeTabId]?.isGitRepo : undefined,
   )
+  // Mobile quick actions need a member-session check (subagent/team tabs have
+  // their own entry points). Mirror the composer's own gate.
+  const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
+  const isMemberSession = Boolean(memberInfo) || activeTabType === 'subagent'
+  // The side dock is hard-disabled on mobile by `workspaceEnabled` above, so
+  // files / review opened from the quick actions render a full-screen overlay.
+  // "Overlay open" is local state (not derived from the store layout): a
+  // background open from chat must not pop the panel over the composer, only an
+  // explicit quick-action tap should. The layout itself is the authoritative
+  // "is there something to show" signal, so the overlay stays in sync with it.
+  const [mobileWorkspaceOpen, setMobileWorkspaceOpen] = useState(false)
+  const mobileLayout = useWorkspaceStore((state) =>
+    isMobileLayout && activeTabId ? state.bySession[activeTabId]?.layout ?? 'hidden' : 'hidden',
+  )
+  const mobileWorkspaceVisible = isMobileLayout &&
+    !isMemberSession &&
+    Boolean(activeTabId) &&
+    isSessionTabState(activeTabId, activeTabType) &&
+    mobileWorkspaceOpen &&
+    mobileLayout !== 'hidden'
+  // Reset the flag when the active task changes so the next task starts closed.
+  useEffect(() => { setMobileWorkspaceOpen(false) }, [activeTabId])
+  // `path: ''` is the launcher form: it opens the file tree with an empty
+  // content pane, exactly like the workspace launcher's "Files" entry, and the
+  // preview flag keeps it replaceable by a real file pick. A terminal opens in
+  // the side dock (the overlay renders the same side-dock surface).
+  const handleMobileOpenWorkspace = useCallback((target: { kind: 'file'; path: string } | { kind: 'terminal' } | { kind: 'review' }) => {
+    if (!activeTabId) return
+    openWorkspaceTarget({
+      sessionId: activeTabId,
+      target: target.kind === 'terminal'
+        ? { kind: 'terminal', cwd: getSessionTerminalCwd(session) ?? '', dock: 'side' }
+        : target,
+      ...(target.kind === 'file' ? { preview: true } : {}),
+    })
+    setMobileWorkspaceOpen(true)
+  }, [activeTabId, session])
+  const handleMobileCloseWorkspace = useCallback(() => {
+    setMobileWorkspaceOpen(false)
+    if (activeTabId) useWorkspaceStore.getState().setLayout(activeTabId, 'hidden')
+  }, [activeTabId])
   const activityVisibilityBySessionRef = useRef<Record<string, { hadAutoOpenActivity: boolean }>>({})
 
   useEffect(() => {
@@ -401,6 +449,26 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       void fetchTeamForSession(activeTabId)
     }
   }, [activeTabId, connectToSession, fetchTeamForSession])
+
+  // Soft refresh: drop the WS + in-memory session state, then reconnect. The
+  // server replays pending permission requests (permission_request /
+  // permission_requests_snapshot) on reconnect and the transcript is reloaded,
+  // which recovers permission / AskUserQuestion prompts dropped on the realtime
+  // WS path (clients.size===0 or transcript-epoch mismatch).
+  const [refreshingSession, setRefreshingSession] = useState(false)
+  const handleManualRefresh = useCallback(async () => {
+    if (!activeTabId || refreshingSession) return
+    setRefreshingSession(true)
+    const chat = useChatStore.getState()
+    try {
+      chat.disconnectSession(activeTabId)
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      chat.connectToSession(activeTabId)
+      await chat.reloadHistory(activeTabId)
+    } finally {
+      setRefreshingSession(false)
+    }
+  }, [activeTabId, refreshingSession])
 
   useEffect(() => {
     if (!activeTabId || !isSessionTabState(activeTabId, activeTabType)) return
@@ -834,6 +902,35 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   title={headerTitle}
                   compact={showRightPanel}
                   metadata={headerMetadata}
+                  actions={
+                    <>
+                      {/* 两行块：上=会话费用，下=TPS。费用徽章较宽，故 TPS 行**水平居中**于其下方
+                          （`items-center`，而非靠右对齐）——两行宽度不对等时居中才显得对仗工整。 */}
+                      <div className="flex h-[42px] shrink-0 flex-col items-center justify-center gap-0.5">
+                        <div className="flex h-[16px] items-center">
+                          {activeTabId ? <SessionCostBadge sessionId={activeTabId} active={chatState !== 'idle'} /> : null}
+                        </div>
+                        <div className="flex h-[14px] items-center">
+                          {activeTabId ? <TpsIndicator sessionId={activeTabId} /> : null}
+                        </div>
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={() => void handleManualRefresh()}
+                        disabled={refreshingSession}
+                        icon={
+                          <span className={`material-symbols-outlined text-[16px] ${refreshingSession ? 'animate-spin' : ''}`}>
+                            refresh
+                          </span>
+                        }
+                        data-testid="session-manual-refresh"
+                      >
+                        {t('chat.refreshSession')}
+                      </Button>
+                    </>
+                  }
                 >
                   {session && getSessionWorkspaceState(session) !== 'available' && (
                     <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-3 py-1.5 text-[11px] ${
@@ -897,12 +994,56 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             />
           ) : null}
 
-          <ChatInput
-            sessionId={activeTabId ?? undefined}
-            visible={active}
-            variant={isEmpty && !showRightPanel ? 'hero' : 'default'}
-            compact={showRightPanel}
-          />
+          {/*
+            Mobile workspace overlay: the side dock is disabled on mobile, so
+            files / review opened from the quick actions render full-screen
+            here. `--z-sheet` (65) sits above the activity overlay's scrim (40)
+            and the FAB row's dropdown (70) below the mobile header.
+          */}
+          {mobileWorkspaceVisible && isMobileLayout && activeTabId ? (
+            <div
+              data-testid="mobile-workspace-overlay"
+              className="fixed inset-0 z-[var(--z-sheet)] flex flex-col bg-[var(--color-surface)]"
+            >
+              <div className="flex shrink-0 items-center justify-between border-b border-[var(--color-border)] px-2 py-1.5">
+                <span className="text-[13px] font-semibold text-[var(--color-text-primary)]">
+                  {t('workspace.panelLabel')}
+                </span>
+                <IconButton
+                  data-testid="mobile-workspace-close"
+                  icon="close"
+                  label={t('common.close')}
+                  onClick={handleMobileCloseWorkspace}
+                  size="2xl"
+                />
+              </div>
+              <div className="min-h-0 flex-1">
+                <WorkspaceSurface
+                  sessionId={activeTabId}
+                  dock="side"
+                  cwd={getSessionTerminalCwd(session) ?? ''}
+                  reviewUnavailableReason={workspaceIsGitRepo === false ? t('workspace.launcher.reviewNeedsGit') : null}
+                />
+              </div>
+            </div>
+          ) : null}
+
+          <div className="relative">
+            <ChatInput
+              sessionId={activeTabId ?? undefined}
+              visible={active}
+              variant={isEmpty && !showRightPanel ? 'hero' : 'default'}
+              compact={showRightPanel}
+            />
+            {isMobileLayout && !mobileWorkspaceVisible && activeTabId && !isMemberSession && isSessionTabState(activeTabId, activeTabType) ? (
+              <MobileQuickActions
+                onOpenTasks={() => openActivityPanel(activeTabId)}
+                onOpenTerminal={() => handleMobileOpenWorkspace({ kind: 'terminal' })}
+                onOpenFiles={() => handleMobileOpenWorkspace({ kind: 'file', path: '' })}
+                onOpenReview={() => handleMobileOpenWorkspace({ kind: 'review' })}
+              />
+            ) : null}
+          </div>
 
           {hasBottomTerminals && activeTabId ? (
             <div

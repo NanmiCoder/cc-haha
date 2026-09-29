@@ -84,6 +84,13 @@ vi.mock('../../stores/chatStore', () => ({
       connectToSession: mocks.connectToSession,
     }),
   },
+  getSessionTpsMeter: () => ({
+    hasStreamed: () => false,
+    hasLiveSamples: () => false,
+    lastDataTime: () => 0,
+    value: () => 0,
+  }),
+  getAgentRunTpsMeters: () => [],
 }))
 
 vi.mock('../../hooks/useKeyboardShortcuts', () => ({
@@ -599,6 +606,45 @@ describe('AppShell boot flow', () => {
 
     expect(screen.getByText('sidebar loaded')).toBeInTheDocument()
     expect(mocks.getDesktopUiPreferences).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps a subagent run tab active in mobile H5 mode', async () => {
+    mocks.isMobile = true
+    mocks.tabState.activeTabId = '__subagent__s1__tool-x'
+    mocks.tabState.tabs = [
+      { sessionId: 's1', title: 'Chat', type: 'session', status: 'idle' },
+      { sessionId: '__subagent__s1__tool-x', title: 'Agent', type: 'subagent', status: 'running' },
+    ]
+
+    render(<AppShell />)
+
+    await screen.findByText('content loaded')
+
+    // The mobile guard used to treat only chat/settings/market/scheduled as
+    // valid destinations, so opening a run record bounced the phone straight
+    // back to the chat tab and the run could never be viewed on H5.
+    await waitFor(() => {
+      expect(mocks.setActiveTab).not.toHaveBeenCalled()
+    })
+  })
+
+  it('still returns mobile off a tab that has no mobile destination', async () => {
+    mocks.isMobile = true
+    mocks.tabState.activeTabId = 't1'
+    mocks.tabState.tabs = [
+      { sessionId: 's1', title: 'Chat', type: 'session', status: 'idle' },
+      { sessionId: 't1', title: 'Terminal', type: 'terminal', status: 'idle' },
+    ]
+
+    render(<AppShell />)
+
+    await screen.findByText('content loaded')
+
+    // Guard against widening the allowlist too far: a tab the phone cannot
+    // render must still fall back to a chat tab.
+    await waitFor(() => {
+      expect(mocks.setActiveTab).toHaveBeenCalledWith('s1')
+    })
   })
 
   it('renders a mobile drawer toggle and backdrop in browser H5 mode', async () => {

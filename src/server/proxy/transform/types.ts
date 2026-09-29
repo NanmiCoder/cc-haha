@@ -56,6 +56,13 @@ export type OpenAIChatRequest = {
   stop?: string | string[]
   stream?: boolean
   stream_options?: { include_usage: boolean }
+  /**
+   * vLLM-family extension: have the engine report each streamed chunk's token
+   * ids, so decode speed can be counted from real tokens instead of estimated
+   * from text. Strict OpenAI endpoints reject the unknown parameter, so this is
+   * only ever set for endpoints that are expected to accept it.
+   */
+  return_token_ids?: boolean
   tools?: OpenAITool[]
   tool_choice?: unknown
   reasoning_effort?: OpenAIReasoningEffort
@@ -78,6 +85,14 @@ export type OpenAICompatibleUsage = {
   total_tokens?: number
   input_tokens_details?: { cached_tokens?: number }
   prompt_tokens_details?: { cached_tokens?: number }
+  /**
+   * How many of the completion tokens were reasoning. Carried so a caller can
+   * separate a model's deliberation from its answer: on a reasoning model the
+   * two differ by several times, and one total cannot express either. vLLM
+   * reports this shape; `output_tokens_details` is the Responses one.
+   */
+  completion_tokens_details?: { reasoning_tokens?: number }
+  output_tokens_details?: { reasoning_tokens?: number }
   cache_read_input_tokens?: number
   cache_creation_input_tokens?: number
 }
@@ -120,6 +135,13 @@ export type OpenAIChatStreamChunk = {
       }>
     }
     finish_reason: string | null
+    /**
+     * vLLM-family extension (requested via `return_token_ids`): the token ids
+     * this chunk's delta decodes from. Absent on endpoints that do not
+     * implement it, which is exactly how the TPS meter discovers that the
+     * exact tier is unavailable.
+     */
+    token_ids?: number[] | null
   }>
   usage?: OpenAIChatResponse['usage']
 }
@@ -273,5 +295,7 @@ export type AnthropicResponse = {
     output_tokens: number
     cache_read_input_tokens?: number
     cache_creation_input_tokens?: number
+    /** Extension: reasoning share of `output_tokens`, when upstream reported it. */
+    reasoning_tokens?: number
   }
 }

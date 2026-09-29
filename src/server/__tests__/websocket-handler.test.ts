@@ -842,7 +842,10 @@ describe('WebSocket handler session isolation', () => {
       runAgentId: 'background-physical-agent',
       streamId: 'background-invocation',
       targetAgentId: 'background-logical-agent',
-      event: { type: 'content_delta', text: 'background is still live' },
+      // The server stamps `serverTs` onto streamed deltas when they leave (the
+      // client rates decode off that clock), so match the fields this test is
+      // about rather than the whole frame.
+      event: expect.objectContaining({ type: 'content_delta', text: 'background is still live' }),
     })
 
     resolveSend(true)

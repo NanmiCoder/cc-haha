@@ -9,6 +9,8 @@ export type SubagentRunUsage = {
   inputTokens?: number
   outputTokens?: number
   totalTokens?: number
+  /** Thinking share of the output. Absent when the engine reported no split. */
+  thinkTokens?: number
 }
 
 export type SubagentRunResponse = {

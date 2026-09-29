@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react'
+import { Fragment, memo, useMemo, useState } from 'react'
 import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { CircleX } from 'lucide-react'
 import { ToolCallBlock, formatDuration } from './ToolCallBlock'
@@ -6,13 +6,17 @@ import { ThinkingBlock } from './ThinkingBlock'
 import {
   activityDurationMs,
   activityStepToolCalls,
+  activityTokenParts,
+  activityTokenUsage,
   buildActivitySegments,
   countFailedToolCalls,
   hasUnresolvedToolCalls,
   toolCallDurationMs,
   type ActivityStep,
 } from './activityGroupModel'
+
 import { useTranslation } from '../../i18n'
+import { useSettingsStore } from '../../stores/settingsStore'
 import type { UIMessage } from '../../types/chat'
 
 type ToolCall = Extract<UIMessage, { type: 'tool_use' }>
@@ -62,6 +66,8 @@ export const ActivityGroup = memo(function ActivityGroup({
   disclosureKey,
 }: Props) {
   const t = useTranslation()
+  // 关闭会话扩展信息时隐藏本 fork 新增的 token/耗时读数；缺省视为开启。
+  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
   /** null = follow the run's own state; set = the reader decided. */
   const [pinnedCollapsedLocal, setPinnedCollapsedLocal] = useState<boolean | null>(null)
   const pinnedCollapsed = disclosureKey
@@ -108,6 +114,7 @@ export const ActivityGroup = memo(function ActivityGroup({
   const segments = buildActivitySegments(steps, t)
   const elapsed = activityDurationMs(steps, resultMap)
   const durationLabel = !isRunning && typeof elapsed === 'number' ? formatDuration(elapsed) : ''
+  const tokenParts = !isRunning ? activityTokenParts(activityTokenUsage(steps, resultMap)) : []
   const summaryText = segments.map((segment) => segment.label).join(', ')
 
   return (
@@ -140,11 +147,23 @@ export const ActivityGroup = memo(function ActivityGroup({
                 {t('toolGroup.failedCount', { count: failedCount })}
               </span>
             )}
-            {durationLabel && (
+            {sessionExtendedInfo !== false && tokenParts.length > 0 && (
+              <span
+                data-activity-tokens="true"
+                className="flex items-center gap-[3px] whitespace-nowrap font-mono tabular-nums text-[var(--color-text-tertiary)]"
+              >
+                {tokenParts.map((part, index) => (
+                  <Fragment key={index}>
+                    {index > 0 ? <span className="opacity-60">+</span> : null}
+                    <span>{part}</span>
+                  </Fragment>
+                ))}
+              </span>
+            )}
+            {sessionExtendedInfo !== false && durationLabel && (
               <span className="whitespace-nowrap font-mono tabular-nums">{durationLabel}</span>
             )}
-            <span aria-hidden="true" className={`w-3 text-center text-[8px] ${collapsed ? '' : 'rotate-90'}`}>▸</span>
-          </span>
+            <span aria-hidden="true" className={`w-3 text-center text-[8px] ${collapsed ? '' : 'rotate-90'}`}>▸</span>          </span>
         </button>
 
         {/* Rows hang off the summary that names them, so they take the guide
@@ -157,8 +176,9 @@ export const ActivityGroup = memo(function ActivityGroup({
                 key={step.message.id}
                 content={step.message.content}
                 isActive={step.message.id === activeThinkingId}
-              />
-            ) : (
+                thinkingDurationMs={step.message.thinkingDurationMs}
+                liveStartAt={step.message.timestamp}
+              />            ) : (
               <ActivityToolRow
                 key={step.toolCall.id}
                 toolCall={step.toolCall}

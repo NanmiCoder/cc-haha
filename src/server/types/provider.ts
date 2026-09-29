@@ -85,6 +85,13 @@ export const RequestCompatibilitySchema = z.object({
   reasoning: RequestCapabilitySchema.optional(),
   parallelTools: RequestCapabilitySchema.optional(),
   structuredOutput: RequestCapabilitySchema.optional(),
+  /**
+   * Whether the endpoint accepts `return_token_ids` and reports each streamed
+   * chunk's token ids. vLLM-family servers implement it; a strict OpenAI
+   * endpoint rejects the unknown parameter, so `auto` sends it only to
+   * endpoints believed to be a local engine (see proxy/handler).
+   */
+  tokenIds: RequestCapabilitySchema.optional(),
 }).passthrough()
 
 export type RequestCompatibility = z.infer<typeof RequestCompatibilitySchema>

@@ -1,7 +1,0 @@
-<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
-  <zip-file>
-    <pe-file path="Claude-Code-Haha-*-win-*.exe">
-      <authenticode-sign/>
-    </pe-file>
-  </zip-file>
-</artifact-configuration>
