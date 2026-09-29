@@ -1,5 +1,6 @@
 import type { PermissionMode } from './settings'
 import type { RuntimeSelection } from './runtime'
+import type { MessageUsage } from './session'
 
 // Source: src/server/ws/events.ts
 
@@ -100,7 +101,14 @@ export type ServerMessage =
       event: AgentRunStreamMessage
     }
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }
-  | { type: 'content_delta'; text?: string; toolInput?: string }
+  | { type: 'content_delta'; text?: string; toolInput?: string; /** Epoch ms the server received this chunk. The client rates decode off this clock instead of its own receive clock, which a busy main thread compresses when it drains a queue (see TpsClock: the meter buckets frames on whichever clock it settled on). */ serverTs?: number }
+  /**
+   * Real tokens decoded since the previous frame, relayed from the engine's
+   * per-chunk token ids (vLLM `return_token_ids`). Carries no content — it
+   * feeds the TPS meter exactly, and the text frames it duplicates are then
+   * ignored. Only sent for endpoints that reported token ids.
+   */
+  | { type: 'tps_tokens'; tokens: number; kind: 'thinking' | 'content' | 'tool'; serverTs?: number }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
   | {
@@ -132,10 +140,11 @@ export type ServerMessage =
   | { type: 'user_message_replay'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string } }
   | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
   /** `complete` marks a whole thinking block; without it `text` is a stream fragment. */
-  | { type: 'thinking'; text: string; complete?: boolean }
+  | { type: 'thinking'; text: string; complete?: boolean; /** Epoch ms the server first saw this thinking block; anchors the live elapsed-time tick to "generation began". */ serverStart?: number; serverTs?: number }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
   | {
       type: 'runtime_config_applied'
+
       providerId: string | null
       modelId: string
       effortLevel?: string
@@ -167,10 +176,10 @@ export type ServerMessage =
 
 export type AgentRunStreamMessage =
   | { type: 'content_start'; blockType: 'text' | 'tool_use'; toolName?: string; toolUseId?: string; originalToolUseId?: string; parentToolUseId?: string }
-  | { type: 'content_delta'; text?: string; toolInput?: string }
+  | { type: 'content_delta'; text?: string; toolInput?: string; /** Epoch ms the server received this chunk. The client rates decode off this clock instead of its own receive clock, which a busy main thread compresses when it drains a queue (see TpsClock: the meter buckets frames on whichever clock it settled on). */ serverTs?: number }
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
-  | { type: 'thinking'; text: string; complete?: boolean }
+  | { type: 'thinking'; text: string; complete?: boolean; /** Epoch ms the server first saw this thinking block; anchors the live elapsed-time tick to "generation began". */ serverStart?: number; serverTs?: number }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
   | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string }
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
@@ -289,6 +298,10 @@ export type AgentTaskNotification = {
 
 export type BackgroundAgentTaskUsage = {
   totalTokens?: number
+  /** Generated tokens; the thinking share is `thinkTokens` when reported. */
+  outputTokens?: number
+  /** Thinking share of the output. Absent when the engine reported no split. */
+  thinkTokens?: number
   toolUses?: number
   durationMs?: number
 }
@@ -347,8 +360,16 @@ export type UIMessage =
    * member transcript.
    */
   | { id: string; type: 'user_text'; content: string; sessionReferences?: Array<{ sessionId: string }>; collaboration?: { sourceSessionId: string; messageId?: string }; modelContent?: string; transcriptMessageId?: string; timestamp: number; attachments?: UIAttachment[]; pending?: boolean; optimisticQueued?: boolean; teammateFrom?: string }
-  | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string }
-  | { id: string; type: 'thinking'; content: string; timestamp: number }
+  /**
+   * `usage` is the token counts the API call that produced this row reported,
+   * carried so a turn can total them. `usageKey` dedupes it: one reply is
+   * persisted as a dozen transcript lines that each repeat the whole `usage`
+   * object, so the number belongs to the call, not to the row. Rows of a reply
+   * that reported nothing — older transcripts, providers that return no usage —
+   * simply do not carry it, and the turn then shows no total.
+   */
+  | { id: string; type: 'assistant_text'; content: string; transcriptMessageId?: string; timestamp: number; model?: string; usage?: MessageUsage; usageKey?: string }
+  | { id: string; type: 'thinking'; content: string; timestamp: number; /** Wall-clock ms this block spent generating; set on completion (live) or mapped from the transcript (history). */ thinkingDurationMs?: number; /** Exact tokens the engine generated for this block, summed from the id side channel while it streamed. Absent on history (the transcript does not carry it) and when the engine reports no ids — the badge falls back to estimating from content then. */ thinkingTokens?: number; usage?: MessageUsage; usageKey?: string; serverTs?: number }
   | {
       id: string
       type: 'tool_use'
@@ -361,6 +382,8 @@ export type UIMessage =
       isPending?: boolean
       status?: 'stopped'
       partialInput?: string
+      usage?: MessageUsage
+      usageKey?: string
     }
   | { id: string; type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; timestamp: number; parentToolUseId?: string }
   | { id: string; type: 'background_task'; task: BackgroundAgentTask; timestamp: number }

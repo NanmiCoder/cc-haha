@@ -1,6 +1,7 @@
 import { splitSessionReferenceContext } from './sessionReferenceContext.js'
 import { parseSessionCollaborationEnvelope } from '../../utils/sessionCollaborationEnvelope.js'
 import { readHistoryContexts } from './sessionHistoryContext.js'
+import { readStoredTranscriptMetadata, writeStoredTranscriptMetadata } from './transcriptMetadataCache.js'
 import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './sessionHistoryRecovery.js'
 /**
  * Session Service — 会话文件的读写操作封装
@@ -9,7 +10,7 @@ import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './ses
  * 确保 Desktop App 与 CLI 的数据完全互通。
  */
 
-import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
+import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, boundToolUseResultPreview, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
 import { constants, createReadStream, createWriteStream, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
@@ -62,6 +63,7 @@ import type {
   SessionListSummary,
 } from './localIndex/types.js'
 import { localIndexCoordinator } from './localIndex/coordinator.js'
+import { resolveExtraProjectRoots } from './localIndex/config.js'
 import { readSessionEntriesByLocator } from './localIndex/sessionEntries.js'
 import type {
   IndexedSessionRow,
@@ -221,6 +223,8 @@ export type MessageEntry = {
   collaboration?: { sourceSessionId: string; messageId: string }
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
+  /** Raw JSONL subtype, present for compact boundary system entries ('compact_boundary' / 'microcompact_boundary'). */
+  subtype?: string
   content: unknown
   bodyTruncated?: boolean
   toolUseResult?: unknown
@@ -236,14 +240,20 @@ export type MessageEntry = {
    * the line carries no message id, which by the same convention means "always count it".
    */
   usageKey?: string
+  /**
+   * Wall-clock ms this thinking block spent generating (content_block_start →
+   * content_block_stop), persisted on the transcript line by the SDK stream.
+   * Only present on assistant lines whose single content block is a thinking
+   * block; lets a reopened session re-show the per-thought timing.
+   */
+  thinkingDurationMs?: number
   parentUuid?: string
   parentToolUseId?: string
   isSidechain?: boolean
   cwd?: string
 }
 
-export type SessionMessagesWithEvidence = {
-  messages: MessageEntry[]
+export type SessionMessagesWithEvidence = {  messages: MessageEntry[]
   transcriptEvidenceComplete: boolean
 }
 
@@ -278,6 +288,19 @@ export type SessionTaskNotification = {
   result?: string
   outputFile?: string
   timestamp?: string
+  /**
+   * Tokens the run generated, derived from its own transcript when the session
+   * is read back. Output-side only, matching the live notification: `thinkTokens`
+   * is present only while thinking is not sent to the API (the same gate the
+   * live path applies), so the reader can show a split without knowing which
+   * case it is in.
+   */
+  usage?: {
+    totalTokens?: number
+    outputTokens?: number
+    thinkTokens?: number
+    toolUses?: number
+  }
 }
 
 /** Canonical terminal identity within a session. Child agents may reuse the
@@ -357,7 +380,7 @@ export type TranscriptContextEstimate = {
 }
 
 /** Raw entry parsed from a single JSONL line */
-type RawEntry = {
+export type RawEntry = {
   type?: string
   subtype?: string
   content?: unknown
@@ -417,19 +440,52 @@ type TranscriptContextAccumulator = {
   transcriptHasMediaInput: boolean
 }
 
+/** One call's usage as it has already been folded into the running totals. */
+type CountedUsage = {
+  model: string
+  inputTokens: number
+  outputTokens: number
+  cacheReadInputTokens: number
+  cacheCreationInputTokens: number
+  webSearchRequests: number
+  costUSD: number
+}
+
+/** Which call a line's `usage` belongs to, and what that key has already contributed. */
+type UsageClaim = {
+  /** `null` when the line carries no identity to deduplicate on and is counted as-is. */
+  key: string | null
+  /**
+   * The value already counted for this key. Non-null means this line **supersedes** that
+   * contribution rather than adding to it.
+   */
+  previous: CountedUsage | null
+}
+
 /**
- * Whether this line's `usage` is the first sighting of its reply.
+ * Resolves which call this line's `usage` describes, or `null` when it must not be counted
+ * (an inherited fork line).
  *
  * Claude Code writes one JSONL line per content block of an assistant message and repeats the
- * complete `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is
- * 14 lines carrying the same numbers. Summing raw lines overstated real transcripts by 2.2x,
- * which is why `stats.ts` and the activity index both deduplicate; the inspector paths had
- * inherited only the fork check and so reported inflated totals to the context panel.
+ * `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is 14 lines.
+ * Summing raw lines overstated real transcripts by 2.2x, which is why `stats.ts` and the
+ * activity index both deduplicate.
+ *
+ * The repeats are **not identical**, which is what the dedup has to respect: measured over 1227
+ * calls, a call's early lines carry `output_tokens: 0` (with, per provider, either the prompt
+ * total and no cache fields, or a running prefix), and the last line carries the final split —
+ * uncached input, cache read/write, and the real output count. Keeping the **first** line threw
+ * away every output token and every cache read of the session, which read in the context panel
+ * as 0 tok/s and a 0% cache hit rate on a perfectly healthy session. A later line therefore
+ * replaces its key's earlier contribution instead of being discarded.
  *
  * Rules (and the key shape) come from `usageAccounting.ts` so every reader of a transcript
  * agrees about what one session cost.
  */
-function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
+function claimUsageRecord(
+  entry: RawEntry,
+  countedUsage: Map<string, CountedUsage>,
+): UsageClaim | null {
   const record = entry as unknown as Record<string, unknown>
   const identity = {
     version: record.version,
@@ -438,13 +494,14 @@ function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
     messageId: entry.message?.id,
     forkedFrom: record.forkedFrom,
   }
-  if (!isBillableUsageRecord(identity)) return false
+  if (!isBillableUsageRecord(identity)) return null
   const key = usageRecordKey(identity)
-  if (key === null) return true
-  if (countedKeys.has(key)) return false
-  if (countedKeys.size >= 50_000 || key.length > 4096) throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
-  countedKeys.add(key)
-  return true
+  if (key === null) return { key: null, previous: null }
+  const previous = countedUsage.get(key)
+  if (previous === undefined && (countedUsage.size >= 50_000 || key.length > 4096)) {
+    throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
+  }
+  return { key, previous: previous ?? null }
 }
 
 function createTranscriptContextAccumulator(): TranscriptContextAccumulator {
@@ -566,6 +623,18 @@ type SessionListSummaryCacheEntry = {
   size: number
   summary: SessionListSummary
 }
+
+/**
+ * How far into a transcript the presence check reads before giving up.
+ *
+ * Deliberately generous: the check stops at the first qualifying entry, so a
+ * real transcript costs only its first few KB, and this cap only decides what to
+ * do with a file whose head is a long run of non-conversation records (large
+ * `file-history-snapshot` entries, for instance). 8 MB is far past the point
+ * where a placeholder would have shown its first real message, while still being
+ * a rounding error against the hundreds of MB the unbounded read used to parse.
+ */
+const TRANSCRIPT_PRESENCE_SCAN_BYTES = 8 * 1024 * 1024
 
 const DEFAULT_SESSION_LIST_CACHE_MAX_ENTRIES = 16
 const DEFAULT_SESSION_LIST_SUMMARY_CACHE_MAX_ENTRIES = 20_000
@@ -773,7 +842,7 @@ export class SessionService {
       hydrate: async (row) => {
         try {
           await this.validateIndexedTranscriptPath(
-            row.transcriptPath, row.projectPath, row.id, await fs.realpath(this.getProjectsDir()),
+            row.transcriptPath, row.projectPath, row.id, await this.getIndexedProjectsRoots(),
           )
           return await this.hydrateIndexedSession(row)
         } catch (error) {
@@ -1068,9 +1137,38 @@ export class SessionService {
     return path.resolve(getClaudeConfigHomeDir())
   }
 
-  private getProjectsDir(): string {
-    return path.join(this.getConfigDir(), 'projects')
-  }
+    private getProjectsDir(): string {
+      return path.join(this.getConfigDir(), 'projects')
+    }
+
+    /**
+     * Every `projects/` root the index reads from: this config dir's own, plus
+     * any listed in `CC_HAHA_EXTRA_PROJECT_ROOTS`.
+     *
+     * The index discovers transcripts under all of them, so every check that
+     * asks "is this row ours?" has to accept the same set — validating against
+     * only the config dir's own root is what silently dropped every session that
+     * came from an extra root (the row failed the ancestry check and was
+     * discarded, leaving a list that reported the right total but almost no
+     * rows).
+     *
+     * Realpath'd because callers compare the result against a realpath'd
+     * transcript path. A root that does not exist is skipped: the extra roots are
+     * optional, and requiring one would make an unset path an error.
+     */
+    private async getIndexedProjectsRoots(): Promise<string[]> {
+      const roots = [this.getProjectsDir(), ...resolveExtraProjectRoots()]
+      const resolved: string[] = []
+      for (const root of roots) {
+        try {
+          const real = await fs.realpath(root)
+          if (!resolved.includes(real)) resolved.push(real)
+        } catch {
+          // Optional extra root that is not there (or not readable yet).
+        }
+      }
+      return resolved
+    }
 
   /**
    * Sanitize a path the same way the shared session storage does.
@@ -1117,6 +1215,46 @@ export class SessionService {
 
   private async readJsonlFile(filePath: string): Promise<RawEntry[]> {
     return (await this.readJsonlFileWithDiagnostics(filePath)).entries
+  }
+
+  /**
+   * Whether a transcript holds real conversation, read from the head only.
+   *
+   * `hasConversationTranscript` asks an existential question, so a full parse
+   * answers it at unbounded cost: this used to read and `JSON.parse` the whole
+   * file, and because one session id can exist under several discovery roots it
+   * did so for each match — measured 4–6 s per `findSessionFile` for a 139 MB
+   * session that also existed as a 184 MB copy, on a path nearly every session
+   * endpoint takes. Reading until the first qualifying entry answers the same
+   * question, and the cap keeps a pathological head (all metadata, no message)
+   * from scanning a giant file.
+   */
+  private async hasConversationTranscriptInFile(filePath: string): Promise<boolean> {
+    const stream = createReadStream(filePath, {
+      encoding: 'utf8',
+      start: 0,
+      end: TRANSCRIPT_PRESENCE_SCAN_BYTES - 1,
+    })
+    const lines = createInterface({ input: stream, crlfDelay: Infinity })
+    try {
+      for await (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) continue
+        let parsed: RawEntry
+        try {
+          parsed = JSON.parse(trimmed) as RawEntry
+        } catch {
+          continue
+        }
+        if (this.hasConversationTranscript([parsed])) return true
+      }
+      return false
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false
+      throw err
+    } finally {
+      stream.destroy()
+    }
   }
 
   private async readTargetedJsonlEntries(
@@ -1235,6 +1373,13 @@ export class SessionService {
     }, 'recovery')
   }
 
+  /** Keeps the in-memory layer small; the durable copy is what makes a miss cheap. */
+  private enforceMetadataProjectionCacheCapacity(): void {
+    while (this.metadataProjectionCache.size > 32) {
+      this.metadataProjectionCache.delete(this.metadataProjectionCache.keys().next().value!)
+    }
+  }
+
   private async scanSessionListSummary(
     filePath: string,
     projectDir: string,
@@ -1257,6 +1402,21 @@ export class SessionService {
       this.metadataProjectionCache.delete(key)
       this.metadataProjectionCache.set(key, cached)
       return cached
+    }
+    // A fresh process used to rescan every transcript it touched; the projection
+    // is a few KB of scalars, so a stored copy saves that full pass on the first
+    // open of a large session. It is trusted only for the exact signature it was
+    // built from, so a stale entry costs a scan rather than a wrong answer.
+    const stored = await readStoredTranscriptMetadata<{
+      summary: SessionListSummary
+      launchInfo: SessionLaunchInfo
+      customTitle: string | null
+      complete: boolean
+    }>(this.getConfigDir(), filePath, signature, projectDir)
+    if (stored) {
+      this.metadataProjectionCache.set(key, { signature, ...stored })
+      this.enforceMetadataProjectionCacheCapacity()
+      return stored
     }
     const requestKey = `${key}\0${signature}`
     const pending = this.metadataProjectionRequests.get(requestKey)
@@ -1339,7 +1499,8 @@ export class SessionService {
       }
       this.metadataProjectionCache.delete(key)
       this.metadataProjectionCache.set(key, { signature: scan.sourceVersion, ...result })
-      while (this.metadataProjectionCache.size > 32) this.metadataProjectionCache.delete(this.metadataProjectionCache.keys().next().value!)
+      this.enforceMetadataProjectionCacheCapacity()
+      writeStoredTranscriptMetadata(this.getConfigDir(), filePath, scan.sourceVersion, projectDir, result)
       return result
     }, 'metadata')
     this.metadataProjectionRequests.set(requestKey, request)
@@ -1902,11 +2063,22 @@ export class SessionService {
       ...(sessionReferences ? { sessionReferences } : {}),
       ...(collaboration ? { collaboration } : {}),
       ...(entry.bodyTruncated === true ? { bodyTruncated: true } : {}),
-      ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
+      // Tool results echo tool *inputs* back (FileEdit's `originalFile` is the
+      // whole pre-edit file). Ship a bounded projection so one edited file
+      // cannot dominate the transport; the field itself is kept because
+      // consumers use its presence to tell tool results from human turns.
+      ...(entry.toolUseResult !== undefined
+        ? { toolUseResult: boundToolUseResultPreview(entry.toolUseResult) }
+        : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
       model: msg.model,
       ...(usage ? { usage } : {}),
       ...(usageKey ? { usageKey } : {}),
+      ...(typeof entry.thinkingDurationMs === 'number' &&
+      Number.isFinite(entry.thinkingDurationMs) &&
+      entry.thinkingDurationMs >= 0
+        ? { thinkingDurationMs: entry.thinkingDurationMs }
+        : {}),
       parentUuid: entry.parentUuid ?? undefined,
       parentToolUseId,
       isSidechain: entry.isSidechain,
@@ -2580,7 +2752,7 @@ export class SessionService {
     filePath: string,
     projectDir: string,
     sessionId: string,
-    projectsRoot: string,
+    projectsRoots: readonly string[],
   ): Promise<Stats> {
     const invalid = (): Error & { code: string } => Object.assign(
       new Error('Indexed transcript path failed scope validation'),
@@ -2596,21 +2768,38 @@ export class SessionService {
       throw invalid()
     }
 
-    const projectsDir = this.getProjectsDir()
-    const expectedPath = path.join(projectsDir, projectDir, `${sessionId}.jsonl`)
+    // The row is ours if it is the transcript we would have built under ANY
+    // indexed root — the config dir's own, or one an extra root contributes. The
+    // path shape and the root it sits in both have to match, so a row cannot
+    // point at some other directory's file and still pass.
     const indexedRealPath = await fs.realpath(filePath)
-    const expectedRealPath = path.resolve(expectedPath) === path.resolve(filePath)
-      ? indexedRealPath
-      : await fs.realpath(expectedPath)
-    const relativePath = path.relative(projectsRoot, indexedRealPath)
-    if (
-      expectedRealPath !== indexedRealPath ||
-      relativePath === '..' ||
-      relativePath.startsWith(`..${path.sep}`) ||
-      path.isAbsolute(relativePath)
-    ) {
-      throw invalid()
+    let withinAnIndexedRoot = false
+    for (const projectsRoot of projectsRoots) {
+      const expectedPath = path.join(projectsRoot, projectDir, `${sessionId}.jsonl`)
+      let expectedRealPath: string
+      if (path.resolve(expectedPath) === path.resolve(filePath)) {
+        expectedRealPath = indexedRealPath
+      } else {
+        try {
+          expectedRealPath = await fs.realpath(expectedPath)
+        } catch {
+          // No such transcript under this root; try the next one.
+          continue
+        }
+      }
+      if (expectedRealPath !== indexedRealPath) continue
+      const relativePath = path.relative(projectsRoot, indexedRealPath)
+      if (
+        relativePath === '..' ||
+        relativePath.startsWith(`..${path.sep}`) ||
+        path.isAbsolute(relativePath)
+      ) {
+        continue
+      }
+      withinAnIndexedRoot = true
+      break
     }
+    if (!withinAnIndexedRoot) throw invalid()
 
     const stat = await fs.stat(indexedRealPath)
     if (!stat.isFile()) throw invalid()
@@ -2633,8 +2822,8 @@ export class SessionService {
         if (!this.indexStatusRemainsUsable()) {
           this.markIndexReadFailure()
         } else {
-          const projectsRoot = indexedMatches.length > 0
-            ? await fs.realpath(this.getProjectsDir())
+          const projectsRoots = indexedMatches.length > 0
+            ? await this.getIndexedProjectsRoots()
             : null
           const hydratedMatches: Array<SessionFileMatch & { mtimeMs: number; hasTranscript: boolean }> = []
           let hydrationFailed = false
@@ -2644,13 +2833,17 @@ export class SessionService {
                 match.filePath,
                 match.projectDir,
                 sessionId,
-                projectsRoot!,
+                projectsRoots!,
               )
-              const entries = await this.readJsonlFile(match.filePath)
+              // Only transcript-vs-placeholder ordering is needed here, so this
+              // reads the head rather than the whole file: a full parse cost 4-6 s
+              // per call for a large session with copies under several roots, on
+              // the path nearly every session endpoint takes. The filesystem
+              // fallback below stays mtime-only for the same reason.
               hydratedMatches.push({
                 ...match,
                 mtimeMs: stat.mtimeMs,
-                hasTranscript: this.hasConversationTranscript(entries),
+                hasTranscript: await this.hasConversationTranscriptInFile(match.filePath),
               })
             } catch (error) {
               if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -2695,17 +2888,34 @@ export class SessionService {
     const matches: Array<{ filePath: string; projectDir: string; mtimeMs: number; hasTranscript: boolean }> = []
     for (const dir of projectDirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
+      let stat: Awaited<ReturnType<typeof fs.stat>>
       try {
-        const stat = await fs.stat(filePath)
-        const entries = await this.readJsonlFile(filePath)
-        matches.push({
-          filePath,
-          projectDir: dir,
-          mtimeMs: stat.mtimeMs,
-          hasTranscript: this.hasConversationTranscript(entries),
-        })
+        stat = await fs.stat(filePath)
       } catch {
         continue
+      }
+      matches.push({
+        filePath,
+        projectDir: dir,
+        mtimeMs: stat.mtimeMs,
+        hasTranscript: false,
+      })
+    }
+
+    // The transcript path is stable per session id, so an unbounded full read
+    // here would run on every reader call (inspection/history/subagent lookups).
+    // It is only ever needed to rank two files that share an id — a worktree
+    // transcript vs. the original placeholder — where the transcript must win
+    // even if its mtime is not strictly newer.
+    if (matches.length > 1) {
+      for (const match of matches) {
+        try {
+          match.hasTranscript = this.hasConversationTranscript(
+            await this.readJsonlFile(match.filePath),
+          )
+        } catch {
+          match.hasTranscript = false
+        }
       }
     }
 
@@ -2930,6 +3140,8 @@ export class SessionService {
     const promptTokens = latest.inputTokens + latest.cacheReadInputTokens + latest.cacheCreationInputTokens
     const providerTokens = promptTokens + latest.outputTokens
     const hasProviderUsage = providerTokens > 0
+    // estimatedTokens 仍用全量 rough 累加（媒体信任启发式需要「内容估计」为
+    // 正且小于窗口才能触发），显示总量单独走 usage 锚口径（见 totalTokens）。
     const estimatedTokens = estimatedTokensFromMessages || promptTokens
     const contextBudget = calculateContextBudget({
       estimatedTokens,
@@ -2945,15 +3157,13 @@ export class SessionService {
       }),
       hasMediaInput: transcriptHasMediaInput,
     })
+    // 显示总量走 usage 锚口径（与 auto-compact 的 tokenCountWithEstimation
+    // 同口径）：最后一条真实 usage 总量 + 其后 rough 累加。bc 中间件压缩后
+    // usage 回落 → 百分比收敛，不再被自 boundary 的全量累加钉死 100%。
+    // 低信任+媒体的可疑 usage 尖峰仍走估计口径（ignoredUsageReason 分支）。
     const totalTokens =
       hasProviderUsage && !contextBudget.ignoredUsageReason
-        ? Math.min(
-            Math.max(
-              contextBudget.usedTokens,
-              providerTokens + estimatedTokensAfterUsage,
-            ),
-            rawMaxTokens,
-          )
+        ? Math.min(providerTokens + estimatedTokensAfterUsage, rawMaxTokens)
         : contextBudget.usedTokens
     const percentage = rawMaxTokens > 0 ? Math.round((totalTokens / rawMaxTokens) * 100) : 0
     const usageCategories: TranscriptContextEstimate['categories'] = [
@@ -3087,7 +3297,7 @@ export class SessionService {
     let lastUsageAt: number | null = null
 
     const contextState = createTranscriptContextAccumulator()
-    const countedUsageKeys = new Set<string>()
+    const countedUsage = new Map<string, CountedUsage>()
 
     await this.streamJsonlFile(found.filePath, (entry) => {
       if (typeof entry.message?.model === 'string') {
@@ -3170,9 +3380,10 @@ export class SessionService {
         ? usage.server_tool_use.web_search_requests
         : 0
 
-      // Fork-inherited lines and the repeated usage objects of a multi-block reply are the
-      // same class of over-count; `claimUsageRecord` rejects both.
-      if (!claimUsageRecord(entry, countedUsageKeys)) return
+      // Fork-inherited lines are skipped; a repeated line for a call already counted comes
+      // back with `previous` so it can replace that contribution (see `claimUsageRecord`).
+      const claim = claimUsageRecord(entry, countedUsage)
+      if (claim === null) return
 
       if (
         inputTokens === 0 &&
@@ -3219,6 +3430,28 @@ export class SessionService {
         models.set(model, modelUsage)
       }
 
+      // A newer line for the same call first takes back what the older one contributed: the
+      // early line's numbers are a partial view of the same request, not a separate one.
+      if (claim.previous) {
+        const previous = claim.previous
+        const previousModel = models.get(previous.model)
+        if (previousModel) {
+          previousModel.inputTokens -= previous.inputTokens
+          previousModel.outputTokens -= previous.outputTokens
+          previousModel.cacheReadInputTokens -= previous.cacheReadInputTokens
+          previousModel.cacheCreationInputTokens -= previous.cacheCreationInputTokens
+          previousModel.webSearchRequests -= previous.webSearchRequests
+          previousModel.costUSD -= previous.costUSD
+          previousModel.costDisplay = this.formatCost(previousModel.costUSD)
+        }
+        totalCostUSD -= previous.costUSD
+        totalInputTokens -= previous.inputTokens
+        totalOutputTokens -= previous.outputTokens
+        totalCacheReadInputTokens -= previous.cacheReadInputTokens
+        totalCacheCreationInputTokens -= previous.cacheCreationInputTokens
+        totalWebSearchRequests -= previous.webSearchRequests
+      }
+
       modelUsage.inputTokens += inputTokens
       modelUsage.outputTokens += outputTokens
       modelUsage.cacheReadInputTokens += cacheReadInputTokens
@@ -3233,6 +3466,18 @@ export class SessionService {
       totalCacheReadInputTokens += cacheReadInputTokens
       totalCacheCreationInputTokens += cacheCreationInputTokens
       totalWebSearchRequests += webSearchRequests
+
+      if (claim.key !== null) {
+        countedUsage.set(claim.key, {
+          model,
+          inputTokens,
+          outputTokens,
+          cacheReadInputTokens,
+          cacheCreationInputTokens,
+          webSearchRequests,
+          costUSD,
+        })
+      }
 
       if (entry.timestamp) {
         const time = Date.parse(entry.timestamp)
@@ -3279,6 +3524,9 @@ export class SessionService {
           // them from, so callers must treat 0 as "unknown" rather than "instant".
           totalDecodeDuration: 0,
           totalTtftDuration: 0,
+          // Nothing to pair with either: a transcript carries no decode span, so the panel
+          // must not divide these tokens by someone else's timing.
+          totalTimedOutputTokens: 0,
           totalDuration:
             firstUsageAt !== null && lastUsageAt !== null
               ? Math.max(0, Math.round((lastUsageAt - firstUsageAt) / 1000))
@@ -3575,14 +3823,14 @@ export class SessionService {
 
       const sessions: SessionListItem[] = []
       const pathExists = this.createCachedPathExists()
-      const projectsRoot = await fs.realpath(this.getProjectsDir())
+      const projectsRoots = await this.getIndexedProjectsRoots()
       for (const row of indexedPage.sessions) {
         try {
           await this.validateIndexedTranscriptPath(
             row.transcriptPath,
             row.projectPath,
             row.id,
-            projectsRoot,
+            projectsRoots,
           )
           sessions.push(await this.hydrateIndexedSession(row, pathExists))
         } catch {
@@ -4219,44 +4467,86 @@ export class SessionService {
     } finally { await handle.close() }
   }
 
-  async findSubagentAgentIdByToolUseId(
-    sessionId: string,
-    toolUseId: string,
-    expectedOwnerAgentId: string | null,
-  ): Promise<string | null> {
+  /**
+   * Where a session keeps its subagent sidecars, derived from the session's own
+   * transcript path rather than from the config dir. A session served out of an
+   * extra index root keeps its subagents next to its transcript, not under this
+   * instance's projects dir — deriving from the config dir would look in the
+   * wrong place for exactly those sessions.
+   */
+  private subagentsDirForTranscript(filePath: string, sessionId: string): string {
+    return path.join(path.dirname(filePath), sessionId, 'subagents')
+  }
+
+  /**
+   * Every subagent sidecar of one session: which Agent call each transcript
+   * belongs to, and which agent owns it.
+   *
+   * Returned as a list because a session can carry hundreds of agents, and
+   * resolving them one toolUseId at a time would re-list and re-parse the whole
+   * sidecar directory per lookup. `complete` reports whether every sidecar was
+   * readable, which is what makes the legacy fallback below safe to trust.
+   */
+  async listSubagentSidecars(sessionId: string): Promise<{
+    sidecars: Array<{ agentId: string; toolUseId: string; ownerAgentId?: string }>
+    complete: boolean
+  }> {
     const found = await this.findSessionFile(sessionId)
     if (!found) {
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
 
-    const subagentsDir = path.join(
-      this.getProjectsDir(),
-      found.projectDir,
-      sessionId,
-      'subagents',
-    )
+    const subagentsDir = this.subagentsDirForTranscript(found.filePath, sessionId)
     const files = await fs.readdir(subagentsDir).catch(() => [])
     if (files.length > 4096) throw new ApiError(413, 'Agent directory exceeds its viewing budget', 'SUBAGENT_METADATA_LIMIT')
-    const candidates: Array<{ agentId: string; ownerAgentId?: string }> = []
-    let metadataComplete = true
+    const sidecars: Array<{ agentId: string; toolUseId: string; ownerAgentId?: string }> = []
+    let complete = true
 
     for (const metadataFile of files.filter((file) => file.endsWith('.meta.json'))) {
       try {
         const metadata = await this.readSubagentMetadata(path.join(subagentsDir, metadataFile))
-        if (metadata.toolUseId !== toolUseId) continue
+        if (typeof metadata.toolUseId !== 'string' || !metadata.toolUseId) continue
         const ownerAgentId = typeof metadata.ownerAgentId === 'string' && metadata.ownerAgentId
           ? metadata.ownerAgentId
           : undefined
-        candidates.push({
+        sidecars.push({
           agentId: metadataFile.replace(/^agent-/, '').replace(/\.meta\.json$/, ''),
+          toolUseId: metadata.toolUseId,
           ...(ownerAgentId ? { ownerAgentId } : {}),
         })
       } catch (error) {
         if (error instanceof ApiError) throw error
         // A half-written sidecar must not hide the other candidates.
-        metadataComplete = false
+        complete = false
       }
     }
+
+    return { sidecars, complete }
+  }
+
+  /**
+   * The raw entries of one subagent transcript — what a run actually generated,
+   * which is the only place its token usage can be recovered from once the
+   * parent session's result text has aged out of the useful fields. Empty when
+   * the sidecar is gone.
+   */
+  async readSubagentTranscriptEntries(sessionId: string, agentId: string): Promise<RawEntry[]> {
+    const found = await this.findSessionFile(sessionId)
+    if (!found) return []
+    const normalizedAgentId = agentId.startsWith('agent-') ? agentId : `agent-${agentId}`
+    return this.readJsonlFile(path.join(
+      this.subagentsDirForTranscript(found.filePath, sessionId),
+      `${normalizedAgentId}.jsonl`,
+    ))
+  }
+
+  async findSubagentAgentIdByToolUseId(
+    sessionId: string,
+    toolUseId: string,
+    expectedOwnerAgentId: string | null,
+  ): Promise<string | null> {
+    const { sidecars, complete } = await this.listSubagentSidecars(sessionId)
+    const candidates = sidecars.filter(sidecar => sidecar.toolUseId === toolUseId)
 
     const exact = candidates.filter(candidate => expectedOwnerAgentId === null
       ? candidate.ownerAgentId === undefined
@@ -4270,7 +4560,7 @@ export class SessionService {
     // cross-parent collision this owner join is meant to prevent.
     if (
       expectedOwnerAgentId !== null &&
-      metadataComplete &&
+      complete &&
       candidates.length === 1 &&
       candidates[0]!.ownerAgentId === undefined
     ) {
@@ -5196,6 +5486,21 @@ export class SessionService {
       const goalLocalCommandMessage = this.goalLocalCommandEntryToMessage(entry)
       if (goalLocalCommandMessage) {
         messages.push(goalLocalCommandMessage)
+        continue
+      }
+
+      // Compact boundary entries carry no `message` role, so the generic filter below
+      // would drop them. Surface them as a typed system entry so the client can use the
+      // boundaries as export range markers (and the UI already renders the
+      // "Conversation compacted" text as a compact summary).
+      if (entry.type === 'system' && (entry.subtype === 'compact_boundary' || entry.subtype === 'microcompact_boundary')) {
+        messages.push({
+          id: typeof entry.uuid === 'string' && entry.uuid ? entry.uuid : crypto.randomUUID(),
+          type: 'system',
+          subtype: entry.subtype,
+          content: entry.content,
+          timestamp: entry.timestamp || new Date().toISOString(),
+        })
         continue
       }
 

@@ -64,6 +64,9 @@ describe('WorkspaceFileOpenWith', () => {
       capabilities: {
         ...browserHost.capabilities,
         shell: true,
+        // Desktop hosts carry the multi-page in-app browser; the open-with
+        // wiring falls back to the system browser only when it is absent.
+        workspaceBrowser: true,
       },
       shell: {
         ...browserHost.shell,
@@ -78,14 +81,15 @@ describe('WorkspaceFileOpenWith', () => {
     )
 
     const labels = getAllByRole('menuitem').map((el) => el.textContent)
-    expect(labels).toHaveLength(4)
+    expect(labels).toHaveLength(5)
     expect(labels.some((l) => l?.includes('VS Code'))).toBe(true)
     expect(labels.some((l) => l?.includes('workspace.files.openContainingFolder'))).toBe(true)
     // This is now a standalone menu: there is no parent copy-path pair.
     expect(labels).toContain('openWith.copyFileContent')
     expect(labels).toContain('openWith.copyPath')
-    expect(labels).not.toContain('openWith.systemDefault')
-  })
+    // The download entry rides with the clipboard group as a plain file action.
+    expect(labels).toContain('workspace.download')
+    expect(labels).not.toContain('openWith.systemDefault')  })
 
   it('clicking the IDE item calls openTarget and onAfterSelect', () => {
     const onAfter = vi.fn()

@@ -1,3 +1,4 @@
+import { getServerBaseUrl } from './desktopRuntime'
 import { classifyPreviewLink } from './previewLinkRouter'
 import { shouldOfferStaticHtmlPreview } from './htmlPreviewPolicy'
 
@@ -60,8 +61,45 @@ export function localFileUrl(base: string, absPath: string): string {
   return `${base.replace(/\/$/, '')}/local-file${encoded}`
 }
 
+/**
+ * Save a file by pointing an anchor at the local server's
+ * `/local-file/<abs-path>?download=1` route.
+ *
+ * A click on an anchor is a navigation, not a fetch. The browser sends no Origin
+ * header with it, so the request reaches the server on the no-Origin path every
+ * other navigation uses and the file is served with its Content-Disposition
+ * intact. This is the only shape that works from the packaged renderer, whose
+ * page is `file://`: an opaque origin can neither pass a CORS check (the fetch
+ * path attaches `Origin: null`, which the server refuses) nor download a `blob:`
+ * URL it minted itself. Routing the bytes through `apiGetBlob` — and later through
+ * a main-process copy — is what reduced a working download to a click that did
+ * nothing.
+ *
+ * @returns whether the download was initiated.
+ */
+export function downloadLocalFile(absolutePath: string): boolean {
+  const url = `${localFileUrl(getServerBaseUrl(), absolutePath)}?download=1`
+  const anchor = document.createElement('a')
+  anchor.href = url
+  // The server's Content-Disposition names a cross-origin save; this names it for
+  // the same-origin case (the in-app browser) too.
+  anchor.download = fileNameFromPath(absolutePath)
+  anchor.rel = 'noopener'
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  return true
+}
+
+/** Last path segment, for the download's suggested save name. */
+export function fileNameFromPath(filePath: string): string {
+  const segments = filePath.split(/[\\/]/).filter((segment) => segment.length > 0)
+  return segments[segments.length - 1] ?? ''
+}
+
 /** Returns true if handled (caller should preventDefault). */
 export function handlePreviewLink(href: string, deps: PreviewLinkDeps): boolean {
+
   const cls = classifyPreviewLink(href)
   const reveal: PreviewLinkReveal | undefined = cls.line
     ? { line: cls.line, ...(cls.column ? { column: cls.column } : {}) }

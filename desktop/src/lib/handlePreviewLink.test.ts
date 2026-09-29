@@ -1,5 +1,16 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+
+// A fixed base so the built URL is deterministic; the real one comes from the
+// desktop runtime, which has no meaning in jsdom.
+const getServerBaseUrl = vi.fn(() => 'http://127.0.0.1:8787')
+vi.mock('./desktopRuntime', async (importOriginal) => ({
+  // Keep the module's other exports: previewLinkRouter needs isLoopbackHostname.
+  ...(await importOriginal<typeof import('./desktopRuntime')>()),
+  getServerBaseUrl: () => getServerBaseUrl(),
+}))
 import {
+  downloadLocalFile,
+  fileNameFromPath,
   handlePreviewLink,
   isAbsoluteLocalPath,
   isRootedLocalPath,
@@ -222,5 +233,75 @@ describe('previewFsUrl (unchanged, regression guard)', () => {
     expect(previewFsUrl('http://127.0.0.1:8787', 's1', 'out/index.html')).toBe(
       'http://127.0.0.1:8787/preview-fs/s1/out/index.html',
     )
+  })
+})
+
+describe('downloadLocalFile', () => {
+  // A click on an anchor is a navigation, not a fetch: the browser attaches no
+  // Origin header, so the request reaches the server on the no-Origin path every
+  // other navigation uses and the file is served. This is the same shape the
+  // chat's download card has always used, and the only one that works from the
+  // packaged renderer, whose page is `file://` — an opaque origin can neither pass
+  // a CORS check (a fetch attaches `Origin: null`, which the server refuses) nor
+  // download a `blob:` URL it minted itself.
+  function clickDownload() {
+    const clicked: HTMLAnchorElement[] = []
+    const create = document.createElement.bind(document)
+    const spy = vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = create(tag)
+      if (tag === 'a') {
+        const anchor = el as HTMLAnchorElement
+        anchor.click = () => clicked.push(anchor)
+      }
+      return el
+    })
+    return { clicked, restore: () => spy.mockRestore() }
+  }
+
+  afterEach(() => getServerBaseUrl.mockClear())
+
+  it('points an anchor straight at the server route', () => {
+    const { clicked, restore } = clickDownload()
+    let initiated: boolean | undefined
+    try {
+      initiated = downloadLocalFile('/home/me/notes.txt')
+    } finally {
+      restore()
+    }
+    expect(clicked[0]?.href).toBe('http://127.0.0.1:8787/local-file/home/me/notes.txt?download=1')
+    expect(clicked[0]?.download).toBe('notes.txt')
+    expect(initiated).toBe(true)
+  })
+
+  it('keeps the route encoded and the saved name for a path with spaces', () => {
+    const { clicked, restore } = clickDownload()
+    try {
+      downloadLocalFile('/home/me/report final.pdf')
+    } finally {
+      restore()
+    }
+    expect(clicked[0]?.href).toBe(
+      'http://127.0.0.1:8787/local-file/home/me/report%20final.pdf?download=1',
+    )
+    expect(clicked[0]?.download).toBe('report final.pdf')
+  })
+
+  it('leaves nothing behind in the document', () => {
+    const { restore } = clickDownload()
+    try {
+      downloadLocalFile('/home/me/notes.txt')
+    } finally {
+      restore()
+    }
+    expect(document.querySelector('a[download]')).toBeNull()
+  })
+})
+
+describe('fileNameFromPath', () => {
+  it('takes the last segment of posix and windows paths', () => {
+    expect(fileNameFromPath('/home/me/notes.txt')).toBe('notes.txt')
+    expect(fileNameFromPath('C:\\proj\\notes.txt')).toBe('notes.txt')
+    expect(fileNameFromPath('/home/me/')).toBe('me')
+    expect(fileNameFromPath('')).toBe('')
   })
 })

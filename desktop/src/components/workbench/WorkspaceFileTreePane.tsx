@@ -13,6 +13,8 @@ import { useWorkspaceChatContextStore } from '@/stores/workspaceChatContextStore
 import { useDismissable } from '@/hooks/useDismissable'
 import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { useMenuKeyboard } from '@/components/workbench/menuKeyboard'
+import { downloadLocalFile } from '@/lib/handlePreviewLink'
+import { resolveAbsoluteOpenPath } from '@/lib/systemFileOpen'
 
 export type WorkspaceFileTreePaneProps = {
   sessionId: string
@@ -46,6 +48,10 @@ export function WorkspaceFileTreePane({
   autoFocus = false,
 }: WorkspaceFileTreePaneProps) {
   const t = useTranslation()
+  // Tree paths are workspace-relative; downloading resolves them to an absolute
+  // path against the session's working directory, the same way the open-with
+  // menu does. Read from the store here rather than threaded as a prop.
+  const workDir = useWorkspaceContentStore((state) => state.statusBySession[sessionId]?.workDir) ?? null
   const [contextMenu, setContextMenu] = useState<{ sessionId: string; row: TreeRow; x: number; y: number } | null>(null)
   const menu = contextMenu?.sessionId === sessionId ? contextMenu : null
   const menuRef = useRef<HTMLDivElement>(null)
@@ -390,8 +396,23 @@ export function WorkspaceFileTreePane({
           }}>
             {t('workspace.addSelectionToChat')}
           </Button>
-        </div>
-      ) : null}
+          {!menu.row.isDirectory ? (
+            <Button
+              role="menuitem"
+              variant="ghost"
+              size="sm"
+              data-testid="workspace-tree-download"
+              onClick={() => {
+                // Failure is reported by the helper (it logs the reason); the menu
+                // still closes, so a failed save never leaves the row stuck open.
+                void downloadLocalFile(resolveAbsoluteOpenPath(menu.row.path, workDir ?? undefined))
+                closeMenu()
+              }}
+            >
+              {t('workspace.download')}
+            </Button>
+          ) : null}
+        </div>      ) : null}
     </div>
   )
 }

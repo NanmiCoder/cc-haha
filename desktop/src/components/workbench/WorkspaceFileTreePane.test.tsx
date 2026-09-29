@@ -482,8 +482,9 @@ describe('file chat references', () => {
     const file = screen.getByTestId('workspace-tree-row-README.md')
     fireEvent.keyDown(file, { key: 'F10', shiftKey: true })
     expect(screen.getByRole('menuitem', { name: 'Add to chat' })).toHaveFocus()
-    fireEvent.keyDown(screen.getByRole('menuitem'), { key: 'Escape' })
+    fireEvent.keyDown(screen.getByRole('menuitem', { name: 'Add to chat' }), { key: 'Escape' })
     expect(screen.queryByRole('menu')).toBeNull()
+
     expect(useWorkspaceChatContextStore.getState().referencesBySession[SESSION]).toBeUndefined()
   })
 

@@ -1,14 +1,25 @@
-import { memo, useCallback, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState, Fragment} from 'react'
 import { BookMarked, ChevronDown, ChevronRight, CircleCheck, Settings } from 'lucide-react'
 import { ToolCallBlock, type ToolCallChrome } from './ToolCallBlock'
+import { TurnDownloadCard } from './DownloadReferencesCard'
 import { ActivityGroup } from './ActivityGroup'
-import { ThinkingBlock } from './ThinkingBlock'
+import { LIVE_ELAPSED_REFRESH_MS, ThinkingBlock } from './ThinkingBlock'
+import { useCompactMetrics } from '../../hooks/useCompactMetrics'
 import {
   activityStepToolCalls,
+  agentGroupSpanMs,
+  agentGroupThinkTokens,
+  agentGroupTokens,
+  agentRunThinkTokens,
+  agentTokenParts,
+  agentRunDurationMs,
+  agentRunInterval,
+  agentRunTokens,
   toActivitySteps,
   toolCallDurationMs,
   type ActivityStep,
 } from './activityGroupModel'
+import { formatDuration } from './ToolCallBlock'
 import { ImageGenerationGroup, type ImageGenerationItem } from './ImageGenerationBlock'
 import { isImageGenerationToolName } from './imageGenerationTools'
 import { useAgentRunActivity } from './useAgentRunActivity'
@@ -21,6 +32,7 @@ import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { useUIStore } from '../../stores/uiStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import type { AgentTaskNotification, BackgroundAgentTask, UIMessage } from '../../types/chat'
 import { AGENT_LIFECYCLE_TYPES } from '../../types/team'
 
@@ -100,6 +112,15 @@ type Props = {
   childToolCallsByParent: Map<string, ToolCall[]>
   agentTaskNotifications: Record<string, AgentTaskNotification>
   agentTaskStatuses?: Record<string, BackgroundAgentTask['status']>
+  /**
+   * Tokens the runs still in flight have produced so far, keyed by tool call.
+   *
+   * A dispatched group reports progress on every turn, and someone waiting on
+   * six agents wants the total to climb while they wait rather than appear all
+   * at once at the end. Absent entries (and settled runs) fall back to the
+   * completion notification, which carries the final, authoritative numbers.
+   */
+  agentTaskLiveUsage?: Record<string, { totalTokens?: number; thinkTokens?: number }>
   activeThinkingId?: string | null
   showOpenRun?: boolean
   /** When true, the last tool is still executing. */
@@ -126,6 +147,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
   childToolCallsByParent,
   agentTaskNotifications,
   agentTaskStatuses,
+  agentTaskLiveUsage,
   activeThinkingId,
   showOpenRun = true,
   isStreaming,
@@ -151,41 +173,51 @@ export const ToolCallGroup = memo(function ToolCallGroup({
           isStreaming={isStreaming}
         />
         {regularSteps.length > 0 ? (
-          <ToolCallGroupContent
-            sessionId={sessionId}
-            onOpenAgentRun={onOpenAgentRun}
-            resolveAgentActivityTarget={resolveAgentActivityTarget}
-            steps={regularSteps}
-            resultMap={resultMap}
-            childToolCallsByParent={childToolCallsByParent}
-            agentTaskNotifications={agentTaskNotifications}
-            agentTaskStatuses={agentTaskStatuses}
-            activeThinkingId={activeThinkingId}
-            showOpenRun={showOpenRun}
-            isStreaming={isStreaming}
-            disclosureKey={disclosureKey}
-          />
+          <>
+            <ToolCallGroupContent
+              sessionId={sessionId}
+              onOpenAgentRun={onOpenAgentRun}
+              resolveAgentActivityTarget={resolveAgentActivityTarget}
+              steps={regularSteps}
+              resultMap={resultMap}
+              childToolCallsByParent={childToolCallsByParent}
+              agentTaskNotifications={agentTaskNotifications}
+              agentTaskStatuses={agentTaskStatuses}
+              agentTaskLiveUsage={agentTaskLiveUsage}
+              activeThinkingId={activeThinkingId}
+              showOpenRun={showOpenRun}
+              isStreaming={isStreaming}
+              disclosureKey={disclosureKey}
+            />
+            <TurnDownloadCard
+              toolCalls={toolCalls.filter((toolCall) => !isMemoryToolCall(toolCall))}
+            />
+          </>
         ) : null}
       </div>
     )
   }
 
   return (
-    <ToolCallGroupContent
-      sessionId={sessionId}
-      onOpenAgentRun={onOpenAgentRun}
-      resolveAgentActivityTarget={resolveAgentActivityTarget}
-      steps={resolvedSteps}
-      resultMap={resultMap}
-      childToolCallsByParent={childToolCallsByParent}
-      agentTaskNotifications={agentTaskNotifications}
-      agentTaskStatuses={agentTaskStatuses}
-      activeThinkingId={activeThinkingId}
-      showOpenRun={showOpenRun}
-      isStreaming={isStreaming}
-      isLive={isLive}
-      disclosureKey={disclosureKey}
-    />
+    <>
+      <ToolCallGroupContent
+        sessionId={sessionId}
+        onOpenAgentRun={onOpenAgentRun}
+        resolveAgentActivityTarget={resolveAgentActivityTarget}
+        steps={resolvedSteps}
+        resultMap={resultMap}
+        childToolCallsByParent={childToolCallsByParent}
+        agentTaskNotifications={agentTaskNotifications}
+        agentTaskStatuses={agentTaskStatuses}
+        agentTaskLiveUsage={agentTaskLiveUsage}
+        activeThinkingId={activeThinkingId}
+        showOpenRun={showOpenRun}
+        isStreaming={isStreaming}
+        isLive={isLive}
+        disclosureKey={disclosureKey}
+      />
+      <TurnDownloadCard toolCalls={toolCalls} />
+    </>
   )
 })
 
@@ -200,6 +232,7 @@ function ToolCallGroupContent({
   childToolCallsByParent,
   agentTaskNotifications,
   agentTaskStatuses,
+  agentTaskLiveUsage,
   activeThinkingId,
   showOpenRun = true,
   isStreaming,
@@ -259,6 +292,7 @@ function ToolCallGroupContent({
             childToolCallsByParent={childToolCallsByParent}
             agentTaskNotifications={agentTaskNotifications}
             agentTaskStatuses={agentTaskStatuses}
+            agentTaskLiveUsage={agentTaskLiveUsage}
             activeThinkingId={activeThinkingId}
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
@@ -295,6 +329,7 @@ function ToolCallGroupContent({
         childToolCallsByParent={childToolCallsByParent}
         agentTaskNotifications={agentTaskNotifications}
         agentTaskStatuses={agentTaskStatuses}
+        agentTaskLiveUsage={agentTaskLiveUsage}
         showOpenRun={showOpenRun}
       />
     )
@@ -450,10 +485,14 @@ function AgentToolGroup({
   childToolCallsByParent,
   agentTaskNotifications,
   agentTaskStatuses,
+  agentTaskLiveUsage,
   showOpenRun = true,
 }: Props) {
   const { expanded, toggleExpanded } = useExpandableCardState()
   const t = useTranslation()
+  // 会话扩展信息关闭时，隐藏本 fork 新增的用量/耗时读数；缺省视为开启。
+  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
+  const compactMetrics = useCompactMetrics()
   const statuses = toolCalls.map((toolCall) =>
     getAgentStatus({
       hasResult: resultMap.has(toolCall.toolUseId),
@@ -467,6 +506,58 @@ function AgentToolGroup({
   const errorPresent = statuses.some((status) => status === 'failed')
   const allComplete = statuses.every((status) => status === 'done')
   const anyStopped = statuses.some((status) => status === 'stopped')
+  // A running dispatch keeps its clock moving. Elapsed wall time is the thing a
+  // reader watches while waiting, and a frozen number reads as a hung run, so
+  // the in-flight members are closed at "now" and the clock is re-read on a
+  // cadence. It shares the thinking badge's cadence so every live counter on a
+  // run moves in the same steps rather than each on its own rhythm.
+  const [liveNowMs, setLiveNowMs] = useState(() => Date.now())
+  useEffect(() => {
+    if (!isAnyRunning) return
+    setLiveNowMs(Date.now())
+    const timer = setInterval(() => setLiveNowMs(Date.now()), LIVE_ELAPSED_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [isAnyRunning])
+  // Wall-clock span of the whole dispatch — earliest start to latest end, NOT
+  // the sum of the members: the runtime runs a dispatched group in parallel, so
+  // three concurrent 2-minute agents are 2 minutes, not 6. Until a member
+  // reports or settles it is closed at "now", so the number only ever grows
+  // towards the truth and never has to wait for the whole dispatch to end.
+  const totalDuration = agentGroupSpanMs(toolCalls.map((toolCall, index) => {
+    const inFlight = statuses[index] === 'running' || statuses[index] === 'starting'
+    // An in-flight member's result is the launch acknowledgement, not its end:
+    // a background dispatch answers in milliseconds while the subagent works for
+    // minutes, so letting that result close the span froze the clock at ~60 ms.
+    // With it withheld the interval falls through to the live clock below.
+    return agentRunInterval(
+      toolCall,
+      inFlight ? undefined : resultMap.get(toolCall.toolUseId),
+      agentTaskNotifications[toolCall.toolUseId]?.usage?.durationMs,
+      inFlight ? liveNowMs : undefined,
+    )
+  }))
+  const totalDurationLabel = totalDuration === undefined ? '' : formatDuration(totalDuration)
+  // Tokens add up where the span does not: a dispatched group runs in parallel,
+  // but the work its members did is not shared between them. A member still in
+  // flight contributes what it has reported so far — the completion
+  // notification is the authoritative figure and replaces it the moment the run
+  // settles, so the number climbs towards the truth instead of appearing at the
+  // end. Both sources come from the runtime, so this is not an estimate of
+  // tokens, only of "how many there will be".
+  const totalTokens = agentGroupTokens(toolCalls.map((toolCall) => agentRunTokens(
+    agentTaskLiveUsage?.[toolCall.toolUseId]?.totalTokens
+      ?? agentTaskNotifications[toolCall.toolUseId]?.usage?.totalTokens,
+    resultMap.get(toolCall.toolUseId),
+  )))
+  // The thinking share, when the runtime reported one. It emits the split only
+  // while the thinking itself is withheld, so a present count is exactly the
+  // case where the bar should show `think + rest` instead of one total.
+  const thinkTokens = agentGroupThinkTokens(toolCalls.map((toolCall) => agentRunThinkTokens(
+    agentTaskLiveUsage?.[toolCall.toolUseId]?.thinkTokens
+      ?? agentTaskNotifications[toolCall.toolUseId]?.usage?.thinkTokens,
+    resultMap.get(toolCall.toolUseId),
+  )))
+  const tokenParts = agentTokenParts(totalTokens, thinkTokens)
 
   return (
     <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
@@ -483,6 +574,40 @@ function AgentToolGroup({
         <span className="flex-1 truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
           {toolCalls.length === 1 ? t('toolGroup.agentOne') : t('toolGroup.agentMany', { count: toolCalls.length })}
         </span>
+        {/* Flush right, before the status: "dispatched 3 agents · 总耗时5m12s · running".
+            Unlike the per-run number on each row below, this one carries its label —
+            the summary bar has the slack to spend on it. Label and number are two
+            elements joined by a 3px gap rather than one string with a space, because
+            a full space between a CJK label and a digit reads as a hole at this size. */}
+        {sessionExtendedInfo !== false && tokenParts.length > 0 && (
+          <span className={`inline-flex shrink-0 items-baseline whitespace-nowrap text-right text-[var(--color-text-secondary)] ${compactMetrics ? 'gap-px text-[11px] tracking-tighter' : 'gap-[3px] text-[12px]'}`}>
+            <span>{t('toolGroup.agentTotalUsage')}</span>
+            <span data-agent-group-usage="true" className={`inline-flex items-baseline tabular-nums ${compactMetrics ? 'gap-px' : 'gap-[3px]'}`}>
+              {/* While members are still in flight the total only covers what has
+                  been reported so far, so it is marked as the estimate it is. */}
+              {isAnyRunning ? <span className="opacity-70">≈</span> : null}
+              {/* `think + rest` while thinking is withheld; a single total once
+                  it is returned. The separator mirrors the activity digest's. */}
+              {tokenParts.map((part, index) => (
+                <Fragment key={index}>
+                  {index > 0 ? <span className="opacity-60">+</span> : null}
+                  <span>{part}</span>
+                </Fragment>
+              ))}
+            </span>
+          </span>
+        )}
+        {sessionExtendedInfo !== false && totalDurationLabel && (
+          <span className={`inline-flex shrink-0 items-baseline whitespace-nowrap text-right text-[var(--color-text-secondary)] ${compactMetrics ? 'gap-px text-[11px] tracking-tighter' : 'gap-[3px] text-[12px]'}`}>
+            <span>{t('toolGroup.agentTotalDuration')}</span>
+            <span data-agent-group-duration="true" className="tabular-nums">
+              {/* Same reason as the usage: the span is still open, so the clock
+                  reads as elapsed-so-far rather than a settled total. */}
+              {isAnyRunning ? <span className="opacity-70">≈</span> : null}
+              {totalDurationLabel}
+            </span>
+          </span>
+        )}
         {isAnyRunning && (
           <Badge tone="warning" className="font-semibold">
             {t('agentStatus.running')}
@@ -550,6 +675,7 @@ function AgentCallCard({
   const [expanded, setExpanded] = useState(false)
   const [previewOpen, setPreviewOpen] = useState(false)
   const t = useTranslation()
+  const sessionExtendedInfo = useSettingsStore((state) => state.sessionExtendedInfo)
   const input = toolCall.input && typeof toolCall.input === 'object'
     ? toolCall.input as Record<string, unknown>
     : {}
@@ -605,6 +731,13 @@ function AgentCallCard({
   const description = typeof input.description === 'string' ? input.description : ''
   const openRunTitle = description.trim() || 'Agent'
   const canOpenRun = showOpenRun && !!sessionId && !!toolCall.toolUseId
+  // This run's execution time: the runtime's report for a background agent, the
+  // tool_use → result delta for a synchronous one. Absent while a synchronous
+  // run is still in flight (nothing trustworthy to measure against yet).
+  const durationMs = agentRunDurationMs(
+    agentRunInterval(toolCall, result, agentTaskNotification?.usage?.durationMs),
+  )
+  const durationLabel = durationMs === undefined ? '' : formatDuration(durationMs)
 
   return (
     <div data-agent-call-layout="row">
@@ -676,6 +809,15 @@ function AgentCallCard({
           >
             {t('toolGroup.openRun')}
           </Button>
+        )}
+        {/* Between the actions and the status: "… · Open run · 5m12s · done". */}
+        {sessionExtendedInfo !== false && durationLabel && (
+          <span
+            data-agent-call-duration="true"
+            className="shrink-0 whitespace-nowrap font-mono text-[11.5px] tabular-nums text-[var(--color-text-tertiary)]"
+          >
+            {durationLabel}
+          </span>
         )}
         <Badge tone={statusTone} className="font-semibold">
           {statusLabel}

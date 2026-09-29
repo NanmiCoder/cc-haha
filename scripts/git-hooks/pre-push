@@ -1,7 +1,0 @@
-#!/usr/bin/env bash
-set -euo pipefail
-
-echo "[pre-push] non-blocking: git push no longer runs local quality gates."
-echo "[pre-push] Run manually before PR/release work: bun run quality:push or bun run verify"
-
-exit 0
