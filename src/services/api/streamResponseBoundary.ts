@@ -44,9 +44,16 @@ export function createOutputLimitErrorMessage({
       ? `${API_ERROR_MESSAGE_PREFIX}: The model's tool call was truncated at the context window limit, so it was not executed.`
       : `${API_ERROR_MESSAGE_PREFIX}: The model has reached its context window limit.`
 
+  // Output-budget truncation is always recoverable: query.ts's
+  // max_output_tokens loop resumes the turn and asks the model to break the
+  // remaining work into smaller pieces, so a truncated tool call retries on a
+  // continuation instead of hard-failing the session. A context-window cut is
+  // different — no smaller budget makes it fit — so a truncated tool call
+  // there stays terminal (no apiError → recovery gate not engaged).
+  const recoverable = stopReason === 'max_tokens' || !truncatedToolUse
   return createAssistantAPIErrorMessage({
     content,
-    ...(truncatedToolUse ? undefined : { apiError: 'max_output_tokens' }),
+    ...(recoverable ? { apiError: 'max_output_tokens' } : undefined),
     error: 'max_output_tokens',
   })
 }

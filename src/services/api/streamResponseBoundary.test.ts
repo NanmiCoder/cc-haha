@@ -27,7 +27,7 @@ describe('stream response boundary', () => {
       if (truncatedToolUse) expect(text).toContain('not executed')
     }
   })
-  test('drops a local tool block when max_tokens proves it was truncated', () => {
+  test('drops a truncated tool block and marks max_tokens cut as recoverable', () => {
     const buffer = new StreamAssistantCommitBuffer<AssistantMessage>({
       deferToolUseCommit: true,
     })
@@ -45,10 +45,13 @@ describe('stream response boundary', () => {
       messages: [expect.objectContaining({ uuid: 'thinking' })],
       truncatedToolUse: true,
     })
+    // The incomplete tool block is dropped from the committed assistant, and
+    // max_tokens truncation carries apiError so query.ts resumes the turn on a
+    // "break it into smaller pieces" continuation instead of aborting.
     expect(error).toMatchObject({
       isApiErrorMessage: true,
       error: 'max_output_tokens',
-      apiError: undefined,
+      apiError: 'max_output_tokens',
     })
   })
 
