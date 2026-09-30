@@ -558,7 +558,7 @@ function parseRequest(
   name: string,
   args: Record<string, unknown>,
   grantFlags: CuGrantFlags | undefined,
-  platform: "darwin" | "win32",
+  platform: "darwin" | "win32" | "linux",
 ): ParsedRequest {
   if (name === "list_apps") {
     return {
@@ -873,7 +873,7 @@ export function staticRequestError(
   name: string,
   args: unknown,
   grantFlags: CuGrantFlags | undefined,
-  platform: "darwin" | "win32",
+  platform: "darwin" | "win32" | "linux",
 ): CuCallToolResult | undefined {
   if (!KNOWN_TOOLS.has(name)) {
     return errorResult(`Unknown computer-use tool "${name}".`, "bad_args");

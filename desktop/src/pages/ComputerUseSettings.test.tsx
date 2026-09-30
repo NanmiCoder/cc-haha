@@ -229,7 +229,7 @@ describe('ComputerUseSettings', () => {
     })
   })
 
-  it('falls back to manual Python path entry when dialogs are unavailable', async () => {
+  it('fills in the detected interpreter when dialogs are unavailable', async () => {
     window.desktopHost = {
       ...browserHost,
       kind: 'browser',
@@ -239,6 +239,41 @@ describe('ComputerUseSettings', () => {
         dialogs: false,
       },
     }
+
+    render(<ComputerUseSettings />)
+
+    const input = await screen.findByLabelText('Python Interpreter Path')
+    await act(async () => {
+      fireEvent.click(screen.getByText('Browse'))
+      await Promise.resolve()
+    })
+
+    // The interpreter runs on the sidecar machine, so a browser file chooser
+    // could never reach it; the path the server already detected is filled in
+    // and the user only has to confirm (nothing is saved without an explicit click).
+    expect(input).toHaveValue('/usr/bin/python3')
+    expect(
+      screen.getByText(
+        'This environment has no native file picker. The detected interpreter path was filled in — just confirm and save.',
+      ),
+    ).toBeInTheDocument()
+    expect(computerUseApiMock.setAuthorizedApps).not.toHaveBeenCalled()
+  })
+
+  it('explains the manual step when dialogs are unavailable and nothing was detected', async () => {
+    window.desktopHost = {
+      ...browserHost,
+      kind: 'browser',
+      isDesktop: false,
+      capabilities: {
+        ...browserHost.capabilities,
+        dialogs: false,
+      },
+    }
+    computerUseApiMock.getStatus.mockResolvedValue({
+      ...readyStatus,
+      python: { installed: false, version: null, path: null, source: null, error: null },
+    })
 
     render(<ComputerUseSettings />)
 

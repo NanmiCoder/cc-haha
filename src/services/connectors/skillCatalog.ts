@@ -24,9 +24,8 @@ export const SKILL_CONNECTORS: ConnectorDefinition[] = details.map(item => {
     collection: 'tools', region: 'global', transport: 'skills', credentialMode: 'isolated',
     pluginId: `office-${item.id}@haha-connectors`, packageName: item.name, version: recipe.version,
     homepage: `https://github.com/${recipe.repository}/tree/${recipe.commit}`,
-    platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64'],
-  }
-})
+    platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'],
+  }})
 
 export function getSkillRecipe(id: string, version?: string): SkillBundleRecipe | undefined {
   return SKILL_RECIPES.find(recipe => recipe.id === id && (version === undefined || recipe.version === version))

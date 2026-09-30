@@ -12,6 +12,7 @@ type CheckState = 'loading' | 'ready' | 'error'
 const PYTHON_DOWNLOAD_URLS: Record<string, string> = {
   darwin: 'https://www.python.org/downloads/macos/',
   win32: 'https://www.python.org/downloads/windows/',
+  linux: 'https://www.python.org/downloads/linux/',
 }
 
 function StatusIcon({ ok }: { ok: boolean | null }) {
@@ -219,10 +220,29 @@ export function ComputerUseSettings() {
     }
   }
 
+  /**
+   * The interpreter lives on the machine running the sidecar, so a browser
+   * (H5) file chooser could never point at it — and a native dialog can also
+   * fail on a Linux host with no portal. Either way, fall back to what the
+   * server already detected instead of leaving the user to type a path from
+   * scratch; they only have to confirm and save.
+   */
+  const fallbackToDetectedPythonPath = () => {
+    const detected = status?.python.path
+    if (detected && !pythonPathDraft.trim()) setPythonPathDraft(detected)
+    setPythonPathMessage(
+      t(
+        detected
+          ? 'settings.computerUse.pythonPathDialogDetected'
+          : 'settings.computerUse.pythonPathDialogFailed',
+      ),
+    )
+  }
+
   const choosePythonPath = async () => {
     const host = getDesktopHost()
     if (!host.capabilities.dialogs) {
-      setPythonPathMessage(t('settings.computerUse.pythonPathDialogFailed'))
+      fallbackToDetectedPythonPath()
       return
     }
     try {
@@ -237,7 +257,7 @@ export function ComputerUseSettings() {
         await savePythonPath(selectedPath)
       }
     } catch {
-      setPythonPathMessage(t('settings.computerUse.pythonPathDialogFailed'))
+      fallbackToDetectedPythonPath()
     }
   }
 
@@ -268,7 +288,7 @@ export function ComputerUseSettings() {
     <ComputerUseEnableDialog
       open={enableConfirmOpen}
       loading={enableSaving}
-      platform={status?.platform === 'darwin' ? 'darwin' : 'win32'}
+      platform={status?.platform === 'darwin' ? 'darwin' : status?.platform === 'linux' ? 'linux' : 'win32'}
       onClose={() => setEnableConfirmOpen(false)}
       onConfirm={confirmComputerUseEnabled}
     />
@@ -372,10 +392,11 @@ export function ComputerUseSettings() {
     )
   }
 
-  // The Python compatibility page is Windows-only. Missing or future engine
-  // values (for example during a rolling sidecar/UI upgrade) fail closed on
-  // the native page instead of resurrecting the retired macOS setup screen.
-  if (status.engine !== 'windows-compat') {
+  // The Python compatibility page is for the Python-backed platforms
+  // (Windows and Linux). Missing or future engine values (for example during
+  // a rolling sidecar/UI upgrade) fail closed on the native page instead of
+  // resurrecting the retired macOS setup screen.
+  if (status.engine !== 'windows-compat' && status.engine !== 'linux-x11') {
     return (
       <div className="max-w-2xl space-y-5">
         <ErrorState

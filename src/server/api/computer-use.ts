@@ -31,15 +31,20 @@ import {
   resolveLaunchableCuHelperBinary,
 } from '../../utils/computerUse/cuHelperBridge.js'
 // Embed the runtime scripts at compile time so bundled mode has them without
-// shipping loose files. Windows only: macOS drives Computer Use through the
-// signed native `cu-helper` daemon, and `helperBridge` refuses to fall back to
-// Python there, so a macOS helper script would be dead weight in the binary.
+// shipping loose files. Python-path platforms only: macOS drives Computer Use
+// through the signed native `cu-helper` daemon, and `helperBridge` refuses to
+// fall back to Python there, so a macOS helper script would be dead weight in
+// the binary.
 // @ts-ignore — Bun text import
 import WIN_HELPER_CONTENT from '../../../runtime/win_helper.py' with { type: 'text' }
+// @ts-ignore — Bun text import
+import LINUX_HELPER_CONTENT from '../../../runtime/linux_helper.py' with { type: 'text' }
 // @ts-ignore — Bun text import
 import WIN_CURSOR_BADGE_CONTENT from '../../../runtime/win_cursor_badge.py' with { type: 'text' }
 // @ts-ignore — Bun text import
 import REQUIREMENTS_WIN32 from '../../../runtime/requirements-win.txt' with { type: 'text' }
+// @ts-ignore — Bun text import
+import REQUIREMENTS_LINUX from '../../../runtime/requirements-linux.txt' with { type: 'text' }
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(__dirname, '../../..')
@@ -56,7 +61,8 @@ const MIN_PYTHON_MINOR = 9
 export const MIN_MACOS_COMPUTER_USE_VERSION = '14.4'
 
 const isWindows = process.platform === 'win32'
-const REQUIREMENTS_CONTENT = REQUIREMENTS_WIN32
+const isLinux = process.platform === 'linux'
+const REQUIREMENTS_CONTENT = isLinux ? REQUIREMENTS_LINUX : REQUIREMENTS_WIN32
 
 function getPythonCommandEnv(): Record<string, string> | undefined {
   if (!isWindows) return undefined
@@ -73,7 +79,7 @@ function getRequirementsPath(): string {
 }
 
 function getHelperFileName(): string {
-  return 'win_helper.py'
+  return isLinux ? 'linux_helper.py' : 'win_helper.py'
 }
 
 /** The agent-activity badge runs as its own process, so it ships separately. */
@@ -158,27 +164,31 @@ export async function runPipInstallWithFallback(
 /**
  * Ensure the Windows runtime files exist in ~/.claude/.runtime/.
  *
- * All three are written from constants embedded at compile time, so dev and
+ * All files are written from constants embedded at compile time, so dev and
  * bundled mode behave identically and a stale copy from an earlier version is
  * always overwritten rather than left in place.
  *
- * Windows only, in the same sense as the imports above: macOS never reaches
- * the Python path.
+ * Windows and Linux only, in the same sense as the imports above: macOS never
+ * reaches the Python path. The cursor badge ships only on Windows — the Linux
+ * helper has no virtual-cursor overlay process.
  */
 async function ensureRuntimeFiles(): Promise<void> {
   await mkdir(runtimeStateRoot, { recursive: true })
 
   await writeFile(getRequirementsPath(), REQUIREMENTS_CONTENT, 'utf8')
-  await writeFile(getHelperPath(), WIN_HELPER_CONTENT, 'utf8')
-  // Ships alongside the helper because the helper is a stateless one-shot CLI
-  // and cannot own a window across actions; the badge needs its own process.
-  await writeFile(getCursorBadgePath(), WIN_CURSOR_BADGE_CONTENT, 'utf8')
+  const helperContent = isLinux ? LINUX_HELPER_CONTENT : WIN_HELPER_CONTENT
+  await writeFile(getHelperPath(), helperContent, 'utf8')
+  if (!isLinux) {
+    // Ships alongside the helper because the helper is a stateless one-shot CLI
+    // and cannot own a window across actions; the badge needs its own process.
+    await writeFile(getCursorBadgePath(), WIN_CURSOR_BADGE_CONTENT, 'utf8')
+  }
 }
 
 type EnvStatus = {
   platform: string
   supported: boolean
-  engine: 'macos-native' | 'windows-compat' | 'unsupported'
+  engine: 'macos-native' | 'windows-compat' | 'linux-x11' | 'unsupported'
   systemVersion: string | null
   arch: string
   /**
@@ -257,6 +267,18 @@ export function resolveComputerUseCapability(
     return {
       supported: true,
       engine: 'windows-compat',
+      cuHelper: {
+        ...baseHelper,
+        available: false,
+        supported: false,
+        reason: 'unsupported_platform',
+      },
+    }
+  }
+  if (platform === 'linux') {
+    return {
+      supported: true,
+      engine: 'linux-x11',
       cuHelper: {
         ...baseHelper,
         available: false,
@@ -621,10 +643,14 @@ export async function checkStatus(
     const perms = await checkCuHelperPermissions()
     accessibility = perms.accessibility
     screenRecording = perms.screenRecording
-  } else if (capability.engine === 'windows-compat' && effectiveVenvCreated && depsInstalled) {
-    // Python path (Windows, or macOS without cu-helper). The helper uses
-    // preflight + visible-window metadata as a passive fallback because plain
-    // preflight can misreport child processes launched by the desktop app.
+  } else if (
+    (capability.engine === 'windows-compat' || capability.engine === 'linux-x11')
+    && effectiveVenvCreated
+    && depsInstalled
+  ) {
+    // Python path (Windows and Linux; macOS without cu-helper too). The helper
+    // uses preflight + visible-window metadata as a passive fallback because
+    // plain preflight can misreport child processes launched by the desktop app.
     try { await ensureRuntimeFiles() } catch {}
     const helperPath = getHelperPath()
     if (await pathExists(helperPath)) {
@@ -669,7 +695,7 @@ type SetupResult = {
 export function getUnsupportedComputerUsePlatformStep(
   platform: string,
 ): SetupResult['steps'][number] | null {
-  if (platform === 'darwin' || platform === 'win32') return null
+  if (platform === 'darwin' || platform === 'win32' || platform === 'linux') return null
   return {
     name: 'platform',
     ok: false,
