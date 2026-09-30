@@ -10,7 +10,7 @@ import {
   type ModelApiFormatRule,
 } from '../../shared/modelApiFormats.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
-import { PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY } from '../../utils/managedEnvConstants.js'
+import { PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY, PROVIDER_THINKING_ENV_KEY } from '../../utils/managedEnvConstants.js'
 import {
   IMAGE_GENERATION_API_KEY_ENV_KEY,
   IMAGE_GENERATION_BASE_URL_ENV_KEY,
@@ -69,6 +69,7 @@ export const MANAGED_PROVIDER_ENV_KEYS = [
   ATTRIBUTION_HEADER_ENV_KEY,
   MODEL_CONTEXT_WINDOWS_ENV_KEY,
   PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY,
+  PROVIDER_THINKING_ENV_KEY,
   OPENAI_OAUTH_PROVIDER_ENV_KEY,
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
   GROK_OAUTH_PROVIDER_ENV_KEY,
@@ -489,6 +490,22 @@ export function providerNeedsProxy(
   return apiFormat !== 'anthropic' || supportsNestedToolResultMedia === false
 }
 
+/**
+ * Map a provider's reasoning capability selection onto the thinking env value.
+ * Native Anthropic-format providers connect straight to the upstream — unlike
+ * proxy-routed formats there is no request transform that could apply the
+ * selection — so, exactly like the output budget, it has to reach the CLI
+ * through the managed environment. 'auto' (or an unset selection) injects
+ * nothing and the CLI keeps deriving thinking from the model family.
+ */
+export function providerThinkingEnvValue(
+  reasoning: NonNullable<SavedProvider['requestCompatibility']>['reasoning'],
+): 'enabled' | 'disabled' | undefined {
+  if (reasoning === 'supported') return 'enabled'
+  if (reasoning === 'unsupported') return 'disabled'
+  return undefined
+}
+
 export function buildProviderManagedEnv(
   provider: SavedProvider,
   options?: { proxyPath?: string; serverPort?: number },
@@ -523,12 +540,19 @@ export function buildProviderManagedEnv(
   const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
   const providerCapabilityEnv = getProviderCapabilityEnv(provider, models)
   const maxOutputTokens = provider.requestCompatibility?.maxOutputTokens
+  const thinkingEnvValue =
+    apiFormat === 'anthropic'
+      ? providerThinkingEnvValue(provider.requestCompatibility?.reasoning)
+      : undefined
 
   return {
     ...providerCapabilityEnv,
     ...omitAuthEnv(presetDefaultEnv),
     ...(typeof maxOutputTokens === 'number' && Number.isSafeInteger(maxOutputTokens) && maxOutputTokens > 0 && {
       [PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY]: String(maxOutputTokens),
+    }),
+    ...(thinkingEnvValue !== undefined && {
+      [PROVIDER_THINKING_ENV_KEY]: thinkingEnvValue,
     }),
     ...(provider.autoCompactWindow !== undefined && {
       CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(provider.autoCompactWindow),

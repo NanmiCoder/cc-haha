@@ -30,10 +30,30 @@ describe('provider compatibility editor contract', () => {
   })
 })
 
-describe('Anthropic budget-only reduction', () => {
+describe('Anthropic budget and thinking reduction', () => {
   it('keeps the reply output budget and drops every advanced compat option', () => {
     const form = compatibilityForm({ maxOutputTokens: 64000, outputTokenLimit: 8000, sampling: 'unsupported', outputTokenField: 'max_tokens', futureOption: { keep: true } })
     expect(parseAnthropicBudgetForm(form)).toEqual({ maxOutputTokens: 64000 })
+  })
+  it('keeps the reasoning selection alongside the budget', () => {
+    expect(parseAnthropicBudgetForm({ ...compatibilityForm({ reasoning: 'supported' }), maxOutputTokens: '64000' }))
+      .toEqual({ maxOutputTokens: 64000, reasoning: 'supported' })
+    expect(parseAnthropicBudgetForm(compatibilityForm({ reasoning: 'unsupported' })))
+      .toEqual({ reasoning: 'unsupported' })
+    expect(parseAnthropicBudgetForm(compatibilityForm({ reasoning: 'auto' })))
+      .toEqual({ reasoning: 'auto' })
+  })
+  it('drops other stale capabilities even when reasoning survives', () => {
+    const form = compatibilityForm({
+      reasoning: 'supported',
+      sampling: 'unsupported',
+      parallelTools: 'supported',
+      structuredOutput: 'unsupported',
+      outputTokenField: 'omit',
+      outputTokenLimit: 8000,
+      futureOption: { keep: true },
+    })
+    expect(parseAnthropicBudgetForm(form)).toEqual({ reasoning: 'supported' })
   })
   it('returns undefined when the budget is blank even if stale options remain', () => {
     expect(parseAnthropicBudgetForm(compatibilityForm({ sampling: 'unsupported' }))).toBeUndefined()

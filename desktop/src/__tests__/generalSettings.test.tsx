@@ -2324,7 +2324,7 @@ describe('Settings > Providers tab', () => {
 
       const dialog = screen.getByRole('dialog')
       await waitFor(() => expect(settleSettings).toBeTypeOf('function'))
-      expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
+      expect(within(dialog).queryByRole('combobox', { name: /Main Model|主模型/i })).not.toBeInTheDocument()
       const regionTrigger = within(dialog).getByRole('button', { name: /China mainland/ })
       const baseUrlInput = within(dialog).getByRole('textbox', { name: /Base URL/i })
       expect(baseUrlInput).toHaveValue('https://open.bigmodel.cn/api/anthropic')
@@ -2408,7 +2408,7 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(screen.getByRole('button', { name: /Add Model/i }))
 
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('combobox', { name: /Main Model|主模型/i })).not.toBeInTheDocument()
 
     fireEvent.click(within(dialog).getByRole('button', { name: /Anthropic Messages \(native\)/i }))
     fireEvent.click(within(dialog).getByRole('option', { name: /OpenAI Responses API \(proxy\)/i }))
@@ -3331,9 +3331,8 @@ describe('Settings > Providers tab', () => {
     })
 
     fireEvent.click(within(dialog).getByRole('button', { name: /Fetch models|获取模型/i }))
-    const comboboxes = await within(dialog).findAllByRole('combobox')
-    const mainCombobox = comboboxes[0]!
-    const haikuCombobox = comboboxes[1]!
+    const mainCombobox = await within(dialog).findByRole('combobox', { name: /Main Model|主模型/i })
+    const haikuCombobox = within(dialog).getByRole('combobox', { name: /Haiku Model/i })
 
     fireEvent.focus(mainCombobox)
     expect(mainCombobox).toHaveAttribute('aria-expanded', 'true')
@@ -3361,12 +3360,13 @@ describe('Settings > Providers tab', () => {
     const mainCombobox = await within(dialog).findByRole('combobox', { name: /Main Model|主模型/i })
     fireEvent.click(mainCombobox)
 
-    expect(within(dialog).getAllByRole('option')).toHaveLength(100)
+    const modelListbox = within(dialog).getByRole('listbox')
+    expect(within(modelListbox).getAllByRole('option')).toHaveLength(100)
     expect(within(dialog).getByText(/More models are available/i)).toBeInTheDocument()
 
     fireEvent.change(mainCombobox, { target: { value: 'model-100' } })
 
-    expect(within(dialog).getAllByRole('option')).toHaveLength(1)
+    expect(within(within(dialog).getByRole('listbox')).getAllByRole('option')).toHaveLength(1)
     expect(within(dialog).getByRole('option', { name: 'model-100' })).toBeInTheDocument()
     expect(within(dialog).queryByText(/More models are available/i)).not.toBeInTheDocument()
   })
@@ -3394,7 +3394,7 @@ describe('Settings > Providers tab', () => {
     // code still picks the headline, the raw text only rides along under it.
     expect(within(dialog).getByText(/upstream said no/)).toBeInTheDocument()
     expect(within(dialog).queryByRole('button', { name: /from the fetched list/i })).not.toBeInTheDocument()
-    expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument()
+    expect(within(dialog).queryByRole('combobox', { name: /Main Model|主模型/i })).not.toBeInTheDocument()
   })
 
   it('surfaces the upstream message when a 200 response cloaks an auth failure', async () => {

@@ -7,6 +7,7 @@ import { get3PModelCapabilityOverride } from './model/modelSupportOverrides.js'
 import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from './model/providers.js'
 import { getSettingsWithErrors } from './settings/settings.js'
 import { isEnvTruthy } from './envUtils.js'
+import { PROVIDER_THINKING_ENV_KEY } from './managedEnvConstants.js'
 
 export type ThinkingConfig =
   | { type: 'adaptive' }
@@ -220,4 +221,35 @@ export function shouldEnableThinkingByDefault(): boolean {
 
 export function shouldSendExplicitDisabledThinking(): boolean {
   return isEnvTruthy(process.env.CC_HAHA_SEND_DISABLED_THINKING)
+}
+
+export type ProviderThinkingSetting = 'enabled' | 'disabled'
+
+/**
+ * A provider's explicit thinking choice, injected by the runtime environment
+ * for native Anthropic-format providers (see providerRuntimeEnv). Anything
+ * other than enabled/disabled — including the variable being unset — means
+ * "auto": keep deriving thinking from the model-family capabilities.
+ */
+export function getConfiguredProviderThinking(
+  env: NodeJS.ProcessEnv = process.env,
+): ProviderThinkingSetting | undefined {
+  const raw = env[PROVIDER_THINKING_ENV_KEY]?.trim().toLowerCase()
+  if (raw === 'enabled' || raw === 'disabled') return raw
+  return undefined
+}
+
+/**
+ * Apply the provider thinking setting on top of the caller-requested state.
+ * The explicit provider choice wins; models that require thinking are not
+ * forced off here — resolveModelThinkingEnabled keeps them enabled, exactly as
+ * an explicit per-request disable behaves.
+ */
+export function applyProviderThinkingSetting(
+  requestedEnabled: boolean,
+  setting: ProviderThinkingSetting | undefined = getConfiguredProviderThinking(),
+): boolean {
+  if (setting === 'enabled') return true
+  if (setting === 'disabled') return false
+  return requestedEnabled
 }
