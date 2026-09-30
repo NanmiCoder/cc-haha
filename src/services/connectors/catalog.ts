@@ -3,11 +3,13 @@ import { SKILL_CONNECTORS } from './skillCatalog.js'
 import { REMOTE_CONNECTORS } from './remoteCatalog.js'
 
 // Native artifacts were inspected at these exact upstream versions. Windows ARM64
-// is deliberately absent for WeCom: upstream does not publish that target.
+// is deliberately absent for WeCom: upstream does not publish that target. Linux
+// x64/arm64 are declared for all three CLIs because each upstream publishes those
+// targets (larksuite goreleaser, dingtalk CGO build, wecom npm platform packages).
 export const CONNECTORS: ConnectorDefinition[] = [
-  { id: 'feishu', pluginId: 'office-feishu@haha-connectors', packageName: '@larksuite/cli', version: '1.0.95', homepage: 'https://github.com/larksuite/cli', credentialMode: 'shared', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64'] },
-  { id: 'dingtalk', pluginId: 'office-dingtalk@haha-connectors', packageName: 'dingtalk-workspace-cli', version: '1.0.61', homepage: 'https://gitee.com/DingTalk-Real-AI/dingtalk-workspace-cli', credentialMode: 'isolated', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64'] },
-  { id: 'wecom', pluginId: 'office-wecom@haha-connectors', packageName: '@wecom/cli', version: '1.2.1', homepage: 'https://github.com/WecomTeam/wecom-cli', credentialMode: 'shared', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64'] },
+  { id: 'feishu', pluginId: 'office-feishu@haha-connectors', packageName: '@larksuite/cli', version: '1.0.95', homepage: 'https://github.com/larksuite/cli', credentialMode: 'shared', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'] },
+  { id: 'dingtalk', pluginId: 'office-dingtalk@haha-connectors', packageName: 'dingtalk-workspace-cli', version: '1.0.61', homepage: 'https://gitee.com/DingTalk-Real-AI/dingtalk-workspace-cli', credentialMode: 'isolated', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'] },
+  { id: 'wecom', pluginId: 'office-wecom@haha-connectors', packageName: '@wecom/cli', version: '1.2.1', homepage: 'https://github.com/WecomTeam/wecom-cli', credentialMode: 'shared', platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'linux-x64', 'linux-arm64'] },
 ]
 
 export const ALL_CONNECTORS: ConnectorDefinition[] = [...CONNECTORS, ...REMOTE_CONNECTORS, ...SKILL_CONNECTORS]

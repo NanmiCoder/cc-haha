@@ -9,11 +9,11 @@ const MAC_COMPUTER_USE_TOOLS = [
 ].map(name => `mcp__computer-use__${name}`)
 
 export function getComputerUseToolAllowlist(
-  platform: 'darwin' | 'win32',
+  platform: 'darwin' | 'win32' | 'linux',
 ): string[] {
   if (platform === 'darwin') return MAC_COMPUTER_USE_TOOLS
   return buildPlatformComputerUseTools(
-    { platform: 'win32', screenshotFiltering: 'none' },
+    { platform: platform === 'linux' ? 'linux' : 'win32', screenshotFiltering: 'none' },
     'pixels',
   ).map(tool => `mcp__computer-use__${tool.name}`)
 }
@@ -200,15 +200,20 @@ and dismissing cookie banners do not require another confirmation when they are
 already within the user's request.
 `
 
-export function getComputerUsePrompt(platform: 'darwin' | 'win32'): string {
-  return platform === 'win32'
-    ? WINDOWS_COMPUTER_USE_PROMPT
-    : COMPUTER_USE_PROMPT
+export function getComputerUsePrompt(platform: 'darwin' | 'win32' | 'linux'): string {
+  return platform === 'darwin'
+    ? COMPUTER_USE_PROMPT
+    : WINDOWS_COMPUTER_USE_PROMPT
 }
 
 export function registerComputerUseSkill(): void {
-  const platform = process.platform === 'win32' ? 'win32' : 'darwin'
-  const isWindows = platform === 'win32'
+  const platform =
+    process.platform === 'win32'
+      ? 'win32'
+      : process.platform === 'linux'
+        ? 'linux'
+        : 'darwin'
+  const isWindows = platform === 'win32' || platform === 'linux'
   registerBundledSkill({
     name: 'computer-use',
     // Task semantics first: skill descriptions can be truncated hard when many

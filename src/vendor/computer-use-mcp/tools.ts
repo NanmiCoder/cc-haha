@@ -90,7 +90,7 @@ function coordinateProp(axis: "x" | "y", role: string) {
 export function buildComputerUseTools(
   _caps?: {
     screenshotFiltering?: "native" | "none";
-    platform?: "darwin" | "win32";
+    platform?: "darwin" | "win32" | "linux";
     teachMode?: boolean;
   },
   _coordinateMode?: CoordinateMode,

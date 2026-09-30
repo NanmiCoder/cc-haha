@@ -47,7 +47,7 @@ export const REMOTE_CONNECTORS: ConnectorDefinition[] = allEntries.map(entry => 
   id: entry.id, pluginId: `office-${entry.id}@haha-connectors`, version: '1.0.0', packageName: entry.name,
   collection: 'services', region: entry.region ?? (domesticIds.has(entry.id) ? 'china' : 'global'),
   homepage: entry.source, credentialMode: 'isolated', transport: 'mcp',
-  platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64'],
+  platforms: ['darwin-arm64', 'darwin-x64', 'win32-x64', 'win32-arm64', 'linux-x64', 'linux-arm64'],
   displayName: entry.name, description: entry.description, category: entry.category,
   capabilities: [entry.description], example: entry.example, requirements: entry.requirements,
   ...(entry.auth.type === 'api-key' ? { setupFields: [{ key: 'apiKey', label: 'API Key / Token', secret: true }] } : {}),

@@ -2111,7 +2111,7 @@ async function handleType(
     (text.includes("\n") ||
       (adapter.executor.capabilities.platform === "darwin" &&
         hasNonControlText) ||
-      (adapter.executor.capabilities.platform === "win32" &&
+      (adapter.executor.capabilities.platform !== "darwin" &&
         hasNonAsciiText)) &&
     overrides.grantFlags.clipboardWrite &&
     subGates.clipboardPasteMultiline;
@@ -2141,7 +2141,7 @@ async function handleType(
   // Return/Tab semantics and paces the Unicode input internally so the
   // foreground lease and interference monitor remain active for the whole
   // operation.
-  if (adapter.executor.capabilities.platform === "win32") {
+  if (adapter.executor.capabilities.platform !== "darwin") {
     if (overrides.isAborted?.()) {
       return errorResult(
         `Typing aborted after 0 of ${graphemes.length} graphemes (user interrupt).`,

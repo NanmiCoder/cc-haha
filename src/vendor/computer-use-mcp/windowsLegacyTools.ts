@@ -118,7 +118,7 @@ const BATCH_ACTION_ITEM_SCHEMA = {
 export function buildComputerUseTools(
   caps: {
     screenshotFiltering: "native" | "none";
-    platform: "darwin" | "win32";
+    platform: "darwin" | "win32" | "linux";
     /** Include request_teach_access + teach_step. Read once at server construction. */
     teachMode?: boolean;
   },
