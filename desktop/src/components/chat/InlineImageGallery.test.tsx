@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 // getBaseUrl backs the absolute-path src (/api/filesystem/file).
@@ -171,5 +171,32 @@ describe('InlineImageGallery', () => {
     expect(srcs[0]).toBe(
       'http://127.0.0.1:3456/api/filesystem/file?path=' + encodeURIComponent('/w/outputs/a/frame.png'),
     )
+  })
+
+  it('shows an error card instead of silently hiding an image the server refuses (issue #1401)', () => {
+    render(<InlineImageGallery text={'已生成，保存到 /tmp/result.png'} />)
+
+    fireEvent.error(screen.getByRole('img'))
+
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.getByText('图片无法显示')).toBeInTheDocument()
+    expect(screen.getByText('result.png')).toBeInTheDocument()
+  })
+
+  it('keeps loading images usable when only one reference fails', () => {
+    render(
+      <InlineImageGallery
+        text={'abs /Users/me/pics/photo.png and rel outputs/b/chart.png'}
+        sessionId="s1"
+        workDir="/w"
+      />,
+    )
+
+    fireEvent.error(screen.getByRole('img', { name: 'photo.png' }))
+
+    expect(screen.getByText('图片无法显示')).toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: 'chart.png' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /chart\.png/i })).toBeInTheDocument()
   })
 })

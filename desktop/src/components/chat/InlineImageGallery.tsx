@@ -53,6 +53,26 @@ type GalleryImage = {
   name: string
 }
 
+/**
+ * Stand-in shown when a referenced image fails to load (typically a 403 from
+ * the file endpoints for paths outside the session-allowed roots — issue
+ * #1401). The card previously disappeared silently; keeping a visible card
+ * with the file name tells the user *which* reference broke without changing
+ * any request boundary: we never widen what may be fetched, we only stop
+ * hiding the refusal.
+ */
+function ImageLoadErrorCard({ name }: { name: string }) {
+  return (
+    <div className="flex min-h-[96px] flex-col items-center justify-center gap-1 overflow-hidden rounded-[var(--radius-lg)] border border-dashed border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-4 text-center">
+      <span className="material-symbols-outlined text-[20px] text-[var(--color-outline)]">broken_image</span>
+      <span className="max-w-full truncate text-[10px] font-medium text-[var(--color-text-primary)]" title={name}>
+        {name}
+      </span>
+      <span className="text-[10px] text-[var(--color-outline)]">图片无法显示</span>
+    </div>
+  )
+}
+
 type Props = {
   text: string
   /**
@@ -69,6 +89,7 @@ type Props = {
 
 export function InlineImageGallery({ text, sessionId, workDir, changedFiles, suppressManagedGeneratedImages = false }: Props) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
+  const [failedSrcs, setFailedSrcs] = useState<ReadonlySet<string>>(() => new Set())
 
   const markdownImageSources = useMemo(
     () => new Set(extractMarkdownImageSources(text).map(normalizeImageReference)),
@@ -77,7 +98,8 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
 
   // Absolute paths are explicitly written out in the prose (not guessed), and the
   // turn checkpoint can't see files written via Bash or outside its tracking scope
-  // — so they keep the legacy behavior and render unconditionally. changedFiles
+  // — so they keep the legacy behavior and render unconditionally (a load that
+  // the server refuses stays visible as an error card, issue #1401). changedFiles
   // only steers the relative-target extraction below, where mentions genuinely
   // need to be reconciled against what the turn actually wrote.
   const imagePaths = useMemo(
@@ -153,34 +175,44 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
         </div>
         <div className={`grid gap-2 ${images.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
           {images.map((img, i) => (
-            <button
-              key={img.src}
-              type="button"
-              onClick={() => setActiveIndex(i)}
-              className="group/image relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left shadow-[var(--shadow-card)] transition-[border-color,box-shadow] duration-150 hover:shadow-[var(--shadow-composer)] hover:border-[var(--color-primary-fixed-dim)]"
-            >
-              <img
-                src={img.src}
-                alt={img.name}
-                loading="lazy"
-                className="w-full object-cover"
-                style={{ maxHeight: images.length === 1 ? 400 : 240 }}
-                onError={(e) => {
-                  // Hide broken images
-                  (e.target as HTMLImageElement).closest('button')!.style.display = 'none'
-                }}
-              />
-              <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover/image:bg-black/20 group-hover/image:opacity-100">
-                <span className="material-symbols-outlined rounded-full bg-white/90 p-2 text-[20px] text-[var(--color-text-primary)] shadow-lg">
-                  fullscreen
-                </span>
-              </div>
-              <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-2.5 pb-2 pt-6">
-                <span className="text-[10px] font-medium text-white/90 drop-shadow-sm">
-                  {img.name}
-                </span>
-              </div>
-            </button>
+            failedSrcs.has(img.src) ? (
+              <ImageLoadErrorCard key={img.src} name={img.name} />
+            ) : (
+              <button
+                key={img.src}
+                type="button"
+                onClick={() => setActiveIndex(i)}
+                className="group/image relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left shadow-[var(--shadow-card)] transition-[border-color,box-shadow] duration-150 hover:shadow-[var(--shadow-composer)] hover:border-[var(--color-primary-fixed-dim)]"
+              >
+                <img
+                  src={img.src}
+                  alt={img.name}
+                  loading="lazy"
+                  className="w-full object-cover"
+                  style={{ maxHeight: images.length === 1 ? 400 : 240 }}
+                  onError={() => {
+                    // Keep failed references visible (issue #1401): swap the tile
+                    // for an error card instead of hiding it silently.
+                    setFailedSrcs((prev) => {
+                      if (prev.has(img.src)) return prev
+                      const next = new Set(prev)
+                      next.add(img.src)
+                      return next
+                    })
+                  }}
+                />
+                <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover/image:bg-black/20 group-hover/image:opacity-100">
+                  <span className="material-symbols-outlined rounded-full bg-white/90 p-2 text-[20px] text-[var(--color-text-primary)] shadow-lg">
+                    fullscreen
+                  </span>
+                </div>
+                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-2.5 pb-2 pt-6">
+                  <span className="text-[10px] font-medium text-white/90 drop-shadow-sm">
+                    {img.name}
+                  </span>
+                </div>
+              </button>
+            )
           ))}
         </div>
       </div>
