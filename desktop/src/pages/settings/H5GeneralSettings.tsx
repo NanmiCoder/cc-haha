@@ -35,9 +35,9 @@ export function H5GeneralSettings() {
     { value: 'en', label: 'English' }, { value: 'zh', label: '简体中文' }, { value: 'zh-TW', label: '繁體中文' }, { value: 'jp', label: '日本語' }, { value: 'kr', label: '한국어' },
   ]
   const themes: { value: ThemeMode, label: string }[] = [
-    { value: 'white', label: t('settings.general.appearance.white') }, { value: 'paper', label: t('settings.general.appearance.paper') },
+    { value: 'white', label: t('settings.general.appearance.white') }, { value: 'glaze-white', label: t('settings.general.appearance.glazeWhite') }, { value: 'paper', label: t('settings.general.appearance.paper') },
     { value: 'warm-classic', label: t('settings.general.appearance.warmClassic') }, { value: 'celadon', label: t('settings.general.appearance.celadon') },
-    { value: 'dark', label: t('settings.general.appearance.dark') }, { value: 'ink-blue', label: t('settings.general.appearance.inkBlue') },
+    { value: 'dark', label: t('settings.general.appearance.dark') }, { value: 'deep-night', label: t('settings.general.appearance.deepNight') }, { value: 'ink-blue', label: t('settings.general.appearance.inkBlue') },
   ]
   const effortLabels = {
     low: t('settings.general.effort.low'), medium: t('settings.general.effort.medium'), high: t('settings.general.effort.high'),
