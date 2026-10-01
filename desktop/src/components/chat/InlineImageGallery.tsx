@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { useTranslation } from '@/i18n'
+import { AuthedImage } from './AuthedImage'
 import { ImageGalleryModal } from './ImageGalleryModal'
 import { isManagedGeneratedImagePath, localImageFileUrl } from '../../lib/attachmentImages'
 import {
@@ -184,22 +185,20 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
             />
           ) : (
             <button
-              key={img.src}
+              key={`${sessionId ?? ''}|${workDir ?? ''}|${img.src}`}
               type="button"
               onClick={() => setActiveIndex(i)}
               className="group/image relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left shadow-[var(--shadow-card)] transition-[border-color,box-shadow] duration-150 hover:shadow-[var(--shadow-composer)] hover:border-[var(--color-primary-fixed-dim)]"
             >
-              <img
+              <AuthedImage
                 src={img.src}
                 alt={img.name}
                 loading="lazy"
                 className="w-full object-cover"
                 style={{ maxHeight: images.length === 1 ? 400 : 240 }}
-                onError={() => {
-                  // img errors expose no HTTP status: a denied, missing or invalid
-                  // image needs visible feedback without claiming a specific cause.
-                  setFailureState((previous) => ({ ...previous, sources: new Set(previous.sources).add(img.src) }))
-                }}
+                // img errors expose no HTTP status: a denied, missing or invalid
+                // image needs visible feedback without claiming a specific cause.
+                onFailure={() => setFailureState((previous) => ({ ...previous, sources: new Set(previous.sources).add(img.src) }))}
               />
               <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover/image:bg-black/20 group-hover/image:opacity-100">
                 <span className="material-symbols-outlined rounded-full bg-white/90 p-2 text-[20px] text-[var(--color-text-primary)] shadow-lg">

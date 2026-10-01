@@ -2,7 +2,9 @@ import { useEffect } from 'react'
 import { ExternalLink, X } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { Modal } from '@/components/ui/Modal'
-import { ZoomableImage } from '@/components/ui/ZoomableImage'
+import { ZoomableImage, type ZoomableImageProps } from '@/components/ui/ZoomableImage'
+import { useAuthedImageFallback } from '../../lib/useAuthedImageFallback'
+import { AuthedImage } from './AuthedImage'
 import { getDesktopHost } from '@/lib/desktopHost'
 import { isRootedLocalPath } from '@/lib/handlePreviewLink'
 import { openLocalFileWithSystem, reportOpenFailure } from '@/lib/systemFileOpen'
@@ -25,6 +27,12 @@ type Props = {
   activeIndex: number
   onClose: () => void
   onSelect: (index: number) => void
+}
+
+/** The lightbox picture, which also loads where a bare request is refused (web UI, H5). */
+function AuthedZoomableImage({ src, onError, ...props }: ZoomableImageProps) {
+  const image = useAuthedImageFallback(src, onError)
+  return <ZoomableImage {...props} src={image.src ?? src} onError={image.onError} />
 }
 
 export function ImageGalleryModal({ open, images, activeIndex, onClose, onSelect }: Props) {
@@ -85,7 +93,7 @@ export function ImageGalleryModal({ open, images, activeIndex, onClose, onSelect
         </div>
 
         <div className="relative flex min-h-0 flex-1 flex-col px-4 pb-4">
-          <ZoomableImage
+          <AuthedZoomableImage
             // The size it measures belongs to one picture, and so does the zoom.
             key={activeImage.src}
             src={activeImage.src}
@@ -154,7 +162,7 @@ export function ImageGalleryModal({ open, images, activeIndex, onClose, onSelect
                     : 'border-[var(--color-media-border)] opacity-55 hover:opacity-90'
                 }`}
               >
-                <img src={image.src} alt={image.name} className="h-12 w-12 object-cover" />
+                <AuthedImage src={image.src} alt={image.name} className="h-12 w-12 object-cover" />
               </button>
             ))}
           </div>

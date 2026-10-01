@@ -1,4 +1,4 @@
-import { memo, useMemo, useCallback } from 'react'
+import { memo, useMemo, useCallback, useRef } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
 import DOMPurify from 'dompurify'
 import katex from 'katex'
@@ -20,6 +20,7 @@ import { isSafeMarkdownImageSource, normalizeMarkdownImageDestination } from '@/
 import { CodeViewer } from '../chat/CodeViewer'
 import { MermaidRenderer } from '../chat/MermaidRenderer'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { attachAuthedImageFallback } from '@/lib/authedImage'
 import { t } from '../../i18n'
 
 type Props = {
@@ -715,9 +716,18 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
     }, 1500)
   }, [onImageClick, onLinkClick])
 
+  // Local images the server refuses to hand to a bare <img> (web UI, H5) get one
+  // authenticated retry; a callback ref keeps the listener on whichever div renders.
+  const detachImageFallback = useRef<(() => void) | null>(null)
+  const imageFallbackRef = useCallback((node: HTMLDivElement | null) => {
+    detachImageFallback.current?.()
+    detachImageFallback.current = node ? attachAuthedImageFallback(node) : null
+  }, [])
+
   if (codeBlocks.length === 0) {
     return (
       <div
+        ref={imageFallbackRef}
         className={proseClasses}
         dangerouslySetInnerHTML={{ __html: parts[0]?.type === 'html' ? parts[0].content : '' }}
         onClick={handleClick}
@@ -726,7 +736,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
   }
 
   return (
-    <div className={proseClasses} onClick={handleClick}>
+    <div ref={imageFallbackRef} className={proseClasses} onClick={handleClick}>
       {parts.map((part, i) =>
         part.type === 'html' ? (
           <div key={i} dangerouslySetInnerHTML={{ __html: part.content }} />

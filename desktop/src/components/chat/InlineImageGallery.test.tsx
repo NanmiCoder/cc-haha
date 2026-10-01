@@ -14,19 +14,30 @@ vi.mock('../../lib/desktopRuntime', () => ({
   getServerBaseUrl: () => 'http://127.0.0.1:4321',
 }))
 
+// The authenticated fallback an <img> error falls back to. It rejects by default,
+// which is what a missing or denied file does, so the failure notice shows.
+const fetchServerImageBlobUrl = vi.hoisted(() => vi.fn())
+vi.mock('../../lib/authedImage', () => ({ fetchServerImageBlobUrl }))
+
 import { InlineImageGallery } from './InlineImageGallery'
+
+beforeEach(() => {
+  fetchServerImageBlobUrl.mockReset().mockRejectedValue(new Error('403'))
+  // jsdom ships no object-URL support.
+  Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true, writable: true })
+})
 
 function imgSrcs(): string[] {
   return screen.getAllByRole('img').map((img) => (img as HTMLImageElement).getAttribute('src') ?? '')
 }
 
 describe('InlineImageGallery', () => {
-  it('shows a failed image notice and filename instead of hiding the gallery entry', () => {
+  it('shows a failed image notice and filename instead of hiding the gallery entry', async () => {
     render(<InlineImageGallery text="See E:/test/denied.png" />)
 
     fireEvent.error(screen.getByRole('img'))
 
-    const notice = screen.getByRole('alert')
+    const notice = await screen.findByRole('alert')
     expect(notice).toBeVisible()
     expect(notice).toHaveTextContent('Unable to load image')
     expect(notice).toHaveTextContent('denied.png')
@@ -34,9 +45,10 @@ describe('InlineImageGallery', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible()
   })
 
-  it('keeps other images usable and tracks failures by source when the list changes', () => {
+  it('keeps other images usable and tracks failures by source when the list changes', async () => {
     const { rerender } = render(<InlineImageGallery text="See /tmp/denied.png and /tmp/allowed.png" />)
     fireEvent.error(screen.getByRole('img', { name: 'denied.png' }))
+    await screen.findByRole('alert')
 
     expect(screen.getByRole('img', { name: 'allowed.png' })).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: /allowed.png/ }))
@@ -49,19 +61,72 @@ describe('InlineImageGallery', () => {
     expect(screen.queryByRole('img', { name: 'denied.png' })).not.toBeInTheDocument()
   })
 
-  it('retries the same protected URL and keeps feedback if the retry fails', () => {
+  it('retries the same protected URL and keeps feedback if the retry fails', async () => {
     render(<InlineImageGallery text="See /tmp/denied.png" />)
     const source = screen.getByRole('img').getAttribute('src')
     fireEvent.error(screen.getByRole('img'))
-    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }))
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     expect(screen.getByRole('img')).toHaveAttribute('src', source)
     fireEvent.error(screen.getByRole('img'))
-    expect(screen.getByRole('alert')).toBeVisible()
+    expect(await screen.findByRole('alert')).toBeVisible()
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
     fireEvent.load(screen.getByRole('img'))
     expect(screen.getByRole('img')).toBeVisible()
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('falls back to an authenticated fetch when the bare <img> is refused, as in the web UI', async () => {
+    fetchServerImageBlobUrl.mockResolvedValue('blob:http://localhost/chart')
+    render(<InlineImageGallery text="See /tmp/chart.png" />)
+    const source = screen.getByRole('img').getAttribute('src')!
+
+    fireEvent.error(screen.getByRole('img'))
+
+    await waitFor(() => expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:http://localhost/chart'))
+    expect(fetchServerImageBlobUrl).toHaveBeenCalledWith(source)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('retries the full-size view with the credential too when the lightbox picture is refused', async () => {
+    render(<InlineImageGallery text="See /tmp/chart.png" />)
+    fireEvent.click(screen.getByRole('button', { name: /chart.png/ }))
+    const dialog = screen.getByRole('dialog')
+    const refused = dialog.querySelector('img')!.getAttribute('src')
+    fetchServerImageBlobUrl.mockResolvedValue('blob:http://localhost/chart-large')
+
+    fireEvent.error(dialog.querySelector('img')!)
+
+    await waitFor(() => expect(dialog.querySelector('img')).toHaveAttribute('src', 'blob:http://localhost/chart-large'))
+    expect(fetchServerImageBlobUrl).toHaveBeenCalledWith(refused)
+  })
+
+  it('tries the authenticated fetch only once per image: a broken blob is a real failure', async () => {
+    fetchServerImageBlobUrl.mockResolvedValue('blob:http://localhost/broken')
+    render(<InlineImageGallery text="See /tmp/broken.png" />)
+    fireEvent.error(screen.getByRole('img'))
+    await waitFor(() => expect(screen.getByRole('img')).toHaveAttribute('src', 'blob:http://localhost/broken'))
+
+    fireEvent.error(screen.getByRole('img'))
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('broken.png')
+    expect(fetchServerImageBlobUrl).toHaveBeenCalledTimes(1)
+  })
+
+  it('ignores a late authenticated result that belongs to the previous session', async () => {
+    let finish!: (url: string) => void
+    fetchServerImageBlobUrl.mockReturnValue(new Promise<string>((resolve) => { finish = resolve }))
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {})
+    const { rerender } = render(<InlineImageGallery text="See /tmp/chart.png" sessionId="old" workDir="/tmp/old" />)
+    const source = screen.getByRole('img').getAttribute('src')
+    fireEvent.error(screen.getByRole('img'))
+
+    rerender(<InlineImageGallery text="See /tmp/chart.png" sessionId="new" workDir="/tmp/old" />)
+    finish('blob:http://localhost/late')
+
+    await waitFor(() => expect(revoke).toHaveBeenCalledWith('blob:http://localhost/late'))
+    expect(screen.getByRole('img')).toHaveAttribute('src', source)
+    revoke.mockRestore()
   })
 
   it.each([

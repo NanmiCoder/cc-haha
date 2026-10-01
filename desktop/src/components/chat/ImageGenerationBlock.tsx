@@ -4,6 +4,7 @@ import { ImageIcon, Maximize2, TriangleAlert } from 'lucide-react'
 import { Skeleton, SkeletonGroup } from '@/components/ui/Skeleton'
 import { useTranslation } from '@/i18n'
 import { localImageFileUrl } from '@/lib/attachmentImages'
+import { AuthedImage } from './AuthedImage'
 import { ImageGalleryModal } from './ImageGalleryModal'
 
 type GeneratedImage = {
@@ -186,7 +187,7 @@ function ImageGenerationCollection({
           onClick={() => setActiveIndex(slot.galleryIndex!)}
           className="group/image relative aspect-square w-full overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] text-left shadow-[var(--shadow-card)] transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-outline)] hover:shadow-[var(--shadow-composer)] active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         >
-          <img
+          <AuthedImage
             src={src}
             alt={t('tool.generatedImageAlt', { index: slot.galleryIndex + 1 })}
             loading="lazy"
