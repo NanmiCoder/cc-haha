@@ -1,7 +1,14 @@
 import { waitFor } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const openPath = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+// The server's verdict on a document the string check cannot place. Refusing
+// (the 403 a path outside the workspace gets) is the default.
+const getWorkspaceFile = vi.hoisted(() => vi.fn())
+
+vi.mock('../api/sessions', () => ({
+  sessionsApi: { getWorkspaceFile },
+}))
 
 vi.mock('./desktopHost', () => ({
   getDesktopHost: () => ({
@@ -24,12 +31,22 @@ vi.mock('./workspace/openTarget', () => ({
 
 vi.mock('../stores/workspaceContentStore', () => ({
   useWorkspaceContentStore: {
-    getState: () => ({ statusBySession: { s1: { workDir: '/work' } } }),
+    getState: () => ({
+      statusBySession: {
+        s1: { workDir: '/work' },
+        // The server reports the canonical workdir; the chat writes the symlinked form.
+        s3: { workDir: '/private/tmp/app' },
+      },
+    }),
   },
 }))
 
 import { openPreviewLink } from './openPreviewLink'
 import { workspaceOpen } from './workspace/openTarget'
+
+beforeEach(() => {
+  getWorkspaceFile.mockReset().mockRejectedValue(new Error('403 Path is outside workspace'))
+})
 
 afterEach(() => {
   openPath.mockReset().mockResolvedValue(undefined)
@@ -101,13 +118,42 @@ describe('openPreviewLink for a document the workspace can draw', () => {
     expect(openPath).not.toHaveBeenCalled()
   })
 
-  it('keeps an absolute document with the system application while the workdir is still unknown', async () => {
-    // Session s2 has no workspace status yet. The system app is what this link
-    // always did, and it always works; a preview tab that may 403 is a gamble.
+  it('keeps an absolute document with the system application while the workdir is still unknown and the server refuses it', async () => {
+    // Session s2 has no workspace status yet, so the string check cannot place the
+    // path; the server's refusal is what sends it to the system app.
     openPreviewLink('/Users/x/Documents/thesis.pdf', 's2')
 
     await waitFor(() => expect(openPath).toHaveBeenCalledWith('/Users/x/Documents/thesis.pdf'))
+    expect(getWorkspaceFile).toHaveBeenCalledWith('s2', '/Users/x/Documents/thesis.pdf')
     expect(workspaceOpen.file).not.toHaveBeenCalled()
+  })
+
+  it('previews an absolute document the server accepts even though the workdir has not loaded yet', async () => {
+    getWorkspaceFile.mockResolvedValue({ state: 'ok', path: '/work/out/thesis.pdf' })
+
+    openPreviewLink('/work/out/thesis.pdf', 's2')
+
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s2', '/work/out/thesis.pdf', {}))
+    expect(openPath).not.toHaveBeenCalled()
+  })
+
+  it('previews a document written through a symlink of the canonical workdir (/tmp vs /private/tmp)', async () => {
+    // Regression: the output card for `/tmp/app/report.pdf` opened the system app,
+    // because the session's canonical workdir is `/private/tmp/app` and the string
+    // comparison called the document outside the workspace.
+    getWorkspaceFile.mockResolvedValue({ state: 'ok', path: '/tmp/app/report.pdf' })
+
+    expect(openPreviewLink('/tmp/app/report.pdf', 's3')).toBe(true)
+
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s3', '/tmp/app/report.pdf', {}))
+    expect(getWorkspaceFile).toHaveBeenCalledWith('s3', '/tmp/app/report.pdf')
+    expect(openPath).not.toHaveBeenCalled()
+  })
+
+  it('does not ask the server when the path is plainly inside the workdir', () => {
+    openPreviewLink('/work/out/thesis.pdf', 's1')
+
+    expect(getWorkspaceFile).not.toHaveBeenCalled()
   })
 
   it('still previews a relative document while the workdir is unknown', () => {
