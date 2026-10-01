@@ -111,13 +111,13 @@ describe('AttachmentGallery', () => {
   })
 
   it.each([
-    ['report.pdf', 'PDF', 'picture_as_pdf'],
-    ['brief.docx', 'DOCX', 'docs'],
-    ['budget.xlsx', 'XLSX', 'table_chart'],
-    ['launch.pptx', 'PPTX', 'slideshow'],
-    ['sources.zip', 'ZIP', 'folder_zip'],
+    ['report.pdf', 'PDF', 'pdf'],
+    ['brief.docx', 'DOCX', 'docx'],
+    ['budget.xlsx', 'XLSX', 'xlsx'],
+    ['launch.pptx', 'PPTX', 'pptx'],
+    ['sources.zip', 'ZIP', 'zip'],
     ['notes.md', 'MD', 'markdown'],
-  ])('renders a type-specific visual for %s', (name, extension, icon) => {
+  ])('renders a type-specific visual for %s', (name, extension, kind) => {
     const view = render(
       <AttachmentGallery
         attachments={[{
@@ -128,7 +128,7 @@ describe('AttachmentGallery', () => {
     )
 
     expect(view.container.querySelector(`[data-file-extension="${extension}"]`)).toBeInTheDocument()
-    expect(view.getByText(icon)).toBeInTheDocument()
+    expect(view.container.querySelector(`[data-file-type="${kind}"] svg`)).toBeInTheDocument()
   })
 
   it('opens an absolute desktop attachment with the system default app', async () => {

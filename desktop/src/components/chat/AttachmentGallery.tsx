@@ -10,6 +10,7 @@ import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { useUIStore } from '../../stores/uiStore'
 import { OpenWithMenu } from '@/components/composite/OpenWithMenu'
 import { Badge } from '@/components/ui/Badge'
+import { FileTypeIcon } from '@/components/ui/FileTypeIcon'
 import { IconButton } from '@/components/ui/IconButton'
 import { Tooltip } from '@/components/ui/Tooltip'
 import { ImageGalleryModal } from './ImageGalleryModal'
@@ -375,7 +376,9 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface)] shadow-[inset_0_0_0_1px_var(--color-border)]"
                 style={{ color: fileIconAccent(fileIcon) }}
               >
-                <span className="material-symbols-outlined text-[19px]">{fileIcon}</span>
+                {attachment.isDirectory
+                  ? <span className="material-symbols-outlined text-[19px]">{fileIcon}</span>
+                  : <FileTypeIcon path={attachment.path || attachment.name} size={20} />}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block min-w-0 max-w-[260px] truncate text-[13px] font-semibold leading-5 text-[var(--color-text-primary)]">

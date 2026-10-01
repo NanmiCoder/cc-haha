@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { OpenWithMenu } from '@/components/composite/OpenWithMenu'
+import { FileTypeIcon } from '@/components/ui/FileTypeIcon'
 import { describeFileType, type OpenWithItem } from '../../lib/openWithItems'
 import { buildOpenWithMenuItemsForHref } from '../../lib/openWithMenuItems'
 import { openPreviewLink } from '../../lib/openPreviewLink'
@@ -23,7 +24,6 @@ export function AssistantOutputTargetCard({ target, sessionId, workDir }: Props)
 
   const isLocalhost = target.kind === 'localhost-url'
   const typeInfo = describeFileType(target.normalizedPath ?? target.href)
-  const icon = typeInfo.icon
   const badge = isLocalhost
     ? t('assistantOutputs.kind.localhost')
     : target.kind === 'local-html'
@@ -78,7 +78,7 @@ export function AssistantOutputTargetCard({ target, sessionId, workDir }: Props)
           {isLocalhost ? (
             <Globe size={17} strokeWidth={2.1} aria-hidden="true" />
           ) : (
-            <span className="material-symbols-outlined text-[20px]" aria-hidden="true">{icon}</span>
+            <FileTypeIcon path={target.normalizedPath ?? target.href} size={26} />
           )}
         </span>
 
