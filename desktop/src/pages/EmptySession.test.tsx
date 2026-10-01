@@ -74,7 +74,8 @@ vi.mock('../api/skills', () => ({
   },
 }))
 
-vi.mock('../api/composerReferences', () => ({
+vi.mock('../api/composerReferences', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api/composerReferences')>(),
   composerReferencesApi: { list: mocks.listReferences },
 }))
 

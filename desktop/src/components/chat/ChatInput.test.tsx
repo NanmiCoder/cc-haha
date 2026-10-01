@@ -64,7 +64,8 @@ vi.mock('../../api/sessions', () => ({
 
 vi.mock('../../api/sessionCollaboration', () => ({ sessionCollaborationApi: { list: mocks.listSessionReferences } }))
 
-vi.mock('../../api/composerReferences', () => ({
+vi.mock('../../api/composerReferences', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../api/composerReferences')>(),
   composerReferencesApi: { list: mocks.listReferences },
 }))
 
@@ -149,6 +150,7 @@ import { getComposerElement, getComposerText, getComposerView, setComposerSelect
 import { useVoiceInputStore } from '../../stores/voiceInputStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
@@ -751,7 +753,7 @@ describe('ChatInput file mentions', () => {
     expect(parentEditor.textContent).toBe('parent draft')
     expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
     expect(container.querySelector('[data-session-id="side-scoped"]')).toBeInTheDocument()
-    expect(mocks.listReferences).toHaveBeenCalledWith('/child')
+    expect(mocks.listReferences).toHaveBeenCalledWith('/child', undefined)
   })
 
   it('accepts asynchronous image paste in an explicit child while the global tab stays on its parent', async () => {
@@ -2010,6 +2012,28 @@ describe('ChatInput file mentions', () => {
     fireEvent.click(await screen.findByRole('option', { name: 'Auth review' }))
     fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
     expect(useChatStore.getState().sessions[sessionId]?.queuedUserMessages?.[0]).toMatchObject({ sessionReferences: [{ sessionId: 'prior' }] })
+  })
+
+  it('asks for @ candidates with the session provider and refetches when the provider changes', async () => {
+    const imagegen = {
+      kind: 'skill' as const, id: 'imagegen', name: 'imagegen', displayName: 'imagegen',
+      description: 'Generate images', source: 'bundled', modelText: 'Use the Skill tool with skill: "imagegen" for this request.',
+    }
+    mocks.listReferences.mockImplementation(async (_cwd?: string, providerId?: string) => ({
+      plugins: [], skills: providerId === 'grok-official' ? [imagegen] : [],
+    }))
+    act(() => useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: null, modelId: 'opus' }))
+    try {
+      render(<ChatInput compact />)
+      await waitFor(() => expect(mocks.listReferences).toHaveBeenLastCalledWith(expect.anything(), 'claude-official'))
+      act(() => useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: 'grok-official', modelId: 'grok-4.7' }))
+      await waitFor(() => expect(mocks.listReferences).toHaveBeenLastCalledWith(expect.anything(), 'grok-official'))
+      setComposerText('@imagegen', 9)
+      fireEvent.click(await screen.findByRole('option', { name: /imagegen/i }))
+      await waitFor(() => expect(document.querySelector('[data-mention-kind="skill"]')).toBeInTheDocument())
+    } finally {
+      act(() => useSessionRuntimeStore.getState().clearSelection(sessionId))
+    }
   })
 
   it('selects an exact slash skill on Enter without executing and preserves its canonical identity', async () => {

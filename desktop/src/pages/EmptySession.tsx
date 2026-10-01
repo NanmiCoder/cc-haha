@@ -26,7 +26,7 @@ import { ComposerDropOverlay } from '../components/chat/ComposerDropOverlay'
 import { ContextUsageIndicator } from '../components/chat/ContextUsageIndicator'
 import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from '@/components/chat/ComposerReferenceMenu'
 import { ComposerReferenceDetail } from '@/components/chat/ComposerReferenceDetail'
-import { composerReferencesApi } from '@/api/composerReferences'
+import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from '../components/chat/LocalSlashCommandPanel'
 import {
@@ -123,7 +123,7 @@ export function EmptySession() {
   const [mentions, setMentions] = useState<ComposerMention[]>([])
   const [referenceDetail, setReferenceDetail] = useState<ComposerMention | null>(null)
   const [referenceOptionId, setReferenceOptionId] = useState<string | undefined>()
-  const [referenceState, setReferenceState] = useState<{ cwd: string, items: ComposerReferenceCandidate[], loading: boolean, error: boolean } | null>(null)
+  const [referenceState, setReferenceState] = useState<{ context: string, items: ComposerReferenceCandidate[], loading: boolean, error: boolean } | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [workDir, setWorkDir] = useState('')
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null)
@@ -167,18 +167,21 @@ export function EmptySession() {
   const activeProviderId = useProviderStore((state) => state.activeId)
   const [draftPermissionMode, setDraftPermissionMode] = useState<PermissionMode>(defaultPermissionMode)
   const lastPluginReloadSummary = usePluginStore((state) => state.lastReloadSummary)
-  const referenceCurrent = referenceState?.cwd === workDir ? referenceState : null
+  const draftRuntimeSelection = useSessionRuntimeStore((state) => state.selections[DRAFT_RUNTIME_SELECTION_KEY])
+  const referenceProviderId = mentionProviderId(draftRuntimeSelection)
+  const referenceContext = `${workDir}\0${referenceProviderId ?? ''}`
+  const referenceCurrent = referenceState?.context === referenceContext ? referenceState : null
   const composerReferences = useMemo(() => (referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES).filter(isComposerReferenceVisible), [referenceCurrent?.items])
   useEffect(() => {
     let active = true
-    setReferenceState({ cwd: workDir, items: [], loading: true, error: false })
-    void composerReferencesApi.list(workDir || undefined).then(data => {
-      if (active) setReferenceState({ cwd: workDir, items: [...data.plugins, ...data.skills], loading: false, error: false })
+    setReferenceState({ context: referenceContext, items: [], loading: true, error: false })
+    void composerReferencesApi.list(workDir || undefined, referenceProviderId).then(data => {
+      if (active) setReferenceState({ context: referenceContext, items: [...data.plugins, ...data.skills], loading: false, error: false })
     }).catch(() => {
-      if (active) setReferenceState({ cwd: workDir, items: [], loading: false, error: true })
+      if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
     })
     return () => { active = false }
-  }, [workDir, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen, plusMenuOpen])
+  }, [referenceContext, workDir, referenceProviderId, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen, plusMenuOpen])
   useEffect(() => {
     setReferenceDetail(null)
     setReferenceOptionId(undefined)
@@ -186,7 +189,6 @@ export function EmptySession() {
     setSlashMenuOpen(false)
   }, [workDir])
 
-  const draftRuntimeSelection = useSessionRuntimeStore((state) => state.selections[DRAFT_RUNTIME_SELECTION_KEY])
   const draftRuntimeSelectionKey = draftRuntimeSelection
     ? `${draftRuntimeSelection.providerId ?? 'official'}:${draftRuntimeSelection.modelId}:${draftRuntimeSelection.effortLevel ?? 'auto'}`
     : undefined

@@ -148,6 +148,60 @@ describe('Skills API', () => {
     expect(body.plugins.some((item: { source: string }) => item.source.endsWith('@haha-connectors'))).toBe(false)
   })
 
+  it('offers bundled imagegen to @ mentions only when the session provider generates images', async () => {
+    // The image provider is injected into each session's CLI, never into the
+    // server. Nothing here may leak in from the developer's environment.
+    const imageEnvKeys = Object.keys(process.env).filter(key => key.startsWith('CC_HAHA_IMAGE_'))
+    const savedImageEnv = Object.fromEntries(imageEnvKeys.map(key => [key, process.env[key]]))
+    for (const key of imageEnvKeys) delete process.env[key]
+    const models = { main: 'fixture-main', haiku: 'fixture-haiku', sonnet: 'fixture-sonnet', opus: 'fixture-opus' }
+    const provider = (id: string, extra: Record<string, unknown> = {}) => ({
+      id, presetId: 'custom', name: id, apiKey: 'fake-key', baseUrl: 'http://127.0.0.1:9/v1', models, ...extra,
+    })
+    await fs.mkdir(path.join(tmpHome, '.claude', 'cc-haha'), { recursive: true })
+    const writeProviders = (activeId: string | null) => fs.writeFile(
+      path.join(tmpHome, '.claude', 'cc-haha', 'providers.json'),
+      JSON.stringify({
+        schemaVersion: 2,
+        activeId,
+        providers: [
+          provider('text-only'),
+          provider('with-images', { imageGeneration: { model: 'fixture-image-model' } }),
+        ],
+      }),
+    )
+    const mentionNames = async (query = '') => {
+      const { req, url, segments } = makeRequest(`/api/skills/mentions?cwd=${encodeURIComponent(tmpHome)}${query}`)
+      const response = await handleSkillsApi(req, url, segments)
+      expect(response.status).toBe(200)
+      const body = await response.json() as { skills: Array<{ name: string, source: string, modelText: string }> }
+      return body.skills
+    }
+    const hasImagegen = async (query = '') => (await mentionNames(query)).some(skill => skill.name === 'imagegen')
+
+    try {
+      await writeProviders('text-only')
+      expect(await hasImagegen('&providerId=grok-official')).toBe(true)
+      expect(await hasImagegen('&providerId=openai-official')).toBe(true)
+      expect(await hasImagegen('&providerId=with-images')).toBe(true)
+      expect(await hasImagegen('&providerId=text-only')).toBe(false)
+      expect(await hasImagegen('&providerId=claude-official')).toBe(false)
+      expect(await hasImagegen('&providerId=deleted-provider')).toBe(false)
+      // No selection inherits the active provider, as the session launch does.
+      expect(await hasImagegen()).toBe(false)
+      await writeProviders('grok-official')
+      expect(await hasImagegen()).toBe(true)
+
+      const imagegen = (await mentionNames('&providerId=grok-official')).find(skill => skill.name === 'imagegen')!
+      expect(imagegen.source).toBe('bundled')
+      expect(imagegen.modelText).toBe('Use the Skill tool with skill: "imagegen" for this request.')
+      // The provider decides availability without touching the server's env.
+      expect(Object.keys(process.env).some(key => key.startsWith('CC_HAHA_IMAGE_'))).toBe(false)
+    } finally {
+      Object.assign(process.env, savedImageEnv)
+    }
+  })
+
   it('lists user and project skills for the requested cwd', async () => {
     const userSkillsRoot = path.join(tmpHome, '.claude', 'skills')
     const projectRoot = path.join(tmpHome, 'workspace')

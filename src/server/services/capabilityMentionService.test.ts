@@ -74,3 +74,15 @@ describe('composer capability mentions', () => {
     expect(explicitLabel.skills[0]?.displayName).toBe('Animation workflow')
     expect(explicitLabel.plugins[0]?.description).toBe(owner.manifest.description!)
   })
+
+test('bundled skills are offered, gated by the caller-supplied availability, and shadow same-named disk skills', () => {
+  const bundled = skill('imagegen', { source: 'bundled', loadedFrom: 'bundled', description: 'Built-in image skill', isEnabled: () => false })
+  const disk = skill('imagegen', { description: 'Personal skill with the same name' })
+  const offered = buildCapabilityMentions({ enabledPlugins: [], commands: [bundled, disk], isEnabled: command => command.source === 'bundled' || command.isEnabled?.() !== false })
+  expect(offered.skills).toHaveLength(1)
+  expect(offered.skills[0]).toMatchObject({ name: 'imagegen', source: 'bundled', description: 'Built-in image skill' })
+  // Unavailable for this session: the disk skill the CLI would fall back to is offered instead.
+  const unavailable = buildCapabilityMentions({ enabledPlugins: [], commands: [bundled, disk] })
+  expect(unavailable.skills).toHaveLength(1)
+  expect(unavailable.skills[0]).toMatchObject({ name: 'imagegen', source: 'userSettings' })
+})

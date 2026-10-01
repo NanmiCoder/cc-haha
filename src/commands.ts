@@ -158,7 +158,7 @@ import {
   getDynamicSkills,
 } from './skills/loadSkillsDir.js'
 import { getBundledSkills } from './skills/bundledSkills.js'
-import { initBundledSkills } from './skills/bundled/index.js'
+import { getInitializedBundledSkills } from './skills/bundled/index.js'
 import { getBuiltinPluginSkillCommands } from './plugins/builtinPlugins.js'
 import {
   getPluginCommands,
@@ -367,11 +367,8 @@ export const builtInCommandNames = memoize(
  */
 export function getCompiledInCommands(): Command[] {
   // The CLI registers these during startup; the server process never runs that
-  // path. Registration appends, so only initialize an empty registry.
-  if (getBundledSkills().length === 0) {
-    initBundledSkills()
-  }
-  const commands: Command[] = [...getBundledSkills()]
+  // path.
+  const commands: Command[] = [...getInitializedBundledSkills()]
 
   try {
     commands.push(...COMMANDS())

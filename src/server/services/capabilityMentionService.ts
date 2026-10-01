@@ -8,6 +8,8 @@ export type CapabilityMentionSnapshot = {
   enabledPlugins: LoadedPlugin[]
   failedPluginIds?: string[]
   brands?: Brand[]
+  /** Defaults to the command's own `isEnabled`, which reads this process's state. */
+  isEnabled?: (command: Command) => boolean
 }
 
 /** Serialize only exact invocation identities, never third-party description text. */
@@ -19,10 +21,11 @@ export function buildCapabilityMentions(snapshot: CapabilityMentionSnapshot): Ca
     const brand = brands.get(source)
     return brand && /^[a-z][a-z0-9-]*$/.test(brand.id) ? `/connectors/${brand.id}.svg` : undefined
   }
+  const isEnabled = snapshot.isEnabled ?? ((command: Command) => command.isEnabled?.() !== false)
   const skills: CapabilityMentionCandidate[] = []
   const names = new Set<string>()
   for (const command of snapshot.commands) {
-    if (command.type !== 'prompt' || command.disableModelInvocation || command.disableNonInteractive || command.userInvocable === false || command.isHidden || command.isEnabled?.() === false || command.source === 'builtin') continue
+    if (command.type !== 'prompt' || command.disableModelInvocation || command.disableNonInteractive || command.userInvocable === false || command.isHidden || !isEnabled(command) || command.source === 'builtin') continue
     const pluginId = command.source === 'plugin' ? command.pluginInfo?.repository : undefined
     if (command.source === 'plugin' && (!pluginId || !enabled.has(pluginId))) continue
     // Match SkillTool discovery, including described plugin prompt commands.
@@ -55,12 +58,35 @@ export function buildCapabilityMentions(snapshot: CapabilityMentionSnapshot): Ca
   return { skills: skills.sort(sort), plugins: plugins.sort(sort) }
 }
 
+/**
+ * Env of the CLI a session with this runtime selection would run.
+ *
+ * `providerId` follows the session runtime contract: an id selects that
+ * provider, `claude-official` is the Claude subscription, and omitting it
+ * inherits the active provider. Unknown or unreadable providers yield no env,
+ * which hides provider-backed skills rather than offering one that would fail.
+ */
+export async function resolveMentionRuntimeEnv(providerId?: string): Promise<Record<string, string>> {
+  const [{ ProviderService }, { CLAUDE_OFFICIAL_PROVIDER_ID }] = await Promise.all([
+    import('./providerService.js'), import('../types/provider.js'),
+  ])
+  const providerService = new ProviderService()
+  try {
+    const id = providerId ?? (await providerService.listProviders()).activeId
+    if (!id || id === CLAUDE_OFFICIAL_PROVIDER_ID) return {}
+    return await providerService.getProviderRuntimeEnv(id)
+  } catch {
+    return {}
+  }
+}
+
 /** Cache-only local discovery: never installs packages, connects MCP, or logs in. */
-export async function listCapabilityMentions(cwd: string): Promise<CapabilityMentionResponse> {
-  const [local, plugins, { loadInstalledPluginsForProject }, { loadPluginMcpServers }, { ALL_CONNECTORS }, { resetSettingsCache }, { clearInstalledPluginsCache }] = await Promise.all([
+export async function listCapabilityMentions(cwd: string, options: { providerId?: string } = {}): Promise<CapabilityMentionResponse> {
+  const [local, plugins, { loadInstalledPluginsForProject }, { loadPluginMcpServers }, { ALL_CONNECTORS }, { resetSettingsCache }, { clearInstalledPluginsCache }, { getInitializedBundledSkills }, { IMAGEGEN_SKILL_NAME, isImagegenAvailable }, runtimeEnv] = await Promise.all([
     import('../../skills/loadSkillsDir.js'), import('../../utils/plugins/loadPluginCommands.js'),
     import('../../utils/plugins/pluginLoader.js'), import('../../utils/plugins/mcpPluginIntegration.js'), import('../../services/connectors/catalog.js'),
     import('../../utils/settings/settingsCache.js'), import('../../utils/plugins/installedPluginsManager.js'),
+    import('../../skills/bundled/index.js'), import('../../skills/bundled/imagegen.js'), resolveMentionRuntimeEnv(options.providerId),
   ])
   // Reuse the runtime's installed-skill loaders, without importing built-in
   // login commands (which require provider credentials even for discovery).
@@ -73,7 +99,8 @@ export async function listCapabilityMentions(cwd: string): Promise<CapabilityMen
   const [pluginCommands, pluginSkills] = await Promise.all([
     plugins.loadPluginCommandsFromEnabledPlugins(state.enabled), plugins.loadPluginSkillsFromEnabledPlugins(state.enabled),
   ])
-  const commands = [...localCommands, ...pluginCommands, ...pluginSkills]
+  // getCommands() order: an enabled bundled skill shadows a same-named disk skill.
+  const commands = [...getInitializedBundledSkills(), ...localCommands, ...pluginCommands, ...pluginSkills]
   const enabledPlugins = await Promise.all(state.enabled.map(async plugin => {
     const specs = Array.isArray(plugin.manifest.mcpServers) ? plugin.manifest.mcpServers : [plugin.manifest.mcpServers]
     // Unexpanded MCPB bundles may require preparation; mentioning must not unpack/install them.
@@ -81,5 +108,10 @@ export async function listCapabilityMentions(cwd: string): Promise<CapabilityMen
     try { return { ...plugin, mcpServers: plugin.mcpServers ?? await loadPluginMcpServers(plugin, state.errors) } }
     catch { return { ...plugin, mcpServers: undefined } }
   }))
-  return buildCapabilityMentions({ commands, enabledPlugins, failedPluginIds: state.errors.map(error => error.source), brands: ALL_CONNECTORS })
+  // imagegen's provider is injected into each session's CLI, never into this
+  // server, so its own isEnabled() would hide it for every provider.
+  const isEnabled = (command: Command) => command.source === 'bundled' && command.name === IMAGEGEN_SKILL_NAME
+    ? isImagegenAvailable(runtimeEnv)
+    : command.isEnabled?.() !== false
+  return buildCapabilityMentions({ commands, enabledPlugins, failedPluginIds: state.errors.map(error => error.source), brands: ALL_CONNECTORS, isEnabled })
 }

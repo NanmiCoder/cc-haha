@@ -1,5 +1,7 @@
 import { feature } from 'bun:bundle'
+import type { Command } from '../../types/command.js'
 import { shouldAutoEnableClaudeInChrome } from 'src/utils/claudeInChrome/setup.js'
+import { getBundledSkills } from '../bundledSkills.js'
 
 /**
  * Initialize all bundled skills.
@@ -57,4 +59,15 @@ export function initBundledSkills(): void {
     registerRunSkillGeneratorSkill()
   }
   /* eslint-enable @typescript-eslint/no-require-imports */
+}
+
+/**
+ * Bundled skills for a process that never ran CLI startup (the desktop server).
+ * Registration appends, so only an empty registry is initialized.
+ */
+export function getInitializedBundledSkills(): Command[] {
+  if (getBundledSkills().length === 0) {
+    initBundledSkills()
+  }
+  return getBundledSkills()
 }

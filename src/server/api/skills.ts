@@ -4,6 +4,7 @@
  * GET /api/skills              — List all installed skills (metadata only)
  * GET /api/skills/detail       — Full skill data (tree + files)
  *       ?source=user&name=xxx
+ * GET /api/skills/mentions     — Composer @ candidates (?cwd=&providerId=)
  */
 
 import * as path from 'path'
@@ -555,7 +556,9 @@ export async function handleSkillsApi(
         return await listSkills(url)
       case 'mentions': {
         const { listCapabilityMentions } = await import('../services/capabilityMentionService.js')
-        return Response.json(await listCapabilityMentions(url.searchParams.get('cwd') || getCwd()))
+        return Response.json(await listCapabilityMentions(url.searchParams.get('cwd') || getCwd(), {
+          providerId: url.searchParams.get('providerId') || undefined,
+        }))
       }
       case 'detail':
         return await getSkillDetail(url)
