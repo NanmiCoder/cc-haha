@@ -210,6 +210,60 @@ describe('the shape of a sheet', () => {
     expect(grid.columnWidths[3]).toBe(72) // not said
   })
 
+  it('widens a column the file gives no width to fit its numbers, so a value is never cut to "12,000…"', async () => {
+    const grid = await firstGrid(workbookOf([{ name: 'A', rows: [['项目', '预算(元)'], ['服务器', '1,234,567,890.00'], ['差旅', '8,000.00']] }]))
+
+    // 16 digits/separators at ~6.6px, plus the cell's padding.
+    expect(grid.columnWidths[1]).toBeGreaterThanOrEqual(120)
+    // A short CJK label still gets the default floor, not a sliver.
+    expect(grid.columnWidths[0]).toBeGreaterThanOrEqual(72)
+  })
+
+  it('leaves a short column at the default width', async () => {
+    const grid = await firstGrid(workbookOf([{ name: 'A', rows: [['a', 'b'], ['c', 'd']] }]))
+
+    expect(grid.columnWidths).toEqual([72, 72])
+  })
+
+  it('caps how far a long text can widen a column', async () => {
+    const grid = await firstGrid(workbookOf([{ name: 'A', rows: [['x'.repeat(500)]] }]))
+
+    expect(grid.columnWidths[0]).toBe(360)
+  })
+
+  it('does not widen a column for a merged heading that spills over its neighbours', async () => {
+    const grid = await firstGrid(workbookOf([{
+      name: 'A',
+      rows: [['Quarterly budget summary for the whole group', '', ''], ['a', 'b', 'c']],
+      merges: [{ s: { r: 0, c: 0 }, e: { r: 0, c: 2 } }],
+    }]))
+
+    expect(grid.columnWidths).toEqual([72, 72, 72])
+  })
+
+  it('widens a stated column for a number that would otherwise be cut, as Excel would show ####', async () => {
+    // 12 characters is what the file asked for; the preview font needs more for this figure.
+    const grid = await firstGrid(workbookOf([{
+      name: 'A',
+      rows: [['预算', 1234567890.12]],
+      columns: [{ wpx: 40 }, { wpx: 40 }],
+    }]))
+
+    expect(grid.columnWidths[1]).toBeGreaterThan(40)
+    // The text column keeps the width the file set: clipping text is what Excel does too.
+    expect(grid.columnWidths[0]).toBe(40)
+  })
+
+  it('never widens a column the file sets, nor a hidden one', async () => {
+    const grid = await firstGrid(workbookOf([{
+      name: 'A',
+      rows: [['x'.repeat(100), 'y'.repeat(100)]],
+      columns: [{ wpx: 90 }, { hidden: true }],
+    }]))
+
+    expect(grid.columnWidths).toEqual([90, 0])
+  })
+
   it('keeps column widths within what can be drawn', async () => {
     const grid = await firstGrid(workbookOf([{ name: 'A', rows: [['a', 'b']], columns: [{ wpx: 2 }, { wpx: 9000 }] }]))
 

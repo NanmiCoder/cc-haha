@@ -91,6 +91,9 @@ export type SpreadsheetEngineOptions = {
 const DEFAULT_COLUMN_WIDTH = 72
 const MIN_COLUMN_WIDTH = 28
 const MAX_COLUMN_WIDTH = 480
+/** A column grows to fit its text or numbers, up to this. */
+const MAX_AUTO_COLUMN_WIDTH = 360
+const CELL_PADDING = 18
 const MIN_ROW_HEIGHT = 16
 const MAX_ROW_HEIGHT = 400
 
@@ -118,6 +121,31 @@ function cellAlign(cell: SheetJs.CellObject): CellAlign {
   if (cell.t === 'n') return 'right'
   if (cell.t === 'b' || cell.t === 'e') return 'center'
   return 'left'
+}
+
+/** Rendered width of cell text at the grid's 12px size; a CJK character is about twice a Latin one. */
+function textWidth(text: string): number {
+  let width = 0
+  for (const char of text) width += (char.codePointAt(0) ?? 0) >= 0x2e80 ? 12 : 6.6
+  return width
+}
+
+/**
+ * How wide a column must be to show its cells whole. Excel would draw a number that does
+ * not fit as `####`; a preview that cuts it to `12,000…` hides the value just the same, and
+ * the preview's font is wider than the one the width was chosen for. `numbersOnly` is for a
+ * column whose width the file states: its text may still be clipped, as Excel clips it, but
+ * a number may not. A merged cell's text spills over its span, so it takes no part.
+ */
+function fitColumnWidth(cells: Grid['cells'], column: number, spilling: ReadonlySet<string>, numbersOnly: boolean): number {
+  let widest = 0
+  for (let row = 0; row < cells.length; row += 1) {
+    const cell = cells[row]?.[column]
+    if (!cell || spilling.has(`${row}:${column}`)) continue
+    if (numbersOnly && cell.align !== 'right') continue
+    widest = Math.max(widest, textWidth(cell.text))
+  }
+  return widest === 0 ? 0 : Math.min(Math.ceil(widest + CELL_PADDING), MAX_AUTO_COLUMN_WIDTH)
 }
 
 /** Turn a dense SheetJS worksheet into the grid the viewer draws, and let SheetJS's objects go. */
@@ -153,11 +181,19 @@ function toGrid(sheet: SheetJs.WorkSheet, limits: SpreadsheetLimits): Grid {
     cells.push(line)
   }
 
+  const spilling = new Set<string>()
+  for (const range of sheet['!merges'] ?? []) {
+    if (range.e.c > range.s.c) spilling.add(`${range.s.r}:${range.s.c}`)
+  }
+
   const columnInfo = sheet['!cols'] ?? []
   const columnWidths = Array.from({ length: columns }, (_, column) => {
     const info = columnInfo[column]
     if (info?.hidden) return 0
-    const width = info?.wpx ?? (info?.wch ? info.wch * 7 + 5 : DEFAULT_COLUMN_WIDTH)
+    const stated = info?.wpx ?? (info?.wch ? info.wch * 7 + 5 : undefined)
+    const width = stated === undefined
+      ? Math.max(DEFAULT_COLUMN_WIDTH, fitColumnWidth(cells, column, spilling, false))
+      : Math.max(stated, fitColumnWidth(cells, column, spilling, true))
     return clamp(Math.round(width), MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH)
   })
 
