@@ -579,6 +579,18 @@ export function setRemoteIngressUrlForTesting(url: string): void {
 
 const REMOTE_FLUSH_INTERVAL_MS = 10
 
+type WriteCompletion = {
+  promise: Promise<void>
+  resolve: () => void
+  reject: (error: Error) => void
+}
+
+type QueuedWrite = {
+  entry: Entry
+  identity: { dev: number; ino: number }
+  completion?: WriteCompletion
+}
+
 class Project {
   // Minimal cache for current session only (not all sessions)
   currentSessionTag: string | undefined
@@ -663,12 +675,18 @@ class Project {
   private internalSubagentEventReader: InternalEventReader | null = null
   private pendingWriteCount: number = 0
   private flushResolvers: Array<() => void> = []
+  private createWriteCompletion(): WriteCompletion {
+    let resolve!: () => void
+    let reject!: (error: Error) => void
+    const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+      resolve = resolvePromise
+      reject = rejectPromise
+    })
+    return { promise, resolve, reject }
+  }
   // Per-file queues capture the destination's identity before returning to
-  // the caller. Actual disk writes are awaited by flush(), not enqueueWrite.
-  private writeQueues = new Map<
-    string,
-    Array<{ entry: Entry; identity: { dev: number; ino: number } }>
-  >()
+  // the caller. Durable entries also carry a per-item append acknowledgement.
+  private writeQueues = new Map<string, QueuedWrite[]>()
   private transcriptFileIdentities = new Map<string, { dev: number; ino: number }>()
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private activeDrain: Promise<void> | null = null
@@ -711,7 +729,11 @@ class Project {
     }
   }
 
-  private enqueueWrite(filePath: string, entry: Entry): Promise<void> {
+  private enqueueWrite(
+    filePath: string,
+    entry: Entry,
+    waitForDisk = false,
+  ): Promise<void> {
     return this.trackWrite(async () => {
       let identity = this.transcriptFileIdentities.get(filePath)
       if (!identity) {
@@ -722,6 +744,9 @@ class Project {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
           this.discardQueuedEntries([{ entry }])
+          if (waitForDisk) {
+            throw new Error(`Transcript file does not exist: ${filePath}`)
+          }
           return
         }
         try {
@@ -738,8 +763,10 @@ class Project {
         queue = []
         this.writeQueues.set(filePath, queue)
       }
-      queue.push({ entry, identity })
+      const completion = waitForDisk ? this.createWriteCompletion() : undefined
+      queue.push({ entry, identity, completion })
       this.scheduleDrain()
+      await completion?.promise
     })
   }
 
@@ -749,12 +776,18 @@ class Project {
     }
     this.flushTimer = setTimeout(async () => {
       this.flushTimer = null
-      this.activeDrain = this.drainWriteQueue()
-      await this.activeDrain
-      this.activeDrain = null
-      // If more items arrived during drain, schedule again
-      if (this.writeQueues.size > 0) {
-        this.scheduleDrain()
+      const drain = this.drainWriteQueue()
+      this.activeDrain = drain
+      try {
+        await drain
+      } catch (error) {
+        logError(error instanceof Error ? error : new Error(String(error)))
+      } finally {
+        if (this.activeDrain === drain) this.activeDrain = null
+        // If more items arrived during drain, schedule again
+        if (this.writeQueues.size > 0) {
+          this.scheduleDrain()
+        }
       }
     }, this.FLUSH_INTERVAL_MS)
   }
@@ -777,9 +810,10 @@ class Project {
     }
   }
 
-  private discardQueuedEntries(batch: Array<{ entry: Entry }>): void {
-    for (const { entry } of batch) {
+  private discardQueuedEntries(batch: Array<Pick<QueuedWrite, 'entry' | 'completion'>>): void {
+    for (const { entry, completion } of batch) {
       if ('uuid' in entry) this.excludeMessageUuids([entry.uuid], entry.sessionId as SessionId)
+      completion?.reject(new Error('Transcript entry was not persisted'))
     }
     this.currentSessionLastPrompt = undefined
   }
@@ -802,7 +836,12 @@ class Project {
       try {
         file = await fsOpen(filePath, constants.O_WRONLY | constants.O_APPEND | noFollow)
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          const writeError = error instanceof Error ? error : new Error(String(error))
+          for (const item of batch) item.completion?.reject(writeError)
+          if (queue.length === 0) this.writeQueues.delete(filePath)
+          throw error
+        }
         this.discardQueuedEntries(batch)
         continue
       }
@@ -810,6 +849,14 @@ class Project {
         const identity = await file.stat()
         if (!identity.isFile()) throw new Error(`Refusing non-regular transcript target: ${filePath}`)
         let content = ''
+        let contentItems: typeof batch = []
+        const appendContent = async () => {
+          if (content.length === 0) return
+          await file.appendFile(content)
+          for (const item of contentItems) item.completion?.resolve()
+          content = ''
+          contentItems = []
+        }
         for (const item of batch) {
           if (this.shouldSkipPersistence() ||
             item.identity.dev !== identity.dev || item.identity.ino !== identity.ino) {
@@ -818,14 +865,17 @@ class Project {
           }
           const line = jsonStringify(item.entry) + '\n'
           if (content.length + line.length >= this.MAX_CHUNK_BYTES) {
-            await file.appendFile(content)
-            content = ''
+            await appendContent()
           }
           content += line
+          contentItems.push(item)
         }
-        if (content.length > 0) {
-          await file.appendFile(content)
-        }
+        await appendContent()
+      } catch (error) {
+        const writeError = error instanceof Error ? error : new Error(String(error))
+        for (const item of batch) item.completion?.reject(writeError)
+        if (queue.length === 0) this.writeQueues.delete(filePath)
+        throw error
       } finally {
         await file.close()
       }
@@ -1310,6 +1360,7 @@ class Project {
   async insertContentReplacement(
     replacements: ContentReplacementRecord[],
     agentId?: AgentId,
+    waitForDisk = false,
   ) {
     return this.trackWrite(async () => {
       const entry: ContentReplacementEntry = {
@@ -1318,13 +1369,18 @@ class Project {
         agentId,
         replacements,
       }
-      await this.appendEntry(entry)
+      await this.appendEntry(entry, undefined, waitForDisk)
     })
   }
 
-  async appendEntry(entry: Entry, sessionId: UUID = getSessionId() as UUID) {
+  async appendEntry(
+    entry: Entry,
+    sessionId: UUID = getSessionId() as UUID,
+    waitForDisk = false,
+  ) {
     if (this.shouldSkipPersistence()) {
       if ('uuid' in entry) this.filterPersistableMessages([entry as TranscriptMessage], sessionId as SessionId)
+      if (waitForDisk) throw new Error('Session persistence is disabled')
       return
     }
 
@@ -1335,6 +1391,9 @@ class Project {
     if (isCurrentSession) {
       // Buffer until materializeSessionFile runs (first user/assistant message).
       if (this.sessionFile === null) {
+        if (waitForDisk) {
+          throw new Error('Transcript file is not initialized')
+        }
         this.pendingEntries.push(entry)
         return
       }
@@ -1402,7 +1461,7 @@ class Project {
       const targetFile = entry.agentId
         ? getAgentTranscriptPath(entry.agentId)
         : sessionFile
-      await this.enqueueWrite(targetFile, entry)
+      await this.enqueueWrite(targetFile, entry, waitForDisk)
     } else if (entry.type === 'marble-origami-commit') {
       // Always append. Commit order matters for restore (later commits may
       // reference earlier commits' summary messages), so these must be
@@ -1704,6 +1763,13 @@ export async function recordContentReplacement(
   agentId?: AgentId,
 ) {
   await getProject().insertContentReplacement(replacements, agentId)
+}
+
+export async function recordContentReplacementDurably(
+  replacements: ContentReplacementRecord[],
+  agentId?: AgentId,
+) {
+  await getProject().insertContentReplacement(replacements, agentId, true)
 }
 
 /**

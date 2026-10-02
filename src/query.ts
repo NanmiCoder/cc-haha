@@ -101,8 +101,12 @@ import { shouldCaptureApiTrace } from './services/api/traceCapture.js'
 import { StreamingToolExecutor } from './services/tools/StreamingToolExecutor.js'
 import { queryCheckpoint } from './utils/queryProfiler.js'
 import { runTools } from './services/tools/toolOrchestration.js'
-import { applyToolResultBudget } from './utils/toolResultStorage.js'
-import { recordContentReplacement } from './utils/sessionStorage.js'
+import {
+  applyToolResultBudget,
+  markReadProviderRequestCompleted,
+  prepareReadProviderRequestForQuery,
+} from './utils/toolResultStorage.js'
+import { recordContentReplacementDurably } from './utils/sessionStorage.js'
 import { handleStopHooks } from './query/stopHooks.js'
 import { buildQueryConfig } from './query/config.js'
 import { productionDeps, type QueryDeps } from './query/deps.js'
@@ -116,6 +120,7 @@ import {
 } from './bootstrap/state.js'
 import { createBudgetTracker, checkTokenBudget } from './query/tokenBudget.js'
 import { count } from './utils/array.js'
+import { normalizePathForComparison } from './utils/file.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const snipModule = feature('HISTORY_SNIP')
@@ -182,6 +187,20 @@ function isWithheldMaxOutputTokens(
   msg: Message | StreamEvent | undefined,
 ): msg is AssistantMessage {
   return msg?.type === 'assistant' && msg.apiError === 'max_output_tokens'
+}
+
+function isCompletedProviderResponse(
+  messages: AssistantMessage[],
+  signal: AbortSignal,
+): boolean {
+  const last = messages.at(-1)
+  return Boolean(
+    last &&
+      !signal.aborted &&
+      !last.isApiErrorMessage &&
+      !last.apiError &&
+      !last.error,
+  )
 }
 
 export type QueryParams = {
@@ -390,16 +409,32 @@ async function* queryLoop(
       toolUseContext.contentReplacementState,
       persistReplacements
         ? records =>
-            void recordContentReplacement(
-              records,
-              toolUseContext.agentId,
-            ).catch(logError)
+            recordContentReplacementDurably(records, toolUseContext.agentId)
         : undefined,
       new Set(
         toolUseContext.options.tools
           .filter(t => !Number.isFinite(t.maxResultSizeChars))
           .map(t => t.name),
       ),
+      (path, toolUseId) => {
+        const lifecycle = toolUseContext.contentReplacementState?.readLifecycle
+        const replacedSequence =
+          lifecycle?.results.get(toolUseId)?.sequence ?? -1
+        const hasNewerRead = lifecycle
+          ? (lifecycle.activeByPath.get(path) ?? []).some(
+              id =>
+                (lifecycle.results.get(id)?.sequence ?? -1) > replacedSequence,
+            )
+          : false
+        if (!hasNewerRead) {
+          for (const key of toolUseContext.readFileState.keys()) {
+            if (normalizePathForComparison(key) === path) {
+              toolUseContext.readFileState.delete(key)
+            }
+          }
+        }
+      },
+      true,
     )
 
     // Apply snip before microcompact (both may run — they are not mutually exclusive).
@@ -585,6 +620,11 @@ async function* queryLoop(
         permissionMode === 'plan' &&
         doesMostRecentAssistantMessageExceed200k(messagesForQuery),
     })
+    prepareReadProviderRequestForQuery(
+      toolUseContext.contentReplacementState,
+      messagesForQuery,
+      new Set(pendingCacheEdits?.deletedToolIds ?? []),
+    )
     messagesForQuery = stripSignatureBlocksAfterModelChange(messagesForQuery, currentModel)
 
     queryCheckpoint('query_setup_end')
@@ -967,6 +1007,16 @@ async function* queryLoop(
             continue
           }
           throw innerError
+        }
+        if (
+          isCompletedProviderResponse(
+            assistantMessages,
+            toolUseContext.abortController.signal,
+          )
+        ) {
+          markReadProviderRequestCompleted(
+            toolUseContext.contentReplacementState,
+          )
         }
       }
     } catch (error) {
