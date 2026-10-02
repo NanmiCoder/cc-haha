@@ -904,6 +904,58 @@ describe('WebSocket handler session isolation', () => {
     await flushMicrotasks(30)
   })
 
+  it('forwards background task lifecycle while a foreground admission awaits send acknowledgement', async () => {
+    const sessionId = `task-lifecycle-during-admission-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const outputCallbacks = new Set<(cliMsg: any) => void>()
+    let resolveSend!: (sent: boolean) => void
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.add(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_sid, callback) => {
+      outputCallbacks.delete(callback)
+    })
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Existing title')
+    const append = spyOn(sessionService, 'appendSessionTaskNotification').mockResolvedValue()
+    spyOn(conversationService, 'sendMessage').mockImplementation(
+      () => new Promise<boolean>((resolve) => {
+        resolveSend = resolve
+      }),
+    )
+    const task = {
+      type: 'system',
+      task_id: 'shell',
+      tool_use_id: 'shell-tool',
+      task_type: 'bash',
+    }
+
+    handleWebSocket.open(ws)
+    for (const callback of [...outputCallbacks]) {
+      callback({ ...task, subtype: 'task_started', uuid: 'shell-started', description: 'bun test' })
+    }
+    await flushMicrotasks(30)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Ask while a command runs' }))
+    await flushMicrotasks(30)
+    ws.sent.length = 0
+
+    for (const callback of [...outputCallbacks]) {
+      callback({ ...task, subtype: 'task_notification', uuid: 'shell-completed', status: 'completed' })
+    }
+    await flushMicrotasks(30)
+
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'system_notification',
+      subtype: 'task_notification',
+      data: expect.objectContaining({ task_id: 'shell', status: 'completed' }),
+    })
+    expect(append).toHaveBeenCalledTimes(1)
+
+    resolveSend(true)
+    await flushMicrotasks(30)
+  })
+
   it('lets directed Agent terminals through the stop fence after suppressing late content', () => {
     const sessionId = `agent-run-terminal-after-stop-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
