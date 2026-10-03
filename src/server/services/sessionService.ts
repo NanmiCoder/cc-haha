@@ -1903,18 +1903,43 @@ export class SessionService {
   }
 
   private async fileHasConversationTranscript(filePath: string): Promise<boolean> {
-    let hasTranscript = false
-    const scan = await withHistoryReadBudget(undefined, () => streamBoundedHistory(
-      filePath,
-      entry => {
-        if (!hasTranscript && this.hasConversationTranscript([entry as RawEntry])) hasTranscript = true
-      },
-      undefined,
-      { maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES },
-    ), 'metadata')
-    // An oversized record may be the only conversation turn. Prefer that
-    // transcript over a newer metadata-only placeholder until it can be read.
-    return hasTranscript || scan.oversizedRecords > 0
+    // The first conversation record settles the answer. Scanning on would make
+    // every session lookup cost a full parse of the transcript.
+    const found = new AbortController()
+    try {
+      const scan = await withHistoryReadBudget(undefined, () => streamBoundedHistory(
+        filePath,
+        entry => {
+          if (this.hasConversationTranscript([entry as RawEntry])) found.abort()
+        },
+        found.signal,
+        { maxRecordBytes: HISTORY_SEMANTIC_RECORD_BYTES },
+      ), 'metadata')
+      // An oversized record may be the only conversation turn. Prefer that
+      // transcript over a newer metadata-only placeholder until it can be read.
+      // A final line without a newline is reported after the last abort check.
+      return found.signal.aborted || scan.oversizedRecords > 0
+    } catch (error) {
+      if (found.signal.aborted && error === found.signal.reason) return true
+      throw error
+    }
+  }
+
+  /** Content is only needed to choose between several files for one session. */
+  private async rankSessionFileMatches<T extends { filePath: string; mtimeMs: number }>(
+    matches: T[],
+    onReadError: (error: unknown) => 'drop' | 'fail',
+  ): Promise<T[] | null> {
+    if (matches.length < 2) return matches
+    const ranked: Array<T & { hasTranscript: boolean }> = []
+    for (const match of matches) {
+      try {
+        ranked.push({ ...match, hasTranscript: await this.fileHasConversationTranscript(match.filePath) })
+      } catch (error) {
+        if (onReadError(error) === 'fail') return null
+      }
+    }
+    return ranked.sort((a, b) => Number(b.hasTranscript) - Number(a.hasTranscript) || b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
   }
 
   // --------------------------------------------------------------------------
@@ -2736,8 +2761,10 @@ export class SessionService {
           const projectsRoot = indexedMatches.length > 0
             ? await fs.realpath(this.getProjectsDir())
             : null
-          const hydratedMatches: Array<SessionFileMatch & { mtimeMs: number; hasTranscript: boolean }> = []
+          const hydratedMatches: Array<SessionFileMatch & { mtimeMs: number }> = []
           let hydrationFailed = false
+          const failUnlessMissing = (error: unknown) =>
+            (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'drop' as const : 'fail' as const
           for (const match of indexedMatches) {
             try {
               const stat = await this.validateIndexedTranscriptPath(
@@ -2746,26 +2773,24 @@ export class SessionService {
                 sessionId,
                 projectsRoot!,
               )
-              hydratedMatches.push({
-                ...match,
-                mtimeMs: stat.mtimeMs,
-                hasTranscript: await this.fileHasConversationTranscript(match.filePath),
-              })
+              hydratedMatches.push({ ...match, mtimeMs: stat.mtimeMs })
             } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+              if (failUnlessMissing(error) === 'fail') {
                 hydrationFailed = true
                 break
               }
             }
           }
+          const rankedMatches = hydrationFailed
+            ? null
+            : await this.rankSessionFileMatches(hydratedMatches, failUnlessMissing)
+          if (!rankedMatches) hydrationFailed = true
           if (
-            !hydrationFailed &&
-            hydratedMatches.length > 0 &&
+            rankedMatches &&
+            rankedMatches.length > 0 &&
             indexedMutationEpoch === getSharedSessionMutationState(this.localIndexGateway).epoch
           ) {
-            return hydratedMatches
-              .sort((a, b) => Number(b.hasTranscript) - Number(a.hasTranscript) || b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
-              .map(({ filePath, projectDir }) => ({ filePath, projectDir }))
+            return rankedMatches.map(({ filePath, projectDir }) => ({ filePath, projectDir }))
           }
           if (hydrationFailed) this.markIndexReadFailure()
         }
@@ -2791,25 +2816,19 @@ export class SessionService {
       return []
     }
 
-    const matches: Array<{ filePath: string; projectDir: string; mtimeMs: number; hasTranscript: boolean }> = []
+    const matches: Array<{ filePath: string; projectDir: string; mtimeMs: number }> = []
     for (const dir of projectDirs) {
       const filePath = path.join(projectsDir, dir, `${sessionId}.jsonl`)
       try {
         const stat = await fs.stat(filePath)
-        matches.push({
-          filePath,
-          projectDir: dir,
-          mtimeMs: stat.mtimeMs,
-          hasTranscript: await this.fileHasConversationTranscript(filePath),
-        })
+        matches.push({ filePath, projectDir: dir, mtimeMs: stat.mtimeMs })
       } catch {
         continue
       }
     }
 
-    return matches
-      .sort((a, b) => Number(b.hasTranscript) - Number(a.hasTranscript) || b.mtimeMs - a.mtimeMs || a.filePath.localeCompare(b.filePath))
-      .map(({ filePath, projectDir }) => ({ filePath, projectDir }))
+    const ranked = await this.rankSessionFileMatches(matches, () => 'drop')
+    return ranked!.map(({ filePath, projectDir }) => ({ filePath, projectDir }))
   }
 
   async findSessionFile(

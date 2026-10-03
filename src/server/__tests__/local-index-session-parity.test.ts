@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { SessionService } from '../services/sessionService.js'
+import * as boundedSessionHistory from '../services/boundedSessionHistory.js'
 import type {
   IndexedSessionRow,
   LocalIndexGateway,
@@ -275,6 +276,20 @@ describe('SessionService local-index routing parity', () => {
       { filePath: newPath, projectDir: '-tmp-new' },
       { filePath: oldPath, projectDir: '-tmp-old' },
     ])
+  })
+
+  it('resolves a single indexed match from its stat without reading records', async () => {
+    const filePath = await writeSession('-tmp-only', SESSION_A, 'Only', '2026-07-15T00:01:00.000Z')
+    const gateway = new FakeLocalIndexGateway()
+    gateway.setReady()
+    gateway.matches = [{ filePath, projectDir: '-tmp-only' }]
+    const service = new SessionService(gateway)
+    const reads = spyOn(boundedSessionHistory, 'streamBoundedHistory')
+    try {
+      expect((await service.findSessionFile(SESSION_A))?.filePath).toBe(filePath)
+      expect(gateway.findCalls).toBe(1)
+      expect(reads).not.toHaveBeenCalled()
+    } finally { reads.mockRestore() }
   })
 
   it('falls back after an indexed read failure and suppresses retries during cooldown', async () => {
