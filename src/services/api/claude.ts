@@ -193,6 +193,7 @@ import {
 } from "src/services/openaiAuth/streamPolicy.js";
 import { endQueryProfile, queryCheckpoint } from "src/utils/queryProfiler.js";
 import {
+  applyProviderThinkingSetting,
   modelSupportsAdaptiveThinking,
   modelUsesBoundThinking,
   modelRequiresThinking,
@@ -1734,8 +1735,13 @@ async function* queryModel(
       usesAdaptiveThinking || modelRequiresThinking(options.model) || maxOutputTokens > 1024
     const hasThinking = thinkingFitsOutputBudget && resolveModelThinkingEnabled(
       options.model,
-      thinkingConfig.type !== 'disabled' &&
-        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING),
+      // A native Anthropic provider's explicit thinking choice (injected as
+      // CLAUDE_CODE_PROVIDER_THINKING) wins over the caller's config and the
+      // global disable; absent/auto falls through to the existing resolution.
+      applyProviderThinkingSetting(
+        thinkingConfig.type !== 'disabled' &&
+          !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING),
+      ),
     )
     const modelCanThink = modelSupportsThinking(options.model)
     const sendsExplicitDisabledThinking =

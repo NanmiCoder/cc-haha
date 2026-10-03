@@ -913,3 +913,70 @@ test('retains required adaptive thinking with a small direct output budget', asy
   expect(requests[0]?.max_tokens).toBe(100)
   expect(requests[0]?.thinking).toMatchObject({ type: 'adaptive' })
 })
+
+const thinkingEnvCleanup = {
+  CLAUDE_CODE_MAX_OUTPUT_TOKENS: undefined,
+  CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: undefined,
+} as const
+
+test('honors the provider thinking env across enabled/disabled/auto states', async () => {
+  // Auto (unset or literal "auto") keeps the pre-existing resolution: the
+  // caller's thinking config drives the request untouched.
+  const baseline = await captureQueryRequest({
+    model: 'qwen-direct',
+    capabilities: 'thinking,effort',
+    thinkingBudget: 2048,
+    env: { ...thinkingEnvCleanup },
+  })
+  expect(baseline.requests).toHaveLength(1)
+  expect(baseline.requests[0]?.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 })
+
+  const autoLiteral = await captureQueryRequest({
+    model: 'qwen-direct',
+    capabilities: 'thinking,effort',
+    thinkingBudget: 2048,
+    env: { CLAUDE_CODE_PROVIDER_THINKING: 'auto', ...thinkingEnvCleanup },
+  })
+  expect(autoLiteral.requests[0]?.thinking).toEqual({ type: 'enabled', budget_tokens: 2048 })
+
+  const forcedOff = await captureQueryRequest({
+    model: 'qwen-direct',
+    capabilities: 'thinking,effort',
+    thinkingBudget: 2048,
+    env: { CLAUDE_CODE_PROVIDER_THINKING: 'disabled', ...thinkingEnvCleanup },
+  })
+  expect(forcedOff.requests).toHaveLength(1)
+  expect(forcedOff.requests[0]?.thinking).toEqual({ type: 'disabled' })
+
+  // Enabled wins over the disabled default of the compact query path and
+  // over the global thinking kill switch.
+  const forcedOn = await captureQueryRequest({
+    model: 'qwen-direct',
+    capabilities: 'thinking,effort',
+    env: { CLAUDE_CODE_PROVIDER_THINKING: 'enabled', ...thinkingEnvCleanup },
+  })
+  expect(forcedOn.requests).toHaveLength(1)
+  expect(forcedOn.requests[0]?.thinking).toMatchObject({ type: 'enabled' })
+
+  const beatsGlobalDisable = await captureQueryRequest({
+    model: 'qwen-direct',
+    capabilities: 'thinking,effort',
+    env: {
+      CLAUDE_CODE_PROVIDER_THINKING: 'enabled',
+      CLAUDE_CODE_DISABLE_THINKING: '1',
+      ...thinkingEnvCleanup,
+    },
+  })
+  expect(beatsGlobalDisable.requests[0]?.thinking).toMatchObject({ type: 'enabled' })
+}, 30_000)
+
+test('a provider thinking disable cannot override a model that requires thinking', async () => {
+  const { requests } = await captureQueryRequest({
+    model: 'k3',
+    capabilities: 'thinking,required_thinking,effort,max_effort',
+    thinkingBudget: 2048,
+    env: { CLAUDE_CODE_PROVIDER_THINKING: 'disabled', ...thinkingEnvCleanup },
+  })
+  expect(requests).toHaveLength(1)
+  expect(requests[0]?.thinking).toMatchObject({ type: 'enabled' })
+}, 10_000)
