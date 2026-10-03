@@ -1,4 +1,4 @@
-import { useId, type ReactNode, type TextareaHTMLAttributes } from 'react'
+import { forwardRef, useId, type ReactNode, type TextareaHTMLAttributes } from 'react'
 
 import { cx } from '@/lib/cx'
 import { FIELD_BASE_CLASSES, fieldStateClasses } from './Input'
@@ -17,8 +17,11 @@ export type TextAreaProps = TextareaHTMLAttributes<HTMLTextAreaElement> & {
  * All 13 textareas in the app were unlabeled and had no id, so clicking their
  * label — where one existed — did not focus them, and a screen reader
  * encountered them as anonymous edit boxes.
+ *
+ * Forwards its ref to the `<textarea>` so callers can focus it and place the
+ * caret, e.g. an inline editor that opens with the cursor at the end.
  */
-export function TextArea({
+export const TextArea = forwardRef<HTMLTextAreaElement, TextAreaProps>(function TextArea({
   label,
   hint,
   error,
@@ -29,7 +32,7 @@ export function TextArea({
   id,
   disabled,
   ...props
-}: TextAreaProps) {
+}, ref) {
   const generatedId = useId()
   const textareaId = id ?? generatedId
   const hintId = `${textareaId}-hint`
@@ -45,6 +48,7 @@ export function TextArea({
         </label>
       )}
       <textarea
+        ref={ref}
         id={textareaId}
         rows={rows}
         disabled={disabled}
@@ -61,4 +65,4 @@ export function TextArea({
           : null}
     </div>
   )
-}
+})

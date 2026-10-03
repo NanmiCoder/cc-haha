@@ -1,3 +1,4 @@
+import { createRef } from 'react'
 import { render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { describe, expect, it } from 'vitest'
@@ -50,5 +51,13 @@ describe('TextArea', () => {
 
     rerender(<TextArea label="Prompt" rows={10} />)
     expect(screen.getByLabelText('Prompt')).toHaveAttribute('rows', '10')
+  })
+
+  // The inline message editor focuses the field and moves the caret to the end
+  // on open; without forwarding, a ref on a function component is dropped.
+  it('forwards its ref to the textarea element', () => {
+    const ref = createRef<HTMLTextAreaElement>()
+    render(<TextArea label="Prompt" ref={ref} />)
+    expect(ref.current).toBe(screen.getByLabelText('Prompt'))
   })
 })

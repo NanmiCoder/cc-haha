@@ -8,8 +8,26 @@ import { useTranslation } from '../../i18n'
 import { openPreviewLink } from '../../lib/openPreviewLink'
 import { splitTextByUrls } from '../../lib/urlBoundary'
 import { AttachmentGallery } from './AttachmentGallery'
-import { MessageActionBar, type MessageBranchAction, type MessageRewindAction } from './MessageActionBar'
+import { MessageActionBar, type MessageBranchAction, type MessageEditAction } from './MessageActionBar'
+import { UserMessageEditor } from './UserMessageEditor'
+import type { UserMessageEditDraft } from './userMessageEdit'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
+
+/**
+ * Edit-and-resend for one prompt. The draft lives with the caller, not in this
+ * component, so it survives the row being virtualized away and remounted.
+ */
+export type UserMessageEditAction = {
+  label: string
+  editing: boolean
+  submitting: boolean
+  disabled: boolean
+  getDraft: () => UserMessageEditDraft
+  onStart: () => void
+  onCancel: () => void
+  onDraftChange: (draft: UserMessageEditDraft) => void
+  onSubmit: (draft: UserMessageEditDraft) => void
+}
 
 type Props = {
   content: string
@@ -18,7 +36,7 @@ type Props = {
   collaboration?: { sourceSessionId: string; messageId?: string }
   attachments?: UIAttachment[]
   branchAction?: MessageBranchAction
-  rewindAction?: MessageRewindAction
+  editAction?: UserMessageEditAction
   timestamp?: number
   sessionId?: string
   /** Set when this turn came from another agent rather than from the user. */
@@ -34,7 +52,7 @@ export const UserMessage = memo(function UserMessage({
   collaboration,
   attachments,
   branchAction,
-  rewindAction,
+  editAction,
   timestamp,
   sessionId,
   teammateFrom,
@@ -44,6 +62,12 @@ export const UserMessage = memo(function UserMessage({
 }: Props) {
   const t = useTranslation()
   const hasText = content.trim().length > 0
+  const actionBarEditAction = useMemo<MessageEditAction | undefined>(
+    () => editAction
+      ? { label: editAction.label, disabled: editAction.disabled, onEdit: editAction.onStart }
+      : undefined,
+    [editAction],
+  )
 
   // The operator's prompt is literal text, NOT markdown — `**`, `#` and file
   // paths have to stay exactly as typed. Teammate traffic is rendered separately
@@ -149,6 +173,27 @@ export const UserMessage = memo(function UserMessage({
     )
   }
 
+  if (editAction?.editing) {
+    return (
+      <div className="flex justify-end">
+        <div
+          data-message-shell="user"
+          data-editing="true"
+          className="flex w-full min-w-0 max-w-[82%] flex-col items-stretch sm:max-w-[78%] lg:max-w-[640px]"
+        >
+          <UserMessageEditor
+            initialDraft={editAction.getDraft()}
+            submitting={editAction.submitting}
+            disabled={editAction.disabled}
+            onDraftChange={editAction.onDraftChange}
+            onCancel={editAction.onCancel}
+            onSubmit={editAction.onSubmit}
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="flex justify-end">
       <div
@@ -180,12 +225,12 @@ export const UserMessage = memo(function UserMessage({
           )}
         </div>
 
-        {hasText && (
+        {(hasText || actionBarEditAction) && (
           <MessageActionBar
             copyText={content}
             copyLabel={t('chat.copyPrompt')}
             branchAction={branchAction}
-            rewindAction={rewindAction}
+            editAction={actionBarEditAction}
             align="end"
             timestamp={timestamp}
           />

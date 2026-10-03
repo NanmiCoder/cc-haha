@@ -1,4 +1,4 @@
-import { Check, Copy, GitFork, Undo2 } from 'lucide-react'
+import { Check, Copy, GitFork, Pencil } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
@@ -11,10 +11,10 @@ export type MessageBranchAction = {
   onBranch: () => void
 }
 
-export type MessageRewindAction = {
+export type MessageEditAction = {
   label: string
-  loading?: boolean
-  onRewind: () => void
+  disabled?: boolean
+  onEdit: () => void
 }
 
 /**
@@ -33,7 +33,7 @@ type Props = {
   copyText?: string
   copyLabel: string
   branchAction?: MessageBranchAction
-  rewindAction?: MessageRewindAction
+  editAction?: MessageEditAction
   align?: 'start' | 'end'
   timestamp?: number
   /** Inline metadata that shares the same compact row as the actions. */
@@ -50,7 +50,7 @@ export function MessageActionBar({
   copyText,
   copyLabel,
   branchAction,
-  rewindAction,
+  editAction,
   align = 'start',
   timestamp,
   metadata,
@@ -65,7 +65,7 @@ export function MessageActionBar({
     ? formatExactMessageTimestamp(timestamp, locale)
     : ''
 
-  if (!hasCopy && !branchAction && !rewindAction && !metadata) return null
+  if (!hasCopy && !branchAction && !editAction && !metadata) return null
 
   return (
     <div
@@ -100,20 +100,20 @@ export function MessageActionBar({
             onPointerUp={(event) => event.currentTarget.blur()}
           />
         ) : null}
-        {rewindAction ? (
+        {editAction ? (
           <IconButton
-            icon={<Undo2 size={13} strokeWidth={2.2} aria-hidden="true" />}
-            label={rewindAction.label}
+            icon={<Pencil size={13} strokeWidth={2.2} aria-hidden="true" />}
+            label={editAction.label}
             size="sm"
             tone="muted"
             shape="circle"
-            disabled={rewindAction.loading}
-            onClick={rewindAction.onRewind}
+            disabled={editAction.disabled}
+            onClick={editAction.onEdit}
             onPointerUp={(event) => event.currentTarget.blur()}
           />
         ) : null}
         {metadata ? (
-          <span className={hasCopy || branchAction ? 'ml-3 min-w-0' : 'min-w-0'}>
+          <span className={hasCopy || branchAction || editAction ? 'ml-3 min-w-0' : 'min-w-0'}>
             {metadata}
           </span>
         ) : null}

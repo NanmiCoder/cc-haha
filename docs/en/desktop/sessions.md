@@ -80,6 +80,22 @@ Checkpoints capture the files Claude changed through its editing tools. **Files 
 
 When a turn's file checkpoint is itself incomplete (a damaged session log, an unsafe path), the code cannot be restored and the confirmation offers only **Roll back conversation only** — the conversation can always be rewound.
 
+### Editing a message and running it again
+
+To reword a prompt and run it again (a truncated reply, a request that missed a constraint), hover one of your own messages and click the pencil, **Edit and resend**. The message turns into an editor in place. Its attachments and references stay as chips you can remove. Enter sends (following your send-key setting) and Esc cancels. Cancelling leaves the session untouched.
+
+The messages you can edit are the same turns you can roll back: completed turns, including failed or interrupted ones. Editing is not offered while Claude is running, while background tasks run, in subagent or team-member sessions, or in a side chat.
+
+Sending rewinds the session to before that message and then sends the edited text, using exactly the rollback described above:
+
+- For the latest turn with no restorable file changes, the conversation is rolled back and the edit sent without asking.
+- For an older message, the confirmation says how many later turns will be deleted.
+- When files changed from that turn on and can be restored, choose **Roll back code and conversation and send** or **Roll back conversation only and send** (files on disk stay as they are). With an incomplete file checkpoint, only the second is offered.
+
+If the rollback fails, neither the conversation nor the files change, and the editor keeps your text. If the rollback succeeds but the message cannot be sent automatically, your edited text goes back into the composer instead of being lost.
+
+Editing a message from before a context compaction rewinds past the compaction, so the rerun works from the full original context.
+
 ## The Activity panel
 
 The first button on the right of the tab bar opens the Activity panel, which lists everything running in parallel for this session:

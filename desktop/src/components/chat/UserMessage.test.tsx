@@ -5,8 +5,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const openPreviewLink = vi.hoisted(() => vi.fn(() => true))
 vi.mock('../../lib/openPreviewLink', () => ({ openPreviewLink }))
 
-import { UserMessage } from './UserMessage'
+import { UserMessage, type UserMessageEditAction } from './UserMessage'
 import { useSettingsStore } from '../../stores/settingsStore'
+
+function makeEditAction(overrides: Partial<UserMessageEditAction> = {}): UserMessageEditAction {
+  return {
+    label: 'Edit and resend',
+    editing: false,
+    submitting: false,
+    disabled: false,
+    getDraft: () => ({ text: 'A prompt', attachments: [], sessionReferences: [] }),
+    onStart: vi.fn(),
+    onCancel: vi.fn(),
+    onDraftChange: vi.fn(),
+    onSubmit: vi.fn(),
+    ...overrides,
+  }
+}
 
 function bubbleOf(container: HTMLElement): HTMLElement {
   const bubble = container.querySelector<HTMLElement>('[data-message-body="user"]')
@@ -20,11 +35,11 @@ describe('UserMessage', () => {
     openPreviewLink.mockClear().mockReturnValue(true)
   })
 
-  it('places rollback beside copy and fork in the existing hover and keyboard-focus action row', () => {
+  it('places edit beside copy and fork in the existing hover and keyboard-focus action row', () => {
     useSettingsStore.setState({ locale: 'en' })
-    const rollback = vi.fn()
-    const { container } = render(<UserMessage content="A prompt" branchAction={{ label: 'Fork', onBranch: vi.fn() }} rewindAction={{ label: 'Roll back conversation', onRewind: rollback }} />)
-    const button = screen.getByRole('button', { name: 'Roll back conversation' })
+    const editAction = makeEditAction()
+    const { container } = render(<UserMessage content="A prompt" branchAction={{ label: 'Fork', onBranch: vi.fn() }} editAction={editAction} />)
+    const button = screen.getByRole('button', { name: 'Edit and resend' })
     const actions = button.closest('[data-message-actions]')
     expect(actions).toBeTruthy()
     expect(actions?.className).toContain('opacity-0')
@@ -36,7 +51,41 @@ describe('UserMessage', () => {
     button.focus()
     expect(document.activeElement).toBe(button)
     fireEvent.click(button)
-    expect(rollback).toHaveBeenCalledOnce()
+    expect(editAction.onStart).toHaveBeenCalledOnce()
+  })
+
+  it('replaces the bubble with the inline editor while editing, seeded from the saved draft', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const editAction = makeEditAction({
+      editing: true,
+      getDraft: () => ({ text: 'Draft kept by the list', attachments: [], sessionReferences: [] }),
+    })
+    const { container } = render(<UserMessage content="Original prompt" editAction={editAction} />)
+
+    expect(container.querySelector('[data-message-body="user"]')).toBeNull()
+    expect(container.querySelector('[data-message-actions]')).toBeNull()
+    expect((screen.getByRole('textbox', { name: 'Edited message' }) as HTMLTextAreaElement).value).toBe('Draft kept by the list')
+  })
+
+  it('offers edit on an attachment-only prompt, which has no text to copy', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    render(
+      <UserMessage
+        content=""
+        attachments={[{ type: 'image', name: 'shot.png', data: 'data:image/png;base64,AAAA' }]}
+        editAction={makeEditAction()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Edit and resend' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Copy prompt' })).toBeNull()
+  })
+
+  it('never offers edit on a teammate message', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    render(<UserMessage content="Do the review" teammateFrom="reviewer" editAction={makeEditAction()} />)
+
+    expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull()
   })
 
   it('keeps long URLs inside the message bubble', () => {

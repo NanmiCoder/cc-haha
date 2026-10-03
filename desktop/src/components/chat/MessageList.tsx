@@ -6,9 +6,9 @@ import { ApiError } from '../../api/client'
 import { sessionsApi, type SessionRewindMode, type SessionTurnCheckpoint, type WorkspaceChangedFile } from '../../api/sessions'
 import { listPendingPermissions, useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useSideChatStore } from '../../stores/sideChatStore'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspaceStore, type WorkspaceOrigin } from '../../stores/workspaceStore'
-import { useWorkspaceReviewStore } from '../../stores/workspaceReviewStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -32,6 +32,9 @@ import { RenderItemBoundary } from './RenderItemBoundary'
 import { StreamingIndicator } from './StreamingIndicator'
 import { InlineTaskSummary } from './InlineTaskSummary'
 import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
+import { describeRewindResult, getApiErrorMessage, rewindToTurnCheckpoint } from './turnRewind'
+import { useUserMessageEditResend } from './useUserMessageEditResend'
+import type { UserMessageEditAction } from './UserMessage'
 import { WorkspaceChangesFallback } from '@/components/chat/WorkspaceChangesFallback'
 import { AgentTeamsInlineCard } from '../agentTeams/AgentTeamsSummary'
 import { MEMBER_AVATARS, memberAccentColor } from '../agentTeams/agentTeamsAvatars'
@@ -1436,16 +1439,6 @@ export function trailingStreamingRailPosition(positions: TurnRailPosition[]): Tu
   return last === 'start' || last === 'middle' ? 'end' : 'solo'
 }
 
-function getApiErrorMessage(error: unknown) {
-  return error instanceof ApiError
-    ? typeof error.body === 'object' && error.body && 'message' in error.body
-      ? String((error.body as { message: unknown }).message)
-      : error.message
-    : error instanceof Error
-      ? error.message
-      : String(error)
-}
-
 function isCheckpointPreviewBudgetError(error: unknown): boolean {
   return error instanceof ApiError &&
     error.status === 413 &&
@@ -2280,7 +2273,6 @@ export function MessageList({
     resolvedSessionId ? s.sessions[resolvedSessionId] : undefined,
   )
   const branchSession = useSessionStore((s) => s.branchSession)
-  const stopGeneration = useChatStore((s) => s.stopGeneration)
   const reloadHistory = useChatStore((s) => s.reloadHistory)
   const loadOlderHistory = useChatStore((s) => s.loadOlderHistory)
   const queueComposerPrefill = useChatStore((s) => s.queueComposerPrefill)
@@ -2293,6 +2285,7 @@ export function MessageList({
     (tab.type === 'subagent' || tab.type === 'team-member')
   )))
   const isDirectAgentSession = isMemberSession || isAgentRunTab
+  const isSideChatSession = useSideChatStore((s) => Boolean(resolvedSessionId && s.entries[resolvedSessionId]))
   const teamWorkbench = useTeamStore((s) =>
     resolvedSessionId ? s.workbenchesBySession[resolvedSessionId] : undefined,
   )
@@ -3201,45 +3194,17 @@ export function MessageList({
     })
 
     try {
-      if (chatState !== 'idle') {
-        stopGeneration(resolvedSessionId)
-      }
-
-      const checkpointTarget = confirmTurnCard.checkpoint.target
-      const result = await sessionsApi.rewind(resolvedSessionId, {
-        targetUserMessageId: checkpointTarget.targetUserMessageId,
-        userMessageIndex: checkpointTarget.userMessageIndex,
+      const result = await rewindToTurnCheckpoint(resolvedSessionId, {
+        checkpointTarget: confirmTurnCard.checkpoint.target,
         expectedContent: target.expectedContent,
-        mode,
-      })
-
-      useWorkspaceStore.getState().pruneTurnReviewTabs(resolvedSessionId, checkpointTarget.userMessageIndex)
-      useWorkspaceReviewStore.getState().clearTurnReviews(resolvedSessionId, checkpointTarget.userMessageIndex)
+      }, mode)
 
       await reloadHistory(resolvedSessionId)
       queueComposerPrefill(resolvedSessionId, {
         text: target.content,
         attachments: target.attachments,
       })
-
-      // Each branch has to match what actually happened on disk: nothing was
-      // restored in conversation mode, and in `both` mode a turn that also wrote
-      // off-checkpoint left changes behind. A plain success would overstate both.
-      const messageCount = result.conversation.messagesRemoved
-      const leftBehind = mode === 'both' ? result.unverifiedChangeSources ?? [] : []
-      addToast({
-        type: leftBehind.length > 0 ? 'warning' : 'success',
-        message: mode === 'conversation'
-          ? t('chat.rewindSuccessConversationOnly', { count: messageCount })
-          : leftBehind.length > 0
-            ? t('chat.rewindSuccessPartialCoverage', {
-                count: messageCount,
-                sources: leftBehind.join(', '),
-              })
-            : result.code.available
-              ? t('chat.rewindSuccessWithCode', { count: messageCount })
-              : t('chat.rewindSuccessConversationOnly', { count: messageCount }),
-      })
+      addToast(describeRewindResult(result, mode, t))
 
       setTurnUndoConfirmTargetId(null)
     } catch (error) {
@@ -3253,14 +3218,12 @@ export function MessageList({
     }
   }, [
     addToast,
-    chatState,
     confirmTurnCard,
     hasRunningBackgroundTasks,
     queueComposerPrefill,
     reloadHistory,
     resolvedSessionId,
     rewindingTurnId,
-    stopGeneration,
     t,
   ])
 
@@ -3331,6 +3294,16 @@ export function MessageList({
     }
     return result
   }, [branchableMessageTargets, branchingMessageId, handleBranchMessage, t])
+
+  const { editActionByMessageId, dialog: editResendDialog } = useUserMessageEditResend({
+    sessionId: resolvedSessionId,
+    messages,
+    turnCards: visibleTurnChangeCards,
+    disabled: branchActionsDisabled || isSideChatSession || Boolean(turnUndoConfirmTargetId),
+    rewindingTurnId,
+    setRewindingTurnId,
+    t,
+  })
 
   const toolResultByToolUseId = useMemo(() => {
     if (toolResultMap.size === 0) return new Map<string, { content: unknown; isError: boolean }>()
@@ -3647,6 +3620,7 @@ export function MessageList({
                   : null
               }
               branchAction={branchActionByMessageId.get(item.message.id)}
+              editAction={editActionByMessageId.get(item.message.id)}
               turnChangedFiles={changedFilesByRenderIndex.get(index)}
               isTurnOutputOwner={turnOutputOwnerIndexes.has(index)}
               turnCompletion={turnCompletionByMessageId.get(item.message.id)}
@@ -3871,6 +3845,15 @@ export function MessageList({
         width={520}
         loading={Boolean(rewindingTurnId)}
       />
+      <ActionDialog
+        open={editResendDialog.open}
+        onClose={editResendDialog.onClose}
+        title={editResendDialog.title}
+        body={editResendDialog.body}
+        actions={editResendDialog.actions}
+        width={520}
+        loading={editResendDialog.loading}
+      />
     </div>
   )
 }
@@ -3883,6 +3866,7 @@ export const MessageBlock = memo(function MessageBlock({
   agentTaskNotifications,
   toolResult,
   branchAction,
+  editAction,
   turnChangedFiles,
   isTurnOutputOwner,
   turnCompletion,
@@ -3899,6 +3883,7 @@ export const MessageBlock = memo(function MessageBlock({
     loading?: boolean
     onBranch: () => void
   }
+  editAction?: UserMessageEditAction
   turnChangedFiles?: string[]
   isTurnOutputOwner?: boolean
   turnCompletion?: TurnCompletion
@@ -3933,6 +3918,7 @@ export const MessageBlock = memo(function MessageBlock({
             sessionReferences={message.sessionReferences}
             collaboration={message.collaboration}
             branchAction={branchAction}
+            editAction={editAction}
             timestamp={message.timestamp}
             sessionId={sessionId ?? undefined}
             teammateFrom={message.teammateFrom}

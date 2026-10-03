@@ -7357,7 +7357,7 @@ function parseWorkspaceReferenceHistoryPrompt(text: string): WorkspaceReferenceH
   }
 }
 
-function pathsReferToSameFile(left: string | undefined, right: string | undefined): boolean {
+export function pathsReferToSameFile(left: string | undefined, right: string | undefined): boolean {
   if (!left || !right) return false
   const normalizedLeft = left.replace(/\\/g, '/').replace(/^\.\//, '')
   const normalizedRight = right.replace(/\\/g, '/').replace(/^\.\//, '')
@@ -7375,7 +7375,7 @@ type RestoredUserDisplay = {
   modelContent?: string
 }
 
-function extractRestoredUserDisplay(text: string): RestoredUserDisplay {
+export function extractRestoredUserDisplay(text: string): RestoredUserDisplay {
   const referenceContext = splitSessionReferenceContext(text)
   if (referenceContext.sessionReferences.length) {
     return { ...extractRestoredUserDisplay(referenceContext.content), sessionReferences: referenceContext.sessionReferences, modelContent: text }
