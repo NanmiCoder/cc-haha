@@ -429,6 +429,45 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
       .toEqual(['plan.md', 'out/report.docx'])
   })
 
+  describe('a file named in an inline code span', () => {
+    // The span, not the sentence, bounds the name: a CJK basename inside backticks
+    // is one file. Scanning it as prose (CJK excluded on purpose) cut
+    // `开题报告2.docx` down to `2.docx` — a card that opens a file that is not there.
+    it('keeps the whole CJK basename', () => {
+      const targets = extractAssistantOutputTargets(
+        '- `开题报告2.docx` — 9/10\n- `开题报告3.docx` — 9/14\n- `开题报告_v2.docx` — 9/17',
+        { workDir: '/w', changedFiles: [] },
+      )
+
+      expect(targets.map((target) => target.normalizedPath))
+        .toEqual(['开题报告2.docx', '开题报告3.docx', '开题报告_v2.docx'])
+    })
+
+    it('keeps a CJK directory', () => {
+      const targets = extractAssistantOutputTargets(
+        '见 `论文/开题报告终稿.docx`',
+        { workDir: '/w', changedFiles: [] },
+      )
+
+      expect(targets.map((target) => target.normalizedPath)).toEqual(['论文/开题报告终稿.docx'])
+    })
+
+    it('does not turn a command into a file card', () => {
+      const targets = extractAssistantOutputTargets('运行 `open 开题报告.docx` 即可', {
+        workDir: '/w',
+        changedFiles: [],
+      })
+
+      expect(targets.map((target) => target.normalizedPath)).not.toContain('开题报告.docx')
+    })
+
+    it('still stops prose at the Chinese verb flush against an ASCII path', () => {
+      const targets = extractAssistantOutputTargets('生成了out/report.docx', { workDir: '/w', changedFiles: [] })
+
+      expect(targets.map((target) => target.normalizedPath)).toEqual(['out/report.docx'])
+    })
+  })
+
   it('places a bare deliverable name in the directory the turn actually wrote into', () => {
     // The real shape of a "generate three documents" turn: the prose gives the
     // directory once and then lists basenames. Resolved against the work dir those

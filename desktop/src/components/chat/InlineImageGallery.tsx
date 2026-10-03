@@ -57,6 +57,16 @@ type GalleryImage = {
   name: string
   /** Where the file is, for "open in system app". Relative until the workdir is known. */
   path: string
+  /**
+   * The prose gave only a bare name and nothing the turn wrote corroborates where
+   * the file is, so the URL is a guess. A failed load is then a wrong guess, not
+   * a broken deliverable.
+   */
+  inferred?: boolean
+}
+
+function samePath(left: string, right: string): boolean {
+  return left.replaceAll('\\', '/').toLowerCase() === right.replaceAll('\\', '/').toLowerCase()
 }
 
 type Props = {
@@ -132,6 +142,7 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
     // Dedup: an absolute path inside the workspace can be caught by BOTH sources.
     // Skip a relative target whose basename already appears among the absolute
     // images, and also collapse duplicate relative targets by resolved src.
+    const proseText = text.replaceAll('\\', '/')
     const absoluteNames = new Set(absolute.map((img) => img.name))
     const seenSrc = new Set(absolute.map((img) => img.src))
     const relative: GalleryImage[] = []
@@ -149,23 +160,32 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
         continue
       }
       seenSrc.add(src)
-      relative.push({ src, name, path: resolveAbsoluteOpenPath(relPath, workDir ?? undefined) })
+      const openPath = resolveAbsoluteOpenPath(relPath, workDir ?? undefined)
+      const corroborated = changedFileEvidence?.some((file) => samePath(file, openPath)) ?? false
+      // A path the prose spells out with its directory is a claim, even when the
+      // checkpoint missed it (shell writes are invisible there); only a bare name,
+      // placed at the root or in an inferred directory, is a guess.
+      const namedWithDirectory = /[\\/]/.test(relPath) && proseText.includes(relPath.replaceAll('\\', '/'))
+      relative.push({ src, name, path: openPath, inferred: !corroborated && !namedWithDirectory })
     }
 
     return [...absolute, ...relative]
   }, [changedFileEvidence, imagePaths, markdownImageSources, sessionId, text, workDir])
 
-  if (images.length === 0) return null
+  // A guessed image that failed to load leaves no trace: there is nothing to retry
+  // when the file was never claimed to be there.
+  const visibleImages = images.filter((img) => !(img.inferred && failedSources.has(img.src)))
+  if (visibleImages.length === 0) return null
 
   return (
     <>
       <div className="mt-3 space-y-2">
         <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-outline)]">
           <span className="material-symbols-outlined text-[12px]">image</span>
-          {images.length === 1 ? '1 image' : `${images.length} images`}
+          {visibleImages.length === 1 ? '1 image' : `${visibleImages.length} images`}
         </div>
-        <div className={`grid gap-2 ${images.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
-          {images.map((img, i) => failedSources.has(img.src) ? (
+        <div className={`grid gap-2 ${visibleImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
+          {visibleImages.map((img, i) => failedSources.has(img.src) ? (
             <ErrorState
               key={img.src}
               size="sm"
@@ -195,7 +215,7 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
                 alt={img.name}
                 loading="lazy"
                 className="w-full object-cover"
-                style={{ maxHeight: images.length === 1 ? 400 : 240 }}
+                style={{ maxHeight: visibleImages.length === 1 ? 400 : 240 }}
                 // img errors expose no HTTP status: a denied, missing or invalid
                 // image needs visible feedback without claiming a specific cause.
                 onFailure={() => setFailureState((previous) => ({ ...previous, sources: new Set(previous.sources).add(img.src) }))}
@@ -218,7 +238,7 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
       {activeIndex !== null && activeIndex >= 0 && (
         <ImageGalleryModal
           open={activeIndex !== null}
-          images={images}
+          images={visibleImages}
           activeIndex={activeIndex}
           onClose={() => setActiveIndex(null)}
           onSelect={setActiveIndex}

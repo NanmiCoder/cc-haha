@@ -1,6 +1,6 @@
 import { resolveAssistantFileHref } from './assistantFileContext'
 import { trimTrailingPunctuation } from './urlBoundary'
-import { isLinkableFilePath, splitTextByFilePaths } from './filePathBoundary'
+import { isLinkableFilePath, parseFilePathRef, splitTextByFilePaths } from './filePathBoundary'
 import { isGeneratedArtifactFile, isOutputResourceFile, isShellProducedDeliverable } from './fileCapabilities'
 
 export type AssistantOutputTargetKind =
@@ -206,6 +206,39 @@ export function extractAssistantOutputTargets(
     }, createFileKey(fileTarget), treeMatch.position)
   }
 
+  const queuePlainPath = (path: string, position: number) => {
+    const href = resolveAssistantFileHref(path, content)
+    const fileTarget = toWorkspaceFileTarget(href, workDir)
+
+    if (!fileTarget) {
+      return
+    }
+
+    queueTarget({
+      id: createId(fileTarget.kind, fileTarget.normalizedPath),
+      kind: fileTarget.kind,
+      title: getBasename(fileTarget.normalizedPath),
+      subtitle: fileTarget.normalizedPath,
+      href,
+      normalizedPath: fileTarget.normalizedPath,
+      confidence: 'high',
+      source: 'plain-path',
+    }, createFileKey(fileTarget), position)
+  }
+
+  // A code span is bounded by its backticks, not by the sentence, so a name in
+  // one is read whole — CJK included, as the rendered chip does. The prose scan
+  // below leaves CJK out on purpose (`修改了lib/foo.ts` must not swallow the
+  // verb), and run over `开题报告2.docx` it kept only `2.docx`.
+  const codeSpans = extractInlineCodeSpans(content, codeBlocks)
+  for (const span of codeSpans) {
+    if (isInMarkdownLink(span.start, markdownLinks)) {
+      continue
+    }
+
+    queuePlainPath(span.ref.path, span.start)
+  }
+
   let plainTextPosition = 0
   for (const segment of splitTextByFilePaths(content)) {
     const position = plainTextPosition
@@ -223,23 +256,11 @@ export function extractAssistantOutputTargets(
       continue
     }
 
-    const href = resolveAssistantFileHref(segment.ref.path, content)
-    const fileTarget = toWorkspaceFileTarget(href, workDir)
-
-    if (!fileTarget) {
+    if (codeSpans.some((span) => position >= span.start && position < span.end)) {
       continue
     }
 
-    queueTarget({
-      id: createId(fileTarget.kind, fileTarget.normalizedPath),
-      kind: fileTarget.kind,
-      title: getBasename(fileTarget.normalizedPath),
-      subtitle: fileTarget.normalizedPath,
-      href,
-      normalizedPath: fileTarget.normalizedPath,
-      confidence: 'high',
-      source: 'plain-path',
-    }, createFileKey(fileTarget), position)
+    queuePlainPath(segment.ref.path, position)
   }
 
   candidates.sort((left, right) => {
@@ -627,6 +648,31 @@ function normalizeMarkdownDestination(destination: string): string {
   }
 
   return trimTrailingPunctuation(normalized)
+}
+
+type InlineCodeSpan = {
+  start: number
+  end: number
+  ref: NonNullable<ReturnType<typeof parseFilePathRef>>
+}
+
+/** Single-line `code` spans outside fenced blocks whose whole content is one file reference. */
+function extractInlineCodeSpans(content: string, codeBlocks: FencedCodeBlock[]): InlineCodeSpan[] {
+  const spans: InlineCodeSpan[] = []
+
+  for (const match of content.matchAll(/(?<!`)`([^`\n]+)`(?!`)/g)) {
+    const start = match.index ?? 0
+    if (isInCodeBlock(start, codeBlocks)) {
+      continue
+    }
+
+    const ref = parseFilePathRef(match[1] ?? '')
+    if (ref) {
+      spans.push({ start, end: start + match[0].length, ref })
+    }
+  }
+
+  return spans
 }
 
 function isInMarkdownLink(position: number, markdownLinks: MarkdownLinkMatch[]): boolean {

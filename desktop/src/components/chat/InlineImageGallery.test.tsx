@@ -181,6 +181,60 @@ describe('InlineImageGallery', () => {
     expect(srcs[0]).toBe('http://127.0.0.1:4321/preview-fs/s1/outputs/a/frame.png')
   })
 
+  describe('an image the prose only names, without a path', () => {
+    // A read-only turn ("which commit swapped nodemaven_banner_sep.png?") names a
+    // file it never wrote. Nothing proves it sits at the workdir root, so a failed
+    // load is a wrong guess, not a broken deliverable worth a red error block.
+    it('does not raise the error block when a guessed bare name fails to load', async () => {
+      render(
+        <InlineImageGallery
+          text={'素材也换成 `nodemaven_banner_sep.png`,说明是按月续的'}
+          sessionId="s1"
+          workDir="/w"
+          changedFiles={[]}
+        />,
+      )
+
+      fireEvent.error(screen.getByRole('img'))
+
+      await waitFor(() => expect(screen.queryByRole('img')).not.toBeInTheDocument())
+      expect(fetchServerImageBlobUrl).toHaveBeenCalled()
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+      expect(screen.queryByText('1 image')).not.toBeInTheDocument()
+    })
+
+    it('still raises the error block for a path the prose spelled out, though the checkpoint missed it', async () => {
+      // A shell-rendered image never reaches changedFiles; its failure is real.
+      render(
+        <InlineImageGallery
+          text={'渲染结果已保存到 outputs/a/frame.png'}
+          sessionId="s1"
+          workDir="/w"
+          changedFiles={[]}
+        />,
+      )
+
+      fireEvent.error(screen.getByRole('img'))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('frame.png')
+    })
+
+    it('still raises the error block for a name the turn really wrote', async () => {
+      render(
+        <InlineImageGallery
+          text={'已生成 `banner.png`'}
+          sessionId="s1"
+          workDir="/w"
+          changedFiles={['/w/out/banner.png']}
+        />,
+      )
+
+      fireEvent.error(screen.getByRole('img'))
+
+      expect(await screen.findByRole('alert')).toHaveTextContent('banner.png')
+    })
+  })
+
   it('uses the absolute-file route for a changed image outside the workspace', () => {
     render(
       <InlineImageGallery
