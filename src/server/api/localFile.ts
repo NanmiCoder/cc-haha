@@ -4,6 +4,7 @@ import { isAllowedFilesystemPath } from './filesystem.js'
 import { serveFileWithRange } from './previewFs.js'
 import { canonicalizeExistingFilesystemPath } from '../services/filesystemPathSecurity.js'
 import { normalizeDriveRootPathForPlatform } from '../services/windowsDrivePath.js'
+import { resolveRelocatedAttachmentPath } from '../../utils/storageRelocations.js'
 
 const PREFIX = '/local-file/'
 
@@ -47,7 +48,7 @@ export function reconstructAbsolutePath(rest: string): string | null {
   if (!decoded) return null
 
   if (decoded === '~' || decoded.startsWith('~/')) {
-    return expandTilde(decoded)
+    return path.normalize(expandTilde(decoded))
   }
 
   // Windows drive form: `C:/...` or `C:\...` is already absolute.
@@ -90,7 +91,7 @@ export async function handleLocalFile(
   const absPath = reconstructAbsolutePath(rest)
   if (!absPath) return new Response('bad request', { status: 400 })
 
-  const resolved = path.resolve(normalizeDriveRootPathForPlatform(absPath))
+  const resolved = resolveRelocatedAttachmentPath(path.resolve(normalizeDriveRootPathForPlatform(absPath)))
   const canonicalPath = await canonicalizeExistingFilesystemPath(resolved)
   if (!canonicalPath) {
     if (!isAllowedFilesystemPath(resolved)) {

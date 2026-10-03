@@ -1,3 +1,4 @@
+import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/migration-lifecycle.js'
 /**
  * DingTalk Adapter for Claude Code Desktop.
  *
@@ -674,6 +675,12 @@ async function start(): Promise<void> {
     keepAlive: true,
   } as any)
 
+  registerAdapterShutdown(async () => {
+    bridge.destroy()
+    dedup.destroy()
+    await client.disconnect()
+  })
+
   client.registerCallbackListener(TOPIC_ROBOT, async (res: any) => {
     const messageId = res.headers?.messageId
     if (messageId) {
@@ -685,7 +692,7 @@ async function start(): Promise<void> {
     if (!data) return
     if (data.msgId && !dedup.tryRecord(`body:${data.msgId}`)) return
 
-    await handleRobotMessage(data)
+    await adapterMigrationLifecycle.track(handleRobotMessage(data))
   })
 
   client.registerCallbackListener(TOPIC_CARD, async (res: any) => {
@@ -695,28 +702,16 @@ async function start(): Promise<void> {
       if (!dedup.tryRecord(`card:${messageId}`)) return
     }
 
-    await handleCardCallback(res.data ?? res)
+    await adapterMigrationLifecycle.track(handleCardCallback(res.data ?? res))
   })
 
+  if (adapterMigrationLifecycle.isQuiescing) return
   await client.connect()
   console.log(`[DingTalk] Stream connected. Server: ${config.serverUrl}`)
 
-  const shutdown = async () => {
-    console.log('[DingTalk] Shutting down...')
-    bridge.destroy()
-    dedup.destroy()
-    try {
-      await client.disconnect()
-    } catch {
-      // ignore
-    }
-    process.exit(0)
-  }
-  process.once('SIGINT', () => void shutdown())
-  process.once('SIGTERM', () => void shutdown())
 }
 
-if (import.meta.main || process.argv.includes('--dingtalk')) start().catch((err) => {
+if (import.meta.main || process.argv.includes('--dingtalk')) adapterMigrationLifecycle.track(start()).catch((err) => {
   console.error('[DingTalk] Fatal:', err instanceof Error ? err.message : err)
   process.exit(1)
 })

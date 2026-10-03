@@ -24,6 +24,14 @@ describe('ImageBlockWatcher', () => {
     }
   })
 
+  it('recognizes Windows drive and UNC paths after a data directory move', () => {
+    for (const sourcePath of [String.raw`D:\data\attachment.png`, 'D:/data/attachment.png', String.raw`\\server\share\attachment.png`]) {
+      const watcher = new ImageBlockWatcher()
+      expect(watcher.feed(`![moved](${sourcePath})`)[0]?.source).toEqual({ kind: 'path', path: sourcePath })
+    }
+    expect(new ImageBlockWatcher().feed('![relative](D:attachment.png)')).toEqual([])
+  })
+
   it('extracts a markdown image with file:// URL as path', () => {
     const w = new ImageBlockWatcher()
     const out = w.feed('![x](file:///var/img/x.png)')

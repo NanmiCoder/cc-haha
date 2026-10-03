@@ -1,3 +1,4 @@
+import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/migration-lifecycle.js'
 /**
  * Slack Adapter for Claude Code Desktop
  *
@@ -250,7 +251,8 @@ const socket = new SlackSocketMode({
 
     replyThreads.set(payload.chatId, payload.threadTs)
 
-    void (async () => {
+    if (adapterMigrationLifecycle.isQuiescing) return
+    void adapterMigrationLifecycle.track((async () => {
       try {
         await runtime.handleInbound({
           chatId: payload.chatId,
@@ -264,14 +266,14 @@ const socket = new SlackSocketMode({
       } catch (err) {
         console.error('[Slack] Failed to prepare inbound message:', err)
       }
-    })()
+    })())
   },
 })
 
 console.log('[Slack] Starting adapter...')
 console.log(`[Slack] Server: ${config.serverUrl}`)
 
-void (async () => {
+void adapterMigrationLifecycle.track((async () => {
   try {
     const identity = await api.authTest()
     botUserId = identity.userId || undefined
@@ -280,13 +282,12 @@ void (async () => {
     console.error('[Slack] auth.test failed:', err instanceof Error ? err.message : err)
     process.exit(1)
   }
-  await socket.start()
-})()
+  if (!adapterMigrationLifecycle.isQuiescing) await socket.start()
+})())
 
-process.on('SIGINT', () => {
+registerAdapterShutdown(async () => {
   console.log('[Slack] Shutting down...')
-  socket.stop()
+  await socket.stop()
   bridge.destroy()
   dedup.destroy()
-  process.exit(0)
 })

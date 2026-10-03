@@ -9,6 +9,15 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Data directory relocation metadata and legacy attachment aliases',
+    command: ['bun', 'test', './src/utils/storageMigrationMetadata.test.ts', './src/utils/storageRelocations.test.ts'],
+  },
+  {
+    title: 'Desktop data migration journal recovery and credential namespace copy',
+    command: ['bun', 'run', 'test', '--', '--run', 'electron/services/dataMigration.test.ts', 'electron/services/migrationCredentials.test.ts'],
+    cwd: 'desktop',
+  },
+  {
     title: 'Agent Teams plan sidecar compatibility and approval recovery',
     command: ['bun', 'test', './src/utils/swarm/teamPlanStore.test.ts', './src/server/services/teamPlanService.test.ts'],
   },

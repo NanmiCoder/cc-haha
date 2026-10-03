@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { migrationMaintenance } from '../migrationMaintenance.js'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isValidTeamMemberName, teamPlanRecordSchema, type TeamPlanRecord, type TeamPlanMember } from '../../shared/teamPlan.js'
@@ -260,7 +261,7 @@ async function startWorkerProcess(launch: TeamLaunch, worker: WorkerRuntime, res
   }
   conversationService.onOutput(worker.sessionId, message => {
     if (message?.type !== 'result') return
-    void handleWorkerResult(launch, worker, message).catch(error => console.error(`[TeamPlanRuntime] cannot record ${member.name}'s turn`, error))
+    void migrationMaintenance.track(handleWorkerResult(launch, worker, message)).catch(error => console.error(`[TeamPlanRuntime] cannot record ${member.name}'s turn`, error))
   })
 }
 
@@ -318,6 +319,7 @@ function autoContinuePrompt(reason: string, attempt: number): string {
 }
 
 async function autoContinueWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: string, attempt: number): Promise<void> {
+  if (migrationMaintenance.isActive) return
   worker.autoContinueTimer = undefined
   if (launch.stopped || launch.pausedAt || !conversationService.hasSession(worker.sessionId)) return
   // Queued mail resumes the member anyway, with the newer context.
@@ -361,7 +363,7 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     const delay = timing.autoContinueDelaysMs[attempt - 1]!
     cancelAutoContinue(worker)
     worker.autoContinueTimer = setTimeout(() => {
-      void autoContinueWorker(launch, worker, reason, attempt).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
+      void migrationMaintenance.track(autoContinueWorker(launch, worker, reason, attempt)).catch(error => console.error(`[TeamPlanRuntime] cannot continue ${worker.member.name}`, error))
     }, delay)
     worker.autoContinueTimer.unref?.()
     await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, lastError: reason, autoRetry: { attempt, max: timing.autoContinueDelaysMs.length, nextAt: Date.now() + delay } }))
@@ -422,6 +424,7 @@ async function wakeForReadyTask(launch: TeamLaunch, worker: WorkerRuntime, entry
 }
 
 async function superviseLaunch(launch: TeamLaunch): Promise<void> {
+  if (migrationMaintenance.isActive) return
   const team = readTeamFile(launch.plan.teamName)
   if (!team || team.createdAt !== launch.createdAt) {
     await stopTeamPlanRuntime(launch.plan.planId)
@@ -457,7 +460,7 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
       // Without a lead nobody coordinates the restarted member; a direct user
       // message is the exception.
       if (!leadAlive && !fromUser) continue
-      void restartWorker(launch, worker, fromUser ? 'user' : 'message')
+      void migrationMaintenance.track(restartWorker(launch, worker, fromUser ? 'user' : 'message'))
       continue
     }
     await deliverToWorker(launch, worker, messages)
@@ -465,11 +468,11 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
 }
 
 function startSupervisor(launch: TeamLaunch): void {
-  if (launch.timer) return
+  if (launch.timer || migrationMaintenance.isActive) return
   launch.timer = setInterval(() => {
-    if (launch.supervising || launch.stopped) return
+    if (launch.supervising || launch.stopped || migrationMaintenance.isActive) return
     launch.supervising = true
-    void superviseLaunch(launch)
+    void migrationMaintenance.track(superviseLaunch(launch))
       .catch(error => { console.error('[TeamPlanRuntime] team supervision failed', error) })
       .finally(() => { launch.supervising = false })
   }, SUPERVISOR_INTERVAL_MS)
@@ -495,11 +498,11 @@ function pauseLaunchesForLead(parentSessionId: string): void {
     // No notice goes to the lead's mailbox: delivering it would start a lead
     // turn right after the user stopped everything. Messaging a stopped member
     // restarts it, so the lead needs no special knowledge to continue later.
-    void mutateTeamFileAsync(launch.plan.teamName, team => {
+    void migrationMaintenance.track(mutateTeamFileAsync(launch.plan.teamName, team => {
       if (team.createdAt !== launch.createdAt) return
       const sessions = new Set([...launch.workers.values()].map(worker => worker.sessionId))
       return { ...team, members: team.members.map(entry => entry.sessionId && sessions.has(entry.sessionId) ? { ...entry, isActive: false, terminated: true } : entry) }
-    }).catch(error => console.error('[TeamPlanRuntime] cannot record the paused team', error))
+    })).catch(error => console.error('[TeamPlanRuntime] cannot record the paused team', error))
   }
 }
 
@@ -544,11 +547,11 @@ function ensureRuntimeHooks(): void {
       const ownedLaunch = () => [...launches.values()].find(item => item.parentId === sessionId && item.running && !item.stopped)
       // Workers never lead a team; skip the disk scan a re-own needs.
       if (!ownedLaunch() && isTeamWorker) return
-      void (async () => {
+      void migrationMaintenance.track((async () => {
         if (!ownedLaunch()) await rehydrateTeamPlanRuntimesForSession(sessionId)
         const launch = ownedLaunch()
         if (launch) await sendTeamSnapshot(sessionId, launch.plan.teamName, launch.createdAt)
-      })().catch(error => console.error('[TeamPlanRuntime] cannot restore the team after a lead start', error))
+      })()).catch(error => console.error('[TeamPlanRuntime] cannot restore the team after a lead start', error))
     },
   })
 }
@@ -582,6 +585,7 @@ export async function stopTeamPlanRuntime(planId: string): Promise<void> {
 }
 
 export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ memberIds: Record<string, string> }> {
+  migrationMaintenance.assertAvailable()
   const approved = plan.approvedSnapshot
   if (!approved || approved.revision !== plan.revision - 1 || plan.state !== 'launching') throw new Error('Team plan is not approved for launch')
   ensureRuntimeHooks()
@@ -661,12 +665,33 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
   }
 }
 
+/** Keep released teams resumable while preventing every supervisor wake. */
+export async function quiesceTeamPlanRuntimesForMigration(): Promise<void> {
+  const parents = new Set([...launches.values()].map(launch => launch.parentId))
+  for (const parent of parents) pauseLaunchesForLead(parent)
+  for (const launch of launches.values()) {
+    if (launch.timer) clearInterval(launch.timer)
+    launch.timer = undefined
+    for (const worker of launch.workers.values()) cancelAutoContinue(worker)
+    if (launch.running) continue
+    launch.stopped = true
+    const current = await readTeamPlan(launch.plan.teamName)
+    if (current?.planId === launch.plan.planId && current.state === 'launching') {
+      await mutateTeamPlan(current.teamName, { ...current, expectedRevision: current.revision }, plan => ({
+        ...plan, state: launch.released ? 'interrupted' : 'cancelled',
+        launch: { ...plan.launch, status: 'failed', executionStarted: launch.released, error: 'Team startup stopped for data migration.' },
+      }))
+    }
+  }
+}
+
 /**
  * Rebuild the supervisor for an approved team whose server-side owner was lost
  * (server or app restart). Members start dormant and restart from their own
  * transcripts as soon as the lead or the user messages them.
  */
 export async function rehydrateTeamPlanRuntime(plan: TeamPlanRecord): Promise<boolean> {
+  if (migrationMaintenance.isActive) return false
   if (plan.state !== 'running' || !plan.approvedSnapshot || launches.has(plan.planId)) return launches.has(plan.planId)
   const team = readTeamFile(plan.teamName)
   if (!team || team.leadSessionId !== plan.sessionId || incarnationOf(team) !== plan.incarnationId) return false

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { migrationMaintenance } from '../migrationMaintenance.js'
 
 export type SessionTurnEvent =
   | { type: 'user-input' | 'input-committed' | 'stopped'; sessionId: string }
@@ -27,6 +28,7 @@ export function registerSessionTurnAdmissionGuard(guard: AdmissionGuard): () => 
 }
 
 export async function admitSessionUserTurn(sessionId: string, canAdmit: () => boolean): Promise<SessionTurnAdmissionLease> {
+  migrationMaintenance.assertAvailable()
   if (admissionGuard) return admissionGuard(sessionId, canAdmit)
   return { release: async () => {} }
 }

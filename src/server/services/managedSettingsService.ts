@@ -9,6 +9,10 @@ import { ensurePersistentStorageUpgraded } from './persistentStorageMigrations.j
 export class ManagedSettingsService {
   private static writeLocks = new Map<string, Promise<void>>()
 
+  static async drainForMigration(): Promise<void> {
+    await Promise.all([...this.writeLocks.values()])
+  }
+
   private getConfigDir(): string {
     return process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
   }

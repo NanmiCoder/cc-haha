@@ -59,6 +59,19 @@ afterEach(async () => {
 })
 
 describe('ConversationService attachment materialization', () => {
+  test('replays a managed image path after migration without needing the original root', async () => {
+    const originalRoot = path.join(tmpDir, 'absent-root')
+    const currentPath = path.join(tmpDir, 'uploads', 'old-session', 'fixture.png')
+    await fs.mkdir(path.dirname(currentPath), { recursive: true })
+    await fs.writeFile(currentPath, Buffer.from('original-image'))
+    await fs.mkdir(path.join(tmpDir, 'cc-haha'))
+    await fs.writeFile(path.join(tmpDir, 'cc-haha/storage-relocations.json'), JSON.stringify({ version: 1, previousRoots: [originalRoot] }))
+    const svc = new ConversationService()
+    const blocks = await (svc as any).buildUserContent('use this image', 'current-session', [{ type: 'image', path: path.join(originalRoot, 'uploads', 'old-session', 'fixture.png'), name: 'fixture.png' }])
+    expect(blocks.some((block: any) => block.type === 'image')).toBe(true)
+    expect(blocks.some((block: any) => block.type === 'text' && block.text.includes(path.join(tmpDir, 'uploads/current-session')))).toBe(true)
+  })
+
   test('inlines image data attachments without resizing when already within API limits', async () => {
     const svc = new ConversationService()
     const sent: unknown[] = []

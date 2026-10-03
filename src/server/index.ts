@@ -9,7 +9,12 @@ import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
  */
 
 import { handleApiRequest } from './router.js'
-import { handleWebSocket, type WebSocketData } from './ws/handler.js'
+import { handleWebSocket, revokeSessionAdmissionsForMigration, drainSessionWritesForMigration, type WebSocketData } from './ws/handler.js'
+import { migrationMaintenance, migrationUnavailableResponse } from './migrationMaintenance.js'
+import { countExternalMigrationProcesses } from './migrationInventory.js'
+import { handleMigrationRuntimeRequest, isMigrationRuntimePath } from './migrationRuntimeApi.js'
+import { quiesceTeamPlanRuntimesForMigration } from './services/teamPlanRuntime.js'
+import { ManagedSettingsService } from './services/managedSettingsService.js'
 import { resolveCors, withCors, type CorsResolution } from './middleware/cors.js'
 import { requireAuth, requireH5Token } from './middleware/auth.js'
 import { teamWatcher } from './services/teamWatcher.js'
@@ -229,15 +234,16 @@ function originFromUrl(value: string | null): string | null {
 }
 
 export function startServer(port = PORT, host = HOST) {
-  enableConfigs()
+  if (process.env.CC_HAHA_MIGRATION_VALIDATION === '1') migrationMaintenance.beginValidation()
+  if (!migrationMaintenance.isActive) enableConfigs()
   const trustedRendererOrigin = resolveTrustedRendererOrigin(process.env.CC_HAHA_TRUSTED_RENDERER_ORIGIN)
   // Warm the synchronous disconnect-grace cache from managed settings so the
   // first client disconnect honors the configured value (issue #764).
-  void refreshDisconnectGraceMs()
+  if (!migrationMaintenance.isActive) void refreshDisconnectGraceMs()
   // Don't hijack the global console / process handlers under `bun test`:
   // a test that boots the server would otherwise route every test-side
   // console.error/warn into the user's real diagnostics file.
-  if (process.env.NODE_ENV !== 'test') {
+  if (process.env.NODE_ENV !== 'test' && !migrationMaintenance.isActive) {
     diagnosticsService.installConsoleCapture()
     diagnosticsService.installProcessCapture()
   }
@@ -261,7 +267,9 @@ export function startServer(port = PORT, host = HOST) {
   const h5AccessService = new H5AccessService()
 
   const publicAccess = new PublicAccessServer({
-    handleApiRequest,
+    handleApiRequest: (request, url, context) => migrationMaintenance.isActive
+      ? Promise.resolve(migrationUnavailableResponse())
+      : migrationMaintenance.track(handleApiRequest(request, url, context)),
     handleStatic: handleStaticH5Request,
     websocket: handleWebSocket,
     serverPort: () => serverPort,
@@ -272,7 +280,7 @@ export function startServer(port = PORT, host = HOST) {
   // Open SQLite before the first REST request. Discovery still runs in the
   // background; without this, getPublicStatus() reports `off` and the sidebar
   // falls through to a full JSONL scan that can exceed the 120s client timeout.
-  void localIndexCoordinator.start().catch(() => undefined)
+  if (!migrationMaintenance.isActive) void localIndexCoordinator.start().catch(() => undefined)
 
   try {
     server = Bun.serve<WebSocketData>({
@@ -281,6 +289,30 @@ export function startServer(port = PORT, host = HOST) {
       idleTimeout: HTTP_CONNECTION_IDLE_TIMEOUT_SECONDS,
 
       async fetch(req, server) {
+        const pathname = new URL(req.url).pathname
+        if (isMigrationRuntimePath(pathname)) {
+          return handleMigrationRuntimeRequest(req, server.requestIP(req)?.address ?? null, {
+            preview: migrationRuntimePreview,
+            quiesce: quiesceServerRuntimeForMigration,
+            recover: quiesceServerRuntimeForRecovery,
+            activate: async () => {
+              migrationMaintenance.activateValidation()
+              delete process.env.CC_HAHA_MIGRATION_VALIDATION
+              enableConfigs()
+              void refreshDisconnectGraceMs()
+              if (process.env.NODE_ENV !== 'test') {
+                diagnosticsService.installConsoleCapture()
+                diagnosticsService.installProcessCapture()
+              }
+              beginBackgroundIndexStartup()
+              teamWatcher.start()
+              cronScheduler.start()
+            },
+          })
+        }
+        if (migrationMaintenance.isActive && pathname !== '/health' &&
+          (migrationMaintenance.isValidation || !pathname.startsWith('/sdk/'))) return migrationUnavailableResponse()
+        return migrationMaintenance.track((async () => {
         const url = new URL(req.url)
         if (isPublicAccessControlPath(url.pathname)) return publicAccess.control(req)
 
@@ -299,8 +331,10 @@ export function startServer(port = PORT, host = HOST) {
           )
         }
 
-        await localIndexCoordinator.start().catch(() => undefined)
-        await ensurePersistentStorageUpgraded()
+        if (!migrationMaintenance.isActive) {
+          await localIndexCoordinator.start().catch(() => undefined)
+          await ensurePersistentStorageUpgraded()
+        }
         const collaborationAction = collaborationToolAction(url.pathname)
         if (collaborationAction) {
           const caller = authenticateCollaborationCaller(req, (id, token) => conversationService.authorizeSdkConnection(id, token))
@@ -623,6 +657,7 @@ export function startServer(port = PORT, host = HOST) {
         }
 
         return new Response('Not Found', { status: 404 })
+        })())
       },
 
       websocket: handleWebSocket,
@@ -651,15 +686,15 @@ export function startServer(port = PORT, host = HOST) {
   // Bun.serve is already accepting requests. Both projections remain
   // background work; session-list metadata gets priority on a cold start so
   // full-text backfill cannot make the sidebar slower on low-memory machines.
-  beginBackgroundIndexStartup()
+  if (!migrationMaintenance.isActive) beginBackgroundIndexStartup()
 
   // Start watching ~/.claude/teams/ for real-time WebSocket push
-  teamWatcher.start()
+  if (!migrationMaintenance.isActive) teamWatcher.start()
 
   // Start the cron scheduler to execute scheduled tasks
-  cronScheduler.start()
+  if (!migrationMaintenance.isActive) cronScheduler.start()
 
-  void ensureDesktopCliLauncherInstalled().catch((error) => {
+  if (!migrationMaintenance.isActive) void ensureDesktopCliLauncherInstalled().catch((error) => {
     console.error(
         '[desktop-cli-launcher] failed to install bundled launcher:',
         error instanceof Error ? error.message : error,
@@ -673,6 +708,48 @@ export function startServer(port = PORT, host = HOST) {
 // ─── Graceful shutdown: kill all CLI subprocesses on exit ────────────────────
 
 let shutdownInProgress: Promise<void> | null = null
+let migrationQuiescence: Promise<void> | undefined
+
+async function migrationRuntimePreview() {
+  const owned = [...conversationService.getProcessIds(), ...cronScheduler.getProcessIds()]
+  return { activeTasks: owned.length, externalProcesses: await countExternalMigrationProcesses(owned) }
+}
+
+export function quiesceServerRuntimeForMigration(ignoreExternalProcesses = false): Promise<void> {
+  if (migrationQuiescence) return migrationQuiescence
+  migrationMaintenance.begin()
+  revokeSessionAdmissionsForMigration()
+  const operation = (async () => {
+    const inventory = await migrationRuntimePreview()
+    if (!ignoreExternalProcesses && inventory.externalProcesses > 0) throw new Error('Close external CLI sessions before migrating data')
+    for (const remote of publicAccessServers) remote.disable()
+    await quiesceTeamPlanRuntimesForMigration()
+    await Promise.all([teamWatcher.stopAndWait(), cronScheduler.stopAndWait(), conversationService.stopForMigration()])
+    await migrationMaintenance.drain()
+    await drainSessionWritesForMigration()
+    backgroundIndexStartupController?.abort()
+    await Promise.all([localIndexCoordinator.stop(), searchContentCoordinator.stop(), backgroundIndexStartup])
+    await sessionService.drainForMigration()
+    await ManagedSettingsService.drainForMigration()
+    await diagnosticsService.drainForMigration()
+  })()
+  migrationQuiescence = operation
+  return operation
+}
+
+export async function quiesceServerRuntimeForRecovery(): Promise<void> {
+  if (migrationQuiescence) {
+    try {
+      await migrationQuiescence
+      return
+    } catch {
+      migrationQuiescence = undefined
+    }
+  }
+  // Recovery restarts the source runtime; it never authorizes copying while
+  // another process still owns that directory.
+  await quiesceServerRuntimeForMigration(true)
+}
 
 export async function stopServerRuntimeForShutdown(
   options: { waitForCli?: boolean } = {},

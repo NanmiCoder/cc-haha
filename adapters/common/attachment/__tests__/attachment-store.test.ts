@@ -16,6 +16,21 @@ afterEach(async () => {
 })
 
 describe('AttachmentStore', () => {
+  it('keeps default IM downloads inside the active storage directory', async () => {
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tmpRoot
+    try {
+      const store = new AttachmentStore()
+      const target = store.resolvePath('feishu', 'session', 'fixture.png')
+      expect(target).toBe(path.join(tmpRoot, 'im-downloads', 'feishu', 'session', 'fixture.png'))
+      await store.write(target, Buffer.from('fixture'))
+      expect(await fs.readFile(target, 'utf8')).toBe('fixture')
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previous
+    }
+  })
+
   it('writes a buffer and returns the absolute path', async () => {
     const store = new AttachmentStore({ root: tmpRoot, retentionMs: 60_000 })
     const target = store.resolvePath('feishu', 'sess-1', 'hello.png')

@@ -5,6 +5,29 @@ import { createElectronHost } from './electronHost'
 import { PUBLIC_ACCESS_CONSENT_VERSION, type WorkspaceBrowserMenuOptions } from './types'
 
 describe('electron desktop host', () => {
+  it('routes migration preview, background start, status, cancellation and progress over narrow IPC', async () => {
+    const invoke = vi.fn().mockResolvedValue(null)
+    const unlisten = vi.fn()
+    const subscribe = vi.fn().mockResolvedValue(unlisten)
+    const host = createElectronHost({ invoke, subscribe })
+    await host.appMode.migration.prepare('D:\\cc-haha-data')
+    await host.appMode.migration.start('migration-1')
+    await host.appMode.migration.status()
+    await host.appMode.migration.cancel('migration-1')
+    expect(invoke.mock.calls).toEqual([
+      [ELECTRON_IPC_CHANNELS.migrationPrepare, { targetDir: 'D:\\cc-haha-data' }],
+      [ELECTRON_IPC_CHANNELS.migrationStart, { id: 'migration-1' }],
+      [ELECTRON_IPC_CHANNELS.migrationStatus, undefined],
+      [ELECTRON_IPC_CHANNELS.migrationCancel, { id: 'migration-1' }],
+    ])
+    const handler = vi.fn()
+    expect(await host.appMode.migration.onProgress(handler)).toBe(unlisten)
+    expect(subscribe).toHaveBeenCalledWith(ELECTRON_EVENT_CHANNELS.migrationProgress, handler)
+    await expect(host.appMode.migration.start('')).rejects.toThrow('Invalid Electron IPC payload')
+    await expect(host.appMode.migration.prepare('bad\u0000path')).rejects.toThrow('Invalid Electron IPC payload')
+    expect(invoke).toHaveBeenCalledTimes(4)
+  })
+
   it('routes public access through validated local IPC without exposing management in browsers', async () => {
     const invoke = vi.fn().mockResolvedValue({ hasCredential: true })
     const host = createElectronHost({ invoke, subscribe: vi.fn() })

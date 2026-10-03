@@ -1,3 +1,4 @@
+import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/migration-lifecycle.js'
 /**
  * 飞书 (Feishu/Lark) Adapter for Claude Code Desktop
  *
@@ -1254,6 +1255,7 @@ async function start(): Promise<void> {
   console.log(`[Feishu] App ID: ${config.feishu.appId}`)
 
   await resolveBotOpenId()
+  if (adapterMigrationLifecycle.isQuiescing) return
 
   const dispatcher = new Lark.EventDispatcher({
     encryptKey: config.feishu.encryptKey,
@@ -1263,14 +1265,14 @@ async function start(): Promise<void> {
   dispatcher.register({
     'im.message.receive_v1': async (data: any) => {
       try {
-        await handleMessage(data)
+        await adapterMigrationLifecycle.track(handleMessage(data))
       } catch (err) {
         console.error('[Feishu] Message handler error:', err)
       }
     },
     'card.action.trigger': async (data: any) => {
       try {
-        return await handleCardAction(data)
+        return await adapterMigrationLifecycle.track(handleCardAction(data))
       } catch (err) {
         console.error('[Feishu] Card action error:', err)
       }
@@ -1288,16 +1290,16 @@ async function start(): Promise<void> {
   console.log('[Feishu] Bot is running! (WebSocket connected)')
 }
 
-if (import.meta.main || process.argv.includes('--feishu')) start().catch((err) => {
+if (import.meta.main || process.argv.includes('--feishu')) adapterMigrationLifecycle.track(start()).catch((err) => {
   console.error('[Feishu] Failed to start:', err)
   process.exit(1)
 })
 
-if (import.meta.main || process.argv.includes('--feishu')) process.on('SIGINT', () => {
+if (import.meta.main || process.argv.includes('--feishu')) registerAdapterShutdown(async () => {
   console.log('[Feishu] Shutting down...')
   bridge.destroy()
   dedup.destroy()
-  process.exit(0)
+  wsClient?.close({ force: true })
 })
 
 export { bridge, dedup, sessionStore, sessionSelectionController, handleServerMessage, getRuntimeState, clearTransientChatState, createSessionForChat, showProjectPicker, handleMessage, handleCardAction, larkClient, prepareNewSession }

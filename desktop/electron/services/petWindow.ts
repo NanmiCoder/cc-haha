@@ -16,6 +16,7 @@ import {
 } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { areStorageWritesFrozen } from './storageMaintenance'
 
 export const PET_WINDOW_WIDTH = 384
 export const PET_WINDOW_HEIGHT = 400
@@ -184,7 +185,7 @@ export function writePetWindowPosition(
   env: NodeJS.ProcessEnv = process.env,
   homeDir: string = os.homedir(),
 ): void {
-  if (!isPetWindowPosition(state)) return
+  if (areStorageWritesFrozen() || !isPetWindowPosition(state)) return
   const statePath = petWindowStatePath(env, homeDir)
   const temporaryPath = `${statePath}.${process.pid}.tmp`
   try {

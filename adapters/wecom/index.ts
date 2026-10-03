@@ -1,3 +1,4 @@
+import { registerAdapterShutdown } from '../common/migration-lifecycle.js'
 /**
  * 企业微信 (Enterprise WeChat / WeCom) Adapter for Claude Code Desktop
  *
@@ -255,7 +256,7 @@ console.log(`[WeCom] Server: ${config.serverUrl}`)
 console.log(`[WeCom] Bot: ${config.wecom.botId}`)
 client.connect()
 
-process.on('SIGINT', () => {
+registerAdapterShutdown(() => {
   console.log('[WeCom] Shutting down...')
   try {
     client.disconnect()
@@ -264,5 +265,4 @@ process.on('SIGINT', () => {
   }
   bridge.destroy()
   dedup.destroy()
-  process.exit(0)
 })

@@ -32,6 +32,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { areStorageWritesFrozen } from './storageMaintenance'
 import type { App, BrowserWindow } from 'electron'
 
 export const APPEARANCE_STATE_FILE = 'appearance-state.json'
@@ -99,7 +100,7 @@ export function writeAppearanceState(
   state: AppliedAppearance,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
-  if (!isAppliedAppearance(state)) return
+  if (areStorageWritesFrozen() || !isAppliedAppearance(state)) return
   const statePath = appearanceStatePath(app, env)
   try {
     mkdirSync(path.dirname(statePath), { recursive: true })

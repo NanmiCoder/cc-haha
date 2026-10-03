@@ -36,6 +36,7 @@ import { isTouchH5Document } from '../../lib/touchH5'
 import { MODEL_REASONING_EFFORTS } from '../../../../src/shared/modelReasoning'
 import { AUTO_QUESTION_TIMEOUT_OPTIONS } from '../../../../src/shared/autoQuestionSettings'
 import { ChatAppearanceSettings } from './ChatAppearanceSettings'
+import { DataMigrationSettings } from './DataMigrationSettings'
 
 /**
  * The General settings panel — the largest of the seven, and the one most often
@@ -141,6 +142,7 @@ export function GeneralSettings() {
   const [pendingMode, setPendingMode] = useState<AppMode | null>(null)
   const [pendingPortableDir, setPendingPortableDir] = useState<string | null>(null)
   const [portableDirDraft, setPortableDirDraft] = useState('')
+  const [migrationRunning, setMigrationRunning] = useState(false)
   const [modeActionRunning, setModeActionRunning] = useState(false)
   const [modeError, setModeError] = useState<string | null>(null)
   const [uiZoomDraft, setUiZoomDraft] = useState(uiZoom)
@@ -1662,6 +1664,7 @@ export function GeneralSettings() {
             <div className="flex flex-col gap-3">
               <button
                 type="button"
+                disabled={migrationRunning}
                 onClick={() => {
                   if (isEnvironmentConfigDir) {
                     setModeError(t('settings.general.storageEnvironmentSwitchBlocked'))
@@ -1712,6 +1715,7 @@ export function GeneralSettings() {
                         setModeError(null)
                       }}
                       className="w-full font-mono text-xs"
+                      disabled={migrationRunning}
                     />
                   </div>
                   <Button
@@ -1719,6 +1723,7 @@ export function GeneralSettings() {
                     variant="secondary"
                     className="h-10 flex-shrink-0 px-3 whitespace-nowrap"
                     onClick={() => void openPortableDirPicker()}
+                    disabled={migrationRunning}
                   >
                     {t('settings.general.storageChooseDir')}
                   </Button>
@@ -1729,7 +1734,7 @@ export function GeneralSettings() {
                     type="button"
                     size="sm"
                     variant="secondary"
-                    disabled={modeActionRunning || (appMode.mode === 'portable' && portableDirDraft.trim() === (appMode.portableDir ?? ''))}
+                    disabled={modeActionRunning || migrationRunning || (appMode.mode === 'portable' && portableDirDraft.trim() === (appMode.portableDir ?? ''))}
                     onClick={() => openModeSwitchConfirm('portable')}
                   >
                     {t('settings.general.storageApplyPortable')}
@@ -1760,6 +1765,12 @@ export function GeneralSettings() {
             <div className="mt-3 text-xs leading-5 text-[var(--color-text-tertiary)]">
               {t('settings.general.storageMoveHint')}
             </div>
+
+            <DataMigrationSettings
+              environmentControlled={isEnvironmentConfigDir}
+              disabled={modeActionRunning || appModeRequiresRestart}
+              onBusyChange={setMigrationRunning}
+            />
 
             {modeError && (
               <div className="mt-3 text-xs text-[var(--color-error)]">

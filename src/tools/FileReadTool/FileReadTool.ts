@@ -29,6 +29,7 @@ import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { getCwd } from '../../utils/cwd.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from '../../utils/envUtils.js'
+import { resolveRelocatedAttachmentPath } from '../../utils/storageRelocations.js'
 import { getErrnoCode, isENOENT } from '../../utils/errors.js'
 import {
   addLineNumbers,
@@ -385,13 +386,13 @@ export const FileReadTool = buildTool({
     return { isSearch: false, isRead: true }
   },
   getPath({ file_path }): string {
-    return file_path || getCwd()
+    return file_path ? resolveRelocatedAttachmentPath(expandPath(file_path)) : getCwd()
   },
   backfillObservableInput(input) {
     // hooks.mdx documents file_path as absolute; expand so hook allowlists
     // can't be bypassed via ~ or relative paths.
     if (typeof input.file_path === 'string') {
-      input.file_path = expandPath(input.file_path)
+      input.file_path = resolveRelocatedAttachmentPath(expandPath(input.file_path))
     }
   },
   async preparePermissionMatcher({ file_path }) {
@@ -418,9 +419,9 @@ export const FileReadTool = buildTool({
   },
   renderToolUseErrorMessage,
   async validateInput({ file_path, pages }, toolUseContext: ToolUseContext) {
-    // Path expansion + extension checks are string-only and avoid I/O before
-    // permission evaluation.
-    const fullFilePath = expandPath(file_path)
+    // Resolve trusted relocation metadata before evaluating permissions; the
+    // attachment itself is not opened here.
+    const fullFilePath = resolveRelocatedAttachmentPath(expandPath(file_path))
     const ext = path.extname(fullFilePath).toLowerCase()
 
     // Validate pages parameter only for PDF files. Models sometimes send
@@ -524,7 +525,7 @@ export const FileReadTool = buildTool({
     const effectivePages = isPDFExtension(ext) ? pages : undefined
     // Use expandPath for consistent path normalization with FileEditTool/FileWriteTool
     // (especially handles whitespace trimming and Windows path separators)
-    const fullFilePath = expandPath(file_path)
+    const fullFilePath = resolveRelocatedAttachmentPath(expandPath(file_path))
 
     // Dedup: if we've already read this exact range and the file hasn't
     // changed on disk, return a stub instead of re-sending the full content.

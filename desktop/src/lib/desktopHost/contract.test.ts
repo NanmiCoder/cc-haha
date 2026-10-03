@@ -23,6 +23,11 @@ describe('desktop host contract', () => {
   })
 
   it('rejects desktop-only browser calls with actionable errors', async () => {
+    await expect(browserHost.appMode.migration.prepare('/fixture/new')).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.appMode.migration.start('migration-1')).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.appMode.migration.cancel('migration-1')).rejects.toThrow('desktop app runtime')
+    await expect(browserHost.appMode.migration.status()).resolves.toBeNull()
+    await expect(browserHost.appMode.migration.onProgress(vi.fn())).resolves.toEqual(expect.any(Function))
     await expect(browserHost.runtime.getServerUrl()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.runtime.getLocalAccessToken()).rejects.toThrow('desktop app runtime')
     await expect(browserHost.dialogs.open({ directory: true })).rejects.toThrow('desktop app runtime')

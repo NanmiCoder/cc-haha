@@ -1,3 +1,4 @@
+import { registerAdapterShutdown } from '../common/migration-lifecycle.js'
 import * as path from 'node:path'
 import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
@@ -616,6 +617,7 @@ async function pollLoop(): Promise<void> {
         timeoutMs: GET_UPDATES_TIMEOUT_MS,
       })
       if (resp.get_updates_buf) getUpdatesBuf = resp.get_updates_buf
+      if (stopped) return
       const hasRetError = typeof resp.ret === 'number' && resp.ret !== 0
       const hasErrCode = typeof resp.errcode === 'number' && resp.errcode !== 0
       if (hasRetError || hasErrCode) {
@@ -646,13 +648,12 @@ console.log('[WeChat] Starting adapter...')
 console.log(`[WeChat] Account: ${accountId}`)
 if (import.meta.main || process.argv.includes('--wechat')) void pollLoop()
 
-if (import.meta.main || process.argv.includes('--wechat')) process.on('SIGINT', () => {
+if (import.meta.main || process.argv.includes('--wechat')) registerAdapterShutdown(() => {
   console.log('[WeChat] Shutting down...')
   stopped = true
   typingController.destroy()
   bridge.destroy()
   dedup.destroy()
-  process.exit(0)
 })
 
 export { bridge, dedup, sessionStore, sessionSelectionController, handleServerMessage, getRuntimeState, clearTransientChatState, createSessionForChat, showProjectPicker, routeUserMessage, startNewSession, typingController }

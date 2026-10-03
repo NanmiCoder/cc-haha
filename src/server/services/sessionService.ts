@@ -725,6 +725,11 @@ export class SessionService {
     }>
   >()
   private readonly taskNotificationMutationEpochs = new Map<string, number>()
+
+  async drainForMigration(): Promise<void> {
+    const writes = [...this.pendingTaskNotificationWrites.values()].flatMap(entries => [...entries].map(entry => entry.promise))
+    await Promise.all(writes)
+  }
   private readonly clearingTaskNotificationSessions = new Set<string>()
 
   private readonly localIndexGateway: LocalIndexGateway

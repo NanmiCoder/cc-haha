@@ -35,8 +35,19 @@ function writeAppModeConfig(configDir: string, config: PersistedAppModeConfig): 
   fs.mkdirSync(configDir, { recursive: true })
   const target = path.join(configDir, APP_MODE_FILE)
   const temporary = path.join(configDir, `.${APP_MODE_FILE}.${randomUUID()}.tmp`)
+  let previous: Record<string, unknown> = {}
   try {
-    fs.writeFileSync(temporary, JSON.stringify(config, null, 2))
+    const parsed: unknown = JSON.parse(fs.readFileSync(target, 'utf8'))
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) previous = parsed as Record<string, unknown>
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+  try {
+    const descriptor = fs.openSync(temporary, 'wx', 0o600)
+    try {
+      fs.writeFileSync(descriptor, JSON.stringify({ ...previous, ...config }, null, 2))
+      fs.fsyncSync(descriptor)
+    } finally { fs.closeSync(descriptor) }
     fs.renameSync(temporary, target)
   } finally {
     fs.rmSync(temporary, { force: true })
@@ -77,7 +88,7 @@ function isPathAtOrBelow(parentDir: string, candidateDir: string): boolean {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
 }
 
-function normalizedCustomDir(app: AppModeAppLike, value: string | null | undefined): string {
+export function normalizedCustomDir(app: AppModeAppLike, value: string | null | undefined): string {
   const selectedDir = value?.trim()
   if (!selectedDir) throw new Error('Choose an absolute custom data directory')
   if (!path.isAbsolute(selectedDir)) throw new Error('Custom data storage must use an absolute path')

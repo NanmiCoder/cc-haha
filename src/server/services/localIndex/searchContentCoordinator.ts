@@ -1,4 +1,5 @@
 import { lstat, readdir, rm } from 'node:fs/promises'
+import { migrationMaintenance } from '../../migrationMaintenance.js'
 import { basename, join, relative, resolve, sep } from 'node:path'
 import { getClaudeConfigHomeDir } from '../../../utils/envUtils.js'
 import { isConfirmedLocalIndexCorruption } from './recovery.js'
@@ -635,6 +636,7 @@ export function createSearchContentCoordinator(
 
   const coordinator: SearchContentCoordinator = {
     async start() {
+      if (migrationMaintenance.isActive) return
       const pendingStop = stopPromise
       if (pendingStop) await pendingStop
       if (startPromise) return startPromise

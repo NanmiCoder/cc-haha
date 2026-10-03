@@ -1,3 +1,4 @@
+import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/migration-lifecycle.js'
 /**
  * Telegram Adapter for Claude Code Desktop
  *
@@ -51,6 +52,7 @@ if (!config.telegram.botToken) {
 }
 
 export const bot = new Bot(config.telegram.botToken)
+bot.use((_ctx, next) => adapterMigrationLifecycle.isQuiescing ? Promise.resolve() : adapterMigrationLifecycle.track(next()))
 const bridge = new WsBridge(config.serverUrl, 'tg')
 const streamDelivery = new TelegramStreamDelivery(bot.api)
 const dedup = new MessageDedup()
@@ -491,7 +493,7 @@ const isAuthorizedTelegramUser = (userId: number) => isAllowedUser('telegram', u
 
 registerAuthorizedTelegramCommand(bot, 'stop', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
-  void (async () => {
+  void adapterMigrationLifecycle.track((async () => {
     const result = await ensureExistingSession(chatId)
     if (result.status !== 'restored') {
       await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
@@ -499,7 +501,7 @@ registerAuthorizedTelegramCommand(bot, 'stop', isAuthorizedTelegramUser, (ctx) =
     }
     bridge.sendStopGeneration(chatId)
     await ctx.reply('⏹ 已发送停止信号。')
-  })()
+  })())
 })
 
 registerAuthorizedTelegramCommand(bot, 'status', isAuthorizedTelegramUser, async (ctx) => {
@@ -509,7 +511,7 @@ registerAuthorizedTelegramCommand(bot, 'status', isAuthorizedTelegramUser, async
 
 registerAuthorizedTelegramCommand(bot, 'clear', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
-  void (async () => {
+  void adapterMigrationLifecycle.track((async () => {
     const result = await ensureExistingSession(chatId)
     if (result.status !== 'restored') {
       await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
@@ -523,7 +525,7 @@ registerAuthorizedTelegramCommand(bot, 'clear', isAuthorizedTelegramUser, (ctx) 
     }
     getRuntimeState(chatId).state = 'thinking'
     await ctx.reply('🧹 已清空当前会话上下文。')
-  })()
+  })())
 })
 
 for (const command of ['allow', 'always', 'allow-always', 'deny'] as const) {
@@ -714,10 +716,11 @@ export function startTelegramAdapter(): void {
   })
   void syncTelegramBotCommands(bot.api).then(() => console.log('[Telegram] Command menu synced')).catch((err) => console.warn('[Telegram] Command menu sync failed:', err instanceof Error ? err.message : err))
   void bot.start({ onStart: () => console.log('[Telegram] Bot is running!') })
-  process.once('SIGINT', () => {
+  registerAdapterShutdown(async () => {
     console.log('[Telegram] Shutting down...')
-    stopTelegramAdapter()
-    process.exit(0)
+    if (bot.isRunning()) await bot.stop()
+    bridge.destroy()
+    dedup.destroy()
   })
 }
 

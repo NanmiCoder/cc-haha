@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { setBaseUrl } from '../api/client'
-import { attachmentImageSource, isInlineImagePath, localImageFileUrl } from './attachmentImages'
+import { attachmentImageSource, isInlineImagePath, isManagedGeneratedImagePath, localImageFileUrl } from './attachmentImages'
 
 describe('attachment image sources', () => {
+  it('recognizes managed image results in a relocated data directory', () => {
+    expect(isManagedGeneratedImagePath('D:\\Haha Data\\cc-haha\\generated-images\\session\\image.png')).toBe(true)
+    expect(isManagedGeneratedImagePath('/Volumes/Data/haha/cc-haha/generated-images/session/image.png')).toBe(true)
+    expect(isManagedGeneratedImagePath('/project/generated-images/image.png')).toBe(false)
+  })
+
   it('recognizes the extensions the server inlines as images', () => {
     expect(isInlineImagePath('/Users/nanmi/Desktop/a.png')).toBe(true)
     expect(isInlineImagePath('/Users/nanmi/Desktop/a.JPG')).toBe(true)

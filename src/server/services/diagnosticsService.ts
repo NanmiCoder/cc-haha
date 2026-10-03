@@ -100,6 +100,10 @@ export class DiagnosticsService {
   private lastRetentionSweepAt = 0
   private writeQueue: Promise<void> = Promise.resolve()
 
+  async drainForMigration(): Promise<void> {
+    await this.writeQueue
+  }
+
   getLogDir(): string {
     return path.join(this.getConfigDir(), 'cc-haha', 'diagnostics')
   }

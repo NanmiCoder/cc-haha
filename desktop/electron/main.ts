@@ -9,6 +9,9 @@ import {
   validateElectronIpcPayload,
 } from './ipc/capabilities'
 import { ElectronServerRuntime } from './services/serverRuntime'
+import { DataMigration } from './services/dataMigration'
+import { areStorageWritesFrozen, setStorageWritesFrozen } from './services/storageMaintenance'
+import { resolveRelocatedAttachmentPath } from '../../src/utils/storageRelocations'
 import { appendHostDiagnostic, electronHostDiagnosticsFile, sanitizeHostDiagnostic } from './services/sidecarManager'
 import { openDialog, saveDialog } from './services/dialogs'
 import { openExternalUrl, openSystemPath, openSystemSettingsUrl } from './services/shell'
@@ -44,6 +47,7 @@ import {
 } from './services/previewSession'
 import {
   applyStartupPortableMode,
+  clearAppManagedPortableEnv,
   getAppMode,
   setAppMode,
 } from './services/appMode'
@@ -102,6 +106,8 @@ import {
 
 let mainWindow: BrowserWindow | null = null
 let serverRuntime: ElectronServerRuntime | null = null
+let dataMigration: DataMigration | null = null
+const hostOperations = new Set<Promise<unknown>>()
 let publicAccessManager: PublicAccessManager | null = null
 let updaterService: ElectronUpdaterService | null = null
 let terminalService: ElectronTerminalService | null = null
@@ -255,6 +261,38 @@ function getServerRuntime() {
     resolveSystemProxy: (url) => session.defaultSession.resolveProxy(url),
   })
   return serverRuntime
+}
+
+function getDataMigration() {
+  dataMigration ??= new DataMigration(app, {
+    preview: () => getServerRuntime().getMigrationPreview(),
+    async quiesce() {
+      await Promise.allSettled([...hostOperations])
+      if (mainWindow && !mainWindow.isDestroyed()) saveWindowState(app, mainWindow)
+      petWindowController?.dispose()
+      petWindowController = null
+      await publicAccessManager?.dispose()
+      publicAccessManager = null
+      setStorageWritesFrozen(true)
+      await getServerRuntime().quiesceForMigration()
+    },
+    async resume() {
+      setStorageWritesFrozen(false)
+      await getServerRuntime().resumeAfterMigration()
+      await getPublicAccessManager().restore().catch(() => {})
+    },
+    restart() {
+      isQuitting = true
+      app.relaunch()
+      app.quit()
+    },
+    progress(status) {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send(ELECTRON_EVENT_CHANNELS.migrationProgress, status)
+      }
+    },
+  })
+  return dataMigration
 }
 
 function getPublicAccessManager() {
@@ -471,6 +509,13 @@ function registerHandler<T>(
       throw new Error(`Invalid Electron IPC payload for ${channel}`)
     }
     const senderWindow = BrowserWindow.fromWebContents(event.sender)
+    const migrationControl = channel.startsWith('desktop:app-mode:migration:')
+    if (migrationControl && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
+      throw new Error('Data migration requires the main desktop window')
+    }
+    if ((dataMigration?.running || areStorageWritesFrozen()) && !migrationControl && channel !== ELECTRON_IPC_CHANNELS.shellOpenPath) {
+      throw new Error('Data migration is in progress')
+    }
     if (channel.startsWith('desktop:public-access:') && (senderWindow !== mainWindow || event.senderFrame !== event.sender.mainFrame)) {
       throw new Error('Public access management requires the main desktop window')
     }
@@ -480,7 +525,10 @@ function registerHandler<T>(
     ) {
       throw new Error(`Electron IPC channel ${channel} is not available to the pet window`)
     }
-    return handler(event, payload)
+    if (migrationControl) return handler(event, payload)
+    const operation = Promise.resolve().then(() => handler(event, payload))
+    hostOperations.add(operation)
+    try { return await operation } finally { hostOperations.delete(operation) }
   })
 }
 
@@ -569,7 +617,7 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.clipboardReadText, () => clipboard.readText())
   registerHandler(ELECTRON_IPC_CHANNELS.clipboardWriteText, (_event, payload) => clipboard.writeText(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.shellOpen, (_event, payload) => openExternalUrl(String(payload)))
-  registerHandler(ELECTRON_IPC_CHANNELS.shellOpenPath, (_event, payload) => openSystemPath(String(payload)))
+  registerHandler(ELECTRON_IPC_CHANNELS.shellOpenPath, (_event, payload) => openSystemPath(resolveRelocatedAttachmentPath(String(payload))))
   registerHandler(ELECTRON_IPC_CHANNELS.traceOpenWindow, (_event, payload) => openTraceWindow(String(payload)))
   registerHandler(ELECTRON_IPC_CHANNELS.petsList, () => listCustomPets())
   registerHandler(ELECTRON_IPC_CHANNELS.petsCreateFromImage, async (event, payload) => {
@@ -853,6 +901,10 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.workspaceBrowserClose, (_event, payload) =>
     getWorkspaceBrowserService().close((payload as { tabId: string }).tabId))
   registerHandler(ELECTRON_IPC_CHANNELS.appModeGet, () => getAppMode(app))
+  registerHandler(ELECTRON_IPC_CHANNELS.migrationPrepare, (_event, payload) => getDataMigration().prepare((payload as { targetDir: string }).targetDir))
+  registerHandler(ELECTRON_IPC_CHANNELS.migrationStart, (_event, payload) => getDataMigration().start((payload as { id: string }).id))
+  registerHandler(ELECTRON_IPC_CHANNELS.migrationStatus, () => getDataMigration().status)
+  registerHandler(ELECTRON_IPC_CHANNELS.migrationCancel, (_event, payload) => getDataMigration().cancel((payload as { id: string }).id))
   registerHandler(ELECTRON_IPC_CHANNELS.appModeSet, (_event, payload) => setAppMode(app, payload as Parameters<typeof setAppMode>[1]))
   registerHandler(ELECTRON_IPC_CHANNELS.appModePrepareRestart, () => getServerRuntime().stopAll(true))
   registerHandler(ELECTRON_IPC_CHANNELS.appModeRestart, () => {
@@ -983,7 +1035,18 @@ registerIpcHandlers()
 
 app.whenReady().then(async () => {
   applyWindowsAppUserModelId(app)
-  applyStartupPortableMode(app)
+  clearAppManagedPortableEnv()
+  let validation = false
+  try {
+    validation = await getDataMigration().recover() === 'validate'
+    applyStartupPortableMode(app)
+  } catch (error) {
+    setStorageWritesFrozen(true)
+    dialog.showErrorBox('数据目录不可用 / Data directory unavailable', error instanceof Error ? error.message : 'Migration recovery failed')
+    await createMainWindow()
+    return
+  }
+  if (validation) process.env.CC_HAHA_MIGRATION_VALIDATION = '1'
   installSystemAppearanceWatch()
   screen.on('display-metrics-changed', (_event, _display, changedMetrics) => {
     if (changedMetrics.includes('scaleFactor') || changedMetrics.includes('bounds')) {
@@ -991,9 +1054,33 @@ app.whenReady().then(async () => {
       workspaceBrowserService?.refreshBounds()
     }
   })
-  await getServerRuntime().startServer().catch(error => {
-    console.error('[desktop] failed to start Electron server sidecar', error)
-  })
+  try {
+    await getServerRuntime().startServer()
+    if (validation) {
+      await getServerRuntime().validateMigrationStartup()
+      await getDataMigration().completeValidation()
+      validation = false
+      await getServerRuntime().activateAfterMigrationValidation()
+      delete process.env.CC_HAHA_MIGRATION_VALIDATION
+    }
+  } catch (error) {
+    if (validation) {
+      try {
+        await getServerRuntime().stopAllAndWait()
+        await getDataMigration().failValidation(error)
+        delete process.env.CC_HAHA_MIGRATION_VALIDATION
+        clearAppManagedPortableEnv()
+        applyStartupPortableMode(app)
+        serverRuntime = null
+        await getServerRuntime().startServer().catch(startError => console.error('[desktop] original directory restart failed', startError))
+      } catch (recoveryError) {
+        setStorageWritesFrozen(true)
+        dialog.showErrorBox('数据目录不可用 / Data directory unavailable', recoveryError instanceof Error ? recoveryError.message : 'Migration recovery failed')
+        await createMainWindow()
+        return
+      }
+    } else console.error('[desktop] failed to start Electron server sidecar', error)
+  }
   await getPublicAccessManager().restore().catch(() => {})
   await installApplicationMenu(app, () => mainWindow)
   if (shouldInstallTray(process.platform)) {
@@ -1032,6 +1119,12 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', event => {
   isQuitting = true
+  if (dataMigration?.running) {
+    event.preventDefault()
+    dataMigration.cancelActive()
+    void dataMigration.wait().then(() => app.quit())
+    return
+  }
   if (quitCleanupFinished) return
   event.preventDefault()
   if (quitCleanupStarted) return

@@ -968,6 +968,33 @@ describe('Settings > General tab', () => {
 
     expect((webSearchHeading.compareDocumentPosition(storageHeading) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     expect(screen.getByText(/Windows, upgrades recover verified legacy app-adjacent data/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Migrate Existing Data…' })).toBeInTheDocument()
+  })
+
+  it('blocks the existing directory-switch controls while a restored migration is running', async () => {
+    const host = window.desktopHost!
+    host.appMode = {
+      ...host.appMode,
+      migration: {
+        ...host.appMode.migration,
+        status: vi.fn().mockResolvedValue({
+          id: 'migration-fixture', sourceDir: '/fixture/original', targetDir: '/fixture/new',
+          stage: 'copying', files: 2, totalFiles: 4, bytes: 512, totalBytes: 1024, cancellable: true,
+        }),
+      },
+    }
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+    await screen.findByRole('dialog', { name: 'Data migration in progress' })
+    // The child's status render precedes its effect that reports the busy state
+    // to General settings; observe the completed parent update as well.
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Use system directory/ })).toBeDisabled()
+      expect(screen.getByLabelText('Custom data directory')).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Choose Folder' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Use This Folder and Restart' })).toBeDisabled()
+    })
+    expect(useSettingsStore.getState().setAppMode).not.toHaveBeenCalled()
   })
 
   it('lets desktop users choose a custom data directory and relaunch immediately', async () => {

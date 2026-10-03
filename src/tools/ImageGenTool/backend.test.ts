@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -36,6 +36,17 @@ const customConfig: ImageGenerationRuntimeConfig = {
 }
 
 let outputDir: string | undefined
+let isolatedConfig: string
+const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+beforeAll(async () => {
+  isolatedConfig = await mkdtemp(join(tmpdir(), 'imagegen-test-config-'))
+  process.env.CLAUDE_CONFIG_DIR = isolatedConfig
+})
+afterAll(async () => {
+  if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  await rm(isolatedConfig, { recursive: true, force: true })
+})
 
 afterEach(async () => {
   if (outputDir) await rm(outputDir, { recursive: true, force: true })
@@ -46,6 +57,28 @@ afterEach(async () => {
 })
 
 describe('ImageGen backend', () => {
+  test('edits a migrated session upload referenced by its historical path', async () => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-relocated-'))
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = outputDir
+    try {
+      const originalRoot = join(outputDir, 'absent-original')
+      const uploadDir = join(outputDir, 'uploads', getSessionId())
+      await mkdir(uploadDir, { recursive: true })
+      await mkdir(join(outputDir, 'cc-haha'))
+      await writeFile(join(uploadDir, 'source.png'), PNG_BYTES)
+      await writeFile(join(outputDir, 'cc-haha/storage-relocations.json'), JSON.stringify({ version: 1, previousRoots: [originalRoot] }))
+      const result = await generateImages({ prompt: 'edit my image', count: 1, referenced_image_paths: [join(originalRoot, 'uploads', getSessionId(), 'source.png')] }, customConfig, {
+        outputDir,
+        fetchImpl: async () => Response.json({ data: [{ b64_json: PNG_BYTES.toString('base64') }] }),
+      })
+      expect(result.inputImageCount).toBe(1)
+    } finally {
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previous
+    }
+  })
+
   test('builds the ChatGPT Responses image tool contract', () => {
     expect(buildChatGPTRequestBody({
       prompt: 'A geometric fox poster',

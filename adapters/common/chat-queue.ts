@@ -6,11 +6,15 @@
  * 参考 openclaw-lark chat-queue.ts 的 Promise 链设计。
  */
 
+import { adapterMigrationLifecycle } from './migration-lifecycle.js'
+
 const queues = new Map<string, Promise<void>>()
 
 export async function enqueue(chatId: string, fn: () => Promise<void>): Promise<void> {
+  if (adapterMigrationLifecycle.isQuiescing) return
   const prev = queues.get(chatId) ?? Promise.resolve()
-  const next = prev.then(fn, () => fn()).catch((err) => {
+  const invoke = () => adapterMigrationLifecycle.isQuiescing ? undefined : fn()
+  const next = adapterMigrationLifecycle.track(prev.then(invoke, invoke)).catch((err) => {
     console.error(`[ChatQueue] Error in task for chat ${chatId}:`, err)
   })
   queues.set(chatId, next)

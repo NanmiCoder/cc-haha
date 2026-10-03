@@ -235,6 +235,13 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       set: config => invoke(ELECTRON_IPC_CHANNELS.appModeSet, config),
       prepareRestart: () => invoke(ELECTRON_IPC_CHANNELS.appModePrepareRestart),
       restart: () => invoke(ELECTRON_IPC_CHANNELS.appModeRestart),
+      migration: {
+        prepare: targetDir => invoke(ELECTRON_IPC_CHANNELS.migrationPrepare, { targetDir }),
+        start: id => invoke(ELECTRON_IPC_CHANNELS.migrationStart, { id }),
+        status: () => invoke(ELECTRON_IPC_CHANNELS.migrationStatus),
+        cancel: id => invoke(ELECTRON_IPC_CHANNELS.migrationCancel, { id }),
+        onProgress: handler => subscribe(ELECTRON_EVENT_CHANNELS.migrationProgress, handler),
+      },
     },
     adapters: {
       restartSidecar: () => invoke(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar),

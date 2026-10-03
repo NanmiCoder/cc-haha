@@ -9,6 +9,24 @@ import {
 } from './capabilities'
 
 describe('Electron IPC capabilities', () => {
+  it('validates migration paths and identities and keeps migration IPC unavailable to pet windows', () => {
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.migrationPrepare, { targetDir: 'D:\\cc-haha-data' })).toBe(true)
+    for (const payload of [undefined, {}, { targetDir: '' }, { targetDir: '   ' }, { targetDir: 2 }, { targetDir: 'bad\u0000path' }, { targetDir: 'D:\\data', sourceDir: 'C:\\data' }]) {
+      expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.migrationPrepare, payload)).toBe(false)
+    }
+    for (const channel of [ELECTRON_IPC_CHANNELS.migrationStart, ELECTRON_IPC_CHANNELS.migrationCancel]) {
+      expect(validateElectronIpcPayload(channel, { id: 'migration-1' })).toBe(true)
+      for (const payload of [undefined, {}, { id: '' }, { id: '../other' }, { id: 'x'.repeat(201) }, { id: 'migration-1', targetDir: 'D:\\data' }]) {
+        expect(validateElectronIpcPayload(channel, payload)).toBe(false)
+      }
+    }
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.migrationStatus, undefined)).toBe(true)
+    expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.migrationStatus, {})).toBe(false)
+    for (const channel of [ELECTRON_IPC_CHANNELS.migrationPrepare, ELECTRON_IPC_CHANNELS.migrationStart, ELECTRON_IPC_CHANNELS.migrationStatus, ELECTRON_IPC_CHANNELS.migrationCancel]) {
+      expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+    }
+  })
+
   it('restricts public access credentials and consent to validated desktop IPC', () => {
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, 'fake-token')).toBe(true)
     for (const value of ['', 'a b', 'x'.repeat(4097), {}, null]) {

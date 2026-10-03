@@ -1,3 +1,4 @@
+import { adapterMigrationLifecycle } from './migration-lifecycle.js'
 /**
  * WebSocket Bridge
  *
@@ -210,7 +211,7 @@ export class WsBridge {
       // races where a later message reads stale map entries set up by an
       // earlier-but-still-in-flight handler.
       const prev = this.handlerChains.get(chatId) ?? Promise.resolve()
-      const next = prev
+      const next = adapterMigrationLifecycle.track(prev
         .catch(() => {}) // upstream errors must not poison the chain
         .then(() => {
           // Resetting a chat cannot cancel promises already queued for its old
@@ -222,7 +223,7 @@ export class WsBridge {
         })
         .catch((err) => {
           console.error(`[WsBridge] Handler error on ${chatId}:`, err)
-        })
+        }))
       this.handlerChains.set(chatId, next)
     })
 

@@ -24,6 +24,7 @@ import { getCcHahaDir, getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getImageStoreDir } from '../../utils/imageStore.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import { isUserProvidedImage } from '../../utils/userProvidedImages.js'
+import { resolveRelocatedAttachmentPath } from '../../utils/storageRelocations.js'
 import { buildApiSmartImageBodies, isApiSmartImageConfig } from './apiSmart.js'
 import { downloadGeneratedImage } from './imageDownload.js'
 
@@ -623,7 +624,7 @@ async function prepareInputImages(
   )
 
   return Promise.all(requested.map(async (inputPath) => {
-    const resolvedPath = await realpath(inputPath).catch(() => null)
+    const resolvedPath = await realpath(resolveRelocatedAttachmentPath(inputPath)).catch(() => null)
     // Two ways an image earns the right to be uploaded to the image provider:
     // it sits in a per-session directory we own (pasted, staged, or generated),
     // or the user named it explicitly with @. Anything else — a path the model

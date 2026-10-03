@@ -1,4 +1,5 @@
 import { closeSideChatsForParent, getSideChat, isSideChatId, SIDE_CHAT_BOUNDARY } from './sideChatRegistry.js'
+import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
 /**
  * ConversationService — CLI subprocess manager
  *
@@ -53,6 +54,7 @@ import {
   REJECT_MESSAGE_WITH_REASON_PREFIX,
 } from '../../constants/messages.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { resolveRelocatedAttachmentPath } from '../../utils/storageRelocations.js'
 import { findCanonicalGitRoot } from '../../utils/git.js'
 import { sanitizePath } from '../../utils/path.js'
 import { getProcessEnvWithTerminalShellEnvironment } from '../../utils/terminalShellEnvironment.js'
@@ -606,6 +608,7 @@ export class ConversationService {
     sdkUrl: string,
     options?: SessionStartOptions,
   ): Promise<void> {
+    migrationMaintenance.assertAvailable()
     if (this.deletedSessions.has(sessionId)) {
       throw new ConversationStartupError(
         `Session was deleted before startup completed: ${sessionId}`,
@@ -742,6 +745,7 @@ export class ConversationService {
     const usesOfficialOAuth = this.shouldMarkManagedOAuth(options?.providerId)
 
     let proc: ReturnType<typeof Bun.spawn>
+    migrationMaintenance.assertAvailable()
     try {
       proc = Bun.spawn(args, buildConversationCliSpawnOptions(launchWorkDir, childEnv))
       if (side) side.started = true
@@ -934,6 +938,7 @@ export class ConversationService {
     attachments?: AttachmentRef[],
     options?: SendMessageOptions,
   ): Promise<boolean> {
+    if (migrationMaintenance.isActive) return false
     const userContent = await this.buildUserContent(content, sessionId, attachments)
     let session = this.sessions.get(sessionId)
     if (session && !await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
@@ -947,7 +952,7 @@ export class ConversationService {
     // can all suspend this call. Stop may revoke the owning desktop turn while
     // one of those awaits is pending, so check ownership at the last possible
     // point before writing the user message to the SDK socket.
-    if (options?.canSend && !options.canSend()) return false
+    if (migrationMaintenance.isActive || (options?.canSend && !options.canSend())) return false
     const sent = this.sendSdkMessage(sessionId, {
       type: 'user',
       ...(options?.messageUuid ? { uuid: options.messageUuid } : {}),
@@ -1801,6 +1806,24 @@ export class ConversationService {
     return Array.from(this.sessions.keys())
   }
 
+  getProcessIds(): number[] {
+    return [...this.sessions.values()].map(session => session.proc.pid).filter(pid => pid > 0)
+  }
+
+  async stopForMigration(): Promise<void> {
+    const sessions = [...this.sessions.entries()]
+    await Promise.all(sessions.map(async ([sessionId, session]) => {
+      if (session.proc.exitCode == null) {
+        await this.requestControl(sessionId, { subtype: 'end_session', reason: 'data_migration' }, 10_000)
+      }
+      const exited = await waitForMigrationExit(session.proc.exited)
+      if (!exited) throw new Error(`CLI process did not exit: ${sessionId}`)
+      await session.outputDrain
+      this.sessions.delete(sessionId)
+    }))
+    await Promise.all([...this.teamStopOperations.values()])
+  }
+
   private async readProcessOutputStream(
     sessionId: string,
     stream: ReadableStream | null | undefined,
@@ -2313,7 +2336,7 @@ export class ConversationService {
       }
     })()
 
-    session.officialOAuthRefreshPromise = recovery
+    session.officialOAuthRefreshPromise = migrationMaintenance.track(recovery)
     void recovery.finally(() => {
       if (session.officialOAuthRefreshPromise === recovery) {
         session.officialOAuthRefreshPromise = undefined
@@ -2731,7 +2754,10 @@ export class ConversationService {
     const savedPaths: string[] = []
     const imageBlocks: UserContentBlock[] = []
     const imageMetadataTexts: string[] = []
-    for (const attachment of attachments) {
+    for (const originalAttachment of attachments) {
+      const attachment = originalAttachment.path
+        ? { ...originalAttachment, path: resolveRelocatedAttachmentPath(originalAttachment.path) }
+        : originalAttachment
       if (this.shouldInlineImageAttachment(attachment)) {
         const image = await this.materializeImageAttachment(attachment, uploadDir)
         if (image) {

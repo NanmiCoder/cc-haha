@@ -35,7 +35,7 @@ function classify(target: string): PendingUpload['source'] | null {
   if (target.startsWith('http://') || target.startsWith('https://')) {
     return { kind: 'url', url: target }
   }
-  if (target.startsWith('/')) {
+  if (target.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(target) || /^\\\\[^\\]+\\[^\\]+/.test(target)) {
     return { kind: 'path', path: target }
   }
   return null // relative paths — skip, we can't resolve them safely

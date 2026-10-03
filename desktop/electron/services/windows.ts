@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { areStorageWritesFrozen } from './storageMaintenance'
 import type { App, BrowserWindow, BrowserWindowConstructorOptions, Display } from 'electron'
 
 export const WINDOW_STATE_FILE = 'window-state.json'
@@ -118,7 +119,7 @@ export function writeWindowState(
   state: StoredWindowState,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  if (!isPersistableWindowState(state)) return
+  if (areStorageWritesFrozen() || !isPersistableWindowState(state)) return
   const statePath = windowStatePath(app, env)
   try {
     mkdirSync(path.dirname(statePath), { recursive: true })

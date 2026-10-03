@@ -13,6 +13,7 @@ import { findGitRoot, gitExe } from '../../utils/git.js'
 import { ripGrep } from '../../utils/ripgrep.js'
 import { expandTilde } from '../../utils/permissions/pathValidation.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
+import { activeStorageRoot, resolveRelocatedAttachmentPath } from '../../utils/storageRelocations.js'
 import {
   canonicalizeFilesystemAccessPath,
   isWithinRegisteredFilesystemRoot,
@@ -85,8 +86,9 @@ export function isAllowedFilesystemPath(targetPath: string): boolean {
   const resolvedPath = canonicalizeFilesystemAccessPath(targetPath)
   const homeDir = canonicalizeFilesystemAccessPath(os.homedir())
   const temporaryDir = canonicalizeFilesystemAccessPath('/tmp')
+  const storageRoot = canonicalizeFilesystemAccessPath(activeStorageRoot())
 
-  if (isWithinRoot(resolvedPath, homeDir) || isWithinRoot(resolvedPath, temporaryDir)) {
+  if (isWithinRoot(resolvedPath, homeDir) || isWithinRoot(resolvedPath, temporaryDir) || isWithinRoot(resolvedPath, storageRoot)) {
     return true
   }
 
@@ -123,7 +125,7 @@ async function handleServeFile(url: URL): Promise<Response> {
   // A model writes `~/Pictures/chart.png` as readily as an absolute path; the
   // other local file routes expand the alias, and the allow-list below is applied
   // to the expanded path.
-  const resolvedPath = path.resolve(normalizeDriveRootPathForPlatform(expandTilde(filePath)))
+  const resolvedPath = resolveRelocatedAttachmentPath(path.resolve(normalizeDriveRootPathForPlatform(expandTilde(filePath))))
   const canonicalPath = await canonicalizeExistingFilesystemPath(resolvedPath)
   if (!canonicalPath) {
     if (!isAllowedFilesystemPath(resolvedPath)) {

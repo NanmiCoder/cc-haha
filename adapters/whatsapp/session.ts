@@ -1,4 +1,5 @@
 import * as fs from 'node:fs'
+import { adapterMigrationLifecycle } from '../common/migration-lifecycle.js'
 import * as path from 'node:path'
 import {
   DisconnectReason,
@@ -48,6 +49,8 @@ export async function createWhatsAppSocket(options: {
 
   const logger = makeBaileysLogger(options.verbose ? 'info' : 'silent')
   const { state, saveCreds } = await useMultiFileAuthState(authDir)
+  const setKeys = state.keys.set.bind(state.keys)
+  state.keys.set = (...args) => adapterMigrationLifecycle.track(Promise.resolve(setKeys(...args)))
   const { version } = await fetchLatestBaileysVersion()
   const sock = makeWASocket({
     auth: {
@@ -108,8 +111,8 @@ function maybeRestoreCredsFromBackup(authDir: string): void {
 function enqueueSaveCreds(authDir: string, saveCreds: () => Promise<void> | void): void {
   const resolved = path.resolve(authDir)
   const prev = credsSaveQueues.get(resolved) ?? Promise.resolve()
-  const next = prev
-    .then(() => safeSaveCreds(resolved, saveCreds))
+  const save = adapterMigrationLifecycle.track(prev.then(() => safeSaveCreds(resolved, saveCreds)))
+  const next = save
     .catch((err) => {
       console.warn('[WhatsApp] Failed to save credentials:', err instanceof Error ? err.message : err)
     })

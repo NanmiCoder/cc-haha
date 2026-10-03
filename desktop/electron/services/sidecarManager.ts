@@ -1,5 +1,6 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
+import { areStorageWritesFrozen } from './storageMaintenance'
 import {
   constants as fsConstants,
   closeSync,
@@ -17,7 +18,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import type { Readable } from 'node:stream'
+import type { Readable, Writable } from 'node:stream'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -41,7 +42,7 @@ const MIN_FIXED_PORT = 1024
 const MAX_FIXED_PORT = 65535
 const MAX_PORT_RESERVATION_ATTEMPTS = 128
 
-export type SidecarChild = ChildProcessByStdio<null, Readable, Readable>
+export type SidecarChild = ChildProcessByStdio<Writable | null, Readable, Readable>
 
 export type SidecarPlan = {
   command: string
@@ -342,7 +343,7 @@ export function appendHostDiagnostic(
   line: string,
   { homeDir = os.homedir() }: { homeDir?: string } = {},
 ): void {
-  if (!filePath) return
+  if (areStorageWritesFrozen() || !filePath) return
   const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`
   let tempDescriptor: number | undefined
   try {
@@ -709,9 +710,9 @@ export function spawnSidecar(plan: SidecarPlan, deps: SpawnSidecarDeps = {}): Si
   }
   return (deps.spawnFn ?? spawn)(plan.command, plan.args, {
     env: plan.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: [plan.env.CC_HAHA_MIGRATION_CONTROL === '1' && plan.args[0] === 'adapters' ? 'pipe' : 'ignore', 'pipe', 'pipe'],
     windowsHide: true,
-  })
+  }) as SidecarChild
 }
 
 export type KillSidecarDeps = {

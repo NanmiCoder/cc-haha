@@ -18,6 +18,7 @@
 
 import * as path from 'node:path'
 import { enqueue } from './chat-queue.js'
+import { adapterMigrationLifecycle } from './migration-lifecycle.js'
 import {
   getConfiguredWorkDir,
   type AdapterConfig,
@@ -388,7 +389,7 @@ export class ImChatRuntime {
           this.getBuffer(chatId).append(msg.text)
           if (this.port.sendImage) {
             for (const pending of this.getImageWatcher(chatId).feed(msg.text)) {
-              void this.dispatchOutboundImage(chatId, pending)
+              void adapterMigrationLifecycle.track(this.dispatchOutboundImage(chatId, pending))
             }
           }
         }

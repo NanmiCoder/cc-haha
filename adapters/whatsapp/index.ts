@@ -1,3 +1,5 @@
+import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/migration-lifecycle.js'
+import { waitForWhatsAppCredsSave } from './session.js'
 /**
  * WhatsApp Adapter for Claude Code Desktop
  *
@@ -605,16 +607,21 @@ export function useWhatsAppSocket(socket: WhatsAppSocket): void {
 }
 
 async function startSocket(): Promise<void> {
+  if (shuttingDown || adapterMigrationLifecycle.isQuiescing) return
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
   useWhatsAppSocket(await createWhatsAppSocket({ authDir }))
+  if (shuttingDown || adapterMigrationLifecycle.isQuiescing) {
+    closeWhatsAppSocket(sock, 'data migration')
+    return
+  }
 
   sock.ev.on('messages.upsert', ({ type, messages }) => {
-    if (type !== 'notify') return
+    if (type !== 'notify' || adapterMigrationLifecycle.isQuiescing) return
     for (const message of messages) {
-      void handleIncomingMessage(message)
+      void adapterMigrationLifecycle.track(handleIncomingMessage(message))
     }
   })
 
@@ -635,13 +642,14 @@ async function startSocket(): Promise<void> {
 }
 
 function scheduleReconnect(): void {
+  if (shuttingDown || adapterMigrationLifecycle.isQuiescing) return
   if (reconnectTimer) return
   const delay = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** reconnectAttempts)
   reconnectAttempts += 1
   console.warn(`[WhatsApp] Connection closed. Reconnecting in ${delay}ms...`)
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
-    startSocket().catch((err) => {
+    adapterMigrationLifecycle.track(startSocket()).catch((err) => {
       console.error('[WhatsApp] Reconnect failed:', err instanceof Error ? err.message : err)
       scheduleReconnect()
     })
@@ -655,14 +663,14 @@ console.log(`[WhatsApp] Allowed users: ${config.whatsapp.allowedUsers.length ===
 
 if (import.meta.main || process.argv.includes('--whatsapp')) await startSocket()
 
-if (import.meta.main || process.argv.includes('--whatsapp')) process.on('SIGINT', () => {
+if (import.meta.main || process.argv.includes('--whatsapp')) registerAdapterShutdown(async () => {
   console.log('[WhatsApp] Shutting down...')
   shuttingDown = true
   if (reconnectTimer) clearTimeout(reconnectTimer)
   closeWhatsAppSocket(sock, 'SIGINT')
   bridge.destroy()
   dedup.destroy()
-  process.exit(0)
+  await waitForWhatsAppCredsSave(authDir)
 })
 
 export { bridge, dedup, sessionStore, sessionSelectionController, handleServerMessage, getRuntimeState, clearTransientChatState, createSessionForChat, showProjectPicker, routeUserMessage, startNewSession }

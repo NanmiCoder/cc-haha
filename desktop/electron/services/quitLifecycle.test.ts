@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 // Execute the production registration without booting Electron or user sidecars.
 // Dependencies are fixtures; the before-quit handler and its state are real.
-function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAccess = false) {
+function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAccess = false, dataMigration: { running: boolean; cancelActive(): void; wait(): Promise<void> } | null = null) {
   const desktopDir = path.basename(process.cwd()) === 'desktop'
     ? process.cwd()
     : path.join(process.cwd(), 'desktop')
@@ -34,6 +34,7 @@ function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAcc
   app.quit = vi.fn(requestQuit)
   const context = {
     app, isQuitting: false, quitCleanupStarted: false, quitCleanupFinished: false,
+    dataMigration,
     mainWindow: {}, saveWindowState: cleanup('window'),
     trayController: { dispose: cleanup('tray') },
     terminalService: { killAll: cleanup('terminal') },
@@ -60,6 +61,24 @@ function quitFixture(failingStep?: string, rejectServer = false, rejectPublicAcc
 const settle = () => new Promise<void>(resolve => setImmediate(resolve))
 
 describe('Electron quit lifecycle', () => {
+  it('keeps the host alive until a pending migration cancels and resumes safely', async () => {
+    let finish!: () => void
+    const wait = new Promise<void>(resolve => { finish = resolve })
+    const migration = { running: true, cancelActive: vi.fn(), wait: () => wait }
+    const fixture = quitFixture(undefined, false, false, migration)
+    expect(fixture.requestQuit().preventDefault).toHaveBeenCalledOnce()
+    expect(migration.cancelActive).toHaveBeenCalledOnce()
+    expect(fixture.calls).toEqual([])
+    expect(fixture.exit).not.toHaveBeenCalled()
+    migration.running = false
+    finish()
+    await settle()
+    expect(fixture.calls).toContain('server')
+    fixture.finishServer()
+    await settle()
+    expect(fixture.exit).toHaveBeenCalledOnce()
+  })
+
   it('waits for server cleanup, coalesces repeated quits, then allows the final quit', async () => {
     const fixture = quitFixture()
     expect(fixture.requestQuit().preventDefault).toHaveBeenCalledOnce()

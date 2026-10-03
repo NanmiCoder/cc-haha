@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it, spyOn } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, it, spyOn, test } from 'bun:test'
 import {
   mkdirSync,
   mkdtempSync,
@@ -11,6 +11,7 @@ import * as os from 'node:os'
 import { homedir, tmpdir } from 'node:os'
 import * as path from 'node:path'
 import { handleLocalFile, reconstructAbsolutePath } from '../localFile'
+import { handleFilesystemRoute } from '../filesystem'
 import { isAllowedFilesystemPath } from '../filesystem'
 
 // Deterministic 256-byte payload (bytes 0..255) so range slices are checkable.
@@ -50,6 +51,32 @@ function setupFiles() {
   writeFileSync(path.join(root, 'with space.html'), '<h1>spaced</h1>')
   return root
 }
+
+test('serves copied attachments from their historical path after the original root disappears', async () => {
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  const current = mkdtempSync(path.join(tmpdir(), 'migrated-config-'))
+  const original = path.join(SANDBOX_ROOTS, 'missing-original')
+  const suffix = path.join('uploads', 'session', 'image.png')
+  mkdirSync(path.join(current, 'uploads', 'session'), { recursive: true })
+  mkdirSync(path.join(current, 'cc-haha'), { recursive: true })
+  writeFileSync(path.join(current, suffix), VIDEO_BYTES)
+  writeFileSync(path.join(current, 'cc-haha/storage-relocations.json'), JSON.stringify({ version: 1, previousRoots: [original] }))
+  process.env.CLAUDE_CONFIG_DIR = current
+  try {
+    expect(isAllowedFilesystemPath(current)).toBe(true)
+    const originalPath = path.join(original, suffix)
+    const response = await handleLocalFile(new URL(`http://localhost/local-file/${originalPath.replaceAll('\\', '/').replace(/^\//, '')}`))
+    expect(response.status).toBe(200)
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(VIDEO_BYTES)
+    const imageResponse = await handleFilesystemRoute('/api/filesystem/file', new URL(`http://localhost/api/filesystem/file?path=${encodeURIComponent(originalPath)}`))
+    expect(imageResponse.status).toBe(200)
+    expect(new Uint8Array(await imageResponse.arrayBuffer())).toEqual(VIDEO_BYTES)
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+    rmSync(current, { recursive: true, force: true })
+  }
+})
 
 function makeExternalFixtureDir(): string | null {
   const candidates = ['/var/tmp', '/private/var/tmp', '/Users/Shared']

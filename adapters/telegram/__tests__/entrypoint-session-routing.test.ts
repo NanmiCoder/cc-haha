@@ -6,6 +6,7 @@ import type { ServerWebSocket } from 'bun'
 import { SessionStore } from '../../common/session-store.js'
 import { WsBridge } from '../../common/ws-bridge.js'
 import { AttachmentStore } from '../../common/attachment/attachment-store.js'
+import { adapterMigrationLifecycle } from '../../common/migration-lifecycle.js'
 
 // Import the actual entrypoint with isolated configuration. Telegram API calls
 // terminate in grammY's documented transformer; HTTP and WS use loopback only.
@@ -357,7 +358,7 @@ describe('Telegram entrypoint session routing', () => {
   it('starts the registered bot and publishes its menu without external access', async () => {
     const gc = spyOn(AttachmentStore.prototype, 'gc').mockResolvedValue({ removed: 0, bytes: 0 })
     const start = spyOn(entry.bot, 'start').mockImplementation(async (options) => { await options?.onStart?.(entry.bot.botInfo) })
-    const previousListeners = process.listeners('SIGINT')
+    const previousListeners = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]))
     try {
       entry.startTelegramAdapter()
       await eventually(() => expect(apiCalls.some((call) => call.method === 'setMyCommands')).toBe(true))
@@ -366,11 +367,54 @@ describe('Telegram entrypoint session routing', () => {
       const commands = apiCalls.find((call) => call.method === 'setMyCommands')!.payload.commands
       expect(commands.some((command: { command: string }) => command.command === 'sessions')).toBe(true)
     } finally {
-      for (const listener of process.listeners('SIGINT')) {
-        if (!previousListeners.includes(listener)) process.removeListener('SIGINT', listener)
+      for (const [signal, listeners] of previousListeners) {
+        for (const listener of process.listeners(signal)) {
+          if (!listeners.includes(listener)) process.removeListener(signal, listener)
+        }
       }
       start.mockRestore()
       gc.mockRestore()
+    }
+  })
+
+  it('blocks real update ingress during migration and its registered shutdown waits for polling to stop', async () => {
+    let cleanup!: () => Promise<void> | void
+    let release!: () => void
+    const pendingStop = new Promise<void>(resolve => { release = resolve })
+    const register = spyOn(adapterMigrationLifecycle, 'registerShutdown').mockImplementation(callback => { cleanup = callback })
+    const start = spyOn(entry.bot, 'start').mockResolvedValue()
+    const running = spyOn(entry.bot, 'isRunning').mockReturnValue(true)
+    const stop = spyOn(entry.bot, 'stop').mockImplementation(async () => { await pendingStop })
+    const gc = spyOn(AttachmentStore.prototype, 'gc').mockResolvedValue({ removed: 0, bytes: 0 })
+    const destroy = spyOn(WsBridge.prototype, 'destroy')
+    const previousListeners = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, process.listeners(signal)]))
+    try {
+      entry.startTelegramAdapter()
+      expect(register).toHaveBeenCalledTimes(1)
+      Object.defineProperty(adapterMigrationLifecycle, 'isQuiescing', { configurable: true, get: () => true })
+      const previousRequests = requests.length
+      const previousMessages = messages.length
+      await text(710, 'Should remain unadmitted')
+      expect(requests).toHaveLength(previousRequests)
+      expect(messages).toHaveLength(previousMessages)
+      let completed = false
+      const stopping = Promise.resolve(cleanup()).then(() => { completed = true })
+      await Promise.resolve()
+      expect(stop).toHaveBeenCalledTimes(1)
+      expect(completed).toBe(false)
+      expect(destroy).not.toHaveBeenCalled()
+      release()
+      await stopping
+      expect(destroy).toHaveBeenCalledTimes(1)
+    } finally {
+      release()
+      Reflect.deleteProperty(adapterMigrationLifecycle, 'isQuiescing')
+      for (const [signal, listeners] of previousListeners) {
+        for (const listener of process.listeners(signal)) {
+          if (!listeners.includes(listener)) process.removeListener(signal, listener)
+        }
+      }
+      for (const spy of [destroy, gc, stop, running, start, register]) spy.mockRestore()
     }
   })
 })

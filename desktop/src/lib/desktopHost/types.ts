@@ -370,6 +370,28 @@ export type AppModeSetInput = {
   portableDir: string | null
 }
 
+export type MigrationPreview = {
+  id: string
+  sourceDir: string
+  targetDir: string
+  files: number
+  bytes: number
+  activeTasks: number
+}
+
+export type MigrationStatus = {
+  id: string
+  sourceDir: string
+  targetDir: string
+  stage: 'preparing' | 'quiescing' | 'copying' | 'verifying' | 'committing' | 'restarting' | 'completed' | 'cancelled' | 'failed'
+  files: number
+  totalFiles: number
+  bytes: number
+  totalBytes: number
+  error?: string
+  cancellable: boolean
+}
+
 export type DesktopPublicAccessStatus = {
   state: 'unconfigured' | 'disabled' | 'connecting' | 'online' | 'reconnecting' | 'failed'
   hasCredential: boolean
@@ -529,6 +551,13 @@ export type DesktopHost = {
     set(config: AppModeSetInput): Promise<void>
     prepareRestart(): Promise<void>
     restart(): Promise<void>
+    migration: {
+      prepare(targetDir: string): Promise<MigrationPreview>
+      start(id: string): Promise<void>
+      status(): Promise<MigrationStatus | null>
+      cancel(id: string): Promise<void>
+      onProgress(handler: (status: MigrationStatus) => void): Promise<DesktopHostUnlisten>
+    }
   }
   adapters: {
     restartSidecar(): Promise<void>

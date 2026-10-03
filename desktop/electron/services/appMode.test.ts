@@ -50,6 +50,14 @@ afterEach(() => {
 })
 
 describe('Electron app mode service', () => {
+  it('preserves unknown startup pointer fields when migrating to another root', () => {
+    const fakeApp = app()
+    writeMode(fakeApp, { mode: 'default', portable_dir: null, future: { preserve: true } })
+    const selected = path.join(fakeApp.root, 'migrated')
+    setAppMode(fakeApp, { mode: 'portable', portableDir: selected }, {})
+    expect(JSON.parse(fs.readFileSync(path.join(fakeApp.getPath('userData'), 'app-mode.json'), 'utf8')))
+      .toMatchObject({ mode: 'portable', portable_dir: selected, future: { preserve: true } })
+  })
   it('always uses ~/.claude in system mode and ignores app-adjacent legacy data at runtime', () => {
     const fakeApp = app()
     const legacyDir = path.join(path.dirname(fakeApp.getPath('exe')), 'CLAUDE_CONFIG_DIR')

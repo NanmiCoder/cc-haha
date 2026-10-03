@@ -1,3 +1,4 @@
+import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/migration-lifecycle.js'
 /**
  * QQ Adapter for Claude Code Desktop
  *
@@ -259,19 +260,18 @@ bot.on('error', (err: Error) => console.error('[QQ] Connection error:', err.mess
 console.log('[QQ] Starting adapter...')
 console.log(`[QQ] Server: ${config.serverUrl}`)
 console.log(`[QQ] App: ${config.qq.appId}`)
-void bot.start().catch((err) => {
+void adapterMigrationLifecycle.track(bot.start()).catch((err) => {
   console.error('[QQ] Failed to start:', err instanceof Error ? err.message : err)
   process.exit(1)
 })
 
-process.on('SIGINT', () => {
+registerAdapterShutdown(async () => {
   console.log('[QQ] Shutting down...')
   try {
-    bot.stop()
+    await bot.stop()
   } catch {
     // Best-effort: the process is exiting either way.
   }
   bridge.destroy()
   dedup.destroy()
-  process.exit(0)
 })

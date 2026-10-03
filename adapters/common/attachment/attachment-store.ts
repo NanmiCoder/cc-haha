@@ -11,6 +11,7 @@
  */
 
 import * as fs from 'node:fs/promises'
+import { adapterMigrationLifecycle } from '../migration-lifecycle.js'
 import * as fsSync from 'node:fs'
 import type { Dirent } from 'node:fs'
 import * as path from 'node:path'
@@ -29,7 +30,7 @@ const DEFAULT_RETENTION_MS = 24 * 60 * 60 * 1000
 const DEFAULT_ORPHAN_GRACE_MS = 10 * 60 * 1000
 
 function defaultRoot(): string {
-  return path.join(os.homedir(), '.claude', 'im-downloads')
+  return path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'im-downloads')
 }
 
 /** Strip path separators / .. / control chars from a filename. */
@@ -70,7 +71,11 @@ export class AttachmentStore {
   }
 
   /** Write atomically: stream to {target}.part, then rename. */
-  async write(target: string, data: Buffer): Promise<string> {
+  write(target: string, data: Buffer): Promise<string> {
+    return adapterMigrationLifecycle.track(this.writeOnce(target, data))
+  }
+
+  private async writeOnce(target: string, data: Buffer): Promise<string> {
     await fs.mkdir(path.dirname(target), { recursive: true })
     const tmp = `${target}.${process.pid}.${Date.now()}.part`
     await fs.writeFile(tmp, data)
@@ -79,7 +84,11 @@ export class AttachmentStore {
   }
 
   /** Remove files older than retentionMs. Returns summary. */
-  async gc(): Promise<{ removed: number; bytes: number }> {
+  gc(): Promise<{ removed: number; bytes: number }> {
+    return adapterMigrationLifecycle.track(this.gcOnce())
+  }
+
+  private async gcOnce(): Promise<{ removed: number; bytes: number }> {
     let removed = 0
     let bytes = 0
     const now = Date.now()

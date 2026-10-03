@@ -1,4 +1,5 @@
 import { getSideChat, isSideChatId } from '../services/sideChatRegistry.js'
+import { migrationMaintenance } from '../migrationMaintenance.js'
 /**
  * WebSocket connection handler
  *
@@ -669,6 +670,11 @@ export const handleWebSocket = {
         typeof rawMessage === 'string' ? rawMessage : rawMessage.toString()
       ) as ClientMessage
 
+      if (migrationMaintenance.isActive && message.type !== 'ping' && message.type !== 'sync_state') {
+        sendError(ws, 'Data migration is in progress', 'MIGRATION_IN_PROGRESS')
+        return
+      }
+
       if (ws.data.clientKind === 'pet' && !isPetClientMessageAllowed(message)) {
         sendError(
           ws,
@@ -681,7 +687,7 @@ export const handleWebSocket = {
       switch (message.type) {
         case 'user_message': {
           const activeTurn: ActiveUserTurnState = { messageSent: false }
-          handleUserMessage(ws, message, activeTurn).catch((err) => {
+          migrationMaintenance.track(handleUserMessage(ws, message, activeTurn)).catch((err) => {
             const sessionId = ws.data.sessionId
             void diagnosticsService.recordEvent({
               type: 'ws_user_message_failed',
@@ -728,15 +734,15 @@ export const handleWebSocket = {
           break
 
         case 'set_permission_mode':
-          void handleSetPermissionMode(ws, message)
+          void migrationMaintenance.track(handleSetPermissionMode(ws, message))
           break
 
         case 'set_runtime_config':
-          void handleSetRuntimeConfig(ws, message)
+          void migrationMaintenance.track(handleSetRuntimeConfig(ws, message))
           break
 
         case 'prewarm_session':
-          void handlePrewarmSession(ws)
+          void migrationMaintenance.track(handlePrewarmSession(ws))
           break
 
         case 'sync_state':
@@ -756,7 +762,7 @@ export const handleWebSocket = {
           break
 
         case 'stop_background_task':
-          void handleStopBackgroundTask(ws, message)
+          void migrationMaintenance.track(handleStopBackgroundTask(ws, message))
           break
 
         case 'ping':
@@ -1137,6 +1143,24 @@ function sessionTurnConnection(
 
 export function stopSessionTurn(sessionId: string): void {
   handleStopGeneration(sessionTurnConnection(sessionId, { serverHost: '127.0.0.1', serverPort: 0 }))
+}
+
+export function revokeSessionAdmissionsForMigration(): void {
+  for (const turn of activeUserTurns.values()) turn.cancelled = true
+  for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)
+  for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
+  prewarmIdleTimers.clear()
+  sessionCleanupTimers.clear()
+  for (const remove of sessionDisconnectWatchers.values()) remove()
+  sessionDisconnectWatchers.clear()
+  for (const tasks of activeAgentTasks.values()) {
+    for (const task of tasks.values()) clearAgentStopFinalizationRetry(task)
+  }
+}
+
+export async function drainSessionWritesForMigration(): Promise<void> {
+  await Promise.allSettled([...runtimeTransitionPromises.values(), ...sessionStartupPromises.values()])
+  await Promise.all([...taskNotificationPersistence.values()].flatMap(writes => [...writes.values()]))
 }
 
 export function isSessionTurnStopped(sessionId: string): boolean {
@@ -2559,6 +2583,7 @@ function scheduleAgentStopFinalizationRetry(
   sessionId: string,
   task: ActiveAgentTaskState,
 ): void {
+  if (migrationMaintenance.isActive) return
   if (!task.localStopConfirmed || task.finalizationRetryTimer !== undefined) return
   const delayMs = AGENT_STOP_FINALIZATION_RETRY_DELAYS_MS[task.finalizationRetryCount]
   if (delayMs !== undefined) {
@@ -2575,7 +2600,7 @@ function scheduleAgentStopFinalizationRetry(
         return
       }
       current.stopFailureMessage = undefined
-      void emitAuthoritativeAgentStopped(sessionId, current)
+      void migrationMaintenance.track(emitAuthoritativeAgentStopped(sessionId, current))
     }, delayMs)
     if (typeof task.finalizationRetryTimer === 'object') {
       task.finalizationRetryTimer.unref?.()
@@ -2628,7 +2653,7 @@ function emitAuthoritativeAgentStopped(
   if (current.bookendPending) return Promise.resolve(false)
   current.bookendPending = true
 
-  const finalization = (async (): Promise<boolean> => {
+  const finalization = migrationMaintenance.track((async (): Promise<boolean> => {
     const remoteArchiveAttempt = current.taskType === 'remote_agent'
       ? ensureRemoteAgentArchive(sessionId, current)
       : undefined
@@ -2725,7 +2750,7 @@ function emitAuthoritativeAgentStopped(
     forwardCliMessageToSessionClients(sessionId, cliMsg)
     scheduleDisconnectedSessionCleanupIfIdle(sessionId)
     return true
-  })().catch((error): boolean => {
+  })()).catch((error): boolean => {
     if (activeAgentTasks.get(sessionId)?.get(current.taskId) !== current) return false
     current.bookendPending = false
     current.stopRequested = false
@@ -2747,7 +2772,7 @@ function resumeAgentFinalizationAfterFailedClear(
 ): void {
   const pendingFinalizations = tasks.flatMap((task) =>
     task.finalization ? [task.finalization] : [])
-  void Promise.allSettled(pendingFinalizations).then(() => {
+  void migrationMaintenance.track(Promise.allSettled(pendingFinalizations).then(() => {
     for (const task of tasks) {
       const current = activeAgentTasks.get(sessionId)?.get(task.taskId)
       if (current !== task) continue
@@ -2759,7 +2784,7 @@ function resumeAgentFinalizationAfterFailedClear(
       current.stopFailureMessage = undefined
       void emitAuthoritativeAgentStopped(sessionId, current)
     }
-  })
+  }))
 }
 
 function emitAuthoritativeStoppedForActiveAgents(sessionId: string): Promise<boolean[]> {
@@ -2852,6 +2877,7 @@ function triggerTitleGeneration(
 ): void {
   const state = sessionTitleState.get(sessionId)
   if (!state || state.hasCustomTitle || state.hasExistingTranscript) return
+  if (migrationMaintenance.isActive) return
   // Titles summarize cumulative input. Once it includes a private turn, later
   // refreshes must remain in memory even if retention is enabled again.
   state.persistTitleSource &&= sessionService.shouldPersistSession()
@@ -2867,7 +2893,7 @@ function triggerTitleGeneration(
     if (state.startedGenerationKeys.has(key)) return
     state.startedGenerationKeys.add(key)
 
-    void (async () => {
+    void migrationMaintenance.track((async () => {
       try {
         const text = state.firstUserMessage
         const placeholder = deriveTitle(text)
@@ -2882,7 +2908,7 @@ function triggerTitleGeneration(
       } catch (err) {
         console.error(`[Title] Failed to derive title for ${sessionId}:`, err)
       }
-    })()
+    })())
     return
   }
 
@@ -2896,7 +2922,7 @@ function triggerTitleGeneration(
   const runtimeProviderId = runtimeOverrides.get(sessionId)?.providerId
   const generationSeq = ++state.generationSeq
 
-  void (async () => {
+  void migrationMaintenance.track((async () => {
     try {
       const responseLanguage = await getResponseLanguageSetting()
       const titleLanguagePreference = resolveTitleLanguagePreference(
@@ -2921,7 +2947,7 @@ function triggerTitleGeneration(
     } catch (err) {
       console.error(`[Title] Failed to generate title for ${sessionId}:`, err)
     }
-  })()
+  })())
 }
 
 async function getResponseLanguageSetting(): Promise<string | undefined> {
@@ -3215,6 +3241,7 @@ function clearPrewarmState(sessionId: string) {
 }
 
 function markPrewarmed(sessionId: string) {
+  if (migrationMaintenance.isActive) return
   prewarmedSessions.add(sessionId)
   const timeoutMs = getPrewarmIdleTimeoutMs()
   if (timeoutMs === 0) return
@@ -3247,12 +3274,12 @@ function cacheSessionInitMetadata(sessionId: string, cliMsg: any) {
   if (cliMsg?.type !== 'system' || cliMsg.subtype !== 'init') return
   if (typeof cliMsg.cwd === 'string' && cliMsg.cwd.trim()) {
     conversationService.updateSessionWorkDir(sessionId, cliMsg.cwd)
-    void (async () => {
+    void migrationMaintenance.track((async () => {
       await sessionService.appendSessionMetadata(sessionId, {
         workDir: cliMsg.cwd,
       })
       await sessionService.deletePlaceholderSessionFiles(sessionId, cliMsg.cwd)
-    })()
+    })())
   }
   if (cliMsg.slash_commands && Array.isArray(cliMsg.slash_commands)) {
     updateSessionSlashCommands(sessionId, cliMsg.slash_commands, { notifyClient: false })
@@ -4095,6 +4122,7 @@ function hasLiveUserTurnForClient(sessionId: string): boolean {
  * reconnects before it fires, the CLI subprocess is stopped.
  */
 function scheduleDisconnectCleanup(sessionId: string): void {
+  if (migrationMaintenance.isActive) return
   computerUseApprovalService.cancelSession(sessionId)
 
   const existing = sessionCleanupTimers.get(sessionId)
@@ -4103,7 +4131,7 @@ function scheduleDisconnectCleanup(sessionId: string): void {
   const cleanupDelayMs = getDisconnectCleanupDelayMs(sessionId)
   const cleanupTimer = setTimeout(() => {
     sessionCleanupTimers.delete(sessionId)
-    if (hasActiveClients(sessionId)) return
+    if (migrationMaintenance.isActive || hasActiveClients(sessionId)) return
 
     const permissionBoundExpired = conversationService
       .getPendingPermissionRequests(sessionId).length > 0
@@ -4142,6 +4170,7 @@ function scheduleDisconnectedSessionCleanupIfIdle(sessionId: string): void {
  * (issue #764). If a client reconnects first, the watcher is torn down.
  */
 function watchTurnCompletionForCleanup(sessionId: string): void {
+  if (migrationMaintenance.isActive) return
   cancelSessionDisconnectWatcher(sessionId)
 
   const onComplete = (cliMsg: any) => {
@@ -4643,7 +4672,7 @@ function handleCliPermissionModeBroadcast(sessionId: string, cliMsg: any): void 
   if (currentMode === mode) return
 
   if (!conversationService.recordSessionPermissionMode(sessionId, mode)) return
-  void persistSessionPermissionMode(sessionId, mode).catch((err) => {
+  void migrationMaintenance.track(persistSessionPermissionMode(sessionId, mode)).catch((err) => {
     console.warn(`[WS] Failed to persist CLI permission mode broadcast for ${sessionId}:`, err)
   })
 }

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -40,6 +40,9 @@ const ADAPTER_COUNT = ADAPTER_FLAGS.length
 let isolatedConfigDir = ''
 
 class FakeSidecarChild extends EventEmitter {
+  exitCode: number | null = null
+  signalCode: string | null = null
+  readonly stdin = new PassThrough()
   readonly stdout = new PassThrough()
   readonly stderr = new PassThrough()
   readonly kill = vi.fn()
@@ -53,6 +56,7 @@ function createRuntime(options: {
   resolveSystemProxy?: (url: string) => Promise<string>
   sleep?: (delayMs: number) => Promise<void>
   proxyBridge?: SystemProxyBridgeLike
+  fetch?: typeof fetch
 } = {}) {
   return new ElectronServerRuntime({
     desktopRoot: '/isolated/desktop',
@@ -61,6 +65,7 @@ function createRuntime(options: {
     env: { CLAUDE_CONFIG_DIR: isolatedConfigDir, ...options.env },
     resolveSystemProxy: options.resolveSystemProxy,
     deps: {
+      ...(options.fetch ? { fetch: options.fetch } : {}),
       appendHostDiagnostic: sidecarMocks.appendHostDiagnostic,
       ...(options.now ? { now: options.now } : {}),
       preferredServerPorts: () => [],
@@ -91,6 +96,153 @@ async function waitForMockCalls(mock: ReturnType<typeof vi.fn>, count: number): 
 }
 
 describe('ElectronServerRuntime', () => {
+  it('drains the authenticated server and every adapter before stopping the server', async () => {
+    const order: string[] = []
+    const runtime = createRuntime({ fetch: (async (_url, options) => {
+      expect(options?.headers).toEqual({ Authorization: `Bearer ${runtime.getLocalAccessToken()}` })
+      order.push('server-drained')
+      return Response.json({ quiesced: true })
+    }) as typeof fetch })
+    await runtime.startServer()
+    const server = sidecarMocks.serverChildren[0]!
+    server.kill.mockImplementation(() => {
+      expect(order.filter(entry => entry === 'adapter-drained')).toHaveLength(ADAPTER_COUNT)
+      order.push('server-stopped')
+      server.exitCode = 0
+      server.emit('exit', 0, null)
+    })
+    for (const child of sidecarMocks.adapterChildren) {
+      child.stdin.on('data', value => {
+        const request = JSON.parse(value.toString())
+        expect(request.token).toBe(runtime.getLocalAccessToken())
+        order.push('adapter-drained')
+        child.stdout.write(JSON.stringify({ type: 'migration_quiesced', requestId: request.requestId }) + '\n')
+        child.exitCode = 0
+        child.emit('exit', 0, null)
+      })
+    }
+    await runtime.quiesceForMigration()
+    expect(order[0]).toBe('server-drained')
+    expect(order.at(-1)).toBe('server-stopped')
+    await expect(runtime.getServerUrl()).rejects.toThrow('Data migration')
+    await expect(runtime.restartAdaptersSidecars()).rejects.toThrow('Data migration')
+    expect(sidecarMocks.serverChildren).toHaveLength(1)
+  })
+
+  it('does not kill the server or acknowledge migration after an adapter drain failure', async () => {
+    const runtime = createRuntime({ fetch: (async () => Response.json({ quiesced: true })) as typeof fetch })
+    await runtime.startServer()
+    for (const child of sidecarMocks.adapterChildren) {
+      child.stdin.on('data', value => {
+        const request = JSON.parse(value.toString())
+        child.stdout.write(JSON.stringify({ type: 'migration_quiesce_failed', requestId: request.requestId }) + '\n')
+        child.exitCode = 1
+        child.emit('exit', 1, null)
+      })
+    }
+    await expect(runtime.quiesceForMigration()).rejects.toThrow('Adapter did not confirm')
+    expect(sidecarMocks.serverChildren[0]!.kill).not.toHaveBeenCalled()
+    expect(sidecarMocks.serverChildren).toHaveLength(1)
+    runtime.stopAll()
+  })
+
+  it.each(['before-control', 'during-control'] as const)('accepts credential-gated sidecars that become inactive %s and positively exit', async timing => {
+    const runtime = createRuntime({ fetch: (async () => Response.json({ quiesced: true })) as typeof fetch })
+    await runtime.startServer()
+    for (const child of sidecarMocks.adapterChildren) {
+      const complete = () => {
+        child.stdout.write('{"type":"migration_adapter_inactive"}\n')
+        queueMicrotask(() => { child.exitCode = 0; child.emit('exit', 0, null) })
+      }
+      if (timing === 'before-control') complete()
+      else child.stdin.on('data', complete)
+    }
+    const server = sidecarMocks.serverChildren[0]!
+    server.kill.mockImplementation(() => { server.exitCode = 0; server.emit('exit', 0, null) })
+    await runtime.quiesceForMigration()
+    expect(sidecarMocks.adapterChildren.every(child => child.exitCode === 0)).toBe(true)
+    expect(await runtime.getMigrationPreview()).toEqual({ activeTasks: 0, externalProcesses: 0 })
+  })
+
+  it('rechecks outside live PID registrations after the source server has exited', async () => {
+    const request = vi.fn(async () => Response.json({ quiesced: true }))
+    const runtime = createRuntime({ fetch: request as typeof fetch })
+    await runtime.startServer()
+    for (const child of sidecarMocks.adapterChildren) {
+      child.stdin.on('data', value => {
+        const message = JSON.parse(value.toString())
+        child.stdout.write(JSON.stringify({ type: 'migration_quiesced', requestId: message.requestId }) + '\n')
+        child.exitCode = 0
+        child.emit('exit', 0, null)
+      })
+    }
+    const server = sidecarMocks.serverChildren[0]!
+    server.kill.mockImplementation(() => { server.exitCode = 0; server.emit('exit', 0, null) })
+    await runtime.quiesceForMigration()
+    expect(await runtime.getMigrationPreview()).toEqual({ activeTasks: 0, externalProcesses: 0 })
+    const external = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' })
+    try {
+      mkdirSync(path.join(isolatedConfigDir, 'sessions'))
+      writeFileSync(path.join(isolatedConfigDir, 'sessions', `${external.pid}.json`), JSON.stringify({ pid: external.pid }))
+      expect(await runtime.getMigrationPreview()).toEqual({ activeTasks: 0, externalProcesses: 1 })
+      expect(request).toHaveBeenCalledTimes(1)
+    } finally {
+      external.kill('SIGKILL')
+      await new Promise<void>(resolve => external.once('exit', () => resolve()))
+    }
+  })
+
+  it('drains owned writers before restarting the source after an outside-writer rejection', async () => {
+    const order: string[] = []
+    const runtime = createRuntime({ fetch: (async input => {
+      const route = String(input).split('/').at(-1)!
+      order.push(route)
+      return route === 'quiesce'
+        ? Response.json({ error: 'Close external CLI sessions' }, { status: 409 })
+        : Response.json({ quiesced: true })
+    }) as typeof fetch })
+    await runtime.startServer()
+    const server = sidecarMocks.serverChildren[0]!
+    server.kill.mockImplementation(() => {
+      order.push('server-stopped')
+      server.exitCode = 0
+      server.emit('exit', 0, null)
+    })
+    for (const child of sidecarMocks.adapterChildren) {
+      child.stdin.on('data', value => {
+        const message = JSON.parse(value.toString())
+        order.push('adapter-drained')
+        child.stdout.write(JSON.stringify({ type: 'migration_quiesced', requestId: message.requestId }) + '\n')
+        child.exitCode = 0
+        child.emit('exit', 0, null)
+      })
+    }
+    await expect(runtime.quiesceForMigration()).rejects.toThrow('Close external CLI')
+    expect(server.kill).not.toHaveBeenCalled()
+    await runtime.resumeAfterMigration()
+    expect(order.slice(0, 2)).toEqual(['quiesce', 'recover'])
+    expect(order.at(-1)).toBe('server-stopped')
+    expect(order.filter(value => value === 'adapter-drained')).toHaveLength(ADAPTER_COUNT)
+    expect(sidecarMocks.serverChildren).toHaveLength(2)
+    runtime.stopAll()
+  })
+
+  it('keeps adapters stopped until migrated startup is validated and explicitly activated', async () => {
+    const paths: string[] = []
+    const runtime = createRuntime({ env: { CC_HAHA_MIGRATION_VALIDATION: '1' }, fetch: (async input => {
+      paths.push(String(input))
+      return Response.json(String(input).endsWith('/validate') ? { valid: true } : { activated: true })
+    }) as typeof fetch })
+    await runtime.startServer()
+    expect(sidecarMocks.adapterChildren).toHaveLength(0)
+    await runtime.validateMigrationStartup()
+    expect(sidecarMocks.adapterChildren).toHaveLength(0)
+    await runtime.activateAfterMigrationValidation()
+    expect(paths.map(value => value.split('/').at(-1))).toEqual(['validate', 'activate'])
+    expect(sidecarMocks.adapterChildren).toHaveLength(ADAPTER_COUNT)
+    runtime.stopAll()
+  })
+
   beforeEach(() => {
     isolatedConfigDir = mkdtempSync(path.join(tmpdir(), 'cc-haha-electron-runtime-'))
     sidecarMocks.nextPort = 49321
@@ -247,7 +399,7 @@ describe('ElectronServerRuntime', () => {
       const activeTurn = process.argv[1]
       const readyFile = process.argv[2]
       let owned = false
-      process.on('SIGTERM', () => {
+      process.stdin.on('data', () => {
         setTimeout(() => {
           if (owned) fs.rmSync(activeTurn, { force: true })
           process.exit(0)
@@ -269,16 +421,23 @@ describe('ElectronServerRuntime', () => {
       env: { CLAUDE_CONFIG_DIR: root },
       deps: {
         appendHostDiagnostic: () => undefined,
+        // Use an inherited pipe: Windows does not deliver POSIX SIGTERM.
+        killSidecar: child => {
+          if (children.includes(child)) child.stdin!.write('stop\n')
+          else child.kill()
+        },
         preferredServerPorts: () => [],
         reserveServerPort: async () => 49321 + serverStarts,
         spawnSidecar: plan => {
           if (plan.args[0] !== 'server') {
-            return new FakeSidecarChild() as unknown as SidecarChild
+            const child = new FakeSidecarChild()
+            child.kill.mockImplementation(() => { child.exitCode = 0; child.emit('exit', 0, null) })
+            return child as unknown as SidecarChild
           }
           const readyFile = path.join(root, `ready-${++serverStarts}`)
           readyFiles.push(readyFile)
           const child = spawn(process.execPath, ['-e', fixture, activeTurn, readyFile], {
-            stdio: ['ignore', 'pipe', 'pipe'],
+            stdio: ['pipe', 'pipe', 'pipe'],
           })
           children.push(child)
           return child as SidecarChild

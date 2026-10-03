@@ -355,6 +355,13 @@ export const browserHost: DesktopHost = {
     async restart() {
       unsupported('Desktop app restart')
     },
+    migration: {
+      async prepare() { return unsupported('Data migration') },
+      async start() { unsupported('Data migration') },
+      async status() { return null },
+      async cancel() { unsupported('Data migration') },
+      async onProgress() { return noopUnlisten },
+    },
   },
   adapters: {
     async restartSidecar() {

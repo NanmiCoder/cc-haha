@@ -79,6 +79,11 @@ export class TeamWatcher {
     }
   }
 
+  async stopAndWait(): Promise<void> {
+    this.stop()
+    await this.checkPromise
+  }
+
   /** Visible for testing -- force a single poll cycle. */
   checkNow(): Promise<void> {
     return this.scheduleCheck()

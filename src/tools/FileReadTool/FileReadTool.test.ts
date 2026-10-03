@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, beforeAll, afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -20,6 +20,43 @@ function makeToolUseContext(): ToolUseContext {
 }
 
 const temporaryDirectories: string[] = []
+let isolatedConfig: string
+const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+beforeAll(async () => {
+  isolatedConfig = await mkdtemp(join(tmpdir(), 'file-read-test-config-'))
+  process.env.CLAUDE_CONFIG_DIR = isolatedConfig
+})
+afterAll(async () => {
+  if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+  else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  await rm(isolatedConfig, { recursive: true, force: true })
+})
+
+test('uses the relocated managed upload for permissions and reading, preserving the original path input', async () => {
+  const current = await mkdtemp(join(tmpdir(), 'file-read-relocated-'))
+  temporaryDirectories.push(current)
+  const previous = process.env.CLAUDE_CONFIG_DIR
+  const previousSimple = process.env.CLAUDE_CODE_SIMPLE
+  process.env.CLAUDE_CONFIG_DIR = current
+  process.env.CLAUDE_CODE_SIMPLE = '1'
+  try {
+    const oldRoot = join(current, 'absent-original')
+    const oldPath = join(oldRoot, 'uploads', 'session', 'fixture.txt')
+    const newPath = join(current, 'uploads', 'session', 'fixture.txt')
+    await mkdir(join(current, 'uploads/session'), { recursive: true })
+    await mkdir(join(current, 'cc-haha'))
+    await writeFile(newPath, 'copied upload')
+    await writeFile(join(current, 'cc-haha/storage-relocations.json'), JSON.stringify({ version: 1, previousRoots: [oldRoot] }))
+    expect(FileReadTool.getPath({ file_path: oldPath })).toBe(newPath)
+    const result = await FileReadTool.call({ file_path: oldPath }, makeToolUseContext())
+    expect(result.data).toMatchObject({ type: 'text', file: { content: 'copied upload' } })
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = previous
+    if (previousSimple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
+    else process.env.CLAUDE_CODE_SIMPLE = previousSimple
+  }
+})
 
 test('uses the shared image processor for the final image compression fallback', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cc-haha-read-image-fallback-'))

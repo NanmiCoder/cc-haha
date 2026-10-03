@@ -1,3 +1,4 @@
+import { adapterMigrationLifecycle } from '../common/migration-lifecycle.js'
 /**
  * Feishu media service — wraps im.messageResource / im.image / im.file
  * so adapters/feishu/index.ts stays focused on flow control.
@@ -101,7 +102,7 @@ export class FeishuMediaService {
     })
 
     if (typeof resp?.writeFile === 'function') {
-      await resp.writeFile(target)
+      await adapterMigrationLifecycle.track(Promise.resolve(resp.writeFile(target)))
     } else if (resp?.data instanceof Buffer) {
       await this.store.write(target, resp.data)
     } else if (resp instanceof Buffer) {
