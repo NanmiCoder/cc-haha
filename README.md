@@ -33,6 +33,11 @@ cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: mu
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_Download_Desktop-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="Download Desktop"></a>
 </p>
 
+<p align="center">
+  <a href="https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v1.mp4"><img src="docs/images/readme-film-cover-en.webp" width="720" alt="Watch the 90-second cc-haha film"></a>
+  <br><sub>A 90-second film made with Opus 5.5, narrated in Chinese with Chinese subtitles. Opens the video in your browser.</sub>
+</p>
+
 The top row covers **getting started and daily work**: sessions, permissions, changes, and Computer Use. The second shows **extensions**: models, skills, scheduled tasks, and IM. These screenshots show the real project in the Chinese interface. Click a thumbnail to see the full screen.
 
 <table>
@@ -49,6 +54,16 @@ The top row covers **getting started and daily work**: sessions, permissions, ch
     <td align="center" valign="top" width="25%"><a href="docs/images/app/en/settings-im.webp"><img src="docs/images/readme-features/en/settings-im.webp" width="100%" alt="Configure Slack in the IM access settings"></a><br><b>08 · Work remotely</b><br>Continue through IM</td>
   </tr>
 </table>
+
+### Agent Teams
+
+<p align="center">
+  <img src="docs/images/readme-features/agent-teams.webp" width="100%" alt="Agent Teams: confirm the proposed team, then watch members work through dependency lanes until the report and page are ready">
+</p>
+
+Describe the goal and the lead proposes a team: who does what, who waits for whom. You choose each member's model and confirm before anyone starts. Independent tasks run in parallel, dependent ones unlock in order on the lane canvas, and every hand-off shows up in the message feed. The report and page land in the same workspace for you to check.
+
+<sub>Clip from the cc-haha promo film, in the Chinese interface. Demo data; on-screen times are staged.</sub>
 
 Start here: [install the app](docs/en/start/install.md) → [connect a model](docs/en/start/models.md) → [run your first session](docs/en/start/first-session.md) → [explore settings](docs/en/desktop/settings.md) → [try real workflows](docs/en/cases/index.md). For hands-free cross-app work on macOS, follow the [Computer Use guide](docs/en/desktop/computer-use.md).
 

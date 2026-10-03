@@ -14,9 +14,12 @@ import poster from './assets/wandor-poster.webp'
 import landscape from './assets/quiet-landscape.webp'
 import stillLife from './assets/quiet-moments.webp'
 import projectSession from './assets/project-session.png'
+import filmPoster from './assets/film-poster.webp'
 import './home.css'
 
 const VIDEO = 'https://pollen-batch-41236914.figma.site/_components/v2/f0ee2dae7671c170c34f12e31c4cb41418976c98/769c564298c132f7919405cd9f17c1b1231f341d.769c5642.mp4'
+// The film is hosted on the CDN; versioned keys keep cached copies from going stale.
+const FILM = 'https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v1.mp4'
 const featureIcons = [Code2, MousePointer2, GitCompareArrows]
 const stepIcons = [Download, SlidersHorizontal, FolderOpen, ScanEye]
 const taskSteps = {
@@ -139,7 +142,25 @@ function Hero({ locale, paused, setPaused, onPreview }: { locale: LandingLocale;
         <div className="wander-suggestions" aria-label={en ? 'Try an idea' : '试试这些想法'}>{c.taskSuggestions.map((item, index) => { const Symbol = featureIcons[index]; return <button key={item.category} aria-pressed={selected === item.category} onClick={() => { setText(item.prompt); setSelected(item.category) }}><Symbol size={14} />{item.label}</button> })}</div>
       </div>
     </div>
-    <div className="wander-hero__foot"><a href="#discover"><ArrowDown size={16} />{en ? 'SCROLL TO EXPLORE' : '往下走，看看更多可能'}</a><span>macOS · Windows · Linux</span><button onClick={() => setPaused(!paused)} aria-pressed={paused}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? (en ? 'Play scenery' : '播放风景') : (en ? 'Pause scenery' : '暂停风景')}</button></div>
+    <div className="wander-hero__foot"><a href="#film"><ArrowDown size={16} />{en ? 'SCROLL TO EXPLORE' : '往下走，看看更多可能'}</a><span>macOS · Windows · Linux</span><button onClick={() => setPaused(!paused)} aria-pressed={paused}>{paused ? <Play size={14} /> : <Pause size={14} />}{paused ? (en ? 'Play scenery' : '播放风景') : (en ? 'Pause scenery' : '暂停风景')}</button></div>
+  </section>
+}
+
+function Film({ locale }: { locale: LandingLocale }) {
+  const en = locale === 'en'
+  // The video element is only created after a click, so visitors who never play it download nothing.
+  const [started, setStarted] = useState(false)
+  const posterAlt = en ? 'Closing frame of the cc-haha film: the wordmark over a painted countryside' : 'cc-haha 宣传片片尾：田园风景上的 cc-haha 字标'
+  return <section className="wander-film wander-section" id="film" aria-labelledby="film-title">
+    <div className="wander-section__heading"><span className="wander-eyebrow">cc-haha / {en ? 'THE FILM · 1:30' : '90 秒短片'}</span><h2 id="film-title">{en ? <>Ninety seconds.<br />See it <em>at work.</em></> : <>90 秒，<br />看它<em>怎么做事。</em></>}</h2><p>{en ? 'A team splits the work, hands it off, runs on schedule, and picks up again on your phone.' : '组队分工、接力推进、按时执行，再到手机上接着聊。'}</p></div>
+    <div className="wander-showcase wander-film__frame">
+      <div className="wander-showcase__bar"><span className="wander-window-dots"><i /><i /><i /></span><span>cc-haha / {en ? 'FILM' : '宣传片'}</span><span>{en ? 'CHINESE NARRATION' : '有声 · 中文字幕'}</span></div>
+      {started
+        ? <video className="wander-film__media" src={FILM} poster={filmPoster} controls autoPlay playsInline preload="metadata" aria-label={en ? 'cc-haha film' : 'cc-haha 宣传片'} />
+        : <button className="wander-film__media wander-film__start" onClick={() => setStarted(true)} aria-label={en ? 'Play the 90-second film' : '播放 90 秒宣传片'}><img src={filmPoster} alt={posterAlt} width={1600} height={900} loading="lazy" /><span className="wander-primary"><Play size={16} />{en ? 'Play the film' : '播放短片'}</span></button>}
+    </div>
+    {en && <p className="wander-film__note">Narrated in Chinese with Chinese subtitles. Demo data; on-screen times are staged.</p>}
+    {!en && <p className="wander-film__note">片中为演示数据，画面中的时间为演示设定。</p>}
   </section>
 }
 
@@ -219,5 +240,5 @@ export default function HomePage({ locale = 'en' }: { locale?: LandingLocale }) 
   useEffect(() => {
     setPageMeta({ alternate: locale === 'en' ? '/' : '/en', canonical: locale === 'en' ? '/en' : '/', description: landingContent[locale].hero.description, lang: locale === 'en' ? 'en' : 'zh-CN', title: locale === 'en' ? 'cc-haha — Less busywork. More room for life.' : 'cc-haha — 把琐碎交给 AI，把时间留给生活。' })
   }, [locale])
-  return <div className="wander-page font-sans"><a className="u-skip" href="#main">{locale === 'en' ? 'Skip to content' : '跳到正文'}</a><main id="main" tabIndex={-1}><Hero locale={locale} paused={paused} setPaused={setPaused} onPreview={setPreview} /><Discover locale={locale} onEnlarge={setEnlargedImage} /><Journey locale={locale} /><Possibilities locale={locale} onPreview={setPreview} /><Faq locale={locale} /></main><Closing locale={locale} />{preview && <TaskPreview task={preview} locale={locale} onClose={() => setPreview(null)} />}{enlargedImage && <ImageViewer image={enlargedImage} locale={locale} onClose={() => setEnlargedImage(null)} />}</div>
+  return <div className="wander-page font-sans"><a className="u-skip" href="#main">{locale === 'en' ? 'Skip to content' : '跳到正文'}</a><main id="main" tabIndex={-1}><Hero locale={locale} paused={paused} setPaused={setPaused} onPreview={setPreview} /><Film locale={locale} /><Discover locale={locale} onEnlarge={setEnlargedImage} /><Journey locale={locale} /><Possibilities locale={locale} onPreview={setPreview} /><Faq locale={locale} /></main><Closing locale={locale} />{preview && <TaskPreview task={preview} locale={locale} onClose={() => setPreview(null)} />}{enlargedImage && <ImageViewer image={enlargedImage} locale={locale} onClose={() => setEnlargedImage(null)} />}</div>
 }

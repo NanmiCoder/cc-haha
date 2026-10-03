@@ -117,6 +117,13 @@ html:has(.wander-page) { scroll-padding-top: 0; }
 .wander-showcase__caption a { margin-top: 5px; font-size: 11px; }
 .wander-discover__note { display: flex; justify-content: center; gap: 35px; margin-top: 27px; font-size: 10px; color: #616351; }
 .wander-discover__note span { display: flex; align-items: center; gap: 6px; }
+.wander-film { background: #faf9f5; padding-bottom: 20px; }
+.wander-film__frame { margin-top: 40px; }
+.wander-film__media { position: relative; display: block; width: 100%; aspect-ratio: 16 / 9; padding: 0; overflow: hidden; border-radius: 18px; background: #f8f9f4; border: 1px solid #78776622; }
+.wander-film__start img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform .6s ease; }
+.wander-film__start:hover img { transform: scale(1.015); }
+.wander-film__start > span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); box-shadow: 0 10px 30px #1e281d30; }
+.wander-film__note { margin-top: 18px; text-align: center; font-size: 10px; color: #616351; }
 .wander-journey { position: relative; min-height: 880px; background: #f1eadb; padding: 85px 30px 140px; isolation: isolate; }
 .wander-landscape { position: absolute; z-index: -2; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center bottom; }
 .wander-journey::before { content: ''; position: absolute; z-index: -1; inset: 0; background: linear-gradient(#faf9f5 0%, #faf9f5b0 20%, #faf9f510 80%); }
@@ -279,6 +286,8 @@ html:has(.wander-page) { scroll-padding-top: 0; }
   .wander-section h2, .wander-journey h2 { font-size: 39px; line-height: 1.25; margin: 16px 0; }
   .wander-eyebrow { font-size: 9px; }
   .wander-section__heading > p { max-width: 290px; font-size: 12px; }
+  .wander-film__frame { margin-top: 28px; }
+  .wander-film__start > span { top: 74%; min-height: 38px; padding: 9px 16px; gap: 8px; font-size: 12px; }
   .wander-discover::before { background-size: auto 600px; inset: 200px 0 0; }
   .wander-feature-tabs { width: 100%; justify-content: space-between; padding: 4px; margin: 26px auto 22px; }
   .wander-feature-tabs button { flex: 1; padding: 12px 8px; font-size: 11px; gap: 5px; min-height: 44px; }

@@ -33,6 +33,11 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_下载桌面端-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="下载桌面端"></a>
 </p>
 
+<p align="center">
+  <a href="https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v1.mp4"><img src="docs/images/readme-film-cover-zh-CN.webp" width="720" alt="观看 90 秒 cc-haha 宣传片"></a>
+  <br><sub>由 Opus 5.5 制作的 90 秒宣传片，点击在浏览器中播放。</sub>
+</p>
+
 上排看**上手与日常工作**：新建、权限、改动与 Computer Use；下排看**扩展能力**：模型、技能、定时任务与 IM。截图来自真实项目，保留项目与会话列表。点击缩略图可查看完整界面。
 
 <table>
@@ -49,6 +54,16 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
     <td align="center" valign="top" width="25%"><a href="docs/images/app/zh-CN/settings-im.webp"><img src="docs/images/readme-features/zh-CN/settings-im.webp" width="100%" alt="IM 接入页的 Slack 配置表单"></a><br><b>08 · 远程接力</b><br>在 IM 中继续会话</td>
   </tr>
 </table>
+
+### Agent Teams
+
+<p align="center">
+  <img src="docs/images/readme-features/agent-teams.webp" width="100%" alt="Agent Teams：确认团队方案后，成员按依赖泳道推进，直到报告和页面完成">
+</p>
+
+说出目标，lead 先给出团队方案：谁做什么、谁等谁。每个成员用哪个模型由你来挑，你确认后成员才出发。能同时做的并行推进，要接力的在泳道画布上按依赖解锁，每次交接都记在通讯流里；报告和页面放进同一个工作区，打开就能检查。
+
+<sub>片段取自 cc-haha 宣传片，演示数据，画面中的时间为演示设定。</sub>
 
 从 0 开始：[下载安装](docs/start/install.md) → [连接模型](docs/start/models.md) → [跑通第一条会话](docs/start/first-session.md) → [设置指南](docs/desktop/settings.md) → [实战案例](docs/cases/index.md)。想体验不抢鼠标的跨应用操作，接着看 [Computer Use 指南](docs/desktop/computer-use.md)。
 
