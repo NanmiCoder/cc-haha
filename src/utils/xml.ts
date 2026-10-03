@@ -14,3 +14,13 @@ export function escapeXml(s: string): string {
 export function escapeXmlAttr(s: string): string {
   return escapeXml(s).replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 }
+
+/** Inverse of escapeXmlAttr, for readers that parse an attribute value back out. */
+export function unescapeXmlAttr(s: string): string {
+  return s
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+}

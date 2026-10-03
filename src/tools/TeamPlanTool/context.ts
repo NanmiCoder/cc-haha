@@ -1,4 +1,7 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { z } from 'zod/v4'
+import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { snapshotTeamPlanPresetSource } from '../../utils/swarm/teamPlanPresetSource.js'
 import type { ToolUseContext } from '../../Tool.js'
 import type { TeamPlanMember, TeamPlanRecord, TeamPlanRuntime, TeamPlanTask } from '../../shared/teamPlan.js'
@@ -57,6 +60,25 @@ export function snapshotTeamAgents(context: ToolUseContext) {
   }]))
 }
 
+/**
+ * The model cannot see provider ids, so a suggested runtime is only kept when
+ * it names the leader's provider or one the user actually configured. A
+ * guessed id ("anthropic") would otherwise fail approval, and a guessed
+ * first-party id could silently move members onto a different, billed provider.
+ */
+function isConfiguredProviderSuggestion(providerId: string, leaderRuntime: TeamPlanRuntime): boolean {
+  if (providerId === leaderRuntime.providerId) return true
+  // Only the saved ids matter here; parsing the file directly keeps this tool
+  // free of the server's provider modules (importing them is an init cycle).
+  try {
+    const index = JSON.parse(readFileSync(join(getClaudeConfigHomeDir(), 'cc-haha', 'providers.json'), 'utf8')) as { providers?: unknown }
+    return Array.isArray(index.providers) && index.providers.some(provider =>
+      !!provider && typeof provider === 'object' && (provider as { id?: unknown }).id === providerId)
+  } catch {
+    return false
+  }
+}
+
 export function resolveProposedTeamPlan(plan: ProposedTeamPlan, context: ToolUseContext) {
   const state = context.getAppState()
   const leaderRuntime = getTeamLeaderRuntime(context.options.mainLoopModel ?? state.mainLoopModelForSession ?? state.mainLoopModel ?? '')
@@ -66,11 +88,14 @@ export function resolveProposedTeamPlan(plan: ProposedTeamPlan, context: ToolUse
     const agentSnapshot = agentCatalog[agentType]
     if (!agentSnapshot) throw new Error(`Agent preset '${agentType}' is unavailable. Choose a listed Agent preset.`)
     if (agentSnapshot.configurationError) throw new Error(agentSnapshot.configurationError)
-    const runtime: TeamPlanRuntime = member.runtime ?? {
+    const suggested = member.runtime && isConfiguredProviderSuggestion(member.runtime.providerId, leaderRuntime)
+      ? member.runtime
+      : undefined
+    const runtime: TeamPlanRuntime = suggested ?? {
       ...leaderRuntime,
       modelId: resolveTeammateModel(undefined, leaderRuntime.modelId, agentSnapshot.model, true),
     }
-    if (!member.runtime) {
+    if (!suggested) {
       if (agentSnapshot.effortLevel !== undefined) runtime.effortLevel = agentSnapshot.effortLevel
       else if (runtime.modelId !== leaderRuntime.modelId) delete runtime.effortLevel
     }

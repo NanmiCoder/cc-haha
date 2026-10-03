@@ -317,6 +317,62 @@ describe('cliTaskStore', () => {
     ])
   })
 
+  it('puts back the bar a live TodoWrite replaced, newer than any read in flight', async () => {
+    const before = [makeTask('session-1', 'completed')]
+    useCLITaskStore.setState({
+      sessionId: 'session-1',
+      tasks: before,
+      expanded: true,
+      completedAndDismissed: true,
+      dismissedCompletionKey: 'session-1::done',
+    })
+    let resolveRead!: (value: { tasks: CLITask[] }) => void
+    vi.mocked(cliTasksApi.getTasksForList).mockReturnValueOnce(new Promise((resolve) => {
+      resolveRead = resolve
+    }))
+    const staleRead = useCLITaskStore.getState().refreshTasks('session-1')
+    useCLITaskStore.getState().setTasksFromTodos([
+      { content: 'Plan from a discarded attempt', status: 'in_progress' },
+    ], 'session-1')
+
+    useCLITaskStore.getState().restoreTasks({
+      sessionId: 'session-1',
+      tasks: before,
+      completedAndDismissed: true,
+      dismissedCompletionKey: 'session-1::done',
+    })
+    resolveRead({ tasks: [makeTask('session-1', 'pending')] })
+    await staleRead
+
+    expect(useCLITaskStore.getState()).toMatchObject({
+      tasks: before,
+      completedAndDismissed: true,
+      dismissedCompletionKey: 'session-1::done',
+    })
+  })
+
+  it('does not restore a snapshot onto a bar that now tracks another session', () => {
+    useCLITaskStore.setState({
+      sessionId: 'session-2',
+      tasks: [makeTask('session-2')],
+      completedAndDismissed: false,
+      dismissedCompletionKey: null,
+    })
+
+    useCLITaskStore.getState().restoreTasks({
+      sessionId: 'session-1',
+      tasks: [makeTask('session-1', 'completed')],
+      completedAndDismissed: true,
+      dismissedCompletionKey: 'session-1::done',
+    })
+
+    expect(useCLITaskStore.getState()).toMatchObject({
+      sessionId: 'session-2',
+      tasks: [{ taskListId: 'session-2' }],
+      completedAndDismissed: false,
+    })
+  })
+
   it('does not reset completed tasks for a different session', async () => {
     useCLITaskStore.setState({
       sessionId: 'session-1',

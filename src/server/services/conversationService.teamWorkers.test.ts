@@ -205,6 +205,27 @@ test('stopping a parent stops its workers and cancels relayed pending approvals'
   expect(events).toContainEqual({ type: 'control_cancel_request', request_id: 'approval' })
 })
 
+test('a lead process that exits on its own or restarts keeps its approved workers', async () => {
+  const service = new ConversationService() as any
+  const killed: string[] = []
+  service.killProcess = (id: string) => killed.push(id)
+  service.waitForProcessOutputDrain = async () => {}
+  service.buildRuntimeExitMessage = () => 'CLI exited'
+  const proc = { exited: Promise.resolve(1) }
+  const results: any[] = []
+  service.sessions.set('parent', { proc, outputCallbacks: [(message: any) => results.push(message)], pendingPermissionRequests: new Map(), sdkMessages: [], workDir: home, permissionMode: 'default' })
+  service.sessions.set('child', { teamWorker: worker, pendingPermissionRequests: new Map() })
+  await service.handleProcessExit('parent', proc, 1)
+  expect(killed).toEqual([])
+  expect(service.hasSession('child')).toBe(true)
+  expect(results.at(-1)).toMatchObject({ type: 'result', is_error: true })
+
+  service.sessions.set('parent', { proc, outputCallbacks: [], pendingPermissionRequests: new Map() })
+  service.stopSession('parent', { keepTeamWorkers: true })
+  expect(killed).toEqual(['parent'])
+  expect(service.hasSession('child')).toBe(true)
+})
+
 test('approved roster launches, materializes canonical tasks, wakes an idle member, and cleans up', async () => {
   const { createHash } = await import('node:crypto')
   const { conversationService: runtimeService } = await import('./conversationService.js')

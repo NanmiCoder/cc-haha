@@ -15,7 +15,13 @@ import * as os from 'os'
 import * as crypto from 'node:crypto'
 import { ApiError } from '../middleware/errorHandler.js'
 import { readTeamTranscriptProjection } from './teamTranscriptProjection.js'
-import { writeToMailbox } from '../../utils/teammateMailbox.js'
+import { readMemberFailure } from '../../utils/swarm/turnFailure.js'
+import { unescapeXmlAttr } from '../../utils/xml.js'
+import {
+  MAILBOX_HISTORY_SUFFIX,
+  readMailboxHistoryAtPath,
+  writeToMailbox,
+} from '../../utils/teammateMailbox.js'
 import {
   sessionService,
   type MessageEntry as SessionMessageEntry,
@@ -44,7 +50,12 @@ import type { TaskInfo } from './taskService.js'
  * task started and can then finish its turn, and an umbrella task stays open
  * across every turn underneath it.
  */
-export type TeamMemberActivity = 'active' | 'idle' | 'exited' | 'unknown'
+/**
+ * `stopped`: a process-backed member whose process is not running (the user's
+ * Stop, a crash, a closed lead). It keeps its conversation and a message
+ * restarts it, unlike `exited`, which means it left the team.
+ */
+export type TeamMemberActivity = 'active' | 'idle' | 'exited' | 'stopped' | 'unknown'
 
 export type TeamMember = {
   agentId: string
@@ -62,6 +73,10 @@ export type TeamMember = {
    * readers fall back to `status` rather than assuming a member went quiet.
    */
   activity?: TeamMemberActivity
+  /** Why the last turn failed, when no automatic retry is pending. */
+  lastError?: string
+  /** An automatic continuation is scheduled after a transient provider failure. */
+  autoRetry?: { attempt: number; max: number; nextAt: number }
   joinedAt: number
   cwd: string
   sessionId?: string
@@ -1146,13 +1161,13 @@ export function projectTeamWorkbenchesFromTranscript(
         if (!body) continue
         team.messages.push({
           id: `${message.id}:teammate:${team.messages.length}`,
-          from: match[1]!,
+          from: unescapeXmlAttr(match[1]!),
           to: 'team-lead',
           recipients: ['team-lead'],
           kind: 'direct',
           text: body,
           timestamp,
-          ...(match[2] ? { color: match[2] } : {}),
+          ...(match[2] ? { color: unescapeXmlAttr(match[2]) } : {}),
         })
         team.updatedAt = timestamp
       }
@@ -1421,6 +1436,9 @@ type TeamFileRaw = {
     sessionId?: string
     backendType?: string
     isActive?: boolean
+    terminated?: boolean
+    lastError?: string
+    autoRetry?: { attempt: number; max: number; nextAt: number }
     mode?: string
   }>
 }
@@ -1525,22 +1543,26 @@ export class TeamService {
       ? await this.discoverSubagentLastWrites(config.leadSessionId)
       : new Map<string, number>()
 
-    const members: TeamMember[] = config.members.map((m) => ({
-      agentId: m.agentId,
-      name: m.name,
-      agentType: m.agentType,
-      ...(m.model ? { model: m.model } : {}),
-      ...(m.providerId !== undefined ? { providerId: m.providerId } : {}),
-      ...(m.providerName !== undefined ? { providerName: m.providerName } : {}),
-      ...(m.effortLevel !== undefined ? { effortLevel: m.effortLevel } : {}),
-      color: m.color,
-      backendType: m.backendType,
-      status: this.deriveStatus(m.isActive),
-      activity: this.deriveActivity(m.isActive, lastWrites.get(m.name), now),
-      joinedAt: m.joinedAt,
-      cwd: m.cwd,
-      sessionId: m.sessionId,
-    }))
+    const members: TeamMember[] = config.members.map((m) => {
+      const failure = readMemberFailure(m as unknown as Record<string, unknown>)
+      return {
+        agentId: m.agentId,
+        name: m.name,
+        agentType: m.agentType,
+        ...(m.model ? { model: m.model } : {}),
+        ...(m.providerId !== undefined ? { providerId: m.providerId } : {}),
+        ...(m.providerName !== undefined ? { providerName: m.providerName } : {}),
+        ...(m.effortLevel !== undefined ? { effortLevel: m.effortLevel } : {}),
+        color: m.color,
+        backendType: m.backendType,
+        status: failure.lastError && !failure.autoRetry ? 'failed' : this.deriveStatus(m.isActive),
+        activity: m.terminated === true ? 'stopped' : this.deriveActivity(m.isActive, lastWrites.get(m.name), now),
+        ...failure,
+        joinedAt: m.joinedAt,
+        cwd: m.cwd,
+        sessionId: m.sessionId,
+      }
+    })
 
     // Discover members from inboxes/ that aren't in config.json (race condition fix)
     const inboxNames = await this.discoverInboxMembers(name)
@@ -1794,7 +1816,7 @@ export class TeamService {
       )
     }
 
-    await writeToMailbox(
+    const delivered = await writeToMailbox(
       recipientName,
       {
         from: 'user',
@@ -1803,6 +1825,14 @@ export class TeamService {
       },
       teamName,
     )
+    if (!delivered) {
+      // The composer keeps the draft only if the request fails.
+      throw new ApiError(
+        503,
+        `Could not deliver the message to ${recipientName}. Try again.`,
+        'MAILBOX_UNAVAILABLE',
+      )
+    }
   }
 
   // ── Get Agent Teams workbench snapshot ──────────────────────────────────────
@@ -2397,9 +2427,17 @@ export class TeamService {
     teamName: string,
   ): Promise<TeamWorkbenchMessage[]> {
     const inboxDir = path.join(this.getTeamsDir(), teamName, 'inboxes')
-    let files: string[]
+    // Read entries leave {recipient}.json for {recipient}.history.jsonl, so a
+    // recipient is known from either file.
+    const recipients = new Set<string>()
     try {
-      files = (await fs.readdir(inboxDir)).filter((file) => file.endsWith('.json'))
+      for (const file of await fs.readdir(inboxDir)) {
+        if (file.endsWith(MAILBOX_HISTORY_SUFFIX)) {
+          recipients.add(file.slice(0, -MAILBOX_HISTORY_SUFFIX.length))
+        } else if (file.endsWith('.json')) {
+          recipients.add(file.slice(0, -'.json'.length))
+        }
+      }
     } catch {
       return []
     }
@@ -2423,13 +2461,15 @@ export class TeamService {
 
     const grouped = new Map<string, MessageAccumulator>()
     const occurrenceByRecipientAndContent = new Map<string, number>()
-    for (const file of files.sort()) {
-      const recipient = file.replace(/\.json$/, '')
+    for (const recipient of [...recipients].sort()) {
       try {
-        const parsed = JSON.parse(await fs.readFile(path.join(inboxDir, file), 'utf8'))
-        if (!Array.isArray(parsed)) continue
+        // Archived history plus the live inbox: delivered messages stay in
+        // the feed after the CLI prunes them from the live file.
+        const entries: InboxMessage[] = await readMailboxHistoryAtPath(
+          path.join(inboxDir, `${recipient}.json`),
+        )
 
-        for (const raw of parsed as InboxMessage[]) {
+        for (const raw of entries) {
           if (
             typeof raw?.from !== 'string' ||
             typeof raw.text !== 'string' ||
@@ -2469,8 +2509,8 @@ export class TeamService {
           }
         }
       } catch {
-        // A mailbox can be between its truncate and rename while the CLI is
-        // writing it. The watcher will invalidate the snapshot again.
+        // The CLI may be replacing a mailbox file; the watcher will
+        // invalidate the snapshot again.
       }
     }
 

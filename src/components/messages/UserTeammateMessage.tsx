@@ -7,6 +7,7 @@ import { Ansi, Box, Text, type TextProps } from '../../ink.js';
 import { toInkColor } from '../../utils/ink.js';
 import { jsonParse } from '../../utils/slowOperations.js';
 import { isShutdownApproved } from '../../utils/teammateMailbox.js';
+import { unescapeXmlAttr } from '../../utils/xml.js';
 import { MessageResponse } from '../MessageResponse.js';
 import { tryRenderPlanApprovalMessage } from './PlanApprovalMessage.js';
 import { tryRenderShutdownMessage } from './ShutdownMessage.js';
@@ -29,16 +30,17 @@ const TEAMMATE_MSG_REGEX = new RegExp(`<${TEAMMATE_MESSAGE_TAG}\\s+teammate_id="
  * <teammate-message teammate_id="alice" color="red" summary="Brief update">message content</teammate-message>
  * Supports multiple messages in a single text block.
  */
-function parseTeammateMessages(text: string): ParsedMessage[] {
+export function parseTeammateMessages(text: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   // Use matchAll to find all matches (this is a RegExp method, not child_process)
   for (const match of text.matchAll(TEAMMATE_MSG_REGEX)) {
     if (match[1] && match[4]) {
+      // Attribute values are XML-escaped by formatTeammateMessage.
       messages.push({
-        teammateId: match[1],
-        color: match[2],
+        teammateId: unescapeXmlAttr(match[1]),
+        color: match[2] === undefined ? undefined : unescapeXmlAttr(match[2]),
         // may be undefined
-        summary: match[3],
+        summary: match[3] === undefined ? undefined : unescapeXmlAttr(match[3]),
         // may be undefined
         content: match[4].trim()
       });

@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { homedir } from 'node:os'
+import { listLeadTeamMemberIdentities } from '../../utils/swarm/teamHelpers.js'
 import { sessionService } from './sessionService.js'
 import { SearchService } from './searchService.js'
 import { conversationService } from './conversationService.js'
@@ -93,6 +94,7 @@ export async function getSessionCollaborationService(): Promise<SessionCollabora
           }
           return titles
         },
+        teamMemberIdentities: listLeadTeamMemberIdentities,
         async create(callerSessionId, input) {
           const workDir = input.workDir ?? await sessionService.getSessionWorkDir(callerSessionId)
           if (!workDir) throw new ApiError(409, 'The source session working directory is unavailable', 'SESSION_WORKSPACE_UNAVAILABLE')

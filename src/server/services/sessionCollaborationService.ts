@@ -45,6 +45,8 @@ export type SessionCollaborationDependencies = {
     create(callerSessionId: string, input: CollaborationCreateInput): Promise<{ sessionId: string; workDir?: string }>
     /** Optional display titles for snapshot members; keyed by session id. */
     titles?(sessionIds: string[]): Promise<Record<string, string>> | Record<string, string>
+    /** Names and worker session ids of the Agent Team members this session leads. */
+    teamMemberIdentities?(sessionId: string): Promise<string[]> | string[]
   }
   runtime: {
     getState?(sessionId: string): 'running' | 'blocked' | 'idle'
@@ -62,6 +64,7 @@ export const COLLABORATION_READ_MAX_PAGES = 8
 export const COLLABORATION_WAIT_MIN_MS = 10_000
 export const COLLABORATION_WAIT_DEFAULT_MS = 30_000
 export const COLLABORATION_WAIT_MAX_MS = 300_000
+export const UNKNOWN_WAIT_TARGET_GUIDANCE = 'These are your Agent Team members, not collaboration sessions, so WaitSessions will never report on them. Their results, failures and questions arrive automatically as teammate messages. If you are waiting for teammates, end your turn instead of polling or sleeping.'
 export type CollaborationSnapshot = { revision: number; members: CollaborationMember[]; messages: CollaborationMessage[]; waitReason?: 'capacity_blocked'; guidance?: string; truncated?: boolean; omittedMessages?: number; omittedMembers?: number; requestedTimeoutMs?: number; timeoutMs?: number }
 
 /** Mirrors the host's customTitle rule so the tool result carries the same name the session list shows. */
@@ -392,6 +395,15 @@ export class SessionCollaborationService {
     const noteTimeout = (snapshot: CollaborationSnapshot): CollaborationSnapshot => requestedTimeoutMs === clampedTimeoutMs ? snapshot : { ...snapshot, requestedTimeoutMs, timeoutMs: clampedTimeoutMs, guidance: [`Requested timeout of ${requestedTimeoutMs}ms was clamped to ${clampedTimeoutMs}ms.`, snapshot.guidance].filter(Boolean).join('\n\n') }
     const inputVersion = callerSessionId ? this.userInputs.get(callerSessionId) ?? 0 : 0
     const current = await this.status(sessionIds)
+    if (sessionIds?.length && callerSessionId && this.deps.sessions.teamMemberIdentities) {
+      // A team lead that waits on its own members' names or worker session ids
+      // would block for the full timeout: nothing here ever updates them,
+      // because members report through teammate messages instead.
+      const team = new Set(await Promise.resolve(this.deps.sessions.teamMemberIdentities(callerSessionId)).catch(() => []))
+      if (sessionIds.every(id => team.has(id) && !this.store.members[id])) {
+        return noteTimeout({ ...this.projectWait(current, afterRevision), guidance: UNKNOWN_WAIT_TARGET_GUIDANCE })
+      }
+    }
     const caller = callerSessionId ? this.store.members[callerSessionId] : undefined
     if (caller && caller.sessionId !== caller.rootSessionId) {
       const workers = Object.values(this.store.members).filter(member => member.rootSessionId === caller.rootSessionId && member.sessionId !== member.rootSessionId)

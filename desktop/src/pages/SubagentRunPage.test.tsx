@@ -1670,6 +1670,49 @@ describe('SubagentRunPage', () => {
     expect(getMemberTranscriptMock).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['stopped', { status: 'idle' as const, activity: 'stopped' as const }],
+    ['retrying', {
+      status: 'idle' as const,
+      activity: 'idle' as const,
+      lastError: 'API Error: 529 overloaded',
+      autoRetry: { attempt: 1, max: 5, nextAt: Date.parse('2026-08-09T00:00:15.000Z') },
+    }],
+    ['failed', {
+      status: 'error' as const,
+      activity: 'idle' as const,
+      lastError: 'Credit balance is too low',
+    }],
+  ])('keeps the composer for a %s member, since a message is what brings it back', async (_state, recovery) => {
+    getMemberTranscriptMock.mockResolvedValue({ messages: [] })
+    const member = {
+      agentId: 'builder@review-team',
+      name: 'builder',
+      role: 'builder',
+      ...recovery,
+    }
+    const team = {
+      name: 'review-team',
+      leadSessionId: 'lead-session',
+      members: [member],
+    }
+    useTeamStore.setState({ activeTeam: team })
+    useTeamStore.getState().openMemberSession(member, team)
+
+    render(
+      <TeamMemberRunPage
+        tabId="team-member:builder@review-team"
+        leadSessionId="lead-session"
+        agentId={member.agentId}
+        title="builder"
+      />,
+    )
+
+    expect(await screen.findByTestId('team-member-conversation')).toBeInTheDocument()
+    expect(screen.queryByTestId('team-member-readonly-note')).not.toBeInTheDocument()
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+  })
+
   it('settles a completed member task without losing direct-message activity', async () => {
     const member = {
       agentId: 'ui-designer@review-team',

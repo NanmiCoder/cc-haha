@@ -6,6 +6,7 @@ import { join } from 'path'
 import {
   addHiddenPaneId,
   getTeamFilePath,
+  listLeadTeamMemberIdentities,
   mutateTeamFileAsync,
   readTeamFile,
   removeHiddenPaneId,
@@ -310,4 +311,63 @@ test('setMemberActive preserves concurrent updates to different members', async 
     }
     await rm(configDir, { recursive: true, force: true })
   }
+})
+
+test('a desktop-hosted lead exit keeps its reviewed team; a terminal lead exit still cleans up', async () => {
+  const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+  const originalReview = process.env.CC_HAHA_TEAM_REVIEW_REQUIRED
+  const configDir = await mkdtemp(join(tmpdir(), 'cc-haha-team-session-cleanup-'))
+  process.env.CLAUDE_CONFIG_DIR = configDir
+  const { cleanupSessionTeams, registerTeamForSessionCleanup, unregisterTeamForSessionCleanup, getTeamDir } = await import('./teamHelpers.js')
+  const { beginTaskListLifecycle, getCanonicalTeamTaskListId } = await import('../tasks.js')
+  const teamName = 'desktop-owned'
+  try {
+    const createdAt = Date.now()
+    const lifecycle = await beginTaskListLifecycle(getCanonicalTeamTaskListId(teamName), { teamName, createdAt, leadSessionId: 'lead-session' })
+    await writeTeamFileAsync(teamName, { name: teamName, createdAt, leadAgentId: `team-lead@${teamName}`, leadSessionId: 'lead-session', reviewRequired: true, members: [] })
+    registerTeamForSessionCleanup(teamName, lifecycle)
+
+    // The desktop replaces the lead process on provider/permission changes,
+    // crashes and reopen; the server owns the team's end of life.
+    process.env.CC_HAHA_TEAM_REVIEW_REQUIRED = '1'
+    await cleanupSessionTeams()
+    expect(readTeamFile(teamName)?.name).toBe(teamName)
+
+    delete process.env.CC_HAHA_TEAM_REVIEW_REQUIRED
+    await cleanupSessionTeams()
+    expect(readTeamFile(teamName)).toBeNull()
+    await expect(fs.access(getTeamDir(teamName))).rejects.toThrow()
+  } finally {
+    unregisterTeamForSessionCleanup(teamName)
+    if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+    if (originalReview === undefined) delete process.env.CC_HAHA_TEAM_REVIEW_REQUIRED
+    else process.env.CC_HAHA_TEAM_REVIEW_REQUIRED = originalReview
+    await rm(configDir, { recursive: true, force: true })
+  }
+})
+
+test("lists every address of a lead's own team members and nothing from other teams", async () => {
+  await withTeamFixture(async (teamName, initial) => {
+    await writeTeamFileAsync(teamName, {
+      ...initial,
+      leadSessionId: 'lead-session',
+      members: [
+        { ...initial.members[0]!, name: 'team-lead', agentId: `team-lead@${teamName}` },
+        { ...initial.members[1]!, sessionId: 'worker-session' },
+      ],
+    })
+    await writeTeamFileAsync('other-team', {
+      ...initial,
+      name: 'other-team',
+      leadSessionId: 'another-lead',
+    })
+
+    expect(await listLeadTeamMemberIdentities('lead-session')).toEqual([
+      'worker-1',
+      `worker-1@${teamName}`,
+      'worker-session',
+    ])
+    expect(await listLeadTeamMemberIdentities('nobody')).toEqual([])
+  })
 })

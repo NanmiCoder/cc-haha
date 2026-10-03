@@ -6,6 +6,7 @@ import type {
   TeamDetail,
   TeamMember,
   TeamMemberActivity,
+  TeamMemberAutoRetry,
   AgentColor,
   TeamWorkbenchSnapshot,
   TeamWorkbenchTimeline,
@@ -62,6 +63,13 @@ type AwaitingMemberReply = {
   content: string
   sentAt: number
   baselineMessageKeys: Set<string>
+  /**
+   * The failure on record when the message went to a failed member (`null`
+   * when it had no reason). The message answers that failure, which stays on
+   * record until the runtime delivers the message, so only a different one
+   * ends the wait.
+   */
+  failureAtSend?: string | null
 }
 const awaitingMemberReplies = new Map<string, AwaitingMemberReply[]>()
 const teamLifecycleGenerations = new Map<string, number>()
@@ -114,7 +122,8 @@ function createMemberSessionState() {
 }
 
 function normalizeMemberStatus(status: string | undefined): TeamMember['status'] {
-  if (status === 'running' || status === 'idle' || status === 'completed') {
+  // The watcher reports a failed member as `error`, the REST roster as `failed`.
+  if (status === 'running' || status === 'idle' || status === 'completed' || status === 'error') {
     return status
   }
   return status === 'failed' ? 'error' : 'idle'
@@ -124,8 +133,23 @@ function normalizeMemberActivity(activity: unknown): TeamMemberActivity | undefi
   return activity === 'active' ||
     activity === 'idle' ||
     activity === 'exited' ||
+    activity === 'stopped' ||
     activity === 'unknown'
     ? activity
+    : undefined
+}
+
+function normalizeMemberLastError(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function normalizeMemberAutoRetry(value: unknown): TeamMemberAutoRetry | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { attempt, max, nextAt } = value as Record<string, unknown>
+  return typeof attempt === 'number' && Number.isFinite(attempt) &&
+    typeof max === 'number' && Number.isFinite(max) &&
+    typeof nextAt === 'number' && Number.isFinite(nextAt)
+    ? { attempt, max, nextAt }
     : undefined
 }
 
@@ -141,6 +165,9 @@ function toTeamMember(raw: Record<string, unknown>): TeamMember {
       '',
     status: normalizeMemberStatus(raw.status as string | undefined),
     activity: normalizeMemberActivity(raw.activity),
+    // The roster omits both once they clear, so a fresh read always replaces them.
+    lastError: normalizeMemberLastError(raw.lastError),
+    autoRetry: normalizeMemberAutoRetry(raw.autoRetry),
     currentTask: raw.currentTask as string | undefined,
     color: raw.color as AgentColor | undefined,
     sessionId: raw.sessionId as string | undefined,
@@ -243,6 +270,14 @@ function mergeTeamMemberStatuses(
       // The watcher omits whatever it could not determine from the roster
       // alone, so an absent field must not erase what a full team read knew.
       activity: normalizeMemberActivity(member.activity) ?? existing.activity,
+      // The failure fields are always sent, as `null` once they clear; only a
+      // server that predates them leaves them out.
+      lastError: member.lastError === undefined
+        ? existing.lastError
+        : normalizeMemberLastError(member.lastError),
+      autoRetry: member.autoRetry === undefined
+        ? existing.autoRetry
+        : normalizeMemberAutoRetry(member.autoRetry),
       currentTask: member.currentTask ?? existing.currentTask,
       color: existing.color ?? AGENT_COLORS[index % AGENT_COLORS.length]!,
     }
@@ -470,12 +505,15 @@ function latestWorkbenchSnapshotForTeam(
  * This needs positive evidence, unlike the workbench figure: an unresolved
  * activity would leave a spinner running forever, and a member that really is
  * mid-turn still reads as busy through its unsettled replies.
+ *
+ * A failed member is not excluded: a member whose failure is still on record
+ * while it is active is already working on the message that answers it.
  */
 function memberIsWorking(
   member: TeamMember,
   snapshot: TeamWorkbenchSnapshot | undefined,
 ): boolean {
-  if (member.status === 'completed' || member.status === 'error' || snapshot?.deletedAt) {
+  if (member.status === 'completed' || snapshot?.deletedAt) {
     return false
   }
   return member.activity === 'active'
@@ -781,9 +819,8 @@ function syncMemberSessionMessages(
   requestedTaskUpdatedAt?: Map<string, number>,
   requestedStreamRevision?: number,
 ) {
-  const isTerminal = member.status === 'completed' ||
-    member.status === 'error' ||
-    Boolean(snapshot?.deletedAt)
+  const isTerminal = member.status === 'completed' || Boolean(snapshot?.deletedAt)
+  const failure = member.status === 'error' ? member.lastError ?? null : undefined
   const awaitingReplies = awaitingMemberReplies.get(sessionId) ?? []
   const unsettledReplies: AwaitingMemberReply[] = []
   if (!isTerminal) {
@@ -794,7 +831,10 @@ function syncMemberSessionMessages(
           awaitingReplies[laterIndex]!.baselineMessageKeys.add(settlement.promptKey)
         }
       }
-      if (!settlement.settled) unsettledReplies.push(reply)
+      // A failure recorded after the message went out ends the wait: the turn
+      // that would have answered it is over.
+      const failedSince = failure !== undefined && failure !== reply.failureAtSend
+      if (!settlement.settled && !failedSince) unsettledReplies.push(reply)
     })
   }
   if (unsettledReplies.length === 0) {
@@ -802,10 +842,7 @@ function syncMemberSessionMessages(
   } else if (unsettledReplies.length !== awaitingReplies.length) {
     awaitingMemberReplies.set(sessionId, unsettledReplies)
   }
-  const isActive = !isTerminal && (
-    memberIsWorking(member, snapshot) ||
-    unsettledReplies.length > 0
-  )
+  const isActive = memberIsWorking(member, snapshot) || unsettledReplies.length > 0
   useChatStore.getState().applyBoundedUpdate((state) => {
     const existing = state.sessions[sessionId]
     const nextState = existing ?? createMemberSessionState()
@@ -1615,6 +1652,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
           .filter((message) => message.id !== optimisticMessage?.id)
           .map(memberMessageKey),
       ),
+      ...(member.status === 'error' ? { failureAtSend: member.lastError ?? null } : {}),
     }
     awaitingMemberReplies.set(sessionId, [
       ...(awaitingMemberReplies.get(sessionId) ?? []),
@@ -1629,11 +1667,12 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
         ? latestWorkbenchSnapshotForTeam(get().workbenchesBySession, currentTeam) ??
           get().memberSnapshotBySession[sessionId]
         : undefined
+      // A message is what brings a failed member back, so its conversation
+      // keeps following the transcript like any other member's.
       const sessionIsAvailable = Boolean(currentTeam && currentMember) &&
         memberIncarnationKey(currentTeam!, currentMember!) === incarnationKey &&
         currentMember?.agentId === member.agentId &&
         currentMember.status !== 'completed' &&
-        currentMember.status !== 'error' &&
         !snapshot?.deletedAt
       if (!sessionIsAvailable) {
         removeAwaitingMemberReply(sessionId, awaitingReply)

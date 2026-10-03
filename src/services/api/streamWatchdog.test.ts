@@ -79,7 +79,7 @@ describe('stream watchdog state', () => {
     expect(error.message).not.toContain('no chunks received')
   })
 
-  test('retries partial local tool input but stops after the tool block completes', () => {
+  test('retries a local tool block whether partial or completed, since it is held until the response completes', () => {
     const state = createStreamWatchdogState()
     state.recordEvent({ type: 'message_start' })
     state.recordEvent({
@@ -101,7 +101,8 @@ describe('stream watchdog state', () => {
     const error = state.createTimeoutError('idle', 240_000)
 
     expect(error.phase).toBe('mid_stream')
-    expect(error.safeToRetryStream()).toBe(false)
+    expect(error.streamSnapshot.localToolUseCompleted).toBe(true)
+    expect(error.safeToRetryStream()).toBe(true)
   })
 
   test('never retries after server-side tool activity begins', () => {

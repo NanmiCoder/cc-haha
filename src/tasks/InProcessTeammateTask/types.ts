@@ -17,6 +17,9 @@ export type TeammateIdentity = {
   color?: string
   planModeRequired: boolean
   parentSessionId: string // Leader's session ID
+  /** Agent id of the teammate's one durable transcript, kept across turns
+   * and resumes (agentId above is the name@team address). */
+  resumableAgentId?: string
 }
 
 export type InProcessTeammateTaskState = TaskStateBase & {

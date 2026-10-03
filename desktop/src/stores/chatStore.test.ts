@@ -25,6 +25,7 @@ const {
   fetchSessionTasksMock,
   clearTasksMock,
   setTasksFromTodosMock,
+  restoreTasksMock,
   markCompletedAndDismissedMock,
   resetCompletedTasksMock,
   refreshTasksMock,
@@ -54,6 +55,7 @@ const {
   fetchSessionTasksMock: vi.fn(),
   clearTasksMock: vi.fn(),
   setTasksFromTodosMock: vi.fn(),
+  restoreTasksMock: vi.fn(),
   markCompletedAndDismissedMock: vi.fn(),
   resetCompletedTasksMock: vi.fn(async () => {}),
   refreshTasksMock: vi.fn(),
@@ -172,8 +174,11 @@ vi.mock('./cliTaskStore', () => ({
       fetchSessionTasks: fetchSessionTasksMock,
       tasks: cliTaskStoreSnapshot.tasks,
       sessionId: cliTaskStoreSnapshot.sessionId,
+      completedAndDismissed: false,
+      dismissedCompletionKey: null,
       clearTasks: clearTasksMock,
       setTasksFromTodos: setTasksFromTodosMock,
+      restoreTasks: restoreTasksMock,
       markCompletedAndDismissed: markCompletedAndDismissedMock,
       resetCompletedTasks: resetCompletedTasksMock,
       refreshTasks: refreshTasksMock,
@@ -541,6 +546,7 @@ describe('chatStore history mapping', () => {
     fetchSessionTasksMock.mockReset()
     clearTasksMock.mockReset()
     setTasksFromTodosMock.mockReset()
+    restoreTasksMock.mockReset()
     markCompletedAndDismissedMock.mockReset()
     resetCompletedTasksMock.mockReset()
     refreshTasksMock.mockReset()
@@ -2149,6 +2155,134 @@ describe('chatStore history mapping', () => {
       }
     },
   )
+
+  it('drops the tool calls a retried stream attempt finished streaming but never ran', () => {
+    const send = (message: ServerMessage) =>
+      useChatStore.getState().handleServerMessage(TEST_SESSION_ID, message)
+    const planBeforeAttempt = [{ id: '1', subject: 'Earlier plan', status: 'in_progress' }]
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    cliTaskStoreSnapshot.tasks = planBeforeAttempt
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'thinking',
+          messages: [
+            { id: 'user-1', type: 'user_text', content: 'Fix the build', timestamp: 1 },
+            {
+              id: 'earlier-read',
+              type: 'tool_use',
+              toolName: 'Read',
+              toolUseId: 'toolu_earlier_read',
+              input: { file_path: 'build.log' },
+              timestamp: 2,
+              isPending: false,
+            },
+            {
+              id: 'earlier-read-result',
+              type: 'tool_result',
+              toolUseId: 'toolu_earlier_read',
+              content: 'error TS2322',
+              isError: false,
+              timestamp: 3,
+            },
+            // From an earlier turn, before this attempt: never this retry's to drop.
+            {
+              id: 'earlier-unresolved',
+              type: 'tool_use',
+              toolName: 'Bash',
+              toolUseId: 'toolu_earlier_unresolved',
+              input: { command: 'ls' },
+              timestamp: 4,
+              isPending: false,
+            },
+          ],
+        }),
+      },
+    })
+
+    send({ type: 'status', state: 'thinking', attemptStart: true })
+    // The server completes a call at its block stop, before message_stop.
+    send({ type: 'content_start', blockType: 'tool_use', toolName: 'TodoWrite', toolUseId: 'toolu_ghost_todo' })
+    send({
+      type: 'tool_use_complete',
+      toolName: 'TodoWrite',
+      toolUseId: 'toolu_ghost_todo',
+      input: { todos: [{ content: 'Plan from the discarded attempt', status: 'in_progress' }] },
+    })
+    send({ type: 'content_start', blockType: 'tool_use', toolName: 'Bash', toolUseId: 'toolu_ghost_bash' })
+    send({
+      type: 'tool_use_complete',
+      toolName: 'Bash',
+      toolUseId: 'toolu_ghost_bash',
+      input: { command: 'npm run build' },
+    })
+    // A call that did run keeps its card, as does a sub-agent's call still
+    // running in the same window: only the root request is being retried.
+    send({ type: 'tool_use_complete', toolName: 'Grep', toolUseId: 'toolu_ran', input: { pattern: 'TS2322' } })
+    send({ type: 'tool_result', toolUseId: 'toolu_ran', content: 'src/a.ts', isError: false })
+    send({
+      type: 'tool_use_complete',
+      toolName: 'Read',
+      toolUseId: 'toolu_agent/toolu_child',
+      input: { file_path: 'src/a.ts' },
+      parentToolUseId: 'toolu_agent',
+    })
+    send({ type: 'content_start', blockType: 'tool_use', toolName: 'Edit', toolUseId: 'toolu_partial' })
+
+    send({ type: 'streaming_fallback', cause: 'stream_retry' })
+
+    const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+    const toolCards = session?.messages
+      .filter((message): message is Extract<UIMessage, { type: 'tool_use' }> => message.type === 'tool_use')
+      .map((message) => message.toolUseId)
+    expect(toolCards).toEqual([
+      'toolu_earlier_read',
+      'toolu_earlier_unresolved',
+      'toolu_ran',
+      'toolu_agent/toolu_child',
+    ])
+    expect(session?.messages.filter((message) => message.type === 'tool_result')).toHaveLength(2)
+    expect(session?.chatState).toBe('thinking')
+    // The plan the discarded TodoWrite showed early is taken back.
+    expect(setTasksFromTodosMock).toHaveBeenCalledTimes(1)
+    expect(restoreTasksMock).toHaveBeenCalledWith({
+      sessionId: TEST_SESSION_ID,
+      tasks: planBeforeAttempt,
+      completedAndDismissed: false,
+      dismissedCompletionKey: null,
+    })
+  })
+
+  it('keeps a TodoWrite that ran when a later stream attempt is retried', () => {
+    const send = (message: ServerMessage) =>
+      useChatStore.getState().handleServerMessage(TEST_SESSION_ID, message)
+    cliTaskStoreSnapshot.sessionId = TEST_SESSION_ID
+    useChatStore.setState({
+      sessions: {
+        [TEST_SESSION_ID]: makeSession({
+          chatState: 'thinking',
+          messages: [{ id: 'user-1', type: 'user_text', content: 'Plan the work', timestamp: 1 }],
+        }),
+      },
+    })
+
+    send({ type: 'status', state: 'thinking', attemptStart: true })
+    send({
+      type: 'tool_use_complete',
+      toolName: 'TodoWrite',
+      toolUseId: 'toolu_plan',
+      input: { todos: [{ content: 'Committed plan', status: 'in_progress' }] },
+    })
+    send({ type: 'tool_result', toolUseId: 'toolu_plan', content: 'Todos have been modified', isError: false })
+    send({ type: 'status', state: 'thinking', attemptStart: true })
+    send({ type: 'streaming_fallback', cause: 'stream_retry' })
+
+    expect(restoreTasksMock).not.toHaveBeenCalled()
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages
+      .filter((message) => message.type === 'tool_use')
+      .map((message) => message.type === 'tool_use' ? message.toolUseId : ''))
+      .toEqual(['toolu_plan'])
+  })
 
   it('treats the first history load as cold when a live task arrived before it started', async () => {
     const sessionId = 'cold-live-before-load'

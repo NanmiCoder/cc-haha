@@ -387,6 +387,23 @@ describe('session collaboration', () => {
     expect(fresh).toMatchObject({ requestedTimeoutMs: 0, timeoutMs: 10_000 })
   }, 20_000)
 
+  test("a team lead waiting on its own members returns at once with guidance instead of blocking", async () => {
+    deps.sessions.teamMemberIdentities = sessionId => sessionId === 'root' ? ['reviewer', 'reviewer@team', 'worker-session'] : []
+    const startedAt = Date.now()
+    const result = await service.wait(0, ['reviewer', 'worker-session'], 300_000, undefined, 'root')
+    expect(Date.now() - startedAt).toBeLessThan(2_000)
+    expect(result.guidance).toContain('Agent Team members')
+    // Real collaboration targets still wait as before.
+    const stillWaits = service.wait((await service.status()).revision, ['peer'], 1000, undefined, 'root')
+    await service.send('root', 'peer', 'arrived', 'arrived-for-peer')
+    expect((await stillWaits).guidance ?? '').not.toContain('Agent Team members')
+    // Another session's member names are not this caller's team.
+    deps.sessions.teamMemberIdentities = () => []
+    const otherCaller = service.wait((await service.status()).revision, ['reviewer'], 1000, undefined, 'root')
+    await service.send('root', 'reviewer', 'later', 'later')
+    expect((await otherCaller).guidance ?? '').not.toContain('Agent Team members')
+  })
+
   test('wait cursor omits unchanged messages but returns a changed delivery receipt', async () => {
     await service.send('root', 'peer', 'message', 'stable')
     const first = await service.wait(0, ['peer'], 0)

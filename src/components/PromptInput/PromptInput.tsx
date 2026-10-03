@@ -1119,6 +1119,16 @@ function PromptInput({
           clearBuffer();
           resetHistory();
           return;
+        } else if (result.error === 'delivery_failed') {
+          // Keep the draft: sending it to the lead model instead would be a
+          // different action than the user asked for.
+          addNotification({
+            key: 'direct-message-failed',
+            text: `Could not deliver to @${result.recipientName} — try again`,
+            priority: 'immediate',
+            timeoutMs: 5000
+          });
+          return;
         } else if (result.error === 'no_team_context') {
           // No team context - fall through to normal prompt submission
         } else {

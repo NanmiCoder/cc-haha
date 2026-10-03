@@ -1075,6 +1075,24 @@ describe('TeamService', () => {
     expect(worker.status).toBe('idle')
   })
 
+  it('reports stopped, failed and auto-retrying process members distinctly', async () => {
+    const config = makeTeamConfig({ name: 'status-team' })
+    const [lead, worker] = config.members as Array<Record<string, unknown>>
+    Object.assign(worker!, { isActive: false, terminated: true })
+    Object.assign(lead!, { isActive: false, lastError: 'stream_truncated', autoRetry: { attempt: 2, max: 5, nextAt: 99 } })
+    await writeTeamConfig('status-team', config)
+    let detail = await service.getTeam('status-team')
+    // Stopped keeps its conversation and restarts on a message: not exited.
+    expect(detail.members.find((m) => m.agentId === 'agent-worker')).toMatchObject({ status: 'idle', activity: 'stopped' })
+    expect(detail.members.find((m) => m.agentId === 'agent-lead')).toMatchObject({ status: 'idle', lastError: 'stream_truncated', autoRetry: { attempt: 2, max: 5, nextAt: 99 } })
+
+    Object.assign(lead!, { autoRetry: undefined, lastError: 'API Error: 401 authentication_error' })
+    await writeTeamConfig('status-team', config)
+    detail = await service.getTeam('status-team')
+    expect(detail.members.find((m) => m.agentId === 'agent-lead')).toMatchObject({ status: 'failed', lastError: 'API Error: 401 authentication_error' })
+    expect(detail.members.find((m) => m.agentId === 'agent-lead')?.autoRetry).toBeUndefined()
+  })
+
   it('keeps delivered reports visible after the leader reads its mailbox', async () => {
     await writeTeamConfig('read-history-team', makeTeamConfig({ name: 'read-history-team' }))
     const report = { id: 'report-1', from: 'Worker Agent', text: 'Analysis complete', timestamp: '2026-09-27T15:25:36.411Z' }
@@ -4364,6 +4382,21 @@ describe('TeamService', () => {
       text: 'Please review the latest diff',
       read: false,
     })
+  })
+
+  it('reports a member message that could not be written instead of claiming it was sent', async () => {
+    await writeTeamConfig('blocked-mailbox-team', makeTeamConfig({ name: 'blocked-mailbox-team' }))
+    // An inbox that cannot be read back can never take the message.
+    await fs.mkdir(
+      path.join(tmpDir, 'teams', 'blocked-mailbox-team', 'inboxes', 'Worker-Agent.json'),
+      { recursive: true },
+    )
+
+    await expect(service.sendMemberMessage(
+      'blocked-mailbox-team',
+      'agent-worker',
+      'Please review the latest diff',
+    )).rejects.toMatchObject({ statusCode: 503, code: 'MAILBOX_UNAVAILABLE' })
   })
 
   it('should send messages to inbox-discovered members', async () => {

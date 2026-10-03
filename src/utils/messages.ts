@@ -3256,6 +3256,15 @@ export function handleMessageFromStream(
         }))
       }
     }
+    // A mid-stream re-send discards the failed attempt; its half-streamed tool
+    // calls never ran and must not linger until the retry's message_stop.
+    if (
+      message.type === 'system' &&
+      message.subtype === 'streaming_fallback' &&
+      message.cause === 'stream_retry'
+    ) {
+      onStreamingToolUses(() => [])
+    }
     // Clear streaming text NOW so the render can switch displayedMessages
     // from deferredMessages to messages in the same batch, making the
     // transition from streaming text → final message atomic (no gap, no duplication).
@@ -4941,7 +4950,7 @@ export function createSystemStreamingFallbackMessage(
     subtype: 'streaming_fallback',
     level: 'info',
     content: cause === 'stream_retry'
-      ? 'Provider stream stalled before a tool side effect; retrying safely'
+      ? 'Provider stream was interrupted before any tool ran; retrying safely'
       : `Streaming request failed (${cause.replace(/_/g, ' ')}); retrying in non-streaming mode`,
     cause,
     timestamp: new Date().toISOString(),

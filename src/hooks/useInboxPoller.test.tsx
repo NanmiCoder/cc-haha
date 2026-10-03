@@ -22,25 +22,54 @@ const backendDetectionModule = await import(
   '../utils/swarm/backends/detection.js'
 )
 const tasksModule = await import('../utils/tasks.js')
+const notifierModule = await import('../services/notifier.js')
+
+// mock.module replaces exports process-wide and outlives this file, so every
+// module mocked below is put back afterwards from these untouched copies.
+// Otherwise later files in one `bun test` run (the coverage gate runs all of
+// src in a single process) see this file's fake mailbox, team file and tasks.
+const originalModules: Array<[string, Record<string, unknown>]> = [
+  ['usehooks-ts', { ...useHooksTsModule }],
+  ['../state/AppState.js', { ...appStateModule }],
+  ['../ink/useTerminalNotification.js', { ...terminalNotificationModule }],
+  ['../services/notifier.js', { ...notifierModule }],
+  ['../utils/teammate.js', { ...teammateModule }],
+  ['../utils/teammateContext.js', { ...teammateContextModule }],
+  ['../utils/swarm/backends/registry.js', { ...backendRegistryModule }],
+  ['../utils/swarm/backends/detection.js', { ...backendDetectionModule }],
+  ['../utils/tasks.js', { ...tasksModule }],
+  ['../utils/teammateMailbox.js', { ...mailboxModule }],
+]
 
 let intervalCallback: (() => void) | undefined
 let state: AppState
 let unreadMessages: TeammateMessage[] = []
 let teamFileReadCount = 0
+let submitted: string[] = []
+let onSubmit: (formatted: string) => boolean = () => true
+// While set, every inbox read waits for it, like a slow disk.
+let readGate: Promise<void> | undefined
 
-const markAllRead = mock(async () => {
-  unreadMessages = unreadMessages.map(message => ({ ...message, read: true }))
+const readUnread = mock(async () => {
+  await readGate
+  return unreadMessages.filter(message => !message.read)
 })
-const markReadByPredicate = mock(
+const markReadByIdentity = mock(
   async (
     _agentName: string,
-    predicate: (message: TeammateMessage) => boolean,
+    _teamName: string | undefined,
+    delivered: readonly TeammateMessage[],
   ) => {
+    const identities = new Set(
+      delivered.map(mailboxModule.getMailboxMessageIdentity),
+    )
     unreadMessages = unreadMessages.map(message =>
-      !message.read && predicate(message)
+      !message.read &&
+      identities.has(mailboxModule.getMailboxMessageIdentity(message))
         ? { ...message, read: true }
         : message,
     )
+    return true
   },
 )
 const removeTeammate = mock(async () => true)
@@ -137,11 +166,9 @@ mock.module('../utils/tasks.js', () => ({
 
 mock.module('../utils/teammateMailbox.js', () => ({
   ...mailboxModule,
-  readUnreadMessages: async () =>
-    unreadMessages.filter(message => !message.read),
-  markMessagesAsRead: markAllRead,
-  markMessagesAsReadByPredicate: markReadByPredicate,
-  writeToMailbox: async () => {},
+  readUnreadMessages: readUnread,
+  markMessagesAsReadByIdentity: markReadByIdentity,
+  writeToMailbox: async () => true,
 }))
 
 const { useInboxPoller } = await import('./useInboxPoller.js')
@@ -151,7 +178,10 @@ function Harness() {
     enabled: true,
     isLoading: false,
     focusedInputDialog: undefined,
-    onSubmitMessage: () => true,
+    onSubmitMessage: formatted => {
+      submitted.push(formatted)
+      return onSubmit(formatted)
+    },
   })
   return null
 }
@@ -159,8 +189,11 @@ function Harness() {
 beforeEach(() => {
   intervalCallback = undefined
   teamFileReadCount = 0
-  markAllRead.mockClear()
-  markReadByPredicate.mockClear()
+  submitted = []
+  onSubmit = () => true
+  readGate = undefined
+  readUnread.mockClear()
+  markReadByIdentity.mockClear()
   removeTeammate.mockClear()
   killPane.mockClear()
   unreadMessages = [
@@ -188,6 +221,9 @@ beforeEach(() => {
 afterAll(() => {
   // Bun's mock.restore does not undo mock.module export replacements.
   mock.module('../utils/swarm/teamHelpers.js', () => originalTeamHelpers)
+  for (const [path, original] of originalModules) {
+    mock.module(path, () => original)
+  }
   mock.restore()
 })
 
@@ -256,6 +292,124 @@ describe('shutdown approval polling', () => {
     }
   })
 })
+
+describe('teammate message delivery', () => {
+  test('acknowledges exactly the delivered batch', async () => {
+    unreadMessages = [chat('alice', 'report')]
+    onSubmit = () => {
+      // A teammate writes while this poll is still delivering.
+      unreadMessages = [...unreadMessages, chat('bob', 'late result')]
+      return true
+    }
+    const output = new PassThrough()
+    const app = render(<Harness />, {
+      stdout: output,
+      stderr: output,
+      debug: false,
+      exitOnCtrlC: false,
+    })
+
+    try {
+      await waitFor(() => markReadByIdentity.mock.calls.length === 1)
+
+      expect(submitted).toHaveLength(1)
+      expect(submitted[0]).toContain('report')
+      expect(markReadByIdentity.mock.calls[0]?.[2]).toEqual([
+        chat('alice', 'report'),
+      ])
+      expect(
+        unreadMessages.filter(message => !message.read).map(m => m.text),
+      ).toEqual(['late result'])
+    } finally {
+      app.unmount()
+      output.destroy()
+    }
+  })
+
+  test('delivers mail queued during a busy turn with the shared envelope', async () => {
+    unreadMessages = []
+    state = {
+      ...state,
+      inbox: {
+        messages: [
+          {
+            id: 'queued-1',
+            from: 'worker',
+            text: 'Finished the migration',
+            timestamp: '2026-10-03T00:00:00.000Z',
+            status: 'pending',
+            summary: 'migration "done"',
+          },
+        ],
+      },
+    } as AppState
+    const output = new PassThrough()
+    const app = render(<Harness />, {
+      stdout: output,
+      stderr: output,
+      debug: false,
+      exitOnCtrlC: false,
+    })
+
+    try {
+      await waitFor(() => submitted.length === 1)
+
+      expect(submitted[0]).toBe(
+        '<teammate-message teammate_id="worker" summary="migration &quot;done&quot;">\n' +
+          'Finished the migration\n' +
+          '</teammate-message>',
+      )
+      expect(state.inbox.messages).toEqual([])
+    } finally {
+      app.unmount()
+      output.destroy()
+    }
+  })
+
+  test('does not deliver a batch twice when polls overlap', async () => {
+    unreadMessages = [chat('alice', 'report')]
+    let openGate!: () => void
+    readGate = new Promise<void>(resolve => {
+      openGate = resolve
+    })
+    const output = new PassThrough()
+    const app = render(<Harness />, {
+      stdout: output,
+      stderr: output,
+      debug: false,
+      exitOnCtrlC: false,
+    })
+
+    try {
+      await waitFor(() => readUnread.mock.calls.length === 1)
+      // The next interval tick fires while the first poll is still reading.
+      intervalCallback?.()
+      intervalCallback?.()
+      openGate()
+      await waitFor(() => markReadByIdentity.mock.calls.length === 1)
+      intervalCallback?.()
+      await waitFor(() => readUnread.mock.calls.length === 2)
+      await Bun.sleep(20)
+
+      expect(submitted).toHaveLength(1)
+      expect(markReadByIdentity).toHaveBeenCalledTimes(1)
+    } finally {
+      openGate()
+      app.unmount()
+      output.destroy()
+    }
+  })
+})
+
+function chat(from: string, text: string): TeammateMessage {
+  return {
+    id: `mailbox-${from}-${text}`,
+    from,
+    text,
+    timestamp: '2026-10-03T00:00:00.000Z',
+    read: false,
+  }
+}
 
 function shutdownApproval(
   from: string,

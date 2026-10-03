@@ -29,6 +29,7 @@ import * as path from 'node:path'
 import { handleSideQuestionRoute } from './sideQuestions.js'
 import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
+import { endTeamsForParent } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import {
   closeSessionConnection,
@@ -996,6 +997,8 @@ async function deleteSession(sessionId: string): Promise<Response> {
   closeSessionConnection(sessionId, 'session deleted')
   cleanupAdapterSessionMappings(sessionId)
   recentProjectsCache = null
+  // A deleted lead ends its reviewed team for good; Stop and lead restarts only pause it.
+  void endTeamsForParent(sessionId).catch(error => console.error(`[Sessions] Failed to end the deleted session's team: ${error}`))
   return Response.json({ ok: true })
 }
 
@@ -1018,6 +1021,7 @@ async function batchDeleteSessions(req: Request): Promise<Response> {
   for (const sessionId of result.successes) {
     closeSessionConnection(sessionId, 'session deleted')
     cleanupAdapterSessionMappings(sessionId)
+    void endTeamsForParent(sessionId).catch(error => console.error(`[Sessions] Failed to end the deleted session's team: ${error}`))
   }
   if (result.successes.length > 0) {
     recentProjectsCache = null

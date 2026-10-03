@@ -1,5 +1,6 @@
 import type { PermissionMode } from './settings'
 import type { RuntimeSelection } from './runtime'
+import type { TeamMemberActivity, TeamMemberAutoRetry } from './team'
 
 // Source: src/server/ws/events.ts
 
@@ -223,8 +224,12 @@ export type TeamMemberStatus = {
    * Omitted when the watcher cannot tell from the roster alone, so a receiver
    * keeps whatever the last full team read established.
    */
-  activity?: 'active' | 'idle' | 'exited' | 'unknown'
+  activity?: TeamMemberActivity
   currentTask?: string
+  /** Why the last turn failed; `null` says the member has recovered. */
+  lastError?: string | null
+  /** A pending automatic continuation; `null` once it has settled. */
+  autoRetry?: TeamMemberAutoRetry | null
 }
 
 export type ComputerUseGrantFlags = {

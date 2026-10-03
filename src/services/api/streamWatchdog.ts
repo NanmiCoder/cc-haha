@@ -160,10 +160,15 @@ export class StreamWatchdogTimeoutError extends Error {
     this.phase = streamSnapshot.phase
   }
 
+  /**
+   * Only an idle stall is re-sent: max_duration and tool_input_duration
+   * already spent their budget, and server-side tool work cannot be undone.
+   * A completed local tool_use does not block it — the commit buffer holds
+   * that block until the response completes, so the tool has not run.
+   */
   safeToRetryStream(): boolean {
     return (
       this.reason === 'idle' &&
-      !this.streamSnapshot.localToolUseCompleted &&
       !this.streamSnapshot.serverToolUseStarted
     )
   }

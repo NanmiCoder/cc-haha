@@ -27,6 +27,7 @@ import { createAbortController } from '../abortController.js'
 import { formatAgentId } from '../agentId.js'
 import { registerCleanup } from '../cleanupRegistry.js'
 import { logForDebugging } from '../debug.js'
+import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { emitTaskTerminatedSdk } from '../sdkEventQueue.js'
 import { evictTaskOutput } from '../task/diskOutput.js'
 import {
@@ -35,11 +36,13 @@ import {
   STOPPED_DISPLAY_MS,
 } from '../task/framework.js'
 import { createTeammateContext } from '../teammateContext.js'
+import { clearMailbox } from '../teammateMailbox.js'
 import {
   isPerfettoTracingEnabled,
   registerAgent as registerPerfettoAgent,
   unregisterAgent as unregisterPerfettoAgent,
 } from '../telemetry/perfettoTracing.js'
+import { createAgentId } from '../uuid.js'
 import { removeMemberByAgentId } from './teamHelpers.js'
 import { isTeamReviewRequired } from './teamPlanPolicy.js'
 import { readTeamPlan } from './teamPlanStore.js'
@@ -71,6 +74,11 @@ export type InProcessSpawnConfig = {
   planModeRequired: boolean
   /** Optional model override for this teammate */
   model?: string
+  /** Set when resuming a teammate: the agent id of its existing transcript.
+   * A fresh spawn gets a new one and starts with an empty inbox. */
+  resumableAgentId?: string
+  /** Permission mode to resume with; defaults from planModeRequired. */
+  permissionMode?: PermissionMode
 }
 
 /**
@@ -81,6 +89,8 @@ export type InProcessSpawnOutput = {
   success: boolean
   /** Full agent ID (format: "name@team") */
   agentId: string
+  /** Identity registered on the task, including its durable transcript id */
+  identity?: TeammateIdentity
   /** Task ID for tracking in AppState */
   taskId?: string
   /** AbortController for this teammate (linked to parent) */
@@ -122,6 +132,12 @@ export async function spawnInProcessTeammate(
   )
 
   try {
+    // A new teammate must not read mail left for an earlier one with this
+    // name; a resumed teammate keeps whatever arrived while it was stopped.
+    if (config.resumableAgentId === undefined) {
+      await clearMailbox(name, teamName)
+    }
+
     // Create independent AbortController for this teammate
     // Teammates should not be aborted when the leader's query is interrupted
     const abortController = createAbortController()
@@ -137,6 +153,7 @@ export async function spawnInProcessTeammate(
       color,
       planModeRequired,
       parentSessionId,
+      resumableAgentId: config.resumableAgentId ?? createAgentId(),
     }
 
     // Create teammate context for AsyncLocalStorage
@@ -175,7 +192,8 @@ export async function spawnInProcessTeammate(
       awaitingPlanApproval: false,
       spinnerVerb: sample(getSpinnerVerbs()),
       pastTenseVerb: sample(TURN_COMPLETION_VERBS),
-      permissionMode: planModeRequired ? 'plan' : 'default',
+      permissionMode:
+        config.permissionMode ?? (planModeRequired ? 'plan' : 'default'),
       isIdle: false,
       shutdownRequested: false,
       lastReportedToolCount: 0,
@@ -202,6 +220,7 @@ export async function spawnInProcessTeammate(
     return {
       success: true,
       agentId,
+      identity,
       taskId,
       abortController,
       teammateContext,

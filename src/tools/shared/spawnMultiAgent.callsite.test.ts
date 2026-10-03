@@ -43,6 +43,22 @@ const originalTeamHelpers = { ...teamHelpersModule }
 const mutateTeamFileAsyncActual = teamHelpersModule.mutateTeamFileAsync
 const readTeamFileAsyncActual = teamHelpersModule.readTeamFileAsync
 
+// mock.module replaces exports process-wide and outlives this file, so every
+// module mocked below is put back afterwards from these untouched copies.
+// Otherwise later files in one `bun test` run (the coverage gate runs all of
+// src in a single process) get a runner, mailbox and backends without their
+// real exports.
+const originalModules: Array<[string, Record<string, unknown>]> = [
+  ['../../utils/swarm/backends/registry.js', { ...(await import('../../utils/swarm/backends/registry.js')) }],
+  ['../../utils/swarm/backends/detection.js', { ...(await import('../../utils/swarm/backends/detection.js')) }],
+  ['../../utils/swarm/teammateLayoutManager.js', { ...(await import('../../utils/swarm/teammateLayoutManager.js')) }],
+  ['../../utils/swarm/inProcessRunner.js', { ...(await import('../../utils/swarm/inProcessRunner.js')) }],
+  ['../../utils/swarm/spawnInProcess.js', { ...(await import('../../utils/swarm/spawnInProcess.js')) }],
+  ['../../utils/task/framework.js', { ...taskFrameworkModule }],
+  ['../../utils/teammateMailbox.js', { ...(await import('../../utils/teammateMailbox.js')) }],
+  ['../../utils/execFileNoThrow.js', { ...execFileNoThrowModule }],
+]
+
 mock.module('../../utils/swarm/backends/registry.js', () => ({
   detectAndGetBackend: async () => ({
     backend: { type: 'tmux' },
@@ -126,6 +142,9 @@ beforeEach(() => {
 
 afterAll(() => {
   mock.module('../../utils/swarm/teamHelpers.js', () => originalTeamHelpers)
+  for (const [path, original] of originalModules) {
+    mock.module(path, () => original)
+  }
   if (originalSubagentModel === undefined) {
     delete process.env.CLAUDE_CODE_SUBAGENT_MODEL
   } else {

@@ -117,11 +117,24 @@ function memberStatusColor(state: MemberWorkState): string {
   return 'var(--color-text-secondary)'
 }
 
+function memberDotColor(state: MemberWorkState, accent: string): string {
+  if (state === 'working') return accent
+  // The raw warning accent is too light for label text, but reads as a fill.
+  if (state === 'retrying') return 'var(--color-warning)'
+  return memberStatusColor(state)
+}
+
 function taskStateLabel(state: WorkbenchTaskState, t: TranslationFn): string {
   return t(`agentTeams.task.${state}` as TranslationKey)
 }
 
-function memberStateLabel(state: MemberWorkState, t: TranslationFn): string {
+function memberStateLabel(state: MemberWorkState, member: TeamMember, t: TranslationFn): string {
+  if (state === 'retrying') {
+    return t('agentTeams.member.retrying', {
+      attempt: member.autoRetry?.attempt ?? '?',
+      max: member.autoRetry?.max ?? '?',
+    })
+  }
   return t(`agentTeams.member.${state}` as TranslationKey)
 }
 
@@ -466,10 +479,10 @@ function MemberNode({
           : waitingDependency
             ? t('agentTeams.member.waitingForDependency', { task: waitingDependency })
             : t('agentTeams.member.waitingForTask')
-        : memberStateLabel(state, t)
+        : memberStateLabel(state, member, t)
   const characterClass = state === 'working'
     ? 'agent-teams-character-working'
-    : state === 'idle'
+    : state === 'idle' || state === 'retrying'
       ? 'agent-teams-character-idle'
       : state === 'exited'
         ? 'agent-teams-character-archived'
@@ -547,10 +560,15 @@ function MemberNode({
         {!isLead ? (
           <span
             className="h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{ backgroundColor: state === 'working' ? accent : memberStatusColor(state) }}
+            style={{ backgroundColor: memberDotColor(state, accent) }}
           />
         ) : null}
-        <span className="truncate">{stateLabel}</span>
+        <span
+          className="truncate"
+          title={state === 'stopped' || state === 'retrying' || state === 'error' ? member.lastError : undefined}
+        >
+          {stateLabel}
+        </span>
         {isLead ? (
           <span className="shrink-0 text-[var(--color-text-tertiary)]">
             · {t('agentTeams.member.inbox', { count: position.inbox })}

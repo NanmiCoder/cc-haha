@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TeamPlanService } from './teamPlanService.js'
 import { approveTeamPlan, ensureTeamDraft, readTeamPlan, replaceTeamPlan, stageMember, submitTeamPlan } from '../../utils/swarm/teamPlanStore.js'
+import * as teamPlanStore from '../../utils/swarm/teamPlanStore.js'
 import { writeTeamFileAsync } from '../../utils/swarm/teamHelpers.js'
 import type { TeamPlanRecord } from '../../shared/teamPlan.js'
 const saved = { home: process.env.HOME, config: process.env.CLAUDE_CONFIG_DIR }
@@ -53,6 +54,29 @@ test('approval launches once and returns frozen selected runtime to executor', a
   expect(calls).toBe(1)
   release()
   expect((await settle('running')).launch?.memberIds).toEqual({ worker: 'child-1' })
+})
+test('a plan read while the approval is committing does not orphan the launch', async () => {
+  let launches = 0
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => {
+    launches++
+    return { memberIds: { worker: 'child-1' } }
+  }, stop: async () => {} })
+  const plan = await ready()
+  const commit = teamPlanStore.approveTeamPlan
+  // The UI polls the plan while the approval runs: this read lands after the
+  // plan already says `launching` but before the launch is registered.
+  const approval = spyOn(teamPlanStore, 'approveTeamPlan').mockImplementation(async (...args: Parameters<typeof commit>) => {
+    const result = await commit(...args)
+    await service.getForSession('session')
+    return result
+  })
+  try {
+    expect((await service.approve('review', identity(plan))).state).toBe('launching')
+  } finally {
+    approval.mockRestore()
+  }
+  expect((await settle('running')).launch?.memberIds).toEqual({ worker: 'child-1' })
+  expect(launches).toBe(1)
 })
 test('validation failure starts no process; launch failure requires explicit review retry', async () => {
   let calls = 0
@@ -134,4 +158,28 @@ test('launch transitions preserve future persisted launch metadata', async () =>
   const interrupted = await cold.getForSession('session')
   expect(interrupted?.launch?.futureLaunch).toEqual({ retained: true })
   expect(interrupted?.state).toBe('interrupted')
+})
+
+test('a running team whose owner was lost is re-owned instead of being marked interrupted', async () => {
+  const plan = await ready()
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => ({ memberIds: { worker: 'fixture-child' } }), stop: async () => {} })
+  await service.approve('review', identity(plan))
+  await settle('running')
+  let owned = false
+  const rehydrated: string[] = []
+  const restarted = new TeamPlanService({
+    validate: async item => item, launch: async () => ({ memberIds: {} }), stop: async () => {},
+    isRunning: () => owned,
+    rehydrate: async item => { rehydrated.push(item.planId); owned = true; return true },
+  })
+  expect((await restarted.getForSession('session'))?.state).toBe('running')
+  expect(rehydrated).toHaveLength(1)
+  expect((await readTeamPlan('review'))?.state).toBe('running')
+
+  owned = false
+  const unrecoverable = new TeamPlanService({
+    validate: async item => item, launch: async () => ({ memberIds: {} }), stop: async () => {},
+    isRunning: () => false, rehydrate: async () => false,
+  })
+  expect((await unrecoverable.getForSession('session'))?.state).toBe('interrupted')
 })

@@ -320,6 +320,23 @@ export type TeamWorkerStart = {
   systemPrompt: string
   tools?: string[]
   agentDefinition?: Record<string, unknown>
+  /**
+   * Restart a worker whose process stopped by resuming its own transcript.
+   * A worker never inherits the parent's launch metadata, so resume is opt-in.
+   */
+  resume?: boolean
+}
+
+/**
+ * Hooks for the server-owned Agent Teams runtime. Workers are independent
+ * processes, so the lead's process lifecycle must not decide their fate on its
+ * own: a lead restart keeps them, and Stop lets the runtime pause them first.
+ */
+export type TeamRuntimeListener = {
+  /** Synchronously before Stop kills a lead's workers. */
+  leadInterrupted?: (parentSessionId: string) => void
+  /** After any CLI session finished starting. */
+  sessionStarted?: (sessionId: string, info: { isTeamWorker: boolean }) => void
 }
 
 export type SessionStartOptions = {
@@ -352,6 +369,7 @@ export class ConversationStartupError extends Error {
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
   private teamStopOperations = new Map<string, Promise<void>>()
+  private teamRuntimeListeners = new Set<TeamRuntimeListener>()
   private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
@@ -601,7 +619,9 @@ export class ConversationService {
       throw new ConversationStartupError('This temporary side chat has expired. Open a new side chat.', 'SESSION_DELETED')
     }
     const launchInfo = options?.teamWorker ? null : await sessionService.getSessionLaunchInfo(sessionId)
-    const shouldResume = !!launchInfo && launchInfo.transcriptMessageCount > 0
+    const shouldResume = options?.teamWorker
+      ? options.teamWorker.resume === true && !!await sessionService.findSessionFile(sessionId)
+      : !!launchInfo && launchInfo.transcriptMessageCount > 0
     const shouldReplacePlaceholder =
       !side && !!launchInfo && launchInfo.transcriptMessageCount === 0
     const shouldCreateWorktree =
@@ -866,6 +886,18 @@ export class ConversationService {
     }
 
     console.log(`[ConversationService] CLI started successfully for ${sessionId}`)
+    for (const listener of this.teamRuntimeListeners) {
+      try {
+        listener.sessionStarted?.(sessionId, { isTeamWorker: Boolean(options?.teamWorker) })
+      } catch (error) {
+        console.error('[ConversationService] Team runtime start hook failed', error)
+      }
+    }
+  }
+
+  addTeamRuntimeListener(listener: TeamRuntimeListener): () => void {
+    this.teamRuntimeListeners.add(listener)
+    return () => this.teamRuntimeListeners.delete(listener)
   }
 
   onOutput(sessionId: string, callback: (msg: any) => void): void {
@@ -1151,12 +1183,23 @@ export class ConversationService {
   }
 
   sendInterrupt(sessionId: string): boolean {
+    // Stop ends all team activity immediately, but an approved team that is
+    // already working is paused rather than destroyed: the runtime marks its
+    // members as user-stopped before their processes die, and a later message
+    // from the lead or the user resumes each member from its own transcript.
+    for (const listener of this.teamRuntimeListeners) {
+      try {
+        listener.leadInterrupted?.(sessionId)
+      } catch (error) {
+        console.error('[ConversationService] Team runtime interrupt hook failed', error)
+      }
+    }
     for (const [childId, child] of this.sessions) {
       if (child.teamWorker?.parentSessionId === sessionId) this.stopSession(childId)
     }
     const stop = (this.teamStopOperations.get(sessionId) ?? Promise.resolve()).then(async () => {
       const runtime = await import('./teamPlanRuntime.js')
-      await runtime.stopTeamPlanRuntimesForParent(sessionId)
+      await runtime.stopTeamPlanRuntimesForParent(sessionId, { pauseReleased: true })
     }).catch(error => {
       console.error('[ConversationService] Failed to revoke interrupted team launch', error)
     }).finally(() => {
@@ -1633,9 +1676,16 @@ export class ConversationService {
     pending.clear()
   }
 
-  stopSession(sessionId: string): void {
-    for (const [childId, child] of this.sessions) {
-      if (child.teamWorker?.parentSessionId === sessionId) this.stopSession(childId)
+  /**
+   * `keepTeamWorkers` is for restarting a lead's process (runtime or
+   * permission change): approved team members are independent processes and
+   * keep working while the lead's process is replaced.
+   */
+  stopSession(sessionId: string, options?: { keepTeamWorkers?: boolean }): void {
+    if (!options?.keepTeamWorkers) {
+      for (const [childId, child] of this.sessions) {
+        if (child.teamWorker?.parentSessionId === sessionId) this.stopSession(childId)
+      }
     }
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -1649,9 +1699,12 @@ export class ConversationService {
   async stopSessionAndWait(
     sessionId: string,
     timeoutMs = DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+    options?: { keepTeamWorkers?: boolean },
   ): Promise<void> {
-    for (const [childId, child] of this.sessions) {
-      if (child.teamWorker?.parentSessionId === sessionId) await this.stopSessionAndWait(childId, timeoutMs)
+    if (!options?.keepTeamWorkers) {
+      for (const [childId, child] of this.sessions) {
+        if (child.teamWorker?.parentSessionId === sessionId) await this.stopSessionAndWait(childId, timeoutMs)
+      }
     }
     const session = this.sessions.get(sessionId)
     if (!session) return
@@ -1831,9 +1884,11 @@ export class ConversationService {
 
     const activeSession = this.sessions.get(sessionId)
     if (activeSession?.proc === proc) {
-      for (const [childId, child] of this.sessions) {
-        if (child.teamWorker?.parentSessionId === sessionId) this.stopSession(childId)
-      }
+      // A lead process that dies on its own (crash, OOM, provider SDK fault)
+      // must not take its approved team with it: members are independent
+      // processes, their messages queue in the lead's mailbox, and the next
+      // lead start receives the team snapshot again. Explicit stops (close,
+      // delete, /clear) still stop workers through stopSession.
       this.cancelPendingControlRequests(
         activeSession,
         new Error('CLI session exited before the control request completed'),

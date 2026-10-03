@@ -31,6 +31,7 @@ import {
   ConversationStartupError,
   conversationService,
 } from '../services/conversationService.js'
+import { deliverTeamPauseNotice, endTeamsForParent, hasActiveTeamWorkForParent } from '../services/teamPlanRuntime.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import {
   sessionService,
@@ -429,7 +430,10 @@ function hasActiveCliRun(sessionId: string): boolean {
 function hasActiveSessionWork(sessionId: string): boolean {
   return hasPendingOrActiveUserTurn(sessionId) ||
     hasActiveCliRun(sessionId) ||
-    hasActiveBackgroundTasks(sessionId)
+    hasActiveBackgroundTasks(sessionId) ||
+    // An idle lead still owns a working team; reaping it after the renderer
+    // disconnects (sleep, reload) would strand every member mid-task.
+    hasActiveTeamWorkForParent(sessionId)
 }
 
 export function getSessionChatActivityState(sessionId: string): SessionChatActivityState {
@@ -1076,6 +1080,12 @@ async function handleUserMessage(
     userMessageSent = true
     activeTurn.messageSent = true
     if (!collaboration) emitSessionTurnEvent({ type: 'input-committed', sessionId })
+    // After the user's own words, so the lead weighs them first.
+    if (!collaboration) {
+      void deliverTeamPauseNotice(sessionId).catch(error =>
+        console.error('[WS] cannot tell the lead about its stopped team', error),
+      )
+    }
   } finally {
     if (!activeTurn.messageSent) await admission?.release()
   }
@@ -1399,6 +1409,8 @@ async function performDesktopClearCommand(
   if (activeTitleState) activeTitleState.activeTurn = undefined
   const pendingStartup = sessionStartupPromises.get(sessionId)
   conversationService.stopSession(sessionId)
+  // Clearing the lead's context ends its reviewed team for good.
+  void endTeamsForParent(sessionId).catch(error => console.error(`[WS] Failed to end the cleared session's team: ${error}`))
   pendingInterruptedTurnResults.delete(sessionId)
   // Clearing replaces the transcript, so do not enqueue terminal bookends that
   // could finish after the replacement write and repopulate the cleared file.
@@ -2030,7 +2042,9 @@ async function restartSessionWithPermissionMode(
     const workDir = conversationService.getSessionWorkDir(sessionId)
     markActiveAgentsStopping(sessionId)
     runtimeExitStoppedSessions.add(sessionId)
-    conversationService.stopSession(sessionId)
+    // Approved team members are independent processes; replacing the lead's
+    // process must not end their work.
+    conversationService.stopSession(sessionId, { keepTeamWorkers: true })
     await emitAuthoritativeStoppedForActiveAgents(sessionId)
     await emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
 
@@ -2151,7 +2165,9 @@ async function restartSessionWithRuntimeConfig(
     const workDir = await resolveRuntimeRestartWorkDir(sessionId)
     markActiveAgentsStopping(sessionId)
     runtimeExitStoppedSessions.add(sessionId)
-    conversationService.stopSession(sessionId)
+    // Approved team members are independent processes; replacing the lead's
+    // process must not end their work.
+    conversationService.stopSession(sessionId, { keepTeamWorkers: true })
     await emitAuthoritativeStoppedForActiveAgents(sessionId)
     await emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
 

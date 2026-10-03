@@ -44,6 +44,7 @@ import {
 import type { SystemPrompt } from '../utils/systemPromptType.js'
 import { getTaskListId, listTasks } from '../utils/tasks.js'
 import { getAgentName, getTeamName, isTeammate } from '../utils/teammate.js'
+import { hasTeamWorkInProgress } from '../utils/swarm/teamActivity.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
 const extractMemoriesModule = feature('EXTRACT_MEMORIES')
@@ -78,17 +79,27 @@ export function shouldLetGoalPromptHookContinue(
   )
 }
 
-export function formatGoalContinuationStatusOutput(reason: string): string {
-  const normalizedReason = reason
+function normalizeGoalReason(reason: string): string {
+  return reason
     .replace(/^Prompt hook condition was not met:\s*/i, '')
     .replace(/[<>&]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .slice(0, 240)
+}
 
+export function formatGoalContinuationStatusOutput(reason: string): string {
+  const normalizedReason = normalizeGoalReason(reason)
   return normalizedReason
     ? `Goal continuing: ${normalizedReason}`
     : 'Goal continuing: more work is required'
+}
+
+export function formatGoalWaitingForTeamStatusOutput(reason: string): string {
+  const normalizedReason = normalizeGoalReason(reason)
+  return normalizedReason
+    ? `Goal waiting for teammates: ${normalizedReason}`
+    : 'Goal waiting for teammates: more work is required'
 }
 
 export async function* handleStopHooks(
@@ -248,6 +259,7 @@ export async function* handleStopHooks(
     // Track whether any blockingError came from a goal hook, so we can
     // resolve the pending preventContinuation correctly after the loop.
     let goalBlockingErrorSeen = false
+    const goalBlockingMessages = new Set<Message>()
 
     for await (const result of generator) {
       if (result.message) {
@@ -324,6 +336,7 @@ export async function* handleStopHooks(
           content: getStopHookMessage(result.blockingError),
           isMeta: true, // Hide from UI (shown in summary message instead)
         })
+        if (isGoalHook) goalBlockingMessages.add(userMessage)
         blockingErrors.push(userMessage)
         yield userMessage
         hasOutput = true
@@ -432,6 +445,26 @@ export async function* handleStopHooks(
       yield createCommandInputMessage(
         '<local-command-stdout>Goal marked complete.</local-command-stdout>',
       )
+    }
+
+    // A team lead whose members are still working has nothing to do but wait
+    // for their reports. Forcing it to continue makes it busy-poll with sleeps
+    // and task-list reads (a full-context model call per loop) while teammate
+    // messages can only reach it between turns. Let the turn end instead: a
+    // member's report starts the next lead turn, and the goal is checked again
+    // when that turn tries to stop.
+    if (
+      goalContinuationReason &&
+      !preventedContinuation &&
+      !toolUseContext.agentId &&
+      blockingErrors.length > 0 &&
+      blockingErrors.every(message => goalBlockingMessages.has(message)) &&
+      hasTeamWorkInProgress(toolUseContext.getAppState())
+    ) {
+      yield createCommandInputMessage(
+        `<local-command-stdout>${formatGoalWaitingForTeamStatusOutput(goalContinuationReason)}</local-command-stdout>`,
+      )
+      return { blockingErrors: [], preventContinuation: false }
     }
 
     if (goalContinuationReason) {

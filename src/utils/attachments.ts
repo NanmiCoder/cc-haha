@@ -233,7 +233,7 @@ import { getAutoMemPath, isAutoMemoryEnabled } from '../memdir/paths.js'
 import { getAgentMemoryDir } from '../tools/AgentTool/agentMemory.js'
 import {
   readUnreadMessages,
-  markMessagesAsReadByPredicate,
+  claimMailboxMessages,
   isShutdownApproved,
   isStructuredProtocolMessage,
   isIdleNotification,
@@ -3663,8 +3663,13 @@ async function getAsyncHookResponseAttachments(): Promise<Attachment[]> {
  *
  * Messages from AppState.inbox are delivered mid-turn as attachments,
  * allowing teammates to receive messages without waiting for the turn to end.
+ *
+ * Like the official external CLI, external builds never deliver mail mid-turn:
+ * the lead receives teammate messages between turns (the print-mode poll or
+ * useInboxPoller) as ordinary prompts, which the desktop chat shows. A
+ * mid-turn attachment is only in the model context and the transcript.
  */
-async function getTeammateMailboxAttachments(
+export async function getTeammateMailboxAttachments(
   toolUseContext: ToolUseContext,
 ): Promise<Attachment[]> {
   if (!isAgentSwarmsEnabled()) {
@@ -3723,11 +3728,21 @@ async function getTeammateMailboxAttachments(
   // messages as read, and if attachments wins, protocol messages get bundled as raw
   // LLM context text instead of being routed to their UI handlers.
   const allUnreadMessages = await readUnreadMessages(agentName, teamName)
-  const unreadMessages = allUnreadMessages.filter(
+  const unreadCandidates = allUnreadMessages.filter(
     m => !isStructuredProtocolMessage(m.text),
   )
+  // Claim before attaching: only the messages this call marked read are
+  // attached, so the print-mode lead poll (or a concurrent attachment pass)
+  // can never deliver one of them a second time, and mail that arrives after
+  // the read stays unread. A failed claim attaches nothing; the messages
+  // remain unread for the next pass.
+  const unreadMessages =
+    unreadCandidates.length > 0
+      ? ((await claimMailboxMessages(agentName, teamName, unreadCandidates)) ??
+        [])
+      : []
   logForDebugging(
-    `[MailboxBridge] Found ${allUnreadMessages.length} unread message(s) for "${agentName}" (${allUnreadMessages.length - unreadMessages.length} structured protocol messages filtered out)`,
+    `[MailboxBridge] Found ${allUnreadMessages.length} unread message(s) for "${agentName}" (${allUnreadMessages.length - unreadCandidates.length} structured protocol messages filtered out, ${unreadMessages.length} claimed)`,
   )
 
   // Also check AppState.inbox for pending messages (queued mid-turn by useInboxPoller)
@@ -3810,25 +3825,14 @@ async function getTeammateMailboxAttachments(
 
   // Build the attachment BEFORE marking messages as processed
   // This prevents message loss if any operation below fails
+  // (mailbox messages were already claimed above; structured protocol
+  // messages stay unread for useInboxPoller to handle).
   const attachment: Attachment[] = [
     {
       type: 'teammate_mailbox',
       messages: allMessages,
     },
   ]
-
-  // Mark only non-structured mailbox messages as read after attachment is built.
-  // Structured protocol messages stay unread for useInboxPoller to handle.
-  if (unreadMessages.length > 0) {
-    await markMessagesAsReadByPredicate(
-      agentName,
-      m => !isStructuredProtocolMessage(m.text),
-      teamName,
-    )
-    logForDebugging(
-      `[MailboxBridge] marked ${unreadMessages.length} non-structured message(s) as read for agent="${agentName}" team="${teamName || 'default'}"`,
-    )
-  }
 
   // Process shutdown_approved messages - remove teammates from team file
   // This mirrors what useInboxPoller does in interactive mode (lines 546-606)

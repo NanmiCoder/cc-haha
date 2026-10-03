@@ -54,6 +54,7 @@ import { buildInheritedEnvVars } from '../../utils/swarm/spawnUtils.js'
 import {
   mutateTeamFileAsync,
   readTeamFileAsync,
+  removeMemberByAgentId,
   sanitizeAgentName,
   sanitizeName,
 } from '../../utils/swarm/teamHelpers.js'
@@ -290,7 +291,14 @@ export async function generateUniqueTeammateName(
     return baseName
   }
 
-  const existingNames = new Set(teamFile.members.map(m => m.name.toLowerCase()))
+  return pickUniqueTeammateName(baseName, teamFile.members)
+}
+
+function pickUniqueTeammateName(
+  baseName: string,
+  members: ReadonlyArray<{ name: string }>,
+): string {
+  const existingNames = new Set(members.map(m => m.name.toLowerCase()))
 
   // If the base name doesn't exist, use it as-is
   if (!existingNames.has(baseName.toLowerCase())) {
@@ -889,18 +897,6 @@ async function handleSpawnInProcess(
     )
   }
 
-  // Generate unique name if duplicate exists in team
-  const uniqueName = await generateUniqueTeammateName(name, teamName)
-
-  // Sanitize the name to prevent @ in agent IDs
-  const sanitizedName = sanitizeAgentName(uniqueName)
-
-  // Generate deterministic agent ID from name and team
-  const teammateId = formatAgentId(sanitizedName, teamName)
-
-  // Assign a unique color to this teammate
-  const teammateColor = assignTeammateColor(teammateId)
-
   // Look up custom agent definition if agent_type is provided
   let agentDefinition:
     | CustomAgentDefinition
@@ -919,6 +915,36 @@ async function handleSpawnInProcess(
     )
   }
 
+  // Reserve a unique name and put the member on the roster under the
+  // team-file lock before the teammate starts: concurrent spawns can never
+  // pick the same name, and a running teammate is always on the roster.
+  // Sanitize first (no @ in agent IDs) so uniqueness covers the name used.
+  const baseName = sanitizeAgentName(name)
+  let sanitizedName = baseName
+  let teammateId = formatAgentId(baseName, teamName)
+  let teammateColor: ReturnType<typeof assignTeammateColor> | undefined
+  await mutateTeamFileAsync(teamName, (teamFile) => {
+    sanitizedName = pickUniqueTeammateName(baseName, teamFile.members)
+    // Generate deterministic agent ID from name and team
+    teammateId = formatAgentId(sanitizedName, teamName)
+    // Assign a unique color to this teammate
+    teammateColor = assignTeammateColor(teammateId)
+    teamFile.members.push({
+      agentId: teammateId,
+      name: sanitizedName,
+      agentType: agent_type,
+      model,
+      prompt,
+      color: teammateColor,
+      planModeRequired: plan_mode_required,
+      joinedAt: Date.now(),
+      tmuxPaneId: 'in-process',
+      cwd: getCwd(),
+      subscriptions: [],
+      backendType: 'in-process',
+    })
+  })
+
   // Spawn in-process teammate
   const config: InProcessSpawnConfig = {
     name: sanitizedName,
@@ -932,6 +958,12 @@ async function handleSpawnInProcess(
   const result = await spawnInProcessTeammate(config, context)
 
   if (!result.success) {
+    // Give the reserved name back
+    await removeMemberByAgentId(teamName, teammateId).catch(error =>
+      logForDebugging(
+        `[handleSpawnInProcess] could not release ${teammateId}: ${errorMessage(error)}`,
+      ),
+    )
     throw new Error(result.error ?? 'Failed to spawn in-process teammate')
   }
 
@@ -943,7 +975,7 @@ async function handleSpawnInProcess(
   // Start the agent execution loop (fire-and-forget)
   if (result.taskId && result.teammateContext && result.abortController) {
     startInProcessTeammate({
-      identity: {
+      identity: result.identity ?? {
         agentId: teammateId,
         agentName: sanitizedName,
         teamName,
@@ -1016,23 +1048,6 @@ async function handleSpawnInProcess(
         },
       },
     }
-  })
-
-  await mutateTeamFileAsync(teamName, (teamFile) => {
-    teamFile.members.push({
-      agentId: teammateId,
-      name: sanitizedName,
-      agentType: agent_type,
-      model,
-      prompt,
-      color: teammateColor,
-      planModeRequired: plan_mode_required,
-      joinedAt: Date.now(),
-      tmuxPaneId: 'in-process',
-      cwd: getCwd(),
-      subscriptions: [],
-      backendType: 'in-process',
-    })
   })
 
   // Note: Do NOT send the prompt via mailbox for in-process teammates.

@@ -59,6 +59,7 @@ import { createUserMessage } from '../../utils/messages.js'
 import { getAgentModel } from '../../utils/model/agent.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
 import {
+  isChainParticipant,
   recordSidechainTranscript,
   writeAgentMetadata,
   type AgentMetadata,
@@ -123,6 +124,35 @@ export function selectInitialTranscriptMessages(
     startingParentUuid: boundary > 0
       ? messages[boundary - 1]?.uuid ?? null
       : undefined,
+  }
+}
+
+/**
+ * The initial messages an agent run still has to append to a transcript that
+ * already holds `recordedUuids`: everything after the last recorded message,
+ * chained to the last recorded message that can be a parent.
+ */
+export function selectUnrecordedTranscriptMessages(
+  messages: Message[],
+  recordedUuids: ReadonlySet<UUID>,
+): {
+  messages: Message[]
+  startingParentUuid: UUID | null | undefined
+} {
+  const lastRecorded = messages.findLastIndex(message =>
+    recordedUuids.has(message.uuid),
+  )
+  if (lastRecorded === -1) {
+    return { messages, startingParentUuid: undefined }
+  }
+  const parent = messages
+    .slice(0, lastRecorded + 1)
+    .findLast(
+      message => recordedUuids.has(message.uuid) && isChainParticipant(message),
+    )
+  return {
+    messages: messages.slice(lastRecorded + 1),
+    startingParentUuid: parent?.uuid ?? null,
   }
 }
 
@@ -314,6 +344,8 @@ export async function* runAgent({
   streamTargetAgentId,
   persistedAgentType,
   alreadyPersistedMessageCount,
+  recordedUuids,
+  extraMetadata,
   workflow,
   onQueryProgress,
 }: {
@@ -384,6 +416,14 @@ export async function* runAgent({
    * transcript. Resume sends them to the model for context but must only
    * append the new continuation messages to disk. */
   alreadyPersistedMessageCount?: number
+  /** Uuids of the messages already in this agent's transcript, for an agent
+   * that keeps one transcript across many runs (an in-process teammate).
+   * Only messages after the last recorded one are appended, and every message
+   * this run records is added. Takes precedence over
+   * alreadyPersistedMessageCount. */
+  recordedUuids?: Set<UUID>
+  /** Additional fields for this run's metadata sidecar. */
+  extraMetadata?: Partial<AgentMetadata>
   /** Optional subdirectory under subagents/ to group this agent's transcript
    * with related ones (e.g. workflows/<runId> for workflow subagents). */
   /** Set when this agent is one step of a dynamic workflow run. */
@@ -827,10 +867,12 @@ export async function* runAgent({
   // Record initial messages before the query loop starts, plus the agentType
   // so resume can route correctly when subagent_type is omitted. Both writes
   // are fire-and-forget — persistence failure shouldn't block the agent.
-  const initialTranscriptWrite = selectInitialTranscriptMessages(
-    initialMessages,
-    alreadyPersistedMessageCount,
-  )
+  const initialTranscriptWrite = recordedUuids
+    ? selectUnrecordedTranscriptMessages(initialMessages, recordedUuids)
+    : selectInitialTranscriptMessages(
+        initialMessages,
+        alreadyPersistedMessageCount,
+      )
   void recordSidechainTranscript(
     initialTranscriptWrite.messages,
     agentId,
@@ -838,6 +880,9 @@ export async function* runAgent({
   ).catch(_err =>
     logForDebugging(`Failed to record sidechain transcript: ${_err}`),
   )
+  for (const message of initialTranscriptWrite.messages) {
+    recordedUuids?.add(message.uuid)
+  }
   void writeAgentMetadata(agentId, {
     agentType: resolvePersistedAgentType(
       persistedAgentType,
@@ -849,6 +894,7 @@ export async function* runAgent({
     ...(spawningToolUseId && { toolUseId: spawningToolUseId }),
     ...(ownerAgentId && { ownerAgentId }),
     ...(workflow && { workflow }),
+    ...extraMetadata,
   }).catch(_err => logForDebugging(`Failed to write agent metadata: ${_err}`))
 
   // Track the last recorded message UUID for parent chain continuity
@@ -920,6 +966,7 @@ export async function* runAgent({
         ).catch(err =>
           logForDebugging(`Failed to record sidechain transcript: ${err}`),
         )
+        recordedUuids?.add(message.uuid)
         if (message.type !== 'progress') {
           lastRecordedUuid = message.uuid
         }

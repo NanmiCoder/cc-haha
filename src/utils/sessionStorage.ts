@@ -81,6 +81,7 @@ import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
 import type { ModelAlias } from './model/aliases.js'
 import { sanitizePath } from './path.js'
+import type { PermissionMode } from './permissions/PermissionMode.js'
 import {
   extractJsonStringField,
   extractLastJsonStringField,
@@ -297,6 +298,22 @@ export type AgentMetadata = {
     /** The runtime's sequential agent number within the run. */
     agentIndex: number
   }
+  /**
+   * Set on an in-process teammate's transcript. A teammate keeps this one
+   * transcript for its whole life, and SendMessage resumes a teammate that is
+   * no longer running from it. The fields below restore its team identity.
+   * All optional — older metadata files and ordinary subagents lack them.
+   */
+  taskKind?: 'in_process_teammate'
+  teamName?: string
+  /** The teammate's name within its team. */
+  name?: string
+  color?: string
+  planModeRequired?: boolean
+  /** agentType of the custom or plugin Agent the teammate was spawned as. */
+  customAgentType?: string
+  /** Permission mode of the teammate's latest turn. */
+  permissionMode?: PermissionMode
 }
 
 /**

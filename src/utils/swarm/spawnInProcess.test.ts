@@ -7,7 +7,8 @@ import * as sdk from '../sdkEventQueue.js'
 import * as diskOutput from '../task/diskOutput.js'
 import * as framework from '../task/framework.js'
 import * as tracing from '../telemetry/perfettoTracing.js'
-import { killInProcessTeammate } from './spawnInProcess.js'
+import { readMailbox, writeToMailbox } from '../teammateMailbox.js'
+import { killInProcessTeammate, spawnInProcessTeammate } from './spawnInProcess.js'
 import * as teamHelpers from './teamHelpers.js'
 
 async function withKillFixture(run: (fixture: {
@@ -97,3 +98,57 @@ for (const failureCode of [undefined, 'ELOCKED', 'EPERM']) {
     })
   })
 }
+
+async function withSpawnFixture(run: (fixture: {
+  spawn: (resumableAgentId?: string) => ReturnType<typeof spawnInProcessTeammate>
+}) => Promise<void>) {
+  const directory = await mkdtemp(join(tmpdir(), 'cc-haha-spawn-teammate-'))
+  const originalConfig = process.env.CLAUDE_CONFIG_DIR
+  process.env.CLAUDE_CONFIG_DIR = directory
+  let state = { tasks: {} } as unknown as AppState
+  const spawned: AbortController[] = []
+  try {
+    await run({
+      spawn: async resumableAgentId => {
+        const result = await spawnInProcessTeammate(
+          { name: 'worker', teamName: 'spawn-team', prompt: 'Work', planModeRequired: false, resumableAgentId },
+          { setAppState: update => { state = update(state) } },
+        )
+        if (result.abortController) spawned.push(result.abortController)
+        return result
+      },
+    })
+  } finally {
+    for (const controller of spawned) controller.abort()
+    if (originalConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+    else process.env.CLAUDE_CONFIG_DIR = originalConfig
+    await rm(directory, { recursive: true, force: true })
+  }
+}
+
+async function unreadFor(name: string): Promise<string[]> {
+  return (await readMailbox(name, 'spawn-team')).filter(m => !m.read).map(m => m.text)
+}
+
+test('a fresh teammate gets a durable transcript id and none of the mail left for an earlier one', async () => {
+  await withSpawnFixture(async fixture => {
+    await writeToMailbox('worker', { from: 'reviewer', text: 'Stale note for the old worker', timestamp: new Date().toISOString() }, 'spawn-team')
+
+    const result = await fixture.spawn()
+
+    expect(result.success).toBe(true)
+    expect(result.identity?.resumableAgentId).toMatch(/^a[0-9a-f]{16}$/)
+    expect(await unreadFor('worker')).toEqual([])
+  })
+})
+
+test('a resumed teammate keeps its transcript id and the mail that arrived while it was stopped', async () => {
+  await withSpawnFixture(async fixture => {
+    await writeToMailbox('worker', { from: 'team-lead', text: 'Waiting for you', timestamp: new Date().toISOString() }, 'spawn-team')
+
+    const result = await fixture.spawn('aworker-0123456789abcdef')
+
+    expect(result.identity?.resumableAgentId).toBe('aworker-0123456789abcdef')
+    expect(await unreadFor('worker')).toEqual(['Waiting for you'])
+  })
+})

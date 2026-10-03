@@ -3,15 +3,19 @@ import type Anthropic from '@anthropic-ai/sdk'
 import { APIConnectionError, APIError, APIUserAbortError } from '@anthropic-ai/sdk'
 import { clearFastModeCooldown, getFastModeRuntimeState } from '../../utils/fastMode.js'
 import { _resetKeepAliveForTesting, getProxyFetchOptions } from '../../utils/proxy.js'
+import { StreamEndedEarlyError } from './streamFallback.js'
+import { createStreamWatchdogState } from './streamWatchdog.js'
 import {
   BASE_DELAY_MS,
   getRetryDelay,
   CannotRetryError,
+  getMaxStreamRetries,
   getMaxStreamTransientRetries,
+  getStreamRetryKind,
+  isProxyStreamTransportError,
   isRetryableStreamError,
   isRetryableStreamTransportError,
   RetriableStreamError,
-  shouldRetryStreamAfterTransportDisconnect,
   withRetry,
 } from './withRetry.js'
 
@@ -312,55 +316,184 @@ describe('isRetryableStreamTransportError', () => {
   })
 })
 
-describe('shouldRetryStreamAfterTransportDisconnect', () => {
+/** An SSE `error` event exactly as the SDK raises it mid-stream (no status). */
+function sseErrorEvent(type: string, message = 'fixture'): APIError {
+  const body = { type: 'error', error: { type, message } }
+  return new APIError(undefined, body, undefined, undefined)
+}
+
+describe('isProxyStreamTransportError', () => {
+  test('matches the truncation and transport errors the provider proxy emits', () => {
+    expect(isProxyStreamTransportError(sseErrorEvent(
+      'stream_truncated',
+      'OpenAI Chat upstream stream ended without finish_reason',
+    ))).toBe(true)
+    expect(isProxyStreamTransportError(sseErrorEvent('stream_error', 'socket hang up'))).toBe(true)
+  })
+
+  test('does not match provider verdicts on the request', () => {
+    for (const type of [
+      'api_error',
+      'overloaded_error',
+      'invalid_request_error',
+      'authentication_error',
+      'permission_error',
+      'billing_error',
+      'rate_limit_error',
+      'not_found_error',
+    ]) {
+      expect(isProxyStreamTransportError(sseErrorEvent(type))).toBe(false)
+    }
+  })
+
+  test('only applies to status-less stream events and never to policy rejections', () => {
+    const body = { type: 'error', error: { type: 'stream_error', message: 'x' } }
+    expect(isProxyStreamTransportError(new APIError(502, body, undefined, undefined))).toBe(false)
+    expect(isProxyStreamTransportError(new Error('{"type":"stream_truncated"}'))).toBe(false)
+    expect(isProxyStreamTransportError(new APIError(undefined, {
+      type: 'error', error: { type: 'stream_error', code: 'cyber_policy', message: 'Rejected' },
+    }, undefined, undefined))).toBe(false)
+  })
+})
+
+describe('getStreamRetryKind', () => {
   const disconnect = Object.assign(new Error('socket closed'), {
     code: 'ECONNRESET',
   })
-  const clean = {
-    error: disconnect,
-    hasCrossedSideEffectBoundary: false,
+  const replayable = {
+    error: disconnect as unknown,
+    canReplay: true,
     streamIdleAborted: false,
     signalAborted: false,
+    nonStreamingFallbackAvailable: false,
+    transientRetryAllowed: true,
   }
 
-  test('recovers a disconnect while the attempt is still side-effect-free', () => {
-    expect(shouldRetryStreamAfterTransportDisconnect(clean)).toBe(true)
+  test('re-sends a dead socket as a transport failure', () => {
+    expect(getStreamRetryKind(replayable)).toBe('transport')
+    expect(getStreamRetryKind({ ...replayable, nonStreamingFallbackAvailable: true })).toBe('transport')
   })
 
-  test('refuses once a tool block completed — a re-send would run it twice', () => {
-    expect(
-      shouldRetryStreamAfterTransportDisconnect({
-        ...clean,
-        hasCrossedSideEffectBoundary: true,
-      }),
-    ).toBe(false)
+  test('re-sends proxy truncations, clean EOF and empty streams when no fallback takes them', () => {
+    for (const error of [
+      sseErrorEvent('stream_truncated'),
+      sseErrorEvent('stream_error'),
+      new StreamEndedEarlyError('incomplete'),
+      new StreamEndedEarlyError('no_events'),
+    ]) {
+      expect(getStreamRetryKind({ ...replayable, error })).toBe('transport')
+    }
   })
 
-  test('leaves watchdog aborts to their own retry path', () => {
-    expect(
-      shouldRetryStreamAfterTransportDisconnect({
-        ...clean,
-        streamIdleAborted: true,
-      }),
-    ).toBe(false)
+  test('leaves truncations the non-streaming fallback recovers to it, except a response cut off mid-way', () => {
+    const withFallback = { ...replayable, nonStreamingFallbackAvailable: true }
+    expect(getStreamRetryKind({ ...withFallback, error: sseErrorEvent('stream_truncated') })).toBeNull()
+    expect(getStreamRetryKind({ ...withFallback, error: sseErrorEvent('stream_error') })).toBeNull()
+    expect(getStreamRetryKind({ ...withFallback, error: new StreamEndedEarlyError('no_events') })).toBeNull()
+    expect(getStreamRetryKind({ ...withFallback, error: new StreamEndedEarlyError('incomplete') })).toBe('transport')
   })
 
-  test('never fights a user abort', () => {
-    expect(
-      shouldRetryStreamAfterTransportDisconnect({
-        ...clean,
-        signalAborted: true,
-      }),
-    ).toBe(false)
+  test('refuses once the attempt committed output or started server-side work', () => {
+    for (const error of [
+      disconnect,
+      sseErrorEvent('stream_truncated'),
+      new StreamEndedEarlyError('incomplete'),
+      sseErrorEvent('api_error'),
+    ]) {
+      expect(getStreamRetryKind({ ...replayable, error, canReplay: false })).toBeNull()
+    }
   })
 
-  test('ignores non-transport stream errors', () => {
-    expect(
-      shouldRetryStreamAfterTransportDisconnect({
-        ...clean,
-        error: new Error('Stream ended without receiving any events'),
-      }),
-    ).toBe(false)
+  test('keeps upstream-reported errors on the transient budget, only where allowed', () => {
+    expect(getStreamRetryKind({ ...replayable, error: sseErrorEvent('api_error') })).toBe('transient')
+    expect(getStreamRetryKind({ ...replayable, error: sseErrorEvent('overloaded_error') })).toBe('transient')
+    expect(getStreamRetryKind({
+      ...replayable,
+      error: sseErrorEvent('api_error'),
+      transientRetryAllowed: false,
+    })).toBeNull()
+  })
+
+  test('keeps provider rejections and unknown faults non-retryable', () => {
+    for (const error of [
+      sseErrorEvent('invalid_request_error', 'prompt is too long'),
+      sseErrorEvent('authentication_error'),
+      sseErrorEvent('permission_error'),
+      sseErrorEvent('billing_error'),
+      new APIError(400, { type: 'error', error: { type: 'invalid_request_error', message: 'bad' } }, undefined, undefined),
+      new RangeError('Content block not found'),
+      new Error('boom'),
+    ]) {
+      expect(getStreamRetryKind({ ...replayable, error })).toBeNull()
+    }
+  })
+
+  test('retries only an idle watchdog stall, on its own budget', () => {
+    const state = createStreamWatchdogState()
+    state.recordEvent({ type: 'message_start' })
+    state.recordEvent({ type: 'content_block_start', index: 0, content_block: { type: 'tool_use' } })
+    state.recordEvent({ type: 'content_block_stop', index: 0 })
+    const stalled = { ...replayable, streamIdleAborted: true }
+    expect(getStreamRetryKind({ ...stalled, error: state.createTimeoutError('idle', 240_000) })).toBe('watchdog')
+    expect(getStreamRetryKind({ ...stalled, error: state.createTimeoutError('max_duration', 600_000) })).toBeNull()
+    expect(getStreamRetryKind({ ...stalled, error: state.createTimeoutError('tool_input_duration', 120_000) })).toBeNull()
+    // A watchdog abort is never mistaken for the socket fault it causes.
+    expect(getStreamRetryKind({ ...stalled, error: disconnect })).toBeNull()
+  })
+
+  test('never fights a user abort or a policy rejection', () => {
+    expect(getStreamRetryKind({ ...replayable, signalAborted: true })).toBeNull()
+    const policy = Object.assign(new Error('Disconnected'), {
+      code: 'ECONNRESET',
+      cause: { error: { code: 'cyber_policy' } },
+    })
+    expect(getStreamRetryKind({ ...replayable, error: policy })).toBeNull()
+  })
+})
+
+describe('getMaxStreamRetries', () => {
+  const TRANSIENT_ENV = 'CLAUDE_STREAM_TRANSIENT_RETRY_MAX'
+  const API_ENV = 'CLAUDE_CODE_MAX_RETRIES'
+
+  function withEnv(values: Record<string, string | undefined>, run: () => void) {
+    const saved = { [TRANSIENT_ENV]: process.env[TRANSIENT_ENV], [API_ENV]: process.env[API_ENV] }
+    try {
+      for (const [key, value] of Object.entries(values)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      run()
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  }
+
+  test('gives transport failures the API retry budget instead of the transient one', () => {
+    withEnv({ [TRANSIENT_ENV]: undefined, [API_ENV]: undefined }, () => {
+      expect(getMaxStreamRetries('transport')).toBe(10)
+      expect(getMaxStreamRetries('watchdog')).toBe(2)
+      expect(getMaxStreamRetries('transient')).toBe(2)
+    })
+    withEnv({ [TRANSIENT_ENV]: undefined, [API_ENV]: '4' }, () => {
+      expect(getMaxStreamRetries('transport')).toBe(4)
+    })
+    withEnv({ [TRANSIENT_ENV]: undefined, [API_ENV]: 'abc' }, () => {
+      expect(getMaxStreamRetries('transport')).toBe(10)
+    })
+  })
+
+  test('an explicit transient override still caps transport retries, so 0 disables them', () => {
+    withEnv({ [TRANSIENT_ENV]: '0', [API_ENV]: undefined }, () => {
+      expect(getMaxStreamRetries('transport')).toBe(0)
+      expect(getMaxStreamRetries('transient')).toBe(0)
+    })
+    withEnv({ [TRANSIENT_ENV]: '3', [API_ENV]: '1' }, () => {
+      expect(getMaxStreamRetries('transport')).toBe(1)
+      expect(getMaxStreamRetries('watchdog')).toBe(3)
+    })
   })
 })
 
@@ -400,6 +533,8 @@ describe('RetriableStreamError', () => {
     expect(wrapped.originalError).toBe(original)
     expect(wrapped.name).toBe('RetriableStreamError')
     expect(wrapped.message).toContain('boom')
+    expect(wrapped.kind).toBe('transient')
+    expect(new RetriableStreamError(original, [], 'transport').kind).toBe('transport')
   })
 })
 

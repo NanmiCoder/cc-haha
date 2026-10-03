@@ -11,7 +11,7 @@ import { subagentsApi } from '../api/subagents'
 import { useTeamPlanStore } from './teamPlanStore'
 import { useTeamStore } from './teamStore'
 import { useSessionStore } from './sessionStore'
-import { useCLITaskStore } from './cliTaskStore'
+import { useCLITaskStore, type CLITaskSnapshot } from './cliTaskStore'
 import { useWorkflowStore } from './workflowStore'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useProviderStore } from './providerStore'
@@ -472,6 +472,12 @@ type ChatStore = {
 const TASK_TOOL_NAMES = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskList', 'TodoWrite'])
 const TASK_STOP_TOOL_NAMES = new Set(['TaskStop', 'KillShell'])
 const pendingTaskToolUseIdsBySession = new Map<string, Set<string>>()
+/**
+ * What the task bar showed before a live TodoWrite from a stream attempt that
+ * has not committed. A `stream_retry` re-sends the whole request, so a write
+ * the discarded attempt applied never happened and is put back.
+ */
+const taskBarBeforeAttemptBySession = new Map<string, CLITaskSnapshot>()
 const pendingToolParentUseIdsBySession = new Map<string, Map<string, string>>()
 type OwnedTaskRouteRegistration = {
   count: number
@@ -856,13 +862,28 @@ function consumePendingTaskToolUseId(sessionId: string, toolUseId: string): bool
 
 function clearPendingTaskToolUseIds(sessionId: string): void {
   pendingTaskToolUseIdsBySession.delete(sessionId)
+  taskBarBeforeAttemptBySession.delete(sessionId)
 }
 
 function consumeAllPendingTaskToolUseIds(sessionId: string): boolean {
   const hasPendingTaskTools =
     (pendingTaskToolUseIdsBySession.get(sessionId)?.size ?? 0) > 0
   pendingTaskToolUseIdsBySession.delete(sessionId)
+  taskBarBeforeAttemptBySession.delete(sessionId)
   return hasPendingTaskTools
+}
+
+/** Remember the task bar once, before the attempt's first live TodoWrite changes it. */
+function rememberTaskBarBeforeAttempt(sessionId: string): void {
+  if (taskBarBeforeAttemptBySession.has(sessionId)) return
+  const taskStore = useCLITaskStore.getState()
+  if (taskStore.sessionId !== sessionId) return
+  taskBarBeforeAttemptBySession.set(sessionId, {
+    sessionId,
+    tasks: taskStore.tasks,
+    completedAndDismissed: taskStore.completedAndDismissed,
+    dismissedCompletionKey: taskStore.dismissedCompletionKey,
+  })
 }
 
 function rememberPendingToolParentUseId(
@@ -4800,6 +4821,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'status':
+        // A new attempt only starts once the previous one committed or was
+        // retried, so its task bar change is no longer undoable.
+        if (msg.attemptStart) taskBarBeforeAttemptBySession.delete(sessionId)
         update((session) => {
           const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
           const hasPendingStreamText =
@@ -4979,6 +5003,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       case 'streaming_fallback': {
         if (msg.cause === 'stream_retry') {
+          const taskBarBeforeAttempt = taskBarBeforeAttemptBySession.get(sessionId)
           consumePendingDelta(sessionId)
           clearPendingToolInputDelta(sessionId)
           clearPendingTaskToolUseIds(sessionId)
@@ -4991,12 +5016,22 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 session.messages.length,
               ),
             )
+            const resolvedToolUseIds = new Set(session.messages.flatMap((message) => (
+              message.type === 'tool_result' ? [message.toolUseId] : []
+            )))
             const messages = [
               ...session.messages.slice(0, startIndex),
               ...session.messages.slice(startIndex).filter((message) =>
                 message.type !== 'assistant_text' &&
                 message.type !== 'thinking' &&
-                !(message.type === 'tool_use' && message.isPending)),
+                !(message.type === 'tool_use' && (
+                  message.isPending ||
+                  // The retry re-sends the whole request, so none of the
+                  // attempt's own calls ran, even one the server already
+                  // completed at its block stop. Only the root request is
+                  // retried here; a sub-agent's call may still be running.
+                  (!message.parentToolUseId && !resolvedToolUseIds.has(message.toolUseId))
+                ))),
             ]
             return {
               messages,
@@ -5015,6 +5050,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
               statusVerb: '',
             }
           })
+          if (taskBarBeforeAttempt) useCLITaskStore.getState().restoreTasks(taskBarBeforeAttempt)
           ensureElapsedTimer()
           useTabStore.getState().updateTabStatus(sessionId, 'running')
           break
@@ -5190,6 +5226,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }
         })
         if (!parentToolUseId && toolName === 'TodoWrite' && Array.isArray((msg.input as any)?.todos)) {
+          rememberTaskBarBeforeAttempt(sessionId)
           useCLITaskStore.getState().setTasksFromTodos((msg.input as any).todos, sessionId)
         } else if (!parentToolUseId && TASK_TOOL_NAMES.has(toolName)) {
           const useId = msg.toolUseId || session?.activeToolUseId

@@ -91,6 +91,8 @@ The first button on the right of the tab bar opens the Activity panel, which lis
 
 Tool activity from background subagents bubbles up here too, so you don't have to wait for one to finish to see what it's doing.
 
+Team members retry on their own when the model service drops a stream, rate-limits, or returns a 5xx; the member row shows "Auto-retry 2/5" and neither you nor the lead has to step in. When the retries run out, or the error needs you (an expired API key, say), the row shows "Error" and the lead is told. The Stop button halts the whole team without losing progress: your next message to the lead tells it which members stopped on which tasks, and it decides from your words whether they carry on. You can also message a member directly; it picks up from its saved conversation, and the same goes for a member marked "Stopped". Switching the model or permission mode doesn't interrupt the team, and after an app restart the team is still there — message a member to continue. Deleting the session or running `/clear` ends the team.
+
 ## What the composer can do
 
 ![The slash-command panel that opens when you type `/` (Chinese interface)](../../images/app/en/composer-slash.webp)

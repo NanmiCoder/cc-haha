@@ -11,8 +11,8 @@
 
 import { feature } from 'bun:bundle'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
+import type { UUID } from 'crypto'
 import { getSystemPrompt } from '../../constants/prompts.js'
-import { TEAMMATE_MESSAGE_TAG } from '../../constants/xml.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import {
   processMailboxPermissionResponse,
@@ -37,16 +37,21 @@ import type {
   InProcessTeammateTaskState,
   TeammateIdentity,
 } from '../../tasks/InProcessTeammateTask/types.js'
-import { appendCappedMessage } from '../../tasks/InProcessTeammateTask/types.js'
+import {
+  appendCappedMessage,
+  TEAMMATE_MESSAGES_UI_CAP,
+} from '../../tasks/InProcessTeammateTask/types.js'
 import {
   createActivityDescriptionResolver,
   createProgressTracker,
   getProgressUpdate,
   updateProgressFromMessage,
 } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
-import type {
-  CustomAgentDefinition,
-  PluginAgentDefinition,
+import {
+  type CustomAgentDefinition,
+  isCustomAgent,
+  isPluginAgent,
+  type PluginAgentDefinition,
 } from '../../tools/AgentTool/loadAgentsDir.js'
 import { runAgent } from '../../tools/AgentTool/runAgent.js'
 import { awaitClassifierAutoApproval } from '../../tools/BashTool/bashPermissions.js'
@@ -58,19 +63,30 @@ import { TASK_LIST_TOOL_NAME } from '../../tools/TaskListTool/constants.js'
 import { TASK_UPDATE_TOOL_NAME } from '../../tools/TaskUpdateTool/constants.js'
 import { TEAM_CREATE_TOOL_NAME } from '../../tools/TeamCreateTool/constants.js'
 import { TEAM_DELETE_TOOL_NAME } from '../../tools/TeamDeleteTool/constants.js'
+import { asAgentId } from '../../types/ids.js'
 import type { Message } from '../../types/message.js'
 import type { PermissionDecision } from '../../types/permissions.js'
 import {
   createAssistantAPIErrorMessage,
   createUserMessage,
+  filterOrphanedThinkingOnlyMessages,
+  filterUnresolvedToolUses,
+  filterWhitespaceOnlyAssistantMessages,
+  getAssistantMessageText,
+  SYNTHETIC_MESSAGES,
 } from '../../utils/messages.js'
 import { evictTaskOutput } from '../../utils/task/diskOutput.js'
 import { evictTerminalTask } from '../../utils/task/framework.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
-import { createAbortController } from '../abortController.js'
+import {
+  createAbortController,
+  createChildAbortController,
+} from '../abortController.js'
+import { formatAgentId } from '../agentId.js'
 import { type AgentContext, runWithAgentContext } from '../agentContext.js'
-import { count } from '../array.js'
+import { getCwd } from '../cwd.js'
 import { logForDebugging } from '../debug.js'
+import { errorMessage as getErrorMessage } from '../errors.js'
 import { cloneFileStateCache } from '../fileStateCache.js'
 import {
   SUBAGENT_REJECT_MESSAGE,
@@ -78,14 +94,23 @@ import {
 } from '../messages.js'
 import type { ModelAlias } from '../model/aliases.js'
 import {
+  PERMISSION_MODES,
+  type PermissionMode,
+} from '../permissions/PermissionMode.js'
+import {
   applyPermissionUpdates,
   persistPermissionUpdates,
 } from '../permissions/PermissionUpdate.js'
 import type { PermissionUpdate } from '../permissions/PermissionUpdateSchema.js'
 import { hasPermissionsToUseTool } from '../permissions/permissions.js'
 import { emitTaskTerminatedSdk } from '../sdkEventQueue.js'
+import {
+  type AgentMetadata,
+  getAgentTranscript,
+  readAgentMetadata,
+} from '../sessionStorage.js'
 import { sleep } from '../sleep.js'
-import { jsonStringify } from '../slowOperations.js'
+import { jsonParse, jsonStringify } from '../slowOperations.js'
 import { asSystemPrompt } from '../systemPromptType.js'
 import {
   claimTask,
@@ -99,16 +124,28 @@ import {
   runWithTeammateContext,
 } from '../teammateContext.js'
 import {
+  claimMailboxMessages,
   createIdleNotification,
+  formatTeammateMessage,
+  formatTeammateMessages,
   getLastPeerDmSummary,
+  IDLE_FAILURE_REASON_MAX_CHARS,
   isPermissionResponse,
+  isPlanApprovalResponse,
   isShutdownRequest,
-  markMessageAsReadByIndex,
+  isStructuredProtocolMessage,
+  markMessagesAsReadByIdentity,
   readMailbox,
+  type TeammateMessage,
   writeToMailbox,
 } from '../teammateMailbox.js'
 import { unregisterAgent as unregisterPerfettoAgent } from '../telemetry/perfettoTracing.js'
-import { createContentReplacementState } from '../toolResultStorage.js'
+import {
+  type ContentReplacementState,
+  createContentReplacementState,
+  reconstructForSubagentResume,
+} from '../toolResultStorage.js'
+import { createAgentId } from '../uuid.js'
 import { TEAM_LEAD_NAME } from './constants.js'
 import {
   getLeaderSetToolPermissionContext,
@@ -118,8 +155,20 @@ import {
   createPermissionRequest,
   sendPermissionRequestViaMailbox,
 } from './permissionSync.js'
-import { readTeamFile, setMemberActive } from './teamHelpers.js'
+import { spawnInProcessTeammate } from './spawnInProcess.js'
+import {
+  mutateTeamFileAsync,
+  readTeamFile,
+  readTeamFileAsync,
+  setMemberActive,
+} from './teamHelpers.js'
 import { TEAMMATE_SYSTEM_PROMPT_ADDENDUM } from './teammatePromptAddendum.js'
+import {
+  formatTeammateAutoContinuePrompt,
+  isTransientTurnFailure,
+  summarizeTurnFailure,
+  TEAMMATE_AUTO_CONTINUE_DELAYS_MS,
+} from './turnFailure.js'
 
 type SetAppStateFn = (updater: (prev: AppState) => AppState) => void
 
@@ -412,10 +461,10 @@ function createInProcessCanUseTool(
             if (msg && !msg.read) {
               const parsed = isPermissionResponse(msg.text)
               if (parsed && parsed.request_id === request.id) {
-                await markMessageAsReadByIndex(
+                await markMessagesAsReadByIdentity(
                   identity.agentName,
                   identity.teamName,
-                  i,
+                  [msg],
                 )
                 if (parsed.subtype === 'success') {
                   processMailboxPermissionResponse({
@@ -472,9 +521,7 @@ function formatAsTeammateMessage(
   color?: string,
   summary?: string,
 ): string {
-  const colorAttr = color ? ` color="${color}"` : ''
-  const summaryAttr = summary ? ` summary="${summary}"` : ''
-  return `<${TEAMMATE_MESSAGE_TAG} teammate_id="${from}"${colorAttr}${summaryAttr}>\n${content}\n</${TEAMMATE_MESSAGE_TAG}>`
+  return formatTeammateMessage({ from, text: content, color, summary })
 }
 
 /**
@@ -511,6 +558,15 @@ export type InProcessRunnerConfig = {
   /** request_id of the API call that spawned this teammate, for lineage
    *  tracing on tengu_api_* events. */
   invokingRequestId?: string
+  /** Earlier conversation of a resumed teammate, loaded from its transcript */
+  resumeMessages?: Message[]
+  /** Content replacement state rebuilt from that transcript */
+  resumeReplacementState?: ContentReplacementState
+  /** Sender shown on the first prompt (default: the team lead) */
+  initialFrom?: string
+  /** Backoff before each automatic continuation after a transient failure.
+   *  Defaults to TEAMMATE_AUTO_CONTINUE_DELAYS_MS. */
+  autoContinueDelaysMs?: readonly number[]
 }
 
 /**
@@ -616,14 +672,15 @@ function updateTaskState(
 /**
  * Sends a message to the leader's file-based mailbox.
  * Uses the same mailbox system as tmux teammates for consistency.
+ * @returns whether the message was persisted
  */
 async function sendMessageToLeader(
   from: string,
   text: string,
   color: string | undefined,
   teamName: string,
-): Promise<void> {
-  await writeToMailbox(
+): Promise<boolean> {
+  return writeToMailbox(
     TEAM_LEAD_NAME,
     {
       from,
@@ -638,6 +695,9 @@ async function sendMessageToLeader(
 /**
  * Sends idle notification to the leader via file-based mailbox.
  * Uses agentName (not agentId) for consistency with process-based teammates.
+ * Without an idleReason it is a result-only frame: the teammate reports a
+ * finished turn but goes straight on with mail that was already waiting.
+ * @returns whether the notification was persisted
  */
 async function sendIdleNotification(
   agentName: string,
@@ -649,16 +709,147 @@ async function sendIdleNotification(
     completedTaskId?: string
     completedStatus?: 'resolved' | 'blocked' | 'failed'
     failureReason?: string
+    result?: string
   },
-): Promise<void> {
+): Promise<boolean> {
   const notification = createIdleNotification(agentName, options)
 
-  await sendMessageToLeader(
+  return sendMessageToLeader(
     agentName,
     jsonStringify(notification),
     agentColor,
     teamName,
   )
+}
+
+/** Why a teammate's turn ended on an API error, and whether a retry can fix it. */
+export type TeammateTurnFailure = {
+  /** First line of the error, as the lead sees it */
+  reason: string
+  isTransient: boolean
+}
+
+/**
+ * Classifies a finished turn from its messages. A turn failed when its last
+ * assistant message is an API error that is not a cancellation marker (an
+ * interrupted request is the user's choice, not a failure).
+ */
+export function classifyTeammateTurnFailure(
+  turnMessages: readonly Message[],
+): TeammateTurnFailure | undefined {
+  const last = turnMessages.findLast(message => message.type === 'assistant')
+  if (!last?.isApiErrorMessage) return undefined
+  const text = getAssistantMessageText(last) ?? ''
+  if (SYNTHETIC_MESSAGES.has(text) || text === ERROR_MESSAGE_USER_ABORT) {
+    return undefined
+  }
+  const detail =
+    text ||
+    (typeof last.errorDetails === 'string' ? last.errorDetails : '')
+  return {
+    reason: summarizeTurnFailure(detail) || 'API error',
+    isTransient: isTransientTurnFailure(detail),
+  }
+}
+
+/** A user message that starts a turn: a prompt, not a tool result or meta. */
+function isTurnBoundary(message: Message): boolean {
+  if (message.type !== 'user' || message.isMeta) return false
+  const content = message.message.content
+  return (
+    typeof content === 'string' ||
+    !content.some(
+      (block: { type: string }) => block.type === 'tool_result',
+    )
+  )
+}
+
+/** Whether a tool result's text is a structured `{ success: false }` reply. */
+function reportsFailure(content: unknown): boolean {
+  const texts =
+    typeof content === 'string'
+      ? [content]
+      : Array.isArray(content)
+        ? content.flatMap(block =>
+            block?.type === 'text' && typeof block.text === 'string'
+              ? [block.text]
+              : [],
+          )
+        : []
+  return texts.some(text => {
+    if (!text.startsWith('{')) return false
+    try {
+      const parsed = jsonParse(text) as { success?: unknown } | null
+      return parsed?.success === false
+    } catch {
+      return false
+    }
+  })
+}
+
+function isSendMessageToLead(block: {
+  type: string
+  name?: string
+  input?: unknown
+}): boolean {
+  if (block.type !== 'tool_use' || block.name !== SEND_MESSAGE_TOOL_NAME) {
+    return false
+  }
+  const input = block.input as { to?: unknown } | null | undefined
+  return (
+    typeof input?.to === 'string' &&
+    input.to.toLowerCase() === TEAM_LEAD_NAME.toLowerCase()
+  )
+}
+
+/**
+ * The teammate's final response for its latest turn: the newest assistant
+ * text since the turn's prompt. Undefined when the turn produced no text, or
+ * when that text came no later than a SendMessage to the lead that went
+ * through -- the lead already has that report.
+ */
+export function getTeammateTurnResult(
+  messages: readonly Message[],
+): string | undefined {
+  let boundary = -1
+  for (let index = messages.length - 1; index >= 0; index--) {
+    if (isTurnBoundary(messages[index]!)) {
+      boundary = index
+      break
+    }
+  }
+  const turn = messages.slice(boundary + 1)
+
+  const deliveredToolUseIds = new Set<string>()
+  for (const message of turn) {
+    if (message.type !== 'user' || typeof message.message.content === 'string') {
+      continue
+    }
+    for (const block of message.message.content) {
+      if (
+        block.type === 'tool_result' &&
+        block.is_error !== true &&
+        !reportsFailure(block.content)
+      ) {
+        deliveredToolUseIds.add(block.tool_use_id)
+      }
+    }
+  }
+
+  for (let index = turn.length - 1; index >= 0; index--) {
+    const message = turn[index]!
+    if (message.type !== 'assistant' || message.isApiErrorMessage) continue
+    const reportedToLead = message.message.content.some(
+      (block: { type: string; id?: string; name?: string; input?: unknown }) =>
+        isSendMessageToLead(block) &&
+        block.id !== undefined &&
+        deliveredToolUseIds.has(block.id),
+    )
+    if (reportedToLead) return undefined
+    const text = getAssistantMessageText(message)
+    if (text) return text
+  }
+  return undefined
 }
 
 /**
@@ -737,34 +928,126 @@ export async function claimNextInProcessTask(
 }
 
 /**
- * Result of waiting for messages.
+ * What a teammate is handed next while it waits.
  */
 type WaitResult =
   | {
       type: 'shutdown_request'
-      request: ReturnType<typeof isShutdownRequest>
+      from: string
       originalMessage: string
     }
   | {
+      /** Every deliverable unread mailbox message, oldest first */
+      type: 'new_messages'
+      messages: TeammateMessage[]
+    }
+  | {
+      /** Input typed into the teammate's transcript view, or a claimed task */
       type: 'new_message'
       message: string
       from: string
-      color?: string
-      summary?: string
     }
   | {
       type: 'aborted'
     }
+  | {
+      /** The wait's deadline passed with nothing to deliver */
+      type: 'timeout'
+    }
+  | {
+      /** The wait's own cancel signal fired */
+      type: 'cancelled'
+    }
+
+export type TeammateMailboxDelivery = Extract<
+  WaitResult,
+  { type: 'shutdown_request' | 'new_messages' }
+>
 
 /**
- * Waits for new prompts or shutdown request.
- * Polls the teammate's mailbox every 500ms, checking for:
- * - Shutdown request from leader (returned to caller for model decision)
- * - New messages/prompts from leader
- * - Abort signal
+ * Takes what is waiting in a teammate's inbox in one pass.
+ *
+ * A shutdown request goes first and alone, so peer chatter can never starve
+ * it. Everything else unread is delivered together, as one prompt. Protocol
+ * frames belong to their own handlers and never become prose for the model:
+ * they are acknowledged and dropped here -- except a plan approval response
+ * from the lead, which the model has always received.
+ *
+ * Only messages this call managed to mark read (by identity) are delivered,
+ * so a failed mark delivers nothing and the next poll tries again.
+ */
+export async function takeTeammateMailbox(
+  identity: Pick<TeammateIdentity, 'agentName' | 'teamName'>,
+): Promise<TeammateMailboxDelivery | null> {
+  const { agentName, teamName } = identity
+  const unread = (await readMailbox(agentName, teamName)).filter(
+    message => !message.read,
+  )
+  if (unread.length === 0) return null
+
+  const shutdownMessage = unread.find(message =>
+    isShutdownRequest(message.text),
+  )
+  if (shutdownMessage) {
+    const claimed = await claimMailboxMessages(agentName, teamName, [
+      shutdownMessage,
+    ])
+    if (claimed === undefined) return null
+    if (claimed.length > 0) {
+      const request = isShutdownRequest(shutdownMessage.text)
+      logForDebugging(
+        `[inProcessRunner] ${agentName} received shutdown request from ${request?.from} (prioritized over ${unread.length - 1} unread messages)`,
+      )
+      return {
+        type: 'shutdown_request',
+        from: request?.from || shutdownMessage.from || TEAM_LEAD_NAME,
+        originalMessage: shutdownMessage.text,
+      }
+    }
+  }
+
+  const deliverable: TeammateMessage[] = []
+  const protocolFrames: TeammateMessage[] = []
+  for (const message of unread) {
+    if (message === shutdownMessage) continue
+    if (
+      !isStructuredProtocolMessage(message.text) ||
+      (message.from === TEAM_LEAD_NAME && isPlanApprovalResponse(message.text))
+    ) {
+      deliverable.push(message)
+    } else {
+      protocolFrames.push(message)
+    }
+  }
+
+  if (protocolFrames.length > 0) {
+    logForDebugging(
+      `[inProcessRunner] ${agentName} dropping ${protocolFrames.length} protocol frame(s) from ${[...new Set(protocolFrames.map(message => message.from))].join(', ')}`,
+      { level: 'warn' },
+    )
+    await claimMailboxMessages(agentName, teamName, protocolFrames)
+  }
+
+  if (deliverable.length === 0) return null
+  const claimed = await claimMailboxMessages(agentName, teamName, deliverable)
+  if (!claimed || claimed.length === 0) return null
+  logForDebugging(
+    `[inProcessRunner] ${agentName} draining ${claimed.length} message(s) from ${[...new Set(claimed.map(message => message.from))].join(', ')}`,
+  )
+  return { type: 'new_messages', messages: claimed }
+}
+
+/**
+ * Waits for the teammate's next prompt: input typed into its transcript view,
+ * then its mailbox (see takeTeammateMailbox), then -- when allowed -- an
+ * unclaimed task from the team's list. Polls every 500ms.
  *
  * This keeps the teammate alive in 'idle' state instead of terminating.
  * Does NOT auto-approve shutdown - the model should make that decision.
+ *
+ * With a deadline the wait ends in 'timeout', and with a cancel signal in
+ * 'cancelled' when that fires; the backoff before an automatic retry uses
+ * both.
  */
 async function waitForNextPromptOrShutdown(
   identity: TeammateIdentity,
@@ -772,8 +1055,16 @@ async function waitForNextPromptOrShutdown(
   taskId: string,
   getAppState: () => AppState,
   setAppState: SetAppStateFn,
+  options: {
+    deadline?: number
+    /** Must be the lifecycle controller's child when given */
+    cancelSignal?: AbortSignal
+    claimTasks?: boolean
+  } = {},
 ): Promise<WaitResult> {
   const POLL_INTERVAL_MS = 500
+  const { deadline, cancelSignal, claimTasks = true } = options
+  const sleepSignal = cancelSignal ?? abortController.signal
 
   logForDebugging(
     `[inProcessRunner] ${identity.agentName} starting poll loop (abort=${abortController.signal.aborted})`,
@@ -781,6 +1072,8 @@ async function waitForNextPromptOrShutdown(
 
   let pollCount = 0
   while (!abortController.signal.aborted) {
+    if (cancelSignal?.aborted) return { type: 'cancelled' }
+
     // Check for in-memory pending messages on every iteration (from transcript viewing)
     const appState = getAppState()
     const task = appState.tasks[taskId]
@@ -819,7 +1112,11 @@ async function waitForNextPromptOrShutdown(
 
     // Wait before next poll (skip on first iteration to check immediately)
     if (pollCount > 0) {
-      await sleep(POLL_INTERVAL_MS)
+      const waitMs =
+        deadline === undefined
+          ? POLL_INTERVAL_MS
+          : Math.min(POLL_INTERVAL_MS, deadline - Date.now())
+      if (waitMs > 0) await sleep(waitMs, sleepSignal)
     }
     pollCount++
 
@@ -830,98 +1127,15 @@ async function waitForNextPromptOrShutdown(
       )
       return { type: 'aborted' }
     }
+    if (cancelSignal?.aborted) return { type: 'cancelled' }
 
     // Check for messages in mailbox
     logForDebugging(
       `[inProcessRunner] ${identity.agentName} poll #${pollCount}: checking mailbox`,
     )
     try {
-      // Read all messages and scan unread for shutdown requests first.
-      // Shutdown requests are prioritized over regular messages to prevent
-      // starvation when peer-to-peer messages flood the queue.
-      const allMessages = await readMailbox(
-        identity.agentName,
-        identity.teamName,
-      )
-
-      // Scan all unread messages for shutdown requests (highest priority).
-      // readMailbox() already reads all messages from disk, so this scan
-      // adds only ~1-2ms of JSON parsing overhead.
-      let shutdownIndex = -1
-      let shutdownParsed: ReturnType<typeof isShutdownRequest> = null
-      for (let i = 0; i < allMessages.length; i++) {
-        const m = allMessages[i]
-        if (m && !m.read) {
-          const parsed = isShutdownRequest(m.text)
-          if (parsed) {
-            shutdownIndex = i
-            shutdownParsed = parsed
-            break
-          }
-        }
-      }
-
-      if (shutdownIndex !== -1) {
-        const msg = allMessages[shutdownIndex]!
-        const skippedUnread = count(
-          allMessages.slice(0, shutdownIndex),
-          m => !m.read,
-        )
-        logForDebugging(
-          `[inProcessRunner] ${identity.agentName} received shutdown request from ${shutdownParsed?.from} (prioritized over ${skippedUnread} unread messages)`,
-        )
-        await markMessageAsReadByIndex(
-          identity.agentName,
-          identity.teamName,
-          shutdownIndex,
-        )
-        return {
-          type: 'shutdown_request',
-          request: shutdownParsed,
-          originalMessage: msg.text,
-        }
-      }
-
-      // No shutdown request found. Prioritize team-lead messages over peer
-      // messages — the leader represents user intent and coordination, so
-      // their messages should not be starved behind peer-to-peer chatter.
-      // Fall back to FIFO for peer messages.
-      let selectedIndex = -1
-
-      // Check for unread team-lead messages first
-      for (let i = 0; i < allMessages.length; i++) {
-        const m = allMessages[i]
-        if (m && !m.read && m.from === TEAM_LEAD_NAME) {
-          selectedIndex = i
-          break
-        }
-      }
-
-      // Fall back to first unread message (any sender)
-      if (selectedIndex === -1) {
-        selectedIndex = allMessages.findIndex(m => !m.read)
-      }
-
-      if (selectedIndex !== -1) {
-        const msg = allMessages[selectedIndex]
-        if (msg) {
-          logForDebugging(
-            `[inProcessRunner] ${identity.agentName} received new message from ${msg.from} (index ${selectedIndex})`,
-          )
-          await markMessageAsReadByIndex(
-            identity.agentName,
-            identity.teamName,
-            selectedIndex,
-          )
-          return {
-            type: 'new_message',
-            message: msg.text,
-            from: msg.from,
-            color: msg.color,
-            summary: msg.summary,
-          }
-        }
-      }
+      const delivery = await takeTeammateMailbox(identity)
+      if (delivery) return delivery
     } catch (err) {
       logForDebugging(
         `[inProcessRunner] ${identity.agentName} poll error: ${err}`,
@@ -930,13 +1144,19 @@ async function waitForNextPromptOrShutdown(
     }
 
     // Check the team's task list for unclaimed tasks
-    const taskPrompt = await claimNextInProcessTask(identity)
-    if (taskPrompt) {
-      return {
-        type: 'new_message',
-        message: taskPrompt,
-        from: 'task-list',
+    if (claimTasks) {
+      const taskPrompt = await claimNextInProcessTask(identity)
+      if (taskPrompt) {
+        return {
+          type: 'new_message',
+          message: taskPrompt,
+          from: 'task-list',
+        }
       }
+    }
+
+    if (deadline !== undefined && Date.now() >= deadline) {
+      return { type: 'timeout' }
     }
   }
 
@@ -944,6 +1164,76 @@ async function waitForNextPromptOrShutdown(
     `[inProcessRunner] ${identity.agentName} exiting poll loop (abort=${abortController.signal.aborted}, polls=${pollCount})`,
   )
   return { type: 'aborted' }
+}
+
+/**
+ * A failure reason with a note that must survive the idle notification's
+ * length cap.
+ */
+function withFailureNote(reason: string, note: string): string {
+  const room = IDLE_FAILURE_REASON_MAX_CHARS - note.length - 1
+  const head =
+    reason.length > room ? `${reason.slice(0, Math.max(0, room - 1))}…` : reason
+  return `${head} ${note}`
+}
+
+/**
+ * Builds the teammate's system prompt for its systemPromptMode.
+ */
+async function buildTeammateSystemPrompt(
+  config: Pick<
+    InProcessRunnerConfig,
+    'toolUseContext' | 'agentDefinition' | 'systemPrompt' | 'systemPromptMode'
+  >,
+): Promise<string> {
+  const { toolUseContext, agentDefinition, systemPrompt, systemPromptMode } =
+    config
+  if (systemPromptMode === 'replace' && systemPrompt) {
+    return systemPrompt
+  }
+
+  const fullSystemPromptParts = await getSystemPrompt(
+    toolUseContext.options.tools,
+    toolUseContext.options.mainLoopModel,
+    undefined,
+    toolUseContext.options.mcpClients,
+  )
+
+  const systemPromptParts = [
+    ...fullSystemPromptParts,
+    TEAMMATE_SYSTEM_PROMPT_ADDENDUM,
+  ]
+
+  // If custom agent definition provided, append its prompt
+  if (agentDefinition) {
+    const customPrompt = agentDefinition.getSystemPrompt()
+    if (customPrompt) {
+      systemPromptParts.push(`\n# Custom Agent Instructions\n${customPrompt}`)
+    }
+
+    // Log agent memory loaded event for in-process teammates
+    if (agentDefinition.memory) {
+      logEvent('tengu_agent_memory_loaded', {
+        ...(process.env.USER_TYPE === 'ant'
+          ? {
+              agent_type:
+                agentDefinition.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+            }
+          : {}),
+        scope:
+          agentDefinition.memory as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+        source:
+          'in-process-teammate' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      })
+    }
+  }
+
+  // Append mode: add provided system prompt after default
+  if (systemPromptMode === 'append' && systemPrompt) {
+    systemPromptParts.push(systemPrompt)
+  }
+
+  return systemPromptParts.join('\n')
 }
 
 /**
@@ -955,6 +1245,12 @@ async function waitForNextPromptOrShutdown(
  *
  * Unlike background tasks, teammates stay alive and can receive multiple prompts.
  * The loop only exits on abort or after shutdown is approved by the model.
+ *
+ * Every turn runs under one durable agent id, so the teammate keeps a single
+ * transcript (and SendMessage can resume it from there). A turn that ends on
+ * a transient API error is continued automatically with backoff, as the
+ * desktop runtime does for its process members; the lead hears about it only
+ * when the retries run out.
  *
  * @param config - Runner configuration
  * @returns Result with messages and success status
@@ -972,11 +1268,13 @@ export async function runInProcessTeammate(
     toolUseContext,
     abortController,
     model,
-    systemPrompt,
-    systemPromptMode,
     allowedTools,
     allowPermissionPrompts,
     invokingRequestId,
+    resumeMessages,
+    resumeReplacementState,
+    initialFrom,
+    autoContinueDelaysMs = TEAMMATE_AUTO_CONTINUE_DELAYS_MS,
   } = config
   const { setAppState } = toolUseContext
   const teamFile = readTeamFile(identity.teamName)
@@ -986,6 +1284,10 @@ export async function runInProcessTeammate(
       ? { streamScopeId: createTeamStreamScopeId(teamFile) }
       : {}),
   }
+  // One transcript for the teammate's whole life, across turns and resumes
+  const transcriptAgentId = asAgentId(
+    identity.resumableAgentId ?? createAgentId(),
+  )
 
   logForDebugging(
     `[inProcessRunner] Starting agent loop for ${identity.agentId}`,
@@ -1006,89 +1308,135 @@ export async function runInProcessTeammate(
     invocationEmitted: false,
   }
 
-  // Build system prompt based on systemPromptMode
-  let teammateSystemPrompt: string
-  if (systemPromptMode === 'replace' && systemPrompt) {
-    teammateSystemPrompt = systemPrompt
-  } else {
-    const fullSystemPromptParts = await getSystemPrompt(
-      toolUseContext.options.tools,
-      toolUseContext.options.mainLoopModel,
-      undefined,
-      toolUseContext.options.mcpClients,
-    )
-
-    const systemPromptParts = [
-      ...fullSystemPromptParts,
-      TEAMMATE_SYSTEM_PROMPT_ADDENDUM,
-    ]
-
-    // If custom agent definition provided, append its prompt
-    if (agentDefinition) {
-      const customPrompt = agentDefinition.getSystemPrompt()
-      if (customPrompt) {
-        systemPromptParts.push(`\n# Custom Agent Instructions\n${customPrompt}`)
-      }
-
-      // Log agent memory loaded event for in-process teammates
-      if (agentDefinition.memory) {
-        logEvent('tengu_agent_memory_loaded', {
-          ...(process.env.USER_TYPE === 'ant'
-            ? {
-                agent_type:
-                  agentDefinition.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-              }
-            : {}),
-          scope:
-            agentDefinition.memory as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-          source:
-            'in-process-teammate' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
-        })
-      }
-    }
-
-    // Append mode: add provided system prompt after default
-    if (systemPromptMode === 'append' && systemPrompt) {
-      systemPromptParts.push(systemPrompt)
-    }
-
-    teammateSystemPrompt = systemPromptParts.join('\n')
+  // All messages across all prompts; a resumed teammate starts from its transcript
+  const allMessages: Message[] = resumeMessages ? [...resumeMessages] : []
+  // Messages already in the transcript: runAgent appends only what follows
+  const recordedUuids = new Set<UUID>(allMessages.map(message => message.uuid))
+  const transcriptMetadata: Partial<AgentMetadata> = {
+    taskKind: 'in_process_teammate',
+    teamName: identity.teamName,
+    name: identity.agentName,
+    planModeRequired: identity.planModeRequired,
+    ...(identity.color && { color: identity.color }),
+    ...(agentDefinition && { customAgentType: agentDefinition.agentType }),
   }
-
-  // Resolve agent definition - use full system prompt with teammate addendum
-  // IMPORTANT: Set permissionMode to 'default' so teammates always get full tool
-  // access regardless of the leader's permission mode.
-  // runAgent applies definition effort over the parent AppState while the
-  // existing ToolUseContext keeps the teammate on the session thinking mode.
-  const resolvedAgentDefinition = buildInProcessTeammateAgentDefinition(
-    identity.agentName,
-    teammateSystemPrompt,
-    agentDefinition,
-  )
-
-  // All messages across all prompts
-  const allMessages: Message[] = []
   // Wrap initial prompt with XML for proper styling in transcript view
-  const wrappedInitialPrompt = formatAsTeammateMessage(
-    'team-lead',
+  let currentPrompt = formatAsTeammateMessage(
+    initialFrom ?? TEAM_LEAD_NAME,
     prompt,
     undefined,
     description,
   )
-  let currentPrompt = wrappedInitialPrompt
   let shouldExit = false
+  // Consecutive automatic continuations after transient failures
+  let autoContinueAttempts = 0
+  // The result the lead last received, so a failure report does not repeat it
+  let lastDeliveredResult = resumeMessages
+    ? getTeammateTurnResult(resumeMessages)
+    : undefined
+
+  // Makes what the teammate was handed while waiting its next prompt
+  const takeNextPrompt = (next: WaitResult): void => {
+    // A new instruction starts a fresh retry budget: someone has seen the
+    // teammate's state and wants it to go on.
+    autoContinueAttempts = 0
+    switch (next.type) {
+      case 'shutdown_request':
+        // Pass shutdown request to model for decision
+        // Format as teammate-message for consistency with how tmux teammates receive it
+        // The model will use approveShutdown or rejectShutdown tool
+        logForDebugging(
+          `[inProcessRunner] ${identity.agentId} received shutdown request - passing to model`,
+        )
+        currentPrompt = formatAsTeammateMessage(
+          next.from,
+          next.originalMessage,
+        )
+        // Add shutdown request to task.messages for transcript display
+        appendTeammateMessage(
+          taskId,
+          createUserMessage({ content: currentPrompt }),
+          setAppState,
+        )
+        break
+
+      case 'new_messages':
+        logForDebugging(
+          `[inProcessRunner] ${identity.agentId} received ${next.messages.length} message(s)`,
+        )
+        // The whole batch is one prompt, each message in its own envelope
+        currentPrompt = formatTeammateMessages(next.messages)
+        appendTeammateMessage(
+          taskId,
+          createUserMessage({ content: currentPrompt }),
+          setAppState,
+        )
+        break
+
+      case 'new_message':
+        logForDebugging(
+          `[inProcessRunner] ${identity.agentId} received new message from ${next.from}`,
+        )
+        // Messages from the user should be plain text (not wrapped in XML)
+        // Messages from 'user' come from pendingUserMessages which are already
+        // added to task.messages by injectUserMessageToTeammate
+        if (next.from === 'user') {
+          currentPrompt = next.message
+        } else {
+          currentPrompt = formatAsTeammateMessage(next.from, next.message)
+          appendTeammateMessage(
+            taskId,
+            createUserMessage({ content: currentPrompt }),
+            setAppState,
+          )
+        }
+        break
+
+      case 'aborted':
+      case 'timeout':
+      case 'cancelled':
+        logForDebugging(
+          `[inProcessRunner] ${identity.agentId} aborted while waiting`,
+        )
+        shouldExit = true
+        break
+    }
+  }
 
   try {
-    // Add initial prompt to task.messages for display (wrapped with XML)
+    // Built inside the try: a failure here must still settle the task
+    const teammateSystemPrompt = await buildTeammateSystemPrompt(config)
+
+    // Resolve agent definition - use full system prompt with teammate addendum
+    // IMPORTANT: Set permissionMode to 'default' so teammates always get full tool
+    // access regardless of the leader's permission mode.
+    // runAgent applies definition effort over the parent AppState while the
+    // existing ToolUseContext keeps the teammate on the session thinking mode.
+    const resolvedAgentDefinition = buildInProcessTeammateAgentDefinition(
+      identity.agentName,
+      teammateSystemPrompt,
+      agentDefinition,
+    )
+
+    // Add initial prompt to task.messages for display (wrapped with XML),
+    // after the latest part of a resumed conversation
     updateTaskState(
       taskId,
-      task => ({
-        ...task,
-        messages: appendCappedMessage(
-          task.messages,
-          createUserMessage({ content: currentPrompt }),
-        ),
-      }),
+      task => {
+        let messages = task.messages
+        for (const message of resumeMessages?.slice(
+          -(TEAMMATE_MESSAGES_UI_CAP - 1),
+        ) ?? []) {
+          messages = appendCappedMessage(messages, message)
+        }
+        return {
+          ...task,
+          messages: appendCappedMessage(
+            messages,
+            createUserMessage({ content: currentPrompt }),
+          ),
+        }
+      },
       setAppState,
     )
 
@@ -1101,7 +1449,7 @@ export async function runInProcessTeammate(
     // earlier iterations' incremental frozen-first decisions → wire prefix
     // differs → cache miss. Gated on parent to inherit feature-flag-off.
     let teammateReplacementState = toolUseContext.contentReplacementState
-      ? createContentReplacementState()
+      ? (resumeReplacementState ?? createContentReplacementState())
       : undefined
 
     // Main teammate loop - runs until abort or shutdown approved
@@ -1139,50 +1487,75 @@ export async function runInProcessTeammate(
           `[inProcessRunner] ${identity.agentId} compacting history (${tokenCount} tokens)`,
         )
         // Create an isolated copy of toolUseContext so that compaction
-        // does not clear the main session's readFileState cache or
-        // trigger the main session's UI callbacks.
-        const isolatedContext: ToolUseContext = {
+        // does not clear the main session's caches or trigger the main
+        // session's UI callbacks. It runs under the teammate's own lifecycle
+        // controller and agent id: the spawn-time context carries the lead's
+        // per-turn controller, which stays aborted once that lead turn was
+        // interrupted and would fail every later compaction.
+        const compactionContext: ToolUseContext = {
           ...toolUseContext,
+          abortController,
+          agentId: transcriptAgentId,
           readFileState: cloneFileStateCache(toolUseContext.readFileState),
+          loadedNestedMemoryPaths: new Set(),
           onCompactProgress: undefined,
           setStreamMode: undefined,
         }
-        const compactedSummary = await compactConversation(
-          allMessages,
-          isolatedContext,
-          {
-            systemPrompt: asSystemPrompt([]),
-            userContext: {},
-            systemContext: {},
-            toolUseContext: isolatedContext,
-            forkContextMessages: [],
-          },
-          true, // suppressFollowUpQuestions
-          undefined, // customInstructions
-          true, // isAutoCompact
-        )
-        contextMessages = buildPostCompactMessages(compactedSummary)
-        // Reset microcompact state since full compact replaces all
-        // messages — old tool IDs are no longer relevant
-        resetMicrocompactState()
-        // Reset content replacement state — compact replaces all messages
-        // so old tool_use_ids are gone. Stale Map entries are harmless
-        // (UUID keys never match) but accumulate memory over long runs.
-        if (teammateReplacementState) {
-          teammateReplacementState = createContentReplacementState()
-        }
-        // Update allMessages in place with compacted version
-        allMessages.length = 0
-        allMessages.push(...contextMessages)
+        try {
+          const compactedSummary = await compactConversation(
+            allMessages,
+            compactionContext,
+            {
+              systemPrompt: asSystemPrompt([]),
+              userContext: {},
+              systemContext: {},
+              toolUseContext: compactionContext,
+              // The summarizing fork reads the conversation from here
+              forkContextMessages: allMessages,
+            },
+            true, // suppressFollowUpQuestions
+            undefined, // customInstructions
+            true, // isAutoCompact
+          )
+          contextMessages = buildPostCompactMessages(compactedSummary)
+          // Reset microcompact state since full compact replaces all
+          // messages — old tool IDs are no longer relevant
+          resetMicrocompactState()
+          // Reset content replacement state — compact replaces all messages
+          // so old tool_use_ids are gone. Stale Map entries are harmless
+          // (UUID keys never match) but accumulate memory over long runs.
+          if (teammateReplacementState) {
+            teammateReplacementState = createContentReplacementState()
+          }
+          // Update allMessages in place with compacted version
+          allMessages.length = 0
+          allMessages.push(...contextMessages)
+          // The compacted history starts a new chain in the same transcript
+          recordedUuids.clear()
 
-        // Mirror compaction into task.messages — otherwise the AppState
-        // mirror grows unbounded (500 turns = 500+ messages, 10-50MB).
-        // Replace with the compacted messages, matching allMessages.
-        updateTaskState(
-          taskId,
-          task => ({ ...task, messages: [...contextMessages, userMessage] }),
-          setAppState,
-        )
+          // Mirror compaction into task.messages — otherwise the AppState
+          // mirror grows unbounded (500 turns = 500+ messages, 10-50MB).
+          // Replace with the compacted messages, matching allMessages.
+          updateTaskState(
+            taskId,
+            task => ({ ...task, messages: [...contextMessages, userMessage] }),
+            setAppState,
+          )
+        } catch (error) {
+          if (abortController.signal.aborted) {
+            logForDebugging(
+              `[inProcessRunner] ${identity.agentId} aborted during compaction`,
+            )
+            break
+          }
+          // A summary that failed (API error, hook...) must not end the
+          // teammate: the turn runs on the full history instead. If that is
+          // too long for the model, the turn fails and the lead is told.
+          logForDebugging(
+            `[inProcessRunner] ${identity.agentId} compaction failed, continuing uncompacted: ${getErrorMessage(error)}`,
+            { level: 'warn' },
+          )
+        }
       }
 
       // Pass previous messages as context to preserve conversation history
@@ -1254,7 +1627,18 @@ export async function runInProcessTeammate(
             canShowPermissionPrompts: allowPermissionPrompts ?? true,
             forkContextMessages,
             querySource: 'agent:custom',
-            override: { abortController: currentWorkAbortController },
+            // Every turn writes to the same transcript, appending only the
+            // messages it has not recorded yet
+            override: {
+              abortController: currentWorkAbortController,
+              agentId: transcriptAgentId,
+            },
+            recordedUuids,
+            description,
+            extraMetadata: {
+              ...transcriptMetadata,
+              permissionMode: currentPermissionMode,
+            },
             model: model as ModelAlias | undefined,
             preserveToolUseResults: true,
             availableTools: toolUseContext.options.tools,
@@ -1336,7 +1720,22 @@ export async function runInProcessTeammate(
           return { success: true, messages: iterationMessages }
         })
       })
-      await withInProcessTeammateActivity(identity, runActiveTurn)
+      try {
+        await withInProcessTeammateActivity(identity, runActiveTurn)
+      } catch (error) {
+        // runAgent ends a run whose controller was aborted by throwing
+        // AbortError. A turn stopped by the user, or by the teammate being
+        // stopped, is not a failure.
+        if (
+          !abortController.signal.aborted &&
+          !currentWorkAbortController.signal.aborted
+        ) {
+          throw error
+        }
+        logForDebugging(
+          `[inProcessRunner] ${identity.agentId} turn ended by abort: ${getErrorMessage(error)}`,
+        )
+      }
 
       // Clear the work controller from state (it's no longer valid)
       updateTaskState(
@@ -1350,8 +1749,11 @@ export async function runInProcessTeammate(
         break
       }
 
+      const turnInterrupted =
+        workWasAborted || currentWorkAbortController.signal.aborted
+
       // If work was aborted (Escape), log it and add interrupt message, then continue to idle state
-      if (workWasAborted) {
+      if (turnInterrupted) {
         logForDebugging(
           `[inProcessRunner] ${identity.agentId} work interrupted, returning to idle`,
         )
@@ -1368,6 +1770,120 @@ export async function runInProcessTeammate(
           }),
           setAppState,
         )
+      }
+
+      const failure = turnInterrupted
+        ? undefined
+        : classifyTeammateTurnFailure(iterationMessages)
+      let retryCancelled = false
+      if (
+        failure?.isTransient &&
+        autoContinueAttempts < autoContinueDelaysMs.length
+      ) {
+        const attempt = ++autoContinueAttempts
+        const delayMs = autoContinueDelaysMs[attempt - 1]!
+        logForDebugging(
+          `[inProcessRunner] ${identity.agentId} turn failed transiently (${failure.reason}); continuing in ${delayMs}ms (retry ${attempt} of ${autoContinueDelaysMs.length})`,
+        )
+        // The lead is not told yet. The teammate stays busy (not idle)
+        // until the retry runs; new mail or input cuts the wait short and is
+        // delivered instead, and Escape cancels the retry.
+        const retryWait = createChildAbortController(abortController)
+        updateTaskState(
+          taskId,
+          task => ({ ...task, currentWorkAbortController: retryWait }),
+          setAppState,
+        )
+        const next = await waitForNextPromptOrShutdown(
+          identity,
+          abortController,
+          taskId,
+          toolUseContext.getAppState,
+          setAppState,
+          {
+            deadline: Date.now() + delayMs,
+            cancelSignal: retryWait.signal,
+            claimTasks: false,
+          },
+        )
+        updateTaskState(
+          taskId,
+          task =>
+            task.currentWorkAbortController === retryWait
+              ? { ...task, currentWorkAbortController: undefined }
+              : task,
+          setAppState,
+        )
+        if (next.type === 'timeout') {
+          currentPrompt = formatTeammateAutoContinuePrompt(
+            failure.reason,
+            attempt,
+            autoContinueDelaysMs.length,
+          )
+          appendTeammateMessage(
+            taskId,
+            createUserMessage({ content: currentPrompt }),
+            setAppState,
+          )
+          continue
+        }
+        if (next.type !== 'cancelled') {
+          takeNextPrompt(next)
+          continue
+        }
+        retryCancelled = true
+      }
+      if (!failure) {
+        autoContinueAttempts = 0
+      }
+      const failureReason = !failure
+        ? undefined
+        : retryCancelled
+          ? withFailureNote(failure.reason, '(automatic retry cancelled)')
+          : failure.isTransient
+            ? withFailureNote(
+                failure.reason,
+                `(automatic retries exhausted; message ${identity.agentName} to continue)`,
+              )
+            : failure.reason
+
+      // The turn's final response travels with the idle notification
+      const result = turnInterrupted
+        ? undefined
+        : getTeammateTurnResult(allMessages)
+      const summary = getLastPeerDmSummary(allMessages)
+
+      // Mail that arrived during the turn is taken now, as one batch, without
+      // going idle in between. The lead still gets this turn's result.
+      if (!turnInterrupted) {
+        let delivery: TeammateMailboxDelivery | null = null
+        try {
+          delivery = await takeTeammateMailbox(identity)
+        } catch (error) {
+          logForDebugging(
+            `[inProcessRunner] ${identity.agentName} turn-end mailbox check failed: ${error}`,
+          )
+        }
+        if (delivery) {
+          if (result !== undefined || failure) {
+            const sent = await sendIdleNotification(
+              identity.agentName,
+              identity.color,
+              identity.teamName,
+              {
+                ...(failure && {
+                  idleReason: 'failed' as const,
+                  failureReason,
+                }),
+                summary,
+                result,
+              },
+            )
+            if (sent && result !== undefined) lastDeliveredResult = result
+          }
+          takeNextPrompt(delivery)
+          continue
+        }
       }
 
       // Check if already idle before updating (to skip duplicate notification)
@@ -1387,21 +1903,24 @@ export async function runInProcessTeammate(
         setAppState,
       )
 
-      // Note: We do NOT automatically send the teammate's response to the leader.
-      // Teammates should use the Teammate tool to communicate with the leader.
-      // This matches process-based teammates where output is not visible to the leader.
-
       // Only send idle notification on transition to idle (not if already idle)
       if (!wasAlreadyIdle) {
-        await sendIdleNotification(
+        const sent = await sendIdleNotification(
           identity.agentName,
           identity.color,
           identity.teamName,
           {
-            idleReason: workWasAborted ? 'interrupted' : 'available',
-            summary: getLastPeerDmSummary(allMessages),
+            idleReason: turnInterrupted
+              ? 'interrupted'
+              : failure
+                ? 'failed'
+                : 'available',
+            summary,
+            failureReason,
+            result,
           },
         )
+        if (sent && result !== undefined) lastDeliveredResult = result
       } else {
         logForDebugging(
           `[inProcessRunner] Skipping duplicate idle notification for ${identity.agentName}`,
@@ -1413,68 +1932,15 @@ export async function runInProcessTeammate(
       )
 
       // Wait for next message or shutdown
-      const waitResult = await waitForNextPromptOrShutdown(
-        identity,
-        abortController,
-        taskId,
-        toolUseContext.getAppState,
-        setAppState,
+      takeNextPrompt(
+        await waitForNextPromptOrShutdown(
+          identity,
+          abortController,
+          taskId,
+          toolUseContext.getAppState,
+          setAppState,
+        ),
       )
-
-      switch (waitResult.type) {
-        case 'shutdown_request':
-          // Pass shutdown request to model for decision
-          // Format as teammate-message for consistency with how tmux teammates receive it
-          // The model will use approveShutdown or rejectShutdown tool
-          logForDebugging(
-            `[inProcessRunner] ${identity.agentId} received shutdown request - passing to model`,
-          )
-          currentPrompt = formatAsTeammateMessage(
-            waitResult.request?.from || 'team-lead',
-            waitResult.originalMessage,
-          )
-          // Add shutdown request to task.messages for transcript display
-          appendTeammateMessage(
-            taskId,
-            createUserMessage({ content: currentPrompt }),
-            setAppState,
-          )
-          break
-
-        case 'new_message':
-          // New prompt from leader or teammate
-          logForDebugging(
-            `[inProcessRunner] ${identity.agentId} received new message from ${waitResult.from}`,
-          )
-          // Messages from the user should be plain text (not wrapped in XML)
-          // Messages from other teammates get XML wrapper for identification
-          if (waitResult.from === 'user') {
-            currentPrompt = waitResult.message
-          } else {
-            currentPrompt = formatAsTeammateMessage(
-              waitResult.from,
-              waitResult.message,
-              waitResult.color,
-              waitResult.summary,
-            )
-            // Add to task.messages for transcript display (only for non-user messages)
-            // Messages from 'user' come from pendingUserMessages which are already
-            // added by injectUserMessageToTeammate
-            appendTeammateMessage(
-              taskId,
-              createUserMessage({ content: currentPrompt }),
-              setAppState,
-            )
-          }
-          break
-
-        case 'aborted':
-          logForDebugging(
-            `[inProcessRunner] ${identity.agentId} aborted while waiting`,
-          )
-          shouldExit = true
-          break
-      }
     }
 
     // Mark as completed when exiting the loop
@@ -1575,7 +2041,9 @@ export async function runInProcessTeammate(
       })
     }
 
-    // Send idle notification with failure via file-based mailbox
+    // Send idle notification with failure via file-based mailbox, with
+    // whatever the teammate said last unless the lead already has it
+    const partialResult = getTeammateTurnResult(allMessages)
     await sendIdleNotification(
       identity.agentName,
       identity.color,
@@ -1584,6 +2052,8 @@ export async function runInProcessTeammate(
         idleReason: 'failed',
         completedStatus: 'failed',
         failureReason: errorMessage,
+        result:
+          partialResult !== lastDeliveredResult ? partialResult : undefined,
       },
     )
 
@@ -1597,6 +2067,60 @@ export async function runInProcessTeammate(
 }
 
 /**
+ * How to bring a teammate back once its runner has ended: the configuration
+ * it ran with, minus anything tied to that run. Kept for the life of the
+ * process -- a stopped teammate has nothing else to resume from -- and keyed
+ * by its name@team address, so a newer teammate with that name replaces it.
+ * The context it holds is the lead's spawn-time context, which outlives the
+ * teammate anyway.
+ */
+type TeammateRespawnTemplate = Pick<
+  InProcessRunnerConfig,
+  | 'identity'
+  | 'agentDefinition'
+  | 'toolUseContext'
+  | 'model'
+  | 'systemPrompt'
+  | 'systemPromptMode'
+  | 'allowedTools'
+  | 'allowPermissionPrompts'
+> & {
+  /** createdAt of the team the teammate belonged to */
+  teamCreatedAt?: number
+}
+
+const respawnTemplates = new Map<string, TeammateRespawnTemplate>()
+const resumesInFlight = new Map<string, Promise<InProcessTeammateResume>>()
+
+function isCurrentTemplate(
+  template: TeammateRespawnTemplate | undefined,
+  teamCreatedAt: number | undefined,
+): template is TeammateRespawnTemplate {
+  // A teammate of an earlier team with the same name must not come back
+  return (
+    template !== undefined &&
+    (template.teamCreatedAt === undefined ||
+      template.teamCreatedAt === teamCreatedAt)
+  )
+}
+
+/**
+ * Whether this process ran an in-process teammate of this name in the team
+ * (created at `teamCreatedAt`) and can resume it, even after it left the
+ * team file.
+ */
+export function hasResumableInProcessTeammate(
+  agentName: string,
+  teamName: string,
+  teamCreatedAt: number | undefined,
+): boolean {
+  return isCurrentTemplate(
+    respawnTemplates.get(formatAgentId(agentName, teamName)),
+    teamCreatedAt,
+  )
+}
+
+/**
  * Starts an in-process teammate in the background.
  *
  * This is the main entry point called after spawn. It starts the agent
@@ -1605,11 +2129,277 @@ export async function runInProcessTeammate(
  * @param config - Runner configuration
  */
 export function startInProcessTeammate(config: InProcessRunnerConfig): void {
+  // The runner and the respawn template must agree on the transcript id
+  const runnerConfig: InProcessRunnerConfig = config.identity.resumableAgentId
+    ? config
+    : {
+        ...config,
+        identity: { ...config.identity, resumableAgentId: createAgentId() },
+      }
+  const { identity } = runnerConfig
+  respawnTemplates.set(identity.agentId, {
+    identity,
+    agentDefinition: runnerConfig.agentDefinition,
+    toolUseContext: runnerConfig.toolUseContext,
+    model: runnerConfig.model,
+    systemPrompt: runnerConfig.systemPrompt,
+    systemPromptMode: runnerConfig.systemPromptMode,
+    allowedTools: runnerConfig.allowedTools,
+    allowPermissionPrompts: runnerConfig.allowPermissionPrompts,
+    teamCreatedAt: readTeamFile(identity.teamName)?.createdAt,
+  })
   // Extract agentId before the closure so the catch handler doesn't retain
   // the full config object (including toolUseContext) while the promise is
   // pending - which can be hours for a long-running teammate.
-  const agentId = config.identity.agentId
-  void runInProcessTeammate(config).catch(error => {
+  const agentId = identity.agentId
+  void runInProcessTeammate(runnerConfig).catch(error => {
     logForDebugging(`[inProcessRunner] Unhandled error in ${agentId}: ${error}`)
   })
+}
+
+export type InProcessTeammateResume =
+  | {
+      kind: 'resumed'
+      taskId: string
+      /** Messages of the earlier conversation the teammate continues from */
+      resumedMessageCount: number
+    }
+  | {
+      /** Another caller restarted it first; it is running now */
+      kind: 'already_running'
+    }
+
+/**
+ * Restarts an in-process teammate that is not running -- its runner failed,
+ * finished, was stopped or evicted -- from its own transcript, with `prompt`
+ * as its next turn. It keeps its name@team address, color, model and agent
+ * definition, gets a new task and abort controller, and rejoins the team file
+ * if it had left it. Mail that arrived while it was stopped stays in its
+ * inbox. A teammate this process never ran (the lead restarted since)
+ * restarts from its team-file record without earlier conversation.
+ */
+export async function resumeInProcessTeammate(
+  params: ResumeInProcessTeammateParams,
+): Promise<InProcessTeammateResume> {
+  const agentId = formatAgentId(params.agentName, params.teamName)
+  const pending = resumesInFlight.get(agentId)
+  if (pending) {
+    const resumed = await pending.then(
+      () => true,
+      () => false,
+    )
+    return resumed
+      ? { kind: 'already_running' }
+      : resumeInProcessTeammate(params)
+  }
+  const resume = resumeStoppedTeammate(params)
+  resumesInFlight.set(agentId, resume)
+  try {
+    return await resume
+  } finally {
+    resumesInFlight.delete(agentId)
+  }
+}
+
+type ResumeInProcessTeammateParams = {
+  agentName: string
+  teamName: string
+  /** The message that becomes the teammate's next prompt */
+  prompt: string
+  /** Its sender */
+  from: string
+  summary?: string
+  /** Context of the caller */
+  context: ToolUseContext
+}
+
+/** Never resume into bypassPermissions from a file on disk. */
+function resumablePermissionMode(
+  metadata: AgentMetadata | null,
+): PermissionMode | undefined {
+  const mode =
+    metadata?.taskKind === 'in_process_teammate'
+      ? metadata.permissionMode
+      : undefined
+  return mode &&
+    mode !== 'bypassPermissions' &&
+    (PERMISSION_MODES as readonly string[]).includes(mode)
+    ? mode
+    : undefined
+}
+
+function findTeammateAgentDefinition(
+  context: ToolUseContext,
+  agentType: string | undefined,
+): CustomAgentDefinition | PluginAgentDefinition | undefined {
+  if (!agentType) return undefined
+  const found = context.options?.agentDefinitions?.activeAgents.find(
+    agent => agent.agentType === agentType,
+  )
+  return found && (isCustomAgent(found) || isPluginAgent(found))
+    ? found
+    : undefined
+}
+
+async function resumeStoppedTeammate({
+  agentName,
+  teamName,
+  prompt,
+  from,
+  summary,
+  context,
+}: ResumeInProcessTeammateParams): Promise<InProcessTeammateResume> {
+  const agentId = formatAgentId(agentName, teamName)
+  const teamFile = await readTeamFileAsync(teamName)
+  if (!teamFile?.members) {
+    throw new Error(`Team "${teamName}" does not exist`)
+  }
+  const member = teamFile.members.find(entry => entry.name === agentName)
+  const storedTemplate = respawnTemplates.get(agentId)
+  const template = isCurrentTemplate(storedTemplate, teamFile.createdAt)
+    ? storedTemplate
+    : undefined
+  if (!template && member?.backendType !== 'in-process') {
+    throw new Error(
+      `"${agentName}" is not an in-process teammate of team "${teamName}"`,
+    )
+  }
+
+  const transcriptAgentId = template?.identity.resumableAgentId
+  const [transcript, metadata] = transcriptAgentId
+    ? await Promise.all([
+        getAgentTranscript(asAgentId(transcriptAgentId)),
+        readAgentMetadata(asAgentId(transcriptAgentId)).catch(() => null),
+      ])
+    : [null, null]
+  const resumeMessages = transcript
+    ? filterWhitespaceOnlyAssistantMessages(
+        filterOrphanedThinkingOnlyMessages(
+          filterUnresolvedToolUses(transcript.messages),
+        ),
+      )
+    : []
+
+  const runnerContext: ToolUseContext = template?.toolUseContext ?? {
+    ...context,
+    messages: [],
+    // A teammate caller's own setAppState does not reach the root store
+    setAppState: context.setAppStateForTasks ?? context.setAppState,
+  }
+  const agentDefinition = template
+    ? template.agentDefinition
+    : findTeammateAgentDefinition(context, member?.agentType)
+  const color = template ? template.identity.color : member?.color
+  const planModeRequired = template
+    ? template.identity.planModeRequired
+    : (member?.planModeRequired ?? false)
+  const model = template ? template.model : member?.model
+
+  const spawned = await spawnInProcessTeammate(
+    {
+      name: agentName,
+      teamName,
+      prompt,
+      color,
+      planModeRequired,
+      model,
+      // Without a transcript the teammate starts a new one, but it still
+      // keeps the mail that was left for it
+      resumableAgentId: transcriptAgentId ?? createAgentId(),
+      permissionMode: resumablePermissionMode(metadata),
+    },
+    { setAppState: runnerContext.setAppState, toolUseId: context.toolUseId },
+  )
+  if (
+    !spawned.success ||
+    !spawned.taskId ||
+    !spawned.identity ||
+    !spawned.teammateContext ||
+    !spawned.abortController
+  ) {
+    throw new Error(spawned.error ?? 'Failed to respawn in-process teammate')
+  }
+
+  // Rejoin the roster before the runner starts
+  try {
+    await mutateTeamFileAsync(teamName, file => {
+      const entry = file.members.find(candidate => candidate.agentId === agentId)
+      if (entry) {
+        entry.joinedAt = Date.now()
+        return
+      }
+      file.members.push({
+        agentId,
+        name: agentName,
+        agentType: agentDefinition?.agentType ?? member?.agentType,
+        model,
+        color,
+        planModeRequired,
+        joinedAt: Date.now(),
+        tmuxPaneId: 'in-process',
+        cwd: getCwd(),
+        subscriptions: [],
+        backendType: 'in-process',
+      })
+    })
+  } catch (error) {
+    logForDebugging(
+      `[inProcessRunner] could not re-add ${agentId} to the team file: ${error}`,
+    )
+  }
+  runnerContext.setAppState(prev =>
+    prev.teamContext
+      ? {
+          ...prev,
+          teamContext: {
+            ...prev.teamContext,
+            teammates: {
+              ...prev.teamContext.teammates,
+              [agentId]: {
+                name: agentName,
+                agentType: agentDefinition?.agentType ?? member?.agentType,
+                color,
+                tmuxSessionName: 'in-process',
+                tmuxPaneId: 'in-process',
+                cwd: getCwd(),
+                spawnedAt: Date.now(),
+              },
+            },
+          },
+        }
+      : prev,
+  )
+
+  startInProcessTeammate({
+    identity: spawned.identity,
+    taskId: spawned.taskId,
+    prompt,
+    description: summary,
+    initialFrom: from,
+    agentDefinition,
+    model,
+    systemPrompt: template?.systemPrompt,
+    systemPromptMode: template?.systemPromptMode,
+    allowedTools: template?.allowedTools,
+    allowPermissionPrompts: template?.allowPermissionPrompts,
+    teammateContext: spawned.teammateContext,
+    toolUseContext: runnerContext,
+    abortController: spawned.abortController,
+    resumeMessages,
+    resumeReplacementState: transcript
+      ? reconstructForSubagentResume(
+          runnerContext.contentReplacementState,
+          resumeMessages,
+          transcript.contentReplacements,
+        )
+      : undefined,
+  })
+  logForDebugging(
+    `[inProcessRunner] Resumed ${agentId} with ${resumeMessages.length} prior messages`,
+  )
+  return {
+    kind: 'resumed',
+    taskId: spawned.taskId,
+    resumedMessageCount: resumeMessages.length,
+  }
 }

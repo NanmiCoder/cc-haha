@@ -16,10 +16,13 @@ export type TeamPlanRuntimeAdapter = {
   launch(plan: TeamPlanRecord): Promise<{ memberIds: Record<string, string> }>
   stop(planId: string): Promise<void>
   isRunning?(planId: string): boolean | Promise<boolean>
+  /** Re-own an approved team whose owner was lost; its members restart on demand. */
+  rehydrate?(plan: TeamPlanRecord): Promise<boolean>
   notifyLeader?(plan: TeamPlanRecord, kind: 'approved' | 'returned' | 'cancelled'): Promise<void>
 }
 const defaultRuntime: TeamPlanRuntimeAdapter = {
   isRunning: async id => (await import('./teamPlanRuntime.js')).isTeamPlanRuntimeActive(id),
+  rehydrate: async plan => (await import('./teamPlanRuntime.js')).rehydrateTeamPlanRuntimesForSession(plan.sessionId),
   validate: async plan => (await import('./teamPlanRuntime.js')).validateTeamPlanRuntime(plan),
   launch: async plan => (await import('./teamPlanRuntime.js')).launchTeamPlanRuntime(plan),
   notifyLeader: async (plan, kind) => { await (await import('./teamPlanRuntime.js')).notifyTeamPlanLeader(plan, kind) },
@@ -29,14 +32,19 @@ const defaultRuntime: TeamPlanRuntimeAdapter = {
 /** Only trusted HTTP/UI actions call approve; model tools import the draft store only. */
 export class TeamPlanService {
   private launches = new Map<string, Promise<void>>()
+  /** Approvals whose plan may already read `launching` before its launch is registered. */
+  private approving = new Set<string>()
   constructor(private runtime: TeamPlanRuntimeAdapter = defaultRuntime) {}
   async getForSession(sessionId: string): Promise<TeamPlanRecord | null> {
     const plan = await findTeamPlanForSession(sessionId)
     // A server restart lost ownership of an unfinished launch. Never silently replay it.
-    if (plan?.state === 'launching' && !this.launches.has(plan.planId)) {
+    if (plan?.state === 'launching' && !this.launches.has(plan.planId) && !this.approving.has(plan.planId)) {
       return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'interrupted', launch: { ...current.launch, status: 'failed', error: 'Launch ownership was lost. Work may have started and will not be replayed.' } }))
     }
     if (plan?.state === 'running' && this.runtime.isRunning && !await this.runtime.isRunning(plan.planId)) {
+      // A server or app restart lost the in-memory owner, not the team: members
+      // keep their transcripts and resume when messaged.
+      if (this.runtime.rehydrate && await this.runtime.rehydrate(plan).catch(() => false) && await this.runtime.isRunning(plan.planId)) return plan
       return mutateTeamPlan(plan.teamName, { ...plan, expectedRevision: plan.revision }, current => ({ ...current, state: 'interrupted', launch: { ...current.launch, status: 'failed', error: 'The worker runtime was interrupted. Started work will not be replayed.' } }))
     }
     return plan
@@ -88,9 +96,16 @@ export class TeamPlanService {
       try { validated = await this.runtime.validate(current) }
       catch (error) { throw new TeamPlanError(error instanceof Error ? error.message : 'Team configuration is unavailable', 400) }
     }
-    const result = await approveTeamPlan(teamName, action, action.requestId, validated)
-    if (result.committed) this.start(result.plan)
-    return result.plan
+    // The approval commits `launching` before this call can register the
+    // launch; a plan read in between must not take it for an orphaned launch.
+    this.approving.add(current.planId)
+    try {
+      const result = await approveTeamPlan(teamName, action, action.requestId, validated)
+      if (result.committed) this.start(result.plan)
+      return result.plan
+    } finally {
+      this.approving.delete(current.planId)
+    }
   }
   async action(teamName: string, kind: 'return' | 'cancel' | 'retry', action: TeamPlanAction): Promise<TeamPlanRecord> {
     if (kind === 'retry') {

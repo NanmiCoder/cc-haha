@@ -4376,7 +4376,9 @@ describe('WebSocket handler session isolation', () => {
     await new Promise((resolve) => setTimeout(resolve, 100))
     await flushMicrotasks(30)
 
-    expect(conversationService.stopSession).toHaveBeenCalledWith(sessionId)
+    // A runtime restart replaces only the lead's process; approved team
+    // members are independent processes and keep working.
+    expect(conversationService.stopSession).toHaveBeenCalledWith(sessionId, { keepTeamWorkers: true })
     expect(conversationService.startSession).toHaveBeenCalledWith(
       sessionId,
       '/tmp',

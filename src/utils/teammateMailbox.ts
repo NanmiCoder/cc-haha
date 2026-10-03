@@ -4,10 +4,23 @@
  * Each teammate has an inbox file at .claude/teams/{team_name}/inboxes/{agent_name}.json
  * Other teammates can write messages to it, and the recipient sees them as attachments.
  *
+ * The live inbox only holds unread messages. Every locked mutation moves read
+ * entries into an append-only {agent_name}.history.jsonl beside it: writers
+ * rewrite the live file under the lock, so it has to stay small, while the
+ * desktop feed still needs the whole conversation (readMailboxHistory).
+ *
  * Note: Inboxes are keyed by agent name within a team.
  */
 
-import { mkdir, readFile, writeFile } from 'fs/promises'
+import {
+  copyFile,
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from 'fs/promises'
 import { join } from 'path'
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod/v4'
@@ -16,7 +29,6 @@ import { PermissionModeSchema } from '../entrypoints/sdk/coreSchemas.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 import type { Message } from '../types/message.js'
 import { generateRequestId } from './agentId.js'
-import { count } from './array.js'
 import { logForDebugging } from './debug.js'
 import { getTeamsDir } from './envUtils.js'
 import { getErrnoCode } from './errors.js'
@@ -31,7 +43,9 @@ import {
   permissionBehaviorSchema,
   permissionRuleValueSchema,
 } from './permissions/PermissionRule.js'
+import { sleep } from './sleep.js'
 import { jsonParse, jsonStringify } from './slowOperations.js'
+import { firstLineOf } from './stringUtils.js'
 import {
   isPaneBackend,
   type BackendType,
@@ -40,18 +54,35 @@ import {
 import { TEAM_LEAD_NAME } from './swarm/constants.js'
 import { sanitizePathComponent } from './tasks.js'
 import { getAgentName, getTeammateColor, getTeamName } from './teammate.js'
+import { escapeXmlAttr } from './xml.js'
 
 // Lock options: retry with backoff so concurrent callers (multiple Claudes
 // in a swarm) wait for the lock instead of failing immediately. The sync
 // lockSync API blocked the event loop; the async API needs explicit retries
 // to achieve the same serialization semantics.
+//
+// The team lead's inbox is a fan-in point for every teammate's messages and
+// idle notifications, and a writer that runs out of retries loses its
+// message. The budget therefore matches the task-list lock (~2.6s total wait)
+// instead of ~650ms; critical sections only rewrite the unread live inbox, so
+// holders release quickly.
 const LOCK_OPTIONS = {
   retries: {
-    retries: 10,
+    retries: 30,
     minTimeout: 5,
     maxTimeout: 100,
   },
+  // The default handler throws from a timer, which becomes an unhandled
+  // exception. A lock stolen after a long event-loop stall is recoverable.
+  onCompromised: (error: Error) => {
+    logForDebugging(`[TeammateMailbox] inbox lock compromised: ${error}`, {
+      level: 'error',
+    })
+  },
 }
+
+// Windows readers can briefly prevent a rename from replacing the inbox.
+const RENAME_RETRY_CODES = new Set(['EPERM', 'EACCES', 'EBUSY'])
 
 export type TeammateMessage = {
   /** Stable envelope identity. Older mailbox records may not have one. */
@@ -111,6 +142,110 @@ async function ensureInboxDir(teamName?: string): Promise<void> {
   logForDebugging(`[TeammateMailbox] Ensured inbox directory: ${inboxDir}`)
 }
 
+/** Suffix of the append-only file that keeps a recipient's read messages. */
+export const MAILBOX_HISTORY_SUFFIX = '.history.jsonl'
+
+/**
+ * Path of the history file that sits beside a live inbox file
+ * ({agent_name}.json -> {agent_name}.history.jsonl).
+ */
+export function getInboxHistoryPath(inboxPath: string): string {
+  const stem = inboxPath.endsWith('.json')
+    ? inboxPath.slice(0, -'.json'.length)
+    : inboxPath
+  return `${stem}${MAILBOX_HISTORY_SUFFIX}`
+}
+
+/**
+ * Identity used to acknowledge exactly the messages a consumer delivered.
+ * Envelope ids are unique per message; records written before ids existed
+ * fall back to sender, timestamp and text.
+ */
+export function getMailboxMessageIdentity(
+  message: Pick<TeammateMessage, 'id' | 'from' | 'timestamp' | 'text'>,
+): string {
+  return message.id
+    ? `id:${message.id}`
+    : `legacy:${message.from}|${message.timestamp}|${message.text}`
+}
+
+function isMailboxRecord(value: unknown): value is TeammateMessage {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/**
+ * Parses a live inbox. Returns undefined for a damaged file. Legacy inboxes
+ * (pretty-printed, still holding read entries) parse the same way.
+ */
+function parseInboxContent(content: string): TeammateMessage[] | undefined {
+  // A brand-new inbox is created empty before '[]' lands in it.
+  if (content.trim() === '') return []
+  let parsed: unknown
+  try {
+    parsed = jsonParse(content)
+  } catch {
+    return undefined
+  }
+  if (!Array.isArray(parsed)) return undefined
+  // A non-object entry would break every consumer's `message.read` check.
+  return parsed.filter(isMailboxRecord)
+}
+
+async function readInboxFile(inboxPath: string): Promise<TeammateMessage[]> {
+  let content: string
+  try {
+    content = await readFile(inboxPath, 'utf-8')
+  } catch (error) {
+    if (getErrnoCode(error) === 'ENOENT') {
+      logForDebugging(`[TeammateMailbox] readMailbox: file does not exist`)
+      return []
+    }
+    logForDebugging(`Failed to read inbox ${inboxPath}: ${error}`)
+    logError(error)
+    return []
+  }
+  const messages = parseInboxContent(content)
+  if (!messages) {
+    // Writes are atomic, so this is a damaged file rather than a write in
+    // progress. The next locked mutation keeps a copy before replacing it.
+    logForDebugging(
+      `[TeammateMailbox] readMailbox: unparseable inbox at ${inboxPath}, treating as empty`,
+      { level: 'warn' },
+    )
+    return []
+  }
+  logForDebugging(
+    `[TeammateMailbox] readMailbox: read ${messages.length} message(s)`,
+  )
+  return messages
+}
+
+async function readInboxHistory(
+  historyPath: string,
+): Promise<TeammateMessage[]> {
+  let content: string
+  try {
+    content = await readFile(historyPath, 'utf-8')
+  } catch (error) {
+    if (getErrnoCode(error) !== 'ENOENT') {
+      logForDebugging(`Failed to read inbox history ${historyPath}: ${error}`)
+      logError(error)
+    }
+    return []
+  }
+  const messages: TeammateMessage[] = []
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const parsed: unknown = jsonParse(line)
+      if (isMailboxRecord(parsed)) messages.push({ ...parsed, read: true })
+    } catch {
+      // A crash can tear the last line; the next append starts a fresh one.
+    }
+  }
+  return messages
+}
+
 /**
  * Read all messages from a teammate's inbox
  * @param agentName - The agent name (not UUID) to read inbox for
@@ -122,24 +257,7 @@ export async function readMailbox(
 ): Promise<TeammateMessage[]> {
   const inboxPath = getInboxPath(agentName, teamName)
   logForDebugging(`[TeammateMailbox] readMailbox: path=${inboxPath}`)
-
-  try {
-    const content = await readFile(inboxPath, 'utf-8')
-    const messages = jsonParse(content) as TeammateMessage[]
-    logForDebugging(
-      `[TeammateMailbox] readMailbox: read ${messages.length} message(s)`,
-    )
-    return messages
-  } catch (error) {
-    const code = getErrnoCode(error)
-    if (code === 'ENOENT') {
-      logForDebugging(`[TeammateMailbox] readMailbox: file does not exist`)
-      return []
-    }
-    logForDebugging(`Failed to read inbox for ${agentName}: ${error}`)
-    logError(error)
-    return []
-  }
+  return readInboxFile(inboxPath)
 }
 
 /**
@@ -160,221 +278,287 @@ export async function readUnreadMessages(
 }
 
 /**
+ * Every message a recipient has received -- archived history plus the live
+ * inbox -- in chronological order, each with its read flag. Lock-free and
+ * read-only; this is what the desktop communication feed shows.
+ */
+export async function readMailboxHistory(
+  agentName: string,
+  teamName?: string,
+): Promise<TeammateMessage[]> {
+  return readMailboxHistoryAtPath(getInboxPath(agentName, teamName))
+}
+
+/**
+ * readMailboxHistory for a caller that enumerates inbox files itself.
+ * @param inboxPath - The live {agent_name}.json path (it need not exist)
+ */
+export async function readMailboxHistoryAtPath(
+  inboxPath: string,
+): Promise<TeammateMessage[]> {
+  // Live inbox first: a mutation appends history before it republishes the
+  // live file, so in this order an entry being moved is seen twice at worst
+  // (deduplicated below), never zero times.
+  const live = await readInboxFile(inboxPath)
+  const history = await readInboxHistory(getInboxHistoryPath(inboxPath))
+  const seen = new Set<string>()
+  const messages: TeammateMessage[] = []
+  for (const message of [...history, ...live]) {
+    const identity = getMailboxMessageIdentity(message)
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    messages.push(message)
+  }
+  // Entries are archived in the order they were read; restore send order.
+  return messages.sort((left, right) =>
+    left.timestamp < right.timestamp
+      ? -1
+      : left.timestamp > right.timestamp
+        ? 1
+        : 0,
+  )
+}
+
+/**
+ * Locked view of a live inbox. `content` is the raw file text, absent when
+ * the file is missing or damaged so the inbox is always republished.
+ */
+async function readInboxForUpdate(
+  inboxPath: string,
+): Promise<{ messages: TeammateMessage[]; content?: string }> {
+  let content: string
+  try {
+    content = await readFile(inboxPath, 'utf-8')
+  } catch (error) {
+    if (getErrnoCode(error) === 'ENOENT') return { messages: [] }
+    // Never rewrite an inbox that could not be read: that would drop it.
+    throw error
+  }
+  const messages = parseInboxContent(content)
+  if (messages) return { messages, content }
+  const preservedPath = `${inboxPath}.corrupt-${Date.now()}`
+  await copyFile(inboxPath, preservedPath)
+  logForDebugging(
+    `[TeammateMailbox] unparseable inbox preserved at ${preservedPath} before it is replaced`,
+    { level: 'error' },
+  )
+  return { messages: [] }
+}
+
+// Call only while holding the inbox lock.
+async function appendInboxHistory(
+  historyPath: string,
+  messages: TeammateMessage[],
+): Promise<void> {
+  if (messages.length === 0) return
+  const lines = messages
+    .map(message => jsonStringify({ ...message, read: true }))
+    .join('\n')
+  const handle = await open(historyPath, 'a+')
+  try {
+    // A crash can leave a torn last line; start on a fresh line so the torn
+    // fragment cannot swallow the entries appended now.
+    const { size } = await handle.stat()
+    let separator = ''
+    if (size > 0) {
+      const last = Buffer.alloc(1)
+      await handle.read(last, 0, 1, size - 1)
+      if (last[0] !== 0x0a) separator = '\n'
+    }
+    await handle.write(`${separator}${lines}\n`)
+  } finally {
+    await handle.close()
+  }
+}
+
+// Call only while holding the inbox lock. Readers take no lock: rename
+// exposes either the complete previous inbox or the complete replacement.
+async function replaceInboxFile(
+  inboxPath: string,
+  content: string,
+): Promise<void> {
+  const temporaryPath = `${inboxPath}.${process.pid}.${randomUUID()}.tmp`
+  try {
+    await writeFile(temporaryPath, content, {
+      encoding: 'utf-8',
+      flag: 'wx',
+    })
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await rename(temporaryPath, inboxPath)
+        return
+      } catch (error) {
+        // Never unlink the live inbox: exhausted retries must leave its
+        // previous contents intact.
+        if (
+          process.platform !== 'win32' ||
+          attempt >= 5 ||
+          !RENAME_RETRY_CODES.has(getErrnoCode(error) ?? '')
+        ) {
+          throw error
+        }
+        await sleep(10 * (attempt + 1))
+      }
+    }
+  } finally {
+    await rm(temporaryPath, { force: true })
+  }
+}
+
+/**
+ * Applies `update` to a live inbox under its lock. Entries the result holds
+ * as read -- newly acknowledged ones and legacy read entries alike -- move to
+ * the history file; only unread entries are republished, as compact JSON.
+ * Throws when the lock or the file cannot be used (ENOENT: no inbox).
+ */
+async function updateInbox(
+  inboxPath: string,
+  update: (messages: TeammateMessage[]) => TeammateMessage[],
+): Promise<void> {
+  const release = await lockfile.lock(inboxPath, {
+    lockfilePath: `${inboxPath}.lock`,
+    ...LOCK_OPTIONS,
+  })
+  try {
+    const current = await readInboxForUpdate(inboxPath)
+    const next = update(current.messages)
+    // History first: a crash between the two steps can repeat an entry,
+    // which readers deduplicate, but can never lose one.
+    await appendInboxHistory(
+      getInboxHistoryPath(inboxPath),
+      next.filter(message => message.read),
+    )
+    const content = jsonStringify(next.filter(message => !message.read))
+    if (content !== current.content) {
+      await replaceInboxFile(inboxPath, content)
+    }
+  } finally {
+    try {
+      await release()
+    } catch (error) {
+      logForDebugging(`[TeammateMailbox] inbox lock release failed: ${error}`)
+    }
+  }
+}
+
+/**
  * Write a message to a teammate's inbox
  * Uses file locking to prevent race conditions when multiple agents write concurrently
  * @param recipientName - The recipient's agent name (not UUID)
  * @param message - The message to write
  * @param teamName - Optional team name
+ * @returns true once the message is persisted; false when it was not (for
+ *   example the inbox stayed locked past the retry budget). Never throws, so
+ *   callers must check the result before reporting a message as sent.
  */
 export async function writeToMailbox(
   recipientName: string,
   message: Omit<TeammateMessage, 'read'>,
   teamName?: string,
-): Promise<void> {
-  await ensureInboxDir(teamName)
-
+): Promise<boolean> {
   const inboxPath = getInboxPath(recipientName, teamName)
-  const lockFilePath = `${inboxPath}.lock`
 
   logForDebugging(
     `[TeammateMailbox] writeToMailbox: recipient=${recipientName}, from=${message.from}, path=${inboxPath}`,
   )
 
-  // Ensure the inbox file exists before locking (proper-lockfile requires the file to exist)
   try {
-    await writeFile(inboxPath, '[]', { encoding: 'utf-8', flag: 'wx' })
-    logForDebugging(`[TeammateMailbox] writeToMailbox: created new inbox file`)
-  } catch (error) {
-    const code = getErrnoCode(error)
-    if (code !== 'EEXIST') {
+    await ensureInboxDir(teamName)
+
+    // Ensure the inbox file exists before locking (proper-lockfile requires the file to exist)
+    try {
+      await writeFile(inboxPath, '[]', { encoding: 'utf-8', flag: 'wx' })
       logForDebugging(
-        `[TeammateMailbox] writeToMailbox: failed to create inbox file: ${error}`,
+        `[TeammateMailbox] writeToMailbox: created new inbox file`,
       )
-      logError(error)
-      return
+    } catch (error) {
+      if (getErrnoCode(error) !== 'EEXIST') throw error
     }
-  }
-
-  let release: (() => Promise<void>) | undefined
-  try {
-    release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
-      ...LOCK_OPTIONS,
-    })
-
-    // Re-read messages after acquiring lock to get the latest state
-    const messages = await readMailbox(recipientName, teamName)
 
     const newMessage = createMailboxMessage(message)
-
-    messages.push(newMessage)
-
-    await writeFile(inboxPath, jsonStringify(messages, null, 2), 'utf-8')
+    await updateInbox(inboxPath, messages => [...messages, newMessage])
     logForDebugging(
       `[TeammateMailbox] Wrote message to ${recipientName}'s inbox from ${message.from}`,
     )
+    return true
   } catch (error) {
-    logForDebugging(`Failed to write to inbox for ${recipientName}: ${error}`)
-    logError(error)
-  } finally {
-    if (release) {
-      await release()
-    }
+    logForDebugging(`Failed to write to inbox for ${recipientName}: ${error}`, {
+      level: 'error',
+    })
+    // Lock contention is an expected, already-reported outcome.
+    if (getErrnoCode(error) !== 'ELOCKED') logError(error)
+    return false
   }
 }
 
 /**
- * Mark a specific message in a teammate's inbox as read by index
- * Uses file locking to prevent race conditions
- * @param agentName - The agent name to mark message as read for
+ * Marks exactly `candidates` read, matched by identity, and resolves to the
+ * subset that was still unread -- the messages this caller now owns.
+ * Messages appended after the caller's read stay unread, and two consumers
+ * racing on one inbox can never both claim the same message. Resolves
+ * undefined when the inbox could not be updated; nothing was claimed then.
+ * @param agentName - The inbox owner
  * @param teamName - Optional team name
- * @param messageIndex - Index of the message to mark as read
+ * @param candidates - Messages the caller read from this inbox
  */
-export async function markMessageAsReadByIndex(
+export async function claimMailboxMessages(
   agentName: string,
   teamName: string | undefined,
-  messageIndex: number,
-): Promise<void> {
+  candidates: readonly TeammateMessage[],
+): Promise<TeammateMessage[] | undefined> {
+  if (candidates.length === 0) return []
+  const identities = new Set(candidates.map(getMailboxMessageIdentity))
   const inboxPath = getInboxPath(agentName, teamName)
-  logForDebugging(
-    `[TeammateMailbox] markMessageAsReadByIndex called: agentName=${agentName}, teamName=${teamName}, index=${messageIndex}, path=${inboxPath}`,
-  )
-
-  const lockFilePath = `${inboxPath}.lock`
-
-  let release: (() => Promise<void>) | undefined
+  let claimed: TeammateMessage[] = []
   try {
-    logForDebugging(
-      `[TeammateMailbox] markMessageAsReadByIndex: acquiring lock...`,
-    )
-    release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
-      ...LOCK_OPTIONS,
+    await updateInbox(inboxPath, messages => {
+      claimed = []
+      return messages.map(message => {
+        if (
+          message.read ||
+          !identities.has(getMailboxMessageIdentity(message))
+        ) {
+          return message
+        }
+        claimed.push(message)
+        return { ...message, read: true }
+      })
     })
-    logForDebugging(`[TeammateMailbox] markMessageAsReadByIndex: lock acquired`)
-
-    // Re-read messages after acquiring lock to get the latest state
-    const messages = await readMailbox(agentName, teamName)
     logForDebugging(
-      `[TeammateMailbox] markMessageAsReadByIndex: read ${messages.length} messages after lock`,
+      `[TeammateMailbox] claimed ${claimed.length} of ${candidates.length} message(s) for ${agentName}`,
     )
-
-    if (messageIndex < 0 || messageIndex >= messages.length) {
-      logForDebugging(
-        `[TeammateMailbox] markMessageAsReadByIndex: index ${messageIndex} out of bounds (${messages.length} messages)`,
-      )
-      return
-    }
-
-    const message = messages[messageIndex]
-    if (!message || message.read) {
-      logForDebugging(
-        `[TeammateMailbox] markMessageAsReadByIndex: message already read or missing`,
-      )
-      return
-    }
-
-    messages[messageIndex] = { ...message, read: true }
-
-    await writeFile(inboxPath, jsonStringify(messages, null, 2), 'utf-8')
-    logForDebugging(
-      `[TeammateMailbox] markMessageAsReadByIndex: marked message at index ${messageIndex} as read`,
-    )
+    return claimed
   } catch (error) {
-    const code = getErrnoCode(error)
-    if (code === 'ENOENT') {
-      logForDebugging(
-        `[TeammateMailbox] markMessageAsReadByIndex: file does not exist at ${inboxPath}`,
-      )
-      return
-    }
+    // Without an inbox there is nothing left to claim.
+    if (getErrnoCode(error) === 'ENOENT') return []
     logForDebugging(
-      `[TeammateMailbox] markMessageAsReadByIndex FAILED for ${agentName}: ${error}`,
+      `[TeammateMailbox] could not mark ${candidates.length} message(s) read for ${agentName}: ${error}`,
+      { level: 'warn' },
     )
-    logError(error)
-  } finally {
-    if (release) {
-      await release()
-      logForDebugging(
-        `[TeammateMailbox] markMessageAsReadByIndex: lock released`,
-      )
-    }
+    if (getErrnoCode(error) !== 'ELOCKED') logError(error)
+    return undefined
   }
 }
 
 /**
- * Mark all messages in a teammate's inbox as read
- * Uses file locking to prevent race conditions
- * @param agentName - The agent name to mark messages as read for
- * @param teamName - Optional team name
+ * Marks exactly the delivered messages read (by identity), leaving anything
+ * that arrived after the caller's read untouched.
+ * @returns true when none of `delivered` is unread any more; false when the
+ *   inbox could not be updated (the messages will be read again).
  */
-export async function markMessagesAsRead(
+export async function markMessagesAsReadByIdentity(
   agentName: string,
-  teamName?: string,
-): Promise<void> {
-  const inboxPath = getInboxPath(agentName, teamName)
-  logForDebugging(
-    `[TeammateMailbox] markMessagesAsRead called: agentName=${agentName}, teamName=${teamName}, path=${inboxPath}`,
+  teamName: string | undefined,
+  delivered: readonly TeammateMessage[],
+): Promise<boolean> {
+  return (
+    (await claimMailboxMessages(agentName, teamName, delivered)) !== undefined
   )
-
-  const lockFilePath = `${inboxPath}.lock`
-
-  let release: (() => Promise<void>) | undefined
-  try {
-    logForDebugging(`[TeammateMailbox] markMessagesAsRead: acquiring lock...`)
-    release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
-      ...LOCK_OPTIONS,
-    })
-    logForDebugging(`[TeammateMailbox] markMessagesAsRead: lock acquired`)
-
-    // Re-read messages after acquiring lock to get the latest state
-    const messages = await readMailbox(agentName, teamName)
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: read ${messages.length} messages after lock`,
-    )
-
-    if (messages.length === 0) {
-      logForDebugging(
-        `[TeammateMailbox] markMessagesAsRead: no messages to mark`,
-      )
-      return
-    }
-
-    const unreadCount = count(messages, m => !m.read)
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: ${unreadCount} unread of ${messages.length} total`,
-    )
-
-    // messages comes from jsonParse — fresh, unshared objects safe to mutate
-    for (const m of messages) m.read = true
-
-    await writeFile(inboxPath, jsonStringify(messages, null, 2), 'utf-8')
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: WROTE ${unreadCount} message(s) as read to ${inboxPath}`,
-    )
-  } catch (error) {
-    const code = getErrnoCode(error)
-    if (code === 'ENOENT') {
-      logForDebugging(
-        `[TeammateMailbox] markMessagesAsRead: file does not exist at ${inboxPath}`,
-      )
-      return
-    }
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead FAILED for ${agentName}: ${error}`,
-    )
-    logError(error)
-  } finally {
-    if (release) {
-      await release()
-      logForDebugging(`[TeammateMailbox] markMessagesAsRead: lock released`)
-    }
-  }
 }
 
 /**
- * Clear a teammate's inbox (delete all messages)
+ * Clear a teammate's inbox. The messages leave the live inbox but remain in
+ * its history.
  * @param agentName - The agent name to clear inbox for
  * @param teamName - Optional team name
  */
@@ -385,9 +569,12 @@ export async function clearMailbox(
   const inboxPath = getInboxPath(agentName, teamName)
 
   try {
-    // flag 'r+' throws ENOENT if the file doesn't exist, so we don't
-    // accidentally create an inbox file that wasn't there.
-    await writeFile(inboxPath, '[]', { encoding: 'utf-8', flag: 'r+' })
+    // Locking a missing file fails with ENOENT, so a clear never creates one.
+    await updateInbox(inboxPath, messages =>
+      messages.map(message =>
+        message.read ? message : { ...message, read: true },
+      ),
+    )
     logForDebugging(`[TeammateMailbox] Cleared inbox for ${agentName}`)
   } catch (error) {
     const code = getErrnoCode(error)
@@ -399,25 +586,38 @@ export async function clearMailbox(
   }
 }
 
+type TeammateMessageEnvelope = {
+  from: string
+  text: string
+  color?: string
+  summary?: string
+}
+
+/**
+ * Formats one teammate message as the `<teammate-message>` block that models
+ * and transcript renderers parse. Attribute values are escaped so a sender
+ * name, color or summary can neither end its attribute nor forge another
+ * envelope.
+ */
+export function formatTeammateMessage(
+  message: TeammateMessageEnvelope,
+): string {
+  const colorAttr = message.color
+    ? ` color="${escapeXmlAttr(message.color)}"`
+    : ''
+  const summaryAttr = message.summary
+    ? ` summary="${escapeXmlAttr(message.summary)}"`
+    : ''
+  return `<${TEAMMATE_MESSAGE_TAG} teammate_id="${escapeXmlAttr(message.from)}"${colorAttr}${summaryAttr}>\n${message.text}\n</${TEAMMATE_MESSAGE_TAG}>`
+}
+
 /**
  * Format teammate messages as XML for attachment display
  */
 export function formatTeammateMessages(
-  messages: Array<{
-    from: string
-    text: string
-    timestamp: string
-    color?: string
-    summary?: string
-  }>,
+  messages: readonly TeammateMessageEnvelope[],
 ): string {
-  return messages
-    .map(m => {
-      const colorAttr = m.color ? ` color="${m.color}"` : ''
-      const summaryAttr = m.summary ? ` summary="${m.summary}"` : ''
-      return `<${TEAMMATE_MESSAGE_TAG} teammate_id="${m.from}"${colorAttr}${summaryAttr}>\n${m.text}\n</${TEAMMATE_MESSAGE_TAG}>`
-    })
-    .join('\n\n')
+  return messages.map(formatTeammateMessage).join('\n\n')
 }
 
 /**
@@ -434,6 +634,63 @@ export type IdleNotificationMessage = {
   completedTaskId?: string
   completedStatus?: 'resolved' | 'blocked' | 'failed'
   failureReason?: string
+  /** The agent's final response this turn, capped by capIdleResult */
+  result?: string
+}
+
+/** Longest final response an idle notification carries. */
+export const IDLE_RESULT_MAX_CHARS = 4000
+/** Longest failure reason (a single line) an idle notification carries. */
+export const IDLE_FAILURE_REASON_MAX_CHARS = 200
+
+const IDLE_RESULT_TRUNCATED = `[result truncated — ask the agent for the rest via ${SEND_MESSAGE_TOOL_NAME}]`
+
+// C0/C1 controls except tab and newline, line/paragraph separators, and
+// invisible format characters other than the joiners real text relies on.
+const CONTROL_CHARACTERS =
+  /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u2028\u2029]|(?![\u200C\u200D])\p{Cf}/gu
+
+function stripControlCharacters(text: string): string {
+  return text.replace(CONTROL_CHARACTERS, '')
+}
+
+/** First `max` UTF-16 units, without splitting a surrogate pair. */
+function truncateText(text: string, max: number): string {
+  if (text.length <= max) return text
+  const head = text.slice(0, max)
+  const last = head.charCodeAt(head.length - 1)
+  return last >= 0xd800 && last <= 0xdbff ? head.slice(0, -1) : head
+}
+
+/**
+ * Caps an agent's final response for an idle notification: control
+ * characters removed and at most IDLE_RESULT_MAX_CHARS, followed by a marker
+ * when cut. The marker points the lead at SendMessage only while the agent
+ * can still answer.
+ */
+export function capIdleResult(
+  result: string | undefined,
+  senderReachable = true,
+): string | undefined {
+  const text = stripControlCharacters(result?.trim() ?? '').trim()
+  if (!text) return undefined
+  const head = truncateText(text, IDLE_RESULT_MAX_CHARS)
+  if (head.length === text.length) return text
+  const marker = senderReachable ? IDLE_RESULT_TRUNCATED : '[result truncated]'
+  return `${head}\n${marker}`
+}
+
+/**
+ * First line of a failure reason, control characters removed, at most
+ * IDLE_FAILURE_REASON_MAX_CHARS.
+ */
+export function capIdleFailureReason(
+  reason: string | undefined,
+): string | undefined {
+  const line = stripControlCharacters(
+    firstLineOf(reason?.trim() ?? ''),
+  ).trim()
+  return line ? truncateText(line, IDLE_FAILURE_REASON_MAX_CHARS) : undefined
 }
 
 /**
@@ -447,6 +704,8 @@ export function createIdleNotification(
     completedTaskId?: string
     completedStatus?: 'resolved' | 'blocked' | 'failed'
     failureReason?: string
+    /** The agent's final response; capped with capIdleResult */
+    result?: string
   },
 ): IdleNotificationMessage {
   return {
@@ -457,7 +716,8 @@ export function createIdleNotification(
     summary: options?.summary,
     completedTaskId: options?.completedTaskId,
     completedStatus: options?.completedStatus,
-    failureReason: options?.failureReason,
+    failureReason: capIdleFailureReason(options?.failureReason),
+    result: capIdleResult(options?.result, options?.idleReason !== 'failed'),
   }
 }
 
@@ -1193,48 +1453,32 @@ export function isStructuredProtocolMessage(messageText: string): boolean {
 
 /**
  * Marks only messages matching a predicate as read, leaving others unread.
- * Uses the same file-locking mechanism as markMessagesAsRead.
+ * Uses the same locked, archiving update as claimMailboxMessages.
+ * @returns false when the inbox could not be updated
  */
 export async function markMessagesAsReadByPredicate(
   agentName: string,
   predicate: (msg: TeammateMessage) => boolean,
   teamName?: string,
-): Promise<void> {
+): Promise<boolean> {
   const inboxPath = getInboxPath(agentName, teamName)
 
-  const lockFilePath = `${inboxPath}.lock`
-  let release: (() => Promise<void>) | undefined
-
   try {
-    release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
-      ...LOCK_OPTIONS,
-    })
-
-    const messages = await readMailbox(agentName, teamName)
-    if (messages.length === 0) {
-      return
-    }
-
-    const updatedMessages = messages.map(m =>
-      !m.read && predicate(m) ? { ...m, read: true } : m,
+    await updateInbox(inboxPath, messages =>
+      messages.map(m => (!m.read && predicate(m) ? { ...m, read: true } : m)),
     )
-
-    await writeFile(inboxPath, jsonStringify(updatedMessages, null, 2), 'utf-8')
+    return true
   } catch (error) {
     const code = getErrnoCode(error)
     if (code === 'ENOENT') {
-      return
+      return true
     }
-    logError(error)
-  } finally {
-    if (release) {
-      try {
-        await release()
-      } catch {
-        // Lock may have already been released
-      }
-    }
+    logForDebugging(
+      `[TeammateMailbox] markMessagesAsReadByPredicate failed for ${agentName}: ${error}`,
+      { level: 'warn' },
+    )
+    if (code !== 'ELOCKED') logError(error)
+    return false
   }
 }
 

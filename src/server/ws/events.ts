@@ -201,8 +201,15 @@ export type TeamMemberStatus = {
    * Omitted when the watcher cannot tell, so a receiver keeps whatever the last
    * full team read established rather than being told the member went quiet.
    */
-  activity?: 'active' | 'idle' | 'exited' | 'unknown'
+  activity?: 'active' | 'idle' | 'exited' | 'stopped' | 'unknown'
   currentTask?: string
+  /**
+   * Why the member's last turn failed; `null` says it has recovered. Only the
+   * process-backed (desktop) runtime records it.
+   */
+  lastError?: string | null
+  /** A pending automatic continuation after a transient provider failure; `null` once settled. */
+  autoRetry?: { attempt: number; max: number; nextAt: number } | null
 }
 
 export type ComputerUseGrantFlags = {

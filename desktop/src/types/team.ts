@@ -13,8 +13,20 @@ export type TeamSummary = {
  * an `in_progress` task is evidence of neither: a teammate marks a task started
  * and can then end its turn, and an umbrella task stays open underneath every
  * turn it covers.
+ *
+ * `stopped` is a member whose process is gone (the user's Stop, a crash, a
+ * closed lead). Unlike `exited`, it is still on the team: a message restarts it
+ * from its saved conversation.
  */
-export type TeamMemberActivity = 'active' | 'idle' | 'exited' | 'unknown'
+export type TeamMemberActivity = 'active' | 'idle' | 'exited' | 'stopped' | 'unknown'
+
+/** An automatic continuation the server scheduled after a transient provider failure. */
+export type TeamMemberAutoRetry = {
+  attempt: number
+  max: number
+  /** Epoch milliseconds. */
+  nextAt: number
+}
 
 export type TeamMember = {
   agentId: string
@@ -22,6 +34,9 @@ export type TeamMember = {
   role: string
   status: 'running' | 'idle' | 'completed' | 'error'
   activity?: TeamMemberActivity
+  /** Why the member's last turn failed. Kept while an automatic retry is pending. */
+  lastError?: string
+  autoRetry?: TeamMemberAutoRetry
   currentTask?: string
   color?: AgentColor
   sessionId?: string

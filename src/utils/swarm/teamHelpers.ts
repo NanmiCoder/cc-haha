@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { readFileSync } from 'fs'
-import { access, mkdir, readFile, rename, rm, writeFile } from 'fs/promises'
+import { access, mkdir, readdir, readFile, rename, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { z } from 'zod/v4'
 import { getSessionCreatedTeams } from '../../bootstrap/state.js'
@@ -28,6 +28,7 @@ import {
 import { getAgentName, getTeamName, isTeammate } from '../teammate.js'
 import { type BackendType, isPaneBackend } from './backends/types.js'
 import { TEAM_LEAD_NAME } from './constants.js'
+import { isTeamReviewRequired } from './teamPlanPolicy.js'
 
 export const inputSchema = lazySchema(() =>
   z.strictObject({
@@ -105,6 +106,10 @@ export type TeamFile = {
     backendType?: BackendType
     isActive?: boolean // false when idle, undefined/true when active
     mode?: PermissionMode // Current permission mode for this teammate
+    /** First line of the error that ended the member's last turn, if it failed. */
+    lastError?: string
+    /** Pending automatic continuation after a transient provider failure. */
+    autoRetry?: { attempt: number; max: number; nextAt: number }
   }>
 }
 
@@ -167,6 +172,33 @@ export function readTeamFile(teamName: string): TeamFile | null {
     )
     return null
   }
+}
+
+/**
+ * Every name, agent id and session id by which a member of a team led by
+ * `leadSessionId` can be addressed, so a lead's tools can tell its own
+ * members apart from other sessions.
+ */
+export async function listLeadTeamMemberIdentities(
+  leadSessionId: string,
+): Promise<string[]> {
+  let teamNames: string[]
+  try {
+    teamNames = await readdir(getTeamsDir())
+  } catch {
+    return []
+  }
+  const identities: string[] = []
+  for (const teamName of teamNames) {
+    const team = readTeamFile(teamName)
+    if (team?.leadSessionId !== leadSessionId) continue
+    for (const member of team.members) {
+      if (member.name === TEAM_LEAD_NAME) continue
+      identities.push(member.name, member.agentId)
+      if (member.sessionId) identities.push(member.sessionId)
+    }
+  }
+  return identities
 }
 
 /**
@@ -713,6 +745,16 @@ export function unregisterTeamForSessionCleanup(
 export async function cleanupSessionTeams(): Promise<void> {
   const sessionCreatedTeams = getSessionCreatedTeams()
   if (sessionCreatedTeams.size === 0) return
+  // A desktop-hosted lead process is replaced on every provider/permission
+  // change, crash or reopen while its session lives on. Its reviewed team
+  // belongs to the desktop server, which ends it on /clear, session deletion
+  // or TeamDelete; deleting it here destroyed running teams on every restart.
+  if (isTeamReviewRequired()) {
+    logForDebugging(
+      `cleanupSessionTeams: keeping ${sessionCreatedTeams.size} desktop-owned team dir(s)`,
+    )
+    return
+  }
   const teams = Array.from(sessionCreatedTeams.entries())
   logForDebugging(
     `cleanupSessionTeams: removing ${teams.length} orphan team dir(s): ${teams.map(([name]) => name).join(', ')}`,

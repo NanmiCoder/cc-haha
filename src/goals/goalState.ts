@@ -230,6 +230,7 @@ function looksLikeGoalStatusOutput(output: string): boolean {
   return (
     trimmed.startsWith('Goal set:') ||
     trimmed.startsWith('Goal continuing:') ||
+    trimmed.startsWith('Goal waiting for teammates:') ||
     trimmed.startsWith('Goal cleared:') ||
     trimmed === 'Goal cleared.' ||
     trimmed === 'Goal marked complete.' ||

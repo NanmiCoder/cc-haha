@@ -9,6 +9,7 @@ import {
   resolvePersistedAgentType,
   runAgent,
   selectInitialTranscriptMessages,
+  selectUnrecordedTranscriptMessages,
   resolveSubagentEffortValue,
   resolveSubagentThinkingConfig,
 } from './runAgent.js'
@@ -40,6 +41,41 @@ describe('subagent runtime configuration', () => {
       undefined,
     )).toEqual({
       messages: [persisted, continuation],
+      startingParentUuid: undefined,
+    })
+  })
+
+  test('appends only what follows the last recorded message of a long-lived transcript', () => {
+    const recorded = createUserMessage({ content: 'old prompt' })
+    const recordedAnswer = createUserMessage({ content: 'old tool result' })
+    const notRecorded = createUserMessage({ content: 'kept in memory only' })
+    const next = createUserMessage({ content: 'new prompt' })
+
+    expect(selectUnrecordedTranscriptMessages(
+      [recorded, notRecorded, recordedAnswer, next],
+      new Set([recorded.uuid, recordedAnswer.uuid]),
+    )).toEqual({
+      messages: [next],
+      startingParentUuid: recordedAnswer.uuid,
+    })
+    // Progress entries are recorded but never chained to
+    const recordedProgress = {
+      type: 'progress',
+      uuid: '00000000-0000-4000-8000-000000000001',
+    } as unknown as Parameters<typeof selectUnrecordedTranscriptMessages>[0][number]
+    expect(selectUnrecordedTranscriptMessages(
+      [recorded, recordedProgress, next],
+      new Set([recorded.uuid, recordedProgress.uuid]),
+    )).toEqual({
+      messages: [next],
+      startingParentUuid: recorded.uuid,
+    })
+    // Nothing recorded yet: a new teammate, or history replaced by compaction
+    expect(selectUnrecordedTranscriptMessages(
+      [notRecorded, next],
+      new Set(),
+    )).toEqual({
+      messages: [notRecorded, next],
       startingParentUuid: undefined,
     })
   })

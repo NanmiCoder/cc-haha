@@ -54,4 +54,32 @@ describe('StreamAssistantCommitBuffer', () => {
     expect(buffer.flushWithoutToolUse()).toEqual([thinking])
     expect(buffer.flush()).toEqual([])
   })
+
+  test('a deferred tool crosses the boundary without committing, so the attempt stays replayable', () => {
+    const buffer = new StreamAssistantCommitBuffer<ReturnType<typeof assistant>>({
+      deferToolUseCommit: true,
+    })
+
+    buffer.add(assistant('text'), 'text')
+    buffer.add(assistant('tool'), 'tool_use')
+    buffer.add(assistant('after-tool'), 'text')
+    expect(buffer.hasCrossedSideEffectBoundary()).toBe(true)
+    expect(buffer.hasCommitted()).toBe(false)
+
+    expect(buffer.flush().map(message => message.uuid)).toEqual(['text', 'tool', 'after-tool'])
+    expect(buffer.hasCommitted()).toBe(true)
+  })
+
+  test('commits as soon as anything is handed out', () => {
+    const serverTool = new StreamAssistantCommitBuffer<ReturnType<typeof assistant>>({
+      deferToolUseCommit: true,
+    })
+    serverTool.add(assistant('server-tool'), 'server_tool_use')
+    expect(serverTool.hasCommitted()).toBe(true)
+
+    const empty = new StreamAssistantCommitBuffer<ReturnType<typeof assistant>>()
+    expect(empty.flush()).toEqual([])
+    expect(empty.flushWithoutToolUse()).toEqual([])
+    expect(empty.hasCommitted()).toBe(false)
+  })
 })

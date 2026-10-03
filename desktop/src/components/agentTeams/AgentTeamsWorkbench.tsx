@@ -518,6 +518,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                 member={selectedMember}
                 isLead={selectedMemberIsLead}
                 leadIsStreaming={leadIsStreaming}
+                now={followingLive ? now : undefined}
                 onBack={() => setSelectedMemberId(null)}
                 onClose={closeCommunication}
                 onOpenExecution={openSelectedExecution}

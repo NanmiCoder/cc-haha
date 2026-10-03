@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
@@ -154,6 +154,17 @@ describe('whole-team planning tools', () => {
     expect(resolveProposedTeamPlan(proposal, context).members[0]?.runtime.effortLevel).toBe('high')
     const explicit = { ...proposal, members: [{ ...proposal.members[0]!, runtime: { providerId: 'fake-provider', modelId: 'plain-model' } }] }
     expect(resolveProposedTeamPlan(explicit, context).members[0]?.runtime.effortLevel).toBeUndefined()
+  })
+
+  test('a suggested runtime naming an unknown provider falls back to the leader runtime', async () => {
+    const proposal = (providerId: string) => ({ members: [{ id: 'w', name: 'w', prompt: 'Work', runtime: { providerId, modelId: 'claude-sonnet-5-5' } }], tasks: [] })
+    // The model cannot see provider ids; a guess must not fail approval or
+    // move the member to a different, billed provider.
+    expect(resolveProposedTeamPlan(proposal('anthropic'), context).members[0]?.runtime).toEqual({ providerId: 'fake-provider', modelId: 'fake-model' })
+    expect(resolveProposedTeamPlan(proposal('claude-official'), context).members[0]?.runtime.providerId).toBe('fake-provider')
+    await mkdir(join(directory, 'cc-haha'), { recursive: true })
+    await writeFile(join(directory, 'cc-haha', 'providers.json'), JSON.stringify({ schemaVersion: 6, activeId: null, providers: [{ id: 'configured-provider', presetId: 'custom', name: 'Configured', apiKey: 'fake', baseUrl: 'http://127.0.0.1:1', apiFormat: 'anthropic', models: { main: 'm', haiku: 'm', sonnet: 'm', opus: 'm' } }] }))
+    expect(resolveProposedTeamPlan(proposal('configured-provider'), context).members[0]?.runtime).toEqual({ providerId: 'configured-provider', modelId: 'claude-sonnet-5-5' })
   })
 
   test('inline MCP credentials never enter the durable catalog or a proposed member', async () => {

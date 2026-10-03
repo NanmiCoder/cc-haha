@@ -109,10 +109,15 @@ export async function runDesktopUiTeamPlanSmoke(options: {
   await browserStep(['wait', '--fn', '!document.querySelector("[data-testid=team-plan-open]") && !document.querySelector("[data-testid=team-plan-approve]")'])
   await browserStep(['wait', 'button[aria-label="Stop"]'])
   await browserStep(['click', 'button[aria-label="Stop"]'])
-  await until(async () => (await getPlan()).state === 'interrupted', 'visible Stop to interrupt the running team')
+  // Stop pauses an approved team: every worker stops and keeps its saved
+  // conversation, and the plan stays running so a later message resumes it.
   await until(async () => {
     const team = JSON.parse(readFileSync(join(configDir, 'teams', TEAM_SMOKE_TEAM, 'config.json'), 'utf8'))
-    return team.members.filter((member: { name: string }) => member.name !== 'team-lead').every((member: { isActive?: boolean }) => member.isActive === false)
-  }, 'stopped workers to become inactive')
+    return team.members
+      .filter((member: { name: string }) => member.name !== 'team-lead')
+      .every((member: { isActive?: boolean; terminated?: boolean }) => member.isActive === false && member.terminated === true)
+  }, 'visible Stop to stop every running team worker')
+  const paused = await getPlan()
+  if (paused.state !== 'running') throw new Error(`Stop ended the approved team instead of pausing it (plan ${paused.state})`)
   await browserStep(['screenshot', join(artifactDir, 'team-review-stopped.png')], { allowFailure: true })
 }

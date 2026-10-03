@@ -401,4 +401,49 @@ describe('AgentTeamsCanvas', () => {
     const lead = screen.queryByTestId('agent-teams-canvas-member-model-team-lead@canvas-team')
     expect(lead).toBeNull()
   })
+
+  it('labels stopped, retrying and failed members and keeps their failure on hover', () => {
+    const current = snapshot('current')
+    const recovering: TeamWorkbenchSnapshot = {
+      ...current,
+      team: {
+        ...current.team,
+        members: current.team.members.map(member => (
+          member.agentId === 'builder@canvas-team'
+            ? {
+                ...member,
+                status: 'idle' as const,
+                activity: 'idle' as const,
+                lastError: 'API Error: 529 overloaded',
+                autoRetry: { attempt: 2, max: 5, nextAt: Date.parse('2026-08-12T02:30:45.000Z') },
+              }
+            : member.agentId === 'reviewer@canvas-team'
+              ? { ...member, status: 'idle' as const, activity: 'stopped' as const }
+              : member.agentId === 'qa@canvas-team'
+                ? { ...member, status: 'error' as const, activity: 'idle' as const, lastError: 'Credit balance is too low' }
+                : member
+        )),
+      },
+    }
+
+    render(<AgentTeamsCanvas {...props({
+      snapshots: [recovering],
+      selectedIndex: 0,
+      snapshot: recovering,
+      previousSnapshot: undefined,
+      activeMessageId: null,
+    })} />)
+
+    const builder = screen.getByTestId('agent-teams-canvas-member-builder@canvas-team')
+    expect(builder.getAttribute('data-member-state')).toBe('retrying')
+    expect(screen.getByText('Auto-retry 2/5').getAttribute('title')).toBe('API Error: 529 overloaded')
+
+    const reviewer = screen.getByTestId('agent-teams-canvas-member-reviewer@canvas-team')
+    expect(reviewer.getAttribute('data-member-state')).toBe('stopped')
+    expect(reviewer.textContent).toContain('Stopped')
+
+    const qa = screen.getByTestId('agent-teams-canvas-member-qa@canvas-team')
+    expect(qa.getAttribute('data-member-state')).toBe('error')
+    expect(screen.getByText('Error').getAttribute('title')).toBe('Credit balance is too low')
+  })
 })

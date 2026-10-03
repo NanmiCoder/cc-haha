@@ -1,5 +1,20 @@
 import { describe, expect, test } from 'bun:test'
-import { shouldTriggerNonStreamingFallbackForEmptyStream } from './streamFallback.js'
+import {
+  shouldTriggerNonStreamingFallbackForEmptyStream,
+  StreamEndedEarlyError,
+} from './streamFallback.js'
+
+describe('StreamEndedEarlyError', () => {
+  test('keeps the user-visible wording that error matchers key on', () => {
+    expect(new StreamEndedEarlyError('no_events').message).toBe(
+      'Stream ended without receiving any events',
+    )
+    expect(new StreamEndedEarlyError('incomplete').message).toBe(
+      'Provider stream ended before completing the response',
+    )
+    expect(new StreamEndedEarlyError('incomplete')).toBeInstanceOf(Error)
+  })
+})
 
 describe('stream fallback policy', () => {
   test('falls back when a stream never produced message_start', () => {

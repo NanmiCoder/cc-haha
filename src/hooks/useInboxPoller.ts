@@ -2,7 +2,6 @@ import { randomUUID } from 'crypto'
 import { useCallback, useEffect, useRef } from 'react'
 import { useInterval } from 'usehooks-ts'
 import type { ToolUseConfirm } from '../components/permissions/PermissionRequest.js'
-import { TEAMMATE_MESSAGE_TAG } from '../constants/xml.js'
 import { useTerminalNotification } from '../ink/useTerminalNotification.js'
 import { sendNotification } from '../services/notifier.js'
 import {
@@ -50,6 +49,7 @@ import {
 } from '../utils/teammate.js'
 import { isInProcessTeammate } from '../utils/teammateContext.js'
 import {
+  formatTeammateMessages,
   getTrustedShutdownApproval,
   isModeSetRequest,
   isPermissionRequest,
@@ -62,8 +62,7 @@ import {
   isShutdownRequest,
   isTeamPermissionUpdate,
   isTrustedTeamLeaderMessage,
-  markMessagesAsRead,
-  markMessagesAsReadByPredicate,
+  markMessagesAsReadByIdentity,
   readUnreadMessages,
   type TeammateMessage,
   writeToMailbox,
@@ -139,8 +138,9 @@ export function useInboxPoller({
   const setAppState = useSetAppState()
   const inboxMessageCount = useAppState(s => s.inbox.messages.length)
   const terminal = useTerminalNotification()
+  const pollInFlightRef = useRef(false)
 
-  const poll = useCallback(async () => {
+  const pollInbox = useCallback(async () => {
     if (!enabled) return
 
     // Use ref to avoid dependency on appState object (prevents infinite loop)
@@ -203,16 +203,17 @@ export function useInboxPoller({
 
     // Helper to mark messages as read in the inbox file.
     // Called after messages are successfully delivered or reliably queued.
-    const markRead = () => {
-      if (deferShutdownApprovals) {
-        void markMessagesAsReadByPredicate(
-          agentName,
-          message => !isShutdownApproved(message.text),
-          currentAppState.teamContext?.teamName,
-        )
-        return
-      }
-      void markMessagesAsRead(agentName, currentAppState.teamContext?.teamName)
+    // Acknowledges exactly this poll's batch: anything that arrived after the
+    // read stays unread for the next poll.
+    const markRead = async () => {
+      const processed = deferShutdownApprovals
+        ? unread.filter(message => !isShutdownApproved(message.text))
+        : unread
+      await markMessagesAsReadByIdentity(
+        agentName,
+        currentAppState.teamContext?.teamName,
+        processed,
+      )
     }
 
     // Separate permission messages from regular teammate messages
@@ -349,7 +350,7 @@ export function useInboxPoller({
             },
           }
 
-          // Deduplicate: if markMessagesAsRead failed on a prior poll,
+          // Deduplicate: if acknowledging failed on a prior poll,
           // the same message will be re-read — skip if already queued.
           setToolUseConfirmQueue(queue => {
             if (queue.some(q => q.toolUseID === parsed.tool_use_id)) {
@@ -828,21 +829,13 @@ export function useInboxPoller({
     if (regularMessages.length === 0) {
       // No regular messages, but we may have processed non-regular messages
       // (permissions, shutdown requests, etc.) above — mark those as read.
-      markRead()
+      await markRead()
       return
     }
 
     // Format messages with XML wrapper for Claude (include color if available)
     // Transform plan approval requests to include instructions for Claude
-    const formatted = regularMessages
-      .map(m => {
-        const colorAttr = m.color ? ` color="${m.color}"` : ''
-        const summaryAttr = m.summary ? ` summary="${m.summary}"` : ''
-        const messageContent = m.text
-
-        return `<${TEAMMATE_MESSAGE_TAG} teammate_id="${m.from}"${colorAttr}${summaryAttr}>\n${messageContent}\n</${TEAMMATE_MESSAGE_TAG}>`
-      })
-      .join('\n\n')
+    const formatted = formatTeammateMessages(regularMessages)
 
     // Helper to queue messages in AppState for later delivery
     const queueMessages = () => {
@@ -886,7 +879,7 @@ export function useInboxPoller({
     // or reliably queued in AppState. This prevents permanent message loss
     // when the session is busy — if we crash before this point, the messages
     // will be re-read on the next poll cycle instead of being silently dropped.
-    markRead()
+    await markRead()
   }, [
     enabled,
     isLoading,
@@ -896,6 +889,19 @@ export function useInboxPoller({
     terminal,
     store,
   ])
+
+  // The interval fires every second whether or not the previous poll has
+  // finished. A poll that is still delivering has not acknowledged its batch
+  // yet, so an overlapping poll would read and deliver the same messages again.
+  const poll = useCallback(async () => {
+    if (pollInFlightRef.current) return
+    pollInFlightRef.current = true
+    try {
+      await pollInbox()
+    } finally {
+      pollInFlightRef.current = false
+    }
+  }, [pollInbox])
 
   // When session becomes idle, deliver any pending messages and clean up processed ones
   useEffect(() => {
@@ -940,13 +946,7 @@ export function useInboxPoller({
     )
 
     // Format messages with XML wrapper for Claude (include color if available)
-    const formatted = pendingMessages
-      .map(m => {
-        const colorAttr = m.color ? ` color="${m.color}"` : ''
-        const summaryAttr = m.summary ? ` summary="${m.summary}"` : ''
-        return `<${TEAMMATE_MESSAGE_TAG} teammate_id="${m.from}"${colorAttr}${summaryAttr}>\n${m.text}\n</${TEAMMATE_MESSAGE_TAG}>`
-      })
-      .join('\n\n')
+    const formatted = formatTeammateMessages(pendingMessages)
 
     // Try to submit - only clear messages if successful
     const submitted = onSubmitTeammateMessage(formatted)

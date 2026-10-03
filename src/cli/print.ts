@@ -165,7 +165,7 @@ import {
   DEFAULT_OUTPUT_STYLE_NAME,
   getAllOutputStyles,
 } from 'src/constants/outputStyles.js'
-import { TEAMMATE_MESSAGE_TAG, TICK_TAG } from 'src/constants/xml.js'
+import { TICK_TAG } from 'src/constants/xml.js'
 import {
   getSettings_DEPRECATED,
   getSettingsWithSources,
@@ -358,8 +358,10 @@ import { TEAM_LEAD_NAME } from '../utils/swarm/constants.js'
 import { SHUTDOWN_TEAM_PROMPT } from '../utils/swarm/teamShutdownPrompt.js'
 import {
   readUnreadMessages,
-  markMessagesAsRead,
+  claimMailboxMessages,
+  formatTeammateMessages,
   isShutdownApproved,
+  type TeammateMessage,
 } from '../utils/teammateMailbox.js'
 import {
   partitionLeadMailboxMessages,
@@ -422,6 +424,92 @@ export function createShutdownTeamPrompt(): QueuedCommand {
     uuid: randomUUID(),
     isMeta: true,
   }
+}
+
+/**
+ * Polls in a row whose batch could not be acknowledged before the batch is
+ * processed anyway: delivering twice beats never delivering.
+ */
+export const MAX_LEAD_MAILBOX_ACK_FAILURES = 5
+
+export type LeadMailboxPollState = {
+  /** The unread mail left once the last teammate went away was drained. */
+  finalDrainDone: boolean
+  /** Consecutive polls whose batch could not be acknowledged. */
+  consecutiveAckFailures: number
+}
+
+export function createLeadMailboxPollState(): LeadMailboxPollState {
+  return { finalDrainDone: false, consecutiveAckFailures: 0 }
+}
+
+export type LeadMailboxPollStep =
+  | { kind: 'stop' }
+  | { kind: 'idle' }
+  | { kind: 'retry' }
+  | { kind: 'batch'; messages: TeammateMessage[] }
+
+/**
+ * One poll of the team lead's inbox. The batch is claimed (acknowledged by
+ * identity) before it is handed out, so mail that lands after the read stays
+ * unread and a concurrent mid-turn attachment can never deliver the same
+ * message again. When no teammate remains, unread mail gets one final drain
+ * instead of being stranded.
+ */
+export async function takeLeadMailboxBatch(
+  state: LeadMailboxPollState,
+  options: { teamName: string | undefined; hasActiveTeammates: boolean },
+): Promise<LeadMailboxPollStep> {
+  const { teamName, hasActiveTeammates } = options
+  const unread = await readUnreadMessages(TEAM_LEAD_NAME, teamName)
+
+  if (!hasActiveTeammates) {
+    if (
+      unread.length === 0 ||
+      state.finalDrainDone ||
+      state.consecutiveAckFailures >= MAX_LEAD_MAILBOX_ACK_FAILURES
+    ) {
+      if (unread.length === 0) {
+        Object.assign(state, createLeadMailboxPollState())
+      }
+      return { kind: 'stop' }
+    }
+    state.finalDrainDone = true
+  } else {
+    state.finalDrainDone = false
+  }
+
+  if (unread.length === 0) {
+    state.consecutiveAckFailures = 0
+    return { kind: 'idle' }
+  }
+
+  const claimed = await claimMailboxMessages(TEAM_LEAD_NAME, teamName, unread)
+  if (claimed) {
+    state.consecutiveAckFailures = 0
+    if (claimed.length === 0) {
+      // Another consumer (a mid-turn attachment) took the whole batch.
+      return hasActiveTeammates ? { kind: 'idle' } : { kind: 'stop' }
+    }
+    return { kind: 'batch', messages: claimed }
+  }
+
+  state.consecutiveAckFailures += 1
+  if (
+    hasActiveTeammates &&
+    state.consecutiveAckFailures < MAX_LEAD_MAILBOX_ACK_FAILURES
+  ) {
+    logForDebugging(
+      `[print.ts] Could not mark ${unread.length} inbox message(s) read (${state.consecutiveAckFailures}/${MAX_LEAD_MAILBOX_ACK_FAILURES}); retrying next poll`,
+      { level: 'warn' },
+    )
+    return { kind: 'retry' }
+  }
+  logForDebugging(
+    `[print.ts] Could not mark ${unread.length} inbox message(s) read for ${state.consecutiveAckFailures} polls; processing the batch unmarked`,
+    { level: 'warn' },
+  )
+  return { kind: 'batch', messages: unread }
 }
 
 // Track message UUIDs received during the current session runtime
@@ -1114,6 +1202,7 @@ function runHeadlessStreaming(
     | undefined
   let inputClosed = false
   let shutdownPromptInjected = false
+  const leadMailboxPoll = createLeadMailboxPollState()
   let heldBackResult: StdoutMessage | null = null
   const deferredAgentNotifications = new TaskNotificationFollowUpBatch()
   let abortController: AbortController | undefined
@@ -2581,8 +2670,6 @@ function runHeadlessStreaming(
       const teamContext = currentAppState.teamContext
 
       if (teamContext && isTeamLead(teamContext)) {
-        const agentName = 'team-lead'
-
         // Poll for messages while teammates are active
         // This is needed because teammates may send messages while we're waiting
         // Keep polling until the team is shut down
@@ -2591,32 +2678,32 @@ function runHeadlessStreaming(
         while (true) {
           // Check if teammates are still active
           const refreshedState = getAppState()
-          const hasActiveTeammates = hasTeammatesRequiringShutdown(refreshedState)
+          const teamName = refreshedState.teamContext?.teamName
+          // Claims exactly the batch it read before handing it out, and
+          // drains leftover mail once after the last teammate is gone.
+          const step = await takeLeadMailboxBatch(leadMailboxPoll, {
+            teamName,
+            hasActiveTeammates: hasTeammatesRequiringShutdown(refreshedState),
+          })
 
-          if (!hasActiveTeammates) {
+          if (step.kind === 'stop') {
             logForDebugging(
               '[print.ts] No more active teammates, stopping poll',
             )
             break
           }
 
-          const unread = await readUnreadMessages(
-            agentName,
-            refreshedState.teamContext?.teamName,
-          )
+          if (step.kind === 'retry') {
+            await sleep(POLL_INTERVAL_MS)
+            continue
+          }
 
-          if (unread.length > 0) {
+          if (step.kind === 'batch') {
+            const unread = step.messages
             logForDebugging(
               `[print.ts] Team-lead found ${unread.length} unread messages`,
             )
 
-            // Mark as read immediately to avoid duplicate processing
-            await markMessagesAsRead(
-              agentName,
-              refreshedState.teamContext?.teamName,
-            )
-
-            const teamName = refreshedState.teamContext?.teamName
             const partitioned = partitionLeadMailboxMessages(unread)
 
             if (
@@ -2695,12 +2782,7 @@ function runHeadlessStreaming(
 
             // Format remaining teammate chat the same way as useInboxPoller.
             // Permission requests stay out of the model context.
-            const formatted = partitioned.remaining
-              .map(
-                (m: { from: string; text: string; color?: string }) =>
-                  `<${TEAMMATE_MESSAGE_TAG} teammate_id="${m.from}"${m.color ? ` color="${m.color}"` : ''}>\n${m.text}\n</${TEAMMATE_MESSAGE_TAG}>`,
-              )
-              .join('\n\n')
+            const formatted = formatTeammateMessages(partitioned.remaining)
 
             // Enqueue and process
             enqueue({

@@ -137,6 +137,8 @@ describe('TeamWatcher.extractMemberStatuses', () => {
       status: 'running',
       activity: 'active',
       currentTask: undefined,
+      lastError: null,
+      autoRetry: null,
     })
     expect(statuses[1]).toEqual({
       agentId: 'agent-worker',
@@ -144,7 +146,24 @@ describe('TeamWatcher.extractMemberStatuses', () => {
       status: 'idle',
       activity: 'idle',
       currentTask: undefined,
+      lastError: null,
+      autoRetry: null,
     })
+  })
+
+  it('reports a stopped process member, a failed turn, and a pending automatic retry', () => {
+    const config = makeTeamConfig()
+    const [lead, worker] = config.members as Array<Record<string, unknown>>
+    Object.assign(worker!, { isActive: false, terminated: true })
+    const stopped = watcher.extractMemberStatuses(config)[1]!
+    // Stopped is restartable by a message, so it is neither idle nor exited.
+    expect(stopped).toMatchObject({ status: 'idle', activity: 'stopped', lastError: null, autoRetry: null })
+
+    Object.assign(worker!, { terminated: false, lastError: 'API Error: 401 authentication_error' })
+    expect(watcher.extractMemberStatuses(config)[1]).toMatchObject({ status: 'error', activity: 'idle', lastError: 'API Error: 401 authentication_error' })
+
+    Object.assign(lead!, { isActive: false, lastError: 'stream_truncated', autoRetry: { attempt: 1, max: 5, nextAt: 123 } })
+    expect(watcher.extractMemberStatuses(config)[0]).toMatchObject({ status: 'idle', lastError: 'stream_truncated', autoRetry: { attempt: 1, max: 5, nextAt: 123 } })
   })
 
   it('reports no activity for a member whose runner never recorded a turn', () => {

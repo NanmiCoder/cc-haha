@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { TeamMember, TeamWorkbenchSnapshot, TeamWorkbenchTask } from '../../types/team'
 import {
   formatWorkbenchMessageTime,
+  getMemberWorkState,
   getWorkbenchPhase,
   getWorkbenchProgress,
   getWorkbenchTaskState,
@@ -542,5 +543,94 @@ describe('Agent Teams member model display', () => {
     const merged = snapshotWithHistoricalMembers([earlier, later], 1)
 
     expect(merged?.team.members[0]?.model).toBe('claude-haiku-4-5')
+  })
+
+  it('drops a failure an earlier frame recorded once a later frame clears it', () => {
+    // The roster records a recovered member by leaving the failure out, so
+    // replaying the earlier frame underneath must not resurrect it.
+    const failed = memberSnapshot('2026-08-08T07:00:00.000Z', [{
+      ...worker,
+      status: 'idle',
+      activity: 'idle',
+      lastError: 'API Error: 529 overloaded',
+      autoRetry: { attempt: 1, max: 5, nextAt: Date.parse('2026-08-08T07:00:15.000Z') },
+    }])
+    const recovered = memberSnapshot('2026-08-08T07:05:00.000Z', [{
+      ...worker,
+      status: 'idle',
+      activity: 'idle',
+    }])
+
+    const replayed = snapshotWithHistoricalMembers([failed, recovered], 1)!.team.members[0]!
+    expect(replayed.lastError).toBeUndefined()
+    expect(replayed.autoRetry).toBeUndefined()
+    expect(getMemberWorkState(replayed)).toBe('idle')
+
+    const earlier = snapshotWithHistoricalMembers([failed, recovered], 0)!.team.members[0]!
+    expect(getMemberWorkState(earlier)).toBe('retrying')
+  })
+})
+
+describe('getMemberWorkState', () => {
+  const retry = { attempt: 2, max: 5, nextAt: Date.parse('2026-08-08T07:00:45.000Z') }
+
+  function member(overrides: Partial<TeamMember>): TeamMember {
+    return {
+      agentId: 'builder@team-a',
+      name: 'builder',
+      role: 'Frontend',
+      status: 'running',
+      ...overrides,
+    }
+  }
+
+  it('keeps stopped, retrying and failed members on the team rather than idle or gone', () => {
+    expect(getMemberWorkState(member({ status: 'idle', activity: 'stopped' }))).toBe('stopped')
+    expect(getMemberWorkState(member({
+      status: 'idle',
+      activity: 'idle',
+      lastError: 'Provider stream ended without message_stop',
+      autoRetry: retry,
+    }))).toBe('retrying')
+    expect(getMemberWorkState(member({
+      status: 'error',
+      activity: 'idle',
+      lastError: 'Credit balance is too low',
+    }))).toBe('error')
+    expect(getMemberWorkState(member({ status: 'completed', activity: 'exited' }))).toBe('exited')
+    expect(getMemberWorkState(member({ status: 'idle', activity: 'exited' }))).toBe('exited')
+  })
+
+  it('lets a live turn and a gone process outrank the failure record', () => {
+    // The runtime keeps the reason until the turn a message started succeeds,
+    // so a failed member that is mid-turn again is recovering, not failed.
+    expect(getMemberWorkState(member({
+      status: 'error',
+      activity: 'active',
+      lastError: 'Credit balance is too low',
+    }))).toBe('working')
+    // An automatic continuation in flight still carries its schedule.
+    expect(getMemberWorkState(member({ activity: 'active', autoRetry: retry }))).toBe('working')
+    // A stopped process never runs the retry it had scheduled, and a message,
+    // not the failure, is what brings it back.
+    expect(getMemberWorkState(member({ status: 'idle', activity: 'stopped', autoRetry: retry }))).toBe('stopped')
+    expect(getMemberWorkState(member({
+      status: 'error',
+      activity: 'stopped',
+      lastError: 'Restart failed: spawn ENOENT',
+    }))).toBe('stopped')
+    // Leaving the team stays final whatever else was recorded.
+    expect(getMemberWorkState(member({
+      status: 'completed',
+      activity: 'stopped',
+      lastError: 'Restart failed',
+      autoRetry: retry,
+    }))).toBe('exited')
+  })
+
+  it('reads the lead from its own session, not from member turn markers', () => {
+    const lead = member({ agentId: 'lead@team-a', activity: 'stopped', autoRetry: retry })
+    expect(getMemberWorkState(lead, { isLead: true, leadIsStreaming: true })).toBe('working')
+    expect(getMemberWorkState(lead, { isLead: true, leadIsStreaming: false })).toBe('idle')
   })
 })

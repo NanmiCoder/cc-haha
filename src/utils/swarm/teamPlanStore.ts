@@ -134,7 +134,7 @@ export async function stageMember(teamName: string, member: TeamPlanMember): Pro
     let plan = await readTeamPlan(teamName)
     if (!plan) throw new TeamPlanError('Create the team draft first')
     await requireCurrent(teamName, { ...plan, expectedRevision: plan.revision })
-    if (await isTeamExecutionApproved(teamName, member.name)) throw new TeamPlanError('A running team already has this member')
+    if (await isTeamExecutionApproved(teamName, member.name)) throw new TeamPlanError(`A running team already has member ${member.name}. Give it more work with SendMessage instead; a stopped member restarts from its saved conversation when messaged.`)
     if (plan.state === 'running') {
       await writeFile(join(getTeamDir(teamName), `plan-${plan.planId}.json`), JSON.stringify(plan, null, 2))
       plan = { ...plan, parentPlanId: plan.planId, planId: randomUUID(), revision: 0, state: 'draft', members: [], tasks: [], approvedSnapshot: undefined, launch: undefined }

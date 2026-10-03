@@ -23,6 +23,7 @@ import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation, type TranslationKey } from '@/i18n'
 import type {
   TeamMember,
+  TeamMemberAutoRetry,
   TeamWorkbenchMessage,
   TeamWorkbenchSnapshot,
   TeamWorkbenchTask,
@@ -35,6 +36,11 @@ export type AgentTeamsMemberInspectorProps = {
   member: TeamMember
   isLead: boolean
   leadIsStreaming: boolean
+  /**
+   * The live clock, for the time left until an automatic retry. Omitted while
+   * replaying, where a countdown from the present would describe nothing.
+   */
+  now?: number
   onBack: () => void
   onClose: () => void
   onOpenExecution: () => void
@@ -190,8 +196,23 @@ function taskTone(state: WorkbenchTaskState): Tone {
 function memberTone(state: MemberWorkState): Tone {
   if (state === 'working') return 'brand'
   if (state === 'error') return 'danger'
+  if (state === 'retrying') return 'warning'
   if (state === 'exited' || state === 'stopped') return 'neutral'
   return 'info'
+}
+
+/** Container and foreground pairs, the same ones `Badge` uses for these tones. */
+function recoveryNoticeClasses(state: MemberWorkState): string {
+  if (state === 'error') return 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+  if (state === 'retrying') return 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
+  return 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
+}
+
+function retryCountdown(autoRetry: TeamMemberAutoRetry, now: number, t: TranslationFn): string {
+  const seconds = Math.ceil((autoRetry.nextAt - now) / 1000)
+  if (seconds <= 0) return t('agentTeams.member.retryNow')
+  if (seconds < 60) return t('agentTeams.member.retryInSeconds', { n: seconds })
+  return t('agentTeams.member.retryInMinutes', { n: Math.round(seconds / 60) })
 }
 
 function leadStatusLabel(snapshot: TeamWorkbenchSnapshot, t: TranslationFn): string {
@@ -283,6 +304,7 @@ export function AgentTeamsMemberInspector({
   member,
   isLead,
   leadIsStreaming,
+  now,
   onBack,
   onClose,
   onOpenExecution,
@@ -324,7 +346,27 @@ export function AgentTeamsMemberInspector({
           ? t('agentTeams.member.waitingForDependency', { task: waitingDependency })
           : workState === 'idle'
             ? t('agentTeams.member.waitingForTask')
-            : t(`agentTeams.member.${workState}` as TranslationKey)
+            : workState === 'retrying'
+              ? t('agentTeams.member.retrying', {
+                  attempt: member.autoRetry?.attempt ?? '?',
+                  max: member.autoRetry?.max ?? '?',
+                })
+              : t(`agentTeams.member.${workState}` as TranslationKey)
+  // Stopped, retrying and failed members all come back on their own or through
+  // a message; say why they paused and what brings them back.
+  const awaitsRecovery = !isLead && (
+    workState === 'stopped' || workState === 'retrying' || workState === 'error'
+  )
+  const failureReason = awaitsRecovery ? member.lastError : undefined
+  const recoveryHint = !awaitsRecovery
+    ? undefined
+    : workState === 'stopped'
+      ? t('agentTeams.member.stoppedHint')
+      : workState === 'error'
+        ? t('agentTeams.member.errorHint')
+        : member.autoRetry && now !== undefined
+          ? retryCountdown(member.autoRetry, now, t)
+          : undefined
 
   return (
     <section
@@ -424,6 +466,32 @@ export function AgentTeamsMemberInspector({
             <dd className="mt-0.5 truncate font-extrabold" data-testid="agent-teams-member-provider">{member.providerName || member.providerId || t('teamPlan.official')}</dd>
           </div>}
         </dl>
+
+        {failureReason || recoveryHint ? (
+          <div
+            data-testid="agent-teams-member-recovery"
+            data-member-state={workState}
+            className={`mt-3 min-w-0 rounded-[var(--radius-md)] px-2.5 py-2 text-[11px] leading-[1.45] ${recoveryNoticeClasses(workState)}`}
+          >
+            {failureReason ? (
+              <p className="flex min-w-0 items-baseline gap-1.5">
+                <span className="shrink-0 font-semibold">{t('agentTeams.inspector.failureReason')}</span>
+                <span
+                  data-testid="agent-teams-member-last-error"
+                  className="min-w-0 truncate font-mono"
+                  title={failureReason}
+                >
+                  {failureReason}
+                </span>
+              </p>
+            ) : null}
+            {recoveryHint ? (
+              <p data-testid="agent-teams-member-recovery-hint" className={failureReason ? 'mt-0.5' : undefined}>
+                {recoveryHint}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">

@@ -105,7 +105,7 @@ export class InProcessBackend implements TeammateExecutor {
       // Start the agent loop in the background (fire-and-forget)
       // The prompt is passed through the task state and config
       startInProcessTeammate({
-        identity: {
+        identity: result.identity ?? {
           agentId: result.agentId,
           agentName: config.name,
           teamName: config.teamName,
@@ -165,7 +165,7 @@ export class InProcessBackend implements TeammateExecutor {
     const { agentName, teamName } = parsed
 
     // Write to file-based mailbox
-    await writeToMailbox(
+    const written = await writeToMailbox(
       agentName,
       {
         text: message.text,
@@ -175,6 +175,9 @@ export class InProcessBackend implements TeammateExecutor {
       },
       teamName,
     )
+    if (!written) {
+      throw new Error(`Failed to write to ${agentName}'s inbox`)
+    }
 
     logForDebugging(`[InProcessBackend] sendMessage() completed for ${agentId}`)
   }
@@ -232,7 +235,7 @@ export class InProcessBackend implements TeammateExecutor {
 
     // Send to teammate's mailbox
     const teammateAgentName = task.identity.agentName
-    await writeToMailbox(
+    const written = await writeToMailbox(
       teammateAgentName,
       {
         from: 'team-lead',
@@ -241,6 +244,12 @@ export class InProcessBackend implements TeammateExecutor {
       },
       task.identity.teamName,
     )
+    if (!written) {
+      logForDebugging(
+        `[InProcessBackend] terminate() could not deliver the shutdown request to ${agentId}`,
+      )
+      return false
+    }
 
     // Mark the task as shutdown requested
     requestTeammateShutdown(task.id, this.context.setAppState)

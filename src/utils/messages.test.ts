@@ -522,3 +522,19 @@ describe('replaceMediaWithPlaceholders', () => {
     expect(replaceMediaWithPlaceholders(blocks)).toBe(blocks)
   })
 })
+
+describe('stream retry display', () => {
+  test("a mid-stream re-send clears the failed attempt's streaming tool calls", async () => {
+    const { createSystemStreamingFallbackMessage, handleMessageFromStream } = await import('./messages.js')
+    let toolUses = [{ index: 0, contentBlock: { type: 'tool_use', id: 'stale', name: 'Write', input: {} }, unparsedToolInput: '{"file_path":' }] as never[]
+    const delivered: unknown[] = []
+    const update = (f: (current: never[]) => never[]) => { toolUses = f(toolUses) }
+    handleMessageFromStream(createSystemStreamingFallbackMessage('stream_retry'), message => delivered.push(message), () => {}, () => {}, update)
+    expect(toolUses).toEqual([])
+    expect(delivered).toHaveLength(1)
+
+    toolUses = [{ index: 0 }] as never[]
+    handleMessageFromStream(createUserMessage({ content: 'unrelated' }), () => {}, () => {}, () => {}, update)
+    expect(toolUses).toHaveLength(1)
+  })
+})
