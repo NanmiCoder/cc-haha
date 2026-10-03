@@ -101,14 +101,19 @@ describe('createTranscriber', () => {
 describe('worker process', () => {
   let dir: string
   let child: ChildProcessWithoutNullStreams | undefined
+  let closed: Promise<void> | undefined
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'voice-worker-'))
     child = undefined
+    closed = undefined
   })
 
   afterEach(async () => {
-    child?.kill('SIGKILL')
+    if (child && child.exitCode === null && child.signalCode === null) {
+      child.kill('SIGKILL')
+    }
+    await closed
     await rm(dir, { recursive: true, force: true })
   })
 
@@ -122,6 +127,7 @@ describe('worker process', () => {
         [WORKER_TOKEN_ENV]: token,
       },
     })
+    closed = new Promise(resolve => child!.once('close', () => resolve()))
     let stderr = ''
     child.stderr.on('data', chunk => { stderr += String(chunk) })
     return new Promise((resolve, reject) => {
@@ -191,6 +197,7 @@ describe('worker process', () => {
       stdio: 'pipe',
       env: { PATH: process.env.PATH ?? '', [WORKER_CONFIG_ENV]: JSON.stringify(baseConfig(dir)) },
     })
+    closed = new Promise(resolve => child!.once('close', () => resolve()))
     let stderr = ''
     child.stderr.on('data', chunk => { stderr += String(chunk) })
     const code = await new Promise<number | null>(resolve => child!.once('exit', c => resolve(c)))

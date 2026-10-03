@@ -42,14 +42,18 @@ function post(port: number, body: Uint8Array, headers: Record<string, string>) {
   })
 }
 
-describe.skipIf(process.platform === 'win32')('compiled desktop voice worker routing', () => {
+describe('compiled desktop voice worker routing', () => {
   it('boots the real merged entrypoint as a voice worker, loads the runtime by absolute path and serves the private socket', async () => {
     const directory = await realpath(await mkdtemp(path.join(tmpdir(), 'cc-haha-sidecar-voice-worker-')))
-    const executable = path.join(directory, 'claude-sidecar-voice-fixture')
+    const executable = path.join(directory, `claude-sidecar-voice-fixture${process.platform === 'win32' ? '.exe' : ''}`)
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH,
       HOME: directory,
+      USERPROFILE: directory,
       TMPDIR: directory,
+      TMP: directory,
+      TEMP: directory,
+      SystemRoot: process.env.SystemRoot,
       CLAUDE_CONFIG_DIR: path.join(directory, '.claude'),
       BUN_OPTIONS: '--no-env-file',
       // preload.ts would chdir here. The worker must never load it.

@@ -58,7 +58,15 @@ const RESPONSE_LIMIT_BYTES = 128 * 1024
  * file system (`/$bunfs/...` on POSIX, `B:/~BUN/...` on Windows).
  */
 export function isBundledWorkerHost(moduleUrl: string = import.meta.url, bundledMode: boolean = isInBundledMode()): boolean {
-  return bundledMode || moduleUrl.startsWith('file:///$bunfs/') || /^file:\/\/\/[A-Za-z]:\/~BUN\//.test(moduleUrl)
+  if (bundledMode) return true
+  try {
+    const url = new URL(moduleUrl)
+    // Windows Bun encodes ~BUN as %7EBUN, even when embeddedFiles is empty.
+    const modulePath = decodeURIComponent(url.pathname)
+    return url.protocol === 'file:' && (modulePath.startsWith('/$bunfs/') || /^\/[A-Za-z]:\/~BUN\//.test(modulePath))
+  } catch {
+    return false
+  }
 }
 
 /**

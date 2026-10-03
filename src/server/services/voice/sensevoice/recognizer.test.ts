@@ -8,7 +8,7 @@ import { VoiceServiceError } from '../errors.js'
 import type { WorkerConfig } from './protocol.js'
 import { installFakeSherpa } from './__fixtures__/fakeSherpa.js'
 import { makeWav } from './__fixtures__/wav.js'
-import { SenseVoiceRecognizer, isBundledWorkerHost, type RecognizerOptions, type SpawnWorker } from './recognizer.js'
+import { SenseVoiceRecognizer, isBundledWorkerHost, workerEnvironment, type RecognizerOptions, type SpawnWorker } from './recognizer.js'
 
 const fakeWorker = fileURLToPath(new URL('./__fixtures__/fakeWorker.mjs', import.meta.url))
 const wav = new Uint8Array(64)
@@ -250,6 +250,45 @@ describe('SenseVoiceRecognizer', () => {
 })
 
 describe('default worker launch', () => {
+  it('relaunches a compiled executable as a worker and transcribes successive recordings', async () => {
+    await installFakeSherpa(dir)
+    const executable = join(dir, `voice-recognizer${process.platform === 'win32' ? '.exe' : ''}`)
+    const build = await Bun.build({
+      entrypoints: [fileURLToPath(new URL('./__fixtures__/compiledRecognizer.ts', import.meta.url))],
+      target: 'bun',
+      compile: { outfile: executable },
+    })
+    expect(build.success).toBe(true)
+    if (process.platform === 'darwin') {
+      for (const args of [['--remove-signature', executable], ['--sign', '-', '--force', '--timestamp=none', executable]]) {
+        const signing = Bun.spawn(['/usr/bin/codesign', ...args], { stdout: 'ignore', stderr: 'pipe' })
+        expect(await signing.exited).toBe(0)
+      }
+    }
+    const configPath = join(dir, 'config.json')
+    await writeFile(configPath, JSON.stringify({ ...config(), maxAudioBytes: 200_000 }))
+    const child = spawn(executable, [configPath], {
+      cwd: dir,
+      env: workerEnvironment({ HOME: dir, USERPROFILE: dir, TMPDIR: dir, TMP: dir, TEMP: dir, CLAUDE_CONFIG_DIR: join(dir, '.claude') }),
+      stdio: 'pipe',
+      windowsHide: true,
+      timeout: 10_000,
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', chunk => { stdout += String(chunk) })
+    child.stderr.on('data', chunk => { stderr += String(chunk) })
+    const code = await new Promise<number | null>((resolve, reject) => {
+      child.once('error', reject)
+      child.once('close', resolve)
+    })
+    expect({ code, stderr }).toEqual({ code: 0, stderr: '' })
+    expect(stdout.trim().split('\n').map(line => JSON.parse(line))).toMatchObject([
+      { text: 'zh:16000', audioSeconds: 1 },
+      { text: 'en:8000', audioSeconds: 0.5 },
+    ])
+  }, 30_000)
+
   it('runs the source worker entry with Bun when not compiled, passing config and token through the environment', async () => {
     await installFakeSherpa(dir)
     // No spawnWorker override: this is the launch path the server uses from source.
@@ -266,7 +305,13 @@ describe('default worker launch', () => {
   it('detects compiled executables by their virtual module URLs', () => {
     expect(isBundledWorkerHost('file:///$bunfs/root/claude-sidecar', false)).toBe(true)
     expect(isBundledWorkerHost('file:///B:/~BUN/root/claude-sidecar.exe', false)).toBe(true)
+    expect(isBundledWorkerHost('file:///B:/%7EBUN/root/claude-sidecar.exe', false)).toBe(true)
+    expect(isBundledWorkerHost('file:///B:/%7eBUN/root/claude-sidecar.exe', false)).toBe(true)
     expect(isBundledWorkerHost('file:///repo/src/server/services/voice/sensevoice/recognizer.ts', false)).toBe(false)
+    expect(isBundledWorkerHost('file:///C:/project/~BUN-tools/recognizer.ts', false)).toBe(false)
+    expect(isBundledWorkerHost('https://example.test/B:/%7EBUN/root/recognizer.ts', false)).toBe(false)
+    expect(isBundledWorkerHost('file:///B:/%ZZ/root/recognizer.ts', false)).toBe(false)
+    expect(isBundledWorkerHost('not a file URL', false)).toBe(false)
     expect(isBundledWorkerHost('file:///repo/src/x.ts', true)).toBe(true)
   })
 })
