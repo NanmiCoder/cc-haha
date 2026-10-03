@@ -97,6 +97,39 @@ describe('ContentRouter tab surfaces', () => {
     expect(screen.getByTestId('terminal-host-__terminal__1')).toHaveAttribute('data-runtime-id', '__session_terminal__session-1')
   })
 
+  it('keeps one browser page layer for the life of the window, inside the session panel', () => {
+    // A workspace browser page dies when its element leaves the DOM and
+    // reloads when it moves, so the layer holding them must never be
+    // re-created — not on a page switch, a task switch, or with no task open.
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'session-1', title: 'One', type: 'session', status: 'idle' },
+        { sessionId: 'session-2', title: 'Two', type: 'session', status: 'idle' },
+        { sessionId: MARKET_TAB_ID, title: 'Market', type: 'market', status: 'idle' },
+      ],
+      activeTabId: 'session-1',
+    })
+    render(<ContentRouter />)
+    const layer = screen.getByTestId('workspace-browser-guest-layer')
+    // Same stacking context as the session content: it fades and goes inert
+    // with the panel when another page takes the window.
+    expect(screen.getByTestId('session-tab-panel')).toContainElement(layer)
+
+    act(() => useTabStore.getState().setActiveTab(MARKET_TAB_ID))
+    expect(screen.getByTestId('session-tab-panel')).toHaveAttribute('inert')
+    expect(screen.getByTestId('workspace-browser-guest-layer')).toBe(layer)
+
+    act(() => useTabStore.getState().setActiveTab('session-2'))
+    expect(screen.getByTestId('workspace-browser-guest-layer')).toBe(layer)
+
+    act(() => useTabStore.setState({
+      tabs: [{ sessionId: MARKET_TAB_ID, title: 'Market', type: 'market', status: 'idle' }],
+      activeTabId: MARKET_TAB_ID,
+    }))
+    expect(screen.queryByTestId('active-session')).toBeNull()
+    expect(screen.getByTestId('workspace-browser-guest-layer')).toBe(layer)
+  })
+
   it('keeps terminal tabs mounted while chat content is active', () => {
     useTabStore.setState({
       tabs: [

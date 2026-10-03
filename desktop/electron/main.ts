@@ -1,5 +1,5 @@
 import { PublicAccessManager } from './services/publicAccess'
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, session, systemPreferences, WebContentsView } from 'electron'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
 import { autoUpdater } from 'electron-updater'
 import path from 'node:path'
 import { ELECTRON_EVENT_CHANNELS, ELECTRON_INTERNAL_CHANNELS, ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from './ipc/channels'
@@ -33,11 +33,15 @@ import { ElectronPreviewService, type PreviewBounds } from './services/preview'
 import {
   ElectronWorkspaceBrowserService,
   WORKSPACE_BROWSER_PARTITION,
-  type WorkspaceBrowserBounds,
   type WorkspaceBrowserCaptureKind,
   type WorkspaceBrowserCreateOptions,
   type WorkspaceBrowserFindOptions,
+  type WorkspaceBrowserWebContentsLike,
 } from './services/workspaceBrowser'
+import {
+  installWorkspaceBrowserGuestPolicy,
+  resolveWorkspaceBrowserGuest,
+} from './services/workspaceBrowserGuest'
 import {
   configureLocalServerRequestAuth,
   configurePreviewSessionPermissions,
@@ -113,6 +117,7 @@ let updaterService: ElectronUpdaterService | null = null
 let terminalService: ElectronTerminalService | null = null
 let previewService: ElectronPreviewService | null = null
 let workspaceBrowserService: ElectronWorkspaceBrowserService | null = null
+let workspaceBrowserSessionConfigured = false
 let petWindowController: PetWindowController | null = null
 const traceWindows = new Map<string, BrowserWindow>()
 let isQuitting = false
@@ -445,10 +450,6 @@ function getWorkspaceBrowserService() {
     emit: event => {
       mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.workspaceBrowserEvent, event)
     },
-    resolveScaleFactor: parent => {
-      const bounds = parent.getBounds?.()
-      return bounds ? screen.getDisplayMatching(bounds).scaleFactor : 1
-    },
     writePdf: async ({ data, filename }) => {
       return saveWorkspaceBrowserPdf(data, async () => {
         if (!mainWindow || mainWindow.isDestroyed()) return null
@@ -459,29 +460,35 @@ function getWorkspaceBrowserService() {
         return result.canceled ? null : result.filePath ?? null
       })
     },
-    createView: () => {
-      const view = new WebContentsView({
-        webPreferences: {
-          preload: previewPreloadPath(),
-          // One shared persistent partition for every workspace page: a login in
-          // one tab has to still be there in the next one. Per-tab partitions
-          // would turn every new tab into a fresh, logged-out browser.
-          partition: WORKSPACE_BROWSER_PARTITION,
-          contextIsolation: true,
-          nodeIntegration: false,
-          sandbox: true,
-        },
-      })
-      // Same boundary as the singleton preview: OS permissions are denied, and
-      // `configureLocalServerRequestAuth` is deliberately NOT installed here.
-      // These pages render arbitrary remote sites, so attaching the desktop's
-      // local access token to their loopback requests would hand any visited
-      // site the local API.
-      configurePreviewSessionPermissions(view.webContents.session)
-      return view
-    },
+    // Pages are `<webview>` guests the renderer creates; their preferences are
+    // fixed by `installWorkspaceBrowserGuestPolicy` on the main window. The id
+    // the renderer reports is only adopted if it names one of those guests.
+    resolveGuest: webContentsId => resolveWorkspaceBrowserGuest<Electron.WebContents>(webContentsId, {
+      fromId: id => webContents.fromId(id),
+      host: mainWindow?.webContents,
+      session: workspaceBrowserSession(),
+    }) as WorkspaceBrowserWebContentsLike,
   })
   return workspaceBrowserService
+}
+
+/**
+ * One shared persistent partition for every workspace page: a login in one
+ * tab has to still be there in the next one. Per-tab partitions would turn
+ * every new tab into a fresh, logged-out browser.
+ */
+function workspaceBrowserSession() {
+  const browserSession = session.fromPartition(WORKSPACE_BROWSER_PARTITION)
+  // Same boundary as the singleton preview: OS permissions are denied, and
+  // `configureLocalServerRequestAuth` is deliberately NOT installed here.
+  // These pages render arbitrary remote sites, so attaching the desktop's
+  // local access token to their loopback requests would hand any visited
+  // site the local API.
+  if (!workspaceBrowserSessionConfigured) {
+    workspaceBrowserSessionConfigured = true
+    configurePreviewSessionPermissions(browserSession)
+  }
+  return browserSession
 }
 
 async function listCustomPets() {
@@ -830,11 +837,10 @@ function registerIpcHandlers() {
   registerHandler(ELECTRON_IPC_CHANNELS.previewClose, () => getPreviewService().close())
   registerHandler(ELECTRON_IPC_CHANNELS.previewMessage, (event, payload) => getPreviewService().message(payload, event.sender))
   registerHandler(ELECTRON_IPC_CHANNELS.workspaceBrowserCreate, (event, payload) => {
-    // The service keeps a single parent window, so whichever renderer calls
-    // `create` last owns where every page is attached and detached. Trace and
-    // pet windows load the same preload, so without this a secondary window
-    // could adopt the pages and strand them as unremovable children of the main
-    // window. Same guard shape as `appSetLocalePreference`.
+    // Pages are guests of the main window's renderer. Trace and pet windows
+    // load the same preload, so without this a secondary window could register
+    // pages it does not host — and own the menu parent of every page. Same
+    // guard shape as `appSetLocalePreference`.
     if (!mainWindow || currentWindow(event) !== mainWindow) {
       throw new Error('Only the main window can host workspace browser pages')
     }
@@ -864,10 +870,6 @@ function registerIpcHandlers() {
   })
   registerHandler(ELECTRON_IPC_CHANNELS.workspaceBrowserStop, (_event, payload) =>
     getWorkspaceBrowserService().stop((payload as { tabId: string }).tabId))
-  registerHandler(ELECTRON_IPC_CHANNELS.workspaceBrowserSetBounds, (_event, payload) => {
-    const { tabId, bounds } = payload as { tabId: string, bounds: WorkspaceBrowserBounds }
-    return getWorkspaceBrowserService().setBounds(tabId, bounds)
-  })
   registerHandler(ELECTRON_IPC_CHANNELS.workspaceBrowserSetVisible, (_event, payload) => {
     const { tabId, visible } = payload as { tabId: string, visible: boolean }
     return getWorkspaceBrowserService().setVisible(tabId, visible)
@@ -890,8 +892,6 @@ function registerIpcHandlers() {
     const { tabId, kind } = payload as { tabId: string, kind: WorkspaceBrowserCaptureKind }
     return getWorkspaceBrowserService().capture(tabId, kind)
   })
-  registerHandler(ELECTRON_IPC_CHANNELS.workspaceBrowserSnapshot, (_event, payload) =>
-    getWorkspaceBrowserService().snapshot((payload as { tabId: string }).tabId))
   registerHandler(ELECTRON_IPC_CHANNELS.workspaceBrowserMessage, (_event, payload) => {
     const { tabId, payload: message } = payload as { tabId: string, payload: unknown }
     return getWorkspaceBrowserService().message(tabId, message)
@@ -913,7 +913,13 @@ function registerIpcHandlers() {
     app.quit()
   })
   registerHandler(ELECTRON_IPC_CHANNELS.adaptersRestartSidecar, () => getServerRuntime().restartAdaptersSidecars())
-  registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => currentWindow(event).webContents.setZoomFactor(normalizeZoomFactor(payload)))
+  registerHandler(ELECTRON_IPC_CHANNELS.zoomSet, (event, payload) => {
+    const window = currentWindow(event)
+    window.webContents.setZoomFactor(normalizeZoomFactor(payload))
+    // Electron pushes the embedder's zoom into every browser guest; app zoom
+    // must not change the pages' own zoom.
+    if (window === mainWindow) workspaceBrowserService?.restorePageZoom()
+  })
   registerHandler(ELECTRON_IPC_CHANNELS.appearanceSetApplied, (_event, payload) => {
     if (!isAppliedAppearance(payload)) return
     lastAppliedAppearance = payload
@@ -942,8 +948,15 @@ async function createMainWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Only for the workspace browser, whose pages must be composited with
+      // the DOM. Every attach is decided by the guest policy installed below.
+      webviewTag: true,
     },
   })
+  // Before any guest can exist: its session denies OS permissions, and its
+  // preferences are replaced with the sandboxed set the policy pins.
+  workspaceBrowserSession()
+  installWorkspaceBrowserGuestPolicy(mainWindow.webContents, { preload: previewPreloadPath() })
   configureLocalServerRequestAuth(
     mainWindow.webContents.session.webRequest,
     resolveMainRendererServerAccess,
@@ -1051,7 +1064,6 @@ app.whenReady().then(async () => {
   screen.on('display-metrics-changed', (_event, _display, changedMetrics) => {
     if (changedMetrics.includes('scaleFactor') || changedMetrics.includes('bounds')) {
       previewService?.refreshBounds()
-      workspaceBrowserService?.refreshBounds()
     }
   })
   try {

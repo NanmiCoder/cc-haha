@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkspaceStatusResult } from '../../api/sessions'
 import { browserHost } from '../../lib/desktopHost/browserHost'
 import { openLocalFileWithSystem } from '../../lib/systemFileOpen'
-import { useOverlayStore } from '../../stores/overlayStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { AssistantMessage } from './AssistantMessage'
@@ -50,7 +49,6 @@ beforeEach(() => {
   vi.spyOn(window, 'open').mockImplementation(() => null)
   apiGetBlob.mockReset().mockRejectedValue(new Error('404'))
   useSettingsStore.setState({ locale: 'en' })
-  useOverlayStore.setState(useOverlayStore.getInitialState(), true)
   withWorkDir('/repo')
   vi.mocked(openLocalFileWithSystem).mockReset().mockResolvedValue(undefined)
   Reflect.deleteProperty(window, 'desktopHost')

@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createRef } from 'react'
 import { WorkspaceBrowserAddressBar } from '@/components/workbench/WorkspaceBrowserAddressBar'
 import { normalizeBrowserAddress } from '@/lib/workspace/browserAddress'
-import { useOverlayStore } from '@/stores/overlayStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 
 const visits = Array.from({ length: 8 }, (_, index) => ({
@@ -19,7 +18,6 @@ const props = {
 beforeEach(() => {
   vi.clearAllMocks()
   useSettingsStore.setState({ locale: 'en' })
-  useOverlayStore.setState({ count: 0, snapshotCount: 0 })
 })
 afterEach(cleanup)
 
@@ -63,7 +61,6 @@ describe('WorkspaceBrowserAddressBar', () => {
     fireEvent.change(address, { target: { value: 'in progress' } })
     rerender(<WorkspaceBrowserAddressBar {...props} currentAddress="" blank active={false} />)
     expect(address).toHaveValue('in progress')
-    expect(useOverlayStore.getState().count).toBe(0)
     act(() => address.blur())
     rerender(<WorkspaceBrowserAddressBar {...props} currentAddress="" blank />)
     act(() => address.focus())
@@ -73,19 +70,16 @@ describe('WorkspaceBrowserAddressBar', () => {
     expect(onNavigate).not.toHaveBeenCalled()
   })
 
-  it('does not create actionable suggestions for an unsupported scheme and balances overlays on unmount', () => {
-    const { unmount } = render(<WorkspaceBrowserAddressBar {...props} />)
+  it('does not create actionable suggestions for an unsupported scheme', () => {
+    render(<WorkspaceBrowserAddressBar {...props} />)
     const address = screen.getByRole('combobox')
     act(() => address.focus())
-    expect(useOverlayStore.getState().count).toBe(1)
     fireEvent.change(address, { target: { value: 'javascript:alert(1)' } })
     expect(screen.queryByRole('listbox')).toBeNull()
     fireEvent.keyDown(address, { key: 'Enter' })
     expect(onNavigate).not.toHaveBeenCalled()
     fireEvent.change(address, { target: { value: 'fixture' } })
-    expect(useOverlayStore.getState().snapshotCount).toBe(1)
-    unmount()
-    expect(useOverlayStore.getState().count).toBe(0)
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
   })
 
   it('shows the new address only after navigation is accepted, allowing selection-discard confirmation first', () => {

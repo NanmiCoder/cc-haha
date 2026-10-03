@@ -7,6 +7,11 @@ import {
   createPreviewSessionPartition,
   isAllowlistedMainRendererMediaRequest,
 } from './services/previewSession'
+import { applyWorkspaceBrowserAttachPolicy } from './services/workspaceBrowserGuest'
+import {
+  WORKSPACE_BROWSER_INITIAL_SRC,
+  WORKSPACE_BROWSER_PARTITION,
+} from '../src/lib/workspace/browserGuestContract'
 
 const desktopRoot = existsSync(path.resolve(process.cwd(), 'electron', 'main.ts'))
   ? process.cwd()
@@ -80,9 +85,15 @@ describe('Electron preview security boundary', () => {
   })
 
   it('locks workspace browser sandboxing on', () => {
-    expect(workspaceBrowserServiceSource).toContain('sandbox: true')
-    expect(workspaceBrowserServiceSource).toContain('contextIsolation: true')
-    expect(workspaceBrowserServiceSource).toContain('nodeIntegration: false')
+    // Pages are `<webview>` guests now; their preferences are pinned by the
+    // attach policy, which the main window must install.
+    const preferences: Record<string, unknown> = { sandbox: false, contextIsolation: false, nodeIntegration: true }
+    expect(applyWorkspaceBrowserAttachPolicy(preferences, {
+      partition: WORKSPACE_BROWSER_PARTITION,
+      src: WORKSPACE_BROWSER_INITIAL_SRC,
+    }, { preload: '/preview-preload.cjs' })).toBe(true)
+    expect(preferences).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false })
+    expect(mainWindowSource).toContain('installWorkspaceBrowserGuestPolicy(mainWindow.webContents')
   })
 
   it('lets only the main window host workspace browser pages', () => {
@@ -132,9 +143,15 @@ describe('Electron preview security boundary', () => {
   })
 
   it('locks workspace browser sandboxing on', () => {
-    expect(workspaceBrowserServiceSource).toContain('sandbox: true')
-    expect(workspaceBrowserServiceSource).toContain('contextIsolation: true')
-    expect(workspaceBrowserServiceSource).toContain('nodeIntegration: false')
+    // Pages are `<webview>` guests now; their preferences are pinned by the
+    // attach policy, which the main window must install.
+    const preferences: Record<string, unknown> = { sandbox: false, contextIsolation: false, nodeIntegration: true }
+    expect(applyWorkspaceBrowserAttachPolicy(preferences, {
+      partition: WORKSPACE_BROWSER_PARTITION,
+      src: WORKSPACE_BROWSER_INITIAL_SRC,
+    }, { preload: '/preview-preload.cjs' })).toBe(true)
+    expect(preferences).toMatchObject({ sandbox: true, contextIsolation: true, nodeIntegration: false })
+    expect(mainWindowSource).toContain('installWorkspaceBrowserGuestPolicy(mainWindow.webContents')
   })
 
   it('lets only the main window host workspace browser pages', () => {

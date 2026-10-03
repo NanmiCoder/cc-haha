@@ -50,11 +50,9 @@ vi.mock('../../stores/openTargetStore', () => ({
 }))
 
 import { OpenProjectMenu } from './OpenProjectMenu'
-import { useOverlayStore } from '../../stores/overlayStore'
 
 describe('OpenProjectMenu', () => {
   beforeEach(() => {
-    useOverlayStore.setState(useOverlayStore.getInitialState(), true)
     storeMocks.ensureTargets.mockReset()
     storeMocks.openTarget.mockReset()
     storeMocks.state = {
@@ -107,25 +105,6 @@ describe('OpenProjectMenu', () => {
     })
 
     expect(storeMocks.openTarget).toHaveBeenCalledWith('finder', '/repo')
-  })
-
-  it('suppresses the native browser preview while the target menu is open', async () => {
-    storeMocks.state.targets = [
-      { id: 'vscode', kind: 'ide', label: 'VS Code', icon: 'vscode', platform: 'darwin' },
-      { id: 'finder', kind: 'file_manager', label: 'Finder', icon: 'finder', platform: 'darwin' },
-    ]
-    storeMocks.state.primaryTargetId = 'vscode'
-
-    const { unmount } = render(<OpenProjectMenu path="/repo" />)
-
-    expect(useOverlayStore.getState().count).toBe(0)
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Open project' }))
-    })
-    expect(useOverlayStore.getState().count).toBe(1)
-
-    unmount()
-    expect(useOverlayStore.getState().count).toBe(0)
   })
 
   it('does not render without a path', () => {

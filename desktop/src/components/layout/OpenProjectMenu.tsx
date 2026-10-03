@@ -3,7 +3,6 @@ import { createPortal } from 'react-dom'
 import { ChevronDown } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
-import { useOverlayStore } from '../../stores/overlayStore'
 import { useDismissable } from '@/hooks/useDismissable'
 import { TargetIcon } from '@/components/composite/TargetIcon'
 
@@ -28,15 +27,6 @@ export function OpenProjectMenu({ path }: Props) {
     }
     void ensureTargets()
   }, [ensureTargets, path])
-
-  // The native browser preview always renders above DOM portals. Suppress it
-  // while this menu is open so targets below the browser toolbar stay visible.
-  useEffect(() => {
-    if (!open) return
-    const { push, pop } = useOverlayStore.getState()
-    push()
-    return () => pop()
-  }, [open])
 
   const handleDismiss = useCallback(() => setOpen(false), [])
 

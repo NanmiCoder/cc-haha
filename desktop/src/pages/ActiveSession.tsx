@@ -810,11 +810,17 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                 onClick={() => useWorkspaceStore.getState().setLayout(activeTabId, 'hidden')} />
               <span className="text-sm text-[var(--color-text-secondary)]">{t('sideChat.title')}</span>
             </div>}
+            {/*
+              ContentRouter keeps this page mounted under settings/market with
+              only opacity-0. A native browser page ignores CSS, so the dock
+              must be told it is off screen or it stays attached over them.
+            */}
             <WorkspaceSurface
               sessionId={activeTabId}
               dock="side"
               cwd={getSessionTerminalCwd(session) ?? ''}
               reviewUnavailableReason={workspaceIsGitRepo === false ? t('workspace.launcher.reviewNeedsGit') : null}
+              visible={active}
             />
           </aside>
         </>

@@ -215,14 +215,17 @@ const workspaceBrowserTab: Validator = value =>
   && hasOnlyKeys(value, ['tabId'])
   && isWorkspaceBrowserId(value.tabId)
 
+// `webContentsId` names the renderer's `<webview>` guest. It is only a claim:
+// the main process adopts it solely if it is a browser guest of the main window.
 const workspaceBrowserCreate: Validator = value =>
   isRecord(value)
-  && hasOnlyKeys(value, ['tabId', 'storageId', 'url', 'bounds', 'visible'])
+  && hasOnlyKeys(value, ['tabId', 'storageId', 'url', 'webContentsId'])
   && isWorkspaceBrowserId(value.tabId)
   && isWorkspaceBrowserId(value.storageId)
   && (value.url === undefined || (typeof value.url === 'string' && value.url.length <= 8_192))
-  && (value.bounds === undefined || boundsPayload(value.bounds))
-  && (value.visible === undefined || typeof value.visible === 'boolean')
+  && typeof value.webContentsId === 'number'
+  && Number.isSafeInteger(value.webContentsId)
+  && value.webContentsId > 0
 
 const workspaceBrowserMenuLabelKeys = ['find', 'print', 'zoom', 'zoomIn', 'zoomOut', 'zoomReset', 'capture', 'pickElement', 'downloads', 'history', 'openExternal']
 
@@ -255,12 +258,6 @@ const workspaceBrowserReload: Validator = value =>
   && hasOnlyKeys(value, ['tabId', 'ignoreCache'])
   && isWorkspaceBrowserId(value.tabId)
   && (value.ignoreCache === undefined || typeof value.ignoreCache === 'boolean')
-
-const workspaceBrowserSetBounds: Validator = value =>
-  isRecord(value)
-  && hasOnlyKeys(value, ['tabId', 'bounds'])
-  && isWorkspaceBrowserId(value.tabId)
-  && boundsPayload(value.bounds)
 
 const workspaceBrowserSetVisible: Validator = value =>
   isRecord(value)
@@ -402,13 +399,11 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.workspaceBrowserGoForward]: workspaceBrowserTab,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserReload]: workspaceBrowserReload,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserStop]: workspaceBrowserTab,
-  [ELECTRON_IPC_CHANNELS.workspaceBrowserSetBounds]: workspaceBrowserSetBounds,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserSetVisible]: workspaceBrowserSetVisible,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserSetZoom]: workspaceBrowserSetZoom,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserFind]: workspaceBrowserFind,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserStopFind]: workspaceBrowserTab,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserCapture]: workspaceBrowserCapture,
-  [ELECTRON_IPC_CHANNELS.workspaceBrowserSnapshot]: workspaceBrowserTab,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserMessage]: workspaceBrowserMessage,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserPrintToPdf]: workspaceBrowserTab,
   [ELECTRON_IPC_CHANNELS.workspaceBrowserClose]: workspaceBrowserTab,

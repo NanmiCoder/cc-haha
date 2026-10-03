@@ -214,3 +214,36 @@ describe('useDismissable', () => {
     expect(onDismiss).not.toHaveBeenCalled()
   })
 })
+
+describe('useDismissable with embedded pages', () => {
+  // A page in a `<webview>` never reports its pointer events to the app's
+  // document; clicking into it only blurs the window and moves focus onto the
+  // element. That is the outside click a menu over the workspace browser sees.
+  function focusEmbedded(element: HTMLElement) {
+    element.tabIndex = -1
+    element.focus()
+    window.dispatchEvent(new Event('blur'))
+  }
+
+  it('dismisses when focus moves into an embedded page outside the overlay', async () => {
+    const onDismiss = vi.fn()
+    render(<Harness onDismiss={onDismiss} />)
+    const page = document.createElement('webview')
+    document.body.appendChild(page)
+    focusEmbedded(page)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onDismiss).toHaveBeenCalledWith('outside')
+    page.remove()
+  })
+
+  it('stays open when the window blurs for another app or for a frame inside the overlay', async () => {
+    const onDismiss = vi.fn()
+    render(<Harness onDismiss={onDismiss} />)
+    window.dispatchEvent(new Event('blur'))
+    const frame = document.createElement('iframe')
+    screen.getByTestId('panel').appendChild(frame)
+    focusEmbedded(frame)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(onDismiss).not.toHaveBeenCalled()
+  })
+})

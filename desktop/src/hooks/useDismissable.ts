@@ -97,7 +97,25 @@ export function useDismissable({
     }
     const handleResize = () => onDismiss('resize')
 
+    // A page inside a `<webview>` or `<iframe>` never reports its pointer
+    // events to this document: clicking into it only takes focus away from
+    // the window. Focus landing in embedded content outside the overlay is
+    // that same outside click. Read after the blur settles — Chromium blurs
+    // the window before it moves `activeElement` onto the frame.
+    let blurTimer: ReturnType<typeof setTimeout> | undefined
+    const handleWindowBlur = () => {
+      clearTimeout(blurTimer)
+      blurTimer = setTimeout(() => {
+        const active = document.activeElement
+        if (!active || (active.tagName !== 'WEBVIEW' && active.tagName !== 'IFRAME')) return
+        if (refs.some((ref) => ref.current?.contains(active))) return
+        if (triggerRef?.current?.contains(active)) return
+        onDismiss('outside')
+      }, 0)
+    }
+
     document.addEventListener(event, handlePointer, capture)
+    window.addEventListener('blur', handleWindowBlur)
     if (closeOnEscape) document.addEventListener('keydown', handleKey, stopEscapePropagation)
     if (closeOnViewportChange) {
       // Capture on scroll: scroll events from nested containers do not bubble.
@@ -106,6 +124,8 @@ export function useDismissable({
     }
 
     return () => {
+      clearTimeout(blurTimer)
+      window.removeEventListener('blur', handleWindowBlur)
       document.removeEventListener(event, handlePointer, capture)
       document.removeEventListener('keydown', handleKey, stopEscapePropagation)
       window.removeEventListener('scroll', handleScroll, true)

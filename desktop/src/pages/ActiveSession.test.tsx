@@ -28,6 +28,27 @@ const teamApiMocks = vi.hoisted(() => ({
   sendMemberMessage: vi.fn(),
 }))
 
+const browserHostMocks = vi.hoisted(() => ({
+  available: false,
+  create: vi.fn(async () => ({ ok: true as const })),
+  setVisible: vi.fn(async () => ({ ok: true as const })),
+  message: vi.fn(async () => ({ ok: true as const })),
+}))
+
+vi.mock('../lib/workspace/browserHost', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../lib/workspace/browserHost')>()
+  return {
+    ...actual,
+    isWorkspaceBrowserAvailable: () => browserHostMocks.available,
+    workspaceBrowserHost: {
+      ...actual.workspaceBrowserHost,
+      create: browserHostMocks.create,
+      setVisible: browserHostMocks.setVisible,
+      message: browserHostMocks.message,
+    },
+  }
+})
+
 vi.mock('../api/sessions', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/sessions')>()
   return {
@@ -98,6 +119,7 @@ vi.mock('./TerminalSettings', () => ({
 }))
 
 import { ActiveSession } from './ActiveSession'
+import { installFakeBrowserGuests, isBrowserPageShown } from '../test/fakeBrowserGuests'
 import { createDefaultSessionState, useChatStore } from '../stores/chatStore'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { useSessionStore } from '../stores/sessionStore'
@@ -133,9 +155,18 @@ beforeEach(() => {
   teamApiMocks.sendMemberMessage.mockReset()
 })
 
+let disposeGuests: (() => void) | null = null
+
 afterEach(() => {
   cleanup()
+  disposeGuests?.()
+  disposeGuests = null
   vi.useRealTimers()
+  vi.unstubAllGlobals()
+  browserHostMocks.available = false
+  for (const mock of [browserHostMocks.create, browserHostMocks.setVisible, browserHostMocks.message]) {
+    mock.mockClear()
+  }
   viewportMocks.isMobile = false
   useTabStore.setState({ tabs: [], activeTabId: null })
   useSessionStore.setState({ sessions: [], activeSessionId: null, isLoading: false, error: null })
@@ -228,6 +259,47 @@ describe('ActiveSession task polling', () => {
     expect(chatInput).toHaveAttribute('data-session-id', sessionId)
     expect(chatInput).toHaveAttribute('data-visible', 'false')
     expect(useChatStore.getState().sessions['__settings__']).toBeUndefined()
+  })
+
+  it('parks the workspace browser page while another page covers the retained session', async () => {
+    // ContentRouter hides a retained session with opacity only. The old native
+    // page ignored CSS and kept painting over the market page; the page must
+    // also stop acting as browser chrome (shortcuts) while it is off screen.
+    disposeGuests = installFakeBrowserGuests()
+    browserHostMocks.available = true
+    const sessionId = 'browser-retained-session'
+    useSessionStore.setState({
+      sessions: [{ id: sessionId, title: 'Browser', createdAt: '', modifiedAt: '', messageCount: 1, projectPath: '/repo', workDir: '/repo', workDirExists: true }],
+      activeSessionId: sessionId,
+    })
+    useTabStore.setState({
+      tabs: [
+        { sessionId, title: 'Browser', type: 'session', status: 'idle' },
+        { sessionId: '__market__', title: 'Market', type: 'market', status: 'idle' },
+      ],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({ sessions: { [sessionId]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true } } })
+    const tabId = useWorkspaceStore.getState().openTarget(sessionId, { kind: 'browser', url: 'https://example.test/' })!
+    const tab = useWorkspaceStore.getState().getTab(sessionId, tabId)
+    if (tab?.kind !== 'browser') throw new Error('expected a browser tab')
+    useWorkspaceStore.getState().setLayout(sessionId, 'split')
+
+    const { rerender } = render(<ActiveSession sessionId={sessionId} active />)
+    await waitFor(() => expect(browserHostMocks.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true))
+    expect(isBrowserPageShown(tab.browserTabId)).toBe(true)
+
+    act(() => useTabStore.getState().setActiveTab('__market__'))
+    rerender(<ActiveSession sessionId={sessionId} active={false} />)
+    expect(browserHostMocks.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
+    expect(isBrowserPageShown(tab.browserTabId)).toBe(false)
+
+    act(() => useTabStore.getState().setActiveTab(sessionId))
+    rerender(<ActiveSession sessionId={sessionId} active />)
+    expect(browserHostMocks.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
+    expect(isBrowserPageShown(tab.browserTabId)).toBe(true)
+    // Hiding is presentation only; the page itself must survive the round trip.
+    expect(browserHostMocks.create).toHaveBeenCalledTimes(1)
   })
 
   it('shows cleaned worktrees as retained history and uses the source project for tools', () => {

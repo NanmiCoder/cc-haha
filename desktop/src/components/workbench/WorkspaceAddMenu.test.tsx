@@ -2,7 +2,6 @@ import { StrictMode, useRef, useState } from 'react'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useOverlayStore } from '@/stores/overlayStore'
 import { WorkspaceAddMenu } from './WorkspaceAddMenu'
 
 const selected = vi.fn()
@@ -21,7 +20,6 @@ function Harness({ last = false, disabled = false }: { last?: boolean; disabled?
 
 beforeEach(() => {
   selected.mockClear()
-  useOverlayStore.setState({ count: 0, snapshotCount: 0 })
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
@@ -120,16 +118,11 @@ describe('WorkspaceAddMenu', () => {
     expect(selected).not.toHaveBeenCalled()
   })
 
-  it('selects one resource and balances native snapshot suppression in StrictMode', () => {
-    const { unmount } = render(<StrictMode><Harness /></StrictMode>)
+  it('selects one resource exactly once in StrictMode', () => {
+    render(<StrictMode><Harness /></StrictMode>)
     fireEvent.click(screen.getByText('Add'))
-    expect(useOverlayStore.getState()).toMatchObject({ count: 1, snapshotCount: 1 })
     fireEvent.click(screen.getByTestId('workspace-menu-browser'))
     expect(selected).toHaveBeenCalledExactlyOnceWith('browser')
     expect(screen.queryByRole('menu')).toBeNull()
-    expect(useOverlayStore.getState()).toMatchObject({ count: 0, snapshotCount: 0 })
-    fireEvent.click(screen.getByText('Add'))
-    unmount()
-    expect(useOverlayStore.getState()).toMatchObject({ count: 0, snapshotCount: 0 })
   })
 })

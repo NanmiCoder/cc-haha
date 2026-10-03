@@ -52,7 +52,7 @@ export function buildWorkspaceBrowserMenuTemplate(
   ]
 }
 
-/** One popup belongs to one live page; dismissal never hides its WebContentsView. */
+/** One popup belongs to one live page; dismissal never hides or reloads that page. */
 export class WorkspaceBrowserMenuController {
   private pending: { tabId: string; cancel: () => void } | null = null
 

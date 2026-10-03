@@ -56,31 +56,23 @@ describe('Electron IPC capabilities', () => {
     ]) expect(validateElectronIpcPayload(channel, { ...payload, ...patch })).toBe(false)
   })
 
-  it('accepts optional initial browser visibility without widening the create payload', () => {
+  it('requires the renderer guest id on create and accepts no geometry', () => {
     const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserCreate
-    const identity = { tabId: 'wb-1', storageId: 'store-1' }
+    const identity = { tabId: 'wb-1', storageId: 'store-1', webContentsId: 7 }
     expect(validateElectronIpcPayload(channel, identity)).toBe(true)
-    expect(validateElectronIpcPayload(channel, { ...identity, visible: false })).toBe(true)
-    expect(validateElectronIpcPayload(channel, { ...identity, visible: true })).toBe(true)
-    for (const visible of ['false', 0, null, {}]) {
-      expect(validateElectronIpcPayload(channel, { ...identity, visible })).toBe(false)
+    expect(validateElectronIpcPayload(channel, { ...identity, url: 'https://example.com/' })).toBe(true)
+    for (const webContentsId of [undefined, 0, -1, 1.5, '7', Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(validateElectronIpcPayload(channel, { ...identity, webContentsId })).toBe(false)
     }
-    expect(validateElectronIpcPayload(channel, { ...identity, visible: false, unknown: true })).toBe(false)
+    // Pages are drawn by the renderer now; the old native-view options are gone.
+    expect(validateElectronIpcPayload(channel, { ...identity, visible: false })).toBe(false)
+    expect(validateElectronIpcPayload(channel, { ...identity, bounds: { x: 0, y: 0, width: 1, height: 1 } })).toBe(false)
   })
 
   it('has a validator for every exposed invoke channel', () => {
     expect(Object.keys(ELECTRON_IPC_VALIDATORS).sort()).toEqual(
       Object.values(ELECTRON_IPC_CHANNELS).sort(),
     )
-  })
-
-  it('limits presentation snapshots to a single browser page id', () => {
-    const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserSnapshot
-    expect(validateElectronIpcPayload(channel, { tabId: 'wb-1' })).toBe(true)
-    for (const payload of [{}, { tabId: '' }, { tabId: 'wb-1', kind: 'full' }, { tabId: 'wb-1', url: 'https://example.com' }]) {
-      expect(validateElectronIpcPayload(channel, payload)).toBe(false)
-    }
-    expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
   })
 
   it('rejects channels outside the desktop host contract', () => {

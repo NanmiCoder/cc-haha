@@ -4,7 +4,6 @@ import { IconButton } from '@/components/ui/IconButton'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '@/i18n'
 import { normalizeBrowserAddress } from '@/lib/workspace/browserAddress'
-import { useSuppressBrowserOverlay } from '@/stores/overlayStore'
 import type { WorkspaceBrowserVisit } from '@/stores/workspaceBrowserStore'
 
 type AddressSuggestion = { input: string; title: string; url?: string; action?: 'search' | 'visit' }
@@ -186,7 +185,6 @@ function AddressSuggestions({ id, items, query, selectedIndex, onHighlight, onSe
 }) {
   const t = useTranslation()
   const listRef = useRef<HTMLDivElement>(null)
-  useSuppressBrowserOverlay({ preserveSnapshot: true })
   useEffect(() => {
     listRef.current?.children[selectedIndex]?.scrollIntoView?.({ block: 'nearest' })
   }, [selectedIndex, items])

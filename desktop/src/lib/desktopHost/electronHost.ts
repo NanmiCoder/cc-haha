@@ -202,9 +202,8 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       create: (tabId, options) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserCreate, {
         tabId,
         storageId: options.storageId,
+        webContentsId: options.webContentsId,
         ...(options.url === undefined ? {} : { url: options.url }),
-        ...(options.bounds === undefined ? {} : { bounds: options.bounds }),
-        ...(options.visible === undefined ? {} : { visible: options.visible }),
       }),
       navigate: (tabId, url) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserNavigate, { tabId, url }),
       goBack: tabId => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserGoBack, { tabId }),
@@ -214,7 +213,6 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
         ...(options?.ignoreCache === undefined ? {} : { ignoreCache: options.ignoreCache }),
       }),
       stop: tabId => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserStop, { tabId }),
-      setBounds: (tabId, bounds) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserSetBounds, { tabId, bounds }),
       setVisible: (tabId, visible) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserSetVisible, { tabId, visible }),
       setZoom: (tabId, factor) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserSetZoom, { tabId, factor }),
       find: (tabId, text, options) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserFind, {
@@ -224,7 +222,6 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       }),
       stopFind: tabId => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserStopFind, { tabId }),
       capture: (tabId, kind) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserCapture, { tabId, kind }),
-      snapshot: (tabId) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserSnapshot, { tabId }),
       message: (tabId, payload) => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserMessage, { tabId, payload }),
       printToPdf: tabId => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserPrintToPdf, { tabId }),
       close: tabId => invoke(ELECTRON_IPC_CHANNELS.workspaceBrowserClose, { tabId }),

@@ -1,7 +1,7 @@
 import { getDesktopHost } from '../desktopHost'
 import { usePreviewSelectionStore } from '../../stores/previewSelectionStore'
+import { disposeWorkspaceBrowserGuest } from './browserGuests'
 import type {
-  WorkspaceBrowserBounds,
   WorkspaceBrowserCaptureKind,
   WorkspaceBrowserEvent,
   WorkspaceBrowserFindOptions,
@@ -17,7 +17,8 @@ import type { PreviewHostMessage } from '../desktopHost'
  * old singleton `previewBridge`: with one implicit page, showing a second link
  * silently navigated the first, and unmounting the React surface closed it.
  * Here React unmounting only stops *drawing* a page — the page dies when its
- * tab is closed, and nothing else.
+ * tab is closed, and nothing else. Drawing itself is `browserGuests`' job; the
+ * host only adopts the page's `<webview>` and runs what happens inside it.
  *
  * On hosts without a native browser (plain desktop browser, H5) every method
  * resolves to a typed failure instead of a silent success, so callers can show
@@ -54,7 +55,7 @@ export const workspaceBrowserHost = {
   },
   create: (
     tabId: string,
-    options: { storageId: string; url?: string; bounds?: WorkspaceBrowserBounds; visible?: boolean },
+    options: { storageId: string; url?: string; webContentsId: number },
   ) => call((api) => api.create(tabId, options)),
   navigate: (tabId: string, url: string) => call((api) => api.navigate(tabId, url)),
   goBack: (tabId: string) => call((api) => api.goBack(tabId)),
@@ -62,8 +63,6 @@ export const workspaceBrowserHost = {
   reload: (tabId: string, options?: { ignoreCache?: boolean }) =>
     call((api) => api.reload(tabId, options)),
   stop: (tabId: string) => call((api) => api.stop(tabId)),
-  setBounds: (tabId: string, bounds: WorkspaceBrowserBounds) =>
-    call((api) => api.setBounds(tabId, bounds)),
   setVisible: (tabId: string, visible: boolean) => call((api) => api.setVisible(tabId, visible)),
   setZoom: (tabId: string, factor: number) => call((api) => api.setZoom(tabId, factor)),
   find: (tabId: string, text: string, options?: WorkspaceBrowserFindOptions) =>
@@ -71,10 +70,6 @@ export const workspaceBrowserHost = {
   stopFind: (tabId: string) => call((api) => api.stopFind(tabId)),
   capture: (tabId: string, kind: WorkspaceBrowserCaptureKind) =>
     call((api) => api.capture(tabId, kind)),
-  snapshot: async (tabId: string): Promise<string | null> => {
-    const api = host()
-    return api ? api.snapshot(tabId) : null
-  },
   message: (tabId: string, payload: PreviewHostMessage) =>
     call((api) => api.message(tabId, payload)),
   close: (tabId: string) => call((api) => api.close(tabId)),
@@ -88,6 +83,7 @@ export const workspaceBrowserHost = {
  */
 export function releaseWorkspaceBrowserTab(browserTabId: string): void {
   usePreviewSelectionStore.getState().clear(browserTabId)
+  disposeWorkspaceBrowserGuest(browserTabId)
   void workspaceBrowserHost.close(browserTabId).catch(() => {})
 }
 

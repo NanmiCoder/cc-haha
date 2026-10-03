@@ -10,6 +10,7 @@ import { TraceList } from '../../pages/TraceList'
 import { TraceSession } from '../../pages/TraceSession'
 import { SubagentRunPage, TeamMemberRunPage } from '../../pages/SubagentRunPage'
 import { AgentTeamsWorkbenchTab } from '../agentTeams/AgentTeamsWorkbenchTab'
+import { WorkspaceBrowserGuestLayer } from '../workbench/WorkspaceBrowserGuestLayer'
 import { returnToTraceList } from '../../lib/traceNavigation'
 
 export function ContentRouter() {
@@ -97,18 +98,24 @@ export function ContentRouter() {
 
   return (
     <div className="relative min-h-0 flex-1 overflow-hidden">
-      {retainedSessionId && (
-        <div
-          aria-hidden={!activeSessionId}
-          {...(activeSessionId ? {} : { inert: '' })}
-          data-testid="session-tab-panel"
-          className={`absolute inset-0 flex min-h-0 flex-col overflow-hidden ${
-            activeSessionId ? 'z-10 opacity-100' : 'pointer-events-none z-0 opacity-0'
-          }`}
-        >
+      {/*
+        Always rendered, even with no task to retain: the browser page layer
+        inside it must outlive every task switch, because a page whose element
+        is removed is destroyed and one that is moved reloads.
+      */}
+      <div
+        aria-hidden={!activeSessionId}
+        {...(activeSessionId ? {} : { inert: '' })}
+        data-testid="session-tab-panel"
+        className={`absolute inset-0 flex min-h-0 flex-col overflow-hidden ${
+          activeSessionId ? 'z-10 opacity-100' : 'pointer-events-none z-0 opacity-0'
+        }`}
+      >
+        {retainedSessionId ? (
           <ActiveSession sessionId={retainedSessionId} active={Boolean(activeSessionId)} />
-        </div>
-      )}
+        ) : null}
+        <WorkspaceBrowserGuestLayer />
+      </div>
       {page && (
         <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden">
           {page}

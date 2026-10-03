@@ -3,7 +3,7 @@ import type { PreviewBrowserControlsMessage } from '../lib/desktopHost/types'
 type ZoomControlsConfig = Omit<PreviewBrowserControlsMessage, 'type' | 'v'>
 export type BrowserZoomAction = 'out' | 'in' | 'reset'
 
-/** Lives inside the native page, above its contents; renderer z-index cannot cover a WebContentsView. */
+/** Lives inside the page, above its contents, so it scrolls, zooms and captures with the page itself. */
 export function createZoomControls(onAction: (action: BrowserZoomAction) => void) {
   const host = document.createElement('div')
   host.dataset.workspaceBrowserZoom = 'true'

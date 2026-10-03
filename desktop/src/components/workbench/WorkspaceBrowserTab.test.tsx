@@ -19,13 +19,11 @@ const { host, isAvailable, releaseTab, openExternal, openPath } = vi.hoisted(() 
       goForward: resolved(),
       reload: resolved(),
       stop: resolved(),
-      setBounds: resolved(),
       setVisible: resolved(),
       setZoom: resolved(),
       find: resolved(),
       stopFind: resolved(),
       capture: resolved(),
-      snapshot: vi.fn().mockResolvedValue('data:image/png;base64,BACKDROP'),
       message: resolved(),
       close: resolved(),
       printToPdf: resolved(),
@@ -57,7 +55,7 @@ vi.mock('../../lib/desktopHost', async (importOriginal) => {
 })
 
 import { WorkspaceBrowserTab } from './WorkspaceBrowserTab'
-import { useOverlayStore } from '../../stores/overlayStore'
+import { installFakeBrowserGuests, isBrowserPageShown } from '../../test/fakeBrowserGuests'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useWorkspaceBrowserStore } from '../../stores/workspaceBrowserStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
@@ -125,23 +123,34 @@ async function openMenuItem(action: WorkspaceBrowserMenuAction) {
   await act(async () => { fireEvent.click(screen.getByTestId('workspace-browser-menu-trigger')) })
 }
 
+function pageShown(tab: WorkspaceBrowserTabModel): boolean {
+  return isBrowserPageShown(tab.browserTabId)
+}
+
+/** Lets an element attach, register with the host and report back. */
+async function flushGuests() {
+  for (let tick = 0; tick < 6; tick += 1) await act(async () => {})
+}
+
+let disposeGuests: () => void
+
 beforeEach(() => {
   useSettingsStore.setState({ locale: 'en', uiZoom: 1 })
   useWorkspaceStore.setState({ bySession: {}, sideWidth: 860, bottomHeight: 420 })
   useWorkspaceBrowserStore.setState({ pageByTabId: {}, historyByTabId: {}, downloads: [] })
-  useOverlayStore.setState({ count: 0, snapshotCount: 0 })
   usePreviewSelectionStore.setState({ bySession: {} })
   isAvailable.mockReturnValue(true)
   for (const mock of Object.values(host)) mock.mockReset().mockResolvedValue({ ok: true })
-  host.snapshot.mockResolvedValue('data:image/png;base64,BACKDROP')
   host.showMenu.mockResolvedValue(null)
   releaseTab.mockClear()
   openExternal.mockClear()
   openPath.mockClear()
+  disposeGuests = installFakeBrowserGuests()
 })
 
 afterEach(() => {
   cleanup()
+  disposeGuests()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
@@ -166,14 +175,16 @@ describe('lifecycle readiness', () => {
     )
   })
 
-  it('focuses a newly created empty address bar once its native page is ready', async () => {
+  it('focuses a newly created empty address bar once its page is ready', async () => {
     const tab = openBrowserTab(null)
     const create = deferredCreate()
     host.create.mockReturnValueOnce(create.promise)
     render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
     const address = screen.getByTestId('workspace-browser-address')
     expect(address).toBeDisabled()
+    await flushGuests()
     await act(async () => { create.resolve({ ok: true }) })
+    await flushGuests()
     expect(address).toBeEnabled()
     expect(address).toHaveFocus()
   })
@@ -185,45 +196,42 @@ describe('lifecycle readiness', () => {
     render(<><input aria-label="Chat composer" /><WorkspaceBrowserTab sessionId={SESSION} tab={tab} active /></>)
     const composer = screen.getByRole('textbox', { name: 'Chat composer' })
     act(() => { composer.focus() })
+    await flushGuests()
     await act(async () => { create.resolve({ ok: true }) })
+    await flushGuests()
     expect(composer).toHaveFocus()
   })
 
-  it('does not focus an existing loaded page address bar when snapshots open and close', async () => {
+  it('does not focus an existing loaded page address bar when it is hidden and shown again', async () => {
     const tab = openBrowserTab()
-    await renderReady(<><input aria-label="Chat composer" /><WorkspaceBrowserTab sessionId={SESSION} tab={tab} active /></>)
+    const view = await renderReady(<><input aria-label="Chat composer" /><WorkspaceBrowserTab sessionId={SESSION} tab={tab} active /></>)
     const composer = screen.getByRole('textbox', { name: 'Chat composer' })
     act(() => { composer.focus() })
-    await act(async () => { useOverlayStore.getState().push(true) })
-    act(() => { useOverlayStore.getState().pop(true) })
+    view.rerender(<><input aria-label="Chat composer" /><WorkspaceBrowserTab sessionId={SESSION} tab={tab} active={false} /></>)
+    view.rerender(<><input aria-label="Chat composer" /><WorkspaceBrowserTab sessionId={SESSION} tab={tab} active /></>)
     expect(composer).toHaveFocus()
   })
 
-  it('waits for registration before bounds, visibility or user commands', async () => {
+  it('registers the guest it created with the host, then shows it and takes commands', async () => {
     const creation = deferredCreate()
     host.create.mockReturnValueOnce(creation.promise)
     const tab = openBrowserTab()
     render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
     fireEvent.click(screen.getByRole('button', { name: 'Reload' }))
-    expect(host.setBounds).not.toHaveBeenCalled()
+    await flushGuests()
+    expect(host.create).toHaveBeenCalledWith(tab.browserTabId, {
+      storageId: tab.storageId,
+      webContentsId: expect.any(Number),
+      url: 'https://example.test/',
+    })
+    expect(pageShown(tab)).toBe(false)
     expect(host.setVisible).not.toHaveBeenCalled()
     expect(host.reload).not.toHaveBeenCalled()
 
     await act(async () => creation.resolve({ ok: true }))
-    expect(host.setBounds).toHaveBeenCalledWith(tab.browserTabId, expect.any(Object))
+    await flushGuests()
+    expect(pageShown(tab)).toBe(true)
     expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
-  })
-
-  it('uses registered state before a slow initial navigation finishes', async () => {
-    const creation = deferredCreate()
-    host.create.mockReturnValueOnce(creation.promise)
-    const tab = openBrowserTab()
-    render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    expect(host.setVisible).not.toHaveBeenCalled()
-    emit(pageState(tab.browserTabId, { loading: true }))
-    fireEvent.click(screen.getByRole('button', { name: 'Stop loading' }))
-    expect(host.stop).toHaveBeenCalledWith(tab.browserTabId)
-    await act(async () => creation.resolve({ ok: true }))
   })
 
   it('surfaces failed creation and retries create before accepting navigation', async () => {
@@ -231,15 +239,19 @@ describe('lifecycle readiness', () => {
     host.create.mockReturnValueOnce(creation.promise)
     const tab = openBrowserTab()
     const view = render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
+    await flushGuests()
     await act(async () => creation.reject(new Error('native creation denied')))
+    await flushGuests()
     view.rerender(<WorkspaceBrowserTab sessionId={SESSION} tab={currentTab(tab.id)} active />)
     expect(screen.getByRole('alert')).toHaveTextContent('native creation denied')
-    expect(host.setBounds).not.toHaveBeenCalled()
+    expect(pageShown(tab)).toBe(false)
     expect(host.setVisible).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
-    await waitFor(() => expect(host.create).toHaveBeenCalledTimes(2))
+    await flushGuests()
+    expect(host.create).toHaveBeenCalledTimes(2)
+    // The refused guest was dropped; the retry registered a fresh one.
+    expect(host.create.mock.calls[1]![1].webContentsId).not.toBe(host.create.mock.calls[0]![1].webContentsId)
     expect(host.reload).not.toHaveBeenCalled()
-    await act(async () => {})
     const address = screen.getByTestId('workspace-browser-address')
     fireEvent.change(address, { target: { value: 'https://retry.test/' } })
     fireEvent.submit(address.closest('form')!)
@@ -251,14 +263,15 @@ describe('lifecycle readiness', () => {
     host.create.mockReturnValueOnce(creation.promise)
     const tab = openBrowserTab()
     const view = render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    host.setBounds.mockClear()
+    await flushGuests()
     host.setVisible.mockClear()
     act(() => useWorkspaceStore.getState().closeTab(SESSION, tab.id))
     await act(async () => {
       if (result === 'resolve') creation.resolve({ ok: true })
       else creation.reject(new Error('closed while loading'))
     })
-    expect(host.setBounds).not.toHaveBeenCalled()
+    await flushGuests()
+    expect(pageShown(tab)).toBe(false)
     expect(host.setVisible).not.toHaveBeenCalled()
     expect(useWorkspaceStore.getState().findBrowserTabOwner(tab.browserTabId)).toBeNull()
     view.unmount()
@@ -271,16 +284,18 @@ describe('lifecycle readiness', () => {
     const first = openBrowserTab()
     const second = openBrowserTab('https://second.test/')
     const view = render(<WorkspaceBrowserTab sessionId={SESSION} tab={first} active />)
+    await flushGuests()
     view.rerender(<WorkspaceBrowserTab sessionId={SESSION} tab={second} active />)
-    await act(async () => {})
-    host.setBounds.mockClear()
+    await flushGuests()
     host.setVisible.mockClear()
     await act(async () => {
       if (result === 'resolve') creation.resolve({ ok: true })
       else creation.reject(new Error('old page failed'))
     })
-    expect(host.setBounds).not.toHaveBeenCalled()
-    expect(host.setVisible).not.toHaveBeenCalled()
+    await flushGuests()
+    expect(pageShown(first)).toBe(false)
+    expect(pageShown(second)).toBe(true)
+    expect(host.setVisible).not.toHaveBeenCalledWith(first.browserTabId, expect.anything())
     expect(currentTab(first.id).loadError).toBeNull()
     expect(currentTab(second.id).loadError).toBeNull()
   })
@@ -290,55 +305,41 @@ describe('lifecycle readiness', () => {
     host.create.mockReturnValueOnce(creation.promise)
     const tab = openBrowserTab()
     const view = render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    expect(host.create).toHaveBeenCalledWith(tab.browserTabId, expect.objectContaining({ visible: false }))
+    await flushGuests()
     view.unmount()
     await act(async () => creation.resolve({ ok: true }))
-    expect(host.setBounds).not.toHaveBeenCalled()
+    await flushGuests()
+    expect(pageShown(tab)).toBe(false)
     expect(host.setVisible).not.toHaveBeenCalled()
     expect(host.close).not.toHaveBeenCalled()
   })
 
-  it('does not replay old resize callbacks into the next page identity', async () => {
-    const callbacks: ResizeObserverCallback[] = []
-    vi.stubGlobal('ResizeObserver', class {
-      constructor(callback: ResizeObserverCallback) { callbacks.push(callback) }
-      observe() {}
-      disconnect() {}
-    })
+  it('parks the previous page and draws the next one when the surface switches tabs', async () => {
     const first = openBrowserTab()
     const second = openBrowserTab('https://second.test/')
-    const view = render(<WorkspaceBrowserTab sessionId={SESSION} tab={first} active />)
-    await act(async () => {})
-    const oldCallback = callbacks[0]!
+    const view = await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={first} active />)
+    expect(pageShown(first)).toBe(true)
     view.rerender(<WorkspaceBrowserTab sessionId={SESSION} tab={second} active />)
-    await act(async () => {})
-    host.setBounds.mockClear()
-    act(() => oldCallback([], {} as ResizeObserver))
-    expect(host.setBounds).not.toHaveBeenCalled()
+    await flushGuests()
+    expect(pageShown(first)).toBe(false)
+    expect(pageShown(second)).toBe(true)
+    // Parking is not closing: both pages are still alive.
+    expect(document.querySelectorAll('webview')).toHaveLength(2)
+    expect(host.close).not.toHaveBeenCalled()
   })
 
   it('keeps an initial navigation failure retryable after registration', async () => {
-    const creation = deferredCreate()
-    host.create.mockReturnValueOnce(creation.promise)
     const tab = openBrowserTab()
-    const view = render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    emit(pageState(tab.browserTabId))
-    await act(async () => creation.reject(new Error('ERR_CONNECTION_REFUSED')))
+    const view = await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
+    // The host reports a failed first load as a `failed` event, which the
+    // event bridge writes onto the tab.
+    act(() => useWorkspaceStore.getState().updateBrowserTab(SESSION, tab.browserTabId, { loadError: 'ERR_CONNECTION_REFUSED' }))
     view.rerender(<WorkspaceBrowserTab sessionId={SESSION} tab={currentTab(tab.id)} active />)
     expect(screen.getByRole('alert')).toHaveTextContent('ERR_CONNECTION_REFUSED')
+    expect(pageShown(tab)).toBe(false)
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
     expect(host.reload).toHaveBeenCalledWith(tab.browserTabId, { ignoreCache: true })
     expect(host.create).toHaveBeenCalledTimes(1)
-  })
-
-  it('does not replace a completed initial navigation with its late promise rejection', async () => {
-    const creation = deferredCreate()
-    host.create.mockReturnValueOnce(creation.promise)
-    const tab = openBrowserTab()
-    render(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    emit({ ...pageState(tab.browserTabId), navigationId: 1, navigationOutcome: 'succeeded' } as WorkspaceBrowserEvent)
-    await act(async () => creation.reject(new Error('late initial load rejection')))
-    expect(currentTab(tab.id).loadError).toBeNull()
   })
 
   it('does not replace successful navigation B with late rejected navigation A', async () => {
@@ -357,7 +358,7 @@ describe('lifecycle readiness', () => {
     expect(currentTab(tab.id).loadError).toBeNull()
   })
 
-  it('reports real navigation and geometry errors for a live page', async () => {
+  it('reports real navigation errors for a live page', async () => {
     const tab = openBrowserTab()
     await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
     host.navigate.mockRejectedValueOnce(new Error('navigation denied'))
@@ -365,15 +366,12 @@ describe('lifecycle readiness', () => {
     fireEvent.change(address, { target: { value: 'https://denied.test/' } })
     fireEvent.submit(address.closest('form')!)
     await waitFor(() => expect(currentTab(tab.id).loadError).toBe('navigation denied'))
-    host.setBounds.mockRejectedValueOnce(new Error('native geometry failed'))
-    act(() => window.dispatchEvent(new Event('resize')))
-    await waitFor(() => expect(currentTab(tab.id).loadError).toBe('native geometry failed'))
   })
 })
 
 async function renderReady(ui: Parameters<typeof render>[0]) {
   const view = render(ui)
-  await act(async () => {})
+  await flushGuests()
   return view
 }
 
@@ -478,7 +476,7 @@ describe('native toolbar menu', () => {
     expect(screen.getByTestId('workspace-browser-find')).toBeInTheDocument()
   })
 
-  it.each(['unmount', 'inactive', 'reactivate', 'close', 'replace', 'overlay'] as const)(
+  it.each(['unmount', 'inactive', 'reactivate', 'close', 'replace'] as const)(
     'ignores a late menu action after %s', async (transition) => {
       const tab = openBrowserTab()
       const view = await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
@@ -496,7 +494,6 @@ describe('native toolbar menu', () => {
         const next = openBrowserTab('https://replacement.test/')
         view.rerender(<WorkspaceBrowserTab sessionId={SESSION} tab={next} active />)
       }
-      if (transition === 'overlay') act(() => { useOverlayStore.getState().push() })
       await act(async () => { select('print') })
       expect(host.printToPdf).not.toHaveBeenCalled()
       if (transition === 'replace' || transition === 'reactivate') {
@@ -586,8 +583,7 @@ describe('page lifetime', () => {
     // the entire page. Native menus can cover the live guest without hiding it.
     expect(host.setVisible).not.toHaveBeenCalledWith(tab.browserTabId, false)
     expect(host.showMenu).toHaveBeenCalledWith(tab.browserTabId, expect.any(Object))
-    expect(host.snapshot).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('workspace-browser-backdrop')).toBeNull()
+    expect(pageShown(tab)).toBe(true)
     expect(screen.getByTestId('workspace-browser-menu-trigger')).toHaveAttribute('aria-expanded', 'true')
     await act(async () => { dismiss(null) })
     expect(screen.getByTestId('workspace-browser-menu-trigger')).toHaveAttribute('aria-expanded', 'false')
@@ -664,147 +660,62 @@ describe('page lifetime', () => {
 })
 
 describe('visibility', () => {
-  it('captures a presentation backdrop before hiding the native page for a plus menu and restores the same page', async () => {
+  // The page is composited with the DOM, so nothing that draws over it has to
+  // hide it, snapshot it, or ask it to move — the bug class the native view had.
+  it('keeps the live page drawn under a dialog instead of hiding or snapshotting it', async () => {
     const tab = openBrowserTab()
     await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    let finish!: (url: string) => void
-    host.snapshot.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
+    act(() => {
+      usePreviewSelectionStore.setState({
+        bySession: { [tab.browserTabId]: { items: [{ id: 'one' }], nextNumber: 2 } },
+      } as never)
+    })
     host.setVisible.mockClear()
-    const createCount = host.create.mock.calls.length
-
-    act(() => { useOverlayStore.getState().push(true) })
-    expect(host.snapshot).toHaveBeenCalledWith(tab.browserTabId)
-    expect(host.setVisible).not.toHaveBeenCalledWith(tab.browserTabId, false)
-    await act(async () => { finish('data:image/png;base64,BACKDROP') })
-    expect(screen.getByTestId('workspace-browser-backdrop')).toHaveAttribute('src', 'data:image/png;base64,BACKDROP')
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
-    expect(host.capture).not.toHaveBeenCalled()
-
-    act(() => { useOverlayStore.getState().pop(true) })
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
-    expect(screen.queryByTestId('workspace-browser-backdrop')).toBeNull()
-    expect(host.create).toHaveBeenCalledTimes(createCount)
-    expect(host.close).not.toHaveBeenCalled()
+    const address = screen.getByTestId('workspace-browser-address')
+    fireEvent.change(address, { target: { value: 'https://elsewhere.test/' } })
+    fireEvent.submit(address.closest('form')!)
+    // Navigating away would discard annotations, so the page asks first.
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(pageShown(tab)).toBe(true)
+    expect(host.setVisible).not.toHaveBeenCalled()
     expect(host.navigate).not.toHaveBeenCalled()
   })
 
-  it('does not hide or paint a stale capture after the plus menu has already closed', async () => {
-    const tab = openBrowserTab()
-    await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    let finish!: (url: string) => void
-    host.snapshot.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-    act(() => { useOverlayStore.getState().push(true) })
-    act(() => { useOverlayStore.getState().pop(true) })
-    host.setVisible.mockClear()
-    await act(async () => { finish('data:image/png;base64,STALE') })
-    expect(screen.queryByTestId('workspace-browser-backdrop')).toBeNull()
-    expect(host.setVisible).not.toHaveBeenCalledWith(tab.browserTabId, false)
-  })
-
-  it('keeps menus usable after capture failure without turning it into a page load error', async () => {
-    const tab = openBrowserTab()
-    await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    host.snapshot.mockRejectedValueOnce(new Error('capture unavailable'))
-    await act(async () => { useOverlayStore.getState().push(true) })
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
-    expect(currentTab(tab.id).loadError).toBeFalsy()
-    act(() => { useOverlayStore.getState().pop(true) })
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
-  })
-
-  it('lets an ordinary modal hide immediately while a snapshot is pending', async () => {
-    const tab = openBrowserTab()
-    await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    let finish!: (url: string) => void
-    host.snapshot.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-    act(() => { useOverlayStore.getState().push(true) })
-    act(() => { useOverlayStore.getState().push() })
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
-    await act(async () => { finish('data:image/png;base64,STALE') })
-    expect(screen.queryByTestId('workspace-browser-backdrop')).toBeNull()
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
-  })
-
-  it('bounds capture waiting so a stalled native snapshot cannot trap the menu', async () => {
-    const tab = openBrowserTab()
-    await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    let finish!: (url: string) => void
-    host.snapshot.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-    vi.useFakeTimers()
-    try {
-      act(() => { useOverlayStore.getState().push(true) })
-      expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
-      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
-      expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
-      await act(async () => { finish('data:image/png;base64,TOO_LATE') })
-      expect(screen.queryByTestId('workspace-browser-backdrop')).toBeNull()
-      act(() => { useOverlayStore.getState().pop(true) })
-      expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('discards a pending backdrop when the browser tab is deactivated', async () => {
+  it('draws the page only while its tab is the active one', async () => {
     const tab = openBrowserTab()
     const { rerender } = await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    let finish!: (url: string) => void
-    host.snapshot.mockReturnValueOnce(new Promise(resolve => { finish = resolve }))
-    act(() => { useOverlayStore.getState().push(true) })
-    rerender(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active={false} />)
-    await act(async () => { finish('data:image/png;base64,OTHER_TAB') })
-    expect(screen.queryByTestId('workspace-browser-backdrop')).toBeNull()
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
-    expect(host.close).not.toHaveBeenCalled()
-  })
-
-  it('clears an already displayed backdrop when the underlying page navigates', async () => {
-    const tab = openBrowserTab()
-    await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-    await act(async () => { useOverlayStore.getState().push(true) })
-    expect(screen.getByTestId('workspace-browser-backdrop')).toBeInTheDocument()
-    emit({ type: 'state', tabId: tab.browserTabId, navigationId: 2, url: 'https://next.example/', title: '', loading: true, canGoBack: false, canGoForward: false })
-    expect(screen.queryByTestId('workspace-browser-backdrop')).toBeNull()
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
-  })
-
-  it('attaches the page only while its tab is the active one', async () => {
-    const tab = openBrowserTab()
-    const { rerender } = await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
+    expect(pageShown(tab)).toBe(true)
     expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
 
     rerender(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active={false} />)
+    expect(pageShown(tab)).toBe(false)
     expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
 
     rerender(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
+    expect(pageShown(tab)).toBe(true)
     expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
+    expect(host.create).toHaveBeenCalledTimes(1)
   })
 
-  it('hides the page while a fullscreen DOM overlay is up', async () => {
-    // A native view always paints above the DOM, so an image modal opened over
-    // the workspace would otherwise be covered by the page.
-    const tab = openBrowserTab()
-    await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-
-    act(() => { useOverlayStore.getState().push() })
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
-
-    act(() => { useOverlayStore.getState().pop() })
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
-  })
-
-  it('hides the page while its own downloads overlay is open', async () => {
-    // Same reason, for the overlays this component draws itself: the downloads
-    // and history sheets are DOM, and the page would paint straight over them.
+  it('replaces the page with its own downloads sheet while that is open', async () => {
     const tab = openBrowserTab()
     await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
 
     await openMenuItem('downloads')
     expect(screen.getByTestId('workspace-browser-panel-downloads')).toBeInTheDocument()
+    expect(pageShown(tab)).toBe(false)
     expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false)
 
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    expect(pageShown(tab)).toBe(true)
     expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
+  })
+
+  it('shows the empty state, not a blank page, for a tab without an address', async () => {
+    const tab = openBrowserTab(null)
+    await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
+    expect(pageShown(tab)).toBe(false)
+    expect(document.querySelectorAll('webview')).toHaveLength(1)
   })
 })
 
@@ -1123,7 +1034,6 @@ describe('browser address suggestions', () => {
     expect(options[0]).toHaveTextContent('ChatCut latest')
     expect(options[1]).toHaveTextContent('Chain Sheet')
     expect(screen.getByTestId('workspace-browser-address')).toHaveAttribute('aria-expanded', 'true')
-    expect(useOverlayStore.getState().snapshotCount).toBe(1)
   })
 
   it('filters by title and URL, starts with search, and uses ArrowDown plus Enter to open a history item', async () => {
@@ -1154,7 +1064,6 @@ describe('browser address suggestions', () => {
     fireEvent.pointerDown(option)
     fireEvent.click(option)
     expect(host.navigate).toHaveBeenCalledWith(tab.browserTabId, 'https://chain.test/')
-    expect(useOverlayStore.getState().count).toBe(0)
   })
 
   it('submits the search row but lets IME composition finish first', async () => {
@@ -1169,20 +1078,22 @@ describe('browser address suggestions', () => {
     expect(host.navigate).toHaveBeenCalledWith(tab.browserTabId, 'https://www.google.com/search?q=%E7%95%8C%E9%9D%A2%E8%AE%BE%E8%AE%A1')
   })
 
-  it('keeps the native page behind a presentation snapshot while suggestions are open and restores it on Escape', async () => {
+  it('drops its suggestions over the live page and closes them on Escape without touching the page', async () => {
     seedVisits()
     const tab = openBrowserTab()
     await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
+    host.setVisible.mockClear()
     const address = screen.getByTestId('workspace-browser-address')
     act(() => address.focus())
-    await waitFor(() => expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, false))
-    expect(host.snapshot).toHaveBeenCalledWith(tab.browserTabId)
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    // The list paints over the page; the page itself never had to move.
+    expect(pageShown(tab)).toBe(true)
     fireEvent.change(address, { target: { value: 'unfinished' } })
     fireEvent.keyDown(address, { key: 'Escape' })
     expect(address).toHaveValue(tab.url)
     expect(screen.queryByRole('listbox')).toBeNull()
-    expect(useOverlayStore.getState().count).toBe(0)
-    expect(host.setVisible).toHaveBeenLastCalledWith(tab.browserTabId, true)
+    expect(pageShown(tab)).toBe(true)
+    expect(host.setVisible).not.toHaveBeenCalled()
   })
 })
 

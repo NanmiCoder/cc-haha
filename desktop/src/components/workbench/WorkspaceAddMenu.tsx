@@ -4,7 +4,6 @@ import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '@/i18n'
 import type { WorkspaceDock, WorkspaceTabKind } from '@/lib/workspace/types'
-import { useSuppressBrowserOverlay } from '@/stores/overlayStore'
 import { useMenuKeyboard } from './menuKeyboard'
 import { WorkspaceLauncher } from './WorkspaceLauncher'
 
@@ -24,7 +23,6 @@ export function WorkspaceAddMenu({
 }: WorkspaceAddMenuProps) {
   const t = useTranslation()
   const menuRef = useRef<HTMLDivElement>(null)
-  useSuppressBrowserOverlay({ preserveSnapshot: true })
   const position = useAnchoredPosition({
     open: true, anchorRef, floatingRef: menuRef,
     placement: 'bottom-start', offset: 1, viewportMargin: 6, clampHeight: true,

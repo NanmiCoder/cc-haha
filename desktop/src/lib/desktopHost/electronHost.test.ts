@@ -231,15 +231,13 @@ describe('electron desktop host', () => {
     await host.browser.create('wb-1', {
       storageId: 'wsb-1',
       url: 'https://example.com',
-      bounds: { x: 0, y: 40, width: 800, height: 600 },
-      visible: false,
+      webContentsId: 7,
     })
     await host.browser.navigate('wb-1', 'https://example.com/next')
     await host.browser.goBack('wb-1')
     await host.browser.goForward('wb-1')
     await host.browser.reload('wb-1', { ignoreCache: true })
     await host.browser.stop('wb-1')
-    await host.browser.setBounds('wb-1', { x: 1, y: 2, width: 3, height: 4 })
     await host.browser.setVisible('wb-1', false)
     await host.browser.setZoom('wb-1', 1.25)
     await host.browser.find('wb-1', 'invoice', { matchCase: true })
@@ -254,16 +252,14 @@ describe('electron desktop host', () => {
       [ELECTRON_IPC_CHANNELS.workspaceBrowserCreate, {
         tabId: 'wb-1',
         storageId: 'wsb-1',
+        webContentsId: 7,
         url: 'https://example.com',
-        bounds: { x: 0, y: 40, width: 800, height: 600 },
-        visible: false,
       }],
       [ELECTRON_IPC_CHANNELS.workspaceBrowserNavigate, { tabId: 'wb-1', url: 'https://example.com/next' }],
       [ELECTRON_IPC_CHANNELS.workspaceBrowserGoBack, { tabId: 'wb-1' }],
       [ELECTRON_IPC_CHANNELS.workspaceBrowserGoForward, { tabId: 'wb-1' }],
       [ELECTRON_IPC_CHANNELS.workspaceBrowserReload, { tabId: 'wb-1', ignoreCache: true }],
       [ELECTRON_IPC_CHANNELS.workspaceBrowserStop, { tabId: 'wb-1' }],
-      [ELECTRON_IPC_CHANNELS.workspaceBrowserSetBounds, { tabId: 'wb-1', bounds: { x: 1, y: 2, width: 3, height: 4 } }],
       [ELECTRON_IPC_CHANNELS.workspaceBrowserSetVisible, { tabId: 'wb-1', visible: false }],
       [ELECTRON_IPC_CHANNELS.workspaceBrowserSetZoom, { tabId: 'wb-1', factor: 1.25 }],
       [ELECTRON_IPC_CHANNELS.workspaceBrowserFind, { tabId: 'wb-1', text: 'invoice', options: { matchCase: true } }],
@@ -282,13 +278,12 @@ describe('electron desktop host', () => {
     expect(host.capabilities.workspaceBrowser).toBe(true)
   })
 
-  it('returns a presentation snapshot through its own addressed IPC without requesting a chat capture', async () => {
-    const invoke = vi.fn().mockResolvedValue('data:image/png;base64,BACKDROP')
+  it('refuses to register a page without the guest it names', async () => {
+    const invoke = vi.fn().mockResolvedValue(undefined)
     const host = createElectronHost({ invoke, subscribe: vi.fn() })
-    await expect(host.browser.snapshot('wb-1')).resolves.toBe('data:image/png;base64,BACKDROP')
-    expect(invoke.mock.calls).toEqual([[ELECTRON_IPC_CHANNELS.workspaceBrowserSnapshot, { tabId: 'wb-1' }]])
-    await expect(host.browser.snapshot('')).rejects.toThrow('Invalid Electron IPC payload')
-    expect(invoke).toHaveBeenCalledTimes(1)
+    await expect(host.browser.create('wb-1', { storageId: 'wsb-1', webContentsId: 0 }))
+      .rejects.toThrow('Invalid Electron IPC payload')
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('rejects an unaddressed browser call before it reaches Electron IPC', async () => {

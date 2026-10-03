@@ -12,10 +12,8 @@ const mocks = vi.hoisted(() => ({
   workspaceBrowserHost: {
     create: vi.fn(async () => ({ ok: true })),
     setVisible: vi.fn(async () => ({ ok: true })),
-    setBounds: vi.fn(async () => ({ ok: true })),
     close: vi.fn(async () => ({ ok: true })),
     message: vi.fn(async () => ({ ok: true })),
-    snapshot: vi.fn(async (): Promise<string | null> => null),
   },
 }))
 
@@ -67,6 +65,7 @@ import { WorkspaceSurface, useWorkspaceBrowserEventBridge } from './WorkspaceSur
 import { WorkspaceHeaderProvider } from '../layout/WorkspaceHeaderContext'
 import { TabBar } from '../layout/TabBar'
 import type { WorkspaceBrowserTab } from '../../lib/workspace/types'
+import { installFakeBrowserGuests } from '../../test/fakeBrowserGuests'
 
 const SESSION = 'session-a'
 
@@ -84,10 +83,14 @@ beforeEach(() => {
   mocks.releaseWorkspaceBrowserTab.mockClear()
   mocks.isWorkspaceBrowserAvailable.mockReturnValue(false)
   Object.values(mocks.workspaceBrowserHost).forEach(mock => mock.mockClear())
+  disposeGuests = installFakeBrowserGuests()
 })
+
+let disposeGuests: () => void
 
 afterEach(() => {
   cleanup()
+  disposeGuests()
   vi.unstubAllGlobals()
 })
 
@@ -114,6 +117,32 @@ it('reveals successful navigation and ignores old failures and stopped error doc
   emitEvent({ type: 'failed', tabId: browserTabId, url: 'https://bad.test/', errorCode: -105, errorDescription: 'LATE', navigationId: 1 })
   emitEvent({ ...state, navigationId: 1 })
   expect(useWorkspaceStore.getState().getTab(SESSION, tabId)).toMatchObject({ loadError: null, url: 'https://good.test/' })
+})
+
+it('reloads a crashed page in place but rebuilds a page whose guest was lost', async () => {
+  mocks.isWorkspaceBrowserAvailable.mockReturnValue(true)
+  const tabId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'browser', url: 'https://lost.test/' })!
+  const browserTabId = (useWorkspaceStore.getState().getTab(SESSION, tabId) as WorkspaceBrowserTab).browserTabId
+  renderSurface()
+  await waitFor(() => expect(screen.getByTestId('workspace-browser-address')).toBeEnabled())
+  renderHook(() => useWorkspaceBrowserEventBridge(true))
+  await act(async () => { await Promise.resolve() })
+  const emitEvent = (event: unknown) => act(() => { mocks.subscribeWorkspaceBrowserEvents.mock.calls[0]![0](event) })
+  const [firstGuest] = Array.from(document.querySelectorAll('webview'))
+
+  // A crashed guest still exists: retrying reloads it.
+  emitEvent({ type: 'destroyed', tabId: browserTabId, reason: 'crashed' })
+  expect(screen.getByRole('alert')).toBeInTheDocument()
+  expect(firstGuest!.isConnected).toBe(true)
+
+  // A lost guest is gone: retrying must build and register a new page.
+  emitEvent({ type: 'destroyed', tabId: browserTabId, reason: 'closed' })
+  expect(firstGuest!.isConnected).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }))
+  await waitFor(() => expect(mocks.workspaceBrowserHost.create).toHaveBeenCalledTimes(2))
+  const [first, second] = mocks.workspaceBrowserHost.create.mock.calls as unknown as Array<[string, { webContentsId: number, url?: string }]>
+  expect(second![1].webContentsId).not.toBe(first![1].webContentsId)
+  expect(second![1].url).toBe('https://lost.test/')
 })
 
 it('updates downloads after close without resurrecting page state', async () => {

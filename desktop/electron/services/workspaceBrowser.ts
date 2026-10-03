@@ -12,37 +12,28 @@ import type {
 } from '../../src/lib/desktopHost/types'
 import { parsePreviewAgentMessage, type PreviewAgentMessage } from '../ipc/previewMessage'
 import { parseHostMessage, type HostMessage } from '../../src/preview-agent/protocol'
+import { WORKSPACE_BROWSER_INITIAL_SRC } from '../../src/lib/workspace/browserGuestContract'
 import { isHttpUrl } from './navigationGuards'
-import {
-  normalizePreviewBounds,
-  normalizePreviewUrl,
-  resolvePreviewScriptPath,
-  snapPreviewBoundsToScaleFactor,
-  type PreviewBounds,
-} from './preview'
+import { normalizePreviewUrl, resolvePreviewScriptPath } from './preview'
 import { normalizeZoomFactor } from './zoom'
 import { WorkspaceBrowserMenuController, type WorkspaceBrowserMenuFactory } from './workspaceBrowserMenu'
 
 export type { WorkspaceBrowserCaptureKind, WorkspaceBrowserEvent, WorkspaceBrowserFindOptions }
-
-/**
- * One persistent partition for every workspace browser page of this user.
- *
- * Codex does the same with `persist:codex-browser-app`: a login performed in
- * one tab has to be there in the next one. The per-tab `storageId` is a *page
- * restore identity* — which page to reopen after a restart — and must never be
- * turned into a partition name, or every tab would get its own cookie jar.
- */
-export const WORKSPACE_BROWSER_PARTITION = 'persist:cc-haha-browser-app'
+export { WORKSPACE_BROWSER_PARTITION } from '../../src/lib/workspace/browserGuestContract'
 
 /** Mirrors the preview capture guard rails; a page controls these dimensions. */
 const FULL_CAPTURE_MAX_EDGE = 16_384
 const FULL_CAPTURE_MAX_PIXELS = 32_000_000
 
+/**
+ * A guest that is not on screen has no compositor frame, and `capturePage`
+ * then waits ~30s before failing. Without a bound, a capture racing a tab
+ * switch would keep the page's zoom chrome hidden for that long.
+ */
+const VIEWPORT_CAPTURE_TIMEOUT_MS = 5_000
+
 /** Visit log bound. The native back/forward stack is unaffected by this cap. */
 const MAX_HISTORY_ENTRIES = 200
-
-export type WorkspaceBrowserBounds = PreviewBounds
 
 type WorkspaceBrowserDebuggerLike = {
   isAttached(): boolean
@@ -77,6 +68,7 @@ type WorkspaceBrowserNavigationHistoryLike = {
   canGoForward(): boolean
   goBack(): void
   goForward(): void
+  clear?(): void
 }
 
 export type WorkspaceBrowserWebContentsLike = {
@@ -124,6 +116,7 @@ export type WorkspaceBrowserWebContentsLike = {
     event: 'will-navigate',
     handler: (event: { preventDefault: () => void }, url: string) => void,
   ): unknown
+  on(event: 'destroyed', handler: () => void): unknown
   navigationHistory?: WorkspaceBrowserNavigationHistoryLike
   canGoBack?(): boolean
   canGoForward?(): boolean
@@ -140,49 +133,50 @@ export type WorkspaceBrowserWebContentsLike = {
   isFocused?(): boolean
 }
 
-export type WorkspaceBrowserViewLike = {
-  webContents: WorkspaceBrowserWebContentsLike
-  setBounds(bounds: PreviewBounds): void
-  setVisible?(visible: boolean): void
-}
-
 export type WorkspaceBrowserParentWindowLike = {
   webContents?: {
-    focus(): void
     isDestroyed?(): boolean
   }
   isDestroyed?(): boolean
-  contentView: {
-    addChildView(view: unknown): void
-    removeChildView(view: unknown): void
-  }
-  getBounds?(): PreviewBounds
 }
 
 export type WorkspaceBrowserCreateOptions = {
   storageId: string
   url?: string
-  bounds?: WorkspaceBrowserBounds
-  visible?: boolean
+  /** The `<webview>` guest the renderer created for this page. */
+  webContentsId: number
 }
 
 export type ElectronWorkspaceBrowserServiceOptions = {
-  createView: () => WorkspaceBrowserViewLike
+  /**
+   * Turns a renderer-reported id into the guest it names. It must throw for
+   * anything that is not a workspace browser webview of the main window.
+   */
+  resolveGuest: (webContentsId: number) => WorkspaceBrowserWebContentsLike
   previewScriptPath: string
   emit: (event: WorkspaceBrowserEvent) => void
-  resolveScaleFactor?: (parent: WorkspaceBrowserParentWindowLike) => number
   /** Writes an exported PDF and resolves with the path it landed on. */
   writePdf?: (input: { data: Uint8Array, filename: string }) => Promise<string | null>
   platform?: NodeJS.Platform
   menuFactory?: WorkspaceBrowserMenuFactory
+  /**
+   * Runs a task after the current native dispatch. Electron applies its own
+   * navigation zoom after `did-navigate` listeners return, so a correction made
+   * inside the listener would be overwritten.
+   */
+  defer?: (task: () => void) => void
+  /** Bounds a viewport capture; a hidden guest otherwise stalls for ~30s. */
+  captureTimeoutMs?: number
 }
 
 type WorkspaceBrowserPage = {
   tabId: string
   storageId: string
-  view: WorkspaceBrowserViewLike
-  attached: boolean
-  requestedBounds: PreviewBounds | null
+  webContents: WorkspaceBrowserWebContentsLike
+  /** Whether the renderer currently shows this page. Only it can take input. */
+  presented: boolean
+  /** The guest starts on a blank document whose entry must not be "Back". */
+  initialEntryCleared: boolean
   zoomFactor: number
   controls: PreviewBrowserControlsMessage | null
   controlsSignature: string | null
@@ -234,32 +228,45 @@ export function workspaceBrowserPdfFilename(url: string, title: string): string 
 /**
  * Multi-page browser host.
  *
- * The whole point of this service is that a page's lifetime is decided by
- * `close(tabId)` and nothing else. Hiding a tab, re-bounding it, moving the
- * panel or unmounting the React surface only change where — or whether — a page
- * is drawn; the `webContents` behind it keeps its form state, scroll position
- * and navigation history the entire time.
+ * Each page is a `<webview>` guest the renderer keeps in a layer that is never
+ * unmounted, so the page is composited with the DOM: menus, dialogs and other
+ * pages draw over it like over any element. This service adopts the guest and
+ * owns everything that happens *inside* it — navigation, history, find, zoom,
+ * capture, downloads and the annotation agent.
+ *
+ * A page's lifetime is still decided by `close(tabId)` and nothing else.
+ * Hiding a tab, moving the panel or unmounting the React surface only change
+ * whether a page is drawn; the guest keeps its form state, scroll position and
+ * navigation history the entire time.
  */
 export class ElectronWorkspaceBrowserService {
-  private readonly createView: () => WorkspaceBrowserViewLike
+  private readonly resolveGuest: (webContentsId: number) => WorkspaceBrowserWebContentsLike
   private readonly previewScriptPath: string
   private readonly emit: (event: WorkspaceBrowserEvent) => void
-  private readonly resolveScaleFactor?: (parent: WorkspaceBrowserParentWindowLike) => number
   private readonly writePdf?: (input: { data: Uint8Array, filename: string }) => Promise<string | null>
   private readonly platform: NodeJS.Platform
+  private readonly defer: (task: () => void) => void
+  private readonly captureTimeoutMs: number
   private readonly pages = new Map<string, WorkspaceBrowserPage>()
   private readonly hookedSessions = new Set<WorkspaceBrowserSessionLike>()
+  /**
+   * Page zoom as Chromium keeps it: per host, shared by every page of the
+   * partition. Electron overwrites a guest's zoom with its embedder's whenever
+   * app zoom changes or the guest navigates, so this is the value to restore.
+   */
+  private readonly zoomByHost = new Map<string, number>()
   private parent: WorkspaceBrowserParentWindowLike | null = null
   private downloadSequence = 0
   private readonly menu?: WorkspaceBrowserMenuController
 
   constructor(options: ElectronWorkspaceBrowserServiceOptions) {
-    this.createView = options.createView
+    this.resolveGuest = options.resolveGuest
     this.previewScriptPath = options.previewScriptPath
     this.emit = options.emit
-    this.resolveScaleFactor = options.resolveScaleFactor
     this.writePdf = options.writePdf
     this.platform = options.platform ?? process.platform
+    this.defer = options.defer ?? (task => { setImmediate(task) })
+    this.captureTimeoutMs = options.captureTimeoutMs ?? VIEWPORT_CAPTURE_TIMEOUT_MS
     if (options.menuFactory) this.menu = new WorkspaceBrowserMenuController(options.menuFactory)
   }
 
@@ -268,35 +275,38 @@ export class ElectronWorkspaceBrowserService {
     tabId: string,
     options: WorkspaceBrowserCreateOptions,
   ): Promise<void> {
-    // Validate before anything is constructed or registered: `openPage` inserts
-    // a live view into `this.pages`, and a throw after that point strands a
-    // `webContents` that was never attached and can never be addressed again.
-    const bounds = options.bounds ? normalizePreviewBounds(options.bounds) : null
+    // Validate before anything is registered: a throw after `openPage` would
+    // leave a page this service can neither address nor release.
     const url = options.url ? normalizePreviewUrl(options.url) : null
-    if (options.visible !== undefined && typeof options.visible !== 'boolean') throw new Error('visible must be a boolean')
+    const webContents = this.resolveGuest(options.webContentsId)
 
     this.parent = parent
     const existing = this.pages.get(tabId)
-    // Re-creating a live id would strand its `webContents` with no way to close
-    // it, so an already-known tab keeps its page.
-    const page = existing ?? this.openPage(tabId, options)
-    if (bounds) page.requestedBounds = bounds
-    if (options.visible === false) {
-      this.detach(page)
-      // Registration is complete even while the first navigation is pending.
-      // The renderer may now safely send geometry, visibility and Stop.
-      this.emitState(page)
-    } else this.showExclusively(page)
-    // A live page is NEVER re-navigated from `create`. The renderer re-mounts
-    // this component every time its tab is re-activated, and `loadURL` on an
-    // existing `webContents` is a hard navigation: it would wipe the form the
-    // user had filled in, reset the scroll position and push a duplicate entry
-    // onto the native back stack — destroying exactly the state that keeping
-    // the page alive exists to preserve. Navigation is `navigate()`'s job.
-    if (url && !existing) {
-      await page.view.webContents.loadURL(url)
+    if (existing) {
+      // A live page is NEVER re-navigated from `create`. The renderer asks
+      // again whenever it has to re-establish a page, and `loadURL` on a live
+      // guest is a hard navigation: it would wipe the form the user filled in,
+      // reset the scroll position and push a duplicate back entry.
+      if (existing.webContents !== webContents) {
+        throw new Error(`workspace browser tab already has a live page: ${tabId}`)
+      }
+      this.emitState(existing)
+      return
     }
+    const owner = this.findPageByWebContents(webContents)
+    if (owner) throw new Error(`workspace browser guest already belongs to ${owner.tabId}`)
+
+    const page = this.openPage(tabId, options.storageId, webContents)
+    // Resolving means "registered": the renderer may now send visibility,
+    // Stop and navigation. The first load is an ordinary navigation, so its
+    // failure reaches the tab as a `failed` event like any other — answering
+    // `create` with it would make an adopted page look unregistered.
     this.emitState(page)
+    if (url) {
+      void webContents.loadURL(url).catch(() => {
+        // Reported through `did-fail-load`, or superseded by a newer navigation.
+      })
+    }
   }
 
   async navigate(tabId: string, url: string): Promise<void> {
@@ -304,7 +314,7 @@ export class ElectronWorkspaceBrowserService {
     page.pickerArmed = false
     page.persistentPicker = null
     page.pickerGeneration += 1
-    await page.view.webContents.loadURL(normalizePreviewUrl(url))
+    await page.webContents.loadURL(normalizePreviewUrl(url))
   }
 
   async showMenu(
@@ -317,7 +327,7 @@ export class ElectronWorkspaceBrowserService {
       throw new Error('Workspace browser menu requires its live owner window')
     }
     if (!this.menu) throw new Error('Workspace browser native menu unavailable')
-    const nativeZoom = page.view.webContents.getZoomFactor?.()
+    const nativeZoom = page.webContents.getZoomFactor?.()
     if (nativeZoom !== undefined && Number.isFinite(nativeZoom) && nativeZoom > 0 && nativeZoom !== page.zoomFactor) {
       page.zoomFactor = nativeZoom
       // Menu actions return to the renderer. Its next zoom step must start
@@ -328,7 +338,7 @@ export class ElectronWorkspaceBrowserService {
   }
 
   goBack(tabId: string): void {
-    const webContents = this.requirePage(tabId).view.webContents
+    const webContents = this.requirePage(tabId).webContents
     if (webContents.navigationHistory) {
       webContents.navigationHistory.goBack()
       return
@@ -337,7 +347,7 @@ export class ElectronWorkspaceBrowserService {
   }
 
   goForward(tabId: string): void {
-    const webContents = this.requirePage(tabId).view.webContents
+    const webContents = this.requirePage(tabId).webContents
     if (webContents.navigationHistory) {
       webContents.navigationHistory.goForward()
       return
@@ -346,72 +356,75 @@ export class ElectronWorkspaceBrowserService {
   }
 
   reload(tabId: string, options?: { ignoreCache?: boolean }): void {
-    const webContents = this.requirePage(tabId).view.webContents
+    const webContents = this.requirePage(tabId).webContents
     if (options?.ignoreCache) webContents.reloadIgnoringCache()
     else webContents.reload()
   }
 
   stop(tabId: string): void {
-    this.requirePage(tabId).view.webContents.stop()
-  }
-
-  setBounds(tabId: string, bounds: WorkspaceBrowserBounds): void {
-    const page = this.requirePage(tabId)
-    page.requestedBounds = normalizePreviewBounds(bounds)
-    this.applyBounds(page)
+    this.requirePage(tabId).webContents.stop()
   }
 
   /**
-   * Hiding detaches the native view from the window so it cannot cover a modal
-   * or steal clicks — it never destroys the page.
+   * Records whether the renderer shows this page. Drawing is the renderer's
+   * job; this decides which page may act as browser chrome (shortcuts, zoom
+   * capsule) and closes a native menu that belonged to a page going away.
    */
   setVisible(tabId: string, visible: boolean): void {
     // Controller close may precede the component's passive unmount cleanup.
     // Only hide is an idempotent teardown; showing a missing page is still an error.
     if (!visible && !this.pages.has(tabId)) return
     const page = this.requirePage(tabId)
-    if (visible) this.showExclusively(page)
-    else this.detach(page)
+    page.presented = visible
+    if (!visible) {
+      this.menu?.cancel(page.tabId)
+      return
+    }
+    // Chromium may have changed this page's zoom while it was off screen (a
+    // same-host page zoomed); the controls it shows must read the real value.
+    this.emitState(page)
   }
 
   setZoom(tabId: string, factor: unknown): void {
     const page = this.requirePage(tabId)
     page.zoomFactor = normalizeZoomFactor(factor)
-    page.view.webContents.setZoomFactor?.(page.zoomFactor)
+    this.zoomByHost.set(zoomHostKey(page.webContents.getURL()), page.zoomFactor)
+    page.webContents.setZoomFactor?.(page.zoomFactor)
     // Chromium may apply zoom to another live page on the same origin.
     // Read every native value so controls never report an invented factor.
     for (const current of this.pages.values()) this.emitState(current)
+  }
+
+  /**
+   * Electron copies the embedder's zoom into every guest when app zoom
+   * changes. App zoom never scaled the old native page, so put each page back
+   * at the zoom it had. Must run right after the embedder zoom changes.
+   */
+  restorePageZoom(): void {
+    for (const page of this.pages.values()) {
+      if (page.closed || page.webContents.isDestroyed?.()) continue
+      page.webContents.setZoomFactor?.(page.zoomFactor)
+    }
   }
 
   find(tabId: string, text: string, options?: WorkspaceBrowserFindOptions): void {
     const trimmed = text.trim()
     const page = this.requirePage(tabId)
     if (!trimmed) {
-      page.view.webContents.stopFindInPage('clearSelection')
+      page.webContents.stopFindInPage('clearSelection')
       return
     }
-    page.view.webContents.findInPage(trimmed, options)
+    page.webContents.findInPage(trimmed, options)
   }
 
   stopFind(tabId: string): void {
-    this.requirePage(tabId).view.webContents.stopFindInPage('clearSelection')
+    this.requirePage(tabId).webContents.stopFindInPage('clearSelection')
   }
 
   async capture(tabId: string, kind: WorkspaceBrowserCaptureKind): Promise<void> {
     const page = this.requirePage(tabId)
     const dataUrl = await this.captureDataUrl(page, kind)
     this.emitFor(page, { type: 'screenshot', tabId: page.tabId, dataUrl, kind })
-  }
-
-  /** Presentation-only image: never enters the screenshot/chat event stream. */
-  async snapshot(tabId: string): Promise<string> {
-    const page = this.requirePage(tabId)
-    const navigationId = page.navigationId
-    const dataUrl = await this.captureDataUrl(page, 'viewport')
-    if (page.closed || navigationId !== page.navigationId) {
-      throw new Error('Browser page changed during snapshot')
-    }
-    return dataUrl
   }
 
   async message(tabId: string, payload: unknown): Promise<void> {
@@ -436,7 +449,7 @@ export class ElectronWorkspaceBrowserService {
     const raw = JSON.stringify(isHostPickerMessage(payload) ? { ...payload, generation: page.pickerGeneration } : payload)
     const generation = page.pickerGeneration
     try {
-      await page.view.webContents.executeJavaScript(
+      await page.webContents.executeJavaScript(
         `globalThis.__PREVIEW_BRIDGE__?.handleHostRaw(${JSON.stringify(raw)})`,
       )
     } catch (error) {
@@ -452,7 +465,7 @@ export class ElectronWorkspaceBrowserService {
 
   async printToPdf(tabId: string): Promise<void> {
     const page = this.requirePage(tabId)
-    const webContents = page.view.webContents
+    const webContents = page.webContents
     if (!webContents.printToPDF || !this.writePdf) throw new Error('pdf export unavailable')
     const filename = workspaceBrowserPdfFilename(webContents.getURL(), webContents.getTitle())
     const data = await webContents.printToPDF({ printBackground: true })
@@ -472,15 +485,19 @@ export class ElectronWorkspaceBrowserService {
     })
   }
 
-  /** The only call that ends a page's life. */
+  /**
+   * The only call that ends a page's life. The renderer removes the guest's
+   * element as well; closing here too means a page can never outlive its tab
+   * even if that removal never happens.
+   */
   close(tabId: string): void {
     const page = this.pages.get(tabId)
     if (!page) return
     this.pages.delete(tabId)
     page.closed = true
-    this.detach(page)
-    if (!page.view.webContents.isDestroyed?.()) {
-      page.view.webContents.close?.()
+    this.menu?.cancel(page.tabId)
+    if (!page.webContents.isDestroyed?.()) {
+      page.webContents.close?.()
     }
   }
 
@@ -488,11 +505,6 @@ export class ElectronWorkspaceBrowserService {
     this.menu?.cancel()
     for (const tabId of [...this.pages.keys()]) this.close(tabId)
     this.parent = null
-  }
-
-  /** Re-snaps every live page after a display scale-factor or bounds change. */
-  refreshBounds(): void {
-    for (const page of this.pages.values()) this.applyBounds(page)
   }
 
   /**
@@ -506,14 +518,17 @@ export class ElectronWorkspaceBrowserService {
     return true
   }
 
-  private openPage(tabId: string, options: WorkspaceBrowserCreateOptions): WorkspaceBrowserPage {
-    const view = this.createView()
+  private openPage(
+    tabId: string,
+    storageId: string,
+    webContents: WorkspaceBrowserWebContentsLike,
+  ): WorkspaceBrowserPage {
     const page: WorkspaceBrowserPage = {
       tabId,
-      storageId: options.storageId,
-      view,
-      attached: false,
-      requestedBounds: null,
+      storageId,
+      webContents,
+      presented: false,
+      initialEntryCleared: false,
       zoomFactor: 1,
       controls: null,
       controlsSignature: null,
@@ -532,12 +547,15 @@ export class ElectronWorkspaceBrowserService {
     }
     this.pages.set(tabId, page)
     this.installPageListeners(page)
-    this.hookSession(view.webContents.session)
+    this.hookSession(webContents.session)
+    // The guest attached at its embedder's zoom; a page starts at 100% or at
+    // whatever its host was last zoomed to, exactly as a fresh native page did.
+    this.restoreNavigationZoom(page)
     return page
   }
 
   private installPageListeners(page: WorkspaceBrowserPage): void {
-    const webContents = page.view.webContents
+    const webContents = page.webContents
 
     // Popups become tabs in this window instead of native child windows, which
     // would escape the workspace and the preload/permission boundary with it.
@@ -548,9 +566,19 @@ export class ElectronWorkspaceBrowserService {
     webContents.on('will-navigate', (event, url) => {
       if (!isHttpUrl(url)) event.preventDefault()
     })
+    webContents.on('destroyed', () => {
+      // A guest dies with its element. Unless the tab closed it, the renderer
+      // lost the page (its layer went away) and the tab must offer a retry
+      // instead of addressing a page that no longer exists.
+      if (page.closed || this.pages.get(page.tabId) !== page) return
+      this.pages.delete(page.tabId)
+      page.closed = true
+      this.menu?.cancel(page.tabId)
+      this.emit({ type: 'destroyed', tabId: page.tabId, reason: 'closed' })
+    })
 
     webContents.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown' || !page.attached || page.closed) return
+      if (input.type !== 'keyDown' || !page.presented || page.closed) return
       const action = matchWorkspaceShortcut({
         key: input.key, code: input.code, metaKey: input.meta,
         ctrlKey: input.control, shiftKey: input.shift, altKey: input.alt,
@@ -597,8 +625,17 @@ export class ElectronWorkspaceBrowserService {
       page.pickerGeneration += 1
       page.navigationUrl = url
       page.navigationCommitted = true
+      if (!page.initialEntryCleared && url !== WORKSPACE_BROWSER_INITIAL_SRC) {
+        // The blank document the guest attached with is a real history entry;
+        // a native page had none, so the first page must not be able to go
+        // "Back" to it.
+        page.initialEntryCleared = true
+        webContents.navigationHistory?.clear?.()
+      }
       this.recordVisit(page, url)
       this.emitState(page)
+      // Electron re-applies the embedder's zoom once these listeners return.
+      this.defer(() => this.restoreNavigationZoom(page))
     })
     webContents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
       if (isMainFrame === false) return
@@ -688,8 +725,8 @@ export class ElectronWorkspaceBrowserService {
     if (message.type === 'browser-zoom') {
       // Only the attached page can act as browser chrome. Background pages
       // cannot modify another tab, and no zoom event enters the chat pipeline.
-      if (page.attached && page.controls) {
-        const current = page.view.webContents.getZoomFactor?.() ?? page.zoomFactor
+      if (page.presented && page.controls) {
+        const current = page.webContents.getZoomFactor?.() ?? page.zoomFactor
         this.setZoom(page.tabId, message.action === 'reset' ? 1 : Math.round((current + (message.action === 'in' ? 0.1 : -0.1)) * 10) / 10)
       }
       return
@@ -753,7 +790,7 @@ export class ElectronWorkspaceBrowserService {
   }
 
   private async clearSelectionOverlay(page: WorkspaceBrowserPage, captureId?: number): Promise<void> {
-    const webContents = page.view.webContents
+    const webContents = page.webContents
     if (page.closed || webContents.isDestroyed?.()) return
     try {
       await webContents.executeJavaScript(`globalThis.__PREVIEW_AGENT_CLEAR_SELECTION_OVERLAY__?.(${captureId === undefined ? '' : JSON.stringify(captureId)})`)
@@ -763,7 +800,7 @@ export class ElectronWorkspaceBrowserService {
   }
 
   private async injectPreviewAgent(page: WorkspaceBrowserPage): Promise<void> {
-    const webContents = page.view.webContents
+    const webContents = page.webContents
     if (page.closed || webContents.isDestroyed?.()) return
     page.pickerArmed = false
     page.persistentPicker = null
@@ -777,12 +814,12 @@ export class ElectronWorkspaceBrowserService {
   }
 
   private async syncBrowserControls(page: WorkspaceBrowserPage): Promise<void> {
-    if (!page.controls || page.closed || page.view.webContents.isDestroyed?.()) return
+    if (!page.controls || page.closed || page.webContents.isDestroyed?.()) return
     const raw = JSON.stringify({ ...page.controls, zoomFactor: page.zoomFactor })
     if (page.controlsSignature === raw) return
     page.controlsSignature = raw
     try {
-      await page.view.webContents.executeJavaScript(`globalThis.__PREVIEW_BRIDGE__?.handleHostRaw(${JSON.stringify(raw)})`)
+      await page.webContents.executeJavaScript(`globalThis.__PREVIEW_BRIDGE__?.handleHostRaw(${JSON.stringify(raw)})`)
     } catch (error) {
       if (page.controlsSignature === raw) page.controlsSignature = null
       throw error
@@ -793,7 +830,7 @@ export class ElectronWorkspaceBrowserService {
     page: WorkspaceBrowserPage,
     kind: WorkspaceBrowserCaptureKind,
   ): Promise<string> {
-    const webContents = page.view.webContents
+    const webContents = page.webContents
     const hideChrome = async (hidden: boolean) => {
       if (page.closed || webContents.isDestroyed?.()) return
       await webContents.executeJavaScript(`globalThis.__PREVIEW_AGENT_SET_CHROME_HIDDEN__?.(${hidden})`)
@@ -803,7 +840,11 @@ export class ElectronWorkspaceBrowserService {
       await hideChrome(true)
       if (kind === 'full') return await this.captureFullPageDataUrl(page)
       if (!webContents.capturePage) throw new Error('native browser capture unavailable')
-      const image = await webContents.capturePage()
+      const image = await withTimeout(
+        webContents.capturePage(),
+        this.captureTimeoutMs,
+        'browser capture timed out',
+      )
       return image.toDataURL()
     } finally {
       page.captureCount -= 1
@@ -825,7 +866,7 @@ export class ElectronWorkspaceBrowserService {
   }
 
   private async captureFullPageDataUrlOnce(page: WorkspaceBrowserPage): Promise<string> {
-    const debuggerApi = page.view.webContents.debugger
+    const debuggerApi = page.webContents.debugger
     if (!debuggerApi) throw new Error('full browser capture unavailable')
 
     let attachedHere = false
@@ -876,40 +917,20 @@ export class ElectronWorkspaceBrowserService {
     }
   }
 
-  private showExclusively(page: WorkspaceBrowserPage): void {
-    // A second attached view would sit on top of the first and swallow its
-    // input, so exactly one page occupies the window's single browser slot.
-    for (const other of this.pages.values()) {
-      if (other !== page) this.detach(other)
-    }
-    if (this.parent && !page.attached) {
-      this.parent.contentView.addChildView(page.view)
-      page.attached = true
-    }
-    page.view.setVisible?.(true)
-    this.applyBounds(page)
+  /**
+   * Put a page back at the zoom Chromium would have given it as a native
+   * page: whatever its host was last zoomed to, otherwise 100%. Electron
+   * instead resets a guest to its embedder's zoom, i.e. the app zoom.
+   */
+  private restoreNavigationZoom(page: WorkspaceBrowserPage): void {
+    const webContents = page.webContents
+    if (page.closed || webContents.isDestroyed?.() || !webContents.setZoomFactor) return
+    const wanted = this.zoomByHost.get(zoomHostKey(webContents.getURL())) ?? 1
+    const actual = webContents.getZoomFactor?.()
+    // Factors round-trip through zoom levels, so compare with a tolerance.
+    if (actual !== undefined && Math.abs(actual - wanted) < 0.001) return
+    webContents.setZoomFactor(wanted)
     this.emitState(page)
-  }
-
-  private detach(page: WorkspaceBrowserPage): void {
-    this.menu?.cancel(page.tabId)
-    // A DOM focus request cannot move macOS's native responder out of a
-    // WebContentsView. Capture ownership before hiding/removing the view drops
-    // it, and do not steal focus when a newer page or a host input already owns it.
-    const returnFocus = page.attached && !page.view.webContents.isDestroyed?.() && page.view.webContents.isFocused?.()
-    page.view.setVisible?.(false)
-    if (!page.attached) return
-    this.parent?.contentView.removeChildView(page.view)
-    page.attached = false
-    if (returnFocus && !this.parent?.isDestroyed?.() && !this.parent?.webContents?.isDestroyed?.()) {
-      this.parent?.webContents?.focus()
-    }
-  }
-
-  private applyBounds(page: WorkspaceBrowserPage): void {
-    if (!page.requestedBounds || !this.parent) return
-    const scaleFactor = this.resolveScaleFactor?.(this.parent) ?? 1
-    page.view.setBounds(snapPreviewBoundsToScaleFactor(page.requestedBounds, scaleFactor))
   }
 
   private recordVisit(page: WorkspaceBrowserPage, url: string): void {
@@ -919,24 +940,27 @@ export class ElectronWorkspaceBrowserService {
     if (!isHttpUrl(url)) return
     const last = page.history[page.history.length - 1]
     if (last?.url === url) return
-    page.history.push({ url, title: page.view.webContents.getTitle(), visitedAt: Date.now() })
+    page.history.push({ url, title: page.webContents.getTitle(), visitedAt: Date.now() })
     if (page.history.length > MAX_HISTORY_ENTRIES) page.history.shift()
     this.emitFor(page, { type: 'history', tabId: page.tabId, entries: [...page.history] })
   }
 
   private emitState(page: WorkspaceBrowserPage): void {
-    const webContents = page.view.webContents
+    const webContents = page.webContents
     if (webContents.isDestroyed?.()) return
     const actualZoom = webContents.getZoomFactor?.()
     if (actualZoom !== undefined && Number.isFinite(actualZoom) && actualZoom > 0) page.zoomFactor = actualZoom
     void this.syncBrowserControls(page).catch(error => {
       if (!page.closed) console.error('Failed to update workspace browser controls', error)
     })
+    // Until its first real navigation the guest shows the blank document it
+    // attached with. A tab without a page has no address and no title.
+    const blank = webContents.getURL() === WORKSPACE_BROWSER_INITIAL_SRC
     this.emitFor(page, {
       type: 'state',
       tabId: page.tabId,
-      url: webContents.getURL(),
-      title: webContents.getTitle(),
+      url: blank ? '' : webContents.getURL(),
+      title: blank ? '' : webContents.getTitle(),
       canGoBack: readCanGoBack(webContents),
       canGoForward: readCanGoForward(webContents),
       loading: webContents.isLoading(),
@@ -960,7 +984,7 @@ export class ElectronWorkspaceBrowserService {
   private findPageByWebContents(webContents: unknown): WorkspaceBrowserPage | null {
     if (!webContents) return null
     for (const page of this.pages.values()) {
-      if (page.view.webContents === webContents) return page
+      if (page.webContents === webContents) return page
     }
     return null
   }
@@ -975,6 +999,29 @@ export class ElectronWorkspaceBrowserService {
     if (!page) throw new Error(`workspace browser tab not open: ${tabId}`)
     return page
   }
+}
+
+/**
+ * Chromium keys page zoom by host name alone — port and scheme do not count —
+ * or by the whole URL when there is no host (`net::GetHostOrSpecFromURL`).
+ */
+function zoomHostKey(url: string): string {
+  try {
+    const { hostname } = new URL(url)
+    return hostname ? hostname.replace(/\.$/, '') : url
+  } catch {
+    return url
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), ms)
+    }),
+  ]).finally(() => clearTimeout(timer))
 }
 
 function readCanGoBack(webContents: WorkspaceBrowserWebContentsLike): boolean {

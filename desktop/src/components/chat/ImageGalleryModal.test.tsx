@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ImageGalleryModal } from './ImageGalleryModal'
 import { browserHost } from '../../lib/desktopHost/browserHost'
 import { openLocalFileWithSystem, reportOpenFailure } from '../../lib/systemFileOpen'
-import { useOverlayStore } from '../../stores/overlayStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 
 vi.mock('../../lib/systemFileOpen', () => ({
@@ -22,85 +21,11 @@ const gallery = [
 ]
 
 const reset = () => {
-  useOverlayStore.setState(useOverlayStore.getInitialState(), true)
   useSettingsStore.setState({ locale: 'en' })
 }
 
 beforeEach(reset)
 afterEach(reset)
-
-describe('ImageGalleryModal · overlay suppression', () => {
-  it('increments overlay count while open and decrements on unmount', () => {
-    expect(useOverlayStore.getState().count).toBe(0)
-
-    const { unmount } = render(
-      <ImageGalleryModal
-        open
-        images={images}
-        activeIndex={0}
-        onClose={() => {}}
-        onSelect={() => {}}
-      />,
-    )
-    expect(useOverlayStore.getState().count).toBe(1)
-
-    unmount()
-    expect(useOverlayStore.getState().count).toBe(0)
-  })
-
-  it('does not increment when rendered with open=false', () => {
-    const { unmount } = render(
-      <ImageGalleryModal
-        open={false}
-        images={images}
-        activeIndex={0}
-        onClose={() => {}}
-        onSelect={() => {}}
-      />,
-    )
-    expect(useOverlayStore.getState().count).toBe(0)
-    unmount()
-    expect(useOverlayStore.getState().count).toBe(0)
-  })
-
-  it('toggles count when open prop flips closed → open → closed', () => {
-    const { rerender, unmount } = render(
-      <ImageGalleryModal
-        open={false}
-        images={images}
-        activeIndex={0}
-        onClose={() => {}}
-        onSelect={() => {}}
-      />,
-    )
-    expect(useOverlayStore.getState().count).toBe(0)
-
-    rerender(
-      <ImageGalleryModal
-        open
-        images={images}
-        activeIndex={0}
-        onClose={() => {}}
-        onSelect={() => {}}
-      />,
-    )
-    expect(useOverlayStore.getState().count).toBe(1)
-
-    rerender(
-      <ImageGalleryModal
-        open={false}
-        images={images}
-        activeIndex={0}
-        onClose={() => {}}
-        onSelect={() => {}}
-      />,
-    )
-    expect(useOverlayStore.getState().count).toBe(0)
-
-    unmount()
-    expect(useOverlayStore.getState().count).toBe(0)
-  })
-})
 
 describe('ImageGalleryModal · navigation', () => {
   it('names both arrows, which an icon-only control otherwise lacks', () => {

@@ -13,6 +13,7 @@ import { useWorkspaceBrowserStore } from '../../stores/workspaceBrowserStore'
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { openWorkspaceTarget, workspaceOpen } from '../../lib/workspace/openTarget'
 import { subscribeWorkspaceBrowserEvents } from '../../lib/workspace/browserHost'
+import { forgetLostWorkspaceBrowserGuest } from '../../lib/workspace/browserGuests'
 import type { WorkspaceCloseScope, WorkspaceDock, WorkspaceTabKind } from '../../lib/workspace/types'
 import { WorkspaceTabStrip } from './WorkspaceTabStrip'
 import { WorkspaceLauncher } from './WorkspaceLauncher'
@@ -335,6 +336,9 @@ export function useWorkspaceBrowserEventBridge(enabled: boolean) {
           })
           break
         case 'destroyed':
+          // A crashed guest still exists and reloads in place. A closed one is
+          // gone, so its retry has to build a new page.
+          if (event.reason === 'closed') forgetLostWorkspaceBrowserGuest(event.tabId)
           store.updateBrowserTab(owner.sessionId, event.tabId, {
             // A reason code is not a message. It reaches the error overlay, so
             // it has to be a translated sentence in all five languages.
