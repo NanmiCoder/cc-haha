@@ -1967,6 +1967,19 @@ describe('MessageList nested tool calls', () => {
     expect(firstTopChunk.style.contentVisibility).toBe('auto')
     expect(firstTopChunk.style.containIntrinsicSize).toMatch(/^0 \d+px$/)
 
+    // At native 80% zoom, each chunk's layout rounding accumulates. The outer
+    // box must own the requested total, or switching a virtual boundary can
+    // change scrollHeight by ~20px and trigger another native scroll event.
+    for (const position of ['top', 'bottom']) {
+      const spacer = container.querySelector<HTMLElement>(`[data-virtual-spacer="${position}"]`)!
+      const requestedHeight = Array.from(spacer.children).reduce(
+        (total, chunk) => total + Number.parseFloat((chunk as HTMLElement).style.height),
+        0,
+      )
+      expect(Number.parseFloat(spacer.style.height)).toBeCloseTo(requestedHeight, 6)
+      expect(spacer.classList.contains('overflow-hidden')).toBe(true)
+    }
+
     // Items inside the active window must NOT carry content-visibility (this
     // is the regression guard that previous content-visibility rollout hit).
     const visibleItems = container.querySelectorAll('[data-virtual-message-item]')

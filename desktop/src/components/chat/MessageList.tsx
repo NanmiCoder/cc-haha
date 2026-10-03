@@ -2181,7 +2181,14 @@ function VirtualSpacer({ height, position }: { height: number; position: 'top' |
   }
 
   return (
-    <div data-virtual-spacer={position} aria-hidden="true">
+    <div
+      data-virtual-spacer={position}
+      aria-hidden="true"
+      className="overflow-hidden"
+      // Fractional zoom rounds each chunk independently. Keep their accumulated
+      // error out of scrollHeight so native scrolling cannot toggle the window.
+      style={{ height }}
+    >
       {chunks.map((chunk) => (
         <div
           key={chunk.key}
