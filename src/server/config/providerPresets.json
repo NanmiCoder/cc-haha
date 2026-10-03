@@ -304,6 +304,22 @@
     }
   },
   {
+    "id": "unifically",
+    "name": "Unifically",
+    "baseUrl": "https://api.unifically.com",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "anthropic/claude-sonnet-5",
+      "haiku": "anthropic/claude-haiku-4-5",
+      "sonnet": "anthropic/claude-sonnet-5",
+      "opus": "anthropic/claude-opus-5"
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://unifically.com",
+    "apiKeyUrl": "https://unifically.com/api-keys",
+    "authStrategy": "auth_token"
+  },
+  {
     "id": "apismart",
     "name": "ApiSmart",
     "defaultImageGeneration": { "model": "doubao-seedream-5-0" },
