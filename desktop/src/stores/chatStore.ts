@@ -209,6 +209,7 @@ export type PerSessionState = {
   composerPrefill?: {
     text: string
     attachments?: UIAttachment[]
+    sessionReferences?: Array<{ sessionId: string }>
     mode?: ComposerPrefillMode
     nonce: number
   } | null
@@ -442,10 +443,19 @@ type ChatStore = {
       messages: UIMessage[]
       backgroundAgentTasks?: Record<string, BackgroundAgentTask>
     },
+    /** Reject errors and skipped/incomplete reloads after a destructive rewind. */
+    options?: { requireApplied?: boolean },
   ) => Promise<void>
   queueComposerPrefill: (
     sessionId: string,
-    prefill: { text: string; attachments?: UIAttachment[]; mode?: ComposerPrefillMode },
+    prefill: {
+      text: string
+      attachments?: UIAttachment[]
+      sessionReferences?: Array<{ sessionId: string }>
+      mode?: ComposerPrefillMode
+    },
+    /** Retain an edit after its committed rewind outlives the source tab. */
+    options?: { restoreMissingSession?: boolean },
   ) => void
   clearComposerPrefill: (sessionId: string, nonce?: number) => void
   queueComposerInsertion: (
@@ -3043,6 +3053,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           historyBootstrapDisabled: options?.minimalBootstrap === true,
           activeGoal: existing?.activeGoal ?? null,
           composerDraft: existing?.composerDraft ?? null,
+          composerPrefill: existing?.composerPrefill ?? null,
           repositoryLaunchDraft: existing?.repositoryLaunchDraft ?? null,
           queuedUserMessages: existing?.queuedUserMessages ?? [],
           backgroundAgentTasks: existing?.backgroundAgentTasks ?? {},
@@ -4072,8 +4083,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     await loadOlderHistoryPage(sessionId, get, set)
   },
 
-  reloadHistory: async (sessionId, guard) => {
-    if (isSideChatSession(sessionId)) return
+  reloadHistory: async (sessionId, guard, options) => {
+    const skipReload = () => {
+      if (options?.requireApplied) throw new Error('History reload was not applied')
+    }
+    if (isSideChatSession(sessionId)) return skipReload()
     if (historyPageControllers.has(sessionId)) {
       historyPageControllers.get(sessionId)?.abort()
       historyPageControllers.delete(sessionId)
@@ -4092,7 +4106,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       if (pendingLoad?.lifecycleGeneration === lifecycleGeneration) {
         await pendingLoad.promise
       }
-      if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration) || controller.signal.aborted) return
+      if (!isCurrentHistoryLifecycle(sessionId, lifecycleGeneration) || controller.signal.aborted) return skipReload()
       historyRecoveryControllers.get(sessionId)?.abort()
       historyRecoveryControllers.delete(sessionId)
       // A reload can queue behind a cold load. Capture snapshot baselines only
@@ -4125,12 +4139,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         sessionOwnedActivityToolUseIds(get().sessions[sessionId]),
         controller.signal,
       )
+      // A partial reload merges existing rows. It cannot prove that a rewound
+      // turn disappeared, so strict callers must keep their draft for retry.
+      if (options?.requireApplied && !historyComplete) return skipReload()
       durableHistoryRows.set(sessionId, new WeakSet(uiMessages))
 
       if (
         !isCurrentHistoryLifecycle(sessionId, lifecycleGeneration) ||
         historyReloadGenerations.get(sessionId) !== reloadGeneration
-      ) return
+      ) return skipReload()
 
       if (guard) {
         const current = get().sessions[sessionId]
@@ -4139,7 +4156,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           current.chatState !== 'idle' ||
           (current.historyMutationEpoch ?? 0) !== requestedMutationEpoch
         ) {
-          return
+          return skipReload()
         }
       }
 
@@ -4242,7 +4259,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
       })
 
-      if (!historyApplied) return
+      if (!historyApplied) return skipReload()
       if (!historyComplete && page) void recoverSessionHistory(sessionId, page.sourceVersion)
       const terminalReconnectBoundary = terminalReconnectHistoryBoundaries.get(sessionId)
       if (
@@ -4306,7 +4323,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           requestedTasks,
         )
       }
-    } catch {
+    } catch (error) {
       // A stop failure can arrive before the task history that identifies it.
       // If that history request fails, surface the failure instead of leaving it
       // cached forever waiting for a reconciliation that may never happen.
@@ -4328,22 +4345,34 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             )),
         }
       })
+      if (options?.requireApplied) throw error
     } finally {
       if (historyReloadControllers.get(sessionId) === controller) historyReloadControllers.delete(sessionId)
     }
   },
 
-  queueComposerPrefill: (sessionId, prefill) => {
-    set((state) => ({
-      sessions: updateSessionIn(state.sessions, sessionId, () => ({
-        composerPrefill: {
-          text: prefill.text,
-          attachments: prefill.attachments,
-          mode: prefill.mode,
-          nonce: Date.now(),
+  queueComposerPrefill: (sessionId, prefill, options) => {
+    set((state) => {
+      const session = state.sessions[sessionId] ?? (
+        options?.restoreMissingSession ? createDefaultSessionState() : undefined
+      )
+      if (!session) return state
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...session,
+            composerPrefill: {
+              text: prefill.text,
+              attachments: prefill.attachments,
+              ...(prefill.sessionReferences ? { sessionReferences: prefill.sessionReferences } : {}),
+              mode: prefill.mode,
+              nonce: Date.now(),
+            },
+          },
         },
-      })),
-    }))
+      }
+    })
   },
 
   clearComposerPrefill: (sessionId, nonce) => {
@@ -7235,7 +7264,7 @@ function getReferenceName(referencePath: string): string {
   return name || referencePath
 }
 
-function extractLeadingFileReferences(text: string): {
+export function extractLeadingFileReferences(text: string): {
   content: string
   attachments?: UIAttachment[]
   modelContent?: string

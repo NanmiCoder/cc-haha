@@ -9828,7 +9828,7 @@ describe('MessageList edit and resend', () => {
     await waitFor(() => expect(queueComposerPrefill).toHaveBeenCalledWith(ACTIVE_TAB, {
       text: 'Build a landing page',
       attachments: [],
-    }))
+    }, { restoreMissingSession: true }))
     expect(sendMessage).not.toHaveBeenCalled()
     expect(useUIStore.getState().toasts).toEqual([
       expect.objectContaining({ type: 'warning' }),
@@ -9878,9 +9878,9 @@ describe('MessageList edit and resend', () => {
 
     await waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
     const [, content, attachments, options] = sendMessage.mock.calls[0]!
-    expect(content).toBe(`${referencePrompt}\n\nHow do I stop it?`)
+    expect(content).toBe(`${referencePrompt.replace('src/app.ts:L3-L5', '/repo/src/app.ts:L3-L5')}\n\nHow do I stop it?`)
     expect(attachments).toEqual([
-      expect.objectContaining({ type: 'file', path: 'src/app.ts', lineStart: 3, lineEnd: 5, quote: 'for (;;) {}' }),
+      expect.objectContaining({ type: 'file', path: '/repo/src/app.ts', lineStart: 3, lineEnd: 5, quote: 'for (;;) {}' }),
       { type: 'image', name: 'shot.png', mimeType: 'image/png', data: 'data:image/png;base64,AAAA' },
     ])
     expect(options).toMatchObject({ displayContent: 'How do I stop it?' })

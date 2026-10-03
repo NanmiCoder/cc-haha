@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { sessionsApi, type SessionRewindMode, type SessionRewindResponse, type SessionTurnCheckpoint } from '../../api/sessions'
 import type { ActionDialogAction } from '@/components/ui/ActionDialog'
 import type { TranslationKey } from '../../i18n/locales/en'
@@ -23,7 +23,10 @@ export type EditableTurnCard = {
   checkpoint: { target: SessionTurnCheckpoint['target'] }
 }
 
+type EditContext = { sessionId: string | null | undefined; active: boolean }
+
 type PendingConfirm = {
+  context: EditContext
   messageId: string
   card: EditableTurnCard
   draft: UserMessageEditDraft
@@ -83,10 +86,26 @@ export function useUserMessageEditResend({
   setRewindingTurnId,
   t,
 }: Options) {
-  const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
-  const [submittingMessageId, setSubmittingMessageId] = useState<string | null>(null)
+  const [editing, setEditing] = useState<{ sessionId: string; messageId: string } | null>(null)
+  const [submitting, setSubmitting] = useState<{ context: EditContext; messageId: string } | null>(null)
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null)
   const draftsRef = useRef(new Map<string, UserMessageEditDraft>())
+  // A new identity also invalidates A → B → A requests and captured dialog actions.
+  const contextRef = useRef<EditContext>({ sessionId, active: true })
+  if (contextRef.current.sessionId !== sessionId) contextRef.current = { sessionId, active: true }
+  const context = contextRef.current
+  const editingMessageId = editing && editing.sessionId === sessionId ? editing.messageId : null
+  const submittingMessageId = submitting?.context === context ? submitting.messageId : null
+  const isCurrentContext = useCallback((candidate: EditContext) =>
+    candidate.active && contextRef.current === candidate, [])
+
+  useEffect(() => {
+    const current = contextRef.current
+    current.active = true
+    setRewindingTurnId(null)
+    return () => { current.active = false }
+  }, [sessionId, setRewindingTurnId])
+
   const messagesRef = useRef(messages)
   messagesRef.current = messages
 
@@ -113,24 +132,26 @@ export function useUserMessageEditResend({
     [t],
   )
 
-  const closeEditor = useCallback((messageId: string) => {
-    draftsRef.current.delete(messageId)
-    setEditingMessageId((current) => current === messageId ? null : current)
+  const closeEditor = useCallback((targetSessionId: string, messageId: string) => {
+    draftsRef.current.delete(JSON.stringify([targetSessionId, messageId]))
+    setEditing((current) => current?.sessionId === targetSessionId && current.messageId === messageId ? null : current)
   }, [])
 
   const runResend = useCallback(async (
+    requestContext: EditContext,
     messageId: string,
     card: EditableTurnCard,
     draft: UserMessageEditDraft,
     payload: UserMessageResendPayload,
     mode: SessionRewindMode,
   ) => {
-    if (!sessionId) return
+    const targetSessionId = requestContext.sessionId
+    if (!targetSessionId || !isCurrentContext(requestContext)) return
     const addToast = useUIStore.getState().addToast
     setRewindingTurnId(messageId)
     let result: SessionRewindResponse
     try {
-      result = await rewindToTurnCheckpoint(sessionId, {
+      result = await rewindToTurnCheckpoint(targetSessionId, {
         checkpointTarget: card.checkpoint.target,
         expectedContent: card.target.expectedContent,
       }, mode)
@@ -138,46 +159,55 @@ export function useUserMessageEditResend({
       // The server rewinds atomically: a failed rewind left the conversation
       // and the files as they were, so the draft stays open for another try.
       addToast({ type: 'error', message: t('chat.editResendFailed', { detail: getApiErrorMessage(error) }) })
-      setConfirm(null)
-      setRewindingTurnId(null)
+      if (isCurrentContext(requestContext)) {
+        setConfirm(null)
+        setRewindingTurnId(null)
+      }
       return
     }
 
     // From here the old turn is gone. The edit must reach either the model or
     // the composer — never be dropped with the editor.
-    closeEditor(messageId)
-    setConfirm(null)
+    closeEditor(targetSessionId, messageId)
+    if (isCurrentContext(requestContext)) setConfirm(null)
     const chatStore = useChatStore.getState()
     let sent = false
     try {
-      await chatStore.reloadHistory(sessionId)
-      if ((useChatStore.getState().sessions[sessionId]?.chatState ?? 'idle') === 'idle') {
-        useChatStore.getState().sendMessage(sessionId, payload.content, payload.attachments, payload.options)
+      const session = chatStore.sessions[targetSessionId]
+      await chatStore.reloadHistory(targetSessionId, {
+        messages: session?.messages ?? [],
+        backgroundAgentTasks: session?.backgroundAgentTasks,
+      }, { requireApplied: true })
+      if (useChatStore.getState().sessions[targetSessionId]?.chatState === 'idle') {
+        useChatStore.getState().sendMessage(targetSessionId, payload.content, payload.attachments, payload.options)
         sent = true
       }
     } catch {
       sent = false
     }
     if (!sent) {
-      useChatStore.getState().queueComposerPrefill(sessionId, {
+      useChatStore.getState().queueComposerPrefill(targetSessionId, {
         text: draft.text,
         attachments: draft.attachments.filter((attachment) => attachment.sendable),
-      })
+        ...(draft.sessionReferences.length > 0 ? { sessionReferences: draft.sessionReferences } : {}),
+      }, { restoreMissingSession: true })
       addToast({ type: 'warning', message: t('chat.editResendPrefilled') })
     } else if (mode === 'both') {
       addToast(describeRewindResult(result, mode, t))
     }
-    setRewindingTurnId(null)
-  }, [closeEditor, sessionId, setRewindingTurnId, t])
+    if (isCurrentContext(requestContext)) setRewindingTurnId(null)
+  }, [closeEditor, isCurrentContext, setRewindingTurnId, t])
 
   const submit = useCallback(async (messageId: string, draft: UserMessageEditDraft) => {
+    const requestContext = context
+    if (!isCurrentContext(requestContext)) return
     const card = editableCards.get(messageId)
     if (!sessionId || !card || disabled || submittingMessageId || rewindingTurnId) return
     const payload = buildUserMessageResendPayload(draft, { contextReferencesOnly })
     if (!payload) return
-    draftsRef.current.set(messageId, draft)
+    draftsRef.current.set(JSON.stringify([sessionId, messageId]), draft)
 
-    setSubmittingMessageId(messageId)
+    setSubmitting({ context: requestContext, messageId })
     let preview: SessionRewindResponse
     try {
       preview = await sessionsApi.rewind(sessionId, {
@@ -187,14 +217,16 @@ export function useUserMessageEditResend({
         dryRun: true,
       })
     } catch (error) {
+      if (!isCurrentContext(requestContext)) return
       useUIStore.getState().addToast({
         type: 'error',
         message: t('chat.editResendFailed', { detail: getApiErrorMessage(error) }),
       })
-      setSubmittingMessageId(null)
+      setSubmitting(null)
       return
     }
-    setSubmittingMessageId(null)
+    if (!isCurrentContext(requestContext)) return
+    setSubmitting(null)
 
     const canRestoreCode = preview.code.available &&
       preview.code.filesChanged.length > 0 &&
@@ -203,11 +235,11 @@ export function useUserMessageEditResend({
     // Nothing on disk to decide about and nothing beyond this turn to lose:
     // the edit is the whole consequence, so it goes straight through.
     if (!canRestoreCode && preview.restoreAvailable !== false && laterTurns === 0) {
-      await runResend(messageId, card, draft, payload, 'conversation')
+      await runResend(requestContext, messageId, card, draft, payload, 'conversation')
       return
     }
-    setConfirm({ messageId, card, draft, payload, preview, laterTurns, canRestoreCode })
-  }, [contextReferencesOnly, disabled, editableCards, rewindingTurnId, runResend, sessionId, submittingMessageId, t])
+    setConfirm({ context: requestContext, messageId, card, draft, payload, preview, laterTurns, canRestoreCode })
+  }, [context, contextReferencesOnly, disabled, editableCards, isCurrentContext, rewindingTurnId, runResend, sessionId, submittingMessageId, t])
 
   const editActionByMessageId = useMemo(() => {
     const result = new Map<string, UserMessageEditAction>()
@@ -224,15 +256,17 @@ export function useUserMessageEditResend({
         editing,
         submitting: submittingMessageId === messageId || rewindingTurnId === messageId,
         disabled: disabled || Boolean(rewindingTurnId && rewindingTurnId !== messageId),
-        getDraft: () => draftsRef.current.get(messageId) ?? createUserMessageEditDraft(message),
+        getDraft: () => draftsRef.current.get(JSON.stringify([sessionId, messageId])) ?? createUserMessageEditDraft(message),
         onStart: () => {
-          setEditingMessageId((current) => {
-            if (current && current !== messageId) draftsRef.current.delete(current)
-            return messageId
+          setEditing((current) => {
+            if (current && (current.sessionId !== sessionId || current.messageId !== messageId)) {
+              draftsRef.current.delete(JSON.stringify([current.sessionId, current.messageId]))
+            }
+            return { sessionId, messageId }
           })
         },
-        onCancel: () => closeEditor(messageId),
-        onDraftChange: (draft) => { draftsRef.current.set(messageId, draft) },
+        onCancel: () => closeEditor(sessionId, messageId),
+        onDraftChange: (draft) => { draftsRef.current.set(JSON.stringify([sessionId, messageId]), draft) },
         onSubmit: (draft) => { void submit(messageId, draft) },
       })
     }
@@ -242,7 +276,7 @@ export function useUserMessageEditResend({
   const dialog = useMemo<UserMessageEditDialog>(() => {
     const busy = Boolean(rewindingTurnId)
     const close = () => { if (!busy) setConfirm(null) }
-    if (!confirm) {
+    if (!confirm || !isCurrentContext(confirm.context)) {
       return { open: false, title: '', body: null, actions: [], loading: false, onClose: close }
     }
     const { preview, laterTurns, canRestoreCode } = confirm
@@ -270,7 +304,7 @@ export function useUserMessageEditResend({
       </div>
     )
     const run = (mode: SessionRewindMode) => {
-      void runResend(confirm.messageId, confirm.card, confirm.draft, confirm.payload, mode)
+      void runResend(confirm.context, confirm.messageId, confirm.card, confirm.draft, confirm.payload, mode)
     }
     const actions: ActionDialogAction[] = [
       { label: t('common.cancel'), onClick: close, variant: 'secondary' },
@@ -296,7 +330,7 @@ export function useUserMessageEditResend({
       loading: busy,
       onClose: close,
     }
-  }, [confirm, rewindingTurnId, runResend, t])
+  }, [confirm, context, isCurrentContext, rewindingTurnId, runResend, t])
 
   return { editActionByMessageId, dialog }
 }

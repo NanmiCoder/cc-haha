@@ -16778,3 +16778,148 @@ describe('chatStore inactive complete-page retention', () => {
     }
   })
 })
+
+// Edit-and-resend must not send on a swallowed error or an obsolete response:
+// the old turn has already been removed from the server transcript.
+describe('chatStore strict history reload', () => {
+  const sessionId = 'strict-history-reload'
+  const strict = { requireApplied: true }
+  const oldMessages: UIMessage[] = [
+    { id: 'rewound-user', type: 'user_text', content: 'Removed prompt', timestamp: 1 },
+    { id: 'rewound-reply', type: 'assistant_text', content: 'Removed reply', timestamp: 2 },
+  ]
+
+  beforeEach(() => {
+    vi.mocked(sessionsApi.getFullHistory).mockReset()
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [] })
+    useChatStore.setState({
+      ...initialState,
+      sessions: { [sessionId]: makeSession({ chatState: 'idle', historyHydrated: true, messages: oldMessages }) },
+    })
+  })
+
+  it('rejects a failed fetch instead of treating stale messages as refreshed', async () => {
+    const failure = new Error('History unavailable after rewind')
+    vi.mocked(sessionsApi.getFullHistory).mockRejectedValueOnce(failure)
+    await expect(useChatStore.getState().reloadHistory(sessionId, undefined, strict)).rejects.toBe(failure)
+    expect(useChatStore.getState().sessions[sessionId]?.messages).toBe(oldMessages)
+  })
+
+  it('keeps best-effort reload failures compatible for existing callers', async () => {
+    vi.mocked(sessionsApi.getFullHistory).mockRejectedValueOnce(new Error('History unavailable'))
+    await expect(useChatStore.getState().reloadHistory(sessionId)).resolves.toBeUndefined()
+    expect(useChatStore.getState().sessions[sessionId]?.messages).toBe(oldMessages)
+  })
+
+  it('resolves once complete authoritative history replaces the removed turn', async () => {
+    await expect(useChatStore.getState().reloadHistory(sessionId, undefined, strict)).resolves.toBeUndefined()
+    expect(useChatStore.getState().sessions[sessionId]?.messages).toEqual([])
+    expect(useChatStore.getState().sessions[sessionId]?.historyStatus).toBe('ready')
+  })
+
+  it('rejects a superseded response even when the transport ignores abort', async () => {
+    let resolveFirst!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve }))
+    const rejected = expect(useChatStore.getState().reloadHistory(sessionId, undefined, strict)).rejects.toThrow('History reload was not applied')
+    await useChatStore.getState().reloadHistory(sessionId)
+    resolveFirst({ messages: [{ id: 'stale', type: 'user', content: 'Stale', timestamp: '2026-10-03T00:00:00Z' }] })
+    await rejected
+    expect(useChatStore.getState().sessions[sessionId]?.messages).toEqual([])
+  })
+
+  it('rejects a response for a disconnected session without recreating it', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => { resolveHistory = resolve }))
+    const rejected = expect(useChatStore.getState().reloadHistory(sessionId, undefined, strict)).rejects.toThrow('History reload was not applied')
+    useChatStore.getState().disconnectSession(sessionId)
+    resolveHistory({ messages: [] })
+    await rejected
+    expect(useChatStore.getState().sessions[sessionId]).toBeUndefined()
+  })
+
+  it('rejects a guarded reload when a live prompt changes the conversation', async () => {
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => { resolveHistory = resolve }))
+    const rejected = expect(useChatStore.getState().reloadHistory(sessionId, { messages: oldMessages }, strict)).rejects.toThrow('History reload was not applied')
+    useChatStore.getState().handleServerMessage(sessionId, { type: 'user_message_replay', content: 'Competing prompt' })
+    const liveMessages = useChatStore.getState().sessions[sessionId]?.messages
+    resolveHistory({ messages: [] })
+    await rejected
+    expect(useChatStore.getState().sessions[sessionId]?.messages).toBe(liveMessages)
+    expect(liveMessages).toContainEqual(expect.objectContaining({ content: 'Competing prompt' }))
+  })
+
+  it('rejects incomplete history instead of retaining removed rows as authoritative', async () => {
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({ messages: [], page: {
+      nextCursor: 'older', hasMore: true, historyComplete: false,
+      sourceVersion: 'version', scannedBytes: 2, omittedOversizedEntries: 1,
+    } })
+    await expect(useChatStore.getState().reloadHistory(sessionId, undefined, strict)).rejects.toThrow('History reload was not applied')
+    expect(useChatStore.getState().sessions[sessionId]?.messages).toBe(oldMessages)
+  })
+})
+
+describe('chatStore composer prefill references', () => {
+  const sessionId = 'prefill-references'
+
+  beforeEach(() => {
+    useChatStore.setState({ ...initialState, sessions: { [sessionId]: makeSession({ chatState: 'idle' }) } })
+  })
+
+  it('retains session context with an edited prompt handed to the composer', () => {
+    const sessionReferences = [{ sessionId: 'referenced-session' }]
+    useChatStore.getState().queueComposerPrefill(sessionId, { text: 'Edited prompt', sessionReferences })
+    expect(useChatStore.getState().sessions[sessionId]?.composerPrefill).toMatchObject({
+      text: 'Edited prompt', sessionReferences,
+    })
+  })
+
+  it('keeps the existing prefill shape when no session references were supplied', () => {
+    useChatStore.getState().queueComposerPrefill(sessionId, { text: 'Existing prefill' })
+    expect(useChatStore.getState().sessions[sessionId]?.composerPrefill).not.toHaveProperty('sessionReferences')
+  })
+})
+
+
+// A completed rewind must retain its edit even when the source tab was closed
+// while the API call was pending; delayed ordinary prefills must stay ignored.
+describe('chatStore closed-session edit recovery', () => {
+  const sessionId = 'closed-edit-recovery'
+  const prefill = {
+    text: 'Recovered edit',
+    attachments: [{ type: 'file' as const, name: 'app.ts', path: '/repo/app.ts' }],
+    sessionReferences: [{ sessionId: 'context-session' }],
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useChatStore.setState({ ...initialState, sessions: {} })
+  })
+
+  it('ignores a normal delayed prefill for a missing session', () => {
+    useChatStore.getState().queueComposerPrefill(sessionId, prefill)
+    expect(useChatStore.getState().sessions[sessionId]).toBeUndefined()
+  })
+
+  it('retains an explicitly recovered edit without opening a socket or sending it', async () => {
+    const { wsManager } = await import('../api/websocket')
+    useChatStore.getState().queueComposerPrefill(sessionId, prefill, { restoreMissingSession: true })
+    expect(useChatStore.getState().sessions[sessionId]).toMatchObject({
+      connectionState: 'disconnected', chatState: 'idle', messages: [], composerPrefill: prefill,
+    })
+    expect(wsManager.connect).not.toHaveBeenCalled()
+    expect(wsManager.send).not.toHaveBeenCalled()
+    expect(sessionsApi.getFullHistory).not.toHaveBeenCalled()
+  })
+
+  it('preserves the recovered prefill when the user reopens its disconnected session', () => {
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ connectionState: 'disconnected', chatState: 'idle' }) } })
+    useChatStore.getState().queueComposerPrefill(sessionId, prefill)
+    const recovered = useChatStore.getState().sessions[sessionId]?.composerPrefill
+    useChatStore.getState().connectToSession(sessionId, { minimalBootstrap: true, prewarm: false, applyRuntimeSelection: false })
+    expect(useChatStore.getState().sessions[sessionId]?.composerPrefill).toBe(recovered)
+    expect(useChatStore.getState().sessions[sessionId]?.connectionState).toBe('connecting')
+    expect(sessionsApi.getFullHistory).not.toHaveBeenCalled()
+    expect(sendMock).not.toHaveBeenCalled()
+  })
+})

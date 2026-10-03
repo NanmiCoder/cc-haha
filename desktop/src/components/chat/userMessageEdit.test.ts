@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { UIMessage } from '../../types/chat'
+import type { UIAttachment, UIMessage } from '../../types/chat'
+import { formatWorkspaceReferencePrompt, type WorkspaceChatReference } from '../../stores/workspaceChatContextStore'
 import {
   buildUserMessageResendPayload,
   countLaterUserTurns,
@@ -37,7 +38,7 @@ describe('createUserMessageEditDraft', () => {
     expect(draft.attachments).toEqual([
       expect.objectContaining({
         type: 'file',
-        path: 'src/app.ts',
+        path: '/repo/src/app.ts',
         lineStart: 3,
         lineEnd: 5,
         note: 'why does this loop',
@@ -92,6 +93,76 @@ describe('createUserMessageEditDraft', () => {
     expect(draft.attachments).toEqual([])
   })
 
+  it.each([false, true])('preserves distinct suffix paths from composer references (loaded: %s)', (loaded) => {
+    const reference: WorkspaceChatReference = {
+      id: 'root-selection', kind: 'code-selection', name: 'config.ts',
+      path: 'config.ts', absolutePath: '/repo/config.ts',
+      lineStart: 1, lineEnd: 1, quote: 'root config',
+    }
+    const referencePrompt = formatWorkspaceReferencePrompt([reference])
+    // ChatInput prefixes uploads before the absolute workspace reference paths.
+    // Previously the display parser consumed the upload as the selection and
+    // editing permanently dropped that distinct file from the model payload.
+    const liveAttachments: UIAttachment[] = [
+      { type: 'file', name: 'config.ts', path: '/repo/sub/config.ts', mimeType: 'text/typescript' },
+      { type: 'file', name: reference.name, path: reference.path,
+        lineStart: reference.lineStart, lineEnd: reference.lineEnd, quote: reference.quote },
+    ]
+    const draft = createUserMessageEditDraft({
+      content: 'Compare these',
+      modelContent: `@"/repo/sub/config.ts" @"${reference.absolutePath}" ${referencePrompt}\n\nCompare these`,
+      // The old history display parser has already omitted the wrong prefix.
+      attachments: loaded
+        ? [{ type: 'file', name: 'config.ts', path: '/repo/config.ts' }, liveAttachments[1]!]
+        : liveAttachments,
+    })
+    const payload = buildUserMessageResendPayload(draft, labels)!
+    expect(payload.attachments.map(attachment => attachment.path))
+      .toEqual(['/repo/sub/config.ts', '/repo/config.ts'])
+    expect(payload.attachments[1]).toMatchObject({ lineStart: 1, quote: 'root config' })
+    if (!loaded) expect(payload.attachments[0]?.mimeType).toBe('text/typescript')
+  })
+
+  it('keeps separate selections and their original diff metadata on one file', () => {
+    const references: WorkspaceChatReference[] = [
+      { id: 'first', kind: 'code-comment', path: 'src/config.ts', absolutePath: '/repo/src/config.ts',
+        name: 'config.ts', lineStart: 2, diffSide: 'old', hunkId: 'hunk-first', note: ' first ', quote: ' first quote ' },
+      { id: 'second', kind: 'code-comment', path: 'src/config.ts', absolutePath: '/repo/src/config.ts',
+        name: 'config.ts', lineStart: 8, diffSide: 'new', hunkId: 'hunk-second', quote: 'second quote' },
+    ]
+    const draft = createUserMessageEditDraft({
+      content: 'Review',
+      modelContent: `@"/repo/other/src/config.ts" @"/repo/src/config.ts" @"/repo/src/config.ts" ${formatWorkspaceReferencePrompt(references)}\n\nReview`,
+      attachments: [
+        { type: 'file', name: 'config.ts', path: '/repo/other/src/config.ts' },
+        ...references.map((reference): UIAttachment => ({
+          type: 'file', name: reference.name, path: reference.path, lineStart: reference.lineStart,
+          diffSide: reference.diffSide, hunkId: reference.hunkId, note: reference.note, quote: reference.quote,
+        })),
+      ],
+    })
+    expect(draft.attachments.map(attachment => attachment.path))
+      .toEqual(['/repo/other/src/config.ts', '/repo/src/config.ts', '/repo/src/config.ts'])
+    expect(draft.attachments[1]).toMatchObject({ hunkId: 'hunk-first', lineStart: 2, diffSide: 'old' })
+    expect(draft.attachments[2]).toMatchObject({ hunkId: 'hunk-second', lineStart: 8, diffSide: 'new' })
+  })
+
+  it('merges exact original attachment metadata instead of losing image data and directory identity', () => {
+    const draft = createUserMessageEditDraft({
+      content: 'Look',
+      modelContent: '@"/repo/shot.png" @"/repo/assets" Look',
+      attachments: [
+        { type: 'image', name: 'Original screenshot', path: '/repo/shot.png', data: 'data:image/png;base64,AAAA', mimeType: 'image/png' },
+        { type: 'file', name: 'assets', path: '/repo/assets', isDirectory: true },
+      ],
+    })
+    expect(draft.attachments).toHaveLength(2)
+    expect(draft.attachments[0]).toMatchObject({ name: 'Original screenshot', data: 'data:image/png;base64,AAAA', mimeType: 'image/png' })
+    expect(draft.attachments[1]).toMatchObject({ isDirectory: true })
+    expect(buildUserMessageResendPayload(draft, labels)?.attachments[0])
+      .toEqual({ type: 'image', name: 'Original screenshot', mimeType: 'image/png', data: 'data:image/png;base64,AAAA' })
+  })
+
   it('marks an attachment with neither data nor a path as not sendable', () => {
     const draft = createUserMessageEditDraft({
       content: 'Summarize',
@@ -124,9 +195,9 @@ describe('buildUserMessageResendPayload', () => {
     })
     const payload = buildUserMessageResendPayload({ ...draft, text: 'Please delete it instead' }, labels)!
 
-    expect(payload.content).toBe(`${WORKSPACE_PROMPT}\n\nPlease delete it instead`)
+    expect(payload.content).toBe(`${WORKSPACE_PROMPT.replace('src/app.ts', '/repo/src/app.ts')}\n\nPlease delete it instead`)
     expect(payload.attachments).toEqual([
-      expect.objectContaining({ type: 'file', path: 'src/app.ts', lineStart: 3, lineEnd: 5 }),
+      expect.objectContaining({ type: 'file', path: '/repo/src/app.ts', lineStart: 3, lineEnd: 5 }),
     ])
     expect(payload.options.displayContent).toBe('Please delete it instead')
 
@@ -134,7 +205,7 @@ describe('buildUserMessageResendPayload', () => {
     // the replacement would drift.
     const reread = createUserMessageEditDraft({
       content: 'Please delete it instead',
-      modelContent: `@"src/app.ts" ${payload.content}`,
+      modelContent: `@"/repo/src/app.ts" ${payload.content}`,
     })
     expect(reread.text).toBe('Please delete it instead')
     expect(reread.attachments.map(({ id: _id, ...rest }) => rest))

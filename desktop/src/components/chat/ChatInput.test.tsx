@@ -652,6 +652,46 @@ describe('ChatInput file mentions', () => {
     expect(getComposerText()).toBe('draft before switching project')
   })
 
+  it('restores path-only files and images from an edit fallback without losing their paths', async () => {
+    render(<ChatInput compact />)
+    act(() => useChatStore.getState().queueComposerPrefill(sessionId, {
+      text: 'edited prompt',
+      attachments: [
+        { type: 'file', name: 'notes.md', path: '/repo/notes.md' },
+        { type: 'image', name: 'shot.png', path: '/repo/shot.png', mimeType: 'image/png' },
+      ],
+    }))
+    await waitFor(() => expect(getComposerText()).toBe('edited prompt'))
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      content: 'edited prompt',
+      attachments: [
+        expect.objectContaining({ type: 'file', path: '/repo/notes.md' }),
+        expect.objectContaining({ type: 'image', path: '/repo/shot.png', mimeType: 'image/png' }),
+      ],
+    }))
+  })
+
+  it('restores removable workspace and session references from an edit fallback', async () => {
+    render(<ChatInput compact />)
+    act(() => useChatStore.getState().queueComposerPrefill(sessionId, {
+      text: 'edited prompt',
+      attachments: [{ type: 'file', name: 'app.ts', path: '/repo/app.ts', lineStart: 3, lineEnd: 5, quote: 'for (;;) {}', note: 'stop this loop', diffSide: 'new', hunkId: 'hunk-1' }],
+      sessionReferences: [{ sessionId: 'referenced-session' }],
+    }))
+    await waitFor(() => expect(getComposerText()).toContain('edited prompt'))
+    expect(screen.getByRole('button', { name: /Remove app.ts/ })).toBeTruthy()
+    expect(getComposerElement().querySelector('[data-mention-kind="session"]')).toBeTruthy()
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      content: expect.stringContaining('for (;;) {}'),
+      attachments: [expect.objectContaining({ path: '/repo/app.ts', lineStart: 3, lineEnd: 5, quote: 'for (;;) {}', note: 'stop this loop' })],
+      sessionReferences: [{ sessionId: 'referenced-session' }],
+    }))
+    const message = useChatStore.getState().sessions[sessionId]!.messages.findLast((row) => row.type === 'user_text')
+    expect(message).toMatchObject({ attachments: [expect.objectContaining({ diffSide: 'new', hunkId: 'hunk-1' })] })
+  })
+
   it('restores an unsent composer draft after the composer unmounts', async () => {
     const { unmount } = render(<ChatInput compact />)
 

@@ -2,6 +2,7 @@ import { useSideChatStore } from '@/stores/sideChatStore'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { parseSideQuestionCommand } from './composerUtils'
 import { getSessionReferences } from '@/lib/composerMentions'
+import { normalizeSessionReferences } from '@/lib/sessionReferences'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
@@ -448,21 +449,49 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     if (!composerPrefill || !activeTabId) return
 
     const nextAttachments = (composerPrefill.attachments ?? [])
-      .filter((attachment) => attachment.type === 'image' || attachment.data)
+      .filter((attachment) => attachment.path || attachment.data)
       .map((attachment, index) => ({
         id: `composer-prefill-${composerPrefill.nonce}-${index}`,
         name: attachment.name,
         type: attachment.type,
         mimeType: attachment.mimeType,
+        path: attachment.path,
         previewUrl: attachment.type === 'image' ? attachment.data : undefined,
         data: attachment.data,
+        isDirectory: attachment.isDirectory,
+        lineStart: attachment.lineStart,
+        lineEnd: attachment.lineEnd,
+        diffSide: attachment.diffSide,
+        hunkId: attachment.hunkId,
+        note: attachment.note,
+        quote: attachment.quote,
       }))
+    const contextAttachments = nextAttachments.filter((attachment) => attachment.type === 'file' && attachment.path && (
+      attachment.lineStart || attachment.note?.trim() || attachment.quote?.trim() || attachment.diffSide || attachment.hunkId
+    ))
+    const uploads = nextAttachments.filter((attachment) => !contextAttachments.includes(attachment))
 
     if (composerPrefill.mode === 'append') {
-      setComposerAttachments((previous) => [...previous, ...nextAttachments])
+      setComposerAttachments((previous) => [...previous, ...uploads])
     } else {
-      setComposerInput(composerPrefill.text, [])
-      setComposerAttachments(nextAttachments)
+      let restored = { text: composerPrefill.text, mentions: [] as ComposerMention[] }
+      for (const reference of normalizeSessionReferences(composerPrefill.sessionReferences)) {
+        const title = useSessionStore.getState().sessions.find((session) => session.id === reference.sessionId)?.title
+        restored = insertMentionIntoText(restored.text, restored.mentions, restored.text.length, restored.text.length, {
+          kind: 'session', id: reference.sessionId, label: title || reference.sessionId,
+          path: '', isDirectory: false,
+        })
+      }
+      setComposerInput(restored.text, restored.mentions)
+      setComposerAttachments(uploads)
+      clearWorkspaceReferences(activeTabId)
+    }
+    for (const attachment of contextAttachments) {
+      addWorkspaceReference(activeTabId, {
+        ...attachment,
+        path: attachment.path!,
+        kind: attachment.diffSide || attachment.hunkId ? 'code-comment' : attachment.lineStart ? 'code-selection' : 'file',
+      })
     }
     setPlusMenuOpen(false)
     setSlashMenuOpen(false)
@@ -480,7 +509,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     clearComposerPrefill(activeTabId, composerPrefill.nonce)
   }, [
     activeTabId,
+    addWorkspaceReference,
     clearComposerPrefill,
+    clearWorkspaceReferences,
     composerPrefill,
     setComposerAttachments,
     setComposerInput,

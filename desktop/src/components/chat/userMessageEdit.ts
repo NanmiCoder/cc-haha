@@ -1,4 +1,6 @@
+import { splitSessionReferenceContext } from '@/lib/sessionReferences'
 import {
+  extractLeadingFileReferences,
   extractRestoredUserDisplay,
   pathsReferToSameFile,
   stripGeneratedImageMetadataLines,
@@ -46,6 +48,77 @@ function isSendable(attachment: UIAttachment): boolean {
   return Boolean(attachment.data || attachment.path)
 }
 
+function normalizeAttachmentPath(path: string | undefined): string | undefined {
+  return path?.replace(/\\/g, '/').replace(/^\.\//, '')
+}
+
+function referenceContextKey(attachment: UIAttachment): string {
+  return JSON.stringify([
+    attachment.lineStart,
+    attachment.lineEnd ?? attachment.lineStart,
+    attachment.diffSide,
+    attachment.note?.trim() || undefined,
+    attachment.quote?.trim() || undefined,
+  ])
+}
+
+type AttachmentCandidate = { attachment: UIAttachment; paths: Array<string | undefined> }
+
+function reconstructAttachments(
+  leading: UIAttachment[],
+  workspace: UIAttachment[],
+  originals: UIAttachment[],
+): UIAttachment[] {
+  const unmatchedLeading = leading.map((attachment) => ({ attachment, paths: [attachment.path] }))
+  const references: AttachmentCandidate[] = workspace.map((attachment) => ({ attachment, paths: [attachment.path] }))
+  const findLeading = (path: string | undefined, exact: boolean) => {
+    for (let index = unmatchedLeading.length - 1; index >= 0; index -= 1) {
+      const candidatePath = unmatchedLeading[index]!.attachment.path
+      if (exact
+        ? normalizeAttachmentPath(candidatePath) === normalizeAttachmentPath(path)
+        : pathsReferToSameFile(candidatePath, path)
+      ) return index
+    }
+    return -1
+  }
+  // The composer sends upload paths first, then workspace paths in reference
+  // order. Match from the end so a root-file selection cannot consume an upload
+  // with the same suffix; retain every unmatched absolute transport path.
+  for (let index = references.length - 1; index >= 0; index -= 1) {
+    const reference = references[index]!
+    let matchingIndex = findLeading(reference.attachment.path, true)
+    if (matchingIndex < 0) matchingIndex = findLeading(reference.attachment.path, false)
+    if (matchingIndex >= 0) {
+      const [matched] = unmatchedLeading.splice(matchingIndex, 1)
+      reference.paths.push(matched!.attachment.path)
+      reference.attachment = { ...reference.attachment, path: matched!.attachment.path }
+    }
+  }
+
+  const candidates: AttachmentCandidate[] = [...unmatchedLeading, ...references]
+  const unmatchedOriginals = originals.filter((attachment) => attachment.referenceKind !== 'chat-selection')
+  for (const candidate of candidates) {
+    const matchingIndex = unmatchedOriginals.findIndex((original) =>
+      original.path && candidate.paths.some((path) =>
+        normalizeAttachmentPath(path) === normalizeAttachmentPath(original.path),
+      ) && referenceContextKey(original) === referenceContextKey(candidate.attachment),
+    )
+    if (matchingIndex < 0) continue
+    const [original] = unmatchedOriginals.splice(matchingIndex, 1)
+    const metadata = Object.fromEntries(Object.entries(original!).filter(([, value]) => value !== undefined))
+    candidate.attachment = { ...candidate.attachment, ...metadata, path: candidate.attachment.path }
+  }
+  // The display parser may already have lost a prefix on a reloaded message.
+  // Its remaining bare chip is redundant with a recovered canonical path, but
+  // distinct absolute paths and data-only uploads must survive.
+  const extraAttachments = unmatchedOriginals.filter((original) =>
+    !original.path || !candidates.some((candidate) => candidate.paths.some((path) =>
+      normalizeAttachmentPath(path) === normalizeAttachmentPath(original.path),
+    )),
+  )
+  return [...candidates.map((candidate) => candidate.attachment), ...extraAttachments]
+}
+
 /**
  * Rebuild what the user originally typed from the prompt that actually reached
  * the model. Parsing the model-facing text with the same reader history uses
@@ -60,22 +133,18 @@ export function createUserMessageEditDraft(
   const messageAttachments = message.attachments ?? []
   const hasImage = messageAttachments.some((attachment) => attachment.type === 'image')
   const source = message.modelContent ?? message.content
-  const parsed = extractRestoredUserDisplay(hasImage ? stripGeneratedImageMetadataLines(source) : source)
-  const parsedAttachments = parsed.attachments ?? []
-
-  // Message attachments add what the model text cannot carry — inline images
-  // and data-only uploads. Chat selections are already part of the text body,
-  // and anything with a path the text already referenced would be a duplicate.
-  const extraAttachments = messageAttachments.filter((attachment) =>
-    attachment.referenceKind !== 'chat-selection' &&
-    !parsedAttachments.some((candidate) => attachment.path && pathsReferToSameFile(candidate.path, attachment.path)),
-  )
-
-  const attachments = [...parsedAttachments, ...extraAttachments].map((attachment, index) => ({
-    ...attachment,
-    id: `edit-attachment-${index}`,
-    sendable: isSendable(attachment),
-  }))
+  const sanitized = hasImage ? stripGeneratedImageMetadataLines(source) : source
+  const referenceContext = splitSessionReferenceContext(sanitized)
+  // Parse transport prefixes separately: the history display reader otherwise
+  // deduplicates absolute paths against relative workspace paths by suffix.
+  const leading = extractLeadingFileReferences(referenceContext.content)
+  const parsed = extractRestoredUserDisplay(leading.content)
+  const attachments = reconstructAttachments(leading.attachments ?? [], parsed.attachments ?? [], messageAttachments)
+    .map((attachment, index) => ({
+      ...attachment,
+      id: `edit-attachment-${index}`,
+      sendable: isSendable(attachment),
+    }))
 
   const body = parsed.content.trim()
   const text = attachments.length > 0 && ATTACHMENT_ONLY_PLACEHOLDERS.has(body) ? '' : body
@@ -83,7 +152,7 @@ export function createUserMessageEditDraft(
   return {
     text,
     attachments,
-    sessionReferences: message.sessionReferences ?? parsed.sessionReferences ?? [],
+    sessionReferences: message.sessionReferences ?? referenceContext.sessionReferences,
   }
 }
 
