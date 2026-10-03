@@ -278,6 +278,29 @@ describe('MarketHome infinite scroll', () => {
   })
 })
 
+it('lays the controls and the cards on one page surface instead of a band over a tinted canvas', () => {
+  // The catalog redesign put the title, disclaimer, chips and search on a white
+  // band ruled off from a tinted canvas holding the cards. The extensions frame,
+  // the plugins tab and the skill detail are all the plain page surface, so the
+  // seam read as two pages glued together and the canvas flashed on every
+  // home ↔ detail switch.
+  render(<MarketHome onRequestInstall={vi.fn()} />)
+  const scroll = screen.getByTestId('market-scroll')
+  expect(scroll.className).toContain('bg-[var(--color-surface)]')
+
+  const anchors = [
+    screen.getByRole('heading', { name: 'Skills Market' }),
+    screen.getByTestId('market-result-summary'),
+    screen.getByTestId('market-grid'),
+  ]
+  for (const anchor of anchors) {
+    for (let node = anchor.parentElement; node && node !== scroll; node = node.parentElement) {
+      expect(node.className).not.toMatch(/\bbg-\[/)
+      expect(node.className).not.toMatch(/\bborder-b\b/)
+    }
+  }
+})
+
 it('keeps featured skill packages inside the existing scroll surface alongside search and installed skills', () => {
   render(<MarketHome onRequestInstall={vi.fn()} featured={<div data-testid="curated-skill-packages" />} />)
   expect(screen.getByTestId('market-scroll')).toContainElement(screen.getByTestId('curated-skill-packages'))

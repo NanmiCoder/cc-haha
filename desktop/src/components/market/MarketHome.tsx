@@ -143,13 +143,13 @@ export function MarketHome({ onRequestInstall, featured }: { onRequestInstall: (
     <div
       ref={scrollRef}
       data-testid="market-scroll"
-      className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface-container-low)]"
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface)]"
     >
-      {/* The top band holds everything that decides *what* is listed — title,
-          disclaimer, categories, search and filters — on the page surface; the
-          cards sit on the tinted canvas below it. */}
-      <div className="flex-shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-        <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-4 px-6 pb-5 pt-6 lg:px-10">
+      {/* One page surface from the title to the last card, like the plugins tab
+          and the skill detail. The controls and the cards are told apart by
+          spacing and the cards' own border, not by a band of a second color. */}
+      <div className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col px-6 pb-10 pt-6 lg:px-10">
+        <div className="flex flex-col gap-4">
           <header className="flex flex-wrap items-start gap-x-3.5 gap-y-3">
             <span className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-[var(--radius-lg)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]">
               <Store className="h-[22px] w-[22px]" strokeWidth={1.6} aria-hidden="true" />
@@ -234,10 +234,8 @@ export function MarketHome({ onRequestInstall, featured }: { onRequestInstall: (
             <FilterBar />
           </div>
         </div>
-      </div>
 
-      <div className="mx-auto flex w-full max-w-[1280px] flex-1 flex-col px-6 pb-10 pt-5 lg:px-10">
-        <div className="flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <div className="mt-7 flex min-h-8 flex-wrap items-center justify-between gap-x-3 gap-y-2">
           <p
             data-testid="market-result-summary"
             aria-live="polite"
