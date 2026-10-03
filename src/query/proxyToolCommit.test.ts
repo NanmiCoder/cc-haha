@@ -240,12 +240,17 @@ for (const scenario of scenarios) {
         return
       }
       const success = scenario === 'chat-completed' || scenario === 'responses-done-only' || scenario === 'anthropic-duplicate'
+      // A tool_use cut by max_tokens is still dropped from the committed
+      // assistant, but the withheld max_output_tokens error now engages the
+      // continuation-recovery gate, so these scenarios make one extra request
+      // instead of hard-failing the session after a single shot.
+      const truncatedTool = scenario === 'chat-length' || scenario === 'responses-incomplete' || scenario === 'anthropic-truncated'
       expect(result.executions).toBe(success ? 1 : 0)
       expect(result.committedToolIds).toEqual(success ? ['call_fixture'] : [])
       const target = join(root, `${scenario}.txt`)
       if (success) expect(await readFile(target, 'utf8')).toBe('written exactly once')
       else expect(await Bun.file(target).exists()).toBe(false)
-      expect(result.requests).toBe(success ? 2 : 1)
+      expect(result.requests).toBe(success || truncatedTool ? 2 : 1)
     } finally {
       clearTimeout(timeout)
       child.kill()
