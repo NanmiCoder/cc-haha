@@ -1,6 +1,12 @@
 import { resolveAssistantFileHref } from './assistantFileContext'
 import { trimTrailingPunctuation } from './urlBoundary'
-import { isLinkableFilePath, parseFilePathRef, splitTextByFilePaths } from './filePathBoundary'
+import {
+  bareNameCandidates,
+  findUnicodeExtensionNames,
+  isLinkableFilePath,
+  parseFilePathRef,
+  splitTextByFilePaths,
+} from './filePathBoundary'
 import { isGeneratedArtifactFile, isOutputResourceFile, isShellProducedDeliverable } from './fileCapabilities'
 
 export type AssistantOutputTargetKind =
@@ -26,6 +32,14 @@ export type AssistantOutputTarget = {
   normalizedPath?: string
   confidence: 'high'
   source: AssistantOutputTargetSource
+  /**
+   * Other names a bare prose mention may really be (`报告v2.docx` for `v2.docx`),
+   * longest first, in the same directory. Text cannot choose between them; the
+   * changed files or the disk can — see {@link useDiskConfirmedTargets}.
+   */
+  nameCandidates?: string[]
+  /** Not to be shown until a changed file or the disk confirms one of its names. */
+  awaitsConfirmation?: boolean
 }
 
 export type ExtractAssistantOutputTargetOptions = {
@@ -48,6 +62,13 @@ export type ExtractAssistantOutputTargetOptions = {
    * did not mention them. Reconciliation still runs when false. Defaults to true.
    */
   includeChangedFileFallback?: boolean
+  /**
+   * Also return names made only of CJK and an extension (`开题报告.docx`), marked
+   * {@link AssistantOutputTarget.awaitsConfirmation}. Their text reads the same
+   * as prose about formats (`后缀为.docx的文件`), so only a caller that confirms
+   * them against the disk before showing them should ask. Defaults to false.
+   */
+  includeUnconfirmedNames?: boolean
 }
 
 type FileTargetMatch = {
@@ -206,7 +227,12 @@ export function extractAssistantOutputTargets(
     }, createFileKey(fileTarget), treeMatch.position)
   }
 
-  const queuePlainPath = (path: string, position: number) => {
+  const queuePlainPath = (
+    path: string,
+    position: number,
+    nameCandidates?: string[],
+    awaitsConfirmation = false,
+  ) => {
     const href = resolveAssistantFileHref(path, content)
     const fileTarget = toWorkspaceFileTarget(href, workDir)
 
@@ -223,6 +249,8 @@ export function extractAssistantOutputTargets(
       normalizedPath: fileTarget.normalizedPath,
       confidence: 'high',
       source: 'plain-path',
+      ...(nameCandidates?.length ? { nameCandidates } : {}),
+      ...(awaitsConfirmation ? { awaitsConfirmation } : {}),
     }, createFileKey(fileTarget), position)
   }
 
@@ -240,6 +268,8 @@ export function extractAssistantOutputTargets(
   }
 
   let plainTextPosition = 0
+  let previousPathEnd = 0
+  const pathRanges: Array<{ start: number; end: number }> = []
   for (const segment of splitTextByFilePaths(content)) {
     const position = plainTextPosition
     plainTextPosition += segment.value.length
@@ -247,6 +277,9 @@ export function extractAssistantOutputTargets(
     if (segment.type !== 'path') {
       continue
     }
+    const floor = previousPathEnd
+    previousPathEnd = position + segment.value.length
+    pathRanges.push({ start: position, end: previousPathEnd })
 
     if (isInMarkdownLink(position, markdownLinks)) {
       continue
@@ -260,7 +293,25 @@ export function extractAssistantOutputTargets(
       continue
     }
 
-    queuePlainPath(segment.ref.path, position)
+    // Only a bare name is ambiguous at its edges; a path with a directory is not.
+    const nameCandidates = /[\\/]/.test(segment.ref.path)
+      ? undefined
+      : bareNameCandidates(content, position, position + segment.ref.path.length, floor)
+    queuePlainPath(segment.ref.path, position, nameCandidates)
+  }
+
+  if (options.includeUnconfirmedNames) {
+    const overlaps = (start: number, end: number) => [...pathRanges, ...codeSpans]
+      .some((range) => start < range.end && end > range.start)
+    for (const name of findUnicodeExtensionNames(content)) {
+      if (overlaps(name.start, name.end)) continue
+      if (isInMarkdownLink(name.start, markdownLinks) || isInCodeBlock(name.start, codeBlocks)) continue
+
+      const nameCandidates = /[\\/]/.test(name.ref.path)
+        ? undefined
+        : bareNameCandidates(content, name.start, name.start + name.ref.path.length, 0)
+      queuePlainPath(name.ref.path, name.start, nameCandidates, true)
+    }
   }
 
   candidates.sort((left, right) => {
@@ -370,7 +421,14 @@ function reconcileTargetsWithChangedFiles(
     // An authored absolute path (including an explicit prose root) is identity,
     // not a basename hint. A checkpoint cannot disprove a shell-created output.
     const explicitPath = isAbsoluteFilePath(target.href)
-    const match = explicitPath ? null : matchChangedFile(mentioned, changedFiles)
+    // The longer reading of an ambiguous name wins when the turn really wrote it
+    // (`报告v2.docx`, not the `v2.docx` the prose scan settled on).
+    const match = explicitPath
+      ? null
+      : [...(target.nameCandidates ?? []), mentioned]
+        .sort((left, right) => getBasename(right).length - getBasename(left).length)
+        .map((name) => matchChangedFile(name, changedFiles))
+        .find(Boolean) ?? null
     // Checkpoints record editing tools, not arbitrary shell output. Explicit
     // identities and document/media deliverables survive absent evidence; bare
     // source-like mentions still need corroboration to avoid resource-strip noise.
@@ -391,12 +449,17 @@ function reconcileTargetsWithChangedFiles(
     }
     seen.add(key)
 
+    const { nameCandidates, awaitsConfirmation, ...rest } = target
     out.push({
-      ...target,
+      ...rest,
       id: createId(target.kind, corrected),
+      ...(target.source === 'plain-path' ? { title: getBasename(corrected) } : {}),
       href: corrected,
       normalizedPath: corrected,
       subtitle: corrected,
+      // A changed-file match is settled; only an unmatched guess stays open.
+      ...(!match && nameCandidates ? { nameCandidates } : {}),
+      ...(!match && awaitsConfirmation ? { awaitsConfirmation } : {}),
     })
     if (out.length >= limit) break
   }

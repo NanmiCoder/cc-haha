@@ -49,8 +49,9 @@ vi.mock('../../stores/workspaceContentStore', () => {
 })
 
 const getWorkspaceFile = vi.hoisted(() => vi.fn().mockResolvedValue({ state: 'ok', content: 'file body' }))
+const getWorkspaceTree = vi.hoisted(() => vi.fn().mockResolvedValue({ state: 'missing', path: '', entries: [] }))
 vi.mock('../../api/sessions', () => ({
-  sessionsApi: { getWorkspaceFile },
+  sessionsApi: { getWorkspaceFile, getWorkspaceTree },
 }))
 
 const copyTextToClipboard = vi.hoisted(() => vi.fn().mockResolvedValue(true))
@@ -75,6 +76,7 @@ vi.mock('../../stores/settingsStore', () => ({
 }))
 
 import { AssistantMessage } from './AssistantMessage'
+import { resetDiskListingCacheForTests } from '../../hooks/useDiskConfirmedTargets'
 
 afterEach(() => {
   openPath.mockClear()
@@ -85,6 +87,8 @@ afterEach(() => {
   openPreviewFn.mockReset().mockResolvedValue(undefined)
   copyTextToClipboard.mockReset().mockResolvedValue(true)
   getWorkspaceFile.mockReset().mockResolvedValue({ state: 'ok', content: 'file body' })
+  getWorkspaceTree.mockReset().mockResolvedValue({ state: 'missing', path: '', entries: [] })
+  resetDiskListingCacheForTests()
 })
 
 describe('AssistantMessage file references', () => {
@@ -132,6 +136,33 @@ describe('AssistantMessage file references', () => {
     openPath.mockClear()
     fireEvent.click(screen.getByRole('link', { name: 'public/audio/track.wav' }))
     await waitFor(() => expect(openPath).toHaveBeenCalledWith('/other/promo/public/audio/track.wav'))
+  })
+
+  it('names and opens the card by the file that exists when the prose could not bound it (#1423)', async () => {
+    getWorkspaceTree.mockResolvedValue({
+      state: 'ok',
+      path: '',
+      entries: [{ name: '报告v2.docx', path: '报告v2.docx', isDirectory: false }],
+    })
+    render(<AssistantMessage sessionId="s1" content={'已生成报告v2.docx'} turnChangedFiles={[]} />)
+
+    const card = await screen.findByText('报告v2.docx', { selector: 'span' })
+    fireEvent.click(card.closest('button')!)
+
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', '报告v2.docx', {}))
+  })
+
+  it('shows a card for a CJK-and-extension name only once it is on disk, and links neither', async () => {
+    getWorkspaceTree.mockResolvedValue({
+      state: 'ok',
+      path: '',
+      entries: [{ name: '开题报告.docx', path: '开题报告.docx', isDirectory: false }],
+    })
+    render(<AssistantMessage sessionId="s1" content={'已生成 开题报告.docx。只支持后缀为.docx的文件'} turnChangedFiles={[]} />)
+
+    expect(await screen.findByText('开题报告.docx', { selector: 'span' })).toBeInTheDocument()
+    expect(screen.queryByText(/后缀为\.docx/, { selector: 'span' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /docx/ })).not.toBeInTheDocument()
   })
 
   it('keeps prose and card destinations equal when the project root is stated later', async () => {

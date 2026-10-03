@@ -20,6 +20,11 @@
  * from `修`), while {@link parseFilePathRef} — an href we generated ourselves,
  * a backtick-quoted span — accepts them, because `README-拍摄大纲.md` is a real
  * file the turn really wrote and its delimiter is the span, not the sentence.
+ * When the ASCII match is recognisably the tail of a CJK name (`测试文档1.docx`),
+ * the prose scanner widens it to the whole token — see
+ * {@link widenAcrossUnicodeLetters}. A name with no ASCII part at all
+ * (`开题报告.docx`) reads exactly like prose about formats, so it is never linked
+ * here; {@link findUnicodeExtensionNames} offers it to callers that check the disk.
  * CJK *punctuation* is excluded in both — it is sentence material either way.
  */
 
@@ -314,15 +319,19 @@ export function splitTextByFilePaths(text: string): FilePathSegment[] {
       continue
     }
 
-    if (start > cursor) {
-      segments.push({ type: 'text', value: text.slice(cursor, start) })
+    const widened = 'url' in found ? null : widenAcrossUnicodeLetters(text, start, found, cursor)
+    const pathStart = widened?.start ?? start
+    const ref = widened?.ref ?? found
+
+    if (pathStart > cursor) {
+      segments.push({ type: 'text', value: text.slice(cursor, pathStart) })
     }
     segments.push(
-      'url' in found
-        ? { type: 'github', value: found.raw, ref: found }
-        : { type: 'path', value: found.raw, ref: found },
+      'url' in ref
+        ? { type: 'github', value: ref.raw, ref }
+        : { type: 'path', value: ref.raw, ref },
     )
-    cursor = start + found.raw.length
+    cursor = pathStart + ref.raw.length
     FILE_PATH_SCAN_RE.lastIndex = cursor
   }
 
@@ -331,6 +340,125 @@ export function splitTextByFilePaths(text: string): FilePathSegment[] {
   }
 
   return segments
+}
+
+const UNICODE_LETTER_RE = /[^\x00-\x7F]/
+const IS_UNICODE_WORD_RE = /[\p{L}\p{N}]/u
+const TOKEN_CHAR_RE = /[\p{L}\p{N}_.\-@+/\\~]/u
+
+/**
+ * The ASCII scan stops at the first CJK letter, so a match flush against one is
+ * either a path glued to a CJK verb (`修改了lib/foo.ts`, keep it) or the ASCII
+ * tail of a CJK name (`测试文档1.docx` → `1.docx`, #1423). A tail is recognisable:
+ * it opens with a digit or symbol, sits in a later segment of the token
+ * (`资料/测试文档v1.docx`), or is a lone `/name` cut from a relative path
+ * (`资料/report.docx`). Then the whole whitespace/punctuation-bounded token is
+ * read with the Unicode segment set, and used only if it is one linkable path
+ * ending exactly where the ASCII match did.
+ *
+ * A verb glued to a name that opens with an ASCII letter (`报告v2.docx`) stays
+ * ambiguous with `修改了foo.ts`, and is left as the ASCII match.
+ */
+function widenAcrossUnicodeLetters(
+  text: string,
+  start: number,
+  found: FilePathRef,
+  floor: number,
+): { start: number; ref: FilePathRef } | null {
+  const previous = start > 0 ? text.charAt(start - 1) : ''
+  if (!UNICODE_LETTER_RE.test(previous) || !IS_UNICODE_WORD_RE.test(previous)) return null
+
+  let tokenStart = start
+  while (tokenStart > floor && TOKEN_CHAR_RE.test(text.charAt(tokenStart - 1))) tokenStart -= 1
+  // A drive root: `:` is not a token character, but `D:` opens the path.
+  if (
+    tokenStart - 2 >= floor
+    && text.charAt(tokenStart - 1) === ':'
+    && /[A-Za-z]/.test(text.charAt(tokenStart - 2))
+    && (tokenStart - 2 === floor || !TOKEN_CHAR_RE.test(text.charAt(tokenStart - 3)))
+  ) {
+    tokenStart -= 2
+  }
+
+  const leading = text.slice(tokenStart, start)
+  const rooted = /^(?:~|\.{1,2})?[\\/]|^[A-Za-z]:[\\/]/.test(leading)
+  const startsAtSeparator = /^[\\/]/.test(found.raw)
+  const isTail = rooted
+    || /[\\/]/.test(leading)
+    || /^[\d_.\-@+]/.test(found.raw)
+    || (startsAtSeparator && (found.path.match(/[\\/]/g)?.length ?? 0) === 1)
+  if (!isTail) return null
+
+  const end = start + found.raw.length
+  const ref = parseFilePathRef(text.slice(tokenStart, end))
+  return ref && ref.raw.length === end - tokenStart ? { start: tokenStart, ref } : null
+}
+
+export type UnicodeExtensionName = { start: number; end: number; ref: FilePathRef }
+
+/**
+ * Names made only of non-ASCII letters and an extension: `开题报告.docx`.
+ *
+ * The prose scan never links these, because their text is the same as prose
+ * about formats — `只支持后缀为.docx的文件`, `另存为.pdf格式`. They are returned
+ * for a caller that can confirm them against the disk before showing anything.
+ * A name with an ASCII part in front of the dot (`测试文档1.docx`) is the prose
+ * scan's to read.
+ */
+export function findUnicodeExtensionNames(text: string): UnicodeExtensionName[] {
+  const names: UnicodeExtensionName[] = []
+  let floor = 0
+
+  for (const match of text.matchAll(/\.[A-Za-z0-9]+(?![A-Za-z0-9_])/g)) {
+    const start = match.index ?? 0
+    if (start < floor) continue
+    const previous = start > 0 ? text.charAt(start - 1) : ''
+    if (!UNICODE_LETTER_RE.test(previous) || !IS_UNICODE_WORD_RE.test(previous)) continue
+
+    const widened = widenAcrossUnicodeLetters(text, start, { raw: match[0], path: match[0] }, floor)
+    if (!widened || 'url' in widened.ref) continue
+    const end = widened.start + widened.ref.raw.length
+    names.push({ start: widened.start, end, ref: widened.ref })
+    floor = end
+  }
+
+  return names
+}
+
+const CANDIDATE_STOP_RE = /[\n\r|`*"'<>:：,，.。;；、!！?？“”‘’「」『』《》\[\]\\/]/
+const CANDIDATE_REACH = 60
+
+/**
+ * Every name a bare file mention in prose may really be, longest first, for a
+ * caller that can check them against the disk.
+ *
+ * Text alone cannot settle `报告v2.docx` (verb glued to `v2.docx`, or one CJK
+ * name?), `测试文档1.docx和测试文档2.docx` (where does the second start?) or
+ * `毕业设计（论文）任务书 张三.docx` (spaces and full-width brackets are sentence
+ * material in the scan). So this widens leftwards across spaces and brackets up
+ * to a sentence mark, a line, `floor` or {@link CANDIDATE_REACH} characters, and
+ * trims rightwards at each CJK boundary inside the name. The extension never
+ * moves, and the mention itself (`start`..`end`) is not listed.
+ */
+export function bareNameCandidates(text: string, start: number, end: number, floor: number): string[] {
+  const name = text.slice(start, end)
+  const dot = name.lastIndexOf('.')
+  if (dot <= 0 && !name.startsWith('.')) return []
+
+  let left = start
+  const reach = Math.max(floor, start - CANDIDATE_REACH)
+  while (left > reach && !CANDIDATE_STOP_RE.test(text.charAt(left - 1))) left -= 1
+
+  const candidates: string[] = []
+  for (let i = left; i < start; i += 1) {
+    if (!/\s/.test(text.charAt(i))) candidates.push(text.slice(i, end))
+  }
+  for (let i = start + 1; i < start + Math.max(dot, 0); i += 1) {
+    if (UNICODE_LETTER_RE.test(text.charAt(i - 1)) && !/\s/.test(text.charAt(i))) {
+      candidates.push(text.slice(i, end))
+    }
+  }
+  return candidates
 }
 
 /**

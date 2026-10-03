@@ -11,6 +11,7 @@ import {
 import { isAbsoluteLocalPath, previewFsUrl } from '../../lib/handlePreviewLink'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { resolveAbsoluteOpenPath } from '../../lib/systemFileOpen'
+import { useDiskConfirmedTargets } from '../../hooks/useDiskConfirmedTargets'
 
 const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i
 
@@ -118,6 +119,24 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
   // back to text-only extraction instead of filtering every mention away.
   const changedFileEvidence = changedFiles !== undefined && changedFiles.length === 0 ? undefined : changedFiles
 
+  const extractedRelativeTargets = useMemo(() => sessionId
+    ? extractAssistantOutputTargets(text, {
+      workDir,
+      changedFiles: changedFileEvidence,
+      includeUnconfirmedNames: true,
+    }).filter(
+      (target) => (
+        target.kind === 'image' &&
+        target.source !== 'markdown-link' &&
+        !markdownImageSources.has(normalizeImageReference(target.href)) &&
+        !markdownImageSources.has(normalizeImageReference(target.normalizedPath ?? ''))
+      ),
+    )
+    : [], [changedFileEvidence, markdownImageSources, sessionId, text, workDir])
+  // `截图保存为1.png` may be `1.png` saved by a glued verb, or one CJK name; the
+  // workspace listing settles which, as it does for the output cards.
+  const relativeTargets = useDiskConfirmedTargets(sessionId, extractedRelativeTargets)
+
   const images = useMemo<GalleryImage[]>(() => {
     // 1. Absolute paths (legacy behavior) — served via /api/filesystem/file.
     const absolute: GalleryImage[] = imagePaths.map((p) => ({ src: localImageFileUrl(p), name: fileName(p), path: p }))
@@ -130,14 +149,6 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
     //    build a /preview-fs URL. Reuses the sandboxed target extractor instead of
     //    a bespoke relative-path regex.
     const base = getServerBaseUrl()
-    const relativeTargets = extractAssistantOutputTargets(text, { workDir, changedFiles: changedFileEvidence }).filter(
-      (target) => (
-        target.kind === 'image' &&
-        target.source !== 'markdown-link' &&
-        !markdownImageSources.has(normalizeImageReference(target.href)) &&
-        !markdownImageSources.has(normalizeImageReference(target.normalizedPath ?? ''))
-      ),
-    )
 
     // Dedup: an absolute path inside the workspace can be caught by BOTH sources.
     // Skip a relative target whose basename already appears among the absolute
@@ -170,7 +181,7 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
     }
 
     return [...absolute, ...relative]
-  }, [changedFileEvidence, imagePaths, markdownImageSources, sessionId, text, workDir])
+  }, [changedFileEvidence, imagePaths, relativeTargets, sessionId, text, workDir])
 
   // A guessed image that failed to load leaves no trace: there is nothing to retry
   // when the file was never claimed to be there.

@@ -21,6 +21,7 @@ import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { isManagedGeneratedImagePath } from '../../lib/attachmentImages'
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
+import { useDiskConfirmedTargets } from '../../hooks/useDiskConfirmedTargets'
 
 type Props = {
   content: string
@@ -90,7 +91,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     [content, sessionId, t, workDir],
   )
 
-  const outputTargets = useMemo(
+  const extractedTargets = useMemo(
     () =>
       isStreaming || !sessionId
         ? []
@@ -99,11 +100,15 @@ export const AssistantMessage = memo(function AssistantMessage({
             workDir,
             changedFiles: turnChangedFiles,
             includeChangedFileFallback: isTurnOutputOwner,
+            // Confirmed against the disk by useDiskConfirmedTargets before showing.
+            includeUnconfirmedNames: true,
           }).filter(
             (target) => target.kind !== 'image' && target.kind !== 'video',
           ),
     [content, isStreaming, isTurnOutputOwner, sessionId, workDir, turnChangedFiles],
   )
+  // A bare name the text could not bound is settled against the workspace listing.
+  const outputTargets = useDiskConfirmedTargets(sessionId, extractedTargets)
   const resolveAssistantImageSrc = useMemo(
     () => {
       if (isStreaming || !sessionId) return undefined

@@ -443,6 +443,77 @@ describe('extractAssistantOutputTargets with changedFiles reconciliation', () =>
         .toEqual(['开题报告2.docx', '开题报告3.docx', '开题报告_v2.docx'])
     })
 
+    describe('a name the text alone cannot bound', () => {
+      const names = (content: string, changedFiles: string[]) =>
+        extractAssistantOutputTargets(content, {
+          workDir: '/w',
+          changedFiles,
+          includeChangedFileFallback: false,
+          includeUnconfirmedNames: true,
+        })
+          .map((target) => [target.title, target.normalizedPath])
+
+      it('takes the longer reading the turn really wrote', () => {
+        expect(names('已生成报告v2.docx', ['/w/报告v2.docx'])).toEqual([['报告v2.docx', '报告v2.docx']])
+      })
+
+      it('splits names glued together without a space', () => {
+        expect(names('已找到测试文档1.docx和测试文档2.docx', ['/w/测试文档1.docx', '/w/测试文档2.docx']))
+          .toEqual([['测试文档1.docx', '测试文档1.docx'], ['测试文档2.docx', '测试文档2.docx']])
+      })
+
+      it('recovers a name with spaces and full-width brackets', () => {
+        expect(names('已生成 毕业设计（论文）任务书 张三.docx', ['/w/毕业设计（论文）任务书 张三.docx']))
+          .toEqual([['毕业设计（论文）任务书 张三.docx', '毕业设计（论文）任务书 张三.docx']])
+      })
+
+      it('prefers the mention over a shorter name that also exists', () => {
+        expect(names('已找到 测试文档1.docx', ['/w/1.docx', '/w/测试文档1.docx']))
+          .toEqual([['测试文档1.docx', '测试文档1.docx']])
+      })
+
+      describe('a name made only of CJK and an extension', () => {
+        it('is not guessed at by default, as prose about formats looks the same', () => {
+          for (const content of ['已生成 开题报告.docx', '只支持后缀为.docx的文件']) {
+            expect(extractAssistantOutputTargets(content, { workDir: '/w', changedFiles: [] })).toEqual([])
+          }
+        })
+
+        it('is offered for confirmation when asked, and settled by a changed file', () => {
+          const unconfirmed = extractAssistantOutputTargets('已生成 开题报告.docx', {
+            workDir: '/w', changedFiles: [], includeUnconfirmedNames: true,
+          })
+          expect(unconfirmed).toMatchObject([{ normalizedPath: '开题报告.docx', awaitsConfirmation: true }])
+
+          const written = extractAssistantOutputTargets('已生成 开题报告.docx', {
+            workDir: '/w', changedFiles: ['/w/开题报告.docx'], includeUnconfirmedNames: true,
+          })
+          expect(written).toHaveLength(1)
+          expect(written[0]).toMatchObject({ title: '开题报告.docx', normalizedPath: '开题报告.docx' })
+          expect(written[0]!.awaitsConfirmation).toBeUndefined()
+        })
+      })
+
+      it('leaves the readings open for the disk when no changed file settles them', () => {
+        const [target] = extractAssistantOutputTargets('已生成报告v2.docx', { workDir: '/w', changedFiles: [] })
+        expect(target).toMatchObject({ normalizedPath: 'v2.docx' })
+        expect(target!.nameCandidates).toEqual(expect.arrayContaining(['已生成报告v2.docx', '报告v2.docx']))
+      })
+    })
+
+    it('keeps the whole CJK name when the prose does not quote it (#1423)', () => {
+      const targets = extractAssistantOutputTargets(
+        '已找到 测试文档1.docx 和 测试文档2.docx，另一份在 C:\\Users\\a\\Desktop\\资料\\测试文档3.docx',
+        { workDir: 'C:\\Users\\a\\Desktop', changedFiles: [] },
+      )
+
+      expect(targets.map((target) => [target.title, target.normalizedPath])).toEqual([
+        ['测试文档1.docx', '测试文档1.docx'],
+        ['测试文档2.docx', '测试文档2.docx'],
+        ['测试文档3.docx', 'C:/Users/a/Desktop/资料/测试文档3.docx'],
+      ])
+    })
+
     it('keeps a CJK directory', () => {
       const targets = extractAssistantOutputTargets(
         '见 `论文/开题报告终稿.docx`',

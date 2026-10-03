@@ -19,9 +19,16 @@ vi.mock('../../lib/desktopRuntime', () => ({
 const fetchServerImageBlobUrl = vi.hoisted(() => vi.fn())
 vi.mock('../../lib/authedImage', () => ({ fetchServerImageBlobUrl }))
 
+// Bare names glued to prose are settled against a workspace listing.
+const getWorkspaceTree = vi.hoisted(() => vi.fn())
+vi.mock('../../api/sessions', () => ({ sessionsApi: { getWorkspaceTree } }))
+
 import { InlineImageGallery } from './InlineImageGallery'
+import { resetDiskListingCacheForTests } from '../../hooks/useDiskConfirmedTargets'
 
 beforeEach(() => {
+  resetDiskListingCacheForTests()
+  getWorkspaceTree.mockReset().mockResolvedValue({ state: 'missing', path: '', entries: [] })
   fetchServerImageBlobUrl.mockReset().mockRejectedValue(new Error('403'))
   // jsdom ships no object-URL support.
   Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true, writable: true })
@@ -217,6 +224,31 @@ describe('InlineImageGallery', () => {
       fireEvent.error(screen.getByRole('img'))
 
       expect(await screen.findByRole('alert')).toHaveTextContent('frame.png')
+    })
+
+    it('shows the image the workspace really holds when a verb is glued to its name', async () => {
+      getWorkspaceTree.mockResolvedValue({
+        state: 'ok',
+        path: '',
+        entries: [{ name: '1.png', path: '1.png', isDirectory: false }],
+      })
+      render(<InlineImageGallery text={'截图保存为1.png'} sessionId="s1" workDir="/w" changedFiles={[]} />)
+
+      await waitFor(() => expect(imgSrcs()).toEqual(['http://127.0.0.1:4321/preview-fs/s1/1.png']))
+    })
+
+    it('shows a CJK-named image only once the workspace confirms it', async () => {
+      getWorkspaceTree.mockResolvedValue({
+        state: 'ok',
+        path: '',
+        entries: [{ name: '流程图.png', path: '流程图.png', isDirectory: false }],
+      })
+      render(<InlineImageGallery text={'已导出 流程图.png，格式选.png即可'} sessionId="s1" workDir="/w" changedFiles={[]} />)
+
+      expect(screen.queryAllByRole('img')).toHaveLength(0)
+      await waitFor(() => expect(imgSrcs()).toEqual([
+        `http://127.0.0.1:4321/preview-fs/s1/${encodeURIComponent('流程图.png')}`,
+      ]))
     })
 
     it('still raises the error block for a name the turn really wrote', async () => {
