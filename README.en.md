@@ -34,8 +34,8 @@ cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: mu
 </p>
 
 <p align="center">
-  <a href="https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v1.mp4"><img src="docs/images/readme-film-cover-en.webp" width="720" alt="Watch the 90-second cc-haha film"></a>
-  <br><sub>A 90-second film made with Opus 5.5, narrated in Chinese with Chinese subtitles. Opens the video in your browser.</sub>
+  <a href="https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v2.mp4"><img src="docs/images/readme-film-cover-en.webp" width="720" alt="Watch the 62-second cc-haha film"></a>
+  <br><sub>A 62-second film made with Claude, with no narration. Opens the video in your browser.</sub>
 </p>
 
 Start here: [install the app](docs/en/start/install.md) → [connect a model](docs/en/start/models.md) → [run your first session](docs/en/start/first-session.md) → [explore settings](docs/en/desktop/settings.md) → [try real workflows](docs/en/cases/index.md). For hands-free cross-app work on macOS, follow the [Computer Use guide](docs/en/desktop/computer-use.md).

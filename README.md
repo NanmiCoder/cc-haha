@@ -34,8 +34,8 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
 </p>
 
 <p align="center">
-  <a href="https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v1.mp4"><img src="docs/images/readme-film-cover-zh-CN.webp" width="720" alt="观看 90 秒 cc-haha 宣传片"></a>
-  <br><sub>由 Opus 5.5 制作的 90 秒宣传片，点击在浏览器中播放。</sub>
+  <a href="https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v2.mp4"><img src="docs/images/readme-film-cover-zh-CN.webp" width="720" alt="观看 62 秒 cc-haha 宣传片"></a>
+  <br><sub>由 Claude 制作的 62 秒宣传片，无旁白，点击在浏览器中播放。</sub>
 </p>
 
 从 0 开始：[下载安装](docs/start/install.md) → [连接模型](docs/start/models.md) → [跑通第一条会话](docs/start/first-session.md) → [设置指南](docs/desktop/settings.md) → [实战案例](docs/cases/index.md)。想体验不抢鼠标的跨应用操作，接着看 [Computer Use 指南](docs/desktop/computer-use.md)。
