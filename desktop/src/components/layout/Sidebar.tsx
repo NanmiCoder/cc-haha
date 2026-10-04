@@ -931,7 +931,7 @@ export function Sidebar({
     <aside
       className="sidebar-panel relative h-full flex flex-col bg-[var(--color-surface-sidebar)] border-r border-[var(--color-border)] select-none"
       data-state={expanded ? 'open' : 'closed'}
-      aria-label="Sidebar"
+      aria-label={t('sidebar.regionLabel')}
     >
       <div
         data-testid="sidebar-title-region"
@@ -1387,7 +1387,7 @@ export function Sidebar({
                                     }
                                   `}
                                   aria-pressed={isBatchMode ? selectedSessionIds.has(session.id) : undefined}
-                                  title={session.title || 'Untitled'}
+                                  title={session.title || t('tabs.untitled')}
                                 >
                                   <span className="flex min-w-0 items-center gap-1.5">
                                     {isBatchMode ? (
@@ -1406,7 +1406,7 @@ export function Sidebar({
                                         )}
                                       </span>
                                     ) : null}
-                                    <span className="min-w-0 flex-1 truncate font-medium tracking-normal">{session.title || 'Untitled'}</span>
+                                    <span className="min-w-0 flex-1 truncate font-medium tracking-normal">{session.title || t('tabs.untitled')}</span>
                                     {getSessionWorkspaceState(session) === 'missing' && (
                                       <span
                                         className="flex-shrink-0 text-[10px] text-[var(--color-warning)]"
@@ -1654,7 +1654,7 @@ export function Sidebar({
               <ul className="max-h-40 space-y-1 overflow-y-auto rounded-[8px] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-2">
                 {pendingBatchDeleteSessions.slice(0, 5).map((session) => (
                   <li key={session.id} className="truncate text-xs text-[var(--color-text-secondary)]">
-                    {session.title || 'Untitled'}
+                    {session.title || t('tabs.untitled')}
                   </li>
                 ))}
                 {(pendingBatchDeleteSessionIds?.length ?? 0) > 5 && (

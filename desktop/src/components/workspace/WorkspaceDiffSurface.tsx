@@ -615,7 +615,7 @@ export function WorkspaceDiffSurface({
           data-testid="workspace-code"
           data-highlight-engine={highlightResult.engine}
           role="grid"
-          aria-label={`${path} diff`}
+          aria-label={t('workspace.diffGridLabel', { path })}
           className="m-0 min-w-full font-mono text-[13px] leading-5 text-[var(--color-code-fg)]"
           style={codeStyle}
         >

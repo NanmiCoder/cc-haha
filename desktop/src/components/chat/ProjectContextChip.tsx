@@ -149,7 +149,7 @@ export function ProjectContextChip({
               tabIndex={0}
               className="shrink-0 cursor-help rounded-full border border-[var(--color-border)] px-1.5 py-0.5 text-[10px] font-medium uppercase leading-none text-[var(--color-text-tertiary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
             >
-              worktree
+              {t('sidebar.worktree')}
             </span>
           </Tooltip>
         </>

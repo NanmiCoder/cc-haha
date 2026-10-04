@@ -708,6 +708,7 @@ export const zh: Record<TranslationKey, string> = {
   'sidebar.timeGroup.older': '更早',
   'sidebar.collapse': '摺疊側邊欄',
   'sidebar.expand': '展開側邊欄',
+  'sidebar.regionLabel': '側邊欄',
   'sidebar.resize': '拖曳調整側邊欄寬度',
 
   // ─── Title Bar ──────────────────────────────────────
@@ -766,6 +767,7 @@ export const zh: Record<TranslationKey, string> = {
   'workspace.searchResultsTruncated': '顯示前 {count} 個結果，請縮小搜尋範圍。',
   'workspace.reviewWorkspace': '審閱工作區',
   'workspace.itemsCount': '{count} 個項目',
+  'workspace.diffGridLabel': '{path} 的差異',
   'workspace.filteredItemsCount': '{visible} / {total} 個項目',
   'workspace.refresh': '重新整理工作區',
   'workspace.resizePanel': '調整工作區寬度',
@@ -1135,6 +1137,7 @@ export const zh: Record<TranslationKey, string> = {
   // Settings > Usage
   'settings.activity.title': 'Token 用量',
   'settings.activity.profileTitle': '個人資料',
+  'settings.activity.avatarAlt': '{name} 的頭像',
   'settings.activity.profilePrivacy': '僅本地',
   'settings.activity.defaultHandle': 'github.com/NanmiCoder/cc-haha',
   'settings.activity.editProfile': '編輯個人資料',
@@ -1447,6 +1450,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.providers.sonnetModel': 'Sonnet 模型',
   'settings.providers.opusModel': 'Opus 模型',
   'settings.providers.model1mSupportShort': '1M',
+  'settings.providers.model1mSupportAria': '1M 上下文支援：{slot}',
   'settings.providers.model1mSupportHint': '「1M」只在該模型端點確實提供 100 萬 token 上下文時勾選，勾錯會讓自動壓縮失效。',
   'settings.providers.model1mSupportTooltip': '宣告該模型端點支援 100 萬 token 上下文：模型名稱會附加 [1m]，上下文視窗自動填為 1,000,000。若端點實際視窗小於 1M，自動壓縮不會觸發，請求會撞上服務商的上下文硬限制。取消勾選會還原為預設視窗。',
   'settings.providers.modelIdPlaceholder': '例如： deepseek-v4-flash',
@@ -2172,6 +2176,7 @@ export const zh: Record<TranslationKey, string> = {
   // Settings > Computer Use
   'settings.tab.computerUse': 'Computer Use',
   'settings.computerUse.title': 'Computer Use',
+  'settings.computerUse.statusCheckFailed': '無法檢查狀態。',
   'settings.computerUse.description': '允許 Claude 截圖、點選、打字並控制你的電腦。需要 Python 3，macOS 上還需要輔助功能許可權。',
   'settings.computerUse.enabledToggle': '啟用',
   'settings.computerUse.enableRiskTitle': '開啟 Computer Use？',
@@ -2653,6 +2658,8 @@ export const zh: Record<TranslationKey, string> = {
   'chat.addSelectionToChat': '新增到對話',
   'chat.imageLoadFailed': '無法載入圖片',
   'chat.imageLoadFailedHint': '檔案可能已損壞，或本機服務暫時沒有回應。',
+  'chat.imageCountOne': '{count} 張圖片',
+  'chat.imageCountOther': '{count} 張圖片',
   'chat.retryImage': '重試圖片：{name}',
   'chat.imageRetrying': '正在重試…',
   'chat.branchFromHere': 'Fork 一個新對話',
@@ -3589,6 +3596,8 @@ export const zh: Record<TranslationKey, string> = {
   'trace.detail.earlierMessages': '展開更早的 {count} 則訊息',
   'trace.detail.chars': '{count} 字元',
   'trace.detail.thinking': '思考',
+  'trace.detail.imageBlock': '[圖片]',
+  'trace.detail.stack': '呼叫堆疊',
 
   // ─── 應用外殼 ──────────────────────────────────────
   'app.serverFailed': '本地服務啟動失敗',
@@ -3862,6 +3871,12 @@ export const zh: Record<TranslationKey, string> = {
   'mermaid.zoomIn': '放大',
   'mermaid.fit': '適應',
   'mermaid.fitDiagram': '縮放至適應圖表',
+  'mermaid.renderError': 'Mermaid 渲染失敗',
+  'mermaid.rendering': '正在渲染圖表…',
+  'mermaid.previewTitle': 'Mermaid 圖表',
+  'mermaid.previewHint': '用縮放按鈕放大圖表。在預覽區內拖曳可平移，也可以用觸控板、滑鼠滾輪或捲軸；捲動時按住 Ctrl/Command 可縮放。',
+  'mermaid.inlineCanvas': 'Mermaid 內嵌畫布',
+  'mermaid.previewCanvas': 'Mermaid 預覽畫布',
   'codeViewer.collapse': '收合',
   'codeViewer.showMoreLines': '顯示其餘 {count} 行',
   'common.copy': '複製',

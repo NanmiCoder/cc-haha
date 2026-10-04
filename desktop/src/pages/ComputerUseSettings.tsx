@@ -284,7 +284,7 @@ export function ComputerUseSettings() {
         {checkState === 'error' ? (
           <ErrorState
             size="lg"
-            title="Failed to check status."
+            title={t('settings.computerUse.statusCheckFailed')}
             retryLabel={t('common.retry')}
             onRetry={fetchStatus}
           />
@@ -428,7 +428,7 @@ export function ComputerUseSettings() {
       ) : checkState === 'error' ? (
         <ErrorState
           size="lg"
-          title="Failed to check status."
+          title={t('settings.computerUse.statusCheckFailed')}
           retryLabel={t('common.retry')}
           onRetry={fetchStatus}
         />
@@ -742,7 +742,7 @@ function NativeComputerUse({
         {configErrorNotice}
         <ErrorState
           size="lg"
-          title="Failed to check status."
+          title={t('settings.computerUse.statusCheckFailed')}
           retryLabel={t('common.retry')}
           onRetry={onRecheck}
           tone="strong"

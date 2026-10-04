@@ -707,6 +707,7 @@ export const en = {
   'sidebar.timeGroup.older': 'Older',
   'sidebar.collapse': 'Collapse sidebar',
   'sidebar.expand': 'Expand sidebar',
+  'sidebar.regionLabel': 'Sidebar',
   'sidebar.resize': 'Resize sidebar',
 
   // ─── Title Bar ──────────────────────────────────────
@@ -765,6 +766,7 @@ export const en = {
   'workspace.searchResultsTruncated': 'Showing the first {count} results. Refine your search.',
   'workspace.reviewWorkspace': 'Review workspace',
   'workspace.itemsCount': '{count} items',
+  'workspace.diffGridLabel': '{path} diff',
   'workspace.filteredItemsCount': '{visible} of {total} items',
   'workspace.refresh': 'Refresh workspace',
   'workspace.resizePanel': 'Resize workspace panel',
@@ -1135,6 +1137,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   // Settings > Usage
   'settings.activity.title': 'Token usage',
   'settings.activity.profileTitle': 'Profile',
+  'settings.activity.avatarAlt': '{name} avatar',
   'settings.activity.profilePrivacy': 'Local only',
   'settings.activity.defaultHandle': 'github.com/NanmiCoder/cc-haha',
   'settings.activity.editProfile': 'Edit profile',
@@ -1447,6 +1450,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.providers.sonnetModel': 'Sonnet Model',
   'settings.providers.opusModel': 'Opus Model',
   'settings.providers.model1mSupportShort': '1M',
+  'settings.providers.model1mSupportAria': '1M support: {slot}',
   'settings.providers.model1mSupportHint': 'Only tick “1M” when the endpoint really serves a 1M-token context — ticking it otherwise stops auto-compaction from firing.',
   'settings.providers.model1mSupportTooltip': 'Declares that this model endpoint supports a 1M-token context: the model name gets a [1m] suffix and the context window is set to 1,000,000. If the endpoint is actually smaller, auto-compaction never fires and requests hit the provider’s hard context limit. Clearing the box restores the preset window.',
   'settings.providers.modelIdPlaceholder': 'e.g. deepseek-v4-flash',
@@ -2172,6 +2176,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   // Settings > Computer Use
   'settings.tab.computerUse': 'Computer Use',
   'settings.computerUse.title': 'Computer Use',
+  'settings.computerUse.statusCheckFailed': 'Failed to check status.',
   'settings.computerUse.description': 'Allow Claude to take screenshots, click, type, and control your computer. Requires Python 3. On macOS, accessibility permissions are also needed.',
   'settings.computerUse.enabledToggle': 'Enabled',
   'settings.computerUse.enableRiskTitle': 'Enable Computer Use?',
@@ -2653,6 +2658,8 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'chat.addSelectionToChat': 'Add to chat',
   'chat.imageLoadFailed': 'Unable to load image',
   'chat.imageLoadFailedHint': 'The file may be damaged, or the local server did not respond.',
+  'chat.imageCountOne': '{count} image',
+  'chat.imageCountOther': '{count} images',
   'chat.retryImage': 'Retry image: {name}',
   'chat.imageRetrying': 'Retrying…',
   'chat.branchFromHere': 'Fork a new conversation',
@@ -3589,6 +3596,8 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'trace.detail.earlierMessages': 'Show {count} earlier messages',
   'trace.detail.chars': '{count} chars',
   'trace.detail.thinking': 'thinking',
+  'trace.detail.imageBlock': '[image]',
+  'trace.detail.stack': 'stack',
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'Local server failed to start',
@@ -3862,6 +3871,12 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'mermaid.zoomIn': 'Zoom in',
   'mermaid.fit': 'Fit',
   'mermaid.fitDiagram': 'Fit diagram',
+  'mermaid.renderError': 'Mermaid Error',
+  'mermaid.rendering': 'Rendering diagram...',
+  'mermaid.previewTitle': 'Mermaid Diagram',
+  'mermaid.previewHint': 'Use the zoom controls to enlarge the diagram. Drag inside the preview to pan, or use the trackpad, mouse wheel, and scrollbars. Hold Ctrl/Command while scrolling to zoom.',
+  'mermaid.inlineCanvas': 'Mermaid inline canvas',
+  'mermaid.previewCanvas': 'Mermaid preview canvas',
   'codeViewer.collapse': 'Collapse',
   'codeViewer.showMoreLines': 'Show {count} more lines',
   'common.copy': 'Copy',

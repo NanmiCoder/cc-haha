@@ -190,7 +190,7 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
       <div className="mt-3 space-y-2">
         <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-outline)]">
           <span className="material-symbols-outlined text-[12px]">image</span>
-          {visibleImages.length === 1 ? '1 image' : `${visibleImages.length} images`}
+          {t(visibleImages.length === 1 ? 'chat.imageCountOne' : 'chat.imageCountOther', { count: visibleImages.length })}
         </div>
         <div className={`grid gap-2 ${visibleImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
           {visibleImages.map((img, i) => failedSources.has(img.src) ? (

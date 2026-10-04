@@ -620,7 +620,7 @@ function AgentCallCard({
         <span className="material-symbols-outlined text-[18px] text-[var(--color-outline)]">smart_toy</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-[13px] font-semibold text-[var(--color-text-primary)]">Agent</span>
+            <span className="text-[13px] font-semibold text-[var(--color-text-primary)]">{t('subagentRun.agent')}</span>
             {description && (
               <span className="truncate text-[12px] text-[var(--color-text-secondary)]">
                 {description}

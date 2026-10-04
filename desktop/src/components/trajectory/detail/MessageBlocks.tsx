@@ -164,9 +164,10 @@ function TextResult({ text }: { text: string }) {
 }
 
 function ImageChip({ mediaType }: { mediaType?: string }) {
+  const t = useTranslation()
   return (
     <Badge tone="neutral" variant="outline" size="xs" pill={false} mono className="w-fit">
-      [image]
+      {t('trace.detail.imageBlock')}
       {mediaType ? <span>{mediaType}</span> : null}
     </Badge>
   )

@@ -707,6 +707,7 @@ export const zh: Record<TranslationKey, string> = {
   'sidebar.timeGroup.older': '更早',
   'sidebar.collapse': '折叠侧边栏',
   'sidebar.expand': '展开侧边栏',
+  'sidebar.regionLabel': '侧边栏',
   'sidebar.resize': '拖拽调整侧边栏宽度',
 
   // ─── Title Bar ──────────────────────────────────────
@@ -765,6 +766,7 @@ export const zh: Record<TranslationKey, string> = {
   'workspace.searchResultsTruncated': '显示前 {count} 个结果，请缩小搜索范围。',
   'workspace.reviewWorkspace': '审阅工作区',
   'workspace.itemsCount': '{count} 个项目',
+  'workspace.diffGridLabel': '{path} 的差异',
   'workspace.filteredItemsCount': '{visible} / {total} 个项目',
   'workspace.refresh': '刷新工作区',
   'workspace.resizePanel': '调整工作区宽度',
@@ -1134,6 +1136,7 @@ export const zh: Record<TranslationKey, string> = {
   // Settings > Usage
   'settings.activity.title': 'Token 用量',
   'settings.activity.profileTitle': '个人资料',
+  'settings.activity.avatarAlt': '{name} 的头像',
   'settings.activity.profilePrivacy': '仅本地',
   'settings.activity.defaultHandle': 'github.com/NanmiCoder/cc-haha',
   'settings.activity.editProfile': '编辑个人资料',
@@ -1446,6 +1449,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.providers.sonnetModel': 'Sonnet 模型',
   'settings.providers.opusModel': 'Opus 模型',
   'settings.providers.model1mSupportShort': '1M',
+  'settings.providers.model1mSupportAria': '1M 上下文支持：{slot}',
   'settings.providers.model1mSupportHint': '「1M」只在该模型端点确实提供 100 万 token 上下文时勾选，勾错会让自动压缩失效。',
   'settings.providers.model1mSupportTooltip': '声明该模型端点支持 100 万 token 上下文：模型名会追加 [1m]，上下文窗口自动填为 1,000,000。若端点实际窗口小于 1M，自动压缩不会触发，请求会撞上服务商的上下文硬限制。取消勾选会恢复预设窗口。',
   'settings.providers.modelIdPlaceholder': '例如： deepseek-v4-flash',
@@ -2171,6 +2175,7 @@ export const zh: Record<TranslationKey, string> = {
   // Settings > Computer Use
   'settings.tab.computerUse': 'Computer Use',
   'settings.computerUse.title': 'Computer Use',
+  'settings.computerUse.statusCheckFailed': '无法检查状态。',
   'settings.computerUse.description': '允许 Claude 截屏、点击、打字并控制你的电脑。需要 Python 3，macOS 上还需要辅助功能权限。',
   'settings.computerUse.enabledToggle': '启用',
   'settings.computerUse.enableRiskTitle': '开启 Computer Use？',
@@ -2652,6 +2657,8 @@ export const zh: Record<TranslationKey, string> = {
   'chat.addSelectionToChat': '添加到对话',
   'chat.imageLoadFailed': '无法加载图片',
   'chat.imageLoadFailedHint': '文件可能已损坏，或本地服务暂时没有响应。',
+  'chat.imageCountOne': '{count} 张图片',
+  'chat.imageCountOther': '{count} 张图片',
   'chat.retryImage': '重试图片：{name}',
   'chat.imageRetrying': '正在重试…',
   'chat.branchFromHere': 'Fork 一个新对话',
@@ -3588,6 +3595,8 @@ export const zh: Record<TranslationKey, string> = {
   'trace.detail.earlierMessages': '展开更早的 {count} 条消息',
   'trace.detail.chars': '{count} 字符',
   'trace.detail.thinking': '思考',
+  'trace.detail.imageBlock': '[图片]',
+  'trace.detail.stack': '调用栈',
 
   // ─── 应用外壳 ──────────────────────────────────────
   'app.serverFailed': '本地服务启动失败',
@@ -3861,6 +3870,12 @@ export const zh: Record<TranslationKey, string> = {
   'mermaid.zoomIn': '放大',
   'mermaid.fit': '适应',
   'mermaid.fitDiagram': '缩放至适应图表',
+  'mermaid.renderError': 'Mermaid 渲染失败',
+  'mermaid.rendering': '正在渲染图表…',
+  'mermaid.previewTitle': 'Mermaid 图表',
+  'mermaid.previewHint': '用缩放按钮放大图表。在预览区内拖动可平移，也可以用触控板、鼠标滚轮或滚动条；滚动时按住 Ctrl/Command 可缩放。',
+  'mermaid.inlineCanvas': 'Mermaid 内嵌画布',
+  'mermaid.previewCanvas': 'Mermaid 预览画布',
   'codeViewer.collapse': '收起',
   'codeViewer.showMoreLines': '显示其余 {count} 行',
   'common.copy': '复制',

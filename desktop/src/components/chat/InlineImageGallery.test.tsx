@@ -28,8 +28,10 @@ vi.mock('../../api/sessions', () => ({ sessionsApi: { getWorkspaceTree } }))
 
 import { InlineImageGallery } from './InlineImageGallery'
 import { resetDiskListingCacheForTests } from '../../hooks/useDiskConfirmedTargets'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 beforeEach(() => {
+  useSettingsStore.setState({ locale: 'en' })
   resetDiskListingCacheForTests()
   getWorkspaceTree.mockReset().mockResolvedValue({ state: 'missing', path: '', entries: [] })
   fetchServerImageBlobUrl.mockReset().mockRejectedValue(new ApiError(500, { error: 'Internal error' }))
@@ -53,6 +55,19 @@ describe('InlineImageGallery', () => {
     expect(notice).toHaveTextContent('chart.png')
     expect(notice).toHaveTextContent('The file may be damaged, or the local server did not respond.')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible()
+  })
+
+  it.each([
+    ['en', 'See /tmp/chart.png', '1 image'],
+    ['en', 'See /tmp/a.png and /tmp/b.png', '2 images'],
+    ['zh', 'See /tmp/a.png and /tmp/b.png', '2 张图片'],
+    ['jp', 'See /tmp/a.png and /tmp/b.png', '画像 2 枚'],
+  ] as const)('counts the pictures in the reader\'s language (%s: %s)', (locale, text, header) => {
+    // The header was typed in English and read "1 IMAGE" in every locale.
+    useSettingsStore.setState({ locale })
+    render(<InlineImageGallery text={text} />)
+
+    expect(screen.getByText(header)).toBeInTheDocument()
   })
 
   it('keeps other images usable and tracks failures by source when the list changes', async () => {

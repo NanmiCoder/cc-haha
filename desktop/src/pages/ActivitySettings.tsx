@@ -776,7 +776,7 @@ export function ActivitySettings() {
         <div className="relative h-16 w-16 overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-card)]">
           <img
             src={avatarSrc}
-            alt={`${profile.displayName} avatar`}
+            alt={t('settings.activity.avatarAlt', { name: profile.displayName })}
             className={avatarClassName}
             onError={(event) => {
               event.currentTarget.src = DEFAULT_AVATAR_SRC

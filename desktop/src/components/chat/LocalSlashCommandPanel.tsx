@@ -280,7 +280,7 @@ function isCapacityCategory(category: ContextCategory) {
   return category.isDeferred || name.includes('free') || name.includes('autocompact')
 }
 
-function ContextStackedBar({ categories, rawMaxTokens }: { categories: ContextCategory[]; rawMaxTokens: number }) {
+function ContextStackedBar({ categories, rawMaxTokens, t }: { categories: ContextCategory[]; rawMaxTokens: number; t: Translate }) {
   const activeCategories = categories.filter((category) => !isCapacityCategory(category) && category.tokens > 0)
   if (activeCategories.length === 0) return null
 
@@ -290,7 +290,7 @@ function ContextStackedBar({ categories, rawMaxTokens }: { categories: ContextCa
         {activeCategories.map((category) => (
           <div
             key={category.name}
-            title={`${category.name}: ${formatNumber(category.tokens)} tokens`}
+            title={`${category.name}: ${t('common.tokens', { count: formatNumber(category.tokens) })}`}
             style={{
               width: `${Math.max(0.5, (category.tokens / rawMaxTokens) * 100)}%`,
               backgroundColor: category.color,
@@ -408,7 +408,7 @@ function MemoryFilesBreakdown({ files, t }: { files: ContextMemoryFile[]; t: Tra
             </div>
             <div className="shrink-0 text-right font-mono">
               <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--color-inspector-muted-strong)]">{file.type}</div>
-              <div className="mt-0.5 text-[11px] text-[var(--color-inspector-muted)]">{formatNumber(file.tokens)} tokens</div>
+              <div className="mt-0.5 text-[11px] text-[var(--color-inspector-muted)]">{t('common.tokens', { count: formatNumber(file.tokens) })}</div>
             </div>
           </div>
         ))}
@@ -480,7 +480,7 @@ function ContextOverview({ context, categories, t }: { context: SessionContextSn
         <span className="ml-3 align-middle text-sm font-normal text-[var(--color-inspector-accent-secondary)]">[{formatPercent(usedPercent)} {t('slash.inspector.context.used')}]</span>
       </div>
       <div className="mt-7">
-        <ContextStackedBar categories={categories} rawMaxTokens={context.rawMaxTokens} />
+        <ContextStackedBar categories={categories} rawMaxTokens={context.rawMaxTokens} t={t} />
       </div>
       <div className="mt-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="rounded-md border border-[var(--color-inspector-border)] bg-[var(--color-inspector-surface)] px-4 py-3">

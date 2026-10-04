@@ -708,6 +708,7 @@ export const jp: Record<TranslationKey, string> = {
   'sidebar.timeGroup.older': 'それ以前',
   'sidebar.collapse': 'サイドバーを折りたたむ',
   'sidebar.expand': 'サイドバーを展開',
+  'sidebar.regionLabel': 'サイドバー',
   'sidebar.resize': 'サイドバーの幅を調整',
 
   // ─── Title Bar ──────────────────────────────────────
@@ -766,6 +767,7 @@ export const jp: Record<TranslationKey, string> = {
   'workspace.searchResultsTruncated': '最初の {count} 件を表示しています。検索を絞り込んでください。',
   'workspace.reviewWorkspace': 'ワークスペースをレビュー',
   'workspace.itemsCount': '{count} 項目',
+  'workspace.diffGridLabel': '{path} の差分',
   'workspace.filteredItemsCount': '{total} 項目中 {visible} 項目',
   'workspace.refresh': 'ワークスペースを更新',
   'workspace.resizePanel': 'ワークスペースパネルのサイズを変更',
@@ -1136,6 +1138,7 @@ export const jp: Record<TranslationKey, string> = {
   // Settings > Usage
   'settings.activity.title': 'トークン使用量',
   'settings.activity.profileTitle': 'プロフィール',
+  'settings.activity.avatarAlt': '{name} のアバター',
   'settings.activity.profilePrivacy': 'ローカルのみ',
   'settings.activity.defaultHandle': 'github.com/NanmiCoder/cc-haha',
   'settings.activity.editProfile': 'プロフィールを編集',
@@ -1448,6 +1451,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.providers.sonnetModel': 'Sonnet モデル',
   'settings.providers.opusModel': 'Opus モデル',
   'settings.providers.model1mSupportShort': '1M',
+  'settings.providers.model1mSupportAria': '1M コンテキスト対応：{slot}',
   'settings.providers.model1mSupportHint': '「1M」は、そのモデルのエンドポイントが実際に 100 万トークンのコンテキストに対応している場合のみチェックしてください。誤ってチェックすると自動圧縮が働かなくなります。',
   'settings.providers.model1mSupportTooltip': 'このモデルのエンドポイントが 100 万トークンのコンテキストに対応していることを宣言します。モデル名に [1m] が付き、コンテキストウィンドウは 1,000,000 に設定されます。実際のウィンドウが 1M より小さい場合、自動圧縮は実行されず、リクエストはプロバイダーのコンテキスト上限に達します。チェックを外すとプリセットのウィンドウに戻ります。',
   'settings.providers.modelIdPlaceholder': '例: deepseek-v4-flash',
@@ -2173,6 +2177,7 @@ export const jp: Record<TranslationKey, string> = {
   // Settings > Computer Use
   'settings.tab.computerUse': 'コンピューター操作',
   'settings.computerUse.title': 'コンピューター操作',
+  'settings.computerUse.statusCheckFailed': 'ステータスを確認できませんでした。',
   'settings.computerUse.description': 'Claude がスクリーンショットを撮影し、クリック、入力を行い、コンピューターを操作できるようにします。Python 3 が必要です。macOS ではアクセシビリティ権限も必要です。',
   'settings.computerUse.enabledToggle': '有効',
   'settings.computerUse.enableRiskTitle': 'Computer Use を有効にしますか？',
@@ -2654,6 +2659,8 @@ export const jp: Record<TranslationKey, string> = {
   'chat.addSelectionToChat': 'チャットに追加',
   'chat.imageLoadFailed': '画像を読み込めません',
   'chat.imageLoadFailedHint': 'ファイルが破損しているか、ローカルサーバーが応答しませんでした。',
+  'chat.imageCountOne': '画像 {count} 枚',
+  'chat.imageCountOther': '画像 {count} 枚',
   'chat.retryImage': '画像を再読み込み: {name}',
   'chat.imageRetrying': '再読み込み中…',
   'chat.branchFromHere': '新しい会話を分岐',
@@ -3590,6 +3597,8 @@ export const jp: Record<TranslationKey, string> = {
   'trace.detail.earlierMessages': '以前の {count} 件のメッセージを表示',
   'trace.detail.chars': '{count} 文字',
   'trace.detail.thinking': '思考',
+  'trace.detail.imageBlock': '[画像]',
+  'trace.detail.stack': 'スタック',
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'ローカルサーバーの起動に失敗しました',
@@ -3863,6 +3872,12 @@ export const jp: Record<TranslationKey, string> = {
   'mermaid.zoomIn': '拡大',
   'mermaid.fit': 'フィット',
   'mermaid.fitDiagram': '図を画面に合わせる',
+  'mermaid.renderError': 'Mermaid の描画エラー',
+  'mermaid.rendering': '図を描画しています…',
+  'mermaid.previewTitle': 'Mermaid 図',
+  'mermaid.previewHint': 'ズームボタンで図を拡大できます。プレビュー内をドラッグして移動するか、トラックパッド、マウスホイール、スクロールバーを使ってください。Ctrl/Command を押しながらスクロールするとズームします。',
+  'mermaid.inlineCanvas': 'Mermaid インラインキャンバス',
+  'mermaid.previewCanvas': 'Mermaid プレビューキャンバス',
   'codeViewer.collapse': '折りたたむ',
   'codeViewer.showMoreLines': '残り {count} 行を表示',
   'common.copy': 'コピー',

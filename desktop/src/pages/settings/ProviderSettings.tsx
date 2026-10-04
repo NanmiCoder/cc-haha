@@ -1904,7 +1904,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
                         type="checkbox"
                         checked={model1mSupport[slot]}
                         onChange={(e) => handleModel1mSupportChange(slot, e.target.checked)}
-                        aria-label={`1M support: ${slot}`}
+                        aria-label={t('settings.providers.model1mSupportAria', { slot })}
                         className="h-3.5 w-3.5 rounded border-[var(--color-border)] text-[var(--color-brand)] accent-[var(--color-brand)] focus:ring-[var(--color-brand)]"
                       />
                       <span>{t('settings.providers.model1mSupportShort')}</span>

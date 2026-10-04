@@ -229,7 +229,7 @@ function ResponseContent({
         {call.error.stack ? (
           <details className="mt-2">
             <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
-              stack
+              {t('trace.detail.stack')}
             </summary>
             <pre className="mt-1.5 max-h-[240px] overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.6] text-[var(--color-text-tertiary)]">
               {call.error.stack}

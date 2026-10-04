@@ -662,7 +662,7 @@ export function MermaidRenderer({ code }: Props) {
       <div className="my-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-error-soft-hover)]">
         <div className="flex items-center gap-2 border-b border-[var(--color-error-soft-hover)] bg-[var(--color-error-container)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--color-on-error-container)]">
           <span className="material-symbols-outlined text-[14px]">error</span>
-          Mermaid Error
+          {t('mermaid.renderError')}
         </div>
         <div className="bg-[var(--color-error-soft)] px-3 py-2 font-mono text-[11px] text-[var(--color-on-error-container)]">
           {error}
@@ -676,7 +676,7 @@ export function MermaidRenderer({ code }: Props) {
       <div className="my-4 flex items-center justify-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] py-8">
         <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-tertiary)]">
           <span className="material-symbols-outlined animate-spin text-[16px]">progress_activity</span>
-          Rendering diagram...
+          {t('mermaid.rendering')}
         </div>
       </div>
     )
@@ -716,7 +716,7 @@ export function MermaidRenderer({ code }: Props) {
           <div className="mx-auto shrink-0 select-none" style={inlineFrameStyle}>
             <div
               style={inlineCanvasStyle}
-              aria-label="Mermaid inline canvas"
+              aria-label={t('mermaid.inlineCanvas')}
               dangerouslySetInnerHTML={{ __html: sanitizedSvg ?? '' }}
             />
           </div>
@@ -729,7 +729,7 @@ export function MermaidRenderer({ code }: Props) {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 text-sm font-semibold text-[var(--color-text-primary)]">
               <span className="material-symbols-outlined text-[18px]">account_tree</span>
-              Mermaid Diagram
+              {t('mermaid.previewTitle')}
             </div>
             <div className="flex items-center gap-2">
               <div className="flex items-center gap-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1 py-1">
@@ -794,14 +794,14 @@ export function MermaidRenderer({ code }: Props) {
                     ref={previewContentRef}
                     style={previewCanvasStyle}
                     data-dragging={isDraggingPreview ? 'true' : 'false'}
-                    aria-label="Mermaid preview canvas"
+                    aria-label={t('mermaid.previewCanvas')}
                     dangerouslySetInnerHTML={{ __html: sanitizedSvg ?? '' }}
                   />
                 </div>
               </div>
             </div>
           <div className="text-[11px] text-[var(--color-text-tertiary)]">
-            Use the zoom controls to enlarge the diagram. Drag inside the preview to pan, or use the trackpad, mouse wheel, and scrollbars. Hold Ctrl/Command while scrolling to zoom.
+            {t('mermaid.previewHint')}
           </div>
         </div>
       </Modal>

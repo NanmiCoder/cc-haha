@@ -710,6 +710,7 @@ export const kr: Record<TranslationKey, string> = {
   'sidebar.timeGroup.older': '그 이전',
   'sidebar.collapse': '사이드바 접기',
   'sidebar.expand': '사이드바 펼치기',
+  'sidebar.regionLabel': '사이드바',
   'sidebar.resize': '사이드바 너비 조절',
 
   // ─── Title Bar ──────────────────────────────────────
@@ -768,6 +769,7 @@ export const kr: Record<TranslationKey, string> = {
   'workspace.searchResultsTruncated': '처음 {count}개 결과를 표시합니다. 검색어를 구체화하세요.',
   'workspace.reviewWorkspace': '작업 공간 검토',
   'workspace.itemsCount': '항목 {count}개',
+  'workspace.diffGridLabel': '{path} 변경 내용',
   'workspace.filteredItemsCount': '항목 {total}개 중 {visible}개',
   'workspace.refresh': '작업 공간 새로 고침',
   'workspace.resizePanel': '작업 공간 패널 크기 조정',
@@ -1138,6 +1140,7 @@ export const kr: Record<TranslationKey, string> = {
   // Settings > Usage
   'settings.activity.title': '토큰 사용량',
   'settings.activity.profileTitle': '프로필',
+  'settings.activity.avatarAlt': '{name} 아바타',
   'settings.activity.profilePrivacy': '로컬 전용',
   'settings.activity.defaultHandle': 'github.com/NanmiCoder/cc-haha',
   'settings.activity.editProfile': '프로필 편집',
@@ -1450,6 +1453,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.providers.sonnetModel': 'Sonnet 모델',
   'settings.providers.opusModel': 'Opus 모델',
   'settings.providers.model1mSupportShort': '1M',
+  'settings.providers.model1mSupportAria': '1M 컨텍스트 지원: {slot}',
   'settings.providers.model1mSupportHint': '해당 모델 엔드포인트가 실제로 100만 토큰 컨텍스트를 지원할 때만 「1M」을 선택하세요. 잘못 선택하면 자동 압축이 작동하지 않습니다.',
   'settings.providers.model1mSupportTooltip': '이 모델 엔드포인트가 100만 토큰 컨텍스트를 지원한다고 선언합니다. 모델 이름에 [1m]이 추가되고 컨텍스트 창이 1,000,000으로 설정됩니다. 엔드포인트의 실제 창이 1M보다 작으면 자동 압축이 실행되지 않고 요청이 공급자의 컨텍스트 한도에 도달합니다. 선택을 해제하면 사전 설정 창으로 되돌아갑니다.',
   'settings.providers.modelIdPlaceholder': '예: deepseek-v4-flash',
@@ -2175,6 +2179,7 @@ export const kr: Record<TranslationKey, string> = {
   // Settings > Computer Use
   'settings.tab.computerUse': '컴퓨터 사용',
   'settings.computerUse.title': '컴퓨터 사용',
+  'settings.computerUse.statusCheckFailed': '상태를 확인하지 못했습니다.',
   'settings.computerUse.description': 'Claude가 스크린샷을 찍고 클릭, 입력하며 컴퓨터를 제어할 수 있도록 허용합니다. Python 3가 필요합니다. macOS에서는 접근성 권한도 필요합니다.',
   'settings.computerUse.enabledToggle': '사용',
   'settings.computerUse.enableRiskTitle': 'Computer Use를 활성화할까요?',
@@ -2656,6 +2661,8 @@ export const kr: Record<TranslationKey, string> = {
   'chat.addSelectionToChat': '채팅에 추가',
   'chat.imageLoadFailed': '이미지를 불러올 수 없습니다',
   'chat.imageLoadFailedHint': '파일이 손상되었거나 로컬 서버가 응답하지 않았습니다.',
+  'chat.imageCountOne': '이미지 {count}개',
+  'chat.imageCountOther': '이미지 {count}개',
   'chat.retryImage': '이미지 다시 시도: {name}',
   'chat.imageRetrying': '다시 시도 중…',
   'chat.branchFromHere': '새 대화 분기',
@@ -3592,6 +3599,8 @@ export const kr: Record<TranslationKey, string> = {
   'trace.detail.earlierMessages': '이전 메시지 {count}개 보기',
   'trace.detail.chars': '{count}자',
   'trace.detail.thinking': '생각',
+  'trace.detail.imageBlock': '[이미지]',
+  'trace.detail.stack': '스택',
 
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': '로컬 서버를 시작하지 못했습니다',
@@ -3865,6 +3874,12 @@ export const kr: Record<TranslationKey, string> = {
   'mermaid.zoomIn': '확대',
   'mermaid.fit': '맞춤',
   'mermaid.fitDiagram': '다이어그램을 화면에 맞추기',
+  'mermaid.renderError': 'Mermaid 렌더링 오류',
+  'mermaid.rendering': '다이어그램을 렌더링하는 중…',
+  'mermaid.previewTitle': 'Mermaid 다이어그램',
+  'mermaid.previewHint': '확대/축소 버튼으로 다이어그램을 키울 수 있습니다. 미리 보기 안에서 드래그해 이동하거나 트랙패드, 마우스 휠, 스크롤바를 사용하세요. Ctrl/Command를 누른 채 스크롤하면 확대/축소됩니다.',
+  'mermaid.inlineCanvas': 'Mermaid 인라인 캔버스',
+  'mermaid.previewCanvas': 'Mermaid 미리 보기 캔버스',
   'codeViewer.collapse': '접기',
   'codeViewer.showMoreLines': '{count}줄 더 보기',
   'common.copy': '복사',
