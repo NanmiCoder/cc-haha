@@ -376,6 +376,22 @@ describe('filesystem API', () => {
       expect(Buffer.from(await res.arrayBuffer()).equals(PNG)).toBe(true)
     })
 
+    it('answers 404 for a picture missing from an allowed root', async () => {
+      // The chat reads 400/403/404 as "not there to show" and leaves the picture out
+      // quietly; any other answer is an error it offers to retry. A file that is
+      // simply missing — cleaned out of /tmp since the reply named it — stays a 404.
+      const dir = fs.realpathSync(await fsp.mkdtemp(path.join(os.tmpdir(), 'claude-filesystem-test-')))
+      cleanupDirs.add(dir)
+      registerFilesystemAccessRoot(dir)
+
+      const res = await handleFilesystemRoute(
+        '/api/filesystem/file',
+        makeUrl('/api/filesystem/file', { path: path.join(dir, 'cleaned', 'chart.png') }),
+      )
+
+      expect(res.status).toBe(404)
+    })
+
     it('still keeps a home-relative path inside the allowed roots', async () => {
       // A picture that really exists, outside $HOME, the temp directories and every
       // registered root, reached by climbing out of the home directory. A missing

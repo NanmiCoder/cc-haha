@@ -2653,7 +2653,7 @@ export const jp: Record<TranslationKey, string> = {
   'chat.contextReferencesOnly': '参照を {count} 件追加しました',
   'chat.addSelectionToChat': 'チャットに追加',
   'chat.imageLoadFailed': '画像を読み込めません',
-  'chat.imageLoadFailedHint': 'ファイルが存在しないか、アクセスが許可されていない可能性があります。',
+  'chat.imageLoadFailedHint': 'ファイルが破損しているか、ローカルサーバーが応答しませんでした。',
   'chat.retryImage': '画像を再読み込み: {name}',
   'chat.imageRetrying': '再読み込み中…',
   'chat.branchFromHere': '新しい会話を分岐',

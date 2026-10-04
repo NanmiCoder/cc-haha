@@ -2651,7 +2651,7 @@ export const zh: Record<TranslationKey, string> = {
   'chat.contextReferencesOnly': '已添加 {count} 个引用',
   'chat.addSelectionToChat': '添加到对话',
   'chat.imageLoadFailed': '无法加载图片',
-  'chat.imageLoadFailedHint': '文件可能不存在，或没有访问权限。',
+  'chat.imageLoadFailedHint': '文件可能已损坏，或本地服务暂时没有响应。',
   'chat.retryImage': '重试图片：{name}',
   'chat.imageRetrying': '正在重试…',
   'chat.branchFromHere': 'Fork 一个新对话',

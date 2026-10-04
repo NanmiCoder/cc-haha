@@ -10,6 +10,7 @@ vi.mock('../../api/client', async (original) => ({
   getBaseUrl: () => 'http://127.0.0.1:3456',
 }))
 
+import { ApiError } from '../../api/client'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { useSettingsStore } from '@/stores/settingsStore'
 
@@ -23,10 +24,25 @@ beforeEach(() => {
 })
 
 describe('MarkdownRenderer local images', () => {
+  // A missing or unreadable picture is no fault, and a red notice for each one —
+  // every embed of a file since cleaned out of /tmp — was noise. It falls back to
+  // its description, as an image that cannot be shown does.
+  it.each([404, 403])('shows the description instead of an error after HTTP %s', async (status) => {
+    apiGetBlob.mockRejectedValue(new ApiError(status, { error: 'refused' }))
+    const { container } = render(
+      <MarkdownRenderer content="![description](missing.png)" resolveImageSrc={() => LOCAL.replace('chart.png', 'missing.png')} />,
+    )
+    fireEvent.error(container.querySelector('img')!)
+
+    expect(await screen.findByText('description')).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
   // QA-002: a terminal image error used to leave only the browser's broken icon.
-  it.each([404, 403])('keeps a named error placeholder after HTTP %s and lets a retry recover', async (status) => {
-    apiGetBlob.mockRejectedValueOnce(new Error(String(status)))
-      .mockRejectedValueOnce(new Error(String(status)))
+  it('keeps a named error placeholder after a server fault and lets a retry recover', async () => {
+    apiGetBlob.mockRejectedValueOnce(new ApiError(500, { error: 'Internal error' }))
+      .mockRejectedValueOnce(new ApiError(500, { error: 'Internal error' }))
       .mockResolvedValueOnce(new Blob(['png'], { type: 'image/png' }))
     const { container } = render(
       <MarkdownRenderer content="![description](missing.png)" resolveImageSrc={() => LOCAL.replace('chart.png', 'missing.png')} />,
@@ -36,7 +52,7 @@ describe('MarkdownRenderer local images', () => {
     const alert = await screen.findByRole('alert')
     expect(alert).toHaveTextContent('Unable to load image')
     expect(alert).toHaveTextContent('missing.png')
-    expect(alert).toHaveTextContent('The file may be missing or access may be denied.')
+    expect(alert).toHaveTextContent('The file may be damaged, or the local server did not respond.')
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
     const retry = screen.getByRole('button', { name: 'Retry image: missing.png' })
     expect(retry).toHaveAttribute('aria-describedby')
@@ -56,7 +72,7 @@ describe('MarkdownRenderer local images', () => {
   })
 
   it('keeps failures local to one image and excludes it from the viewer', async () => {
-    apiGetBlob.mockRejectedValue(new Error('404'))
+    apiGetBlob.mockRejectedValue(new ApiError(500, { error: 'Internal error' }))
     const onImageClick = vi.fn()
     const { container } = render(
       <MarkdownRenderer content="![missing](missing.png)\n\n![valid](chart.png)" resolveImageSrc={(src) => LOCAL.replace('chart.png', src)} onImageClick={onImageClick} />,
@@ -68,7 +84,7 @@ describe('MarkdownRenderer local images', () => {
   })
 
   it('does not navigate a surrounding link when retry is clicked', async () => {
-    apiGetBlob.mockRejectedValue(new Error('404'))
+    apiGetBlob.mockRejectedValue(new ApiError(500, { error: 'Internal error' }))
     const onLinkClick = vi.fn()
     const { container } = render(
       <MarkdownRenderer content="[![missing](missing.png)](https://example.com)" resolveImageSrc={() => LOCAL} onLinkClick={onLinkClick} />,
@@ -82,7 +98,7 @@ describe('MarkdownRenderer local images', () => {
   })
 
   it('does not reuse a failure from another renderer with the same parsed Markdown', async () => {
-    apiGetBlob.mockRejectedValue(new Error('404'))
+    apiGetBlob.mockRejectedValue(new ApiError(500, { error: 'Internal error' }))
     const content = '![missing](missing.png)'
     const { container } = render(<><MarkdownRenderer content={content} resolveImageSrc={() => LOCAL} /><MarkdownRenderer content={content} resolveImageSrc={() => LOCAL} /></>)
     const prose = container.querySelectorAll<HTMLElement>('.markdown-prose')

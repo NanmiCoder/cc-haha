@@ -18,11 +18,18 @@ const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)$/i
 /**
  * Extracts absolute image file paths from text content.
  * Matches paths like /Users/.../image.png, /tmp/output.jpg, etc.
+ *
+ * Wildcards (`*`, `?`) and substitutions (`{name}`, `${id}`, `$NAME`, `%03d`)
+ * are not path characters: the character that opens one ends the match. A path
+ * like `/tmp/shots/0*.png` or `/tmp/frames/f%03d.png` names a set of files, or a
+ * template for one, that no URL can load; taken as a file, it became a red
+ * "unable to load" tile under a reply that only quoted it. Brackets stay: real
+ * directories use them (`app/[slug]/opengraph-image.png`).
  */
 export function extractImagePaths(text: string): string[] {
   // Match absolute paths ending with image extensions
   // Handles paths that may be wrapped in backticks, quotes, or standalone
-  const regex = /(?:^|[\s`"'(])(\/?(?:[A-Za-z]:[\\/]|\/)[^\s`"')<>]+\.(?:png|jpe?g|gif|webp|svg|bmp|avif|ico))/gim
+  const regex = /(?:^|[\s`"'(])(\/?(?:[A-Za-z]:[\\/]|\/)[^\s`"')<>*?{$%]+\.(?:png|jpe?g|gif|webp|svg|bmp|avif|ico))/gim
   const paths: string[] = []
   const seen = new Set<string>()
 
@@ -58,16 +65,6 @@ type GalleryImage = {
   name: string
   /** Where the file is, for "open in system app". Relative until the workdir is known. */
   path: string
-  /**
-   * The prose gave only a bare name and nothing the turn wrote corroborates where
-   * the file is, so the URL is a guess. A failed load is then a wrong guess, not
-   * a broken deliverable.
-   */
-  inferred?: boolean
-}
-
-function samePath(left: string, right: string): boolean {
-  return left.replaceAll('\\', '/').toLowerCase() === right.replaceAll('\\', '/').toLowerCase()
 }
 
 type Props = {
@@ -87,12 +84,17 @@ type Props = {
 export function InlineImageGallery({ text, sessionId, workDir, changedFiles, suppressManagedGeneratedImages = false }: Props) {
   const t = useTranslation()
   const [activeIndex, setActiveIndex] = useState<number | null>(null)
-  const [failureState, setFailureState] = useState(() => ({ sessionId, workDir, sources: new Set<string>() }))
+  const [failureState, setFailureState] = useState(() => ({
+    sessionId,
+    workDir,
+    failed: new Set<string>(),
+    unavailable: new Set<string>(),
+  }))
   // The same absolute URL can become readable in a different workspace/session.
   if (failureState.sessionId !== sessionId || failureState.workDir !== workDir) {
-    setFailureState({ sessionId, workDir, sources: new Set() })
+    setFailureState({ sessionId, workDir, failed: new Set(), unavailable: new Set() })
   }
-  const failedSources = failureState.sources
+  const failedSources = failureState.failed
 
   const markdownImageSources = useMemo(
     () => new Set(extractMarkdownImageSources(text).map(normalizeImageReference)),
@@ -153,7 +155,6 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
     // Dedup: an absolute path inside the workspace can be caught by BOTH sources.
     // Skip a relative target whose basename already appears among the absolute
     // images, and also collapse duplicate relative targets by resolved src.
-    const proseText = text.replaceAll('\\', '/')
     const absoluteNames = new Set(absolute.map((img) => img.name))
     const seenSrc = new Set(absolute.map((img) => img.src))
     const relative: GalleryImage[] = []
@@ -171,21 +172,17 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
         continue
       }
       seenSrc.add(src)
-      const openPath = resolveAbsoluteOpenPath(relPath, workDir ?? undefined)
-      const corroborated = changedFileEvidence?.some((file) => samePath(file, openPath)) ?? false
-      // A path the prose spells out with its directory is a claim, even when the
-      // checkpoint missed it (shell writes are invisible there); only a bare name,
-      // placed at the root or in an inferred directory, is a guess.
-      const namedWithDirectory = /[\\/]/.test(relPath) && proseText.includes(relPath.replaceAll('\\', '/'))
-      relative.push({ src, name, path: openPath, inferred: !corroborated && !namedWithDirectory })
+      relative.push({ src, name, path: resolveAbsoluteOpenPath(relPath, workDir ?? undefined) })
     }
 
     return [...absolute, ...relative]
-  }, [changedFileEvidence, imagePaths, relativeTargets, sessionId, text, workDir])
+  }, [imagePaths, relativeTargets, sessionId, workDir])
 
-  // A guessed image that failed to load leaves no trace: there is nothing to retry
-  // when the file was never claimed to be there.
-  const visibleImages = images.filter((img) => !(img.inferred && failedSources.has(img.src)))
+  // A picture the server will not serve — missing, outside the readable roots, not
+  // an image — leaves no trace. The reply only named it, and its text still does:
+  // a file cleaned out of /tmp, a web route, a name quoted from a log. Only a load
+  // that should have worked is an error worth a retry.
+  const visibleImages = images.filter((img) => !failureState.unavailable.has(img.src))
   if (visibleImages.length === 0) return null
 
   return (
@@ -203,9 +200,9 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
               title={t('chat.imageLoadFailed')}
               retryLabel={t('common.retry')}
               onRetry={() => setFailureState((previous) => {
-                const sources = new Set(previous.sources)
-                sources.delete(img.src)
-                return { ...previous, sources }
+                const failed = new Set(previous.failed)
+                failed.delete(img.src)
+                return { ...previous, failed }
               })}
               detail={(
                 <>
@@ -227,9 +224,10 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
                 loading="lazy"
                 className="w-full object-cover"
                 style={{ maxHeight: visibleImages.length === 1 ? 400 : 240 }}
-                // img errors expose no HTTP status: a denied, missing or invalid
-                // image needs visible feedback without claiming a specific cause.
-                onFailure={() => setFailureState((previous) => ({ ...previous, sources: new Set(previous.sources).add(img.src) }))}
+                onFailure={(failure) => setFailureState((previous) => ({
+                  ...previous,
+                  [failure]: new Set(previous[failure]).add(img.src),
+                }))}
               />
               <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover/image:bg-black/20 group-hover/image:opacity-100">
                 <span className="material-symbols-outlined rounded-full bg-white/90 p-2 text-[20px] text-[var(--color-text-primary)] shadow-lg">

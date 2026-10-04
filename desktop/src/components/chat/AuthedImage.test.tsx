@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const fetchServerImageBlobUrl = vi.hoisted(() => vi.fn())
 vi.mock('../../lib/authedImage', () => ({ fetchServerImageBlobUrl }))
 
+import { ApiError } from '../../api/client'
 import { AuthedImage } from './AuthedImage'
 
 beforeEach(() => {
@@ -40,6 +41,35 @@ describe('AuthedImage', () => {
     fireEvent.error(screen.getByRole('img'))
 
     await waitFor(() => expect(onFailure).toHaveBeenCalledTimes(1))
+  })
+
+  // A file the server will not serve is not there to show; anything else is a
+  // load that should have worked.
+  it.each([
+    [404, 'unavailable'],
+    [403, 'unavailable'],
+    [400, 'unavailable'],
+    [413, 'unavailable'],
+    [401, 'failed'],
+    [500, 'failed'],
+  ] as const)('reports HTTP %i from the authenticated attempt as %s', async (status, failure) => {
+    fetchServerImageBlobUrl.mockRejectedValue(new ApiError(status, {}))
+    const onFailure = vi.fn()
+    render(<AuthedImage src="http://127.0.0.1:1/a.png" alt="a" onFailure={onFailure} />)
+
+    fireEvent.error(screen.getByRole('img'))
+
+    await waitFor(() => expect(onFailure).toHaveBeenCalledWith(failure))
+  })
+
+  it('reports a dropped connection as a failure, not as a file that is not there', async () => {
+    fetchServerImageBlobUrl.mockRejectedValue(new TypeError('Failed to fetch'))
+    const onFailure = vi.fn()
+    render(<AuthedImage src="http://127.0.0.1:1/a.png" alt="a" onFailure={onFailure} />)
+
+    fireEvent.error(screen.getByRole('img'))
+
+    await waitFor(() => expect(onFailure).toHaveBeenCalledWith('failed'))
   })
 
   it('does not apply a result that arrives after the image is gone, and frees it', async () => {
@@ -89,6 +119,8 @@ describe('AuthedImage', () => {
     fireEvent.error(screen.getByRole('img'))
     fireEvent.error(screen.getByRole('img'))
     expect(onFailure).toHaveBeenCalledTimes(1)
+    // The server sent the file and it did not decode: there, and broken.
+    expect(onFailure).toHaveBeenCalledWith('failed')
   })
 
   it('discards a late copy after switching sources, even when returning to the original source', async () => {

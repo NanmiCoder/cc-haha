@@ -1,9 +1,9 @@
 import type { ImgHTMLAttributes } from 'react'
-import { useAuthedImageFallback } from '@/lib/useAuthedImageFallback'
+import { useAuthedImageFallback, type ImageFailure } from '@/lib/useAuthedImageFallback'
 
 type Props = Omit<ImgHTMLAttributes<HTMLImageElement>, 'onError'> & {
-  /** Runs once the image has failed even with the app's credential. */
-  onFailure?: () => void
+  /** Runs once the image has failed even with the app's credential, saying why. */
+  onFailure?: (failure: ImageFailure) => void
   /** A user retry skips the potentially cached bare failure and fetches afresh. */
   retryWithCredential?: boolean
 }

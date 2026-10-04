@@ -2652,7 +2652,7 @@ export const zh: Record<TranslationKey, string> = {
   'chat.contextReferencesOnly': '已新增 {count} 個引用',
   'chat.addSelectionToChat': '新增到對話',
   'chat.imageLoadFailed': '無法載入圖片',
-  'chat.imageLoadFailedHint': '檔案可能不存在，或沒有存取權限。',
+  'chat.imageLoadFailedHint': '檔案可能已損壞，或本機服務暫時沒有回應。',
   'chat.retryImage': '重試圖片：{name}',
   'chat.imageRetrying': '正在重試…',
   'chat.branchFromHere': 'Fork 一個新對話',
