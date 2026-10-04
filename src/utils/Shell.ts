@@ -170,6 +170,7 @@ export type ExecOptions = {
   preventCwdChanges?: boolean
   shouldUseSandbox?: boolean
   shouldAutoBackground?: boolean
+  timeoutBehavior?: 'background' | 'terminate'
   /** When provided, stdout is piped (not sent to file) and this callback fires on each data chunk. */
   onStdout?: (data: string) => void
 }
@@ -190,6 +191,7 @@ export async function exec(
     preventCwdChanges,
     shouldUseSandbox,
     shouldAutoBackground,
+    timeoutBehavior = 'background',
     onStdout,
   } = options ?? {}
   const commandTimeout = timeout || DEFAULT_TIMEOUT
@@ -341,7 +343,7 @@ export async function exec(
       abortSignal,
       commandTimeout,
       taskOutput,
-      shouldAutoBackground,
+      shouldAutoBackground && timeoutBehavior === 'background',
     )
 
     // Close our copy of the fd — the child has its own dup.

@@ -1,4 +1,5 @@
 import { c as _c } from "react/compiler-runtime";
+import { getSessionId, getSessionProjectDir } from '../../bootstrap/state.js';
 import React from 'react';
 import { z } from 'zod/v4';
 import { FallbackToolUseErrorMessage } from '../../components/FallbackToolUseErrorMessage.js';
@@ -11,6 +12,7 @@ import type { Tool } from '../../Tool.js';
 import { buildTool, type ToolDef } from '../../Tool.js';
 import type { LocalAgentTaskState } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import type { LocalShellTaskState } from '../../tasks/LocalShellTask/guards.js';
+import { resolveLocalShellTask } from '../../tasks/LocalShellTask/resolveLocalShellTask.js';
 import type { RemoteAgentTaskState } from '../../tasks/RemoteAgentTask/RemoteAgentTask.js';
 import type { TaskState } from '../../tasks/types.js';
 import { AbortError } from '../../utils/errors.js';
@@ -24,6 +26,7 @@ import { getTaskOutput } from '../../utils/task/diskOutput.js';
 import { updateTaskState } from '../../utils/task/framework.js';
 import { formatTaskOutput } from '../../utils/task/outputFormatting.js';
 import type { ThemeName } from '../../utils/theme.js';
+import { escapeXml } from '../../utils/xml.js';
 import { AgentPromptDisplay, AgentResponseDisplay } from '../AgentTool/UI.js';
 import BashToolResultMessage from '../BashTool/BashToolResultMessage.js';
 import { TASK_OUTPUT_TOOL_NAME } from './constants.js';
@@ -43,6 +46,9 @@ type TaskOutput = {
   description: string;
   output: string;
   exitCode?: number | null;
+  processObservation?: 'alive' | 'dead' | 'unknown';
+  outcomeKnown?: boolean;
+  terminalReason?: string;
   error?: string;
   // For agents
   prompt?: string;
@@ -85,7 +91,11 @@ async function getTaskOutputData(task: TaskState): Promise<TaskOutput> {
     const bashTask = task as LocalShellTaskState;
     return {
       ...baseOutput,
-      exitCode: bashTask.result?.code ?? null
+      exitCode: bashTask.result?.code ?? null,
+      error: bashTask.error ?? '',
+      processObservation: bashTask.processObservation,
+      outcomeKnown: bashTask.outcomeKnown,
+      terminalReason: bashTask.terminalReason,
     };
   }
   if (task.type === 'local_agent') {
@@ -194,15 +204,17 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
     }
     const appState = getAppState();
     const task = appState.tasks?.[task_id] as TaskState | undefined;
-    if (!task) {
-      return {
-        result: false,
-        message: `No task found with ID: ${task_id}`,
-        errorCode: 2
-      };
+    if (task) {
+      return { result: true };
+    }
+    const resolved = await resolveLocalShellTask(task_id, getAppState);
+    if (resolved) {
+      return { result: true };
     }
     return {
-      result: true
+      result: false,
+      message: `No task found with ID: ${task_id}`,
+      errorCode: 2
     };
   },
   async call(input: TaskOutputToolInput, toolUseContext, _canUseTool, _parentMessage, onProgress) {
@@ -211,10 +223,23 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
       block,
       timeout
     } = input;
-    const appState = toolUseContext.getAppState();
-    const task = appState.tasks?.[task_id] as TaskState | undefined;
+    const sessionId = getSessionId();
+    const projectDir = getSessionProjectDir();
+    const resolved = await resolveLocalShellTask(task_id, toolUseContext.getAppState);
+    if (getSessionId() !== sessionId || getSessionProjectDir() !== projectDir) {
+      throw new Error(`No task found with ID: ${task_id}`);
+    }
+    const task = resolved?.task ?? toolUseContext.getAppState().tasks?.[task_id] as TaskState | undefined;
     if (!task) {
       throw new Error(`No task found with ID: ${task_id}`);
+    }
+    if (resolved?.metadata && block) {
+      return {
+        data: {
+          retrieval_status: resolved.task.status === 'running' ? 'timeout' as const : 'success' as const,
+          task: await getTaskOutputData(resolved.task),
+        },
+      };
     }
     if (!block) {
       // Non-blocking: return current state
@@ -290,6 +315,15 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
       if (data.task.exitCode !== undefined && data.task.exitCode !== null) {
         parts.push(`<exit_code>${data.task.exitCode}</exit_code>`);
       }
+      if (data.task.processObservation) {
+        parts.push(`<process_observation>${escapeXml(data.task.processObservation)}</process_observation>`);
+      }
+      if (data.task.outcomeKnown !== undefined) {
+        parts.push(`<outcome_known>${data.task.outcomeKnown}</outcome_known>`);
+      }
+      if (data.task.terminalReason) {
+        parts.push(`<terminal_reason>${escapeXml(data.task.terminalReason)}</terminal_reason>`);
+      }
       if (data.task.output?.trim()) {
         const {
           content
@@ -297,7 +331,7 @@ export const TaskOutputTool: Tool<InputSchema, TaskOutputToolOutput> = buildTool
         parts.push(`<output>\n${content.trimEnd()}\n</output>`);
       }
       if (data.task.error) {
-        parts.push(`<error>${data.task.error}</error>`);
+        parts.push(`<error>${escapeXml(data.task.error)}</error>`);
       }
     }
     return {
