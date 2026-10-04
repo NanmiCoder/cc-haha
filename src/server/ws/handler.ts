@@ -163,7 +163,15 @@ const sessionSlashCommands = new Map<string, SessionSlashCommand[]>()
 // The longest automatic question wait is 30 minutes; leave room for its
 // bounded model request before reclaiming a disconnected CLI.
 const PENDING_PERMISSION_DISCONNECT_CLEANUP_MS = 31 * 60_000
+// A background shell task may legitimately outlive a disconnected client, but
+// nothing else bounds one that never emits a terminal notification — so a
+// forgotten run_in_background loop would pin the CLI (and its process group)
+// forever. Cap that keep-alive at the same order as the permission bound;
+// once it elapses with the client still gone, the shared runtime is stopped and
+// terminal bookends are published.
+const BACKGROUND_TASK_DISCONNECT_MAX_MS = 31 * 60_000
 const sessionCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const backgroundTaskCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>()
 /**
  * Per-session removers for the active-work watcher (issue #764). When the last
  * client disconnects while a turn or background task is still running, we let
@@ -612,6 +620,7 @@ export const handleWebSocket = {
     // Cancel any "let the running turn finish, then clean up" watcher too —
     // the session is observed again (issue #764).
     cancelSessionDisconnectWatcher(sessionId)
+    clearBackgroundTaskDisconnectCeiling(sessionId)
 
     addActiveClient(sessionId, ws)
     if (prewarmPendingSessions.has(sessionId) || prewarmedSessions.has(sessionId)) {
@@ -748,7 +757,7 @@ export const handleWebSocket = {
           break
 
         case 'stop_generation':
-          handleStopGeneration(ws)
+          handleStopGeneration(ws, { reapBackgroundTasks: true })
           break
 
         case 'stop_background_task':
@@ -794,6 +803,18 @@ export const handleWebSocket = {
     // closed. Defer cleanup until all active work completes, then apply the
     // idle grace period. Sessions that are already idle go straight to the timer.
     if (hasActiveSessionWork(sessionId)) {
+      // If the CLI runtime is already gone but turn/task bookkeeping lingers,
+      // no completion event will ever arrive to clear it. Publish terminal
+      // bookends now so a later reconnect does not re-hydrate a ghost "Running".
+      // A deliberate restart never reaches here: it stops the runtime without
+      // emitting an error result, and startSession re-creates the session.
+      if (!conversationService.hasSession(sessionId) && hasTrackedTaskRecords(sessionId)) {
+        runtimeExitStoppedSessions.add(sessionId)
+        void emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
+        void emitAuthoritativeStoppedForActiveAgents(sessionId)
+        scheduleDisconnectCleanup(sessionId)
+        return
+      }
       // A turn blocked on permission cannot finish without user input. Keep the
       // completion watcher for early cleanup, but also enforce the existing
       // pending-permission maximum so an abandoned prompt cannot pin the CLI.
@@ -2187,11 +2208,22 @@ async function restartSessionWithRuntimeConfig(
   }
 }
 
-function handleStopGeneration(ws: SessionConnection) {
+function handleStopGeneration(
+  ws: SessionConnection,
+  options: { reapBackgroundTasks?: boolean } = {},
+) {
   const { sessionId } = ws.data
   emitSessionTurnEvent({ type: 'stopped', sessionId })
   const stoppedTurn = activeUserTurns.get(sessionId)
   const agentTasks = [...(activeAgentTasks.get(sessionId)?.values() ?? [])]
+  // A user-issued Stop ends the whole session's work. Background shell tasks
+  // (Bash/PowerShell run_in_background) are tracked as non-Agent tasks, which
+  // the Agent-stop bookkeeping below never touches — left alone they keep
+  // running after the user asked everything to stop, and keep the CLI alive.
+  // Programmatic stops (stopSessionTurn, runtime-config restart) stay narrow.
+  const backgroundTaskIds = options.reapBackgroundTasks === true
+    ? [...(activeNonAgentTasks.get(sessionId)?.keys() ?? [])]
+    : []
   console.log(`[WS] Stop generation requested for session: ${sessionId}`)
 
   if (stoppedTurn) {
@@ -2233,6 +2265,10 @@ function handleStopGeneration(ws: SessionConnection) {
     agentTasks.map((task) => requestStopTrackedAgentTask(sessionId, task, ws)),
   )
 
+  for (const taskId of backgroundTaskIds) {
+    stopTrackedBackgroundTask(sessionId, taskId)
+  }
+
   if (
     stoppedTurn &&
     conversationService.hasSession(sessionId) &&
@@ -2254,7 +2290,10 @@ function handleStopGeneration(ws: SessionConnection) {
     conversationService.sendInterrupt(sessionId)
   }
 
-  if ((stoppedTurn || agentTasks.length > 0) && conversationService.hasSession(sessionId)) {
+  if (
+    (stoppedTurn || agentTasks.length > 0 || backgroundTaskIds.length > 0) &&
+    conversationService.hasSession(sessionId)
+  ) {
     // Force-kill if still running after 3 seconds
     setTimeout(() => {
       const stoppedForegroundStillCurrent = Boolean(
@@ -2275,8 +2314,11 @@ function handleStopGeneration(ws: SessionConnection) {
         [...(activeAgentTasks.get(sessionId)?.values() ?? [])].some(
           (task) => !task.localStopConfirmed,
         )
+      const stoppedBackgroundStillActive = backgroundTaskIds.some((taskId) =>
+        activeNonAgentTasks.get(sessionId)?.has(taskId),
+      )
       if (
-        (stoppedForegroundStillCurrent || stoppedAgentsStillActive) &&
+        (stoppedForegroundStillCurrent || stoppedAgentsStillActive || stoppedBackgroundStillActive) &&
         conversationService.hasSession(sessionId)
       ) {
         console.log(`[WS] Force-killing CLI subprocess for session: ${sessionId}`)
@@ -2330,6 +2372,29 @@ async function requestStopBackgroundTask(
   } catch (error) {
     reportBackgroundTaskStopFailure(sessionId, ws, taskId, error)
   }
+}
+
+/**
+ * Stop a tracked background shell task without an originating socket, for a
+ * whole-session Stop. Failures are logged rather than answered to one client,
+ * and a late `not_found` is converged to a terminal bookend just like the
+ * panel's per-task Stop.
+ */
+function stopTrackedBackgroundTask(sessionId: string, taskId: string): void {
+  if (!activeNonAgentTasks.get(sessionId)?.has(taskId)) return
+  void conversationService
+    .requestControl(sessionId, { subtype: 'stop_task', task_id: taskId })
+    .then((response) => {
+      if (response?.reason === 'not_found') {
+        convergeEvictedBackgroundTaskStop(sessionId, taskId)
+      }
+    })
+    .catch((error) => {
+      console.warn(
+        `[WS] Failed to stop background task ${taskId} for session ${sessionId}:`,
+        error,
+      )
+    })
 }
 
 /**
@@ -2813,9 +2878,12 @@ function closeStoppedAgentsAfterRuntimeExit(sessionId: string, cliMsg: any): voi
   if (
     cliMsg?.type === 'result' &&
     cliMsg.is_error &&
-    agentStopRequestedSessions.has(sessionId) &&
     !conversationService.hasSession(sessionId)
   ) {
+    // The runtime is gone (crash, hard kill, or non-graceful exit). Any tracked
+    // Agent or background shell task died with it, so publish terminal bookends
+    // even when the user never pressed Stop — otherwise a reconnect re-hydrates
+    // a stale "Running" entry that can never reach a terminal state.
     runtimeExitStoppedSessions.add(sessionId)
     void emitAuthoritativeStoppedForActiveAgents(sessionId)
     void emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
@@ -3154,6 +3222,7 @@ function cleanupSessionRuntimeState(
   options?: { preserveRetryableAgentStops?: boolean },
 ) {
   cancelSessionDisconnectWatcher(sessionId)
+  clearBackgroundTaskDisconnectCeiling(sessionId)
   clearSessionTurnObserver(sessionId)
   clearAgentRuntimeState(sessionId, {
     preserveRetryableStops: options?.preserveRetryableAgentStops,
@@ -4146,6 +4215,12 @@ function watchTurnCompletionForCleanup(sessionId: string): void {
         const cleanupTimer = sessionCleanupTimers.get(sessionId)
         if (cleanupTimer) clearTimeout(cleanupTimer)
         sessionCleanupTimers.delete(sessionId)
+        // Arm the hard ceiling for a non-Agent background task that never
+        // reports back. Running Agent tasks keep their existing handling: only
+        // they can prove their own stop through the Agent finalization path.
+        if (hasTrackedNonAgentTasks(sessionId)) {
+          armBackgroundTaskDisconnectCeiling(sessionId)
+        }
       }
       return
     }
@@ -4174,6 +4249,7 @@ function watchTurnCompletionForCleanup(sessionId: string): void {
     ) return
 
     cancelSessionDisconnectWatcher(sessionId)
+    clearBackgroundTaskDisconnectCeiling(sessionId)
     // All observed work finished while still disconnected — fall back to the
     // bounded idle timer rather than stopping the CLI immediately.
     if (!hasActiveClients(sessionId)) {
@@ -4214,6 +4290,52 @@ function cancelSessionDisconnectWatcher(sessionId: string): void {
     remove()
     sessionDisconnectWatchers.delete(sessionId)
   }
+}
+
+/**
+ * Arm the hard ceiling for a disconnected session kept alive only by background
+ * shell tasks. Idempotent: an already-armed ceiling is left in place so the
+ * clock measures from the first observation, not from the latest event.
+ */
+function armBackgroundTaskDisconnectCeiling(sessionId: string): void {
+  if (backgroundTaskCleanupTimers.has(sessionId)) return
+  const timer = setTimeout(() => {
+    backgroundTaskCleanupTimers.delete(sessionId)
+    if (hasActiveClients(sessionId)) return
+    if (!hasTrackedNonAgentTasks(sessionId)) return
+    console.log(
+      `[WS] Session ${sessionId} kept alive by background tasks for ${BACKGROUND_TASK_DISCONNECT_MAX_MS}ms without a client; stopping CLI subprocess`,
+    )
+    forceStopSharedRuntimeForAgentCancellation(sessionId)
+    void emitAuthoritativeStoppedForActiveAgents(sessionId)
+  }, BACKGROUND_TASK_DISCONNECT_MAX_MS)
+  backgroundTaskCleanupTimers.set(sessionId, timer)
+}
+
+function clearBackgroundTaskDisconnectCeiling(sessionId: string): void {
+  const timer = backgroundTaskCleanupTimers.get(sessionId)
+  if (timer) {
+    clearTimeout(timer)
+    backgroundTaskCleanupTimers.delete(sessionId)
+  }
+}
+
+/**
+ * Any tracked task record, Agent or not. Used to decide whether a dead runtime
+ * left behind ghost "Running" entries that need a terminal bookend.
+ */
+function hasTrackedTaskRecords(sessionId: string): boolean {
+  return (activeNonAgentTasks.get(sessionId)?.size ?? 0) > 0 ||
+    (activeAgentTasks.get(sessionId)?.size ?? 0) > 0
+}
+
+/**
+ * Non-Agent background shell tasks only (Bash/Dream/workflow). Unlike
+ * {@link hasActiveBackgroundTasks}, this never counts an Agent task, whose
+ * lifecycle is owned by the Agent finalization path.
+ */
+function hasTrackedNonAgentTasks(sessionId: string): boolean {
+  return (activeNonAgentTasks.get(sessionId)?.size ?? 0) > 0
 }
 
 function replayPendingPermissionRequests(
@@ -5146,6 +5268,7 @@ export function getActiveSessionIds(): string[] {
 
 export function __resetWebSocketHandlerStateForTests(): void {
   for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
+  for (const timer of backgroundTaskCleanupTimers.values()) clearTimeout(timer)
   for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)
   for (const remove of sessionDisconnectWatchers.values()) remove()
   for (const tasks of activeAgentTasks.values()) {
@@ -5157,6 +5280,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   taskNotificationPersistence.clear()
   sessionTranscriptEpochs.clear()
   sessionCleanupTimers.clear()
+  backgroundTaskCleanupTimers.clear()
   sessionDisconnectWatchers.clear()
   prewarmPendingSessions.clear()
   prewarmedSessions.clear()
