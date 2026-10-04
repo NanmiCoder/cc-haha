@@ -12,8 +12,10 @@ import {
   parseWorkbenchMessageBody,
   resolveMemberModel,
   resolveTeamMemberIdentity,
+  stalledTaskOwnerState,
   taskOwnedByMember,
   type MemberWorkState,
+  type StalledTaskOwnerState,
   type WorkbenchMessageBody,
   type WorkbenchTaskState,
 } from '@/components/agentTeams/agentTeamsModel'
@@ -183,7 +185,30 @@ function formatDuration(durationMs: number): string {
 
 function formatTaskSpan(entry: TaskHistoryEntry): string {
   if (entry.startedAt === null || entry.durationMs === null) return '—'
-  return `${formatWorkbenchMessageTime(new Date(entry.startedAt).toISOString())} +${formatDuration(entry.durationMs)}`
+  const start = formatWorkbenchMessageTime(new Date(entry.startedAt).toISOString())
+  // Times come from polled frames: a task that started and ended between two
+  // of them has an unknown duration, not a zero one.
+  return entry.durationMs < 1000 ? start : `${start} +${formatDuration(entry.durationMs)}`
+}
+
+type TaskGroup = 'running' | 'upcoming' | 'completed'
+
+const TASK_GROUPS: Array<{ group: TaskGroup; label: TranslationKey }> = [
+  { group: 'running', label: 'agentTeams.inspector.groupRunning' },
+  { group: 'upcoming', label: 'agentTeams.inspector.groupUpcoming' },
+  { group: 'completed', label: 'agentTeams.inspector.groupCompleted' },
+]
+
+function taskGroup(state: WorkbenchTaskState): TaskGroup {
+  if (state === 'running') return 'running'
+  if (state === 'completed') return 'completed'
+  return 'upcoming'
+}
+
+function stalledTone(state: StalledTaskOwnerState): Tone {
+  if (state === 'error') return 'danger'
+  if (state === 'retrying') return 'warning'
+  return 'neutral'
 }
 
 function taskTone(state: WorkbenchTaskState): Tone {
@@ -191,6 +216,15 @@ function taskTone(state: WorkbenchTaskState): Tone {
   if (state === 'completed') return 'success'
   if (state === 'open') return 'warning'
   return 'neutral'
+}
+
+function memberStateLabel(state: MemberWorkState, member: TeamMember, t: TranslationFn): string {
+  return state === 'retrying'
+    ? t('agentTeams.member.retrying', {
+        attempt: member.autoRetry?.attempt ?? '?',
+        max: member.autoRetry?.max ?? '?',
+      })
+    : t(`agentTeams.member.${state}` as TranslationKey)
 }
 
 function memberTone(state: MemberWorkState): Tone {
@@ -346,12 +380,9 @@ export function AgentTeamsMemberInspector({
           ? t('agentTeams.member.waitingForDependency', { task: waitingDependency })
           : workState === 'idle'
             ? t('agentTeams.member.waitingForTask')
-            : workState === 'retrying'
-              ? t('agentTeams.member.retrying', {
-                  attempt: member.autoRetry?.attempt ?? '?',
-                  max: member.autoRetry?.max ?? '?',
-                })
-              : t(`agentTeams.member.${workState}` as TranslationKey)
+            : (workState === 'stopped' || workState === 'error' || workState === 'retrying') && runningTask
+              ? t('agentTeams.member.stalledOnTask', { state: memberStateLabel(workState, member, t), task: runningTask.id })
+              : memberStateLabel(workState, member, t)
   // Stopped, retrying and failed members all come back on their own or through
   // a message; say why they paused and what brings them back.
   const awaitsRecovery = !isLead && (
@@ -433,7 +464,7 @@ export function AgentTeamsMemberInspector({
             <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
               {t('agentTeams.inspector.completedTasks')}
             </dt>
-            <dd className="mt-0.5 font-extrabold tabular-nums">{completedTasks}</dd>
+            <dd className="mt-0.5 font-extrabold tabular-nums">{completedTasks}/{taskHistory.length}</dd>
           </div>
           <div>
             <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
@@ -509,40 +540,66 @@ export function AgentTeamsMemberInspector({
             </span>
           </h3>
           {taskHistory.length > 0 ? (
-            <ol className="mt-2" data-testid="agent-teams-member-task-history">
-              {taskHistory.map(entry => {
-                const span = formatTaskSpan(entry)
+            <div data-testid="agent-teams-member-task-history">
+              {TASK_GROUPS.map(({ group, label }) => {
+                const entries = taskHistory.filter(entry => taskGroup(entry.state) === group)
+                if (entries.length === 0) return null
+                // Up next reads in the order the work unblocks, not by when
+                // (never) it started.
+                if (group === 'upcoming') entries.sort((left, right) => left.task.id.localeCompare(right.task.id, undefined, { numeric: true }))
                 return (
-                  <li
-                    key={entry.task.id}
-                    data-testid={`agent-teams-member-task-${entry.task.id}`}
-                    data-task-state={entry.state}
-                    className="flex min-w-0 items-center gap-2 border-b border-[var(--color-border)] py-1.5 last:border-b-0"
-                  >
-                    <span className="w-[26px] shrink-0 font-mono text-[10px] font-extrabold text-[var(--color-text-tertiary)]">
-                      #{entry.task.id}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-[11.5px] leading-[1.3]" title={entry.task.subject}>
-                      {entry.task.subject}
-                    </span>
-                    <Badge
-                      data-testid={`agent-teams-member-task-${entry.task.id}-state`}
-                      tone={taskTone(entry.state)}
-                      size="xs"
-                      bordered
-                    >
-                      {t(`agentTeams.task.${entry.state}` as TranslationKey)}
-                    </Badge>
-                    <time
-                      dateTime={entry.startedAt === null ? undefined : new Date(entry.startedAt).toISOString()}
-                      className="w-[82px] shrink-0 text-right font-mono text-[9.5px] tabular-nums text-[var(--color-text-tertiary)]"
-                    >
-                      {span}
-                    </time>
-                  </li>
+                  <section key={group} data-testid={`agent-teams-member-task-group-${group}`} className="mt-2">
+                    <h4 className="text-[10px] font-semibold text-[var(--color-text-secondary)]">
+                      {t(label)} · {entries.length}
+                    </h4>
+                    <ol className="mt-0.5">
+                      {entries.map(entry => {
+                        const stalled = stalledTaskOwnerState(entry.task, snapshot)
+                        const openDependencies = entry.state === 'blocked'
+                          ? entry.task.blockedBy.filter(id => snapshot.tasks.find(task => task.id === id)?.status !== 'completed')
+                          : []
+                        const aside = openDependencies.length > 0
+                          ? `${t('agentTeams.task.dependsOn')} ${openDependencies.map(id => `#${id}`).join(' ')}`
+                          : formatTaskSpan(entry)
+                        return (
+                          <li
+                            key={entry.task.id}
+                            data-testid={`agent-teams-member-task-${entry.task.id}`}
+                            data-task-state={entry.state}
+                            data-task-stalled={stalled}
+                            className="flex min-w-0 items-center gap-2 border-b border-[var(--color-border)] py-1.5 last:border-b-0"
+                          >
+                            <span className="w-[26px] shrink-0 font-mono text-[10px] font-extrabold text-[var(--color-text-tertiary)]">
+                              #{entry.task.id}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-[11.5px] leading-[1.3]" title={entry.task.subject}>
+                              {entry.task.subject}
+                            </span>
+                            <Badge
+                              data-testid={`agent-teams-member-task-${entry.task.id}-state`}
+                              tone={stalled ? stalledTone(stalled) : taskTone(entry.state)}
+                              size="xs"
+                              bordered
+                            >
+                              {stalled
+                                ? memberStateLabel(stalled, member, t)
+                                : t(`agentTeams.task.${entry.state}` as TranslationKey)}
+                            </Badge>
+                            <time
+                              dateTime={entry.startedAt === null ? undefined : new Date(entry.startedAt).toISOString()}
+                              className="w-[82px] shrink-0 truncate text-right font-mono text-[9.5px] tabular-nums text-[var(--color-text-tertiary)]"
+                              title={aside}
+                            >
+                              {aside}
+                            </time>
+                          </li>
+                        )
+                      })}
+                    </ol>
+                  </section>
                 )
               })}
-            </ol>
+            </div>
           ) : (
             <p className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
               {t('agentTeams.noMemberTasks')}

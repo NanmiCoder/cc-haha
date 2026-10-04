@@ -15,6 +15,7 @@ import {
   runningTaskForMember,
   shortModelLabel,
   snapshotWithHistoricalMembers,
+  stalledTaskOwnerState,
   taskOwnedByMember,
   WORKBENCH_TASK_WIDTH,
 } from './agentTeamsModel'
@@ -443,6 +444,37 @@ describe('Agent Teams workbench model', () => {
     // Two messages inside one snapshot used to render an identical `T+0`.
     expect(first).not.toBe(second)
     expect(formatWorkbenchMessageTime('not-a-date')).toBe('')
+  })
+})
+
+describe('Agent Teams stalled tasks', () => {
+  const member = (name: string, extra: Partial<TeamMember>): TeamMember => ({
+    agentId: `${name}@team-a`, name, role: name, status: 'idle', ...extra,
+  })
+  const withMembers = (tasks: TeamWorkbenchTask[], members: TeamMember[]): TeamWorkbenchSnapshot => {
+    const base = snapshot(tasks)
+    return { ...base, team: { ...base.team, members } }
+  }
+
+  it("reports the owner's state for an in-progress task its owner is no longer working on", () => {
+    // The task list keeps `in_progress` until the member itself updates it,
+    // so a stopped or failed owner would otherwise look busy on the board.
+    const frame = withMembers(
+      [task('1', 'in_progress', [], 'stopper'), task('2', 'in_progress', [], 'failer'), task('3', 'in_progress', [], 'retrier'), task('4', 'in_progress', [], 'worker')],
+      [
+        member('stopper', { activity: 'stopped' }),
+        member('failer', { status: 'error', activity: 'idle', lastError: 'Credit balance is too low' }),
+        member('retrier', { activity: 'idle', lastError: 'overloaded', autoRetry: { attempt: 1, max: 5, nextAt: 1 } }),
+        member('worker', { status: 'running', activity: 'active' }),
+      ],
+    )
+    expect(frame.tasks.map(item => stalledTaskOwnerState(item, frame))).toEqual(['stopped', 'error', 'retrying', undefined])
+  })
+
+  it('never marks finished, unstarted or unowned work as stalled', () => {
+    const owner = member('stopper', { activity: 'stopped' })
+    const frame = withMembers([task('1', 'completed', [], 'stopper'), task('2', 'pending', [], 'stopper'), task('3', 'in_progress')], [owner])
+    expect(frame.tasks.map(item => stalledTaskOwnerState(item, frame))).toEqual([undefined, undefined, undefined])
   })
 })
 

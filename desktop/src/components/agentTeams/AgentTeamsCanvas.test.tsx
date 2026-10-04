@@ -402,6 +402,32 @@ describe('AgentTeamsCanvas', () => {
     expect(lead).toBeNull()
   })
 
+  it('chips what each member has done, is doing and does next, with the subject on hover', () => {
+    render(<AgentTeamsCanvas {...props()} />)
+    const chips = (agentId: string) => Array.from(
+      screen.getByTestId(`agent-teams-canvas-member-${agentId}`).querySelectorAll('[data-member-task]'),
+    ).map(chip => ({
+      id: chip.getAttribute('data-member-task'),
+      status: chip.getAttribute('data-task-status'),
+      next: chip.getAttribute('data-task-next') === 'true',
+      title: chip.getAttribute('title'),
+    }))
+
+    expect(chips('builder@canvas-team')).toEqual([
+      { id: '1', status: 'completed', next: false, title: 'Task 1' },
+      { id: '2', status: 'in_progress', next: false, title: 'Task 2' },
+    ])
+    // Nothing started yet, but the member's next task is already known.
+    expect(chips('reviewer@canvas-team')).toEqual([
+      { id: '3', status: 'pending', next: true, title: 'Task 3' },
+    ])
+    // The connector line runs behind the chip row; a see-through chip lets
+    // it strike through the label.
+    const next = screen.getByTestId('agent-teams-canvas-member-reviewer@canvas-team').querySelector<HTMLElement>('[data-task-next]')!
+    expect(next.style.backgroundColor).not.toBe('transparent')
+    expect(next.style.backgroundColor).not.toBe('')
+  })
+
   it('labels stopped, retrying and failed members and keeps their failure on hover', () => {
     const current = snapshot('current')
     const recovering: TeamWorkbenchSnapshot = {
@@ -436,7 +462,15 @@ describe('AgentTeamsCanvas', () => {
 
     const builder = screen.getByTestId('agent-teams-canvas-member-builder@canvas-team')
     expect(builder.getAttribute('data-member-state')).toBe('retrying')
-    expect(screen.getByText('Auto-retry 2/5').getAttribute('title')).toBe('API Error: 529 overloaded')
+    // It names the task it stopped on, not just that it stopped.
+    expect(screen.getByText('Auto-retry 2/5 · at #2').getAttribute('title')).toBe('API Error: 529 overloaded')
+    // The task list still says in progress; the card must not animate work
+    // nobody is doing.
+    const stalledTask = screen.getByTestId('agent-teams-canvas-task-2')
+    expect(stalledTask.getAttribute('data-stalled')).toBe('retrying')
+    expect(stalledTask.textContent).toContain('Auto-retry 2/5')
+    expect(stalledTask.textContent).not.toContain('In progress')
+    expect(stalledTask.querySelector('[data-progress="indeterminate"]')).toBeNull()
 
     const reviewer = screen.getByTestId('agent-teams-canvas-member-reviewer@canvas-team')
     expect(reviewer.getAttribute('data-member-state')).toBe('stopped')

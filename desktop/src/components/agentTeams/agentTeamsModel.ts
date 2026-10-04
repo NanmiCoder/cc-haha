@@ -314,6 +314,27 @@ export function getMemberWorkState(
   return member.status === 'running' ? 'working' : 'idle'
 }
 
+export type StalledTaskOwnerState = Extract<MemberWorkState, 'stopped' | 'error' | 'retrying'>
+
+/**
+ * Why a task still marked in progress is not moving: its owner was stopped,
+ * failed, or waits for an automatic retry. Only the member updates its own
+ * task, so the list keeps saying `in_progress`, and the board would animate
+ * work nobody is doing.
+ */
+export function stalledTaskOwnerState(
+  task: TeamWorkbenchTask,
+  snapshot: TeamWorkbenchSnapshot,
+): StalledTaskOwnerState | undefined {
+  if (task.status !== 'in_progress' || snapshot.deletedAt) return undefined
+  const owner = inferTaskOwner(task, snapshot)
+  if (!owner) return undefined
+  const { member, isLead } = resolveTeamMemberIdentity(snapshot.team, owner.identity)
+  if (isLead || !snapshot.team.members.includes(member)) return undefined
+  const state = getMemberWorkState(member)
+  return state === 'stopped' || state === 'error' || state === 'retrying' ? state : undefined
+}
+
 export type TaskOwnerAttribution = {
   identity: string
   /** True when the name was recovered from the mailbox rather than recorded. */

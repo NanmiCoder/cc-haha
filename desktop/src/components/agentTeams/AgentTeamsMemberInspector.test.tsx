@@ -125,7 +125,59 @@ describe('AgentTeamsMemberInspector', () => {
     expect(row.textContent).toContain('Completed')
     expect(row.textContent).toContain(`${expectedStart} +7:00`)
     expect(row.getAttribute('data-task-state')).toBe('completed')
-    expect(screen.getByText('1', { selector: 'dd' })).toBeTruthy()
+    expect(screen.getByText('1/1', { selector: 'dd' })).toBeTruthy()
+  })
+
+  it('groups what a member is doing, will do next and has done, and says where a stopped member stopped', () => {
+    const memberTask = (id: string, status: TeamWorkbenchTask['status'], blockedBy: string[] = []): TeamWorkbenchTask => ({
+      id, subject: `Task ${id}`, description: '', owner: 'builder', status, blocks: [], blockedBy, taskListId: 'team-a',
+    })
+    const stopped: TeamMember = { ...builder, activity: 'stopped' }
+    const frame = (generatedAt: string, tasks: TeamWorkbenchTask[]): TeamWorkbenchSnapshot => ({
+      version: 'v1',
+      generatedAt,
+      team: { name: 'team-a', leadAgentId: 'lead@team-a', leadSessionId: 'lead-session', members: [stopped, reviewer] },
+      tasks,
+      messages: [],
+    })
+    const snapshots = [
+      frame('2026-08-08T07:00:00.000Z', [memberTask('1', 'pending'), memberTask('2', 'pending'), memberTask('3', 'pending', ['2']), memberTask('4', 'pending')]),
+      // #1 started and finished between two polls: its duration is unknown,
+      // not zero.
+      frame('2026-08-08T07:05:00.000Z', [memberTask('1', 'completed'), memberTask('2', 'in_progress'), memberTask('3', 'pending', ['2']), memberTask('4', 'pending')]),
+    ]
+    render(
+      <AgentTeamsMemberInspector
+        snapshots={snapshots}
+        selectedIndex={1}
+        snapshot={snapshots[1]!}
+        member={stopped}
+        isLead={false}
+        leadIsStreaming={false}
+        onBack={vi.fn()}
+        onClose={vi.fn()}
+        onOpenExecution={vi.fn()}
+      />,
+    )
+
+    const group = (name: string) => screen.getByTestId(`agent-teams-member-task-group-${name}`)
+    const ids = (name: string) => Array.from(group(name).querySelectorAll('[data-task-state]')).map(row => row.getAttribute('data-testid'))
+    expect(screen.getAllByTestId(/^agent-teams-member-task-group-/).map(node => node.getAttribute('data-testid'))).toEqual([
+      'agent-teams-member-task-group-running',
+      'agent-teams-member-task-group-upcoming',
+      'agent-teams-member-task-group-completed',
+    ])
+    expect(ids('running')).toEqual(['agent-teams-member-task-2'])
+    expect(ids('upcoming')).toEqual(['agent-teams-member-task-3', 'agent-teams-member-task-4'])
+    expect(ids('completed')).toEqual(['agent-teams-member-task-1'])
+
+    // The task list still says in progress, but nobody is working on it.
+    expect(screen.getByTestId('agent-teams-member-task-2-state').textContent).toBe('Stopped')
+    expect(screen.getByText('Stopped · at #2')).toBeTruthy()
+    expect(screen.getByTestId('agent-teams-member-task-3').textContent).toContain('Depends on #2')
+    expect(screen.getByTestId('agent-teams-member-task-1').textContent).toContain(formatWorkbenchMessageTime('2026-08-08T07:05:00.000Z'))
+    expect(screen.getByTestId('agent-teams-member-task-1').textContent).not.toContain('+0:00')
+    expect(screen.getByText('1/4', { selector: 'dd' })).toBeTruthy()
   })
 
   it('shows message direction, renders human Markdown, and narrates protocol payloads', () => {
@@ -282,7 +334,8 @@ describe('AgentTeamsMemberInspector', () => {
         />,
       )
 
-      expect(screen.getByText('Stopped')).toBeTruthy()
+      // Where it stopped, not just that it stopped.
+      expect(screen.getByText('Stopped · at #7')).toBeTruthy()
       const notice = screen.getByTestId('agent-teams-member-recovery')
       expect(notice.getAttribute('data-member-state')).toBe('stopped')
       expect(screen.getByTestId('agent-teams-member-recovery-hint').textContent)

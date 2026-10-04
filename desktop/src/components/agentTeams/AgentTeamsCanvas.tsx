@@ -17,9 +17,11 @@ import {
   parseWorkbenchMessageBody,
   resolveMemberModel,
   resolveTeamMemberIdentity,
+  stalledTaskOwnerState,
   taskOwnedByMember,
   type MemberWorkState,
   type PositionedWorkbenchTask,
+  type StalledTaskOwnerState,
   type WorkbenchTaskState,
 } from './agentTeamsModel'
 
@@ -50,6 +52,8 @@ type MemberPosition = {
   percent: number
   inbox: number
   recentTasks: TeamWorkbenchTask[]
+  /** The first of the member's tasks that has not started yet. */
+  nextTask?: TeamWorkbenchTask
 }
 
 type OwnerVisual = {
@@ -136,6 +140,32 @@ function memberStateLabel(state: MemberWorkState, member: TeamMember, t: Transla
     })
   }
   return t(`agentTeams.member.${state}` as TranslationKey)
+}
+
+function isStalledState(state: MemberWorkState): state is StalledTaskOwnerState {
+  return state === 'stopped' || state === 'error' || state === 'retrying'
+}
+
+function stalledColors(state: StalledTaskOwnerState) {
+  if (state === 'error') {
+    return { background: 'var(--color-error-container)', foreground: 'var(--color-on-error-container)', border: 'var(--color-error)' }
+  }
+  if (state === 'retrying') {
+    return { background: 'var(--color-warning-container)', foreground: 'var(--color-on-warning-container)', border: 'var(--color-warning)' }
+  }
+  return { background: 'var(--color-surface-container-high)', foreground: 'var(--color-text-secondary)', border: 'var(--color-border-strong)' }
+}
+
+function memberTaskChipStyle(task: TeamWorkbenchTask, next: boolean, accent: string) {
+  if (next) {
+    // Opaque like the other chips: the formation's connector line runs
+    // behind this row and would cut through the label.
+    return { borderStyle: 'dashed', borderColor: 'var(--color-outline)', backgroundColor: 'var(--color-background)', color: 'var(--color-text-tertiary)' }
+  }
+  if (task.status === 'completed') {
+    return { borderColor: 'var(--color-border)', backgroundColor: 'var(--color-success-container)', color: 'var(--color-on-success-container)' }
+  }
+  return { borderColor: accent, backgroundColor: 'var(--color-surface-container-lowest)', color: 'var(--color-text-primary)' }
 }
 
 function leadStatusLabel(snapshot: TeamWorkbenchSnapshot, t: TranslationFn): string {
@@ -252,6 +282,18 @@ function memberInboxCount(member: TeamMember, messages: TeamWorkbenchMessage[]):
     memberMatches(member, message.to) ||
     message.recipients.some(recipient => memberMatches(member, recipient))
   )).length
+}
+
+/**
+ * The chips under a member card: what it has done and is doing, then the next
+ * task waiting for it, within the four chips the card has room for.
+ */
+function memberTaskChips(ownedTasks: TeamWorkbenchTask[]): Pick<MemberPosition, 'recentTasks' | 'nextTask'> {
+  const nextTask = ownedTasks
+    .filter(task => task.status === 'pending')
+    .sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))[0]
+  const started = ownedTasks.filter(task => task.status !== 'pending')
+  return { recentTasks: started.slice(nextTask ? -3 : -4), nextTask }
 }
 
 function workState(
@@ -479,7 +521,9 @@ function MemberNode({
           : waitingDependency
             ? t('agentTeams.member.waitingForDependency', { task: waitingDependency })
             : t('agentTeams.member.waitingForTask')
-        : memberStateLabel(state, member, t)
+        : isStalledState(state) && position.currentTask
+          ? t('agentTeams.member.stalledOnTask', { state: memberStateLabel(state, member, t), task: position.currentTask.id })
+          : memberStateLabel(state, member, t)
   const characterClass = state === 'working'
     ? 'agent-teams-character-working'
     : state === 'idle' || state === 'retrying'
@@ -582,14 +626,22 @@ function MemberNode({
             <span className="block h-full rounded-full" style={{ width: `${position.percent}%`, backgroundColor: accent }} />
           </span>
           <span className="mt-1.5 flex max-w-[172px] items-center justify-center gap-1 overflow-hidden">
-            {position.recentTasks.map(task => (
-              <span
-                key={task.id}
-                className="rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-high)] px-1.5 py-px font-mono text-[9px] font-extrabold text-[var(--color-text-secondary)]"
-              >
-                #{task.id}
-              </span>
-            ))}
+            {[...position.recentTasks, ...(position.nextTask ? [position.nextTask] : [])].map(task => {
+              const next = task === position.nextTask
+              return (
+                <span
+                  key={task.id}
+                  data-member-task={task.id}
+                  data-task-status={task.status}
+                  data-task-next={next ? 'true' : undefined}
+                  title={task.subject}
+                  className="rounded-full border px-1.5 py-px font-mono text-[9px] font-extrabold"
+                  style={memberTaskChipStyle(task, next, accent)}
+                >
+                  #{task.id}
+                </span>
+              )
+            })}
           </span>
         </>
       ) : null}
@@ -628,6 +680,10 @@ function TaskCard({
   const owner = taskOwnerVisual(task, snapshot, members, depth)
   const accent = owner?.accent ?? 'var(--color-brand)'
   const colors = taskStateColors(state, accent)
+  // Still in progress on the list, but its owner stopped, failed or waits to
+  // retry: say so instead of animating work nobody is doing.
+  const stalled = owner ? stalledTaskOwnerState(task, snapshot) : undefined
+  const stall = stalled ? stalledColors(stalled) : undefined
   const progress = taskProgress(task)
   const dependencies = task.blockedBy.map(id => `#${id}`).join(' ')
   const ownerLabel = owner
@@ -645,7 +701,8 @@ function TaskCard({
       data-state={state}
       data-depth={depth}
       data-chain-active={focused ? 'true' : 'false'}
-      aria-label={`${task.subject}, ${taskStateLabel(state, t)}`}
+      data-stalled={stalled}
+      aria-label={`${task.subject}, ${stalled && owner ? memberStateLabel(stalled, owner.member, t) : taskStateLabel(state, t)}`}
       onClick={onSelect}
       onMouseEnter={onHover}
       onMouseLeave={onHoverEnd}
@@ -656,7 +713,7 @@ function TaskCard({
         left: x,
         top: y,
         backgroundColor: colors.background,
-        borderColor: justUnlocked ? 'var(--color-success)' : colors.border,
+        borderColor: justUnlocked ? 'var(--color-success)' : stall?.border ?? colors.border,
         opacity: dimmed ? 0.34 : state === 'blocked' ? 0.72 : 1,
       }}
     >
@@ -667,12 +724,16 @@ function TaskCard({
         <span
           className="shrink-0 rounded-full border px-1.5 py-px text-[9.5px] font-extrabold"
           style={{
-            backgroundColor: justUnlocked ? 'var(--color-success-container)' : colors.pillBackground,
-            borderColor: justUnlocked ? 'var(--color-success)' : colors.border,
-            color: justUnlocked ? 'var(--color-on-success-container)' : colors.pillForeground,
+            backgroundColor: justUnlocked ? 'var(--color-success-container)' : stall?.background ?? colors.pillBackground,
+            borderColor: justUnlocked ? 'var(--color-success)' : stall?.border ?? colors.border,
+            color: justUnlocked ? 'var(--color-on-success-container)' : stall?.foreground ?? colors.pillForeground,
           }}
         >
-          {justUnlocked ? t('agentTeams.task.unlocked') : taskStateLabel(state, t)}
+          {justUnlocked
+            ? t('agentTeams.task.unlocked')
+            : stalled && owner
+              ? memberStateLabel(stalled, owner.member, t)
+              : taskStateLabel(state, t)}
         </span>
       </span>
 
@@ -706,7 +767,7 @@ function TaskCard({
             : 'var(--color-surface-container-high)',
         }}
       >
-        {progress === null ? (
+        {stalled && progress === null ? null : progress === null ? (
           <span
             data-progress="indeterminate"
             className="agent-teams-task-running-fill block h-full rounded-full"
@@ -716,7 +777,7 @@ function TaskCard({
           <span
             data-progress={Math.round(progress)}
             className="block h-full rounded-full"
-            style={{ width: `${progress}%`, backgroundColor: colors.progress }}
+            style={{ width: `${progress}%`, backgroundColor: stall ? stall.border : colors.progress }}
           />
         )}
       </span>
@@ -779,7 +840,7 @@ export function AgentTeamsCanvas({
         total: ownedTasks.length,
         percent: ownedTasks.length === 0 ? 0 : Math.round((completed / ownedTasks.length) * 100),
         inbox: memberInboxCount(member, snapshot.messages),
-        recentTasks: ownedTasks.filter(task => task.status !== 'pending').slice(-4),
+        ...memberTaskChips(ownedTasks),
       })
     }
 
