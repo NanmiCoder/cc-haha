@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type HTMLAttributes } from 'react'
+import { useCallback, useEffect, useRef, useState, type HTMLAttributes } from 'react'
 import { Sidebar } from './Sidebar'
 import { ContentRouter } from './ContentRouter'
 import { ToastContainer } from '@/components/layout/Toast'
@@ -37,10 +37,6 @@ import { useTranslation } from '../../i18n'
 import { H5ConnectionView } from './H5ConnectionView'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import type { Tab } from '../../stores/tabStore'
-import { getTraceLaunchRequest } from '../../lib/traceLaunch'
-import { openTraceDetail } from '../../lib/traceNavigation'
-import { TraceList } from '../../pages/TraceList'
-import { TraceSession } from '../../pages/TraceSession'
 
 function isChatTab(tab: Tab | undefined) {
   return tab?.type === 'session'
@@ -63,7 +59,6 @@ export function AppShell() {
     setDesktopUiPreferencesRequest((current) => current === request ? null : current)
   }, [])
   const t = useTranslation()
-  const traceLaunch = useMemo(() => getTraceLaunchRequest(), [])
   const desktopRuntime = isDesktopRuntime()
   const isMobileShell = useMobileViewport() && !desktopRuntime
   const tabs = useTabStore((s) => s.tabs)
@@ -130,42 +125,27 @@ export function AppShell() {
         await fetchSettings()
         if (cancelled) return
 
-        if (!traceLaunch.windowMode) {
-          const displayNameHydrationRevision = captureProjectDisplayNameHydrationRevision()
-          const preferencesRequest = desktopUiPreferencesApi.getPreferences()
-          setDesktopUiPreferencesRequest(preferencesRequest)
-          void preferencesRequest
-            .then(({ preferences }) => {
-              if (cancelled) return
-              hydrateProjectDisplayNames(
-                preferences.projectDisplayNames ?? {},
-                displayNameHydrationRevision,
-              )
-              if (desktopRuntime && preferences.pet.enabled) {
-                return getDesktopHost().pets.show()
-              }
-            })
-            .catch(() => undefined)
-        }
+        const displayNameHydrationRevision = captureProjectDisplayNameHydrationRevision()
+        const preferencesRequest = desktopUiPreferencesApi.getPreferences()
+        setDesktopUiPreferencesRequest(preferencesRequest)
+        void preferencesRequest
+          .then(({ preferences }) => {
+            if (cancelled) return
+            hydrateProjectDisplayNames(
+              preferences.projectDisplayNames ?? {},
+              displayNameHydrationRevision,
+            )
+            if (desktopRuntime && preferences.pet.enabled) {
+              return getDesktopHost().pets.show()
+            }
+          })
+          .catch(() => undefined)
 
         setReady(true)
 
         void (async () => {
-          if (traceLaunch.windowMode) return
-
           await useTabStore.getState().restoreTabs()
           if (cancelled) return
-          if (traceLaunch.sessionId) {
-            // A deep link arrives before the session list is in the store often
-            // enough that the id prefix is the only title we can guarantee.
-            const launchedSession = useSessionStore.getState().sessions
-              .find((session) => session.id === traceLaunch.sessionId)
-            openTraceDetail(
-              traceLaunch.sessionId,
-              launchedSession?.title || traceLaunch.sessionId.slice(0, 8),
-            )
-            return
-          }
           const { activeTabId: activeId, tabs } = useTabStore.getState()
           const activeTab = tabs.find((tab) => tab.sessionId === activeId)
           if (activeId && activeTab?.type === 'session') {
@@ -191,7 +171,7 @@ export function AppShell() {
     return () => {
       cancelled = true
     }
-  }, [bootstrapNonce, fetchSettings, desktopRuntime, traceLaunch])
+  }, [bootstrapNonce, fetchSettings, desktopRuntime])
 
   // Listen for macOS native menu navigation events (About / Settings)
   useEffect(() => {
@@ -295,19 +275,6 @@ export function AppShell() {
     return (
       <div className="app-shell-viewport flex items-center justify-center bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
         {t('app.launching')}
-      </div>
-    )
-  }
-
-  if (traceLaunch.windowMode) {
-    return (
-      <div className="app-shell-viewport flex overflow-hidden bg-[var(--color-surface)] text-[var(--color-text-primary)]">
-        {traceLaunch.sessionId ? (
-          <TraceSession sessionId={traceLaunch.sessionId} standalone />
-        ) : (
-          <TraceList />
-        )}
-        <ToastContainer />
       </div>
     )
   }

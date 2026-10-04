@@ -55,6 +55,8 @@ import { formatTokenCount } from '../../lib/formatTokenCount'
 import { formatDurationMs, hasRunningBackgroundTasks as hasAnyRunningBackgroundTasks } from '../../lib/backgroundTasks'
 import { buildTurnCompletionByMessageId, type TurnCompletion } from '../../lib/turnCompletion'
 import { isTouchH5Document } from '../../lib/touchH5'
+import { findChatRenderTarget } from '../../lib/trajectory/chatTarget'
+import { useTrajectoryViewStore } from '../../stores/trajectoryViewStore'
 import {
   EMPTY_TEAM_LIFECYCLE_CURSOR,
   isTeamLifecycleScopedAt,
@@ -2408,6 +2410,8 @@ export function MessageList({
   })
   const [measuredItemsVersion, setMeasuredItemsVersion] = useState(0)
   const [highlightedNavigationItemKey, setHighlightedNavigationItemKey] = useState<string | null>(null)
+  /** The tool call inside the highlighted item a jump is about, if any. */
+  const [highlightedNavigationToolUseId, setHighlightedNavigationToolUseId] = useState<string | null>(null)
   const [programmaticNavigationItemId, setProgrammaticNavigationItemId] = useState<string | null>(null)
   const [activeConversationFindMatch, setActiveConversationFindMatch] = useState<ConversationFindMatch | null>(null)
   const conversationFindMatchesRef = useRef<ConversationFindMatch[]>([])
@@ -3314,7 +3318,10 @@ export function MessageList({
     return result
   }, [toolResultMap])
 
-  const handleNavigateToConversationItem = useCallback((item: ConversationNavigationItem) => {
+  const handleNavigateToConversationItem = useCallback((
+    item: ConversationNavigationItem,
+    options: { toolUseId?: string } = {},
+  ) => {
     const container = scrollContainerRef.current
     if (!container) return
 
@@ -3322,6 +3329,9 @@ export function MessageList({
     userScrollIntentUntilRef.current = 0
     setProgrammaticNavigationItemId(item.id)
     setHighlightedNavigationItemKey(item.renderItemKey)
+    // A tool call inside the item: its group opens onto it and the call itself
+    // takes the highlight, since the item is mostly the rows around it.
+    setHighlightedNavigationToolUseId(options.toolUseId ?? null)
 
     const scheduleHighlightClear = () => {
       if (navigationHighlightTimerRef.current !== null) {
@@ -3354,10 +3364,22 @@ export function MessageList({
     }
     setVirtualViewport({ scrollTop: targetScrollTop, viewportHeight })
 
-    requestAnimationFrame(() => {
-      const targetNode = Array.from(
+    const alignTarget = (retriesLeft: number) => {
+      const itemNode = Array.from(
         scrollContentRef.current?.querySelectorAll<HTMLElement>('[data-chat-render-item-key]') ?? [],
       ).find((node) => node.dataset.chatRenderItemKey === item.renderItemKey)
+      // Align the call itself, not the top of a group that may be thousands of
+      // rows tall. The group opens in the render this navigation triggered, so
+      // give it one more frame if the row is not in the DOM yet.
+      const toolNode = options.toolUseId && itemNode
+        ? Array.from(itemNode.querySelectorAll<HTMLElement>('[data-tool-use-id]'))
+          .find((node) => node.dataset.toolUseId === options.toolUseId)
+        : undefined
+      if (options.toolUseId && itemNode && !toolNode && retriesLeft > 0) {
+        requestAnimationFrame(() => alignTarget(retriesLeft - 1))
+        return
+      }
+      const targetNode = toolNode ?? itemNode
 
       if (targetNode) {
         const targetRect = targetNode.getBoundingClientRect()
@@ -3372,7 +3394,8 @@ export function MessageList({
       }
 
       scheduleHighlightClear()
-    })
+    }
+    requestAnimationFrame(() => alignTarget(1))
   }, [
     syncVirtualViewportFromContainer,
     virtualTranscriptWindow.offsets,
@@ -3407,6 +3430,33 @@ export function MessageList({
   const conversationFindStreamingTextRef = useRef(streamingText)
   conversationFindStreamingTextRef.current = streamingText
   const conversationFindControllerRef = useRef<ConversationFindController | null>(null)
+
+  // "Locate in chat" from the trajectory view. The request arrives together
+  // with the switch back to chat, so wait two frames for the list to have real
+  // dimensions again before measuring offsets.
+  const trajectoryNav = useTrajectoryViewStore((state) => (
+    state.nav?.to === 'chat' && state.nav.sessionId === resolvedSessionId ? state.nav : null
+  ))
+  const consumeTrajectoryNav = useTrajectoryViewStore((state) => state.consumeNav)
+  const handleNavigateToConversationItemRef = useRef(handleNavigateToConversationItem)
+  handleNavigateToConversationItemRef.current = handleNavigateToConversationItem
+  useEffect(() => {
+    if (trajectoryNav?.to !== 'chat') return
+    let frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        consumeTrajectoryNav(trajectoryNav.nonce)
+        const items = conversationFindRenderItemsRef.current
+        const { index, toolUseId } = findChatRenderTarget(items, trajectoryNav.target)
+        if (index < 0) return
+        const key = getRenderItemKey(items[index]!)
+        handleNavigateToConversationItemRef.current(
+          { id: key, renderItemKey: key, renderIndex: index, turnNumber: 0, preview: '', attachmentCount: 0 },
+          { toolUseId },
+        )
+      })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [consumeTrajectoryNav, trajectoryNav])
 
   useEffect(() => {
     if (!resolvedSessionId || resolvedSessionId !== activeTabId) return
@@ -3556,6 +3606,13 @@ export function MessageList({
   }, [isWorkspacePanelOpen, resolvedSessionId, restoreWorkspaceOrigin, workspacePanelOrigin])
 
 
+  /** Only the item a jump landed on hears about it, so other memoized items keep their props. */
+  const navigationToolUseIdFor = (item: RenderItem): string | undefined => (
+    highlightedNavigationToolUseId !== null && highlightedNavigationItemKey === getRenderItemKey(item)
+      ? highlightedNavigationToolUseId
+      : undefined
+  )
+
   const renderTranscriptItem = (item: RenderItem, index: number) => {
     const cardsForItem = turnCardsByRenderIndex.get(index) ?? []
 
@@ -3584,6 +3641,7 @@ export function MessageList({
               // whether a run stands open.
               isLive={chatState !== 'idle' && index === renderItems.length - 1 && !hasTrailingStreamingItem}
               disclosureKey={getRenderItemKey(item)}
+              revealToolUseId={navigationToolUseIdFor(item)}
             />
           ) : item.kind === 'team_card' ? (
             resolvedSessionId ? (() => {
@@ -3625,6 +3683,10 @@ export function MessageList({
               isTurnOutputOwner={turnOutputOwnerIndexes.has(index)}
               turnCompletion={turnCompletionByMessageId.get(item.message.id)}
               supersededAskUserQuestionIds={supersededAskUserQuestionIds}
+              navigationHighlighted={
+                item.message.type === 'tool_use' &&
+                navigationToolUseIdFor(item) === item.message.toolUseId
+              }
             />
           )}
         </RenderItemBoundary>
@@ -3871,6 +3933,7 @@ export const MessageBlock = memo(function MessageBlock({
   isTurnOutputOwner,
   turnCompletion,
   supersededAskUserQuestionIds,
+  navigationHighlighted = false,
 }: {
   sessionId?: string | null
   message: UIMessage
@@ -3888,6 +3951,8 @@ export const MessageBlock = memo(function MessageBlock({
   isTurnOutputOwner?: boolean
   turnCompletion?: TurnCompletion
   supersededAskUserQuestionIds?: ReadonlySet<string>
+  /** A "locate in chat" jump landed on this tool call. */
+  navigationHighlighted?: boolean
 }) {
   const t = useTranslation()
   const teammateVisual = message.type === 'user_text' && message.teammateFrom && team
@@ -3976,6 +4041,8 @@ export const MessageBlock = memo(function MessageBlock({
           status={message.status}
           partialInput={message.partialInput}
           disclosureKey={message.toolUseId}
+          toolUseId={message.parentToolUseId ? undefined : message.toolUseId}
+          navigationHighlighted={navigationHighlighted}
           agentTaskNotification={
             message.toolName === 'Agent'
               ? agentTaskNotifications[message.toolUseId]

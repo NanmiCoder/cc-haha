@@ -13,6 +13,12 @@ type Props = {
   wrapLongLines?: boolean
   chrome?: CodeViewerChrome
   label?: string
+  /**
+   * Drop the 420px cap on the code area and let it grow with its content.
+   * For hosts that already scroll (a side panel): a capped box inside a
+   * scrolling panel leaves the panel's own space empty below it.
+   */
+  unboundedHeight?: boolean
 }
 
 const warmPrismTheme: PrismTheme = {
@@ -189,11 +195,13 @@ function CodeArea({
   language,
   showLineNumbers,
   wrapLongLines,
+  unboundedHeight,
 }: {
   code: string
   language?: string
   showLineNumbers: boolean
   wrapLongLines: boolean
+  unboundedHeight: boolean
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [runtime, setRuntime] = useState<ShikiRuntime | null>(null)
@@ -236,7 +244,8 @@ function CodeArea({
     <div
       ref={containerRef}
       data-has-line-numbers={showLineNumbers ? 'true' : 'false'}
-      className="code-viewer-area relative max-h-[420px] overflow-auto bg-[var(--color-code-bg)]"
+      data-unbounded-height={unboundedHeight ? 'true' : undefined}
+      className={`code-viewer-area relative overflow-auto bg-[var(--color-code-bg)] ${unboundedHeight ? '' : 'max-h-[420px]'}`}
     >
       {(!ShikiHighlighter || !loaded) && (
         <PrismCodeContent
@@ -294,6 +303,7 @@ export function CodeViewer({
   wrapLongLines = false,
   chrome = 'card',
   label,
+  unboundedHeight = false,
 }: Props) {
   const t = useTranslation()
   const [expanded, setExpanded] = useState(false)
@@ -305,7 +315,10 @@ export function CodeViewer({
 
   const effectiveShowLineNumbers = showLineNumbers && !!language && language !== 'text'
   const languageLabel = language || 'code'
-  const lineCountLabel = `${allLines.length} ${allLines.length === 1 ? 'line' : 'lines'}`
+  const lineCountLabel = t(
+    allLines.length === 1 ? 'tool.lineCountSingular' : 'tool.lineCountPlural',
+    { count: allLines.length },
+  )
   const showExpandToggle = allLines.length > maxLines
 
   return (
@@ -334,6 +347,8 @@ export function CodeViewer({
         </div>
         <CopyButton
           text={code}
+          label={t('common.copy')}
+          copiedLabel={t('common.copied')}
           className={
             isEmbedded
               ? 'rounded-[var(--radius-sm)] px-2 py-1 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-container-high)] hover:text-[var(--color-text-primary)]'
@@ -348,6 +363,7 @@ export function CodeViewer({
         language={language}
         showLineNumbers={effectiveShowLineNumbers}
         wrapLongLines={wrapLongLines}
+        unboundedHeight={unboundedHeight}
       />
 
       {/* Expand/collapse toggle */}

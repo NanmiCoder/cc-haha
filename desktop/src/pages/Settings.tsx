@@ -14,7 +14,6 @@ import { ComputerUseSettings } from './ComputerUseSettings'
 import { McpSettings } from './McpSettings'
 import { TerminalSettings } from './TerminalSettings'
 import { DiagnosticsSettings } from './DiagnosticsSettings'
-import { TraceList } from './TraceList'
 import { ActivitySettings } from './ActivitySettings'
 import { MemorySettings } from './MemorySettings'
 import { PetSettings } from '../features/pets/PetSettings'
@@ -81,7 +80,6 @@ export function DesktopSettings() {
             <TabButton icon="pets" label={t('settings.tab.pets')} active={activeTab === 'pets'} onClick={() => setActiveTab('pets')} />
             <TabButton icon="mouse" label={t('settings.tab.computerUse')} active={activeTab === 'computerUse'} onClick={() => setActiveTab('computerUse')} />
             <TabButton icon="monitoring" label={t('settings.tab.activity')} active={activeTab === 'activity'} onClick={() => setActiveTab('activity')} />
-            <TabButton icon="account_tree" label={t('settings.tab.trace')} active={activeTab === 'trace'} onClick={() => setActiveTab('trace')} />
             <TabButton icon="monitor_heart" label={t('settings.tab.diagnostics')} active={activeTab === 'diagnostics'} onClick={() => setActiveTab('diagnostics')} />
           </div>
           <div className="mt-2 border-t border-[var(--color-border-separator)] pt-2">
@@ -89,8 +87,8 @@ export function DesktopSettings() {
           </div>
         </div>
 
-        {/* Tab content; trace embeds a full-bleed page that manages its own scroll */}
-        <div className={activeTab === 'trace' ? 'flex-1 flex min-h-0 flex-col overflow-hidden' : 'flex-1 overflow-y-auto px-9 py-8'}>
+        {/* Tab content */}
+        <div className="flex-1 overflow-y-auto px-9 py-8">
           {activeTab === 'providers' && <ProviderSettings />}
           {activeTab === 'activity' && <ActivitySettings />}
           {activeTab === 'general' && <GeneralSettings />}
@@ -105,7 +103,6 @@ export function DesktopSettings() {
           {activeTab === 'plugins' && <PluginSettings />}
           {activeTab === 'pets' && <PetSettings />}
           {activeTab === 'computerUse' && <ComputerUseSettings />}
-          {activeTab === 'trace' && <TraceList />}
           {activeTab === 'diagnostics' && <DiagnosticsSettings />}
           {activeTab === 'about' && <AboutSettings />}
         </div>

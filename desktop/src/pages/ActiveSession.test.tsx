@@ -70,6 +70,12 @@ vi.mock('../components/chat/MessageList', () => ({
   ),
 }))
 
+vi.mock('../components/trajectory/TrajectoryView', () => ({
+  default: ({ sessionId, visible, running }: { sessionId: string; visible: boolean; running: boolean }) => (
+    <div data-testid="trajectory-view" data-session-id={sessionId} data-visible={visible ? 'true' : 'false'} data-running={running ? 'true' : 'false'} />
+  ),
+}))
+
 vi.mock('../components/chat/ChatInput', () => ({
   ChatInput: ({ compact, variant, sessionId, visible }: { compact?: boolean; variant?: string; sessionId?: string; visible?: boolean }) => (
     <div data-testid="chat-input" data-compact={compact ? 'true' : 'false'} data-variant={variant} data-session-id={sessionId} data-visible={visible ? 'true' : 'false'} />
@@ -127,6 +133,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useTabStore } from '../stores/tabStore'
 import { useTeamStore } from '../stores/teamStore'
 import { useActivityPanelStore } from '../stores/activityPanelStore'
+import { useTrajectoryViewStore } from '../stores/trajectoryViewStore'
 import {
   WORKSPACE_BOTTOM_DEFAULT_HEIGHT,
   WORKSPACE_BOTTOM_MAX_HEIGHT,
@@ -177,6 +184,60 @@ afterEach(() => {
   useWorkspaceStore.setState(useWorkspaceStore.getInitialState(), true)
   useActivityPanelStore.setState(useActivityPanelStore.getInitialState(), true)
   useCLITaskStore.setState(useCLITaskStore.getInitialState(), true)
+  useTrajectoryViewStore.setState({ modes: {}, opened: {}, nav: null })
+})
+
+describe('ActiveSession trajectory view', () => {
+  function seedSession(id: string) {
+    useSettingsStore.setState({ locale: 'en' })
+    useTabStore.setState({ activeTabId: id, tabs: [{ sessionId: id, title: 'Main', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({ sessions: [{ id, title: 'Main', messageCount: 1, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }] })
+    useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true, messages: [{ id: 'm', type: 'assistant_text', content: 'main', timestamp: 1 }] } } })
+  }
+
+  it('swaps the chat body for the trajectory while keeping the chat and composer mounted', async () => {
+    const id = 'trajectory-session'
+    seedSession(id)
+    render(<ActiveSession sessionId={id} />)
+    const list = screen.getByTestId('message-list')
+    const input = screen.getByTestId('chat-input')
+    // Never mounted (so never fetched) until the user opens it.
+    expect(screen.queryByTestId('trajectory-view')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' }))
+    const trajectory = await screen.findByTestId('trajectory-view')
+    expect(trajectory).toHaveAttribute('data-visible', 'true')
+    expect(trajectory).toHaveAttribute('data-session-id', id)
+    expect(screen.getByTestId('message-list')).toBe(list)
+    expect(list.parentElement).toHaveClass('hidden')
+    expect(screen.getByTestId('chat-input')).toBe(input)
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Chat' }))
+    expect(screen.getByTestId('trajectory-view')).toBe(trajectory)
+    expect(trajectory).toHaveAttribute('data-visible', 'false')
+    expect(screen.getByTestId('session-trajectory-panel')).toHaveClass('hidden')
+    expect(list.parentElement).not.toHaveClass('hidden')
+  })
+
+  it('opens the trajectory when a chat tool card asks to reveal a row there', async () => {
+    const id = 'reveal-session'
+    seedSession(id)
+    render(<ActiveSession sessionId={id} />)
+    act(() => useTrajectoryViewStore.getState().revealInTrajectory(id, 't:toolu_1'))
+    expect(await screen.findByTestId('trajectory-view')).toHaveAttribute('data-visible', 'true')
+    expect(screen.getByRole('tab', { name: 'Trajectory' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('offers no trajectory switch on mobile', () => {
+    viewportMocks.isMobile = true
+    const id = 'mobile-trajectory'
+    seedSession(id)
+    useTrajectoryViewStore.setState({ modes: { [id]: 'trajectory' }, opened: { [id]: true }, nav: null })
+    render(<ActiveSession sessionId={id} />)
+    expect(screen.queryByRole('tab', { name: 'Trajectory' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('trajectory-view')).not.toBeInTheDocument()
+    expect(screen.getByTestId('message-list').parentElement).not.toHaveClass('hidden')
+  })
 })
 
 describe('ActiveSession task polling', () => {
@@ -512,7 +573,7 @@ describe('ActiveSession task polling', () => {
     })
 
     const tokenBadge = screen.getByTitle(/cache read 4,971,000.*cache write 10,000/i)
-    expect(tokenBadge).toHaveTextContent('5.1m tokens incl. cache')
+    expect(tokenBadge).toHaveTextContent('5.1M tokens incl. cache')
   })
 
   it('shows the worktree name in the header and reveals its directory on focus', async () => {

@@ -6,12 +6,9 @@ import { ScheduledTasks } from '../../pages/ScheduledTasks'
 import { ExtensionMarket } from '@/pages/ExtensionMarket'
 import { Settings } from '../../pages/Settings'
 import { TerminalSettings } from '../../pages/TerminalSettings'
-import { TraceList } from '../../pages/TraceList'
-import { TraceSession } from '../../pages/TraceSession'
 import { SubagentRunPage, TeamMemberRunPage } from '../../pages/SubagentRunPage'
 import { AgentTeamsWorkbenchTab } from '../agentTeams/AgentTeamsWorkbenchTab'
 import { WorkspaceBrowserGuestLayer } from '../workbench/WorkspaceBrowserGuestLayer'
-import { returnToTraceList } from '../../lib/traceNavigation'
 
 export function ContentRouter() {
   const activeTabId = useTabStore((s) => s.activeTabId)
@@ -51,14 +48,6 @@ export function ContentRouter() {
     page = <ScheduledTasks />
   } else if (activeTabType === 'connectors' || activeTabType === 'market') {
     page = <ExtensionMarket />
-  } else if (activeTabType === 'trace') {
-    const traceTabId = activeTabId
-    const traceSessionId = tabs.find((t) => t.sessionId === traceTabId)?.traceSessionId
-    page = traceSessionId
-      ? <TraceSession sessionId={traceSessionId} onBack={() => returnToTraceList(traceTabId)} />
-      : <EmptySession />
-  } else if (activeTabType === 'traces') {
-    page = <TraceList />
   } else if (activeTabType === 'subagent') {
     const subagentTab = tabs.find((t) => t.sessionId === activeTabId)
     page = subagentTab?.sourceSessionId && subagentTab.subagentToolUseId

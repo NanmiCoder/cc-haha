@@ -14,6 +14,7 @@ import { InlineImageGallery } from './InlineImageGallery'
 import { ToolResultImages } from './ToolResultImages'
 import { ImageGenerationBlock } from './ImageGenerationBlock'
 import { isImageGenerationToolName } from './imageGenerationTools'
+import { ViewInTrajectoryButton } from '../trajectory/TrajectoryLinkContext'
 import type { AgentTaskNotification } from '../../types/chat'
 import {
   PlanPreviewCard,
@@ -44,6 +45,10 @@ type Props = {
   durationMs?: number
   /** Stable key that survives virtualized row unmount/remount. */
   disclosureKey?: string
+  /** Enables "view in trajectory" when rendered inside the main session's message list. */
+  toolUseId?: string
+  /** Briefly marks this call as the one a "locate in chat" jump landed on. */
+  navigationHighlighted?: boolean
 }
 
 const TOOL_ICONS: Record<string, string> = {
@@ -136,7 +141,7 @@ type ContentStats = {
   windowed?: boolean
 }
 
-export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, compact = false, chrome = 'card', isPending = false, status, partialInput, defaultExpanded = false, durationMs, disclosureKey }: Props) {
+export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, compact = false, chrome = 'card', isPending = false, status, partialInput, defaultExpanded = false, durationMs, disclosureKey, toolUseId, navigationHighlighted = false }: Props) {
   const isRow = chrome === 'row'
   const isExitPlanTool = isExitPlanModeTool(toolName)
   const isEnterPlanTool = isEnterPlanModeTool(toolName)
@@ -172,6 +177,9 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
     [isPending, obj, partialInput, toolName],
   )
   const liveStatsSummary = liveStats ? formatContentStats(liveStats, t) : ''
+  const pendingTitle = pendingSummary
+    ? (liveStatsSummary ? `${pendingSummary} · ${liveStatsSummary}` : pendingSummary)
+    : undefined
   // The text extractors below skip image blocks; this is what gives them a thumbnail.
   const toolImages = useMemo(
     () => toolResultImagesFor({ toolName, input, content: result?.content }),
@@ -241,24 +249,25 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   return (
     <div
       data-tool-call-chrome={chrome}
-      className={
+      data-tool-use-id={toolUseId}
+      className={`${
         isRow
-          ? ''
+          ? 'rounded-[var(--radius-md)]'
           : `overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
             compact ? 'mb-0' : 'mb-2'
           }`
-      }
+      }${navigationHighlighted ? ' chat-tool-navigation-target' : ''}`}
     >
-      <button
-        type="button"
-        data-chat-disclosure="true"
-        aria-expanded={expandable ? expanded : undefined}
-        onClick={() => {
-          if (expandable) {
-            setExpanded((value) => !value)
-          }
-        }}
-        className={`flex items-center text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
+      {/*
+        The header is a row of siblings, not one big button, so a second action
+        ("view in trajectory") can sit in it without nesting interactive
+        elements or being laid over the duration and chevron. The disclosure
+        button stretches its hit area across the whole header with an `::after`
+        overlay: clicking the duration or chevron still toggles, and the action
+        — positioned, later in tree order — paints and hit-tests above it.
+      */}
+      <div
+        className={`group/toolhead relative flex items-center transition-colors hover:bg-[var(--color-surface-hover)] ${
           isRow
             // The negative margin lets the hover highlight breathe past the
             // timeline rule without the row itself being inset from it.
@@ -266,84 +275,112 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
             : compact ? 'w-full gap-[11px] px-3.5 py-2.5' : 'w-full gap-3 px-4 py-3'
         }`}
       >
-        {isRow ? (
-          /* Rows had no icon at all, so every step began with a bare word and
-             the eye had nothing to run down. A leading glyph gives the run a
-             left edge, separates one tool family from the next at a glance, and
-             marks the whole line as machinery rather than speech. */
-          <RowToolIcon toolName={toolName} active={Boolean(pendingSummary)} />
-        ) : compact ? (
-          <span className="material-symbols-outlined shrink-0 text-[16px] text-[var(--color-text-secondary)]">{icon}</span>
-        ) : (
-          /* The ink square is the design's tool badge: solid `--t1` with the page
-             ground as its glyph color, which is exactly the primary-button pair. */
-          <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]">
-            <span className="material-symbols-outlined text-[16px]">{icon}</span>
+        <button
+          type="button"
+          data-chat-disclosure="true"
+          aria-expanded={expandable ? expanded : undefined}
+          onClick={() => {
+            if (expandable) {
+              setExpanded((value) => !value)
+            }
+          }}
+          // The overlay covers the status text too, so its own tooltip cannot
+          // show; the running summary is the one that truncates, so carry it here.
+          title={pendingTitle}
+          className={`flex min-w-0 flex-1 items-center self-stretch text-left after:absolute after:inset-0 after:content-[''] focus:outline-none focus-visible:after:shadow-[var(--shadow-focus-ring)] ${
+            isRow
+              ? 'gap-2 after:rounded-[var(--radius-md)]'
+              : compact ? 'gap-[11px]' : 'gap-3'
+          }`}
+        >
+          {isRow ? (
+            /* Rows had no icon at all, so every step began with a bare word and
+               the eye had nothing to run down. A leading glyph gives the run a
+               left edge, separates one tool family from the next at a glance, and
+               marks the whole line as machinery rather than speech. */
+            <RowToolIcon toolName={toolName} active={Boolean(pendingSummary)} />
+          ) : compact ? (
+            <span className="material-symbols-outlined shrink-0 text-[16px] text-[var(--color-text-secondary)]">{icon}</span>
+          ) : (
+            /* The ink square is the design's tool badge: solid `--t1` with the page
+               ground as its glyph color, which is exactly the primary-button pair. */
+            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]">
+              <span className="material-symbols-outlined text-[16px]">{icon}</span>
+            </span>
+          )}
+          <span className={
+            isRow
+              // The running step is the one the reader is waiting on, so it is the
+              // one that gets colour. Finished steps stay grey and the eye lands on
+              // where the run actually is without a separate progress strip.
+              //
+              // Grey even when finished, and a step below the prose it sits among:
+              // the layers have to be separable at a glance, or a run of machinery
+              // reads as loudly as the sentence that concludes it.
+              ? `shrink-0 text-[12.5px] font-medium ${
+                  pendingSummary ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'
+                }`
+              : `shrink-0 font-bold text-[var(--color-text-primary)] ${compact ? 'text-[13px]' : 'text-[14px]'}`
+          }>
+            {toolName}
           </span>
-        )}
-        <span className={
-          isRow
-            // The running step is the one the reader is waiting on, so it is the
-            // one that gets colour. Finished steps stay grey and the eye lands on
-            // where the run actually is without a separate progress strip.
-            //
-            // Grey even when finished, and a step below the prose it sits among:
-            // the layers have to be separable at a glance, or a run of machinery
-            // reads as loudly as the sentence that concludes it.
-            ? `shrink-0 text-[12.5px] font-medium ${
-                pendingSummary ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'
-              }`
-            : `shrink-0 font-bold text-[var(--color-text-primary)] ${compact ? 'text-[13px]' : 'text-[14px]'}`
-        }>
-          {toolName}
-        </span>
-        {filePath ? (
-          <span className={`min-w-0 flex-1 truncate font-mono ${isRow ? 'text-[12px] text-[var(--color-text-tertiary)]' : compact ? 'text-[12.5px] text-[var(--color-text-secondary)]' : 'text-[13px] text-[var(--color-text-secondary)]'}`}>
-            {filePath.split('/').pop()}
-          </span>
-        ) : summary ? (
-          <span className={`min-w-0 flex-1 truncate ${summaryIsProse ? '' : 'font-mono'} ${isRow ? 'text-[12px] text-[var(--color-text-tertiary)]' : compact ? 'text-[12.5px] text-[var(--color-text-secondary)]' : 'text-[13px] text-[var(--color-text-secondary)]'}`}>
-            {summary}
-          </span>
-        ) : (
-          <span className="flex-1" />
-        )}
-        {pendingSummary ? (
-          <span
-            className="inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12.5px] text-[var(--color-text-tertiary)]"
-            title={liveStatsSummary ? `${pendingSummary} · ${liveStatsSummary}` : pendingSummary}
-          >
-            <LoaderCircle size={13} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
-            <span className="truncate">{pendingSummary}</span>
-            {liveStatsSummary ? (
-              <>
-                <span className="shrink-0">·</span>
-                <span className="shrink-0 font-mono tabular-nums">
-                  {liveStatsSummary}
-                </span>
-              </>
-            ) : null}
-          </span>
-        ) : stoppedSummary ? (
-          <span className="inline-flex shrink-0 items-center gap-1 text-[12.5px] text-[var(--color-text-tertiary)]">
-            <CircleStop size={13} strokeWidth={2.25} aria-hidden="true" />
-            {stoppedSummary}
-          </span>
-        ) : result && outputSummary ? (
-          <span
-            className={`inline-flex min-w-0 shrink items-center gap-1.5 text-[12.5px] ${
-              result.isError
-                ? 'font-medium text-[var(--color-error)]'
-                : 'text-[var(--color-text-tertiary)]'
-            }`}
-          >
-            {result.isError && <CircleX size={13} strokeWidth={2} className="shrink-0" aria-hidden="true" />}
-            <span className="min-w-0 truncate">{outputSummary}</span>
-          </span>
-        ) : liveStatsSummary ? (
-          <span className="shrink-0 font-mono text-[12.5px] tabular-nums text-[var(--color-text-tertiary)]">
-            {liveStatsSummary}
-          </span>
+          {filePath ? (
+            <span className={`min-w-0 flex-1 truncate font-mono ${isRow ? 'text-[12px] text-[var(--color-text-tertiary)]' : compact ? 'text-[12.5px] text-[var(--color-text-secondary)]' : 'text-[13px] text-[var(--color-text-secondary)]'}`}>
+              {filePath.split('/').pop()}
+            </span>
+          ) : summary ? (
+            <span className={`min-w-0 flex-1 truncate ${summaryIsProse ? '' : 'font-mono'} ${isRow ? 'text-[12px] text-[var(--color-text-tertiary)]' : compact ? 'text-[12.5px] text-[var(--color-text-secondary)]' : 'text-[13px] text-[var(--color-text-secondary)]'}`}>
+              {summary}
+            </span>
+          ) : (
+            <span className="flex-1" />
+          )}
+          {pendingSummary ? (
+            <span
+              className="inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12.5px] text-[var(--color-text-tertiary)]"
+            >
+              <LoaderCircle size={13} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
+              <span className="truncate">{pendingSummary}</span>
+              {liveStatsSummary ? (
+                <>
+                  <span className="shrink-0">·</span>
+                  <span className="shrink-0 font-mono tabular-nums">
+                    {liveStatsSummary}
+                  </span>
+                </>
+              ) : null}
+            </span>
+          ) : stoppedSummary ? (
+            <span className="inline-flex shrink-0 items-center gap-1 text-[12.5px] text-[var(--color-text-tertiary)]">
+              <CircleStop size={13} strokeWidth={2.25} aria-hidden="true" />
+              {stoppedSummary}
+            </span>
+          ) : result && outputSummary ? (
+            <span
+              className={`inline-flex min-w-0 shrink items-center gap-1.5 text-[12.5px] ${
+                result.isError
+                  ? 'font-medium text-[var(--color-error)]'
+                  : 'text-[var(--color-text-tertiary)]'
+              }`}
+            >
+              {result.isError && <CircleX size={13} strokeWidth={2} className="shrink-0" aria-hidden="true" />}
+              <span className="min-w-0 truncate">{outputSummary}</span>
+            </span>
+          ) : liveStatsSummary ? (
+            <span className="shrink-0 font-mono text-[12.5px] tabular-nums text-[var(--color-text-tertiary)]">
+              {liveStatsSummary}
+            </span>
+          ) : null}
+        </button>
+        {toolUseId ? (
+          // Its own slot left of the duration: the space is always held (no
+          // jump on hover) and nothing is drawn over the duration or chevron.
+          // `relative` lifts it above the disclosure's stretched overlay; the
+          // negative margin keeps a 24px target from growing a 20px row.
+          <ViewInTrajectoryButton
+            toolUseId={toolUseId}
+            className="relative -my-1 shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/toolhead:opacity-100"
+          />
         ) : null}
         {durationSummary && (
           <span className={`shrink-0 font-mono text-[12px] tabular-nums ${
@@ -357,7 +394,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
             {isRow ? (expanded ? '▾' : '▸') : (expanded ? '▴' : '▾')}
           </span>
         )}
-      </button>
+      </div>
 
       {SESSION_TOOL_NAMES.has(toolName) ? <SessionToolLinks input={input} result={result?.content} /> : null}
 
@@ -653,6 +690,8 @@ function ShellOutput({ content, isError, toolName }: { content: unknown; isError
         </span>
         <CopyButton
           text={output.full}
+          label={t('common.copy')}
+          copiedLabel={t('common.copied')}
           className="rounded-[var(--radius-sm)] px-2 py-0.5 text-[11px] text-[var(--color-terminal-muted)] transition-colors hover:text-[var(--color-terminal-fg)]"
         />
       </div>
@@ -824,6 +863,8 @@ function renderResultOutput(
               <span>{label}</span>
               <CopyButton
                 text={text}
+                label={t?.('common.copy')}
+                copiedLabel={t?.('common.copied')}
                 className="rounded-[var(--radius-sm)] px-2 py-1 text-[11px] normal-case tracking-normal text-[var(--color-error)] transition-colors hover:bg-[var(--color-error-soft-hover)]"
               />
             </div>
@@ -853,6 +894,8 @@ function renderResultOutput(
           <span>{label}</span>
           <CopyButton
             text={text}
+            label={t?.('common.copy')}
+            copiedLabel={t?.('common.copied')}
             className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[11px] normal-case tracking-normal text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
           />
         </div>
@@ -911,6 +954,8 @@ function renderDetails(
         <span>{label}</span>
         <CopyButton
           text={text}
+          label={t?.('common.copy')}
+          copiedLabel={t?.('common.copied')}
           className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[11px] normal-case tracking-normal text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
         />
       </div>

@@ -345,7 +345,6 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.clipboardWriteText]: stringPayload,
   [ELECTRON_IPC_CHANNELS.shellOpen]: stringPayload,
   [ELECTRON_IPC_CHANNELS.shellOpenPath]: stringPayload,
-  [ELECTRON_IPC_CHANNELS.traceOpenWindow]: sessionIdPayload,
   [ELECTRON_IPC_CHANNELS.petsList]: noPayload,
   [ELECTRON_IPC_CHANNELS.petsCreateFromImage]: petCreateFromAtlas,
   [ELECTRON_IPC_CHANNELS.petsCreateFromAtlas]: petCreateFromAtlas,

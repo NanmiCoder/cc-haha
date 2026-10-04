@@ -108,6 +108,8 @@ type Props = {
   isLive?: boolean
   /** Stable key that survives virtualized row unmount/remount. */
   disclosureKey?: string
+  /** A "locate in chat" jump targets this call: open its run and mark its row. */
+  revealToolUseId?: string
 }
 
 export type OpenAgentRunPayload = {
@@ -131,6 +133,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
   isStreaming,
   isLive = false,
   disclosureKey,
+  revealToolUseId,
 }: Props) {
   const resolvedSteps = useMemo(() => steps ?? toActivitySteps(toolCalls), [steps, toolCalls])
   const memoryActivity = getMemoryToolActivity(toolCalls, resultMap)
@@ -164,6 +167,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
             disclosureKey={disclosureKey}
+            revealToolUseId={revealToolUseId}
           />
         ) : null}
       </div>
@@ -185,6 +189,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
       isStreaming={isStreaming}
       isLive={isLive}
       disclosureKey={disclosureKey}
+      revealToolUseId={revealToolUseId}
     />
   )
 })
@@ -205,6 +210,7 @@ function ToolCallGroupContent({
   isStreaming,
   isLive = false,
   disclosureKey,
+  revealToolUseId,
 }: ContentProps) {
   const toolCalls = activityStepToolCalls(steps)
   const hasImageGeneration = toolCalls.some((toolCall) => isImageGenerationToolName(toolCall.toolName))
@@ -262,6 +268,7 @@ function ToolCallGroupContent({
             activeThinkingId={activeThinkingId}
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
+            revealToolUseId={revealToolUseId}
           />
         ))}
       </div>
@@ -316,6 +323,7 @@ function ToolCallGroupContent({
       isStreaming={isStreaming}
       isLive={isLive}
       disclosureKey={disclosureKey}
+      revealToolUseId={revealToolUseId}
     />
   )
 }
@@ -804,6 +812,7 @@ function ToolCallTree({
         status={toolCall.status}
         partialInput={toolCall.partialInput}
         durationMs={toolCallDurationMs(toolCall, result)}
+        toolUseId={toolCall.parentToolUseId ? undefined : toolCall.toolUseId}
       />
       {childToolCalls.length > 0 && (
         <div className={

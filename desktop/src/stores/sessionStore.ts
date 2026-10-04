@@ -502,9 +502,7 @@ function removeIdsFromSet(selected: Set<string>, ids: string[]): Set<string> {
 }
 
 function getOpenSessionIds(): Set<string> {
-  return new Set(useTabStore.getState().tabs.flatMap((tab) => tab.type === 'session'
-    ? [tab.sessionId]
-    : tab.type === 'trace' && tab.traceSessionId ? [tab.traceSessionId] : []))
+  return new Set(useTabStore.getState().tabs.flatMap((tab) => tab.type === 'session' ? [tab.sessionId] : []))
 }
 
 function getProjectHistorySessionIds(projectHistory: Record<string, ProjectHistoryState>): Set<string> {

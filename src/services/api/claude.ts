@@ -283,6 +283,7 @@ import {
   checkResponseForCacheBreak,
   recordPromptState,
 } from "./promptCacheBreakDetection.js";
+import { recordPromptSnapshot } from "./promptSnapshot.js";
 import { withStreamRetry } from "./streamRetry.js";
 import {
   CannotRetryError,
@@ -1645,6 +1646,16 @@ async function* queryModel(
       extraBodyParams: getExtraBodyParams(),
     });
   }
+
+  // Desktop-only prompt snapshot sidecar for the trajectory view. Gated and
+  // fire-and-forget internally: never awaited, never throws.
+  recordPromptSnapshot({
+    systemPrompt,
+    tools: allTools,
+    model: options.model,
+    querySource: options.querySource,
+    agentId: options.agentId,
+  });
 
   const newContext: LLMRequestNewContext | undefined = isBetaTracingEnabled()
     ? {

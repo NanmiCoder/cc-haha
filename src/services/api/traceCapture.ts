@@ -44,6 +44,20 @@ export type TraceOverviewOptions = {
   scanCursor?: string
   signal?: AbortSignal
 }
+/** Hard ceilings of the time-window call lookup (`getSessionTraceCallsNear`). */
+export const TRACE_NEAR_LIMIT = 50
+export const TRACE_NEAR_MAX_WINDOW_MS = 60 * 60 * 1000
+export const TRACE_NEAR_SCAN_BYTES = 32 * 1024 * 1024
+export const TRACE_NEAR_SCAN_RECORDS = 4000
+export type TraceCallsNearResult = {
+  calls: TraceCallRecord[]
+  revisionToken?: string
+  captured: boolean
+  /** callId → `start-end` byte range for the call-detail `at` hint. */
+  locs?: Record<string, string>
+  /** The scan budget or the result cap was hit; more calls may exist in the window. */
+  limited?: boolean
+}
 export type TraceSessionWindow = {
   offset: number
   limit: number
@@ -819,9 +833,56 @@ class TraceCaptureService {
     }
   }
 
-  async getSessionTraceCall(sessionId: string, callId: string, options: Pick<TraceOverviewOptions, 'scanCursor' | 'signal'> = {}): Promise<TraceCallRecord | null> {
+  /**
+   * Captured calls whose start time lies in `[from, to]`, oldest first, at
+   * most `TRACE_NEAR_LIMIT`. Small, fully indexed captures answer from the
+   * SQLite index; everything else (index off, capture larger than one index
+   * window) uses a time-directed bounded scan, so the lookup does not depend
+   * on which overview window happens to be indexed.
+   */
+  async getSessionTraceCallsNear(
+    sessionId: string,
+    options: { from: string; to: string; signal?: AbortSignal },
+  ): Promise<TraceCallsNearResult> {
+    options.signal?.throwIfAborted()
+    const fromMs = Date.parse(options.from)
+    const toMs = Date.parse(options.to)
+    if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs < fromMs || toMs - fromMs > TRACE_NEAR_MAX_WINDOW_MS) {
+      throw traceResourceError('TRACE_NEAR_INVALID_WINDOW', 'from/to must be ISO timestamps with from <= to and a window of at most one hour')
+    }
     const mode = syncTraceIndexMode()
     const context = currentTraceScopeContext()
+    const normalizedSessionId = sanitizeTraceFileName(sessionId)
+    const filePath = getTraceFilePath(normalizedSessionId, context)
+    let stat: Stats
+    try {
+      stat = await fs.stat(filePath)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { calls: [], captured: false }
+      throw error
+    }
+    const window = { fromMs, toMs, fromIso: new Date(fromMs).toISOString(), toIso: new Date(toMs).toISOString() }
+    if (mode === 'on' && stat.size <= TRACE_WINDOW_BYTES_LIMIT) {
+      const indexed = await readIndexedTraceCallsNear(normalizedSessionId, filePath, stat, window, context.target, options.signal)
+      if (indexed) return indexed
+    }
+    try {
+      return await scanTraceCallsNear(normalizedSessionId, filePath, window, options.signal)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { calls: [], captured: false }
+      throw error
+    }
+  }
+
+  async getSessionTraceCall(sessionId: string, callId: string, options: Pick<TraceOverviewOptions, 'scanCursor' | 'signal'> & { at?: [number, number] } = {}): Promise<TraceCallRecord | null> {
+    const mode = syncTraceIndexMode()
+    const context = currentTraceScopeContext()
+    // A byte locator from the near lookup reaches calls outside the indexed
+    // overview window; a stale or mismatched locator falls through.
+    if (options.at) {
+      const located = await readTraceCallAt(sessionId, callId, options.at, context)
+      if (located) return located
+    }
     const scan = options.scanCursor
       ? await resolveTraceScan(getTraceFilePath(sanitizeTraceFileName(sessionId), context), options)
       : { signal: options.signal }
@@ -2110,6 +2171,242 @@ async function readProjectedTraceCall(
   }
 }
 
+type TraceNearWindow = { fromMs: number; toMs: number; fromIso: string; toIso: string }
+
+const TRACE_NEAR_PROBE_BYTES = 64 * 1024
+const TRACE_NEAR_HEAD_BYTES = 16 * 1024
+/** Records are appended on completion; allow for clock/append races. */
+const TRACE_NEAR_EARLY_SLACK_MS = 60 * 1000
+/** A call that started inside the window may complete (and be appended) this much later. */
+const TRACE_NEAR_LATE_SLACK_MS = 30 * 60 * 1000
+const TRACE_NEAR_TIME_KEY_RE = /"(completedAt|startedAt|timestamp)":"([^"\\]{1,64})"/g
+
+/**
+ * Time key of a trace line from its bounded head: a call's `completedAt`
+ * (else `startedAt`), an event's `timestamp`. These fields precede the
+ * request/response bodies in the serialized record, and escaped JSON inside
+ * body strings never matches the unescaped `"key":"` spelling.
+ */
+function traceLineTimeKey(head: string): number | null {
+  const event = head.startsWith('{"type":"event"')
+  let started: number | null = null
+  for (const match of head.matchAll(TRACE_NEAR_TIME_KEY_RE)) {
+    const value = Date.parse(match[2]!)
+    if (!Number.isFinite(value)) continue
+    if (event) {
+      if (match[1] === 'timestamp') return value
+      continue
+    }
+    if (match[1] === 'completedAt') return value
+    if (match[1] === 'startedAt' && started === null) started = value
+  }
+  return started
+}
+
+function traceNearRevisionToken(stat: Stats): string {
+  return `file:${createHash('sha256').update(`${traceFileIdentity(stat) ?? ''}:${stat.size}:${stat.mtimeMs}`).digest('hex')}`
+}
+
+function traceNearResult(
+  sessionId: string,
+  locators: TraceCallLocator[],
+  revisionToken: string,
+  limited: boolean,
+): TraceCallsNearResult {
+  const calls = locators.slice(0, TRACE_NEAR_LIMIT)
+  return {
+    calls: calls.map(locator => shellTraceCallFromLocator(sessionId, locator)),
+    revisionToken,
+    captured: true,
+    locs: Object.fromEntries(calls.map(locator => [locator.id, `${locator.byteStart}-${locator.byteStart + locator.byteLength}`])),
+    ...(limited || locators.length > TRACE_NEAR_LIMIT ? { limited: true } : {}),
+  }
+}
+
+async function readIndexedTraceCallsNear(
+  sessionId: string,
+  filePath: string,
+  stat: Stats,
+  window: TraceNearWindow,
+  target: TraceIndexTarget,
+  signal?: AbortSignal,
+): Promise<TraceCallsNearResult | null> {
+  try {
+    const projection = await ensureTraceProjection(sessionId, filePath, stat, 0, target, { signal })
+    const index = getTraceIndex(target)
+    if (!projection || !index) return null
+    const hit = index.getCallsInRange(sessionId, window.fromIso, window.toIso, TRACE_NEAR_LIMIT + 1)
+    if (!hit) return null
+    const { source } = hit
+    const fingerprint = storedTraceFingerprint(source)
+    // Only a projection of the whole file can prove that a call is absent.
+    if (!fingerprint || source.state !== 'ready' || source.filePath !== filePath ||
+      source.windowStartByte !== 0 || source.scanTruncated) return null
+    if ((await detectTraceSourceChange(filePath, fingerprint)).kind !== 'unchanged') return null
+    const revisionToken = createHash('sha256').update(`0:${serializeSourceFingerprint(fingerprint)}`).digest('hex')
+    return traceNearResult(sessionId, hit.calls, revisionToken, false)
+  } catch (error) {
+    if (signal?.aborted) throw error
+    if (isTraceIndexSqliteFailure(error)) quarantineTraceIndexFailure(target, error)
+    return null
+  }
+}
+
+/**
+ * Time-directed bounded scan for `getSessionTraceCallsNear`. Lines are in
+ * append (≈ completion) order, so a binary search over byte offsets on each
+ * line's head time finds the first candidate; a forward scan then parses
+ * whole records until the time keys pass the window or the budget runs out.
+ */
+async function scanTraceCallsNear(
+  sessionId: string,
+  filePath: string,
+  window: TraceNearWindow,
+  signal?: AbortSignal,
+): Promise<TraceCallsNearResult> {
+  return withTraceScanSlot(signal, async () => {
+    const handle = await fs.open(filePath, 'r')
+    try {
+      const stat = await handle.stat()
+      const size = stat.size
+      let scanned = 0
+      const readAt = async (position: number, length: number): Promise<Buffer> => {
+        signal?.throwIfAborted()
+        const buffer = Buffer.allocUnsafe(Math.max(0, Math.min(length, size - position)))
+        let read = 0
+        while (read < buffer.length) {
+          const { bytesRead } = await handle.read(buffer, read, buffer.length - read, position + read)
+          if (bytesRead < 1) break
+          read += bytesRead
+        }
+        scanned += read
+        traceCaptureDiagnostics.incrementalJsonlBytesRead += read
+        return buffer.subarray(0, read)
+      }
+      // First line starting at or after `offset`, with its head time key.
+      const probe = async (offset: number): Promise<{ lineStart: number; key: number | null } | null> => {
+        let lineStart = offset
+        if (offset > 0) {
+          let cursor = offset - 1
+          for (;;) {
+            if (cursor >= size || cursor - offset > TRACE_RECORD_BYTES_LIMIT) return null
+            const bytes = await readAt(cursor, TRACE_NEAR_PROBE_BYTES)
+            if (!bytes.length) return null
+            const newline = bytes.indexOf(0x0a)
+            if (newline !== -1) {
+              lineStart = cursor + newline + 1
+              break
+            }
+            cursor += bytes.length
+          }
+        }
+        if (lineStart >= size) return null
+        const head = await readAt(lineStart, TRACE_NEAR_HEAD_BYTES)
+        const newline = head.indexOf(0x0a)
+        return { lineStart, key: traceLineTimeKey(head.subarray(0, newline === -1 ? head.length : newline).toString('utf8')) }
+      }
+
+      // Unknown or unreadable heads count as "at or after" the target so the
+      // search only ever moves the scan start earlier, never past a match.
+      const target = window.fromMs - TRACE_NEAR_EARLY_SLACK_MS
+      let low = 0
+      let high = size
+      while (high - low > TRACE_NEAR_PROBE_BYTES) {
+        const mid = low + Math.floor((high - low) / 2)
+        const found = await probe(mid)
+        if (!found || found.lineStart >= high || found.key === null || found.key >= target) high = mid
+        else low = found.lineStart + 1
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
+
+      const matches = new Map<string, TraceCallLocator>()
+      let position = low > 0 ? low - 1 : 0
+      // `low` sits inside a line that is before the window; discard its rest.
+      let skipping = low > 0
+      let lineStart = position
+      let fragments: Buffer[] = []
+      let fragmentBytes = 0
+      let records = 0
+      let limited = false
+      const scanStart = scanned
+      scan: while (position < size) {
+        if (scanned - scanStart >= TRACE_NEAR_SCAN_BYTES || records >= TRACE_NEAR_SCAN_RECORDS) {
+          limited = true
+          break
+        }
+        const bytes = await readAt(position, 256 * 1024)
+        if (!bytes.length) break
+        let start = 0
+        let newline = bytes.indexOf(0x0a)
+        while (newline !== -1) {
+          const part = bytes.subarray(start, newline + 1)
+          if (!skipping && fragmentBytes + part.length <= TRACE_RECORD_BYTES_LIMIT) {
+            const line = fragments.length ? Buffer.concat([...fragments, part], fragmentBytes + part.length) : part
+            records += 1
+            const key = traceLineTimeKey(line.subarray(0, TRACE_NEAR_HEAD_BYTES).toString('utf8'))
+            if (key !== null && key > window.toMs + TRACE_NEAR_LATE_SLACK_MS) break scan
+            for (const call of parseTraceBuffer(line, { byteStart: lineStart }).callLocators) {
+              const started = Date.parse(call.startedAt)
+              if (started >= window.fromMs && started <= window.toMs && traceLocatorStringsFit(call)) matches.set(call.id, call)
+            }
+          }
+          skipping = false
+          fragments = []
+          fragmentBytes = 0
+          lineStart = position + newline + 1
+          start = newline + 1
+          newline = bytes.indexOf(0x0a, start)
+        }
+        if (start < bytes.length) {
+          fragmentBytes += bytes.length - start
+          if (fragmentBytes > TRACE_RECORD_BYTES_LIMIT) {
+            skipping = true
+            fragments = []
+          } else if (!skipping) {
+            fragments.push(Buffer.from(bytes.subarray(start)))
+          }
+        }
+        position += bytes.length
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
+      const calls = [...matches.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.byteStart - b.byteStart)
+      return traceNearResult(sessionId, calls, traceNearRevisionToken(stat), limited)
+    } finally {
+      await handle.close()
+    }
+  })
+}
+
+/** Hydrate one call from a byte locator (`[start, end)`, trailing newline optional). */
+async function readTraceCallAt(
+  sessionId: string,
+  callId: string,
+  at: [number, number],
+  context = currentTraceScopeContext(),
+): Promise<TraceCallRecord | null> {
+  const [start, end] = at
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start ||
+    end - start > TRACE_RECORD_BYTES_LIMIT + 1) return null
+  const filePath = getTraceFilePath(sanitizeTraceFileName(sessionId), context)
+  try {
+    const { size } = await fs.stat(filePath)
+    if (end > size) return null
+    const readStart = Math.max(0, start - 1)
+    const readEnd = Math.min(size, end + 1)
+    const raw = await readTraceRange(filePath, readStart, readEnd)
+    // The range must be exactly one JSONL line.
+    if (start > 0 && raw[0] !== 0x0a) return null
+    const body = raw.subarray(start - readStart, end - readStart)
+    const line = body[body.length - 1] === 0x0a ? body.subarray(0, body.length - 1) : body
+    if (line === body && readEnd > end && raw[raw.length - 1] !== 0x0a) return null
+    if (line.includes(0x0a)) return null
+    return parseTraceBuffer(line).calls.find(call => call.id === callId) ?? null
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  }
+}
+
 function traceLocatorStringsFit(locator: TraceCallLocator | TraceEventLocator): boolean {
   return Object.entries(locator).every(([key, value]) =>
     key === 'title' || key === 'message' || typeof value !== 'string' || value.length <= (key === 'id' || key === 'callId' ? 512 : 128),
@@ -2125,26 +2422,31 @@ async function readStableTraceProjection(
   append?: { source: NonNullable<ReturnType<TraceIndex['getSource']>>; fingerprint: SourceFingerprint },
   scan?: TraceScanOptions,
 ): ReturnType<typeof readStableTraceProjectionNow> {
-  scan?.signal?.throwIfAborted()
+  return withTraceScanSlot(scan?.signal, () => readStableTraceProjectionNow(filePath, append, scan))
+}
+
+/** One bounded trace file scan at a time; a short queue, then 429-style busy. */
+async function withTraceScanSlot<T>(signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+  signal?.throwIfAborted()
   let reserved = false
   if (activeTraceScans >= 1) {
     if (traceScanWaiters.length >= 8) throw traceResourceError('TRACE_INDEX_BUSY', 'Trace reader queue is full; retry shortly')
     await new Promise<void>((resolve, reject) => {
-      const ready = () => { scan?.signal?.removeEventListener('abort', cancelled); resolve() }
+      const ready = () => { signal?.removeEventListener('abort', cancelled); resolve() }
       const cancelled = () => {
         const at = traceScanWaiters.indexOf(ready)
         if (at !== -1) traceScanWaiters.splice(at, 1)
-        reject(scan?.signal?.reason ?? new Error('Trace scan aborted'))
+        reject(signal?.reason ?? new Error('Trace scan aborted'))
       }
       traceScanWaiters.push(ready)
-      scan?.signal?.addEventListener('abort', cancelled, { once: true })
+      signal?.addEventListener('abort', cancelled, { once: true })
     })
     reserved = true
   }
   if (!reserved) activeTraceScans += 1
   try {
-    scan?.signal?.throwIfAborted()
-    return await readStableTraceProjectionNow(filePath, append, scan)
+    signal?.throwIfAborted()
+    return await run()
   } finally {
     const next = traceScanWaiters.shift()
     if (next) next()

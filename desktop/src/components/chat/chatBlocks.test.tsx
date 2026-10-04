@@ -16,6 +16,29 @@ describe('chat blocks', () => {
     useChatStore.setState({ sessions: {} })
   })
 
+  it.each(['card', 'row'] as const)('marks a located %s by its tool id, on the chrome the highlight style keys off', (chrome) => {
+    const { container, rerender } = render(
+      <ToolCallBlock chrome={chrome} toolName="Bash" input={{ command: 'ls' }} result={{ content: 'a', isError: false }} toolUseId="toolu_mark" navigationHighlighted />,
+    )
+    const root = container.querySelector('[data-tool-use-id="toolu_mark"]')!
+    expect(root.getAttribute('data-tool-call-chrome')).toBe(chrome)
+    expect(root.className).toContain('chat-tool-navigation-target')
+
+    rerender(<ToolCallBlock chrome={chrome} toolName="Bash" input={{ command: 'ls' }} result={{ content: 'a', isError: false }} toolUseId="toolu_mark" />)
+    expect(container.querySelector('[data-tool-use-id="toolu_mark"]')!.className).not.toContain('chat-tool-navigation-target')
+  })
+
+  it.each(['card', 'row'] as const)('names the %s output copy action in the interface language', (chrome) => {
+    // Regression: tool output copy buttons fell back to CopyButton's English "Copy".
+    useSettingsStore.setState({ locale: 'zh' })
+    const { container } = render(
+      <ToolCallBlock chrome={chrome} toolName="Bash" input={{ command: 'ls' }} result={{ content: 'a.txt', isError: false }} />,
+    )
+    fireEvent.click(container.querySelector('[data-chat-disclosure="true"]')!)
+    expect(screen.getAllByRole('button', { name: '复制' }).length).toBeGreaterThan(0)
+    expect(screen.queryByRole('button', { name: 'Copy' })).toBeNull()
+  })
+
   it('keeps thinking collapsed by default', () => {
     const { container } = render(<ThinkingBlock content="this is a long internal reasoning trace" isActive />)
 

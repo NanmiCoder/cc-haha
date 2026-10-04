@@ -1,8 +1,30 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { CodeViewer } from './CodeViewer'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 describe('CodeViewer', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+  })
+
+  it('translates its line count and copy action', () => {
+    // Regression: the header spelled "3 lines" and the copy button "Copy" in
+    // English whatever the interface language was.
+    useSettingsStore.setState({ locale: 'zh' })
+    render(<CodeViewer code={'{\n  "a": 1\n}'} language="json" />)
+
+    expect(screen.getByText('3 行')).toBeTruthy()
+    expect(screen.queryByText(/lines?$/)).toBeNull()
+    expect(screen.getByRole('button', { name: '复制' })).toBeTruthy()
+  })
+
+  it('counts a single line in the singular', () => {
+    render(<CodeViewer code="ls" language="bash" />)
+    expect(screen.getByText('1 line')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Copy' })).toBeTruthy()
+  })
+
   it('keeps the same inner padding for highlighted code content', () => {
     const { container } = render(
       <CodeViewer code={'cd testb\nnpm run dev'} language="bash" showLineNumbers />,
@@ -36,5 +58,18 @@ describe('CodeViewer', () => {
     expect(contentWrapper).toBeTruthy()
     expect(contentWrapper?.style.whiteSpace).toBe('pre-wrap')
     expect(contentWrapper?.style.wordBreak).toBe('break-word')
+  })
+  it("caps the code area by default, so a tool card cannot take over the chat", () => {
+    const { container } = render(<CodeViewer code={"a\nb"} language="json" />)
+    expect(container.querySelector(".code-viewer-area")?.className).toContain("max-h-[420px]")
+  })
+
+  it("lets a host that already scrolls grow the code area with its content", () => {
+    // Regression: inside the trajectory detail panel the 420px box scrolled on
+    // its own and left the rest of the panel empty below it.
+    const { container } = render(<CodeViewer code={"a\nb"} language="json" unboundedHeight />)
+    const area = container.querySelector(".code-viewer-area")
+    expect(area?.className).not.toContain("max-h-")
+    expect(area?.getAttribute("data-unbounded-height")).toBe("true")
   })
 })

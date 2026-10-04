@@ -48,7 +48,7 @@ General covers four areas: appearance and replies, how the agent works, network 
 | Agent Teams | On by default. Use it when a larger task needs several agents working together. New sessions pick it up; existing sessions do after an app restart. See [Subagents](./agents.md) first. |
 | Auto-answer questions | Off by default. After 1, 5, 10, or 30 minutes without an answer to an agent's multiple-choice question, it can choose a recommended option. If it cannot choose reliably, it keeps waiting. Use only when you want unattended work to continue. |
 | Auto-dream | Off by default. After enough sessions have accumulated, it can organize auto-memory in the background, using additional model calls and tokens. |
-| Agent Trace | On by default. New sessions write condensed request, response, and status events to a local traces directory. Use the **Trace** tab to investigate a failure; turning it off stops new records, while old ones remain readable. |
+| Agent Trace | On by default. New sessions write raw request, response, and status events to a local traces directory. To investigate a failure, open an assistant line in the session's **Trajectory** and switch to its **Raw request** tab; turning it off stops new records, while old ones remain readable. |
 
 ### Network, web search, and notifications
 
@@ -126,12 +126,6 @@ A usage dashboard computed from the Claude Code session records on this machine.
 - Across the top: total tokens, peak tokens, longest task, current and longest streak.
 - In the middle: a heatmap with daily, weekly, and cumulative views. Click a day for that day's sessions, tokens, messages, and tool calls.
 - Below: activity insights — active rate, most-used model, skills used, fresh versus cache-hit token split, and estimated cost. Estimated cost excludes models with no known price, and the UI says how many were skipped.
-
-## Trace
-
-Records the model request chain for each session — requests, responses, status events, timings — for debugging stalls, failures, and unexplained waits. The switch is in **Settings → General** and is on by default; new sessions produce new records.
-
-Once enabled, new sessions write condensed records to a local traces directory. Existing records stay readable after you turn it off; only new ones stop being written. The trace list supports search, filtering (all / LLM / tools / errors), opening a trace in its own window, and deleting a session's trace without touching its chat history.
 
 ## Diagnostics
 

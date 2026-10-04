@@ -412,4 +412,12 @@ describe('uiStore settings tab persistence', () => {
 
     expect(useUIStore.getState().activeSettingsTab).toBe('providers')
   })
+
+  it('lands a stale persisted Trace entry on General, where the capture toggle moved', async () => {
+    window.localStorage.setItem('cc-haha-active-settings-tab', 'trace')
+
+    const { useUIStore } = await import('./uiStore')
+
+    expect(useUIStore.getState().activeSettingsTab).toBe('general')
+  })
 })

@@ -58,7 +58,6 @@ describe('desktop bootstrap', () => {
 
     expect(isPetWindowLocation('?petWindow=1')).toBe(true)
     expect(isPetWindowLocation('?petWindow=0')).toBe(false)
-    expect(isPetWindowLocation('?traceWindow=1')).toBe(false)
   })
 
   it('surfaces bootstrap failures in the root element', async () => {

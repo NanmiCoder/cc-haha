@@ -701,7 +701,7 @@ export function MermaidRenderer({ code }: Props) {
             >
               {t('mermaid.preview')}
             </Button>
-            <CopyButton text={code} className={COPY_CHIP_CLASS} />
+            <CopyButton text={code} label={t('common.copy')} copiedLabel={t('common.copied')} className={COPY_CHIP_CLASS} />
           </div>
         </div>
 
@@ -767,7 +767,7 @@ export function MermaidRenderer({ code }: Props) {
                   onClick={zoomIn}
                 />
               </div>
-              <CopyButton text={code} className={COPY_CHIP_CLASS} />
+              <CopyButton text={code} label={t('common.copy')} copiedLabel={t('common.copied')} className={COPY_CHIP_CLASS} />
             </div>
           </div>
           <div

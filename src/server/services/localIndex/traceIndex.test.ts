@@ -126,6 +126,36 @@ describe('trace index', () => {
     })
   })
 
+  test('looks up calls by start-time range through the ordered index, oldest first and bounded', async () => {
+    await createTestIndex()
+    const sql: string[] = []
+    const index = createTraceIndex(observingDatabase(sql))
+    expect(index.getCallsInRange('range', '2026-07-15T00:00:00.000Z', '2026-07-15T02:00:00.000Z', 10)).toBeNull()
+    const calls = Array.from({ length: 60 }, (_, ordinal) => ({
+      id: `call-${ordinal}`, ordinal, byteStart: ordinal * 10, byteLength: 10,
+      // Written out of order: the range read must sort by startedAt.
+      startedAt: `2026-07-15T01:${String(59 - ordinal).padStart(2, '0')}:00.000Z`, completedAt: null,
+      status: 'ok', source: 'proxy', model: 'model-a',
+      durationMs: 2, failed: false, inputTokens: 3, outputTokens: 4,
+    }))
+    index.replaceSession({ source: { sessionId: 'range', filePath: '/tmp/range.jsonl', size: 600, indexedBytes: 600, mtimeMs: 1 }, calls, events: [] })
+    sql.length = 0
+    const hit = index.getCallsInRange('range', '2026-07-15T01:10:00.000Z', '2026-07-15T01:12:00.000Z', 50)
+    expect(hit?.source.sessionId).toBe('range')
+    expect(hit?.calls.map(call => call.startedAt)).toEqual([
+      '2026-07-15T01:10:00.000Z', '2026-07-15T01:11:00.000Z', '2026-07-15T01:12:00.000Z',
+    ])
+    expect(hit?.calls.map(call => call.id)).toEqual(['call-49', 'call-48', 'call-47'])
+    expect(index.getCallsInRange('range', '2026-07-15T00:00:00.000Z', '2026-07-15T02:00:00.000Z', 5)?.calls.map(call => call.id))
+      .toEqual(['call-59', 'call-58', 'call-57', 'call-56', 'call-55'])
+    expect(index.getCallsInRange('range', '2026-07-15T03:00:00.000Z', '2026-07-15T04:00:00.000Z', 5)?.calls).toEqual([])
+    const plan = database!.read(operation => operation.all<{ detail: string }>(
+      `EXPLAIN QUERY PLAN ${sql.find(statement => statement.includes('started_at >= ?'))}`,
+      'range', '2026-07-15T01:10:00.000Z', '2026-07-15T01:12:00.000Z', 50,
+    ))
+    expect(plan.map(row => row.detail).join('\n')).toMatch(/USING INDEX trace_calls_(page_)?order_idx/)
+  })
+
   test('keeps the latest call locator and exposes revision-based changes without duplicates', async () => {
     const index = await createTestIndex()
 

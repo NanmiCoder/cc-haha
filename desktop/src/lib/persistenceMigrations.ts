@@ -12,7 +12,7 @@ import {
 
 import { CHAT_APPEARANCE_STORAGE_KEY, migrateChatAppearance } from './chatAppearance'
 
-export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 5
+export const CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION = 6
 export const DESKTOP_PERSISTENCE_VERSION_KEY = 'cc-haha.persistence.schemaVersion'
 
 type DesktopMigrationReport = {
@@ -28,14 +28,19 @@ const FOLLOW_SYSTEM_THEME_STORAGE_KEY = 'cc-haha-follow-system-theme'
 const LIGHT_THEME_STORAGE_KEY = 'cc-haha-light-theme'
 const DARK_THEME_STORAGE_KEY = 'cc-haha-dark-theme'
 const LOCALE_STORAGE_KEY = 'cc-haha-locale'
+const ACTIVE_SETTINGS_TAB_STORAGE_KEY = 'cc-haha-active-settings-tab'
+// Schema 6 retired the standalone Trace page: its list tab, its per-session
+// tabs and its Settings rail entry. Per-session traces now live in the chat's
+// 轨迹 view, so a trace tab reopens as that session's chat tab.
+const LEGACY_TRACE_LIST_TAB_ID = '__traces__'
+const LEGACY_TRACE_TAB_PREFIX = '__trace__'
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
-const PERSISTED_SPECIAL_TAB_TYPES = ['settings', 'scheduled', 'market', 'connectors', 'traces'] as const
+const PERSISTED_SPECIAL_TAB_TYPES = ['settings', 'scheduled', 'market', 'connectors'] as const
 const PERSISTED_SPECIAL_TAB_IDS: Record<(typeof PERSISTED_SPECIAL_TAB_TYPES)[number], string> = {
   settings: '__settings__',
   scheduled: '__scheduled__',
   market: '__market__',
   connectors: '__connectors__',
-  traces: '__traces__',
 }
 const SUPPORTED_LOCALES = ['en', 'zh', 'zh-TW', 'jp', 'kr']
 const WORKSPACE_PERSISTED_TAB_KINDS = ['file', 'browser', 'review', 'terminal']
@@ -59,8 +64,25 @@ function getPersistedSpecialTabType(tab: Record<string, unknown>): (typeof PERSI
   if (tab.sessionId === '__scheduled__') return 'scheduled'
   if (tab.sessionId === '__connectors__') return 'market'
   if (tab.sessionId === '__market__') return 'market'
-  if (tab.sessionId === '__traces__') return 'traces'
   return isPersistedSpecialTabType(tab.type) ? tab.type === 'connectors' ? 'market' : tab.type : null
+}
+
+function isLegacyTraceListTab(tab: Record<string, unknown>): boolean {
+  return tab.sessionId === LEGACY_TRACE_LIST_TAB_ID || tab.type === 'traces'
+}
+
+function isLegacyTraceTab(tab: Record<string, unknown>): boolean {
+  return tab.type === 'trace' || String(tab.sessionId).startsWith(LEGACY_TRACE_TAB_PREFIX)
+}
+
+/** The session a retired per-session trace tab pointed at, or null. */
+function getLegacyTraceSessionId(tab: Record<string, unknown>): string | null {
+  if (!isLegacyTraceTab(tab)) return null
+  const sessionId = String(tab.sessionId)
+  const traced = typeof tab.traceSessionId === 'string' && tab.traceSessionId
+    ? tab.traceSessionId
+    : sessionId.slice(LEGACY_TRACE_TAB_PREFIX.length)
+  return traced && !traced.startsWith(LEGACY_TRACE_TAB_PREFIX) ? traced : null
 }
 
 function writeJson(storage: StorageLike, key: string, value: unknown): void {
@@ -82,10 +104,15 @@ function migrateTabs(storage: StorageLike, report: DesktopMigrationReport): void
       .filter((tab): tab is Record<string, unknown> => isRecord(tab))
       .filter((tab) => typeof tab.sessionId === 'string' && typeof tab.title === 'string')
       .filter((tab) => tab.type !== 'terminal' && !String(tab.sessionId).startsWith('__terminal__'))
+      .filter((tab) => !isLegacyTraceListTab(tab))
+      .filter((tab) => !isLegacyTraceTab(tab) || getLegacyTraceSessionId(tab) !== null)
       .map((tab) => {
         const specialType = getPersistedSpecialTabType(tab)
+        const tracedSessionId = getLegacyTraceSessionId(tab)
         return {
-          sessionId: specialType ? PERSISTED_SPECIAL_TAB_IDS[specialType] : tab.sessionId as string,
+          sessionId: specialType
+            ? PERSISTED_SPECIAL_TAB_IDS[specialType]
+            : tracedSessionId ?? tab.sessionId as string,
           title: tab.title as string,
           type: specialType ?? 'session',
         }
@@ -93,7 +120,12 @@ function migrateTabs(storage: StorageLike, report: DesktopMigrationReport): void
       .filter((tab, index, tabs) => tabs.findIndex(other => other.sessionId === tab.sessionId) === index)
     const legacyActive = isRecord(parsed) ? rawTabs.find(tab => isRecord(tab) && tab.sessionId === parsed.activeTabId) : undefined
     const activeType = isRecord(legacyActive) ? getPersistedSpecialTabType(legacyActive) : null
-    const normalizedActive = activeType ? PERSISTED_SPECIAL_TAB_IDS[activeType] : isRecord(parsed) ? parsed.activeTabId : null
+    const activeTracedSessionId = isRecord(parsed) && typeof parsed.activeTabId === 'string'
+      ? getLegacyTraceSessionId(isRecord(legacyActive) ? legacyActive : { sessionId: parsed.activeTabId })
+      : null
+    const normalizedActive = activeType
+      ? PERSISTED_SPECIAL_TAB_IDS[activeType]
+      : activeTracedSessionId ?? (isRecord(parsed) ? parsed.activeTabId : null)
     const activeTabId =
       isRecord(parsed) &&
       typeof normalizedActive === 'string' &&
@@ -110,6 +142,13 @@ function migrateTabs(storage: StorageLike, report: DesktopMigrationReport): void
     storage.removeItem(TAB_STORAGE_KEY)
   }
   report.migratedKeys.push(TAB_STORAGE_KEY)
+}
+
+function migrateActiveSettingsTab(storage: StorageLike, report: DesktopMigrationReport): void {
+  // The Trace rail entry is gone; its capture toggle lives under General.
+  if (storage.getItem(ACTIVE_SETTINGS_TAB_STORAGE_KEY) !== 'trace') return
+  storage.setItem(ACTIVE_SETTINGS_TAB_STORAGE_KEY, 'general')
+  report.migratedKeys.push(ACTIVE_SETTINGS_TAB_STORAGE_KEY)
 }
 
 function migrateSessionRuntime(storage: StorageLike, report: DesktopMigrationReport): void {
@@ -314,6 +353,7 @@ export function runDesktopPersistenceMigrations(storage: StorageLike | null = ge
   if (!storage) return report
 
   runMigrationStep(report, TAB_STORAGE_KEY, () => migrateTabs(storage, report))
+  runMigrationStep(report, ACTIVE_SETTINGS_TAB_STORAGE_KEY, () => migrateActiveSettingsTab(storage, report))
   runMigrationStep(report, SESSION_RUNTIME_STORAGE_KEY, () => migrateSessionRuntime(storage, report))
   runMigrationStep(report, THEME_STORAGE_KEY, () =>
     migrateThemeKey(storage, THEME_STORAGE_KEY, THEME_MODES, report))

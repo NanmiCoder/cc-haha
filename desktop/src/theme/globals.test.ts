@@ -230,6 +230,24 @@ describe('desktop theme tokens', () => {
     expect(css).toContain('--line-numbers-foreground: var(--color-text-tertiary);')
   })
 
+  // Shiki only runs in a real browser (CodeViewer keeps tests on Prism), so its
+  // markup is pinned here. Block `.line`s joined by "\n" text nodes rendered an
+  // empty line box between every two lines, and its inner <pre> reset
+  // `wrapLongLines` back to `white-space: pre`.
+  it('keeps Shiki code single-spaced and lets wrapLongLines reach its inner pre', () => {
+    expect(getThemeBlock('.code-viewer-area [data-highlight-engine="shiki"] code')).toMatch(/display:\s*flex;[\s\S]*flex-direction:\s*column;/)
+    expect(getThemeBlock('.code-viewer-area [data-highlight-engine="shiki"] .line:empty::before')).toContain("content: '\\200b';")
+    const pre = getThemeBlock('.code-viewer-area [data-highlight-engine="shiki"] pre')
+    expect(pre).toContain('white-space: inherit;')
+    expect(pre).toContain('word-break: inherit;')
+  })
+
+  it('marks a located tool call on its own row or card, and lets it take over from its item', () => {
+    expect(getThemeBlock('.chat-tool-navigation-target[data-tool-call-chrome="row"]')).toContain('animation: chat-tool-row-navigation-target-pulse')
+    expect(getThemeBlock('.chat-tool-navigation-target[data-tool-call-chrome="card"]')).toContain('animation: chat-tool-card-navigation-target-pulse')
+    expect(getThemeBlock('.chat-render-item--navigation-target:has(.chat-tool-navigation-target)')).toContain('animation: none;')
+  })
+
   it('keeps xterm helper and accessibility layers from rendering duplicate terminal text', () => {
     expect(css).toContain('.settings-terminal-host .xterm-accessibility:not(.debug),')
     expect(css).toContain('.settings-terminal-host .xterm-message')

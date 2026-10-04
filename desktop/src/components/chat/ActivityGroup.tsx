@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { toolResultImagesFor, type ToolResultImageExtraction } from '@/lib/toolResultContent'
 import { CircleX } from 'lucide-react'
@@ -35,6 +35,12 @@ type Props = {
   isLive?: boolean
   /** Stable key that survives virtualized row unmount/remount. */
   disclosureKey?: string
+  /**
+   * A "locate in chat" jump landed on this call. A folded run would hide it,
+   * so the run opens (and stays open, as if the reader had clicked) and the
+   * row is marked while the jump's highlight lasts.
+   */
+  revealToolUseId?: string
 }
 
 /**
@@ -62,6 +68,7 @@ export const ActivityGroup = memo(function ActivityGroup({
   isStreaming,
   isLive = false,
   disclosureKey,
+  revealToolUseId,
 }: Props) {
   const t = useTranslation()
   /** null = follow the run's own state; set = the reader decided. */
@@ -75,6 +82,12 @@ export const ActivityGroup = memo(function ActivityGroup({
   }
 
   const toolCalls = useMemo(() => activityStepToolCalls(steps), [steps])
+  const revealsHere = revealToolUseId !== undefined && toolCalls.some((toolCall) => toolCall.toolUseId === revealToolUseId)
+  useEffect(() => {
+    if (revealsHere) setPinnedCollapsed(false)
+    // Pin once per request; `setPinnedCollapsed` is recreated every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revealsHere, revealToolUseId])
   const failedCount = countFailedToolCalls(toolCalls, resultMap, childToolCallsByParent)
   const hasActiveThinking = Boolean(activeThinkingId) && steps.some(
     (step) => step.kind === 'thinking' && step.message.id === activeThinkingId,
@@ -87,7 +100,9 @@ export const ActivityGroup = memo(function ActivityGroup({
   // now". The latter flickers: a run of six tools resolves and restarts six
   // times, and folding on each gap made the whole block open and shut under the
   // reader while they were trying to watch it.
-  const collapsed = pinnedCollapsed ?? !isLive
+  // Open in the same render the request arrives in, so the row is in the DOM
+  // for the scroll that follows; the effect above makes it stick.
+  const collapsed = revealsHere ? false : (pinnedCollapsed ?? !isLive)
 
   const soleToolCall = steps.length === 1 && steps[0]?.kind === 'tool' ? steps[0].toolCall : null
   if (soleToolCall) {
@@ -101,6 +116,7 @@ export const ActivityGroup = memo(function ActivityGroup({
             toolCall={soleToolCall}
             resultMap={resultMap}
             childToolCallsByParent={childToolCallsByParent}
+            revealToolUseId={revealToolUseId}
           />
         </div>
       </div>
@@ -170,6 +186,7 @@ export const ActivityGroup = memo(function ActivityGroup({
                 toolCall={step.toolCall}
                 resultMap={resultMap}
                 childToolCallsByParent={childToolCallsByParent}
+                revealToolUseId={revealToolUseId}
               />
             ))}
           </div>
@@ -243,10 +260,12 @@ function ActivityToolRow({
   toolCall,
   resultMap,
   childToolCallsByParent,
+  revealToolUseId,
 }: {
   toolCall: ToolCall
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
+  revealToolUseId?: string
 }) {
   const result = resultMap.get(toolCall.toolUseId)
   const childToolCalls = childToolCallsByParent.get(toolCall.toolUseId) ?? []
@@ -262,6 +281,8 @@ function ActivityToolRow({
         status={toolCall.status}
         partialInput={toolCall.partialInput}
         durationMs={toolCallDurationMs(toolCall, result)}
+        toolUseId={toolCall.parentToolUseId ? undefined : toolCall.toolUseId}
+        navigationHighlighted={revealToolUseId !== undefined && toolCall.toolUseId === revealToolUseId}
       />
       {childToolCalls.length > 0 && (
         <div className="ml-2 border-l border-[var(--color-border)] pl-3">

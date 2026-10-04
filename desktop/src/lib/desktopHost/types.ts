@@ -442,9 +442,6 @@ export type DesktopHost = {
     open(target: string): Promise<void>
     openPath(path: string): Promise<void>
   }
-  trace?: {
-    openWindow(sessionId: string): Promise<void>
-  }
   pets: {
     list(): Promise<DesktopPetListResult>
     createFromImage(input: DesktopPetCreateInput): Promise<DesktopPetCreateResult | null>

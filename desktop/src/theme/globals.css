@@ -121,6 +121,29 @@
   background: var(--color-surface-hover);
 }
 
+/* react-shiki puts CodeViewer's wrapping style on its container div; the <pre>
+   it renders inside would otherwise reset it to the UA's `white-space: pre`, so
+   `wrapLongLines` never wrapped anything once Shiki took over from Prism. */
+.code-viewer-area [data-highlight-engine="shiki"] pre {
+  margin: 0;
+  white-space: inherit;
+  word-break: inherit;
+}
+
+/* Shiki joins its `.line` spans with "\n" text nodes. With the lines laid out
+   as blocks (for the padding and hover above), each of those newlines became an
+   empty line box of its own, double-spacing every highlighted block. A flex
+   container does not render whitespace-only text runs; an empty source line
+   keeps its height through a zero-width character. */
+.code-viewer-area [data-highlight-engine="shiki"] code {
+  display: flex;
+  flex-direction: column;
+}
+
+.code-viewer-area [data-highlight-engine="shiki"] .line:empty::before {
+  content: '\200b';
+}
+
 .code-viewer-area .has-line-numbers,
 .code-viewer-area .rs-has-line-numbers {
   counter-reset: line-number calc(var(--line-start, 1) - 1);
@@ -2411,10 +2434,13 @@ body.sidebar-resizing * {
   padding-top: 24px;
 }
 
+/* Held, not flashed: a jump usually lands on borderless content (a run's summary
+   line, a reply), and a tint that peaks for a few frames is over before the eye
+   has found where the scroll stopped. The spread ring lets the tint breathe past
+   text that sits flush with the item's edges without moving any layout. */
 @keyframes chat-navigation-target-pulse {
-  0% { background: transparent; }
-  22% { background: var(--color-chat-navigation-target); }
-  100% { background: transparent; }
+  0%, 100% { background: transparent; box-shadow: 0 0 0 4px transparent; }
+  12%, 70% { background: var(--color-chat-navigation-target); box-shadow: 0 0 0 4px var(--color-chat-navigation-target); }
 }
 
 .chat-render-item--navigation-target {
@@ -2422,10 +2448,51 @@ body.sidebar-resizing * {
   animation: chat-navigation-target-pulse 1.4s ease-out;
 }
 
+/* The jump targets one tool call. Its row or card carries the mark instead of
+   the whole item, which for an activity group can be thousands of rows. When
+   the call has no row of its own on screen the item keeps the mark. */
+.chat-render-item--navigation-target:has(.chat-tool-navigation-target) {
+  animation: none;
+}
+
+/* Rows are borderless lines: tint them like an item. Cards have their own
+   opaque surface, so they take a focus-coloured ring outside the border. */
+@keyframes chat-tool-row-navigation-target-pulse {
+  0%, 100% { background: transparent; box-shadow: 0 0 0 4px transparent; }
+  12%, 70% { background: var(--color-chat-navigation-target); box-shadow: 0 0 0 4px var(--color-chat-navigation-target); }
+}
+
+@keyframes chat-tool-card-navigation-target-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  12%, 70% { box-shadow: 0 0 0 2px var(--color-border-focus), 0 0 0 6px var(--color-chat-navigation-target); }
+}
+
+.chat-tool-navigation-target[data-tool-call-chrome="row"] {
+  animation: chat-tool-row-navigation-target-pulse 1.4s ease-out;
+}
+
+.chat-tool-navigation-target[data-tool-call-chrome="card"] {
+  animation: chat-tool-card-navigation-target-pulse 1.4s ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .chat-render-item--navigation-target {
     animation: none;
     background: var(--color-chat-navigation-target);
+  }
+
+  .chat-render-item--navigation-target:has(.chat-tool-navigation-target) {
+    background: none;
+  }
+
+  .chat-tool-navigation-target[data-tool-call-chrome="row"] {
+    animation: none;
+    background: var(--color-chat-navigation-target);
+  }
+
+  .chat-tool-navigation-target[data-tool-call-chrome="card"] {
+    animation: none;
+    box-shadow: 0 0 0 2px var(--color-border-focus);
   }
 }
 

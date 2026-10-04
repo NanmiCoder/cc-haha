@@ -258,6 +258,17 @@ export function getAgentTranscriptPath(agentId: AgentId): string {
   return join(base, `agent-${agentId}.jsonl`)
 }
 
+/**
+ * Prompt snapshot sidecar for the current session (system prompt, tool
+ * catalog and user context per request). Lives in the same session directory
+ * as `subagents/`; main-thread and subagent requests share one file and are
+ * told apart by the record's `scope`.
+ */
+export function getPromptSnapshotPath(): string {
+  const projectDir = getSessionProjectDir() ?? getProjectDir(getOriginalCwd())
+  return join(projectDir, getSessionId(), 'prompt-snapshots.jsonl')
+}
+
 function getAgentMetadataPath(agentId: AgentId): string {
   return getAgentTranscriptPath(agentId).replace(/\.jsonl$/, '.meta.json')
 }

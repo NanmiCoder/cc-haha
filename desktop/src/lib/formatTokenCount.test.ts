@@ -21,10 +21,11 @@ describe('formatTokenCount', () => {
 
   it('drops the trailing .0 to match the CLI notation', () => {
     expect(formatTokenCount(1000)).toBe('1k')
-    expect(formatTokenCount(2_000_000)).toBe('2m')
+    expect(formatTokenCount(2_000_000)).toBe('2M')
   })
 
-  it('formats millions with an m suffix', () => {
-    expect(formatTokenCount(2_400_000)).toBe('2.4m')
+  it('formats millions with an uppercase M so they never read as minutes', () => {
+    expect(formatTokenCount(2_400_000)).toBe('2.4M')
+    expect(formatTokenCount(145_900_000)).toBe('145.9M')
   })
 })

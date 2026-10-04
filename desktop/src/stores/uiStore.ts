@@ -58,7 +58,6 @@ const SETTINGS_TABS = [
   'plugins',
   'pets',
   'computerUse',
-  'trace',
   'diagnostics',
   'about',
 ] as const
@@ -110,6 +109,9 @@ function getStoredSettingsTab(): SettingsTab {
   try {
     const stored = localStorage.getItem(ACTIVE_SETTINGS_TAB_STORAGE_KEY)
     if (isSettingsTab(stored)) return stored
+    // The retired Trace entry; its capture toggle now lives under General.
+    // persistenceMigrations rewrites it at startup — this is the second guard.
+    if (stored === 'trace') return 'general'
   } catch { /* localStorage unavailable */ }
   return 'providers'
 }
@@ -176,9 +178,9 @@ export function initializeTheme() {
   stopSystemAppearanceWatch?.()
   stopSystemAppearanceWatch = subscribeSystemAppearance((appearance) => {
     // Read the preference from storage rather than this window's store. The
-    // pet and trace windows run the same bootstrap with their own store
-    // instance over one shared localStorage, so after the main window changes
-    // the setting their in-memory copy is stale — and acting on it here would
+    // pet window runs the same bootstrap with its own store instance over one
+    // shared localStorage, so after the main window changes the setting its
+    // in-memory copy is stale — and acting on it here would
     // write the user's choice straight back out.
     if (!readStoredFollowSystemTheme()) return
     const lightTheme = readStoredLightTheme()
@@ -246,7 +248,6 @@ export type SettingsTab =
   | 'plugins'
   | 'pets'
   | 'computerUse'
-  | 'trace'
   | 'diagnostics'
   | 'about'
 

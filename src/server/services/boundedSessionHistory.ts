@@ -124,7 +124,41 @@ export function displayPreview(entry: Record<string, unknown>): Record<string, u
   return truncated ? { ...result, bodyTruncated: true } : result
 }
 
-export async function readBoundedHistoryPage(filePath: string, options: { cursor?: string; limit?: number; signal?: AbortSignal; full?: boolean } = {}): Promise<{ entries: BoundedHistoryEntry[]; page: HistoryPageInfo }> {
+/** Ceilings for a caller-supplied page budget (e.g. the trajectory ledger,
+ * whose rows are far more compact than chat messages). */
+export const HISTORY_PAGE_BUDGET_MAX = { records: 1000, bytes: 2 * 1024 * 1024, rows: 2000 } as const
+export type HistoryPageBudget = { records?: number; bytes?: number; rows?: number }
+
+function clampBudget(value: number | undefined, fallback: number, max: number): number {
+  return value !== undefined && Number.isFinite(value) && value >= 1 ? Math.min(max, Math.floor(value)) : fallback
+}
+
+/** Bytes of an oversized record's line head reported by `captureOversized`. */
+export const HISTORY_OVERSIZED_HEAD_BYTES = 64 * 1024
+/** An oversized record that was skipped (and still counted as omitted): its
+ * exact line range and the first `HISTORY_OVERSIZED_HEAD_BYTES` of the line,
+ * which may end mid-character or mid-token. */
+export type OversizedHistoryRecord = { byteStart: number; byteEnd: number; head: string }
+
+function firstBytes(parts: Buffer[], limit: number): Buffer {
+  const picked: Buffer[] = []
+  let length = 0
+  for (const part of parts) {
+    if (length >= limit) break
+    const slice = part.subarray(0, limit - length)
+    picked.push(slice)
+    length += slice.length
+  }
+  return Buffer.concat(picked, length)
+}
+
+export async function readBoundedHistoryPage(filePath: string, options: {
+  cursor?: string; limit?: number; signal?: AbortSignal; full?: boolean; budget?: HistoryPageBudget
+  /** Report complete oversized records (with a bounded line head) in `oversized`. */
+  captureOversized?: boolean
+  /** Page-path byte cost of one parsed record; defaults to its serialized length. */
+  measure?: (entry: Record<string, unknown>) => number
+} = {}): Promise<{ entries: BoundedHistoryEntry[]; page: HistoryPageInfo; oversized?: OversizedHistoryRecord[] }> {
   if (options.limit !== undefined && (!Number.isFinite(options.limit) || options.limit < 1)) throw new ApiError(400, 'History limit must be a positive finite number', 'INVALID_HISTORY_LIMIT')
   const full = options.full === true
   return withHistoryReadBudget(options.signal, async () => {
@@ -167,13 +201,19 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
       let outputBytes = 0
       let renderedRows = 0
       const entries: BoundedHistoryEntry[] = []
+      const oversizedRecords: OversizedHistoryRecord[] = []
+      const capture = options.captureOversized === true
       // The page path stops at the first UI screenful; the full path keeps
       // walking to the head of the file, bounded by record/byte/row budgets
       // instead of a page boundary. Rows default high because the byte budget
       // is the real bound for ordinary transcripts.
-      const recordLimit = Math.max(1, Math.min(options.full ? Number.MAX_SAFE_INTEGER : HISTORY_PAGE_RECORDS, Math.floor(options.limit ?? (options.full ? HISTORY_FULL_ROWS : HISTORY_PAGE_RECORDS))))
-      const byteBudget = options.full ? HISTORY_FULL_BYTES : HISTORY_PAGE_BYTES
-      const rowBudget = options.full ? HISTORY_FULL_ROWS : HISTORY_PAGE_ROWS
+      // A page budget override only widens the ordinary page path, clamped to
+      // HISTORY_PAGE_BUDGET_MAX; it never applies to the full-history path.
+      const budget = options.full ? undefined : options.budget
+      const pageRecords = clampBudget(budget?.records, HISTORY_PAGE_RECORDS, HISTORY_PAGE_BUDGET_MAX.records)
+      const recordLimit = Math.max(1, Math.min(options.full ? Number.MAX_SAFE_INTEGER : pageRecords, Math.floor(options.limit ?? (options.full ? HISTORY_FULL_ROWS : pageRecords))))
+      const byteBudget = options.full ? HISTORY_FULL_BYTES : clampBudget(budget?.bytes, HISTORY_PAGE_BYTES, HISTORY_PAGE_BUDGET_MAX.bytes)
+      const rowBudget = options.full ? HISTORY_FULL_ROWS : clampBudget(budget?.rows, HISTORY_PAGE_ROWS, HISTORY_PAGE_BUDGET_MAX.rows)
       const scanBudget = options.full ? HISTORY_FULL_SCAN_BYTES : HISTORY_SCAN_BYTES
       const load = async (): Promise<boolean> => {
         // Reserve enough I/O for post-read source anchors and both outgoing
@@ -205,6 +245,10 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
         let end = position
         let start = position
         let first = true
+        // Oversized line head: forward keeps the first bytes once; backward
+        // keeps the two most recent (earliest-in-file) parts.
+        let head: Buffer | undefined
+        let headParts: Buffer[] = []
         while (!complete) {
           if ((!buffer.length || (newer ? position >= bufferEnd : position <= bufferStart)) && !await load()) break
           if (newer) {
@@ -214,7 +258,10 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
             const part = buffer.subarray(local, stop)
             bytes += part.length
             if (!oversized && bytes <= HISTORY_SEMANTIC_RECORD_BYTES) parts.push(part)
-            else if (!oversized) { oversized = true; parts = [] }
+            else if (!oversized) {
+              if (capture && !skipping) head = firstBytes([...parts, part], HISTORY_OVERSIZED_HEAD_BYTES)
+              oversized = true; parts = []
+            }
             position = bufferStart + stop + (newline < 0 ? 0 : 1)
             end = bufferStart + stop
             complete = newline >= 0 || position === cursor.size
@@ -226,7 +273,12 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
             const part = buffer.subarray(stop, local)
             bytes += part.length
             if (!oversized && bytes <= HISTORY_SEMANTIC_RECORD_BYTES) parts.push(part)
-            else if (!oversized) { oversized = true; parts = [] }
+            else if (!oversized) {
+              // The part read last is the earliest in the line so far.
+              if (capture && !skipping) headParts = parts.slice(-1)
+              oversized = true; parts = []
+            }
+            if (capture && oversized && !skipping) headParts = [part, ...headParts.slice(0, 1)]
             position = bufferStart + stop
             start = position
             complete = newline >= 0 || position === 0
@@ -238,7 +290,17 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
           else position = boundary
           break
         }
-        if (oversized) { if (!skipping) omitted++; skipping = false; continue }
+        if (oversized) {
+          if (!skipping) {
+            omitted++
+            if (capture) {
+              const lineHead = newer ? head : firstBytes(headParts, HISTORY_OVERSIZED_HEAD_BYTES)
+              oversizedRecords.push({ byteStart: newer ? boundary : start, byteEnd: end, head: lineHead?.toString('utf8') ?? '' })
+            }
+          }
+          skipping = false
+          continue
+        }
         if (!bytes) continue
         const raw = parts.length === 1 ? parts[0]! : Buffer.concat(newer ? parts : parts.reverse(), bytes)
         let entry: Record<string, unknown>
@@ -248,7 +310,7 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
         // tool inputs and trailing reference envelopes must remain parseable.
         // A record above the ordinary page budget owns its page; the reader's
         // semantic record and scan limits still bound memory and I/O.
-        const entryBytes = Buffer.byteLength(JSON.stringify(entry))
+        const entryBytes = options.measure && !options.full ? options.measure(entry) : Buffer.byteLength(JSON.stringify(entry))
         const content = (entry.message as { content?: unknown } | undefined)?.content
         // Each assistant block/tool result may become a separate UI row. Stop
         // before the complete record instead of clipping rows behind a cursor.
@@ -274,7 +336,7 @@ export async function readBoundedHistoryPage(filePath: string, options: { cursor
         hasMore: lower > 0, historyComplete: lower === 0 && upper === cursor.size && omitted === 0 && !contentTruncated,
         ...(contentTruncated ? { contentTruncated: true } : {}),
         sourceVersion, scannedBytes, omittedOversizedEntries: omitted,
-      } }
+      }, ...(capture ? { oversized: newer ? oversizedRecords : oversizedRecords.reverse() } : {}) }
     } finally { await handle.close() }
   })
 }

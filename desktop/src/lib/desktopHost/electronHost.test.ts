@@ -198,18 +198,6 @@ describe('electron desktop host', () => {
     expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.windowStartDragging, undefined)
   })
 
-  it('opens dedicated trace windows through a narrow IPC channel', async () => {
-    const invoke = vi.fn().mockResolvedValue(undefined)
-    const host = createElectronHost({
-      invoke,
-      subscribe: vi.fn(),
-    })
-
-    await host.trace?.openWindow('session-123')
-
-    expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.traceOpenWindow, 'session-123')
-  })
-
   it('routes preview zoom through the preview IPC channel', async () => {
     const invoke = vi.fn().mockResolvedValue(undefined)
     const host = createElectronHost({

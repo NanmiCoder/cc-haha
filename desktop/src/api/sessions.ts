@@ -530,8 +530,10 @@ export const sessionsApi = {
     return api.get<TraceSession>(`/api/sessions/${sessionId}/trace${suffix}`, options)
   },
 
-  getTraceCall(sessionId: string, callId: string) {
-    return api.get<{ call: TraceCallRecord }>(`/api/sessions/${sessionId}/trace/calls/${callId}`)
+  /** `at` is the record locator from `/trace/near`, needed for calls outside the indexed window. */
+  getTraceCall(sessionId: string, callId: string, at?: string) {
+    const suffix = at ? `?${new URLSearchParams({ at })}` : ''
+    return api.get<{ call: TraceCallRecord }>(`/api/sessions/${sessionId}/trace/calls/${callId}${suffix}`)
   },
 
   create(input?: string | CreateSessionRequest) {

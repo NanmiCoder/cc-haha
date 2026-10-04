@@ -18,7 +18,6 @@ const mocks = vi.hoisted(() => ({
   connectToSession: vi.fn(),
   setActiveTab: vi.fn(),
   openTab: vi.fn(),
-  openTraceTab: vi.fn(),
   getDesktopUiPreferences: vi.fn(),
   updatePetPreferences: vi.fn(),
   tabState: {
@@ -66,7 +65,6 @@ vi.mock('../../stores/tabStore', () => {
     activeTabId: mocks.tabState.activeTabId,
     tabs: mocks.tabState.tabs,
     openTab: mocks.openTab,
-    openTraceTab: mocks.openTraceTab,
     setActiveTab: mocks.setActiveTab,
   })
   useTabStore.setState = (next: { activeTabId?: string | null }) => {
@@ -145,14 +143,6 @@ vi.mock('./H5ConnectionView', () => ({
   ),
 }))
 
-vi.mock('../../pages/TraceSession', () => ({
-  TraceSession: ({ sessionId, standalone }: { sessionId: string; standalone?: boolean }) => (
-    <section data-standalone={standalone ? 'true' : 'false'} data-testid="trace-session">
-      trace:{sessionId}
-    </section>
-  ),
-}))
-
 vi.mock('@/components/layout/Toast', () => ({
   ToastContainer: () => null,
 }))
@@ -209,7 +199,6 @@ describe('AppShell boot flow', () => {
       },
     })
     mocks.openTab.mockReset()
-    mocks.openTraceTab.mockReset()
     mocks.setActiveTab.mockImplementation((sessionId: string) => {
       mocks.tabState.activeTabId = sessionId
     })
@@ -389,51 +378,16 @@ describe('AppShell boot flow', () => {
     })
   })
 
-  it('opens a trace tab from a session-scoped trace deep link', async () => {
-    window.history.pushState({}, '', '/?traceSessionId=session-deep-link')
-
-    render(<AppShell />)
-
-    await screen.findByText('sidebar loaded')
-    await waitFor(() => {
-      // No session in the store yet, so the id prefix is all the title we have.
-      expect(mocks.openTraceTab).toHaveBeenCalledWith('session-deep-link', 'session-')
-    })
-    expect(mocks.connectToSession).not.toHaveBeenCalled()
-  })
-
-  it('titles a deep-linked trace tab with the session once the store knows it', async () => {
-    useSessionStore.setState({
-      sessions: [{
-        id: 'session-deep-link',
-        title: 'Debug stuck agent',
-        createdAt: '2026-06-09T10:00:00.000Z',
-        modifiedAt: '2026-06-09T10:10:00.000Z',
-        messageCount: 2,
-        projectPath: '/tmp',
-        workDir: '/tmp',
-        workDirExists: true,
-      }],
-    })
-    window.history.pushState({}, '', '/?traceSessionId=session-deep-link')
-
-    render(<AppShell />)
-
-    await screen.findByText('sidebar loaded')
-    await waitFor(() => {
-      expect(mocks.openTraceTab).toHaveBeenCalledWith('session-deep-link', 'Debug stuck agent')
-    })
-  })
-
-  it('renders a dedicated trace window shell from traceWindow deep links', async () => {
+  it('boots the normal shell for a retired trace-window deep link', async () => {
+    // Trace windows and `?traceSessionId=` deep links were removed with the
+    // standalone Trace page; a stale URL must not hide the workspace shell.
     window.history.pushState({}, '', '/?traceWindow=1&traceSessionId=session-window')
 
     render(<AppShell />)
 
-    expect(await screen.findByTestId('trace-session')).toHaveTextContent('trace:session-window')
-    expect(screen.getByTestId('trace-session')).toHaveAttribute('data-standalone', 'true')
-    expect(screen.queryByText('sidebar loaded')).not.toBeInTheDocument()
-    expect(mocks.restoreTabs).not.toHaveBeenCalled()
+    await screen.findByText('sidebar loaded')
+    await waitFor(() => expect(mocks.restoreTabs).toHaveBeenCalledTimes(1))
+    expect(mocks.openTab).not.toHaveBeenCalled()
   })
 
   it('routes native menu navigation through the desktop host', async () => {

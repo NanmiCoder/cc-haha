@@ -127,9 +127,6 @@ vi.mock('../pages/ActivitySettings', () => ({
   ActivitySettings: () => <div>Activity Settings Mock</div>,
 }))
 
-vi.mock('../pages/TraceList', () => ({
-  TraceList: () => <div>Trace List Mock</div>,
-}))
 
 vi.mock('../stores/agentStore', () => ({
   useAgentStore: () => ({
@@ -1203,18 +1200,10 @@ describe('Settings > General tab', () => {
     expect(screen.getByText('Activity Settings Mock')).toBeInTheDocument()
   })
 
-  it('opens the Trace tab from Settings navigation between Token usage and Diagnostics', () => {
+  it('does not list a Trace section in Settings navigation', () => {
     render(<Settings />)
 
-    const usageTab = screen.getByText('Token usage')
-    const traceTab = screen.getByText('Trace')
-    const diagnosticsTab = screen.getByText('Diagnostics')
-    expect((usageTab.compareDocumentPosition(traceTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
-    expect((traceTab.compareDocumentPosition(diagnosticsTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
-
-    fireEvent.click(traceTab)
-
-    expect(screen.getByText('Trace List Mock')).toBeInTheDocument()
+    expect(screen.queryByText('Trace')).not.toBeInTheDocument()
   })
 
   it('lets the user disable WebFetch preflight skipping', () => {
@@ -1460,6 +1449,20 @@ describe('Settings > General tab', () => {
     expect(screen.getByLabelText('Collect agent traces')).not.toBeChecked()
     expect(screen.getByText('Agent trace')).toBeInTheDocument()
     expect(screen.getByText('Message Sending')).toBeInTheDocument()
+  })
+
+  it('points the capture hint at the session Trajectory view instead of the removed trace list', async () => {
+    render(<Settings />)
+
+    fireEvent.click(screen.getByText('General'))
+    expect(screen.getByText(/switch to Raw request/)).toBeInTheDocument()
+
+    await act(async () => {
+      fireEvent.click(screen.getByLabelText('Collect agent traces'))
+    })
+
+    expect(screen.getByText(/Raw request in each session's Trajectory view/)).toBeInTheDocument()
+    expect(screen.queryByText(/trace list/i)).not.toBeInTheDocument()
   })
 
   it('uses the shared dropdown for response language', () => {

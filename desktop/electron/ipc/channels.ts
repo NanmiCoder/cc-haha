@@ -17,7 +17,6 @@ export const ELECTRON_IPC_CHANNELS = {
   clipboardWriteText: 'desktop:clipboard:write-text',
   shellOpen: 'desktop:shell:open',
   shellOpenPath: 'desktop:shell:open-path',
-  traceOpenWindow: 'desktop:trace:open-window',
   petsList: 'desktop:pets:list',
   petsCreateFromImage: 'desktop:pets:create-from-image',
   petsCreateFromAtlas: 'desktop:pets:create-from-atlas',

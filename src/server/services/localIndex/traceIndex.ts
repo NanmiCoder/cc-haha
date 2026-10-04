@@ -132,6 +132,11 @@ export interface TraceIndex {
     source: TraceSourceRecord
     call: TraceCallLocator
   } | null
+  /** Calls whose `startedAt` lies in `[fromIso, toIso]` (ISO strings), oldest first. */
+  getCallsInRange(sessionId: string, fromIso: string, toIso: string, limit: number): {
+    source: TraceSourceRecord
+    calls: TraceCallLocator[]
+  } | null
   getChanges(sessionId: string, sinceRevision: number): TraceIndexChanges | null
   listSessions(options?: {
     sessionIds?: string[]
@@ -938,6 +943,22 @@ export function createTraceIndex(database: TraceIndexDatabase): TraceIndex {
           callId,
         )
         return row ? { source, call: callFromRow(row) } : null
+      })
+    },
+    getCallsInRange(sessionId, fromIso, toIso, limit) {
+      return database.read(operation => {
+        const source = readSource(operation, sessionId)
+        if (!source) return null
+        const calls = operation.all<CallRow>(
+          `SELECT * FROM trace_calls
+           WHERE session_id = ? AND started_at >= ? AND started_at <= ?
+           ORDER BY started_at, first_ordinal LIMIT ?`,
+          sessionId,
+          fromIso,
+          toIso,
+          Math.max(1, Math.min(500, Math.trunc(limit))),
+        ).map(callFromRow)
+        return { source, calls }
       })
     },
     getChanges(sessionId, sinceRevision) {

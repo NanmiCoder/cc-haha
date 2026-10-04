@@ -31,14 +31,14 @@ export function isPetWindowLocation(search = window.location.search): boolean {
 /**
  * Whether this renderer is the one that owns workspace state.
  *
- * Every window — main, pet, and each detached trace window — loads this same
- * entry. They share one `localStorage` origin, and the workspace document is
- * written whole rather than merged per session, so a second writer would
- * overwrite the main window's state with whatever it hydrated at open time.
+ * Every window — main and pet — loads this same entry. They share one
+ * `localStorage` origin, and the workspace document is written whole rather
+ * than merged per session, so a second writer would overwrite the main
+ * window's state with whatever it hydrated at open time.
  */
 export function isPrimaryWorkspaceWindow(search = window.location.search): boolean {
   const params = new URLSearchParams(search)
-  return params.get('petWindow') !== '1' && params.get('traceWindow') !== '1'
+  return params.get('petWindow') !== '1'
 }
 
 function loadDesktopBootstrapModules() {

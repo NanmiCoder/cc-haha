@@ -109,6 +109,22 @@ Tool activity from background subagents bubbles up here too, so you don't have t
 
 Team members retry on their own when the model service drops a stream, rate-limits, or returns a 5xx; the member row shows "Auto-retry 2/5" and neither you nor the lead has to step in. When the retries run out, or the error needs you (an expired API key, say), the row shows "Error" and the lead is told. The Stop button halts the whole team without losing progress: your next message to the lead tells it which members stopped on which tasks, and it decides from your words whether they carry on. You can also message a member directly; it picks up from its saved conversation, and the same goes for a member marked "Stopped". Switching the model or permission mode doesn't interrupt the team, and after an app restart the team is still there — message a member to continue. Deleting the session or running `/clear` ends the team.
 
+## Trajectory: what actually happened, step by step
+
+Switch **Chat / Trajectory** next to the session title to **Trajectory** and the same session turns into a ledger, one line per event, with your composer and draft still in place. Lines run in order, with "Turn N" marked on the left:
+
+- **System** — the system prompt sent to the model. The first one is "Initial system prompt"; after that, "System prompt updated" or "Tools updated" appears whenever the prompt or the tool catalog changes.
+- **User** — your messages, including ones queued while a turn was running.
+- **Context** — what the harness injected: the skill list, a SKILL.md loaded when a skill was invoked, CLAUDE.md and the date, todo reminders, memories, hook output, plan-mode reminders, compaction summaries, and so on.
+- **Assistant** — one line per model response, with that call's input / output tokens and approximate duration on the right. A response that only called tools shows "(tool calls only)".
+- **Tool** — one line per tool call, as "name arguments → result". Failed calls are red.
+
+The minimap at the top lays the loaded trajectory out in three lanes — input, model, tools — and clicking anywhere jumps to that line. With **Size by duration** on, slow calls take up more width. The toolbar also folds every turn, hides tool calls, and searches.
+
+Click any line to open its details on the right: overview, preview, input / result, and the raw record. A system line shows the full system prompt, the tool catalog, and a diff against the previous version. An Agent tool line offers **View subagent trajectory**, which opens the subagent's own ledger. **Locate in chat** jumps back to the message in the conversation; in the other direction, hovering a tool card in the chat shows a button that jumps straight into the trajectory.
+
+With Agent Trace enabled in **Settings → General**, assistant lines also get a **Raw request** tab showing the request that call actually sent and the response it got back — useful when a provider returns an error.
+
 ## What the composer can do
 
 ![The slash-command panel that opens when you type `/` (Chinese interface)](../../images/app/en/composer-slash.webp)

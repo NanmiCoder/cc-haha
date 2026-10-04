@@ -13,16 +13,19 @@ export const SETTINGS_TAB_ID = '__settings__'
 export const SCHEDULED_TAB_ID = '__scheduled__'
 export const CONNECTORS_TAB_ID = '__connectors__'
 export const MARKET_TAB_ID = '__market__'
-export const TRACE_LIST_TAB_ID = '__traces__'
 export const TERMINAL_TAB_PREFIX = '__terminal__'
-export const TRACE_TAB_PREFIX = '__trace__'
 export const WORKBENCH_TAB_PREFIX = '__workbench__'
 export const SUBAGENT_TAB_PREFIX = '__subagent__'
 export const TEAM_TAB_PREFIX = '__team__'
 export const TEAM_MEMBER_TAB_PREFIX = 'team-member:'
 
-export type TabType = 'session' | 'settings' | 'scheduled' | 'connectors' | 'market' | 'terminal' | 'trace' | 'traces' | 'workbench' | 'subagent' | 'team' | 'team-member'
-type PersistentSpecialTabType = 'settings' | 'scheduled' | 'connectors' | 'market' | 'traces'
+export type TabType = 'session' | 'settings' | 'scheduled' | 'connectors' | 'market' | 'terminal' | 'workbench' | 'subagent' | 'team' | 'team-member'
+type PersistentSpecialTabType = 'settings' | 'scheduled' | 'connectors' | 'market'
+
+// Retired tab shapes that older builds persisted. `persistenceMigrations`
+// rewrites them at startup; restoreTabs tolerates them as a second guard.
+const LEGACY_TRACE_LIST_TAB_ID = '__traces__'
+const LEGACY_TRACE_TAB_PREFIX = '__trace__'
 
 export type Tab = {
   sessionId: string
@@ -31,7 +34,6 @@ export type Tab = {
   status: 'idle' | 'running' | 'error'
   terminalCwd?: string
   terminalRuntimeId?: string
-  traceSessionId?: string
   workbenchSessionId?: string
   sourceSessionId?: string
   sourceTurnKey?: string
@@ -44,8 +46,16 @@ export type Tab = {
   returnTabId?: string
 }
 
+type PersistedTab = {
+  sessionId: string
+  title: string
+  // Typed as string: old builds also persisted the retired 'trace'/'traces'.
+  type?: string
+  traceSessionId?: string
+}
+
 type TabPersistence = {
-  openTabs: Array<{ sessionId: string; title: string; type?: TabType; traceSessionId?: string }>
+  openTabs: PersistedTab[]
   activeTabId: string | null
 }
 
@@ -54,8 +64,6 @@ type TabStore = {
   activeTabId: string | null
 
   openTab: (sessionId: string, title: string, type?: TabType) => void
-  openTracesTab: (title?: string) => string
-  openTraceTab: (sessionId: string, title?: string) => string
   openTerminalTab: (cwd?: string, terminalRuntimeId?: string) => string
   openSubagentTab: (
     sourceSessionId: string,
@@ -91,24 +99,44 @@ const PERSISTENT_SPECIAL_TAB_IDS: Record<PersistentSpecialTabType, string> = {
   scheduled: SCHEDULED_TAB_ID,
   market: MARKET_TAB_ID,
   connectors: CONNECTORS_TAB_ID,
-  traces: TRACE_LIST_TAB_ID,
 }
 
-function getPersistentSpecialTabType(tab: Pick<Tab, 'sessionId'> & { type?: TabType }): PersistentSpecialTabType | null {
+function getPersistentSpecialTabType(tab: { sessionId: string; type?: string }): PersistentSpecialTabType | null {
   if (tab.sessionId === SETTINGS_TAB_ID) return 'settings'
   if (tab.sessionId === SCHEDULED_TAB_ID) return 'scheduled'
   if (tab.sessionId === CONNECTORS_TAB_ID) return 'market'
   if (tab.sessionId === MARKET_TAB_ID) return 'market'
-  if (tab.sessionId === TRACE_LIST_TAB_ID) return 'traces'
-  if (tab.type === 'connectors' || tab.type === 'settings' || tab.type === 'scheduled' || tab.type === 'market' || tab.type === 'traces') {
+  if (tab.type === 'connectors' || tab.type === 'settings' || tab.type === 'scheduled' || tab.type === 'market') {
     return tab.type === 'connectors' ? 'market' : tab.type
   }
   return null
 }
 
-function getPersistedSessionId(tab: TabPersistence['openTabs'][number]): string | null {
+/**
+ * Rewrites the retired Trace tabs: the list tab is dropped and a per-session
+ * trace tab becomes that session's chat tab (where the 轨迹 view now lives).
+ */
+function normalizeLegacyPersistedTab(tab: PersistedTab): PersistedTab | null {
+  if (tab.sessionId === LEGACY_TRACE_LIST_TAB_ID || tab.type === 'traces') return null
+  if (tab.type === 'trace' || tab.sessionId.startsWith(LEGACY_TRACE_TAB_PREFIX)) {
+    const sessionId = tab.traceSessionId || tab.sessionId.slice(LEGACY_TRACE_TAB_PREFIX.length)
+    return sessionId && !sessionId.startsWith(LEGACY_TRACE_TAB_PREFIX)
+      ? { sessionId, title: tab.title, type: 'session' }
+      : null
+  }
+  return tab
+}
+
+function normalizeLegacyActiveTabId(activeTabId: string | null | undefined): string | null {
+  if (!activeTabId || activeTabId === LEGACY_TRACE_LIST_TAB_ID) return null
+  if (activeTabId.startsWith(LEGACY_TRACE_TAB_PREFIX)) {
+    return activeTabId.slice(LEGACY_TRACE_TAB_PREFIX.length) || null
+  }
+  return activeTabId
+}
+
+function getPersistedSessionId(tab: PersistedTab): string | null {
   if (getPersistentSpecialTabType(tab)) return null
-  if (tab.type === 'trace') return tab.traceSessionId || null
   if (
     tab.type === 'terminal' || tab.type === 'workbench' || tab.type === 'subagent' ||
     tab.type === 'team' || tab.type === 'team-member'
@@ -144,51 +172,6 @@ export const useTabStore = create<TabStore>((set, get) => ({
       })
     }
     get().saveTabs()
-  },
-
-  openTracesTab: (title = 'Traces') => {
-    const { tabs } = get()
-    const existing = tabs.find((tab) => tab.sessionId === TRACE_LIST_TAB_ID)
-    if (existing) {
-      set({
-        tabs: tabs.map((tab) => (
-          tab.sessionId === TRACE_LIST_TAB_ID
-            ? { ...tab, title, type: 'traces' }
-            : tab
-        )),
-        activeTabId: TRACE_LIST_TAB_ID,
-      })
-    } else {
-      set({
-        tabs: [...tabs, { sessionId: TRACE_LIST_TAB_ID, title, type: 'traces', status: 'idle' }],
-        activeTabId: TRACE_LIST_TAB_ID,
-      })
-    }
-    get().saveTabs()
-    return TRACE_LIST_TAB_ID
-  },
-
-  openTraceTab: (sessionId, title = 'Trace') => {
-    const traceTabId = `${TRACE_TAB_PREFIX}${sessionId}`
-    const { tabs } = get()
-    const existing = tabs.find((tab) => tab.sessionId === traceTabId)
-    if (existing) {
-      set({
-        tabs: tabs.map((tab) => (
-          tab.sessionId === traceTabId
-            ? { ...tab, title, type: 'trace', traceSessionId: sessionId }
-            : tab
-        )),
-        activeTabId: traceTabId,
-      })
-    } else {
-      set({
-        tabs: [...tabs, { sessionId: traceTabId, title, type: 'trace', status: 'idle', traceSessionId: sessionId }],
-        activeTabId: traceTabId,
-      })
-    }
-    get().saveTabs()
-    return traceTabId
   },
 
   openTerminalTab: (cwd, terminalRuntimeId) => {
@@ -418,7 +401,6 @@ export const useTabStore = create<TabStore>((set, get) => ({
         sessionId: t.sessionId,
         title: t.title,
         type: t.type,
-        ...(t.traceSessionId ? { traceSessionId: t.traceSessionId } : {}),
       })),
       activeTabId: persistedActiveTabId,
     }
@@ -439,8 +421,17 @@ export const useTabStore = create<TabStore>((set, get) => ({
       const raw = localStorage.getItem(TAB_STORAGE_KEY)
       if (!raw) return
 
-      const data = JSON.parse(raw) as TabPersistence
-      if (!data.openTabs || data.openTabs.length === 0) {
+      const parsed = JSON.parse(raw) as TabPersistence
+      const data: TabPersistence = {
+        openTabs: Array.isArray(parsed.openTabs)
+          ? parsed.openTabs.flatMap((tab) => {
+              const normalized = normalizeLegacyPersistedTab(tab)
+              return normalized ? [normalized] : []
+            })
+          : [],
+        activeTabId: normalizeLegacyActiveTabId(parsed.activeTabId),
+      }
+      if (data.openTabs.length === 0) {
         set({ tabs: [], activeTabId: null })
         localStorage.removeItem(TAB_STORAGE_KEY)
         return
@@ -495,18 +486,6 @@ export const useTabStore = create<TabStore>((set, get) => ({
           const specialType = getPersistentSpecialTabType(t)
           if (specialType) {
             return { sessionId: PERSISTENT_SPECIAL_TAB_IDS[specialType], title: t.title, type: specialType, status: 'idle' as const }
-          }
-          if (t.type === 'trace' && t.traceSessionId) {
-            // Titled with the traced session, same as a freshly opened trace
-            // tab — the tab bar's glyph is what marks it as a trace.
-            const sourceTitle = sessionsById.get(t.traceSessionId)?.title || t.title
-            return {
-              sessionId: `${TRACE_TAB_PREFIX}${t.traceSessionId}`,
-              title: sourceTitle,
-              type: 'trace' as const,
-              status: 'idle' as const,
-              traceSessionId: t.traceSessionId,
-            }
           }
           return {
             sessionId: t.sessionId,

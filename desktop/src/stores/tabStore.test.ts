@@ -309,13 +309,11 @@ describe('tabStore', () => {
     expect(useTabStore.getState().activeTabId).toBe(MARKET_TAB_ID)
   })
 
-  it('restores historical session and trace tabs by id with metadata ready before activation', async () => {
+  it('restores historical session tabs by id with metadata ready before activation', async () => {
     const historical = historicalSummary()
-    const traceId = `__trace__${historical.id}`
     localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
       openTabs: [
         { sessionId: historical.id, title: 'Saved old title', type: 'session' },
-        { sessionId: traceId, title: 'Saved trace title', type: 'trace', traceSessionId: historical.id },
       ],
       activeTabId: historical.id,
     }))
@@ -344,16 +342,55 @@ describe('tabStore', () => {
     })
     expect(useTabStore.getState().tabs).toEqual([
       { sessionId: historical.id, title: historical.title, type: 'session', status: 'idle' },
-      { sessionId: traceId, title: historical.title, type: 'trace', status: 'idle', traceSessionId: historical.id },
     ])
 
     useTabStore.getState().closeTab(historical.id)
     await useSessionStore.getState().fetchSessions()
     expect(sessionsApi.list).toHaveBeenLastCalledWith({ view: 'sidebar', perProjectLimit: 6 })
-    expect(useSessionStore.getState().sessions).toEqual([historical])
-    useTabStore.getState().closeTab(traceId)
-    await useSessionStore.getState().fetchSessions()
     expect(useSessionStore.getState().sessions).toEqual([])
+  })
+
+  it('restores un-migrated retired Trace tabs as the traced session chat tab', async () => {
+    // Second guard behind persistenceMigrations: a schema-5 payload that
+    // reaches restore unchanged must not resurrect the removed Trace page.
+    const historical = historicalSummary()
+    localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [
+        { sessionId: '__traces__', title: 'Traces', type: 'traces' },
+        { sessionId: `__trace__${historical.id}`, title: 'Saved trace title', type: 'trace', traceSessionId: historical.id },
+        { sessionId: historical.id, title: 'Saved chat title', type: 'session' },
+      ],
+      activeTabId: `__trace__${historical.id}`,
+    }))
+    vi.mocked(sessionsApi.list).mockResolvedValue({ sessions: [], total: 0 })
+    vi.mocked(sessionsApi.getSummary).mockResolvedValue(historical)
+
+    await useTabStore.getState().restoreTabs()
+
+    expect(sessionsApi.getSummary).toHaveBeenCalledExactlyOnceWith(historical.id)
+    expect(useTabStore.getState().tabs).toEqual([
+      { sessionId: historical.id, title: historical.title, type: 'session', status: 'idle' },
+    ])
+    expect(useTabStore.getState().activeTabId).toBe(historical.id)
+
+    useTabStore.getState().saveTabs()
+    expect(JSON.parse(localStorage.getItem('cc-haha-open-tabs')!)).toEqual({
+      openTabs: [{ sessionId: historical.id, title: historical.title, type: 'session' }],
+      activeTabId: historical.id,
+    })
+  })
+
+  it('clears the saved tabs when only the retired Trace list was open', async () => {
+    localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [{ sessionId: '__traces__', title: 'Traces', type: 'traces' }],
+      activeTabId: '__traces__',
+    }))
+
+    await useTabStore.getState().restoreTabs()
+
+    expect(useTabStore.getState().tabs).toEqual([])
+    expect(sessionsApi.list).not.toHaveBeenCalled()
+    expect(localStorage.getItem('cc-haha-open-tabs')).toBeNull()
   })
 
   it('drops only tabs whose individual historical summary returns 404', async () => {

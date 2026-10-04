@@ -11,6 +11,8 @@ export async function fetchTraceCallDetail(
   sessionId: string,
   callId: string,
   revisionKey?: string,
+  /** Record locator from `/trace/near`; reaches calls outside the indexed window. */
+  at?: string,
 ): Promise<TraceCallRecord | null> {
   // revisionKey is the call's own content, not the session revision. Callers pass
   // the same key for an unchanged call, so a sibling span does not bust this cache.
@@ -26,7 +28,7 @@ export async function fetchTraceCallDetail(
     if (existingKey.startsWith(prefix)) removeCachedCall(existingKey)
   }
   try {
-    const result = await sessionsApi.getTraceCall(sessionId, callId)
+    const result = await sessionsApi.getTraceCall(sessionId, callId, at)
     const call = result?.call
     if (!call) return null
     const bytes = estimateRetainedBytes(call)

@@ -1,5 +1,5 @@
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
 import { ArrowLeft, GitFork, Target, MessageCircleQuestion } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
@@ -9,7 +9,6 @@ import {
   SETTINGS_TAB_ID,
   TEAM_TAB_PREFIX,
   TERMINAL_TAB_PREFIX,
-  TRACE_TAB_PREFIX,
   WORKBENCH_TAB_PREFIX,
   useTabStore,
   type TabType,
@@ -31,6 +30,9 @@ import { Tooltip } from '@/components/ui/Tooltip'
 import { BrandSeal } from '@/components/composite/BrandSeal'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
+import { TrajectoryViewSwitch } from '../components/trajectory/TrajectoryViewSwitch'
+import { TrajectoryLinkContext } from '../components/trajectory/TrajectoryLinkContext'
+import { useTrajectoryViewStore } from '../stores/trajectoryViewStore'
 import {
   SessionChatHeader,
   SessionChatSurface,
@@ -83,6 +85,9 @@ const WORKSPACE_RESIZE_STEP = 32
 const TERMINAL_RESIZE_STEP = 24
 const EMPTY_DISMISSED_BACKGROUND_TASK_KEYS: readonly string[] = []
 
+// Loaded on first switch to 轨迹, so sessions that never open it pay nothing.
+const TrajectoryView = lazy(() => import('../components/trajectory/TrajectoryView'))
+
 function isSessionTabState(activeTabId: string | null, activeTabType: TabType | null | undefined) {
   if (!activeTabId) return false
   if (activeTabType === 'session') return true
@@ -90,7 +95,6 @@ function isSessionTabState(activeTabId: string | null, activeTabType: TabType | 
   return activeTabId !== SETTINGS_TAB_ID &&
     activeTabId !== SCHEDULED_TAB_ID &&
     !activeTabId.startsWith(TERMINAL_TAB_PREFIX) &&
-    !activeTabId.startsWith(TRACE_TAB_PREFIX) &&
     !activeTabId.startsWith(WORKBENCH_TAB_PREFIX) &&
     !activeTabId.startsWith(TEAM_TAB_PREFIX)
 }
@@ -345,6 +349,11 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       : EMPTY_DISMISSED_BACKGROUND_TASK_KEYS,
   )
   const chatState = sessionState?.chatState ?? 'idle'
+  const trajectoryMode = useTrajectoryViewStore((state) => activeTabId ? state.modes[activeTabId] === 'trajectory' : false)
+  const trajectoryOpened = useTrajectoryViewStore((state) => activeTabId ? state.opened[activeTabId] === true : false)
+  const trajectoryLink = useMemo(() => (activeTabId ? { sessionId: activeTabId } : null), [activeTabId])
+  // Mobile has no header to switch from, and a ledger plus detail pane does not fit a phone.
+  const showTrajectory = trajectoryMode && !isMobileLayout
   const tokenUsage = sessionState?.tokenUsage ?? { input_tokens: 0, output_tokens: 0 }
   const hasRunningBackgroundTasks = hasAnyRunningBackgroundTasks(sessionState?.backgroundAgentTasks)
   const stoppingBackgroundTaskIds = sessionState?.stoppingBackgroundTaskIds
@@ -863,8 +872,11 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   title={headerTitle}
                   compact={showRightPanel}
                   metadata={headerMetadata}
-                  actions={<IconButton icon={<MessageCircleQuestion size={18} />} label={t('sideChat.title')}
-                    pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />}
+                  actions={<>
+                    {activeTabId && <TrajectoryViewSwitch sessionId={activeTabId} />}
+                    <IconButton icon={<MessageCircleQuestion size={18} />} label={t('sideChat.title')}
+                      pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />
+                  </>}
                 >
                   {session && getSessionWorkspaceState(session) !== 'available' && (
                     <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-3 py-1.5 text-[11px] ${
@@ -900,17 +912,34 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                 </SessionChatHeader>
               )}
 
-              {isHistoryLoading ? (
-                <div className="flex flex-1 items-center justify-center p-8">
-                  <LoadingState label={t('common.loading')} variant="inline" size="md" />
+              {/* The chat stays mounted under 轨迹 so its scroll position, measured heights and draft survive the switch. */}
+              <div className={showTrajectory ? 'hidden' : 'contents'}>
+                {isHistoryLoading ? (
+                  <div className="flex flex-1 items-center justify-center p-8">
+                    <LoadingState label={t('common.loading')} variant="inline" size="md" />
+                  </div>
+                ) : historyError ? (
+                  <div role="alert" className="flex flex-1 items-center justify-center p-8 text-sm text-[var(--color-error)]">
+                    {historyError}
+                  </div>
+                ) : (
+                  <TrajectoryLinkContext.Provider value={isMobileLayout ? null : trajectoryLink}>
+                    <MessageList sessionId={activeTabId ?? undefined} compact={showRightPanel} mobileLayout={isMobileLayout} />
+                  </TrajectoryLinkContext.Provider>
+                )}
+              </div>
+              {trajectoryOpened && activeTabId && !isMobileLayout ? (
+                <div className={showTrajectory ? 'flex min-h-0 flex-1 flex-col' : 'hidden'} data-testid="session-trajectory-panel">
+                  <Suspense fallback={<LoadingState label={t('common.loading')} variant="inline" size="md" className="flex-1" />}>
+                    <TrajectoryView
+                      sessionId={activeTabId}
+                      visible={showTrajectory && active}
+                      running={chatState !== 'idle'}
+                      activityKey={sessionState?.messages.length ?? 0}
+                    />
+                  </Suspense>
                 </div>
-              ) : historyError ? (
-                <div role="alert" className="flex flex-1 items-center justify-center p-8 text-sm text-[var(--color-error)]">
-                  {historyError}
-                </div>
-              ) : (
-                <MessageList sessionId={activeTabId ?? undefined} compact={showRightPanel} mobileLayout={isMobileLayout} />
-              )}
+              ) : null}
             </>
           )}
 
@@ -936,7 +965,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             sessionId={activeTabId ?? undefined}
             visible={active}
             variant={isEmpty && !showRightPanel ? 'hero' : 'default'}
-            compact={showRightPanel}
+            // The ledger needs the height more than the composer needs its full chrome.
+            compact={showRightPanel || showTrajectory}
           />
 
           {hasBottomTerminals && activeTabId ? (

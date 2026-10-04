@@ -13,7 +13,11 @@ import { handleSideChatsRoute } from './sideChats.js'
  *   GET    /api/sessions/:id/subagents/by-tool/:toolUseId — 获取 SubAgent 运行详情
  *   POST   /api/sessions/:id/subagents/by-tool/:toolUseId/messages — 继续与 SubAgent 对话
  *   GET    /api/sessions/:id/trace — 获取会话级模型调用 trace（body preview 裁剪后的列表视图）
- *   GET    /api/sessions/:id/trace/calls/:callId — 获取单次调用的完整 trace 记录
+ *   GET    /api/sessions/:id/trace/calls/:callId?at= — 获取单次调用的完整 trace 记录（at=字节范围，来自 near 的 locs）
+ *   GET    /api/sessions/:id/trace/near?from=&to= — 按开始时间窗口（≤1 小时）查找调用，最旧在前，最多 50 条
+ *   GET    /api/sessions/:id/trajectory?cursor=&after=&agentId= — 轨迹账本分页（尾页 / 更早页 / 实时追加）
+ *   GET    /api/sessions/:id/trajectory/rows/:rowId?loc=&agentId= — 按字节定位读取单行的完整记录
+ *   GET    /api/sessions/:id/trajectory/snapshots/:hash — 读取一份系统提示词 / 工具 / 用户上下文快照
  *   GET    /api/sessions/:id/turn-checkpoints — 获取按轮次保留的 checkpoint 预览
  *   GET    /api/sessions/:id/turn-checkpoints/diff — 获取绑定到指定 checkpoint 的 diff
  *   GET    /api/sessions/:id/review — 按显式来源获取 Git 审查状态
@@ -61,6 +65,12 @@ import { registerChangedFileAccessRoot, registerFilesystemAccessRoot } from '../
 import { findGitRoot } from '../../utils/git.js'
 import { traceCaptureService, trimTraceCallPreviews } from '../services/traceCaptureService.js'
 import { getSubagentRunByAgentId, getSubagentRunByTool } from '../services/subagentRunService.js'
+import {
+  getTrajectoryPage,
+  getTrajectoryRowDetail,
+  getTrajectorySnapshotBlob,
+  parseAgentIdParam,
+} from '../services/trajectoryService.js'
 import { isValidPermissionMode } from '../services/settingsService.js'
 import { handleWorkspaceSearchRoute } from './workspaceSearch.js'
 import { handleWorkspaceWatchRoute } from './workspaceWatch.js'
@@ -223,9 +233,20 @@ export async function handleSessionsApi(
           'cache-control': 'no-store',
         } })
       }
+      if (segments[4] === 'near') return await getSessionTraceCallsNear(req, sessionId, url)
       return segments[4] === 'calls'
-        ? await getSessionTraceCall(sessionId, segments[5])
+        ? await getSessionTraceCall(sessionId, segments[5], url)
         : await getSessionTrace(req, sessionId, url)
+    }
+
+    if (subResource === 'trajectory') {
+      if (req.method !== 'GET') {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      return await handleTrajectoryRoute(req, url, sessionId, segments)
     }
 
     if (subResource === 'git-info') {
@@ -547,6 +568,32 @@ async function getSessionTrace(req: Request, sessionId: string, url: URL): Promi
   })
 }
 
+async function handleTrajectoryRoute(req: Request, url: URL, sessionId: string, segments: string[]): Promise<Response> {
+  const agentId = parseAgentIdParam(url.searchParams.get('agentId'))
+  const leaf = (index: number): string => {
+    try {
+      return decodeURIComponent(segments[index] ?? '')
+    } catch {
+      throw ApiError.badRequest('Invalid trajectory path')
+    }
+  }
+  if (segments.length === 4) {
+    return Response.json(await getTrajectoryPage(sessionId, {
+      cursor: url.searchParams.get('cursor') || undefined,
+      after: url.searchParams.get('after') || undefined,
+      agentId,
+      signal: req.signal,
+    }))
+  }
+  if (segments.length === 6 && segments[4] === 'rows') {
+    return Response.json(await getTrajectoryRowDetail(sessionId, leaf(5), url.searchParams.get('loc'), { agentId, signal: req.signal }))
+  }
+  if (segments.length === 6 && segments[4] === 'snapshots') {
+    return Response.json(await getTrajectorySnapshotBlob(sessionId, leaf(5), req.signal))
+  }
+  throw ApiError.notFound('Trajectory route not found')
+}
+
 function parseTracePageOffset(url: URL): number {
   const value = url.searchParams.get('offset') ?? '0'
   if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
@@ -570,12 +617,45 @@ async function getSessionTraceMeta(sessionId: string): Promise<{
   }
 }
 
-async function getSessionTraceCall(sessionId: string, callId: string | undefined): Promise<Response> {
+/** Mirrors `TRACE_NEAR_MAX_WINDOW_MS` in the trace service, which re-validates. */
+const TRACE_NEAR_MAX_WINDOW_MS = 60 * 60 * 1000
+const TRACE_NEAR_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/
+
+function parseTraceNearTime(url: URL, name: 'from' | 'to'): number {
+  const value = url.searchParams.get(name)
+  const time = value && TRACE_NEAR_TIME_RE.test(value) ? Date.parse(value) : Number.NaN
+  if (!Number.isFinite(time)) throw ApiError.badRequest(`${name} must be an ISO timestamp`)
+  return time
+}
+
+async function getSessionTraceCallsNear(req: Request, sessionId: string, url: URL): Promise<Response> {
+  const from = parseTraceNearTime(url, 'from')
+  const to = parseTraceNearTime(url, 'to')
+  if (to < from) throw ApiError.badRequest('to must not be earlier than from')
+  if (to - from > TRACE_NEAR_MAX_WINDOW_MS) throw ApiError.badRequest('The trace lookup window is at most one hour')
+  const near = await traceCaptureService.getSessionTraceCallsNear(sessionId, {
+    from: new Date(from).toISOString(),
+    to: new Date(to).toISOString(),
+    signal: req.signal,
+  })
+  return Response.json({ ...near, calls: near.calls.map((call) => trimTraceCallPreviews(call)) })
+}
+
+function parseTraceCallLocator(url: URL): [number, number] | undefined {
+  const value = url.searchParams.get('at')
+  if (value === null || value === '') return undefined
+  const match = /^(\d{1,15})-(\d{1,15})$/.exec(value)
+  const range = match ? [Number(match[1]), Number(match[2])] as [number, number] : null
+  if (!range || range[1] <= range[0]) throw ApiError.badRequest('Invalid trace call locator')
+  return range
+}
+
+async function getSessionTraceCall(sessionId: string, callId: string | undefined, url: URL): Promise<Response> {
   if (!callId || callId.trim().length === 0) {
     throw ApiError.badRequest('callId is required')
   }
 
-  const call = await traceCaptureService.getSessionTraceCall(sessionId, callId)
+  const call = await traceCaptureService.getSessionTraceCall(sessionId, callId, { at: parseTraceCallLocator(url) })
   if (!call) {
     throw ApiError.notFound(`Trace call not found: ${callId}`)
   }

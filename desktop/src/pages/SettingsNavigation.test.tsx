@@ -2,26 +2,14 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('../api/traces', () => ({
-  tracesApi: {
-    list: vi.fn().mockResolvedValue({
-      total: 0,
-      storageDir: '/tmp/cc-haha/traces',
-      settings: { enabled: true, storageDir: '/tmp/cc-haha/traces' },
-      traces: [],
-    }),
-    deleteSession: vi.fn(),
-  },
-}))
-
 import { DesktopSettings as Settings } from './Settings'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
 
 /**
  * The rail is a scroll container taller than its viewport, and Settings
- * remounts every time the tab is re-entered — notably when a trace tab's "back
- * to list" walks the user here. These cover the two halves of landing
+ * remounts every time the tab is re-entered — notably when another surface
+ * sends the user to a specific section. These cover the two halves of landing
  * correctly: the right section is shown, and its rail entry is in view.
  */
 describe('Settings section navigation', () => {
@@ -44,25 +32,33 @@ describe('Settings section navigation', () => {
   })
 
   it('opens the section a pending request asked for and clears the request', async () => {
-    useUIStore.setState({ pendingSettingsTab: 'trace' })
+    useUIStore.setState({ pendingSettingsTab: 'diagnostics' })
 
     render(<Settings />)
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'Trace list' })).toBeInTheDocument()
-    expect(useUIStore.getState().activeSettingsTab).toBe('trace')
+    await waitFor(() => {
+      expect(useUIStore.getState().activeSettingsTab).toBe('diagnostics')
+    })
     expect(useUIStore.getState().pendingSettingsTab).toBeNull()
+    expect(screen.getByRole('button', { name: 'Diagnostics', current: 'page' })).toBeInTheDocument()
   })
 
   it('brings the selected rail entry into view on mount', async () => {
-    useUIStore.setState({ activeSettingsTab: 'trace' })
+    useUIStore.setState({ activeSettingsTab: 'diagnostics' })
 
     render(<Settings />)
 
     await waitFor(() => {
       expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' })
     })
-    const railEntry = screen.getByRole('button', { name: 'Trace', current: 'page' })
+    const railEntry = screen.getByRole('button', { name: 'Diagnostics', current: 'page' })
     expect(railEntry).toBeInTheDocument()
+  })
+
+  it('no longer offers a Trace section; per-session traces live in the chat', () => {
+    render(<Settings />)
+
+    expect(screen.queryByRole('button', { name: 'Trace' })).not.toBeInTheDocument()
   })
 
   it('follows the selection when another section is picked', () => {

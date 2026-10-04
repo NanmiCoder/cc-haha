@@ -25,3 +25,27 @@ export function formatClockTime(iso: string): string {
   if (Number.isNaN(date.getTime())) return iso
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
+
+/** Pretty-print a JSON string or value; a non-JSON string passes through unchanged. */
+export function formatTraceJson(value: unknown): string {
+  if (typeof value === 'string') {
+    const parsed = parseJsonText(value)
+    return parsed === null ? value : JSON.stringify(parsed, null, 2)
+  }
+  try {
+    // JSON.stringify(undefined) yields undefined, not a string.
+    return JSON.stringify(value, null, 2) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function parseJsonText(value: string): unknown | null {
+  const trimmed = value.trim()
+  if (!trimmed || (!trimmed.startsWith('{') && !trimmed.startsWith('['))) return null
+  try {
+    return JSON.parse(trimmed)
+  } catch {
+    return null
+  }
+}

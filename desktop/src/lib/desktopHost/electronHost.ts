@@ -119,9 +119,6 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
       open: target => invoke(ELECTRON_IPC_CHANNELS.shellOpen, target),
       openPath: path => invoke(ELECTRON_IPC_CHANNELS.shellOpenPath, path),
     },
-    trace: {
-      openWindow: sessionId => invoke(ELECTRON_IPC_CHANNELS.traceOpenWindow, sessionId),
-    },
     pets: {
       list: () => invoke(ELECTRON_IPC_CHANNELS.petsList),
       createFromImage: input => invoke(ELECTRON_IPC_CHANNELS.petsCreateFromImage, input),

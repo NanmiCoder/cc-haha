@@ -32,9 +32,9 @@ function setup(options: {
   entry?: string
 } = {}) {
   const primary = { id: 1 } as unknown as WebContents
-  const trace = { id: 3 } as unknown as WebContents
+  const secondary = { id: 3 } as unknown as WebContents
   const other = { id: 2 } as unknown as WebContents
-  const appContents = new Set<WebContents>([primary, trace])
+  const appContents = new Set<WebContents>([primary, secondary])
   let check!: CheckHandler
   let request!: RequestHandler
   const session = {
@@ -75,7 +75,7 @@ function setup(options: {
   })
   return {
     primary,
-    trace,
+    secondary,
     other,
     systemPreferences,
     ask,
@@ -90,9 +90,9 @@ describe('installMicrophonePermissions request handler', () => {
     await expect(ask(primary, {})).resolves.toBe(true)
   })
 
-  it('grants audio-only capture to the detached trace window, whatever its query string', async () => {
-    const { trace, ask } = setup({ platform: 'linux' })
-    await expect(ask(trace, { requestingUrl: `${APP_URL}?traceWindow=1&traceSessionId=abc` })).resolves.toBe(true)
+  it('grants audio-only capture to a secondary application window, whatever its query string', async () => {
+    const { secondary, ask } = setup({ platform: 'linux' })
+    await expect(ask(secondary, { requestingUrl: `${APP_URL}?petWindow=1&sessionId=abc` })).resolves.toBe(true)
   })
 
   it('denies audio requests from contents that are not an application window', async () => {
@@ -102,18 +102,18 @@ describe('installMicrophonePermissions request handler', () => {
   })
 
   it('denies once the application window is gone', async () => {
-    const { primary, trace, ask, closeWindow } = setup({ platform: 'win32' })
+    const { primary, secondary, ask, closeWindow } = setup({ platform: 'win32' })
     closeWindow(primary)
-    closeWindow(trace)
+    closeWindow(secondary)
     await expect(ask(primary, {})).resolves.toBe(false)
-    await expect(ask(trace, {})).resolves.toBe(false)
+    await expect(ask(secondary, {})).resolves.toBe(false)
   })
 
-  it('still denies subframes and video from the trace window', async () => {
-    const { trace, ask } = setup({ platform: 'win32' })
-    await expect(ask(trace, { isMainFrame: false })).resolves.toBe(false)
-    await expect(ask(trace, { mediaTypes: ['audio', 'video'] })).resolves.toBe(false)
-    await expect(ask(trace, { requestingUrl: 'https://example.com/' })).resolves.toBe(false)
+  it('still denies subframes and video from a secondary application window', async () => {
+    const { secondary, ask } = setup({ platform: 'win32' })
+    await expect(ask(secondary, { isMainFrame: false })).resolves.toBe(false)
+    await expect(ask(secondary, { mediaTypes: ['audio', 'video'] })).resolves.toBe(false)
+    await expect(ask(secondary, { requestingUrl: 'https://example.com/' })).resolves.toBe(false)
   })
 
   it('denies subframes and foreign or missing frame URLs', async () => {
@@ -192,9 +192,9 @@ describe('installMicrophonePermissions check handler', () => {
     }
   })
 
-  it('reports audio as permitted for the trace window but not for non-application contents', () => {
-    const { trace, other, probe } = setup({ platform: 'win32' })
-    expect(probe(trace, { requestingUrl: `${APP_URL}?traceWindow=1` })).toBe(true)
+  it('reports audio as permitted for a secondary application window but not for non-application contents', () => {
+    const { secondary, other, probe } = setup({ platform: 'win32' })
+    expect(probe(secondary, { requestingUrl: `${APP_URL}?petWindow=1` })).toBe(true)
     expect(probe(other)).toBe(false)
   })
 
@@ -222,7 +222,7 @@ describe('createRendererUrlMatcher', () => {
   it('matches the packaged index.html regardless of query and hash', () => {
     const matches = createRendererUrlMatcher(APP_ENTRY)
     expect(matches(APP_URL)).toBe(true)
-    expect(matches(`${APP_URL}?traceWindow=1#/chat`)).toBe(true)
+    expect(matches(`${APP_URL}?petWindow=1#/chat`)).toBe(true)
     expect(matches(pathToFileURL('/Applications/Other.app/dist/index.html').toString())).toBe(false)
     expect(matches('https://example.com/dist/index.html')).toBe(false)
     expect(matches('not a url')).toBe(false)
@@ -259,7 +259,7 @@ describe('main window wiring', () => {
   it('installs the microphone policy once, on the shared app session, for any application window', () => {
     expect(mainWindowSource).toContain('installMicrophonePermissions(mainWindow.webContents.session')
     expect(mainSource.match(/installMicrophonePermissions\(/g)).toHaveLength(1)
-    // A detached trace window renders the same ChatInput, so the gate cannot be "is mainWindow".
+    // The policy covers every application window, so the gate cannot be "is mainWindow".
     expect(mainWindowSource).toContain('BrowserWindow.fromWebContents(contents)')
     expect(mainWindowSource).not.toMatch(/primary:/)
   })

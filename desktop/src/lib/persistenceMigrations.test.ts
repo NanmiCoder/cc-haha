@@ -77,7 +77,6 @@ describe('desktop persistence migrations', () => {
     window.localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
       openTabs: [
         { sessionId: '__market__', title: 'Market', type: 'market' },
-        { sessionId: '__traces__', title: 'Traces', type: 'traces' },
       ],
       activeTabId: '__market__',
     }))
@@ -88,10 +87,80 @@ describe('desktop persistence migrations', () => {
     expect(JSON.parse(window.localStorage.getItem('cc-haha-open-tabs') || '{}')).toEqual({
       openTabs: [
         { sessionId: '__market__', title: 'Market', type: 'market' },
-        { sessionId: '__traces__', title: 'Traces', type: 'traces' },
       ],
       activeTabId: '__market__',
     })
+  })
+
+  test('upgrades a frozen schema-5 install with retired Trace tabs and Settings entry', () => {
+    // Exactly what a schema-5 build persisted with the Trace list open, two
+    // per-session trace tabs (one of whose sessions also has a chat tab), and
+    // a trace tab focused. The Trace page is gone; traces live in the chat's
+    // 轨迹 view, so a trace tab must reopen as its session's chat tab.
+    localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '5')
+    localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [
+        { sessionId: 'session-a', title: 'Chat A', type: 'session' },
+        { sessionId: '__traces__', title: 'Traces', type: 'traces' },
+        { sessionId: '__trace__session-a', title: 'Chat A', type: 'trace', traceSessionId: 'session-a' },
+        { sessionId: '__trace__session-b', title: 'Chat B', type: 'trace', traceSessionId: 'session-b' },
+        { sessionId: '__settings__', title: 'Settings', type: 'settings' },
+      ],
+      activeTabId: '__trace__session-b',
+    }))
+    localStorage.setItem('cc-haha-active-settings-tab', 'trace')
+
+    const report = runDesktopPersistenceMigrations()
+
+    const expected = {
+      openTabs: [
+        { sessionId: 'session-a', title: 'Chat A', type: 'session' },
+        { sessionId: 'session-b', title: 'Chat B', type: 'session' },
+        { sessionId: '__settings__', title: 'Settings', type: 'settings' },
+      ],
+      activeTabId: 'session-b',
+    }
+    expect(JSON.parse(localStorage.getItem('cc-haha-open-tabs')!)).toEqual(expected)
+    expect(localStorage.getItem('cc-haha-active-settings-tab')).toBe('general')
+    expect(report.migratedKeys).toContain('cc-haha-active-settings-tab')
+    expect(localStorage.getItem(DESKTOP_PERSISTENCE_VERSION_KEY)).toBe(String(CURRENT_DESKTOP_PERSISTENCE_SCHEMA_VERSION))
+
+    // Idempotent: a second launch leaves both keys alone.
+    const second = runDesktopPersistenceMigrations()
+    expect(JSON.parse(localStorage.getItem('cc-haha-open-tabs')!)).toEqual(expected)
+    expect(second.migratedKeys).not.toContain('cc-haha-active-settings-tab')
+  })
+
+  test.each([
+    ['the Trace list', '__traces__'],
+    ['an unresolvable trace tab', '__trace__'],
+  ])('falls back to the first surviving tab when %s was focused', (_label, activeTabId) => {
+    localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [
+        { sessionId: '__traces__', title: 'Traces', type: 'traces' },
+        { sessionId: '__trace__', title: 'Broken', type: 'trace' },
+        { sessionId: 'session-a', title: 'Chat A', type: 'session' },
+      ],
+      activeTabId,
+    }))
+
+    runDesktopPersistenceMigrations()
+
+    expect(JSON.parse(localStorage.getItem('cc-haha-open-tabs')!)).toEqual({
+      openTabs: [{ sessionId: 'session-a', title: 'Chat A', type: 'session' }],
+      activeTabId: 'session-a',
+    })
+  })
+
+  test('drops the open-tabs key when only retired Trace tabs were open', () => {
+    localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+      openTabs: [{ sessionId: '__traces__', title: 'Traces', type: 'traces' }],
+      activeTabId: '__traces__',
+    }))
+
+    runDesktopPersistenceMigrations()
+
+    expect(localStorage.getItem('cc-haha-open-tabs')).toBeNull()
   })
 
   test('canonicalizes mismatched persisted special tab ids and types during startup migration', () => {

@@ -32,19 +32,6 @@ vi.mock('../../pages/TerminalSettings', () => ({
   ),
 }))
 
-vi.mock('../../pages/TraceSession', () => ({
-  TraceSession: ({ sessionId, onBack }: { sessionId: string; onBack?: () => void }) => (
-    <div data-testid="trace-session">
-      trace:{sessionId}
-      {onBack ? <button type="button" onClick={onBack}>back</button> : null}
-    </div>
-  ),
-}))
-
-vi.mock('../../pages/TraceList', () => ({
-  TraceList: () => <div data-testid="trace-list" />,
-}))
-
 vi.mock('../../pages/SubagentRunPage', () => ({
   SubagentRunPage: ({ sourceSessionId, taskId, toolUseId, title }: { sourceSessionId: string; taskId?: string; toolUseId: string; title: string }) => (
     <div data-testid="subagent-run-page">{sourceSessionId}:{toolUseId}:{taskId}:{title}</div>
@@ -157,65 +144,6 @@ describe('ContentRouter tab surfaces', () => {
     expect(useTabStore.getState().tabs.filter((tab) => tab.type === 'terminal')).toHaveLength(2)
     expect(useTabStore.getState().activeTabId).not.toBe('__terminal__1')
     expect(useTabStore.getState().tabs.find((tab) => tab.sessionId === useTabStore.getState().activeTabId)?.terminalCwd).toBe('/tmp/project')
-  })
-
-  it('renders trace tabs without mounting the chat session surface', () => {
-    useTabStore.setState({
-      tabs: [{
-        sessionId: '__trace__session-1',
-        title: 'Trace',
-        type: 'trace',
-        status: 'idle',
-        traceSessionId: 'session-1',
-      }],
-      activeTabId: '__trace__session-1',
-    })
-
-    render(<ContentRouter />)
-
-    expect(screen.getByTestId('trace-session')).toHaveTextContent('trace:session-1')
-    expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
-  })
-
-  it('walks a trace tab back to the list and closes the tab behind it', () => {
-    useTabStore.setState({
-      tabs: [
-        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
-        {
-          sessionId: '__trace__session-1',
-          title: 'Chat',
-          type: 'trace',
-          status: 'idle',
-          traceSessionId: 'session-1',
-        },
-      ],
-      activeTabId: '__trace__session-1',
-    })
-
-    render(<ContentRouter />)
-    fireEvent.click(screen.getByRole('button', { name: 'back' }))
-
-    const { tabs, activeTabId } = useTabStore.getState()
-    expect(activeTabId).toBe(SETTINGS_TAB_ID)
-    expect(tabs.some((tab) => tab.sessionId === '__trace__session-1')).toBe(false)
-    expect(useUIStore.getState().pendingSettingsTab).toBe('trace')
-  })
-
-  it('renders the trace list tab without mounting the chat session surface', () => {
-    useTabStore.setState({
-      tabs: [{
-        sessionId: '__traces__',
-        title: 'Trace',
-        type: 'traces',
-        status: 'idle',
-      }],
-      activeTabId: '__traces__',
-    })
-
-    render(<ContentRouter />)
-
-    expect(screen.getByTestId('trace-list')).toBeInTheDocument()
-    expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
   })
 
   it('renders SubAgent run tabs', () => {

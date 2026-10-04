@@ -471,11 +471,10 @@ describe('primary-window gate', () => {
     const { isPrimaryWorkspaceWindow } = await import('../../main')
 
     expect(isPrimaryWorkspaceWindow('')).toBe(true)
-    // Pet and trace windows share this origin and load the same entry. The
+    // The pet window shares this origin and loads the same entry. The
     // document is written whole, so a second writer would overwrite the main
     // window's state with whatever it hydrated when it opened.
     expect(isPrimaryWorkspaceWindow('?petWindow=1')).toBe(false)
-    expect(isPrimaryWorkspaceWindow('?traceWindow=1&traceSessionId=abc')).toBe(false)
   })
 
   it('discards legacy viewed marks without a comparison fingerprint', () => {

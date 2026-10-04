@@ -9,8 +9,6 @@ import {
   TEAM_MEMBER_TAB_PREFIX,
   TEAM_TAB_PREFIX,
   TERMINAL_TAB_PREFIX,
-  TRACE_LIST_TAB_ID,
-  TRACE_TAB_PREFIX,
   WORKBENCH_TAB_PREFIX,
   useTabStore,
   type Tab,
@@ -84,16 +82,13 @@ function clippedSide(
 // One glyph per *non-chat* tab kind: the glyph says "this tab is not a
 // conversation". Chat tabs deliberately have none — a bubble on every tab in a
 // strip that is mostly chats is pure noise, and the slot it occupied is worth
-// more as title. `trace` and `traces` share the Settings rail's glyph on
-// purpose — a trace tab should read as that section, not as another chat.
+// more as title.
 const TAB_TYPE_ICON: Partial<Record<TabType, string>> = {
   settings: 'settings',
   scheduled: 'schedule',
   market: 'storefront',
   connectors: 'link',
   terminal: 'terminal',
-  trace: 'account_tree',
-  traces: 'account_tree',
   workbench: 'view_sidebar',
   subagent: 'smart_toy',
   team: 'account_tree',
@@ -123,9 +118,7 @@ function isSessionTabId(tabId: string | null) {
     tabId !== SCHEDULED_TAB_ID &&
     tabId !== MARKET_TAB_ID &&
     tabId !== CONNECTORS_TAB_ID &&
-    tabId !== TRACE_LIST_TAB_ID &&
     !tabId.startsWith(TERMINAL_TAB_PREFIX) &&
-    !tabId.startsWith(TRACE_TAB_PREFIX) &&
     !tabId.startsWith(WORKBENCH_TAB_PREFIX) &&
     !tabId.startsWith(SUBAGENT_TAB_PREFIX) &&
     !tabId.startsWith(TEAM_TAB_PREFIX) &&

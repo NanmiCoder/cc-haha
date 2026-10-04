@@ -13,8 +13,8 @@ export type MicrophoneSystemPreferences = {
 export type MicrophonePermissionOptions = {
   /**
    * True for contents that live in a window this application created and that
-   * is still open (main window and the detached trace window, both of which
-   * render the chat input).
+   * is still open. Deliberately not "is the main window": the policy belongs
+   * to every application window, not to one specific window.
    */
   isAppContents: (contents: WebContents) => boolean
   /** True only for a frame URL that is the application's own renderer entry. */
@@ -25,8 +25,8 @@ export type MicrophonePermissionOptions = {
 
 /**
  * Match the application's own renderer document: the dev server origin, or the
- * packaged `dist/index.html`. Query and hash are ignored because the main and
- * trace windows load the same entry with different query strings.
+ * packaged `dist/index.html`. Query and hash are ignored because every
+ * application window loads the same entry with its own query string.
  */
 export function createRendererUrlMatcher(
   entry: string,

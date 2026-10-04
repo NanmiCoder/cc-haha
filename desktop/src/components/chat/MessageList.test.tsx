@@ -35,6 +35,7 @@ import { CHAT_APPEARANCE_STORAGE_KEY } from '../../lib/chatAppearance'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSideChatStore } from '../../stores/sideChatStore'
 import { useTabStore } from '../../stores/tabStore'
+import { useTrajectoryViewStore } from '../../stores/trajectoryViewStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTeamStore } from '../../stores/teamStore'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
@@ -1220,6 +1221,103 @@ describe('MessageList nested tool calls', () => {
     await waitFor(() => expect(screen.getByText('Prompt 0')).toBeTruthy())
     expect(scrollTop).toBe(0)
     expect(container.querySelector('[data-chat-render-item-key="user-0"]')?.className).toContain('chat-render-item--navigation-target')
+  })
+
+  it('scrolls to and highlights the message a trajectory row asks to locate', async () => {
+    const messages: UIMessage[] = Array.from({ length: 220 }, (_, index) => ({
+      id: `${index % 2 === 0 ? 'user' : 'assistant'}-${index}`,
+      type: index % 2 === 0 ? 'user_text' : 'assistant_text',
+      content: `${index % 2 === 0 ? 'Prompt' : 'Answer'} ${index}`,
+      timestamp: index,
+    })) as UIMessage[]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
+    useTrajectoryViewStore.setState({ nav: null, modes: {}, opened: {} })
+
+    const { container } = render(<MessageList />)
+    const scroller = container.querySelector('.chat-scroll-area') as HTMLElement
+    let scrollTop = 24_000
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 25_000 })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value },
+    })
+
+    // An unknown uuid first, then the real one: any listed uuid identifies the item.
+    act(() => useTrajectoryViewStore.getState().revealInChat(ACTIVE_TAB, { uuids: ['not-loaded', 'assistant-1'] }))
+
+    await waitFor(() => expect(container.querySelector('[data-chat-render-item-key="assistant-1"]')?.className).toContain('chat-render-item--navigation-target'))
+    expect(scrollTop).toBeLessThan(1000)
+    expect(container.querySelector('[data-chat-render-item-key="user-0"]')?.className ?? '').not.toContain('chat-render-item--navigation-target')
+    expect(useTrajectoryViewStore.getState().nav).toBeNull()
+  })
+
+  it('opens a folded run onto the tool call a trajectory row locates, and marks that row', async () => {
+    // Regression: the jump only scrolled to the run and tinted it, but a settled
+    // run is folded to its summary line, so the call it was about stayed hidden.
+    const messages: UIMessage[] = [
+      { id: 'locate-user', type: 'user_text', content: 'Inspect the repo', timestamp: 1 },
+      { id: 'locate-read', type: 'tool_use', toolName: 'Read', toolUseId: 'toolu-locate-read', input: { file_path: '/repo/a.ts' }, timestamp: 2 },
+      { id: 'locate-read-result', type: 'tool_result', toolUseId: 'toolu-locate-read', content: 'a', isError: false, timestamp: 3 },
+      { id: 'locate-bash', type: 'tool_use', toolName: 'Bash', toolUseId: 'toolu-locate-bash', input: { command: 'ls' }, timestamp: 4 },
+      { id: 'locate-bash-result', type: 'tool_result', toolUseId: 'toolu-locate-bash', content: 'a.ts', isError: false, timestamp: 5 },
+      { id: 'locate-grep', type: 'tool_use', toolName: 'Grep', toolUseId: 'toolu-locate-grep', input: { pattern: 'x' }, timestamp: 6 },
+      { id: 'locate-grep-result', type: 'tool_result', toolUseId: 'toolu-locate-grep', content: '', isError: false, timestamp: 7 },
+      { id: 'locate-answer', type: 'assistant_text', content: 'Done.', timestamp: 8 },
+    ] as UIMessage[]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
+    useTrajectoryViewStore.setState({ nav: null, modes: {}, opened: {} })
+
+    const { container } = render(<MessageList />)
+    const scroller = container.querySelector('.chat-scroll-area') as HTMLElement
+    const scrollWrites: number[] = []
+    let scrollTop = 0
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 4_000 })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value: number) => { scrollTop = value; scrollWrites.push(value) },
+    })
+    // Only the located row has a box; the run around it measures as empty, so
+    // any correction can only have come from aligning the row itself.
+    const realRect = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.toolUseId === 'toolu-locate-bash') return { top: 900, bottom: 920, height: 20, left: 0, right: 100, width: 100, x: 0, y: 900, toJSON: () => ({}) } as DOMRect
+      return realRect.call(this)
+    })
+
+    const group = screen.getByTestId('activity-group')
+    expect(group.getAttribute('data-expanded')).toBe('false')
+    expect(container.querySelector('[data-tool-use-id="toolu-locate-bash"]')).toBeNull()
+
+    act(() => useTrajectoryViewStore.getState().revealInChat(ACTIVE_TAB, { toolUseId: 'toolu-locate-bash' }))
+
+    await waitFor(() => expect(container.querySelector('[data-tool-use-id="toolu-locate-bash"]')?.className).toContain('chat-tool-navigation-target'))
+    expect(screen.getByTestId('activity-group').getAttribute('data-expanded')).toBe('true')
+    // Exactly the located call is marked, not its neighbours.
+    expect(container.querySelectorAll('.chat-tool-navigation-target')).toHaveLength(1)
+    expect(container.querySelector('[data-tool-use-id="toolu-locate-read"]')?.className).not.toContain('chat-tool-navigation-target')
+    // Aligned to the row: 900px down, brought to the 25% reading line of a 500px viewport.
+    await waitFor(() => expect(scrollWrites.length).toBeGreaterThanOrEqual(2))
+    expect(scrollWrites.at(-1)! - scrollWrites.at(-2)!).toBe(900 - 500 * 0.25)
+
+    // The mark is brief; the run stays open as if the reader had opened it.
+    await waitFor(
+      () => expect(container.querySelector('.chat-tool-navigation-target')).toBeNull(),
+      { timeout: 3_000 },
+    )
+    expect(screen.getByTestId('activity-group').getAttribute('data-expanded')).toBe('true')
+  })
+
+  it('ignores a locate request addressed to another session', async () => {
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: makeConversationNavigationMessages() }) } })
+    useTrajectoryViewStore.setState({ nav: null, modes: {}, opened: {} })
+    render(<MessageList />)
+    act(() => useTrajectoryViewStore.getState().revealInChat('other-session', { uuids: ['user-0'] }))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(useTrajectoryViewStore.getState().nav).toMatchObject({ sessionId: 'other-session' })
   })
 
   it('keeps streaming output out of the user-turn navigator after a prompt jump', async () => {
