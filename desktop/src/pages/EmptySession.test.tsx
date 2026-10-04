@@ -865,6 +865,30 @@ describe('EmptySession', () => {
     })
   })
 
+  it('carries the global effort into the first draft selection for ChatGPT Official', async () => {
+    useSettingsStore.setState({ effortLevel: 'low' })
+    useProviderStore.setState({
+      providers: [],
+      activeId: 'openai-official',
+      providerOrder: ['claude-official', 'openai-official', 'grok-official'],
+      hasLoadedProviders: true,
+    })
+
+    render(<EmptySession />)
+
+    setComposerText('draft question', 14)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({ permissionMode: 'default' })
+    })
+
+    expect(useSessionRuntimeStore.getState().selections['draft-session']).toMatchObject({
+      providerId: 'openai-official',
+      effortLevel: 'low',
+    })
+  })
+
   it.each([true, false])('materializes raw provider models with 1M=%s before the first draft message', async (enabled) => {
     useProviderStore.setState({
       providers: [{
@@ -902,7 +926,7 @@ describe('EmptySession', () => {
     expect(useSessionRuntimeStore.getState().selections['draft-session']).toEqual({
       providerId: 'provider-minimax',
       modelId: enabled ? 'MiniMax-M3[1m]' : 'MiniMax-M3',
-      effortLevel: 'max',
+      effortLevel: 'low',
     })
     expect(mocks.wsSend.mock.calls.slice(0, 3)).toEqual([
       [
@@ -911,7 +935,7 @@ describe('EmptySession', () => {
           type: 'set_runtime_config',
           providerId: 'provider-minimax',
           modelId: enabled ? 'MiniMax-M3[1m]' : 'MiniMax-M3',
-          effortLevel: 'max',
+          effortLevel: 'low',
         },
       ],
       ['draft-session', { type: 'prewarm_session' }],

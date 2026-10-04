@@ -34,6 +34,8 @@ import {
   SlashCommandMenu,
 } from '../components/chat/SlashCommandMenu'
 import { useMobileViewport } from '../hooks/useMobileViewport'
+import { GROK_OFFICIAL_PROVIDER_ID } from '../constants/grokOfficialProvider'
+import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import {
   normalizeRuntimeSelection,
@@ -400,7 +402,15 @@ export function EmptySession() {
           activeCustomProvider.apiFormat,
           getBundledPresetReasoningProviderKind(activeCustomProvider.presetId),
         )
-        : defaultActiveProviderSelection
+        : defaultActiveProviderSelection && (
+          defaultActiveProviderSelection.providerId === OPENAI_OFFICIAL_PROVIDER_ID ||
+          defaultActiveProviderSelection.providerId === GROK_OFFICIAL_PROVIDER_ID
+        )
+          // Built-in providers are not in the saved list. Without an explicit
+          // effort the server runs the model default while the selector shows
+          // the global value, so resolve it against the model's catalog here.
+          ? normalizeRuntimeSelection({ ...defaultActiveProviderSelection, effortLevel })
+          : defaultActiveProviderSelection
       const claudeOAuthRuntimeSelection = !explicitDraftSelection &&
         authStatus.source === 'claude-oauth' &&
         activeProviderId === null &&

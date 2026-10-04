@@ -160,6 +160,15 @@ describe('settingsStore locale defaults', () => {
   })
 })
 
+describe('settingsStore effort default', () => {
+  it('starts at low before the server value loads', async () => {
+    vi.resetModules()
+    const { useSettingsStore } = await import('./settingsStore')
+
+    expect(useSettingsStore.getState().effortLevel).toBe('low')
+  })
+})
+
 describe('settingsStore UI zoom', () => {
   beforeEach(() => {
     vi.resetModules()

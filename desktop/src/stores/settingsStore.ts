@@ -204,7 +204,7 @@ let autoQuestionUpdateQueue: Promise<unknown> = Promise.resolve()
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   permissionMode: 'default',
   currentModel: null,
-  effortLevel: 'max',
+  effortLevel: 'low',
   thinkingEnabled: true,
   workflowKeywordTriggerEnabled: true,
   agentTeamsEnabled: true,

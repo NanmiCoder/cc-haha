@@ -1069,6 +1069,7 @@ describe('ModelSelector', () => {
     })
     useSettingsStore.setState({
       locale: 'en',
+      effortLevel: 'max',
       availableModels: openAIModels,
       currentModel: openAIModels[0],
       activeProviderName: 'ChatGPT Official',

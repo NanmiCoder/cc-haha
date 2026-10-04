@@ -119,7 +119,7 @@ const EFFORT_LEVELS = MODEL_REASONING_EFFORTS
 // CLI's own default runs. Keep this in step with what the `opus` alias resolves to there
 // (getDefaultOpusModel) so the UI names the model that actually runs.
 const DEFAULT_MODEL = 'claude-opus-5-5'
-const DEFAULT_EFFORT = 'max'
+const DEFAULT_EFFORT = 'low'
 
 const settingsService = new SettingsService()
 const providerService = new ProviderService()
