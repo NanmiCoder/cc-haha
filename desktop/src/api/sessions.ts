@@ -355,6 +355,12 @@ export type WorkspaceTreeEntry = {
   isDirectory: boolean
 }
 
+export type WorkspaceFileStat = {
+  path: string
+  state: 'file' | 'missing' | 'unavailable'
+  mtimeMs?: number
+}
+
 export type WorkspaceTreeResult = {
   state: 'ok' | 'missing' | 'error'
   path: string
@@ -383,6 +389,8 @@ export type SessionTurnCheckpoint = {
   workDir?: string
   restoreAvailable?: boolean
   unverifiedChangeSources?: string[]
+  /** When the turn's prompt was recorded, epoch ms on the server's clock. */
+  startedAt?: number
 }
 
 export type SessionTurnCheckpointsResponse = {
@@ -616,6 +624,12 @@ export const sessionsApi = {
   searchWorkspace(sessionId: string, query: string, signal?: AbortSignal) {
     const params = new URLSearchParams({ query })
     return api.get<WorkspaceSearchResult>(`/api/sessions/${sessionId}/workspace/search?${params}`, { signal })
+  },
+
+  statWorkspaceFiles(sessionId: string, workspacePaths: string[], signal?: AbortSignal) {
+    const query = new URLSearchParams()
+    for (const workspacePath of workspacePaths) query.append('path', workspacePath)
+    return api.get<{ files: WorkspaceFileStat[] }>(`/api/sessions/${sessionId}/workspace/stat?${query}`, { signal })
   },
 
   getWorkspaceFile(sessionId: string, workspacePath: string, signal?: AbortSignal) {

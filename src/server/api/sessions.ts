@@ -602,6 +602,11 @@ async function handleSessionWorkspaceRoute(
       ))
     case 'search':
       return handleWorkspaceSearchRoute(workDir, url)
+    case 'stat':
+      return await runWorkspaceRequest(() => workspaceService.statFiles(
+        sessionId,
+        requireWorkspaceStatPaths(url),
+      ).then((files) => ({ files })))
     case 'file':
       return await runWorkspaceRequest(() => workspaceService.readFile(
         sessionId,
@@ -905,6 +910,19 @@ function requireWorkspacePath(url: URL, route: 'file' | 'diff' | 'raw'): string 
     throw ApiError.badRequest(`path query parameter is required for workspace ${route}`)
   }
   return filePath
+}
+
+const MAX_WORKSPACE_STAT_PATHS = 20
+
+function requireWorkspaceStatPaths(url: URL): string[] {
+  const paths = [...new Set(url.searchParams.getAll('path').filter(Boolean))]
+  if (paths.length === 0) {
+    throw ApiError.badRequest('path query parameter is required for workspace stat')
+  }
+  if (paths.length > MAX_WORKSPACE_STAT_PATHS) {
+    throw ApiError.badRequest(`workspace stat accepts at most ${MAX_WORKSPACE_STAT_PATHS} paths`)
+  }
+  return paths
 }
 
 /**

@@ -5691,6 +5691,22 @@ describe('Sessions API', () => {
       content: 'export const answer = 2\n',
     })
 
+    const statQuery = new URLSearchParams()
+    for (const statPath of ['src/app.ts', 'out/missing.docx', '../escape.docx']) statQuery.append('path', statPath)
+    const statRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/stat?${statQuery}`)
+    expect(statRes.status).toBe(200)
+    expect(await statRes.json()).toEqual({
+      files: [
+        { path: 'src/app.ts', state: 'file', mtimeMs: expect.any(Number) },
+        { path: 'out/missing.docx', state: 'missing' },
+        { path: '../escape.docx', state: 'unavailable' },
+      ],
+    })
+    expect((await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/stat`)).status).toBe(400)
+    const tooMany = new URLSearchParams()
+    for (let index = 0; index < 21; index += 1) tooMany.append('path', `out/${index}.docx`)
+    expect((await fetch(`${baseUrl}/api/sessions/${sessionId}/workspace/stat?${tooMany}`)).status).toBe(400)
+
     const imageRes = await fetch(
       `${baseUrl}/api/sessions/${sessionId}/workspace/file?path=${encodeURIComponent('assets/pixel.png')}`,
     )
@@ -6873,6 +6889,8 @@ describe('Sessions API', () => {
     }
 
     expect(body.checkpoints).toHaveLength(3)
+    // When each prompt was recorded: the client asks the disk for files written since.
+    const PROMPT_RECORDED_AT = Date.parse('2026-01-01T00:01:00.000Z')
     expect(body.checkpoints).toEqual([
       {
         target: {
@@ -6890,6 +6908,7 @@ describe('Sessions API', () => {
         workDir: fixture.workDir,
         restoreAvailable: true,
         unverifiedChangeSources: [],
+        startedAt: PROMPT_RECORDED_AT,
       },
       {
         target: {
@@ -6907,6 +6926,7 @@ describe('Sessions API', () => {
         workDir: fixture.workDir,
         restoreAvailable: true,
         unverifiedChangeSources: [],
+        startedAt: PROMPT_RECORDED_AT,
       },
       {
         target: {
@@ -6924,6 +6944,7 @@ describe('Sessions API', () => {
         workDir: fixture.workDir,
         restoreAvailable: true,
         unverifiedChangeSources: [],
+        startedAt: PROMPT_RECORDED_AT,
       },
     ])
   })

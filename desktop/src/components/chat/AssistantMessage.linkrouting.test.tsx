@@ -144,6 +144,8 @@ describe('AssistantMessage output-target cards', () => {
         sessionId="s1"
         content={'见 [说明文档](docs/readme.md)'}
         isStreaming={false}
+        turnChangedFiles={['docs/readme.md']}
+        turnOutputEvidence={{ unlistedWrites: false }}
       />,
     )
     // Link text appears in both the bubble anchor and the card title; the badge is unique.
@@ -254,6 +256,8 @@ describe('AssistantMessage output-target cards', () => {
           '页面 [首页](out/index.html)',
         ].join('\n')}
         isStreaming={false}
+        turnChangedFiles={['docs/readme.md', 'out/index.html']}
+        turnOutputEvidence={{ unlistedWrites: false }}
       />,
     )
     expect(screen.getByText('assistantOutputs.kind.localhost')).toBeInTheDocument()

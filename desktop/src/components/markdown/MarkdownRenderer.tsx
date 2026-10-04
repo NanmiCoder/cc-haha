@@ -7,14 +7,19 @@ import { marked, type Tokens } from 'marked'
 // The `md-code-link` variant below is spelled out literally so Tailwind can see
 // it; MarkdownRenderer.test.tsx asserts it against CODE_LINK_CLASS.
 import {
+  AUTHORED_FILE_LINK_ATTRIBUTE,
   cjkAwareAutolink,
   fileRefFromElement,
   fileLinkAttributes,
   FILE_LINK_CLASS,
+  guessedFileLinkPaths,
   linkifyFilePaths,
   renderCodespan,
   unwrapFileLinks,
+  unwrapGuessedFileLinks,
+  type FileLinkVerifier,
 } from '@/lib/markdownAutolink'
+import { useFileLinkVerification } from '@/hooks/useFileLinkVerification'
 import { classifyPreviewLink } from '@/lib/previewLinkRouter'
 import { isSafeMarkdownImageSource, normalizeMarkdownImageDestination } from '@/lib/markdownImages'
 import { CodeViewer } from '../chat/CodeViewer'
@@ -44,6 +49,13 @@ type Props = {
    * so a viewer can show them — and the place of the one clicked.
    */
   onImageClick?: (click: MarkdownImageClick) => void
+  /**
+   * Check the file links guessed from code spans and prose before they look like
+   * links. Until it answers they render as the plain code or text they came from,
+   * and the ones it finds missing stay that way. Links the author wrote in
+   * Markdown are taken at their word. Without a verifier every guess links.
+   */
+  fileLinkVerifier?: FileLinkVerifier
 }
 
 export type MarkdownImageClick = {
@@ -63,7 +75,7 @@ type MathBlock = {
   displayMode: boolean
 }
 
-type HtmlPart = { type: 'html'; content: string }
+type HtmlPart = { type: 'html'; content: string; guessedFilePaths: string[] }
 type CodePart = { type: 'code'; block: CodeBlock }
 type MarkdownPart = HtmlPart | CodePart
 
@@ -147,7 +159,7 @@ renderer.link = function (token: Tokens.Link) {
   // validated local destinations as data, just like automatic file references.
   const target = classifyPreviewLink(token.href)
   if (target.path) {
-    return `<a class="${FILE_LINK_CLASS}" ${fileLinkAttributes({ raw: token.href, path: target.path, line: target.line, column: target.column })}>${this.parser.parseInline(token.tokens)}</a>`
+    return `<a class="${FILE_LINK_CLASS}" ${AUTHORED_FILE_LINK_ATTRIBUTE} ${fileLinkAttributes({ raw: token.href, path: target.path, line: target.line, column: target.column })}>${this.parser.parseInline(token.tokens)}</a>`
   }
   return renderDefaultLink.call(this, token)
 }
@@ -359,7 +371,7 @@ function enhanceMarkdownHtml(
   mathBlocks: MathBlock[],
   references: ReferenceLinking,
   resolveImageSrc?: (src: string) => string | null,
-): string {
+): HtmlPart {
   const cleanHtml = DOMPurify.sanitize(html, MARKDOWN_SANITIZE_CONFIG)
 
   const wantsFilePathLinks = references.bare && REFERENCE_HINT_RE.test(cleanHtml)
@@ -371,11 +383,11 @@ function enhanceMarkdownHtml(
     || wantsFileLinkStripping
     || /<(?:a|table|img|source)\b/i.test(cleanHtml)
   if (!needsDomEnhancement) {
-    return cleanHtml
+    return { type: 'html', content: cleanHtml, guessedFilePaths: [] }
   }
 
   if (typeof document === 'undefined') {
-    return cleanHtml
+    return { type: 'html', content: cleanHtml, guessedFilePaths: [] }
   }
 
   // A detached div is not inert: assigning innerHTML can start image requests
@@ -440,7 +452,16 @@ function enhanceMarkdownHtml(
   if (wantsFilePathLinks) linkifyFilePaths(container as unknown as HTMLElement)
   else if (wantsFileLinkStripping) unwrapFileLinks(container as unknown as HTMLElement)
 
-  return template.innerHTML
+  return { type: 'html', content: template.innerHTML, guessedFilePaths: guessedFileLinkPaths(container) }
+}
+
+/** Unwrap the guessed file links `keep` turns down, on markup already sanitized. */
+function filterGuessedFileLinks(part: HtmlPart, keep: (path: string) => boolean): HtmlPart {
+  if (part.guessedFilePaths.every(keep) || typeof document === 'undefined') return part
+  const template = document.createElement('template')
+  template.innerHTML = part.content
+  unwrapGuessedFileLinks(template.content, keep)
+  return { ...part, content: template.innerHTML }
 }
 
 function parseMarkdown(content: string): { html: string; codeBlocks: CodeBlock[]; mathBlocks: MathBlock[] } {
@@ -627,7 +648,7 @@ function reportImageClick(
   })
 }
 
-export const MarkdownRenderer = memo(function MarkdownRenderer({ content, variant = 'default', className, cache = true, streaming = false, onLinkClick, resolveImageSrc, onImageClick }: Props) {
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, variant = 'default', className, cache = true, streaming = false, onLinkClick, resolveImageSrc, onImageClick, fileLinkVerifier }: Props) {
   const { html, codeBlocks, mathBlocks } = useMemo(
     () => cache ? getCachedMarkdownParse(content, streaming) : parseMarkdown(content),
     [cache, content, streaming],
@@ -657,7 +678,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
     }
 
     if (codeBlocks.length === 0) {
-      return [{ type: 'html' as const, content: enhanceMarkdownHtml(html, mathBlocks, references, resolveImageSrc) }]
+      return [enhanceMarkdownHtml(html, mathBlocks, references, resolveImageSrc)]
     }
 
     const result: MarkdownPart[] = []
@@ -670,18 +691,31 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
 
       const before = remaining.slice(0, idx)
       if (before) {
-        result.push({ type: 'html', content: enhanceMarkdownHtml(before, mathBlocks, references, resolveImageSrc) })
+        result.push(enhanceMarkdownHtml(before, mathBlocks, references, resolveImageSrc))
       }
       result.push({ type: 'code', block })
       remaining = remaining.slice(idx + marker.length)
     }
 
     if (remaining) {
-      result.push({ type: 'html', content: enhanceMarkdownHtml(remaining, mathBlocks, references, resolveImageSrc) })
+      result.push(enhanceMarkdownHtml(remaining, mathBlocks, references, resolveImageSrc))
     }
 
     return result
   }, [html, codeBlocks, mathBlocks, streaming, onLinkClick, resolveImageSrc])
+
+  // A guessed link is a promise the file is there. Ask once the markup is final;
+  // the guesses look like plain code until then, and stay so if the file is not.
+  const guessedFilePaths = useMemo(
+    () => parts.flatMap((part) => part.type === 'html' ? part.guessedFilePaths : []),
+    [parts],
+  )
+  const missingFilePaths = useFileLinkVerification(fileLinkVerifier, guessedFilePaths)
+  const visibleParts = useMemo(() => {
+    if (!fileLinkVerifier || guessedFilePaths.length === 0) return parts
+    const keep = (path: string) => missingFilePaths !== null && !missingFilePaths.has(path)
+    return parts.map((part) => part.type === 'html' ? filterGuessedFileLinks(part, keep) : part)
+  }, [fileLinkVerifier, guessedFilePaths.length, missingFilePaths, parts])
 
   const handleClick = useCallback(async (event: ReactMouseEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement | null
@@ -720,7 +754,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
     return (
       <MarkdownHtml
         className={proseClasses}
-        html={parts[0]?.type === 'html' ? parts[0].content : ''}
+        html={visibleParts[0]?.type === 'html' ? visibleParts[0].content : ''}
         onClick={handleClick}
       />
     )
@@ -728,7 +762,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({ content, varian
 
   return (
     <div className={proseClasses} onClick={handleClick}>
-      {parts.map((part, i) =>
+      {visibleParts.map((part, i) =>
         part.type === 'html' ? (
           <MarkdownHtml key={i} html={part.content} />
         ) : shouldRenderAsMermaid(part.block) ? (

@@ -130,6 +130,13 @@ export type SessionRewindExecuteResult = SessionRewindPreview & {
 export type SessionTurnCheckpointPreview = SessionRewindPreview & {
   workDir: string
   restoreAvailable: boolean
+  /**
+   * When the turn's prompt was recorded, in epoch ms on the server's clock.
+   * A file the checkpoint cannot see (a shell command wrote it) counts as this
+   * turn's output only if its mtime is not older; comparing two server times
+   * keeps a remote client's clock out of the decision.
+   */
+  startedAt?: number
 }
 
 export type SessionTurnCheckpointDiffResult = {
@@ -2220,7 +2227,8 @@ export async function listSessionTurnCheckpoints(
       frozen,
     )
 
-    checkpoints.push(checkpoint)
+    const startedAt = Date.parse(turn.userMessage.timestamp)
+    checkpoints.push(Number.isFinite(startedAt) ? { ...checkpoint, startedAt } : checkpoint)
   }
 
   return checkpoints

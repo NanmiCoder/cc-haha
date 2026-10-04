@@ -672,3 +672,69 @@ describe('canonical output deduplication', () => {
     expect(targets[0]?.href).toBe('/work/report.pdf')
   })
 })
+
+describe('outputs a turn produced', () => {
+  // A reply summarising commits quoted the file names from their messages. The
+  // turn only ran `git log`, yet each name became a Word card that opened
+  // "file not found": being mentioned is not being produced.
+  const quoted = [
+    '正文和行内代码里的 `开题报告2.docx`、`D:/资料/测试文档1.docx` 被截成 1.docx 的问题',
+    '预览见 http://localhost:5173/',
+  ].join('\n')
+
+  it('drops every quoted file when the turn could not have written one unseen', () => {
+    const asMentions = extractAssistantOutputTargets(quoted, { workDir: '/w', changedFiles: [] })
+    expect(asMentions.map((target) => target.title))
+      .toEqual(['开题报告2.docx', '测试文档1.docx', '1.docx', 'http://localhost:5173/'])
+
+    const asOutputs = extractAssistantOutputTargets(quoted, {
+      workDir: '/w',
+      changedFiles: [],
+      outputEvidence: { unlistedWrites: false },
+    })
+    expect(asOutputs.map((target) => target.href)).toEqual(['http://localhost:5173/'])
+  })
+
+  it('keeps what the turn wrote, by relative or absolute name, with nothing left to prove', () => {
+    const targets = extractAssistantOutputTargets(
+      '报告在 out/report.docx，副本在 `/Users/me/backup/report.docx`',
+      {
+        workDir: '/w',
+        changedFiles: ['/w/out/report.docx', '/Users/me/backup/report.docx', '/w/out/summary.pdf'],
+        outputEvidence: { unlistedWrites: false },
+      },
+    )
+
+    expect(targets.map((target) => [target.href, target.awaitsTurnWrite]))
+      .toEqual([
+        ['out/report.docx', undefined],
+        ['/Users/me/backup/report.docx', undefined],
+        ['out/summary.pdf', undefined],
+      ])
+  })
+
+  it('leaves a file a shell command may have written for the disk to prove', () => {
+    const targets = extractAssistantOutputTargets(
+      '计划见 plan.md，报告已生成：out/report.docx',
+      { workDir: '/w', changedFiles: ['/w/plan.md'], outputEvidence: { unlistedWrites: true } },
+    )
+
+    expect(targets.map((target) => [target.normalizedPath, target.awaitsTurnWrite]))
+      .toEqual([['plan.md', undefined], ['out/report.docx', true]])
+  })
+
+  it('asks the disk about every file when no checkpoint is known', () => {
+    const targets = extractAssistantOutputTargets(quoted, {
+      workDir: '/w',
+      outputEvidence: { unlistedWrites: true },
+    })
+
+    expect(targets.map((target) => [target.title, target.awaitsTurnWrite]))
+      .toEqual([
+        ['开题报告2.docx', true],
+        ['测试文档1.docx', true],
+        ['1.docx', true],
+        ['http://localhost:5173/', undefined],
+      ])
+  })
+})

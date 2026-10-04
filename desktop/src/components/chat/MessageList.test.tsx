@@ -26,6 +26,7 @@ import { ApiError } from '../../api/client'
 import { subagentsApi, type SubagentRunResponse } from '../../api/subagents'
 import { teamsApi } from '../../api/teams'
 import { resetAgentRunActivityCache } from './useAgentRunActivity'
+import { resetWorkspaceFileStatsForTests } from '../../lib/workspaceFileStats'
 import { useChatStore } from '../../stores/chatStore'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
@@ -7943,6 +7944,77 @@ describe('MessageList nested tool calls', () => {
     expect(within(finalItem as HTMLElement).getByRole('button', { name: 'Open' })).toBeTruthy()
     await expandChangedFileCards()
     expect(within(turnCard).getByText('ink-survey-philosophy.md')).toBeTruthy()
+  })
+
+  describe('output cards need the turn to have produced the file', () => {
+    function mockCheckpoint(unverifiedChangeSources: string[], startedAt: number) {
+      return vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({
+        checkpoints: [{
+          target: { targetUserMessageId: 'transcript-user-1', userMessageIndex: 0, userMessageCount: 1 },
+          workDir: '/private/tmp',
+          code: { available: true, filesChanged: [], insertions: 0, deletions: 0 },
+          unverifiedChangeSources,
+          startedAt,
+        }],
+      })
+    }
+
+    function replyWith(text: string) {
+      const store = useChatStore.getState()
+      act(() => {
+        store.sendMessage(ACTIVE_TAB, 'Summarise the last commits')
+        store.handleServerMessage(ACTIVE_TAB, { type: 'content_start', blockType: 'text' })
+        store.handleServerMessage(ACTIVE_TAB, { type: 'content_delta', text })
+        store.handleServerMessage(ACTIVE_TAB, { type: 'status', state: 'idle' })
+      })
+    }
+
+    beforeEach(() => {
+      resetWorkspaceFileStatsForTests()
+    })
+
+    it('shows none for file names a read-only turn only quoted', async () => {
+      // The turn ran `git log`; the reply quoted names from commit messages.
+      const getTurnCheckpoints = mockCheckpoint([], Date.now())
+      const statWorkspaceFiles = vi.spyOn(sessionsApi, 'statWorkspaceFiles').mockImplementation(async (_sessionId, paths) => ({
+        files: paths.map((path) => ({ path, state: 'missing' as const })),
+      }))
+
+      render(<MessageList sessionId={ACTIVE_TAB} />)
+      replyWith('QUOTED_NAMES 修复了 `开题报告2.docx`、`D:/资料/测试文档1.docx` 被截断的问题')
+
+      await waitFor(() => expect(getTurnCheckpoints).toHaveBeenCalled())
+      await waitFor(() => expect(statWorkspaceFiles).toHaveBeenCalled())
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      })
+      const reply = screen.getByText('QUOTED_NAMES', { exact: false }).closest('[data-chat-render-item-key]')
+      expect(reply).not.toBeNull()
+      expect(within(reply as HTMLElement).queryByRole('button', { name: 'Open' })).toBeNull()
+      // Nothing there to open, so nothing looks openable either.
+      expect(within(reply as HTMLElement).queryByRole('link')).toBeNull()
+    })
+
+    it('shows only what a shell command wrote after the turn began', async () => {
+      const startedAt = Date.parse('2026-10-04T08:00:00Z')
+      mockCheckpoint(['Bash'], startedAt)
+      const statWorkspaceFiles = vi.spyOn(sessionsApi, 'statWorkspaceFiles').mockImplementation(async (_sessionId, paths) => ({
+        files: paths.map((path) => ({
+          path,
+          state: 'file' as const,
+          mtimeMs: path === 'out/report.docx' ? startedAt + 5_000 : startedAt - 86_400_000,
+        })),
+      }))
+
+      render(<MessageList sessionId={ACTIVE_TAB} />)
+      replyWith('CONVERTED 已把 `in/source.docx` 转成 `out/report.docx`')
+
+      await waitFor(() => expect(statWorkspaceFiles).toHaveBeenCalled())
+      const reply = screen.getByText('CONVERTED', { exact: false }).closest('[data-chat-render-item-key]') as HTMLElement
+      await waitFor(() => expect(within(reply).getAllByRole('button', { name: 'Open' })).toHaveLength(1))
+      expect(within(reply).getByText('report.docx', { selector: 'span' })).toBeTruthy()
+      expect(within(reply).queryByText('source.docx', { selector: 'span' })).toBeNull()
+    })
   })
 
   it('keeps one output card per turn when separate turns generate the same path', async () => {

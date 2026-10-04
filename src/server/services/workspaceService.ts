@@ -130,6 +130,13 @@ export type WorkspaceTreeEntry = {
   isDirectory: boolean
 }
 
+export type WorkspaceFileStat = {
+  /** The path exactly as requested. */
+  path: string
+  state: 'file' | 'missing' | 'unavailable'
+  mtimeMs?: number
+}
+
 export type WorkspaceTreeResult = {
   state: 'ok' | 'missing' | 'error'
   path: string
@@ -176,6 +183,12 @@ type GitRepoInfo =
       kind: 'error'
       message: string
     }
+
+type ResolvedWorkspaceRoot = {
+  workDir: string
+  workspaceRoot: string
+  canonicalWorkspaceRoot: string
+}
 
 type WorkspacePathResolution = {
   requestedPath: string
@@ -651,6 +664,35 @@ export class WorkspaceService {
     }
     if (signal.aborted) stop()
     return stop
+  }
+
+  /**
+   * Whether each path is a file, and when it was last written. Paths resolve
+   * under the same boundary as {@link readFile}, so this tells a caller nothing
+   * the file route would not; a path that boundary refuses is `unavailable`.
+   */
+  async statFiles(
+    sessionId: string,
+    filePaths: string[],
+  ): Promise<WorkspaceFileStat[]> {
+    // One reply's links arrive together; look the workspace up once for all of them.
+    let root: ResolvedWorkspaceRoot
+    try {
+      root = await this.resolveWorkspaceRoot(sessionId)
+    } catch {
+      return filePaths.map((filePath) => ({ path: filePath, state: 'unavailable' }))
+    }
+    return Promise.all(filePaths.map(async (filePath): Promise<WorkspaceFileStat> => {
+      try {
+        const resolvedPath = await this.resolveWorkspacePathIn(root, filePath)
+        const stat = await this.safeStat(resolvedPath.absolutePath)
+        if (stat.kind === 'error') return { path: filePath, state: 'unavailable' }
+        if (stat.kind === 'missing' || !stat.stat.isFile()) return { path: filePath, state: 'missing' }
+        return { path: filePath, state: 'file', mtimeMs: stat.stat.mtimeMs }
+      } catch {
+        return { path: filePath, state: 'unavailable' }
+      }
+    }))
   }
 
   async readTree(
@@ -1254,6 +1296,11 @@ export class WorkspaceService {
     sessionId: string,
     requestedPath: string,
   ): Promise<WorkspacePathResolution> {
+    return this.resolveWorkspacePathIn(await this.resolveWorkspaceRoot(sessionId), requestedPath)
+  }
+
+  /** The session's workdir and its canonical root — the same for every path a request names. */
+  private async resolveWorkspaceRoot(sessionId: string): Promise<ResolvedWorkspaceRoot> {
     const workDir = await this.requireWorkDir(sessionId)
     const workspaceRoot = await this.getWorkspaceRoot(workDir)
     if (workspaceRoot.kind === 'missing') {
@@ -1262,7 +1309,13 @@ export class WorkspaceService {
     if (workspaceRoot.kind === 'error') {
       throw new Error(workspaceRoot.message)
     }
+    return { workDir, ...workspaceRoot }
+  }
 
+  private async resolveWorkspacePathIn(
+    { workDir, ...workspaceRoot }: ResolvedWorkspaceRoot,
+    requestedPath: string,
+  ): Promise<WorkspacePathResolution> {
     const absolutePath = path.resolve(workDir, requestedPath || '.')
     if (!this.isWithinRoot(absolutePath, workDir)) {
       // Files this session changed outside its workdir (the user pointed the

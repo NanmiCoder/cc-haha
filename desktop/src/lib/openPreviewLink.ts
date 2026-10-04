@@ -7,6 +7,7 @@ import { useWorkspaceContentStore } from '../stores/workspaceContentStore'
 import { sessionsApi } from '../api/sessions'
 import { workspaceOpen } from './workspace/openTarget'
 import { openLocalFileWithSystem, reportOpenFailure, resolveAbsoluteOpenPath } from './systemFileOpen'
+import { isWorkspaceFileMissing } from './workspaceFileStats'
 
 /**
  * Cheap, synchronous guess at whether the workspace preview can reach this document.
@@ -72,13 +73,28 @@ export function openPreviewLink(href: string, sessionId: string): boolean {
           ...(reveal ? { line: reveal.line, ...(reveal.column ? { column: reveal.column } : {}) } : {}),
         })
       }
-      if (!isWorkspaceDocumentFile(path) || documentReachableInWorkspace(path, currentWorkDir())) {
-        openInWorkspace()
+      const route = () => {
+        if (!isWorkspaceDocumentFile(path) || documentReachableInWorkspace(path, currentWorkDir())) {
+          openInWorkspace()
+          return
+        }
+        void documentReachableOnServer(id, path).then((reachable) => {
+          if (reachable) openInWorkspace()
+          else openSystemFile(path)
+        })
+      }
+      // A file that is not there gets no tab announcing so; the click says it
+      // could not open the file, where the user is looking. A link the reply
+      // just verified answers from memory, so the tab still opens at once.
+      const missing = isWorkspaceFileMissing(id, path)
+      if (typeof missing === 'boolean') {
+        if (missing) reportOpenFailure(path)
+        else route()
         return
       }
-      void documentReachableOnServer(id, path).then((reachable) => {
-        if (reachable) openInWorkspace()
-        else openSystemFile(path)
+      void missing.then((isMissing) => {
+        if (isMissing) reportOpenFailure(path)
+        else route()
       })
     },
     openSystemFile,

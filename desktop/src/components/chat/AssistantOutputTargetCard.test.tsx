@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const { openBrowser } = vi.hoisted(() => ({ openBrowser: vi.fn() }))
@@ -102,12 +102,13 @@ describe('AssistantOutputTargetCard', () => {
     expect(screen.getByText('outputs/brief.docx')).toBeInTheDocument()
   })
 
-  it('routes Open to workspace preview for a markdown target', () => {
+  it('routes Open to workspace preview for a markdown target', async () => {
     render(<AssistantOutputTargetCard target={markdownTarget} sessionId="s1" />)
     fireEvent.click(screen.getByLabelText('assistantOutputs.open'))
     // The trailing args are openPreview's optional `origin` and `reveal` (#1146);
-    // a card has no line number to reveal, hence undefined.
-    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'docs/readme.md', {})
+    // a card has no line number to reveal, hence undefined. The workspace is
+    // asked whether the file is there first, so the tab opens a tick later.
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', 'docs/readme.md', {}))
   })
 
   it('routes Open to the in-app browser for a localhost target', () => {
@@ -118,10 +119,10 @@ describe('AssistantOutputTargetCard', () => {
 
   // The trailing icon button is a discoverability affordance, not the hit area:
   // clicking the file name / path anywhere on the row must open the target.
-  it('opens the workspace preview when the row body is clicked', () => {
+  it('opens the workspace preview when the row body is clicked', async () => {
     render(<AssistantOutputTargetCard target={markdownTarget} sessionId="s1" />)
     fireEvent.click(screen.getByText('readme.md'))
-    expect(openPreviewFn).toHaveBeenCalledWith('s1', 'docs/readme.md', {})
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', 'docs/readme.md', {}))
   })
 
   it('opens the in-app browser when a localhost row body is clicked', () => {

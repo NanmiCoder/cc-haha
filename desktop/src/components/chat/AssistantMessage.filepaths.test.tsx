@@ -50,8 +50,19 @@ vi.mock('../../stores/workspaceContentStore', () => {
 
 const getWorkspaceFile = vi.hoisted(() => vi.fn().mockResolvedValue({ state: 'ok', content: 'file body' }))
 const getWorkspaceTree = vi.hoisted(() => vi.fn().mockResolvedValue({ state: 'missing', path: '', entries: [] }))
+// The turn ran a shell command, so a named file may be its output.
+const shellTurn = { unlistedWrites: true }
+// Unless a test says otherwise, every file a card names was just written.
+const writtenNow = async (_sessionId: string, paths: string[]) => ({
+  files: paths.map((path) => ({ path, state: 'file' as const, mtimeMs: Date.now() })),
+})
+const nothingOnDisk = async (_sessionId: string, paths: string[]) => ({
+  files: paths.map((path) => ({ path, state: 'missing' as const })),
+})
+const statWorkspaceFiles = vi.hoisted(() => vi.fn())
+statWorkspaceFiles.mockImplementation(writtenNow)
 vi.mock('../../api/sessions', () => ({
-  sessionsApi: { getWorkspaceFile, getWorkspaceTree },
+  sessionsApi: { getWorkspaceFile, getWorkspaceTree, statWorkspaceFiles },
 }))
 
 const copyTextToClipboard = vi.hoisted(() => vi.fn().mockResolvedValue(true))
@@ -77,6 +88,7 @@ vi.mock('../../stores/settingsStore', () => ({
 
 import { AssistantMessage } from './AssistantMessage'
 import { resetDiskListingCacheForTests } from '../../hooks/useDiskConfirmedTargets'
+import { resetWorkspaceFileStatsForTests } from '../../lib/workspaceFileStats'
 
 afterEach(() => {
   openPath.mockClear()
@@ -88,32 +100,36 @@ afterEach(() => {
   copyTextToClipboard.mockReset().mockResolvedValue(true)
   getWorkspaceFile.mockReset().mockResolvedValue({ state: 'ok', content: 'file body' })
   getWorkspaceTree.mockReset().mockResolvedValue({ state: 'missing', path: '', entries: [] })
+  statWorkspaceFiles.mockReset().mockImplementation(writtenNow)
   resetDiskListingCacheForTests()
+  resetWorkspaceFileStatsForTests()
 })
 
 describe('AssistantMessage file references', () => {
-  it('opens the code view at the referenced line', () => {
+  it('opens the code view at the referenced line', async () => {
     // #1146, and the contract src/constants/prompts.ts already asks the model for.
     render(<AssistantMessage sessionId="s1" content={'越界在 desktop/src/lib/foo.ts:42'} isStreaming={false} />)
-    fireEvent.click(screen.getByRole('link', { name: 'desktop/src/lib/foo.ts:42' }))
+    fireEvent.click(await screen.findByRole('link', { name: 'desktop/src/lib/foo.ts:42' }))
     expect(openPreviewFn).toHaveBeenCalledWith('s1', 'desktop/src/lib/foo.ts', { line: 42 })
   })
 
-  it('opens an inline-code reference through the same route', () => {
+  it('opens an inline-code reference through the same route', async () => {
     render(<AssistantMessage sessionId="s1" content={'改 `src/app.ts:7`'} isStreaming={false} />)
-    fireEvent.click(screen.getByRole('link', { name: 'src/app.ts:7' }))
+    fireEvent.click(await screen.findByRole('link', { name: 'src/app.ts:7' }))
     expect(openPreviewFn).toHaveBeenCalledWith('s1', 'src/app.ts', { line: 7 })
   })
 
-  it('opens a source reference under the explicitly declared project root', () => {
+  it('opens a source reference under the explicitly declared project root', async () => {
     render(<AssistantMessage sessionId="s1" content={'项目根目录是 `/other/promo/`：\n- `src/lib/shots.ts:7`'} />)
-    fireEvent.click(screen.getByRole('link', { name: 'src/lib/shots.ts:7' }))
+    fireEvent.click(await screen.findByRole('link', { name: 'src/lib/shots.ts:7' }))
+    // The disk was asked about the file the click opens, not the text as written.
+    expect(statWorkspaceFiles).toHaveBeenCalledWith('s1', expect.arrayContaining(['/other/promo/src/lib/shots.ts']))
     expect(openPreviewFn).toHaveBeenCalledWith('s1', '/other/promo/src/lib/shots.ts', { line: 7 })
   })
 
   it('uses the declared root for prose context menus and copy path', async () => {
     render(<AssistantMessage sessionId="s1" content={'项目根目录是 `/other/promo/`：\n- `public/audio/track.wav`'} />)
-    fireEvent.contextMenu(screen.getByRole('link', { name: 'public/audio/track.wav' }))
+    fireEvent.contextMenu(await screen.findByRole('link', { name: 'public/audio/track.wav' }))
     await waitFor(() => expect(screen.getByRole('menu')).toBeInTheDocument())
     expect(getTargetsForPath).toHaveBeenCalledWith('/other/promo/public/audio/track.wav')
     fireEvent.click(screen.getByRole('menuitem', { name: 'openWith.copyPath' }))
@@ -128,13 +144,14 @@ describe('AssistantMessage file references', () => {
       '- `public/audio/track.wav` — 合成音轨',
       '- `README.md` — 说明',
     ].join('\n\n')
-    const { container } = render(<AssistantMessage sessionId="s1" content={content} turnChangedFiles={turnChangedFiles} />)
+    const { container } = render(<AssistantMessage sessionId="s1" content={content} turnChangedFiles={turnChangedFiles} turnOutputEvidence={shellTurn} />)
     expect(container.querySelectorAll('video')).toHaveLength(1)
     expect(container.querySelector('video')).toHaveAttribute('src', 'http://127.0.0.1:4321/local-file/other/promo/out/movie.mp4')
-    fireEvent.click(screen.getByText('track.wav').closest('button')!)
+    // Nothing in the checkpoint wrote it, so the card waits for the disk.
+    fireEvent.click((await screen.findByText('track.wav')).closest('button')!)
     await waitFor(() => expect(openPath).toHaveBeenCalledWith('/other/promo/public/audio/track.wav'))
     openPath.mockClear()
-    fireEvent.click(screen.getByRole('link', { name: 'public/audio/track.wav' }))
+    fireEvent.click(await screen.findByRole('link', { name: 'public/audio/track.wav' }))
     await waitFor(() => expect(openPath).toHaveBeenCalledWith('/other/promo/public/audio/track.wav'))
   })
 
@@ -144,7 +161,7 @@ describe('AssistantMessage file references', () => {
       path: '',
       entries: [{ name: '报告v2.docx', path: '报告v2.docx', isDirectory: false }],
     })
-    render(<AssistantMessage sessionId="s1" content={'已生成报告v2.docx'} turnChangedFiles={[]} />)
+    render(<AssistantMessage sessionId="s1" content={'已生成报告v2.docx'} turnChangedFiles={[]} turnOutputEvidence={shellTurn} />)
 
     const card = await screen.findByText('报告v2.docx', { selector: 'span' })
     fireEvent.click(card.closest('button')!)
@@ -158,7 +175,7 @@ describe('AssistantMessage file references', () => {
       path: '',
       entries: [{ name: '开题报告.docx', path: '开题报告.docx', isDirectory: false }],
     })
-    render(<AssistantMessage sessionId="s1" content={'已生成 开题报告.docx。只支持后缀为.docx的文件'} turnChangedFiles={[]} />)
+    render(<AssistantMessage sessionId="s1" content={'已生成 开题报告.docx。只支持后缀为.docx的文件'} turnChangedFiles={[]} turnOutputEvidence={shellTurn} />)
 
     expect(await screen.findByText('开题报告.docx', { selector: 'span' })).toBeInTheDocument()
     expect(screen.queryByText(/后缀为\.docx/, { selector: 'span' })).not.toBeInTheDocument()
@@ -166,12 +183,135 @@ describe('AssistantMessage file references', () => {
   })
 
   it('keeps prose and card destinations equal when the project root is stated later', async () => {
-    render(<AssistantMessage sessionId="s1" content={'`track.wav`\n\n项目根目录是 `/other/promo/`'} />)
-    fireEvent.click(screen.getByRole('link', { name: 'track.wav' }))
+    render(<AssistantMessage sessionId="s1" content={'`track.wav`\n\n项目根目录是 `/other/promo/`'} turnOutputEvidence={shellTurn} />)
+    fireEvent.click(await screen.findByRole('link', { name: 'track.wav' }))
     await waitFor(() => expect(openPath).toHaveBeenLastCalledWith('/other/promo/track.wav'))
     openPath.mockClear()
-    fireEvent.click(screen.getByText('track.wav', { selector: 'span' }).closest('button')!)
+    fireEvent.click((await screen.findByText('track.wav', { selector: 'span' })).closest('button')!)
     await waitFor(() => expect(openPath).toHaveBeenLastCalledWith('/other/promo/track.wav'))
+  })
+
+  describe('a reply that only quotes file names', () => {
+    // Summarising commits, the reply quoted the names from their messages. The
+    // turn ran only `git log`, yet three Word cards appeared and opened "file not
+    // found" — read by the user as the agent having made Word documents.
+    const content = '正文和行内代码里的 `开题报告2.docx`、`D:/资料/测试文档1.docx` 被截成 1.docx 的问题'
+
+    it('shows neither a card nor a link when the turn wrote nothing and the files are nowhere', async () => {
+      statWorkspaceFiles.mockImplementation(nothingOnDisk)
+      render(<AssistantMessage
+        sessionId="s1"
+        content={content}
+        turnChangedFiles={[]}
+        turnOutputEvidence={{ unlistedWrites: false, startedAt: Date.now() }}
+      />)
+
+      await waitFor(() => expect(statWorkspaceFiles).toHaveBeenCalled())
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      // The names stay readable as the code they were written as.
+      expect(screen.getByText('开题报告2.docx', { selector: 'code' })).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: '开题报告2.docx' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: 'D:/资料/测试文档1.docx' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: '1.docx' })).not.toBeInTheDocument()
+      expect(screen.queryByText('开题报告2.docx', { selector: 'span' })).not.toBeInTheDocument()
+      expect(screen.queryByText('测试文档1.docx', { selector: 'span' })).not.toBeInTheDocument()
+      expect(screen.queryByText('1.docx', { selector: 'span' })).not.toBeInTheDocument()
+      // Only the prose links asked; the card decision needed no disk at all.
+      expect(statWorkspaceFiles.mock.calls.flatMap(([, paths]) => paths).sort())
+        .toEqual(['1.docx', 'D:/资料/测试文档1.docx', '开题报告2.docx'])
+    })
+
+    it('waits for the checkpoint instead of showing a card it may then take back', async () => {
+      const { rerender } = render(<AssistantMessage sessionId="s1" content={'报告已生成：`out/report.docx`'} />)
+
+      // The prose link may confirm its file meanwhile; the card still waits.
+      expect(await screen.findByRole('link', { name: 'out/report.docx' })).toBeInTheDocument()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(screen.queryByText('report.docx', { selector: 'span' })).not.toBeInTheDocument()
+
+      rerender(<AssistantMessage
+        sessionId="s1"
+        content={'报告已生成：`out/report.docx`'}
+        turnChangedFiles={[]}
+        turnOutputEvidence={{ unlistedWrites: true, startedAt: Date.now() - 1_000 }}
+      />)
+      expect(await screen.findByText('report.docx', { selector: 'span' })).toBeInTheDocument()
+      expect(statWorkspaceFiles).toHaveBeenCalledWith('s1', ['out/report.docx'])
+    })
+
+    it('shows no card for files that predate a turn that also ran a shell command', async () => {
+      const startedAt = Date.now()
+      statWorkspaceFiles.mockImplementation(async (_sessionId: string, paths: string[]) => ({
+        files: paths.map((path) => path === '开题报告2.docx'
+          ? { path, state: 'file' as const, mtimeMs: startedAt - 86_400_000 }
+          : { path, state: 'missing' as const }),
+      }))
+      render(<AssistantMessage
+        sessionId="s1"
+        content={content}
+        turnChangedFiles={[]}
+        turnOutputEvidence={{ unlistedWrites: true, startedAt }}
+      />)
+
+      await waitFor(() => expect(statWorkspaceFiles).toHaveBeenCalled())
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(screen.queryByText('开题报告2.docx', { selector: 'span' })).not.toBeInTheDocument()
+      expect(screen.queryByText('1.docx', { selector: 'span' })).not.toBeInTheDocument()
+    })
+  })
+
+  describe('a reference guessed from code or prose', () => {
+    it('links only once the file is known to exist', async () => {
+      statWorkspaceFiles.mockImplementation(async (_sessionId: string, paths: string[]) => ({
+        files: paths.map((path) => path === 'src/app.ts'
+          ? { path, state: 'file' as const, mtimeMs: 0 }
+          : { path, state: 'missing' as const }),
+      }))
+      render(<AssistantMessage sessionId="s1" content={'改了 `src/app.ts:7`，`docs/gone.md` 已删除'} />)
+
+      // Plain code until the disk answers, so nothing looks openable on a guess.
+      expect(screen.queryByRole('link')).not.toBeInTheDocument()
+      expect(screen.getByText('src/app.ts:7', { selector: 'code' })).toBeInTheDocument()
+
+      expect(await screen.findByRole('link', { name: 'src/app.ts:7' })).toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: 'docs/gone.md' })).not.toBeInTheDocument()
+      expect(screen.getByText('docs/gone.md', { selector: 'code' })).toBeInTheDocument()
+      expect(statWorkspaceFiles).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps a link the reply wrote in Markdown, whether or not the file is there', async () => {
+      statWorkspaceFiles.mockImplementation(nothingOnDisk)
+      render(<AssistantMessage sessionId="s1" content={'见 [说明](docs/gone.md)'} />)
+
+      expect(screen.getByRole('link', { name: '说明' })).toBeInTheDocument()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(screen.getByRole('link', { name: '说明' })).toBeInTheDocument()
+    })
+
+    it('answers a remounted message from memory, without a plain-code flash', async () => {
+      const first = render(<AssistantMessage sessionId="s1" content={'改了 `src/app.ts:7`'} />)
+      await first.findByRole('link', { name: 'src/app.ts:7' })
+      first.unmount()
+
+      render(<AssistantMessage sessionId="s1" content={'改了 `src/app.ts:7`'} />)
+
+      expect(screen.getByRole('link', { name: 'src/app.ts:7' })).toBeInTheDocument()
+      expect(statWorkspaceFiles).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the links when the disk cannot be asked', async () => {
+      statWorkspaceFiles.mockRejectedValue(new Error('offline'))
+      render(<AssistantMessage sessionId="s1" content={'改了 `src/app.ts:7`'} />)
+
+      expect(await screen.findByRole('link', { name: 'src/app.ts:7' })).toBeInTheDocument()
+    })
+
+    it('does not ask the workspace about a home-relative path it would misread', () => {
+      render(<AssistantMessage sessionId="s1" content={'笔记在 `~/notes/plan.md`'} />)
+
+      expect(screen.getByRole('link', { name: '~/notes/plan.md' })).toBeInTheDocument()
+      expect(statWorkspaceFiles).not.toHaveBeenCalled()
+    })
   })
 
   it('does not linkify a bare path mid-stream', () => {
@@ -181,7 +321,7 @@ describe('AssistantMessage file references', () => {
 
   it('offers the open-with menu on right-click, including the copy entries', async () => {
     render(<AssistantMessage sessionId="s1" content={'见 src/app.ts:42'} isStreaming={false} />)
-    fireEvent.contextMenu(screen.getByRole('link', { name: 'src/app.ts:42' }))
+    fireEvent.contextMenu(await screen.findByRole('link', { name: 'src/app.ts:42' }))
 
     await waitFor(() => expect(screen.getByRole('menu')).toBeInTheDocument())
     const labels = screen.getAllByRole('menuitem').map((el) => el.textContent)
@@ -193,7 +333,7 @@ describe('AssistantMessage file references', () => {
 
   it('copies the absolute path, resolved against the session workdir', async () => {
     render(<AssistantMessage sessionId="s1" content={'见 src/app.ts:42'} isStreaming={false} />)
-    fireEvent.contextMenu(screen.getByRole('link', { name: 'src/app.ts:42' }))
+    fireEvent.contextMenu(await screen.findByRole('link', { name: 'src/app.ts:42' }))
 
     await waitFor(() => expect(screen.getByRole('menu')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('menuitem', { name: 'openWith.copyPath' }))
@@ -202,7 +342,7 @@ describe('AssistantMessage file references', () => {
 
   it('copies file contents by reading the path without its line suffix', async () => {
     render(<AssistantMessage sessionId="s1" content={'见 src/app.ts:42'} isStreaming={false} />)
-    fireEvent.contextMenu(screen.getByRole('link', { name: 'src/app.ts:42' }))
+    fireEvent.contextMenu(await screen.findByRole('link', { name: 'src/app.ts:42' }))
 
     await waitFor(() => expect(screen.getByRole('menu')).toBeInTheDocument())
     fireEvent.click(screen.getByRole('menuitem', { name: 'openWith.copyFileContent' }))

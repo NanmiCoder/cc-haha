@@ -54,6 +54,7 @@ import type { TeamDetail, TeamWorkbenchSnapshot } from '../../types/team'
 import { formatTokenCount } from '../../lib/formatTokenCount'
 import { formatDurationMs, hasRunningBackgroundTasks as hasAnyRunningBackgroundTasks } from '../../lib/backgroundTasks'
 import { buildTurnCompletionByMessageId, type TurnCompletion } from '../../lib/turnCompletion'
+import type { TurnOutputEvidence } from '../../lib/assistantOutputTargets'
 import { isTouchH5Document } from '../../lib/touchH5'
 import {
   EMPTY_TEAM_LIFECYCLE_CURSOR,
@@ -1305,23 +1306,34 @@ function buildTurnCardInsertionMap(
   return cardsByRenderIndex
 }
 
+type TurnFileEvidence = TurnOutputEvidence & { changedFiles: string[] }
+
+const UNKNOWN_TURN_OUTPUT_EVIDENCE: TurnOutputEvidence = { unlistedWrites: true }
+
 /**
- * Map each render item to the REAL changed files of the turn it belongs to, so an
- * assistant message can anchor its output chips on files that were actually
- * written this turn instead of guessing paths from the prose. Items are attributed
- * to the most recent preceding non-pending user message (the turn boundary).
+ * Map each render item to what its turn's checkpoint knows: the REAL changed
+ * files, so an assistant message can anchor its output chips on files that were
+ * actually written this turn instead of guessing paths from the prose, and
+ * whether anything else could have written one. Items are attributed to the
+ * most recent preceding non-pending user message (the turn boundary).
  */
 function buildChangedFilesByRenderIndex(
   renderItems: RenderItem[],
   turnChangeCards: TurnChangeCardModel[],
-): Map<number, string[]> {
-  const filesByTurnId = new Map<string, string[]>()
+): Map<number, TurnFileEvidence> {
+  const filesByTurnId = new Map<string, TurnFileEvidence>()
   for (const card of turnChangeCards) {
-    filesByTurnId.set(card.target.messageId, card.checkpoint.code.filesChanged)
+    const { code, unverifiedChangeSources, startedAt } = card.checkpoint
+    filesByTurnId.set(card.target.messageId, {
+      changedFiles: code.filesChanged,
+      // An older server does not say; assume the worst.
+      unlistedWrites: unverifiedChangeSources === undefined || unverifiedChangeSources.length > 0,
+      ...(typeof startedAt === 'number' ? { startedAt } : {}),
+    })
   }
   if (filesByTurnId.size === 0) return new Map()
 
-  const filesByRenderIndex = new Map<number, string[]>()
+  const filesByRenderIndex = new Map<number, TurnFileEvidence>()
   let activeTurnId: string | null = null
   renderItems.forEach((item, index) => {
     if (item.kind === 'message' && item.message.type === 'user_text' && !item.message.pending) {
@@ -2876,6 +2888,9 @@ export function MessageList({
     () => buildChangedFilesByRenderIndex(renderItems, turnChangeCards),
     [renderItems, turnChangeCards],
   )
+  // No checkpoint is coming for this view; the disk alone has to vouch for outputs.
+  // While one is still loading, nothing unproven is shown instead.
+  const turnEvidenceUnavailable = isDirectAgentSession || turnChangeLoadError !== null || workspaceChangesFallback !== null
   const turnOutputOwnerIndexes = useMemo(
     () => buildTurnOutputOwnerIndexes(renderItems, turnChangeCards),
     [renderItems, turnChangeCards],
@@ -3621,7 +3636,8 @@ export function MessageList({
               }
               branchAction={branchActionByMessageId.get(item.message.id)}
               editAction={editActionByMessageId.get(item.message.id)}
-              turnChangedFiles={changedFilesByRenderIndex.get(index)}
+              turnChangedFiles={changedFilesByRenderIndex.get(index)?.changedFiles}
+              turnOutputEvidence={changedFilesByRenderIndex.get(index) ?? (turnEvidenceUnavailable ? UNKNOWN_TURN_OUTPUT_EVIDENCE : undefined)}
               isTurnOutputOwner={turnOutputOwnerIndexes.has(index)}
               turnCompletion={turnCompletionByMessageId.get(item.message.id)}
               supersededAskUserQuestionIds={supersededAskUserQuestionIds}
@@ -3868,6 +3884,7 @@ export const MessageBlock = memo(function MessageBlock({
   branchAction,
   editAction,
   turnChangedFiles,
+  turnOutputEvidence,
   isTurnOutputOwner,
   turnCompletion,
   supersededAskUserQuestionIds,
@@ -3885,6 +3902,7 @@ export const MessageBlock = memo(function MessageBlock({
   }
   editAction?: UserMessageEditAction
   turnChangedFiles?: string[]
+  turnOutputEvidence?: TurnOutputEvidence
   isTurnOutputOwner?: boolean
   turnCompletion?: TurnCompletion
   supersededAskUserQuestionIds?: ReadonlySet<string>
@@ -3941,6 +3959,7 @@ export const MessageBlock = memo(function MessageBlock({
             branchAction={branchAction}
             sessionId={sessionId ?? undefined}
             turnChangedFiles={turnChangedFiles}
+            turnOutputEvidence={turnOutputEvidence}
             isTurnOutputOwner={isTurnOutputOwner}
             turnCompletion={turnCompletion}
           />

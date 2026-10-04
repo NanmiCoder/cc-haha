@@ -40,6 +40,22 @@ export type AssistantOutputTarget = {
   nameCandidates?: string[]
   /** Not to be shown until a changed file or the disk confirms one of its names. */
   awaitsConfirmation?: boolean
+  /**
+   * Named, but no changed file shows the turn wrote it. Not to be shown as an
+   * output until the disk does — see {@link useTurnWrittenTargets}.
+   */
+  awaitsTurnWrite?: boolean
+}
+
+/** What a turn's checkpoint says about the files it could have produced. */
+export type TurnOutputEvidence = {
+  /**
+   * The turn ran a tool whose writes the changed files may not list (a writing
+   * shell command, an MCP tool). False means the changed files are the whole story.
+   */
+  unlistedWrites: boolean
+  /** When the turn's prompt was recorded, epoch ms on the server's clock. */
+  startedAt?: number
 }
 
 export type ExtractAssistantOutputTargetOptions = {
@@ -69,6 +85,15 @@ export type ExtractAssistantOutputTargetOptions = {
    * them against the disk before showing them should ask. Defaults to false.
    */
   includeUnconfirmedNames?: boolean
+  /**
+   * Return only what the turn produced, for a caller presenting results as its
+   * outputs. A mentioned file no changed file accounts for is dropped when the
+   * turn could not have written it unseen, and otherwise marked
+   * {@link AssistantOutputTarget.awaitsTurnWrite} for the disk to prove. A file
+   * the reply merely talks about (a name quoted from a commit message) is not an
+   * output. Omitted → every mention counts, as the inline galleries want.
+   */
+  outputEvidence?: Pick<TurnOutputEvidence, 'unlistedWrites'>
 }
 
 type FileTargetMatch = {
@@ -341,7 +366,16 @@ export function extractAssistantOutputTargets(
       workDir,
       limit,
       options.includeChangedFileFallback !== false,
+      options.outputEvidence,
     )
+  }
+
+  // Without a checkpoint nothing vouches for any file; each one must be proven.
+  const evidence = options.outputEvidence
+  if (evidence) {
+    return results.flatMap((target) => target.kind === 'localhost-url'
+      ? [target]
+      : evidence.unlistedWrites ? [{ ...target, awaitsTurnWrite: true }] : [])
   }
 
   return results
@@ -404,6 +438,7 @@ function reconcileTargetsWithChangedFiles(
   workDir: string | null,
   limit: number,
   includeChangedFileFallback: boolean,
+  outputEvidence?: Pick<TurnOutputEvidence, 'unlistedWrites'>,
 ): AssistantOutputTarget[] {
   if (limit <= 0) return []
 
@@ -419,12 +454,13 @@ function reconcileTargetsWithChangedFiles(
 
     const mentioned = target.normalizedPath ?? target.href
     // An authored absolute path (including an explicit prose root) is identity,
-    // not a basename hint. A checkpoint cannot disprove a shell-created output.
+    // not a basename hint: it matches only the very same changed file. A
+    // checkpoint cannot disprove a shell-created output.
     const explicitPath = isAbsoluteFilePath(target.href)
     // The longer reading of an ambiguous name wins when the turn really wrote it
     // (`报告v2.docx`, not the `v2.docx` the prose scan settled on).
     const match = explicitPath
-      ? null
+      ? findSameChangedFile(resolveFilePath(target.href), changedFiles)
       : [...(target.nameCandidates ?? []), mentioned]
         .sort((left, right) => getBasename(right).length - getBasename(left).length)
         .map((name) => matchChangedFile(name, changedFiles))
@@ -434,6 +470,11 @@ function reconcileTargetsWithChangedFiles(
     // source-like mentions still need corroboration to avoid resource-strip noise.
     if (!match && !explicitPath && !isShellProducedDeliverable(mentioned)
       && target.kind !== 'video' && !/\.(?:mp3|wav|m4a|flac|aac|ogg|opus)$/i.test(mentioned)) {
+      continue
+    }
+    // That exemption exists for writes the checkpoint cannot see. A turn that ran
+    // nothing able to make one has no unseen output; the name is only quoted.
+    if (!match && outputEvidence && !outputEvidence.unlistedWrites) {
       continue
     }
 
@@ -460,6 +501,7 @@ function reconcileTargetsWithChangedFiles(
       // A changed-file match is settled; only an unmatched guess stays open.
       ...(!match && nameCandidates ? { nameCandidates } : {}),
       ...(!match && awaitsConfirmation ? { awaitsConfirmation } : {}),
+      ...(!match && outputEvidence ? { awaitsTurnWrite: true } : {}),
     })
     if (out.length >= limit) break
   }
@@ -492,6 +534,11 @@ function reconcileTargetsWithChangedFiles(
   }
 
   return out
+}
+
+function findSameChangedFile(absolutePath: string, changedFiles: string[]): string | null {
+  const identity = absolutePath.toLowerCase()
+  return changedFiles.find((file) => resolveFilePath(file).toLowerCase() === identity) ?? null
 }
 
 /**

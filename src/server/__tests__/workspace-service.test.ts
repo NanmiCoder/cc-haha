@@ -145,6 +145,59 @@ describe('WorkspaceService outside-workspace preview', () => {
   })
 })
 
+describe('WorkspaceService.statFiles', () => {
+  beforeEach(() => {
+    clearFilesystemAccessRootsForTests()
+  })
+
+  afterEach(() => {
+    clearFilesystemAccessRootsForTests()
+  })
+
+  it('reports each path as a written file, missing, or out of bounds, in request order', async () => {
+    const workDir = await makeTempDir('workspace-service-stat-')
+    const outsideDir = await makeTempDir('workspace-service-stat-outside-')
+    await fs.mkdir(path.join(workDir, 'out'))
+    await fs.writeFile(path.join(workDir, 'out', '报告.docx'), 'docx')
+    const writtenAt = new Date('2026-10-04T08:00:05Z')
+    await fs.utimes(path.join(workDir, 'out', '报告.docx'), writtenAt, writtenAt)
+    await fs.writeFile(path.join(outsideDir, 'secret.docx'), 'nope')
+    const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? workDir : null)
+
+    const stats = await service.statFiles('session-1', [
+      'out/报告.docx',
+      'out/missing.docx',
+      'out',
+      path.join(outsideDir, 'secret.docx'),
+      '../escape.docx',
+    ])
+
+    expect(stats).toEqual([
+      { path: 'out/报告.docx', state: 'file', mtimeMs: writtenAt.getTime() },
+      { path: 'out/missing.docx', state: 'missing' },
+      // A directory is not an output file.
+      { path: 'out', state: 'missing' },
+      // The file route would refuse these too, so their existence is not told.
+      { path: path.join(outsideDir, 'secret.docx'), state: 'unavailable' },
+      { path: '../escape.docx', state: 'unavailable' },
+    ])
+  })
+
+  it('stats a file outside the workdir once it is a registered access root', async () => {
+    const workDir = await makeTempDir('workspace-service-stat-')
+    const outsideDir = await makeTempDir('workspace-service-stat-outside-')
+    const outsideFile = path.join(outsideDir, 'report.pdf')
+    await fs.writeFile(outsideFile, 'pdf')
+    registerFilesystemAccessRoot(outsideDir)
+    const service = new WorkspaceService(async () => workDir)
+
+    const [stat] = await service.statFiles('session-1', [outsideFile])
+
+    expect(stat).toMatchObject({ path: outsideFile, state: 'file' })
+    expect(typeof stat?.mtimeMs).toBe('number')
+  })
+})
+
 describe('WorkspaceService', () => {
   it('surfaces bounded transcript failures instead of reporting a clean workspace', async () => {
     const workDir = await makeTempDir('workspace-history-budget-')

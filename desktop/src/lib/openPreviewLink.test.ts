@@ -5,9 +5,19 @@ const openPath = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 // The server's verdict on a document the string check cannot place. Refusing
 // (the 403 a path outside the workspace gets) is the default.
 const getWorkspaceFile = vi.hoisted(() => vi.fn())
+// Whether the file is there at all. Every file is, unless a test says otherwise.
+const statWorkspaceFiles = vi.hoisted(() => vi.fn())
+const everyFileThere = async (_sessionId: string, paths: string[]) => ({
+  files: paths.map((path) => ({ path, state: 'file' as const, mtimeMs: 0 })),
+})
 
 vi.mock('../api/sessions', () => ({
-  sessionsApi: { getWorkspaceFile },
+  sessionsApi: { getWorkspaceFile, statWorkspaceFiles },
+}))
+
+const addToast = vi.hoisted(() => vi.fn())
+vi.mock('../stores/uiStore', () => ({
+  useUIStore: { getState: () => ({ addToast }) },
 }))
 
 vi.mock('./desktopHost', () => ({
@@ -43,35 +53,39 @@ vi.mock('../stores/workspaceContentStore', () => ({
 
 import { openPreviewLink } from './openPreviewLink'
 import { workspaceOpen } from './workspace/openTarget'
+import { resetWorkspaceFileStatsForTests, statWorkspacePaths } from './workspaceFileStats'
 
 beforeEach(() => {
+  resetWorkspaceFileStatsForTests()
   getWorkspaceFile.mockReset().mockRejectedValue(new Error('403 Path is outside workspace'))
+  statWorkspaceFiles.mockReset().mockImplementation(everyFileThere)
 })
 
 afterEach(() => {
   openPath.mockReset().mockResolvedValue(undefined)
   vi.mocked(workspaceOpen.file).mockClear()
+  addToast.mockClear()
 })
 
 describe('openPreviewLink for a document the workspace can draw', () => {
-  it('previews a workspace-relative document, which the server resolves against the workdir', () => {
+  it('previews a workspace-relative document, which the server resolves against the workdir', async () => {
     expect(openPreviewLink('out/thesis.pdf', 's1')).toBe(true)
 
-    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'out/thesis.pdf', {})
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'out/thesis.pdf', {}))
     expect(openPath).not.toHaveBeenCalled()
   })
 
-  it('previews a Word document the same way as a PDF', () => {
+  it('previews a Word document the same way as a PDF', async () => {
     expect(openPreviewLink('out/thesis.docx', 's1')).toBe(true)
 
-    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'out/thesis.docx', {})
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'out/thesis.docx', {}))
     expect(openPath).not.toHaveBeenCalled()
   })
 
-  it.each(['out/budget.xlsx', 'out/legacy.xls'])('previews an Excel workbook (%s) the same way', (path) => {
+  it.each(['out/budget.xlsx', 'out/legacy.xls'])('previews an Excel workbook (%s) the same way', async (path) => {
     expect(openPreviewLink(path, 's1')).toBe(true)
 
-    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', path, {})
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s1', path, {}))
     expect(openPath).not.toHaveBeenCalled()
   })
 
@@ -82,10 +96,10 @@ describe('openPreviewLink for a document the workspace can draw', () => {
     expect(workspaceOpen.file).not.toHaveBeenCalled()
   })
 
-  it('previews an absolute path that sits inside the session directory', () => {
+  it('previews an absolute path that sits inside the session directory', async () => {
     openPreviewLink('/work/out/thesis.pdf', 's1')
 
-    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', '/work/out/thesis.pdf', {})
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s1', '/work/out/thesis.pdf', {}))
     expect(openPath).not.toHaveBeenCalled()
   })
 
@@ -111,10 +125,10 @@ describe('openPreviewLink for a document the workspace can draw', () => {
     expect(workspaceOpen.file).not.toHaveBeenCalled()
   })
 
-  it('still previews a relative document that only steps out of a folder and back in', () => {
+  it('still previews a relative document that only steps out of a folder and back in', async () => {
     openPreviewLink('out/../out/thesis.pdf', 's1')
 
-    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'out/../out/thesis.pdf', {})
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'out/../out/thesis.pdf', {}))
     expect(openPath).not.toHaveBeenCalled()
   })
 
@@ -150,22 +164,22 @@ describe('openPreviewLink for a document the workspace can draw', () => {
     expect(openPath).not.toHaveBeenCalled()
   })
 
-  it('does not ask the server when the path is plainly inside the workdir', () => {
+  it('does not ask the server when the path is plainly inside the workdir', async () => {
     openPreviewLink('/work/out/thesis.pdf', 's1')
 
     expect(getWorkspaceFile).not.toHaveBeenCalled()
   })
 
-  it('still previews a relative document while the workdir is unknown', () => {
+  it('still previews a relative document while the workdir is unknown', async () => {
     openPreviewLink('out/thesis.pdf', 's2')
 
-    expect(workspaceOpen.file).toHaveBeenCalledWith('s2', 'out/thesis.pdf', {})
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s2', 'out/thesis.pdf', {}))
   })
 
-  it('applies only to documents: source files outside the workdir open in the code view as before', () => {
+  it('applies only to documents: source files outside the workdir open in the code view as before', async () => {
     openPreviewLink('/Users/x/notes/app.ts', 's1')
 
-    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', '/Users/x/notes/app.ts', {})
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s1', '/Users/x/notes/app.ts', {}))
     expect(openPath).not.toHaveBeenCalled()
   })
 
@@ -184,10 +198,44 @@ describe('openPreviewLink', () => {
     await waitFor(() => expect(openPath).toHaveBeenCalledWith('/work/outputs/brief.pptx'))
   })
 
-  it('opens a CJK-named markdown in the workspace instead of ignoring the click', () => {
+  it('opens a CJK-named markdown in the workspace instead of ignoring the click', async () => {
     // The output card for `README-拍摄大纲.md` rendered but its click returned
     // false: the path parser was ASCII-only and the router answered `ignored`.
     expect(openPreviewLink('README-拍摄大纲.md', 's1')).toBe(true)
-    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'README-拍摄大纲.md', {})
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'README-拍摄大纲.md', {}))
+  })
+})
+
+describe('openPreviewLink for a file that is not there', () => {
+  it('opens no tab and says it could not open the file', async () => {
+    statWorkspaceFiles.mockImplementation(async (_sessionId: string, paths: string[]) => ({
+      files: paths.map((path) => ({ path, state: 'missing' as const })),
+    }))
+
+    expect(openPreviewLink('docs/开题报告2.docx', 's1')).toBe(true)
+
+    await waitFor(() => expect(addToast).toHaveBeenCalledWith({ type: 'error', message: expect.stringContaining('开题报告2.docx') }))
+    expect(workspaceOpen.file).not.toHaveBeenCalled()
+    expect(openPath).not.toHaveBeenCalled()
+  })
+
+  it('opens at once a file the reply already found on disk', async () => {
+    await statWorkspacePaths('s1', ['src/app.ts'])
+
+    openPreviewLink('src/app.ts:7', 's1')
+
+    expect(workspaceOpen.file).toHaveBeenCalledWith('s1', 'src/app.ts', { line: 7 })
+    expect(statWorkspaceFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it('still opens a file the workspace may not judge, as before', async () => {
+    statWorkspaceFiles.mockImplementation(async (_sessionId: string, paths: string[]) => ({
+      files: paths.map((path) => ({ path, state: 'unavailable' as const })),
+    }))
+
+    openPreviewLink('/Users/x/notes/app.ts', 's1')
+
+    await waitFor(() => expect(workspaceOpen.file).toHaveBeenCalledWith('s1', '/Users/x/notes/app.ts', {}))
+    expect(addToast).not.toHaveBeenCalled()
   })
 })

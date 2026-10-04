@@ -72,6 +72,36 @@ export function unwrapFileLinks(container: HTMLElement): void {
 }
 
 /**
+ * Marks a file link the author wrote as a Markdown link (`[app.ts](src/app.ts)`).
+ * Every other file link is a guess — a code span or a stretch of prose that looks
+ * like a path — and a guess is only worth a link once the file is known to exist.
+ */
+export const AUTHORED_FILE_LINK_ATTRIBUTE = 'data-file-authored'
+
+/** Answers which guessed file links point at nothing. */
+export type FileLinkVerifier = {
+  /** Paths known missing, when every path is already known; otherwise undefined. */
+  peekMissing(paths: string[]): ReadonlySet<string> | undefined
+  /** Paths known missing. A path that could not be checked is not missing. */
+  findMissing(paths: string[]): Promise<ReadonlySet<string>>
+}
+
+const GUESSED_FILE_LINK_SELECTOR = `a.${FILE_LINK_CLASS}:not([${AUTHORED_FILE_LINK_ATTRIBUTE}])`
+
+export function guessedFileLinkPaths(container: ParentNode): string[] {
+  return [...container.querySelectorAll<HTMLAnchorElement>(GUESSED_FILE_LINK_SELECTOR)]
+    .map((anchor) => anchor.dataset.filePath ?? '')
+    .filter(Boolean)
+}
+
+/** Undo the guessed file links `keep` turns down, leaving their code or text behind. */
+export function unwrapGuessedFileLinks(container: ParentNode, keep: (path: string) => boolean): void {
+  container.querySelectorAll<HTMLAnchorElement>(GUESSED_FILE_LINK_SELECTOR).forEach((anchor) => {
+    if (!keep(anchor.dataset.filePath ?? '')) anchor.replaceWith(...anchor.childNodes)
+  })
+}
+
+/**
  * Rebuild the `path:line` reference an anchor stands for.
  *
  * Since the target travels in `data-*`, this is how it gets back to a string —

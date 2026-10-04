@@ -13,7 +13,7 @@ import { InlineImageGallery } from './InlineImageGallery'
 import { InlineVideoGallery } from './InlineVideoGallery'
 import { AssistantOutputTargetCard } from './AssistantOutputTargetCard'
 import { openPreviewLink } from '../../lib/openPreviewLink'
-import { extractAssistantOutputTargets } from '../../lib/assistantOutputTargets'
+import { extractAssistantOutputTargets, type TurnOutputEvidence } from '../../lib/assistantOutputTargets'
 import { resolveAssistantFileHref } from '@/lib/assistantFileContext'
 import { createAssistantMarkdownImageResolver, localPathFromMarkdownImageUrl } from '../../lib/markdownImages'
 import type { MarkdownImageClick } from '../markdown/MarkdownRenderer'
@@ -22,6 +22,8 @@ import { isManagedGeneratedImagePath } from '../../lib/attachmentImages'
 import { useWorkspaceContentStore } from '../../stores/workspaceContentStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { useDiskConfirmedTargets } from '../../hooks/useDiskConfirmedTargets'
+import { useTurnWrittenTargets } from '../../hooks/useTurnWrittenTargets'
+import { createWorkspaceFileLinkVerifier } from '../../lib/workspaceFileStats'
 
 type Props = {
   content: string
@@ -31,6 +33,11 @@ type Props = {
   /** This turn's real changed files (absolute), used to anchor output chips onto
    *  files that were actually written instead of guessing from the prose. */
   turnChangedFiles?: string[]
+  /**
+   * What the turn's checkpoint says it could have written. Absent while it is
+   * still loading, so no card is shown on a guess that the checkpoint then drops.
+   */
+  turnOutputEvidence?: TurnOutputEvidence
   /** Only one assistant message per turn owns fallback cards for unmentioned changed files. */
   isTurnOutputOwner?: boolean
   /** Set only on the last reply of a finished turn: when it ended and how long it took. */
@@ -45,6 +52,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   branchAction,
   sessionId,
   turnChangedFiles,
+  turnOutputEvidence,
   isTurnOutputOwner = true,
   turnCompletion,
 }: Props) {
@@ -62,6 +70,16 @@ export const AssistantMessage = memo(function AssistantMessage({
       return handled
     },
     [content, sessionId],
+  )
+
+  // A reference guessed from a code span or prose links only once its file is
+  // known to exist, judged as the click would resolve it — so a name quoted from
+  // a commit message never looks openable.
+  const fileLinkVerifier = useMemo(
+    () => isStreaming || !sessionId
+      ? undefined
+      : createWorkspaceFileLinkVerifier(sessionId, (path) => resolveAssistantFileHref(path, content)),
+    [content, isStreaming, sessionId],
   )
 
   // Right-clicking a reference in the prose opens the same menu the output cards
@@ -102,13 +120,18 @@ export const AssistantMessage = memo(function AssistantMessage({
             includeChangedFileFallback: isTurnOutputOwner,
             // Confirmed against the disk by useDiskConfirmedTargets before showing.
             includeUnconfirmedNames: true,
+            // A card says the turn produced the file; until the checkpoint says
+            // what could have written one, nothing unproven is.
+            outputEvidence: { unlistedWrites: turnOutputEvidence?.unlistedWrites ?? false },
           }).filter(
             (target) => target.kind !== 'image' && target.kind !== 'video',
           ),
-    [content, isStreaming, isTurnOutputOwner, sessionId, workDir, turnChangedFiles],
+    [content, isStreaming, isTurnOutputOwner, sessionId, workDir, turnChangedFiles, turnOutputEvidence?.unlistedWrites],
   )
-  // A bare name the text could not bound is settled against the workspace listing.
-  const outputTargets = useDiskConfirmedTargets(sessionId, extractedTargets)
+  // A bare name the text could not bound is settled against the workspace listing,
+  // then a file no changed file accounts for must show it was written this turn.
+  const settledTargets = useDiskConfirmedTargets(sessionId, extractedTargets)
+  const outputTargets = useTurnWrittenTargets(sessionId, settledTargets, turnOutputEvidence?.startedAt)
   const resolveAssistantImageSrc = useMemo(
     () => {
       if (isStreaming || !sessionId) return undefined
@@ -177,6 +200,7 @@ export const AssistantMessage = memo(function AssistantMessage({
             onLinkClick={sessionId ? handleLinkClick : undefined}
             resolveImageSrc={resolveAssistantImageSrc}
             onImageClick={resolveAssistantImageSrc ? handleImageClick : undefined}
+            fileLinkVerifier={fileLinkVerifier}
           />
           {!isStreaming && (
             <InlineImageGallery
