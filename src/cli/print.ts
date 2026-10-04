@@ -437,14 +437,20 @@ export type LeadMailboxPollState = {
   finalDrainDone: boolean
   /** Consecutive polls whose batch could not be acknowledged. */
   consecutiveAckFailures: number
+  /**
+   * The host paused the team (the desktop's Stop): teammate mail waits unread
+   * for the user's next message instead of starting lead turns nobody asked for.
+   */
+  held: boolean
 }
 
 export function createLeadMailboxPollState(): LeadMailboxPollState {
-  return { finalDrainDone: false, consecutiveAckFailures: 0 }
+  return { finalDrainDone: false, consecutiveAckFailures: 0, held: false }
 }
 
 export type LeadMailboxPollStep =
   | { kind: 'stop' }
+  | { kind: 'held' }
   | { kind: 'idle' }
   | { kind: 'retry' }
   | { kind: 'batch'; messages: TeammateMessage[] }
@@ -461,6 +467,7 @@ export async function takeLeadMailboxBatch(
   options: { teamName: string | undefined; hasActiveTeammates: boolean },
 ): Promise<LeadMailboxPollStep> {
   const { teamName, hasActiveTeammates } = options
+  if (state.held) return { kind: 'held' }
   const unread = await readUnreadMessages(TEAM_LEAD_NAME, teamName)
 
   if (!hasActiveTeammates) {
@@ -2693,6 +2700,13 @@ function runHeadlessStreaming(
             break
           }
 
+          if (step.kind === 'held') {
+            logForDebugging(
+              '[print.ts] Team paused by the host; teammate mail waits for the next user message',
+            )
+            break
+          }
+
           if (step.kind === 'retry') {
             await sleep(POLL_INTERVAL_MS)
             continue
@@ -3020,6 +3034,7 @@ function runHeadlessStreaming(
           }
         } else if (message.request.subtype === 'interrupt' || message.request.subtype === 'team_plan_pause') {
           sessionMessageInbox.cancelQueued(dequeueAllMatching)
+          if (message.request.subtype === 'team_plan_pause') leadMailboxPoll.held = true
           // Track escapes for attribution (ant-only feature)
           if (feature('COMMIT_ATTRIBUTION')) {
             setAppState(prev => ({
@@ -4452,6 +4467,9 @@ function runHeadlessStreaming(
         trackReceivedMessageUuid(message.uuid)
       }
 
+      // The user speaking again ends a host pause: mail held since then reaches
+      // the lead after this turn, alongside whatever the user now wants.
+      leadMailboxPoll.held = false
       enqueue({
         mode: 'prompt' as const,
         // file_attachments rides the protobuf catchall from the web composer.

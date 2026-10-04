@@ -131,6 +131,27 @@ async function startHarness(memberNames: string[]) {
   }
 }
 
+/**
+ * The user sends the lead a message. The lead here is a fixture whose turns
+ * would call the fake model too, so what the runtime tells it is recorded
+ * instead of delivered.
+ */
+async function userMessagesLead(h: Harness, toLead: string[] = []) {
+  const { noteLeadUserMessage } = await import('./teamPlanRuntime.js')
+  const send = h.service.sendMessage.bind(h.service)
+  const spy = spyOn(h.service, 'sendMessage').mockImplementation(async (...args: Parameters<typeof send>) => {
+    if (args[0] !== h.parentId) return send(...args)
+    toLead.push(String(args[1]))
+    return true
+  })
+  try {
+    await noteLeadUserMessage(h.parentId)
+  } finally {
+    spy.mockRestore()
+  }
+  return toLead
+}
+
 async function messageMember(h: Harness, to: string, from: string, text: string) {
   const { writeToMailbox } = await import('../../utils/teammateMailbox.js')
   await writeToMailbox(to, { from, text, timestamp: new Date().toISOString() }, h.teamName)
@@ -273,6 +294,14 @@ test("the user's Stop pauses the team instead of ending it, and only an instruct
     expect(h.requests.length).toBe(before)
     expect(h.service.hasSession(h.memberIds.writer!)).toBe(false)
 
+    // A lead message the user did not ask for (one the lead was sending as the
+    // user pressed Stop, or a turn it started on its own) must not undo the Stop.
+    await messageMember(h, 'writer', 'team-lead', 'Lead message from before the user spoke again')
+    await new Promise(resolve => setTimeout(resolve, 700))
+    expect(h.requests.length).toBe(before)
+    expect(h.service.hasSession(h.memberIds.writer!)).toBe(false)
+
+    await userMessagesLead(h)
     await messageMember(h, 'writer', 'team-lead', 'The user wants you to continue')
     await h.waitFor(() => h.requests.length > before, 'resumed member turn')
     expect(h.requests.at(-1)?.resumed).toBe(h.memberIds.writer)
@@ -283,33 +312,46 @@ test("the user's Stop pauses the team instead of ending it, and only an instruct
   }
 }, 30_000)
 
-test("after a Stop, the lead's next message tells it which members stopped and how to resume them", async () => {
-  const h = await startHarness(['reader', 'writer'])
+test("a user's direct message resumes a stopped member without waiting for the lead", async () => {
+  const h = await startHarness(['reader'])
   try {
-    const { deliverTeamPauseNotice } = await import('./teamPlanRuntime.js')
-    await h.waitFor(async () => (await h.leadNotifications()).length === 2, 'initial turn reports')
-    const sent: Array<[string, string]> = []
-    const send = h.service.sendMessage.bind(h.service)
-    const spy = spyOn(h.service, 'sendMessage').mockImplementation(async (...args: Parameters<typeof send>) => {
-      sent.push([args[0], String(args[1])])
-      return send(...args)
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    h.service.sendInterrupt(h.parentId)
+    await h.service.waitForTeamWorkersStopped(h.parentId)
+    const before = h.requests.length
+    await messageMember(h, 'reader', 'user', 'Keep going on your own')
+    await h.waitFor(() => h.requests.length > before, 'resumed member turn')
+    expect(h.requests.at(-1)?.resumed).toBe(h.memberIds.reader)
+    expect(h.requests.at(-1)?.prompt).toContain('Keep going on your own')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test('a Stop while a member is restarting leaves that member stopped', async () => {
+  const h = await startHarness(['reader'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 1, 'initial turn report')
+    const sessionId = h.memberIds.reader!
+    await h.service.stopSessionAndWait(sessionId)
+    const start = h.service.startSession.bind(h.service)
+    let stopped = false
+    const spy = spyOn(h.service, 'startSession').mockImplementation(async (...args: Parameters<typeof start>) => {
+      // The user presses Stop after the restart began but before its process
+      // exists, so Stop's kill pass cannot see it.
+      if (args[0] === sessionId && !stopped) {
+        stopped = true
+        h.service.sendInterrupt(h.parentId)
+      }
+      return start(...args)
     })
     try {
-      // Without a Stop there is nothing to tell.
-      await deliverTeamPauseNotice(h.parentId)
-      expect(sent).toEqual([])
-
-      h.service.sendInterrupt(h.parentId)
+      await messageMember(h, 'reader', 'team-lead', 'Check one more file')
+      await h.waitFor(() => stopped, 'restart to begin')
       await h.service.waitForTeamWorkersStopped(h.parentId)
-      await deliverTeamPauseNotice(h.parentId)
-      await deliverTeamPauseNotice(h.parentId)
-
-      const notices = sent.filter(([sessionId]) => sessionId === h.parentId).map(([, text]) => text)
-      expect(notices).toHaveLength(1)
-      expect(notices[0]).toContain('[Team runtime notice]')
-      expect(notices[0]).toMatch(/- reader: #\d+ Task for reader \(pending\)/)
-      expect(notices[0]).toMatch(/- writer: #\d+ Task for writer \(pending\)/)
-      expect(notices[0]).toContain('SendMessage each member that still has work')
+      await new Promise(resolve => setTimeout(resolve, 800))
+      expect(h.service.hasSession(sessionId)).toBe(false)
+      expect((await h.teamMember('reader'))?.terminated).toBe(true)
     } finally {
       spy.mockRestore()
     }
@@ -317,6 +359,87 @@ test("after a Stop, the lead's next message tells it which members stopped and h
     await h.cleanup()
   }
 }, 30_000)
+
+test("after a Stop, the lead's next message tells it which members stopped and how to resume them", async () => {
+  const h = await startHarness(['reader', 'writer'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 2, 'initial turn reports')
+    // Without a Stop or a failure there is nothing to tell.
+    expect(await userMessagesLead(h)).toEqual([])
+
+    h.service.sendInterrupt(h.parentId)
+    await h.service.waitForTeamWorkersStopped(h.parentId)
+    const notices = await userMessagesLead(h)
+    await userMessagesLead(h, notices)
+
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain("[Team runtime notice] The user's Stop also stopped your team")
+    expect(notices[0]).toMatch(/- reader: #\d+ Task for reader \(pending\)/)
+    expect(notices[0]).toMatch(/- writer: #\d+ Task for writer \(pending\)/)
+    expect(notices[0]).toContain('SendMessage each member that still has work')
+  } finally {
+    await h.cleanup()
+  }
+}, 30_000)
+
+test("after any failure, the user's next message tells the lead which members to wake, once per failure", async () => {
+  const { setTeamRuntimeTimingForTests } = await import('./teamPlanRuntime.js')
+  setTeamRuntimeTimingForTests({ autoContinueDelaysMs: [40] })
+  const h = await startHarness(['billing', 'network', 'crash', 'healthy'])
+  try {
+    await h.waitFor(async () => (await h.leadNotifications()).length === 4, 'initial turn reports')
+    const notices: string[] = []
+    const failureCount = async () => (await h.leadNotifications()).filter(item => item.idleReason === 'failed').length
+    // Model calls are answered in arrival order, so members fail one at a
+    // time: billing is final, a dropped connection exhausts its one retry,
+    // and a crash ends the process.
+    for (const [name, replies] of [
+      ['billing', ['FIXTURE_ERROR:Credit balance is too low']],
+      ['network', ['FIXTURE_ERROR:API Error: Connection error.', 'FIXTURE_ERROR:API Error: Connection error.']],
+      ['crash', ['FIXTURE_CRASH']],
+    ] as const) {
+      const count = await failureCount()
+      h.replies.push(...replies)
+      await messageMember(h, name, 'team-lead', 'Keep working')
+      await h.waitFor(async () => await failureCount() > count, `${name} failure`)
+    }
+
+    // No Stop happened, yet the user's next message names every member
+    // that stopped on an error.
+    await userMessagesLead(h, notices)
+    expect(notices).toHaveLength(1)
+    const notice = notices[0]!
+    expect(notice).toContain('[Team runtime notice]')
+    expect(notice).toMatch(/- billing \(stopped on an error: Credit balance is too low\): #\d+ Task for billing \(pending\)/)
+    expect(notice).toMatch(/- network \(stopped on an error: [^)]*Connection error[^\n]*\): #\d+ Task for network/)
+    expect(notice).toMatch(/- crash \(stopped on an error: [^\n]*exited[^\n]*\): #\d+ Task for crash/)
+    expect(notice).not.toContain('healthy')
+    expect(notice).toContain('SendMessage each member that still has work')
+
+    // Each failure is announced once.
+    await userMessagesLead(h, notices)
+    expect(notices).toHaveLength(1)
+
+    // The lead wakes a member: it continues in its own conversation.
+    const before = h.requests.length
+    await messageMember(h, 'billing', 'team-lead', 'Billing is fixed, continue')
+    await h.waitFor(() => h.requests.length > before, 'woken member turn')
+    expect(h.requests.at(-1)?.prompt).toContain('Billing is fixed, continue')
+    await h.waitFor(async () => (await h.teamMember('billing'))?.isActive === false, 'woken turn to finish')
+
+    // A new failure is announced again, alone.
+    const count = await failureCount()
+    h.replies.push('FIXTURE_ERROR:Credit balance is too low')
+    await messageMember(h, 'billing', 'team-lead', 'One more thing')
+    await h.waitFor(async () => await failureCount() > count, 'second billing failure')
+    await userMessagesLead(h, notices)
+    expect(notices).toHaveLength(2)
+    expect(notices[1]).toContain('- billing (stopped on an error')
+    expect(notices[1]).not.toContain('- network')
+  } finally {
+    await h.cleanup()
+  }
+}, 60_000)
 
 test('stopping and resuming the team repeatedly is never mistaken for a crash loop', async () => {
   const h = await startHarness(['reader'])
@@ -328,6 +451,7 @@ test('stopping and resuming the team repeatedly is never mistaken for a crash lo
       await h.service.waitForTeamWorkersStopped(h.parentId)
       await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, `stop ${cycle} to be recorded`)
       const before = h.requests.length
+      await userMessagesLead(h)
       await messageMember(h, 'reader', 'team-lead', `Continue after stop ${cycle}`)
       await h.waitFor(() => h.requests.length > before, `resume ${cycle}`)
       expect(h.requests.at(-1)?.prompt).toContain(`Continue after stop ${cycle}`)

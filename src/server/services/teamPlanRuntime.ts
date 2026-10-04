@@ -52,6 +52,10 @@ type WorkerRuntime = {
   restartsExhausted: boolean
   /** The user's Stop ended this process; resuming it is not a crash restart. */
   stoppedByUser?: boolean
+  /** Why the member's last turn ended in a failure nothing retries any more. */
+  failure?: string
+  /** The lead has not yet been told, with the user's next message, that this member waits to be woken. */
+  wakeNoticePending?: boolean
   wokenForTaskIds: Set<string>
   lastResultAt?: number
 }
@@ -70,8 +74,12 @@ type TeamLaunch = {
   stopped: boolean
   /** Set by the user's Stop: hold automatic work until the lead or the user acts again. */
   pausedAt?: number
-  /** The lead has not yet been told what the user's last Stop did to this team. */
-  pauseNoticePending?: boolean
+  /**
+   * When the user next messaged the lead after a Stop. Only lead instructions
+   * written since then resume the team: earlier ones were sent before the
+   * user's Stop took effect, or in turns the user never asked for.
+   */
+  resumeAllowedAt?: number
   permissionMode: string
 }
 
@@ -281,7 +289,7 @@ async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 
     if (!worker.restartsExhausted) {
       worker.restartsExhausted = true
       await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false, terminated: true, lastError: 'Stopped restarting after repeated exits. A message from the user restarts it.' }))
-      await notifyLead(launch, worker, { idleReason: 'failed', failureReason: `${worker.member.name} exited ${worker.restartHistory.length} times in ${WORKER_RESTART_WINDOW_MS / 60_000} minutes; automatic restarts are paused` })
+      await notifyFailure(launch, worker, `${worker.member.name} exited ${worker.restartHistory.length} times in ${WORKER_RESTART_WINDOW_MS / 60_000} minutes; automatic restarts are paused`)
     }
     return false
   }
@@ -290,7 +298,9 @@ async function restartWorker(launch: TeamLaunch, worker: WorkerRuntime, reason: 
   const start = (async () => {
     try {
       await startWorkerProcess(launch, worker, true)
-      if (launch.stopped) {
+      // The team was ended, or the user pressed Stop while this process was
+      // starting and Stop's kill pass could not see it yet.
+      if (launch.stopped || worker.stoppedByUser) {
         await conversationService.stopSessionAndWait(worker.sessionId)
         return false
       }
@@ -335,7 +345,7 @@ async function autoContinueWorker(launch: TeamLaunch, worker: WorkerRuntime, rea
     const { autoRetry: _autoRetry, ...rest } = current as MemberEntry & { autoRetry?: unknown }
     return { ...rest, isActive: false, lastError: reason }
   })
-  await notifyLead(launch, worker, { idleReason: 'failed', failureReason: `${reason} (could not continue automatically; message ${worker.member.name} to retry)` })
+  await notifyFailure(launch, worker, `${reason} (could not continue automatically; message ${worker.member.name} to retry)`)
 }
 
 async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, message: { is_error?: boolean; result?: unknown }): Promise<void> {
@@ -352,6 +362,7 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
   }
   if (!failed) {
     worker.autoContinueAttempts = 0
+    clearFailure(worker)
     cancelAutoContinue(worker)
     await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: false }))
     await notifyLead(launch, worker, { idleReason: 'available', ...(text ? { result: text } : {}) })
@@ -374,12 +385,25 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     const { autoRetry: _autoRetry, ...rest } = entry as MemberEntry & { autoRetry?: unknown }
     return { ...rest, isActive: false, lastError: reason, ...(alive ? {} : { terminated: true }) }
   })
-  await notifyLead(launch, worker, {
-    idleReason: 'failed',
-    failureReason: alive
-      ? exhausted ? `${reason} (automatic retries exhausted; message ${worker.member.name} to continue)` : reason
-      : `${worker.member.name}'s process exited (${reason}). Messaging it restarts it from its saved conversation.`,
-  })
+  await notifyFailure(launch, worker, alive
+    ? exhausted ? `${reason} (automatic retries exhausted; message ${worker.member.name} to continue)` : reason
+    : `${worker.member.name}'s process exited (${reason}). Messaging it restarts it from its saved conversation.`)
+}
+
+/**
+ * A failure nothing retries any more: the lead hears it now through its
+ * mailbox, and again with the user's next message, which is when the cause
+ * (a usage limit, billing, the network) has usually been dealt with.
+ */
+async function notifyFailure(launch: TeamLaunch, worker: WorkerRuntime, failureReason: string): Promise<void> {
+  worker.failure = failureReason
+  worker.wakeNoticePending = true
+  await notifyLead(launch, worker, { idleReason: 'failed', failureReason })
+}
+
+function clearFailure(worker: WorkerRuntime): void {
+  worker.failure = undefined
+  worker.wakeNoticePending = false
 }
 
 // ── Supervisor ──────────────────────────────────────────────────────────────
@@ -397,6 +421,7 @@ async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messag
     await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false }))
     return
   }
+  clearFailure(worker)
   const ids = new Set(messages.map(message => message.id).filter(Boolean))
   const legacy = new Set(messages.filter(message => !message.id).map(message => JSON.stringify([message.from, message.timestamp, message.text])))
   await markMessagesAsReadByPredicate(worker.member.name, message => message.id ? ids.has(message.id) : legacy.has(JSON.stringify([message.from, message.timestamp, message.text])), launch.plan.teamName)
@@ -450,10 +475,16 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
       continue
     }
     if (launch.pausedAt) {
-      // Only a new instruction from the lead or the user resumes a paused team.
-      const resume = messages.some(message => (message.from === TEAM_LEAD_NAME || message.from === 'user') && Date.parse(message.timestamp) >= launch.pausedAt!)
+      // Only a new instruction resumes a paused team: the user's own message to
+      // a member, or the lead's once the user has spoken to it again.
+      const resume = messages.some(message => {
+        const at = Date.parse(message.timestamp)
+        if (message.from === 'user') return at >= launch.pausedAt!
+        return message.from === TEAM_LEAD_NAME && launch.resumeAllowedAt !== undefined && at >= launch.resumeAllowedAt
+      })
       if (!resume) continue
       launch.pausedAt = undefined
+      launch.resumeAllowedAt = undefined
     }
     if (!conversationService.hasSession(worker.sessionId)) {
       const fromUser = messages.some(message => message.from === 'user')
@@ -486,50 +517,62 @@ async function sendTeamSnapshot(parentId: string, teamName: string, createdAt: n
 }
 
 /** The user's Stop: every member stops now, nothing is lost, the next instruction resumes. */
-function pauseLaunchesForLead(parentSessionId: string): void {
+function pauseLaunchesForLead(parentSessionId: string): boolean {
+  let paused = false
   for (const launch of launches.values()) {
     if (launch.parentId !== parentSessionId || launch.stopped || !launch.running) continue
+    paused = true
     launch.pausedAt = Date.now()
-    launch.pauseNoticePending = true
+    launch.resumeAllowedAt = undefined
     for (const worker of launch.workers.values()) {
       cancelAutoContinue(worker)
       worker.stoppedByUser = true
+      worker.wakeNoticePending = true
     }
     // No notice goes to the lead's mailbox: delivering it would start a lead
-    // turn right after the user stopped everything. Messaging a stopped member
-    // restarts it, so the lead needs no special knowledge to continue later.
+    // turn right after the user stopped everything. The user's next message
+    // carries it instead (noteLeadUserMessage).
     void migrationMaintenance.track(mutateTeamFileAsync(launch.plan.teamName, team => {
       if (team.createdAt !== launch.createdAt) return
       const sessions = new Set([...launch.workers.values()].map(worker => worker.sessionId))
       return { ...team, members: team.members.map(entry => entry.sessionId && sessions.has(entry.sessionId) ? { ...entry, isActive: false, terminated: true } : entry) }
     })).catch(error => console.error('[TeamPlanRuntime] cannot record the paused team', error))
   }
+  return paused
 }
 
 /**
- * The lead's first message from the user after a Stop: tell it what the Stop
- * did to its team. Nothing is said at the Stop itself, which would start a lead
- * turn the user just stopped, but without this a lead told to "continue" waits
- * for members that are no longer running. The lead decides from the user's
- * words whether the members go on.
+ * The user just sent the lead a message. After a Stop this is what allows the
+ * lead to resume the team. And whether the team was stopped or members ran
+ * into errors (a usage limit, billing, the network, a crash), the lead is told
+ * once which members are not running: they keep their saved conversations and
+ * do nothing until messaged, so a lead told to "continue" would otherwise wait
+ * for them, or redo their work. The lead decides from the user's words whether
+ * they go on; nothing is said at the Stop or failure itself, which would start
+ * a lead turn the user did not ask for.
  */
-export async function deliverTeamPauseNotice(parentSessionId: string): Promise<void> {
+export async function noteLeadUserMessage(parentSessionId: string): Promise<void> {
   for (const launch of launches.values()) {
-    if (launch.parentId !== parentSessionId || launch.stopped || !launch.pauseNoticePending) continue
-    launch.pauseNoticePending = false
-    const stopped = [...launch.workers.values()].filter(worker => worker.released && worker.stoppedByUser)
-    if (stopped.length === 0) continue
+    if (launch.parentId !== parentSessionId || launch.stopped) continue
+    if (launch.pausedAt) launch.resumeAllowedAt = Date.now()
+    const waiting = [...launch.workers.values()].filter(worker => worker.released && worker.wakeNoticePending)
+    if (waiting.length === 0) continue
+    for (const worker of waiting) worker.wakeNoticePending = false
     const tasks = await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName)).catch(() => [] as Task[])
-    const lines = stopped.map(worker => {
+    const lines = waiting.map(worker => {
       const open = tasks.filter(task => task.owner === worker.member.name && task.status !== 'completed')
+      const label = worker.failure ? `${worker.member.name} (stopped on an error: ${worker.failure})` : worker.member.name
       return open.length > 0
-        ? `- ${worker.member.name}: ${open.map(task => `#${task.id} ${task.subject} (${task.status})`).join('; ')}`
-        : `- ${worker.member.name}: no unfinished task`
+        ? `- ${label}: ${open.map(task => `#${task.id} ${task.subject} (${task.status})`).join('; ')}`
+        : `- ${label}: no unfinished task`
     })
+    const stoppedByUser = waiting.some(worker => worker.stoppedByUser)
     await conversationService.sendMessage(parentSessionId, [
-      `[Team runtime notice] The user's Stop also stopped your team ${launch.plan.teamName}. These members are stopped and keep their work so far:`,
+      stoppedByUser
+        ? `[Team runtime notice] The user's Stop also stopped your team ${launch.plan.teamName}. These members are stopped and keep their work so far:`
+        : `[Team runtime notice] These members of your team ${launch.plan.teamName} stopped on an error and keep their work so far:`,
       ...lines,
-      'A stopped member does nothing until it is messaged: if the work should go on, SendMessage each member that still has work, and it resumes from its saved conversation where it left off. Do not spawn replacements or redo their tasks. If the user wants the team to stay stopped, leave them.',
+      'A stopped member does nothing until it is messaged: if the work should go on, SendMessage each member that still has work, and it resumes from its saved conversation where it left off. Do not spawn replacements or redo their tasks. If a woken member fails again with the same error (a usage limit, billing, the network), tell the user instead of retrying. If the user wants the team to stay stopped, leave them.',
     ].join('\n'))
   }
 }

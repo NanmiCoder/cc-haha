@@ -335,8 +335,8 @@ export type TeamWorkerStart = {
  * own: a lead restart keeps them, and Stop lets the runtime pause them first.
  */
 export type TeamRuntimeListener = {
-  /** Synchronously before Stop kills a lead's workers. */
-  leadInterrupted?: (parentSessionId: string) => void
+  /** Synchronously before Stop kills a lead's workers; true when it paused a running team. */
+  leadInterrupted?: (parentSessionId: string) => boolean | void
   /** After any CLI session finished starting. */
   sessionStarted?: (sessionId: string, info: { isTeamWorker: boolean }) => void
 }
@@ -1192,9 +1192,10 @@ export class ConversationService {
     // already working is paused rather than destroyed: the runtime marks its
     // members as user-stopped before their processes die, and a later message
     // from the lead or the user resumes each member from its own transcript.
+    let pausedTeam = false
     for (const listener of this.teamRuntimeListeners) {
       try {
-        listener.leadInterrupted?.(sessionId)
+        if (listener.leadInterrupted?.(sessionId) === true) pausedTeam = true
       } catch (error) {
         console.error('[ConversationService] Team runtime interrupt hook failed', error)
       }
@@ -1211,10 +1212,13 @@ export class ConversationService {
       if (this.teamStopOperations.get(sessionId) === stop) this.teamStopOperations.delete(sessionId)
     })
     this.teamStopOperations.set(sessionId, stop)
+    // A paused team's lead also holds the mail its members sent before the
+    // Stop until the user speaks again; acting on it would start lead turns,
+    // and restart members, that the user just stopped.
     return this.sendSdkMessage(sessionId, {
       type: 'control_request',
       request_id: crypto.randomUUID(),
-      request: { subtype: 'interrupt' },
+      request: { subtype: pausedTeam ? 'team_plan_pause' : 'interrupt' },
     })
   }
 

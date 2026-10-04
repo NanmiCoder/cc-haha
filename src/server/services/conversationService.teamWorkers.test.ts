@@ -205,6 +205,23 @@ test('stopping a parent stops its workers and cancels relayed pending approvals'
   expect(events).toContainEqual({ type: 'control_cancel_request', request_id: 'approval' })
 })
 
+test("Stop asks a lead whose team was paused to hold its teammates' mail, and interrupts any other session plainly", () => {
+  const service = new ConversationService() as any
+  const requests: Array<[string, string]> = []
+  service.sendSdkMessage = (id: string, message: any) => {
+    requests.push([id, message.request.subtype])
+    return true
+  }
+  const remove = service.addTeamRuntimeListener({ leadInterrupted: (id: string) => id === 'lead' })
+  try {
+    service.sendInterrupt('lead')
+    service.sendInterrupt('solo')
+  } finally {
+    remove()
+  }
+  expect(requests).toEqual([['lead', 'team_plan_pause'], ['solo', 'interrupt']])
+})
+
 test('a lead process that exits on its own or restarts keeps its approved workers', async () => {
   const service = new ConversationService() as any
   const killed: string[] = []

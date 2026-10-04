@@ -19,6 +19,7 @@ import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useTeamStore } from '../../stores/teamStore'
+import { getMemberWorkState, resolveTeamMemberIdentity } from '../agentTeams/agentTeamsModel'
 import { useTeamPlanStore } from '@/stores/teamPlanStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import {
@@ -300,10 +301,22 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const hasRunningSubagents = hasRunningSubagentTasks(sessionState?.backgroundAgentTasks)
   // Approved team processes are tracked by their plan, not background-agent
   // notifications. Keep Stop available after the review card is dismissed.
-  const hasRunningTeam = useTeamPlanStore(state => {
+  const teamPlanRunning = useTeamPlanStore(state => {
     const plan = activeTabId ? state.bySession[activeTabId]?.plan : undefined
     return plan?.state === 'launching' || plan?.state === 'running'
   })
+  // Stop pauses a running team without ending its plan, so the plan alone
+  // would keep offering Stop after every member is already stopped.
+  const teamMembersAllStopped = useTeamStore(state => {
+    const team = activeTabId ? state.workbenchesBySession[activeTabId]?.snapshots.at(-1)?.team : undefined
+    if (!team) return false
+    const members = team.members.filter(member => !resolveTeamMemberIdentity(team, member.agentId).isLead)
+    return members.length > 0 && members.every(member => {
+      const work = getMemberWorkState(member)
+      return work === 'stopped' || work === 'exited'
+    })
+  })
+  const hasRunningTeam = teamPlanRunning && !teamMembersAllStopped
   const workspaceState = getSessionWorkspaceState(activeSession)
   const isWorkspaceMissing = workspaceState !== 'available'
   // Both composer branches (hero and inline) and the drop handler share this:

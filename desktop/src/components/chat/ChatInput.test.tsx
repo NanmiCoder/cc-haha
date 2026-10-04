@@ -1,5 +1,7 @@
 import { getComposerViewForTesting } from './MentionComposer'
 import { useTeamPlanStore } from '@/stores/teamPlanStore'
+import { useTeamStore } from '@/stores/teamStore'
+import type { TeamDetail, TeamMember } from '@/types/team'
 import type { TeamPlanRecord } from '../../../../src/shared/teamPlan'
 import { useSideChatStore } from '@/stores/sideChatStore'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -248,6 +250,7 @@ describe('ChatInput file mentions', () => {
     vi.clearAllMocks()
     useSideChatStore.setState({ entries: {} })
     useTeamPlanStore.setState({ bySession: {} })
+    useTeamStore.setState({ workbenchesBySession: {} })
     mocks.voiceSupported.mockReturnValue(false)
     useVoiceInputStore.setState({ catalog: null, loading: false, error: null })
     mocks.sideOpen.mockResolvedValue('side-tab')
@@ -1355,6 +1358,44 @@ describe('ChatInput file mentions', () => {
 
     act(() => { useTeamPlanStore.setState({ bySession: { [sessionId]: { ...entry, plan: { ...plan, state: 'interrupted' } } } }) })
     expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+  })
+
+  it('stops offering Stop once Stop has paused every member of a running team', () => {
+    const plan: TeamPlanRecord = {
+      schemaVersion: 1, planId: 'approved-plan', sessionId, teamName: 'approved-team',
+      incarnationId: 'incarnation', revision: 2, state: 'running', workDir: '/repo', createdAt: 1, updatedAt: 2,
+      leaderRuntime: { providerId: 'fake-provider', modelId: 'fake-model' }, members: [], tasks: [],
+    }
+    useTeamPlanStore.setState({ bySession: { [sessionId]: { plan, loading: false, busy: false, error: null, conflict: false } } })
+    const showTeam = (readerActivity: TeamMember['activity']) => {
+      const team: TeamDetail = {
+        name: 'approved-team',
+        leadAgentId: 'team-lead@approved-team',
+        leadSessionId: sessionId,
+        members: [
+          // The lead's own row never says whether the team still runs.
+          { agentId: 'team-lead@approved-team', name: 'team-lead', role: 'team-lead', status: 'idle' },
+          { agentId: 'reader@approved-team', name: 'reader', role: 'reader', status: 'idle', activity: readerActivity },
+          { agentId: 'writer@approved-team', name: 'writer', role: 'writer', status: 'completed', activity: 'exited' },
+        ],
+      }
+      useTeamStore.setState({
+        workbenchesBySession: {
+          [sessionId]: { teamName: team.name, loading: false, error: null, snapshots: [{ version: '1', generatedAt: '', team, tasks: [], messages: [] }] },
+        },
+      })
+    }
+    act(() => showTeam('active'))
+    render(<ChatInput compact />)
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
+
+    // The plan stays running while paused, so only the members tell that
+    // nothing is left to stop; a Stop button here invites endless clicking.
+    act(() => showTeam('stopped'))
+    expect(screen.queryByRole('button', { name: 'Stop' })).not.toBeInTheDocument()
+
+    act(() => showTeam('idle'))
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument()
   })
 
   it.each(['local_bash', 'dream'])('does not turn Run into Stop for a running %s task', (taskType) => {

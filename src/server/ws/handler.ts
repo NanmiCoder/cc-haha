@@ -32,7 +32,7 @@ import {
   ConversationStartupError,
   conversationService,
 } from '../services/conversationService.js'
-import { deliverTeamPauseNotice, endTeamsForParent, hasActiveTeamWorkForParent } from '../services/teamPlanRuntime.js'
+import { endTeamsForParent, hasActiveTeamWorkForParent, noteLeadUserMessage } from '../services/teamPlanRuntime.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import {
   sessionService,
@@ -1088,8 +1088,8 @@ async function handleUserMessage(
     if (!collaboration) emitSessionTurnEvent({ type: 'input-committed', sessionId })
     // After the user's own words, so the lead weighs them first.
     if (!collaboration) {
-      void deliverTeamPauseNotice(sessionId).catch(error =>
-        console.error('[WS] cannot tell the lead about its stopped team', error),
+      void noteLeadUserMessage(sessionId).catch(error =>
+        console.error('[WS] cannot tell the lead about its stopped team members', error),
       )
     }
   } finally {
