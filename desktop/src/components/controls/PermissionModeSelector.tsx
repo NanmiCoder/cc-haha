@@ -271,7 +271,6 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
           interactionTabIdRef.current = actionTabId
           setOpen(true)
         }}
-        disabled={isTurnActive}
         aria-label={MODE_LABELS[currentMode]}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -281,7 +280,7 @@ export function PermissionModeSelector({ workDir: workDirProp, compact = false, 
         // the run-location pill, whose branch name can be arbitrarily long.
         // Without these the label wrapped to two lines and grew the whole row.
         className={`flex shrink-0 items-center whitespace-nowrap font-medium text-[var(--color-text-primary)] transition-[background-color,color,border-color] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] ${
-          isTurnActive ? 'opacity-50 cursor-not-allowed' : 'hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]'
+          'hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]'
         } ${compactButtonClass}`}
       >
         {compact ? (
