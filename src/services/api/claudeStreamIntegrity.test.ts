@@ -113,6 +113,21 @@ for (const block of ['text', 'tool_use']) {
     expect(messages[0]?.isApiErrorMessage).not.toBe(true)
   })
 }
+function upstreamInterruption(messages: AssistantMessage[]) {
+  const error = messages.find(message => message.isApiErrorMessage)
+  expect(error?.businessErrorCode).toBe('upstream_stream_interrupted')
+  return JSON.stringify(error?.message.content)
+}
+test('a reply cut mid-text reports the open block it was cut in', async () => {
+  const text = upstreamInterruption(await receiveResponse(fixtureEvents().slice(0, 3), true))
+  expect(text).toContain('The upstream model provider closed the stream')
+  expect(text).toContain('3 events · last content_block_delta · stop_reason none · message_stop missing · 1 block open')
+})
+test('a reply that only dropped message_stop reports the stop_reason it sent', async () => {
+  const text = upstreamInterruption(await receiveResponse([...fixtureEvents(), terminal()], true))
+  expect(text).toContain('5 events · last message_delta · stop_reason end_turn · message_stop missing')
+  expect(text).not.toContain('open')
+})
 for (const reason of ['max_tokens', 'model_context_window_exceeded', 'refusal']) {
   test(`duplicate ${reason} terminal frame produces one terminal error`, async () => {
     const messages = await receiveResponse([...fixtureEvents(), terminal(reason), terminal(reason), { type: 'message_stop' }])

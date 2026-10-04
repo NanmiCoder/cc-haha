@@ -3621,6 +3621,7 @@ export const zh: Record<TranslationKey, string> = {
   'businessError.request_too_large': '这次请求超出了服务商或中转站允许的大小。下一条消息会自动移除较早的图片和文档；如果仍然失败，请压缩会话或新开会话。',
   'businessError.prompt_too_long': '当前上下文超出了模型限制。请先压缩会话，或减少上下文后重试。',
   'businessError.auto_mode_unavailable': '当前套餐不支持自动模式。',
+  'businessError.upstream_stream_interrupted': '上游模型服务商在回复完成前断开了连接，自动重试后仍未成功。这通常是服务商或网络线路超时、不稳定造成的，不是上下文超限。可以发送「继续」让模型接着做，或稍后重试、更换服务商。',
 
   // ─── Server Status Verbs ──────────────────────────────────────
   'serverVerb.Thinking': '思考中',

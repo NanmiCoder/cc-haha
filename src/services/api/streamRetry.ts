@@ -109,6 +109,7 @@ export async function* withStreamRetry(
         }
         yield getAssistantMessageFromError(error.originalError, model, {
           messages,
+          streamRetries: retries,
         });
         return;
       }

@@ -3625,6 +3625,7 @@ export const kr: Record<TranslationKey, string> = {
   'businessError.request_too_large': '요청이 공급자 또는 중계 서버가 허용하는 크기를 초과했습니다. 다음 메시지에서 이전 이미지와 문서가 자동으로 제거됩니다. 그래도 실패하면 대화를 압축하거나 새 세션을 시작하세요.',
   'businessError.prompt_too_long': '프롬프트가 선택한 모델에 비해 너무 깁니다. 대화를 압축하거나 컨텍스트를 줄여 다시 시도하세요.',
   'businessError.auto_mode_unavailable': '자동 모드는 현재 요금제에서 사용할 수 없습니다.',
+  'businessError.upstream_stream_interrupted': '상위 모델 제공업체가 응답이 끝나기 전에 연결을 끊었고, 자동 재시도로도 복구되지 않았습니다. 대개 제공업체나 네트워크 경로의 시간 초과 또는 불안정 때문이며, 컨텍스트 한도 오류가 아닙니다. "계속"을 보내 이어서 진행하게 하거나, 잠시 후 다시 시도하거나 제공업체를 바꿔 보세요.',
 
   // ─── Server Status Verbs ──────────────────────────────────────
   'serverVerb.Thinking': '사고 중',

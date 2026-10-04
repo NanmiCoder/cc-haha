@@ -1,7 +1,9 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import * as rateLimits from '../rateLimitMocking.js'
 import { APIError } from '@anthropic-ai/sdk'
+import { BUSINESS_ERROR_CODES } from '../../constants/businessErrors.js'
 import { classifyAPIError, getAssistantMessageFromError } from './errors.js'
+import { StreamEndedEarlyError } from './streamFallback.js'
 
 function displayed(error: Error): string {
   const result = getAssistantMessageFromError(error, 'claude-opus-5-5')
@@ -75,5 +77,33 @@ describe('specialized API error paths', () => {
     expect(displayed(new APIError(500, { error: { code: 'upstream_failure' } }, undefined, undefined))).toBe('API Error: 500 Request failed')
     expect(displayed(new APIError(undefined, { error: { message: 'Failed' } }, undefined, undefined))).toBe('API Error: Failed')
     expect(displayed(new APIError(400, { message: 'Bad field' }, undefined, undefined))).toBe('API Error: 400 Bad field')
+  })
+})
+
+describe('early stream end presentation', () => {
+  test('names the upstream provider, keeps the evidence and tags the business code', () => {
+    const error = new StreamEndedEarlyError('incomplete', {
+      eventCount: 412, lastEventType: 'content_block_delta', stopReason: null,
+      messageStopReceived: false, openBlockCount: 1, elapsedMs: 263_400,
+    })
+    const result = getAssistantMessageFromError(error, 'claude-opus-5-5', { streamRetries: 10 })
+    const text = result.message.content.map(block => block.type === 'text' ? block.text : '').join('')
+
+    expect(text.startsWith('API Error: Provider stream ended before completing the response. The upstream model provider')).toBe(true)
+    expect(text).toContain('retried 10 times')
+    expect(text).toContain('1 block open')
+    expect(result.isApiErrorMessage).toBe(true)
+    expect(result.error).toBe('unknown')
+    expect(result.businessErrorCode).toBe(BUSINESS_ERROR_CODES.UPSTREAM_STREAM_INTERRUPTED)
+    expect(JSON.parse(result.errorDetails!)).toEqual({
+      reason: 'incomplete', retries: 10, eventCount: 412, lastEventType: 'content_block_delta',
+      stopReason: null, messageStopReceived: false, openBlockCount: 1, elapsedMs: 263_400,
+    })
+  })
+
+  test('an empty stream without evidence is tagged the same way', () => {
+    const result = getAssistantMessageFromError(new StreamEndedEarlyError('no_events'), 'claude-opus-5-5')
+    expect(result.businessErrorCode).toBe(BUSINESS_ERROR_CODES.UPSTREAM_STREAM_INTERRUPTED)
+    expect(JSON.parse(result.errorDetails!)).toEqual({ reason: 'no_events', retries: 0 })
   })
 })

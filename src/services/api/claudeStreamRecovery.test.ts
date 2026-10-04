@@ -295,6 +295,18 @@ test('retries are bounded, then the original error surfaces with the last attemp
   expect(contentOf(errors)).toContain('ended without finish_reason')
 }, 15_000)
 
+test('a clean EOF that persists through every retry names the upstream and the retries spent', async () => {
+  const cutMidText = anthropicStream([messageStart, ...textBlock('cut-attempt').slice(0, 2)])
+  const { errors } = await run([cutMidText, cutMidText])
+
+  expect(requests).toHaveLength(2)
+  expect(errors).toHaveLength(1)
+  expect(errors[0]?.businessErrorCode).toBe('upstream_stream_interrupted')
+  expect(contentOf(errors)).toContain('The upstream model provider closed the stream')
+  expect(contentOf(errors)).toContain('retried 1 time · 3 events · last content_block_delta')
+  expect(JSON.parse(errors[0]!.errorDetails!)).toMatchObject({ reason: 'incomplete', retries: 1, openBlockCount: 1 })
+}, 15_000)
+
 for (const type of ['invalid_request_error', 'authentication_error', 'permission_error', 'billing_error']) {
   test(`a mid-stream ${type} is not retried`, async () => {
     const { errors } = await run([

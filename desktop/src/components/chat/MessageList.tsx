@@ -152,6 +152,12 @@ type SelectionPointer = {
   clientY: number
 }
 
+// Business errors whose raw message carries evidence worth keeping under the
+// translated explanation (e.g. what the stream received before it was cut).
+const BUSINESS_ERRORS_WITH_RAW_DETAIL: ReadonlySet<string> = new Set([
+  'upstream_stream_interrupted',
+])
+
 const CHAT_SELECTION_MENU_OFFSET = 10
 const CHAT_SELECTION_MENU_WIDTH = 360
 const CHAT_SELECTION_MENU_HEIGHT = 44
@@ -4103,7 +4109,8 @@ export const MessageBlock = memo(function MessageBlock({
             ? errorText
             : message.message
       const showRawDetail =
-        !message.businessErrorCode &&
+        (!message.businessErrorCode ||
+          BUSINESS_ERRORS_WITH_RAW_DETAIL.has(message.businessErrorCode)) &&
         Boolean(message.message) &&
         message.message.trim() !== '' &&
         message.message !== displayMessage

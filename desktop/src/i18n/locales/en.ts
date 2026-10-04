@@ -3622,6 +3622,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'businessError.request_too_large': 'The request is too large for your provider or relay. Earlier images and documents are removed automatically on your next message; if it still fails, compact the conversation or start a new session.',
   'businessError.prompt_too_long': 'The prompt is too long for the selected model. Compact the conversation or retry with less context.',
   'businessError.auto_mode_unavailable': 'Auto mode is unavailable for your current plan.',
+  'businessError.upstream_stream_interrupted': 'The upstream model provider closed the connection before the reply finished, and automatic retries did not recover it. This is usually a provider or network timeout or instability, not a context-limit error. Send "continue" to let the model pick up where it stopped, or retry later or switch providers.',
 
   // ─── Server Status Verbs ──────────────────────────────────────
   'serverVerb.Thinking': 'Thinking',

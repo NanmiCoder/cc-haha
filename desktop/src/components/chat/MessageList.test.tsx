@@ -8276,6 +8276,36 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByText(/This model does not support images/)).toBeNull()
   })
 
+  it('blames the upstream provider for an interrupted stream and keeps the stream evidence', () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    const raw =
+      'API Error: Provider stream ended before completing the response. The upstream model provider closed the stream before the reply finished; this is not a context-limit error. (retried 10 times · 412 events · last content_block_delta · stop_reason none · message_stop missing · 1 block open · 263s)'
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'error-1',
+              type: 'error',
+              code: 'unknown',
+              businessErrorCode: 'upstream_stream_interrupted',
+              message: raw,
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.getByText(/上游模型服务商在回复完成前断开了连接/)).toBeTruthy()
+    expect(screen.getByText(/不是上下文超限/)).toBeTruthy()
+    // The evidence is what tells a mid-block cut from a dropped message_stop
+    // when users send a screenshot; the translation alone would hide it.
+    expect(screen.getByText(raw)).toBeTruthy()
+  })
+
   it.each([
     ['en', /too large for your provider or relay/, /removed automatically/],
     ['zh', /服务商或中转站允许的大小/, /自动移除/],

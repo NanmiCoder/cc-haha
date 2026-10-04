@@ -230,6 +230,7 @@ import { isOpenAIPolicyError } from "../openaiAuth/policyError.js"
 import {
   shouldTriggerNonStreamingFallbackForEmptyStream,
   StreamEndedEarlyError,
+  type StreamEndedEarlyEvidence,
 } from "./streamFallback.js";
 import { StreamAssistantCommitBuffer } from "./streamAssistantCommitBuffer.js";
 import {
@@ -2784,6 +2785,24 @@ async function* queryModel(
           );
       }
 
+      // Recorded on an early-EOF error so the surfaced message shows whether
+      // the provider cut the reply mid-block or only dropped message_stop.
+      // Count open blocks before preservePartialText closes partial text.
+      const openBlockCountAtEof = contentBlocks.filter(
+        (block, index) => block && !completedBlockIndexes.has(index),
+      ).length;
+      const streamEndEvidence = (): StreamEndedEarlyEvidence => {
+        const snapshot = streamWatchdogState.snapshot();
+        return {
+          eventCount: snapshot.eventCount,
+          lastEventType: snapshot.lastEventType ?? null,
+          stopReason,
+          messageStopReceived: snapshot.messageStopReceived,
+          openBlockCount: openBlockCountAtEof,
+          elapsedMs: Date.now() - start,
+        };
+      };
+
       // Preserve visible text when the socket closes before its block_stop.
       // Never synthesize a completed tool or unsigned thinking block from EOF.
       preservePartialText();
@@ -2832,7 +2851,7 @@ async function* queryModel(
           request_id: (streamRequestId ??
             "unknown") as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
         });
-        throw new StreamEndedEarlyError("no_events");
+        throw new StreamEndedEarlyError("no_events", streamEndEvidence());
       }
 
       // A clean socket EOF is not a successful Anthropic response. Explicit
@@ -2843,7 +2862,7 @@ async function* queryModel(
         (!streamWatchdogState.snapshot().messageStopReceived || stopReason === null ||
           contentBlocks.some((block, index) => block && !completedBlockIndexes.has(index)))
       ) {
-        throw new StreamEndedEarlyError("incomplete");
+        throw new StreamEndedEarlyError("incomplete", streamEndEvidence());
       }
 
       // No tool boundary was crossed, so completed thinking/text blocks were

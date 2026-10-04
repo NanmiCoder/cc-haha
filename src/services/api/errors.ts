@@ -51,6 +51,10 @@ import {
 } from '../claudeAiLimits.js'
 import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mock-limits command
 import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
+import {
+  formatStreamEndedEarlyMessage,
+  StreamEndedEarlyError,
+} from './streamFallback.js'
 import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
 
 // Presentation only: classifiers, retries and diagnostic metadata keep the
@@ -659,6 +663,8 @@ export function getAssistantMessageFromError(
   options?: {
     messages?: Message[]
     messagesForAPI?: (UserMessage | AssistantMessage)[]
+    /** Mid-stream re-sends already spent on this failure. */
+    streamRetries?: number
   },
 ): AssistantMessage {
   // Check for SDK timeout errors
@@ -1179,6 +1185,21 @@ export function getAssistantMessageFromError(
       content: `${API_ERROR_MESSAGE_PREFIX}: ${error.message}`,
       error: 'server_error',
       errorDetails: JSON.stringify(error.toDiagnosticData()),
+    })
+  }
+
+  // The provider closed a 200 stream before finishing the reply. Name the
+  // upstream as the cause so it is not mistaken for a context-limit rejection.
+  if (error instanceof StreamEndedEarlyError) {
+    return createAssistantAPIErrorMessage({
+      content: `${API_ERROR_MESSAGE_PREFIX}: ${formatStreamEndedEarlyMessage(error, options?.streamRetries)}`,
+      error: 'unknown',
+      errorDetails: JSON.stringify({
+        reason: error.reason,
+        retries: options?.streamRetries ?? 0,
+        ...error.evidence,
+      }),
+      businessErrorCode: BUSINESS_ERROR_CODES.UPSTREAM_STREAM_INTERRUPTED,
     })
   }
 

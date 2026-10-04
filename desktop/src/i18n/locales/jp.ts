@@ -3623,6 +3623,7 @@ export const jp: Record<TranslationKey, string> = {
   'businessError.request_too_large': 'リクエストがプロバイダーまたは中継サービスの許容サイズを超えました。次のメッセージで以前の画像とドキュメントが自動的に削除されます。それでも失敗する場合は、会話を圧縮するか、新しいセッションを開始してください。',
   'businessError.prompt_too_long': 'プロンプトが選択したモデルには長すぎます。会話を圧縮するか、コンテキストを減らして再試行してください。',
   'businessError.auto_mode_unavailable': '自動モードは現在のプランでは利用できません。',
+  'businessError.upstream_stream_interrupted': '上流のモデルプロバイダーが応答の完了前に接続を切断し、自動リトライでも回復しませんでした。通常はプロバイダーまたはネットワーク経路のタイムアウトや不安定さが原因で、コンテキスト上限のエラーではありません。「続けて」と送信して続きを依頼するか、時間をおいて再試行するか、プロバイダーを切り替えてください。',
 
   // ─── Server Status Verbs ──────────────────────────────────────
   'serverVerb.Thinking': '思考中',
