@@ -8,6 +8,7 @@ import {
   hideWindowSafely,
   hasMeaningfulIntersection,
   installWindowLifecycle,
+  installWindowsDragHitTestRefresh,
   isPersistableWindowState,
   isWindowStateVisibleOnAnyDisplay,
   readWindowState,
@@ -249,6 +250,81 @@ describe('Electron window service', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  const fakeDragHitTestWindow = () => {
+    const handlers = new Map<string, () => void>()
+    const bounds = { x: 20, y: 30, width: 1280, height: 820 }
+    const window = {
+      on: vi.fn((event: string, handler: () => void) => handlers.set(event, handler)),
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isMaximized: () => false,
+      isFullScreen: () => false,
+      getBounds: vi.fn(() => bounds),
+      setBounds: vi.fn(),
+    }
+    return { window, handlers, bounds }
+  }
+
+  it('re-arms the Windows drag hit test on every window state change', () => {
+    vi.useFakeTimers()
+    try {
+      const { window, handlers, bounds } = fakeDragHitTestWindow()
+
+      installWindowsDragHitTestRefresh(window as never, 'win32', 100)
+
+      expect([...handlers.keys()].sort()).toEqual([
+        'enter-full-screen',
+        'focus',
+        'leave-full-screen',
+        'maximize',
+        'restore',
+        'unmaximize',
+      ])
+
+      handlers.get('unmaximize')?.()
+      expect(window.setBounds).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(100)
+      expect(window.setBounds).toHaveBeenNthCalledWith(1, { ...bounds, height: bounds.height + 1 })
+      expect(window.setBounds).toHaveBeenNthCalledWith(2, bounds)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('collapses a burst of state-change events into one debounced bounds bounce', () => {
+    vi.useFakeTimers()
+    try {
+      const { window, handlers } = fakeDragHitTestWindow()
+
+      installWindowsDragHitTestRefresh(window as never, 'win32', 100)
+
+      // Unmaximizing emits unmaximize, restore and focus back to back.
+      handlers.get('unmaximize')?.()
+      handlers.get('restore')?.()
+      vi.advanceTimersByTime(60)
+      handlers.get('focus')?.()
+      vi.advanceTimersByTime(60)
+      // The cancelled timers must not fire; only the last one is still pending.
+      expect(window.getBounds).not.toHaveBeenCalled()
+
+      vi.advanceTimersByTime(40)
+      expect(window.getBounds).toHaveBeenCalledTimes(1)
+      expect(window.setBounds).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('attaches no state-change listeners outside Windows', () => {
+    const { window, handlers } = fakeDragHitTestWindow()
+
+    installWindowsDragHitTestRefresh(window as never, 'darwin', 100)
+
+    expect(window.on).not.toHaveBeenCalled()
+    expect(handlers.size).toBe(0)
   })
 
   it('skips the Windows drag hit-test refresh after the window is destroyed', () => {
