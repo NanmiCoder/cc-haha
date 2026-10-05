@@ -22,7 +22,7 @@ type Translate = (key: TranslationKey, params?: Record<string, string | number>)
 export async function rewindToTurnCheckpoint(
   sessionId: string,
   request: {
-    checkpointTarget: SessionTurnCheckpoint['target']
+    checkpointTarget: Pick<SessionTurnCheckpoint['target'], 'targetUserMessageId' | 'userMessageIndex'>
     expectedContent: string
   },
   mode: SessionRewindMode,

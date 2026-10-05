@@ -9810,12 +9810,25 @@ describe('MessageList edit and resend', () => {
     { id: 'assistant-3', type: 'assistant_text', content: 'Third answer', timestamp: 6 },
   ]
 
+  async function enabledEditButton(bubble: HTMLElement) {
+    // The bubble renders before the turn checkpoints load; until they do the
+    // action is shown disabled, and only then is the prompt known rewindable.
+    return waitFor(() => {
+      const button = within(bubble).getByRole('button', { name: 'Edit and resend' }) as HTMLButtonElement
+      expect(button.disabled).toBe(false)
+      return button
+    })
+  }
+
   async function openEditorFor(content: string) {
     const bubble = (await screen.findByText(content)).closest('[data-message-shell="user"]') as HTMLElement
-    // The bubble renders before the turn checkpoints load; only then is the
-    // prompt known to be rewindable and the edit action offered.
-    fireEvent.click(await within(bubble).findByRole('button', { name: 'Edit and resend' }))
+    fireEvent.click(await enabledEditButton(bubble))
     return screen.getByRole('textbox', { name: 'Edited message' }) as HTMLTextAreaElement
+  }
+
+  function editButtonIn(content: string) {
+    const bubble = screen.getByText(content).closest('[data-message-shell="user"]') as HTMLElement
+    return within(bubble).getByRole('button', { name: 'Edit and resend' }) as HTMLButtonElement
   }
 
   function typeAndSend(textbox: HTMLTextAreaElement, text: string) {
@@ -9852,23 +9865,26 @@ describe('MessageList edit and resend', () => {
     render(<MessageList />)
 
     const first = (await screen.findByText('First prompt')).closest('[data-message-shell="user"]') as HTMLElement
-    await waitFor(() => expect(within(first).getByRole('button', { name: 'Edit and resend' })).toBeTruthy())
+    await enabledEditButton(first)
     const second = screen.getByText('Second prompt').closest('[data-message-shell="user"]') as HTMLElement
     expect(within(second).queryByRole('button', { name: 'Edit and resend' })).toBeNull()
     const collab = screen.getByText('Delivered from elsewhere').closest('[data-message-shell="user"]') as HTMLElement
     expect(within(collab).queryByRole('button', { name: 'Edit and resend' })).toBeNull()
   })
 
-  it('offers no edit while the session is busy or in a side chat', async () => {
+  it('keeps edit visible but disabled, with the reason, while a turn runs; none in a side chat', async () => {
     setup(oneTurn, [checkpoint('user-1', 0, 1)])
     const { unmount } = render(<MessageList />)
-    await screen.findByRole('button', { name: 'Edit and resend' })
+    await enabledEditButton((await screen.findByText('Build a page')).closest('[data-message-shell="user"]') as HTMLElement)
 
     act(() => {
       const current = useChatStore.getState().sessions[ACTIVE_TAB]!
       useChatStore.setState({ sessions: { [ACTIVE_TAB]: { ...current, chatState: 'thinking' } } })
     })
-    expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull()
+    const busy = editButtonIn('Build a page')
+    expect(busy.disabled).toBe(true)
+    expect(screen.getByRole('button', { name: 'Edit and resend', description: 'Editing is available once this turn finishes.' })).toBe(busy)
+    expect(busy.closest('[title]')?.getAttribute('title')).toBe('Editing is available once this turn finishes.')
     unmount()
 
     setup(oneTurn, [checkpoint('user-1', 0, 1)])
@@ -9877,6 +9893,83 @@ describe('MessageList edit and resend', () => {
     await screen.findByText('Build a page')
     await waitFor(() => expect(sessionsApi.getTurnCheckpoints).toHaveBeenCalled())
     await act(async () => { await Promise.resolve() })
+    expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull()
+  })
+
+  it('keeps edit disabled while a background task runs, even when the checkpoints never loaded, then enables it', async () => {
+    const runningTask = {
+      taskId: 'shell-1', status: 'running', taskType: 'local_bash', description: 'npm run dev', startedAt: 1, updatedAt: 2,
+    } as const
+    setup(oneTurn, [checkpoint('user-1', 0, 1)], { backgroundAgentTasks: { 'shell-1': runningTask } })
+    render(<MessageList />)
+    await screen.findByText('Build a page')
+
+    const blocked = editButtonIn('Build a page')
+    expect(blocked.disabled).toBe(true)
+    expect(screen.getByRole('button', {
+      name: 'Edit and resend',
+      description: 'Editing is available once the running background tasks finish or are stopped.',
+    })).toBe(blocked)
+    expect(sessionsApi.getTurnCheckpoints).not.toHaveBeenCalled()
+
+    act(() => {
+      const current = useChatStore.getState().sessions[ACTIVE_TAB]!
+      useChatStore.setState({ sessions: { [ACTIVE_TAB]: {
+        ...current, backgroundAgentTasks: { 'shell-1': { ...runningTask, status: 'completed', updatedAt: 3 } },
+      } } })
+    })
+    const bubble = screen.getByText('Build a page').closest('[data-message-shell="user"]') as HTMLElement
+    await enabledEditButton(bubble)
+  })
+
+  it('says the prompt is being checked while the checkpoints load, and why when they fail', async () => {
+    let rejectCheckpoints!: (error: Error) => void
+    setup(oneTurn, [])
+    vi.mocked(sessionsApi.getTurnCheckpoints).mockReturnValue(new Promise((_, reject) => { rejectCheckpoints = reject }))
+    render(<MessageList />)
+    await screen.findByText('Build a page')
+    await waitFor(() => expect(editButtonIn('Build a page').disabled).toBe(true))
+    expect(screen.getByRole('button', { name: 'Edit and resend', description: 'Checking whether this prompt can be rewound…' })).toBeTruthy()
+
+    await act(async () => { rejectCheckpoints(new Error('checkpoint store offline')) })
+    await waitFor(() => expect(screen.getByRole('button', {
+      name: 'Edit and resend',
+      description: "Editing is unavailable: this session's checkpoints could not be loaded.",
+    })).toBeTruthy())
+    expect(editButtonIn('Build a page').disabled).toBe(true)
+  })
+
+  it('still edits a prompt past the checkpoint preview budget, rolling back the conversation only', async () => {
+    const { sendMessage } = setup(oneTurn, [])
+    vi.mocked(sessionsApi.getTurnCheckpoints).mockRejectedValue(new ApiError(413, { error: 'HISTORY_CHECKPOINT_PREVIEW_LIMIT' }))
+    // The dry run finds changed files; this mode has told the user file undo
+    // is unavailable, so they must not be offered back.
+    const rewind = vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(rewindResult({
+      code: { available: true, filesChanged: ['app.ts'], insertions: 1, deletions: 0 },
+    }))
+    render(<MessageList />)
+    await screen.findByRole('region', { name: 'Workspace changed files' })
+
+    typeAndSend(await openEditorFor('Build a page'), 'Build a landing page')
+
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(rewind).toHaveBeenNthCalledWith(1, ACTIVE_TAB, {
+      targetUserMessageId: 'user-1', userMessageIndex: 0, expectedContent: 'Build a page', dryRun: true,
+    })
+    expect(rewind).toHaveBeenNthCalledWith(2, ACTIVE_TAB, {
+      targetUserMessageId: 'user-1', userMessageIndex: 0, expectedContent: 'Build a page', mode: 'conversation',
+    })
+  })
+
+  it('offers no edit past the budget for a live prompt that has no transcript id yet', async () => {
+    setup([
+      { id: 'live-user', type: 'user_text', content: 'Live prompt', timestamp: 1 },
+      { id: 'live-reply', type: 'assistant_text', content: 'Live answer', timestamp: 2 },
+    ], [])
+    vi.mocked(sessionsApi.getTurnCheckpoints).mockRejectedValue(new ApiError(413, { error: 'HISTORY_CHECKPOINT_PREVIEW_LIMIT' }))
+    render(<MessageList />)
+    await screen.findByRole('region', { name: 'Workspace changed files' })
     expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull()
   })
 

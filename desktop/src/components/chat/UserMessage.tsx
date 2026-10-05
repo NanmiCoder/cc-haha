@@ -22,6 +22,8 @@ export type UserMessageEditAction = {
   editing: boolean
   submitting: boolean
   disabled: boolean
+  /** Why the action is disabled, when the user can do something about it. */
+  disabledReason?: string
   getDraft: () => UserMessageEditDraft
   onStart: () => void
   onCancel: () => void
@@ -64,7 +66,12 @@ export const UserMessage = memo(function UserMessage({
   const hasText = content.trim().length > 0
   const actionBarEditAction = useMemo<MessageEditAction | undefined>(
     () => editAction
-      ? { label: editAction.label, disabled: editAction.disabled, onEdit: editAction.onStart }
+      ? {
+          label: editAction.label,
+          disabled: editAction.disabled,
+          disabledReason: editAction.disabledReason,
+          onEdit: editAction.onStart,
+        }
       : undefined,
     [editAction],
   )

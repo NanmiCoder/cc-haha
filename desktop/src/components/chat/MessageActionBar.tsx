@@ -1,5 +1,5 @@
 import { Check, Copy, GitFork, Pencil } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
 import { CopyButton } from '@/components/ui/CopyButton'
@@ -14,6 +14,8 @@ export type MessageBranchAction = {
 export type MessageEditAction = {
   label: string
   disabled?: boolean
+  /** Shown on hover while disabled, so the action says why rather than vanishing. */
+  disabledReason?: string
   onEdit: () => void
 }
 
@@ -68,6 +70,7 @@ export function MessageActionBar({
   placement = 'inline',
 }: Props) {
   const locale = useSettingsStore((state) => state.locale)
+  const editReasonId = useId()
   const hasCopy = Boolean(copyText?.trim())
   const hoverTimeLabel = typeof timestamp === 'number'
     ? formatMessageHoverTime(timestamp, locale)
@@ -116,7 +119,22 @@ export function MessageActionBar({
             onPointerUp={(event) => event.currentTarget.blur()}
           />
         ) : null}
-        {editAction ? (
+        {editAction?.disabled && editAction.disabledReason ? (
+          // A disabled button takes no pointer events, so its own title would
+          // never show. The reason hangs on a wrapper that still hovers.
+          <span className="inline-flex" title={editAction.disabledReason}>
+            <IconButton
+              icon={<Pencil size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+              label={editAction.label}
+              showTooltip={false}
+              size="xs"
+              tone="muted"
+              disabled
+              aria-describedby={editReasonId}
+            />
+            <span id={editReasonId} className="sr-only">{editAction.disabledReason}</span>
+          </span>
+        ) : editAction ? (
           <IconButton
             icon={<Pencil size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden="true" />}
             label={editAction.label}

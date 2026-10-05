@@ -33,7 +33,7 @@ import { StreamingIndicator } from './StreamingIndicator'
 import { InlineTaskSummary } from './InlineTaskSummary'
 import { CurrentTurnChangeCard } from './CurrentTurnChangeCard'
 import { describeRewindResult, getApiErrorMessage, rewindToTurnCheckpoint } from './turnRewind'
-import { useUserMessageEditResend } from './useUserMessageEditResend'
+import { useUserMessageEditResend, type EditableTurnCard } from './useUserMessageEditResend'
 import type { UserMessageEditAction } from './UserMessage'
 import { WorkspaceChangesFallback } from '@/components/chat/WorkspaceChangesFallback'
 import { AgentTeamsInlineCard } from '../agentTeams/AgentTeamsSummary'
@@ -119,6 +119,8 @@ type RenderModel = {
 
 type RewindTurnTarget = {
   messageId: string
+  /** The prompt's own transcript id; a live prompt has none until history reloads. */
+  transcriptMessageId?: string
   userMessageIndex: number
   content: string
   expectedContent: string
@@ -1244,6 +1246,7 @@ export function getCompletedTurnTargets(messages: UIMessage[]): RewindTurnTarget
       userMessageIndex += 1
       currentTarget = {
         messageId: message.id,
+        ...(message.transcriptMessageId ? { transcriptMessageId: message.transcriptMessageId } : {}),
         userMessageIndex,
         content: message.content,
         expectedContent: message.modelContent ?? message.content,
@@ -2434,15 +2437,14 @@ export function MessageList({
   const [activeConversationFindMatch, setActiveConversationFindMatch] = useState<ConversationFindMatch | null>(null)
   const conversationFindMatchesRef = useRef<ConversationFindMatch[]>([])
   const [messageListWidth, setMessageListWidth] = useState<number | null>(null)
-  const branchActionsDisabled =
-    isDirectAgentSession ||
+  const turnInProgress =
     isPreparingTurn ||
     chatState !== 'idle' ||
-    hasRunningBackgroundTasks ||
     streamingText.trim().length > 0 ||
     Boolean(activeThinkingId) ||
     Boolean(sessionState?.activeToolUseId) ||
     Boolean(sessionState?.activeToolName)
+  const branchActionsDisabled = isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
   const hasCompactingDivider = messages.some((message) =>
     message.type === 'compact_summary' && message.phase === 'compacting')
 
@@ -3320,11 +3322,49 @@ export function MessageList({
     return result
   }, [branchableMessageTargets, branchingMessageId, handleBranchMessage, t])
 
+  const completedTurnMessageIds = useMemo(
+    () => new Set(completedTurnTargets.map((target) => target.messageId)),
+    [completedTurnTargets],
+  )
+  const checkpointPreviewOverBudget = workspaceChangesFallback !== null &&
+    workspaceChangesFallback.sessionId === resolvedSessionId
+  // Past the preview budget the server lists no checkpoints at all, but one
+  // rewind still resolves a prompt by its transcript id, so those prompts stay
+  // editable. This mode tells the user file undo is unavailable, so the edit
+  // rolls back the conversation only.
+  const editTurnCards = useMemo<EditableTurnCard[]>(
+    () => checkpointPreviewOverBudget
+      ? completedTurnTargets.flatMap((target) => target.transcriptMessageId
+        ? [{
+            target: { messageId: target.messageId, expectedContent: target.expectedContent },
+            checkpoint: {
+              target: { targetUserMessageId: target.transcriptMessageId, userMessageIndex: target.userMessageIndex },
+            },
+            conversationOnly: true,
+          }]
+        : [])
+      : visibleTurnChangeCards,
+    [checkpointPreviewOverBudget, completedTurnTargets, visibleTurnChangeCards],
+  )
+  const editBlockedReason = turnInProgress
+    ? t('chat.editMessageWaitForTurn')
+    : hasRunningBackgroundTasks
+      ? t('chat.editMessageWaitForBackgroundTasks')
+      : null
+  const editPendingReason = !checkpointHistoryReady || isLoadingTurnChangeCards
+    ? t('chat.editMessageCheckingCheckpoints')
+    : turnChangeLoadError !== null
+      ? t('chat.editMessageCheckpointsUnavailable')
+      : null
+
   const { editActionByMessageId, dialog: editResendDialog } = useUserMessageEditResend({
     sessionId: resolvedSessionId,
     messages,
-    turnCards: visibleTurnChangeCards,
-    disabled: branchActionsDisabled || isSideChatSession || Boolean(turnUndoConfirmTargetId),
+    turnCards: editTurnCards,
+    completedMessageIds: completedTurnMessageIds,
+    blockedReason: editBlockedReason,
+    pendingReason: editPendingReason,
+    disabled: isDirectAgentSession || isSideChatSession || Boolean(turnUndoConfirmTargetId),
     rewindingTurnId,
     setRewindingTurnId,
     t,

@@ -20,7 +20,9 @@ type Translate = (key: TranslationKey, params?: Record<string, string | number>)
 /** The slice of a turn card the edit flow needs: who to rewind, and how. */
 export type EditableTurnCard = {
   target: { messageId: string; expectedContent: string }
-  checkpoint: { target: SessionTurnCheckpoint['target'] }
+  checkpoint: { target: Pick<SessionTurnCheckpoint['target'], 'targetUserMessageId' | 'userMessageIndex'> }
+  /** Files are never offered back, whatever the dry run finds: only the conversation rewinds. */
+  conversationOnly?: boolean
 }
 
 type EditContext = { sessionId: string | null | undefined; active: boolean }
@@ -40,7 +42,17 @@ type Options = {
   sessionId: string | null | undefined
   messages: UIMessage[]
   turnCards: EditableTurnCard[]
-  /** Busy, background work, an agent tab, a side chat: no new edits start. */
+  /**
+   * Prompts whose turn has completed. While an edit cannot start, these keep a
+   * disabled action that says why instead of losing it: a pencil that silently
+   * comes and goes with background work reads as a missing feature.
+   */
+  completedMessageIds: ReadonlySet<string>
+  /** Why no edit can start in this session right now (a turn or background work is running). */
+  blockedReason: string | null
+  /** Why a completed prompt has no rewind target yet; null once the targets are settled. */
+  pendingReason: string | null
+  /** An agent tab, a side chat, an open undo dialog: no edit action at all. */
   disabled: boolean
   rewindingTurnId: string | null
   setRewindingTurnId: (messageId: string | null) => void
@@ -81,6 +93,9 @@ export function useUserMessageEditResend({
   sessionId,
   messages,
   turnCards,
+  completedMessageIds,
+  blockedReason,
+  pendingReason,
   disabled,
   rewindingTurnId,
   setRewindingTurnId,
@@ -202,7 +217,7 @@ export function useUserMessageEditResend({
     const requestContext = context
     if (!isCurrentContext(requestContext)) return
     const card = editableCards.get(messageId)
-    if (!sessionId || !card || disabled || submittingMessageId || rewindingTurnId) return
+    if (!sessionId || !card || disabled || blockedReason || submittingMessageId || rewindingTurnId) return
     const payload = buildUserMessageResendPayload(draft, { contextReferencesOnly })
     if (!payload) return
     draftsRef.current.set(JSON.stringify([sessionId, messageId]), draft)
@@ -228,7 +243,8 @@ export function useUserMessageEditResend({
     if (!isCurrentContext(requestContext)) return
     setSubmitting(null)
 
-    const canRestoreCode = preview.code.available &&
+    const canRestoreCode = !card.conversationOnly &&
+      preview.code.available &&
       preview.code.filesChanged.length > 0 &&
       preview.restoreAvailable !== false
     const laterTurns = countLaterUserTurns(messagesRef.current, messageId)
@@ -239,23 +255,30 @@ export function useUserMessageEditResend({
       return
     }
     setConfirm({ context: requestContext, messageId, card, draft, payload, preview, laterTurns, canRestoreCode })
-  }, [context, contextReferencesOnly, disabled, editableCards, isCurrentContext, rewindingTurnId, runResend, sessionId, submittingMessageId, t])
+  }, [blockedReason, context, contextReferencesOnly, disabled, editableCards, isCurrentContext, rewindingTurnId, runResend, sessionId, submittingMessageId, t])
 
   const editActionByMessageId = useMemo(() => {
     const result = new Map<string, UserMessageEditAction>()
     if (!sessionId) return result
     const label = t('chat.editMessage')
-    for (const [messageId] of editableCards) {
+    for (const messageId of new Set([...editableCards.keys(), ...completedMessageIds])) {
+      const message = messageById.get(messageId)
+      if (!isEditableUserMessage(message)) continue
+      const card = editableCards.get(messageId)
       const editing = editingMessageId === messageId
       // A disabled session offers no new edits, but an open editor stays open
       // (disabled) instead of discarding what the user typed.
       if (disabled && !editing) continue
-      const message = messageById.get(messageId)!
+      const unavailableReason = blockedReason ?? (card ? null : pendingReason)
+      // Settled targets without this prompt: the rewind API cannot address it.
+      if (!card && !unavailableReason && !editing) continue
       result.set(messageId, {
         label,
         editing,
         submitting: submittingMessageId === messageId || rewindingTurnId === messageId,
-        disabled: disabled || Boolean(rewindingTurnId && rewindingTurnId !== messageId),
+        disabled: disabled || !card || Boolean(unavailableReason) ||
+          Boolean(rewindingTurnId && rewindingTurnId !== messageId),
+        ...(unavailableReason ? { disabledReason: unavailableReason } : {}),
         getDraft: () => draftsRef.current.get(JSON.stringify([sessionId, messageId])) ?? createUserMessageEditDraft(message),
         onStart: () => {
           setEditing((current) => {
@@ -271,7 +294,7 @@ export function useUserMessageEditResend({
       })
     }
     return result
-  }, [closeEditor, disabled, editableCards, editingMessageId, messageById, rewindingTurnId, sessionId, submit, submittingMessageId, t])
+  }, [blockedReason, closeEditor, completedMessageIds, disabled, editableCards, editingMessageId, messageById, pendingReason, rewindingTurnId, sessionId, submit, submittingMessageId, t])
 
   const dialog = useMemo<UserMessageEditDialog>(() => {
     const busy = Boolean(rewindingTurnId)

@@ -5,7 +5,7 @@ import { useChatStore, type PerSessionState } from '@/stores/chatStore'
 import { useUIStore } from '@/stores/uiStore'
 import type { UIMessage } from '@/types/chat'
 import type { TranslationKey } from '@/i18n/locales/en'
-import { useUserMessageEditResend } from './useUserMessageEditResend'
+import { useUserMessageEditResend, type EditableTurnCard } from './useUserMessageEditResend'
 import type { UserMessageEditDraft } from './userMessageEdit'
 
 const messages: UIMessage[] = [
@@ -38,13 +38,26 @@ function deferred<T>() {
   return { promise, resolve, reject }
 }
 
-function setup() {
+const card: EditableTurnCard = { target: { messageId: 'shared-user', expectedContent: 'continue' }, checkpoint: { target } }
+const completed = new Set(['shared-user'])
+
+type Availability = {
+  turnCards: EditableTurnCard[]
+  blockedReason: string | null
+  pendingReason: string | null
+}
+
+function setup(availability: Partial<Availability> = {}) {
   const setRewindingTurnId = vi.fn()
-  return renderHook(({ sessionId }) => useUserMessageEditResend({
-    sessionId, messages,
-    turnCards: [{ target: { messageId: 'shared-user', expectedContent: 'continue' }, checkpoint: { target } }],
+  return renderHook((props: { sessionId: string } & Partial<Availability>) => useUserMessageEditResend({
+    sessionId: props.sessionId,
+    messages,
+    turnCards: props.turnCards ?? [card],
+    completedMessageIds: completed,
+    blockedReason: props.blockedReason ?? null,
+    pendingReason: props.pendingReason ?? null,
     disabled: false, rewindingTurnId: null, setRewindingTurnId, t: translate,
-  }), { initialProps: { sessionId: 'session-a' } })
+  }), { initialProps: { sessionId: 'session-a', ...availability } })
 }
 
 describe('useUserMessageEditResend session and recovery boundaries', () => {
@@ -176,5 +189,65 @@ describe('useUserMessageEditResend session and recovery boundaries', () => {
     await act(async () => { pending.reject(new Error('late failure')) })
     expect(useUIStore.getState().toasts).toEqual([])
     expect(sessionsApi.rewind).toHaveBeenCalledTimes(1)
+  })
+
+  // The action used to vanish whenever an edit could not start, which read as
+  // the feature being gone. It now stays, disabled, and says why.
+  describe('availability', () => {
+    type Result = ReturnType<typeof setup>['result']
+    const actionOf = (result: Result) => result.current.editActionByMessageId.get('shared-user')
+
+    it('keeps a blocked prompt visible with the reason, refuses its submit, and re-enables it once unblocked', async () => {
+      const { result, rerender } = setup({ blockedReason: 'Wait for background tasks' })
+      expect(actionOf(result)).toMatchObject({ disabled: true, disabledReason: 'Wait for background tasks' })
+      await act(async () => actionOf(result)!.onSubmit(draft))
+      expect(sessionsApi.rewind).not.toHaveBeenCalled()
+
+      rerender({ sessionId: 'session-a' })
+      expect(actionOf(result)).toMatchObject({ disabled: false })
+      expect(actionOf(result)!.disabledReason).toBeUndefined()
+    })
+
+    it('reports the block before a missing rewind target', () => {
+      const { result } = setup({ turnCards: [], blockedReason: 'Wait for this turn', pendingReason: 'Checking' })
+      expect(actionOf(result)).toMatchObject({ disabled: true, disabledReason: 'Wait for this turn' })
+    })
+
+    it('says a prompt is being checked until its own target arrives', () => {
+      const { result, rerender } = setup({ turnCards: [], pendingReason: 'Checking' })
+      expect(actionOf(result)).toMatchObject({ disabled: true, disabledReason: 'Checking' })
+      // Other prompts may still be loading; this one already has its target.
+      rerender({ sessionId: 'session-a', turnCards: [card], pendingReason: 'Checking' })
+      expect(actionOf(result)).toMatchObject({ disabled: false })
+      expect(actionOf(result)!.disabledReason).toBeUndefined()
+    })
+
+    it('offers nothing once the settled targets leave the prompt out', () => {
+      const { result } = setup({ turnCards: [] })
+      expect(actionOf(result)).toBeUndefined()
+    })
+
+    it('keeps an open editor and its draft while background work blocks the edit', () => {
+      const { result, rerender } = setup()
+      act(() => {
+        actionOf(result)!.onStart()
+        actionOf(result)!.onDraftChange(draft)
+      })
+      // Running background tasks also withhold the turn cards.
+      rerender({ sessionId: 'session-a', turnCards: [], blockedReason: 'Wait for background tasks' })
+      expect(actionOf(result)).toMatchObject({ editing: true, disabled: true, disabledReason: 'Wait for background tasks' })
+      expect(actionOf(result)!.getDraft().text).toBe(draft.text)
+    })
+
+    it('never offers the files back for a conversation-only target, whatever the dry run finds', async () => {
+      vi.mocked(sessionsApi.rewind).mockResolvedValue(codePreview)
+      vi.spyOn(useChatStore.getState(), 'reloadHistory').mockResolvedValue(undefined)
+      const { result } = setup({ turnCards: [{ ...card, conversationOnly: true }] })
+      await act(async () => actionOf(result)!.onSubmit(draft))
+      await waitFor(() => expect(sessionsApi.rewind).toHaveBeenCalledTimes(2))
+      expect(sessionsApi.rewind).toHaveBeenLastCalledWith('session-a', expect.objectContaining({ mode: 'conversation' }))
+      expect(result.current.dialog.open).toBe(false)
+      await waitFor(() => expect(useChatStore.getState().sendMessage).toHaveBeenCalledWith('session-a', draft.text, [], expect.any(Object)))
+    })
   })
 })
