@@ -31,6 +31,8 @@ export type WorkspaceSurfaceProps = {
   cwd: string
   /** Reason the review entry is unavailable here, e.g. "not a Git repository". */
   reviewUnavailableReason?: string | null
+  /** False until the session has a conversation for a side chat to fork. */
+  sideChatAvailable?: boolean
   /**
    * Whether this dock is on screen. The bottom dock stays mounted while hidden
    * so xterm keeps its geometry, so "mounted" and "visible" are not the same
@@ -51,6 +53,7 @@ export function WorkspaceSurface({
   dock,
   cwd,
   reviewUnavailableReason = null,
+  sideChatAvailable = true,
   visible = true,
 }: WorkspaceSurfaceProps) {
   const t = useTranslation()
@@ -237,6 +240,7 @@ export function WorkspaceSurface({
             onSelect={handleLauncherSelect}
             dock={dock}
             reviewUnavailableReason={reviewUnavailableReason}
+            sideChatAvailable={sideChatAvailable}
           />
         ) : activeTab === null ? null : activeTab.kind === 'side-chat' ? (
           <SideChatSurface parentSessionId={sessionId} sideChatId={activeTab.sideChatId} visible={visible} />
@@ -269,6 +273,7 @@ export function WorkspaceSurface({
           dock={dock}
           initialFocus={initialMenuFocus.current}
           reviewUnavailableReason={reviewUnavailableReason}
+          sideChatAvailable={sideChatAvailable}
           onSelect={selectFromMenu}
           onClose={closeMenu}
         />

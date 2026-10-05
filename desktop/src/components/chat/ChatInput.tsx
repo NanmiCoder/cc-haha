@@ -336,6 +336,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
   const showLaunchControls = !isMemberSession && !sideChat && messageCount === 0
+  const sideChatAvailable = Boolean(sideChat) || messageCount > 0
   // `useCompactControls` is about room, so it asks the column how wide it is —
   // never "is a side panel open". Until a measurement lands (jsdom, first
   // paint) it defers to the caller's `compact`, which keeps the
@@ -665,8 +666,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       names.add(name.toLowerCase())
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
-    return commands.filter(isComposerSlashCommandVisible)
-  }, [agentSlashCommands, slashCommands, composerReferences, t])
+    // `/btw` forks the conversation so far; a blank session has none to fork.
+    return commands.filter(command => isComposerSlashCommandVisible(command) && (sideChatAvailable || command.name !== 'btw'))
+  }, [agentSlashCommands, slashCommands, composerReferences, sideChatAvailable, t])
 
   const filteredCommandGroups = useMemo(() => {
     return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))

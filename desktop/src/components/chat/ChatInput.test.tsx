@@ -826,6 +826,21 @@ describe('ChatInput file mentions', () => {
     expect(getComposerText()).toBe('')
   })
 
+  it('leaves /btw out of the slash menu until the session has a conversation to fork', async () => {
+    useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, messageCount: 0 })) }))
+    useChatStore.setState(state => ({ sessions: { [sessionId]: { ...state.sessions[sessionId]!, messages: [] } } }))
+    render(<ChatInput />)
+    const btwOptions = () => screen.queryAllByRole('option').filter(option => option.textContent?.startsWith('/btw'))
+    setComposerText('/bt', 3)
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)) })
+    expect(btwOptions()).toEqual([])
+
+    act(() => useChatStore.setState(state => ({ sessions: { [sessionId]: { ...state.sessions[sessionId]!, messages: [{ id: 'first', type: 'user_text', content: 'hi', timestamp: 1 }] } } })))
+    setComposerText('', 0)
+    setComposerText('/bt', 3)
+    await waitFor(() => expect(btwOptions()).toHaveLength(1))
+  })
+
   it('opens an empty full side chat with /btw without sending a main message', async () => {
     render(<ChatInput compact />)
     setComposerText('/btw', 4)

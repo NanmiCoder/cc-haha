@@ -258,6 +258,34 @@ describe('ActiveSession task polling', () => {
     expect(screen.getByTestId('message-list')).toBe(main)
   })
 
+  it.each([false, true])('offers no side chat in a blank session until it has a conversation (mobile: %s)', (isMobile) => {
+    viewportMocks.isMobile = isMobile
+    const id = `blank-side-parent-${isMobile ? 'mobile' : 'desktop'}`
+    useSettingsStore.setState({ locale: 'en' })
+    useTabStore.setState({ activeTabId: id, tabs: [{ sessionId: id, title: 'Untitled Session', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({ sessions: [{ id, title: 'Untitled Session', messageCount: 0, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }] })
+    useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true } } })
+    if (!isMobile) useWorkspaceStore.getState().setLayout(id, 'split')
+    render(<ActiveSession sessionId={id} />)
+
+    expect(screen.getByTestId('empty-session-hero')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Side chat' })).not.toBeInTheDocument()
+    if (!isMobile) {
+      expect(screen.getByTestId('workspace-launcher-review')).toBeInTheDocument()
+      expect(screen.queryByTestId('workspace-launcher-side-chat')).not.toBeInTheDocument()
+    }
+
+    act(() => useChatStore.setState(state => ({ sessions: { ...state.sessions, [id]: { ...state.sessions[id]!, messages: [{ id: 'u', type: 'user_text', content: 'hi', timestamp: 1 }] } } })))
+
+    expect(screen.queryByTestId('empty-session-hero')).not.toBeInTheDocument()
+    const launcherEntry = screen.queryByTestId('workspace-launcher-side-chat')
+    expect(Boolean(launcherEntry)).toBe(!isMobile)
+    const headerEntry = screen.getAllByRole('button', { name: 'Side chat' }).filter(button => button !== launcherEntry)
+    expect(headerEntry).toHaveLength(1)
+    fireEvent.click(headerEntry[0]!)
+    expect(openSideChat).toHaveBeenCalledWith(id)
+  })
+
   it('can hide a mobile side chat without destroying its temporary tab', () => {
     viewportMocks.isMobile = true
     const id = 'mobile-side-parent'

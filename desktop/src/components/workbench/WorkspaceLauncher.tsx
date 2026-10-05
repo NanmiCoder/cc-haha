@@ -42,11 +42,19 @@ export type WorkspaceLauncherProps = {
    * missing feature.
    */
   reviewUnavailableReason?: string | null
+  /**
+   * A side chat forks the parent transcript, so a session with no
+   * conversation yet has nothing to fork. Unlike review, the entry is left
+   * out rather than disabled: it becomes available by talking, not by
+   * changing the folder.
+   */
+  sideChatAvailable?: boolean
 }
 
 export function WorkspaceLauncher({
   onSelect,
   reviewUnavailableReason,
+  sideChatAvailable = true,
   dock = 'side',
   variant = 'empty',
 }: WorkspaceLauncherProps) {
@@ -61,7 +69,7 @@ export function WorkspaceLauncher({
       className={menu ? '' : `flex min-h-0 flex-1 items-start justify-center overflow-y-auto ${compact ? 'px-4 py-2' : 'px-6 py-10'}`}
     >
       <ul className={menu ? 'space-y-px' : 'my-auto w-full max-w-[420px] space-y-px'} role={menu ? 'presentation' : undefined} aria-label={menu ? undefined : t('workspace.launcher.label')}>
-        {ENTRIES.filter(entry => dock !== 'bottom' || entry.kind !== 'side-chat').map(({ kind, labelKey, shortcut, Icon }) => {
+        {ENTRIES.filter(entry => entry.kind !== 'side-chat' || (dock !== 'bottom' && sideChatAvailable)).map(({ kind, labelKey, shortcut, Icon }) => {
           const disabledReason = kind === 'review' ? reviewUnavailableReason ?? null : null
           // The hint advertises the app command; a pointer choice uses this dock.
           const hint = shortcut ? formatWorkspaceShortcut(shortcut, platform) : null

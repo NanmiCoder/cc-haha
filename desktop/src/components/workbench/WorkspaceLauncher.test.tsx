@@ -22,6 +22,16 @@ describe('WorkspaceLauncher', () => {
     ])
   })
 
+  it('leaves side chat out while there is no conversation to fork', () => {
+    render(<WorkspaceLauncher onSelect={vi.fn()} sideChatAvailable={false} />)
+    expect(screen.getAllByRole('button').map((item) => item.getAttribute('data-testid'))).toEqual([
+      'workspace-launcher-review',
+      'workspace-launcher-terminal',
+      'workspace-launcher-browser',
+      'workspace-launcher-file',
+    ])
+  })
+
   it('advertises the four global resource shortcuts while clicks retain their dock', () => {
     render(<WorkspaceLauncher onSelect={vi.fn()} />)
     // The hint is what makes the launcher teach its own shortcuts rather than

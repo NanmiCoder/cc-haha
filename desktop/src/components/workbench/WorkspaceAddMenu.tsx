@@ -13,13 +13,14 @@ export type WorkspaceAddMenuProps = {
   dock: WorkspaceDock
   initialFocus?: 'first' | 'last'
   reviewUnavailableReason?: string | null
+  sideChatAvailable?: boolean
   onSelect: (kind: WorkspaceTabKind) => void
   onClose: () => void
 }
 
 /** The empty dock owns a launcher; the + button owns a menu over its current content. */
 export function WorkspaceAddMenu({
-  id, anchorRef, dock, initialFocus, reviewUnavailableReason, onSelect, onClose,
+  id, anchorRef, dock, initialFocus, reviewUnavailableReason, sideChatAvailable, onSelect, onClose,
 }: WorkspaceAddMenuProps) {
   const t = useTranslation()
   const menuRef = useRef<HTMLDivElement>(null)
@@ -57,7 +58,7 @@ export function WorkspaceAddMenu({
       style={position.style}
       className="z-[var(--z-dropdown)] w-[260px] max-w-[calc(100vw-12px)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
     >
-      <WorkspaceLauncher variant="menu" dock={dock} onSelect={onSelect} reviewUnavailableReason={reviewUnavailableReason} />
+      <WorkspaceLauncher variant="menu" dock={dock} onSelect={onSelect} reviewUnavailableReason={reviewUnavailableReason} sideChatAvailable={sideChatAvailable} />
     </div>,
     document.body,
   )
