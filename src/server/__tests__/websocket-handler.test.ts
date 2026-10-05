@@ -1331,7 +1331,7 @@ describe('WebSocket handler session isolation', () => {
     await flushMicrotasks()
 
     expect(sendInterrupt).toHaveBeenCalledWith(sessionId)
-    expect(requestControl).toHaveBeenCalledTimes(4)
+    expect(requestControl).toHaveBeenCalledTimes(6)
     for (const taskId of [
       'agent-task-1',
       'agent-task-2',
@@ -1342,6 +1342,15 @@ describe('WebSocket handler session isolation', () => {
         subtype: 'stop_task',
         task_id: taskId,
       }, 3_000)
+    }
+    // A user Stop also reaps the non-Agent tasks sharing the runtime, so their
+    // shell processes are actually asked to stop rather than only being
+    // bookended when the runtime happens to exit.
+    for (const taskId of ['bash-collateral-task', 'provider-analyzer-teammate']) {
+      expect(requestControl).toHaveBeenCalledWith(sessionId, {
+        subtype: 'stop_task',
+        task_id: taskId,
+      })
     }
     expect(archiveRemoteSession).toHaveBeenCalledWith(
       'remote-session-agent-task-3',
@@ -1423,7 +1432,7 @@ describe('WebSocket handler session isolation', () => {
     })
   })
 
-  it('does not bulk-stop non-Agent background tasks', async () => {
+  it('bulk-stops non-Agent background tasks on user Stop', async () => {
     const sessionId = `stop-agent-filter-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
     const outputCallbacks: Array<(cliMsg: any) => void> = []
@@ -1453,8 +1462,13 @@ describe('WebSocket handler session isolation', () => {
     handleWebSocket.message(ws, JSON.stringify({ type: 'stop_generation' }))
     await Promise.resolve()
 
+    // A user Stop ends the whole session: the Agent task is stopped through the
+    // Agent finalization path (with its 3s control timeout), and the non-Agent
+    // shell/dream tasks are reaped through the same control channel without one.
     expect(requestControl.mock.calls).toEqual([
       [sessionId, { subtype: 'stop_task', task_id: 'agent-task-1' }, 3_000],
+      [sessionId, { subtype: 'stop_task', task_id: 'bash-task-1' }],
+      [sessionId, { subtype: 'stop_task', task_id: 'dream-task-1' }],
     ])
     outputCallbacks[0]?.({
       type: 'system',
@@ -5152,6 +5166,196 @@ describe('WebSocket handler session isolation', () => {
       turnState: 'running',
       activeBackgroundTaskIds: [],
     })
+  })
+
+  it('reaps a non-Agent background task when the user stops a background-only session', async () => {
+    const sessionId = `stop-background-only-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const outputCallbacks: Array<(cliMsg: any) => void> = []
+    spyOn(globalThis, 'setTimeout').mockImplementation(() => 1 as any)
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.push(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    // The CLI reports the task as already evicted, so the Stop converges on a
+    // terminal bookend rather than waiting for a notification that never comes.
+    const requestControl = spyOn(conversationService, 'requestControl')
+      .mockResolvedValue({ reason: 'not_found' })
+
+    handleWebSocket.open(ws)
+    outputCallbacks[0]?.({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'orphan-bash-1',
+      tool_use_id: 'orphan-bash-tool-1',
+      description: 'Background shell that outlived the turn',
+      task_type: 'local_bash',
+    })
+    await flushMicrotasks()
+    ws.sent.length = 0
+
+    // No foreground turn and no Agent task: before this fix the non-Agent task
+    // was simply never asked to stop.
+    handleWebSocket.message(ws, JSON.stringify({ type: 'stop_generation' }))
+    await flushMicrotasks()
+
+    expect(requestControl).toHaveBeenCalledWith(sessionId, {
+      subtype: 'stop_task',
+      task_id: 'orphan-bash-1',
+    })
+    expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      type: 'system_notification',
+      subtype: 'task_notification',
+      message: 'Background shell that outlived the turn stopped',
+      data: expect.objectContaining({
+        task_id: 'orphan-bash-1',
+        tool_use_id: 'orphan-bash-tool-1',
+        status: 'stopped',
+      }),
+    })
+  })
+
+  it('bounds a disconnected session kept alive only by a background task', () => {
+    const sessionId = `background-task-ceiling-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    let nextTimerId = 0
+    const timers: Array<{ id: number; callback: () => void; delayMs: number }> = []
+    spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delayMs?: number) => {
+      const id = ++nextTimerId
+      timers.push({ id, callback, delayMs: delayMs ?? 0 })
+      return id as any
+    }) as any)
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    const append = spyOn(sessionService, 'appendSessionTaskNotification').mockResolvedValue()
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    const outputCallbacks: Array<(cliMsg: any) => void> = []
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.push(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+
+    handleWebSocket.open(ws)
+    outputCallbacks[0]?.({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'ceiling-bash-1',
+      tool_use_id: 'ceiling-bash-tool-1',
+      description: 'Never-ending background shell',
+      task_type: 'local_bash',
+    })
+    handleWebSocket.close(ws, 1000, 'pet closed while a background task runs')
+    expect(stopSession).not.toHaveBeenCalled()
+
+    // The watcher sees the background task still running with no client left.
+    outputCallbacks.at(-1)?.({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'ceiling-bash-1',
+      tool_use_id: 'ceiling-bash-tool-1',
+      task_type: 'local_bash',
+      status: 'running',
+    })
+
+    const ceiling = timers.find((timer) => timer.delayMs === 31 * 60_000)
+    expect(ceiling).toBeDefined()
+    ceiling?.callback()
+
+    expect(stopSession).toHaveBeenCalledWith(sessionId)
+    expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      taskId: 'ceiling-bash-1',
+      toolUseId: 'ceiling-bash-tool-1',
+      status: 'stopped',
+    }))
+  })
+
+  it('cancels the background-task ceiling when a client reconnects', () => {
+    const sessionId = `background-task-ceiling-reconnect-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    let nextTimerId = 0
+    const timers: Array<{ id: number; callback: () => void; delayMs: number }> = []
+    spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, delayMs?: number) => {
+      const id = ++nextTimerId
+      timers.push({ id, callback, delayMs: delayMs ?? 0 })
+      return id as any
+    }) as any)
+    const clearTimeoutSpy = spyOn(globalThis, 'clearTimeout').mockImplementation(() => {})
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    const outputCallbacks: Array<(cliMsg: any) => void> = []
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.push(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+
+    handleWebSocket.open(ws)
+    outputCallbacks[0]?.({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'ceiling-bash-reconnect-1',
+      tool_use_id: 'ceiling-bash-reconnect-tool-1',
+      description: 'Still watched by a returning client',
+      task_type: 'local_bash',
+    })
+    handleWebSocket.close(ws, 1000, 'pet closed while a background task runs')
+    outputCallbacks.at(-1)?.({
+      type: 'system',
+      subtype: 'task_notification',
+      task_id: 'ceiling-bash-reconnect-1',
+      tool_use_id: 'ceiling-bash-reconnect-tool-1',
+      task_type: 'local_bash',
+      status: 'running',
+    })
+
+    const ceiling = timers.find((timer) => timer.delayMs === 31 * 60_000)
+    expect(ceiling).toBeDefined()
+
+    const reconnected = makeClientSocket(sessionId)
+    handleWebSocket.open(reconnected)
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(ceiling?.id)
+
+    // Even an already-queued ceiling must not kill a session a client is using.
+    ceiling?.callback()
+    expect(stopSession).not.toHaveBeenCalled()
+  })
+
+  it('reaps residual background tasks when the runtime is already gone at disconnect', () => {
+    const sessionId = `dead-runtime-residual-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(globalThis, 'setTimeout').mockImplementation(() => 0 as any)
+    const stopSession = spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    const append = spyOn(sessionService, 'appendSessionTaskNotification').mockResolvedValue()
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    const hasSession = spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    const outputCallbacks: Array<(cliMsg: any) => void> = []
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.push(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+
+    handleWebSocket.open(ws)
+    outputCallbacks[0]?.({
+      type: 'system',
+      subtype: 'task_started',
+      task_id: 'residual-bash-1',
+      tool_use_id: 'residual-bash-tool-1',
+      description: 'Task record left behind by a dead CLI',
+      task_type: 'local_bash',
+    })
+
+    // The CLI died before the renderer closed, so no completion event will ever
+    // arrive to clear this record.
+    hasSession.mockReturnValue(false)
+    handleWebSocket.close(ws, 1006, 'renderer closed after the CLI died')
+
+    expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      taskId: 'residual-bash-1',
+      toolUseId: 'residual-bash-tool-1',
+      status: 'stopped',
+    }))
+    expect(stopSession).not.toHaveBeenCalled()
   })
 })
 
