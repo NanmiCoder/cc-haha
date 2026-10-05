@@ -21,6 +21,13 @@ const perform = vi.fn(async () => {})
 beforeEach(() => { vi.clearAllMocks(); mocks.translations = null; useConnectorStore.setState({ items: [item], loading: false, error: null, pending: {}, refresh, act: perform }) })
 afterEach(() => { cleanup(); vi.useRealTimers() })
 describe('Connectors', () => {
+  it('opens the detail of the connector the composer menu pointed at', () => {
+    const handled = vi.fn()
+    render(<Connectors focusConnectorId="feishu" onFocusHandled={handled} />)
+    expect(screen.getByRole('dialog')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'connectors.action.authenticate' })).toBeInTheDocument()
+    expect(handled).toHaveBeenCalledTimes(1)
+  })
   it('explains shared credentials and requires confirmation before account connection', () => {
     render(<Connectors />)
     fireEvent.click(screen.getByRole('button', { name: 'connectors.details' }))

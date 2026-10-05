@@ -1,33 +1,32 @@
-import { fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireEvent, render, screen, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 import { ComposerCapabilityMenu } from './ComposerCapabilityMenu'
 import { sessionCollaborationApi } from '@/api/sessionCollaboration'
 import { filesystemApi } from '@/api/filesystem'
+import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import type { CapabilityMenuSection } from './capabilityMenuModel'
 
 vi.mock('@/api/sessionCollaboration', () => ({ sessionCollaborationApi: { list: vi.fn() } }))
 vi.mock('@/api/filesystem', () => ({ filesystemApi: { browse: vi.fn(), search: vi.fn() } }))
+const initialWidth = window.innerWidth
 beforeEach(() => {
   vi.mocked(sessionCollaborationApi.list).mockClear().mockResolvedValue({ sessions: [] })
   vi.mocked(filesystemApi.search).mockResolvedValue({ currentPath: '/work', parentPath: '/', entries: [] })
 })
+afterEach(() => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: initialWidth })
+})
+
+const designSkill: ComposerReferenceCandidate = { kind: 'skill', id: 'design', name: 'design', displayName: 'Design', description: 'Create interfaces', source: 'user', modelText: 'Use design' }
+const videoPlugin: ComposerReferenceCandidate = { kind: 'plugin', id: 'video', name: 'video', displayName: 'Video Studio', description: 'Create videos', source: 'plugin', modelText: 'Use video' }
 
 function fixtureSections(): CapabilityMenuSection[] {
   return [
     {
-      id: 'add',
-      title: 'Add',
-      items: [{
-        key: 'add-files',
-        label: 'Add files or photos',
-        icon: { kind: 'slash' },
-        action: { type: 'attachment' },
-      }],
-    },
-    {
-      id: 'capabilities',
-      title: 'Capabilities',
+      id: 'use',
+      title: 'For this task',
+      showTitle: true,
       items: [
         {
           key: 'skills',
@@ -41,35 +40,88 @@ function fixtureSections(): CapabilityMenuSection[] {
               label: 'Design',
               description: 'Create interfaces',
               icon: { kind: 'slash' },
-              action: { type: 'insertSlashText', command: 'design' },
+              group: 'Recently used',
+              action: { type: 'insertMention', reference: designSkill },
             },
             {
-              key: 'skills:manage',
-              label: 'Manage skills',
+              key: 'skills:all',
+              label: 'All skills',
               icon: { kind: 'slash' },
-              action: { type: 'settings', tab: 'skills' },
+              count: 1,
+              children: [{
+                key: 'skill:design',
+                label: 'Design',
+                icon: { kind: 'slash' },
+                action: { type: 'insertMention', reference: designSkill },
+              }],
+            },
+            {
+              key: 'market-skill:pptx',
+              label: 'pptx',
+              description: 'Build slides',
+              icon: { kind: 'slash' },
+              group: 'Popular',
+              action: { type: 'installSkill', id: 'pptx', name: 'pptx' },
+              button: { label: 'Install', action: { type: 'installSkill', id: 'pptx', name: 'pptx' } },
+            },
+            {
+              key: 'skills:browse',
+              label: 'Browse the skill market',
+              icon: { kind: 'slash' },
+              action: { type: 'market', section: 'skills' },
             },
           ],
         },
         {
-          key: 'computer-use',
-          label: 'Computer Use',
-          description: 'Let Claude operate apps',
+          key: 'connectors',
+          label: 'Connectors',
           icon: { kind: 'slash' },
-          switch: { checked: false, disabled: false },
-          action: { type: 'toggleComputerUse' },
+          children: [{
+            key: 'connector:github',
+            label: 'GitHub',
+            icon: { kind: 'slash' },
+            status: 'ok',
+            group: 'Connected',
+            action: { type: 'market', section: 'plugins', connectorId: 'github' },
+          }],
+        },
+        {
+          key: 'add-files',
+          label: 'Add files or photos',
+          icon: { kind: 'slash' },
+          action: { type: 'attachment' },
         },
       ],
     },
     {
-      id: 'commands',
-      title: 'Commands',
+      id: 'run',
+      title: 'How it runs',
+      showTitle: true,
       items: [{
-        key: 'slash-commands',
-        label: 'Slash commands',
+        key: 'computer-use',
+        label: 'Computer Use',
+        description: 'Let Claude operate apps',
         icon: { kind: 'slash' },
-        action: { type: 'slashTrigger' },
+        switch: { checked: false, disabled: false },
+        action: { type: 'toggleComputerUse' },
       }],
+    },
+    {
+      id: 'more',
+      title: 'More tools',
+      showTitle: false,
+      items: [{
+        key: 'more',
+        label: 'More tools',
+        icon: { kind: 'slash' },
+        children: [{
+          key: 'slash-commands',
+          label: 'Slash commands',
+          icon: { kind: 'slash' },
+          action: { type: 'slashTrigger' },
+        }],
+      }],
+      searchOnly: [{ key: 'plugin:video', label: 'Video Studio', icon: { kind: 'slash' }, action: { type: 'insertMention', reference: videoPlugin } }],
     },
   ]
 }
@@ -93,66 +145,115 @@ function searchInput(): HTMLElement {
   return screen.getByRole('combobox')
 }
 
+function rootList(): HTMLElement {
+  return screen.getByRole('listbox', { name: 'Open composer tools' })
+}
+
 describe('ComposerCapabilityMenu', () => {
-  it('renders section titles and dispatches a leaf action on click', () => {
+  it('titles the two groups and dispatches a leaf action on click', () => {
     const { onAction } = renderMenu()
-    expect(screen.getByRole('group', { name: 'Add' })).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: 'Capabilities' })).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: 'Commands' })).toBeInTheDocument()
+    expect(within(rootList()).getByText('For this task')).toBeInTheDocument()
+    expect(within(rootList()).getByText('How it runs')).toBeInTheDocument()
+    // More is one row; its group needs no visible title.
+    expect(within(rootList()).queryByText('More tools', { selector: '[role="presentation"]' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('option', { name: /Add files or photos/ }))
     expect(onAction).toHaveBeenCalledWith({ type: 'attachment' })
   })
 
-  it('drills into a sub-list and returns with the back row', () => {
+  it('opens a category beside the root on hover and keeps the root in view', () => {
     const { onAction } = renderMenu()
+    fireEvent.mouseEnter(screen.getByRole('option', { name: /Skills/ }))
+    const flyout = screen.getByTestId('capability-flyout')
+    expect(within(flyout).getByText('Skills')).toBeInTheDocument()
+    expect(within(flyout).getByText('Recently used')).toBeInTheDocument()
+    expect(within(flyout).getByText('Create interfaces')).toBeInTheDocument()
+    // The root list is still there, its open category marked.
+    expect(within(rootList()).getByRole('option', { name: /Skills/ })).toHaveAttribute('aria-selected', 'true')
 
-    // Parent rows open their sub-list instead of firing an action.
+    // Hovering a sibling category swaps the panel; a leaf closes it.
+    fireEvent.mouseEnter(screen.getByRole('option', { name: /Connectors/ }))
+    expect(within(screen.getByTestId('capability-flyout')).getByRole('option', { name: 'GitHub' })).toBeInTheDocument()
+    fireEvent.mouseEnter(screen.getByRole('option', { name: /Add files or photos/ }))
+    expect(screen.queryByTestId('capability-flyout')).not.toBeInTheDocument()
+
     fireEvent.click(screen.getByRole('option', { name: /Skills/ }))
-    expect(onAction).not.toHaveBeenCalled()
-    expect(screen.getByRole('option', { name: /Design/ })).toBeInTheDocument()
-
-    // Back navigation restores the top-level sections.
-    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
-    expect(screen.getByRole('group', { name: 'Commands' })).toBeInTheDocument()
-
-    // Drilling again and picking a leaf fires its action.
-    fireEvent.click(screen.getByRole('option', { name: /Skills/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Design/ }))
-    expect(onAction).toHaveBeenCalledWith({ type: 'insertSlashText', command: 'design' })
+    fireEvent.click(within(screen.getByTestId('capability-flyout')).getByRole('option', { name: /Design/ }))
+    expect(onAction).toHaveBeenCalledWith({ type: 'insertMention', reference: designSkill })
   })
 
-  it('navigates with the keyboard from the search input', () => {
-    const { onClose } = renderMenu()
+  it('walks into a category with the keyboard and steps back one panel per Escape', () => {
+    const { onAction, onClose } = renderMenu()
     const input = searchInput()
 
-    // Order: Add files → Skills → Computer Use → Slash commands.
+    // Root order: Skills → Connectors → Add files → Computer Use → More.
+    fireEvent.keyDown(input, { key: 'ArrowRight' })
+    const flyout = screen.getByTestId('capability-flyout')
+    expect(input).toHaveAttribute('aria-controls', 'cap-sub-list')
+    expect(input).not.toHaveAttribute('aria-activedescendant')
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    const first = within(flyout).getByRole('option', { name: /Design/ })
+    expect(input).toHaveAttribute('aria-activedescendant', first.id)
+    fireEvent.keyDown(input, { key: 'ArrowLeft' })
+    expect(screen.queryByTestId('capability-flyout')).not.toBeInTheDocument()
+
+    fireEvent.keyDown(input, { key: 'Enter' })
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(screen.getByRole('option', { name: /Design/ })).toBeInTheDocument()
+    expect(onAction).toHaveBeenCalledWith({ type: 'insertMention', reference: designSkill })
 
     fireEvent.keyDown(input, { key: 'Escape' })
-    // Esc inside a sub-list steps back first, then closes.
+    expect(screen.queryByTestId('capability-flyout')).not.toBeInTheDocument()
     expect(onClose).not.toHaveBeenCalled()
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('runs a row button once without also running the row', () => {
+    const { onAction } = renderMenu()
+    fireEvent.mouseEnter(screen.getByRole('option', { name: /Skills/ }))
+    const flyout = screen.getByTestId('capability-flyout')
+    expect(within(flyout).getByText('Popular')).toBeInTheDocument()
+    fireEvent.click(within(flyout).getByRole('button', { name: 'Install' }))
+    expect(onAction).toHaveBeenCalledTimes(1)
+    expect(onAction).toHaveBeenCalledWith({ type: 'installSkill', id: 'pptx', name: 'pptx' })
+  })
+
+  it('browses the full skill list in the side panel and returns with its back button', () => {
+    renderMenu()
+    fireEvent.mouseEnter(screen.getByRole('option', { name: /Skills/ }))
+    fireEvent.click(within(screen.getByTestId('capability-flyout')).getByRole('option', { name: /All skills/ }))
+    const flyout = screen.getByTestId('capability-flyout')
+    expect(within(flyout).getByText('All skills')).toBeInTheDocument()
+    expect(within(flyout).getByRole('listbox', { name: 'References' })).toBeInTheDocument()
+    expect(within(flyout).getByRole('option', { name: 'Design' })).toBeInTheDocument()
+
+    fireEvent.click(within(flyout).getByRole('button', { name: 'Back' }))
+    expect(within(screen.getByTestId('capability-flyout')).getByText('Recently used')).toBeInTheDocument()
+  })
+
   it('toggles a switch row without double-firing from the row click', () => {
     const { onAction } = renderMenu()
     const row = screen.getByRole('option', { name: 'Computer Use: Disabled' })
-    expect(row).toHaveAccessibleName('Computer Use: Disabled')
-
     fireEvent.click(row.querySelector('input[type="checkbox"]')!)
     expect(onAction).toHaveBeenCalledTimes(1)
     expect(onAction).toHaveBeenCalledWith({ type: 'toggleComputerUse' })
   })
 
-  it('filters rows through the search box and flattens sub-list matches', async () => {
-    renderMenu()
+  it('searches everything from the root, closing an open category', async () => {
+    const { onAction } = renderMenu()
+    fireEvent.mouseEnter(screen.getByRole('option', { name: /Connectors/ }))
     fireEvent.change(searchInput(), { target: { value: 'Design' } })
-    expect(screen.getByRole('option', { name: /Design/ })).toBeInTheDocument()
-    expect(screen.queryByText('Commands')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('capability-flyout')).not.toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'Design' })).toBeInTheDocument()
+
+    // Plugins that no sub-list shows are still found and mentioned.
+    fireEvent.change(searchInput(), { target: { value: 'video' } })
+    const option = await screen.findByRole('option', { name: 'Video Studio' })
+    expect(searchInput()).toHaveAttribute('aria-activedescendant', option.id)
+    fireEvent.keyDown(searchInput(), { key: 'Enter' })
+    expect(onAction).toHaveBeenCalledWith({ type: 'insertMention', reference: videoPlugin })
 
     fireEvent.change(searchInput(), { target: { value: 'no-such-capability' } })
     expect(await screen.findByText('No matching references')).toBeInTheDocument()
@@ -161,35 +262,19 @@ describe('ComposerCapabilityMenu', () => {
   })
 })
 
-// Searching a category previously produced an inert parent row.
-it('opens a searched category and scopes subsequent searches to its children', () => {
-  const { onAction } = renderMenu()
-  fireEvent.change(searchInput(), { target: { value: 'Skills' } })
+it('opens a searched category in the side panel', () => {
+  renderMenu()
+  fireEvent.change(searchInput(), { target: { value: 'Connectors' } })
   fireEvent.keyDown(searchInput(), { key: 'Enter' })
   expect(searchInput()).toHaveValue('')
-  expect(screen.getByRole('option', { name: 'Design' })).toBeInTheDocument()
-  fireEvent.change(searchInput(), { target: { value: 'Design' } })
-  fireEvent.keyDown(searchInput(), { key: 'Enter' })
-  expect(onAction).toHaveBeenCalledWith({ type: 'insertSlashText', command: 'design' })
+  expect(within(screen.getByTestId('capability-flyout')).getByRole('option', { name: 'GitHub' })).toBeInTheDocument()
 })
 
-it('keeps the root menu concise and exposes descriptions inside a category', () => {
+it('keeps the root a list of names and leaves descriptions to the categories', () => {
   renderMenu()
   expect(screen.queryByText('Add a skill to this chat')).not.toBeInTheDocument()
-  fireEvent.click(screen.getByRole('option', { name: 'Skills' }))
-  expect(screen.getByText('Create interfaces')).toBeInTheDocument()
-})
-
-it('uses the shared reference search to insert a plugin without a connector', async () => {
-  const reference = { kind: 'plugin' as const, id: 'video', name: 'video', displayName: 'Video Studio', description: 'Create videos', source: 'plugin', modelText: 'Use video' }
-  const sections = fixtureSections()
-  sections[1]!.items.unshift({ key: 'plugins', label: 'Plugins', icon: { kind: 'slash' }, children: [{ key: 'plugin:video', label: 'Video Studio', icon: { kind: 'slash' }, action: { type: 'insertMention', reference } }] })
-  const { onAction } = renderMenu({ sections })
-  fireEvent.change(searchInput(), { target: { value: 'video' } })
-  const option = await screen.findByRole('option', { name: 'Video Studio' })
-  expect(searchInput()).toHaveAttribute('aria-activedescendant', option.id)
-  fireEvent.keyDown(searchInput(), { key: 'Enter' })
-  expect(onAction).toHaveBeenCalledWith({ type: 'insertMention', reference })
+  fireEvent.mouseEnter(screen.getByRole('option', { name: 'Skills' }))
+  expect(screen.getByText('Build slides')).toBeInTheDocument()
 })
 
 it('finds project files through the same search and preserves their structured path', async () => {
@@ -202,17 +287,25 @@ it('finds project files through the same search and preserves their structured p
   expect(onClose).toHaveBeenCalledTimes(1)
 })
 
-it('keeps nested tools accessible and backs up one level per Escape', () => {
-  const sections = fixtureSections()
-  const skills = sections[1]!.items[0]!
-  sections[1]!.items = [{ key: 'more', label: 'More tools', icon: { kind: 'slash' }, children: [skills] }]
-  const { onClose } = renderMenu({ sections })
-  fireEvent.click(screen.getByRole('option', { name: 'More tools' }))
-  fireEvent.click(screen.getByRole('option', { name: 'Skills' }))
-  expect(screen.getByRole('option', { name: 'Design' })).toBeInTheDocument()
+it('opens categories in place when the window has no room for a side panel', () => {
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 480 })
+  const { onClose } = renderMenu()
+  fireEvent.mouseEnter(screen.getByRole('option', { name: /Skills/ }))
+  expect(screen.queryByTestId('capability-flyout')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('option', { name: /Skills/ }))
+  expect(screen.queryByRole('listbox', { name: 'Open composer tools' })).not.toBeInTheDocument()
+  expect(screen.getByRole('option', { name: /Design/ })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+  expect(rootList()).toBeInTheDocument()
+  expect(onClose).not.toHaveBeenCalled()
+})
+
+it('drills in place inside the phone sheet and backs up one level per Escape', () => {
+  const { onClose } = renderMenu({ presentation: 'sheet' })
+  fireEvent.click(screen.getByRole('option', { name: /More tools/ }))
+  expect(screen.queryByTestId('capability-flyout')).not.toBeInTheDocument()
+  expect(screen.getByRole('option', { name: /Slash commands/ })).toBeInTheDocument()
   fireEvent.keyDown(searchInput(), { key: 'Escape' })
-  expect(screen.getByRole('option', { name: 'Skills' })).toBeInTheDocument()
-  fireEvent.keyDown(searchInput(), { key: 'Escape' })
-  expect(screen.getByRole('option', { name: 'More tools' })).toBeInTheDocument()
+  expect(screen.getByRole('option', { name: /More tools/ })).toBeInTheDocument()
   expect(onClose).not.toHaveBeenCalled()
 })

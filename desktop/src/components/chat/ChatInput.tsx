@@ -45,6 +45,10 @@ import { ComposerCapabilityMenu } from './ComposerCapabilityMenu'
 import { MobileComposerSheet, type MobileComposerSetting } from './MobileComposerSheet'
 import { MobileApprovalDock } from './MobileApprovalDock'
 import { useCapabilityMenu } from './useCapabilityMenu'
+import { AgentTeamChip } from './AgentTeamChip'
+import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { recordRecentSkills } from '@/lib/recentSkills'
 import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from './LocalSlashCommandPanel'
@@ -163,6 +167,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const [shellRef, shellWidth] = useElementWidth<HTMLDivElement>()
   const [input, setInput] = useState('')
   const [mentions, setMentions] = useState<ComposerMention[]>([])
+  // Bumped when the + menu installs a skill, so the mention list reloads.
+  const [referencesVersion, setReferencesVersion] = useState(0)
   const [referenceDetail, setReferenceDetail] = useState<ComposerMention | null>(null)
   const [referenceOptionId, setReferenceOptionId] = useState<string | undefined>()
   const [referenceState, setReferenceState] = useState<{ context: string, items: ComposerReferenceCandidate[], loading: boolean, error: boolean } | null>(null)
@@ -375,7 +381,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
     })
     return () => { active = false }
-  }, [referenceContext, referenceCwd, referenceProviderId, isMemberSession, slashMenuOpen, fileSearchOpen, plusMenuOpen])
+  }, [referenceContext, referenceCwd, referenceProviderId, isMemberSession, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
   useEffect(() => {
     setReferenceDetail(null)
     setReferenceOptionId(undefined)
@@ -922,7 +928,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     // `@label` is a pill and which is literal text the user typed.
     const sessionReferences = getSessionReferences(input, mentions)
     const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
-    const contentForModel = [workspaceReferencePrompt, serializedText].filter(Boolean).join('\n\n')
+    const joinedContent = [workspaceReferencePrompt, serializedText].filter(Boolean).join('\n\n')
+    // Agent Team armed in the + menu: the model gets the team instruction, the
+    // bubble keeps what the user typed.
+    const sendAsTeam = capabilityMenu.agentTeamArmed && !isMemberSession
+    const contentForModel = sendAsTeam ? withAgentTeamRequest(joinedContent) : joinedContent
     const displayContent = text || (
       workspaceReferences.length > 0
         ? t('chat.contextReferencesOnly', { count: workspaceReferences.length })
@@ -1020,6 +1030,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       })
     }
     invalidatePendingPastes()
+    recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
+    if (sendAsTeam) capabilityMenu.disarmAgentTeam()
     setComposerInput('', [])
     setComposerAttachments([])
     const chatStore = useChatStore.getState()
@@ -1307,23 +1319,18 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           composerRef.current?.setSelectionOffsets(replacement.cursorPos)
         })
       },
-      onInsertPromptSeed: (text) => {
-        const next = inputRef.current.trim() ? `${inputRef.current}\n${text}` : text
-        setComposerInput(next)
-        requestAnimationFrame(() => {
-          composerRef.current?.focus()
-          composerRef.current?.setSelectionOffsets(next.length)
-        })
-      },
       onAttachment: openAttachmentPicker,
       onSlashTrigger: insertSlashCommand,
       onSaveWorkflow: () => setLocalSlashPanel('save-workflow'),
+      onReferencesChanged: () => setReferencesVersion(version => version + 1),
       onClose: () => setPlusMenuOpen(false),
     },
   })
 
   const composerPlaceholder =
-    isHeroComposer
+    capabilityMenu.agentTeamArmed && !isWorkspaceMissing && !questionPending && !isMemberSession
+      ? t('chat.capabilities.teamPlaceholder')
+      : isHeroComposer
       ? t('empty.placeholder')
       : isWorkspaceMissing
         ? workspaceState === 'worktree_removed'
@@ -1719,7 +1726,12 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                         onAction={capabilityMenu.onAction}
                       />
                     )}
+                    <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
                   </div>
+
+                  {capabilityMenu.agentTeamArmed && !isMemberSession ? (
+                    <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
+                  ) : null}
 
                   <div className="shrink-0">
                     <PermissionModeSelector

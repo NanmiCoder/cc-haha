@@ -77,6 +77,10 @@ import {
 import { ComposerCapabilityMenu } from '@/components/chat/ComposerCapabilityMenu'
 import { MobileComposerSheet, type MobileComposerSetting } from '@/components/chat/MobileComposerSheet'
 import { useCapabilityMenu } from '@/components/chat/useCapabilityMenu'
+import { AgentTeamChip } from '@/components/chat/AgentTeamChip'
+import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { recordRecentSkills } from '@/lib/recentSkills'
 import type { AttachmentRef } from '../types/chat'
 import type { PermissionMode } from '../types/settings'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
@@ -146,6 +150,8 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
   const [repositoryLaunchReady, setRepositoryLaunchReady] = useState(!initialWorkDir)
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
+  // Bumped when the + menu installs a skill, so the mention list reloads.
+  const [referencesVersion, setReferencesVersion] = useState(0)
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
   const [fileSearchOpen, setFileSearchOpen] = useState(false)
   const [localSlashPanel, setLocalSlashPanel] = useState<LocalSlashCommandName | null>(null)
@@ -197,7 +203,7 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
       if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
     })
     return () => { active = false }
-  }, [referenceContext, workDir, referenceProviderId, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen, plusMenuOpen])
+  }, [referenceContext, workDir, referenceProviderId, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
   useEffect(() => {
     setReferenceDetail(null)
     setReferenceOptionId(undefined)
@@ -473,9 +479,14 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
       // Inline @-mentions go out as the `@"absolute path"` text the CLI parses,
       // serialized from the live document; the bubble keeps the pill text.
       const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
+      // Agent Team armed in the + menu: the model gets the team instruction,
+      // the bubble keeps what the user typed.
+      const sendAsTeam = capabilityMenu.agentTeamArmed
       if (serializedText || attachmentPayload.length > 0) {
-        sendMessage(sessionId, serializedText, attachmentPayload, { displayContent: text })
+        sendMessage(sessionId, sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText, attachmentPayload, { displayContent: text })
       }
+      recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
+      if (sendAsTeam) capabilityMenu.disarmAgentTeam()
       setInput('')
       setMentions([])
       setAttachments([])
@@ -775,23 +786,16 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
           composerRef.current?.setSelectionOffsets(replacement.cursorPos)
         })
       },
-      onInsertPromptSeed: (text) => {
-        const next = input.trim() ? `${input}\n${text}` : text
-        setInput(next)
-        requestAnimationFrame(() => {
-          composerRef.current?.focus()
-          composerRef.current?.setSelectionOffsets(next.length)
-        })
-      },
       onAttachment: openAttachmentPicker,
       onSlashTrigger: insertSlashCommand,
       onSaveWorkflow: () => setLocalSlashPanel('save-workflow'),
+      onReferencesChanged: () => setReferencesVersion(version => version + 1),
       onClose: () => setPlusMenuOpen(false),
     },
   })
 
   const heroProject = workDir ? (resolveProjectDisplayName(workDir) ?? projectTitle(workDir)) : null
-  // Same merge as the "+" menu's prompt seeds: a draft already typed is kept.
+  // A draft already typed is kept: the suggestion goes on a new line.
   const insertSuggestion = (text: string) => {
     const next = input.trim() ? `${input}\n${text}` : text
     setInput(next)
@@ -956,7 +960,7 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
                   onPaste={handleComposerPaste}
                   onCompositionStart={dictation.compositionHandlers.onCompositionStart}
                   onCompositionEnd={dictation.compositionHandlers.onCompositionEnd}
-                  placeholder={t('empty.placeholder')}
+                  placeholder={capabilityMenu.agentTeamArmed ? t('chat.capabilities.teamPlaceholder') : t('empty.placeholder')}
                   // `min-w-0`: see ChatInput — an unbreakable long run (URL,
                   // hash) otherwise grows this flex item past the panel.
                   className="flex-1 min-w-0"
@@ -1024,7 +1028,12 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
                         onAction={capabilityMenu.onAction}
                       />
                     )}
+                    <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
                   </div>
+
+                  {capabilityMenu.agentTeamArmed ? (
+                    <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
+                  ) : null}
 
                   <PermissionModeSelector
                     ref={permissionSelectorRef}

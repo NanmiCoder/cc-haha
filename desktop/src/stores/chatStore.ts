@@ -33,6 +33,7 @@ import { AGENT_LIFECYCLE_TYPES } from '../types/team'
 import type { ComposerAttachment } from '../lib/composerAttachments'
 import type { ComposerMention } from '../lib/composerMentions'
 import type { MessageEntry } from '../types/session'
+import { stripAgentTeamRequest } from '../lib/agentTeamRequest'
 import type { PermissionMode } from '../types/settings'
 import type { RuntimeSelection } from '../types/runtime'
 import type {
@@ -7419,6 +7420,11 @@ type RestoredUserDisplay = {
 }
 
 export function extractRestoredUserDisplay(text: string): RestoredUserDisplay {
+  // The Agent Team switch prefixes an instruction block the user never typed.
+  const teamRequest = stripAgentTeamRequest(text)
+  if (teamRequest.requested) {
+    return { ...extractRestoredUserDisplay(teamRequest.content), modelContent: text }
+  }
   const referenceContext = splitSessionReferenceContext(text)
   if (referenceContext.sessionReferences.length) {
     return { ...extractRestoredUserDisplay(referenceContext.content), sessionReferences: referenceContext.sessionReferences, modelContent: text }

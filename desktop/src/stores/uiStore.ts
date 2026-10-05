@@ -233,6 +233,12 @@ export type Toast = {
   duration?: number
 }
 
+export type MarketTarget = {
+  section: 'plugins' | 'skills'
+  /** Open this connector's detail once the catalog loads. */
+  connectorId?: string
+}
+
 export type SettingsTab =
   | 'providers'
   | 'activity'
@@ -269,6 +275,8 @@ type UIStore = {
   activeSettingsTab: SettingsTab
   pendingSettingsTab: SettingsTab | null
   pendingMemoryPath: string | null
+  /** Where the extension market should open next (set by the composer + menu). */
+  pendingMarketTarget: MarketTarget | null
   activeModal: string | null
   toasts: Toast[]
 
@@ -282,6 +290,7 @@ type UIStore = {
   setActiveSettingsTab: (tab: SettingsTab) => void
   setPendingSettingsTab: (tab: SettingsTab | null) => void
   setPendingMemoryPath: (path: string | null) => void
+  setPendingMarketTarget: (target: MarketTarget | null) => void
   openModal: (id: string) => void
   closeModal: () => void
   addToast: (toast: Omit<Toast, 'id'>) => void
@@ -301,6 +310,7 @@ export const useUIStore = create<UIStore>((set) => ({
   activeSettingsTab: getStoredSettingsTab(),
   pendingSettingsTab: null,
   pendingMemoryPath: null,
+  pendingMarketTarget: null,
   activeModal: null,
   toasts: [],
 
@@ -374,6 +384,7 @@ export const useUIStore = create<UIStore>((set) => ({
   },
   setPendingSettingsTab: (tab) => set({ pendingSettingsTab: tab }),
   setPendingMemoryPath: (path) => set({ pendingMemoryPath: path }),
+  setPendingMarketTarget: (target) => set({ pendingMarketTarget: target }),
   openModal: (id) => set({ activeModal: id }),
   closeModal: () => set({ activeModal: null }),
 

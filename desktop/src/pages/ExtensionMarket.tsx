@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowLeft, PackageCheck } from 'lucide-react'
 import { useTranslation } from '@/i18n'
+import { useUIStore } from '@/stores/uiStore'
 import { cx } from '@/lib/cx'
 import { Button } from '@/components/ui/Button'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
@@ -13,6 +14,17 @@ export function ExtensionMarket() {
   const t = useTranslation()
   const [section, setSection] = useState<'plugins' | 'skills'>('plugins')
   const [managing, setManaging] = useState(false)
+  const [focusConnectorId, setFocusConnectorId] = useState<string>()
+  const pendingTarget = useUIStore(state => state.pendingMarketTarget)
+  // The composer's + menu opens the market at a section, or straight at one
+  // connector's detail. Consumed once, so reopening the tab later starts fresh.
+  useEffect(() => {
+    if (!pendingTarget) return
+    setSection(pendingTarget.section)
+    setManaging(false)
+    setFocusConnectorId(pendingTarget.connectorId)
+    useUIStore.getState().setPendingMarketTarget(null)
+  }, [pendingTarget])
   const myLabel = t(section === 'plugins' ? 'extensions.myPlugins' : 'extensions.mySkills')
   const description = section === 'plugins'
     ? t('extensions.pluginsSubtitle')
@@ -40,7 +52,7 @@ export function ExtensionMarket() {
           previous featured row is a change to the skills branch below. */}
       {managing
         ? section === 'plugins' ? <Connectors key="installed" management /> : <InstalledSkills />
-        : section === 'plugins' ? <Connectors key="catalog" mode="plugins" /> : <Market />}
+        : section === 'plugins' ? <Connectors key="catalog" mode="plugins" focusConnectorId={focusConnectorId} onFocusHandled={() => setFocusConnectorId(undefined)} /> : <Market />}
     </div>
   </section>
 }

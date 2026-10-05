@@ -16,6 +16,7 @@ import {
 import { computerUseApi, type ComputerUseStatus, type SetupResult } from '../api/computerUse'
 import { useTranslation } from '../i18n'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import { COMPUTER_USE_ENABLE_REQUEST, needsComputerUsePermissionCard } from '@/lib/computerUseEnable'
 import {
   SettingsBlock,
   SettingsGroup,
@@ -192,16 +193,7 @@ export function ComputerUseSettings() {
     setConfigError(null)
     setComputerUseEnabled(value)
     try {
-      await computerUseApi.setAuthorizedApps(value
-        ? {
-            enabled: true,
-            grantFlags: {
-              clipboardRead: true,
-              clipboardWrite: true,
-              systemKeyCombos: true,
-            },
-          }
-        : { enabled: false })
+      await computerUseApi.setAuthorizedApps(value ? COMPUTER_USE_ENABLE_REQUEST : { enabled: false })
       if (requestSeq !== configMutationSeqRef.current) return true
       return true
     } catch {
@@ -247,11 +239,7 @@ export function ComputerUseSettings() {
     setEnableSaving(false)
     if (!saved) return
     setEnableConfirmOpen(false)
-    if (
-      status?.engine === 'macos-native'
-      && (status.permissions.accessibility === false
-        || status.permissions.screenRecording === false)
-    ) {
+    if (needsComputerUsePermissionCard(status)) {
       await openPermissionCard()
     }
   }

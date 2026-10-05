@@ -459,7 +459,7 @@ describe('EmptySession', () => {
     render(<EmptySession />)
     if (entry === '+') {
       fireEvent.click(screen.getByLabelText('Open composer tools'))
-      fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, plugins, files…' }), { target: { value: 'design' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'design' } })
     } else if (entry === '/empty') setComposerText('/', 1)
     else setComposerText(`${entry}design`, 7)
     expect(await screen.findByRole('option', { name: 'Personal frontend design' })).toBeInTheDocument()
@@ -494,6 +494,7 @@ describe('EmptySession', () => {
     fireEvent.click(screen.getByLabelText('Open composer tools'))
     await waitFor(() => expect(mocks.listReferences.mock.calls.length).toBeGreaterThan(initialCalls))
     fireEvent.click(await screen.findByRole('option', { name: /^Skills/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /^All skills/ }))
     expect(screen.queryByRole('option', { name: 'Old skill' })).not.toBeInTheDocument()
 
     await act(async () => resolveRefresh({ plugins: [], skills: result === 'replacement' ? [newSkill] : [] }))
@@ -511,7 +512,7 @@ describe('EmptySession', () => {
     await pickProject()
     setComposerText('Please review ', 14)
     fireEvent.click(screen.getByLabelText('Open composer tools'))
-    fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, plugins, files…' }), { target: { value: 'README' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'README' } })
     fireEvent.click(await screen.findByRole('option', { name: 'README.md' }))
 
     await waitFor(() => {
@@ -520,7 +521,7 @@ describe('EmptySession', () => {
     expect(document.querySelector('.composer-mention')).toHaveTextContent('@README.md')
     expect(getComposerText()).toContain('Please review @README.md')
     expect(mocks.search).toHaveBeenCalledWith('README', '/workspace/project', { signal: expect.any(AbortSignal) })
-    expect(screen.queryByRole('combobox', { name: 'Search skills, plugins, files…' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Search skills, connectors, files…' })).not.toBeInTheDocument()
     expect(mocks.wsSend).not.toHaveBeenCalled()
     expect(mocks.createSession).not.toHaveBeenCalled()
   })

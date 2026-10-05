@@ -7,6 +7,9 @@ import { useSideChatStore } from '@/stores/sideChatStore'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
+import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
+import { COMPUTER_USE_ENABLE_REQUEST } from '@/lib/computerUseEnable'
+import { readRecentSkills, RECENT_SKILLS_STORAGE_KEY } from '@/lib/recentSkills'
 import { act, StrictMode } from 'react'
 
 const viewportMocks = vi.hoisted(() => ({
@@ -248,6 +251,7 @@ describe('ChatInput file mentions', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    localStorage.removeItem(RECENT_SKILLS_STORAGE_KEY)
     useSideChatStore.setState({ entries: {} })
     useTeamPlanStore.setState({ bySession: {} })
     useTeamStore.setState({ workbenchesBySession: {} })
@@ -2176,7 +2180,7 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput compact />)
     if (entry === '+') {
       fireEvent.click(screen.getByLabelText('Open composer tools'))
-      fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, plugins, files…' }), { target: { value: 'design' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'design' } })
     } else if (entry === '/empty') setComposerText('/', 1)
     else setComposerText(`${entry}design`, 7)
     expect(await screen.findByRole('option', { name: 'Personal frontend design' })).toBeInTheDocument()
@@ -2211,6 +2215,7 @@ describe('ChatInput file mentions', () => {
     fireEvent.click(screen.getByLabelText('Open composer tools'))
     await waitFor(() => expect(mocks.listReferences.mock.calls.length).toBeGreaterThan(initialCalls))
     fireEvent.click(await screen.findByRole('option', { name: /^Skills/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /^All skills/ }))
     expect(screen.queryByRole('option', { name: 'Old skill' })).not.toBeInTheDocument()
 
     await act(async () => resolveRefresh({ plugins: [], skills: result === 'replacement' ? [newSkill] : [] }))
@@ -2227,7 +2232,7 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput compact />)
     setComposerText('Please review ', 14)
     fireEvent.click(screen.getByLabelText('Open composer tools'))
-    fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, plugins, files…' }), { target: { value: 'README' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'README' } })
     fireEvent.click(await screen.findByRole('option', { name: 'README.md' }))
 
     await waitFor(() => {
@@ -2236,7 +2241,7 @@ describe('ChatInput file mentions', () => {
     expect(document.querySelector('.composer-mention')).toHaveTextContent('@README.md')
     expect(getComposerText()).toContain('Please review @README.md')
     expect(mocks.search).toHaveBeenCalledWith('README', '/repo', { signal: expect.any(AbortSignal) })
-    expect(screen.queryByRole('combobox', { name: 'Search skills, plugins, files…' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('combobox', { name: 'Search skills, connectors, files…' })).not.toBeInTheDocument()
     expect(mocks.wsSend).not.toHaveBeenCalled()
     fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
     expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({
@@ -2254,6 +2259,7 @@ describe('ChatInput file mentions', () => {
 
     fireEvent.click(screen.getByLabelText('Open composer tools'))
     fireEvent.click(await screen.findByRole('option', { name: /^Skills/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /^All skills/ }))
     fireEvent.click(await screen.findByRole('option', { name: /Design/ }))
 
     await waitFor(() => expect(document.querySelector('[data-mention-kind="skill"]')).toBeInTheDocument())
@@ -2280,9 +2286,12 @@ describe('ChatInput file mentions', () => {
     expect(mocks.wsSend).not.toHaveBeenCalled()
   })
 
-  it('toggles Computer Use from the capability menu with a rollback on failure', async () => {
-    const getStatus = vi.spyOn(computerUseApi, 'getStatus').mockResolvedValue({
+  it('turns Computer Use on from the capability menu only after the consent dialog', async () => {
+    vi.spyOn(computerUseApi, 'getStatus').mockResolvedValue({
       supported: true,
+      platform: 'darwin',
+      engine: 'macos-native',
+      permissions: { accessibility: true, screenRecording: true },
     } as Awaited<ReturnType<typeof computerUseApi.getStatus>>)
     vi.spyOn(computerUseApi, 'getAuthorizedApps').mockResolvedValue({
       enabled: false,
@@ -2291,16 +2300,113 @@ describe('ChatInput file mentions', () => {
       pythonPath: null,
     })
     const setAuthorizedApps = vi.spyOn(computerUseApi, 'setAuthorizedApps').mockResolvedValue({ ok: true })
+    const openPermissionCard = vi.spyOn(computerUseApi, 'openPermissionCard').mockResolvedValue({ ok: true })
     render(<ChatInput compact />)
 
     fireEvent.click(screen.getByLabelText('Open composer tools'))
     const row = await screen.findByRole('option', { name: /Computer use/ })
     await waitFor(() => expect(row.querySelector('input[type="checkbox"]')).not.toBeChecked())
 
+    // The switch asks first; dismissing the dialog changes nothing.
     fireEvent.click(row.querySelector('input[type="checkbox"]')!)
-    await waitFor(() => expect(setAuthorizedApps).toHaveBeenCalledWith({ enabled: true }))
+    const dialog = await screen.findByRole('dialog')
+    expect(setAuthorizedApps).not.toHaveBeenCalled()
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    expect(setAuthorizedApps).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click((await screen.findByRole('option', { name: /Computer use/ })).querySelector('input[type="checkbox"]')!)
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Enable Computer Use' }))
+    await waitFor(() => expect(setAuthorizedApps).toHaveBeenCalledWith(COMPUTER_USE_ENABLE_REQUEST))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+    // Permissions already granted: no macOS permission card.
+    expect(openPermissionCard).not.toHaveBeenCalled()
+  })
+
+  it('turns Computer Use off from the capability menu without asking', async () => {
+    vi.spyOn(computerUseApi, 'getStatus').mockResolvedValue({ supported: true, platform: 'darwin' } as Awaited<ReturnType<typeof computerUseApi.getStatus>>)
+    vi.spyOn(computerUseApi, 'getAuthorizedApps').mockResolvedValue({
+      enabled: true,
+      authorizedApps: [],
+      grantFlags: { clipboardRead: true, clipboardWrite: true, systemKeyCombos: true },
+      pythonPath: null,
+    })
+    const setAuthorizedApps = vi.spyOn(computerUseApi, 'setAuthorizedApps').mockRejectedValue(new Error('disk full'))
+    render(<ChatInput compact />)
+
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    const row = await screen.findByRole('option', { name: /Computer use/ })
     await waitFor(() => expect(row.querySelector('input[type="checkbox"]')).toBeChecked())
-    expect(getStatus).toHaveBeenCalled()
+    fireEvent.click(row.querySelector('input[type="checkbox"]')!)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(setAuthorizedApps).toHaveBeenCalledWith({ enabled: false })
+    // The write failed: the switch rolls back.
+    await waitFor(() => expect(row.querySelector('input[type="checkbox"]')).toBeChecked())
+  })
+
+  it('sends one message as an Agent Team request while the bubble keeps the typed text', async () => {
+    render(<ChatInput compact />)
+    setComposerText('Ship the release checklist', 26)
+
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click((await screen.findByRole('option', { name: /Agent Teams/ })).querySelector('input[type="checkbox"]')!)
+    const chip = await screen.findByTestId('agent-team-chip')
+    expect(chip).toHaveTextContent('Agent Teams')
+
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, {
+      type: 'user_message',
+      content: withAgentTeamRequest('Ship the release checklist'),
+      attachments: [],
+    })
+    const messages = useChatStore.getState().sessions[sessionId]?.messages ?? []
+    expect(messages[messages.length - 1]).toMatchObject({ type: 'user_text', content: 'Ship the release checklist' })
+    // Armed for one message only.
+    expect(screen.queryByTestId('agent-team-chip')).not.toBeInTheDocument()
+
+    // The first turn finished; the next message goes out as a plain one.
+    act(() => {
+      useChatStore.setState(state => ({ sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, chatState: 'idle' } } }))
+    })
+    setComposerText('Follow-up', 9)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenLastCalledWith(sessionId, { type: 'user_message', content: 'Follow-up', attachments: [] })
+  })
+
+  it('disarms Agent Team from the chip before sending', async () => {
+    render(<ChatInput compact />)
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click((await screen.findByRole('option', { name: /Agent Teams/ })).querySelector('input[type="checkbox"]')!)
+    fireEvent.click(within(await screen.findByTestId('agent-team-chip')).getByRole('button', { name: 'Remove Agent Teams' }))
+    expect(screen.queryByTestId('agent-team-chip')).not.toBeInTheDocument()
+
+    setComposerText('Just me', 7)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, { type: 'user_message', content: 'Just me', attachments: [] })
+  })
+
+  it('lists a skill under Recently used after it was sent', async () => {
+    const design = {
+      kind: 'skill' as const, id: 'design', name: 'design', displayName: 'Design',
+      description: 'Create interfaces', source: 'user', modelText: 'Use the Skill tool with skill: "design" for this request.',
+    }
+    mocks.listReferences.mockResolvedValue({ plugins: [], skills: [design] })
+    render(<ChatInput compact />)
+
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click(await screen.findByRole('option', { name: /^Skills/ }))
+    expect(screen.queryByText('Recently used')).not.toBeInTheDocument()
+    fireEvent.click(await screen.findByRole('option', { name: /^All skills/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /Design/ }))
+    await waitFor(() => expect(document.querySelector('[data-mention-kind="skill"]')).toBeInTheDocument())
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(readRecentSkills()).toEqual(['design'])
+
+    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click(await screen.findByRole('option', { name: /^Skills/ }))
+    expect(await screen.findByText('Recently used')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Design/ })).toBeInTheDocument()
   })
 
   it('inserts a selected @ file as an inline mention pill and sends its absolute path', async () => {

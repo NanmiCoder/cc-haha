@@ -38,7 +38,7 @@ const PHASE_KEYS: Record<string, TranslationKey> = {
 
 const TOOL_PLUGIN_IDS = new Set(['hyperframes', 'obsidian', 'drawio', 'remotion'])
 
-export function Connectors({ mode = 'plugins', embedded = false, externalQuery, installedFilter = 'all', management = false }: { mode?: 'plugins' | 'skills', embedded?: boolean, externalQuery?: string, installedFilter?: 'all' | 'installed' | 'installable', management?: boolean } = {}) {
+export function Connectors({ mode = 'plugins', embedded = false, externalQuery, installedFilter = 'all', management = false, focusConnectorId, onFocusHandled }: { mode?: 'plugins' | 'skills', embedded?: boolean, externalQuery?: string, installedFilter?: 'all' | 'installed' | 'installable', management?: boolean, focusConnectorId?: string, onFocusHandled?: () => void } = {}) {
   const t = useTranslation()
   const { items, loading, error, pending, refresh, act } = useConnectorStore()
   const [query, setQuery] = useState('')
@@ -111,6 +111,14 @@ export function Connectors({ mode = 'plugins', embedded = false, externalQuery, 
     setSelected(item.id)
   }
   const closeDetail = () => { setSelected(null); setConfiguration({}); setInvalidFields([]); setLocalError(null) }
+  // Opened from the composer at one connector: its detail shows as soon as the
+  // catalog has it (the modal reads `items`, so an early id simply waits).
+  useEffect(() => {
+    if (!focusConnectorId) return
+    setConfiguration({}); setInvalidFields([]); setLocalError(null)
+    setSelected(focusConnectorId)
+    onFocusHandled?.()
+  }, [focusConnectorId, onFocusHandled])
   const requestAction = (item: ConnectorDto, action: ConnectorAction, fromDetail = false) => {
     if (!(management && action === 'remove' && !fromDetail)) showDetail(item)
     const fields = item.setupFields || []
