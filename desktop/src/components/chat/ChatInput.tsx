@@ -5,13 +5,14 @@ import { getSessionReferences } from '@/lib/composerMentions'
 import { normalizeSessionReferences } from '@/lib/sessionReferences'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
-import { ArrowUp, CornerDownRight, Pencil, Plus, Square, Trash2 } from 'lucide-react'
+import { ArrowUp, CornerDownRight, Cpu, Gauge, Pencil, Plus, ShieldCheck, Square, Trash2 } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation } from '../../i18n'
 import {
   hasPendingAskUserQuestion,
+  listPendingPermissions,
   useChatStore,
   type RepositoryLaunchDraftState,
 } from '../../stores/chatStore'
@@ -30,7 +31,8 @@ import {
 } from '../../stores/workspaceChatContextStore'
 import { sessionsApi, type SessionGitInfo } from '../../api/sessions'
 import { agentsApi } from '../../api/agents'
-import { PermissionModeSelector } from '../controls/PermissionModeSelector'
+import { PermissionModeSelector, type PermissionModeSelectorHandle } from '../controls/PermissionModeSelector'
+import { PERMISSION_MODE_LABEL_KEYS, useResolvedPermissionMode } from '../controls/permissionModeState'
 import { ModelSelector, type ModelSelectorHandle } from '../controls/ModelSelector'
 import type { AttachmentRef } from '../../types/chat'
 import { AttachmentGallery } from './AttachmentGallery'
@@ -40,12 +42,14 @@ import { RepositoryLaunchControls } from '@/components/chat/RepositoryLaunchCont
 import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from './ComposerReferenceMenu'
 import { ComposerReferenceDetail } from './ComposerReferenceDetail'
 import { ComposerCapabilityMenu } from './ComposerCapabilityMenu'
+import { MobileComposerSheet, type MobileComposerSetting } from './MobileComposerSheet'
+import { MobileApprovalDock } from './MobileApprovalDock'
 import { useCapabilityMenu } from './useCapabilityMenu'
 import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from './LocalSlashCommandPanel'
 import { getSlashCommandOptionId, SlashCommandMenu } from './SlashCommandMenu'
-import { ContextUsageIndicator } from './ContextUsageIndicator'
+import { ContextUsageIndicator, type ContextUsageIndicatorHandle } from './ContextUsageIndicator'
 import {
   appendAgentSlashCommands,
   buildAgentSlashCommands,
@@ -74,6 +78,7 @@ import {
   findMentionRanges,
   insertMentionIntoText,
   type ComposerMention,
+  type NewComposerMention,
 } from '../../lib/composerMentions'
 import type { PermissionMode } from '../../types/settings'
 import { getSessionWorkspaceState, getSessionSeedWorkDir } from '../../lib/sessionWorkspace'
@@ -181,6 +186,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const panelRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const modelSelectorRef = useRef<ModelSelectorHandle>(null)
+  const permissionSelectorRef = useRef<PermissionModeSelectorHandle>(null)
+  const contextUsageRef = useRef<ContextUsageIndicatorHandle>(null)
   const plusMenuRef = useRef<HTMLDivElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const fileSearchRef = useRef<ComposerReferenceMenuHandle>(null)
@@ -300,6 +307,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
   const isMemberSession = !!memberInfo || activeTabType === 'subagent'
   const isActive = chatState !== 'idle'
+  const resolvedPermissionMode = useResolvedPermissionMode(activeTabId ?? undefined)
   const hasRunningSubagents = hasRunningSubagentTasks(sessionState?.backgroundAgentTasks)
   // Approved team processes are tracked by their plan, not background-agent
   // notifications. Keep Stop available after the review card is dismissed.
@@ -633,7 +641,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   }, [activeSession?.workDir, activeSession?.projectRoot, activeSession?.workspaceState, activeTabId, gitInfo?.workDir, showLaunchControls])
 
   useDismissable({
-    open: plusMenuOpen,
+    // The phone's + opens a sheet in a portal, which closes itself; an outside
+    // press listener here would read every tap inside it as "outside".
+    open: plusMenuOpen && !isMobileComposer,
     refs: [plusMenuRef],
     onDismiss: () => setPlusMenuOpen(false),
   })
@@ -1227,6 +1237,52 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // The "+" capability menu. The hook owns data loading and navigation
   // actions; these handlers are only the composer-local edits (mention badge,
   // slash text, prompt seed) plus the surfaces this composer already opens.
+  const insertSelectedFileMention = (mention: NewComposerMention) => {
+    const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
+    const inserted = insertMentionIntoText(inputRef.current, mentionsRef.current, cursorPos, cursorPos, mention)
+    setComposerInput(inserted.text, inserted.mentions)
+    requestAnimationFrame(() => {
+      composerRef.current?.focus()
+      composerRef.current?.setSelectionOffsets(inserted.cursorPos)
+    })
+  }
+
+  // The phone's + sheet carries the controls that left its toolbar. A row
+  // closes the sheet first and opens the control's own sheet a frame later,
+  // so the two never stack.
+  const openFromComposerSheet = (open: () => void) => {
+    setPlusMenuOpen(false)
+    requestAnimationFrame(open)
+  }
+  const mobileComposerSettings: MobileComposerSetting[] = isMobileComposer && !isMemberSession
+    ? [
+      {
+        key: 'permission',
+        icon: <ShieldCheck size={16} strokeWidth={1.75} aria-hidden="true" />,
+        label: t('permMode.executionPermissions'),
+        value: t(PERMISSION_MODE_LABEL_KEYS[resolvedPermissionMode]),
+        disabled: isActive,
+        onSelect: () => openFromComposerSheet(() => permissionSelectorRef.current?.open()),
+      },
+      ...(activeTabId ? [
+        {
+          key: 'model',
+          icon: <Cpu size={16} strokeWidth={1.75} aria-hidden="true" />,
+          label: t('chat.mobileSheet.model'),
+          value: runtimeModelLabel,
+          disabled: isActive,
+          onSelect: () => openFromComposerSheet(() => modelSelectorRef.current?.open()),
+        },
+        {
+          key: 'context',
+          icon: <Gauge size={16} strokeWidth={1.75} aria-hidden="true" />,
+          label: t('contextIndicator.title'),
+          onSelect: () => openFromComposerSheet(() => contextUsageRef.current?.open()),
+        },
+      ] : []),
+    ]
+    : []
+
   const capabilityMenu = useCapabilityMenu({
     open: plusMenuOpen && !isMemberSession,
     cwd: referenceCwd,
@@ -1278,6 +1334,24 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           : isMemberSession
             ? t('teams.memberPlaceholder')
             : t('chat.placeholder')
+
+  // On a phone a waiting request takes the composer's place (MessageList shows
+  // a marker where the card was). Not for a member's page or a side chat:
+  // neither hosts its list with `decisionsInComposer`, so the card stays there.
+  const approvalInComposer = isMobileComposer && !isMemberSession && !sideChat && !!activeTabId &&
+    listPendingPermissions(sessionState).length > 0
+  if (approvalInComposer) {
+    return (
+      <div
+        ref={shellRef}
+        data-testid="chat-input-shell"
+        data-session-id={activeTabId}
+        className="composer-fade bg-[var(--color-surface)] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-1"
+      >
+        <MobileApprovalDock sessionId={activeTabId} />
+      </div>
+    )
+  }
 
   return (
     <div
@@ -1619,31 +1693,42 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                       <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
                     </button>
 
-                    {plusMenuOpen && (
+                    {plusMenuOpen && !isMobileComposer && (
                       <ComposerCapabilityMenu
                         cwd={referenceCwd}
                         referencesLoading={referenceCurrent?.loading ?? true}
                         referencesError={referenceCurrent?.error}
-                        onSelectFile={mention => {
-                          const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
-                          const inserted = insertMentionIntoText(inputRef.current, mentionsRef.current, cursorPos, cursorPos, mention)
-                          setComposerInput(inserted.text, inserted.mentions)
-                          requestAnimationFrame(() => {
-                            composerRef.current?.focus()
-                            composerRef.current?.setSelectionOffsets(inserted.cursorPos)
-                          })
-                        }}
+                        onSelectFile={insertSelectedFileMention}
                         id={capabilityMenuId}
                         sections={capabilityMenu.sections}
                         onAction={capabilityMenu.onAction}
                         onClose={() => setPlusMenuOpen(false)}
-                        mobile={isMobileComposer}
+                      />
+                    )}
+                    {isMobileComposer && (
+                      <MobileComposerSheet
+                        open={plusMenuOpen}
+                        onClose={() => setPlusMenuOpen(false)}
+                        menuId={capabilityMenuId}
+                        settings={mobileComposerSettings}
+                        sections={capabilityMenu.sections}
+                        cwd={referenceCwd}
+                        referencesLoading={referenceCurrent?.loading ?? true}
+                        referencesError={referenceCurrent?.error}
+                        onSelectFile={insertSelectedFileMention}
+                        onAction={capabilityMenu.onAction}
                       />
                     )}
                   </div>
 
                   <div className="shrink-0">
-                    <PermissionModeSelector sessionId={activeTabId ?? undefined} workDir={resolvedWorkDir} compact={useCompactControls} />
+                    <PermissionModeSelector
+                      ref={permissionSelectorRef}
+                      sessionId={activeTabId ?? undefined}
+                      workDir={resolvedWorkDir}
+                      compact={useCompactControls}
+                      trigger={isMobileComposer ? 'elevatedOnly' : 'chip'}
+                    />
                   </div>
 
                   {showLocationInToolbar && (
@@ -1686,6 +1771,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             >
               {!isMemberSession && activeTabId && (
                 <ContextUsageIndicator
+                  ref={contextUsageRef}
+                  hideTrigger={isMobileComposer}
                   sessionId={activeTabId}
                   chatState={chatState}
                   messageCount={messageCount}
@@ -1768,7 +1855,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
         <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
 
-        {!isMemberSession && !showLocationInToolbar && (
+        {/* On a phone, a session under way names its project in the top bar;
+            only a session still choosing where to run needs the picker here. */}
+        {!isMemberSession && !showLocationInToolbar && !(isMobileComposer && messageCount > 0) && (
           <div className={useCompactControls ? 'mt-2 flex min-w-0 px-1' : 'mt-3 px-1'}>
             {messageCount > 0 ? (
               <ProjectContextChip

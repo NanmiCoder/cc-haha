@@ -20,7 +20,13 @@ type Props = {
   onSelectFile?: (mention: NewComposerMention) => void
   onAction(action: CapabilityAction): void
   onClose(): void
-  mobile?: boolean
+  /**
+   * `popover` floats above the composer's + button. `sheet` lays the same menu
+   * out inside the phone's bottom sheet: in the flow, 44px rows, and no
+   * autofocused search, since focusing a field on a phone throws the keyboard
+   * up over the very list that was just opened.
+   */
+  presentation?: 'popover' | 'sheet'
 }
 
 export function getCapabilityMenuOptionId(id: string, index: number): string {
@@ -54,7 +60,8 @@ function RowIcon({ icon, iconColor }: { icon: CapabilityIcon, iconColor?: string
 }
 
 /** The + launcher uses the same search, rows and mention selection as @. */
-export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoading, referencesError, onSelectFile, onAction, onClose, mobile = false }: Props) {
+export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoading, referencesError, onSelectFile, onAction, onClose, presentation = 'popover' }: Props) {
+  const sheet = presentation === 'sheet'
   const t = useTranslation()
   const [query, setQuery] = useState('')
   const [path, setPath] = useState<string[]>([])
@@ -131,29 +138,33 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
   }
   const renderRow = (item: CapabilityMenuItem, index: number) => <ComposerSuggestionRow
     key={item.key} id={getCapabilityMenuOptionId(id, index)} label={item.label}
-    selected={index === activeIndex} icon={<RowIcon icon={item.icon} iconColor={item.iconColor} />}
+    // A finger has no keyboard cursor to show; the sheet keeps rows plain.
+    selected={!sheet && index === activeIndex} icon={<RowIcon icon={item.icon} iconColor={item.iconColor} />}
     aria-label={item.switch ? `${item.label}: ${t(item.switch.checked ? 'settings.plugins.status.enabled' : 'settings.plugins.status.disabled')}` : undefined}
     aria-labelledby={item.switch ? undefined : `${getCapabilityMenuOptionId(id, index)}-label`}
     aria-disabled={item.disabled || item.switch?.disabled || undefined}
     title={item.disabledReason ?? item.description}
+    touch={sheet}
     onMouseEnter={() => setHighlight(index)} onClick={() => activate(item)}
     trailing={item.switch ? <span className="-my-1 shrink-0" onClick={event => event.stopPropagation()}>
       <Switch size="sm" checked={item.switch.checked} disabled={item.switch.disabled} label={t('chat.capabilities.computerUseToggle')} labelHidden onChange={() => item.action && onAction(item.action)} />
     </span> : item.children ? <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" /> : item.key === 'slash-commands' ? <kbd className={COMPOSER_KBD}>/</kbd> : null}
   />
   let offset = 0
-  return <div className={`absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] ${mobile ? 'w-[min(360px,calc(100vw-32px))]' : showReferences ? 'w-[min(480px,calc(100vw-32px))]' : 'w-[min(288px,calc(100vw-32px))]'}`} onMouseDown={event => event.preventDefault()}>
-    <div className="flex h-10 items-center gap-2 border-b border-[var(--color-border)] px-3">
+  return <div className={sheet
+    ? 'flex min-w-0 flex-col'
+    : `absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] ${showReferences ? 'w-[min(480px,calc(100vw-32px))]' : 'w-[min(288px,calc(100vw-32px))]'}`} onMouseDown={sheet ? undefined : event => event.preventDefault()}>
+    <div className={`flex items-center gap-2 border-b border-[var(--color-border)] px-3 ${sheet ? 'h-12' : 'h-10'}`}>
       {drillParent ? <IconButton icon={<ChevronLeft size={14} strokeWidth={1.75} />} label={t('chat.capabilities.back')} size="xs" tone="muted" onClick={goBack} /> : null}
       <Search aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
-      <input autoFocus value={query} onChange={event => { setQuery(event.target.value); setHighlight(0) }} onKeyDown={handleKeyDown} onClick={event => event.currentTarget.focus()}
+      <input autoFocus={!sheet} value={query} onChange={event => { setQuery(event.target.value); setHighlight(0) }} onKeyDown={handleKeyDown} onClick={event => event.currentTarget.focus()}
         placeholder={drillParent?.label ?? t('chat.capabilities.searchPlaceholder')} aria-label={t('chat.capabilities.searchPlaceholder')}
         role="combobox" aria-expanded="true" aria-controls={listId} aria-activedescendant={activeOptionId}
-        className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]" />
+        className={`min-w-0 flex-1 bg-transparent text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] ${sheet ? 'text-[15px]' : 'text-[13px]'}`} />
     </div>
     {showReferences ? <ComposerReferenceMenu key={path.join('/')} ref={referenceRef} id={listId} cwd={cwd} filter={query} embedded browseReferences={browseReferences} references={references} actions={actions}
       referencesLoading={referencesLoading} referencesError={referencesError} onSelect={selectMention} onActiveChange={setReferenceOptionId} /> :
-      <div ref={listRef} id={listId} role="listbox" aria-label={t('chat.composerTools')} className="max-h-[min(360px,50vh)] overflow-y-auto p-1">
+      <div ref={listRef} id={listId} role="listbox" aria-label={t('chat.composerTools')} className={sheet ? 'p-2' : 'max-h-[min(360px,50vh)] overflow-y-auto p-1'}>
         {drillParent ? items.map(renderRow) : sections.map(section => {
           const start = offset
           offset += section.items.length

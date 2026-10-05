@@ -626,6 +626,14 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     workflowRuns,
   ])
   const hasVisibleActivity = activityModel ? hasVisibleSessionActivity(activityModel) : false
+  const activityBadgeCount = activityModel?.badgeCount ?? 0
+
+  // The phone's top bar lives outside this page; it draws the activity pill
+  // from what is published here.
+  useEffect(() => {
+    if (!isMobileLayout || !active || !activeTabId) return
+    useActivityPanelStore.getState().setMobileSummary(activeTabId, { visible: hasVisibleActivity, count: activityBadgeCount })
+  }, [active, activeTabId, activityBadgeCount, hasVisibleActivity, isMobileLayout])
   const hasAutoOpenActivity = activityModel ? activityModel.badgeCount > 0 : false
 
   useEffect(() => {
@@ -639,7 +647,10 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       return
     }
 
-    if (!state.hadAutoOpenActivity && hasAutoOpenActivity && !isActivityPanelOpen) {
+    // Not on a phone: there the panel is a sheet over the conversation, and
+    // the top bar's activity pill already says work started, without covering
+    // what the agent is writing.
+    if (!state.hadAutoOpenActivity && hasAutoOpenActivity && !isActivityPanelOpen && !isMobileLayout) {
       openActivityPanel(activeTabId)
     }
     state.hadAutoOpenActivity = hasAutoOpenActivity
@@ -648,6 +659,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     activeTabType,
     hasAutoOpenActivity,
     isActivityPanelOpen,
+    isMobileLayout,
     openActivityPanel,
   ])
 
@@ -989,7 +1001,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   </div>
                 ) : (
                   <TrajectoryLinkContext.Provider value={isMobileLayout ? null : trajectoryLink}>
-                    <MessageList sessionId={activeTabId ?? undefined} compact={showRightPanel} mobileLayout={isMobileLayout} />
+                    <MessageList sessionId={activeTabId ?? undefined} compact={showRightPanel} mobileLayout={isMobileLayout} decisionsInComposer={isMobileLayout} />
                   </TrajectoryLinkContext.Provider>
                 )}
               </div>
@@ -1018,7 +1030,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               onOpenMember={handleOpenTeamMember}
               onStopBackgroundTask={handleStopBackgroundTask}
               stoppingBackgroundTaskIds={stoppingBackgroundTaskIds}
-              placement="overlay"
+              placement="sheet"
             />
           ) : null}
 

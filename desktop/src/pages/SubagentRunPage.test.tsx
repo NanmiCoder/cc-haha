@@ -524,6 +524,8 @@ describe('SubagentRunPage', () => {
     expect(screen.getByTestId('session-header')).toHaveClass('px-4', 'py-2.5')
     expect(screen.getByTestId('agent-run-conversation-column')).toHaveClass('flex-1')
     expect(screen.queryByTestId('conversation-navigator')).not.toBeInTheDocument()
+    // The phone shell's top bar owns Back; the page does not draw a second one.
+    expect(screen.queryByRole('button', { name: 'Back to parent session' })).not.toBeInTheDocument()
   })
 
   it('does not replace authoritative activity with a partial transcript tail', async () => {

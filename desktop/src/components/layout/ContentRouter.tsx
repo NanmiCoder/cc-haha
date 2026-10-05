@@ -10,7 +10,15 @@ import { SubagentRunPage, TeamMemberRunPage } from '../../pages/SubagentRunPage'
 import { AgentTeamsWorkbenchTab } from '../agentTeams/AgentTeamsWorkbenchTab'
 import { WorkspaceBrowserGuestLayer } from '../workbench/WorkspaceBrowserGuestLayer'
 
-export function ContentRouter() {
+type ContentRouterProps = {
+  /**
+   * What shows when no tab is active. The desktop shows the new-session page;
+   * the phone shows its session list with the new-task composer under it.
+   */
+  homePage?: ReactNode
+}
+
+export function ContentRouter({ homePage }: ContentRouterProps = {}) {
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
   const activeTabType = tabs.find((t) => t.sessionId === activeTabId)?.type
@@ -41,7 +49,7 @@ export function ContentRouter() {
 
   let page: ReactNode = null
   if (!activeTabId || !activeTabType) {
-    page = <EmptySession />
+    page = homePage ?? <EmptySession />
   } else if (activeTabType === 'settings') {
     page = <Settings />
   } else if (activeTabType === 'scheduled') {

@@ -68,7 +68,14 @@ vi.mock('@tauri-apps/plugin-shell', () => ({
 // Mock desktopRuntime.getServerBaseUrl
 vi.mock('../../lib/desktopRuntime', () => ({
   getServerBaseUrl: vi.fn(() => 'http://127.0.0.1:4321'),
+  isDesktopRuntime: () => false,
 }))
+
+const viewport = vi.hoisted(() => ({ mobile: false }))
+vi.mock('../../hooks/useMobileViewport', () => ({ useMobileViewport: () => viewport.mobile }))
+
+const turnDiff = vi.hoisted(() => ({ get: vi.fn() }))
+vi.mock('../../api/sessions', () => ({ sessionsApi: { getTurnCheckpointDiff: turnDiff.get } }))
 
 vi.mock('../../lib/systemFileOpen', () => ({
   openLocalFileWithSystem: openSystemFileSpy,
@@ -716,5 +723,44 @@ describe('CurrentTurnChangeCard – collapse long file lists', () => {
     fireEvent.click(showLess)
     expect(screen.getAllByRole('button', { name: /turnChangesOpenInWorkspaceAria/ })).toHaveLength(5)
     expect(screen.getByText('chat.turnChangesShowMore')).toBeInTheDocument()
+  })
+})
+
+describe('CurrentTurnChangeCard on a phone', () => {
+  beforeEach(() => {
+    viewport.mobile = true
+    turnDiff.get.mockReset()
+    reviewOpenSpy.mockClear()
+  })
+  afterEach(() => {
+    viewport.mobile = false
+    cleanup()
+  })
+
+  it('opens the turn\'s change to a file in a full-height sheet, since there is no workspace beside the chat', async () => {
+    turnDiff.get.mockImplementation(async (_session: string, _turn: string, path: string) => ({
+      state: 'ok',
+      path,
+      diff: `diff --git a/${path} b/${path}\n--- a/${path}\n+++ b/${path}\n@@ -1 +1 @@\n-old line in ${path}\n+new line in ${path}\n`,
+    }))
+    renderExpandedCard(['src/todo.ts', 'test/todo.test.ts'])
+
+    fireEvent.click(screen.getByTitle('src/todo.ts'))
+
+    expect(reviewOpenSpy).not.toHaveBeenCalled()
+    expect(turnDiff.get).toHaveBeenCalledWith('s1', 'msg-1', 'src/todo.ts', 0, true)
+    expect(await screen.findByText(/new line in src\/todo\.ts/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'mobile.diff.next' }))
+    expect(await screen.findByText(/new line in test\/todo\.test\.ts/)).toBeInTheDocument()
+  })
+
+  it('says when a file has no line change to show', async () => {
+    turnDiff.get.mockResolvedValue({ state: 'ok', path: 'docs/spec.docx' })
+    renderExpandedCard(['docs/spec.docx'])
+
+    fireEvent.click(screen.getByTitle('docs/spec.docx'))
+
+    expect(await screen.findByText('mobile.diff.empty')).toBeInTheDocument()
   })
 })

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
+import '@testing-library/jest-dom'
 import { ActivityGroup } from './ActivityGroup'
 import { buildActivitySegments, formatActivitySummary, type ActivityStep } from './activityGroupModel'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -417,5 +418,67 @@ describe('buildActivitySegments', () => {
     expect(zhSummary).toBe(`${zh('toolGroup.searchedOne')}、${zh('toolGroup.readMany', { count: 2 })}`)
     expect(zhSummary).not.toContain(',')
     expect(formatActivitySummary(buildActivitySegments(steps, t), t)).toBe(`${t('toolGroup.searchedOne')}, ${t('toolGroup.readMany', { count: 2 })}`)
+  })
+})
+
+describe('ActivityGroup on a phone', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+  })
+
+  const read = toolCall({ id: 'use-read', toolUseId: 'read-1', toolName: 'Read', input: { file_path: '/repo/src/todo.ts' }, timestamp: 1_000 })
+  const bash = toolCall({ id: 'use-bash', toolUseId: 'bash-1', toolName: 'Bash', input: { command: 'bun test' }, timestamp: 2_000 })
+  const steps: ActivityStep[] = [{ kind: 'tool', toolCall: read }, { kind: 'tool', toolCall: bash }]
+
+  it('folds a finished run into one card and opens the whole timeline in a sheet', () => {
+    render(
+      <ActivityGroup
+        presentation="sheet"
+        steps={steps}
+        resultMap={resultsOf([
+          toolResult({ id: 'r1', toolUseId: 'read-1', timestamp: 1_500 }),
+          toolResult({ id: 'r2', toolUseId: 'bash-1', timestamp: 3_000 }),
+        ])}
+        childToolCallsByParent={new Map()}
+      />,
+    )
+
+    const card = screen.getByTestId('activity-group')
+    expect(card).toHaveAttribute('data-presentation', 'sheet')
+    expect(card).toHaveTextContent(formatActivitySummary(buildActivitySegments(steps, t), t))
+    // Nothing unfolds in place: the transcript keeps its place on a small screen.
+    expect(within(card).queryByText('bun test')).toBeNull()
+    expect(screen.queryByTestId('activity-live-step')).toBeNull()
+
+    fireEvent.click(within(card).getByRole('button'))
+    const sheet = screen.getByTestId('activity-timeline-sheet')
+    expect(within(sheet).getByText('bun test')).toBeTruthy()
+  })
+
+  it('shows the step under way while the run is live', () => {
+    render(
+      <ActivityGroup
+        presentation="sheet"
+        steps={steps}
+        resultMap={resultsOf([toolResult({ id: 'r1', toolUseId: 'read-1', timestamp: 1_500 })])}
+        childToolCallsByParent={new Map()}
+        isLive
+      />,
+    )
+
+    expect(screen.getByTestId('activity-group')).toHaveAttribute('data-running', 'true')
+    expect(within(screen.getByTestId('activity-live-step')).getByText('bun test')).toBeTruthy()
+  })
+
+  it('gives even a single call the card, so every run reads the same', () => {
+    render(
+      <ActivityGroup
+        presentation="sheet"
+        steps={[{ kind: 'tool', toolCall: bash }]}
+        resultMap={resultsOf([toolResult({ id: 'r2', toolUseId: 'bash-1', timestamp: 3_000 })])}
+        childToolCallsByParent={new Map()}
+      />,
+    )
+    expect(screen.getByTestId('activity-group')).toHaveAttribute('data-presentation', 'sheet')
   })
 })

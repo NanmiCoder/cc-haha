@@ -1201,6 +1201,81 @@ describe('ActiveSession task polling', () => {
     }, { timeout: 4000 })
   })
 
+  it('on a phone, publishes the activity to the top bar pill instead of throwing the sheet over the chat', async () => {
+    viewportMocks.isMobile = true
+    const sessionId = 'activity-phone-session'
+    useCLITaskStore.setState({ fetchSessionTasks: vi.fn().mockResolvedValue(undefined) })
+    useSessionStore.setState({
+      sessions: [{
+        id: sessionId,
+        title: 'Phone Activity Session',
+        createdAt: '2026-05-07T00:00:00.000Z',
+        modifiedAt: '2026-05-07T00:00:00.000Z',
+        messageCount: 1,
+        projectPath: '/workspace/project',
+        workDir: '/workspace/project',
+        workDirExists: true,
+      }],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'Phone Activity Session', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          messages: [],
+          chatState: 'thinking',
+          connectionState: 'connected',
+          streamingText: '',
+          streamingToolInput: '',
+          activeToolUseId: null,
+          activeToolName: null,
+          activeThinkingId: null,
+          pendingPermission: null,
+          pendingComputerUsePermission: null,
+          tokenUsage: { input_tokens: 0, output_tokens: 0 },
+          streamingResponseChars: 0,
+          elapsedSeconds: 0,
+          statusVerb: '',
+          slashCommands: [],
+          backgroundAgentTasks: {},
+          agentTaskNotifications: {},
+          elapsedTimer: null,
+        },
+      },
+    })
+
+    render(<ActiveSession />)
+    act(() => {
+      useCLITaskStore.setState({
+        sessionId,
+        tasks: [{
+          id: 'task-1',
+          subject: 'Draft implementation plan',
+          description: 'Create the first activity row',
+          status: 'in_progress',
+          blocks: [],
+          blockedBy: [],
+          taskListId: sessionId,
+        }],
+        completedAndDismissed: false,
+      })
+    })
+
+    await waitFor(() => {
+      expect(useActivityPanelStore.getState().mobileSummaryBySession[sessionId]).toEqual({ visible: true, count: 1 })
+    })
+    expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(false)
+
+    act(() => useActivityPanelStore.getState().open(sessionId))
+    expect(await screen.findByTestId('session-activity-sheet')).toBeInTheDocument()
+    act(() => useActivityPanelStore.getState().close())
+  })
+
   it('auto-opens for current activity and seals unfinished tasks when the turn becomes idle', async () => {
     const sessionId = 'activity-auto-open-session'
     const fetchSessionTasks = vi.fn().mockResolvedValue(undefined)

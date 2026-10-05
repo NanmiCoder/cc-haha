@@ -30,6 +30,11 @@ export type SessionChatStatusResponse = {
   state: 'idle' | 'thinking' | 'compacting' | 'tool_executing'
   activityState: PetSessionRuntimeStatus
 }
+/** One entry per session that is working or waiting right now; idle sessions are absent. */
+export type LiveSessionActivity = {
+  id: string
+  activityState: 'running' | 'waiting'
+}
 type MessagesResponse = {
   messages: MessageEntry[]
   taskNotifications?: AgentTaskNotification[]
@@ -523,6 +528,10 @@ export const sessionsApi = {
 
   getSummary(sessionId: string, options?: ApiRequestOptions) {
     return api.get<SessionListItem>(`/api/sessions/${sessionId}/summary`, options)
+  },
+
+  getLiveStatus(signal?: AbortSignal) {
+    return api.get<{ sessions: LiveSessionActivity[] }>('/api/sessions/live-status', { signal })
   },
 
   getChatStatus(sessionId: string, signal?: AbortSignal) {

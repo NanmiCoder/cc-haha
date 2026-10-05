@@ -1,8 +1,22 @@
 import { create } from 'zustand'
 import type { ActivitySectionId } from '../components/activity/sessionActivityModel'
 
+/**
+ * What the phone's top bar needs to draw the activity pill: whether the
+ * session has any parallel work to show, and how much of it needs a look
+ * (running, pending or failed). The session page derives it from the same
+ * model the panel renders and publishes it here, because the top bar sits
+ * outside that page.
+ */
+export type MobileActivitySummary = {
+  visible: boolean
+  count: number
+}
+
 type ActivityPanelStore = {
   openSessionId: string | null
+  mobileSummaryBySession: Record<string, MobileActivitySummary | undefined>
+  setMobileSummary: (sessionId: string, summary: MobileActivitySummary | null) => void
   selectedSectionBySession: Record<string, ActivitySectionId | undefined>
   dismissedBackgroundTaskKeysBySession: Record<string, string[] | undefined>
 
@@ -18,6 +32,19 @@ type ActivityPanelStore = {
 
 export const useActivityPanelStore = create<ActivityPanelStore>((set, get) => ({
   openSessionId: null,
+  mobileSummaryBySession: {},
+  setMobileSummary: (sessionId, summary) =>
+    set((state) => {
+      const current = state.mobileSummaryBySession[sessionId]
+      if (!summary) {
+        if (!current) return state
+        const next = { ...state.mobileSummaryBySession }
+        delete next[sessionId]
+        return { mobileSummaryBySession: next }
+      }
+      if (current && current.visible === summary.visible && current.count === summary.count) return state
+      return { mobileSummaryBySession: { ...state.mobileSummaryBySession, [sessionId]: summary } }
+    }),
   selectedSectionBySession: {},
   dismissedBackgroundTaskKeysBySession: {},
 

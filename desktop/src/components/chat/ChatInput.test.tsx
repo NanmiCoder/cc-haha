@@ -2808,6 +2808,80 @@ describe('ChatInput file mentions', () => {
     expect(fileSearchMenu).not.toHaveTextContent('Navigate')
   })
 
+  it('moves the low-frequency controls off the phone toolbar into the + sheet', async () => {
+    viewportMocks.isMobile = true
+
+    render(<ChatInput />)
+    await waitFor(() => {
+      expect(mocks.getGitInfo).toHaveBeenCalledWith(sessionId)
+    })
+
+    // Context usage stays mounted to keep tracking, but takes no toolbar slot.
+    expect(screen.getByTestId('context-usage-indicator')).not.toBeVisible()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    const sheet = screen.getByTestId('mobile-composer-sheet')
+    expect(within(sheet).getByRole('button', { name: /Execution Permissions/ })).toHaveTextContent('Ask permissions')
+    // The phone sheet must not grab focus: that would throw the keyboard up
+    // over the list that was just opened.
+    expect(within(sheet).getByRole('combobox')).not.toHaveFocus()
+
+    fireEvent.click(within(sheet).getByRole('button', { name: /^Context/ }))
+
+    // One sheet at a time: the + sheet closes before the breakdown opens.
+    expect(screen.queryByTestId('mobile-composer-sheet')).not.toBeInTheDocument()
+    expect(await screen.findByTestId('context-usage-sheet')).toBeInTheDocument()
+  })
+
+  it('hands the phone composer slot to the approval bar while a request waits, and takes it back', async () => {
+    viewportMocks.isMobile = true
+    render(<ChatInput />)
+    await waitFor(() => {
+      expect(mocks.getGitInfo).toHaveBeenCalledWith(sessionId)
+    })
+    const request = { requestId: 'perm-1', toolName: 'Bash', toolUseId: 'toolu-1', input: { command: 'bun run build' } }
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...state.sessions[sessionId]!, pendingPermission: request, pendingPermissions: { [request.requestId]: request } },
+        },
+      }))
+    })
+    expect(screen.getByTestId('mobile-approval-dock')).toHaveTextContent('bun run build')
+    expect(screen.queryByTestId('chat-input-panel')).not.toBeInTheDocument()
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...state.sessions[sessionId]!, pendingPermission: null, pendingPermissions: {} },
+        },
+      }))
+    })
+    expect(screen.queryByTestId('mobile-approval-dock')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-input-panel')).toBeInTheDocument()
+  })
+
+  it('leaves the desktop composer alone while a request waits, since the card is in the transcript', async () => {
+    render(<ChatInput />)
+    await waitFor(() => {
+      expect(mocks.getGitInfo).toHaveBeenCalledWith(sessionId)
+    })
+    const request = { requestId: 'perm-1', toolName: 'Bash', toolUseId: 'toolu-1', input: { command: 'bun run build' } }
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...state.sessions[sessionId]!, pendingPermission: request, pendingPermissions: { [request.requestId]: request } },
+        },
+      }))
+    })
+    expect(screen.queryByTestId('mobile-approval-dock')).not.toBeInTheDocument()
+    expect(screen.getByTestId('chat-input-panel')).toBeInTheDocument()
+  })
+
   it('keeps the active-session toolbar in flow so multiline caret cannot render behind controls', async () => {
     render(<ChatInput />)
 

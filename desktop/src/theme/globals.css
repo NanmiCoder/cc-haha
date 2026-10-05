@@ -1877,10 +1877,6 @@ button, input, textarea, select, a, [role="button"] {
   overflow-x: hidden;
 }
 
-.app-shell-backdrop {
-  background: var(--color-overlay-scrim);
-}
-
 .sidebar-shell {
   position: relative;
   width: var(--sidebar-width);
@@ -1948,28 +1944,6 @@ body.sidebar-resizing * {
   cursor: col-resize !important;
 }
 
-.app-shell--mobile .sidebar-shell {
-  position: fixed;
-  inset: 0 auto 0 0;
-  z-index: 50;
-  width: min(88vw, var(--sidebar-width));
-  max-width: var(--sidebar-width);
-  overflow: visible;
-  transform: translateX(-100%);
-  transition:
-    transform var(--motion-sidebar-duration) var(--motion-sidebar-easing),
-    width var(--motion-sidebar-duration) var(--motion-sidebar-easing);
-}
-
-.app-shell--mobile .sidebar-shell[data-state="closed"] {
-  pointer-events: none;
-}
-
-.app-shell--mobile .sidebar-shell[data-state="open"] {
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
 .sidebar-panel {
   width: var(--sidebar-width);
   min-width: var(--sidebar-width);
@@ -1983,13 +1957,6 @@ body.sidebar-resizing * {
 .sidebar-panel[data-state="closed"] {
   width: var(--sidebar-rail-width);
   min-width: var(--sidebar-rail-width);
-}
-
-.app-shell--mobile .sidebar-panel,
-.app-shell--mobile .sidebar-panel[data-state="closed"] {
-  width: min(88vw, var(--sidebar-width));
-  min-width: min(88vw, var(--sidebar-width));
-  box-shadow: var(--shadow-dropdown);
 }
 
 .sidebar-toggle-button {
@@ -2632,29 +2599,6 @@ html[data-touch-h5] .app-shell-viewport {
 }
 html[data-touch-h5][data-touch-h5-keyboard] .app-shell-viewport {
   padding-bottom: 0px;
-}
-
-/* Message action bars (copy / branch) are hover-revealed on desktop. Keep
-   them visible whenever the browser is in the narrow H5 shell, even if an
-   embedded browser reports no coarse pointer, and retain the touch marker as
-   coverage for wider tablets. */
-.app-shell--mobile [data-message-actions],
-html[data-touch-h5] [data-message-actions] {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.app-shell--mobile [data-message-actions] {
-  height: 2.75rem;
-}
-
-.app-shell--mobile [data-message-actions] > div,
-.app-shell--mobile [data-message-actions] button {
-  min-height: 2.75rem;
-}
-
-.app-shell--mobile [data-message-actions] button {
-  width: 2.75rem;
 }
 
 /* Agent list rows reveal their edit / delete / override buttons on hover, which

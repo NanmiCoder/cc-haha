@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -80,13 +80,11 @@ describe('Voice Input settings tab wiring', () => {
     expect(fresh.useUIStore.getState().activeSettingsTab).toBe('voice')
   })
 
-  it('keeps voice out of the browser shell: a stored voice tab falls back to model settings', async () => {
+  it('keeps voice out of the browser shell: a stored voice tab opens the settings list instead', async () => {
     useUIStore.setState({ activeSettingsTab: 'voice' })
     render(<H5Settings />)
 
-    expect(await screen.findByText('provider-panel')).toBeInTheDocument()
+    expect(await screen.findByTestId('h5-settings-providers')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'Voice Input' })).not.toBeInTheDocument()
-    expect(within(screen.getByRole('navigation', { name: 'Settings' })).getAllByRole('button')).toHaveLength(2)
-    await waitFor(() => expect(useUIStore.getState().activeSettingsTab).toBe('providers'))
   })
 })

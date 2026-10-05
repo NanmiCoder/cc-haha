@@ -122,6 +122,8 @@ type Props = {
   disclosureKey?: string
   /** A "locate in chat" jump targets this call: open its run and mark its row. */
   revealToolUseId?: string
+  /** See ActivityGroup: the phone folds each run into a card. */
+  activityPresentation?: 'inline' | 'sheet'
 }
 
 export type OpenAgentRunPayload = {
@@ -146,6 +148,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
   isLive = false,
   disclosureKey,
   revealToolUseId,
+  activityPresentation = 'inline',
 }: Props) {
   const resolvedSteps = useMemo(() => steps ?? toActivitySteps(toolCalls), [steps, toolCalls])
   const memoryActivity = getMemoryToolActivity(toolCalls, resultMap)
@@ -180,6 +183,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
             isStreaming={isStreaming}
             disclosureKey={disclosureKey}
             revealToolUseId={revealToolUseId}
+            activityPresentation={activityPresentation}
           />
         ) : null}
       </div>
@@ -202,6 +206,7 @@ export const ToolCallGroup = memo(function ToolCallGroup({
       isLive={isLive}
       disclosureKey={disclosureKey}
       revealToolUseId={revealToolUseId}
+      activityPresentation={activityPresentation}
     />
   )
 })
@@ -223,6 +228,7 @@ function ToolCallGroupContent({
   isLive = false,
   disclosureKey,
   revealToolUseId,
+  activityPresentation = 'inline',
 }: ContentProps) {
   const awaitingToolUseIds = useAwaitingToolUseIds(sessionId)
   const toolCalls = activityStepToolCalls(steps)
@@ -282,6 +288,7 @@ function ToolCallGroupContent({
             showOpenRun={showOpenRun}
             isStreaming={isStreaming}
             revealToolUseId={revealToolUseId}
+            activityPresentation={activityPresentation}
           />
         ))}
       </div>
@@ -338,6 +345,7 @@ function ToolCallGroupContent({
       disclosureKey={disclosureKey}
       revealToolUseId={revealToolUseId}
       awaitingToolUseIds={awaitingToolUseIds}
+      presentation={activityPresentation}
     />
   )
 }

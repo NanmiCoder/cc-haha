@@ -1343,6 +1343,11 @@ export class ConversationService {
     return this.sessions.has(sessionId)
   }
 
+  /** Team workers report through their lead: their requests already count there. */
+  isTeamWorkerSession(sessionId: string): boolean {
+    return Boolean(this.sessions.get(sessionId)?.teamWorker)
+  }
+
   getSessionWorkDir(sessionId: string): string {
     const session = this.sessions.get(sessionId)
     return session?.workDir || ''

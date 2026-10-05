@@ -216,3 +216,71 @@ describe('read-only session chat activity status', () => {
     expect(getSessionChatActivityState(sessionId)).toBe('idle')
   })
 })
+
+describe('live session activity for the phone session list', () => {
+  afterEach(() => {
+    __resetWebSocketHandlerStateForTests()
+    mock.restore()
+  })
+
+  async function getLiveStatus(): Promise<Array<{ id: string; activityState: string }>> {
+    const { handleSessionsApi } = await import('../api/sessions.js')
+    const url = new URL('http://127.0.0.1/api/sessions/live-status')
+    const response = await handleSessionsApi(new Request(url), url, ['api', 'sessions', 'live-status'])
+    expect(response.status).toBe(200)
+    const body = (await response.json()) as { sessions: Array<{ id: string; activityState: string }> }
+    return body.sessions
+  }
+
+  it('lists working and waiting sessions in one answer and leaves idle ones out', async () => {
+    const running = `live-running-${crypto.randomUUID()}`
+    const waiting = `live-waiting-${crypto.randomUUID()}`
+    const idle = `live-idle-${crypto.randomUUID()}`
+    __markActiveTurnForTests(running)
+    __markActiveTurnForTests(waiting)
+    spyOn(conversationService, 'getActiveSessions').mockReturnValue([running, waiting, idle])
+    spyOn(conversationService, 'getPendingPermissionRequests').mockImplementation((id: string) => (
+      id === waiting ? [{ requestId: 'permission-1', toolName: 'Bash', input: { command: 'ls' } }] : []
+    ))
+
+    const live = await getLiveStatus()
+
+    expect(live).toContainEqual({ id: running, activityState: 'running' })
+    expect(live).toContainEqual({ id: waiting, activityState: 'waiting' })
+    expect(live.some((entry) => entry.id === idle)).toBe(false)
+  })
+
+  it('finds a turn that is running before its CLI process is tracked', async () => {
+    const sessionId = `live-turn-only-${crypto.randomUUID()}`
+    __markActiveTurnForTests(sessionId)
+    spyOn(conversationService, 'getActiveSessions').mockReturnValue([])
+
+    expect(await getLiveStatus()).toContainEqual({ id: sessionId, activityState: 'running' })
+  })
+
+  it('reports a team worker through its lead instead of as a row of its own', async () => {
+    const lead = `live-lead-${crypto.randomUUID()}`
+    const worker = `live-worker-${crypto.randomUUID()}`
+    spyOn(conversationService, 'getActiveSessions').mockReturnValue([lead, worker])
+    spyOn(conversationService, 'isTeamWorkerSession').mockImplementation((id: string) => id === worker)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockImplementation(() => [
+      { requestId: 'permission-1', toolName: 'Bash', input: { command: 'ls' } },
+    ])
+
+    const live = await getLiveStatus()
+
+    expect(live).toContainEqual({ id: lead, activityState: 'waiting' })
+    expect(live.some((entry) => entry.id === worker)).toBe(false)
+  })
+
+  it('rejects writes to the live-status collection route', async () => {
+    const { handleSessionsApi } = await import('../api/sessions.js')
+    const url = new URL('http://127.0.0.1/api/sessions/live-status')
+    const response = await handleSessionsApi(
+      new Request(url, { method: 'POST' }),
+      url,
+      ['api', 'sessions', 'live-status'],
+    )
+    expect(response.status).toBe(405)
+  })
+})

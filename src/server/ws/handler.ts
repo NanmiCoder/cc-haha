@@ -479,6 +479,35 @@ export function getSessionChatActivityState(sessionId: string): SessionChatActiv
     ?? (legacyQueuedSessionChats.has(sessionId) ? 'running' : 'idle')
 }
 
+export type LiveSessionActivity = {
+  id: string
+  activityState: Extract<SessionChatActivityState, 'running' | 'waiting'>
+}
+
+/**
+ * Every session that is working or waiting on the user right now, in one
+ * answer. The phone's session list has to sort sessions it never opened a
+ * socket to, and asking each one would cost a request per row. Team workers
+ * are left out: their requests already surface on the lead.
+ */
+export function listLiveSessionActivity(): LiveSessionActivity[] {
+  const ids = new Set<string>([
+    ...conversationService.getActiveSessions(),
+    ...activeUserTurns.keys(),
+    ...activeCliRuns,
+    ...legacyQueuedSessionChats,
+  ])
+  const live: LiveSessionActivity[] = []
+  for (const id of ids) {
+    if (conversationService.isTeamWorkerSession(id)) continue
+    const activityState = getSessionChatActivityState(id)
+    if (activityState === 'running' || activityState === 'waiting') {
+      live.push({ id, activityState })
+    }
+  }
+  return live
+}
+
 /** Compatibility fallback for the legacy REST enqueue endpoint. */
 export function markSessionChatQueued(sessionId: string): void {
   beginSessionChatActivity(sessionId)

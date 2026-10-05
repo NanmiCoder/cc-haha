@@ -1,11 +1,8 @@
-import { useCallback, useEffect, useRef, useState, type HTMLAttributes } from 'react'
-import { Menu, X } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 import { Sidebar } from './Sidebar'
 import { ContentRouter } from './ContentRouter'
 import { ToastContainer } from '@/components/layout/Toast'
 import { UpdateChecker } from '@/components/layout/UpdateChecker'
-import { StatusDot } from '@/components/ui/Badge'
-import { IconButton } from '@/components/ui/IconButton'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useUIStore, type SettingsTab } from '../../stores/uiStore'
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
@@ -28,7 +25,6 @@ import {
 } from '../../stores/projectDisplayNameStore'
 import { openDesktopNotificationTarget } from '../../lib/desktopNotificationNavigation'
 import { TabBar } from './TabBar'
-import { MobileAttentionDot } from './MobileAttentionDot'
 import { WorkspaceHeaderProvider } from './WorkspaceHeaderContext'
 import { StartupErrorView } from './StartupErrorView'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
@@ -36,7 +32,8 @@ import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTranslation } from '../../i18n'
 import { H5ConnectionView } from './H5ConnectionView'
-import { useMobileViewport } from '../../hooks/useMobileViewport'
+import { MobileShell } from '../mobile/MobileShell'
+import { useMobileShellLayout } from '../mobile/mobileShellLayout'
 import type { Tab } from '../../stores/tabStore'
 
 function isChatTab(tab: Tab | undefined) {
@@ -46,13 +43,10 @@ function isChatTab(tab: Tab | undefined) {
 export function AppShell() {
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
-  const toggleSidebar = useUIStore((s) => s.toggleSidebar)
-  const setSidebarOpen = useUIStore((s) => s.setSidebarOpen)
   const [ready, setReady] = useState(false)
   const [startupError, setStartupError] = useState<string | null>(null)
   const [h5StartupError, setH5StartupError] = useState<H5ConnectionRequiredError | null>(null)
   const [bootstrapNonce, setBootstrapNonce] = useState(0)
-  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false)
   const [desktopUiPreferencesRequest, setDesktopUiPreferencesRequest] = useState<
     Promise<DesktopUiPreferencesResponse> | null
   >(null)
@@ -61,33 +55,17 @@ export function AppShell() {
   }, [])
   const t = useTranslation()
   const desktopRuntime = isDesktopRuntime()
-  const isMobileShell = useMobileViewport() && !desktopRuntime
+  const shellLayout = useMobileShellLayout(desktopRuntime)
   const tabs = useTabStore((s) => s.tabs)
   const activeTabId = useTabStore((s) => s.activeTabId)
-  const setActiveTab = useTabStore((s) => s.setActiveTab)
   const sessions = useSessionStore((s) => s.sessions)
   const activeSession = activeTabId
     ? sessions.find((session) => session.id === activeTabId) ?? null
     : null
-  const wasMobileShellRef = useRef(false)
   const sidebarWidth = useUIStore((s) => s.sidebarWidth)
-  const effectiveSidebarOpen = isMobileShell ? mobileSidebarOpen : sidebarOpen
-  const sidebarResize = useSidebarResize(!isMobileShell)
+  const sidebarResize = useSidebarResize(shellLayout === 'desktop')
   const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
   const isActiveChatTab = isChatTab(activeTab)
-  const mobileSessionTitle = activeSession?.title || activeTab?.title || t('session.untitled')
-  const mobileSessionUpdated = (() => {
-    if (!activeSession?.modifiedAt) return ''
-    const diff = Date.now() - new Date(activeSession.modifiedAt).getTime()
-    if (diff < 60000) return t('session.timeJustNow')
-    if (diff < 3600000) return t('session.timeMinutes', { n: Math.floor(diff / 60000) })
-    if (diff < 86400000) return t('session.timeHours', { n: Math.floor(diff / 3600000) })
-    return t('session.timeDays', { n: Math.floor(diff / 86400000) })
-  })()
-  const sidebarHiddenProps: HTMLAttributes<HTMLDivElement> & { inert?: '' } =
-    isMobileShell && !effectiveSidebarOpen
-      ? { 'aria-hidden': true, inert: '' }
-      : {}
 
   useEffect(() => {
     const sessionStore = useSessionStore.getState()
@@ -219,45 +197,6 @@ export function AppShell() {
   useKeyboardShortcuts()
   useElectronWindowDragRegions()
 
-  useEffect(() => {
-    if (isMobileShell && !wasMobileShellRef.current) {
-      setMobileSidebarOpen(false)
-      setSidebarOpen(false)
-    }
-    if (!isMobileShell && wasMobileShellRef.current) {
-      setMobileSidebarOpen(false)
-    }
-    wasMobileShellRef.current = isMobileShell
-  }, [isMobileShell, setSidebarOpen])
-
-  useEffect(() => {
-    if (!ready || !isMobileShell) return
-    if (isChatTab(activeTab) || activeTab?.type === 'settings' || (!activeTab && !activeTabId)) return
-    const nextChatTab = tabs.find(isChatTab)
-    if (nextChatTab) {
-      setActiveTab(nextChatTab.sessionId)
-      return
-    }
-    useTabStore.setState({ activeTabId: null })
-  }, [activeTab, activeTabId, isMobileShell, ready, setActiveTab, tabs])
-
-  const setEffectiveSidebarOpen = (open: boolean) => {
-    if (isMobileShell) {
-      setMobileSidebarOpen(open)
-      setSidebarOpen(open)
-      return
-    }
-    setSidebarOpen(open)
-  }
-
-  const toggleEffectiveSidebar = () => {
-    if (isMobileShell) {
-      setEffectiveSidebarOpen(!mobileSidebarOpen)
-      return
-    }
-    toggleSidebar()
-  }
-
   if (!desktopRuntime && h5StartupError) {
     return (
       <H5ConnectionView
@@ -280,106 +219,42 @@ export function AppShell() {
     )
   }
 
+  if (shellLayout !== 'desktop') {
+    return <MobileShell layout={shellLayout} preferencesRequest={desktopUiPreferencesRequest} />
+  }
+
   return (
-    <div className={`app-shell app-shell-viewport flex overflow-hidden bg-[var(--color-surface)]${isMobileShell ? ' app-shell--mobile' : ''}`}>
-      {isMobileShell && effectiveSidebarOpen ? (
-        <button
-          type="button"
-          data-testid="sidebar-backdrop"
-          className="app-shell-backdrop fixed inset-0 z-[var(--z-scrim)] border-0 p-0"
-          aria-label={t('sidebar.collapse')}
-          onClick={() => setEffectiveSidebarOpen(false)}
-        />
-      ) : null}
+    <div className="app-shell app-shell-viewport flex overflow-hidden bg-[var(--color-surface)]">
       <div
         id="sidebar-shell"
         ref={sidebarResize.shellRef}
         data-testid="sidebar-shell"
-        data-state={effectiveSidebarOpen ? 'open' : 'closed'}
-        data-mobile={isMobileShell ? 'true' : 'false'}
-        className={`sidebar-shell${isMobileShell ? ' sidebar-shell--mobile' : ''}`}
-        {...sidebarHiddenProps}
+        data-state={sidebarOpen ? 'open' : 'closed'}
+        data-mobile="false"
+        className="sidebar-shell"
       >
-        {!isMobileShell || effectiveSidebarOpen ? (
-          <Sidebar
-            isMobile={isMobileShell}
-            onRequestClose={() => setEffectiveSidebarOpen(false)}
-            desktopUiPreferencesRequest={desktopUiPreferencesRequest}
-            onDesktopUiPreferencesConsumed={consumeDesktopUiPreferencesRequest}
-          />
-        ) : null}
-        {!isMobileShell ? (
-          <div
-            data-testid="sidebar-resize-handle"
-            role="separator"
-            aria-orientation="vertical"
-            aria-label={t('sidebar.resize')}
-            aria-valuenow={effectiveSidebarOpen ? sidebarWidth : 0}
-            tabIndex={0}
-            className="sidebar-resize-handle"
-            {...sidebarResize.handleProps}
-          />
-        ) : null}
+        <Sidebar
+          desktopUiPreferencesRequest={desktopUiPreferencesRequest}
+          onDesktopUiPreferencesConsumed={consumeDesktopUiPreferencesRequest}
+        />
+        <div
+          data-testid="sidebar-resize-handle"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('sidebar.resize')}
+          aria-valuenow={sidebarOpen ? sidebarWidth : 0}
+          tabIndex={0}
+          className="sidebar-resize-handle"
+          {...sidebarResize.handleProps}
+        />
       </div>
       <main
         id="content-area"
-        data-sidebar-state={effectiveSidebarOpen ? 'open' : 'closed'}
-        className={`min-w-0 flex-1 flex flex-col overflow-hidden${isMobileShell ? ' app-shell-main--mobile' : ''}`}
+        data-sidebar-state={sidebarOpen ? 'open' : 'closed'}
+        className="min-w-0 flex-1 flex flex-col overflow-hidden"
       >
-        {isMobileShell ? (
-          <div
-            data-testid="mobile-session-header"
-            className="flex shrink-0 items-center gap-3 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2"
-          >
-            <span className="relative inline-flex shrink-0">
-              <IconButton
-                data-testid="mobile-sidebar-toggle"
-                icon={effectiveSidebarOpen
-                  ? <X size={20} strokeWidth={1.75} aria-hidden="true" />
-                  : <Menu size={20} strokeWidth={1.75} aria-hidden="true" />}
-                label={effectiveSidebarOpen ? t('sidebar.collapse') : t('sidebar.expand')}
-                onClick={toggleEffectiveSidebar}
-                size="2xl"
-                aria-controls="sidebar-shell"
-                aria-expanded={effectiveSidebarOpen}
-              />
-              {/* 手机没有 tab 栏，抽屉是切换会话的唯一入口，也是等待标志唯一能被
-                  找到的地方：别的会话在等人时，在汉堡按钮上提一下。 */}
-              <MobileAttentionDot activeSessionId={activeTabId} />
-            </span>
-            {activeTab?.type === 'settings' ? (
-              <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-tight text-[var(--color-text-primary)]">{t('sidebar.settings')}</h1>
-            ) : isActiveChatTab ? (
-              <div className="min-w-0 flex-1">
-                <h1 className="truncate text-[15px] font-semibold leading-tight text-[var(--color-text-primary)]">
-                  {mobileSessionTitle}
-                </h1>
-                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-[var(--color-text-tertiary)]">
-                  {activeTab?.status === 'running' ? (
-                    <span className="flex shrink-0 items-center gap-1 text-[var(--color-text-secondary)]">
-                      <StatusDot tone="info" pulse />
-                      {t('session.active')}
-                    </span>
-                  ) : null}
-                  {activeSession?.messageCount !== undefined && activeSession.messageCount > 0 ? (
-                    <>
-                      {activeTab?.status === 'running' ? <span aria-hidden="true">·</span> : null}
-                      <span>{t('session.messages', { count: activeSession.messageCount })}</span>
-                    </>
-                  ) : null}
-                  {mobileSessionUpdated ? (
-                    <>
-                      {(activeTab?.status === 'running') || ((activeSession?.messageCount ?? 0) > 0) ? <span aria-hidden="true">·</span> : null}
-                      <span className="truncate">{t('session.lastUpdated', { time: mobileSessionUpdated })}</span>
-                    </>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
         <WorkspaceHeaderProvider>
-          {!isMobileShell ? <TabBar /> : null}
+          <TabBar />
           <ContentRouter />
         </WorkspaceHeaderProvider>
       </main>

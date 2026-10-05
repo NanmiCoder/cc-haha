@@ -51,7 +51,8 @@ vi.mock('../../i18n', () => ({
   }[key] ?? key),
 }))
 
-import { PermissionModeSelector } from './PermissionModeSelector'
+import { createRef } from 'react'
+import { PermissionModeSelector, type PermissionModeSelectorHandle } from './PermissionModeSelector'
 import { useChatStore, type PerSessionState } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -176,6 +177,34 @@ describe('PermissionModeSelector', () => {
     expect(screen.getByRole('dialog', { name: 'Execution Permissions' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument()
     expect(screen.getByRole('menuitem', { name: /Auto accept edits/ })).toBeInTheDocument()
+  })
+
+  it('keeps the phone toolbar free of the trigger until some writes run unattended', () => {
+    viewportMocks.isMobile = true
+    useTabStore.setState({ activeTabId: 'tab', tabs: [] })
+    useChatStore.setState({ sessions: { tab: { ...makeChatSession('idle'), permissionMode: 'default' } } })
+
+    render(<PermissionModeSelector compact trigger="elevatedOnly" />)
+    expect(screen.queryByRole('button', { name: 'Ask permissions' })).not.toBeInTheDocument()
+
+    act(() => useChatStore.setState({ sessions: { tab: { ...makeChatSession('idle'), permissionMode: 'bypassPermissions' } } }))
+    expect(screen.getByRole('button', { name: 'Bypass permissions' })).toHaveClass('h-11', 'w-11')
+  })
+
+  it('opens from its handle with no trigger on screen, and not mid-turn', () => {
+    viewportMocks.isMobile = true
+    useTabStore.setState({ activeTabId: 'tab', tabs: [] })
+    useChatStore.setState({ sessions: { tab: makeChatSession('idle') } })
+    const handle = createRef<PermissionModeSelectorHandle>()
+
+    render(<PermissionModeSelector ref={handle} compact trigger="elevatedOnly" />)
+    act(() => handle.current?.open())
+    expect(screen.getByRole('dialog', { name: 'Execution Permissions' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    act(() => useChatStore.setState({ sessions: { tab: makeChatSession('streaming') } }))
+    act(() => handle.current?.open())
+    expect(screen.queryByRole('dialog', { name: 'Execution Permissions' })).not.toBeInTheDocument()
   })
 
   it('uses the active tab workspace when showing the bypass confirmation path', () => {

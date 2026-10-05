@@ -26,13 +26,13 @@ beforeEach(() => {
   vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
-it('limits browser navigation to providers and general, with local appearance and shared agent preferences', async () => {
+it('shows one grouped list: connection, provider, phone-editable preferences, and computer-only settings read-only', async () => {
   useUIStore.setState({ activeSettingsTab: 'terminal' })
   render(<H5Settings />)
-  const nav = within(screen.getByRole('navigation', { name: 'Settings' }))
-  expect(nav.getAllByRole('button')).toHaveLength(2)
+  // No tab strip of two pills any more, and nothing desktop-only opens.
+  expect(screen.queryByRole('navigation', { name: 'Settings' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'Terminal' })).not.toBeInTheDocument()
-  fireEvent.click(nav.getByRole('button', { name: 'General' }))
+  expect(screen.getByRole('button', { name: 'Disconnect' })).toBeInTheDocument()
   expect(screen.getByText('Appearance and interface language apply only to this browser.')).toBeInTheDocument()
   const update = vi.spyOn(settingsApi, 'updateUser').mockResolvedValue({ ok: true })
   fireEvent.change(screen.getByLabelText('Output Style'), { target: { value: 'Learning' } })
@@ -42,6 +42,29 @@ it('limits browser navigation to providers and general, with local appearance an
   fireEvent.change(screen.getByLabelText('Reasoning effort'), { target: { value: 'low' } })
   await waitFor(() => expect(effort).toHaveBeenCalledWith('low'))
   expect(screen.queryByLabelText(/ngrok Authtoken/)).not.toBeInTheDocument()
+  // The computer-only settings are listed so the phone knows they exist, and
+  // offer nothing to press.
+  const desktopOnly = screen.getByTestId('h5-settings-desktop-only')
+  expect(desktopOnly).toHaveTextContent('MCP')
+  expect(within(desktopOnly).queryAllByRole('button')).toHaveLength(0)
+})
+it('opens the model provider page from the list and comes back', async () => {
+  useUIStore.setState({ activeSettingsTab: 'general' })
+  render(<H5Settings />)
+  fireEvent.click(screen.getByTestId('h5-settings-providers'))
+  expect(await screen.findByTestId('provider-fixture-provider')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'All settings' }))
+  expect(screen.getByTestId('h5-settings-providers')).toBeInTheDocument()
+})
+it('opens on the list even when the providers page was the last one seen', () => {
+  useUIStore.setState({ activeSettingsTab: 'providers' })
+  render(<H5Settings />)
+  expect(screen.getByTestId('h5-settings-providers')).toBeInTheDocument()
+})
+it('honours a link that asks for the providers page', async () => {
+  useUIStore.setState({ pendingSettingsTab: 'providers' })
+  render(<H5Settings />)
+  expect(await screen.findByTestId('provider-fixture-provider')).toBeInTheDocument()
 })
 it('edits saved providers without reading or overwriting stored keys or global settings', async () => {
   const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider: saved })
@@ -94,10 +117,10 @@ it('changes browser appearance without writing connected computer settings', asy
 })
 
 it('routes the actual Settings page to the browser-safe panels', async () => {
+  useUIStore.setState({ activeSettingsTab: 'general' })
   render(<Settings />)
-  const nav = within(screen.getByRole('navigation', { name: 'Settings' }))
-  expect(nav.getAllByRole('button')).toHaveLength(2)
   expect(screen.queryByTestId('settings-navigation')).not.toBeInTheDocument()
+  fireEvent.click(screen.getByTestId('h5-settings-providers'))
   expect(await screen.findByTestId('provider-fixture-provider')).toBeInTheDocument()
 })
 

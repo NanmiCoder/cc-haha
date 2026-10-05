@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronRight, Circle, FileText, LoaderCircle, Square, Terminal, Users, X, Zap } from 'lucide-react'
 import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { IconButton } from '@/components/ui/IconButton'
 import { Progress } from '@/components/ui/Progress'
 import { useDismissable } from '@/hooks/useDismissable'
@@ -22,7 +23,11 @@ export type OpenSubagentPayload = {
   teamStartedAt?: number
 }
 
-type SessionActivityPanelPlacement = 'overlay' | 'rail'
+/**
+ * `overlay` floats over the session's top right, `rail` docks beside it, and
+ * `sheet` is the phone's bottom sheet, opened from the top bar's activity pill.
+ */
+type SessionActivityPanelPlacement = 'overlay' | 'rail' | 'sheet'
 
 type TranslationFn = ReturnType<typeof useTranslation>
 
@@ -656,7 +661,8 @@ export function SessionActivityPanel({
   )
 
   useDismissable({
-    open,
+    // A sheet closes itself (scrim, close button, Escape).
+    open: open && placement !== 'sheet',
     refs: [panelRef],
     onDismiss: onClose,
     isExempt: isDismissExempt,
@@ -675,6 +681,98 @@ export function SessionActivityPanel({
       setSelectedBackgroundTaskId(null)
     }
   }, [model.sections.backgroundTasks.rows, open, selectedBackgroundTaskId])
+
+  const sections = visibleSections.map((section, index) => {
+    const sectionTitle = getSectionTitle(section.id, t)
+    const taskProgress = section.id === 'tasks' ? getTaskProgress(section.rows) : null
+
+    return (
+      <section
+        key={section.id}
+        aria-label={sectionTitle}
+        className={index > 0 ? 'border-t border-[var(--color-border)] pt-3' : undefined}
+      >
+        <div className="mb-1.5 flex items-center justify-between gap-2 px-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <h3 className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">
+              {sectionTitle}
+            </h3>
+            {section.rows.length > 0 ? (
+              <Badge tone="neutral" size="sm" pill={false}>{section.rows.length}</Badge>
+            ) : null}
+          </div>
+          {taskProgress ? (
+            <span className="flex shrink-0 items-center gap-2 text-[12px] tabular-nums text-[var(--color-text-tertiary)]">
+              {/* `Progress` is `w-full`; the wrapper is what makes it the
+                  52px rail the design calls for, since the two width
+                  utilities would otherwise resolve by stylesheet order. */}
+              <span className="inline-flex w-[52px] shrink-0">
+                {/* Named for what it measures, not the section: reusing the
+                    section title made screen readers announce "任务, 50%". */}
+                <Progress
+                  size="xs"
+                  tone="success"
+                  value={taskProgress.percent}
+                  label={t('session.activity.tasksProgress', {
+                    completed: taskProgress.completed,
+                    total: taskProgress.total,
+                  })}
+                />
+              </span>
+              {taskProgress.completed}/{taskProgress.total}
+            </span>
+          ) : null}
+          {section.id === 'backgroundTasks' && finishedBackgroundTaskKeys.length > 0 && onClearFinishedBackgroundTasks ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => onClearFinishedBackgroundTasks(finishedBackgroundTaskKeys)}
+            >
+              {t('session.activity.clearFinished')}
+            </Button>
+          ) : null}
+        </div>
+        <div className={getSectionRowsClassName(section.id, section.rows.length)}>
+          {section.rows.map((row) => (
+            <div key={row.id}>
+              <ActivityRowView
+                row={row}
+                sessionId={model.sessionId}
+                onOpenSubagent={onOpenSubagent}
+                onOpenMember={onOpenMember}
+                onStopBackgroundTask={onStopBackgroundTask}
+                stoppingBackgroundTask={Boolean(row.taskId && stoppingBackgroundTaskIds?.[row.taskId])}
+                onOpenBackgroundTask={(backgroundRow) => {
+                  setSelectedBackgroundTaskId((current) => (
+                    current === backgroundRow.id ? null : backgroundRow.id
+                  ))
+                }}
+                selected={section.id === 'backgroundTasks' && selectedBackgroundTaskId === row.id}
+              />
+              {section.id === 'backgroundTasks' && selectedBackgroundTaskId === row.id ? (
+                <BackgroundTaskDetail row={row} />
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </section>
+    )
+  })
+
+  if (placement === 'sheet') {
+    return (
+      <MobileBottomSheet
+        open={open}
+        onClose={onClose}
+        title={t('session.activity.title')}
+        closeLabel={t('session.activity.close')}
+        testId="session-activity-sheet"
+        contentClassName="space-y-3 px-3 pb-4 pt-3"
+      >
+        {sections}
+      </MobileBottomSheet>
+    )
+  }
 
   if (!open) return null
   // Both placements are out-of-flow overlays pinned to the top right of the
@@ -730,82 +828,7 @@ export function SessionActivityPanel({
         data-testid="session-activity-scroll"
         className={`min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-4 pb-4 pt-0.5 ${ACTIVITY_SCROLLBAR_CLASS}`}
       >
-        {visibleSections.map((section, index) => {
-          const sectionTitle = getSectionTitle(section.id, t)
-          const taskProgress = section.id === 'tasks' ? getTaskProgress(section.rows) : null
-
-          return (
-            <section
-              key={section.id}
-              aria-label={sectionTitle}
-              className={index > 0 ? 'border-t border-[var(--color-border)] pt-3' : undefined}
-            >
-              <div className="mb-1.5 flex items-center justify-between gap-2 px-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  <h3 className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">
-                    {sectionTitle}
-                  </h3>
-                  {section.rows.length > 0 ? (
-                    <Badge tone="neutral" size="sm" pill={false}>{section.rows.length}</Badge>
-                  ) : null}
-                </div>
-                {taskProgress ? (
-                  <span className="flex shrink-0 items-center gap-2 text-[12px] tabular-nums text-[var(--color-text-tertiary)]">
-                    {/* `Progress` is `w-full`; the wrapper is what makes it the
-                        52px rail the design calls for, since the two width
-                        utilities would otherwise resolve by stylesheet order. */}
-                    <span className="inline-flex w-[52px] shrink-0">
-                      {/* Named for what it measures, not the section: reusing the
-                          section title made screen readers announce "任务, 50%". */}
-                      <Progress
-                        size="xs"
-                        tone="success"
-                        value={taskProgress.percent}
-                        label={t('session.activity.tasksProgress', {
-                          completed: taskProgress.completed,
-                          total: taskProgress.total,
-                        })}
-                      />
-                    </span>
-                    {taskProgress.completed}/{taskProgress.total}
-                  </span>
-                ) : null}
-                {section.id === 'backgroundTasks' && finishedBackgroundTaskKeys.length > 0 && onClearFinishedBackgroundTasks ? (
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => onClearFinishedBackgroundTasks(finishedBackgroundTaskKeys)}
-                  >
-                    {t('session.activity.clearFinished')}
-                  </Button>
-                ) : null}
-              </div>
-              <div className={getSectionRowsClassName(section.id, section.rows.length)}>
-                {section.rows.map((row) => (
-                  <div key={row.id}>
-                    <ActivityRowView
-                      row={row}
-                      sessionId={model.sessionId}
-                      onOpenSubagent={onOpenSubagent}
-                      onOpenMember={onOpenMember}
-                      onStopBackgroundTask={onStopBackgroundTask}
-                      stoppingBackgroundTask={Boolean(row.taskId && stoppingBackgroundTaskIds?.[row.taskId])}
-                      onOpenBackgroundTask={(backgroundRow) => {
-                        setSelectedBackgroundTaskId((current) => (
-                          current === backgroundRow.id ? null : backgroundRow.id
-                        ))
-                      }}
-                      selected={section.id === 'backgroundTasks' && selectedBackgroundTaskId === row.id}
-                    />
-                    {section.id === 'backgroundTasks' && selectedBackgroundTaskId === row.id ? (
-                      <BackgroundTaskDetail row={row} />
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )
-        })}
+        {sections}
       </div>
     </div>
   )

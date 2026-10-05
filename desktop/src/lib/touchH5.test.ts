@@ -437,12 +437,12 @@ describe('touch-H5 stylesheet contract', () => {
     expect(css).toMatch(/html\[data-touch-h5\]\[data-touch-h5-keyboard\] \.app-shell-viewport \{\s*\n\s*padding-bottom: 0px;/)
   })
 
-  it('keeps message action bars visible in the mobile shell without relying on touch detection', () => {
-    expect(css).toMatch(/\.app-shell--mobile \[data-message-actions\],\s*\nhtml\[data-touch-h5\] \[data-message-actions\] \{\s*\n\s*opacity: 1;\s*\n\s*pointer-events: auto;/)
-    // 2.75rem = 44px, the platform minimum for primary touch targets. These
-    // buttons shipped at 40px because IconButton's size doc had the 40/44
-    // tiers reversed.
-    expect(css).toMatch(/\.app-shell--mobile \[data-message-actions\] button \{\s*\n\s*width: 2\.75rem;/)
+  it('does not force the hover action bars open on touch: the phone holds a message for its actions', () => {
+    // The bars were kept visible under every message on a phone, a row of
+    // icons per message. They are no longer drawn there (useMessageActionMenu),
+    // and a rule forcing them visible would bring the row back the moment a
+    // bar renders on a touch layout again.
+    expect(css).not.toMatch(/\[data-message-actions\]/)
   })
 
   it('disables paint skipping for the trace-window rows too', () => {

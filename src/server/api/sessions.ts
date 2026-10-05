@@ -39,6 +39,7 @@ import {
   closeSessionConnection,
   ensureCliSessionStartedForControl,
   getSlashCommands,
+  listLiveSessionActivity,
 } from '../ws/handler.js'
 import { listSkillSlashCommands, type SkillSlashCommand } from './skills.js'
 import { WorkspaceService, type WorkspaceRawFile } from '../services/workspaceService.js'
@@ -150,6 +151,17 @@ export async function handleSessionsApi(
         )
       }
       return await batchDeleteSessions(req)
+    }
+
+    // Special collection route: /api/sessions/live-status
+    if (sessionId === 'live-status') {
+      if (req.method !== 'GET') {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      return Response.json({ sessions: listLiveSessionActivity() })
     }
 
     // Special collection route: /api/sessions/recent-projects

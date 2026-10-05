@@ -354,7 +354,7 @@ function makeDesktopUiPreferencesResponse({
   }
 }
 
-function SidebarDrawerHarness({ request }: { request: Promise<DesktopUiPreferencesResponse> }) {
+function SidebarRemountHarness({ request }: { request: Promise<DesktopUiPreferencesResponse> }) {
   const [open, setOpen] = useState(true)
   const [preferencesRequest, setPreferencesRequest] = useState<
     Promise<DesktopUiPreferencesResponse> | null
@@ -363,11 +363,10 @@ function SidebarDrawerHarness({ request }: { request: Promise<DesktopUiPreferenc
   return (
     <>
       <button type="button" onClick={() => setOpen((current) => !current)}>
-        {open ? 'Close drawer harness' : 'Open drawer harness'}
+        {open ? 'Unmount sidebar harness' : 'Mount sidebar harness'}
       </button>
       {open && (
         <Sidebar
-          isMobile
           desktopUiPreferencesRequest={preferencesRequest}
           onDesktopUiPreferencesConsumed={(consumedRequest) => {
             setPreferencesRequest((current) => current === consumedRequest ? null : current)
@@ -1739,13 +1738,13 @@ describe('Sidebar', () => {
     expect(JSON.parse(window.localStorage.getItem(PROJECT_HIDDEN_STORAGE_KEY) ?? '[]')).toEqual(['/workspace/alpha'])
   })
 
-  it('invalidates stale bootstrap preferences before a mobile drawer remount', async () => {
+  it('invalidates stale bootstrap preferences before a sidebar remount', async () => {
     const preferencesResponse = createDeferred<DesktopUiPreferencesResponse>()
     useSessionStore.setState({
       sessions: [makeSession('alpha-1', 'Alpha Session', '/workspace/alpha', new Date().toISOString())],
     })
 
-    render(<SidebarDrawerHarness request={preferencesResponse.promise} />)
+    render(<SidebarRemountHarness request={preferencesResponse.promise} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'Project actions for alpha' }))
     fireEvent.click(screen.getByRole('menuitem', { name: 'Hide from Sidebar' }))
@@ -1760,8 +1759,8 @@ describe('Sidebar', () => {
       })
     })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close drawer harness' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Open drawer harness' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Unmount sidebar harness' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Mount sidebar harness' }))
     expect(screen.queryByTestId('sidebar-project-group-workspace-alpha')).not.toBeInTheDocument()
 
     await act(async () => {
@@ -2309,47 +2308,6 @@ describe('Sidebar', () => {
     expect(within(screen.getByRole('button', { name: /Worktree run/ })).getByText('worktree')).toHaveClass('sr-only')
   })
 
-  it('keeps mobile navigation focused on chat sessions', async () => {
-    const onRequestClose = vi.fn()
-    createSession.mockResolvedValue('session-mobile-new')
-    useSessionStore.setState({
-      sessions: [
-        {
-          id: 'session-1',
-          title: 'Open Session',
-          createdAt: new Date().toISOString(),
-          modifiedAt: new Date().toISOString(),
-          messageCount: 1,
-          projectPath: '/workspace/project',
-          workDir: '/workspace/project',
-          workDirExists: true,
-        },
-      ],
-    })
-
-    render(<Sidebar isMobile onRequestClose={onRequestClose} />)
-
-    expect(screen.queryByRole('button', { name: 'Scheduled' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Extension Market' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Settings' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
-    expect(useTabStore.getState().activeTabId).toBe('__settings__')
-    expect(onRequestClose).toHaveBeenCalledTimes(1)
-    onRequestClose.mockClear()
-
-    fireEvent.click(screen.getByRole('button', { name: /Open Session/ }))
-    expect(onRequestClose).toHaveBeenCalledTimes(1)
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
-    })
-
-    await waitFor(() => {
-      expect(createSession).toHaveBeenCalled()
-    })
-    expect(onRequestClose).toHaveBeenCalledTimes(2)
-  })
-
   it('keeps one unified extension market entry in desktop navigation', () => {
     render(<Sidebar />)
 
@@ -2761,65 +2719,15 @@ describe('Sidebar', () => {
     })
   })
 
-  // The whole drawer is touch-only: it has no hover, and nothing can be focused
-  // through `pointer-events: none`. Every control gated on `group-hover` was
-  // therefore either dead or an invisible tap target, and the 53 tests above
-  // never saw it because they all render the desktop sidebar.
-  describe('touch drawer controls', () => {
-    const renderWithProject = (isMobile: boolean) => {
-      useSessionStore.setState({
-        sessions: [makeSession('alpha-1', 'Alpha newest', '/workspace/alpha', new Date('2026-05-15T10:00:00.000Z').toISOString())],
-      })
-      return render(<Sidebar isMobile={isMobile} />)
-    }
-
-    it('keeps the project row actions hover-gated on desktop', () => {
-      renderWithProject(false)
-
-      const actions = screen.getByRole('button', { name: 'Project actions for alpha' })
-      expect(actions).toHaveClass('h-7', 'w-7')
-      expect(actions.parentElement).toHaveClass('pointer-events-none', 'opacity-0')
+  it('keeps the project row actions hover-gated on desktop', () => {
+    useSessionStore.setState({
+      sessions: [makeSession('alpha-1', 'Alpha newest', '/workspace/alpha', new Date('2026-05-15T10:00:00.000Z').toISOString())],
     })
+    render(<Sidebar />)
 
-    it('leaves the project row actions tappable at 44px in the drawer', () => {
-      renderWithProject(true)
-
-      const actions = screen.getByRole('button', { name: 'Project actions for alpha' })
-      const create = screen.getByRole('button', { name: 'New session in alpha' })
-      expect(actions).toHaveClass('h-11', 'w-11')
-      expect(create).toHaveClass('h-11', 'w-11')
-      // Both live in one row, so they need a gap wide enough not to catch a
-      // thumb aimed at the other.
-      expect(actions.parentElement).toHaveClass('opacity-100', 'gap-1.5')
-      expect(actions.parentElement).not.toHaveClass('pointer-events-none')
-    })
-
-    it('stops rendering the projects header actions as an invisible tap target', () => {
-      renderWithProject(true)
-
-      // These kept `pointer-events` while sitting at `opacity: 0` — visually
-      // absent on a phone, yet still firing on tap.
-      const menu = screen.getByRole('button', { name: 'Project menu' })
-      expect(menu).toHaveClass('h-11', 'w-11')
-      expect(menu.parentElement).toHaveClass('opacity-100')
-      expect(menu.parentElement).not.toHaveClass('opacity-0')
-    })
-
-    it('raises the search row and overflow toggle to the touch minimum', () => {
-      renderWithProject(true)
-
-      expect(screen.getByRole('button', { name: 'Refresh sessions' })).toHaveClass('h-11', 'w-11')
-      expect(screen.getByRole('button', { name: 'Batch manage' })).toHaveClass('h-11', 'w-11')
-      // Same flex row as the two above; at h-9 it left the row ragged.
-      expect(screen.getAllByRole('button', { name: 'Search chats' })[0]).toHaveClass('h-11')
-    })
-
-    it('raises the task view bell to the touch minimum as well', () => {
-      renderWithProject(true)
-
-      // 铃铛跟旁边的折叠按钮同处标题行；停在 32px 会是这行里唯一打不中的目标。
-      expect(screen.getByRole('button', { name: 'Task view' })).toHaveClass('h-11', 'w-11')
-    })
+    const actions = screen.getByRole('button', { name: 'Project actions for alpha' })
+    expect(actions).toHaveClass('h-7', 'w-7')
+    expect(actions.parentElement).toHaveClass('pointer-events-none', 'opacity-0')
   })
 
   describe('task view', () => {

@@ -117,4 +117,17 @@ describe('useMobileViewport', () => {
     expect(controller.removeListener).toHaveBeenCalledTimes(1)
     expect(controller.getListenerCount()).toBe(0)
   })
+
+  it('gives a wide touch browser the touch controls too, because a tablet has no hover', () => {
+    const controller = createMatchMediaController(false)
+    window.matchMedia = controller.matchMedia as typeof window.matchMedia
+    document.documentElement.setAttribute('data-touch-h5', 'true')
+
+    try {
+      render(<Probe />)
+      expect(screen.getByTestId('viewport-state')).toHaveTextContent('mobile')
+    } finally {
+      document.documentElement.removeAttribute('data-touch-h5')
+    }
+  })
 })

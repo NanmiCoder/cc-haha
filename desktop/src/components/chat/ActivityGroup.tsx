@@ -1,7 +1,8 @@
 import { memo, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { toolResultImagesFor, type ToolResultImageExtraction } from '@/lib/toolResultContent'
-import { ChevronRight, CirclePause, CircleX, LoaderCircle } from 'lucide-react'
+import { Check, ChevronRight, CirclePause, CircleX, LoaderCircle } from 'lucide-react'
+import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { ToolCallBlock, formatDuration } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolResultImages } from './ToolResultImages'
@@ -44,6 +45,13 @@ type Props = {
   revealToolUseId?: string
   /** Calls whose permission prompt is waiting on the user. */
   awaitingToolUseIds?: ReadonlySet<string>
+  /**
+   * `inline` opens the run in place. `sheet` (the phone) keeps every run one
+   * card: the counted summary, plus the step under way while it runs; a tap
+   * opens the whole timeline in a sheet. A run unfolding in place on a phone
+   * pushed the conversation off the screen a step at a time.
+   */
+  presentation?: 'inline' | 'sheet'
 }
 
 const MAX_HEADER_ICONS = 3
@@ -98,8 +106,10 @@ export const ActivityGroup = memo(function ActivityGroup({
   disclosureKey,
   revealToolUseId,
   awaitingToolUseIds,
+  presentation = 'inline',
 }: Props) {
   const t = useTranslation()
+  const [sheetOpen, setSheetOpen] = useState(false)
   /** null = follow the run's own state; set = the reader decided. */
   const [pinnedCollapsedLocal, setPinnedCollapsedLocal] = useState<boolean | null>(null)
   const pinnedCollapsed = disclosureKey
@@ -146,7 +156,7 @@ export const ActivityGroup = memo(function ActivityGroup({
   }
 
   const soleToolCall = steps.length === 1 && steps[0]?.kind === 'tool' ? steps[0].toolCall : null
-  if (soleToolCall) {
+  if (soleToolCall && presentation === 'inline') {
     return (
       <div>
         <div
@@ -170,6 +180,97 @@ export const ActivityGroup = memo(function ActivityGroup({
   const headerIcons = segments
     .filter((segment, index) => segments.findIndex((other) => other.icon === segment.icon) === index)
     .slice(0, MAX_HEADER_ICONS)
+
+  if (presentation === 'sheet') {
+    const lastToolStep = [...steps].reverse().find((step) => step.kind === 'tool')
+    const liveToolCall = showsProgress && lastToolStep?.kind === 'tool' ? lastToolStep.toolCall : null
+    const timeline = (
+      <ToolTimeline>
+        {steps.map((step) => step.kind === 'thinking' ? (
+          <TimelineThinking
+            key={step.message.id}
+            content={step.message.content}
+            isActive={step.message.id === activeThinkingId}
+          />
+        ) : (
+          <ActivityToolRow key={step.toolCall.id} toolCall={step.toolCall} {...rowProps} />
+        ))}
+      </ToolTimeline>
+    )
+    return (
+      <div
+        data-testid="activity-group"
+        data-presentation="sheet"
+        data-running={isRunning ? 'true' : 'false'}
+        className={`overflow-hidden rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] ${
+          showsProgress ? 'border-[var(--color-info)]' : 'border-[var(--color-border)]'
+        }`}
+      >
+        <button
+          type="button"
+          data-chat-disclosure="true"
+          aria-haspopup="dialog"
+          onClick={() => setSheetOpen(true)}
+          className="flex min-h-11 w-full items-center gap-2 px-3 py-2 text-left text-[13px] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+        >
+          <span
+            aria-hidden="true"
+            className={`flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border ${
+              awaitingCount > 0
+                ? 'border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
+                : showsProgress
+                ? 'border-[var(--color-info)] bg-[var(--color-info-container)] text-[var(--color-on-info-container)]'
+                : failedCount > 0
+                ? 'border-[var(--color-error-container)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+                : 'border-[var(--color-success)] bg-[var(--color-success-container)] text-[var(--color-on-success-container)]'
+            }`}
+          >
+            {awaitingCount > 0 ? <CirclePause size={12} strokeWidth={2} />
+              : showsProgress ? <LoaderCircle size={12} strokeWidth={2} className="animate-spin" />
+              : failedCount > 0 ? <CircleX size={12} strokeWidth={2} />
+              : <Check size={12} strokeWidth={2} />}
+          </span>
+          <span data-activity-summary="" className="min-w-0 flex-1 truncate font-medium text-[var(--color-text-primary)]">
+            {summaryText}
+          </span>
+          {failedCount > 0 && (
+            <span className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-[12px] text-[var(--color-error)]">
+              {t('toolGroup.failedCount', { count: failedCount })}
+            </span>
+          )}
+          {awaitingCount > 0 ? (
+            <span className="shrink-0 whitespace-nowrap text-[12px] font-medium text-[var(--color-on-warning-container)]">
+              {t('permission.awaitingApproval')}
+            </span>
+          ) : showsProgress ? (
+            <span className="shrink-0 whitespace-nowrap text-[12px] text-[var(--color-info)]">{t('agentStatus.running')}</span>
+          ) : durationLabel ? (
+            <span className="shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{durationLabel}</span>
+          ) : null}
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        </button>
+        {liveToolCall ? (
+          <div data-testid="activity-live-step" className="border-t border-[var(--color-border)] px-2 pb-1 pt-1">
+            <ToolTimeline>
+              <ActivityToolRow toolCall={liveToolCall} {...rowProps} />
+            </ToolTimeline>
+          </div>
+        ) : null}
+        {!liveToolCall ? <CollapsedRunImages toolCalls={toolCalls} resultMap={resultMap} /> : null}
+        <MobileBottomSheet
+          open={sheetOpen}
+          onClose={() => setSheetOpen(false)}
+          title={summaryText}
+          closeLabel={t('common.close')}
+          testId="activity-timeline-sheet"
+          tall
+          contentClassName="px-3 py-2"
+        >
+          {timeline}
+        </MobileBottomSheet>
+      </div>
+    )
+  }
 
   return (
     <div>

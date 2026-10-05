@@ -1,5 +1,5 @@
 import { useSideChatStore } from '@/stores/sideChatStore'
-import { useState, useRef, useEffect, useCallback, useId } from 'react'
+import { forwardRef, useState, useRef, useEffect, useCallback, useId, useImperativeHandle } from 'react'
 import DOMPurify from 'dompurify'
 import { Check, ChevronDown, CirclePlay, DraftingCompass, Folder, Gavel, ShieldCheck, Zap, type LucideIcon } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
@@ -16,6 +16,7 @@ import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 import { AutoModeOptInDialog } from './AutoModeOptInDialog'
+import { useResolvedPermissionMode } from './permissionModeState'
 import {
   COMPOSER_MENU_ITEM,
   COMPOSER_MENU_ITEM_ACTIVE,
@@ -55,10 +56,22 @@ function ItemIcon({ mode }: { mode: PermissionMode }) {
   return <Icon aria-hidden="true" size={16} strokeWidth={1.75} />
 }
 
+export type PermissionModeSelectorHandle = {
+  /** Opens the mode menu, as a tap on the trigger would. Ignored mid-turn. */
+  open: () => void
+}
+
 type Props = {
   sessionId?: string
   workDir?: string
   compact?: boolean
+  /**
+   * `chip` always shows the trigger. `elevatedOnly` hides it while every write
+   * still asks first: the phone composer keeps the mode in its + sheet, and
+   * only puts the trigger on the toolbar once some writes run unattended — the
+   * one state worth a glance.
+   */
+  trigger?: 'chip' | 'elevatedOnly'
   menuPlacement?: 'top' | 'bottom'
   /** Controlled mode: override current value */
   value?: PermissionMode
@@ -66,18 +79,19 @@ type Props = {
   onChange?: (mode: PermissionMode) => void
 }
 
-export function PermissionModeSelector({ sessionId, workDir: workDirProp, compact = false, menuPlacement = 'top', value, onChange }: Props = {}) {
+export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, Props>(function PermissionModeSelector(
+  { sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', value, onChange }: Props = {},
+  handleRef,
+) {
   const t = useTranslation()
   const isMobile = useMobileViewport() && !isDesktopRuntime()
   const {
-    permissionMode: storeMode,
     autoModeOptInAccepted,
     acceptAutoModeOptIn,
   } = useSettingsStore()
   const setSessionPermissionMode = useChatStore((s) => s.setSessionPermissionMode)
   const selectedTabId = useTabStore((s) => s.activeTabId)
   const activeTabId = sessionId ?? selectedTabId
-  const livePermissionMode = useChatStore(s => activeTabId ? s.sessions[activeTabId]?.permissionMode : undefined)
   const sideChat = useSideChatStore(s => activeTabId ? s.entries[activeTabId] : undefined)
   const sessions = useSessionStore((s) => s.sessions)
   const chatState = useChatStore((s) =>
@@ -147,9 +161,7 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
   const activeSession = activeTabId
     ? sessions.find((s) => s.id === activeTabId)
     : null
-  const currentMode = isControlled
-    ? value
-    : livePermissionMode || (activeSession?.permissionMode as PermissionMode | undefined) || sideChat?.permissionMode || storeMode
+  const currentMode = useResolvedPermissionMode(sessionId, value)
   const workDir = workDirProp || activeSession?.workDir || sideChat?.workDir || '~'
   // A quiet 28px chip on the composer row (risk dot + label + chevron); the
   // compact desktop form keeps only the mode glyph, and the phone form grows
@@ -190,6 +202,15 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
   }, [activeTabId, autoDialog, confirmDialog, open])
 
   const closeMenu = useCallback(() => setOpen(false), [])
+
+  const openMenu = useCallback(() => {
+    const actionTabId = sessionId ?? useTabStore.getState().activeTabId
+    if ((useChatStore.getState().sessions[actionTabId ?? '']?.chatState ?? 'idle') !== 'idle') return
+    interactionTabIdRef.current = actionTabId
+    setOpen(true)
+  }, [sessionId])
+
+  useImperativeHandle(handleRef, () => ({ open: openMenu }), [openMenu])
 
   // `ref` wraps the trigger and the desktop popup; `menuRef` covers the sheet,
   // which portals out of it. `stopEscapePropagation` keeps one Escape from
@@ -268,8 +289,11 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
     </>
   )
 
+  const showTrigger = trigger === 'chip' || MODE_DOT_TONE[currentMode] !== 'success'
+
   return (
     <div ref={ref} className="relative">
+      {showTrigger ? (
       <button
         onClick={() => {
           const actionTabId = sessionId ?? useTabStore.getState().activeTabId
@@ -309,6 +333,7 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
           </>
         )}
       </button>
+      ) : null}
 
       {open && (
         isMobile ? (
@@ -455,4 +480,4 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
       />
     </div>
   )
-}
+})

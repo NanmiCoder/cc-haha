@@ -10,6 +10,7 @@ import { splitTextByUrls } from '../../lib/urlBoundary'
 import { AttachmentGallery } from './AttachmentGallery'
 import { MessageActionBar, type MessageBranchAction, type MessageEditAction } from './MessageActionBar'
 import { UserMessageEditor } from './UserMessageEditor'
+import { useMessageActionMenu } from './useMessageActionMenu'
 import type { UserMessageEditDraft } from './userMessageEdit'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 
@@ -75,6 +76,10 @@ export const UserMessage = memo(function UserMessage({
       : undefined,
     [editAction],
   )
+  // A teammate's message offers copy only; the user's own adds branch and edit.
+  const actionMenu = useMessageActionMenu(teammateFrom
+    ? { copyText: hasText ? content : undefined, timestamp }
+    : { copyText: hasText ? content : undefined, branchAction, editAction: actionBarEditAction, timestamp })
 
   // The operator's prompt is literal text, NOT markdown — `**`, `#` and file
   // paths have to stay exactly as typed. Teammate traffic is rendered separately
@@ -118,7 +123,8 @@ export const UserMessage = memo(function UserMessage({
         <div
           data-message-shell="teammate"
           data-teammate-from={teammateFrom}
-          className="group relative flex min-w-0 max-w-[82%] flex-col items-start lg:max-w-[680px]"
+          {...actionMenu.pressProps}
+          className={`group relative flex min-w-0 max-w-[82%] flex-col items-start lg:max-w-[680px] ${actionMenu.pressClassName}`}
         >
           <div className="mb-1.5 flex min-w-0 items-center gap-2 px-0.5 text-xs text-[var(--color-text-tertiary)]">
             {teammateAvatarSrc ? (
@@ -167,7 +173,7 @@ export const UserMessage = memo(function UserMessage({
             )}
           </div>
 
-          {hasText && (
+          {hasText && !actionMenu.enabled && (
             <MessageActionBar
               copyText={content}
               copyLabel={t('chat.copyPrompt')}
@@ -176,6 +182,7 @@ export const UserMessage = memo(function UserMessage({
               timestamp={timestamp}
             />
           )}
+          {actionMenu.sheet}
         </div>
       </div>
     )
@@ -206,7 +213,8 @@ export const UserMessage = memo(function UserMessage({
     <div className="flex justify-end">
       <div
         data-message-shell="user"
-        className="group relative flex min-w-0 max-w-[82%] flex-col items-end lg:max-w-[640px]"
+        {...actionMenu.pressProps}
+        className={`group relative flex min-w-0 max-w-[82%] flex-col items-end lg:max-w-[640px] ${actionMenu.pressClassName}`}
       >
         <div className="flex max-w-full flex-col items-end gap-2">
           {collaboration ? <div className="px-0.5 text-[11px] text-[var(--color-text-tertiary)]">
@@ -233,7 +241,7 @@ export const UserMessage = memo(function UserMessage({
           )}
         </div>
 
-        {(hasText || actionBarEditAction) && (
+        {(hasText || actionBarEditAction) && !actionMenu.enabled && (
           <MessageActionBar
             copyText={content}
             copyLabel={t('chat.copyPrompt')}
@@ -244,6 +252,7 @@ export const UserMessage = memo(function UserMessage({
             timestamp={timestamp}
           />
         )}
+        {actionMenu.sheet}
       </div>
     </div>
   )

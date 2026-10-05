@@ -377,6 +377,30 @@ describe('EmptySession', () => {
     expect(screen.getByTestId('empty-session-composer-shell')).toHaveClass('absolute', 'bottom-0')
   })
 
+  it('puts the phone home list where the hero was, with the composer docked under it', () => {
+    mocks.isMobile = true
+
+    render(<EmptySession mobileHome={<div>session list</div>} />)
+
+    expect(screen.getByTestId('mobile-home')).toHaveTextContent('session list')
+    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument()
+    // In the flow, not floating over the list: the list scrolls above it.
+    const shell = screen.getByTestId('empty-session-composer-shell')
+    expect(shell).toHaveClass('shrink-0')
+    expect(shell).not.toHaveClass('absolute')
+    // Home is read first; the keyboard must not jump up over the list.
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
+  })
+
+  it('ignores the phone home slot on a desktop window', () => {
+    mocks.isMobile = false
+
+    render(<EmptySession mobileHome={<div>session list</div>} />)
+
+    expect(screen.queryByTestId('mobile-home')).not.toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
+  })
+
   it('uses compact composer controls on phone-sized H5 browsers', async () => {
     mocks.isMobile = true
 

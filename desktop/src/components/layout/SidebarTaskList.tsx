@@ -28,7 +28,6 @@ export type SidebarTaskListProps = {
   attentionSessionIds: ReadonlySet<string>
   selectedSessionIds: ReadonlySet<string>
   isBatchMode: boolean
-  isMobile: boolean
   renamingId: string | null
   renameValue: string
   workspaceLabelFor: (session: SessionListItem) => string
@@ -47,7 +46,6 @@ export function SidebarTaskList({
   attentionSessionIds,
   selectedSessionIds,
   isBatchMode,
-  isMobile,
   renamingId,
   renameValue,
   workspaceLabelFor,
@@ -98,7 +96,6 @@ export function SidebarTaskList({
                     isRunning={runningSessionIds.has(session.id)}
                     needsAttention={attentionSessionIds.has(session.id)}
                     isBatchMode={isBatchMode}
-                    isMobile={isMobile}
                     workspaceLabel={workspaceLabelFor(session)}
                     onClick={onSessionClick}
                     onContextMenu={onSessionContextMenu}
@@ -121,7 +118,6 @@ function SidebarTaskRow({
   isRunning,
   needsAttention,
   isBatchMode,
-  isMobile,
   workspaceLabel,
   onClick,
   onContextMenu,
@@ -133,7 +129,6 @@ function SidebarTaskRow({
   isRunning: boolean
   needsAttention: boolean
   isBatchMode: boolean
-  isMobile: boolean
   workspaceLabel: string
   onClick: (event: React.MouseEvent, session: SessionListItem) => void
   onContextMenu: (event: React.MouseEvent, sessionId: string) => void
@@ -148,7 +143,7 @@ function SidebarTaskRow({
       onClick={(event) => onClick(event, session)}
       onContextMenu={(event) => onContextMenu(event, session.id)}
       className={`
-        group/session w-full rounded-[var(--radius-sm)] px-2 ${isMobile ? 'py-2.5' : 'py-1.5'} text-left transition-[background,color,box-shadow] duration-150
+        group/session w-full rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-[background,color,box-shadow] duration-150
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-sidebar)]
         ${isSelected
           ? 'sidebar-session-row--selected bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'

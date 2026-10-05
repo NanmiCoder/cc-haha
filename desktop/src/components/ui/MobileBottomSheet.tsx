@@ -17,6 +17,12 @@ type Props = {
   panelClassName?: string
   panelRef?: Ref<HTMLDivElement>
   testId?: string
+  /**
+   * Nearly the full screen, for content read in full before acting on it (a
+   * plan to approve, a set of questions). The default stops at 78% so the page
+   * it was opened from stays in view above it.
+   */
+  tall?: boolean
 }
 
 export function MobileBottomSheet({
@@ -34,6 +40,7 @@ export function MobileBottomSheet({
   panelClassName = '',
   panelRef,
   testId,
+  tall = false,
 }: Props) {
   useEffect(() => {
     if (!open) return
@@ -55,7 +62,7 @@ export function MobileBottomSheet({
         aria-modal={role === 'dialog' ? true : undefined}
         aria-label={ariaLabel ?? (typeof title === 'string' ? title : undefined)}
         data-testid={testId}
-        className={`absolute inset-x-0 bottom-0 flex max-h-[min(78dvh,640px)] min-h-0 flex-col overflow-hidden rounded-t-[var(--radius-xl)] border-x-0 border-y border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)] ${panelClassName}`}
+        className={`absolute inset-x-0 bottom-0 flex ${tall ? 'max-h-[92dvh]' : 'max-h-[min(78dvh,640px)]'} min-h-0 flex-col overflow-hidden rounded-t-[var(--radius-xl)] border-x-0 border-y border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)] ${panelClassName}`}
         onClick={(event) => event.stopPropagation()}
       >
         <div className="shrink-0 border-b border-[var(--color-border)] px-4 py-3">

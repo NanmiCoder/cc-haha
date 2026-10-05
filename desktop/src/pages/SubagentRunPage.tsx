@@ -772,7 +772,9 @@ function AgentSessionView({
       <SessionChatHeader
         title={title}
         compact={isMobileLayout}
-        leading={(
+        // On a phone the shell's top bar already carries Back (and the system
+        // back gesture drives it); a second one here said the same thing twice.
+        leading={isMobileLayout ? undefined : (
           <Button
             variant="ghost"
             size="sm"

@@ -716,6 +716,19 @@ describe('SessionActivityPanel', () => {
     expect(onClose).not.toHaveBeenCalled()
   })
 
+  it('opens as a bottom sheet on the phone, which a tap inside does not close', () => {
+    const onClose = vi.fn()
+    render(<SessionActivityPanel model={model()} open onClose={onClose} onOpenSubagent={vi.fn()} placement="sheet" />)
+
+    const sheet = screen.getByTestId('session-activity-sheet')
+    expect(screen.queryByTestId('session-activity-panel')).not.toBeInTheDocument()
+    fireEvent.pointerDown(sheet)
+    expect(onClose).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('renders as a rail without closing on outside pointerdown', () => {
     const onClose = vi.fn()
     render(

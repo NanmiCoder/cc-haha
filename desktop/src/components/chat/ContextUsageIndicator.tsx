@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   sessionsApi,
@@ -32,6 +32,16 @@ type Props = {
    * and after a replacement runtime confirms it has started.
    */
   refreshNonce?: number
+  /**
+   * Keep the indicator mounted (it still tracks the session) but draw no
+   * trigger: the phone composer opens the breakdown from its + sheet instead
+   * of spending a 44px toolbar slot on it.
+   */
+  hideTrigger?: boolean
+}
+
+export type ContextUsageIndicatorHandle = {
+  open: () => void
 }
 
 const ACTIVE_REFRESH_MS = 30_000
@@ -154,7 +164,7 @@ function shouldFetchContext(
   return Boolean(sessionId) && !draft && (messageCount > 0 || chatState !== 'idle')
 }
 
-export function ContextUsageIndicator({
+export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Props>(function ContextUsageIndicator({
   sessionId,
   chatState,
   messageCount,
@@ -163,7 +173,8 @@ export function ContextUsageIndicator({
   draft = false,
   compact = false,
   refreshNonce = 0,
-}: Props) {
+  hideTrigger = false,
+}, handleRef) {
   const t = useTranslation()
   // `compact` also fires for the desktop composer, which narrows for the right
   // panel rather than for touch, so the phone touch target keys off the
@@ -575,11 +586,19 @@ export function ContextUsageIndicator({
     void refresh('manual')
   }
 
+  useImperativeHandle(handleRef, () => ({
+    open: () => {
+      setDetailsOpen(true)
+      void refresh('manual')
+    },
+  }), [refresh])
+
   return (
     <div className="relative pointer-events-auto">
       <button
         ref={triggerRef}
         type="button"
+        hidden={hideTrigger}
         aria-label={ariaLabel}
         aria-expanded={detailsOpen}
         aria-haspopup="dialog"
@@ -649,4 +668,4 @@ export function ContextUsageIndicator({
       )}
     </div>
   )
-}
+})

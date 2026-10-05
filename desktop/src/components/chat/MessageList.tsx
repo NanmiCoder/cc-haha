@@ -1564,6 +1564,12 @@ type MessageListProps = {
   sessionId?: string | null
   compact?: boolean
   mobileLayout?: boolean
+  /**
+   * The host answers waiting requests from an approval bar in the composer's
+   * place (the phone session page). Permission, plan and question cards then
+   * shrink to a marker line here while they wait, so only one live copy exists.
+   */
+  decisionsInComposer?: boolean
   onOpenAgentRun?: (payload: OpenAgentRunPayload) => void
   /**
    * Lets a host that renders the list under a non-session id (an agent run's
@@ -2281,6 +2287,7 @@ export function MessageList({
   sessionId,
   compact = false,
   mobileLayout = false,
+  decisionsInComposer = false,
   onOpenAgentRun,
   resolveAgentActivityTarget,
 }: MessageListProps = {}) {
@@ -3703,6 +3710,7 @@ export function MessageList({
               isLive={chatState !== 'idle' && index === renderItems.length - 1 && !hasTrailingStreamingItem}
               disclosureKey={getRenderItemKey(item)}
               revealToolUseId={navigationToolUseIdFor(item)}
+              activityPresentation={mobileLayout ? 'sheet' : 'inline'}
             />
           ) : item.kind === 'team_card' ? (
             resolvedSessionId ? (() => {
@@ -3745,6 +3753,7 @@ export function MessageList({
               isTurnOutputOwner={turnOutputOwnerIndexes.has(index)}
               turnCompletion={turnCompletionByMessageId.get(item.message.id)}
               supersededAskUserQuestionIds={supersededAskUserQuestionIds}
+              decisionsInComposer={decisionsInComposer}
               navigationHighlighted={
                 item.message.type === 'tool_use' &&
                 navigationToolUseIdFor(item) === item.message.toolUseId
@@ -3996,6 +4005,7 @@ export const MessageBlock = memo(function MessageBlock({
   isTurnOutputOwner,
   turnCompletion,
   supersededAskUserQuestionIds,
+  decisionsInComposer = false,
   navigationHighlighted = false,
 }: {
   sessionId?: string | null
@@ -4015,6 +4025,7 @@ export const MessageBlock = memo(function MessageBlock({
   isTurnOutputOwner?: boolean
   turnCompletion?: TurnCompletion
   supersededAskUserQuestionIds?: ReadonlySet<string>
+  decisionsInComposer?: boolean
   /** A "locate in chat" jump landed on this tool call. */
   navigationHighlighted?: boolean
 }) {
@@ -4089,6 +4100,7 @@ export const MessageBlock = memo(function MessageBlock({
             input={message.input}
             result={toolResult?.content}
             supersededByUserMessage={supersededAskUserQuestionIds?.has(message.toolUseId)}
+            markerWhenPending={decisionsInComposer}
           />
         )
       }
@@ -4133,6 +4145,7 @@ export const MessageBlock = memo(function MessageBlock({
           input={message.input}
           description={message.description}
           displayName={message.displayName}
+          markerWhenPending={decisionsInComposer}
         />
       )
     case 'error': {

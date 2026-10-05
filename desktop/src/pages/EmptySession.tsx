@@ -1,7 +1,7 @@
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
-import { ArrowUp, Plus } from 'lucide-react'
+import { ArrowUp, Cpu, Plus, ShieldCheck } from 'lucide-react'
 import { BrandSeal } from '@/components/composite/BrandSeal'
 import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
 import { projectTitle } from '@/components/layout/sidebarTaskGroups'
@@ -22,7 +22,8 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../stores/tabStore'
 import { RepositoryLaunchControls } from '@/components/chat/RepositoryLaunchControls'
-import { PermissionModeSelector } from '../components/controls/PermissionModeSelector'
+import { PermissionModeSelector, type PermissionModeSelectorHandle } from '../components/controls/PermissionModeSelector'
+import { PERMISSION_MODE_LABEL_KEYS } from '../components/controls/permissionModeState'
 import { ModelSelector, type ModelSelectorHandle } from '../components/controls/ModelSelector'
 import { AttachmentGallery } from '../components/chat/AttachmentGallery'
 import { ComposerDropOverlay } from '../components/chat/ComposerDropOverlay'
@@ -58,6 +59,7 @@ import {
   findMentionRanges,
   insertMentionIntoText,
   type ComposerMention,
+  type NewComposerMention,
 } from '../lib/composerMentions'
 import {
   appendAgentSlashCommands,
@@ -73,6 +75,7 @@ import {
   resolveSlashUiAction,
 } from '../components/chat/composerUtils'
 import { ComposerCapabilityMenu } from '@/components/chat/ComposerCapabilityMenu'
+import { MobileComposerSheet, type MobileComposerSetting } from '@/components/chat/MobileComposerSheet'
 import { useCapabilityMenu } from '@/components/chat/useCapabilityMenu'
 import type { AttachmentRef } from '../types/chat'
 import type { PermissionMode } from '../types/settings'
@@ -123,7 +126,15 @@ function resolveCreateSessionErrorMessage(error: unknown, t: Translate): string 
 
 const EMPTY_COMPOSER_REFERENCES: ComposerReferenceCandidate[] = []
 
-export function EmptySession() {
+type EmptySessionProps = {
+  /**
+   * The phone's home page puts its session list where the hero would be, with
+   * this composer docked under it, so a new task starts from the list.
+   */
+  mobileHome?: ReactNode
+}
+
+export function EmptySession({ mobileHome }: EmptySessionProps = {}) {
   const t = useTranslation()
   const [input, setInput] = useState('')
   const [mentions, setMentions] = useState<ComposerMention[]>([])
@@ -152,6 +163,7 @@ export function EmptySession() {
   const panelRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const modelSelectorRef = useRef<ModelSelectorHandle>(null)
+  const permissionSelectorRef = useRef<PermissionModeSelectorHandle>(null)
   const plusMenuRef = useRef<HTMLDivElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const fileSearchRef = useRef<ComposerReferenceMenuHandle>(null)
@@ -212,12 +224,19 @@ export function EmptySession() {
   // recording bar takes their row.
   const dictationLive = dictation.phase !== 'idle'
 
+  const showMobileHome = isMobileComposer && mobileHome !== undefined
+
   useEffect(() => {
+    // The phone's home is a list to read first; focusing the composer would
+    // throw the keyboard over it every time someone comes back to it.
+    if (showMobileHome) return
     composerRef.current?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useDismissable({
-    open: plusMenuOpen,
+    // On a phone the + opens a sheet that closes itself; see ChatInput.
+    open: plusMenuOpen && !isMobileComposer,
     refs: [plusMenuRef],
     onDismiss: () => setPlusMenuOpen(false),
   })
@@ -698,6 +717,43 @@ export function EmptySession() {
     })
   }
 
+  const insertSelectedFileMention = (mention: NewComposerMention) => {
+    const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
+    const inserted = insertMentionIntoText(input, mentions, cursorPos, cursorPos, mention)
+    setInput(inserted.text)
+    setMentions(inserted.mentions)
+    requestAnimationFrame(() => {
+      composerRef.current?.focus()
+      composerRef.current?.setSelectionOffsets(inserted.cursorPos)
+    })
+  }
+
+  // See ChatInput: the phone's + sheet holds the controls that left the
+  // toolbar, and a row hands over to that control's own sheet.
+  const openFromComposerSheet = (open: () => void) => {
+    setPlusMenuOpen(false)
+    requestAnimationFrame(open)
+  }
+  const mobileComposerSettings: MobileComposerSetting[] = isMobileComposer
+    ? [
+      {
+        key: 'permission',
+        icon: <ShieldCheck size={16} strokeWidth={1.75} aria-hidden="true" />,
+        label: t('permMode.executionPermissions'),
+        value: t(PERMISSION_MODE_LABEL_KEYS[draftPermissionMode]),
+        onSelect: () => openFromComposerSheet(() => permissionSelectorRef.current?.open()),
+      },
+      {
+        key: 'model',
+        icon: <Cpu size={16} strokeWidth={1.75} aria-hidden="true" />,
+        label: t('chat.mobileSheet.model'),
+        value: draftModelLabel,
+        disabled: isSubmitting,
+        onSelect: () => openFromComposerSheet(() => modelSelectorRef.current?.open()),
+      },
+    ]
+    : []
+
   // The "+" capability menu: the shared hook owns data and navigation actions,
   // these handlers are only the composer-local edits. Kept identical to
   // ChatInput's block on purpose — the two composers are one control.
@@ -758,6 +814,11 @@ export function EmptySession() {
     // which puts it just above the middle of the page. On a phone it stays
     // docked to the bottom edge, above the keyboard.
     <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
+      {showMobileHome ? (
+        <div data-testid="mobile-home" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {mobileHome}
+        </div>
+      ) : (
       <div className={`flex flex-col items-center text-center ${
         isMobileComposer
           ? 'flex-1 justify-center px-6 pb-[230px] pt-10'
@@ -779,11 +840,14 @@ export function EmptySession() {
           </p>
         </div>
       </div>
+      )}
 
       <div
         data-testid="empty-session-composer-shell"
         className={`flex justify-center ${
-        isMobileComposer
+        showMobileHome
+          ? 'relative z-[var(--z-raised)] shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-3 pb-2 pt-2'
+          : isMobileComposer
           ? 'absolute bottom-0 left-0 right-0 z-[var(--z-nav)] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]'
           : 'relative z-[var(--z-raised)] shrink-0 px-8'
       }`}
@@ -896,7 +960,7 @@ export function EmptySession() {
                   // `min-w-0`: see ChatInput — an unbreakable long run (URL,
                   // hash) otherwise grows this flex item past the panel.
                   className="flex-1 min-w-0"
-                  editorClassName={`chat-reading-text min-h-[72px] overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
+                  editorClassName={`chat-reading-text ${showMobileHome ? 'min-h-[44px]' : 'min-h-[72px]'} overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
                     isMobileComposer ? 'max-h-[132px]' : 'max-h-[200px]'
                   }`}
                   aria={{
@@ -934,33 +998,39 @@ export function EmptySession() {
                       <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
                     </button>
 
-                    {plusMenuOpen && (
+                    {plusMenuOpen && !isMobileComposer && (
                       <ComposerCapabilityMenu
                         cwd={workDir}
                         referencesLoading={referenceCurrent?.loading ?? true}
                         referencesError={referenceCurrent?.error}
-                        onSelectFile={mention => {
-                          const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
-                          const inserted = insertMentionIntoText(input, mentions, cursorPos, cursorPos, mention)
-                          setInput(inserted.text)
-                          setMentions(inserted.mentions)
-                          requestAnimationFrame(() => {
-                            composerRef.current?.focus()
-                            composerRef.current?.setSelectionOffsets(inserted.cursorPos)
-                          })
-                        }}
+                        onSelectFile={insertSelectedFileMention}
                         id={capabilityMenuId}
                         sections={capabilityMenu.sections}
                         onAction={capabilityMenu.onAction}
                         onClose={() => setPlusMenuOpen(false)}
-                        mobile={isMobileComposer}
+                      />
+                    )}
+                    {isMobileComposer && (
+                      <MobileComposerSheet
+                        open={plusMenuOpen}
+                        onClose={() => setPlusMenuOpen(false)}
+                        menuId={capabilityMenuId}
+                        settings={mobileComposerSettings}
+                        sections={capabilityMenu.sections}
+                        cwd={workDir}
+                        referencesLoading={referenceCurrent?.loading ?? true}
+                        referencesError={referenceCurrent?.error}
+                        onSelectFile={insertSelectedFileMention}
+                        onAction={capabilityMenu.onAction}
                       />
                     )}
                   </div>
 
                   <PermissionModeSelector
+                    ref={permissionSelectorRef}
                     workDir={workDir}
                     compact={isMobileComposer}
+                    trigger={isMobileComposer ? 'elevatedOnly' : 'chip'}
                     value={draftPermissionMode}
                     onChange={setDraftPermissionMode}
                   />
@@ -984,14 +1054,18 @@ export function EmptySession() {
                   hidden={dictationLive}
                   className={`${isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}`}
                 >
-                  <ContextUsageIndicator
-                    chatState="idle"
-                    messageCount={0}
-                    runtimeSelectionKey={draftRuntimeSelectionKey}
-                    fallbackModelLabel={draftModelLabel}
-                    draft
-                    compact={isMobileComposer}
-                  />
+                  {/* A draft has used none of its context; on a phone that is not
+                      worth one of the toolbar's few touch targets. */}
+                  {!isMobileComposer && (
+                    <ContextUsageIndicator
+                      chatState="idle"
+                      messageCount={0}
+                      runtimeSelectionKey={draftRuntimeSelectionKey}
+                      fallbackModelLabel={draftModelLabel}
+                      draft
+                      compact={isMobileComposer}
+                    />
+                  )}
                   <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
                   <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
                   {/* Kept identical to ChatInput's send button — same

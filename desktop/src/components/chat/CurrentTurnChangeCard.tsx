@@ -17,6 +17,9 @@ import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { workspaceOpen } from '../../lib/workspace/openTarget'
 import { isWorkspaceDocumentFile, isWorkspacePreviewableFile } from '../../lib/fileCapabilities'
 import { openLocalFileWithSystem, reportOpenFailure } from '../../lib/systemFileOpen'
+import { useMobileViewport } from '../../hooks/useMobileViewport'
+import { isDesktopRuntime } from '../../lib/desktopRuntime'
+import { MobileTurnDiffSheet } from './MobileTurnDiffSheet'
 
 type CurrentTurnChangeCardProps = {
   sessionId: string
@@ -52,6 +55,10 @@ export function CurrentTurnChangeCard({
   const filesId = useId()
   const [openWith, setOpenWith] = useState<{ items: OpenWithItem[]; anchor: DOMRect; triggerEl: HTMLElement } | null>(null)
   const [showAllFiles, setShowAllFiles] = useState(false)
+  // A phone has no workspace beside the chat to open a file in; the turn's
+  // change to it opens full height in a sheet instead.
+  const isMobile = useMobileViewport() && !isDesktopRuntime()
+  const [diffPath, setDiffPath] = useState<string | null>(null)
 
   const files = useMemo<ChangedFileEntry[]>(
     () => checkpoint.code.filesChanged
@@ -75,6 +82,10 @@ export function CurrentTurnChangeCard({
   const hasUnverifiedChanges = restoreAvailable && unverifiedChangeSources.length > 0
 
   const openChangedFile = useCallback((event: ReactMouseEvent<HTMLButtonElement>, fileEntry: ChangedFileEntry) => {
+    if (isMobile) {
+      setDiffPath(fileEntry.displayPath)
+      return
+    }
     const renderItem = event.currentTarget.closest<HTMLElement>('[data-chat-render-item-key]')
     const origin = {
       sourceTurnKey: renderItem?.dataset.chatRenderItemKey ?? checkpoint.target.targetUserMessageId,
@@ -111,7 +122,7 @@ export function CurrentTurnChangeCard({
       path: fileEntry.displayPath,
       origin,
     })
-  }, [checkpoint.target.targetUserMessageId, checkpoint.target.userMessageIndex, sessionId, files])
+  }, [checkpoint.target.targetUserMessageId, checkpoint.target.userMessageIndex, sessionId, files, isMobile])
 
   const handleOpenWith = useCallback((event: ReactMouseEvent<HTMLButtonElement>, fileEntry: ChangedFileEntry) => {
     event.stopPropagation()
@@ -237,7 +248,7 @@ export function CurrentTurnChangeCard({
             const typeInfo = describeFileType(fileEntry.displayPath)
             const workspacePreviewable = isWorkspacePreviewableFile(fileEntry.displayPath)
             return (
-              <div key={fileEntry.apiPath} className="flex h-8 items-center gap-0.5 px-1.5">
+              <div key={fileEntry.apiPath} className={`flex ${isMobile ? 'h-11' : 'h-8'} items-center gap-0.5 px-1.5`}>
                 <button
                   type="button"
                   id={`turn-change-opener-${checkpoint.target.targetUserMessageId}-${encodeURIComponent(fileEntry.apiPath)}`}
@@ -305,6 +316,16 @@ export function CurrentTurnChangeCard({
       )}
 
       {openWith && <OpenWithMenu items={openWith.items} anchor={openWith.anchor} triggerEl={openWith.triggerEl} onClose={() => setOpenWith(null)} />}
+      {isMobile && checkpoint.target.targetUserMessageId ? (
+        <MobileTurnDiffSheet
+          sessionId={sessionId}
+          targetUserMessageId={checkpoint.target.targetUserMessageId}
+          userMessageIndex={checkpoint.target.userMessageIndex}
+          paths={files.map((entry) => entry.displayPath)}
+          openPath={diffPath}
+          onOpenPathChange={setDiffPath}
+        />
+      ) : null}
     </section>
   )
 }

@@ -9,6 +9,7 @@ import { useTranslation } from '../../i18n'
 import { ArrowRight, Check, CircleCheck, Info, MessageCircleQuestion, MessagesSquare, Send } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { PendingDecisionMarker } from './PendingDecisionMarker'
 import {
   ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX,
   ASK_USER_QUESTION_EXPIRED_ANSWER_PREFIX,
@@ -37,6 +38,12 @@ type Props = {
    * Computed by buildRenderModel, the only place that sees the whole list.
    */
   supersededByUserMessage?: boolean
+  /**
+   * While the question waits on a live request, draw one marker line instead
+   * of the card: the phone answers it from the approval bar, and two live
+   * copies of the card would each hold half an answer.
+   */
+  markerWhenPending?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -100,6 +107,7 @@ export function AskUserQuestion({
   input,
   result,
   supersededByUserMessage,
+  markerWhenPending = false,
 }: Props) {
   const { respondToPermission } = useChatStore()
   const activeTabId = useTabStore((s) => s.activeTabId)
@@ -212,6 +220,9 @@ export function AskUserQuestion({
   // direction. With the early return above the useMemo calls, that transition threw
   // "Rendered fewer/more hooks than expected" and took the whole message list down.
   if (questions.length === 0) return null
+  if (markerWhenPending && pendingRequest) {
+    return <PendingDecisionMarker title={t('mobile.approval.questionTitle')} />
+  }
   const safeActiveTab = Math.min(activeTab, questions.length - 1)
   const activeQuestion = questions[safeActiveTab]
 

@@ -6,6 +6,7 @@ import { buildOpenWithMenuItemsForHref } from '../../lib/openWithMenuItems'
 import { fileRefFromElement } from '../../lib/markdownAutolink'
 import type { OpenWithItem } from '../../lib/openWithItems'
 import { MessageActionBar, type MessageBranchAction } from './MessageActionBar'
+import { useMessageActionMenu } from './useMessageActionMenu'
 import { TurnCompletionStamp } from './TurnCompletionStamp'
 import type { TurnCompletion } from '../../lib/turnCompletion'
 import { ImageGalleryModal } from './ImageGalleryModal'
@@ -165,25 +166,33 @@ export const AssistantMessage = memo(function AssistantMessage({
     [t, workDir],
   )
 
+  const showTurnCompletion = !isStreaming && Boolean(turnCompletion)
+  // On a phone any finished reply can be held for copy and select; branching
+  // stays with the reply that closes a turn, as on the desktop bar.
+  const actionMenu = useMessageActionMenu({
+    copyText: isStreaming ? undefined : content,
+    branchAction: showTurnCompletion ? branchAction : undefined,
+  })
+
   if (!content.trim()) return null
 
   const documentLayout = shouldUseDocumentLayout(content)
-  const showTurnCompletion = !isStreaming && Boolean(turnCompletion)
 
   return (
     <div className="flex justify-start">
       <div
         data-message-shell="assistant"
         data-layout={documentLayout ? 'document' : 'bubble'}
+        {...actionMenu.pressProps}
         // Always the full column. A reply that hugs its text turns every short
         // answer into a differently-shaped block, so a scrolled transcript reads
         // as a ragged pile; one width makes the replies a single column the eye
         // can run down. The user bubble stays hugged — that asymmetry is what
         // says which side is speaking, so it does not need width to say it too.
-        className="group flex w-full min-w-0 max-w-full flex-col items-start"
+        className={`group flex w-full min-w-0 max-w-full flex-col items-start ${actionMenu.pressClassName}`}
       >
         <div
-          onContextMenu={sessionId ? handleContextMenu : undefined}
+          onContextMenu={sessionId && !actionMenu.enabled ? handleContextMenu : undefined}
           // No card. Left-aligned, full-column prose against the page is already
           // unmistakably the reply — the hugged, tinted bubble on the right is
           // what says who is speaking (see the note above), so a border here
@@ -267,14 +276,15 @@ export const AssistantMessage = memo(function AssistantMessage({
         */}
         {showTurnCompletion && (
           <MessageActionBar
-            copyText={content}
+            copyText={actionMenu.enabled ? undefined : content}
             copyLabel={t('chat.copyReply')}
-            branchAction={branchAction}
+            branchAction={actionMenu.enabled ? undefined : branchAction}
             align="start"
             alwaysVisible
             metadata={<TurnCompletionStamp completion={turnCompletion!} />}
           />
         )}
+        {actionMenu.sheet}
       </div>
     </div>
   )
