@@ -24,6 +24,7 @@ import {
   getAgentName,
   getTeammateColor,
   getTeamName,
+  isTeammate,
 } from '../../utils/teammate.js'
 import { writeToMailbox } from '../../utils/teammateMailbox.js'
 import { VERIFICATION_AGENT_TYPE } from '../AgentTool/constants.js'
@@ -161,6 +162,33 @@ export const TaskUpdateTool = buildTool({
           updatedFields: [],
           error: 'Task not found',
         },
+      }
+    }
+
+    // A teammate cannot start or finish a task ahead of the tasks it waits on;
+    // without this the list's dependencies are only a suggestion, and a member
+    // marks its blocked task in progress while the work it needs is unwritten.
+    // The lead is not held to it: it coordinates, and may decide a dependency
+    // no longer matters.
+    if (
+      isTeammate() &&
+      (status === 'in_progress' || status === 'completed') &&
+      status !== existingTask.status &&
+      existingTask.blockedBy.length > 0
+    ) {
+      const unresolved = new Set(
+        (await listTasks(taskListId)).filter(task => task.status !== 'completed').map(task => task.id),
+      )
+      const waitingOn = existingTask.blockedBy.filter(id => unresolved.has(id))
+      if (waitingOn.length > 0) {
+        return {
+          data: {
+            success: false,
+            taskId,
+            updatedFields: [],
+            error: `Task #${taskId} waits on ${waitingOn.map(id => `#${id}`).join(', ')}, not completed yet. Do not work on it or change its status until then; TaskList shows which of your tasks are ready.`,
+          },
+        }
       }
     }
 

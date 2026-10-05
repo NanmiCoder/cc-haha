@@ -15,6 +15,7 @@ import {
   getInboxPath,
   IDLE_RESULT_MAX_CHARS,
   isIdleNotification,
+  isShutdownApproved,
   markMessagesAsReadByIdentity,
   markMessagesAsReadByPredicate,
   readMailbox,
@@ -531,5 +532,24 @@ describe('teammate message formatting', () => {
       '<teammate-message teammate_id="alice">\none\n</teammate-message>\n\n' +
         '<teammate-message teammate_id="bob" summary="second">\ntwo\n</teammate-message>',
     )
+  })
+})
+
+describe('shutdown approvals', () => {
+  const approval = (extra: Record<string, unknown>) => JSON.stringify({
+    type: 'shutdown_approved', requestId: 'shutdown-1@reader', from: 'reader', timestamp: new Date().toISOString(), ...extra,
+  })
+
+  test('are recognised for teammates the lead runs itself', () => {
+    expect(isShutdownApproved(approval({ paneId: '%1', backendType: 'tmux' }))?.from).toBe('reader')
+    expect(isShutdownApproved(approval({ backendType: 'in-process' }))?.from).toBe('reader')
+  })
+
+  // Recognising it makes the lead drop the member from the team file and
+  // unassign its tasks. The desktop keeps a stopped member on the roster so a
+  // message can restart it, and wakes waiting members by the approved task
+  // owners; adding `process` to the schema would quietly break both.
+  test('leave a desktop member to the server runtime', () => {
+    expect(isShutdownApproved(approval({ paneId: '', backendType: 'process' }))).toBeNull()
   })
 })

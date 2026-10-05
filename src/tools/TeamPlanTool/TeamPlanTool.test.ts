@@ -87,6 +87,14 @@ describe('whole-team planning tools', () => {
     delete process.env.CC_HAHA_TEAM_REVIEW_REQUIRED
     expect(getPrompt()).not.toContain('Human review before execution')
   })
+
+  test('planning instructions say a dependent member starts only once its dependencies are done', async () => {
+    // A lead once wrote "if recon has not reported yet, start on your own",
+    // and the members did, ahead of the dependency the user approved.
+    const prompt = await TeamPlanTool.prompt({} as never)
+    expect(prompt).toContain('receives its prompt only once one of them is ready')
+    expect(prompt).toContain('never tell a member to start without them')
+  })
   test('legacy Agent spawns only stage members, then whole-plan submit waits for human review', async () => {
     const created = await TeamCreateTool.call({ team_name: 'review-team' }, context)
     expect(created.data.plan?.state).toBe('draft')

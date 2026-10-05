@@ -110,6 +110,12 @@ export type TeamFile = {
     lastError?: string
     /** Pending automatic continuation after a transient provider failure. */
     autoRetry?: { attempt: number; max: number; nextAt: number }
+    /**
+     * The member has not been given its approved instructions yet: every task
+     * it owns waited on unfinished work when the team started. Absent on
+     * members written before this was recorded, which were all instructed.
+     */
+    awaitingDependencies?: boolean
   }>
 }
 

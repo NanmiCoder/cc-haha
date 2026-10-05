@@ -19,6 +19,14 @@ sdk.onmessage = async event => {
       sdk.send(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {} } }))
     } else if (message.type === 'user') {
       const content = JSON.stringify(message.message?.content)
+      // A member that agrees to shut down tells the lead so, then leaves. The
+      // approval is what the real CLI writes for a desktop member, backend included.
+      if (content.includes('FIXTURE_APPROVE_SHUTDOWN')) {
+        const { writeToMailbox } = await import('../../../utils/teammateMailbox.js')
+        const from = arg('--agent-name')!
+        await writeToMailbox('team-lead', { from, timestamp: new Date().toISOString(), text: JSON.stringify({ type: 'shutdown_approved', requestId: 'fixture', from, timestamp: new Date().toISOString(), paneId: '', backendType: 'process' }) }, arg('--team-name'))
+        sdk.close(); setTimeout(() => process.exit(0), 5); continue
+      }
       if (content.includes('FIXTURE_SHUTDOWN')) { sdk.close(); setTimeout(() => process.exit(0), 5); continue }
       const url = new URL(process.env.ANTHROPIC_BASE_URL!)
       if (url.hostname !== '127.0.0.1') throw new Error('Fixture refuses non-loopback upstream')

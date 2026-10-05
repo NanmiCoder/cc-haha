@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { migrationMaintenance } from '../migrationMaintenance.js'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
-import { isValidTeamMemberName, teamPlanRecordSchema, type TeamPlanRecord, type TeamPlanMember } from '../../shared/teamPlan.js'
+import { isValidTeamMemberName, teamPlanRecordSchema, type TeamPlanRecord, type TeamPlanMember, type TeamPlanTask } from '../../shared/teamPlan.js'
 import { conversationService } from './conversationService.js'
 import { ProviderService } from './providerService.js'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '../types/provider.js'
@@ -15,7 +15,7 @@ import { cleanupTeamDirectories, getTeamDir, mutateTeamFileAsync, readTeamFile, 
 import { getTeamsDir as getTeamsDirectory } from '../../utils/envUtils.js'
 import { TEAM_LEAD_NAME } from '../../utils/swarm/constants.js'
 import { createTask, listTasks, updateTask, withTaskListLifecycleLock, getCanonicalTeamTaskListId, type Task } from '../../utils/tasks.js'
-import { readUnreadMessages, markMessagesAsReadByPredicate, writeToMailbox, createIdleNotification, formatTeammateMessages, type TeammateMessage } from '../../utils/teammateMailbox.js'
+import { readUnreadMessages, readMailboxHistory, markMessagesAsReadByPredicate, writeToMailbox, createIdleNotification, formatTeammateMessages, isShutdownRequest, type TeammateMessage } from '../../utils/teammateMailbox.js'
 import { formatTeammateAutoContinuePrompt, isTransientTurnFailure, summarizeTurnFailure, TEAMMATE_AUTO_CONTINUE_DELAYS_MS } from '../../utils/swarm/turnFailure.js'
 
 const providerService = new ProviderService()
@@ -58,6 +58,14 @@ type WorkerRuntime = {
   wakeNoticePending?: boolean
   wokenForTaskIds: Set<string>
   lastResultAt?: number
+  /**
+   * Approved instructions held back because every task the member owns waits
+   * on unfinished work. They go out when one of its tasks becomes ready, or
+   * when the user writes to the member, whichever comes first.
+   */
+  brief?: string
+  /** When a shutdown request last reached the member; an approval after it makes its exit an ordinary one. */
+  shutdownRequestedAt?: number
 }
 
 type TeamLaunch = {
@@ -175,6 +183,39 @@ async function materializeTasks(plan: TeamPlanRecord): Promise<Record<string, st
     })
   }
   return mapping
+}
+
+/**
+ * What an approved member is told to do: its preset's opening, its prompt and
+ * its shared tasks. Each task names who waits on it (`handOffTo`): a member
+ * cannot see that from its own tasks, and without it a result only ever went
+ * to the lead, reaching the member that needed it late or not at all.
+ */
+function memberBrief(member: TeamPlanMember, members: TeamPlanMember[], tasks: TeamPlanTask[], taskMapping: Record<string, string>): string {
+  const ownerName = (task: TeamPlanTask) => members.find(candidate => candidate.id === task.ownerId)?.name ?? TEAM_LEAD_NAME
+  const assigned = tasks.filter(task => task.ownerId === member.id).map(task => {
+    const handOffTo = [...new Set(tasks.filter(other => other.dependencies.includes(task.id)).map(ownerName))].filter(name => name !== member.name)
+    return { ...task, id: taskMapping[task.id], dependencies: task.dependencies.map(dep => taskMapping[dep]), ...(handOffTo.length > 0 ? { handOffTo } : {}) }
+  })
+  const handOff = assigned.some(task => 'handOffTo' in task)
+    ? '\n\nWhen you finish a task that has handOffTo: first SendMessage its result to each member listed there, then mark it completed. Their work starts from your message the moment you complete the task.'
+    : ''
+  return `${member.agentSnapshot?.initialPrompt ? member.agentSnapshot.initialPrompt + "\n" : ""}${member.prompt}\n\nApproved shared tasks (use TaskGet/TaskUpdate; start a task only once all of its dependencies are completed):\n${JSON.stringify(assigned)}${handOff}`
+}
+
+function unresolvedTaskIds(tasks: Task[]): Set<string> {
+  return new Set(tasks.filter(task => task.status !== 'completed').map(task => task.id))
+}
+
+/** Unfinished tasks the member owns whose dependencies are all complete. */
+function readyTasksOf(memberName: string, tasks: Task[]): Task[] {
+  const unresolved = unresolvedTaskIds(tasks)
+  return tasks.filter(task => task.owner === memberName && task.status !== 'completed' && task.blockedBy.every(id => !unresolved.has(id)))
+}
+
+/** The member owns unfinished work and all of it waits on other tasks. */
+function waitsForDependencies(memberName: string, tasks: Task[]): boolean {
+  return tasks.some(task => task.owner === memberName && task.status !== 'completed') && readyTasksOf(memberName, tasks).length === 0
 }
 
 // ── Worker failure classification ───────────────────────────────────────────
@@ -368,6 +409,16 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
     await notifyLead(launch, worker, { idleReason: 'available', ...(text ? { result: text } : {}) })
     return
   }
+  if (!alive && await approvedShutdown(launch, worker)) {
+    // It left because the lead asked it to and it agreed. Every process exit
+    // arrives here as an error result; recording this one as a failure showed
+    // a finished team as broken and told the lead its members had crashed.
+    worker.autoContinueAttempts = 0
+    clearFailure(worker)
+    cancelAutoContinue(worker)
+    await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: false, terminated: true }))
+    return
+  }
   const reason = firstLine(text || 'The member process exited')
   if (alive && isTransientWorkerFailure(text) && worker.autoContinueAttempts < timing.autoContinueDelaysMs.length) {
     const attempt = ++worker.autoContinueAttempts
@@ -388,6 +439,33 @@ async function handleWorkerResult(launch: TeamLaunch, worker: WorkerRuntime, mes
   await notifyFailure(launch, worker, alive
     ? exhausted ? `${reason} (automatic retries exhausted; message ${worker.member.name} to continue)` : reason
     : `${worker.member.name}'s process exited (${reason}). Messaging it restarts it from its saved conversation.`)
+}
+
+/**
+ * The approval a member writes to the lead before it exits. The mailbox's own
+ * isShutdownApproved does not recognise a desktop member's approval, on
+ * purpose (see ShutdownApprovedMessageSchema), so the type is read here.
+ */
+function isShutdownApproval(text: string): boolean {
+  try {
+    return (JSON.parse(text) as { type?: unknown } | null)?.type === 'shutdown_approved'
+  } catch {
+    return false
+  }
+}
+
+/** Whether the member approved the shutdown request it was last given; asked once per request. */
+async function approvedShutdown(launch: TeamLaunch, worker: WorkerRuntime): Promise<boolean> {
+  const since = worker.shutdownRequestedAt
+  if (since === undefined) return false
+  // A later exit without a new request is a crash again.
+  worker.shutdownRequestedAt = undefined
+  const approved = async () => (await readMailboxHistory(TEAM_LEAD_NAME, launch.plan.teamName).catch(() => []))
+    .some(message => message.from === worker.member.name && Date.parse(message.timestamp) >= since && isShutdownApproval(message.text))
+  if (await approved()) return true
+  // The lead may be archiving its inbox at this very moment.
+  await new Promise(resolve => setTimeout(resolve, 300))
+  return approved()
 }
 
 /**
@@ -416,12 +494,21 @@ async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messag
   // The message replaces any scheduled retry and answers the last failure;
   // the turn it starts records its own outcome.
   await updateWorkerEntry(launch, worker, entry => withoutFailure({ ...entry, isActive: true, terminated: false }))
-  const accepted = await conversationService.sendMessage(worker.sessionId, formatTeammateMessages(messages))
+  // A member that has not started yet gets its approved instructions with the
+  // first thing it is told, unless that is only to shut down.
+  const starts = worker.brief !== undefined && !messages.every(message => isShutdownRequest(message.text))
+  if (messages.some(message => isShutdownRequest(message.text))) worker.shutdownRequestedAt = Date.now()
+  const text = formatTeammateMessages(messages)
+  const accepted = await conversationService.sendMessage(worker.sessionId, starts ? `${worker.brief}\n\n${text}` : text)
   if (!accepted) {
     await updateWorkerEntry(launch, worker, entry => ({ ...entry, isActive: false }))
     return
   }
   clearFailure(worker)
+  if (starts) {
+    worker.brief = undefined
+    await updateWorkerEntry(launch, worker, ({ awaitingDependencies: _awaiting, ...entry }) => entry)
+  }
   const ids = new Set(messages.map(message => message.id).filter(Boolean))
   const legacy = new Set(messages.filter(message => !message.id).map(message => JSON.stringify([message.from, message.timestamp, message.text])))
   await markMessagesAsReadByPredicate(worker.member.name, message => message.id ? ids.has(message.id) : legacy.has(JSON.stringify([message.from, message.timestamp, message.text])), launch.plan.teamName)
@@ -435,7 +522,7 @@ async function deliverToWorker(launch: TeamLaunch, worker: WorkerRuntime, messag
 async function wakeForReadyTask(launch: TeamLaunch, worker: WorkerRuntime, entry: MemberEntry | undefined, tasks: Task[]): Promise<void> {
   if (!entry || entry.isActive || worker.autoContinueTimer || !conversationService.hasSession(worker.sessionId)) return
   if (worker.lastResultAt === undefined || Date.now() - worker.lastResultAt < timing.unblockedTaskWakeDelayMs) return
-  const unresolved = new Set(tasks.filter(task => task.status !== 'completed').map(task => task.id))
+  const unresolved = unresolvedTaskIds(tasks)
   const ready = tasks.find(task => task.owner === worker.member.name && task.status === 'pending' && !worker.wokenForTaskIds.has(task.id)
     && task.blockedBy.length > 0 && task.blockedBy.every(id => !unresolved.has(id)))
   if (!ready) return
@@ -443,6 +530,41 @@ async function wakeForReadyTask(launch: TeamLaunch, worker: WorkerRuntime, entry
   await deliverToWorker(launch, worker, [{
     from: 'task-list',
     text: `Task #${ready.id} assigned to you is now ready because its dependencies are complete: ${ready.subject}\nStart it now with TaskUpdate (status in_progress), and mark it completed when done.`,
+    timestamp: new Date().toISOString(),
+    read: false,
+  }])
+}
+
+/**
+ * Give a member that has not started yet its approved instructions once one
+ * of its tasks is ready, so it never works ahead of the dependencies the user
+ * approved. A Stop or a server restart may have ended its idle process; it
+ * starts again for this, as it would for a message.
+ */
+async function startWhenReady(launch: TeamLaunch, worker: WorkerRuntime, tasks: Task[], held: TeammateMessage[]): Promise<void> {
+  const ready = readyTasksOf(worker.member.name, tasks)
+  if (ready.length === 0) return
+  if (!conversationService.hasSession(worker.sessionId)) {
+    void migrationMaintenance.track(restartWorker(launch, worker, 'message'))
+    return
+  }
+  // The instructions already say what is ready; no separate wake follows.
+  for (const task of ready) worker.wokenForTaskIds.add(task.id)
+  // The members it depends on were told to send their results before
+  // completing. When one did not, say so now rather than let this member find
+  // out halfway through that it is working without its input.
+  const teammates = new Set([...launch.workers.values()].map(other => other.member.name))
+  const upstream = new Set(ready.flatMap(task => task.blockedBy).map(id => tasks.find(task => task.id === id)?.owner)
+    .filter((owner): owner is string => !!owner && owner !== worker.member.name && teammates.has(owner)))
+  const silent = [...upstream].filter(owner => !held.some(message => message.from === owner))
+  const missing = silent.length > 0
+    ? `\nNothing has reached you from ${silent.join(', ')} yet. If you need ${silent.length === 1 ? 'its' : 'their'} result, ask with SendMessage before you rely on it.`
+    : ''
+  // What the lead and teammates wrote while it waited (the results it depends
+  // on) arrives with its instructions.
+  await deliverToWorker(launch, worker, [...held, {
+    from: 'task-list',
+    text: `Ready now (dependencies complete): ${ready.map(task => `#${task.id} ${task.subject}`).join('; ')}${missing}`,
     timestamp: new Date().toISOString(),
     read: false,
   }])
@@ -468,12 +590,6 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
       await updateWorkerEntry(launch, worker, current => ({ ...current, isActive: false, terminated: true }))
     }
     const messages = await readUnreadMessages(worker.member.name, launch.plan.teamName)
-    if (messages.length === 0) {
-      if (!leadAlive || launch.pausedAt) continue
-      tasks ??= await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName)).catch(() => [])
-      await wakeForReadyTask(launch, worker, entry, tasks)
-      continue
-    }
     if (launch.pausedAt) {
       // Only a new instruction resumes a paused team: the user's own message to
       // a member, or the lead's once the user has spoken to it again.
@@ -485,6 +601,18 @@ async function superviseLaunch(launch: TeamLaunch): Promise<void> {
       if (!resume) continue
       launch.pausedAt = undefined
       launch.resumeAllowedAt = undefined
+    }
+    // A member that waits on dependencies is started by its tasks, or by the
+    // user writing to it. What the lead or a teammate sends it meanwhile (a
+    // forwarded result, a broadcast) waits in its inbox and arrives with its
+    // instructions; starting on such a message would undo the approved order.
+    const held = worker.brief !== undefined && !messages.some(message => message.from === 'user' || isShutdownRequest(message.text))
+    if (messages.length === 0 || held) {
+      if (!leadAlive) continue
+      tasks ??= await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName)).catch(() => [])
+      if (worker.brief !== undefined) await startWhenReady(launch, worker, tasks, messages)
+      else await wakeForReadyTask(launch, worker, entry, tasks)
+      continue
     }
     if (!conversationService.hasSession(worker.sessionId)) {
       const fromUser = messages.some(message => message.from === 'user')
@@ -559,9 +687,18 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
     if (waiting.length === 0) continue
     for (const worker of waiting) worker.wakeNoticePending = false
     const tasks = await listTasks(getCanonicalTeamTaskListId(launch.plan.teamName)).catch(() => [] as Task[])
+    const unresolved = unresolvedTaskIds(tasks)
     const lines = waiting.map(worker => {
       const open = tasks.filter(task => task.owner === worker.member.name && task.status !== 'completed')
       const label = worker.failure ? `${worker.member.name} (stopped on an error: ${worker.failure})` : worker.member.name
+      // A member whose start failed is reported like any other failure.
+      if (worker.brief !== undefined && !worker.failure) {
+        const ready = readyTasksOf(worker.member.name, tasks)
+        const blockers = [...new Set(open.flatMap(task => task.blockedBy.filter(id => unresolved.has(id))))]
+        if (ready.length > 0) return `- ${label}: not started yet; ${ready.map(task => `#${task.id} ${task.subject}`).join('; ')} is ready for it, so message it to start`
+        if (blockers.length > 0) return `- ${label}: not started yet; it starts by itself once ${blockers.map(id => `#${id}`).join(', ')} ${blockers.length === 1 ? 'is' : 'are'} completed, and messages to it wait until then`
+        return `- ${label}: not started yet; no unfinished task`
+      }
       return open.length > 0
         ? `- ${label}: ${open.map(task => `#${task.id} ${task.subject} (${task.status})`).join('; ')}`
         : `- ${label}: no unfinished task`
@@ -655,6 +792,11 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
       await writeTeamFileAsync(plan.teamName, team)
     })
     taskMapping = await materializeTasks(plan)
+    // Every member's process starts now, but one whose tasks all wait on other
+    // tasks gets its instructions only once one of them is ready. Handing them
+    // out at once let members start before the work they depend on existed.
+    const startingTasks = await listTasks(getCanonicalTeamTaskListId(plan.teamName))
+    const waiting = new Set(members.filter(member => waitsForDependencies(member.name, startingTasks)).map(member => member.id))
     await startTeamWorkersBarrier(members, async member => {
       if (launch.stopped || !conversationService.hasSession(plan.sessionId)) throw new Error('Team launch cancelled')
       const id = randomUUID()
@@ -676,21 +818,30 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
             team.members.push({ agentId: `${entry.name}@${plan.teamName}`, name: entry.name, agentType: entry.agentType,
               model: entry.runtime.modelId, providerId: entry.runtime.providerId, providerName: typeof entry.providerName === 'string' ? entry.providerName : undefined, effortLevel: entry.runtime.effortLevel,
               planMemberId: entry.id, joinedAt: Date.now(), tmuxPaneId: '', cwd: plan.workDir, subscriptions: [],
-              sessionId: memberIds[entry.id], backendType: 'process', isActive: true })
+              sessionId: memberIds[entry.id], backendType: 'process',
+              ...(waiting.has(entry.id) ? { isActive: false, awaitingDependencies: true } : { isActive: true }) })
           }
           await writeTeamFileAsync(plan.teamName, team)
         })
         await sendTeamSnapshot(plan.sessionId, plan.teamName, launch.createdAt)
       }
-      const assigned = approved.tasks.filter(task => task.ownerId === member.id).map(task => ({ ...task, id: taskMapping[task.id], dependencies: task.dependencies.map(dep => taskMapping[dep]) }))
+      const brief = memberBrief(member, members, approved.tasks, taskMapping)
       await withTaskListLifecycleLock(getCanonicalTeamTaskListId(plan.teamName), async () => {
         const latest = await readTeamPlan(plan.teamName)
         if (launch.stopped || !latest || latest.planId !== plan.planId || latest.incarnationId !== plan.incarnationId || latest.state !== 'launching' || latest.revision !== plan.revision || latest.approvedSnapshot?.requestId !== approved.requestId) throw new Error('Team launch authorization has been revoked')
         executionStarted = true
         launch.released = true
-        const sent = await conversationService.sendMessage(id, `${member.agentSnapshot?.initialPrompt ? member.agentSnapshot.initialPrompt + "\n" : ""}${member.prompt}\n\nApproved shared tasks (use TaskGet/TaskUpdate; respect dependencies):\n${JSON.stringify(assigned)}`, undefined, { canSend: () => !launch.stopped })
-        if (!sent) throw new Error(`Failed to release ${member.name}`)
         const worker = launch.workers.get(member.id)
+        if (waiting.has(member.id)) {
+          // The supervisor delivers it when a task is ready (startWhenReady).
+          if (worker) {
+            worker.brief = brief
+            worker.released = true
+          }
+          return
+        }
+        const sent = await conversationService.sendMessage(id, brief, undefined, { canSend: () => !launch.stopped })
+        if (!sent) throw new Error(`Failed to release ${member.name}`)
         if (worker) worker.released = true
       })
     }, id => conversationService.stopSessionAndWait(id))
@@ -699,7 +850,11 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
     // remains connected while idle and wakes when another teammate writes.
     launch.running = true
     startSupervisor(launch)
-    await conversationService.sendMessage(plan.sessionId, `Approved team ${plan.teamName} is running. Members and their shared tasks are ready. Continue coordinating the approved team; do not spawn these members again. Members report back automatically when they finish or fail; you do not need to poll or wait in a loop.`)
+    const waitingNames = members.filter(member => waiting.has(member.id)).map(member => member.name)
+    const waitingNote = waitingNames.length > 0
+      ? ` Every task of ${waitingNames.join(', ')} waits on other tasks: such a member gets its instructions automatically once one of its tasks is ready. Messages sent to it before that wait in its inbox and arrive with those instructions. Each member is told to send its result to the members whose tasks depend on it before completing, so forward a result yourself only when a member says one is missing.`
+      : ''
+    await conversationService.sendMessage(plan.sessionId, `Approved team ${plan.teamName} is running. Members and their shared tasks are ready.${waitingNote} Continue coordinating the approved team; do not spawn these members again. Members report back automatically when they finish or fail; you do not need to poll or wait in a loop.`)
     return { memberIds }
   } catch (error) {
     await stopTeamPlanRuntime(plan.planId)
@@ -740,14 +895,25 @@ export async function rehydrateTeamPlanRuntime(plan: TeamPlanRecord): Promise<bo
   if (!team || team.leadSessionId !== plan.sessionId || incarnationOf(team) !== plan.incarnationId) return false
   const memberIds = plan.launch?.memberIds ?? {}
   const workers = new Map<string, WorkerRuntime>()
+  let taskMapping: Record<string, string> | undefined
   for (const member of plan.approvedSnapshot.members) {
     const sessionId = memberIds[member.id] ?? team.members.find(entry => entry.planMemberId === member.id && entry.backendType === 'process')?.sessionId
     if (!sessionId) continue
     const entry = team.members.find(candidate => candidate.sessionId === sessionId)
     if (!entry) continue
-    workers.set(member.id, { member, sessionId, released: true, autoContinueAttempts: 0, restartHistory: [], restartsExhausted: false, wokenForTaskIds: new Set() })
+    const worker: WorkerRuntime = { member, sessionId, released: true, autoContinueAttempts: 0, restartHistory: [], restartsExhausted: false, wokenForTaskIds: new Set() }
+    // Still waiting for its first ready task: rebuild the instructions it was approved with.
+    if (entry.awaitingDependencies === true) {
+      taskMapping ??= Object.fromEntries((await listTasks(getCanonicalTeamTaskListId(plan.teamName)).catch(() => [] as Task[]))
+        .filter(task => task.metadata?.teamPlanId === plan.planId && typeof task.metadata?.teamPlanTaskId === 'string')
+        .map(task => [task.metadata!.teamPlanTaskId as string, task.id]))
+      worker.brief = memberBrief(member, plan.approvedSnapshot.members, plan.approvedSnapshot.tasks, taskMapping)
+    }
+    workers.set(member.id, worker)
   }
   if (workers.size === 0) return false
+  // Another start may have re-owned the team while the task list was read.
+  if (launches.has(plan.planId)) return true
   ensureRuntimeHooks()
   const launch: TeamLaunch = {
     parentId: plan.sessionId, plan, createdAt: team.createdAt, released: true, running: true,

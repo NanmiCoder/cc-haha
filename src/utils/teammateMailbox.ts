@@ -1040,6 +1040,14 @@ export type ShutdownRequestMessage = z.infer<
 
 /**
  * Shutdown approved message sent from teammate to leader via mailbox
+ *
+ * `backendType` deliberately leaves out `process`, the desktop's members.
+ * Whoever recognises an approval here removes the member from the team file
+ * and unassigns its unfinished tasks, which is right for a teammate the lead
+ * itself runs. A desktop member belongs to the server's team runtime instead:
+ * it stays on the roster as stopped so a message can restart it, and its tasks
+ * keep the owners the user approved, which is what wakes the members waiting
+ * on them. Its approval therefore reaches the lead as an ordinary message.
  */
 export const ShutdownApprovedMessageSchema = lazySchema(() =>
   z.strictObject({

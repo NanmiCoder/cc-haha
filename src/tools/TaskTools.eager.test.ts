@@ -24,6 +24,7 @@ import {
   updateTask,
   withTaskListLifecycleLock,
 } from '../utils/tasks.js'
+import { clearDynamicTeamContext, setDynamicTeamContext } from '../utils/teammate.js'
 import { TaskCreateTool } from './TaskCreateTool/TaskCreateTool.js'
 import { TaskGetTool } from './TaskGetTool/TaskGetTool.js'
 import { TaskListTool } from './TaskListTool/TaskListTool.js'
@@ -520,6 +521,62 @@ describe('Task tool execution ordering', () => {
       expect(deleted.data.taskListSnapshotRevision).toBe(3)
       await expect(stat(getTasksDir(taskListId))).rejects.toThrow()
     } finally {
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      if (previousTaskListId === undefined) delete process.env.CLAUDE_CODE_TASK_LIST_ID
+      else process.env.CLAUDE_CODE_TASK_LIST_ID = previousTaskListId
+      await rm(configDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('Task dependencies', () => {
+  it('a teammate cannot start or finish a task ahead of the tasks it waits on, the lead can', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'task-tool-dependencies-'))
+    const taskListId = 'task-tool-dependency-team'
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousTaskListId = process.env.CLAUDE_CODE_TASK_LIST_ID
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    process.env.CLAUDE_CODE_TASK_LIST_ID = taskListId
+    let appState: Record<string, unknown> = { expandedView: undefined, inbox: { messages: [] } }
+    const context = {
+      abortController: new AbortController(),
+      getAppState: () => appState,
+      setAppState: (update: (prev: Record<string, unknown>) => Record<string, unknown>) => {
+        appState = update(appState)
+      },
+    } as unknown as ToolUseContext
+    const asTeammate = () => setDynamicTeamContext({ agentId: `analyst@${taskListId}`, agentName: 'analyst', teamName: taskListId, planModeRequired: false })
+    const statusOf = async (taskId: string) => (await TaskGetTool.call({ taskId }, context)).data.task?.status
+
+    try {
+      const inventory = (await TaskCreateTool.call({ subject: 'Inventory', description: 'Map the release' }, context)).data.task.id
+      const review = (await TaskCreateTool.call({ subject: 'Review', description: 'Needs the inventory' }, context)).data.task.id
+      await TaskUpdateTool.call({ taskId: review, addBlockedBy: [inventory] }, context)
+
+      // The reported run: the analyst marked its review in progress while the
+      // inventory it depends on had not even been started.
+      asTeammate()
+      for (const status of ['in_progress', 'completed'] as const) {
+        const refused = await TaskUpdateTool.call({ taskId: review, status }, context)
+        expect(refused.data).toMatchObject({ success: false, updatedFields: [] })
+        expect(refused.data.error).toContain(`Task #${review} waits on #${inventory}`)
+      }
+      expect(await statusOf(review)).toBe('pending')
+      // Everything but the status still goes through.
+      expect((await TaskUpdateTool.call({ taskId: review, description: 'Needs the inventory first' }, context)).data.success).toBe(true)
+
+      // The lead coordinates and may decide the dependency no longer matters.
+      clearDynamicTeamContext()
+      expect((await TaskUpdateTool.call({ taskId: review, status: 'in_progress' }, context)).data.success).toBe(true)
+      await updateTask(taskListId, review, { status: 'pending' })
+
+      await updateTask(taskListId, inventory, { status: 'completed' })
+      asTeammate()
+      expect((await TaskUpdateTool.call({ taskId: review, status: 'in_progress' }, context)).data.success).toBe(true)
+      expect((await TaskUpdateTool.call({ taskId: review, status: 'completed' }, context)).data.success).toBe(true)
+    } finally {
+      clearDynamicTeamContext()
       if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
       if (previousTaskListId === undefined) delete process.env.CLAUDE_CODE_TASK_LIST_ID
