@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Network } from 'lucide-react'
 import { workflowsApi } from '../../api/workflows'
 import { useTranslation } from '../../i18n'
 import { runsForSession, useWorkflowStore } from '../../stores/workflowStore'
@@ -139,7 +140,7 @@ export function WorkflowSavePanel({
     >
       {completedRuns.length === 0 ? (
         <EmptyState
-          icon={<span className="material-symbols-outlined">account_tree</span>}
+          icon={<Network size={20} strokeWidth={1.75} aria-hidden="true" />}
           description={t('slash.saveWorkflow.noCompletedRun')}
         />
       ) : (
@@ -191,12 +192,12 @@ export function WorkflowSavePanel({
                 ]}
               />
               {error && (
-                <p role="alert" className="text-sm text-[var(--color-error)]">
+                <p role="alert" className="text-[13px] text-[var(--color-error)]">
                   {t('slash.saveWorkflow.error', { detail: error })}
                 </p>
               )}
               {savedName && (
-                <p role="status" className="text-sm text-[var(--color-success)]">
+                <p role="status" className="text-[13px] text-[var(--color-success)]">
                   {t('slash.saveWorkflow.success', { name: savedName })}
                 </p>
               )}

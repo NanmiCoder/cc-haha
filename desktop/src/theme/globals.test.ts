@@ -185,15 +185,25 @@ describe('desktop theme tokens', () => {
     expect(getThemeBlock(':root')).toContain('--color-switch-checked-bg: var(--color-brand);')
   })
 
-  it('uses container queries for the compact activity summary strip', () => {
+  it('keeps a path in a chat table cell whole instead of breaking it per letter', () => {
+    // In the split workspace the chat column is ~400px; table cells used to wrap
+    // `src/lib/validators.ts` one letter at a time.
+    expect(css).toMatch(/\.md-table-wrap :is\(td, th\) code \{[^}]*white-space: nowrap;[^}]*word-break: normal;/)
+  })
+
+  it('lays the activity summary tiles out by container width, not viewport width', () => {
     const activitySummaryCss = getCssBetween('.activity-summary-panel {', '.activity-heat-cell {')
 
     expect(activitySummaryCss).toContain('container-type: inline-size;')
+    // One column when cramped; on the 700px settings page the five tiles read
+    // 2+1 / 1+1+1 — the headline total spans two of three columns, so the second
+    // row is full instead of ending in a hole.
+    expect(activitySummaryCss).toContain('grid-template-columns: minmax(0, 1fr);')
     expect(activitySummaryCss).toContain('@container (min-width: 360px)')
-    expect(activitySummaryCss).toContain('@container (min-width: 560px)')
-    expect(activitySummaryCss).toContain('grid-template-columns: repeat(5, minmax(0, 1fr));')
-    expect(activitySummaryCss).toContain('grid-column: auto;')
-    expect(activitySummaryCss).not.toContain('grid-column: span 2;')
+    expect(activitySummaryCss).toContain('@container (min-width: 520px)')
+    expect(activitySummaryCss).toContain('grid-template-columns: repeat(3, minmax(0, 1fr));')
+    expect(activitySummaryCss).toContain('grid-column: span 2;')
+    expect(activitySummaryCss).not.toContain('repeat(5, minmax(0, 1fr))')
   })
 
   it('avoids color-mix in the startup-critical UI zoom shell chrome for Safari 15 WebView support', () => {

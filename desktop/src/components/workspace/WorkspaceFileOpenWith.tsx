@@ -40,7 +40,7 @@ export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, 
     void useOpenTargetStore.getState().openTarget(target.id, absolutePath).catch(() => reportOpenFailure(absolutePath))
     onAfterSelect?.()
   }
-  const itemClass = 'flex h-9 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left text-[15px] text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]'
+  const itemClass = 'flex h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]'
   const failure = error ?? discovery.error
   return (
     <>
@@ -52,7 +52,7 @@ export function WorkspaceFileOpenWith({ absolutePath, sessionId, workspacePath, 
           <span className="truncate">{target.kind === 'system_default' ? t('openWith.systemDefault') : target.label}</span>
         </button>
       ))}
-      {applications.length > 0 && (folders.length > 0 || usefulActions.length > 0 || onRefresh) ? <div className="mx-2 my-1 border-t border-[var(--color-border)]" role="separator" /> : null}
+      {applications.length > 0 && (folders.length > 0 || usefulActions.length > 0 || onRefresh) ? <div className="-mx-1 my-1 border-t border-[var(--color-border)]" role="separator" /> : null}
       {folders.map((target) => <button key={target.id} type="button" role="menuitem" onClick={() => selectTarget(target)} className={itemClass}>{t('workspace.files.openContainingFolder')}</button>)}
       {usefulActions.map((item) => <button key={item.id} type="button" role="menuitem" onClick={() => { if (item.id === 'preview' && onPreview) onPreview(); else item.onSelect(); onAfterSelect?.() }} className={itemClass}><span className="truncate">{item.label}</span></button>)}
       {onRefresh ? <button type="button" role="menuitem" className={itemClass} onClick={() => { onRefresh(); onAfterSelect?.() }}>{t('workspace.refresh')}</button> : null}

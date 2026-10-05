@@ -49,39 +49,36 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
       <Card
         as="section"
         radius="xl"
-        surface="low"
+        surface="lowest"
         padding="lg"
         shadow="card"
         className="w-full max-w-3xl"
       >
         <div className="flex flex-col gap-4">
           <div>
-            <h1
-              className="text-[21px] font-semibold tracking-tight text-[var(--color-text-primary)]"
-              style={{ fontFamily: 'var(--font-headline)' }}
-            >
+            <h1 className="text-[22px] font-semibold tracking-tight text-[var(--color-text-primary)]">
               {t('app.serverFailed')}
             </h1>
-            <p className="mt-2 text-sm leading-6 text-[var(--color-text-secondary)]">
+            <p className="mt-1.5 text-[13px] leading-6 text-[var(--color-text-tertiary)]">
               {t('app.serverFailedHint')}
             </p>
           </div>
 
-          <Card radius="lg" surface="none" className="bg-[var(--color-code-bg)]">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
+          <Card radius="md" surface="none" padding="sm" className="bg-[var(--color-code-bg)]">
+            <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">
               {t('app.startupError')}
             </div>
-            <pre className="mt-2 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.7] text-[var(--color-error)]">
+            <pre className="mt-1.5 max-h-28 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.65] text-[var(--color-error)]">
               {message}
             </pre>
           </Card>
 
           {logs ? (
-            <Card radius="lg" surface="none" className="bg-[var(--color-code-bg)]">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
+            <Card radius="md" surface="none" padding="sm" className="bg-[var(--color-code-bg)]">
+              <div className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">
                 {t('app.serverLogs')}
               </div>
-              <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[13px] leading-[1.7] text-[var(--color-text-secondary)]">
+              <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.65] text-[var(--color-text-secondary)]">
                 {logs}
               </pre>
             </Card>
@@ -92,7 +89,7 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
               type="button"
               variant="secondary"
               size="sm"
-              icon={<Copy className="h-4 w-4" aria-hidden="true" />}
+              icon={<Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
               onClick={handleCopy}
             >
               {copied ? t('app.copiedDiagnostics') : t('app.copyDiagnostics')}
@@ -101,7 +98,7 @@ export function StartupErrorView({ error }: StartupErrorViewProps) {
               type="button"
               variant="ghost"
               size="sm"
-              icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
+              icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
               onClick={() => window.location.reload()}
             >
               {t('common.retry')}

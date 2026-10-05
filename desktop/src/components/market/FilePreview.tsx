@@ -141,10 +141,10 @@ export function FilePreview({
 
   return (
     <div
-      className="grid min-h-0 min-w-0 flex-1 gap-5 lg:h-full lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]"
+      className="grid min-h-0 min-w-0 flex-1 gap-4 @3xl:h-full @3xl:grid-cols-[minmax(0,260px)_minmax(0,1fr)]"
       data-testid="market-file-preview"
     >
-      <div className="flex max-h-[40vh] min-h-0 flex-col gap-0.5 overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-2 lg:max-h-none">
+      <div className="flex max-h-[40vh] min-h-0 flex-col gap-px overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 @3xl:max-h-none">
         {files.map((file) => {
           const active = file.path === activePath
           const Icon = LANG_ICONS[file.language] ?? File
@@ -154,18 +154,23 @@ export function FilePreview({
               type="button"
               data-testid={`market-file-item-${file.path}`}
               onClick={() => void open(file.path)}
-              className={`flex items-center gap-2.5 rounded-[var(--radius-lg)] px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
+              className={`flex items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
+                // The list's selected row: the neutral selected fill, with the
+                // brand reserved for the selected item's icon.
                 active
-                  ? // The darkened pair, not `--color-brand`: raw terracotta on
-                    // its own soft fill misses AA under the two ink themes.
-                    'bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)]'
-                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
+                  ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                  : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
               }`}
             >
-              <Icon className="h-[15px] w-[15px] flex-shrink-0" strokeWidth={1.5} aria-hidden="true" />
+              <Icon
+                className={`flex-shrink-0 ${active ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'}`}
+                size={14}
+                strokeWidth={1.75}
+                aria-hidden="true"
+              />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[13.5px] font-medium">{file.path}</span>
-                <span className={`mt-px block text-[11.5px] ${active ? 'opacity-80' : 'text-[var(--color-text-tertiary)]'}`}>
+                <span className="block truncate text-[13px] font-medium">{file.path}</span>
+                <span className="block font-mono text-[11px] text-[var(--color-text-tertiary)]">
                   {file.language} · {formatSize(file.size)}
                 </span>
               </span>
@@ -174,23 +179,23 @@ export function FilePreview({
         })}
       </div>
 
-      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)]">
+      <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
         {activeFile && (
-          <div className="flex flex-shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-[18px] py-3 text-xs text-[var(--color-text-tertiary)]">
-            <span className="font-mono text-[13.5px] font-semibold text-[var(--color-text-primary)]">{activeFile.path}</span>
+          <div className="flex min-h-10 flex-shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-tertiary)]">
+            <span className="font-mono text-xs text-[var(--color-text-primary)]">{activeFile.path}</span>
             <span>{activeFile.language}</span>
             <span>·</span>
             <span>{formatSize(activeFile.size)}</span>
             {state.kind === 'loaded' && state.file.truncated && (
               <span className="inline-flex items-center gap-1 text-[var(--color-warning)]">
-                <Scissors className="h-3 w-3" strokeWidth={1.6} aria-hidden="true" />
+                <Scissors size={12} strokeWidth={1.75} aria-hidden="true" />
                 {t('market.file.truncated')}
               </span>
             )}
           </div>
         )}
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-[26px] py-[22px] max-lg:max-h-[70vh]">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 @max-3xl:max-h-[70vh]">
           {state.kind === 'loading' && (
             <div className="flex justify-center py-10" data-testid="market-file-loading">
               <Spinner size={20} tone="brand" label={t('common.loading')} />
@@ -198,14 +203,14 @@ export function FilePreview({
           )}
           {state.kind === 'error' && (
             <div className="flex flex-col items-center gap-2 py-8 text-center" data-testid="market-file-error">
-              <CircleAlert className="h-7 w-7 text-[var(--color-error)]" strokeWidth={1.6} aria-hidden="true" />
-              <p className="text-sm text-[var(--color-text-primary)]">{t('market.file.loadError')}</p>
+              <CircleAlert className="text-[var(--color-error)]" size={20} strokeWidth={1.75} aria-hidden="true" />
+              <p className="text-[13px] font-medium text-[var(--color-text-primary)]">{t('market.file.loadError')}</p>
               <p className="max-w-md break-words text-xs text-[var(--color-text-tertiary)]">{state.message}</p>
               <Button
                 variant="secondary"
                 size="base"
                 className="mt-1"
-                icon={<RefreshCw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />}
+                icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
                 onClick={() => activePath && void open(activePath)}
               >
                 {t('market.retry')}
@@ -213,7 +218,7 @@ export function FilePreview({
             </div>
           )}
           {state.kind === 'idle' && (
-            <p className="py-10 text-center text-sm text-[var(--color-text-tertiary)]">{t('market.file.empty')}</p>
+            <p className="py-10 text-center text-[13px] text-[var(--color-text-tertiary)]">{t('market.file.empty')}</p>
           )}
           {state.kind === 'loaded' &&
             (state.file.language === 'markdown' ? (

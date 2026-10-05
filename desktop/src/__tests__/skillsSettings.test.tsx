@@ -133,8 +133,10 @@ describe('Settings > Skills tab', () => {
     render(<Settings />)
     switchToSkillsTab()
 
-    expect(screen.getByText('Browse installed skills')).toBeInTheDocument()
-    expect(screen.getByText('Skill Browser')).toBeInTheDocument()
+    // The settings page head names the browser; the list opens on search and
+    // its numbers rather than a second title block.
+    expect(screen.queryByText('Browse installed skills')).not.toBeInTheDocument()
+    expect(screen.getByRole('searchbox', { name: 'Search skills' })).toBeInTheDocument()
     expect(screen.getByText('Total skills')).toBeInTheDocument()
     expect(screen.getByText('Alpha Skill')).toBeInTheDocument()
     expect(screen.getByText('Second skill description')).toBeInTheDocument()
@@ -299,6 +301,8 @@ describe('Settings > Skills tab', () => {
       await Promise.resolve()
     })
 
-    expect(screen.getByText('Installed Plugins')).toBeInTheDocument()
+    // The Plugins pane is titled with its rail label, which the rail entry also
+    // carries — the heading is what proves the pane itself opened.
+    expect(screen.getByRole('heading', { name: 'Plugins' })).toBeInTheDocument()
   })
 })

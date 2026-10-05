@@ -1,33 +1,35 @@
 import type { ReactNode } from 'react'
+import { SquareTerminal } from 'lucide-react'
 
 type Props = {
-  title?: string
+  /** Mono label at the head's left: the shell the command ran in. */
+  label?: string
+  /** Right side of the head: exit-code pill, duration, copy. */
+  meta?: ReactNode
   children: ReactNode
   className?: string
 }
 
 /**
- * macOS-style terminal window decoration with traffic light buttons.
- * Reusable wrapper for Bash commands, tool results, and code viewers.
+ * The frame a shell call's output sits in: a 32px head and a sunken body.
+ *
+ * Deliberately not a window. The macOS traffic lights it used to wear were
+ * decoration pretending to be controls, and the black slab they sat on was the
+ * loudest thing in a light transcript — a terminal block is a code block that
+ * happens to have run, so it takes the code block's ground in every theme.
  */
-export function TerminalChrome({ title, children, className = '' }: Props) {
+export function TerminalChrome({ label, meta, children, className = '' }: Props) {
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-terminal-border)] bg-[var(--color-terminal-bg)] ${className}`}>
-      {/* Title bar with traffic lights */}
-      <div className="flex items-center gap-2.5 border-b border-[var(--color-terminal-border)] bg-[var(--color-terminal-header)] px-4 py-[11px]">
-        <div className="flex gap-1.5">
-          <div className="h-2.5 w-2.5 rounded-[var(--radius-full)] bg-[var(--color-terminal-danger)]" />
-          <div className="h-2.5 w-2.5 rounded-[var(--radius-full)] bg-[var(--color-terminal-warning)]" />
-          <div className="h-2.5 w-2.5 rounded-[var(--radius-full)] bg-[var(--color-terminal-accent)]" />
-        </div>
-        {title && (
-          <span className="ml-1.5 truncate font-mono text-[12.5px] font-medium text-[var(--color-terminal-muted)]">
-            {title}
-          </span>
-        )}
+    <div
+      data-terminal-chrome=""
+      className={`overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)] ${className}`}
+    >
+      <div className="flex h-8 items-center gap-2.5 border-b border-[var(--color-border)] bg-[var(--color-surface-container)] pl-2.5 pr-1.5 text-[var(--color-text-tertiary)]">
+        <SquareTerminal size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{label}</span>
+        {meta ? <span className="flex shrink-0 items-center gap-2">{meta}</span> : null}
       </div>
-      {/* Content */}
-      <div className="bg-[var(--color-terminal-bg)] text-[var(--color-terminal-fg)]">
+      <div className="text-[var(--color-code-fg)]">
         {children}
       </div>
     </div>

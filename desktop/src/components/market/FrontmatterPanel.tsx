@@ -13,7 +13,7 @@ const COLLAPSIBLE_THRESHOLD = 8
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-flex max-w-full items-center rounded-[var(--radius-sm)] bg-[var(--color-surface-container-high)] px-2 py-0.5 text-[11px] leading-5 text-[var(--color-text-secondary)] break-words">
+    <span className="inline-flex max-w-full items-center rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 text-[11px] leading-5 text-[var(--color-text-secondary)] break-words">
       {children}
     </span>
   )
@@ -33,10 +33,10 @@ function ValueCell({ value }: { value: FrontmatterValue }) {
   if (typeof value === 'boolean') {
     return (
       <span
-        className={`inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-2 py-0.5 text-[11px] leading-5 ${
+        className={`inline-flex items-center gap-1 rounded-[var(--radius-xs)] px-1.5 font-mono text-[11px] leading-5 ${
           value
             ? 'bg-[var(--color-success-container)] text-[var(--color-on-success-container)]'
-            : 'bg-[var(--color-surface-container-high)] text-[var(--color-text-tertiary)]'
+            : 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
         }`}
       >
         {value ? 'true' : 'false'}
@@ -46,7 +46,7 @@ function ValueCell({ value }: { value: FrontmatterValue }) {
 
   if (typeof value === 'string' && value.includes('\n')) {
     return (
-      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-lg)] bg-[var(--color-code-bg)] px-3 py-2 font-mono text-[11.5px] leading-5 text-[var(--color-text-secondary)]">
+      <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-md)] bg-[var(--color-code-bg)] px-3 py-2 font-mono text-xs leading-5 text-[var(--color-text-secondary)]">
         {value}
       </pre>
     )
@@ -63,10 +63,10 @@ function CollapseToggle({ open, onToggle }: { open: boolean; onToggle: () => voi
       data-testid="skill-frontmatter-toggle"
       aria-expanded={open}
       onClick={onToggle}
-      className="-mr-1 inline-flex min-h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-[11px] font-normal normal-case tracking-normal text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+      className="-mr-1 inline-flex min-h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs font-normal text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
     >
       {open ? t('market.detail.metadataCollapse') : t('market.detail.metadataExpand')}
-      <ChevronDown className={`h-3.5 w-3.5 transition-transform ${open ? 'rotate-180' : ''}`} strokeWidth={2} aria-hidden="true" />
+      <ChevronDown className={`transition-transform ${open ? 'rotate-180' : ''}`} size={14} strokeWidth={1.75} aria-hidden="true" />
     </button>
   )
 }
@@ -86,12 +86,12 @@ function SidebarRows({ entries }: { entries: FrontmatterEntry[] }) {
           <div
             key={entry.key}
             data-testid={`skill-frontmatter-row-${entry.key}`}
-            className={`min-w-0 border-b border-[var(--color-border)] px-[18px] py-2.5 last:border-b-0 ${
+            className={`min-w-0 border-b border-[var(--color-border)] px-4 py-2 last:border-b-0 ${
               stacked ? 'flex flex-col gap-1.5' : 'flex items-start justify-between gap-4'
             }`}
           >
             <dt
-              className="min-w-0 font-mono text-[10.5px] leading-5 text-[var(--color-text-tertiary)] [overflow-wrap:anywhere]"
+              className="min-w-0 font-mono text-[11px] leading-5 text-[var(--color-text-tertiary)] [overflow-wrap:anywhere]"
               title={entry.key}
             >
               {entry.key}
@@ -124,10 +124,10 @@ function GridRows({ entries }: { entries: FrontmatterEntry[] }) {
           data-testid={`skill-frontmatter-row-${entry.key}`}
           className={`flex min-w-0 flex-col gap-1 ${entry.block ? 'col-span-full' : ''}`}
         >
-          <dt className="truncate font-mono text-[10.5px] leading-4 text-[var(--color-text-tertiary)]" title={entry.key}>
+          <dt className="truncate font-mono text-[11px] leading-4 text-[var(--color-text-tertiary)]" title={entry.key}>
             {entry.key}
           </dt>
-          <dd className="min-w-0 text-[12.5px] leading-5 text-[var(--color-text-primary)]">
+          <dd className="min-w-0 text-[13px] leading-5 text-[var(--color-text-primary)]">
             <ValueCell value={entry.value} />
           </dd>
         </div>
@@ -172,8 +172,8 @@ export function FrontmatterPanel({
       <section data-testid="skill-frontmatter-panel" className={className}>
         {/* Sticky: the rail scrolls on its own, and a bare list of `slug` /
             `xiaping_*` rows is meaningless without the heading in view. */}
-        <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container)] px-[18px] py-2">
-          <h3 className="flex-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+        <div className="sticky top-0 z-[var(--z-raised)] flex items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container)] px-4 py-1.5">
+          <h3 className="flex-1 text-xs font-semibold text-[var(--color-text-tertiary)]">
             {t('market.detail.metadata')}
           </h3>
           {toggle}
@@ -191,10 +191,10 @@ export function FrontmatterPanel({
       className={`border-b border-[var(--color-border)] ${className ?? ''}`}
     >
       <div className="flex items-center gap-2 py-2">
-        <h3 className="flex-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+        <h3 className="flex-1 text-xs font-semibold text-[var(--color-text-tertiary)]">
           {t('market.detail.metadata')}
         </h3>
-        <span className="text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{entries.length}</span>
+        <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{entries.length}</span>
         {toggle}
       </div>
       {open && <GridRows entries={entries} />}

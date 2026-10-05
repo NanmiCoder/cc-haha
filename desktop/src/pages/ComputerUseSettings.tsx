@@ -1,9 +1,32 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import {
+  CircleAlert,
+  CircleCheck,
+  CircleHelp,
+  CircleX,
+  Download,
+  ExternalLink,
+  FolderOpen,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  ShieldCheck,
+  TriangleAlert,
+} from 'lucide-react'
 import { computerUseApi, type ComputerUseStatus, type SetupResult } from '../api/computerUse'
 import { useTranslation } from '../i18n'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/settings/SettingsSection'
+import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { ErrorState } from '@/components/ui/ErrorState'
+import { Input } from '@/components/ui/Input'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Switch } from '@/components/ui/Switch'
 import { getDesktopHost } from '../lib/desktopHost'
@@ -14,24 +37,56 @@ const PYTHON_DOWNLOAD_URLS: Record<string, string> = {
   win32: 'https://www.python.org/downloads/windows/',
 }
 
+// Settings.tsx owns the page frame (width, gutters); a pane is just a column.
+const PAGE_CLASS = 'min-w-0'
+// The status rows carry a leading icon/dot, which `SettingsRow` has no slot
+// for, so they reuse its title/description type directly.
+const ROW_TITLE_CLASS = 'text-[13px] font-medium leading-5 text-[var(--color-text-primary)]'
+const ROW_DESC_CLASS = 'mt-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]'
+
+type NoticeTone = 'error' | 'warning' | 'success'
+
+const NOTICE_CLASSES: Record<NoticeTone, string> = {
+  error: 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]',
+  warning: 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]',
+  success: 'bg-[var(--color-success-container)] text-[var(--color-on-success-container)]',
+}
+
+const NOTICE_ICONS: Record<NoticeTone, typeof CircleAlert> = {
+  error: CircleAlert,
+  warning: TriangleAlert,
+  success: CircleCheck,
+}
+
+/** A tinted status banner: semantic container fill, no border, 14px icon. */
+function Notice({ tone, children }: { tone: NoticeTone; children: ReactNode }) {
+  const Icon = NOTICE_ICONS[tone]
+  return (
+    <div className={`flex items-start gap-2 rounded-[var(--radius-md)] px-3 py-2 text-xs leading-[1.5] ${NOTICE_CLASSES[tone]}`}>
+      <Icon size={14} strokeWidth={1.75} aria-hidden="true" className="mt-px shrink-0" />
+      <div className="min-w-0 flex-1">{children}</div>
+    </div>
+  )
+}
+
 function StatusIcon({ ok }: { ok: boolean | null }) {
   if (ok === null) {
-    return <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)]">help</span>
+    return <CircleHelp size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
   }
   return ok ? (
-    <span className="material-symbols-outlined text-[18px] text-[var(--color-success)]" style={{ fontVariationSettings: "'FILL' 1" }}>check_circle</span>
+    <CircleCheck size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-success)]" />
   ) : (
-    <span className="material-symbols-outlined text-[18px] text-[var(--color-error)]" style={{ fontVariationSettings: "'FILL' 1" }}>cancel</span>
+    <CircleX size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-error)]" />
   )
 }
 
 function StatusRow({ label, ok, detail }: { label: string; ok: boolean | null; detail: string }) {
   return (
-    <div className="flex items-center gap-3 py-2.5 px-4 rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)]">
+    <div className="flex min-h-[52px] items-center gap-3 px-4 py-3">
       <StatusIcon ok={ok} />
-      <div className="flex-1 min-w-0">
-        <span className="text-sm font-medium text-[var(--color-text-primary)]">{label}</span>
-        <span className="ml-2 text-xs text-[var(--color-text-tertiary)]">{detail}</span>
+      <div className="min-w-0 flex-1">
+        <div className={ROW_TITLE_CLASS}>{label}</div>
+        <div className={`${ROW_DESC_CLASS} break-all`}>{detail}</div>
       </div>
     </div>
   )
@@ -280,7 +335,7 @@ export function ComputerUseSettings() {
   // page replaced the entire tree.
   if (status === null) {
     return (
-      <div className="max-w-2xl">
+      <div className={PAGE_CLASS}>
         {checkState === 'error' ? (
           <ErrorState
             size="lg"
@@ -300,7 +355,7 @@ export function ComputerUseSettings() {
   // rendering as enabled when the capability probe wins the race.
   if (configState === 'loading') {
     return (
-      <div className="max-w-2xl">
+      <div className={PAGE_CLASS}>
         <LoadingState size="md" label={t('common.loading')} />
       </div>
     )
@@ -308,7 +363,7 @@ export function ComputerUseSettings() {
 
   if (configState === 'error') {
     return (
-      <div className="max-w-2xl">
+      <div className={PAGE_CLASS}>
         <ErrorState
           size="lg"
           title={t('settings.computerUse.configLoadFailed')}
@@ -323,16 +378,13 @@ export function ComputerUseSettings() {
     const macosVersionProblem = status.platform === 'darwin'
     const versionDetectionFailed = status.cuHelper.reason === 'system_version_unknown'
     return (
-      <div className="max-w-2xl space-y-5">
-        <div>
-          <h2 className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
-            {t('settings.computerUse.controlTitle')}
-          </h2>
-          <p className="mt-1.5 text-[13.5px] leading-6 text-[var(--color-text-secondary)]">
-            {t('settings.computerUse.controlSubtitle')}
-          </p>
-        </div>
+      <div className={PAGE_CLASS}>
+        <SettingsPageHeader
+          title={t('settings.computerUse.controlTitle')}
+          description={t('settings.computerUse.controlSubtitle')}
+        />
         <ErrorState
+          className="mt-6"
           size="lg"
           title={versionDetectionFailed
             ? t('settings.computerUse.macosDetectionFailedTitle')
@@ -377,7 +429,7 @@ export function ComputerUseSettings() {
   // the native page instead of resurrecting the retired macOS setup screen.
   if (status.engine !== 'windows-compat') {
     return (
-      <div className="max-w-2xl space-y-5">
+      <div className={PAGE_CLASS}>
         <ErrorState
           size="lg"
           title={t('settings.computerUse.nativeUnavailableTitle')}
@@ -392,232 +444,221 @@ export function ComputerUseSettings() {
 
   return (
     <>
-      <div className="max-w-2xl space-y-6">
-      {/* Title */}
-      <div>
-        <div className="flex items-center justify-between gap-4">
-          <h2 className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
-            {t('settings.computerUse.title')}
-          </h2>
-          <Switch
-            checked={computerUseEnabled}
-            onChange={requestComputerUseEnabled}
-            label={t('settings.computerUse.enabledToggle')}
-            size="sm"
-          />
-        </div>
-        <p className="mt-1.5 text-[13.5px] leading-6 text-[var(--color-text-secondary)]">
-          {t('settings.computerUse.description')}
-        </p>
-      </div>
-
-      {configError && (
-        <div className="px-4 py-3 rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-container)] text-sm text-[var(--color-on-error-container)]">
-          {configError}
-        </div>
-      )}
-
-      {!computerUseEnabled && (
-        <div className="px-4 py-3 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] text-sm text-[var(--color-on-warning-container)]">
-          {t('settings.computerUse.disabledHint')}
-        </div>
-      )}
-
-      {checkState === 'loading' ? (
-        <LoadingState size="md" label={t('common.loading')} />
-      ) : checkState === 'error' ? (
-        <ErrorState
-          size="lg"
-          title={t('settings.computerUse.statusCheckFailed')}
-          retryLabel={t('common.retry')}
-          onRetry={fetchStatus}
+      <div className={PAGE_CLASS}>
+        <SettingsPageHeader
+          title={t('settings.computerUse.title')}
+          description={t('settings.computerUse.description')}
+          action={(
+            <Switch
+              checked={computerUseEnabled}
+              onChange={requestComputerUseEnabled}
+              label={t('settings.computerUse.enabledToggle')}
+            />
+          )}
         />
-      ) : status ? (
-        <>
-          {!status.supported && (
-            <div className="px-4 py-3 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] text-sm text-[var(--color-on-warning-container)]">
-              {t('settings.computerUse.notSupported')}
-            </div>
+
+        <div className="mt-6 space-y-4">
+          {configError && <Notice tone="error">{configError}</Notice>}
+
+          {!computerUseEnabled && (
+            <Notice tone="warning">{t('settings.computerUse.disabledHint')}</Notice>
           )}
 
-          {/* Status checks */}
-          <div className="space-y-2">
-            <StatusRow
-              label={t('settings.computerUse.python')}
-              ok={status.python.installed}
-              detail={pythonDetail}
+          {checkState === 'loading' ? (
+            <LoadingState size="md" label={t('common.loading')} />
+          ) : checkState === 'error' ? (
+            <ErrorState
+              size="lg"
+              title={t('settings.computerUse.statusCheckFailed')}
+              retryLabel={t('common.retry')}
+              onRetry={fetchStatus}
             />
-            <StatusRow
-              label={t('settings.computerUse.venv')}
-              ok={status.venv.created}
-              detail={status.venv.created ? `${t('settings.computerUse.venvReady')} — ${status.venv.path}` : t('settings.computerUse.venvNotReady')}
-            />
-            <StatusRow
-              label={t('settings.computerUse.deps')}
-              ok={status.dependencies.installed}
-              detail={status.dependencies.installed ? t('settings.computerUse.depsReady') : t('settings.computerUse.depsNotReady')}
-            />
-          </div>
+          ) : status ? (
+            <>
+              {!status.supported && (
+                <Notice tone="warning">{t('settings.computerUse.notSupported')}</Notice>
+              )}
 
-          <div className="space-y-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-4">
-            <label htmlFor="computer-use-python-path" className="block text-sm font-medium text-[var(--color-text-primary)]">
-              {t('settings.computerUse.pythonPathLabel')}
-            </label>
-            <div className="flex flex-wrap gap-2">
-              <input
-                id="computer-use-python-path"
-                type="text"
-                value={pythonPathDraft}
-                onChange={e => {
-                  setPythonPathDraft(e.target.value)
-                  setPythonPathMessage(null)
-                }}
-                placeholder={t('settings.computerUse.pythonPathPlaceholder')}
-                className="min-w-[220px] flex-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-xs text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-brand)] focus:outline-none"
-              />
-              <Button
-                variant="secondary"
-                size="base"
-                onClick={choosePythonPath}
-                disabled={pythonPathSaving}
-                icon={<span className="material-symbols-outlined text-[16px]">folder_open</span>}
-              >
-                {t('settings.computerUse.pythonPathBrowse')}
-              </Button>
-              <Button
-                variant="primary"
-                size="base"
-                onClick={() => savePythonPath()}
-                disabled={!pythonPathDirty}
-                loading={pythonPathSaving}
-                icon={<span className="material-symbols-outlined text-[16px]">save</span>}
-              >
-                {t('settings.computerUse.pythonPathSave')}
-              </Button>
-              {pythonPathSaved && (
+              {/* Status checks */}
+              <SettingsGroup>
+                <StatusRow
+                  label={t('settings.computerUse.python')}
+                  ok={status.python.installed}
+                  detail={pythonDetail}
+                />
+                <StatusRow
+                  label={t('settings.computerUse.venv')}
+                  ok={status.venv.created}
+                  detail={status.venv.created ? `${t('settings.computerUse.venvReady')} — ${status.venv.path}` : t('settings.computerUse.venvNotReady')}
+                />
+                <StatusRow
+                  label={t('settings.computerUse.deps')}
+                  ok={status.dependencies.installed}
+                  detail={status.dependencies.installed ? t('settings.computerUse.depsReady') : t('settings.computerUse.depsNotReady')}
+                />
+              </SettingsGroup>
+
+              <SettingsGroup>
+                <SettingsRow
+                  title={t('settings.computerUse.pythonPathLabel')}
+                  description={pythonPathMessage ?? t('settings.computerUse.pythonPathHint')}
+                  htmlFor="computer-use-python-path"
+                  layout="stack"
+                >
+                  <Input
+                    id="computer-use-python-path"
+                    type="text"
+                    size="md"
+                    containerClassName="min-w-[220px] flex-1"
+                    className="font-mono"
+                    value={pythonPathDraft}
+                    onChange={e => {
+                      setPythonPathDraft(e.target.value)
+                      setPythonPathMessage(null)
+                    }}
+                    placeholder={t('settings.computerUse.pythonPathPlaceholder')}
+                  />
+                  <Button
+                    variant="secondary"
+                    size="base"
+                    onClick={choosePythonPath}
+                    disabled={pythonPathSaving}
+                    icon={<FolderOpen size={14} strokeWidth={1.75} aria-hidden="true" />}
+                  >
+                    {t('settings.computerUse.pythonPathBrowse')}
+                  </Button>
+                  <Button
+                    variant="primary"
+                    size="base"
+                    onClick={() => savePythonPath()}
+                    disabled={!pythonPathDirty}
+                    loading={pythonPathSaving}
+                    icon={<Save size={14} strokeWidth={1.75} aria-hidden="true" />}
+                  >
+                    {t('settings.computerUse.pythonPathSave')}
+                  </Button>
+                  {pythonPathSaved && (
+                    <Button
+                      variant="secondary"
+                      size="base"
+                      onClick={() => savePythonPath('')}
+                      disabled={pythonPathSaving}
+                      icon={<RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />}
+                    >
+                      {t('settings.computerUse.pythonPathAuto')}
+                    </Button>
+                  )}
+                </SettingsRow>
+              </SettingsGroup>
+
+              {/* macOS Permissions — only shown on macOS (darwin) */}
+              {envReady && status.platform === 'darwin' && (
+                <>
+                  <SettingsGroup>
+                    <StatusRow
+                      label={t('settings.computerUse.accessibility')}
+                      ok={status.permissions.accessibility}
+                      detail={
+                        status.permissions.accessibility === null ? t('settings.computerUse.permUnknown')
+                          : status.permissions.accessibility ? t('settings.computerUse.permGranted')
+                            : t('settings.computerUse.permDenied')
+                      }
+                    />
+                    <StatusRow
+                      label={t('settings.computerUse.screenRecording')}
+                      ok={screenRecordingReady}
+                      detail={
+                        status.permissions.screenRecording === true ? t('settings.computerUse.permGranted')
+                          : status.permissions.screenRecording === false ? t('settings.computerUse.permDenied')
+                            : t('settings.computerUse.permScreenRecordingUnknownSoft')
+                      }
+                    />
+                  </SettingsGroup>
+                  {(accessibilityNeedsAttention || screenRecordingNeedsAttention) && (
+                    <Notice tone="warning">
+                      <p>{t('settings.computerUse.permRestartHint')}</p>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {accessibilityNeedsAttention && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => openSystemSettings('Privacy_Accessibility')}
+                            icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
+                          >
+                            {t('settings.computerUse.openAccessibility')}
+                          </Button>
+                        )}
+                        {screenRecordingNeedsAttention && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => openSystemSettings('Privacy_ScreenCapture')}
+                            icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
+                          >
+                            {t('settings.computerUse.openScreenRecording')}
+                          </Button>
+                        )}
+                      </div>
+                    </Notice>
+                  )}
+                </>
+              )}
+
+              {allReady && (status.platform !== 'darwin' || (status.permissions.accessibility && screenRecordingReady)) && (
+                <Notice tone="success">{t('settings.computerUse.allReady')}</Notice>
+              )}
+
+              {setupResult && (
+                <Notice tone={setupResult.success ? 'success' : 'error'}>
+                  <div className="font-medium">
+                    {setupResult.success ? t('settings.computerUse.setupSuccess') : t('settings.computerUse.setupFail')}
+                  </div>
+                  <div className="mt-1.5 space-y-1">
+                    {setupResult.steps.map((step, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <StatusIcon ok={step.ok} />
+                        <span className="min-w-0 break-words">{step.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Notice>
+              )}
+
+              {/* Action buttons */}
+              <div className="flex flex-wrap gap-2">
+                {!status.python.installed && (
+                  <Button
+                    variant="primary"
+                    size="base"
+                    onClick={() => openExternalUrl(pythonDownloadUrl)}
+                    icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
+                  >
+                    {t('settings.computerUse.downloadPython')}
+                  </Button>
+                )}
+                {!envReady && status.python.installed && (
+                  <Button
+                    variant="primary"
+                    size="base"
+                    onClick={handleSetup}
+                    loading={setupRunning}
+                    icon={<Download size={14} strokeWidth={1.75} aria-hidden="true" />}
+                  >
+                    {setupRunning ? t('settings.computerUse.setupRunning') : t('settings.computerUse.setupBtn')}
+                  </Button>
+                )}
                 <Button
                   variant="secondary"
                   size="base"
-                  onClick={() => savePythonPath('')}
-                  disabled={pythonPathSaving}
-                  icon={<span className="material-symbols-outlined text-[16px]">restart_alt</span>}
+                  onClick={fetchStatus}
+                  icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
                 >
-                  {t('settings.computerUse.pythonPathAuto')}
+                  {t('settings.computerUse.recheckBtn')}
                 </Button>
-              )}
-            </div>
-            <p className="text-xs text-[var(--color-text-tertiary)]">
-              {pythonPathMessage ?? t('settings.computerUse.pythonPathHint')}
-            </p>
-          </div>
-
-          {/* macOS Permissions — only shown on macOS (darwin) */}
-          {envReady && status.platform === 'darwin' && (
-            <>
-              <StatusRow
-                label={t('settings.computerUse.accessibility')}
-                ok={status.permissions.accessibility}
-                detail={
-                  status.permissions.accessibility === null ? t('settings.computerUse.permUnknown')
-                    : status.permissions.accessibility ? t('settings.computerUse.permGranted')
-                      : t('settings.computerUse.permDenied')
-                }
-              />
-              <StatusRow
-                label={t('settings.computerUse.screenRecording')}
-                ok={screenRecordingReady}
-                detail={
-                  status.permissions.screenRecording === true ? t('settings.computerUse.permGranted')
-                    : status.permissions.screenRecording === false ? t('settings.computerUse.permDenied')
-                      : t('settings.computerUse.permScreenRecordingUnknownSoft')
-                }
-              />
-              {(accessibilityNeedsAttention || screenRecordingNeedsAttention) && (
-                <div className="flex flex-col gap-2 px-4 py-3 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)]">
-                  <p className="text-xs text-[var(--color-on-warning-container)]">{t('settings.computerUse.permRestartHint')}</p>
-                  <div className="flex gap-2">
-                    {accessibilityNeedsAttention && (
-                      <Button
-                        variant="secondary"
-                        size="base"
-                        onClick={() => openSystemSettings('Privacy_Accessibility')}
-                        icon={<span className="material-symbols-outlined text-[14px]">open_in_new</span>}
-                      >
-                        {t('settings.computerUse.openAccessibility')}
-                      </Button>
-                    )}
-                    {screenRecordingNeedsAttention && (
-                      <Button
-                        variant="secondary"
-                        size="base"
-                        onClick={() => openSystemSettings('Privacy_ScreenCapture')}
-                        icon={<span className="material-symbols-outlined text-[14px]">open_in_new</span>}
-                      >
-                        {t('settings.computerUse.openScreenRecording')}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-
-          {allReady && (status.platform !== 'darwin' || (status.permissions.accessibility && screenRecordingReady)) && (
-            <div className="px-4 py-3 rounded-[var(--radius-lg)] border border-[var(--color-success)] bg-[var(--color-success-container)] text-sm text-[var(--color-on-success-container)] flex items-center gap-2">
-              <span className="material-symbols-outlined text-[18px]" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
-              {t('settings.computerUse.allReady')}
-            </div>
-          )}
-
-          {setupResult && (
-            <div className={`rounded-[var(--radius-lg)] border p-4 space-y-2 ${setupResult.success ? 'border-[var(--color-success)] bg-[var(--color-success-container)]' : 'border-[var(--color-error)] bg-[var(--color-error-container)]'}`}>
-              <div className={`text-sm font-medium ${setupResult.success ? 'text-[var(--color-on-success-container)]' : 'text-[var(--color-on-error-container)]'}`}>
-                {setupResult.success ? t('settings.computerUse.setupSuccess') : t('settings.computerUse.setupFail')}
               </div>
-              {setupResult.steps.map((step, i) => (
-                <div key={i} className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-                  <StatusIcon ok={step.ok} />
-                  <span>{step.message}</span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Action buttons */}
-          <div className="flex gap-3">
-            {!status.python.installed && (
-              <Button
-                variant="primary"
-                size="lg"
-                onClick={() => openExternalUrl(pythonDownloadUrl)}
-                icon={<span className="material-symbols-outlined text-[18px]">open_in_new</span>}
-              >
-                {t('settings.computerUse.downloadPython')}
-              </Button>
-            )}
-            {!envReady && status.python.installed && (
-              <Button
-                variant="primary"
-                size="lg"
-                onClick={handleSetup}
-                loading={setupRunning}
-                icon={<span className="material-symbols-outlined text-[18px]">download</span>}
-              >
-                {setupRunning ? t('settings.computerUse.setupRunning') : t('settings.computerUse.setupBtn')}
-              </Button>
-            )}
-            <Button
-              variant="secondary"
-              size="lg"
-              onClick={fetchStatus}
-              icon={<span className="material-symbols-outlined text-[18px]">refresh</span>}
-            >
-              {t('settings.computerUse.recheckBtn')}
-            </Button>
-          </div>
-
-        </>
-      ) : null}
+            </>
+          ) : null}
+        </div>
       </div>
       {enableDialog}
     </>
@@ -630,9 +671,11 @@ export function ComputerUseSettings() {
 
 type Translate = ReturnType<typeof useTranslation>
 
-/** macOS OS-permission status row (辅助功能 / 屏幕录制): a refined row with a
- *  status dot (granted=emerald, needed=amber, checking=neutral) + label + state,
- *  built to live inside a divide-y group rather than as a standalone boxy card. */
+/** macOS OS-permission status row (辅助功能 / 屏幕录制): a status dot
+ *  (granted=success, needed=warning, failed=danger, checking=info) + label +
+ *  state badge, built to live inside a divide-y group card. Colors ride the
+ *  semantic token pairs so they follow [data-theme] (stock emerald/amber shades
+ *  are fixed colors — see paletteEscapes.test.ts). */
 function PermissionStatusRow({
   t,
   label,
@@ -653,34 +696,20 @@ function PermissionStatusRow({
     : needed
       ? t('settings.computerUse.permNeeded')
       : t('settings.computerUse.permChecking')
-  const dotClass = failed
-    ? 'bg-[var(--color-error)]'
+  const tone: Tone = failed
+    ? 'danger'
     : granted
-    ? 'bg-[var(--color-success)]'
+    ? 'success'
     : needed
-      ? 'bg-[var(--color-warning)]'
-      : 'bg-[var(--color-text-tertiary)]'
-  // Status colors ride the semantic tokens so they follow [data-theme]
-  // (stock emerald/amber shades are fixed colors — see paletteEscapes.test.ts).
-  const detailClass = failed
-    ? 'text-[var(--color-error)]'
-    : granted
-    ? 'text-[var(--color-success)]'
-    : needed
-      ? 'text-[var(--color-warning)]'
-      : 'text-[var(--color-text-tertiary)]'
+      ? 'warning'
+      : 'info'
   return (
-    <div className="flex items-center gap-3 py-2.5">
-      <span className="relative flex h-2 w-2 flex-shrink-0 items-center justify-center" aria-hidden>
-        <span className={`h-2 w-2 rounded-full ${dotClass} ${granted ? 'shadow-[0_0_0_3px_rgba(16,185,129,0.15)]' : needed ? 'shadow-[0_0_0_3px_rgba(245,158,11,0.15)]' : ''}`} />
-        {needed && (
-          <span className="absolute h-2 w-2 animate-ping rounded-full bg-[var(--color-warning)] opacity-60" />
-        )}
-      </span>
-      <span className="flex-1 min-w-0 text-sm font-medium text-[var(--color-text-primary)]">
+    <div className="flex min-h-[52px] items-center gap-3 px-4 py-3">
+      <StatusDot tone={tone} size="md" pulse={needed} />
+      <span className={`min-w-0 flex-1 ${ROW_TITLE_CLASS}`}>
         {label}
       </span>
-      <span className={`text-xs font-medium ${detailClass}`}>{detail}</span>
+      <Badge tone={tone} size="xs">{detail}</Badge>
     </div>
   )
 }
@@ -712,35 +741,31 @@ function NativeComputerUse({
   const screenRecording = status.permissions.screenRecording
   const permissionProbeFailed = Boolean(status.permissions.error)
   const header = (
-    <div className="flex items-start justify-between gap-6">
-      <div className="min-w-0">
-        <h2 className="text-lg font-semibold tracking-tight text-[var(--color-text-primary)]">
-          {t('settings.computerUse.controlTitle')}
-        </h2>
-        <p className="mt-1.5 text-sm leading-relaxed text-[var(--color-text-secondary)]">
-          {t('settings.computerUse.controlSubtitle')}
-        </p>
-      </div>
-      <Switch
-        checked={enabled}
-        onChange={onToggleEnabled}
-        label={t('settings.computerUse.enabledToggle')}
-        size="sm"
-      />
-    </div>
+    <SettingsPageHeader
+      title={t('settings.computerUse.controlTitle')}
+      description={t('settings.computerUse.controlSubtitle')}
+      action={(
+        <Switch
+          checked={enabled}
+          onChange={onToggleEnabled}
+          label={t('settings.computerUse.enabledToggle')}
+        />
+      )}
+    />
   )
   const configErrorNotice = configError ? (
-    <div className="px-4 py-3 rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-container)] text-sm text-[var(--color-on-error-container)]">
-      {configError}
+    <div className="mt-6">
+      <Notice tone="error">{configError}</Notice>
     </div>
   ) : null
 
   if (statusError) {
     return (
-      <div className="max-w-2xl space-y-5">
+      <div className={PAGE_CLASS}>
         {header}
         {configErrorNotice}
         <ErrorState
+          className="mt-6"
           size="lg"
           title={t('settings.computerUse.statusCheckFailed')}
           retryLabel={t('common.retry')}
@@ -753,10 +778,11 @@ function NativeComputerUse({
 
   if (!status.cuHelper.available) {
     return (
-      <div className="max-w-2xl space-y-5">
+      <div className={PAGE_CLASS}>
         {header}
         {configErrorNotice}
         <ErrorState
+          className="mt-6"
           size="lg"
           title={t('settings.computerUse.nativeUnavailableTitle')}
           detail={t('settings.computerUse.nativeUnavailableDetail')}
@@ -769,72 +795,60 @@ function NativeComputerUse({
   }
 
   return (
-    <div className="max-w-2xl space-y-10">
+    <div className={PAGE_CLASS}>
       {header}
       {configErrorNotice}
 
       {/* ─── 控制 (Control) ─── */}
-      <section className="space-y-3">
-        <h3 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-          {t('settings.computerUse.sectionControl')}
-        </h3>
-
-        {/* One elevated surface for the OS permissions required by the master
+      <SettingsSection title={t('settings.computerUse.sectionControl')}>
+        {/* One group card for the OS permissions required by the master
             toggle in the page header. */}
-        <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
-          {/* OS-permission group */}
-          <div className="px-4 py-4">
-            <div className="text-sm font-semibold text-[var(--color-text-primary)]">
-              {t('settings.computerUse.osPermTitle')}
-            </div>
-            <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-tertiary)]">
-              {t('settings.computerUse.osPermHint')}
-            </p>
-            <div className="mt-2 divide-y divide-[var(--color-border)]">
-              <PermissionStatusRow
-                t={t}
-                label={t('settings.computerUse.accessibility')}
-                state={accessibility}
-                failed={permissionProbeFailed}
-              />
-              <PermissionStatusRow
-                t={t}
-                label={t('settings.computerUse.screenRecording')}
-                state={screenRecording}
-                failed={permissionProbeFailed}
-              />
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
+        <SettingsGroup>
+          <SettingsRow
+            title={t('settings.computerUse.osPermTitle')}
+            description={t('settings.computerUse.osPermHint')}
+          />
+          <PermissionStatusRow
+            t={t}
+            label={t('settings.computerUse.accessibility')}
+            state={accessibility}
+            failed={permissionProbeFailed}
+          />
+          <PermissionStatusRow
+            t={t}
+            label={t('settings.computerUse.screenRecording')}
+            state={screenRecording}
+            failed={permissionProbeFailed}
+          />
+          <SettingsBlock>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="secondary"
+                size="base"
                 onClick={onOpenCard}
-                disabled={cardOpening}
-                className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-accent)] transition hover:bg-[var(--color-surface-hover)] active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100"
+                loading={cardOpening}
+                icon={<ShieldCheck size={14} strokeWidth={1.75} aria-hidden="true" />}
               >
-                <span className="material-symbols-outlined text-[16px]">
-                  {cardOpening ? 'hourglass_empty' : 'shield_person'}
-                </span>
                 {cardOpening ? t('settings.computerUse.openingCard') : t('settings.computerUse.openCard')}
-              </button>
-              <button
+              </Button>
+              <Button
+                variant="ghost"
+                size="base"
                 onClick={onRecheck}
-                className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] active:scale-[0.98]"
+                icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
               >
-                <span className="material-symbols-outlined text-[16px]">refresh</span>
                 {t('settings.computerUse.recheckBtn')}
-              </button>
+              </Button>
             </div>
             {cardError && (
               <p className="mt-2 flex items-center gap-1.5 text-xs text-[var(--color-error)]">
-                <span className="material-symbols-outlined text-[14px]" style={{ fontVariationSettings: "'FILL' 1" }}>
-                  error
-                </span>
+                <CircleAlert size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
                 {cardError}
               </p>
             )}
-          </div>
-        </div>
-      </section>
-
+          </SettingsBlock>
+        </SettingsGroup>
+      </SettingsSection>
     </div>
   )
 }

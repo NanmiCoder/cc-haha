@@ -7,7 +7,13 @@ export type ChatAppearance = {
   width: 'standard' | 'wide' | 'full'
 }
 
-export const DEFAULT_CHAT_APPEARANCE: ChatAppearance = { font: 'system', fontSize: 14, width: 'standard' }
+/**
+ * Porcelain reading defaults: 15px conversation text on an 800px measure.
+ * Only defaults changed — the stored shape is the same v1 record, so a value a
+ * user already saved (including the old 14px default written by the migration)
+ * is kept as theirs.
+ */
+export const DEFAULT_CHAT_APPEARANCE: ChatAppearance = { font: 'system', fontSize: 15, width: 'standard' }
 export type AppearanceStorage = Pick<Storage, 'getItem' | 'setItem'>
 
 const FONT_STACKS: Record<ChatAppearance['font'], string> = {
@@ -16,7 +22,7 @@ const FONT_STACKS: Record<ChatAppearance['font'], string> = {
   serif: 'Georgia, "Songti SC", "Source Han Serif SC", "Noto Serif CJK SC", SimSun, serif',
   mono: '"JetBrains Mono", ui-monospace, Menlo, Consolas, "PingFang SC", "Microsoft YaHei", monospace',
 }
-const WIDTHS = { standard: '900px', wide: '1200px', full: '100%' }
+const WIDTHS = { standard: '800px', wide: '1200px', full: '100%' }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -27,7 +33,7 @@ export function normalizeChatAppearance(value: unknown): ChatAppearance {
   return {
     font: record.font === 'sans' || record.font === 'serif' || record.font === 'mono' ? record.font : 'system',
     fontSize: typeof record.fontSize === 'number' && Number.isFinite(record.fontSize)
-      ? Math.round(Math.min(24, Math.max(12, record.fontSize))) : 14,
+      ? Math.round(Math.min(24, Math.max(12, record.fontSize))) : DEFAULT_CHAT_APPEARANCE.fontSize,
     width: record.width === 'wide' || record.width === 'full' ? record.width : 'standard',
   }
 }

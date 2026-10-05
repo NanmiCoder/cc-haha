@@ -34,7 +34,7 @@ export function DocumentToolbar({
 
   return (
     <div className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface)]">
-      <div className="flex h-11 items-center gap-2 px-3">
+      <div className="flex h-10 items-center gap-2 pl-3 pr-2">
         <div className="flex min-w-0 flex-1 items-center gap-2">{leading}</div>
         {zoom ? (
           <ZoomControls
@@ -51,9 +51,9 @@ export function DocumentToolbar({
         ) : null}
         {canOpenInSystem ? (
           <IconButton
-            icon={<ExternalLink size={16} strokeWidth={1.9} />}
+            icon={<ExternalLink size={14} strokeWidth={1.75} />}
             label={t('workspace.openInSystemApp')}
-            size="md"
+            size="sm"
             tone="secondary"
             onClick={() => {
               void openLocalFileWithSystem(absolutePath).catch(() => reportOpenFailure(absolutePath))
@@ -62,7 +62,7 @@ export function DocumentToolbar({
         ) : null}
       </div>
       {note ? (
-        <p title={note} className="truncate px-3 pb-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+        <p title={note} className="truncate px-3 pb-1.5 text-[12px] text-[var(--color-text-tertiary)]">
           {note}
         </p>
       ) : null}

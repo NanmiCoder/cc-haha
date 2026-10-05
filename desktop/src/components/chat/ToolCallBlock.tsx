@@ -1,11 +1,35 @@
 import { SessionToolLinks, SESSION_TOOL_NAMES } from '@/components/chat/SessionToolLinks'
-import { memo, useMemo, useState } from 'react'
+import { memo, useMemo, useState, type ReactNode } from 'react'
 import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
-import { CircleStop, CircleX, LoaderCircle } from 'lucide-react'
+import {
+  ChevronRight,
+  Circle,
+  CircleCheck,
+  CircleDot,
+  CirclePause,
+  CircleStop,
+  CircleX,
+  ClipboardList,
+  Copy,
+  LoaderCircle,
+} from 'lucide-react'
 import { activitySegmentIcon } from './activityGroupModel'
 import { CodeViewer } from './CodeViewer'
 import { DiffViewer } from './DiffViewer'
 import { TerminalChrome } from './TerminalChrome'
+import {
+  countDiffLines,
+  countReadLines,
+  formatCountLabel,
+  hasToolVerb,
+  parseSearchResult,
+  parseShellExitCode,
+  parseTodos,
+  toolVerb,
+  type GrepResult,
+  type TodoItem,
+} from './toolCallPresentation'
+import { Badge } from '@/components/ui/Badge'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { toolResultImagesFor } from '@/lib/toolResultContent'
 import { useTranslation } from '../../i18n'
@@ -23,13 +47,22 @@ import {
   isExitPlanModeTool,
 } from './PlanModePreview'
 
+type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string
+
 /**
- * `card` is the standalone bordered block. `row` strips the border, the ink icon
- * square and the bold name so the call reads as one line inside an expanded
- * activity group. Expanded row details stay inline on a nested guide instead of
- * rebuilding the card stack that the activity-group treatment removed (#1177).
+ * `card` is the standalone bordered block. `row` is one node of an activity
+ * run's timeline: a 22px ringed icon on the run's rail, the verb, its target and
+ * a right-aligned result. Expanded row details hang under the text column rather
+ * than rebuilding the card stack the activity-group treatment removed (#1177).
  */
 export type ToolCallChrome = 'card' | 'row'
+
+/**
+ * Where a call stands, as the timeline colours it: running is info blue,
+ * waiting on the user is amber, failed is red. Done and idle stay neutral —
+ * a finished step should not compete with the one still in flight.
+ */
+export type ToolRowStatus = 'idle' | 'running' | 'waiting' | 'done' | 'error' | 'stopped'
 
 type Props = {
   toolName: string
@@ -49,42 +82,37 @@ type Props = {
   toolUseId?: string
   /** Briefly marks this call as the one a "locate in chat" jump landed on. */
   navigationHighlighted?: boolean
-}
-
-const TOOL_ICONS: Record<string, string> = {
-  ListSessions: 'forum', ReadSession: 'forum', CreateSession: 'add_comment', SendSessionMessage: 'send', WaitSessions: 'hourglass_top',
-  Bash: 'terminal',
-  PowerShell: 'terminal',
-  Read: 'description',
-  Write: 'edit_document',
-  Edit: 'edit_note',
-  Glob: 'search',
-  Grep: 'find_in_page',
-  Agent: 'smart_toy',
-  WebSearch: 'travel_explore',
-  WebFetch: 'cloud_download',
-  NotebookEdit: 'note',
-  Skill: 'auto_awesome',
+  /** A permission prompt for this call is waiting on the user. */
+  awaitingApproval?: boolean
+  /**
+   * The call is executing right now. Owners that know whether the turn is live
+   * pass it; without them only a call whose input is still streaming counts,
+   * so a transcript replayed after a crash never spins forever.
+   */
+  running?: boolean
 }
 
 const WRITER_PREVIEW_MAX_LINES = 120
 const WRITER_PREVIEW_MAX_CHARS = 30000
+const SEARCH_RESULT_MAX_ROWS = 200
 
 /**
- * Shell-style tools whose stdout is echoed back into the terminal card (#1149).
+ * Shell-style tools whose stdout is echoed back into the terminal block (#1149).
  * `PowerShell` mirrors `Bash` on Windows — both carry a `command` input and
  * produce plain-text output, so they share one rendering path.
  */
 const SHELL_TOOL_NAMES = new Set(['Bash', 'PowerShell'])
 
 /**
- * Shell input keys already echoed by the terminal card itself: `command` shows
- * as the `$` line and `description` as the window title. When those are the only
- * keys present the Tool Input JSON block is pure duplication (#1149).
+ * Shell input keys already echoed by the terminal block itself: `command` shows
+ * as the `$` line and `description` names the row. When those are the only keys
+ * present the Tool Input JSON block is pure duplication (#1149).
  */
 const SHELL_ECHOED_INPUT_KEYS = new Set(['command', 'description'])
 
 const SHELL_OUTPUT_COLLAPSED_LINES = 12
+
+const SEARCH_TOOL_NAMES = new Set(['Grep', 'Glob'])
 
 export function isShellTool(toolName: string): boolean {
   return SHELL_TOOL_NAMES.has(toolName)
@@ -141,7 +169,7 @@ type ContentStats = {
   windowed?: boolean
 }
 
-export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, compact = false, chrome = 'card', isPending = false, status, partialInput, defaultExpanded = false, durationMs, disclosureKey, toolUseId, navigationHighlighted = false }: Props) {
+export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, result, compact = false, chrome = 'card', isPending = false, status, partialInput, defaultExpanded = false, durationMs, disclosureKey, toolUseId, navigationHighlighted = false, awaitingApproval = false, running }: Props) {
   const isRow = chrome === 'row'
   const isExitPlanTool = isExitPlanModeTool(toolName)
   const isEnterPlanTool = isEnterPlanModeTool(toolName)
@@ -154,12 +182,7 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   }
   const t = useTranslation()
   const obj = input && typeof input === 'object' ? (input as Record<string, unknown>) : {}
-  const icon = TOOL_ICONS[toolName] || 'build'
-  const filePath = typeof obj.file_path === 'string' ? obj.file_path : ''
-  const summary = getToolSummary(toolName, obj, t)
-  // Prose reads as prose. Monospace is for the things that are literally code —
-  // a command, a glob, a path — not for a sentence describing one.
-  const summaryIsProse = isProseToolSummary(toolName, obj)
+  const target = getToolTarget(toolName, obj)
   const outputSummary = getToolResultSummary(
     toolName,
     result?.content,
@@ -180,36 +203,63 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
   const pendingTitle = pendingSummary
     ? (liveStatsSummary ? `${pendingSummary} · ${liveStatsSummary}` : pendingSummary)
     : undefined
+  const rowStatus: ToolRowStatus = result?.isError
+    ? 'error'
+    : result
+      ? 'done'
+      : stoppedSummary
+        ? 'stopped'
+        : awaitingApproval
+          ? 'waiting'
+          // Input still streaming is live by definition; past that, only an
+          // owner that knows the turn is live may call a resultless step running.
+          : (running || Boolean(pendingSummary))
+            ? 'running'
+            : 'idle'
   // The text extractors below skip image blocks; this is what gives them a thumbnail.
   const toolImages = useMemo(
     () => toolResultImagesFor({ toolName, input, content: result?.content }),
     [input, result?.content, toolName],
   )
+  const durationSummary = typeof durationMs === 'number' && durationMs >= 0 && result
+    ? formatDuration(durationMs)
+    : ''
 
   const preview = useMemo(
-    () => renderPreview(toolName, obj, result, t, isRow),
-    [isRow, obj, result, toolName, t],
+    () => renderPreview(toolName, obj, result, t, durationSummary),
+    [durationSummary, obj, result, toolName, t],
   )
   const details = useMemo(
-    () => renderDetails(toolName, obj, t, isPending ? partialInput : undefined, isRow),
-    [isPending, isRow, obj, partialInput, toolName, t],
+    () => renderDetails(toolName, obj, t, isPending ? partialInput : undefined),
+    [isPending, obj, partialInput, toolName, t],
   )
   const hasResultDetails = Boolean(result && extractTextContent(result.content))
   const hasEditPreview = toolName === 'Edit' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string'
   const hasWritePreview = toolName === 'Write' && typeof obj.content === 'string'
-  // A shell command is itself expandable content: the terminal card echoes the
+  // A shell command is itself expandable content: the terminal block echoes the
   // command plus its output — including the "no output" case, where the result
-  // text is empty and hasResultDetails alone would keep the card sealed shut.
+  // text is empty and hasResultDetails alone would keep the row sealed shut.
   const hasShellCommand = isShellTool(toolName) && typeof obj.command === 'string'
+  const hasTodoList = toolName === 'TodoWrite' && (parseTodos(obj)?.length ?? 0) > 0
   const hasAgentInputDetails = toolName === 'Agent' && (
     typeof obj.description === 'string' ||
     typeof obj.prompt === 'string' ||
     typeof obj.subagent_type === 'string'
   )
-  const expandable = hasEditPreview || hasWritePreview || hasShellCommand || hasResultDetails || hasAgentInputDetails || Boolean(isPending && partialInput)
-  const durationSummary = typeof durationMs === 'number' && durationMs >= 0 && result
-    ? formatDuration(durationMs)
-    : ''
+  const expandable = hasEditPreview || hasWritePreview || hasShellCommand || hasTodoList || hasResultDetails || hasAgentInputDetails || Boolean(isPending && partialInput)
+  // A shell call the model described names itself by that description: it
+  // already leads with the action ("运行 validators 单测"), so a verb in front of
+  // it only stutters, and the pipeline it stands for truncates into noise. The
+  // command moves to the tooltip and the terminal block's `$` line.
+  const shellDescription = isShellTool(toolName) && typeof obj.description === 'string' ? obj.description.trim() : ''
+  const verb = shellDescription || toolVerb(toolName, t)
+  const labelKind: 'verb' | 'toolName' | 'description' = shellDescription
+    ? 'description'
+    : hasToolVerb(toolName) ? 'verb' : 'toolName'
+  // The raw tool name stays one hover away: the row speaks in verbs, but
+  // someone matching a row to a log or a trajectory entry needs the real name.
+  // The overlay covers the running summary too, so its full text rides along.
+  const headTitle = [toolName, target.title, pendingTitle].filter(Boolean).join(' · ')
 
   if (isEnterPlanTool) {
     return (
@@ -246,188 +296,168 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
     )
   }
 
+  const meta = (
+    <ToolRowMeta
+      toolName={toolName}
+      input={obj}
+      result={result ?? null}
+      rowStatus={rowStatus}
+      outputSummary={outputSummary}
+      pendingSummary={pendingSummary}
+      stoppedSummary={stoppedSummary}
+      liveStatsSummary={liveStatsSummary}
+    />
+  )
+
+  // The head is a row of siblings, not one big button, so a second action
+  // ("view in trajectory") can sit in it without nesting interactive elements
+  // or being laid over the duration and chevron. The disclosure button stretches
+  // its hit area across the whole head with an `::after` overlay: clicking the
+  // duration or chevron still toggles, and the action — positioned, later in
+  // tree order — paints and hit-tests above it.
+  const head = (
+    <>
+      <button
+        type="button"
+        data-chat-disclosure="true"
+        aria-expanded={expandable ? expanded : undefined}
+        onClick={() => {
+          if (expandable) {
+            setExpanded((value) => !value)
+          }
+        }}
+        title={headTitle}
+        className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left after:absolute after:inset-0 after:rounded-[var(--radius-sm)] after:content-[''] focus:outline-none focus-visible:after:shadow-[var(--shadow-focus-ring)]"
+      >
+        {isRow ? null : <CardToolIcon toolName={toolName} status={rowStatus} />}
+        <span
+          className={
+            labelKind === 'toolName'
+              ? `${target.text ? 'max-w-[40%] shrink-0' : 'min-w-0'} truncate font-mono text-[12px] font-medium text-[var(--color-text-primary)]`
+              : labelKind === 'description'
+                ? 'min-w-0 truncate text-[13px] font-medium text-[var(--color-text-primary)]'
+                : 'shrink-0 text-[13px] font-medium text-[var(--color-text-primary)]'
+          }
+        >
+          {verb}
+        </span>
+        {target.text ? (
+          <span
+            className={`min-w-0 truncate ${
+              target.mono
+                ? 'font-mono text-[12px] text-[var(--color-text-secondary)]'
+                : 'text-[13px] text-[var(--color-text-secondary)]'
+            }`}
+          >
+            {target.text}
+          </span>
+        ) : null}
+        <span className="min-w-3 flex-1" />
+        {meta}
+      </button>
+      {toolUseId ? (
+        // Its own slot left of the duration: the space is always held (no
+        // jump on hover) and nothing is drawn over the duration or chevron.
+        // `relative` lifts it above the disclosure's stretched overlay.
+        <ViewInTrajectoryButton
+          toolUseId={toolUseId}
+          className="relative -my-1 shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/toolhead:opacity-100"
+        />
+      ) : null}
+      <span className="w-[38px] shrink-0 text-right font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+        {durationSummary}
+      </span>
+      {expandable ? (
+        <ChevronRight
+          size={14}
+          strokeWidth={1.75}
+          aria-hidden="true"
+          className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+        />
+      ) : (
+        <span aria-hidden="true" className="w-3.5 shrink-0" />
+      )}
+    </>
+  )
+
+  const imageStrip = toolImages.images.length > 0 || toolImages.dropped > 0 ? (
+    <ToolResultImages
+      images={toolImages.images}
+      omitted={toolImages.dropped}
+      originalPath={toolImages.originalPath}
+      toolName={toolName}
+      // Row: under the text column, where the expanded details also start.
+      className={isRow ? 'pb-1.5 pl-[30px] pt-0.5' : 'px-3 pb-3'}
+    />
+  ) : null
+
+  if (isRow) {
+    return (
+      <div
+        data-tool-call-chrome="row"
+        data-tool-use-id={toolUseId}
+        data-tool-status={rowStatus}
+        className={`rounded-[var(--radius-sm)]${navigationHighlighted ? ' chat-tool-navigation-target' : ''}`}
+      >
+        <div className="flex min-h-[30px] items-center gap-1">
+          <ToolNode toolName={toolName} status={rowStatus} />
+          <div
+            className={`group/toolhead relative flex min-w-0 flex-1 items-center gap-2 self-stretch rounded-[var(--radius-sm)] pl-1 pr-1 transition-colors ${
+              expandable ? 'hover:bg-[var(--color-surface-hover)]' : ''
+            }`}
+          >
+            {head}
+          </div>
+        </div>
+
+        {SESSION_TOOL_NAMES.has(toolName) ? (
+          <div className="pl-[30px]"><SessionToolLinks input={input} result={result?.content} /></div>
+        ) : null}
+
+        {/* Outside the disclosure on purpose: a picture the tool returned is the
+            answer, not a detail to open a panel for. */}
+        {imageStrip}
+
+        {expandable && expanded && (
+          <div
+            data-tool-call-details="inline"
+            data-tool-output-error={result?.isError ? 'true' : undefined}
+            className="space-y-2 pb-2.5 pl-[30px] pt-1"
+          >
+            {preview}
+            {details}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div
-      data-tool-call-chrome={chrome}
+      data-tool-call-chrome="card"
       data-tool-use-id={toolUseId}
-      className={`${
-        isRow
-          ? 'rounded-[var(--radius-md)]'
-          : `overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
-            compact ? 'mb-0' : 'mb-2'
-          }`
+      data-tool-status={rowStatus}
+      className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
+        compact ? 'mb-0' : 'mb-2'
       }${navigationHighlighted ? ' chat-tool-navigation-target' : ''}`}
     >
-      {/*
-        The header is a row of siblings, not one big button, so a second action
-        ("view in trajectory") can sit in it without nesting interactive
-        elements or being laid over the duration and chevron. The disclosure
-        button stretches its hit area across the whole header with an `::after`
-        overlay: clicking the duration or chevron still toggles, and the action
-        — positioned, later in tree order — paints and hit-tests above it.
-      */}
       <div
-        className={`group/toolhead relative flex items-center transition-colors hover:bg-[var(--color-surface-hover)] ${
-          isRow
-            // The negative margin lets the hover highlight breathe past the
-            // timeline rule without the row itself being inset from it.
-            ? '-mx-2 w-[calc(100%+1rem)] gap-2 rounded-[var(--radius-md)] px-2 py-1'
-            : compact ? 'w-full gap-[11px] px-3.5 py-2.5' : 'w-full gap-3 px-4 py-3'
-        }`}
+        className={`group/toolhead relative flex w-full items-center gap-2 px-3 transition-colors ${
+          compact ? 'min-h-9' : 'min-h-10'
+        } ${expandable ? 'hover:bg-[var(--color-surface-hover)]' : ''}`}
       >
-        <button
-          type="button"
-          data-chat-disclosure="true"
-          aria-expanded={expandable ? expanded : undefined}
-          onClick={() => {
-            if (expandable) {
-              setExpanded((value) => !value)
-            }
-          }}
-          // The overlay covers the status text too, so its own tooltip cannot
-          // show; the running summary is the one that truncates, so carry it here.
-          title={pendingTitle}
-          className={`flex min-w-0 flex-1 items-center self-stretch text-left after:absolute after:inset-0 after:content-[''] focus:outline-none focus-visible:after:shadow-[var(--shadow-focus-ring)] ${
-            isRow
-              ? 'gap-2 after:rounded-[var(--radius-md)]'
-              : compact ? 'gap-[11px]' : 'gap-3'
-          }`}
-        >
-          {isRow ? (
-            /* Rows had no icon at all, so every step began with a bare word and
-               the eye had nothing to run down. A leading glyph gives the run a
-               left edge, separates one tool family from the next at a glance, and
-               marks the whole line as machinery rather than speech. */
-            <RowToolIcon toolName={toolName} active={Boolean(pendingSummary)} />
-          ) : compact ? (
-            <span className="material-symbols-outlined shrink-0 text-[16px] text-[var(--color-text-secondary)]">{icon}</span>
-          ) : (
-            /* The ink square is the design's tool badge: solid `--t1` with the page
-               ground as its glyph color, which is exactly the primary-button pair. */
-            <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]">
-              <span className="material-symbols-outlined text-[16px]">{icon}</span>
-            </span>
-          )}
-          <span className={
-            isRow
-              // The running step is the one the reader is waiting on, so it is the
-              // one that gets colour. Finished steps stay grey and the eye lands on
-              // where the run actually is without a separate progress strip.
-              //
-              // Grey even when finished, and a step below the prose it sits among:
-              // the layers have to be separable at a glance, or a run of machinery
-              // reads as loudly as the sentence that concludes it.
-              ? `shrink-0 text-[12.5px] font-medium ${
-                  pendingSummary ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'
-                }`
-              : `shrink-0 font-bold text-[var(--color-text-primary)] ${compact ? 'text-[13px]' : 'text-[14px]'}`
-          }>
-            {toolName}
-          </span>
-          {filePath ? (
-            <span className={`min-w-0 flex-1 truncate font-mono ${isRow ? 'text-[12px] text-[var(--color-text-tertiary)]' : compact ? 'text-[12.5px] text-[var(--color-text-secondary)]' : 'text-[13px] text-[var(--color-text-secondary)]'}`}>
-              {filePath.split('/').pop()}
-            </span>
-          ) : summary ? (
-            <span className={`min-w-0 flex-1 truncate ${summaryIsProse ? '' : 'font-mono'} ${isRow ? 'text-[12px] text-[var(--color-text-tertiary)]' : compact ? 'text-[12.5px] text-[var(--color-text-secondary)]' : 'text-[13px] text-[var(--color-text-secondary)]'}`}>
-              {summary}
-            </span>
-          ) : (
-            <span className="flex-1" />
-          )}
-          {pendingSummary ? (
-            <span
-              className="inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12.5px] text-[var(--color-text-tertiary)]"
-            >
-              <LoaderCircle size={13} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
-              <span className="truncate">{pendingSummary}</span>
-              {liveStatsSummary ? (
-                <>
-                  <span className="shrink-0">·</span>
-                  <span className="shrink-0 font-mono tabular-nums">
-                    {liveStatsSummary}
-                  </span>
-                </>
-              ) : null}
-            </span>
-          ) : stoppedSummary ? (
-            <span className="inline-flex shrink-0 items-center gap-1 text-[12.5px] text-[var(--color-text-tertiary)]">
-              <CircleStop size={13} strokeWidth={2.25} aria-hidden="true" />
-              {stoppedSummary}
-            </span>
-          ) : result && outputSummary ? (
-            <span
-              className={`inline-flex min-w-0 shrink items-center gap-1.5 text-[12.5px] ${
-                result.isError
-                  ? 'font-medium text-[var(--color-error)]'
-                  : 'text-[var(--color-text-tertiary)]'
-              }`}
-            >
-              {result.isError && <CircleX size={13} strokeWidth={2} className="shrink-0" aria-hidden="true" />}
-              <span className="min-w-0 truncate">{outputSummary}</span>
-            </span>
-          ) : liveStatsSummary ? (
-            <span className="shrink-0 font-mono text-[12.5px] tabular-nums text-[var(--color-text-tertiary)]">
-              {liveStatsSummary}
-            </span>
-          ) : null}
-        </button>
-        {toolUseId ? (
-          // Its own slot left of the duration: the space is always held (no
-          // jump on hover) and nothing is drawn over the duration or chevron.
-          // `relative` lifts it above the disclosure's stretched overlay; the
-          // negative margin keeps a 24px target from growing a 20px row.
-          <ViewInTrajectoryButton
-            toolUseId={toolUseId}
-            className="relative -my-1 shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/toolhead:opacity-100"
-          />
-        ) : null}
-        {durationSummary && (
-          <span className={`shrink-0 font-mono text-[12px] tabular-nums ${
-            result?.isError ? 'font-medium text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]'
-          }`}>
-            {durationSummary}
-          </span>
-        )}
-        {expandable && (
-          <span className={`shrink-0 leading-none text-[var(--color-text-tertiary)] ${isRow ? 'text-[8px]' : 'text-[11px]'}`} aria-hidden="true">
-            {isRow ? (expanded ? '▾' : '▸') : (expanded ? '▴' : '▾')}
-          </span>
-        )}
+        {head}
       </div>
 
       {SESSION_TOOL_NAMES.has(toolName) ? <SessionToolLinks input={input} result={result?.content} /> : null}
 
-      {/* Outside the disclosure on purpose: a picture the tool returned is the
-          answer, not a detail to open a panel for. */}
-      {toolImages.images.length > 0 || toolImages.dropped > 0 ? (
-        <ToolResultImages
-          images={toolImages.images}
-          omitted={toolImages.dropped}
-          originalPath={toolImages.originalPath}
-          toolName={toolName}
-          // Row: line up with the tool name (icon + gap), where the expanded rail's content also starts.
-          className={isRow ? 'pb-1.5 pl-[21px] pt-0.5' : compact ? 'px-3.5 pb-2.5' : 'px-4 pb-3'}
-        />
-      ) : null}
+      {imageStrip}
 
       {expandable && expanded && (
         <div
-          data-tool-call-details={isRow ? 'inline' : 'panel'}
+          data-tool-call-details="panel"
           data-tool-output-error={result?.isError ? 'true' : undefined}
-          className={
-            isRow
-              ? `mb-2 ml-2 mt-1 space-y-2.5 border-l py-1 pl-3 ${
-                result?.isError
-                  ? 'border-[var(--color-error-soft-hover)]'
-                  : 'border-[var(--color-border)]'
-              }`
-              : `space-y-2.5 border-t px-4 py-3.5 ${
-                result?.isError
-                  ? 'border-[var(--color-error-soft-hover)] bg-[var(--color-error-soft)]'
-                  : 'border-[var(--color-border)]'
-              }`
-          }
+          className="space-y-2.5 border-t border-[var(--color-border)] px-3 py-3"
         >
           {preview}
           {details}
@@ -436,6 +466,197 @@ export const ToolCallBlock = memo(function ToolCallBlock({ toolName, input, resu
     </div>
   )
 })
+
+/** The row's node on the run's rail. */
+function ToolNode({ toolName, status }: { toolName: string; status: ToolRowStatus }) {
+  const Icon = status === 'running' ? LoaderCircle : activitySegmentIcon(toolName)
+  return (
+    <span
+      aria-hidden="true"
+      data-tool-node={status}
+      className={`relative flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border ${NODE_TONE[status]}`}
+    >
+      <Icon size={12} strokeWidth={2} className={status === 'running' ? 'animate-spin' : undefined} />
+    </span>
+  )
+}
+
+const NODE_TONE: Record<ToolRowStatus, string> = {
+  idle: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  done: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  stopped: 'border-[var(--color-outline)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)]',
+  running: 'border-[var(--color-info)] bg-[var(--color-info-container)] text-[var(--color-on-info-container)]',
+  waiting: 'border-[var(--color-warning)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]',
+  error: 'border-[var(--color-error-soft-hover)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]',
+}
+
+/** A standalone card leads with a plain glyph; the node belongs to the rail. */
+function CardToolIcon({ toolName, status }: { toolName: string; status: ToolRowStatus }) {
+  const Icon = status === 'running' ? LoaderCircle : activitySegmentIcon(toolName)
+  const tone = status === 'error'
+    ? 'text-[var(--color-error)]'
+    : status === 'running'
+      ? 'text-[var(--color-info)]'
+      : status === 'waiting'
+        ? 'text-[var(--color-warning)]'
+        : 'text-[var(--color-text-tertiary)]'
+  return (
+    <Icon
+      size={14}
+      strokeWidth={1.75}
+      aria-hidden="true"
+      className={`shrink-0 ${tone} ${status === 'running' ? 'animate-spin' : ''}`}
+    />
+  )
+}
+
+/**
+ * The right-hand result of a row: what the call produced, in the fewest words
+ * that still say it — `+18 −5`, `26 lines`, `3 files · 6 matches`. Failures
+ * lead with their first line instead, in red, because that line is usually the
+ * whole story.
+ */
+function ToolRowMeta({
+  toolName,
+  input,
+  result,
+  rowStatus,
+  outputSummary,
+  pendingSummary,
+  stoppedSummary,
+  liveStatsSummary,
+}: {
+  toolName: string
+  input: Record<string, unknown>
+  result: { content: unknown; isError: boolean } | null
+  rowStatus: ToolRowStatus
+  outputSummary: string
+  pendingSummary: string
+  stoppedSummary: string
+  liveStatsSummary: string
+}) {
+  const t = useTranslation()
+
+  if (pendingSummary) {
+    return (
+      <span className="inline-flex min-w-0 max-w-[58%] shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
+        <span className="truncate">{pendingSummary}</span>
+        {liveStatsSummary ? (
+          <>
+            <span className="shrink-0">·</span>
+            <span className="shrink-0 font-mono tabular-nums">{liveStatsSummary}</span>
+          </>
+        ) : null}
+      </span>
+    )
+  }
+
+  if (stoppedSummary) {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-text-tertiary)]">
+        <CircleStop size={12} strokeWidth={2} aria-hidden="true" />
+        {stoppedSummary}
+      </span>
+    )
+  }
+
+  if (rowStatus === 'waiting') {
+    return (
+      <span className="inline-flex shrink-0 items-center gap-1 text-[12px] font-medium text-[var(--color-on-warning-container)]">
+        <CirclePause size={12} strokeWidth={2} aria-hidden="true" />
+        {t('permission.awaitingApproval')}
+      </span>
+    )
+  }
+
+  if (!result) {
+    return liveStatsSummary ? (
+      <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+        {liveStatsSummary}
+      </span>
+    ) : null
+  }
+
+  if (result.isError) {
+    return outputSummary ? (
+      <span className="inline-flex min-w-0 shrink items-center gap-1 text-[12px] text-[var(--color-error)]">
+        <CircleX size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        <span className="min-w-0 truncate">{outputSummary}</span>
+      </span>
+    ) : null
+  }
+
+  const resultMeta = getResultMeta(toolName, input, result.content, t)
+  if (resultMeta) return resultMeta
+  return outputSummary ? (
+    <span className="min-w-0 shrink truncate text-[12px] text-[var(--color-text-tertiary)]">
+      {outputSummary}
+    </span>
+  ) : null
+}
+
+/** Tool-specific result digests; null falls back to the generic one-liner. */
+function getResultMeta(
+  toolName: string,
+  input: Record<string, unknown>,
+  content: unknown,
+  t: Translate,
+): ReactNode | null {
+  if ((toolName === 'Edit' && typeof input.old_string === 'string' && typeof input.new_string === 'string') ||
+    (toolName === 'Write' && typeof input.content === 'string')) {
+    const counts = toolName === 'Edit'
+      ? countDiffLines(input.old_string as string, input.new_string as string)
+      : countDiffLines('', input.content as string)
+    return <DiffCounts additions={counts.additions} deletions={toolName === 'Edit' ? counts.deletions : null} />
+  }
+
+  const text = extractTextContent(content) ?? ''
+
+  if (toolName === 'Read' && text) {
+    // A one-line file says more as itself than as "1 line", so it keeps the
+    // generic one-liner that shows the result without expanding.
+    const lines = countReadLines(text)
+    return lines > 1 ? <MetaText>{formatLineCount(lines, t)}</MetaText> : null
+  }
+
+  if (SEARCH_TOOL_NAMES.has(toolName) && text) {
+    const parsed = parseSearchResult(text)
+    if (!parsed) return null
+    return <MetaText>{formatSearchSummary(parsed, t)}</MetaText>
+  }
+
+  if (toolName === 'TodoWrite') {
+    const todos = parseTodos(input)
+    if (!todos || todos.length === 0) return null
+    return <MetaText>{formatCountLabel(todos.length, 'tool.itemCountSingular', 'tool.itemCountPlural', t)}</MetaText>
+  }
+
+  return null
+}
+
+function MetaText({ children }: { children: ReactNode }) {
+  return (
+    <span className="min-w-0 shrink truncate text-[12px] tabular-nums text-[var(--color-text-tertiary)]">
+      {children}
+    </span>
+  )
+}
+
+export function DiffCounts({ additions, deletions }: { additions: number; deletions: number | null }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 font-mono text-[12px] tabular-nums">
+      <span className="text-[var(--color-diff-added-text)]">+{additions}</span>
+      {deletions === null ? null : <span className="text-[var(--color-diff-removed-text)]">−{deletions}</span>}
+    </span>
+  )
+}
+
+function formatSearchSummary(parsed: GrepResult, t: Translate): string {
+  const files = formatCountLabel(parsed.fileCount, 'tool.fileCountSingular', 'tool.fileCountPlural', t)
+  if (parsed.matchCount === undefined) return files
+  const matches = formatCountLabel(parsed.matchCount, 'tool.matchCountSingular', 'tool.matchCountPlural', t)
+  return `${files} · ${matches}`
+}
 
 function EnterPlanModeToolCallBlock({
   result,
@@ -450,22 +671,22 @@ function EnterPlanModeToolCallBlock({
   const errorText = result?.isError ? extractTextContent(result.content) : null
 
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-primary-fixed-dim)] bg-[var(--color-surface-container-lowest)] ${
+    <div className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
       compact ? 'mb-0' : 'mb-2'
     }`}>
-      <div className="flex w-full items-center gap-2 px-3 py-2 text-left">
-        <span className="material-symbols-outlined text-[14px] text-[var(--color-brand)]">architecture</span>
-        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+      <div className="flex min-h-9 w-full items-center gap-2 px-3 text-left">
+        <ClipboardList size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
           {t('settings.permissions.plan')}
         </span>
         {isPending ? (
-          <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-outline)]">
-            <LoaderCircle size={12} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
+          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
+            <LoaderCircle size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
             {t('tool.preparingTool')}
           </span>
         ) : null}
         {result?.isError ? (
-          <span className="material-symbols-outlined shrink-0 text-[14px] text-[var(--color-error)]">error</span>
+          <CircleX size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-error)]" />
         ) : null}
       </div>
 
@@ -509,16 +730,17 @@ function PlanToolCallBlock({
   const hasRawResult = Boolean(result && extractTextContent(result.content))
 
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-primary-fixed-dim)] bg-[var(--color-surface-container-lowest)] ${
+    <div className={`overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] ${
       compact ? 'mb-0' : 'mb-2'
     }`}>
       <button
         type="button"
         onClick={onToggle}
-        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+        aria-expanded={expanded}
+        className="flex min-h-10 w-full items-center gap-2 px-3 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
       >
-        <span className="material-symbols-outlined text-[14px] text-[var(--color-brand)]">architecture</span>
-        <span className="min-w-0 flex-1 truncate text-[12px] font-semibold text-[var(--color-text-primary)]">
+        <ClipboardList size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
           {title}
         </span>
         {preview.filePath ? (
@@ -527,14 +749,17 @@ function PlanToolCallBlock({
           </span>
         ) : null}
         {isPending ? (
-          <span className="inline-flex shrink-0 items-center gap-1 text-[10px] text-[var(--color-outline)]">
-            <LoaderCircle size={12} strokeWidth={2.4} className="animate-spin" aria-hidden="true" />
+          <span className="inline-flex shrink-0 items-center gap-1 text-[12px] text-[var(--color-info)]">
+            <LoaderCircle size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
             {t('tool.preparingTool')}
           </span>
         ) : null}
-        <span className="material-symbols-outlined text-[14px] text-[var(--color-outline)]">
-          {expanded ? 'expand_less' : 'expand_more'}
-        </span>
+        <ChevronRight
+          size={14}
+          strokeWidth={1.75}
+          aria-hidden="true"
+          className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+        />
       </button>
 
       {expanded ? (
@@ -558,22 +783,53 @@ function PlanToolCallBlock({
   )
 }
 
+/** The small "copy" action every detail block carries in its head. */
+function DetailCopyButton({ text, t }: { text: string; t?: Translate }) {
+  const label = t?.('common.copy') ?? 'Copy'
+  return (
+    <CopyButton
+      text={text}
+      label={label}
+      copiedLabel={t?.('common.copied') ?? 'Copied'}
+      displayLabel={<><Copy size={12} strokeWidth={2} aria-hidden="true" />{label}</>}
+      displayCopiedLabel={<><CircleCheck size={12} strokeWidth={2} aria-hidden="true" />{t?.('common.copied') ?? 'Copied'}</>}
+      className="inline-flex h-6 shrink-0 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+    />
+  )
+}
+
+/** Shared 30px head for the inline output / input / writer blocks. */
+function DetailHead({ label, children, tone = 'neutral' }: { label: ReactNode; children?: ReactNode; tone?: 'neutral' | 'error' }) {
+  return (
+    <div
+      className={`flex h-[30px] items-center justify-between gap-2 border-b pl-3 pr-1.5 text-[12px] ${
+        tone === 'error'
+          ? 'border-[var(--color-error-soft-hover)] text-[var(--color-on-error-container)]'
+          : 'border-[var(--color-border)] text-[var(--color-text-tertiary)]'
+      }`}
+    >
+      <span className="min-w-0 truncate">{label}</span>
+      {children}
+    </div>
+  )
+}
+
 function renderPreview(
   toolName: string,
   obj: Record<string, unknown>,
   result?: { content: unknown; isError: boolean } | null,
-  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
-  embedded = false,
+  t?: Translate,
+  durationSummary = '',
 ) {
   const filePath = typeof obj.file_path === 'string' ? obj.file_path : 'file'
-  // Must match the terminal-card condition below exactly. When they diverged, a
+  // Must match the terminal-block condition below exactly. When they diverged, a
   // shell call whose input lacked `command` suppressed the generic result box
   // without rendering a replacement, blanking the panel (e.g. an
   // InputValidationError whose error body then vanished).
   const shellCommand = isShellTool(toolName) && typeof obj.command === 'string' ? obj.command : null
   const echoesInTerminal = shellCommand !== null
   const resultText = getVisibleResultText(toolName, result, echoesInTerminal)
-  const resultOutput = result && resultText ? renderResultOutput(result, resultText, t, embedded) : null
+  const resultOutput = result && resultText ? renderResultOutput(result, resultText, t) : null
 
   if (toolName === 'Edit' && typeof obj.old_string === 'string' && typeof obj.new_string === 'string') {
     return (
@@ -594,32 +850,46 @@ function renderPreview(
   }
 
   if (shellCommand !== null) {
-    // #1149: echo the command's output back into the terminal card. Both the
+    // #1149: echo the command's output back into the terminal block. Both the
     // success and error bodies render here, so getVisibleResultText suppresses
     // the generic result box for shell tools to avoid a second copy.
     return (
-      <TerminalChrome title={typeof obj.description === 'string' ? obj.description : filePath}>
-        <div className="px-3 py-2.5 font-mono text-[11px] leading-[1.3] text-[var(--color-terminal-fg)]">
-          <span className="text-[var(--color-terminal-accent)]">$</span> {shellCommand}
-        </div>
-        {result ? (
-          <ShellOutput
-            content={result.content}
-            isError={result.isError}
-            toolName={toolName}
-          />
-        ) : null}
-      </TerminalChrome>
+      <ShellTerminal
+        toolName={toolName}
+        command={shellCommand}
+        result={result ?? null}
+        durationSummary={durationSummary}
+      />
     )
   }
 
-  if (toolName === 'Read') {
-    return resultOutput
+  if (toolName === 'TodoWrite') {
+    const todos = parseTodos(obj)
+    if (todos && todos.length > 0) {
+      // The list is the call; its "todos updated" acknowledgement says nothing.
+      return (
+        <>
+          <TodoListView todos={todos} />
+          {result?.isError ? resultOutput : null}
+        </>
+      )
+    }
   }
 
-  if (resultOutput) return resultOutput
+  if (SEARCH_TOOL_NAMES.has(toolName) && result && !result.isError) {
+    const parsed = parseSearchResult(extractTextContent(result.content) ?? '')
+    if (parsed && parsed.rows.length > 0) {
+      return (
+        <SearchResultView
+          result={parsed}
+          pattern={toolName === 'Grep' && typeof obj.pattern === 'string' ? obj.pattern : ''}
+          caseInsensitive={obj['-i'] === true}
+        />
+      )
+    }
+  }
 
-  return null
+  return resultOutput
 }
 
 function getVisibleResultText(
@@ -631,9 +901,9 @@ function getVisibleResultText(
   const text = extractTextContent(result.content)
   if (!text) return null
 
-  // Shell output owns its own renderer inside TerminalChrome (both success and
-  // error), so the generic result box must stay out of the way — but only when
-  // that renderer will actually run.
+  // Shell output owns its own renderer inside the terminal block (both success
+  // and error), so the generic result box must stay out of the way — but only
+  // when that renderer will actually run.
   if (echoesInTerminal) return null
   if (result.isError) return text
   // Read/Edit/Write stay suppressed: Edit/Write results are a single
@@ -644,7 +914,8 @@ function getVisibleResultText(
 }
 
 /**
- * Terminal-style output body: plain text in one text node, in a `<pre>`.
+ * A shell call as a terminal block: the command on a `$` line and its output
+ * under it, in one plain `<pre>`.
  *
  * Shell output has no language to highlight, so it does not go through
  * CodeViewer. Note this is NOT a saving relative to the old behaviour —
@@ -654,69 +925,212 @@ function getVisibleResultText(
  * that it used to be there. For reference, CodeViewer does mount both Prism and
  * Shiki over the same text, so that move would cost two tokenizer passes.
  */
-function ShellOutput({ content, isError, toolName }: { content: unknown; isError: boolean; toolName: string }) {
+function ShellTerminal({
+  toolName,
+  command,
+  result,
+  durationSummary,
+}: {
+  toolName: string
+  command: string
+  result: { content: unknown; isError: boolean } | null
+  durationSummary: string
+}) {
   const [expanded, setExpanded] = useState(false)
   const t = useTranslation()
-  const resolved = useMemo(() => resolveShellOutputKind(content, toolName), [content, toolName])
+  const isError = Boolean(result?.isError)
+  const resolved = useMemo(
+    () => (result ? resolveShellOutputKind(result.content, toolName) : null),
+    [result, toolName],
+  )
   // Errors are never windowed. #625 deliberately made full tool error output
   // visible; putting failures behind a 12-line window would quietly undo that.
   // Successes get the window because they are the bulk of the transcript.
   const output = useMemo(
-    () => prepareShellOutput(resolved.kind === 'text' ? resolved.text : '', expanded || isError),
+    () => prepareShellOutput(resolved?.kind === 'text' ? resolved.text : '', expanded || isError),
     [resolved, expanded, isError],
   )
   const showToggle = output.collapsible && !isError
-
-  // Content we cannot render as terminal text: say nothing rather than assert
-  // something false about the command.
-  if (resolved.kind === 'opaque') return null
-
-  if (!output.visible) {
-    return (
-      <div className="border-t border-[var(--color-terminal-border)] px-3 py-2.5 font-mono text-[11px] italic text-[var(--color-terminal-muted)]">
-        {t('tool.noOutput')}
-      </div>
-    )
-  }
+  const exitCode = result ? parseShellExitCode(extractTextContent(result.content) ?? '', isError) : null
 
   return (
-    <div className="border-t border-[var(--color-terminal-border)]">
-      {/* Commands that emit image paths (screenshots, plots) still get a gallery,
-          as the generic result box used to provide on the error path. */}
-      <InlineImageGallery text={output.full} />
-      <div className="flex items-center justify-between px-3 py-1.5">
-        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-[var(--color-terminal-muted)]">
-          {isError ? t('tool.errorOutput') : t('tool.toolOutput')}
-        </span>
-        <CopyButton
-          text={output.full}
-          label={t('common.copy')}
-          copiedLabel={t('common.copied')}
-          className="rounded-[var(--radius-sm)] px-2 py-0.5 text-[11px] text-[var(--color-terminal-muted)] transition-colors hover:text-[var(--color-terminal-fg)]"
-        />
+    <TerminalChrome
+      label={toolName === 'PowerShell' ? 'powershell' : 'bash'}
+      meta={(
+        <>
+          {result ? (
+            <Badge
+              tone={isError ? 'danger' : 'success'}
+              data-shell-exit={exitCode ?? 'error'}
+            >
+              {exitCode === null ? t('agentStatus.failed') : t('tool.exitCode', { code: exitCode })}
+            </Badge>
+          ) : null}
+          {durationSummary ? (
+            <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{durationSummary}</span>
+          ) : null}
+          <DetailCopyButton text={output.full || command} t={t} />
+        </>
+      )}
+    >
+      <div className="px-3.5 pb-3 pt-2.5 font-mono text-[12px] leading-[1.65]">
+        <div className="whitespace-pre-wrap break-words text-[var(--color-code-fg)]">
+          <span aria-hidden="true" className="mr-2 select-none text-[var(--color-brand)]">$</span>
+          {command}
+        </div>
+        {/* Content we cannot render as terminal text: say nothing rather than
+            assert something false about the command. */}
+        {!resolved || resolved.kind === 'opaque' ? null : output.visible ? (
+          <>
+            {/* Commands that emit image paths (screenshots, plots) still get a
+                gallery, as the generic result box used to provide. */}
+            <InlineImageGallery text={output.full} />
+            <pre
+              data-shell-output=""
+              tabIndex={0}
+              className={`mt-1.5 max-h-[420px] overflow-auto whitespace-pre-wrap break-words font-mono text-[12px] leading-[1.65] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
+                isError ? 'text-[var(--color-error)]' : 'text-[var(--color-code-fg)]'
+              }`}
+            >
+              {output.visible}
+            </pre>
+          </>
+        ) : (
+          <div className="mt-1.5 font-sans text-[12px] text-[var(--color-text-tertiary)]">
+            {t('tool.noOutput')}
+          </div>
+        )}
       </div>
-      <pre
-        data-shell-output=""
-        tabIndex={0}
-        className={`max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 pb-2.5 font-mono text-[11.5px] leading-[1.45] ${
-          isError ? 'text-[var(--color-terminal-danger)]' : 'text-[var(--color-terminal-fg)]'
-        }`}
-      >
-        {output.visible}
-      </pre>
       {showToggle ? (
         <button
           type="button"
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
-          className="w-full border-t border-[var(--color-terminal-border)] py-1.5 font-mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-terminal-muted)] transition-colors hover:text-[var(--color-terminal-fg)]"
+          className="flex h-7 w-full items-center justify-center border-t border-[var(--color-border)] text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
         >
           {expanded
             ? t('tool.showLess')
             : t('tool.showMoreLines', { count: output.hiddenLines })}
         </button>
       ) : null}
+    </TerminalChrome>
+  )
+}
+
+/** Grep / Glob hits as `file:line  code`, the matched text marked. */
+function SearchResultView({
+  result,
+  pattern,
+  caseInsensitive,
+}: {
+  result: GrepResult
+  pattern: string
+  caseInsensitive: boolean
+}) {
+  const matcher = useMemo(() => buildSearchMatcher(pattern, caseInsensitive), [caseInsensitive, pattern])
+  const rows = result.rows.slice(0, SEARCH_RESULT_MAX_ROWS)
+  const hidden = result.rows.length - rows.length
+
+  return (
+    <div
+      data-search-result=""
+      className="max-h-[340px] divide-y divide-[var(--color-border)] overflow-auto rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] font-mono text-[12px] leading-[1.6]"
+    >
+      {rows.map((row, index) => (
+        <div key={`${row.file}:${row.line ?? ''}:${index}`} className="flex gap-3.5 px-2.5 py-1">
+          {row.code === undefined ? (
+            <span className="min-w-0 truncate text-[var(--color-text-secondary)]" title={row.file}>{row.file}</span>
+          ) : (
+            <>
+              <span className="w-[236px] max-w-[42%] shrink-0 truncate text-[var(--color-text-tertiary)]" title={`${row.file}:${row.line}`}>
+                {row.file}:{row.line}
+              </span>
+              <span className="min-w-0 truncate whitespace-pre text-[var(--color-text-primary)]">
+                {highlightMatches(row.code, matcher)}
+              </span>
+            </>
+          )}
+        </div>
+      ))}
+      {hidden > 0 ? (
+        <div className="px-2.5 py-1 text-[var(--color-text-tertiary)]">+{hidden}</div>
+      ) : null}
     </div>
+  )
+}
+
+function buildSearchMatcher(pattern: string, caseInsensitive: boolean): RegExp | null {
+  if (!pattern) return null
+  try {
+    return new RegExp(pattern, caseInsensitive ? 'gi' : 'g')
+  } catch {
+    // ripgrep syntax JavaScript cannot parse: show the rows unmarked.
+    return null
+  }
+}
+
+function highlightMatches(code: string, matcher: RegExp | null): ReactNode {
+  if (!matcher) return code
+  const parts: ReactNode[] = []
+  let last = 0
+  for (const match of code.matchAll(matcher)) {
+    const start = match.index ?? 0
+    if (!match[0]) continue
+    if (start > last) parts.push(code.slice(last, start))
+    parts.push(
+      <mark
+        key={start}
+        className="rounded-[var(--radius-xs)] bg-[var(--color-search-highlight)] text-[var(--color-on-search-highlight)]"
+      >
+        {match[0]}
+      </mark>,
+    )
+    last = start + match[0].length
+  }
+  if (parts.length === 0) return code
+  if (last < code.length) parts.push(code.slice(last))
+  return parts
+}
+
+/** A TodoWrite call drawn as the checklist it wrote. */
+function TodoListView({ todos }: { todos: TodoItem[] }) {
+  return (
+    <ul data-todo-list="" className="grid gap-0.5 py-0.5">
+      {todos.map((todo, index) => {
+        const Icon = todo.status === 'completed' ? CircleCheck : todo.status === 'in_progress' ? CircleDot : Circle
+        return (
+          <li
+            key={`${index}:${todo.content}`}
+            data-todo-status={todo.status}
+            className="flex min-h-[26px] items-center gap-2 text-[13px]"
+          >
+            <Icon
+              size={14}
+              strokeWidth={1.75}
+              aria-hidden="true"
+              className={`shrink-0 ${
+                todo.status === 'completed'
+                  ? 'text-[var(--color-success)]'
+                  : todo.status === 'in_progress'
+                    ? 'text-[var(--color-info)]'
+                    : 'text-[var(--color-text-tertiary)]'
+              }`}
+            />
+            <span
+              className={
+                todo.status === 'completed'
+                  ? 'text-[var(--color-text-tertiary)] line-through decoration-[var(--color-text-tertiary)]'
+                  : todo.status === 'in_progress'
+                    ? 'font-medium text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-secondary)]'
+              }
+            >
+              {todo.content}
+            </span>
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
@@ -843,70 +1257,52 @@ export function formatDuration(durationMs: number): string {
   return `${Math.floor(totalMinutes / 60)}h${totalMinutes % 60}m`
 }
 
+/**
+ * Input and output blocks share one shape in both chromes — a bordered,
+ * `--radius-md` code block — so a row and a card show the same detail the same
+ * way. The block wraps CodeViewer's borderless `embedded` chrome rather than its
+ * card chrome: one edge, one head, one copy action per block (#1177).
+ */
+function DetailBlock({ children }: { children: ReactNode }) {
+  return (
+    <div
+      data-tool-detail-surface="block"
+      className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)]"
+    >
+      {children}
+    </div>
+  )
+}
+
 function renderResultOutput(
   result: { content: unknown; isError: boolean },
   text: string,
-  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
-  embedded = false,
+  t?: Translate,
 ) {
   const label = result.isError
     ? t?.('tool.errorOutput') ?? 'Error Output'
     : t?.('tool.toolOutput') ?? 'Tool Output'
 
-  if (embedded) {
-    return (
-      <>
-        <InlineImageGallery text={text} />
-        {result.isError ? (
-          <div data-tool-detail-surface="embedded" className="overflow-hidden bg-[var(--color-error-soft)]">
-            <div className="flex items-center justify-between border-b border-[var(--color-error-soft-hover)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-error)]">
-              <span>{label}</span>
-              <CopyButton
-                text={text}
-                label={t?.('common.copy')}
-                copiedLabel={t?.('common.copied')}
-                className="rounded-[var(--radius-sm)] px-2 py-1 text-[11px] normal-case tracking-normal text-[var(--color-error)] transition-colors hover:bg-[var(--color-error-soft-hover)]"
-              />
-            </div>
-            <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.45] text-[var(--color-error)]">
-              {text}
-            </pre>
-          </div>
-        ) : (
-          <CodeViewer code={text} language="plaintext" maxLines={18} chrome="embedded" label={label} />
-        )}
-      </>
-    )
-  }
-
   return (
     <>
       <InlineImageGallery text={text} />
-      <div
-        data-tool-detail-surface="card"
-        className={`overflow-hidden rounded-[var(--radius-lg)] border ${
-          result.isError
-            ? 'border-[var(--color-error)] bg-[var(--color-error-container)]'
-            : 'border-[var(--color-border)] bg-[var(--color-surface)]'
-        }`}
-      >
-        <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
-          <span>{label}</span>
-          <CopyButton
-            text={text}
-            label={t?.('common.copy')}
-            copiedLabel={t?.('common.copied')}
-            className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[11px] normal-case tracking-normal text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
-          />
-        </div>
-        {result.isError ? (
-          <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words bg-[var(--color-code-bg)] px-3 py-2 font-mono text-[12px] leading-[1.45] text-[var(--color-error)]">
+      {result.isError ? (
+        <div
+          data-tool-detail-surface="error"
+          className="overflow-hidden rounded-[var(--radius-md)] bg-[var(--color-error-container)]"
+        >
+          <DetailHead label={label} tone="error">
+            <DetailCopyButton text={text} t={t} />
+          </DetailHead>
+          <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-on-error-container)]">
             {text}
           </pre>
-        ) : (
-          <CodeViewer code={text} language="plaintext" maxLines={18} />
-        )}
-      </div>
+        </div>
+      ) : (
+        <DetailBlock>
+          <CodeViewer code={text} language="plaintext" maxLines={18} chrome="embedded" label={label} />
+        </DetailBlock>
+      )}
     </>
   )
 }
@@ -914,26 +1310,30 @@ function renderResultOutput(
 function renderDetails(
   toolName: string,
   obj: Record<string, unknown>,
-  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
+  t?: Translate,
   partialInput?: string,
-  embedded = false,
 ) {
   if (partialInput) {
     if (toolName === 'Write') {
       const writerContent = extractPartialJsonStringField(partialInput, 'content')
       if (writerContent !== null) {
-        return renderWriterPreview(writerContent, t, embedded)
+        return renderWriterPreview(writerContent, t)
       }
     }
-    return renderPartialInput(partialInput, t, embedded)
+    return renderPartialInput(partialInput, t)
   }
 
   if (toolName === 'Edit' || toolName === 'Write') {
     return null
   }
 
-  // #1149: the terminal card already shows `command` as the `$` line and
-  // `description` as its title, so this block must never repeat them. Showing
+  // The checklist above already is the input.
+  if (toolName === 'TodoWrite' && (parseTodos(obj)?.length ?? 0) > 0) {
+    return null
+  }
+
+  // #1149: the terminal block already shows `command` as the `$` line and the
+  // row carries `description`, so this block must never repeat them. Showing
   // the *remaining* keys keeps timeout / run_in_background visible without
   // re-printing the command — an all-or-nothing suppression put the command
   // back on screen for the ~20% of real calls that carry a `timeout`.
@@ -944,23 +1344,10 @@ function renderDetails(
 
   const text = JSON.stringify(displayed, null, 2)
   const label = t?.('tool.toolInput') ?? 'Tool Input'
-  if (embedded) {
-    return <CodeViewer code={text} language="json" maxLines={18} chrome="embedded" label={label} />
-  }
-
   return (
-    <div data-tool-detail-surface="card" className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)]">
-      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
-        <span>{label}</span>
-        <CopyButton
-          text={text}
-          label={t?.('common.copy')}
-          copiedLabel={t?.('common.copied')}
-          className="rounded-[var(--radius-sm)] border border-[var(--color-border)] px-2 py-1 text-[11px] normal-case tracking-normal text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
-        />
-      </div>
-      <CodeViewer code={text} language="json" maxLines={18} />
-    </div>
+    <DetailBlock>
+      <CodeViewer code={text} language="json" maxLines={18} chrome="embedded" label={label} />
+    </DetailBlock>
   )
 }
 
@@ -1122,8 +1509,7 @@ function formatCount(count: number): string {
 
 function renderWriterPreview(
   content: string,
-  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
-  embedded = false,
+  t?: Translate,
 ) {
   const contentStats = countContentStats(content)
   const lines = content.length === 0 ? [] : content.split('\n')
@@ -1148,20 +1534,15 @@ function renderWriterPreview(
 
   return (
     <div
-      data-tool-detail-surface={embedded ? 'embedded' : 'card'}
-      className={
-        embedded
-          ? 'overflow-hidden bg-[var(--color-surface)]'
-          : 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)]'
-      }
+      data-tool-detail-surface="block"
+      className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)]"
     >
-      <div className="flex items-center justify-between border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
-        <span>{t?.('tool.writerPreview') ?? 'Writer'}</span>
-        <span className="font-mono normal-case tracking-normal tabular-nums">
-          {statsSummary}
-        </span>
+      <div className="bg-[var(--color-surface-container)]">
+        <DetailHead label={t?.('tool.writerPreview') ?? 'Writer'}>
+          <span className="shrink-0 pr-1.5 font-mono text-[11px] tabular-nums">{statsSummary}</span>
+        </DetailHead>
       </div>
-      <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words bg-[var(--color-code-bg)] px-3 py-2 font-mono text-[12px] leading-[1.45] text-[var(--color-code-fg)]">
+      <pre className="max-h-[420px] overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[12px] leading-[1.6] text-[var(--color-code-fg)]">
         {visibleContent}
       </pre>
     </div>
@@ -1170,14 +1551,13 @@ function renderWriterPreview(
 
 function renderPartialInput(
   partialInput: string,
-  t?: (key: TranslationKey, params?: Record<string, string | number>) => string,
-  embedded = false,
+  t?: Translate,
 ) {
   const formattedInput = formatPartialJsonInput(partialInput)
   const label = t?.('tool.partialInput') ?? 'Partial input'
 
-  if (embedded) {
-    return (
+  return (
+    <DetailBlock>
       <CodeViewer
         code={formattedInput}
         language="json"
@@ -1186,16 +1566,7 @@ function renderPartialInput(
         chrome="embedded"
         label={label}
       />
-    )
-  }
-
-  return (
-    <div data-tool-detail-surface="card" className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)]">
-      <div className="border-b border-[var(--color-border)] px-3 py-2 text-[10px] uppercase tracking-[0.18em] text-[var(--color-outline)]">
-        {label}
-      </div>
-      <CodeViewer code={formattedInput} language="json" maxLines={8} wrapLongLines />
-    </div>
+    </DetailBlock>
   )
 }
 
@@ -1340,73 +1711,61 @@ function stripAnsi(value: string): string {
     .replace(/\x1B\[[0-9;?]*[ -/]*[@-~]/g, '')
 }
 
-function RowToolIcon({ toolName, active }: { toolName: string; active: boolean }) {
-  const Icon = activitySegmentIcon(toolName)
-  return (
-    <Icon
-      size={13}
-      strokeWidth={1.8}
-      aria-hidden="true"
-      className={`mt-[3px] shrink-0 self-start ${
-        active ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'
-      }`}
-    />
-  )
+type ToolTarget = {
+  text: string
+  /** Code-shaped (a path, command, pattern, URL) rather than a sentence. */
+  mono: boolean
+  /** The untruncated form for the row's tooltip. */
+  title?: string
 }
 
-/** Whether the row's summary is a sentence rather than something code-shaped. */
-function isProseToolSummary(toolName: string, obj: Record<string, unknown>): boolean {
-  switch (toolName) {
-    case 'CreateSession':
-    case 'SendSessionMessage':
-      return true
-    case 'Bash':
-    case 'PowerShell':
-    case 'Agent':
-      return typeof obj.description === 'string' && obj.description.trim().length > 0
-    case 'Read':
-    case 'Write':
-    case 'Edit':
-      return true
-    default:
-      return false
-  }
-}
+/**
+ * What the row's verb acts on. Monospace is for the things that are literally
+ * code — a command, a glob, a path — not for a sentence describing one, and
+ * never for Chinese, where it opens typewriter gaps between characters.
+ */
+function getToolTarget(toolName: string, obj: Record<string, unknown>): ToolTarget {
+  const str = (value: unknown) => (typeof value === 'string' ? value.trim() : '')
+  const prose = (text: string): ToolTarget => ({ text, mono: false, title: text || undefined })
+  const code = (text: string, title = text): ToolTarget => ({ text, mono: true, title: title || undefined })
 
-function getToolSummary(toolName: string, obj: Record<string, unknown>, t?: (key: TranslationKey, params?: Record<string, string | number>) => string): string {
+  const filePath = str(obj.file_path) || (toolName === 'NotebookEdit' ? str(obj.notebook_path) : '')
+  if (filePath) return code(filePath.split(/[/\\]/).pop() || filePath, filePath)
+
   switch (toolName) {
-    case 'ListSessions': return typeof obj.query === 'string' ? obj.query : ''
-    case 'CreateSession': return String(obj.title ?? obj.prompt ?? '')
-    case 'ReadSession': return String(obj.sessionId ?? '')
-    case 'SendSessionMessage': return String(obj.content ?? '')
-    case 'WaitSessions': return Array.isArray(obj.sessionIds) ? obj.sessionIds.join(', ') : ''
+    case 'ListSessions': return prose(str(obj.query))
+    case 'CreateSession': return prose(String(obj.title ?? obj.prompt ?? ''))
+    case 'ReadSession': return code(String(obj.sessionId ?? ''))
+    case 'SendSessionMessage': return prose(String(obj.content ?? ''))
+    case 'WaitSessions': return code(Array.isArray(obj.sessionIds) ? obj.sessionIds.join(', ') : '')
     case 'Bash':
-    case 'PowerShell':
-      // The model sends a short description of what the command is for, in the
-      // conversation's language ("查看最近 commit 的改动文件"). Prefer it: a row
-      // saying that is readable at a glance, where the raw command it stands for
-      // is a pipeline that truncates into noise. The command itself is still one
-      // click away in the expanded row.
-      if (typeof obj.description === 'string' && obj.description.trim()) return obj.description
-      return typeof obj.command === 'string' ? obj.command : ''
-    case 'Read':
-      return t?.('tool.readFileContents') ?? 'Read file contents'
-    case 'Write':
-      return typeof obj.content === 'string'
-        ? (t?.('tool.linesCreated', { count: obj.content.split('\n').length }) ?? `${obj.content.split('\n').length} lines created`)
-        : (t?.('tool.createFile') ?? 'Create file')
-    case 'Edit':
-      return typeof obj.old_string === 'string' && typeof obj.new_string === 'string'
-        ? changedLineSummary(obj.old_string, obj.new_string, t)
-        : (t?.('tool.updateFileContents') ?? 'Update file contents')
-    case 'Glob':
-      return typeof obj.pattern === 'string' ? obj.pattern : ''
+    case 'PowerShell': {
+      // With a description the row is named by it (see ToolCallBlock), so the
+      // command only rides in the tooltip; without one, the command is the target.
+      const command = str(obj.command)
+      return str(obj.description) ? { text: '', mono: true, title: command || undefined } : code(command)
+    }
     case 'Grep':
-      return typeof obj.pattern === 'string' ? obj.pattern : ''
+    case 'Glob':
+      return code(str(obj.pattern))
+    case 'WebSearch':
+    case 'ToolSearch':
+      return prose(str(obj.query))
+    case 'WebFetch':
+      return code(str(obj.url))
     case 'Agent':
-      return typeof obj.description === 'string' ? obj.description : ''
+      return prose(str(obj.description))
+    case 'Skill':
+      return code(str(obj.skill))
+    case 'TaskCreate':
+      return prose(str(obj.subject))
+    case 'TaskUpdate':
+    case 'TaskGet': {
+      const subject = str(obj.subject)
+      return subject ? prose(subject) : code(str(obj.taskId) ? `#${str(obj.taskId)}` : '')
+    }
     default:
-      return ''
+      return { text: '', mono: false }
   }
 }
 
@@ -1422,19 +1781,4 @@ function extractTextContent(content: unknown): string | null {
     return JSON.stringify(content, null, 2)
   }
   return null
-}
-
-function changedLineSummary(oldString: string, newString: string, t?: (key: TranslationKey, params?: Record<string, string | number>) => string): string {
-  const oldLines = oldString.split('\n')
-  const newLines = newString.split('\n')
-  let changed = 0
-  const max = Math.max(oldLines.length, newLines.length)
-
-  for (let index = 0; index < max; index += 1) {
-    if ((oldLines[index] ?? '') !== (newLines[index] ?? '')) {
-      changed += 1
-    }
-  }
-
-  return t?.('tool.linesChanged', { count: changed }) ?? `${changed} lines changed`
 }

@@ -1,6 +1,7 @@
 // desktop/src/components/settings/CcSwitchImportModal.tsx
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { FolderX, Inbox } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
@@ -175,7 +176,7 @@ export function CcSwitchImportModal({ open, onClose }: CcSwitchImportModalProps)
         <div className="flex flex-col items-center gap-2">
           <EmptyState
             className="w-full"
-            icon={<span className="material-symbols-outlined text-[20px]">folder_off</span>}
+            icon={<FolderX size={20} strokeWidth={1.75} aria-hidden="true" />}
             title={t('settings.providers.ccSwitch.unavailableTitle')}
             description={t(UNAVAILABLE_KEYS[scan.reason ?? 'not-found'])}
             action={{ label: t('common.retry'), onClick: () => void runScan() }}
@@ -190,7 +191,7 @@ export function CcSwitchImportModal({ open, onClose }: CcSwitchImportModalProps)
         <div className="flex flex-col items-center gap-2">
           <EmptyState
             className="w-full"
-            icon={<span className="material-symbols-outlined text-[20px]">inbox</span>}
+            icon={<Inbox size={20} strokeWidth={1.75} aria-hidden="true" />}
             title={t('settings.providers.ccSwitch.emptyTitle')}
             description={t('settings.providers.ccSwitch.emptyDesc')}
             action={{ label: t('common.retry'), onClick: () => void runScan() }}
@@ -202,7 +203,7 @@ export function CcSwitchImportModal({ open, onClose }: CcSwitchImportModalProps)
 
     return (
       <div className="flex flex-col gap-3">
-        <p className="text-xs leading-5 text-[var(--color-text-secondary)]">
+        <p className="text-[13px] leading-5 text-[var(--color-text-secondary)]">
           {t('settings.providers.ccSwitch.description')}
         </p>
 
@@ -223,13 +224,13 @@ export function CcSwitchImportModal({ open, onClose }: CcSwitchImportModalProps)
           </div>
         </div>
 
-        <ul className="flex flex-col gap-1.5">
+        <ul className="divide-y divide-[var(--color-border)] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
           {candidates.map((candidate) => (
             <li
               key={candidate.sourceId}
               data-testid={`cc-switch-candidate-${candidate.sourceId}`}
               className={cx(
-                'rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2.5',
+                'px-3.5 py-3',
                 !candidate.importable && 'opacity-60',
               )}
             >

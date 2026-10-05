@@ -14,29 +14,33 @@ export const KIND_LABEL_KEYS: Record<TrajectoryRowKind, TranslationKey> = {
 }
 
 /**
- * The prompt is the anchor of every turn, so it takes the accent; responses
- * are the most numerous rows and stay neutral. `info` is avoided: in the paper
- * themes it is the same terracotta as `brand`.
+ * The prompt is the anchor of every turn, so it is the one kind with a colour —
+ * the same blue as links. Everything else stays neutral: success / warning are
+ * status colours app-wide (done / needs you), so a green context row or an amber
+ * tool row read as states they are not, and terracotta is reserved for the brand
+ * and selection marks. Errors are the only other colour in the table.
  */
 export const KIND_TONES: Record<TrajectoryRowKind, Tone> = {
   system: 'neutral',
-  user: 'brand',
-  context: 'success',
+  user: 'info',
+  context: 'neutral',
   assistant: 'neutral',
-  tool: 'warning',
+  tool: 'neutral',
   compact: 'neutral',
 }
 
 /**
  * Minimap span fill per kind — the same hue as the kind's badge, so a color
- * means one thing everywhere in the view. Failures are drawn separately.
+ * means one thing everywhere in the view. Lanes already separate input, model
+ * and tools, so within a lane a grey step is enough; the prompt keeps its blue
+ * and failures are drawn separately in error red.
  */
 export const KIND_FILL_CLASSES: Record<TrajectoryRowKind, string> = {
   system: 'bg-[var(--color-text-tertiary)]',
-  user: 'bg-[var(--color-brand)]',
-  context: 'bg-[var(--color-success)]',
+  user: 'bg-[var(--color-info)]',
+  context: 'bg-[var(--color-border-strong)]',
   assistant: 'bg-[var(--color-text-secondary)]',
-  tool: 'bg-[var(--color-warning)]',
+  tool: 'bg-[var(--color-text-tertiary)]',
   compact: 'bg-[var(--color-text-tertiary)]',
 }
 

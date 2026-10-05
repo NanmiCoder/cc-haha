@@ -234,7 +234,7 @@ describe('WorkspaceFileTreePane', () => {
     fireEvent.click(screen.getByTestId('workspace-tree-row-src'))
     const file = await screen.findByTestId('workspace-tree-row-src/adapters.ts')
     expect(file).toHaveAccessibleName('adapters.ts')
-    expect(file).toHaveClass('h-[34px]', 'text-[14px]')
+    expect(file).toHaveClass('h-7', 'text-[13px]')
     expect(file.querySelector('[data-file-type="ts"]')).not.toBeNull()
     expect(file.querySelector('[data-workspace-tree-guide]')).toHaveAttribute('aria-hidden', 'true')
     expect(screen.getByTestId('workspace-tree-row-README.md').querySelector('[data-file-type="markdown"]')).not.toBeNull()
@@ -450,9 +450,9 @@ describe('keyboard', () => {
 })
 
 describe('filter field', () => {
-  it('matches the reference 32px filter height and 14px type using the existing medium field', async () => {
+  it('uses the compact 28px filter field with 12px type', async () => {
     await renderPane()
-    expect(screen.getByRole('searchbox')).toHaveClass('h-8', 'text-sm')
+    expect(screen.getByRole('searchbox')).toHaveClass('h-7', 'text-xs')
   })
 
   it('offers the clear button the hand-rolled input never had', async () => {

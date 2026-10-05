@@ -328,7 +328,7 @@ export default function TrajectoryView({ sessionId, visible, running, activityKe
             type="button"
             disabled={state.loadingOlder}
             onClick={() => void handleLoadOlder()}
-            className="rounded-[var(--radius-sm)] px-2 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-60"
+            className="rounded-[var(--radius-sm)] px-2 text-[12px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-60"
           >
             {state.loadingOlder ? t('common.loading') : t(terms.length ? 'trajectory.table.searchLoaded' : 'trajectory.table.loadOlder')}
           </button>
@@ -372,14 +372,14 @@ export default function TrajectoryView({ sessionId, visible, running, activityKe
       />
       {ordered.length > 0 && <TrajectoryMinimap model={minimap} viewport={viewport} rowsById={rowsById} onSelect={reveal} />}
       {currentTurn !== null && currentStats && !terms.length && (
-        <div className="flex h-7 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-[11px] text-[var(--color-text-secondary)]" data-testid="trajectory-turn-bar">
+        <div className="flex h-7 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 text-[12px] tabular-nums text-[var(--color-text-tertiary)]" data-testid="trajectory-turn-bar">
           <button
             type="button"
             onClick={() => handleToggleTurn(currentTurn)}
             aria-expanded={!collapsedTurns.has(currentTurn)}
             className="inline-flex items-center gap-1 rounded-[var(--radius-sm)] px-1 font-medium text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
-            {collapsedTurns.has(currentTurn) ? <ChevronRight size={12} aria-hidden /> : <ChevronDown size={12} aria-hidden />}
+            {collapsedTurns.has(currentTurn) ? <ChevronRight size={12} strokeWidth={2} aria-hidden /> : <ChevronDown size={12} strokeWidth={2} aria-hidden />}
             {turnLabel(currentTurn, t)}
           </button>
           <span>{t('trajectory.table.toolCount', { count: currentStats.tools })}</span>

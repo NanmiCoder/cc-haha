@@ -17,8 +17,8 @@ export function TrajectoryViewSwitch({ sessionId }: { sessionId: string }) {
       value={mode}
       onChange={(next) => setMode(sessionId, next)}
       items={[
-        { value: 'chat', label: t('trajectory.switch.chat'), icon: <MessagesSquare size={13} aria-hidden /> },
-        { value: 'trajectory', label: t('trajectory.switch.trajectory'), icon: <ListTree size={13} aria-hidden /> },
+        { value: 'chat', label: t('trajectory.switch.chat'), icon: <MessagesSquare size={14} strokeWidth={1.75} aria-hidden /> },
+        { value: 'trajectory', label: t('trajectory.switch.trajectory'), icon: <ListTree size={14} strokeWidth={1.75} aria-hidden /> },
       ]}
     />
   )

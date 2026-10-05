@@ -121,8 +121,8 @@ function memberStatusColor(state: MemberWorkState): string {
   return 'var(--color-text-secondary)'
 }
 
-function memberDotColor(state: MemberWorkState, accent: string): string {
-  if (state === 'working') return accent
+function memberDotColor(state: MemberWorkState): string {
+  if (state === 'working') return 'var(--color-info)'
   // The raw warning accent is too light for label text, but reads as a fill.
   if (state === 'retrying') return 'var(--color-warning)'
   return memberStatusColor(state)
@@ -192,8 +192,9 @@ function taskStateColors(state: WorkbenchTaskState, accent: string) {
     return {
       background: 'var(--color-surface-container-lowest)',
       border: accent,
-      pillBackground: 'var(--color-brand-soft)',
-      pillForeground: 'var(--color-brand)',
+      // Running is the app-wide "in progress" tone, never the brand.
+      pillBackground: 'var(--color-info-container)',
+      pillForeground: 'var(--color-on-info-container)',
       title: 'var(--color-text-primary)',
       progress: accent,
     }
@@ -541,7 +542,7 @@ function MemberNode({
       aria-label={memberName(member)}
       aria-pressed={selected}
       onClick={onSelect}
-      className="agent-teams-person absolute z-20 flex w-[176px] cursor-pointer flex-col items-center rounded-[14px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)]"
+      className="agent-teams-person absolute z-[var(--z-sticky)] flex w-[176px] cursor-pointer flex-col items-center rounded-[var(--radius-lg)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)]"
       style={{ left: centerX - MEMBER_SLOT_WIDTH / 2, top }}
     >
       <span className="relative block" style={{ width: avatarSize, height: avatarSize }}>
@@ -560,13 +561,13 @@ function MemberNode({
         {hasActiveMessage ? (
           <span
             aria-hidden="true"
-            className="agent-teams-member-ring absolute -inset-[6px] rounded-full border-2 border-[var(--color-brand)]"
+            className="agent-teams-member-ring absolute -inset-[6px] rounded-full border-2 border-[var(--color-info)]"
           />
         ) : null}
         {!isLead && state === 'idle' ? (
           <span
             aria-hidden="true"
-            className="agent-teams-zz absolute -right-1 -top-1 text-[9px] font-extrabold text-[var(--color-text-tertiary)]"
+            className="agent-teams-zz absolute -right-1 -top-1 text-[11px] font-semibold text-[var(--color-text-tertiary)]"
           >
             zZ
           </span>
@@ -574,15 +575,15 @@ function MemberNode({
       </span>
 
       <span
-        className="mt-0.5 flex max-w-[168px] items-center gap-1.5 overflow-hidden rounded-[14px] border bg-[var(--color-surface-container-lowest)] px-2.5 py-1 shadow-[var(--shadow-card)]"
+        className="mt-0.5 flex max-w-[168px] items-center gap-1.5 overflow-hidden rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] px-2.5 py-1 shadow-[var(--shadow-card)]"
         style={{ borderColor: selected ? 'var(--color-brand)' : 'var(--color-border)' }}
       >
-        <span className="truncate font-mono text-[10.5px] font-extrabold text-[var(--color-text-primary)]">
+        <span className="truncate font-mono text-[11px] font-medium text-[var(--color-text-primary)]">
           {memberName(member)}
         </span>
         {model ? (
           <span
-            className="max-w-[54px] shrink-0 truncate rounded-full border border-[var(--color-border)] px-1.5 py-px text-[9px] font-extrabold text-[var(--color-text-tertiary)]"
+            className="max-w-[54px] shrink-0 truncate rounded-full border border-[var(--color-border)] px-1.5 py-px text-[11px] font-semibold text-[var(--color-text-tertiary)]"
             title={model.full}
             data-testid={`agent-teams-canvas-member-model-${member.agentId}`}
             data-model-inherited={model.inherited ? 'true' : 'false'}
@@ -591,20 +592,20 @@ function MemberNode({
           </span>
         ) : null}
         {isLead ? (
-          <span className="shrink-0 rounded-full border border-[var(--color-brand)] bg-[var(--color-brand-soft)] px-1.5 py-px text-[9px] font-extrabold text-[var(--color-brand)]">
+          <span className="shrink-0 rounded-full bg-[var(--color-surface-container)] px-1.5 py-px text-[11px] font-medium text-[var(--color-text-secondary)]">
             {t('agentTeams.leader')}
           </span>
         ) : null}
       </span>
 
       <span
-        className="mt-1 flex max-w-[172px] items-center gap-1.5 text-[10.5px] font-semibold"
+        className="mt-1 flex max-w-[172px] items-center gap-1.5 text-[11px] font-semibold"
         style={{ color: isLead ? 'var(--color-text-secondary)' : memberStatusColor(state) }}
       >
         {!isLead ? (
           <span
             className="h-1.5 w-1.5 shrink-0 rounded-full"
-            style={{ backgroundColor: memberDotColor(state, accent) }}
+            style={{ backgroundColor: memberDotColor(state) }}
           />
         ) : null}
         <span
@@ -635,7 +636,7 @@ function MemberNode({
                   data-task-status={task.status}
                   data-task-next={next ? 'true' : undefined}
                   title={task.subject}
-                  className="rounded-full border px-1.5 py-px font-mono text-[9px] font-extrabold"
+                  className="rounded-full border px-1.5 py-px font-mono text-[11px] font-medium"
                   style={memberTaskChipStyle(task, next, accent)}
                 >
                   #{task.id}
@@ -678,7 +679,7 @@ function TaskCard({
 }) {
   const { task, state, depth, x, y } = positioned
   const owner = taskOwnerVisual(task, snapshot, members, depth)
-  const accent = owner?.accent ?? 'var(--color-brand)'
+  const accent = owner?.accent ?? 'var(--color-info)'
   const colors = taskStateColors(state, accent)
   // Still in progress on the list, but its owner stopped, failed or waits to
   // retry: say so instead of animating work nobody is doing.
@@ -708,7 +709,7 @@ function TaskCard({
       onMouseLeave={onHoverEnd}
       onFocus={onFocus}
       onBlur={onBlur}
-      className={`agent-teams-task absolute z-20 flex h-[92px] w-[200px] cursor-pointer flex-col gap-[5px] rounded-[10px] border p-[9px_10px] text-left shadow-none outline-none transition-[opacity,border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-card)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)] active:translate-y-0 ${justUnlocked ? 'agent-teams-unlocked' : ''}`}
+      className={`agent-teams-task absolute z-[var(--z-sticky)] flex h-[92px] w-[200px] cursor-pointer flex-col gap-[5px] rounded-[var(--radius-md)] border p-[9px_10px] text-left shadow-none outline-none transition-[opacity,border-color,box-shadow,transform] hover:-translate-y-px hover:border-[var(--color-border-strong)] hover:shadow-[var(--shadow-card)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)] active:translate-y-0 ${justUnlocked ? 'agent-teams-unlocked' : ''}`}
       style={{
         left: x,
         top: y,
@@ -718,11 +719,11 @@ function TaskCard({
       }}
     >
       <span className="flex items-center justify-between gap-1.5">
-        <span data-task-id={task.id} className="shrink-0 font-mono text-[10px] font-extrabold text-[var(--color-text-tertiary)]">
+        <span data-task-id={task.id} className="shrink-0 font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">
           #{task.id}
         </span>
         <span
-          className="shrink-0 rounded-full border px-1.5 py-px text-[9.5px] font-extrabold"
+          className="shrink-0 rounded-full border px-1.5 py-px text-[11px] font-semibold"
           style={{
             backgroundColor: justUnlocked ? 'var(--color-success-container)' : stall?.background ?? colors.pillBackground,
             borderColor: justUnlocked ? 'var(--color-success)' : stall?.border ?? colors.border,
@@ -747,10 +748,10 @@ function TaskCard({
         ) : (
           <span aria-hidden="true" className="h-5 w-5 shrink-0" />
         )}
-        <span className="min-w-0 flex-1 truncate font-mono text-[9.5px] font-bold text-[var(--color-text-secondary)]" title={owner?.inferred ? t('agentTeams.task.reconstructedOwner') : undefined}>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] font-medium text-[var(--color-text-secondary)]" title={owner?.inferred ? t('agentTeams.task.reconstructedOwner') : undefined}>
           {ownerLabel}
         </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-[9.5px] text-[var(--color-text-tertiary)]">
+        <span className="shrink-0 whitespace-nowrap font-mono text-[11px] text-[var(--color-text-tertiary)]">
           {dependencies
             ? state === 'blocked'
               ? `${t('agentTeams.task.dependsOn')} ${dependencies}`
@@ -1024,7 +1025,7 @@ export function AgentTeamsCanvas({
                   data-edge-active={focusedChain && related ? 'true' : 'false'}
                   d={dependencyPath(from, to)}
                   fill="none"
-                  stroke={fresh ? 'var(--color-success)' : satisfied ? owner?.accent ?? 'var(--color-brand)' : 'var(--color-border)'}
+                  stroke={fresh ? 'var(--color-success)' : satisfied ? owner?.accent ?? 'var(--color-text-secondary)' : 'var(--color-border)'}
                   strokeWidth={fresh ? 3 : focusedChain && related ? 2.5 : 2}
                   strokeDasharray="7 7"
                   opacity={related ? (satisfied ? 0.95 : 0.8) : 0.2}
@@ -1034,7 +1035,7 @@ export function AgentTeamsCanvas({
                   cx={to.x - 4}
                   cy={to.y + TASK_HEIGHT / 2}
                   r={3.2}
-                  fill={fresh ? 'var(--color-success)' : satisfied ? owner?.accent ?? 'var(--color-brand)' : 'var(--color-border)'}
+                  fill={fresh ? 'var(--color-success)' : satisfied ? owner?.accent ?? 'var(--color-text-secondary)' : 'var(--color-border)'}
                   opacity={related ? 1 : 0.2}
                 />
               </g>
@@ -1075,13 +1076,13 @@ export function AgentTeamsCanvas({
         </svg>
 
         <div
-          className="absolute z-10 whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]"
+          className="absolute z-[var(--z-raised)] whitespace-nowrap text-[11px] font-semibold text-[var(--color-text-tertiary)]"
           style={{ left: FORMATION_TITLE_X, top: FORMATION_TITLE_Y }}
         >
           {t('agentTeams.canvas.formation')}
         </div>
         <div
-          className="absolute z-10 whitespace-nowrap text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]"
+          className="absolute z-[var(--z-raised)] whitespace-nowrap text-[11px] font-semibold text-[var(--color-text-tertiary)]"
           style={{ left: FORMATION_TITLE_X, top: TASKS_TITLE_Y }}
         >
           {t('agentTeams.canvas.tasks')}
@@ -1098,13 +1099,13 @@ export function AgentTeamsCanvas({
           return (
             <div
               key={lane.depth}
-              className="absolute z-10 flex items-center justify-between px-3"
+              className="absolute z-[var(--z-raised)] flex items-center justify-between px-3"
               style={{ left: lane.x, top: LANE_TOP + 8, width: lane.width }}
             >
-              <span className="truncate text-[10px] font-extrabold uppercase tracking-[0.1em] text-[var(--color-text-secondary)]">
+              <span className="truncate text-[11px] font-semibold text-[var(--color-text-secondary)]">
                 {title}
               </span>
-              <span className="shrink-0 font-mono text-[10px] font-bold text-[var(--color-text-tertiary)]">
+              <span className="shrink-0 font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">
                 {completed}/{lane.count}
               </span>
             </div>
@@ -1158,7 +1159,7 @@ export function AgentTeamsCanvas({
             aria-hidden="true"
             data-testid="agent-teams-active-flight"
             data-flight-channel={route.channel}
-            className="agent-teams-flight pointer-events-none absolute z-30 flex items-center gap-1.5 whitespace-nowrap rounded-full border-[1.5px] bg-[var(--color-surface-container-lowest)] px-2 py-1 shadow-[var(--shadow-card)]"
+            className="agent-teams-flight pointer-events-none absolute z-[var(--z-nav)] flex items-center gap-1.5 whitespace-nowrap rounded-full border-[1.5px] bg-[var(--color-surface-container-lowest)] px-2 py-1 shadow-[var(--shadow-card)]"
             style={{
               borderColor: route.color,
               color: route.color,
@@ -1168,13 +1169,13 @@ export function AgentTeamsCanvas({
             } as CSSProperties}
           >
             <span className="h-[7px] w-[7px] rounded-full" style={{ backgroundColor: route.color }} />
-            <span className="font-mono text-[10px] font-extrabold">{route.label}</span>
+            <span className="font-mono text-[11px] font-medium">{route.label}</span>
           </div>
         ))}
 
         <div
           data-testid="agent-teams-legend"
-          className="absolute z-10 flex items-center gap-[22px] whitespace-nowrap text-[10.5px] font-semibold text-[var(--color-text-secondary)]"
+          className="absolute z-[var(--z-raised)] flex items-center gap-[22px] whitespace-nowrap text-[11px] font-semibold text-[var(--color-text-secondary)]"
           style={{ left: 32, top: layout.legendY }}
         >
           <span className="flex items-center gap-1.5">
@@ -1182,7 +1183,7 @@ export function AgentTeamsCanvas({
             {t('agentTeams.legend.unmet')}
           </span>
           <span className="flex items-center gap-1.5">
-            <svg aria-hidden="true" width="26" height="6"><path d="M 0,3 L 26,3" stroke="var(--color-brand)" strokeWidth="2" strokeDasharray="7 7" className="agent-teams-flow" /></svg>
+            <svg aria-hidden="true" width="26" height="6"><path d="M 0,3 L 26,3" stroke="var(--color-text-secondary)" strokeWidth="2" strokeDasharray="7 7" className="agent-teams-flow" /></svg>
             {t('agentTeams.legend.satisfied')}
           </span>
           <span className="flex items-center gap-1.5">
@@ -1194,7 +1195,7 @@ export function AgentTeamsCanvas({
             {t('agentTeams.legend.unlocked')}
           </span>
           <span className="flex items-center gap-1.5">
-            <span aria-hidden="true" className="h-4 w-4 rounded-full border-[1.5px] border-[var(--color-brand)]" />
+            <span aria-hidden="true" className="h-4 w-4 rounded-full border-[1.5px] border-[var(--color-info)]" />
             {t('agentTeams.legend.flight')}
           </span>
         </div>

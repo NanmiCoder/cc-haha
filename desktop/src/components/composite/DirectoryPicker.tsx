@@ -1,5 +1,17 @@
 import { useState, useEffect, useId, useMemo, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  ChevronLeft,
+  Folder,
+  FolderGit2,
+  FolderOpen,
+  FolderPlus,
+  Plus,
+  Search,
+} from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { sessionsApi, type RecentProject } from '../../api/sessions'
 import { filesystemApi } from '../../api/filesystem'
@@ -81,22 +93,21 @@ function RecentProjectItem({
       aria-selected={isSelected}
       onMouseEnter={onHover}
       onClick={() => onSelect(project.realPath)}
-      className={`flex w-full items-center gap-3 px-4 text-left transition-colors hover:bg-[var(--color-surface-hover)] ${
-        touch ? 'min-h-[72px] py-3.5' : 'py-3'
+      // Selected and keyboard-highlighted share the hover fill; the terracotta
+      // check on the right is what marks the current project.
+      className={`flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)] ${
+        touch ? 'min-h-[56px] py-2.5' : 'min-h-8 py-1.5'
       } ${
-        isSelected ? 'bg-[var(--color-surface-selected)]' : highlighted ? 'bg-[var(--color-surface-hover)]' : ''
+        isSelected || highlighted ? 'bg-[var(--color-surface-hover)]' : ''
       }`}
     >
       {project.isGit ? (
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--color-text-secondary)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="w-5 flex-shrink-0">
-          <circle cx="18" cy="18" r="3" /><circle cx="6" cy="6" r="3" />
-          <path d="M13 6h3a2 2 0 0 1 2 2v7" /><line x1="6" y1="9" x2="6" y2="21" />
-        </svg>
+        <FolderGit2 size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
       ) : (
-        <span className="material-symbols-outlined w-5 flex-shrink-0 text-center text-[20px] text-[var(--color-text-secondary)]">folder</span>
+        <Folder size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
       )}
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">
+        <div className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">
           {label}
         </div>
         <div className="truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">
@@ -104,9 +115,7 @@ function RecentProjectItem({
         </div>
       </div>
       {isSelected && (
-        <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-brand)]" style={{ fontVariationSettings: "'FILL' 1" }}>
-          check
-        </span>
+        <Check size={14} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" />
       )}
     </button>
   )
@@ -301,34 +310,43 @@ export function RecentProjectsPanel({
     }
   }
 
+  const actionRowClassName = `flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none ${
+    touch ? 'min-h-11 py-2' : 'min-h-8 py-1.5'
+  }`
+
   if (mode === 'browse') {
     return (
       <>
-        <div className="flex flex-wrap items-center gap-1 border-b border-[var(--color-border)] px-3 py-2">
-          <Button variant="link" size="xs" className="mr-2" onClick={() => setMode('recent')}>
-            {'← ' + t('dirPicker.recent')}
-          </Button>
-          <button onClick={() => loadBrowseDir('/')} className="text-[10px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]">/</button>
+        <div className={`flex flex-wrap items-center gap-1 border-b border-[var(--color-border)] pb-1 ${touch ? 'px-3 pt-1' : 'px-1'}`}>
+          <button
+            type="button"
+            onClick={() => setMode('recent')}
+            className="mr-1 inline-flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-xs font-medium text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          >
+            <ChevronLeft size={14} strokeWidth={1.75} aria-hidden="true" />
+            {t('dirPicker.recent')}
+          </button>
+          <button onClick={() => loadBrowseDir('/')} className="font-mono text-[11px] text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]">/</button>
           {browsePath.split('/').filter(Boolean).map((seg, i, arr) => (
             <span key={i} className="flex items-center gap-1">
-              <span className="text-[10px] text-[var(--color-text-tertiary)]">/</span>
+              <span className="font-mono text-[11px] text-[var(--color-text-tertiary)]">/</span>
               <button
                 onClick={() => loadBrowseDir('/' + arr.slice(0, i + 1).join('/'))}
-                className="text-[10px] text-[var(--color-text-accent)] hover:underline"
+                className="font-mono text-[11px] text-[var(--color-text-accent)] hover:underline"
               >{seg}</button>
             </span>
           ))}
         </div>
 
-        <div className={`${touch ? '' : 'max-h-[240px]'} overflow-y-auto`}>
+        <div className={`${touch ? 'px-1.5' : 'max-h-[240px]'} overflow-y-auto py-1`}>
           {loading ? (
             <LoadingState label={t('common.loading')} variant="block" size="sm" />
           ) : (
             <>
               {browseParent && browseParent !== browsePath && (
-                <button onClick={() => loadBrowseDir(browseParent)} className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-surface-hover)]">
-                  <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">arrow_upward</span>
-                  <span className="text-xs text-[var(--color-text-secondary)]">..</span>
+                <button onClick={() => loadBrowseDir(browseParent)} className="flex min-h-[30px] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left transition-colors hover:bg-[var(--color-surface-hover)]">
+                  <ArrowUp size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+                  <span className="text-[13px] text-[var(--color-text-secondary)]">..</span>
                 </button>
               )}
               {browseEntries.length === 0 ? (
@@ -336,15 +354,15 @@ export function RecentProjectsPanel({
               ) : browseEntries.map((entry) => (
                 <div
                   key={entry.path}
-                  className="flex w-full items-center gap-2 px-3 py-2 hover:bg-[var(--color-surface-hover)]"
+                  className="flex min-h-[30px] w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 transition-colors hover:bg-[var(--color-surface-hover)]"
                 >
                   <button
                     type="button"
                     onClick={() => loadBrowseDir(entry.path)}
                     className="flex min-w-0 flex-1 items-center gap-2 text-left"
                   >
-                    <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">folder</span>
-                    <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-primary)]">{entry.name}</span>
+                    <Folder size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+                    <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-text-primary)]">{entry.name}</span>
                   </button>
                   <Button variant="link" size="xs" onClick={() => handleSelect(entry.path)}>
                     {t('common.select')}
@@ -355,9 +373,9 @@ export function RecentProjectsPanel({
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-[var(--color-border)] px-3 py-2">
-          <span className="truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">{browsePath}</span>
-          <Button size="base" onClick={() => handleSelect(browsePath)}>
+        <div className={`flex items-center justify-between gap-3 border-t border-[var(--color-border)] pt-1 ${touch ? 'px-3 pb-2' : 'px-1'}`}>
+          <span className="min-w-0 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{browsePath}</span>
+          <Button size="sm" className="shrink-0" onClick={() => handleSelect(browsePath)}>
             {t('dirPicker.useThisFolder')}
           </Button>
         </div>
@@ -368,13 +386,15 @@ export function RecentProjectsPanel({
   return (
     <>
       {showRecentHeading && (
-        <div className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-[var(--color-outline)]">
+        <div className="px-2 pb-1 pt-2 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
           {t('dirPicker.recent')}
         </div>
       )}
-      <div className="px-3 pb-2">
-        <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2">
-          <span aria-hidden="true" className="material-symbols-outlined shrink-0 text-[16px] text-[var(--color-text-tertiary)]">search</span>
+      {/* The menu-search row: a bare field over a hairline, not a boxed input
+          inside a box. */}
+      <div className={`mb-1 border-b border-[var(--color-border)] ${touch ? 'px-3' : ''}`}>
+        <div className="flex h-8 items-center gap-2 px-2">
+          <Search size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
           <input
             id={searchInputId}
             ref={searchRef}
@@ -386,7 +406,7 @@ export function RecentProjectsPanel({
             placeholder={t('dirPicker.searchProjects')}
             autoComplete="off"
             spellCheck={false}
-            className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+            className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
           />
         </div>
       </div>
@@ -394,7 +414,7 @@ export function RecentProjectsPanel({
         id={listboxId}
         role="listbox"
         aria-label={t('dirPicker.selectProject')}
-        className={`${touch ? '' : 'max-h-[300px]'} overflow-y-auto`}
+        className={`${touch ? 'px-1.5' : 'max-h-[300px]'} overflow-y-auto`}
       >
         {loading ? (
           <LoadingState label={t('common.loading')} variant="block" size="sm" />
@@ -420,23 +440,23 @@ export function RecentProjectsPanel({
       </div>
       {/* Action rows stay out of the listbox: an `option` role would announce
           them as projects. */}
-      <div className="border-t border-[var(--color-border)]">
+      <div className={`mt-1 border-t border-[var(--color-border)] pt-1 ${touch ? 'px-1.5 pb-1.5' : ''}`}>
         {onCreateProject && (
           <button
             type="button"
             onClick={onCreateProject}
-            className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+            className={actionRowClassName}
           >
-            <span className="material-symbols-outlined text-[20px] text-[var(--color-text-tertiary)]">add</span>
-            <span className="text-sm text-[var(--color-text-secondary)]">{t('sidebar.newProject')}</span>
+            <Plus size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+            <span className="text-[13px] text-[var(--color-text-primary)]">{t('sidebar.newProject')}</span>
           </button>
         )}
         <button
           onClick={handleChooseFolder}
-          className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-[var(--color-surface-hover)]"
+          className={actionRowClassName}
         >
-          <span className="material-symbols-outlined text-[20px] text-[var(--color-text-tertiary)]">create_new_folder</span>
-          <span className="text-sm text-[var(--color-text-secondary)]">{t('dirPicker.chooseFolder')}</span>
+          <FolderPlus size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <span className="text-[13px] text-[var(--color-text-primary)]">{t('dirPicker.chooseFolder')}</span>
         </button>
       </div>
     </>
@@ -510,18 +530,22 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
   const isWorkbar = variant === 'workbar'
   const selectedLabel = selectedDisplayName || selectedProject?.repoName || selectedProject?.projectName || projectNameFromPath(value)
   const showGitIcon = selectedProject?.isGit || isGitProject
+  // The workbar trigger is a form field (ProjectEditorModal's folder row), so it
+  // takes the geometry of the secondary button it alternates with there: h-9,
+  // 8px corner, a hairline that firms up on hover.
+  const workbarTriggerClassName = (isMobileBrowser ? 'min-h-11 ' : '') + 'group inline-flex h-9 min-w-0 items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm font-medium leading-none text-[var(--color-text-primary)] transition-[background-color,color,border-color] duration-150 ease-out hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] disabled:cursor-not-allowed disabled:opacity-50'
   const triggerClassName = isWorkbar
-    ? 'max-w-full ' + (isMobileBrowser ? 'min-h-11 ' : '') + 'group inline-flex h-9 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 text-[13.5px] font-medium leading-none text-[var(--color-text-primary)] transition-[background-color,color,border-color] duration-150 ease-out hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] disabled:cursor-not-allowed disabled:opacity-50'
-    : 'flex items-center gap-2 px-3 py-1.5 bg-[var(--color-surface-container-low)] hover:bg-[var(--color-surface-hover)] rounded-full text-xs transition-colors border border-[var(--color-border)]'
+    ? 'max-w-full ' + workbarTriggerClassName
+    : 'inline-flex h-7 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 text-xs text-[var(--color-text-secondary)] transition-colors hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
   const emptyTriggerClassName = isWorkbar
-    ? (isMobileBrowser ? 'min-h-11 ' : '') + 'group inline-flex h-9 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3.5 text-[13.5px] font-medium leading-none text-[var(--color-text-primary)] transition-[background-color,color,border-color] duration-150 ease-out hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] disabled:cursor-not-allowed disabled:opacity-50'
-    : 'flex items-center gap-2 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] transition-colors'
+    ? workbarTriggerClassName
+    : 'inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 text-xs text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
   const containerClassName = isWorkbar
     ? `relative min-w-0 ${isMobileBrowser ? 'flex-1' : 'max-w-[320px] shrink'}`
     : 'relative'
 
-  const dropdownClassName = 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]'
+  const dropdownClassName = 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
   const dropdownStyle = {
     position: 'fixed' as const,
     left: dropdownPos?.left,
@@ -555,16 +579,14 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
           title={value}
         >
           {showGitIcon ? (
-            <svg width="15" height="15" viewBox="0 0 16 16" fill="currentColor" className="shrink-0 text-[var(--color-text-secondary)]">
-              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
-            </svg>
+            <FolderGit2 size={isWorkbar ? 16 : 14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
           ) : (
-            <span aria-hidden="true" className={`material-symbols-outlined shrink-0 ${isWorkbar ? 'text-[17px]' : 'text-[14px]'} text-[var(--color-text-secondary)]`}>folder</span>
+            <Folder size={isWorkbar ? 16 : 14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
           )}
           <span className="min-w-0 flex-1 truncate text-[var(--color-text-primary)]">
             {selectedLabel}
           </span>
-          <span className={`${isWorkbar ? 'text-[15px]' : 'text-[12px]'} material-symbols-outlined shrink-0 text-[var(--color-text-tertiary)]`}>expand_more</span>
+          <ChevronDown size={isWorkbar ? 16 : 14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         </button>
       ) : (
         <button
@@ -573,7 +595,7 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
           className={emptyTriggerClassName}
           title={t('dirPicker.selectProject')}
         >
-          <span aria-hidden="true" className={`material-symbols-outlined shrink-0 ${isWorkbar ? 'text-[17px]' : 'text-[14px]'}`}>folder_open</span>
+          <FolderOpen size={isWorkbar ? 16 : 14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
           <span className="min-w-0 truncate">{t('dirPicker.selectProject')}</span>
         </button>
       )}

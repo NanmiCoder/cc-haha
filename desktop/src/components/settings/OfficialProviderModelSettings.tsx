@@ -102,12 +102,12 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
   }
 
   return (
-    <section className="mt-3 border-t border-[var(--color-border-separator)] pt-3" aria-labelledby={`${providerId}-models-title`}>
+    <section className="mt-3 border-t border-[var(--color-border)] pt-3" aria-labelledby={`${providerId}-models-title`}>
       <div className="mb-3">
-        <h4 id={`${providerId}-models-title`} className="text-sm font-semibold text-[var(--color-text-primary)]">
+        <h4 id={`${providerId}-models-title`} className="text-[13px] font-semibold text-[var(--color-text-secondary)]">
           {t('settings.providers.officialModelsTitle')}
         </h4>
-        <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
+        <p className="mt-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
           {t('settings.providers.officialModelsDesc')}
         </p>
       </div>
@@ -143,7 +143,7 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
 
           <div className="flex items-center gap-3">
             <Button
-              size="sm"
+              size="base"
               onClick={handleSave}
               loading={isSaving}
               disabled={!models.main.trim()}

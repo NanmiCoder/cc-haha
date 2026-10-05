@@ -919,8 +919,7 @@ describe('AskUserQuestion', () => {
       expect((screen.getByPlaceholderText('Type your answer...') as HTMLTextAreaElement).value)
         .toBe('custom q2')
       fireEvent.click(screen.getByRole('button', { name: /Q1$/ }))
-      expect(screen.getByRole('button', { name: /^A1$/ }).getAttribute('class'))
-        .toContain('border-[var(--color-secondary)]')
+      expect(screen.getByRole('button', { name: /^A1$/ }).getAttribute('aria-pressed')).toBe('true')
     })
 
     it('does not resurrect the form once the question was submitted', () => {

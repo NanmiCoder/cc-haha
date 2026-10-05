@@ -705,7 +705,7 @@ export function PetApp() {
                 void persistPreferences({ showTaskPanel: false })
               }}
             >
-              <ChevronDown size={16} aria-hidden="true" />
+              <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" />
             </button>
           </section>
         )}

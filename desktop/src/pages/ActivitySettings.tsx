@@ -1,13 +1,20 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react'
+import { Box, ChartNoAxesColumn, CircleAlert, Pencil, Puzzle, Upload } from 'lucide-react'
 import { activityStatsApi, type ActivityStatsResponse, type DailyActivity } from '../api/activityStats'
 import {
   desktopUiPreferencesApi,
   getProfileAvatarUrl,
   type DesktopProfilePreferences,
 } from '../api/desktopUiPreferences'
+import { SettingsPageHeader, SettingsSection } from '@/components/settings/SettingsSection'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { EmptyState } from '@/components/ui/EmptyState'
+import { IconButton } from '@/components/ui/IconButton'
+import { Input } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
+import { cx } from '@/lib/cx'
 import { type Locale, useTranslation } from '../i18n'
 import { useSettingsStore } from '../stores/settingsStore'
 import { publicAssetPath } from '../lib/publicAsset'
@@ -46,6 +53,9 @@ type PluginRankItem = {
 type HeatmapMode = 'daily' | 'weekly' | 'cumulative'
 
 const WEEK_COUNT = 52
+const CHART_DAY_COUNT = 14
+/** Columns a month name needs ("Sep", "10月") before the next label may start. */
+const MONTH_LABEL_MIN_WEEKS = 3
 const WEEKDAY_LABEL_KEYS = [
   'settings.activity.weekday.mon',
   'settings.activity.weekday.wed',
@@ -107,6 +117,13 @@ function formatDateLabel(dateKey: string, locale: Locale) {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+  })
+}
+
+function formatShortDate(dateKey: string, locale: Locale) {
+  return parseLocalDate(dateKey).toLocaleDateString(DATE_LOCALES[locale], {
+    month: 'numeric',
+    day: 'numeric',
   })
 }
 
@@ -283,6 +300,32 @@ function getDailyTokenMap(stats: ActivityStatsResponse | null) {
   return map
 }
 
+/** The trailing window the daily bar chart covers, ending today. */
+function buildRecentDailyTokens(stats: ActivityStatsResponse | null, dayCount: number) {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const tokenMap = getDailyTokenMap(stats)
+  return Array.from({ length: dayCount }, (_, index) => {
+    const date = localDateKey(addDays(today, index - (dayCount - 1)))
+    return { date, tokens: tokenMap.get(date) ?? 0 }
+  })
+}
+
+function buildModelRows(stats: ActivityStatsResponse | null) {
+  const unpriced = new Set(stats?.unpricedModels ?? [])
+  return Object.entries(stats?.modelUsage ?? {})
+    .map(([model, usage]) => ({
+      model,
+      fresh: getFreshTokenTotal(usage),
+      cached: usage.cacheReadInputTokens ?? 0,
+      total: getModelTokenTotal(usage),
+      costUSD: usage.costUSD ?? 0,
+      unpriced: unpriced.has(model),
+    }))
+    .filter((row) => row.total > 0)
+    .sort((a, b) => b.total - a.total || a.model.localeCompare(b.model))
+}
+
 function getHeatLevel(day: DailyActivity | undefined, tokens: number, maxScore: number) {
   const sessionCount = day?.sessionCount ?? 0
   if (sessionCount === 0 && tokens === 0) return 0
@@ -420,10 +463,16 @@ function buildMonthLabels(days: HeatmapDay[], locale: Locale) {
   const lastDate = parseLocalDate(lastDay.date)
   let previousMonth = -1
 
-  for (let week = 0; week < WEEK_COUNT; week += 1) {
+  // A month that starts in the last two columns has no room for its name; it
+  // would overhang the grid's right edge (GitHub drops it for the same reason).
+  for (let week = 0; week < WEEK_COUNT - (MONTH_LABEL_MIN_WEEKS - 1); week += 1) {
     const weekDate = addDays(firstDate, week * 7)
     if (weekDate > lastDate) break
     if (weekDate.getMonth() !== previousMonth) {
+      // The window can open on the tail of a month: its label would collide
+      // with the next one, so the full month keeps the space.
+      const previous = labels[labels.length - 1]
+      if (previous && week - previous.week < MONTH_LABEL_MIN_WEEKS) labels.pop()
       labels.push({
         week,
         label: weekDate.toLocaleDateString(DATE_LOCALES[locale], { month: 'short' }),
@@ -616,6 +665,8 @@ export function ActivitySettings() {
   }, [stats])
   const unpricedModelCount = stats?.unpricedModels?.length ?? 0
   const topPluginItems = useMemo(() => buildPluginAndSkillRankItems(stats), [stats])
+  const recentDays = useMemo(() => buildRecentDailyTokens(stats, CHART_DAY_COUNT), [stats])
+  const modelRows = useMemo(() => buildModelRows(stats), [stats])
   const metrics: SummaryMetric[] = [
     {
       label: t('settings.activity.totalTokens'),
@@ -770,10 +821,21 @@ export function ActivitySettings() {
     }
   }
 
+  const recentPeakTokens = Math.max(...recentDays.map((day) => day.tokens), 0)
+  const recentFirstDay = recentDays[0]
+  const recentLastDay = recentDays[recentDays.length - 1]
+
   return (
-    <div className="mx-auto w-full max-w-[1060px] min-w-0 pb-12">
-      <section className="relative flex min-h-[176px] flex-col items-center justify-start pt-4 text-center">
-        <div className="relative h-16 w-16 overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-card)]">
+    <div className="w-full min-w-0">
+      <SettingsPageHeader
+        title={t('settings.activity.title')}
+        description={t('settings.activity.subtitleLoading')}
+      />
+
+      {/* The identity this page is screenshotted under. The edit control stays
+          invisible until hover or keyboard focus so it never lands in a shot. */}
+      <div className="group/activity-profile mt-6 flex items-center gap-3.5 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-4 py-3.5">
+        <div className="relative h-11 w-11 shrink-0 overflow-hidden rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
           <img
             src={avatarSrc}
             alt={t('settings.activity.avatarAlt', { name: profile.displayName })}
@@ -784,100 +846,188 @@ export function ActivitySettings() {
             }}
           />
         </div>
-        <div className="group/activity-profile mt-4 flex w-full max-w-[756px] items-start justify-center gap-2">
-          <h1 className="min-w-0 max-w-[720px] whitespace-normal break-words text-[26px] font-semibold text-[var(--color-text-primary)] sm:text-[31px]" style={{ fontFamily: 'var(--font-headline)' }}>{profile.displayName}</h1>
-          <button
-            type="button"
-            aria-label={t('settings.activity.editProfile')}
-            title={t('settings.activity.editProfile')}
-            className="mt-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-tertiary)] opacity-0 transition-[background-color,color,opacity,transform] group-hover/activity-profile:opacity-100 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-2 focus:ring-offset-[var(--color-surface)] focus-visible:opacity-100 active:translate-y-[1px] disabled:pointer-events-none disabled:opacity-0"
-            onClick={() => {
-              setIsEditingProfile(true)
-              setDraftDisplayName(profile.displayName)
-              setDraftSubtitle(profile.subtitle)
-            }}
-            disabled={isProfileLoading}
-          >
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">edit</span>
-          </button>
+        <div className="min-w-0 flex-1">
+          <h3 className="min-w-0 whitespace-normal break-words text-[15px] font-semibold leading-snug text-[var(--color-text-primary)]">
+            {profile.displayName}
+          </h3>
+          {profileSubtitleHref ? (
+            <a
+              href={profileSubtitleHref}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-0.5 block max-w-full truncate text-xs text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-accent)]"
+            >
+              {profile.subtitle}
+            </a>
+          ) : (
+            <div className="mt-0.5 max-w-full truncate text-xs text-[var(--color-text-tertiary)]">{profile.subtitle}</div>
+          )}
+          {profileStatus && <div className="mt-1 text-xs text-[var(--color-success)]">{profileStatus}</div>}
+          {profileError && !isEditingProfile && <div className="mt-1 text-xs text-[var(--color-error)]">{profileError}</div>}
         </div>
-        {profileSubtitleHref ? (
-          <a
-            href={profileSubtitleHref}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-2 inline-flex max-w-full items-center justify-center gap-2 truncate text-base text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-primary)]"
-          >
-            <span>{profile.subtitle}</span>
-          </a>
-        ) : (
-          <div className="mt-2 max-w-full truncate text-base text-[var(--color-text-tertiary)]">{profile.subtitle}</div>
-        )}
-        {profileStatus && <div className="mt-3 text-xs text-[var(--color-success)]">{profileStatus}</div>}
-        {profileError && !isEditingProfile && <div className="mt-3 text-xs text-[var(--color-error)]">{profileError}</div>}
-      </section>
+        <IconButton
+          icon={<Pencil size={14} strokeWidth={1.75} aria-hidden="true" />}
+          label={t('settings.activity.editProfile')}
+          size="sm"
+          tone="muted"
+          disabledStyle="hide"
+          className="opacity-0 group-hover/activity-profile:opacity-100 focus-visible:opacity-100"
+          onClick={() => {
+            setIsEditingProfile(true)
+            setDraftDisplayName(profile.displayName)
+            setDraftSubtitle(profile.subtitle)
+          }}
+          disabled={isProfileLoading}
+        />
+      </div>
 
-      <section className="activity-summary-panel mx-auto mt-7 w-full min-w-0 max-w-[900px]">
-        {isLoading ? (
-          <div className="activity-summary-grid grid gap-3">
-            {Array.from({ length: 5 }).map((_, index) => (
-              <Card
-                key={index}
-                radius="xl"
-                surface="lowest"
-                padding="none"
-                shadow="card"
-                className={`activity-summary-metric min-h-[92px] animate-pulse px-4 py-4 ${
-                  index === 0 ? 'activity-summary-metric-primary' : ''
-                }`}
-              >
-                <div className="mx-auto h-6 w-16 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)]" />
-                <div className="mx-auto mt-2.5 h-3 w-20 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)]" />
-                <div className="mx-auto mt-2 h-2.5 w-14 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)]" />
-              </Card>
-            ))}
-          </div>
-        ) : (
-          <div className="activity-summary-grid grid gap-3">
-            {metrics.map((metric, index) => {
-              const isPrimary = index === 0
-              return (
+      <section className="activity-summary-panel mt-3 w-full min-w-0">
+        <div className="activity-summary-grid grid gap-3">
+          {isLoading
+            ? Array.from({ length: 5 }).map((_, index) => (
                 <Card
-                  key={metric.label}
-                  radius="xl"
+                  key={index}
                   surface="lowest"
                   padding="none"
-                  lift
+                  aria-hidden="true"
+                  className={cx(
+                    'activity-summary-metric grid min-h-[92px] animate-pulse content-start gap-2 px-4 py-3.5',
+                    index === 0 && 'activity-summary-metric-primary',
+                  )}
+                >
+                  <div className="h-3 w-16 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)]" />
+                  <div className="h-6 w-20 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)]" />
+                  <div className="h-3 w-12 rounded-[var(--radius-xs)] bg-[var(--color-surface-container)]" />
+                </Card>
+              ))
+            : metrics.map((metric, index) => (
+                <Card
+                  key={metric.label}
+                  surface="lowest"
+                  padding="none"
                   // `backwards` holds the entry frame through `animationDelay` so the stagger still
                   // reads, without a standalone `opacity-0`: that pairing is what made these cards
                   // invisible once the keyframes they named were dropped from globals.css.
-                  className={`activity-summary-metric min-w-0 px-4 py-4 text-center [animation:screen-pop_420ms_cubic-bezier(0.16,1,0.3,1)_backwards] motion-reduce:animate-none ${
-                    isPrimary ? 'activity-summary-metric-primary' : ''
-                  }`}
+                  className={cx(
+                    'activity-summary-metric grid min-w-0 content-start gap-1 px-4 py-3.5',
+                    '[animation:screen-pop_420ms_cubic-bezier(0.16,1,0.3,1)_backwards] motion-reduce:animate-none',
+                    index === 0 && 'activity-summary-metric-primary',
+                  )}
                   style={{ animationDelay: `${index * 45}ms` }}
                 >
-                  <div className="flex min-h-[68px] flex-col items-center justify-center gap-2">
-                    <div
-                      // Two lines rather than one truncated one: durations like "436 小时 26 分钟"
-                      // do not fit a fifth of the row and were rendering as "436 小…".
-                      className={`activity-summary-value max-w-full min-w-0 line-clamp-2 font-semibold leading-[1.15] text-[var(--color-text-primary)] tabular-nums ${
-                        isPrimary ? 'text-[25px]' : 'text-[24px]'
-                      }`}
-                      style={{ fontFamily: 'var(--font-headline)' }}
-                    >
-                      {metric.value}
-                    </div>
-                    <div className="min-w-0 truncate text-[12px] font-medium leading-tight text-[var(--color-text-tertiary)]">
-                      {metric.label}
-                    </div>
-                    {metric.detail && <div className="max-w-full truncate text-[11px] leading-tight text-[var(--color-text-tertiary)]">{metric.detail}</div>}
+                  <div className="min-w-0 truncate text-xs text-[var(--color-text-tertiary)]">{metric.label}</div>
+                  <div
+                    // Two lines rather than one truncated one: durations like "436 小时 26 分钟"
+                    // do not fit a third of the row and were rendering as "436 小…".
+                    className="activity-summary-value line-clamp-2 min-w-0 max-w-full text-[22px] font-semibold leading-tight tabular-nums text-[var(--color-text-primary)]"
+                  >
+                    {metric.value}
                   </div>
+                  {metric.detail && (
+                    <div className="min-w-0 truncate text-xs text-[var(--color-text-tertiary)]">{metric.detail}</div>
+                  )}
                 </Card>
+              ))}
+        </div>
+      </section>
+
+      {!isLoading && !error && hasUsage && recentFirstDay && recentLastDay && (
+        <Card surface="lowest" padding="none" className="mt-3 px-4 pb-2.5 pt-4">
+          <div className="mb-1 flex items-baseline justify-between gap-3">
+            <span className="min-w-0 truncate text-xs text-[var(--color-text-secondary)]">
+              {t('settings.activity.heatmapLabel')}
+            </span>
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+              {formatShortDate(recentFirstDay.date, locale)} – {formatShortDate(recentLastDay.date, locale)}
+            </span>
+          </div>
+          <ol
+            aria-label={t('settings.activity.heatmapLabel')}
+            className="flex h-[150px] items-end gap-2 pt-5"
+            style={{
+              backgroundImage: 'repeating-linear-gradient(to top, var(--color-border) 0 1px, transparent 1px 43px)',
+            }}
+          >
+            {recentDays.map((day, index) => {
+              const isLast = index === recentDays.length - 1
+              const isPeak = day.tokens > 0 && day.tokens === recentPeakTokens
+              const height = recentPeakTokens > 0 ? (day.tokens / recentPeakTokens) * 100 : 0
+              const dateLabel = formatDateLabel(day.date, locale)
+              return (
+                <li
+                  key={day.date}
+                  className="group/activity-bar relative flex h-full min-w-0 flex-1 items-end"
+                  title={`${dateLabel} · ${formatTokens(day.tokens)} ${t('settings.activity.tokens')}`}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={cx(
+                      'w-full rounded-t-[var(--radius-xs)] transition-colors',
+                      isLast
+                        ? 'bg-[var(--color-brand)]'
+                        : 'bg-[var(--color-outline)] group-hover/activity-bar:bg-[var(--color-text-tertiary)]',
+                    )}
+                    // Today keeps a 2px stub even before its first reply, so the
+                    // highlighted "now" end of the window never disappears.
+                    style={{ height: `${height}%`, minHeight: isLast ? 2 : undefined }}
+                  />
+                  {day.tokens > 0 && (
+                    <span
+                      aria-hidden="true"
+                      className={cx(
+                        'pointer-events-none absolute left-1/2 -translate-x-1/2 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]',
+                        isLast || isPeak ? 'opacity-100' : 'opacity-0 group-hover/activity-bar:opacity-100',
+                      )}
+                      style={{ bottom: `calc(${height}% + 4px)` }}
+                    >
+                      {formatTokens(day.tokens)}
+                    </span>
+                  )}
+                  <span className="sr-only">{`${dateLabel}: ${formatTokens(day.tokens)} ${t('settings.activity.tokens')}`}</span>
+                </li>
               )
             })}
+          </ol>
+          <div aria-hidden="true" className="mt-1.5 flex gap-2">
+            {recentDays.map((day, index) => (
+              <span
+                key={day.date}
+                className="min-w-0 flex-1 whitespace-nowrap text-center font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
+              >
+                {(recentDays.length - 1 - index) % 3 === 0 ? formatShortDate(day.date, locale) : ''}
+              </span>
+            ))}
           </div>
-        )}
-      </section>
+        </Card>
+      )}
+
+      {!isLoading && !error && hasUsage && modelRows.length > 0 && (
+        <Card surface="lowest" padding="none" role="table" className="mt-3 overflow-hidden">
+          <div
+            role="row"
+            className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)] gap-3 bg-[var(--color-surface-container)] px-4 py-2.5 text-xs font-semibold text-[var(--color-text-tertiary)]"
+          >
+            <span role="columnheader" className="min-w-0 truncate">{t('settings.agents.model')}</span>
+            <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.freshTokens')}</span>
+            <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.cachedTokens')}</span>
+            <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.estimatedCost')}</span>
+          </div>
+          {modelRows.map((row) => (
+            <div
+              key={row.model}
+              role="row"
+              className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)] items-center gap-3 border-t border-[var(--color-border)] px-4 py-2.5 text-[13px] tabular-nums text-[var(--color-text-primary)]"
+            >
+              <span role="cell" className="min-w-0 truncate font-mono text-xs" title={row.model}>{row.model}</span>
+              <span role="cell" className="min-w-0 truncate text-right">{formatTokens(row.fresh)}</span>
+              <span role="cell" className="min-w-0 truncate text-right">{formatTokens(row.cached)}</span>
+              <span role="cell" className="min-w-0 truncate text-right">
+                {row.unpriced ? <span className="text-[var(--color-text-tertiary)]">—</span> : formatCostUSD(row.costUSD, locale)}
+              </span>
+            </div>
+          ))}
+        </Card>
+      )}
 
       <Modal
         open={isEditingProfile}
@@ -898,29 +1048,17 @@ export function ActivitySettings() {
         <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.activity.displayNameHelper')}</p>
 
         <div className="mt-5 grid gap-4">
-          <div className="grid gap-2">
-            <label htmlFor="activity-profile-display-name" className="text-xs font-medium text-[var(--color-text-secondary)]">
-              {t('settings.activity.displayName')}
-            </label>
-            <input
-              id="activity-profile-display-name"
-              value={draftDisplayName}
-              onChange={(event) => setDraftDisplayName(event.target.value)}
-              className="h-10 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-border-focus)]"
-            />
-          </div>
+          <Input
+            label={t('settings.activity.displayName')}
+            value={draftDisplayName}
+            onChange={(event) => setDraftDisplayName(event.target.value)}
+          />
 
-          <div className="grid gap-2">
-            <label htmlFor="activity-profile-subtitle" className="text-xs font-medium text-[var(--color-text-secondary)]">
-              {t('settings.activity.subtitle')}
-            </label>
-            <input
-              id="activity-profile-subtitle"
-              value={draftSubtitle}
-              onChange={(event) => setDraftSubtitle(event.target.value)}
-              className="h-10 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-sm text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-border-focus)]"
-            />
-          </div>
+          <Input
+            label={t('settings.activity.subtitle')}
+            value={draftSubtitle}
+            onChange={(event) => setDraftSubtitle(event.target.value)}
+          />
 
           <div className="grid gap-2">
             <div className="text-xs font-medium text-[var(--color-text-secondary)]">{t('settings.activity.avatar')}</div>
@@ -937,7 +1075,7 @@ export function ActivitySettings() {
                 variant="secondary"
                 size="base"
                 onClick={() => avatarInputRef.current?.click()}
-                icon={<span className="material-symbols-outlined text-[15px]" aria-hidden="true">upload</span>}
+                icon={<Upload size={14} strokeWidth={1.75} aria-hidden="true" />}
               >
                 {t('settings.activity.changeAvatar')}
               </Button>
@@ -950,77 +1088,74 @@ export function ActivitySettings() {
           </div>
         </div>
 
-        {profileError && <div className="mt-4 rounded-[var(--radius-md)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-3 py-2 text-xs text-[var(--color-on-error-container)]">{profileError}</div>}
+        {profileError && (
+          <div className="mt-4 flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-xs text-[var(--color-on-error-container)]">
+            <CircleAlert size={14} strokeWidth={1.75} aria-hidden="true" className="mt-px shrink-0" />
+            <span className="min-w-0">{profileError}</span>
+          </div>
+        )}
       </Modal>
 
-      <div className="mt-10">
-        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h2 className="text-xl font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.activity.tokenActivity')}</h2>
-          </div>
-          <div className="inline-flex w-fit items-center gap-7">
-            {modeOptions.map((option) => (
-              <button
-                key={option.mode}
-                type="button"
-                aria-pressed={heatmapMode === option.mode}
-                title={option.help}
-                className={`text-lg font-semibold transition-[color,transform] active:translate-y-[1px] ${
-                  heatmapMode === option.mode
-                    ? 'text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
-                }`}
-                onClick={() => setHeatmapMode(option.mode)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
+      <SettingsSection
+        title={t('settings.activity.tokenActivity')}
+        action={
+          <SegmentedControl
+            size="sm"
+            label={t('settings.activity.tokenActivity')}
+            value={heatmapMode}
+            onChange={setHeatmapMode}
+            items={modeOptions.map((option) => ({ value: option.mode, label: option.label, title: option.help }))}
+          />
+        }
+      >
         {isLoading ? (
-          <div className="min-h-[190px] space-y-3">
-            <div className="h-4 w-1/4 animate-pulse rounded bg-[var(--color-surface-container)]" />
-            <div className="grid grid-flow-col gap-[3px]">
-              {Array.from({ length: 52 }).map((_, col) => (
+          <Card surface="lowest" padding="none" aria-hidden="true" className="min-h-[190px] px-4 py-4">
+            <div className="h-3 w-1/4 animate-pulse rounded-[var(--radius-xs)] bg-[var(--color-surface-container)]" />
+            <div className="mt-3 grid grid-flow-col justify-start gap-[3px]">
+              {Array.from({ length: WEEK_COUNT }).map((_, col) => (
                 <div key={col} className="grid grid-rows-7 gap-[3px]">
                   {Array.from({ length: 7 }).map((__, row) => (
-                    <div key={row} className="h-2.5 w-2.5 animate-pulse rounded-[3px] bg-[var(--color-surface-container)]" />
+                    <div key={row} className="activity-heat-swatch h-2.5 w-2.5 animate-pulse bg-[var(--color-surface-container)]" />
                   ))}
                 </div>
               ))}
             </div>
-          </div>
+          </Card>
         ) : error ? (
-          <div className="rounded-[var(--radius-md)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-4 py-3 text-sm text-[var(--color-on-error-container)]">
-            {error}
+          <div
+            role="alert"
+            className="flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-xs text-[var(--color-on-error-container)]"
+          >
+            <CircleAlert size={14} strokeWidth={1.75} aria-hidden="true" className="mt-px shrink-0" />
+            <span className="min-w-0 break-words">{error}</span>
           </div>
         ) : !hasUsage ? (
-          <div className="flex min-h-[190px] items-center justify-center">
-            <div className="max-w-sm text-center">
-              <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-tertiary)]">
-                <span className="material-symbols-outlined text-[20px]" aria-hidden="true">monitoring</span>
-              </div>
-              <div className="mt-3 text-sm font-medium text-[var(--color-text-primary)]">{t('settings.activity.emptyTitle')}</div>
-              <p className="mt-1 text-sm leading-5 text-[var(--color-text-tertiary)]">{t('settings.activity.emptyBody')}</p>
-            </div>
-          </div>
+          <EmptyState
+            size="md"
+            icon={<ChartNoAxesColumn size={18} strokeWidth={1.75} />}
+            title={t('settings.activity.emptyTitle')}
+            description={t('settings.activity.emptyBody')}
+          />
         ) : (
-          <>
-            <div ref={heatmapMeasureRef} className="min-w-0 pb-2">
+          <Card surface="lowest" padding="none" className="px-4 pb-3.5 pt-4">
+            <div ref={heatmapMeasureRef} className="min-w-0">
               <div className="relative" style={{ width: heatmapWidth, maxWidth: '100%' }}>
+                {/* Absolutely placed by week: grid auto-placement pushed a label
+                    whose 4-column span ran past the last week onto a second row,
+                    and wrapped "10月" into two lines. */}
                 <div
-                  className="mb-3 grid h-5 text-[11px] leading-none text-[var(--color-text-tertiary)]"
-                  style={{
-                    marginLeft: HEAT_LABEL_WIDTH,
-                    gridTemplateColumns: `repeat(${WEEK_COUNT}, ${heatCellSize}px)`,
-                    columnGap: HEAT_CELL_GAP,
-                  }}
+                  data-testid="activity-month-labels"
+                  className="relative mb-3 h-5 text-[11px] leading-none text-[var(--color-text-tertiary)]"
+                  style={{ marginLeft: HEAT_LABEL_WIDTH }}
                 >
                   {monthLabels.map((month) => (
-                    <div key={`${month.week}-${month.label}`} style={{ gridColumn: `${month.week + 1} / span 4` }}>
+                    <span
+                      key={`${month.week}-${month.label}`}
+                      className="absolute top-0 whitespace-nowrap"
+                      style={{ left: month.week * (heatCellSize + HEAT_CELL_GAP) }}
+                    >
                       {month.label}
-                    </div>
+                    </span>
                   ))}
                 </div>
 
@@ -1058,11 +1193,12 @@ export function ActivitySettings() {
                           role="gridcell"
                           aria-label={`${cellTitle}: ${cellDetail}`}
                           aria-describedby={activeTooltipDate === day.date ? tooltipId : undefined}
-                          className={`activity-heat-cell rounded-[3px] border focus:outline-none focus:ring-2 focus:ring-[var(--color-brand)] focus:ring-offset-2 focus:ring-offset-[var(--color-surface)] ${
+                          className={cx(
+                            'activity-heat-cell border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-container-lowest)]',
                             isSelected
                               ? 'is-active border-[var(--color-activity-cell-border-active)]'
-                              : 'border-[var(--color-activity-cell-border)] hover:border-[var(--color-activity-cell-border-hover)]'
-                          }`}
+                              : 'border-[var(--color-activity-cell-border)] hover:border-[var(--color-activity-cell-border-hover)]',
+                          )}
                           style={{
                             width: heatCellSize,
                             height: heatCellSize,
@@ -1081,11 +1217,11 @@ export function ActivitySettings() {
                   <div
                     id={`activity-day-tooltip-${tooltipDay.date}`}
                     role="tooltip"
-                    className="pointer-events-none absolute z-20 min-w-[172px] rounded-[var(--radius-md)] border border-[var(--color-activity-tooltip-border)] bg-[var(--color-activity-tooltip-surface)] px-3 py-2 text-xs shadow-xl"
+                    className="pointer-events-none absolute z-[var(--z-tooltip)] min-w-[172px] rounded-[var(--radius-md)] border border-[var(--color-activity-tooltip-border)] bg-[var(--color-activity-tooltip-surface)] px-2.5 py-1.5 text-xs shadow-[var(--shadow-dropdown)]"
                     style={tooltipStyle}
                   >
                     <div className="font-medium text-[var(--color-activity-tooltip-text)]">{getHeatmapCellTitle(tooltipDay, locale, t)}</div>
-                    <div className="mt-1 text-[var(--color-activity-tooltip-muted)]">
+                    <div className="mt-0.5 tabular-nums text-[var(--color-activity-tooltip-muted)]">
                       {getHeatmapCellDetail(tooltipDay, t)}
                     </div>
                   </div>
@@ -1093,62 +1229,65 @@ export function ActivitySettings() {
               </div>
             </div>
 
-            <div className="mt-3 flex items-center justify-end gap-2 text-xs text-[var(--color-text-tertiary)] xl:mt-4">
-              <span>{t('settings.activity.less')}</span>
+            <div className="mt-3 flex items-center justify-end gap-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+              <span className="mr-0.5">{t('settings.activity.less')}</span>
               {HEAT_COLORS.map((color) => (
                 <span
                   key={color}
                   aria-hidden="true"
-                  className="rounded-[3px] border border-[var(--color-activity-cell-border)]"
+                  className="activity-heat-swatch border border-[var(--color-activity-cell-border)]"
                   style={{ width: heatCellSize, height: heatCellSize, backgroundColor: color }}
                 />
               ))}
-              <span>{t('settings.activity.more')}</span>
+              <span className="ml-0.5">{t('settings.activity.more')}</span>
             </div>
-          </>
+          </Card>
         )}
-      </div>
+      </SettingsSection>
 
       {!isLoading && !error && hasUsage && (
-        <div className={`mt-12 grid gap-10 ${
-          topPluginItems.length > 0 ? 'lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1fr)]' : 'lg:max-w-[520px]'
-        }`}>
-          <section className="min-w-0">
-            <h2 className="text-lg font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.activity.activityInsights')}</h2>
-            <dl className="mt-5 grid gap-3">
-              {insightMetrics.map((metric) => (
-                <div key={metric.label} className="grid grid-cols-[minmax(0,1fr)_auto] items-baseline gap-5">
-                  <dt className="min-w-0 truncate text-sm font-medium text-[var(--color-text-tertiary)]">{metric.label}</dt>
-                  <dd className="min-w-0 text-right text-sm font-semibold text-[var(--color-text-primary)]">
-                    <span className="tabular-nums">{metric.value}</span>
-                    {metric.detail && (
-                      <span className="ml-2 text-xs font-medium text-[var(--color-text-tertiary)]">{metric.detail}</span>
-                    )}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </section>
-
-          {topPluginItems.length > 0 && (
-            <section className="min-w-0">
-              <h2 className="text-lg font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.activity.mostUsedPluginsAndSkills')}</h2>
-              <div className="mt-5 grid gap-3">
-                {topPluginItems.map((item) => (
-                  <div key={item.id} className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3">
-                    <span className="flex h-7 w-7 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-tertiary)]">
-                      <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
-                        {item.kind === 'skill' ? 'extension' : 'hub'}
-                      </span>
-                    </span>
-                    <span className="min-w-0 truncate text-sm font-medium text-[var(--color-text-primary)]">{item.label}</span>
-                    <span className="text-sm text-[var(--color-text-tertiary)] tabular-nums">{formatRunCount(item.count, t)}</span>
+        <>
+          <SettingsSection title={t('settings.activity.activityInsights')}>
+            <Card surface="lowest" padding="none" className="overflow-hidden">
+              <dl className="divide-y divide-[var(--color-border)]">
+                {insightMetrics.map((metric) => (
+                  <div key={metric.label} className="flex min-h-[44px] items-center justify-between gap-6 px-4 py-2.5">
+                    <dt className="min-w-0 truncate text-[13px] text-[var(--color-text-secondary)]">{metric.label}</dt>
+                    <dd className="flex min-w-0 items-baseline justify-end gap-2 text-right">
+                      {metric.detail && (
+                        <span className="min-w-0 truncate text-xs text-[var(--color-text-tertiary)]">{metric.detail}</span>
+                      )}
+                      <span className="shrink-0 text-[13px] font-medium tabular-nums text-[var(--color-text-primary)]">{metric.value}</span>
+                    </dd>
                   </div>
                 ))}
-              </div>
-            </section>
+              </dl>
+            </Card>
+          </SettingsSection>
+
+          {topPluginItems.length > 0 && (
+            <SettingsSection title={t('settings.activity.mostUsedPluginsAndSkills')}>
+              <Card surface="lowest" padding="none" className="overflow-hidden">
+                <ul className="divide-y divide-[var(--color-border)]">
+                  {topPluginItems.map((item) => (
+                    <li key={item.id} className="flex min-h-[44px] items-center gap-3 px-4 py-2">
+                      <span
+                        aria-hidden="true"
+                        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]"
+                      >
+                        {item.kind === 'skill'
+                          ? <Box size={14} strokeWidth={1.75} />
+                          : <Puzzle size={14} strokeWidth={1.75} />}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-text-primary)]">{item.label}</span>
+                      <span className="shrink-0 text-xs tabular-nums text-[var(--color-text-tertiary)]">{formatRunCount(item.count, t)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            </SettingsSection>
           )}
-        </div>
+        </>
       )}
     </div>
   )

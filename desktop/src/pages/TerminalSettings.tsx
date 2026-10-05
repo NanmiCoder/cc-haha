@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type WheelEvent } from 'react'
-import { Info } from 'lucide-react'
+import { ChevronDown, CircleAlert, Eraser, ExternalLink, FolderOpen, Info, Monitor, Plus, RotateCcw, SquareTerminal, X } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../i18n'
 import { terminalApi } from '../api/terminal'
 import { useSettingsStore } from '../stores/settingsStore'
@@ -11,6 +11,13 @@ import { Button } from '@/components/ui/Button'
 import { IconButton, type IconButtonSurface } from '@/components/ui/IconButton'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { StatusDot, type Tone } from '@/components/ui/Badge'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/settings/SettingsSection'
 import type { DesktopTerminalStartupShell } from '../types/settings'
 import { getDesktopHost } from '../lib/desktopHost'
 import {
@@ -496,10 +503,14 @@ export function TerminalSettings({
     }
   }
 
-  // The ink panel is only drawn when there is a session behind it; the page
-  // tokens are inverted against the terminal ground, so anything sitting on it
-  // has to switch together.
+  // The terminal panel is only drawn when there is a session behind it; the
+  // terminal palette follows its own tokens, so anything sitting on it has to
+  // switch together.
   const hasTerminalPanel = status !== 'unavailable'
+  // The Settings → Terminal page. The same component also backs the workspace
+  // terminal tab (`workspace`) and the docked bottom panel (`docked`), which own
+  // their own chrome, so the page header and width only apply here.
+  const settingsPage = showPreferences && !workspace && !docked
   const terminalHeaderTitleClass = hasTerminalPanel
     ? 'text-[var(--color-terminal-fg)]'
     : 'text-[var(--color-text-primary)]'
@@ -507,38 +518,46 @@ export function TerminalSettings({
     ? 'text-[var(--color-terminal-muted)]'
     : 'text-[var(--color-text-tertiary)]'
   const terminalHeaderSurface: IconButtonSurface = hasTerminalPanel ? 'terminal' : 'default'
+  const actionIconSize = docked ? 14 : 16
+  const selectedShell = shellItems.find((item) => item.value === startupShell)
 
   return (
-    <div className={`flex h-full flex-col overflow-hidden ${
+    <div className={
       docked
-        ? 'min-h-0 bg-[var(--color-surface-container-lowest)]'
+        ? 'flex h-full min-h-0 flex-col overflow-hidden bg-[var(--color-surface-container-lowest)]'
         : workspace
-          ? 'min-h-0 bg-[var(--color-surface)] px-5 py-4'
-          : 'min-h-[min(720px,calc(100vh-8rem))]'
-    }`}>
+          ? 'flex h-full min-h-0 flex-col overflow-hidden bg-[var(--color-surface)] px-5 py-4'
+          : settingsPage
+            // Settings.tsx owns the page frame (width, gutters); this is just the column.
+            ? 'flex min-w-0 flex-col'
+            : 'flex h-full min-h-[min(720px,calc(100vh-8rem))] flex-col overflow-hidden'
+    }>
+      {settingsPage && (
+        <SettingsPageHeader
+          title={t('settings.terminal.title')}
+          description={t('settings.terminal.description')}
+        />
+      )}
+
       {error && (
-        <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-3 py-2 text-sm text-[var(--color-on-error-container)]">
-          {error}
+        <div className={`${settingsPage ? 'mt-6' : 'mb-3'} flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-on-error-container)]`}>
+          <CircleAlert size={14} strokeWidth={1.75} aria-hidden="true" className="mt-px shrink-0" />
+          <span className="min-w-0 break-words">{error}</span>
         </div>
       )}
 
       {showPreferences && isWindows && (
         <>
-          <div className="mb-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-4">
-            <div className="flex flex-col gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
-                  {t('settings.terminal.preferencesTitle')}
-                </h3>
-                <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                  {t('settings.terminal.preferencesBody')}
-                </p>
-              </div>
-
-              <div className="flex flex-col gap-2">
-                <span className="text-sm font-medium text-[var(--color-text-primary)]">
-                  {t('settings.terminal.startupShell')}
-                </span>
+          <SettingsSection
+            title={t('settings.terminal.preferencesTitle')}
+            description={t('settings.terminal.preferencesBody')}
+          >
+            <SettingsGroup>
+              <SettingsRow
+                title={t('settings.terminal.startupShell')}
+                description={selectedShell?.description}
+                layout="inline"
+              >
                 <Dropdown<DesktopTerminalStartupShell>
                   items={shellItems}
                   value={startupShell}
@@ -547,113 +566,117 @@ export function TerminalSettings({
                     setPreferencesError(null)
                     setPreferencesSaved(false)
                   }}
-                  width="100%"
+                  width={300}
+                  align="right"
                   trigger={
                     // `flex-1` on the label, not `justify-between`: Button pins
                     // `justify-center`, and a className override of it would win
                     // or lose on stylesheet order rather than on class order.
-                    <Button variant="secondary" size="lg" block>
+                    <Button variant="secondary" size="base" className="w-[220px]">
                       <span className="flex-1 truncate text-left font-normal text-[var(--color-text-primary)]">
-                        {shellItems.find((item) => item.value === startupShell)?.label ?? startupShell}
+                        {selectedShell?.label ?? startupShell}
                       </span>
-                      <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)]">expand_more</span>
+                      <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                     </Button>
                   }
                 />
-              </div>
+              </SettingsRow>
 
               {startupShell === 'custom' && (
-                <Input
-                  label={t('settings.terminal.customPath')}
-                  placeholder={t('settings.terminal.customPathPlaceholder')}
-                  value={customShellPath}
-                  onChange={(event) => {
-                    setCustomShellPath(event.target.value)
-                    setPreferencesError(null)
-                    setPreferencesSaved(false)
-                  }}
-                  error={preferencesError ?? undefined}
-                />
+                <SettingsBlock>
+                  <Input
+                    label={t('settings.terminal.customPath')}
+                    placeholder={t('settings.terminal.customPathPlaceholder')}
+                    value={customShellPath}
+                    size="md"
+                    className="font-mono"
+                    onChange={(event) => {
+                      setCustomShellPath(event.target.value)
+                      setPreferencesError(null)
+                      setPreferencesSaved(false)
+                    }}
+                    error={preferencesError ?? undefined}
+                  />
+                </SettingsBlock>
               )}
 
-              {preferencesError && startupShell !== 'custom' && (
-                <p className="text-xs text-[var(--color-error)]">{preferencesError}</p>
-              )}
-
-              <div className="flex flex-wrap items-center gap-3">
+              <SettingsBlock className="flex min-h-[52px] flex-wrap items-center justify-end gap-3">
+                {preferencesError && startupShell !== 'custom' && (
+                  <p className="mr-auto text-xs text-[var(--color-error)]">{preferencesError}</p>
+                )}
+                {preferencesSaved && (
+                  <span className="text-xs text-[var(--color-text-tertiary)]">
+                    {t('settings.terminal.saveShellSuccess')}
+                  </span>
+                )}
                 <Button
                   type="button"
-                  size="sm"
+                  size="base"
                   loading={preferencesSaving}
                   onClick={() => void savePreferences()}
                 >
                   {t('settings.terminal.saveShell')}
                 </Button>
-                {preferencesSaved && (
-                  <span className="text-xs text-[var(--color-text-secondary)]">
-                    {t('settings.terminal.saveShellSuccess')}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
+              </SettingsBlock>
+            </SettingsGroup>
+          </SettingsSection>
           <BashPathSettings isTauri={terminalApi.isAvailable()} />
         </>
       )}
 
-      {/* The workspace already owns a tab strip; only standalone terminals need window chrome. */}
+      {/* The workspace already owns a tab strip; only standalone terminals need a frame. */}
       <div
         className={[
-          'flex min-h-0 flex-1 flex-col overflow-hidden',
-          docked ? '' : `rounded-[var(--radius-xl)] border ${hasTerminalPanel ? 'border-[var(--color-terminal-border)] shadow-[var(--shadow-card)]' : 'border-[var(--color-border)]'}`,
+          'flex flex-col overflow-hidden',
+          settingsPage ? 'mt-7 h-[min(560px,calc(100vh-14rem))] min-h-[320px]' : 'min-h-0 flex-1',
+          docked ? '' : `rounded-[var(--radius-lg)] border ${hasTerminalPanel ? 'border-[var(--color-terminal-border)]' : 'border-[var(--color-border)]'}`,
           hasTerminalPanel ? 'bg-[var(--color-terminal-bg)]' : 'bg-[var(--color-surface-container-lowest)]',
         ].join(' ')}
       >
         {!compactHeader && <div
           data-testid="settings-terminal-toolbar"
-          className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-3.5 ${
-            docked ? 'min-h-9 py-1.5' : 'min-h-11 py-2'
+          className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b px-3 py-1.5 ${
+            docked ? 'min-h-9' : 'min-h-10'
           } ${
             hasTerminalPanel
               ? 'border-[var(--color-terminal-border)] bg-[var(--color-terminal-header)]'
               : 'border-[var(--color-border)] bg-[var(--color-surface-container-low)]'
           }`}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            {!docked && <span className="flex shrink-0 items-center gap-1.5" aria-hidden="true">
-              <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-terminal-danger)]" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-terminal-warning)]" />
-              <span className="h-2.5 w-2.5 rounded-full bg-[var(--color-terminal-accent)]" />
-            </span>}
-            {!docked && <h2
-              className={`${docked ? 'text-[12.5px]' : 'text-[13px]'} shrink-0 font-semibold ${terminalHeaderTitleClass}`}
-              style={{ fontFamily: 'var(--font-headline)' }}
-            >
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            {!docked && (
+              <SquareTerminal size={14} strokeWidth={1.75} aria-hidden="true" className={`shrink-0 ${terminalHeaderMetaClass}`} />
+            )}
+            {/* The settings page names the terminal in its page header already. */}
+            {!docked && !settingsPage && <h2 className={`shrink-0 text-[13px] font-medium ${terminalHeaderTitleClass}`}>
               {t('settings.terminal.title')}
             </h2>}
             {shellInfo && (
-              <div className={`flex min-w-0 items-center gap-1.5 font-mono text-[11.5px] ${terminalHeaderMetaClass}`}>
+              <div className={`flex min-w-0 items-center gap-1.5 font-mono text-[11px] ${terminalHeaderMetaClass}`}>
                 <span className="min-w-0 truncate">{shellInfo.cwd}</span>
                 <span className="shrink-0">·</span>
                 <span className="shrink-0">{shellInfo.shell}</span>
               </div>
             )}
-            <span className={`inline-flex shrink-0 items-center gap-1.5 text-[11.5px] ${terminalHeaderMetaClass}`}>
+            <span className={`inline-flex shrink-0 items-center gap-1.5 text-xs ${terminalHeaderMetaClass}`}>
               <StatusDot tone={STATUS_TONE[status]} pulse={status === 'running'} />
               {t(STATUS_LABEL_KEYS[status])}
             </span>
             {/* Info lives on the left: its tooltip is anchored to the icon's
                 left edge and opens down-right, so from here it always lands
-                inside the panel instead of being clipped by the right edge. */}
-            <span className="inline-flex shrink-0 items-center pl-1">
-              <TerminalHelpHint compact={docked} surface={terminalHeaderSurface} />
-            </span>
+                inside the panel instead of being clipped by the right edge.
+                The settings page shows the same guidance as its description. */}
+            {!settingsPage && (
+              <span className="inline-flex shrink-0 items-center">
+                <TerminalHelpHint compact={docked} surface={terminalHeaderSurface} />
+              </span>
+            )}
           </div>
 
           <div className="flex shrink-0 items-center gap-0.5">
             {onOpenInTab && (
               <IconButton
-                icon="open_in_new"
+                icon={<ExternalLink size={actionIconSize} strokeWidth={1.75} aria-hidden="true" />}
                 label={t('terminal.openInTab')}
                 size={docked ? 'sm' : 'md'}
                 tone="muted"
@@ -663,7 +686,7 @@ export function TerminalSettings({
             )}
             {onNewTerminal && (
               <IconButton
-                icon="add"
+                icon={<Plus size={actionIconSize} strokeWidth={1.75} aria-hidden="true" />}
                 label={t('terminal.newTab')}
                 size={docked ? 'sm' : 'md'}
                 tone="muted"
@@ -672,7 +695,7 @@ export function TerminalSettings({
               />
             )}
             <IconButton
-              icon="mop"
+              icon={<Eraser size={actionIconSize} strokeWidth={1.75} aria-hidden="true" />}
               label={t('settings.terminal.clear')}
               size={docked ? 'sm' : 'md'}
               tone="muted"
@@ -681,7 +704,7 @@ export function TerminalSettings({
               onClick={clearTerminal}
             />
             <IconButton
-              icon="restart_alt"
+              icon={<RotateCcw size={actionIconSize} strokeWidth={1.75} aria-hidden="true" />}
               label={t('settings.terminal.restart')}
               size={docked ? 'sm' : 'md'}
               tone="muted"
@@ -691,7 +714,7 @@ export function TerminalSettings({
             />
             {onClose && (
               <IconButton
-                icon="close"
+                icon={<X size={actionIconSize} strokeWidth={1.75} aria-hidden="true" />}
                 label={t('terminal.closePanel')}
                 showTooltip={false}
                 size={docked ? 'sm' : 'md'}
@@ -713,7 +736,8 @@ export function TerminalSettings({
           <EmptyState
             className="flex-1"
             size="md"
-            icon={<span className="material-symbols-outlined text-[20px]" aria-hidden="true">desktop_windows</span>}
+            variant="plain"
+            icon={<Monitor size={18} strokeWidth={1.75} aria-hidden="true" />}
             title={t('settings.terminal.unavailableTitle')}
             description={t('settings.terminal.unavailableBody')}
           />
@@ -824,7 +848,7 @@ function TerminalHelpHint({
           A native `title` would duplicate it and, per the a11y baseline, tooltips
           are wired with aria-describedby rather than becoming the accessible name. */}
       <IconButton
-        icon={<Info className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} aria-hidden="true" strokeWidth={2.2} />}
+        icon={<Info size={compact ? 12 : 14} aria-hidden="true" strokeWidth={compact ? 2 : 1.75} />}
         label={t('settings.terminal.infoLabel')}
         showTooltip={false}
         size={compact ? 'xs' : 'sm'}
@@ -841,7 +865,7 @@ function TerminalHelpHint({
       <span
         id={tooltipId}
         role="tooltip"
-        className={`${open ? 'visible opacity-100' : 'invisible opacity-0'} absolute left-0 top-full z-30 mt-2 w-[min(340px,calc(100vw-3rem))] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-high)] px-3 py-2 text-left text-xs leading-5 text-[var(--color-text-secondary)] shadow-[var(--shadow-dropdown)] transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100`}
+        className={`${open ? 'visible opacity-100' : 'invisible opacity-0'} absolute left-0 top-full z-[var(--z-tooltip)] mt-2 w-[min(340px,calc(100vw-3rem))] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-left text-xs leading-5 text-[var(--color-text-secondary)] shadow-[var(--shadow-dropdown)] transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100`}
       >
         {t('settings.terminal.description')}
       </span>
@@ -852,7 +876,7 @@ function TerminalHelpHint({
 const STATUS_TONE: Record<TerminalStatus, Tone> = {
   running: 'success',
   error: 'danger',
-  starting: 'warning',
+  starting: 'info',
   idle: 'neutral',
   exited: 'neutral',
   unavailable: 'neutral',
@@ -928,48 +952,51 @@ function BashPathSettings({ isTauri }: { isTauri: boolean }) {
   if (!isTauri) return null
 
   return (
-    <div className="mb-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-      <label className="mb-1.5 block text-sm font-medium text-[var(--color-text-primary)]">
-        {t('settings.terminal.bashPathLabel')}
-      </label>
-      <p className="mb-2 text-xs text-[var(--color-text-tertiary)]">
-        {t('settings.terminal.bashPathDescription')}
-      </p>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={bashPath || ''}
-          onChange={(e) => { setBashPath(e.target.value); setInvalid(false); setSaved(false) }}
-          placeholder={t('settings.terminal.bashPathLabel')}
-          className="flex-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-1.5 text-sm font-mono text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
-        />
-        <IconButton
-          icon="folder_open"
-          label={t('settings.terminal.bashPathBrowse')}
-          showTooltip={false}
-          size="md"
-          tone="secondary"
-          bordered
-          className="w-10"
-          onClick={handleBrowse}
-        />
-        <Button variant="primary" size="base" onClick={handleSave} disabled={saving}>
-          {saved ? t('settings.terminal.bashPathSaved') : t('settings.terminal.bashPathSave')}
-        </Button>
-        <Button
-          variant="secondary"
-          size="base"
-          onClick={handleReset}
-          disabled={saving || bashPath === null}
-        >
-          {t('settings.terminal.bashPathReset')}
-        </Button>
-      </div>
-      {invalid && (
-        <p className="mt-1.5 text-xs text-[var(--color-error)]">
-          {t('settings.terminal.bashPathInvalid')}
-        </p>
-      )}
-    </div>
+    <SettingsSection
+      title={t('settings.terminal.bashPathLabel')}
+      description={t('settings.terminal.bashPathDescription')}
+    >
+      <SettingsGroup>
+        <SettingsBlock>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              type="text"
+              size="md"
+              containerClassName="min-w-[200px] flex-1"
+              className="font-mono"
+              aria-label={t('settings.terminal.bashPathLabel')}
+              value={bashPath || ''}
+              onChange={(e) => { setBashPath(e.target.value); setInvalid(false); setSaved(false) }}
+              placeholder={t('settings.terminal.bashPathLabel')}
+            />
+            <IconButton
+              icon={<FolderOpen size={16} strokeWidth={1.75} aria-hidden="true" />}
+              label={t('settings.terminal.bashPathBrowse')}
+              showTooltip={false}
+              size="md"
+              tone="secondary"
+              bordered
+              onClick={handleBrowse}
+            />
+            <Button variant="primary" size="base" onClick={handleSave} disabled={saving}>
+              {saved ? t('settings.terminal.bashPathSaved') : t('settings.terminal.bashPathSave')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="base"
+              onClick={handleReset}
+              disabled={saving || bashPath === null}
+            >
+              {t('settings.terminal.bashPathReset')}
+            </Button>
+          </div>
+          {invalid && (
+            <p className="mt-2 text-xs text-[var(--color-error)]">
+              {t('settings.terminal.bashPathInvalid')}
+            </p>
+          )}
+        </SettingsBlock>
+      </SettingsGroup>
+    </SettingsSection>
   )
 }

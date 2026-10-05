@@ -16,7 +16,7 @@ export function OpenInSystemButton({ absolutePath }: { absolutePath: string }) {
     <Button
       variant="secondary"
       size="sm"
-      icon={<ExternalLink size={14} strokeWidth={1.9} aria-hidden="true" />}
+      icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
       onClick={() => {
         void openLocalFileWithSystem(absolutePath).catch(() => reportOpenFailure(absolutePath))
       }}

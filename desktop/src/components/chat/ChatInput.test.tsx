@@ -1134,16 +1134,17 @@ describe('ChatInput file mentions', () => {
     render(<ChatInput variant="hero" />)
 
     const panel = screen.getByTestId('chat-input-panel')
-    // 20px composer corner + the composer step of the shadow scale, the same
-    // shell EmptySession renders (docs/redesign-paper-ink-seal.md §2).
-    expect(panel).toHaveClass('rounded-[var(--radius-2xl)]', 'glass-panel--composer')
+    // The floating card (「素」): `--radius-xl` + the composer step of the
+    // shadow scale, the same shell EmptySession renders.
+    expect(panel).toHaveClass('rounded-[var(--radius-xl)]', 'glass-panel--composer')
     expect(panel).not.toHaveClass('rounded-b-none')
 
     // One pill in the toolbar instead of a three-button bar welded to the
     // panel's bottom edge — which is what used to square off that edge.
     const pill = await screen.findByRole('button', { name: 'Location: repo / main' })
     expect(panel).toContainElement(pill)
-    expect(pill).toHaveClass('h-9')
+    // A 28px toolbar control like its neighbours, not a bordered pill.
+    expect(pill).toHaveClass('h-7')
     expect(screen.queryByText('Select a project...')).not.toBeInTheDocument()
 
     await openLocationMenu()
@@ -1280,7 +1281,9 @@ describe('ChatInput file mentions', () => {
 
     const send = screen.getByRole('button', { name: 'Run' })
     expect(send).toHaveClass('rounded-full', 'h-8', 'w-8')
-    expect(send).toHaveTextContent('arrow_upward')
+    // Terracotta is the send key's alone.
+    expect(send).toHaveClass('bg-[var(--color-brand)]')
+    expect(send.querySelector('[data-icon="send"]')).toBeInTheDocument()
 
     await act(async () => {
       useChatStore.setState({
@@ -1293,7 +1296,11 @@ describe('ChatInput file mentions', () => {
 
     const stop = screen.getByRole('button', { name: 'Stop' })
     expect(stop).toHaveClass('rounded-full', 'h-8', 'w-8')
-    expect(stop).toHaveTextContent('stop')
+    // Mid-turn the same circle turns ink with a filled square — a running turn
+    // must not read as the error-red danger button.
+    expect(stop).toHaveClass('bg-[var(--color-btn-primary-bg)]')
+    expect(stop).not.toHaveClass('bg-[var(--color-error)]')
+    expect(stop.querySelector('[data-icon="stop"]')).toBeInTheDocument()
     expect(stop).not.toBeDisabled()
   })
 
@@ -1465,18 +1472,18 @@ describe('ChatInput file mentions', () => {
     expect(screen.queryByTestId('run-location-outside')).not.toBeInTheDocument()
   })
 
-  // The band cancels the panel's `p-3`, so it has to follow the panel's padding
-  // rather than the control layout. A wide column beside an open panel renders
-  // the wide toolbar inside a `p-3` panel; keying the band on the controls would
-  // have inset the divider by 12px there.
-  it('keeps the toolbar band matched to the panel padding when a wide column sits beside a panel', async () => {
+  // The card has one geometry at every width: the old narrow-layout band
+  // (`-mx-3` cancelling a `p-3` panel) is gone with the divider it drew, so a
+  // wide column beside a panel and a full-width column render the same card.
+  it('keeps one card geometry when a wide column sits beside a panel', async () => {
     stubComposerColumnWidth(580)
 
     render(<ChatInput compact />)
 
     await screen.findByTestId('run-location-readonly')
-    expect(screen.getByTestId('chat-input-panel')).toHaveClass('p-3')
-    expect(screen.getByTestId('chat-input-toolbar')).toHaveClass('-mx-3')
+    expect(screen.getByTestId('chat-input-panel')).toHaveClass('p-2')
+    expect(screen.getByTestId('chat-input-toolbar')).toHaveClass('pt-1.5')
+    expect(screen.getByTestId('chat-input-toolbar').className).not.toMatch(/-m[xy]-\d/)
   })
 
   it('uses the persisted message count to keep reopened sessions in context mode while history loads', async () => {
@@ -2771,7 +2778,7 @@ describe('ChatInput file mentions', () => {
     // to `.glass-panel`'s own `box-shadow` on stylesheet order — so the phone
     // composer silently rendered the floating-overlay shadow instead.
     expect(screen.getByTestId('chat-input-panel')).toHaveClass('glass-panel--composer')
-    expect(screen.getByTestId('chat-input-panel')).toHaveClass('rounded-[var(--radius-2xl)]')
+    expect(screen.getByTestId('chat-input-panel')).toHaveClass('rounded-[var(--radius-xl)]')
     expect(screen.getByTestId('chat-input-panel')).not.toHaveClass('rounded-b-none')
     expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('shrink-0', 'gap-1')
     expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('min-w-0', 'flex-1', 'justify-end', 'gap-1')
@@ -2797,7 +2804,7 @@ describe('ChatInput file mentions', () => {
     const toolbar = screen.getByTestId('chat-input-toolbar')
 
     expect(toolbar).not.toHaveClass('absolute')
-    expect(toolbar).toHaveClass('mt-3')
+    expect(toolbar).toHaveClass('pt-1.5')
     expect(input).not.toHaveClass('pb-12')
     expect(input).not.toHaveClass('pb-14')
   })
@@ -2807,26 +2814,28 @@ describe('ChatInput file mentions', () => {
   // same place in both. The live one used to weld itself to the panel edge
   // with `-mx-4 -mb-4`, which pulled every control 4px left and stretched the
   // divider across the panel the moment the first message landed.
-  it('keeps the wide composer toolbar inset when a draft turns into a live session', async () => {
+  it('keeps the composer toolbar in place when a draft turns into a live session', async () => {
     const { unmount } = render(<ChatInput variant="hero" />)
 
     const draftToolbar = screen.getByTestId('chat-input-toolbar')
-    expect(draftToolbar).toHaveClass('pt-3')
+    const draftPanel = screen.getByTestId('chat-input-panel')
+    const draftGeometry = { toolbar: draftToolbar.className, panel: draftPanel.className }
     expect(draftToolbar.className).not.toMatch(/-m[xy]-\d/)
     unmount()
 
     const live = render(<ChatInput variant="default" />)
 
-    const liveToolbar = screen.getByTestId('chat-input-toolbar')
-    expect(liveToolbar).toHaveClass('pt-3')
-    expect(liveToolbar.className).not.toMatch(/-m[xy]-\d/)
+    // Same row, same card: nothing shifts when the first message lands.
+    expect(screen.getByTestId('chat-input-toolbar').className).toBe(draftGeometry.toolbar)
+    expect(screen.getByTestId('chat-input-panel').className).toBe(draftGeometry.panel)
     live.unmount()
 
-    // The narrow composer keeps the band: `p-3` leaves too little room to
-    // spend on inset, and it never swaps variants mid-session.
+    // The narrow composer is the same card too; only the shell's outer
+    // padding follows `compact`.
     render(<ChatInput compact />)
 
-    expect(screen.getByTestId('chat-input-toolbar')).toHaveClass('-mx-3')
+    expect(screen.getByTestId('chat-input-toolbar').className).toBe(draftGeometry.toolbar)
+    expect(screen.getByTestId('chat-input-toolbar').className).not.toMatch(/-m[xy]-\d/)
   })
 
   // The hero row is `flex`, and a paragraph holding an unbreakable run (a

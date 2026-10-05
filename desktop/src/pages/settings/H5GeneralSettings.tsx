@@ -4,10 +4,9 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 import { settingsApi } from '@/api/settings'
 import { modelsApi } from '@/api/models'
-import { SettingsSection } from '@/components/settings/SettingsSection'
-import { SelectField } from '@/components/ui/SelectField'
-import { Switch } from '@/components/ui/Switch'
-import type { ThemeMode, UserSettings, EffortLevel } from '@/types/settings'
+import { SettingsGroup, SettingsRow, SettingsSection, SettingsSwitchRow } from '@/components/settings/SettingsSection'
+import { SelectField, type SelectFieldProps } from '@/components/ui/SelectField'
+import type { ChatSendBehavior, ThemeMode, UserSettings, EffortLevel } from '@/types/settings'
 
 export function H5GeneralSettings() {
   const t = useTranslation()
@@ -53,23 +52,30 @@ export function H5GeneralSettings() {
   const styles = [{ value: 'default', label: t('settings.general.outputStyleBuiltin.default.label') },
     { value: 'Explanatory', label: t('settings.general.outputStyleBuiltin.explanatory.label') }, { value: 'Learning', label: t('settings.general.outputStyleBuiltin.learning.label') }]
   if (settings.outputStyle && !styles.some((item) => item.value === settings.outputStyle)) styles.push({ value: settings.outputStyle, label: settings.outputStyle })
-  return <div className="max-w-xl space-y-5">
-    {failed && <p role="alert" className="text-sm text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
-    <SettingsSection title={t('settings.general.appearanceTitle')} description={t('h5Settings.browserOnly')}>
-      <div className="space-y-4">
-        <SelectField label={t('settings.general.appearanceTitle')} value={theme} options={themes} onChange={(value) => { useUIStore.getState().setFollowSystemTheme(false); void settings.setTheme(value) }} />
-        <SelectField label={t('settings.general.languageTitle')} value={settings.locale} options={languages} onChange={settings.setLocale} />
-      </div>
+  // Native selects on purpose: this pane renders on a phone, where the OS
+  // picker is the usable one. Each sits in a settings row, named by its title.
+  const select = <T extends string>(label: string, field: Omit<SelectFieldProps<T>, 'label' | 'labelHidden' | 'size'>) => (
+    <SettingsRow title={label}>
+      <SelectField<T> {...field} label={label} labelHidden size="md" containerClassName="w-full sm:w-[220px]" />
+    </SettingsRow>
+  )
+  return <div className="w-full min-w-0">
+    {failed && <p role="alert" className="mb-4 text-[13px] text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
+    <SettingsSection className="mt-0" title={t('settings.general.appearanceTitle')} description={t('h5Settings.browserOnly')}>
+      <SettingsGroup>
+        {select<ThemeMode>(t('settings.general.appearanceTitle'), { value: theme, options: themes, onChange: (value) => { useUIStore.getState().setFollowSystemTheme(false); void settings.setTheme(value) } })}
+        {select<Locale>(t('settings.general.languageTitle'), { value: settings.locale, options: languages, onChange: settings.setLocale })}
+      </SettingsGroup>
     </SettingsSection>
     <SettingsSection title={t('h5Settings.agentPreferences')} description={t('h5Settings.agentPreferencesHint')}>
-      <div className="space-y-5">
-        <SelectField label={t('settings.general.responseLangTitle')} disabled={busy} value={settings.responseLanguage} options={responseLanguages} onChange={(language) => void save({ language })} />
-        <SelectField label={t('settings.general.outputStyleTitle')} disabled={busy} value={settings.outputStyle || 'default'} options={styles} onChange={(outputStyle) => void save({ outputStyle })} />
-        <SelectField label={t('h5Settings.effort')} disabled={busy || !effortOptions.length} value={selectedEffort} options={effortOptions.map((value) => ({ value, label: effortLabels[value] }))} onChange={(value) => void effort(value)} />
-        <SelectField label={t('h5Settings.sendBehavior')} disabled={busy} value={settings.chatSendBehavior} options={[{ value: 'enter', label: t('h5Settings.enter') }, { value: 'modifierEnter', label: t('h5Settings.modifierEnter') }]} onChange={(chatSendBehavior) => void save({ chatSendBehavior })} />
-        <Switch disabled={busy} checked={settings.thinkingEnabled} label={t('settings.general.thinkingEnabled')} description={t('settings.general.thinkingDescription')} onChange={(alwaysThinkingEnabled) => void save({ alwaysThinkingEnabled })} />
-        <Switch disabled={busy} checked={settings.workflowKeywordTriggerEnabled} label={t('settings.general.workflowKeywordEnabled')} description={t('settings.general.workflowKeywordDescription')} onChange={(workflowKeywordTriggerEnabled) => void save({ workflowKeywordTriggerEnabled })} />
-      </div>
+      <SettingsGroup>
+        {select(t('settings.general.responseLangTitle'), { disabled: busy, value: settings.responseLanguage, options: responseLanguages, onChange: (language) => void save({ language }) })}
+        {select(t('settings.general.outputStyleTitle'), { disabled: busy, value: settings.outputStyle || 'default', options: styles, onChange: (outputStyle) => void save({ outputStyle }) })}
+        {select<EffortLevel>(t('h5Settings.effort'), { disabled: busy || !effortOptions.length, value: selectedEffort, options: effortOptions.map((value) => ({ value, label: effortLabels[value] })), onChange: (value) => void effort(value) })}
+        {select<ChatSendBehavior>(t('h5Settings.sendBehavior'), { disabled: busy, value: settings.chatSendBehavior, options: [{ value: 'enter', label: t('h5Settings.enter') }, { value: 'modifierEnter', label: t('h5Settings.modifierEnter') }], onChange: (chatSendBehavior) => void save({ chatSendBehavior }) })}
+        <SettingsSwitchRow disabled={busy} checked={settings.thinkingEnabled} title={t('settings.general.thinkingEnabled')} description={t('settings.general.thinkingDescription')} onChange={(alwaysThinkingEnabled) => void save({ alwaysThinkingEnabled })} />
+        <SettingsSwitchRow disabled={busy} checked={settings.workflowKeywordTriggerEnabled} title={t('settings.general.workflowKeywordEnabled')} description={t('settings.general.workflowKeywordDescription')} onChange={(workflowKeywordTriggerEnabled) => void save({ workflowKeywordTriggerEnabled })} />
+      </SettingsGroup>
     </SettingsSection>
   </div>
 }

@@ -1,5 +1,6 @@
 import { forwardRef, type MutableRefObject } from 'react'
 import {
+  BookOpen,
   Bot,
   Bug,
   CircleDollarSign,
@@ -15,7 +16,6 @@ import {
   PanelTop,
   Settings,
   ShieldCheck,
-  Sparkles,
   Target,
   Terminal,
   Wrench,
@@ -28,6 +28,10 @@ import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { safeMentionIcon } from '@/lib/composerMentions'
 import { publicAssetPath } from '@/lib/publicAsset'
 import { referenceFallbackIcon, skillSourceLabelKey } from './referencePresentation'
+import { COMPOSER_KBD, COMPOSER_MENU_SECTION } from './composerMenuStyles'
+
+/** One menu row: icon, then the name over its description (the 「素」 menu item). */
+const ROW = 'flex min-h-8 w-full cursor-default items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
 
 const SYSTEM_SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   agent: Bot,
@@ -38,7 +42,7 @@ const SYSTEM_SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   cost: CircleDollarSign,
   context: PanelTop,
   plugin: Package,
-  memory: Sparkles,
+  memory: BookOpen,
   doctor: Wrench,
   compact: Zap,
   clear: Eraser,
@@ -109,22 +113,24 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
           ref={(element) => { itemRefs.current[index] = element }}
           onClick={() => onSelect(command.name)}
           onMouseEnter={() => onHighlight(index)}
-          className={`flex w-full cursor-default items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors ${
+          className={`${ROW} ${
             index === selectedIndex
               ? 'bg-[var(--color-surface-hover)]'
               : 'hover:bg-[var(--color-surface-hover)]'
-          } focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]`}
+          }`}
         >
           <Icon
             aria-hidden="true"
-            className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]"
-            strokeWidth={1.8}
+            className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]"
+            strokeWidth={1.75}
           />
-          <span id={`${id}-label-${index}`} className="min-w-0 max-w-[60%] flex-none truncate text-sm font-medium text-[var(--color-text-primary)]">
-            /{command.name}
-          </span>
-          <span id={`${id}-description-${index}`} className="min-w-0 flex-1 truncate text-sm text-[var(--color-text-tertiary)]">
-            {command.description}
+          <span className="grid min-w-0 flex-1 gap-px">
+            <span id={`${id}-label-${index}`} className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">
+              /{command.name}
+            </span>
+            <span id={`${id}-description-${index}`} className="truncate text-xs text-[var(--color-text-tertiary)]">
+              {command.description}
+            </span>
           </span>
           {isSearching && command.argumentHint ? (
             <span className="max-w-[30%] shrink truncate font-mono text-[11px] text-[var(--color-text-tertiary)]" title={command.argumentHint}>
@@ -139,19 +145,19 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
       <div
         ref={ref}
         onMouseDown={event => event.preventDefault()}
-        className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)]"
+        className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
       >
-        {isSearching ? <div className="px-4 pb-1 pt-3 text-xs font-medium text-[var(--color-text-tertiary)]">
+        {isSearching ? <div className={`${COMPOSER_MENU_SECTION} px-3 pt-2.5`}>
           {t('chat.slashSearchResults')}
         </div> : null}
         <div
           id={id}
           role="listbox"
           aria-label={t('chat.slashCommands')}
-          className="max-h-[min(360px,45vh)] overflow-y-auto p-1.5"
+          className="max-h-[min(360px,45vh)] overflow-y-auto p-1"
         >
           {groups.system.length > 0 ? <div role="group" aria-label={t(isSearching ? 'chat.slashCommands' : 'chat.slashFrequent')}>
-            {!isSearching ? <div className="px-3 pb-1 pt-2 text-xs font-medium text-[var(--color-text-tertiary)]">{t('chat.slashFrequent')}</div> : null}
+            {!isSearching ? <div className={COMPOSER_MENU_SECTION}>{t('chat.slashFrequent')}</div> : null}
             {groups.system.map(renderSystemCommand)}
           </div> : null}
 
@@ -160,7 +166,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
             { kind: 'plugin' as const, items: groups.plugins ?? [], label: t('chat.referencePlugins'), offset: groups.system.length + groups.skills.length },
           ]).map(group => group.items.length > 0 ? (
             <div key={group.kind} role="group" aria-label={group.label}>
-              <div className="px-3 pb-1 pt-2 text-xs font-medium text-[var(--color-text-tertiary)]">{group.label}</div>
+              <div className={COMPOSER_MENU_SECTION}>{group.label}</div>
               {group.items.map((command, position) => {
                 const index = group.offset + position
                 const candidate = references.find(item => item.kind === group.kind && (item.name === command.name || item.id === command.name))
@@ -173,24 +179,26 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
                   title={[candidate?.displayName || command.name, command.argumentHint, command.description].filter(Boolean).join(' — ')}
                   ref={element => { itemRefs.current[index] = element }}
                   onClick={() => onSelect(command.name)} onMouseEnter={() => onHighlight(index)}
-                  className={`flex w-full cursor-default items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${index === selectedIndex ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'}`}>
-                  {icon ? <img src={publicAssetPath(icon)} alt="" className="h-5 w-5 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]" strokeWidth={1.8} />}
-                  <span id={`${id}-label-${index}`} className="min-w-0 max-w-[60%] flex-none truncate text-sm font-medium text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
-                  <span id={`${id}-description-${index}`} className="min-w-0 flex-1 truncate text-sm text-[var(--color-text-tertiary)]">{command.description}</span>
+                  className={`${ROW} ${index === selectedIndex ? 'bg-[var(--color-surface-hover)]' : 'hover:bg-[var(--color-surface-hover)]'}`}>
+                  {icon ? <img src={publicAssetPath(icon)} alt="" className="h-4 w-4 shrink-0 object-contain" /> : <Icon aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" strokeWidth={1.75} />}
+                  <span className="grid min-w-0 flex-1 gap-px">
+                    <span id={`${id}-label-${index}`} className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">{candidate?.displayName || command.name}</span>
+                    <span id={`${id}-description-${index}`} className="truncate text-xs text-[var(--color-text-tertiary)]">{command.description}</span>
+                  </span>
                   {sourceLabel ? <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">{t(sourceLabel)}</span> : null}
                 </div>
               })}
             </div>
           ) : null)}
         </div>
-        {!isSearching ? <div className="px-4 pb-2 text-xs text-[var(--color-text-tertiary)]">{t('chat.slashSearchHint')}</div> : null}
+        {!isSearching ? <div className="px-3 pb-2 text-xs text-[var(--color-text-tertiary)]">{t('chat.slashSearchHint')}</div> : null}
         {showKeyboardHints ? (
-          <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-tertiary)]">
-            <kbd className="rounded border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-[10px]">↑↓</kbd>
+          <div className="flex items-center gap-1.5 border-t border-[var(--color-border)] px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
+            <kbd className={COMPOSER_KBD}>↑↓</kbd>
             <span>{t('chat.navigate')}</span>
-            <kbd className="ml-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-[10px]">Enter</kbd>
+            <kbd className={`${COMPOSER_KBD} ml-2`}>Enter</kbd>
             <span>{t('chat.select')}</span>
-            <kbd className="ml-2 rounded border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1.5 py-0.5 font-mono text-[10px]">Esc</kbd>
+            <kbd className={`${COMPOSER_KBD} ml-2`}>Esc</kbd>
             <span>{t('chat.dismiss')}</span>
           </div>
         ) : null}

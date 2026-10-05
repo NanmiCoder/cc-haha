@@ -9,6 +9,7 @@ import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from '@/compo
 import type { NewComposerMention } from '@/lib/composerMentions'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import type { CapabilityAction, CapabilityIcon, CapabilityMenuItem, CapabilityMenuSection } from './capabilityMenuModel'
+import { COMPOSER_KBD } from './composerMenuStyles'
 
 type Props = {
   id: string
@@ -32,11 +33,11 @@ function descendants(items: CapabilityMenuItem[], path: string[] = []): Array<{ 
 
 function RowIcon({ icon, iconColor }: { icon: CapabilityIcon, iconColor?: string }) {
   if (icon.kind === 'image') {
-    return <img src={publicAssetPath(icon.src)} alt="" className="h-5 w-5 shrink-0 object-contain" />
+    return <img src={publicAssetPath(icon.src)} alt="" className="h-4 w-4 shrink-0 object-contain" />
   }
   if (icon.kind === 'slash') {
     return (
-      <span aria-hidden="true" className="flex h-5 w-5 shrink-0 items-center justify-center text-[15px] font-bold text-[var(--color-text-secondary)]">
+      <span aria-hidden="true" className="flex h-4 w-4 shrink-0 items-center justify-center font-mono text-[13px] text-[var(--color-text-tertiary)]">
         /
       </span>
     )
@@ -45,9 +46,9 @@ function RowIcon({ icon, iconColor }: { icon: CapabilityIcon, iconColor?: string
   return (
     <Icon
       aria-hidden="true"
-      className="h-5 w-5 shrink-0 text-[var(--color-text-secondary)]"
+      className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]"
       style={iconColor ? { color: iconColor } : undefined}
-      strokeWidth={1.7}
+      strokeWidth={1.75}
     />
   )
 }
@@ -138,25 +139,25 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
     onMouseEnter={() => setHighlight(index)} onClick={() => activate(item)}
     trailing={item.switch ? <span className="-my-1 shrink-0" onClick={event => event.stopPropagation()}>
       <Switch size="sm" checked={item.switch.checked} disabled={item.switch.disabled} label={t('chat.capabilities.computerUseToggle')} labelHidden onChange={() => item.action && onAction(item.action)} />
-    </span> : item.children ? <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" /> : item.key === 'slash-commands' ? <kbd>/</kbd> : null}
+    </span> : item.children ? <ChevronRight aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-[var(--color-text-tertiary)]" /> : item.key === 'slash-commands' ? <kbd className={COMPOSER_KBD}>/</kbd> : null}
   />
   let offset = 0
-  return <div className={`absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)] ${mobile ? 'w-[min(360px,calc(100vw-32px))]' : showReferences ? 'w-[min(480px,calc(100vw-32px))]' : 'w-[min(288px,calc(100vw-32px))]'}`} onMouseDown={event => event.preventDefault()}>
-    <div className="flex items-center gap-2 border-b border-[var(--color-border-separator)] px-3 py-2">
-      {drillParent ? <IconButton icon={<ChevronLeft className="h-4 w-4" />} label={t('chat.capabilities.back')} size="xs" onClick={goBack} /> : null}
-      <Search aria-hidden="true" className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" />
+  return <div className={`absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] ${mobile ? 'w-[min(360px,calc(100vw-32px))]' : showReferences ? 'w-[min(480px,calc(100vw-32px))]' : 'w-[min(288px,calc(100vw-32px))]'}`} onMouseDown={event => event.preventDefault()}>
+    <div className="flex h-10 items-center gap-2 border-b border-[var(--color-border)] px-3">
+      {drillParent ? <IconButton icon={<ChevronLeft size={14} strokeWidth={1.75} />} label={t('chat.capabilities.back')} size="xs" tone="muted" onClick={goBack} /> : null}
+      <Search aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
       <input autoFocus value={query} onChange={event => { setQuery(event.target.value); setHighlight(0) }} onKeyDown={handleKeyDown} onClick={event => event.currentTarget.focus()}
         placeholder={drillParent?.label ?? t('chat.capabilities.searchPlaceholder')} aria-label={t('chat.capabilities.searchPlaceholder')}
         role="combobox" aria-expanded="true" aria-controls={listId} aria-activedescendant={activeOptionId}
-        className="min-w-0 flex-1 bg-transparent text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]" />
+        className="min-w-0 flex-1 bg-transparent text-[13px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]" />
     </div>
     {showReferences ? <ComposerReferenceMenu key={path.join('/')} ref={referenceRef} id={listId} cwd={cwd} filter={query} embedded browseReferences={browseReferences} references={references} actions={actions}
       referencesLoading={referencesLoading} referencesError={referencesError} onSelect={selectMention} onActiveChange={setReferenceOptionId} /> :
-      <div ref={listRef} id={listId} role="listbox" aria-label={t('chat.composerTools')} className="max-h-[min(360px,50vh)] overflow-y-auto p-1.5">
+      <div ref={listRef} id={listId} role="listbox" aria-label={t('chat.composerTools')} className="max-h-[min(360px,50vh)] overflow-y-auto p-1">
         {drillParent ? items.map(renderRow) : sections.map(section => {
           const start = offset
           offset += section.items.length
-          return <div key={section.id} role="group" aria-label={section.title} className="border-b border-[var(--color-border-separator)] py-1 last:border-b-0">{section.items.map((item, index) => renderRow(item, start + index))}</div>
+          return <div key={section.id} role="group" aria-label={section.title} className="border-b border-[var(--color-border)] py-1 first:pt-0 last:border-b-0 last:pb-0">{section.items.map((item, index) => renderRow(item, start + index))}</div>
         })}
       </div>}
   </div>

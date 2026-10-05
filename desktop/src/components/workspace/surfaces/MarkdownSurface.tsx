@@ -94,7 +94,7 @@ export function MarkdownSurface({
           content={value}
           variant="document"
           resolveImageSrc={resolveImageSrc}
-          className="workspace-markdown-preview prose-p:text-[14px] prose-p:leading-7 prose-h1:text-[24px] prose-h2:text-[18px] prose-h3:text-[15px] prose-code:text-[12px] prose-pre:my-4"
+          className="workspace-markdown-preview prose-p:text-[14px] prose-p:leading-7 prose-h1:text-[22px] prose-h2:text-[18px] prose-h3:text-[15px] prose-code:text-[12px] prose-pre:my-4"
         />
       </div>
       <FloatingSelectionMenu selection={selectionMenu} onAdd={addCurrentSelectionToChat} popoverRef={selectionMenuRef} />

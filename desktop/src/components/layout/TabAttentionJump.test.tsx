@@ -25,7 +25,7 @@ describe('TabAttentionJump', () => {
   ])('shows %i as %s so the pill never outgrows the toolbar', (count, shown) => {
     render(<TabAttentionJump count={count} label="Jump" onJump={vi.fn()} />)
 
-    expect(screen.getByTestId('tab-attention-jump')).toHaveTextContent(new RegExp(`^warning${shown.replace('+', '\\+')}$`))
+    expect(screen.getByTestId('tab-attention-jump')).toHaveTextContent(new RegExp(`^${shown.replace('+', '\\+')}$`))
   })
 
   it('jumps when pressed', () => {
@@ -43,10 +43,10 @@ describe('TabAttentionJump', () => {
     expect(screen.getByRole('button')).toHaveAttribute('title', 'Jump to the next waiting session')
   })
 
-  it('hides the glyph text from a screen reader', () => {
+  it('hides the glyph from a screen reader', () => {
     const { container } = render(<TabAttentionJump count={2} label="Jump" onJump={vi.fn()} />)
 
-    expect(container.querySelector('.material-symbols-outlined')).toHaveAttribute('aria-hidden', 'true')
+    expect(container.querySelector('svg')).toHaveAttribute('aria-hidden', 'true')
   })
 
   it('does not submit a surrounding form', () => {

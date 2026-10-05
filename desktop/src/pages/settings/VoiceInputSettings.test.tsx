@@ -183,8 +183,8 @@ describe('VoiceInputSettings layout', () => {
   it('keeps three cards under short headings: recognition, microphone, test', async () => {
     await renderPage(makeCatalog(READY))
 
-    expect(screen.getAllByRole('heading', { level: 2 }).map(heading => heading.textContent)).toEqual([
-      'Voice Input',
+    expect(screen.getAllByRole('heading', { level: 2 }).map(heading => heading.textContent)).toEqual(['Voice Input'])
+    expect(screen.getAllByRole('heading', { level: 3 }).map(heading => heading.textContent)).toEqual([
       'Recognition engine',
       'Microphone',
       'Transcription test',
@@ -203,7 +203,7 @@ describe('VoiceInputSettings layout', () => {
     await renderPage(makeCatalog(READY))
     const rows = screen.getByTestId('voice-model-status').parentElement!
     expect(rows.className).toContain('divide-y')
-    expect(rows.className).toContain('--color-border-separator')
+    expect(rows.className).toContain('divide-[var(--color-border)]')
   })
 })
 

@@ -7,9 +7,9 @@ import {
   FolderOpen,
   Grid3X3,
   ImageIcon,
+  Palette,
   Plus,
   RefreshCw,
-  Sparkles,
 } from 'lucide-react'
 import {
   desktopUiPreferencesApi,
@@ -20,12 +20,17 @@ import actionSheetGuideZh from '../../assets/pets/action-sheet-guide.zh.png'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
-import { Switch } from '@/components/ui/Switch'
 import { Modal } from '@/components/ui/Modal'
+import {
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+  SettingsSwitchRow,
+} from '@/components/settings/SettingsSection'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { BUILTIN_PETS } from './builtinPets'
@@ -346,32 +351,33 @@ export function PetSettings() {
   const pets: readonly PetDescriptor[] = [...BUILTIN_PETS, ...customPets]
 
   return (
-    <div className="mx-auto w-full max-w-4xl space-y-6 pb-8">
-      <header>
-        <h1 className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.pets.title')}</h1>
-        <p className="mt-1.5 text-[13.5px] leading-6 text-[var(--color-text-secondary)]">{t('settings.pets.subtitle')}</p>
-      </header>
+    <div className="w-full min-w-0">
+      <SettingsPageHeader title={t('settings.pets.title')} description={t('settings.pets.subtitle')} />
 
       {loading ? (
-        <LoadingState label={t('settings.pets.loading')} variant="dashed" size="md" />
+        <div className="mt-7">
+          <LoadingState label={t('settings.pets.loading')} variant="dashed" size="md" />
+        </div>
       ) : loadError || !preferences ? (
-        <ErrorState
-          title={t('settings.pets.loadError')}
-          onRetry={() => void load()}
-          retryLabel={t('settings.pets.retry')}
-          size="md"
-        />
+        <div className="mt-7">
+          <ErrorState
+            title={t('settings.pets.loadError')}
+            onRetry={() => void load()}
+            retryLabel={t('settings.pets.retry')}
+            size="md"
+          />
+        </div>
       ) : (
         <>
-          <Card as="section" radius="lg" padding="lg">
-            <ToggleRow
-              label={t('settings.pets.enableTitle')}
+          <SettingsGroup className="mt-7">
+            <SettingsSwitchRow
+              title={t('settings.pets.enableTitle')}
               description={t('settings.pets.enableDescription')}
               checked={preferences.enabled}
               disabled={!desktopAvailable}
               onChange={(checked) => void updatePreferences({ enabled: checked }, true)}
             />
-          </Card>
+          </SettingsGroup>
 
           <PetCatalog
             title={t('settings.pets.builtInTitle')}
@@ -382,14 +388,14 @@ export function PetSettings() {
             onSelect={(id) => void updatePreferences({ selectedPetId: id }, preferences.enabled && desktopAvailable)}
           />
 
-          <section className="space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <h2 className="text-base font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.pets.customTitle')}</h2>
-              <div className="flex items-center gap-2">
+          <SettingsSection
+            title={t('settings.pets.customTitle')}
+            action={(
+              <>
                 <Button
                   variant="secondary"
                   size="sm"
-                  icon={<Plus size={14} aria-hidden="true" />}
+                  icon={<Plus size={14} strokeWidth={1.75} aria-hidden="true" />}
                   disabled={!desktopAvailable}
                   onClick={() => {
                     setCreateError(null)
@@ -403,13 +409,14 @@ export function PetSettings() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  icon={<RefreshCw size={14} aria-hidden="true" />}
+                  icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
                   onClick={() => void load()}
                 >
                   {t('settings.pets.refresh')}
                 </Button>
-              </div>
-            </div>
+              </>
+            )}
+          >
             {customPets.length > 0 ? (
               <PetCatalog
                 pets={customPets}
@@ -422,71 +429,72 @@ export function PetSettings() {
               <EmptyState description={t('settings.pets.customEmpty')} variant="dashed" size="md" />
             )}
             {invalidPetCount > 0 && (
-              <p role="status" className="text-xs text-[var(--color-warning)]">
+              <p role="status" className="mt-2 text-xs text-[var(--color-on-warning-container)]">
                 {t('settings.pets.invalidCustom', { count: invalidPetCount })}
               </p>
             )}
-          </section>
+          </SettingsSection>
 
-          <Card as="section" radius="lg" padding="lg" className="space-y-4">
-            <h2 className="text-base font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.pets.appearanceTitle')}</h2>
-            <label className="block">
-              <span className="flex items-center justify-between gap-3 text-sm font-medium text-[var(--color-text-primary)]">
-                <span>{t('settings.pets.size')}</span>
-                <output htmlFor="pet-size">{preferences.size}px</output>
-              </span>
-              <span className="mt-0.5 block text-xs text-[var(--color-text-secondary)]">{t('settings.pets.sizeDescription')}</span>
-              <input
-                id="pet-size"
-                aria-label={t('settings.pets.size')}
-                className="mt-3 w-full accent-[var(--color-brand)]"
-                type="range"
-                min={PET_SIZE_MIN}
-                max={PET_SIZE_MAX}
-                step={8}
-                value={preferences.size}
-                onChange={(event) => void updatePreferences({ size: Number(event.target.value) })}
-              />
-            </label>
-            <div className="border-t border-[var(--color-border-separator)] pt-4">
-              <ToggleRow
-                label={t('settings.pets.motion')}
+          <SettingsSection title={t('settings.pets.appearanceTitle')}>
+            <SettingsGroup>
+              <SettingsRow
+                title={t('settings.pets.size')}
+                description={t('settings.pets.sizeDescription')}
+                htmlFor="pet-size"
+                layout="inline"
+                footer={(
+                  <input
+                    id="pet-size"
+                    aria-label={t('settings.pets.size')}
+                    className="w-full accent-[var(--color-brand)]"
+                    type="range"
+                    min={PET_SIZE_MIN}
+                    max={PET_SIZE_MAX}
+                    step={8}
+                    value={preferences.size}
+                    onChange={(event) => void updatePreferences({ size: Number(event.target.value) })}
+                  />
+                )}
+              >
+                <output htmlFor="pet-size" className="font-mono text-xs tabular-nums text-[var(--color-text-secondary)]">
+                  {preferences.size}px
+                </output>
+              </SettingsRow>
+              <SettingsSwitchRow
+                title={t('settings.pets.motion')}
                 description={t('settings.pets.motionDescription')}
                 checked={preferences.motionEnabled}
                 onChange={(checked) => void updatePreferences({ motionEnabled: checked })}
               />
-            </div>
-            <div className="border-t border-[var(--color-border-separator)] pt-4">
-              <ToggleRow
-                label={t('settings.pets.showTaskPanel')}
+              <SettingsSwitchRow
+                title={t('settings.pets.showTaskPanel')}
                 description={t('settings.pets.showTaskPanelDescription')}
                 checked={preferences.showTaskPanel}
                 onChange={(checked) => void updatePreferences({ showTaskPanel: checked })}
               />
-            </div>
-          </Card>
+            </SettingsGroup>
+          </SettingsSection>
 
-          <Card as="section" radius="lg" padding="lg" className="flex items-center justify-between gap-5">
-            <div className="min-w-0">
-              <h2 className="text-sm font-medium text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.pets.folderTitle')}</h2>
-              <p className="mt-1 break-all font-mono text-xs text-[var(--color-text-secondary)]">
-                {t('settings.pets.folderDescription')}
-              </p>
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              icon={<FolderOpen size={15} aria-hidden="true" />}
-              disabled={!desktopAvailable}
-              onClick={() => void handleOpenFolder()}
+          <SettingsGroup className="mt-7">
+            <SettingsRow
+              title={t('settings.pets.folderTitle')}
+              description={<span className="break-all">{t('settings.pets.folderDescription')}</span>}
             >
-              {t('settings.pets.openFolder')}
-            </Button>
-          </Card>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<FolderOpen size={14} strokeWidth={1.75} aria-hidden="true" />}
+                disabled={!desktopAvailable}
+                onClick={() => void handleOpenFolder()}
+              >
+                {t('settings.pets.openFolder')}
+              </Button>
+            </SettingsRow>
+          </SettingsGroup>
         </>
       )}
 
-      {saveError && <p role="alert" className="text-sm text-[var(--color-error)]">{saveError}</p>}
+      {saveError && <p role="alert" className="mt-4 text-[13px] text-[var(--color-error)]">{saveError}</p>}
 
       <Modal
         open={createOpen}
@@ -520,11 +528,11 @@ export function PetSettings() {
       >
         {createMethod === null ? (
           <div className="space-y-3">
-            <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+            <p className="text-[13px] leading-5 text-[var(--color-text-secondary)]">
               {t('settings.pets.createMethodIntro')}
             </p>
             <CreationMethodCard
-              icon={<ImageIcon size={20} aria-hidden="true" />}
+              icon={<ImageIcon size={18} strokeWidth={1.75} aria-hidden="true" />}
               title={t('settings.pets.createImageTitle')}
               description={t('settings.pets.createImageDescription')}
               detail={t('settings.pets.createImageDetail')}
@@ -532,7 +540,7 @@ export function PetSettings() {
               onClick={() => selectCreateMethod('image')}
             />
             <CreationMethodCard
-              icon={<Sparkles size={20} aria-hidden="true" />}
+              icon={<Palette size={18} strokeWidth={1.75} aria-hidden="true" />}
               title={t('settings.pets.createAiTitle')}
               description={t('settings.pets.createAiDescription')}
               detail={t('settings.pets.createAiDetail')}
@@ -540,7 +548,7 @@ export function PetSettings() {
               onClick={() => selectCreateMethod('guided')}
             />
             <CreationMethodCard
-              icon={<Grid3X3 size={20} aria-hidden="true" />}
+              icon={<Grid3X3 size={18} strokeWidth={1.75} aria-hidden="true" />}
               title={t('settings.pets.createAtlasTitle')}
               description={t('settings.pets.createAtlasDescription')}
               detail={t('settings.pets.createAtlasDetail')}
@@ -552,7 +560,7 @@ export function PetSettings() {
             <Button
               variant="link"
               size="sm"
-              icon={<ArrowLeft size={15} aria-hidden="true" />}
+              icon={<ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
               onClick={() => {
                 setCreateMethod(null)
                 setCreateError(null)
@@ -562,7 +570,7 @@ export function PetSettings() {
               {t('settings.pets.createBack')}
             </Button>
 
-            <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+            <p className="text-[13px] leading-5 text-[var(--color-text-secondary)]">
               {t('settings.pets.guide.intro')}
             </p>
 
@@ -570,8 +578,10 @@ export function PetSettings() {
               <p className="text-xs leading-5 text-[var(--color-text-secondary)]">
                 {t('settings.pets.guide.step1Body')}
               </p>
-              <div className="mt-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)]">
-                <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2.5 text-[11.5px] leading-5 text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-mono, ui-monospace, monospace)' }}>
+              <div className="mt-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)]">
+                {/* Body face, not mono: the prompt is prose (Chinese in zh), and
+                    CJK set in a monospace face picks up typewriter gaps. */}
+                <pre className="max-h-56 overflow-y-auto whitespace-pre-wrap px-3 py-2.5 text-xs leading-5 text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-body)' }}>
                   {t('settings.pets.guide.prompt')}
                 </pre>
               </div>
@@ -580,8 +590,8 @@ export function PetSettings() {
                   size="sm"
                   variant="secondary"
                   icon={promptCopied
-                    ? <Check size={14} aria-hidden="true" />
-                    : <Copy size={14} aria-hidden="true" />}
+                    ? <Check size={14} strokeWidth={1.75} aria-hidden="true" />
+                    : <Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
                   onClick={() => void handleCopyPrompt()}
                 >
                   {promptCopied
@@ -589,7 +599,7 @@ export function PetSettings() {
                     : t('settings.pets.guide.promptCopy')}
                 </Button>
               </div>
-              <p className="mt-2 text-[11px] leading-4 text-[var(--color-text-tertiary)]">
+              <p className="mt-2 text-xs leading-4 text-[var(--color-text-tertiary)]">
                 {t('settings.pets.guide.step1Tools')}
               </p>
             </GuideStep>
@@ -605,14 +615,14 @@ export function PetSettings() {
                   'settings.pets.guide.check3',
                 ] as const).map((key) => (
                   <li key={key} className="flex items-start gap-1.5 text-xs leading-5 text-[var(--color-text-secondary)]">
-                    <Check size={13} className="mt-0.5 flex-none text-[var(--color-brand)]" aria-hidden="true" />
+                    <Check size={14} strokeWidth={1.75} className="mt-0.5 flex-none text-[var(--color-success)]" aria-hidden="true" />
                     <span>{t(key)}</span>
                   </li>
                 ))}
               </ul>
               <button
                 type="button"
-                className="mt-2.5 block w-full overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)]"
+                className="mt-2.5 block w-full overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                 onClick={() => setGuideExpanded((current) => !current)}
                 aria-label={t('settings.pets.guide.templateAlt')}
               >
@@ -626,12 +636,12 @@ export function PetSettings() {
                 <Button
                   size="sm"
                   variant="secondary"
-                  icon={<Download size={14} aria-hidden="true" />}
+                  icon={<Download size={14} strokeWidth={1.75} aria-hidden="true" />}
                   onClick={() => void handleSaveGuide()}
                 >
                   {t('settings.pets.guide.saveTemplate')}
                 </Button>
-                <span className="text-[11px] leading-4 text-[var(--color-text-tertiary)]">
+                <span className="text-xs leading-4 text-[var(--color-text-tertiary)]">
                   {guideExpanded
                     ? t('settings.pets.guide.templateCollapse')
                     : t('settings.pets.guide.templateExpand')}
@@ -650,7 +660,7 @@ export function PetSettings() {
             <Button
               variant="link"
               size="sm"
-              icon={<ArrowLeft size={15} aria-hidden="true" />}
+              icon={<ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
               disabled={createBusy}
               onClick={() => {
                 if (createMethod === 'guided') {
@@ -666,51 +676,51 @@ export function PetSettings() {
                 ? t('settings.pets.guide.backToSteps')
                 : t('settings.pets.createBack')}
             </Button>
-            <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-hover)] px-3.5 py-3">
-              <h3 className="text-sm font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
+            <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3.5 py-3">
+              <h3 className="text-[13px] font-semibold text-[var(--color-text-primary)]">
                 {createMethod === 'image' ? t('settings.pets.createImageTitle')
                   : createMethod === 'guided' ? t('settings.pets.createAiTitle')
                     : t('settings.pets.createAtlasTitle')}
               </h3>
-              <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">
+              <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
                 {createMethod === 'image'
                   ? t('settings.pets.createImageHint')
                   : t('settings.pets.createAtlasHint')}
               </p>
             </div>
-            <label className="block space-y-1.5 text-sm text-[var(--color-text-primary)]">
+            <label className="block space-y-1.5 text-[13px] text-[var(--color-text-primary)]">
               <span className="font-medium">{t('settings.pets.createId')}</span>
               <input
-                className="w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 outline-none focus:border-[var(--color-border-focus)]"
+                className="w-full rounded-[var(--radius-md)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
                 aria-label={t('settings.pets.createId')}
                 value={createForm.slug}
                 maxLength={73}
                 placeholder="moon-cat"
                 onChange={(event) => setCreateForm((current) => ({ ...current, slug: event.target.value }))}
               />
-              <span className="block text-xs text-[var(--color-text-secondary)]">{t('settings.pets.createIdHint')}</span>
+              <span className="block text-xs text-[var(--color-text-tertiary)]">{t('settings.pets.createIdHint')}</span>
             </label>
-            <label className="block space-y-1.5 text-sm text-[var(--color-text-primary)]">
+            <label className="block space-y-1.5 text-[13px] text-[var(--color-text-primary)]">
               <span className="font-medium">{t('settings.pets.createName')}</span>
               <input
-                className="w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 outline-none focus:border-[var(--color-border-focus)]"
+                className="w-full rounded-[var(--radius-md)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
                 aria-label={t('settings.pets.createName')}
                 value={createForm.displayName}
                 maxLength={80}
                 onChange={(event) => setCreateForm((current) => ({ ...current, displayName: event.target.value }))}
               />
             </label>
-            <label className="block space-y-1.5 text-sm text-[var(--color-text-primary)]">
+            <label className="block space-y-1.5 text-[13px] text-[var(--color-text-primary)]">
               <span className="font-medium">{t('settings.pets.createDescription')}</span>
               <textarea
-                className="min-h-24 w-full resize-y rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 outline-none focus:border-[var(--color-border-focus)]"
+                className="min-h-24 w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)]"
                 aria-label={t('settings.pets.createDescription')}
                 value={createForm.description}
                 maxLength={500}
                 onChange={(event) => setCreateForm((current) => ({ ...current, description: event.target.value }))}
               />
             </label>
-            {createError && <p role="alert" className="text-sm text-[var(--color-error)]">{createError}</p>}
+            {createError && <p role="alert" className="text-[13px] text-[var(--color-error)]">{createError}</p>}
           </div>
         )}
       </Modal>
@@ -728,15 +738,12 @@ function GuideStep({
   children: ReactNode
 }) {
   return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-3.5">
+    <section className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-3.5">
       <div className="flex items-center gap-2">
-        <span className="flex h-5 w-5 flex-none items-center justify-center rounded-full bg-[var(--color-brand)] text-[11px] font-semibold text-[var(--color-on-primary)]">
+        <span className="flex h-5 w-5 flex-none items-center justify-center rounded-full bg-[var(--color-surface-container)] text-[11px] font-medium tabular-nums text-[var(--color-text-secondary)]">
           {index}
         </span>
-        <h4
-          className="text-sm font-semibold text-[var(--color-text-primary)]"
-          style={{ fontFamily: 'var(--font-headline)' }}
-        >
+        <h4 className="text-[13px] font-semibold text-[var(--color-text-primary)]">
           {title}
         </h4>
       </div>
@@ -765,20 +772,20 @@ function CreationMethodCard({
   return (
     <button
       type="button"
-      className="group flex w-full items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 text-left transition-[border-color,background-color,transform] enabled:hover:-translate-y-0.5 enabled:hover:border-[var(--color-primary-fixed-dim)] enabled:hover:bg-[var(--color-surface-hover)] motion-reduce:transition-none motion-reduce:enabled:hover:translate-y-0 enabled:active:translate-y-0 disabled:cursor-not-allowed disabled:opacity-55"
+      className="group flex w-full items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 text-left transition-[border-color,background-color] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] enabled:hover:border-[var(--color-outline)] enabled:hover:bg-[var(--color-surface-hover)] motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-55"
       disabled={disabled}
       onClick={onClick}
     >
-      <span className="flex h-9 w-9 flex-none items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-brand-soft)] text-[var(--color-brand)]">
+      <span className="flex h-8 w-8 flex-none items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
         {icon}
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold text-[var(--color-text-primary)]">{title}</span>
-          {badge && <Badge tone="brand" size="sm">{badge}</Badge>}
+          <span className="text-[13px] font-medium text-[var(--color-text-primary)]">{title}</span>
+          {badge && <Badge tone="neutral" size="sm">{badge}</Badge>}
         </span>
         <span className="mt-1 block text-xs leading-5 text-[var(--color-text-secondary)]">{description}</span>
-        <span className="mt-1 block text-[11px] leading-4 text-[var(--color-text-tertiary)]">{detail}</span>
+        <span className="mt-0.5 block text-xs leading-4 text-[var(--color-text-tertiary)]">{detail}</span>
       </span>
     </button>
   )
@@ -800,76 +807,52 @@ function PetCatalog({
   onSelect: (id: string) => void
 }) {
   const t = useTranslation()
-  return (
-    <section className="space-y-3">
-      {title && <h2 className="text-base font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{title}</h2>}
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-        {pets.map((pet) => {
-          const selected = pet.id === selectedPetId
-          return (
-            <article
-              key={pet.id}
-              className={`flex items-center gap-4 rounded-[var(--radius-xl)] p-4 transition-[background-color,border-color] duration-150 ease-out ${
-                selected
-                  ? 'border-[1.5px] border-[var(--color-primary-fixed-dim)] bg-[var(--color-surface-hover)]'
-                  : 'border border-[var(--color-border)] bg-[var(--color-surface)]'
-              }`}
+  const grid = (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      {pets.map((pet) => {
+        const selected = pet.id === selectedPetId
+        return (
+          <article
+            key={pet.id}
+            className={`flex items-center gap-3 rounded-[var(--radius-lg)] p-3 transition-[background-color,border-color] duration-150 ease-out ${
+              selected
+                ? 'border-[1.5px] border-[var(--color-primary-fixed-dim)] bg-[var(--color-surface-hover)]'
+                : 'border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]'
+            }`}
+          >
+            <PetPreview pet={pet} />
+            <div className="min-w-0 flex-1">
+              <h3 className="text-[13px] font-medium text-[var(--color-text-primary)]">{pet.displayName}</h3>
+              <p className="mt-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                {pet.source === 'builtin' ? t(pet.descriptionKey) : pet.description}
+              </p>
+            </div>
+            <Button
+              variant={selected ? 'ghost' : 'secondary'}
+              size="sm"
+              disabled={selected}
+              aria-pressed={selected}
+              onClick={() => onSelect(pet.id)}
             >
-              <PetPreview pet={pet} />
-              <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{pet.displayName}</h3>
-                <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)]">
-                  {pet.source === 'builtin' ? t(pet.descriptionKey) : pet.description}
-                </p>
-              </div>
-              <Button
-                variant={selected ? 'ghost' : 'secondary'}
-                size="sm"
-                disabled={selected}
-                aria-pressed={selected}
-                onClick={() => onSelect(pet.id)}
-              >
-                {selected ? selectedLabel : selectLabel}
-              </Button>
-            </article>
-          )
-        })}
-      </div>
-    </section>
+              {selected ? selectedLabel : selectLabel}
+            </Button>
+          </article>
+        )
+      })}
+    </div>
   )
+  return title ? <SettingsSection title={title}>{grid}</SettingsSection> : grid
 }
 
 function PetPreview({ pet }: { pet: PetDescriptor }) {
   return (
     <div
-      className="flex h-16 w-16 flex-none items-center justify-center rounded-[var(--radius-2xl)]"
+      className="flex h-16 w-16 flex-none items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)]"
+      // A built-in pet keeps its own faint tint: the accent is part of the
+      // pet's identity data, not a chrome color.
       style={{ backgroundColor: pet.source === 'builtin' ? `${pet.accent}18` : undefined }}
     >
       <PetRenderer pet={pet} state="idle" size={54} motionEnabled={false} />
     </div>
-  )
-}
-
-function ToggleRow({
-  label,
-  description,
-  checked,
-  disabled = false,
-  onChange,
-}: {
-  label: string
-  description: string
-  checked: boolean
-  disabled?: boolean
-  onChange: (checked: boolean) => void
-}) {
-  return (
-    <Switch
-      label={label}
-      description={description}
-      checked={checked}
-      disabled={disabled}
-      onChange={onChange}
-    />
   )
 }

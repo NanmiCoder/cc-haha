@@ -1,7 +1,7 @@
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
-import { ArrowLeft, GitFork, Target, MessageCircleQuestion } from 'lucide-react'
+import { ArrowLeft, Folder, GitBranch, GitFork, History, Target, MessageCircleQuestion, TriangleAlert } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import {
@@ -28,6 +28,9 @@ import { useTranslation } from '../i18n'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Tooltip } from '@/components/ui/Tooltip'
 import { BrandSeal } from '@/components/composite/BrandSeal'
+import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
+import { getSessionProjectKey, getSessionWorkspaceLabel } from '@/components/layout/sidebarTaskGroups'
+import { resolveProjectDisplayName } from '../stores/projectDisplayNameStore'
 import { MessageList } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { TrajectoryViewSwitch } from '../components/trajectory/TrajectoryViewSwitch'
@@ -172,6 +175,17 @@ function getRenderedWorkspacePanelWidth(panelRef: RefObject<HTMLElement>, fallba
     ? renderedWidth
     : fallbackWidth
 }
+
+/**
+ * Bounds of the split workspace panel. It may take up to 70% of the row, but
+ * never the room the chat column needs: `SessionChatSurface` pins the compact
+ * column at `min-w-[400px]` and the resize handle below is 1px, so a persisted
+ * width past `100% - 401px` (860px in a 1160px row) pushed the panel's right
+ * edge — the review toolbar, the file tree — out of the window. The minimum
+ * yields to the same bound, since `min-width` beats `max-width` and would
+ * otherwise reintroduce the overflow in a narrow window.
+ */
+const WORKSPACE_SPLIT_PANEL_BOUNDS = 'max-w-[min(70%,calc(100%_-_401px))] min-w-[min(420px,54%,calc(100%_-_401px))]'
 
 function WorkspaceResizeHandle({ panelRef }: { panelRef: RefObject<HTMLElement> }) {
   const t = useTranslation()
@@ -442,9 +456,11 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
 
     let cancelled = false
     setSessionGitInfo((current) => current?.sessionId === activeTabId ? null : current)
+    // Kept for every session, not only worktree ones: the header names the
+    // branch too. The worktree indicator reads `worktree.enabled` itself.
     void sessionsApi.getGitInfo(activeTabId)
       .then((info) => {
-        if (!cancelled && info.worktree?.enabled) {
+        if (!cancelled) {
           setSessionGitInfo({ sessionId: activeTabId, info })
         }
       })
@@ -469,9 +485,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       void sessionsApi.getGitInfo(activeTabId)
         .then((info) => {
           if (cancelled) return
-          setSessionGitInfo(info.worktree?.enabled
-            ? { sessionId: activeTabId, info }
-            : null)
+          setSessionGitInfo({ sessionId: activeTabId, info })
         })
         .catch(() => {
           // Keep the last useful snapshot when supplementary Git metadata cannot refresh.
@@ -542,6 +556,10 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     !isPreparingTurn &&
     (session?.messageCount ?? 0) === 0
   const compactEmptyHero = isEmpty && showTerminalPanel
+  // The project the blank session will work in, by the name the sidebar shows.
+  const emptyHeroProject = isEmpty && session && (session.projectRoot || session.workDir)
+    ? getSessionWorkspaceLabel(session, resolveProjectDisplayName) || null
+    : null
   const isHistoryLoading =
     (session?.messageCount ?? 0) > 0 &&
     messages.length === 0 &&
@@ -708,13 +726,52 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     !isMobileLayout &&
     isSessionTabState(activeTabId, activeTabType)
   const isActivityRailOpen = showActivityRail && isActivityPanelOpen
+  // Suggestions and recent sessions need the open column under a hero
+  // composer; squeezed by a side panel, the terminal or a phone, they go.
+  const showNewSessionStarter = isEmpty && !showRightPanel && !compactEmptyHero && !isMobileLayout
+  // Where the session runs, first: the project by the name the sidebar shows,
+  // then the branch git reports for it (「素」 su-01: folder · branch · …).
+  const headerProjectLabel = session && (session.projectRoot || session.workDir)
+    ? getSessionWorkspaceLabel(session, resolveProjectDisplayName)
+    : null
+  const headerBranch = currentGitInfo?.branch || null
   const headerMetadataCandidates: Array<SessionHeaderMetaItem | null> = [
+    headerProjectLabel
+      ? {
+          key: 'project',
+          content: (
+            <span
+              data-testid="session-header-project"
+              className="flex max-w-[160px] shrink-0 items-center gap-1"
+              title={session?.workDir ?? undefined}
+            >
+              <Folder size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+              <span className="min-w-0 truncate">{headerProjectLabel}</span>
+            </span>
+          ),
+        }
+      : null,
+    headerBranch
+      ? {
+          key: 'branch',
+          content: (
+            <span
+              data-testid="session-header-branch"
+              className="flex max-w-[160px] shrink-0 items-center gap-1"
+              title={headerBranch}
+            >
+              <GitBranch size={12} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+              <span className="min-w-0 truncate">{headerBranch}</span>
+            </span>
+          ),
+        }
+      : null,
     isActive
       ? {
           key: 'active',
           content: (
             <span className="flex shrink-0 items-center gap-1.5 text-[var(--color-text-secondary)]">
-              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-success)] animate-pulse-dot" />
+              <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-info)] animate-pulse-dot" />
               {t('session.active')}
             </span>
           ),
@@ -731,9 +788,9 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               <span
                 data-testid="session-worktree-indicator"
                 tabIndex={0}
-                className="flex min-w-0 max-w-[260px] shrink cursor-help items-center gap-1 rounded-[4px] text-[var(--color-text-secondary)] outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                className="flex min-w-0 max-w-[260px] shrink cursor-help items-center gap-1 rounded-[var(--radius-xs)] text-[var(--color-text-secondary)] outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
               >
-                <GitFork size={11} className="shrink-0 text-[var(--color-brand)]" aria-hidden="true" />
+                <GitFork size={12} strokeWidth={2} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
                 <span className="shrink-0 capitalize">{t('sidebar.worktree')}:</span>
                 <span className="min-w-0 truncate font-medium">{worktreeName}</span>
               </span>
@@ -809,15 +866,15 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             ref={workbenchPanelRef}
             data-testid="workbench-panel"
             data-workspace-layout={isWorkspaceFull ? 'full' : workspaceLayout}
-            className="flex h-full min-w-0 flex-col bg-[var(--color-surface)]"
+            className={`flex h-full flex-col bg-[var(--color-surface)] ${isWorkspaceFull ? 'min-w-0' : WORKSPACE_SPLIT_PANEL_BOUNDS}`}
             style={isWorkspaceFull
               ? { flex: '1 1 auto' }
-              : { width: rightPanelWidth, flex: '0 0 auto', maxWidth: '70%', minWidth: 'min(420px, 54%)' }}
+              : { width: rightPanelWidth, flex: '0 0 auto' }}
           >
             {isMobileLayout && sideChatOpen && <div className="flex shrink-0 items-center border-b border-[var(--color-border)] px-2 py-1">
-              <IconButton icon={<ArrowLeft size={18} />} label={t('tabs.hideWorkspace')} size="2xl"
+              <IconButton icon={<ArrowLeft size={18} strokeWidth={1.75} aria-hidden="true" />} label={t('tabs.hideWorkspace')} size="2xl"
                 onClick={() => useWorkspaceStore.getState().setLayout(activeTabId, 'hidden')} />
-              <span className="text-sm text-[var(--color-text-secondary)]">{t('sideChat.title')}</span>
+              <span className="text-[13px] text-[var(--color-text-secondary)]">{t('sideChat.title')}</span>
             </div>}
             {/*
               ContentRouter keeps this page mounted under settings/market with
@@ -837,31 +894,34 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     >
           {(isEmpty || isMobileLayout) && (
             <div className="flex justify-end px-4 py-2">
-              <IconButton icon={<MessageCircleQuestion size={18} />} label={t('sideChat.title')}
+              <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
                 pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />
             </div>
           )}
           {isEmpty ? (
+            // The new-session page (「素」, su-12): mark, question, one line of
+            // context, then the composer and the starter row below it. The hero
+            // bottom-aligns and the starter top-aligns, so the composer between
+            // them lands just above the middle of the column — without moving
+            // it out of its slot, where a remount would drop the draft.
             <div
               data-testid="empty-session-hero"
               className={[
-                'brand-seal-glow flex min-h-0 flex-1 flex-col items-center justify-center overflow-hidden px-8 pt-8',
-                compactEmptyHero ? 'pb-6' : 'pb-32',
+                'flex min-h-0 flex-1 flex-col items-center justify-end overflow-hidden px-8',
+                compactEmptyHero ? 'pb-6 pt-6' : 'pb-7 pt-8',
               ].join(' ')}
             >
-              <div className="flex max-w-[420px] flex-col items-center gap-[13px] text-center">
-                <BrandSeal size={compactEmptyHero ? 'lg' : 'xl'} />
+              <div className="flex max-w-[600px] flex-col items-center gap-2.5 text-center">
+                <BrandSeal size={compactEmptyHero ? 'md' : 'lg'} />
                 <h1
-                  className={`text-2xl font-semibold tracking-tight text-[var(--color-text-primary)]`}
-                  style={{ fontFamily: 'var(--font-headline)' }}
+                  className={`mt-2 font-semibold leading-[1.3] tracking-tight text-[var(--color-text-primary)] ${compactEmptyHero ? 'text-[22px]' : 'text-[26px]'}`}
                 >
-                  {t('empty.title')}
+                  {emptyHeroProject
+                    ? t('empty.heroTitle', { project: emptyHeroProject })
+                    : t('empty.heroTitleNoProject')}
                 </h1>
-                <p
-                  className={`mx-auto -mt-1 text-[var(--color-text-secondary)] ${compactEmptyHero ? 'max-w-[280px] text-sm leading-6' : 'text-[15px] leading-[1.7]'}`}
-                  style={{ fontFamily: 'var(--font-body)' }}
-                >
-                  {t('empty.subtitle')}
+                <p className="text-[14px] text-[var(--color-text-tertiary)]">
+                  {t('empty.heroSubtitle')}
                 </p>
               </div>
             </div>
@@ -874,19 +934,19 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                   metadata={headerMetadata}
                   actions={<>
                     {activeTabId && <TrajectoryViewSwitch sessionId={activeTabId} />}
-                    <IconButton icon={<MessageCircleQuestion size={18} />} label={t('sideChat.title')}
+                    <IconButton icon={<MessageCircleQuestion size={16} strokeWidth={1.75} aria-hidden="true" />} label={t('sideChat.title')} size="sm"
                       pressed={sideChatOpen} onClick={() => void openSideChat(activeTabId)} />
                   </>}
                 >
                   {session && getSessionWorkspaceState(session) !== 'available' && (
-                    <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] border px-3 py-1.5 text-[11px] ${
+                    <div className={`mt-2 inline-flex max-w-full items-center gap-2 rounded-[var(--radius-md)] px-3 py-1.5 text-[12px] ${
                       getSessionWorkspaceState(session) === 'worktree_removed'
-                        ? 'border-[var(--color-border)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
-                        : 'border-[var(--color-error)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+                        ? 'bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
+                        : 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
                     }`}>
-                      <span className="material-symbols-outlined text-[14px]">
-                        {getSessionWorkspaceState(session) === 'worktree_removed' ? 'history' : 'warning'}
-                      </span>
+                      {getSessionWorkspaceState(session) === 'worktree_removed'
+                        ? <History size={14} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
+                        : <TriangleAlert size={14} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />}
                       <span className="truncate">
                         {getSessionWorkspaceState(session) === 'worktree_removed'
                           ? t('session.worktreeRemoved', { dir: session.projectRoot || '' })
@@ -968,6 +1028,17 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             // The ledger needs the height more than the composer needs its full chrome.
             compact={showRightPanel || showTrajectory}
           />
+
+          {showNewSessionStarter && activeTabId ? (
+            <div className="flex min-h-0 flex-[1.3] flex-col items-center overflow-y-auto px-8 pb-8 pt-1">
+              <NewSessionStarter
+                projectPath={session ? getSessionProjectKey(session) : null}
+                projectLabel={emptyHeroProject}
+                excludeSessionId={activeTabId}
+                onSuggestion={(text) => useChatStore.getState().queueComposerInsertion(activeTabId, { text })}
+              />
+            </div>
+          ) : null}
 
           {hasBottomTerminals && activeTabId ? (
             <div

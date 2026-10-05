@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { X } from 'lucide-react'
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -112,9 +113,9 @@ export function Modal({
         {title && variant === 'dialog' && (
           <div className="flex items-start justify-between gap-4 px-6 pt-6 pb-0">
             <h2
-              // 22px serif — dialog titles are headings, and headings carry the
-              // 「墨」 identity (handoff §7, every modal comp).
-              className="text-[22px] font-bold tracking-tight text-[var(--color-text-primary)]"
+              // 18px semibold: a dialog title names the task, it is not a page
+              // headline. The old 22px bold out-shouted the dialog's own content.
+              className="text-[18px] font-semibold leading-7 text-[var(--color-text-primary)]"
               style={{ fontFamily: typography === 'interface' ? 'inherit' : 'var(--font-headline)' }}
             >
               {title}
@@ -123,9 +124,9 @@ export function Modal({
               type="button"
               onClick={onClose}
               aria-label="Close dialog"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
+              className="-mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]"
             >
-              <span className="material-symbols-outlined text-[18px]">close</span>
+              <X size={16} strokeWidth={1.75} aria-hidden="true" />
             </button>
           </div>
         )}

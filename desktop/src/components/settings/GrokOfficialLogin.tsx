@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Copy, LogIn, LogOut } from 'lucide-react'
+import { CircleCheck, Copy, LogIn, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useHahaGrokOAuthStore } from '../../stores/hahaGrokOAuthStore'
 import { useTranslation } from '../../i18n'
@@ -93,8 +93,9 @@ export function GrokOfficialLogin() {
 
   if (status.loggedIn) {
     return (
-      <div data-testid="grok-official-login" className="flex items-center gap-3 text-sm">
-        <span className="text-[var(--color-success)]">
+      <div data-testid="grok-official-login" className="flex flex-wrap items-center gap-3 text-[13px]">
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-[var(--color-success)]">
+          <CircleCheck size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
           {t('settings.grokOfficialLogin.loggedInPrefix')} {status.email || t('settings.grokOfficialLogin.accountUnknown')}
         </span>
         <Button
@@ -112,11 +113,12 @@ export function GrokOfficialLogin() {
 
   return (
     <div data-testid="grok-official-login" className="flex flex-col gap-2">
-      <div className="text-sm text-[var(--color-text-secondary)]">{t('settings.grokOfficialLogin.intro')}</div>
+      <div className="text-[13px] leading-5 text-[var(--color-text-secondary)]">{t('settings.grokOfficialLogin.intro')}</div>
       <Button
+        size="base"
         onClick={handleLogin}
         disabled={isLoading}
-        icon={<LogIn className="h-4 w-4" aria-hidden="true" />}
+        icon={<LogIn size={14} strokeWidth={1.75} aria-hidden="true" />}
         className="self-start"
       >
         {isLoading ? t('settings.grokOfficialLogin.loginStarting') : t('settings.grokOfficialLogin.loginButton')}

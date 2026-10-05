@@ -41,7 +41,8 @@ const NON_PROSE_ELEMENTS = new Set(['kbd', 'Keycap', 'code', 'pre', 'style', 'sc
 const LANGUAGE_NEUTRAL: Record<string, string[]> = {
   'components/agentTeams/AgentTeamsCanvas.tsx': ['zZ'], // a sleeping agent's glyph
   'components/agentTeams/AgentTeamsWorkbench.tsx': ['Agent Teams ·'], // product name, kept in every locale
-  'components/chat/MermaidRenderer.tsx': ['Mermaid'], // the diagram language
+  'components/chat/MermaidRenderer.tsx': ['mermaid'], // the diagram language, as a code block labels it
+  'components/chat/ToolCallBlock.tsx': ['bash', 'powershell'], // shell names, as a code block labels them
   'components/layout/H5ConnectionView.tsx': ['https://chat.example.com'], // example URL
   'components/layout/Sidebar.tsx': ['cc-', 'haha', 'GitHub'], // wordmark, brand
   'components/market/FrontmatterPanel.tsx': ['true', 'false'], // YAML values, shown as written
@@ -52,8 +53,8 @@ const LANGUAGE_NEUTRAL: Record<string, string[]> = {
   'components/workspace/WorkspaceDiffSurface.tsx': ['diff --git'], // the git header, read to screen readers
   'features/pets/PetSettings.tsx': ['px', 'moon-cat'], // unit, example ID
   'pages/Connectors.tsx': ['MCP', 'CLI'], // transport names
-  'pages/McpSettings.tsx': ['STDIO'], // transport name
-  'pages/MemorySettings.tsx': ['MARKDOWN'], // file format
+  'components/search/GlobalSearchModal.tsx': ['esc'], // the key, as printed on its keycap
+  'pages/MemorySettings.tsx': ['Markdown'], // file format
   'pages/settings/AboutSettings.tsx': [ // product, repository and author; example proxy
     'Claude Code Haha', 'GitHub', 'NanmiCoder/cc-haha', '程序员阿江-Relakkes', 'http://127.0.0.1:7890',
   ],

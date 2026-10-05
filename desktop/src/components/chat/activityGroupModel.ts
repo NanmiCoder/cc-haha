@@ -1,13 +1,15 @@
 import {
   Bot,
+  Box,
   Brain,
   FilePen,
   FilePlus,
   FileText,
   Globe,
   ListTodo,
+  MessageSquare,
   Search,
-  Terminal,
+  SquareTerminal,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
@@ -31,6 +33,7 @@ export type ActivityStep =
   | { kind: 'tool'; toolCall: ToolCall }
 
 export const THINKING_SEGMENT_KEY = '__thinking__'
+const TASKS_FAMILY_KEY = '__tasks__'
 
 export type ActivitySegment = {
   key: string
@@ -63,11 +66,27 @@ const TOOL_VERBS: Record<string, (count: number, t: Translate) => string> = {
   Agent: (n, t) => n === 1 ? t('toolGroup.agentOne') : t('toolGroup.agentMany', { count: n }),
   WebSearch: (_n, t) => t('toolGroup.searchedWeb'),
   WebFetch: (n, t) => n === 1 ? t('toolGroup.fetchedOne') : t('toolGroup.fetchedMany', { count: n }),
+  // A todo list is one artifact however many times it is rewritten, so the
+  // summary says what happened to it rather than counting the rewrites.
+  TodoWrite: (_n, t) => t('toolGroup.updatedTodos'),
+  [TASKS_FAMILY_KEY]: (_n, t) => t('toolGroup.managedTasks'),
+}
+
+/**
+ * Tools that share one clause in the summary. The task tools are four names for
+ * one activity — "TaskCreate, TaskUpdate (3), TaskList" read as an inventory of
+ * internals where "managed tasks" says what the reader needs.
+ */
+const TOOL_FAMILIES: Record<string, string> = {
+  TaskCreate: TASKS_FAMILY_KEY,
+  TaskUpdate: TASKS_FAMILY_KEY,
+  TaskList: TASKS_FAMILY_KEY,
+  TaskGet: TASKS_FAMILY_KEY,
 }
 
 const TOOL_SEGMENT_ICONS: Record<string, LucideIcon> = {
-  Bash: Terminal,
-  PowerShell: Terminal,
+  Bash: SquareTerminal,
+  PowerShell: SquareTerminal,
   Read: FileText,
   Write: FilePlus,
   Edit: FilePen,
@@ -75,12 +94,22 @@ const TOOL_SEGMENT_ICONS: Record<string, LucideIcon> = {
   NotebookEdit: FilePen,
   Glob: Search,
   Grep: Search,
+  ToolSearch: Search,
   Agent: Bot,
   WebSearch: Globe,
   WebFetch: Globe,
+  TodoWrite: ListTodo,
   TaskCreate: ListTodo,
   TaskUpdate: ListTodo,
   TaskList: ListTodo,
+  TaskGet: ListTodo,
+  [TASKS_FAMILY_KEY]: ListTodo,
+  Skill: Box,
+  ListSessions: MessageSquare,
+  ReadSession: MessageSquare,
+  CreateSession: MessageSquare,
+  SendSessionMessage: MessageSquare,
+  WaitSessions: MessageSquare,
 }
 
 export function activitySegmentIcon(toolName: string): LucideIcon {
@@ -98,7 +127,9 @@ export function buildActivitySegments(steps: ActivityStep[], t: Translate): Acti
   const editedFilePaths = new Set<string>()
 
   for (const step of steps) {
-    const key = step.kind === 'thinking' ? THINKING_SEGMENT_KEY : step.toolCall.toolName
+    const key = step.kind === 'thinking'
+      ? THINKING_SEGMENT_KEY
+      : TOOL_FAMILIES[step.toolCall.toolName] ?? step.toolCall.toolName
     if (!counts.has(key)) order.push(key)
 
     // The Edit label counts files, not operations. Agents commonly refine one
@@ -147,6 +178,15 @@ export function buildActivitySegments(steps: ActivityStep[], t: Translate): Acti
       icon: activitySegmentIcon(key),
     }
   })
+}
+
+/**
+ * The header sentence. The separator is the locale's own list mark — `、` in
+ * Chinese and Japanese, a comma elsewhere — because a Latin comma between
+ * Chinese clauses reads as a typo.
+ */
+export function formatActivitySummary(segments: ActivitySegment[], t: Translate): string {
+  return segments.map((segment) => segment.label).join(t('toolGroup.separator'))
 }
 
 export function toolCallHasError(

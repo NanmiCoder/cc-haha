@@ -1,6 +1,12 @@
 import { MODEL_SLOTS, type ModelSlot } from '@/lib/providerModelContext'
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { ArrowRight, Check, ChevronDown } from 'lucide-react'
+import {
+  COMPOSER_MENU_ITEM,
+  COMPOSER_MENU_ITEM_ACTIVE,
+  COMPOSER_MENU_SECTION,
+} from '@/components/chat/composerMenuStyles'
 import {
   BUNDLED_PROVIDER_PRESETS,
   getBundledPresetReasoningProviderKind,
@@ -515,6 +521,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const runtimeEffortOptions = supportedRuntimeEfforts === undefined
     ? EFFORT_OPTIONS.filter((option) => option.value !== 'xhigh')
     : EFFORT_OPTIONS.filter((option) => supportedRuntimeEfforts.includes(option.value))
+  const showEffortPill = canEditRuntimeEffort && !!selectedRuntimeEffort && runtimeEffortOptions.length > 0
 
   const navigateToProviderSettings = useCallback(() => {
     setOpen(false)
@@ -640,39 +647,39 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           through it (and above the panel edge). As a sibling above the
           scrollport, the list is hard-clipped below the header instead. */}
       {!isMobileBrowser && (
-        <div className="flex-none border-b border-[var(--color-border)] px-3.5 pb-2 pt-3">
-          <div className="mb-2 px-1 text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-tertiary)]">
+        <div className="flex-none border-b border-[var(--color-border)] px-1 pb-1.5">
+          <div className={COMPOSER_MENU_SECTION}>
             {t('model.configuration')}
           </div>
           {searchField}
         </div>
       )}
-      <div className={`overflow-y-auto ${isMobileBrowser ? 'p-1' : 'min-h-0 flex-1 p-1.5'}`}>
+      <div className={`overflow-y-auto ${isMobileBrowser ? 'p-1' : 'min-h-0 flex-1 p-1'}`}>
         {!hasMatchingModels && (
           <div
             role="status"
-            className={`flex items-center justify-center px-4 text-center text-sm text-[var(--color-text-tertiary)] ${isMobileBrowser ? 'min-h-28' : 'min-h-24'}`}
+            className={`flex items-center justify-center px-4 text-center text-[13px] text-[var(--color-text-tertiary)] ${isMobileBrowser ? 'min-h-28' : 'min-h-24'}`}
           >
             {t('model.noMatches')}
           </div>
         )}
 
         {isRuntimeScoped ? (
-          <div className="space-y-3">
+          <div className="space-y-1">
             {filteredProviderChoices.map((choice) => (
-              <div key={choice.providerId ?? 'official'} className="space-y-1.5">
-                <div className="flex items-center justify-between gap-2 px-3 pt-1">
-                  <span className="truncate text-xs font-semibold text-[var(--color-text-tertiary)]">
+              <div key={choice.providerId ?? 'official'}>
+                <div className={`flex items-center justify-between gap-2 ${COMPOSER_MENU_SECTION}`}>
+                  <span className="truncate">
                     {choice.providerName}
                   </span>
                   {choice.isDefault && (
-                    <span className="flex-shrink-0 text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                    <span className="flex-shrink-0 font-normal">
                       {t('settings.providers.default')}
                     </span>
                   )}
                 </div>
 
-                <div className="space-y-1">
+                <div className="space-y-px">
                   {choice.models.map((model) => {
                     const isSelected =
                       activeRuntimeSelection?.providerId === choice.providerId &&
@@ -722,33 +729,25 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                             ...(nextEffort ? { effortLevel: nextEffort } : {}),
                           })
                         }}
-                        className={`
-                          w-full rounded-[var(--radius-md)] border px-3 text-left transition-colors
-                          ${isMobileBrowser ? 'min-h-[56px] py-3' : 'py-2'}
-                          ${isSelected
-                            ? 'border-[var(--color-model-option-selected-border)] bg-[var(--color-model-option-selected-bg)]'
-                            : 'border-transparent hover:bg-[var(--color-surface-hover)]'
-                          }
-                        `}
+                        aria-current={isSelected || undefined}
+                        className={`${COMPOSER_MENU_ITEM} ${isMobileBrowser ? 'min-h-[56px] py-3' : ''} ${isSelected ? COMPOSER_MENU_ITEM_ACTIVE : ''}`}
                       >
-                        <div className="flex items-center gap-3">
-                          <div className="min-w-0 flex-1">
-                            {/* Model ids are identifiers, so they sit in the
-                                mono face alongside paths and token counts. */}
-                            <div className="truncate font-mono text-[13px] font-medium text-[var(--color-text-primary)]">
-                              {model.name}
-                            </div>
-                            {model.description && (
-                              <div className="mt-0.5 truncate pr-[6px] text-[11px] text-[var(--color-text-tertiary)]">
-                                {model.description}
-                              </div>
-                            )}
+                        <div className="grid min-w-0 flex-1 gap-px">
+                          {/* Model ids are identifiers, so they sit in the
+                              mono face alongside paths and token counts. */}
+                          <div className="truncate font-mono text-[13px] text-[var(--color-text-primary)]">
+                            {model.name}
                           </div>
-
-                          {isSelected && (
-                            <span className="material-symbols-outlined flex-shrink-0 text-[16px] text-[var(--color-brand)]">check</span>
+                          {model.description && (
+                            <div className="truncate pr-[6px] text-xs text-[var(--color-text-tertiary)]">
+                              {model.description}
+                            </div>
                           )}
                         </div>
+
+                        {isSelected && (
+                          <Check aria-hidden="true" size={14} strokeWidth={2} className="flex-shrink-0 text-[var(--color-brand)]" />
+                        )}
                       </button>
                     )
                   })}
@@ -757,7 +756,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
             ))}
           </div>
         ) : (
-          <div className="space-y-1">
+          <div className="space-y-px">
             {filteredAvailableModels.map((model) => {
               const isSelected = model.id === selectedModel?.id
               return (
@@ -771,29 +770,21 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
                     }
                     setOpen(false)
                   }}
-                  className={`
-                    w-full rounded-[var(--radius-md)] px-3 text-left transition-colors
-                    ${isMobileBrowser ? 'min-h-[56px] py-3' : 'py-2'}
-                    ${isSelected
-                      ? 'border border-[var(--color-model-option-selected-border)] bg-[var(--color-model-option-selected-bg)]'
-                      : 'hover:bg-[var(--color-surface-hover)]'
-                    }
-                  `}
+                  aria-current={isSelected || undefined}
+                  className={`${COMPOSER_MENU_ITEM} ${isMobileBrowser ? 'min-h-[56px] py-3' : ''} ${isSelected ? COMPOSER_MENU_ITEM_ACTIVE : ''}`}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-mono text-[13px] font-medium text-[var(--color-text-primary)]">{model.name}</div>
-                      {model.description && (
-                        <div className="mt-0.5 truncate text-[11px] text-[var(--color-text-tertiary)]">
-                          {model.description}
-                        </div>
-                      )}
-                    </div>
-
-                    {isSelected && (
-                      <span className="material-symbols-outlined flex-shrink-0 text-[16px] text-[var(--color-brand)]">check</span>
+                  <div className="grid min-w-0 flex-1 gap-px">
+                    <div className="truncate font-mono text-[13px] text-[var(--color-text-primary)]">{model.name}</div>
+                    {model.description && (
+                      <div className="truncate text-xs text-[var(--color-text-tertiary)]">
+                        {model.description}
+                      </div>
                     )}
                   </div>
+
+                  {isSelected && (
+                    <Check aria-hidden="true" size={14} strokeWidth={2} className="flex-shrink-0 text-[var(--color-brand)]" />
+                  )}
                 </button>
               )
             })}
@@ -823,7 +814,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       <div
         ref={dropdownRef}
         data-testid="model-selector-dropdown"
-        className="fixed z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-overlay)]"
+        className="fixed z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
         style={{
           top: dropdownPosition.top,
           bottom: dropdownPosition.bottom,
@@ -852,10 +843,10 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           desktop composer, which narrows for the right panel, not for touch. */}
       <div
         ref={ref}
-        className={`flex min-w-0 items-stretch rounded-[var(--radius-md)] transition-colors ${
+        className={`flex min-w-0 items-stretch transition-colors ${
           appearance === 'field'
-            ? 'h-10 w-full border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-container-low)]'
-            : 'hover:bg-[var(--color-surface-hover)]'
+            ? 'h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-outline)]'
+            : `h-7 rounded-[var(--radius-sm)] hover:bg-[var(--color-surface-hover)] ${open || effortOpen ? 'bg-[var(--color-surface-hover)]' : ''}`
         } ${isMobileBrowser ? 'min-h-11' : ''} ${fluid ? 'w-full' : ''} ${disabled ? 'opacity-50' : ''}`}
       >
         <button
@@ -875,13 +866,13 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           // focused. The ring traces `border-radius`, so on the half-rounded
           // halves of this segmented control it otherwise drew a box that was
           // rounded down one side and square down the other.
-          className={`flex min-w-0 items-center gap-2 text-xs font-medium text-[var(--color-text-secondary)] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${
+          className={`flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-secondary)] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${
             appearance === 'field'
               ? 'h-full w-full rounded-[var(--radius-md)] px-3 text-left'
-              : `rounded-l-[var(--radius-md)] focus-visible:rounded-[var(--radius-md)] ${fluid ? 'flex-1' : ''} ${compact ? 'max-w-[112px] py-1.5 pl-2.5 pr-1' : 'max-w-[220px] py-1.5 pl-2.5 pr-1'}`
+              : `rounded-l-[var(--radius-sm)] focus-visible:rounded-[var(--radius-sm)] pl-2 ${fluid ? 'flex-1' : ''} ${compact ? 'max-w-[112px]' : 'max-w-[220px]'} ${showEffortPill ? 'pr-1' : 'rounded-r-[var(--radius-sm)] pr-1.5'}`
           }`}
         >
-          <span className={`${appearance === 'field' ? 'text-sm font-normal' : compact ? 'text-xs font-medium' : 'text-[13px] font-medium'} min-w-0 flex-1 truncate text-[var(--color-text-primary)]`}>
+          <span className={`${appearance === 'field' ? 'text-[13px]' : 'text-xs'} min-w-0 flex-1 truncate text-[var(--color-text-primary)]`}>
             {buttonModelLabel}
           </span>
           {!canEditRuntimeEffort && !compact && buttonProviderLabel && (
@@ -889,12 +880,12 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
               {buttonProviderLabel}
             </span>
           )}
-          <span className={`material-symbols-outlined flex-shrink-0 text-[var(--color-text-tertiary)] ${appearance === 'field' ? 'text-[16px]' : 'text-[12px]'}`}>
-            {needsProviderConfiguration ? 'arrow_forward' : 'expand_more'}
-          </span>
+          {needsProviderConfiguration
+            ? <ArrowRight aria-hidden="true" size={appearance === 'field' ? 16 : 12} strokeWidth={2} className="flex-shrink-0 text-[var(--color-text-tertiary)]" />
+            : !showEffortPill && <ChevronDown aria-hidden="true" size={appearance === 'field' ? 16 : 12} strokeWidth={2} className="flex-shrink-0 text-[var(--color-text-tertiary)]" />}
         </button>
 
-        {canEditRuntimeEffort && selectedRuntimeEffort && runtimeEffortOptions.length > 0 && (
+        {showEffortPill && selectedRuntimeEffort && (
           <button
             ref={effortButtonRef}
             type="button"
@@ -906,9 +897,14 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
               setOpen(false)
               setEffortOpen(!effortOpen)
             }}
-            className={`shrink-0 rounded-r-[var(--radius-md)] pr-2.5 text-[var(--color-text-secondary)] outline-none transition-colors hover:text-[var(--color-text-primary)] focus-visible:rounded-[var(--radius-md)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed ${compact ? 'pl-1 text-[10px]' : 'pl-1.5 text-[12px]'}`}
+            // The effort rides on the model name as a small sunken pill; the
+            // chevron moves here so the pair reads "model · effort ⌄".
+            className={`flex shrink-0 items-center gap-1 rounded-r-[var(--radius-sm)] pl-0.5 pr-1.5 text-[var(--color-text-tertiary)] outline-none transition-colors hover:text-[var(--color-text-primary)] focus-visible:rounded-[var(--radius-sm)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed`}
           >
-            {effortLabels[selectedRuntimeEffort]}
+            <span className="inline-flex h-[18px] items-center rounded-full bg-[var(--color-surface-container)] px-1.5 text-[11px]">
+              {effortLabels[selectedRuntimeEffort]}
+            </span>
+            <ChevronDown aria-hidden="true" size={12} strokeWidth={2} className="flex-shrink-0" />
           </button>
         )}
       </div>

@@ -6,7 +6,7 @@ import {
   Paperclip,
   Plug,
   Settings2,
-  Sparkles,
+  UserPlus,
   Users,
   Workflow,
   type LucideIcon,
@@ -180,7 +180,7 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
     key: 'teams:create',
     label: t('chat.capabilities.teamCreate'),
     description: t('chat.capabilities.teamCreateDescription'),
-    icon: { kind: 'lucide', icon: Sparkles },
+    icon: { kind: 'lucide', icon: UserPlus },
     action: { type: 'insertPromptSeed', text: input.teamCreatePrompt },
   }]
   for (const team of input.teams) {

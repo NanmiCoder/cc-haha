@@ -60,7 +60,7 @@ export function WorkspaceLauncher({
       data-testid={menu ? 'workspace-add-menu-items' : 'workspace-launcher'}
       className={menu ? '' : `flex min-h-0 flex-1 items-start justify-center overflow-y-auto ${compact ? 'px-4 py-2' : 'px-6 py-10'}`}
     >
-      <ul className={menu ? 'space-y-0.5' : 'my-auto w-full max-w-[640px] space-y-0.5'} role={menu ? 'presentation' : undefined} aria-label={menu ? undefined : t('workspace.launcher.label')}>
+      <ul className={menu ? 'space-y-px' : 'my-auto w-full max-w-[420px] space-y-px'} role={menu ? 'presentation' : undefined} aria-label={menu ? undefined : t('workspace.launcher.label')}>
         {ENTRIES.filter(entry => dock !== 'bottom' || entry.kind !== 'side-chat').map(({ kind, labelKey, shortcut, Icon }) => {
           const disabledReason = kind === 'review' ? reviewUnavailableReason ?? null : null
           // The hint advertises the app command; a pointer choice uses this dock.
@@ -75,23 +75,23 @@ export function WorkspaceLauncher({
                 disabled={disabledReason !== null}
                 title={disabledReason ?? undefined}
                 onClick={() => onSelect(kind)}
-                className={`group flex w-full items-center rounded-[var(--radius-md)] text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ${menu ? 'min-h-9 gap-2.5 px-2 py-1.5' : compact ? 'min-h-9 gap-3 px-3 py-2' : 'min-h-[52px] gap-3 px-3 py-3'}`}
+                className={`group flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left text-[13px] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent ${menu || compact ? 'h-8' : 'h-9'}`}
               >
                 <Icon
-                  size={18}
-                  strokeWidth={1.9}
+                  size={16}
+                  strokeWidth={1.75}
                   aria-hidden="true"
-                  className="shrink-0 text-[var(--color-text-tertiary)]"
+                  className="shrink-0 text-[var(--color-text-tertiary)] group-hover:text-[var(--color-text-secondary)]"
                 />
-                <span className="min-w-0 flex-1 truncate text-[14px] text-[var(--color-text-primary)]">
+                <span className="min-w-0 flex-1 truncate text-[var(--color-text-primary)]">
                   {t(labelKey)}
                 </span>
                 {disabledReason ? (
-                  <span className="max-w-[60%] shrink-0 truncate text-[11px] text-[var(--color-text-tertiary)]">
+                  <span className="max-w-[60%] shrink-0 truncate text-[12px] text-[var(--color-text-tertiary)]">
                     {disabledReason}
                   </span>
                 ) : hint ? (
-                  <kbd className={`shrink-0 text-[var(--color-text-tertiary)] ${menu ? 'text-[12px]' : 'rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-1.5 py-0.5 font-mono text-[11px]'}`}>
+                  <kbd className="inline-flex h-[18px] shrink-0 items-center rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-1 font-mono text-[11px] leading-none text-[var(--color-text-tertiary)]">
                     {hint}
                   </kbd>
                 ) : null}

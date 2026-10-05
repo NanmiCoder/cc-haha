@@ -279,8 +279,17 @@ describe('Settings > Diagnostics tab', () => {
     expect(screen.getByText('event-1')).toBeInTheDocument()
     expect(screen.getByText(/best-effort/i)).toHaveTextContent(/review.*private metadata/i)
 
-    const eventRow = screen.getByText('cli_start_failed').closest('.grid')
-    expect(eventRow).toHaveClass('grid-cols-1', 'md:grid-cols-[120px_92px_1fr]')
+    // Each event is one list row: type, severity, timestamp, session, summary and
+    // its copyable ID all stay together, so a long summary cannot push the
+    // timestamp onto a different event.
+    const eventRow = screen.getByText('cli_start_failed').closest('[data-testid="diagnostic-event"]') as HTMLElement
+    expect(eventRow).not.toBeNull()
+    expect(within(eventRow).getByText('error')).toBeInTheDocument()
+    expect(within(eventRow).getByText('session-1')).toBeInTheDocument()
+    expect(within(eventRow).getByText('CLI exited during startup with code 1')).toBeInTheDocument()
+    expect(within(eventRow).getByText(new Date('2026-05-02T00:00:00.000Z').toLocaleString())).toBeInTheDocument()
+    expect(within(eventRow).getByRole('button', { name: 'Copy event ID: event-1' })).toBeInTheDocument()
+    expect(screen.getAllByTestId('diagnostic-event')).toHaveLength(100)
   })
 
   it('shows local-index state, counts, storage, update time, and error code without rollout modes', async () => {
@@ -572,7 +581,9 @@ describe('Settings > Diagnostics tab', () => {
     await screen.findByText('Log directory')
 
     expect(diagnosticsTab).toHaveAttribute('aria-current', 'page')
-    expect(diagnosticsTab.querySelector('.material-symbols-outlined')).toHaveAttribute('aria-hidden', 'true')
+    // The nav icon is decorative: whichever icon element the rail renders first
+    // must be hidden so the tab is announced by its label alone.
+    expect(diagnosticsTab.firstElementChild).toHaveAttribute('aria-hidden', 'true')
   })
 
   it('exports a diagnostics bundle from the settings page', async () => {

@@ -85,7 +85,8 @@ function ringClassName(tone: AgentMascotSpec['tone']): string {
   if (tone === 'danger') return 'border-[color-mix(in_srgb,var(--color-error)_42%,transparent)]'
   if (tone === 'success') return 'border-[color-mix(in_srgb,var(--color-success)_34%,transparent)]'
   if (tone === 'muted') return 'border-[color-mix(in_srgb,var(--color-text-tertiary)_24%,transparent)]'
-  return 'border-[color-mix(in_srgb,var(--color-brand)_42%,transparent)]'
+  // Running is information, not brand: the app reads blue as "in progress".
+  return 'border-[color-mix(in_srgb,var(--color-info)_42%,transparent)]'
 }
 
 export function AgentMascot({ seed, status }: { seed: string; status: ActivityStatus }) {
@@ -108,7 +109,7 @@ export function AgentMascot({ seed, status }: { seed: string; status: ActivitySt
       {isActive ? (
         <span
           data-testid="agent-mascot-motion-ring"
-          className="absolute -inset-0.5 rounded-[var(--radius-lg)] border border-transparent border-t-[var(--color-brand)] opacity-80 motion-safe:animate-spin motion-reduce:animate-none"
+          className="absolute -inset-0.5 rounded-[var(--radius-lg)] border border-transparent border-t-[var(--color-info)] opacity-80 motion-safe:animate-spin motion-reduce:animate-none"
           aria-hidden="true"
         />
       ) : null}
@@ -116,7 +117,7 @@ export function AgentMascot({ seed, status }: { seed: string; status: ActivitySt
         src={imageSrc}
         alt=""
         draggable={false}
-        className="relative z-[1] h-[34px] w-[34px] max-w-none select-none object-contain"
+        className="relative h-[34px] w-[34px] max-w-none select-none object-contain"
       />
     </span>
   )

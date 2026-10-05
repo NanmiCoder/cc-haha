@@ -212,4 +212,23 @@ describe('isWorktreeSession', () => {
       workDir: '/Users/dev/work/alpha-experiment',
     }))).toBe(true)
   })
+
+  // git resolves the root through the macOS `/var` → `/private/var` symlink
+  // while the work dir keeps the shell's spelling. Without folding the alias,
+  // every session under a temp dir wore the worktree branch glyph.
+  it.each([
+    ['/private/var/folders/x/T/proj', '/var/folders/x/T/proj'],
+    ['/var/folders/x/T/proj', '/private/var/folders/x/T/proj/src'],
+    ['/private/tmp/proj', '/tmp/proj'],
+  ])('does not flag a work dir that is the root %s spelled through /private', (projectRoot, workDir) => {
+    expect(isWorktreeSession(makeSession({ id: 'a', projectRoot, workDir }))).toBe(false)
+  })
+
+  it('still flags a sibling checkout behind the /private alias', () => {
+    expect(isWorktreeSession(makeSession({
+      id: 'a',
+      projectRoot: '/private/var/folders/x/T/proj',
+      workDir: '/var/folders/x/T/proj-feature',
+    }))).toBe(true)
+  })
 })

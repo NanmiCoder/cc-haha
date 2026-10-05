@@ -32,8 +32,12 @@ describe('SessionChatSurface', () => {
 
     const header = screen.getByTestId('session-header')
     expect(header.firstElementChild).toHaveClass('max-w-[var(--chat-content-max-width)]')
-    expect(within(header).getByRole('heading', { name: 'Child run' })).toHaveClass('truncate')
-    expect(header.querySelectorAll('[aria-hidden="true"]')).toHaveLength(1)
+    expect(within(header).getByRole('heading', { name: 'Child run' })).toHaveClass('truncate', 'text-[15px]', 'font-semibold')
+    const separators = header.querySelectorAll('[aria-hidden="true"]')
+    expect(separators).toHaveLength(1)
+    // A 3px dot, not a typed "·" glyph whose size and baseline follow the font.
+    expect(separators[0]!.textContent).toBe('')
+    expect(separators[0]).toHaveClass('rounded-full')
   })
 
   it('uses the same compact chat column contract when a side panel is present', () => {

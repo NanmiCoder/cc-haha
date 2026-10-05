@@ -775,10 +775,10 @@ function AgentSessionView({
         leading={(
           <Button
             variant="ghost"
-            size="base"
+            size="sm"
             onClick={onBack}
-            icon={<ArrowLeft size={15} strokeWidth={2} aria-hidden="true" />}
-            className="shrink-0"
+            icon={<ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
+            className="mt-px shrink-0"
           >
             {backLabel}
           </Button>
@@ -804,10 +804,10 @@ function AgentSessionView({
           <>
             {hasVisibleActivity ? <SessionActivityButton sessionId={sessionId} /> : null}
             <IconButton
-              icon={<RefreshCw size={15} strokeWidth={2.2} aria-hidden="true" className={loading ? 'animate-spin' : undefined} />}
+              icon={<RefreshCw size={16} strokeWidth={1.75} aria-hidden="true" className={loading ? 'animate-spin' : undefined} />}
               label={refreshLabel}
               showTooltip={false}
-              size="md"
+              size="sm"
               tone="muted"
               onClick={onRefresh}
               disabled={loading}
@@ -820,7 +820,7 @@ function AgentSessionView({
         }]}
       >
         {details ? (
-          <p className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-[11px] text-[var(--color-text-tertiary)]">
+          <p className="mt-1 flex min-w-0 flex-wrap gap-x-2 text-xs text-[var(--color-text-tertiary)]">
             {details}
           </p>
         ) : null}
@@ -830,7 +830,7 @@ function AgentSessionView({
         <div role="status" className="flex flex-1 items-center justify-center text-sm text-[var(--color-text-tertiary)]">{loadingLabel}</div>
       ) : null}
       {error ? (
-        <div role="alert" className="mx-5 mt-4 rounded-[var(--radius-md)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-3 py-2 text-sm text-[var(--color-on-error-container)]">
+        <div role="alert" className="mx-auto mt-4 w-[calc(100%-40px)] max-w-[var(--chat-content-max-width)] rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-[13px] text-[var(--color-on-error-container)]">
           {error}
         </div>
       ) : null}
@@ -848,7 +848,7 @@ function AgentSessionView({
       {ready && !canSendMessage ? (
         <p
           data-testid={readOnlyTestId}
-          className="shrink-0 border-t border-[var(--color-border)] px-5 py-3 text-center text-[11.5px] text-[var(--color-text-tertiary)]"
+          className="shrink-0 border-t border-[var(--color-border)] px-5 py-3 text-center text-xs text-[var(--color-text-tertiary)]"
         >
           {readOnlyLabel}
         </p>
@@ -884,7 +884,8 @@ function StatusBadge({ status, t }: { status: SubagentRunStatus; t: TranslationF
 function statusTone(status: SubagentRunStatus): BadgeTone {
   if (status === 'completed') return 'success'
   if (status === 'failed' || status === 'stopped') return 'danger'
-  if (status === 'running') return 'brand'
+  // Running is a state, and states are never the brand colour (spec §1).
+  if (status === 'running') return 'info'
   return 'neutral'
 }
 

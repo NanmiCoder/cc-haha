@@ -5,12 +5,9 @@ import {
   Box,
   Boxes,
   Bolt,
-  Braces,
   Check,
   CircleAlert,
   Folder,
-  Hammer,
-  Layers,
   LockKeyhole,
   Pencil,
   Plus,
@@ -19,7 +16,6 @@ import {
   Terminal,
   Trash2,
   User,
-  Wrench,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import type { TranslationKey } from '../../i18n'
@@ -44,22 +40,39 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { DirectoryPicker } from '@/components/composite/DirectoryPicker'
 import { IconButton } from '@/components/ui/IconButton'
-import { Input } from '@/components/ui/Input'
+import { FIELD_BASE_CLASSES, Input, fieldStateClasses } from '@/components/ui/Input'
 import { Modal } from '@/components/ui/Modal'
 import { SearchField } from '@/components/ui/SearchField'
 import { SelectField } from '@/components/ui/SelectField'
-import { SettingsPageHeader } from '@/components/settings/SettingsSection'
+import {
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+  SettingsStat,
+} from '@/components/settings/SettingsSection'
 import { ModelSelector } from '@/components/controls/ModelSelector'
+import { cx } from '@/lib/cx'
 
+/**
+ * The colour names an agent file may declare (`color: blue`), rendered as
+ * theme tokens so the bot glyph follows the active palette instead of sitting
+ * on the same Tailwind-500 hex under all six themes.
+ *
+ * The hue names have no status meaning, so they borrow the terminal's ANSI
+ * ramp — the one themed set of plain hues — rather than the status pairs. The
+ * two hues it lacks fall back to the nearest themed accents: orange to the
+ * warning amber, cyan to the teal tertiary.
+ */
 const AGENT_COLORS: Record<string, string> = {
-  red: '#ef4444',
-  orange: '#f97316',
-  yellow: '#eab308',
-  green: '#22c55e',
-  blue: '#3b82f6',
-  purple: '#a855f7',
-  pink: '#ec4899',
-  cyan: '#06b6d4',
+  red: 'var(--color-terminal-ansi-red)',
+  orange: 'var(--color-warning)',
+  yellow: 'var(--color-terminal-ansi-yellow)',
+  green: 'var(--color-terminal-ansi-green)',
+  blue: 'var(--color-terminal-ansi-blue)',
+  purple: 'var(--color-terminal-ansi-magenta)',
+  pink: 'var(--color-terminal-ansi-bright-magenta)',
+  cyan: 'var(--color-tertiary)',
 }
 
 const AGENT_SOURCE_ORDER: AgentSource[] = [
@@ -168,21 +181,19 @@ export function AgentManager() {
     <div className="w-full min-w-0">
       {mutationWarning && (
         <div
-          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-xl)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-4 py-3"
+          className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-[var(--radius-lg)] bg-[var(--color-warning-container)] px-4 py-2.5"
           role="status"
         >
           <div className="flex min-w-0 items-start gap-2">
-            <CircleAlert size={17} className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-[var(--color-text-primary)]">
-                {t('settings.agents.refreshWarning')}
-              </p>
-            </div>
+            <CircleAlert size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-on-warning-container)]" />
+            <p className="min-w-0 text-[13px] font-medium leading-5 text-[var(--color-on-warning-container)]">
+              {t('settings.agents.refreshWarning')}
+            </p>
           </div>
           <Button
             variant="secondary"
-            size="sm"
-            icon={<RefreshCw size={14} />}
+            size="base"
+            icon={<RefreshCw size={14} strokeWidth={1.75} />}
             onClick={() => void retryMutationRefresh(
               agentContextPath,
               contextSessionId,
@@ -203,137 +214,123 @@ export function AgentManager() {
       ) : (
         <>
           <SettingsPageHeader
-            title={t('settings.agents.title')}
+            title={t('settings.tab.agents')}
             description={t('settings.agents.description')}
             action={(
-              <Button icon={<Plus size={16} />} onClick={() => setFormState({ mode: 'create' })}>
+              <Button
+                variant="primary"
+                size="base"
+                icon={<Plus size={14} strokeWidth={1.75} />}
+                onClick={() => setFormState({ mode: 'create' })}
+              >
                 {t('settings.agents.create')}
               </Button>
             )}
           />
 
           {isLoading && allAgents.length === 0 ? (
-            <LoadingState label={t('common.loading')} labelHidden size="md" />
-          ) : error ? (
-            <ErrorState
-              title={t('settings.agents.loadError')}
-              onRetry={() => void fetchAgents(agentContextPath)}
-              retryLabel={t('common.retry')}
-              size="lg"
-            />
-          ) : allAgents.length === 0 ? (
-            <EmptyState
-              icon={<Bot size={20} />}
-              title={t('settings.agents.empty')}
-              description={t('settings.agents.emptyHint')}
-              size="md"
-            />
-          ) : (
-            <div className="flex min-w-0 flex-col gap-6">
-              <section className="overflow-hidden rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-                <div className="grid min-w-0 gap-4 px-5 py-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(400px,1fr)] xl:items-end">
-                  <div className="min-w-0">
-                    <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">
-                      {t('settings.agents.browserEyebrow')}
-                    </div>
-                    <div className="mb-2 flex items-center gap-3">
-                      <Bot size={22} className="text-[var(--color-brand)]" />
-                      <h3 className="text-lg font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
-                        {t('settings.agents.browserTitle')}
-                      </h3>
-                    </div>
-                  </div>
-                  {/* Column count follows the track width, not the viewport: `sm:grid-cols-3`
-                      kept forcing three columns into a 320px column and clipped the CJK labels. */}
-                  <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(116px,1fr))] gap-3">
-                    <SummaryCard label={t('settings.agents.summary.totalAgents')} value={String(allAgents.length)} icon={<Bot size={14} />} />
-                    <SummaryCard label={t('settings.agents.summary.activeAgents')} value={String(activeAgents.length)} icon={<Bolt size={14} />} />
-                    <SummaryCard label={t('settings.agents.summary.sources')} value={String(sourceCount)} icon={<Layers size={14} />} />
-                  </div>
-                </div>
-              </section>
-
-              <div className={`grid gap-4 ${sourceCount >= 2 ? 'xl:grid-cols-2' : ''}`}>
-                {AGENT_SOURCE_ORDER.map((source) => {
-                  const group = groupedAgents[source]
-                  if (!group?.length) return null
-                  const sourceLabel = t(`settings.agents.source.${source}`)
-                  return (
-                    <section key={source} className="min-w-0 overflow-hidden rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface)]">
-                      <div className="border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-5 py-4">
-                        <div className="mb-1 flex flex-wrap items-center gap-2">
-                          <span className={`inline-flex h-7 w-7 items-center justify-center rounded-full ${getAgentSourceAccentClass(source)}`}>
-                            {getAgentSourceIcon(source)}
-                          </span>
-                          <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">{sourceLabel}</h4>
-                          <span className="text-xs text-[var(--color-text-tertiary)]">{group.length}</span>
-                        </div>
-                        <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">
-                          {t('settings.agents.groupHint', { source: sourceLabel, count: String(group.length) })}
-                        </p>
-                      </div>
-                      <div className="flex flex-col p-2">
-                        {group.map((agent, index) => (
-                          // A row is a div, not a button: the actions on the
-                          // right have to be siblings of the primary control,
-                          // never nested inside it.
-                          <div
-                            key={`${agent.source}-${agent.agentType}-${agent.target ?? agent.baseDir ?? index}`}
-                            className="group flex items-start gap-1 rounded-[var(--radius-xl)] border border-transparent px-3 py-3 transition-all hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)]"
-                          >
-                            <button
-                              type="button"
-                              onClick={() => selectAgent(agent, 'agents')}
-                              className="min-w-0 flex-1 rounded-[var(--radius-lg)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)]"
-                            >
-                            <div className="flex items-start gap-3">
-                              <Bot size={18} className="mt-0.5 shrink-0" style={{ color: getAgentDotColor(agent.color) }} />
-                              <div className="min-w-0 flex-1">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="break-all font-mono text-[13px] font-semibold text-[var(--color-text-primary)]">{agent.agentType}</span>
-                                  {agent.modelDisplay && <MetaPill>{agent.modelDisplay}</MetaPill>}
-                                  {agent.effort !== undefined && <MetaPill>{agent.effort}</MetaPill>}
-                                  <MetaPill>{sourceLabel}</MetaPill>
-                                  <Badge
-                                    tone={agent.isActive ? 'success' : 'neutral'}
-                                    size="md"
-                                    bordered
-                                    className="uppercase tracking-[0.12em]"
-                                  >
-                                    {agent.isActive ? t('settings.agents.status.active') : t('settings.agents.status.available')}
-                                  </Badge>
-                                  {agent.overriddenBy && (
-                                    <MetaPill>{t('settings.agents.overriddenBy', { source: t(`settings.agents.source.${agent.overriddenBy}`) })}</MetaPill>
-                                  )}
-                                </div>
-                                <div className="mt-1 break-words text-xs leading-5 text-[var(--color-text-secondary)] [&_.prose]:text-xs [&_.prose]:leading-5 [&_.prose]:text-[var(--color-text-secondary)]">
-                                  <MarkdownRenderer content={agent.description || t('settings.agents.noDescription')} />
-                                </div>
-                                <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
-                                  <span>{agent.tools === undefined
-                                    ? t('settings.agents.noTools')
-                                    : agent.tools.length === 0
-                                      ? t('settings.agents.disabledTools')
-                                      : t('settings.agents.toolCount', { count: String(agent.tools.length) })}</span>
-                                  {(agent.target || agent.baseDir) && <span className="break-all font-mono">{agent.target || agent.baseDir}</span>}
-                                </div>
-                              </div>
-                            </div>
-                            </button>
-                            <AgentRowActions
-                              agent={agent}
-                              onEdit={() => setFormState({ mode: 'edit', agent })}
-                              onDelete={() => setDeleteTarget(agent)}
-                              onOverride={() => setOverrideTarget(agent)}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </section>
-                  )
-                })}
-              </div>
+            <div className="mt-7">
+              <LoadingState label={t('common.loading')} labelHidden size="md" />
             </div>
+          ) : error ? (
+            <div className="mt-7">
+              <ErrorState
+                title={t('settings.agents.loadError')}
+                onRetry={() => void fetchAgents(agentContextPath)}
+                retryLabel={t('common.retry')}
+                size="lg"
+              />
+            </div>
+          ) : allAgents.length === 0 ? (
+            <div className="mt-7">
+              <EmptyState
+                icon={<Bot size={20} strokeWidth={1.75} />}
+                title={t('settings.agents.empty')}
+                description={t('settings.agents.emptyHint')}
+                size="md"
+              />
+            </div>
+          ) : (
+            <>
+              <div className="mt-6 grid min-w-0 grid-cols-3 gap-3">
+                <SettingsStat label={t('settings.agents.summary.totalAgents')} value={String(allAgents.length)} />
+                <SettingsStat label={t('settings.agents.summary.activeAgents')} value={String(activeAgents.length)} />
+                <SettingsStat label={t('settings.agents.summary.sources')} value={String(sourceCount)} />
+              </div>
+
+              {AGENT_SOURCE_ORDER.map((source) => {
+                const group = groupedAgents[source]
+                if (!group?.length) return null
+                const sourceLabel = t(`settings.agents.source.${source}`)
+                return (
+                  <SettingsSection
+                    key={source}
+                    title={(
+                      <span className="inline-flex items-center gap-1.5">
+                        <span aria-hidden="true" className="text-[var(--color-text-tertiary)]">{getAgentSourceIcon(source)}</span>
+                        <span>{sourceLabel}</span>
+                        <span className="font-normal tabular-nums text-[var(--color-text-tertiary)]">{group.length}</span>
+                      </span>
+                    )}
+                  >
+                    <SettingsGroup>
+                      {group.map((agent, index) => (
+                        // A row is a div, not a button: the actions on the
+                        // right have to be siblings of the primary control,
+                        // never nested inside it.
+                        <div
+                          key={`${agent.source}-${agent.agentType}-${agent.target ?? agent.baseDir ?? index}`}
+                          className="group flex min-h-[52px] items-start gap-2 px-4 py-3 transition-colors duration-150 first:rounded-t-[var(--radius-lg)] last:rounded-b-[var(--radius-lg)] hover:bg-[var(--color-surface-hover)]"
+                        >
+                          <button
+                            type="button"
+                            onClick={() => selectAgent(agent, 'agents')}
+                            className="flex min-w-0 flex-1 items-start gap-3 rounded-[var(--radius-sm)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                          >
+                            <span
+                              aria-hidden="true"
+                              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)]"
+                            >
+                              <Bot size={16} strokeWidth={1.75} style={{ color: getAgentDotColor(agent.color) }} />
+                            </span>
+                            <span className="block min-w-0 flex-1">
+                              <span className="flex flex-wrap items-center gap-1.5">
+                                <span className="break-all font-mono text-[13px] font-medium text-[var(--color-text-primary)]">{agent.agentType}</span>
+                                {agent.modelDisplay && <MetaPill mono>{agent.modelDisplay}</MetaPill>}
+                                {agent.effort !== undefined && <MetaPill>{agent.effort}</MetaPill>}
+                                <Badge tone={agent.isActive ? 'success' : 'neutral'}>
+                                  {agent.isActive ? t('settings.agents.status.active') : t('settings.agents.status.available')}
+                                </Badge>
+                                {agent.overriddenBy && (
+                                  <MetaPill>{t('settings.agents.overriddenBy', { source: t(`settings.agents.source.${agent.overriddenBy}`) })}</MetaPill>
+                                )}
+                              </span>
+                              <span className="mt-1 block break-words text-xs leading-[1.5] text-[var(--color-text-secondary)] [&_.prose]:text-xs [&_.prose]:leading-[1.5] [&_.prose]:text-[var(--color-text-secondary)]">
+                                <MarkdownRenderer content={agent.description || t('settings.agents.noDescription')} />
+                              </span>
+                              <span className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
+                                <span>{agent.tools === undefined
+                                  ? t('settings.agents.noTools')
+                                  : agent.tools.length === 0
+                                    ? t('settings.agents.disabledTools')
+                                    : t('settings.agents.toolCount', { count: String(agent.tools.length) })}</span>
+                                {(agent.target || agent.baseDir) && <span className="break-all font-mono">{agent.target || agent.baseDir}</span>}
+                              </span>
+                            </span>
+                          </button>
+                          <AgentRowActions
+                            agent={agent}
+                            onEdit={() => setFormState({ mode: 'edit', agent })}
+                            onDelete={() => setDeleteTarget(agent)}
+                            onOverride={() => setOverrideTarget(agent)}
+                          />
+                        </div>
+                      ))}
+                    </SettingsGroup>
+                  </SettingsSection>
+                )
+              })}
+            </>
           )}
         </>
       )}
@@ -384,101 +381,121 @@ function AgentDetailView({
   const editable = isEditableAgent(agent)
   const inherited = t('settings.agents.detail.inherit')
 
+  const toolSummary = agent.tools === undefined
+    ? t('settings.agents.noTools')
+    : agent.tools.length === 0
+      ? t('settings.agents.disabledTools')
+      : t('settings.agents.toolCount', { count: String(agent.tools.length) })
+
   return (
-    <div className="flex h-full min-w-0 flex-col gap-4">
+    <div className="min-w-0">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Button variant="ghost" size="sm" icon={<ArrowLeft size={16} />} onClick={onBack}>
+        <Button variant="ghost" size="base" className="-ml-3" icon={<ArrowLeft size={14} strokeWidth={1.75} />} onClick={onBack}>
           {t('settings.agents.backToList')}
         </Button>
         {editable ? (
           <div className="flex items-center gap-2">
-            <Button variant="secondary" size="sm" icon={<Pencil size={14} />} onClick={onEdit}>
+            <Button variant="secondary" size="base" icon={<Pencil size={14} strokeWidth={1.75} />} onClick={onEdit}>
               {t('settings.agents.edit')}
             </Button>
-            <Button variant="danger" size="sm" icon={<Trash2 size={14} />} onClick={onDelete}>
+            <Button variant="danger-ghost" size="base" icon={<Trash2 size={14} strokeWidth={1.75} />} onClick={onDelete}>
               {t('settings.agents.delete')}
             </Button>
           </div>
         ) : (
           <div className="flex items-center gap-2">
             {agent.overridable && (
-              <Button variant="secondary" size="sm" icon={<Bolt size={14} />} onClick={onOverride}>
+              <Button variant="secondary" size="base" icon={<Bolt size={14} strokeWidth={1.75} />} onClick={onOverride}>
                 {t('settings.agents.override')}
               </Button>
             )}
             {/* Kept alongside the button: the prompt and tools really are fixed,
                 and only the model and effort are not. */}
-            <MetaPill><LockKeyhole size={11} /> {t('settings.agents.readOnly')}</MetaPill>
+            <Badge tone="neutral" icon={<LockKeyhole size={11} strokeWidth={2} aria-hidden="true" />}>
+              {t('settings.agents.readOnly')}
+            </Badge>
           </div>
         )}
       </div>
 
-      <section className="overflow-hidden rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-        <div className="grid gap-4 px-5 py-5 lg:grid-cols-[minmax(0,1.4fr)_minmax(340px,1fr)] lg:items-start">
-          <div className="min-w-0">
-            <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-tertiary)]">{t('settings.agents.entryEyebrow')}</div>
-            <div className="mb-2 flex flex-wrap items-center gap-2">
-              <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: getAgentDotColor(agent.color) }} />
-              <h3 className="break-all text-[22px] font-semibold leading-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{agent.agentType}</h3>
-              <MetaPill>{sourceLabel}</MetaPill>
-              <MetaPill>{agent.isActive ? t('settings.agents.status.active') : t('settings.agents.status.available')}</MetaPill>
-              {agent.overriddenBy && (
-                <MetaPill>{t('settings.agents.overriddenByShort', { source: t(`settings.agents.source.${agent.overriddenBy}`) })}</MetaPill>
-              )}
-            </div>
-            <div className="max-w-4xl text-sm leading-6 text-[var(--color-text-secondary)]">
-              <MarkdownRenderer content={agent.description || t('settings.agents.noDescription')} />
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <DetailStat label={t('settings.agents.detail.configuredModel')} value={agent.model || inherited} icon={<Braces size={14} />} />
-            <DetailStat label={t('settings.agents.detail.configuredEffort')} value={agent.effort === undefined ? inherited : String(agent.effort)} icon={<Hammer size={14} />} />
-            <DetailStat
-              label={t('settings.agents.summary.tools')}
-              value={agent.tools === undefined
-                ? t('settings.agents.noTools')
-                : agent.tools.length === 0
-                  ? t('settings.agents.disabledTools')
-                  : t('settings.agents.toolCount', { count: String(agent.tools.length) })}
-              icon={<Wrench size={14} />}
-            />
-            <p className="col-span-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
-              {t('settings.agents.detail.effortHint')}
-            </p>
-          </div>
+      {/* The agent's own page header: same 22px title as every settings pane. */}
+      <header className="mt-5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span
+            aria-hidden="true"
+            className="h-2.5 w-2.5 shrink-0 rounded-full"
+            style={{ backgroundColor: getAgentDotColor(agent.color) }}
+          />
+          <h2 className="min-w-0 break-all text-[22px] font-semibold leading-tight tracking-[-0.015em] text-[var(--color-text-primary)]">
+            {agent.agentType}
+          </h2>
         </div>
-      </section>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <MetaPill>{sourceLabel}</MetaPill>
+          <Badge tone={agent.isActive ? 'success' : 'neutral'}>
+            {agent.isActive ? t('settings.agents.status.active') : t('settings.agents.status.available')}
+          </Badge>
+          {agent.overriddenBy && (
+            <MetaPill>{t('settings.agents.overriddenByShort', { source: t(`settings.agents.source.${agent.overriddenBy}`) })}</MetaPill>
+          )}
+        </div>
+        <div className="mt-2 text-[13px] leading-5 text-[var(--color-text-tertiary)] [&_.prose]:text-[13px] [&_.prose]:leading-5 [&_.prose]:text-[var(--color-text-tertiary)]">
+          <MarkdownRenderer content={agent.description || t('settings.agents.noDescription')} />
+        </div>
+      </header>
 
-      {agent.tools && agent.tools.length > 0 && (
-        <section className="rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface)] px-5 py-4">
-          <div className="mb-3 flex items-center gap-2">
-            <Wrench size={18} className="text-[var(--color-text-tertiary)]" />
-            <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">{t('settings.agents.tools')}</h4>
-          </div>
-          <div className="flex flex-wrap gap-2">{agent.tools.map((tool) => <MetaPill key={tool}>{tool}</MetaPill>)}</div>
-        </section>
-      )}
-
-      <section className="flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface)]">
-        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-            <div className="min-w-0">
-              <div className="break-all font-mono text-xs text-[var(--color-text-secondary)]">{agent.target || agent.baseDir || sourceLabel}</div>
-              <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)]">{t('settings.agents.promptHint')}</div>
-            </div>
-            <MetaPill>{t('settings.agents.systemPrompt')}</MetaPill>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--color-surface-container-lowest)]">
-            {agent.systemPrompt ? (
-              <div className="px-6 py-5 lg:px-8">
-                <MarkdownRenderer content={agent.systemPrompt} variant="document" className="mx-auto max-w-[72ch]" />
+      <SettingsSection title={t('settings.agents.entryEyebrow')}>
+        <SettingsGroup>
+          <SettingsRow title={t('settings.agents.detail.configuredModel')} layout="inline">
+            <span className="break-all font-mono text-xs text-[var(--color-text-secondary)]">{agent.model || inherited}</span>
+          </SettingsRow>
+          <SettingsRow
+            title={t('settings.agents.detail.configuredEffort')}
+            description={t('settings.agents.detail.effortHint')}
+            layout="inline"
+          >
+            <span className="font-mono text-xs text-[var(--color-text-secondary)]">
+              {agent.effort === undefined ? inherited : String(agent.effort)}
+            </span>
+          </SettingsRow>
+          <SettingsRow
+            title={t('settings.agents.summary.tools')}
+            layout="inline"
+            footer={agent.tools && agent.tools.length > 0 ? (
+              <div role="list" aria-label={t('settings.agents.tools')} className="flex flex-wrap gap-1.5">
+                {agent.tools.map((tool) => (
+                  <span
+                    key={tool}
+                    role="listitem"
+                    className="inline-flex h-6 items-center rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-2 font-mono text-[11px] text-[var(--color-text-secondary)]"
+                  >
+                    {tool}
+                  </span>
+                ))}
               </div>
-            ) : (
-              <div className="px-6 py-10 text-center text-sm text-[var(--color-text-tertiary)]">{t('settings.agents.noSystemPrompt')}</div>
-            )}
+            ) : undefined}
+          >
+            <span className="text-xs text-[var(--color-text-secondary)]">{toolSummary}</span>
+          </SettingsRow>
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.agents.systemPrompt')} description={t('settings.agents.promptHint')}>
+        <div className="min-w-0 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+          <div className="flex min-h-9 items-center border-b border-[var(--color-border)] px-4 py-2">
+            <span className="min-w-0 break-all font-mono text-[11px] text-[var(--color-text-tertiary)]">
+              {agent.target || agent.baseDir || sourceLabel}
+            </span>
           </div>
+          {agent.systemPrompt ? (
+            <div className="px-6 py-5">
+              <MarkdownRenderer content={agent.systemPrompt} variant="document" className="mx-auto max-w-[72ch]" />
+            </div>
+          ) : (
+            <div className="px-6 py-10 text-center text-[13px] text-[var(--color-text-tertiary)]">{t('settings.agents.noSystemPrompt')}</div>
+          )}
         </div>
-      </section>
+      </SettingsSection>
     </div>
   )
 }
@@ -615,8 +632,8 @@ function AgentFormModal({
         <Field label={t('settings.agents.form.scope')} error={fieldErrors.scope} required>
           <div className="grid grid-cols-2 gap-2" role="group" aria-label={t('settings.agents.form.scope')}>
             {([
-              { value: 'user' as const, label: t('settings.agents.form.scopeUser'), icon: <User size={16} /> },
-              { value: 'project' as const, label: t('settings.agents.form.scopeProject'), icon: <Folder size={16} /> },
+              { value: 'user' as const, label: t('settings.agents.form.scopeUser'), icon: <User size={16} strokeWidth={1.75} /> },
+              { value: 'project' as const, label: t('settings.agents.form.scopeProject'), icon: <Folder size={16} strokeWidth={1.75} /> },
             ]).map((option) => {
               const selected = scope === option.value
               return (
@@ -626,27 +643,38 @@ function AgentFormModal({
                   aria-pressed={selected}
                   disabled={mode === 'edit'}
                   onClick={() => setScope(option.value)}
-                  className={`flex min-h-16 items-center gap-3 rounded-[var(--radius-lg)] border px-4 py-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                  // The option-card selection of the spec: terracotta outline
+                  // over the faintest terracotta wash, never a filled block.
+                  className={cx(
+                    'flex h-12 items-center gap-2.5 rounded-[var(--radius-md)] border px-3 text-left transition-colors',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+                    'disabled:cursor-not-allowed disabled:opacity-60',
                     selected
-                      ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-                  }`}
+                      ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)] text-[var(--color-text-primary)]'
+                      : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
+                  )}
                 >
-                  <span className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-                    selected ? 'bg-[var(--color-primary-fixed)] text-[var(--color-brand)]' : 'bg-[var(--color-surface-container-high)]'
-                  }`}>
+                  <span
+                    aria-hidden="true"
+                    className={cx(
+                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-sm)]',
+                      selected
+                        ? 'bg-[var(--color-surface-container-lowest)] text-[var(--color-brand)]'
+                        : 'bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]',
+                    )}
+                  >
                     {option.icon}
                   </span>
-                  <span className="text-sm font-semibold">{option.label}</span>
+                  <span className="text-[13px] font-medium">{option.label}</span>
                 </button>
               )
             })}
           </div>
           {scope === 'project' && (
-            <div className="mt-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+            <div className="mt-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2.5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                  <p className="break-all text-[13px] text-[var(--color-text-secondary)]">
                     {projectPath
                       ? t('settings.agents.form.projectTarget', { path: projectPath })
                       : t('settings.agents.form.projectUnavailable')}
@@ -689,7 +717,11 @@ function AgentFormModal({
             rows={7}
             placeholder={t('settings.agents.form.systemPromptPlaceholder')}
             onChange={(event) => setSystemPrompt(event.target.value)}
-            className={`${textAreaClassName} ${fieldErrors.systemPrompt ? 'border-[var(--color-error)]' : ''}`}
+            className={cx(
+              FIELD_BASE_CLASSES,
+              'min-h-32 resize-y px-2.5 py-2 text-[13px] leading-6',
+              fieldStateClasses(Boolean(fieldErrors.systemPrompt)),
+            )}
           />
         </Field>
 
@@ -815,17 +847,19 @@ function ToolPicker({
   }
 
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-3">
+    // A sunken well with no border of its own: the tool cards inside carry the
+    // only hairline, so the dialog never stacks border inside border.
+    <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <p className="text-sm font-semibold text-[var(--color-text-primary)]">
+          <p className="text-[13px] font-medium text-[var(--color-text-primary)]">
             {t('settings.agents.form.builtInTools')}
           </p>
           <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
             {t('settings.agents.form.builtInToolsHint')}
           </p>
         </div>
-        <Badge tone="brand" size="md">
+        <Badge tone="neutral" className="tabular-nums">
           {t('settings.agents.form.toolsSelectedCount', { count: selectedTools.length })}
         </Badge>
       </div>
@@ -846,7 +880,7 @@ function ToolPicker({
           <div className="max-h-64 space-y-3 overflow-y-auto pr-1">
             {groupedTools.map(({ category, tools }) => (
               <section key={category} aria-label={t(`settings.agents.form.toolCategory.${category}`)}>
-                <h4 className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-tertiary)]">
+                <h4 className="mb-1.5 text-xs font-semibold text-[var(--color-text-tertiary)]">
                   {t(`settings.agents.form.toolCategory.${category}`)}
                 </h4>
                 <div className="grid gap-2 sm:grid-cols-2">
@@ -861,21 +895,27 @@ function ToolPicker({
                         aria-checked={selected}
                         aria-label={`${tool} — ${description}`}
                         onClick={() => toggleTool(tool)}
-                        className={`flex min-h-14 items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors ${
+                        className={cx(
+                          'flex min-h-14 items-start gap-2.5 rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
                           selected
-                            ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)]'
-                            : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)]'
-                        }`}
+                            ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)]'
+                            : 'border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] hover:bg-[var(--color-surface-hover)]',
+                        )}
                       >
-                        <span className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                          selected
-                            ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-white'
-                            : 'border-[var(--color-outline)] bg-[var(--color-surface)]'
-                        }`}>
-                          {selected && <Check size={12} strokeWidth={3} />}
+                        <span
+                          aria-hidden="true"
+                          className={cx(
+                            'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border',
+                            selected
+                              ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-[var(--color-on-primary)]'
+                              : 'border-[var(--color-border-strong)] bg-[var(--color-surface-container-lowest)]',
+                          )}
+                        >
+                          {selected && <Check size={12} strokeWidth={2.5} />}
                         </span>
                         <span className="min-w-0">
-                          <span className="block font-mono text-xs font-semibold text-[var(--color-text-primary)]">{tool}</span>
+                          <span className="block font-mono text-xs font-medium text-[var(--color-text-primary)]">{tool}</span>
                           <span className="mt-0.5 block text-[11px] leading-4 text-[var(--color-text-tertiary)]">{description}</span>
                         </span>
                       </button>
@@ -895,7 +935,7 @@ function ToolPicker({
         <EmptyState description={t('settings.agents.form.toolsUnavailable')} variant="dashed" size="sm" />
       )}
 
-      <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+      <div className="mt-3 border-t border-[var(--color-border-separator)] pt-3">
         <Input
           label={t('settings.agents.form.toolsCustomLabel')}
           value={customTools}
@@ -1070,7 +1110,7 @@ function BuiltInAgentOverrideModal({
     >
       <div className="space-y-4">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="break-all font-mono text-sm font-semibold text-[var(--color-text-primary)]">
+          <span className="break-all font-mono text-[13px] font-medium text-[var(--color-text-primary)]">
             {agent.agentType}
           </span>
           <MetaPill>{t('settings.agents.source.built-in')}</MetaPill>
@@ -1080,14 +1120,14 @@ function BuiltInAgentOverrideModal({
         {agent.overriddenBy && (
           // Editing a built-in that a same-named user agent shadows would look
           // like it worked and change nothing at spawn time.
-          <p role="status" className="rounded-[var(--radius-lg)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-text-primary)]">
+          <p role="status" className="rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-on-warning-container)]">
             {t('settings.agents.overrideShadowed', {
               source: t(`settings.agents.source.${agent.overriddenBy}`),
             })}
           </p>
         )}
         {isManaged && (
-          <p role="status" className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs leading-5 text-[var(--color-text-secondary)]">
+          <p role="status" className="rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs leading-5 text-[var(--color-text-secondary)]">
             {t('settings.agents.overrideManaged', {
               source: t(`settings.agents.source.${overrideSource}`),
             })}
@@ -1129,7 +1169,7 @@ function BuiltInAgentOverrideModal({
         <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">
           {t('settings.agents.overrideScopeHint')}
         </p>
-        {submitError && <p role="alert" className="text-sm text-[var(--color-error)]">{submitError}</p>}
+        {submitError && <p role="alert" className="text-[13px] text-[var(--color-error)]">{submitError}</p>}
       </div>
     </Modal>
   )
@@ -1173,7 +1213,7 @@ function AgentRowActions({
           <IconButton
             size="sm"
             tone="muted"
-            icon={<Pencil size={14} />}
+            icon={<Pencil size={14} strokeWidth={1.75} />}
             label={t('settings.agents.rowEdit', { name: agent.agentType })}
             onClick={onEdit}
           />
@@ -1182,7 +1222,7 @@ function AgentRowActions({
             tone="muted"
             // A delete icon that sits red at rest reads as an error state.
             hoverTone="danger"
-            icon={<Trash2 size={14} />}
+            icon={<Trash2 size={14} strokeWidth={1.75} />}
             label={t('settings.agents.rowDelete', { name: agent.agentType })}
             onClick={onDelete}
           />
@@ -1193,7 +1233,7 @@ function AgentRowActions({
         <IconButton
           size="sm"
           tone="muted"
-          icon={<Bolt size={14} />}
+          icon={<Bolt size={14} strokeWidth={1.75} />}
           label={t('settings.agents.rowOverride', { name: agent.agentType })}
           onClick={onOverride}
         />
@@ -1245,8 +1285,9 @@ function getAgentDotColor(color?: string) {
   return color && AGENT_COLORS[color] ? AGENT_COLORS[color] : 'var(--color-text-tertiary)'
 }
 
+/** The 14px glyph beside a source section's label. */
 function getAgentSourceIcon(source: AgentSource) {
-  const iconProps = { size: 16 }
+  const iconProps = { size: 14, strokeWidth: 1.75 }
   switch (source) {
     case 'userSettings': return <User {...iconProps} />
     case 'projectSettings': return <Folder {...iconProps} />
@@ -1255,18 +1296,6 @@ function getAgentSourceIcon(source: AgentSource) {
     case 'plugin': return <Boxes {...iconProps} />
     case 'flagSettings': return <Terminal {...iconProps} />
     case 'built-in': return <Box {...iconProps} />
-  }
-}
-
-function getAgentSourceAccentClass(source: AgentSource) {
-  switch (source) {
-    case 'userSettings': return 'bg-[var(--color-primary-fixed)] text-[var(--color-brand)]'
-    case 'projectSettings': return 'bg-[var(--color-success-container)] text-[var(--color-success)]'
-    case 'localSettings': return 'bg-[var(--color-info-container)] text-[var(--color-info)]'
-    case 'policySettings': return 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
-    case 'plugin': return 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]'
-    case 'flagSettings': return 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
-    case 'built-in': return 'bg-[var(--color-surface-container-high)] text-[var(--color-text-tertiary)]'
   }
 }
 
@@ -1384,38 +1413,13 @@ function Field({ label, error, required, children }: { label: string; error?: st
 }
 
 /**
- * The agent metadata chip.
- *
- * `bordered` is what makes this expressible as a `Badge`: these pills carry
- * both a fill and a hairline border, and they sit on three different
- * backgrounds (`--color-surface` cards, `--color-surface-container-low`
- * headers, and the bare page). A plain `outline` badge would collapse into the
- * card on the first of those.
+ * The agent metadata chip: an 11px neutral pill in sentence case. `mono` is for
+ * model ids, which are identifiers rather than words.
  */
-function MetaPill({ children }: { children: ReactNode }) {
+function MetaPill({ children, mono = false }: { children: ReactNode; mono?: boolean }) {
   return (
-    <Badge tone="neutral" size="md" bordered className="uppercase tracking-[0.12em]">
+    <Badge tone="neutral" mono={mono}>
       {children}
     </Badge>
   )
 }
-
-function SummaryCard({ label, value, icon, className = '' }: { label: string; value: string; icon: ReactNode; className?: string }) {
-  return (
-    <div className={`min-w-0 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3 ${className}`}>
-      <div className="flex min-w-0 items-center gap-1.5 text-[11px] uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">{icon}<span className="truncate">{label}</span></div>
-      <div className="mt-2 truncate text-lg font-semibold text-[var(--color-text-primary)]">{value}</div>
-    </div>
-  )
-}
-
-function DetailStat({ label, value, icon }: { label: string; value: string; icon: ReactNode }) {
-  return (
-    <div className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
-      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">{icon}<span>{label}</span></div>
-      <div className="mt-2 break-all text-base font-semibold text-[var(--color-text-primary)]">{value}</div>
-    </div>
-  )
-}
-
-const textAreaClassName = 'min-h-32 resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]'

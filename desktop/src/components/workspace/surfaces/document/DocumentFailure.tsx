@@ -1,3 +1,4 @@
+import { CircleAlert } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Button } from '@/components/ui/Button'
 import { useTranslation } from '@/i18n'
@@ -27,7 +28,7 @@ export function DocumentFailure({
   const canOpenInSystem = isRootedLocalPath(absolutePath)
   return (
     <PanelMessage
-      icon="error"
+      icon={CircleAlert}
       tone="error"
       message={message}
       action={onRetry || extraActions || canOpenInSystem ? (

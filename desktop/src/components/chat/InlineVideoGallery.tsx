@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Film } from 'lucide-react'
 import { AssistantOutputTargetCard } from '@/components/chat/AssistantOutputTargetCard'
 import { extractAssistantOutputTargets } from '../../lib/assistantOutputTargets'
 import { isAbsoluteLocalPath, localFileUrl, previewFsUrl } from '../../lib/handlePreviewLink'
@@ -140,18 +141,18 @@ function VideoPreview({ video, sessionId, workDir }: { video: GalleryVideo; sess
   }
 
   return (
-    <div className="overflow-hidden rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] shadow-sm">
+    <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
       <video
         src={video.src}
         controls
         preload="metadata"
         playsInline
-        className="w-full rounded-t-xl bg-black"
+        className="w-full bg-black"
         style={{ maxHeight: 420 }}
         onError={() => setFailed(true)}
       />
-      <div className="flex items-center gap-1.5 px-2.5 py-1.5 text-[10px] font-medium text-[var(--color-text-tertiary)]">
-        <span className="material-symbols-outlined text-[12px]">movie</span>
+      <div className="flex h-[30px] items-center gap-1.5 border-t border-[var(--color-border)] px-3 text-[11px] text-[var(--color-text-tertiary)]">
+        <Film size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />
         <span className="truncate">{video.name}</span>
       </div>
     </div>

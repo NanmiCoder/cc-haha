@@ -207,7 +207,7 @@ export function ProjectEditorModal(props: ProjectEditorModalProps) {
       <fieldset disabled={busy} className="m-0 min-w-0 border-0 p-0">
         <div className="flex flex-col gap-5">
           {displayedError && (
-            <p role="alert" className="rounded-[var(--radius-md)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-3 py-2 text-sm text-[var(--color-on-error-container)]">
+            <p role="alert" className="rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-[13px] text-[var(--color-on-error-container)]">
               {displayedError}
             </p>
           )}
@@ -234,7 +234,7 @@ export function ProjectEditorModal(props: ProjectEditorModalProps) {
               aria-describedby={showValidation && sourceFolderError ? 'project-editor-source-folder-error' : undefined}
               className="flex flex-col gap-1.5"
             >
-              <span id="project-editor-source-folder" className="text-sm font-medium text-[var(--color-text-primary)]">
+              <span id="project-editor-source-folder" className="text-[13px] font-medium text-[var(--color-text-primary)]">
                 {t('sidebar.projectEditor.sourceFolder')}
                 <span className="ml-0.5 text-[var(--color-error)]">*</span>
               </span>
@@ -247,7 +247,7 @@ export function ProjectEditorModal(props: ProjectEditorModalProps) {
                   aria-label={t('dirPicker.chooseProjectFolder')}
                   className="min-w-0 self-start max-w-full"
                 >
-                  <FolderOpen size={16} className="shrink-0" aria-hidden="true" />
+                  <FolderOpen size={14} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
                   <span className="truncate">{sourceFolder || t('dirPicker.chooseProjectFolder')}</span>
                 </Button>
               ) : (
@@ -271,11 +271,11 @@ export function ProjectEditorModal(props: ProjectEditorModalProps) {
           )}
 
           {mode === 'edit' && (
-            <div className="flex flex-col gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
+            <div className="flex flex-col gap-3 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-4 py-3">
               {props.onRestoreFolderName && (
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <p className="text-sm font-medium text-[var(--color-text-primary)]">
+                    <p className="text-[13px] font-medium text-[var(--color-text-primary)]">
                       {t('sidebar.projectEditor.restoreFolderName')}
                     </p>
                     <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">

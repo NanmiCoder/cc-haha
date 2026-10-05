@@ -55,7 +55,7 @@ export function WorkspaceAddMenu({
       data-placement={position.placement}
       onKeyDown={onKeyDown}
       style={position.style}
-      className="z-[var(--z-dropdown)] w-[280px] max-w-[calc(100vw-12px)] overflow-y-auto rounded-[16px] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-card)]"
+      className="z-[var(--z-dropdown)] w-[260px] max-w-[calc(100vw-12px)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
     >
       <WorkspaceLauncher variant="menu" dock={dock} onSelect={onSelect} reviewUnavailableReason={reviewUnavailableReason} />
     </div>,

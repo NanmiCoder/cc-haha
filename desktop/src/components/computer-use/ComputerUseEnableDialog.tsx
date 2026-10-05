@@ -1,3 +1,4 @@
+import { TriangleAlert } from 'lucide-react'
 import { useTranslation } from '@/i18n'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 
@@ -26,10 +27,10 @@ export function ComputerUseEnableDialog({
       width={500}
       loading={loading}
       body={(
-        <div className="space-y-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-          <div className="flex items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-3 text-[var(--color-on-warning-container)]">
-            <span className="material-symbols-outlined mt-0.5 text-[20px] text-[var(--color-warning)]">warning</span>
-            <p className="font-semibold">{t('settings.computerUse.enableRiskSummary')}</p>
+        <div className="space-y-4 text-[13px] leading-[1.6] text-[var(--color-text-secondary)]">
+          <div className="flex items-start gap-2.5 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-2.5 text-[var(--color-on-warning-container)]">
+            <TriangleAlert size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
+            <p className="font-medium">{t('settings.computerUse.enableRiskSummary')}</p>
           </div>
           <ul className="list-disc space-y-1.5 pl-5">
             <li>{t('settings.computerUse.enableRiskScreen')}</li>
@@ -38,7 +39,7 @@ export function ComputerUseEnableDialog({
             <li>{t('settings.computerUse.enableRiskStop')}</li>
           </ul>
           {platform === 'darwin' && (
-            <p className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)] px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
+            <p className="rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
               {t('settings.computerUse.enableRiskMacos')}
             </p>
           )}

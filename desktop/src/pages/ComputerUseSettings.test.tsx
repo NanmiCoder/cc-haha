@@ -441,6 +441,19 @@ describe('ComputerUseSettings', () => {
       expect(screen.getByRole('switch', { name: 'Enabled' })).toBeInTheDocument()
     })
 
+    it('states each OS permission with a semantic badge instead of fixed glow colors', async () => {
+      computerUseApiMock.getStatus.mockResolvedValue(nativeStatus)
+
+      const { container } = render(<ComputerUseSettings />)
+
+      await screen.findByRole('heading', { name: 'Computer Control' })
+      // accessibility: false → needs attention (warning); screenRecording: true → granted (success).
+      expect(screen.getByText('Needs authorization').className).toContain('--color-warning-container')
+      expect(screen.getByText('Granted').className).toContain('--color-success-container')
+      // The old dots carried stock emerald/amber rgba() halos that ignore [data-theme].
+      expect(container.innerHTML).not.toMatch(/rgba\(/)
+    })
+
     it('shows a permission probe failure instead of permanent checking labels', async () => {
       computerUseApiMock.getStatus.mockResolvedValue({
         ...nativeStatus,

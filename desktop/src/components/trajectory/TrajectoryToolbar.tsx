@@ -34,9 +34,11 @@ function ToggleButton({ pressed, onClick, icon, children, title }: { pressed: bo
       onClick={onClick}
       title={title}
       className={cx(
-        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-md)] px-2 text-xs transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+        'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-[var(--radius-sm)] px-2 text-[12px] transition-colors active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+        // A pressed toggle is the neutral selected fill; terracotta is kept for
+        // the brand and selection marks, not on/off state.
         pressed
-          ? 'bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)]'
+          ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
       )}
     >
@@ -80,19 +82,19 @@ export function TrajectoryToolbar({
       <ToggleButton
         pressed={durationMode}
         onClick={() => onDurationModeChange(!durationMode)}
-        icon={<Clock size={13} aria-hidden />}
+        icon={<Clock size={14} strokeWidth={1.75} aria-hidden />}
         title={t('trajectory.toolbar.durationHint')}
       >
         {t('trajectory.toolbar.duration')}
       </ToggleButton>
-      <ToggleButton pressed={turnsCollapsed} onClick={() => onTurnsCollapsedChange(!turnsCollapsed)} icon={<ListCollapse size={13} aria-hidden />}>
+      <ToggleButton pressed={turnsCollapsed} onClick={() => onTurnsCollapsedChange(!turnsCollapsed)} icon={<ListCollapse size={14} strokeWidth={1.75} aria-hidden />}>
         {t('trajectory.toolbar.collapseTurns')}
       </ToggleButton>
-      <ToggleButton pressed={toolsHidden} onClick={() => onToolsHiddenChange(!toolsHidden)} icon={<Wrench size={13} aria-hidden />}>
+      <ToggleButton pressed={toolsHidden} onClick={() => onToolsHiddenChange(!toolsHidden)} icon={<Wrench size={14} strokeWidth={1.75} aria-hidden />}>
         {t('trajectory.toolbar.hideTools')}
       </ToggleButton>
       {agentLabel && (
-        <nav aria-label={t('trajectory.subagent.breadcrumb')} className="ml-2 flex min-w-0 items-center gap-1 text-xs">
+        <nav aria-label={t('trajectory.subagent.breadcrumb')} className="ml-2 flex min-w-0 items-center gap-1 text-[12px]">
           <button
             type="button"
             onClick={onExitAgent}
@@ -100,13 +102,13 @@ export function TrajectoryToolbar({
           >
             {t('trajectory.subagent.main')}
           </button>
-          <ChevronRight size={12} aria-hidden className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <ChevronRight size={12} strokeWidth={2} aria-hidden className="shrink-0 text-[var(--color-text-tertiary)]" />
           <span className="truncate font-medium text-[var(--color-text-primary)]">{agentLabel}</span>
         </nav>
       )}
       <div className="ml-auto flex min-w-0 items-center gap-3">
         <span
-          className="hidden min-w-0 truncate text-[11px] tabular-nums text-[var(--color-text-tertiary)] lg:inline"
+          className="hidden min-w-0 truncate text-[12px] tabular-nums text-[var(--color-text-tertiary)] lg:inline"
           data-testid="trajectory-totals"
           title={t('trajectory.toolbar.totalsHint')}
         >

@@ -98,6 +98,53 @@ function isDocumentVisible() {
   return typeof document === 'undefined' || document.visibilityState !== 'hidden'
 }
 
+/**
+ * The toolbar's context ring: an outline-colored track with an arc drawn to
+ * `percentage`. `null` means no reading yet (track only); `loading` swaps the
+ * arc for a quarter-turn spinner on the same track, so the control keeps its
+ * footprint while the first inspection is in flight.
+ */
+function ContextRing({
+  size,
+  loading,
+  percentage,
+  color,
+}: {
+  size: number
+  loading: boolean
+  percentage: number | null
+  color: string
+}) {
+  const radius = 6.25
+  const circumference = 2 * Math.PI * radius
+  const arc = loading ? 0.25 : percentage === null ? 0 : Math.max(0, Math.min(100, percentage)) / 100
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+      data-testid="context-usage-ring"
+      className={`shrink-0 -rotate-90 ${loading ? 'motion-safe:animate-spin' : ''}`}
+    >
+      <circle cx="8" cy="8" r={radius} fill="none" stroke="var(--color-outline)" strokeWidth="2.5" />
+      {arc > 0 && (
+        <circle
+          cx="8"
+          cy="8"
+          r={radius}
+          fill="none"
+          stroke={loading ? 'var(--color-text-tertiary)' : color}
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={`${circumference} ${circumference}`}
+          strokeDashoffset={circumference * (1 - arc)}
+        />
+      )}
+    </svg>
+  )
+}
+
 function shouldFetchContext(
   sessionId: string | undefined,
   draft: boolean,
@@ -388,16 +435,13 @@ export function ContextUsageIndicator({
   const percentage = displayContext ? Math.max(0, Math.min(100, displayContext.percentage)) : 0
   const usedTokens = displayContext?.totalTokens ?? 0
   const maxTokens = displayContext?.rawMaxTokens ?? 0
+  // Neutral ink until the window is genuinely tight; only then does the ring
+  // borrow a status color (warning near the limit, error at it).
   const strokeColor = percentage >= 90
     ? 'var(--color-error)'
     : percentage >= 75
       ? 'var(--color-warning)'
-      : 'var(--color-secondary)'
-  const ringStyle = {
-    background: displayContext
-      ? `conic-gradient(${strokeColor} ${percentage * 3.6}deg, var(--color-surface-container-high) 0deg)`
-      : 'var(--color-surface-container-high)',
-  }
+      : 'var(--color-text-tertiary)'
   const displayPercent = displayContext ? formatPercent(percentage) : '--'
   const displayInspectionModel = !context || contextDataSessionIdRef.current === sessionId
     ? inspectionModel
@@ -542,31 +586,27 @@ export function ContextUsageIndicator({
         onClick={handleTriggerClick}
         title={t('contextIndicator.title')}
         data-testid="context-usage-indicator"
-        className={`group grid shrink-0 place-items-center rounded-full bg-transparent text-[var(--color-text-secondary)] transition-[background-color,color] duration-150 ease-out hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-lowest)] ${
-          isMobileBrowser ? 'h-11 w-11' : 'h-8 w-8'
-        } ${detailsOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''}`}
+        // Desktop: a 28px toolbar control showing the ring and the percentage
+        // side by side. The phone shell keeps a 44px square touch target and
+        // leaves the number to the accessible name — it sits between two
+        // other 44px buttons and has no width to spare.
+        className={`inline-flex shrink-0 items-center rounded-[var(--radius-sm)] bg-transparent transition-colors duration-150 ease-out hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+          isMobileBrowser ? 'h-11 w-11 justify-center' : 'h-7 gap-1.5 px-1.5'
+        } ${detailsOpen ? 'bg-[var(--color-surface-hover)]' : ''}`}
       >
-        <span className={`relative grid shrink-0 place-items-center rounded-full ${isMobileBrowser ? 'h-[22px] w-[22px]' : 'h-5 w-5'}`}>
-          {loading && !displayContext ? (
-            <span className="absolute inset-[2px] rounded-full border-2 border-[var(--color-text-tertiary)] border-t-transparent motion-safe:animate-spin" />
-          ) : (
-            <span
-              className={`relative grid place-items-center rounded-full ${isMobileBrowser ? 'h-[22px] w-[22px]' : 'h-5 w-5'}`}
-              style={ringStyle}
-            >
-              <span className={`absolute inset-[3.5px] rounded-full transition-colors duration-150 ${
-                detailsOpen
-                  ? 'bg-[var(--color-surface-hover)]'
-                  : 'bg-[var(--color-surface-container-lowest)] group-hover:bg-[var(--color-surface-hover)]'
-              }`} />
-              <span
-                className="relative h-1.5 w-1.5 rounded-full"
-                style={{ backgroundColor: displayContext ? strokeColor : 'var(--color-text-tertiary)' }}
-              />
-            </span>
-          )}
+        <ContextRing
+          size={isMobileBrowser ? 18 : 16}
+          loading={loading && !displayContext}
+          percentage={displayContext ? percentage : null}
+          color={strokeColor}
+        />
+        <span
+          className={isMobileBrowser
+            ? 'sr-only'
+            : 'font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]'}
+        >
+          {displayPercent}
         </span>
-        <span className="sr-only">{displayPercent}</span>
       </button>
 
       {!preferSheet && detailsOpen && popoverPosition && createPortal(
@@ -575,7 +615,7 @@ export function ContextUsageIndicator({
           role="dialog"
           aria-label={t('contextIndicator.title')}
           data-testid="context-usage-popover"
-          className="fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-[22px] py-5 text-left shadow-[var(--shadow-overlay)]"
+          className="fixed z-[var(--z-popover)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 text-left shadow-[var(--shadow-dropdown)]"
           style={{
             top: popoverPosition.top,
             bottom: popoverPosition.bottom,
@@ -598,7 +638,7 @@ export function ContextUsageIndicator({
           ariaLabel={t('contextIndicator.title')}
           testId="context-usage-sheet"
           headerExtra={(
-            <div className="truncate text-base font-semibold text-[var(--color-text-primary)]">
+            <div className="truncate font-mono text-[13px] text-[var(--color-text-secondary)]">
               {modelLabel}
             </div>
           )}

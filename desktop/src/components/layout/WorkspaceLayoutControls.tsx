@@ -28,7 +28,9 @@ export function WorkspaceLayoutControls({
   const hint = (label: string, shortcut: string | null) => (
     <span className="flex items-center gap-2 whitespace-nowrap font-medium">
       {label}
-      <kbd className="rounded-full bg-[var(--color-surface-container)] px-1.5 font-sans font-normal">{shortcut}</kbd>
+      {shortcut ? (
+        <kbd className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[var(--radius-xs)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-1 font-mono text-[11px] font-normal leading-none text-[var(--color-text-tertiary)]">{shortcut}</kbd>
+      ) : null}
     </span>
   )
 
@@ -36,10 +38,10 @@ export function WorkspaceLayoutControls({
     <>
       {isVisible && <IconButton
         icon={isFull
-          ? <Minimize2 size={17} strokeWidth={1.9} />
-          : <Maximize2 size={17} strokeWidth={1.9} />}
+          ? <Minimize2 size={16} strokeWidth={1.75} aria-hidden="true" />
+          : <Maximize2 size={16} strokeWidth={1.75} aria-hidden="true" />}
         label={t(isFull ? 'workspace.controls.restore' : 'workspace.controls.expand')}
-        size="md"
+        size="sm"
         tone="muted"
         pressed={isFull}
         data-testid="workspace-toggle-fullscreen"
@@ -47,10 +49,10 @@ export function WorkspaceLayoutControls({
       />}
       <Tooltip placement="bottom-end" appearance="surface" content={hint(t('workspace.controls.toggleBottom'), formatWorkspaceShortcut('toggle-bottom-panel', platform))}>
       <IconButton
-        icon={<PanelBottom size={17} strokeWidth={1.9} />}
+        icon={<PanelBottom size={16} strokeWidth={1.75} aria-hidden="true" />}
         label={t('workspace.controls.toggleBottom')}
         showTooltip={false}
-        size="md"
+        size="sm"
         tone="muted"
         pressed={bottomOpen}
         data-testid="workspace-toggle-bottom"
@@ -61,10 +63,10 @@ export function WorkspaceLayoutControls({
       </Tooltip>
       <Tooltip placement="bottom-end" appearance="surface" content={hint(t('workspace.controls.toggleSide'), formatWorkspaceShortcut('toggle-workspace', platform))}>
       <IconButton
-        icon={<PanelRight size={17} strokeWidth={1.9} />}
+        icon={<PanelRight size={16} strokeWidth={1.75} aria-hidden="true" />}
         label={t(isVisible ? 'tabs.hideWorkspace' : 'tabs.showWorkspace')}
         showTooltip={false}
-        size="md"
+        size="sm"
         tone="muted"
         pressed={isVisible}
         data-testid="workspace-toggle-side"

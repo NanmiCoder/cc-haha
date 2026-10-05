@@ -1,5 +1,7 @@
 import { CodeViewer } from './CodeViewer'
 import { memo, useMemo, useState } from 'react'
+import { CircleAlert, CircleCheck } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
 import { useTranslation } from '../../i18n'
 import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
 import { extractToolResultImages } from '../../lib/toolResultContent'
@@ -35,11 +37,7 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
   const hasImages = toolImages.images.length > 0 || toolImages.dropped > 0
 
   return (
-    <div className={`overflow-hidden rounded-[var(--radius-lg)] border ${
-      isError
-        ? 'border-[var(--color-error)]'
-        : 'border-[var(--color-border)]'
-    }`}>
+    <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
       {/* Status header */}
       <button
         type="button"
@@ -48,25 +46,19 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
         setLocalExpanded(next)
         if (disclosureKey) setDisclosure(disclosureKey, next)
       }}
-        className={`flex w-full items-center justify-between px-3 py-2 text-left text-[10px] font-bold uppercase tracking-wider ${
-        isError
-          ? 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
-          : 'bg-[var(--color-surface-container-high)] text-[var(--color-text-tertiary)]'
-      }`}
+        className="flex min-h-9 w-full items-center gap-2 px-3 text-left text-[13px] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
       >
-        <span className="flex items-center gap-1.5">
-          <span className="material-symbols-outlined text-[12px]">
-            {isError ? 'error' : 'check_circle'}
-          </span>
+        {isError ? (
+          <CircleAlert size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-error)]" />
+        ) : (
+          <CircleCheck size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        )}
+        <span className="min-w-0 flex-1 truncate font-medium text-[var(--color-text-primary)]">
           {toolName ? t('tool.result', { toolName }) : t('tool.resultGeneric')}
         </span>
-        <span className={`px-2 py-0.5 rounded-full text-[9px] ${
-          isError
-            ? 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
-            : 'bg-[var(--color-diff-added-bg)] text-[var(--color-diff-added-text)]'
-        }`}>
+        <Badge tone={isError ? 'danger' : 'success'}>
           {isError ? t('tool.error') : t('tool.success')}
-        </span>
+        </Badge>
       </button>
 
       {/* Pictures the tool returned as image blocks */}
@@ -85,7 +77,7 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
       {/* Content. A result that is only pictures has no text to preview. */}
       {!text && hasImages ? null : expanded ? (
         isError ? (
-          <div className="bg-[var(--color-error-container)] px-3 py-2.5 font-mono text-[11px] leading-[1.5] whitespace-pre-wrap break-words text-[var(--color-on-error-container)]">
+          <div className="whitespace-pre-wrap break-words border-t border-[var(--color-border)] bg-[var(--color-error-container)] px-3 py-2.5 font-mono text-[12px] leading-[1.6] text-[var(--color-on-error-container)]">
             {text}
           </div>
         ) : (
@@ -96,7 +88,7 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
           />
         )
       ) : (
-        <div className="bg-[var(--color-surface-container-lowest)] px-3 py-2 font-mono text-[10px] leading-[1.35] text-[var(--color-text-tertiary)]">
+        <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-[12px] leading-[1.5] text-[var(--color-text-tertiary)]">
           {preview}
           {hasMore ? '…' : ''}
         </div>
@@ -109,7 +101,8 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
             setLocalExpanded(next)
             if (disclosureKey) setDisclosure(disclosureKey, next)
           }}
-          className="w-full py-1 text-[10px] font-medium text-[var(--color-text-accent)] hover:underline bg-[var(--color-surface-container-low)] border-t border-[var(--color-border)]"
+          type="button"
+          className="flex h-7 w-full items-center justify-center border-t border-[var(--color-border)] text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
         >
           {expanded ? t('tool.showLess') : t('tool.showMore', { count: text.length - 200 })}
         </button>

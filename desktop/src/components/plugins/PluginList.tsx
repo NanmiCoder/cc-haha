@@ -1,8 +1,22 @@
 import { useEffect, useMemo, useState } from 'react'
+import {
+  ChevronRight,
+  CircleCheck,
+  ListChecks,
+  Puzzle,
+  RefreshCw,
+  RotateCw,
+  Store,
+  ToggleLeft,
+  ToggleRight,
+  TriangleAlert,
+  type LucideIcon,
+} from 'lucide-react'
 import { usePluginStore, type PluginActionTarget } from '../../stores/pluginStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTranslation } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
+import { cx } from '@/lib/cx'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -179,7 +193,7 @@ export function PluginList() {
   if (plugins.length === 0) {
     return (
       <EmptyState
-        icon={<span className="material-symbols-outlined text-[20px]">extension</span>}
+        icon={<Puzzle size={20} strokeWidth={1.75} aria-hidden="true" />}
         title={t('settings.plugins.empty')}
         description={t('settings.plugins.emptyHint')}
         action={{ label: t('settings.plugins.refresh'), onClick: () => void fetchPlugins(currentWorkDir) }}
@@ -188,168 +202,100 @@ export function PluginList() {
   }
 
   return (
-    <div className="flex flex-col gap-6 min-w-0">
-      <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] shadow-[var(--shadow-card)] overflow-hidden">
-        <div className="flex flex-col gap-4 px-5 py-5 min-w-0">
-          <div className="flex flex-col gap-4 min-w-0 xl:flex-row xl:items-start xl:justify-between">
-            <div className="min-w-0 max-w-4xl">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-tertiary)] mb-2">
-                {t('settings.plugins.browserEyebrow')}
-              </div>
-              <div className="flex items-center gap-3 mb-2">
-                <span className="material-symbols-outlined text-[22px] text-[var(--color-brand)]">
-                  extension
-                </span>
-                <h3
-                  className="text-[21px] font-semibold leading-tight text-[var(--color-text-primary)]"
-                  style={{ fontFamily: 'var(--font-headline)' }}
-                >
-                  {t('settings.plugins.browserTitle')}
-                </h3>
-              </div>
-              <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
-                {t('settings.plugins.browserDescription')}
-              </p>
-            </div>
-
-            <div className="flex flex-wrap gap-2 xl:justify-end">
-              {/* `size="sm"` plus `min-h-9` was two heights fighting; `md` is
-                  h-9 outright. The material icon also moves into `icon`, so
-                  `loading` swaps it for the spinner instead of rendering both. */}
-              <Button
-                variant="secondary"
-                size="md"
-                className="flex-1 sm:flex-none"
-                icon={<span className="material-symbols-outlined text-[16px]" aria-hidden="true">refresh</span>}
-                onClick={() => void fetchPlugins(currentWorkDir)}
-              >
-                {t('settings.plugins.refresh')}
-              </Button>
-              <Button
-                size="md"
-                className="flex-1 sm:flex-none"
-                icon={<span className="material-symbols-outlined text-[16px]" aria-hidden="true">sync</span>}
-                onClick={handleReload}
-                loading={isApplying}
-              >
-                {t('settings.plugins.apply')}
-              </Button>
-            </div>
-          </div>
-
-          <div className="grid min-w-0 grid-cols-2 gap-2 md:grid-cols-4">
-            <SummaryCard
-              label={t('settings.plugins.summary.total')}
-              value={String(summary?.total ?? plugins.length)}
-              icon="extension"
-            />
-            <SummaryCard
-              label={t('settings.plugins.summary.enabled')}
-              value={String(summary?.enabled ?? plugins.filter((plugin) => plugin.enabled).length)}
-              icon="check_circle"
-            />
-            <SummaryCard
-              label={t('settings.plugins.summary.attention')}
-              value={String(grouped.attention.length)}
-              icon="warning"
-            />
-            <SummaryCard
-              label={t('settings.plugins.summary.marketplaces')}
-              value={String(summary?.marketplaceCount ?? marketplaces.length)}
-              icon="storefront"
-            />
-          </div>
-
-          {lastReloadSummary && (
-            <p className="text-xs text-[var(--color-text-tertiary)]">
-              {t('settings.plugins.lastReload', {
-                enabled: String(lastReloadSummary.enabled),
-                skills: String(lastReloadSummary.skills),
-                errors: String(lastReloadSummary.errors),
-              })}
-            </p>
-          )}
+    <div className="flex min-w-0 flex-col gap-6">
+      {/* The page head above already names this page, so the list opens on
+          its numbers and the two runtime actions rather than a second title. */}
+      <div className="flex flex-col gap-3">
+        <div className="grid min-w-0 grid-cols-2 gap-3 md:grid-cols-4">
+          <SummaryCard
+            label={t('settings.plugins.summary.total')}
+            value={String(summary?.total ?? plugins.length)}
+            icon={Puzzle}
+          />
+          <SummaryCard
+            label={t('settings.plugins.summary.enabled')}
+            value={String(summary?.enabled ?? plugins.filter((plugin) => plugin.enabled).length)}
+            icon={CircleCheck}
+          />
+          <SummaryCard
+            label={t('settings.plugins.summary.attention')}
+            value={String(grouped.attention.length)}
+            icon={TriangleAlert}
+          />
+          <SummaryCard
+            label={t('settings.plugins.summary.marketplaces')}
+            value={String(summary?.marketplaceCount ?? marketplaces.length)}
+            icon={Store}
+          />
         </div>
 
-        <div className="flex flex-col gap-3 border-t border-[var(--color-border)] px-5 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-            <span className="material-symbols-outlined text-[16px] text-[var(--color-text-tertiary)]">
-              checklist
-            </span>
-            <span className="font-medium text-[var(--color-text-primary)]">
-              {t('settings.plugins.selectionCount', { count: String(selectedPlugins.length) })}
-            </span>
-            {selectedPlugins.length > 0 && (
-              <Button variant="ghost" size="sm" onClick={clearSelection}>
-                {t('settings.plugins.clearSelection')}
-              </Button>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2 sm:justify-end">
-            <Button
-              size="base"
-              icon={<span className="material-symbols-outlined text-[16px]" aria-hidden="true">toggle_on</span>}
-              disabled={enableCandidates.length === 0 || isApplying}
-              onClick={() => setConfirmBatchAction('enable')}
-            >
-              {t('settings.plugins.enableSelected')}
-            </Button>
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
+          <p className="min-w-0 flex-1 text-xs text-[var(--color-text-tertiary)]">
+            {lastReloadSummary && t('settings.plugins.lastReload', {
+              enabled: String(lastReloadSummary.enabled),
+              skills: String(lastReloadSummary.skills),
+              errors: String(lastReloadSummary.errors),
+            })}
+          </p>
+          <div className="flex flex-wrap gap-2">
             <Button
               variant="secondary"
               size="base"
-              icon={<span className="material-symbols-outlined text-[16px]" aria-hidden="true">toggle_off</span>}
-              disabled={disableCandidates.length === 0 || isApplying}
-              onClick={() => setConfirmBatchAction('disable')}
+              icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
+              onClick={() => void fetchPlugins(currentWorkDir)}
             >
-              {t('settings.plugins.disableSelected')}
+              {t('settings.plugins.refresh')}
+            </Button>
+            <Button
+              size="base"
+              icon={<RotateCw size={14} strokeWidth={1.75} aria-hidden="true" />}
+              onClick={handleReload}
+              loading={isApplying}
+            >
+              {t('settings.plugins.apply')}
             </Button>
           </div>
         </div>
-      </section>
+      </div>
 
-      {marketplaces.length > 0 && (
-        <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)] overflow-hidden">
-          <div className="px-5 py-4 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-            <h4
-              className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)]"
-              style={{ fontFamily: 'var(--font-headline)' }}
-            >
-              {t('settings.plugins.marketplacesTitle')}
-            </h4>
-            <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
-              {t('settings.plugins.marketplacesHint')}
-            </p>
-          </div>
-          <div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">
-            {marketplaces.map((marketplace) => (
-              <div
-                key={marketplace.name}
-                className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-semibold text-[var(--color-text-primary)]">
-                    {marketplace.name}
-                  </span>
-                  <Badge tone={marketplace.autoUpdate ? 'success' : 'neutral'}>
-                    {marketplace.autoUpdate
-                      ? t('settings.plugins.marketplaceAutoUpdateOn')
-                      : t('settings.plugins.marketplaceAutoUpdateOff')}
-                  </Badge>
-                </div>
-                <div className="mt-2 text-xs leading-5 text-[var(--color-text-secondary)] break-words">
-                  {marketplace.source}
-                </div>
-                <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
-                  <span>{t('settings.plugins.marketplaceInstalledCount', { count: String(marketplace.installedCount) })}</span>
-                  {marketplace.lastUpdated && (
-                    <span>{t('settings.plugins.marketplaceUpdatedAt', { value: new Date(marketplace.lastUpdated).toLocaleString() })}</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+      {/* Batch selection: one quiet bar, filled only while something is picked. */}
+      <div
+        className={cx(
+          'flex flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4 py-2.5 sm:flex-row sm:items-center sm:justify-between',
+          selectedPlugins.length > 0 ? 'bg-[var(--color-surface-selected)]' : 'bg-[var(--color-surface-container-lowest)]',
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
+          <ListChecks className="flex-shrink-0 text-[var(--color-text-tertiary)]" size={14} strokeWidth={1.75} aria-hidden="true" />
+          <span className="font-medium text-[var(--color-text-primary)]">
+            {t('settings.plugins.selectionCount', { count: String(selectedPlugins.length) })}
+          </span>
+          {selectedPlugins.length > 0 && (
+            <Button variant="ghost" size="sm" onClick={clearSelection}>
+              {t('settings.plugins.clearSelection')}
+            </Button>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2 sm:justify-end">
+          <Button
+            size="sm"
+            icon={<ToggleRight size={14} strokeWidth={1.75} aria-hidden="true" />}
+            disabled={enableCandidates.length === 0 || isApplying}
+            onClick={() => setConfirmBatchAction('enable')}
+          >
+            {t('settings.plugins.enableSelected')}
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            icon={<ToggleLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
+            disabled={disableCandidates.length === 0 || isApplying}
+            onClick={() => setConfirmBatchAction('disable')}
+          >
+            {t('settings.plugins.disableSelected')}
+          </Button>
+        </div>
+      </div>
 
       {renderGroup('attention', grouped.attention, {
         fetchPluginDetail,
@@ -372,6 +318,45 @@ export function PluginList() {
         selectedPluginIds,
         onToggleSelection: togglePluginSelection,
       })}
+
+      {marketplaces.length > 0 && (
+        <section className="min-w-0">
+          <GroupHeading title={t('settings.plugins.marketplacesTitle')} hint={t('settings.plugins.marketplacesHint')} />
+          <Card radius="lg" surface="lowest" padding="none" className="divide-y divide-[var(--color-border)] overflow-hidden">
+            {marketplaces.map((marketplace) => (
+              <div key={marketplace.name} className="flex min-w-0 items-start gap-3 px-4 py-3">
+                <span className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
+                  <Store size={14} strokeWidth={1.75} aria-hidden="true" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[13px] font-medium text-[var(--color-text-primary)]">
+                      {marketplace.name}
+                    </span>
+                    <Badge tone={marketplace.autoUpdate ? 'success' : 'neutral'}>
+                      {marketplace.autoUpdate
+                        ? t('settings.plugins.marketplaceAutoUpdateOn')
+                        : t('settings.plugins.marketplaceAutoUpdateOff')}
+                    </Badge>
+                  </div>
+                  <div className="mt-0.5 break-words font-mono text-[11px] leading-5 text-[var(--color-text-secondary)]">
+                    {marketplace.source}
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap gap-x-1.5 gap-y-1 text-xs text-[var(--color-text-tertiary)]">
+                    <span>{t('settings.plugins.marketplaceInstalledCount', { count: String(marketplace.installedCount) })}</span>
+                    {marketplace.lastUpdated && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span>{t('settings.plugins.marketplaceUpdatedAt', { value: new Date(marketplace.lastUpdated).toLocaleString() })}</span>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </Card>
+        </section>
+      )}
 
       <ConfirmDialog
         open={confirmBatchAction !== null}
@@ -400,6 +385,21 @@ type RenderGroupOptions = {
   onToggleSelection: (pluginId: string, selected: boolean) => void
 }
 
+/** 13 semibold secondary over the card it names, with an optional 12px hint. */
+function GroupHeading({ title, hint, count }: { title: string; hint?: string; count?: number }) {
+  return (
+    <div className="mb-2 px-0.5">
+      <div className="flex items-center gap-2">
+        <h4 className="text-[13px] font-semibold text-[var(--color-text-secondary)]">{title}</h4>
+        {count !== undefined && (
+          <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{count}</span>
+        )}
+      </div>
+      {hint && <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{hint}</p>}
+    </div>
+  )
+}
+
 function renderGroup(
   bucket: PluginBucket,
   items: PluginSummary[],
@@ -421,67 +421,64 @@ function renderGroup(
         : 'settings.plugins.group.disabled'
 
   return (
-    <section
-      key={bucket}
-      className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)] overflow-hidden"
-    >
-      <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-        <div className="min-w-0">
-          <h4
-            className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)]"
-            style={{ fontFamily: 'var(--font-headline)' }}
-          >
-            {t(titleKey)}
-          </h4>
-          <p className="text-xs leading-5 text-[var(--color-text-tertiary)] mt-1">
-            {t('settings.plugins.groupHint', { count: String(items.length) })}
-          </p>
-        </div>
-        <span className="font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">{items.length}</span>
-      </div>
-      <div className="flex flex-col p-2">
-        {items.map((plugin) => (
-          <div
-            key={plugin.id}
-            className={`group rounded-[var(--radius-lg)] border px-3 py-3 transition-[background-color,border-color] duration-150 ease-out hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] ${
-              selectedPluginIds.has(plugin.id)
-                ? 'border-[var(--color-primary-fixed-dim)] bg-[var(--color-surface-selected)]'
-                : 'border-transparent'
-            }`}
-          >
-            <div className="flex items-start gap-3">
+    <section key={bucket} className="min-w-0">
+      <GroupHeading
+        title={t(titleKey)}
+        hint={t('settings.plugins.groupHint', { count: String(items.length) })}
+        count={items.length}
+      />
+      <Card radius="lg" surface="lowest" padding="none" className="divide-y divide-[var(--color-border)] overflow-hidden">
+        {items.map((plugin) => {
+          const selected = selectedPluginIds.has(plugin.id)
+          return (
+            <div
+              key={plugin.id}
+              className={cx(
+                'group flex items-start gap-3 px-4 py-3 transition-colors duration-150',
+                selected ? 'bg-[var(--color-surface-selected)]' : 'hover:bg-[var(--color-surface-hover)]',
+              )}
+            >
               {canMutatePlugin(plugin) ? (
                 <Checkbox
                   label={t('settings.plugins.selectPlugin', { name: plugin.name })}
                   labelHidden
-                  checked={selectedPluginIds.has(plugin.id)}
+                  checked={selected}
                   onChange={(event) => onToggleSelection(plugin.id, event.currentTarget.checked)}
-                  containerClassName="h-6 w-6 shrink-0"
+                  containerClassName="mt-1 h-5 w-5 shrink-0"
                 />
               ) : (
-                <span className="mt-0.5 h-6 w-6 shrink-0" aria-hidden="true" />
+                <span className="mt-1 h-5 w-5 shrink-0" aria-hidden="true" />
               )}
               <button
                 type="button"
                 onClick={() => void fetchPluginDetail(plugin.id, cwd)}
-                className="flex min-w-0 flex-1 items-start gap-3 rounded-[var(--radius-lg)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
+                className="flex min-w-0 flex-1 items-start gap-3 rounded-[var(--radius-sm)] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
               >
-                <span className="mt-0.5 material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)]">
-                  {plugin.hasErrors ? 'warning' : plugin.enabled ? 'extension' : 'extension_off'}
+                <span
+                  className={cx(
+                    'flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-[var(--radius-md)]',
+                    plugin.hasErrors
+                      ? 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]'
+                      : 'bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]',
+                  )}
+                >
+                  {plugin.hasErrors
+                    ? <TriangleAlert size={14} strokeWidth={1.75} aria-hidden="true" />
+                    : <Puzzle size={14} strokeWidth={1.75} aria-hidden="true" />}
                 </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-semibold text-[var(--color-text-primary)] break-all">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="break-all text-[13px] font-medium text-[var(--color-text-primary)]">
                       {plugin.name}
                     </span>
                     <StatusPill plugin={plugin} />
                     <ScopePill scope={plugin.scope} />
                     {plugin.version && <Badge mono>v{plugin.version}</Badge>}
                   </div>
-                  <p className="mt-1 text-xs leading-5 text-[var(--color-text-secondary)] break-words">
+                  <p className="mt-0.5 break-words text-xs leading-5 text-[var(--color-text-secondary)]">
                     {plugin.description || t('settings.plugins.noDescription')}
                   </p>
-                  <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--color-text-tertiary)]">
                     <span>{plugin.marketplace}</span>
                     {plugin.componentCounts.skills > 0 && (
                       <span>{t('settings.plugins.capability.skills', { count: String(plugin.componentCounts.skills) })}</span>
@@ -499,14 +496,17 @@ function renderGroup(
                     )}
                   </div>
                 </div>
-                <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)] opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:opacity-100">
-                  chevron_right
-                </span>
+                <ChevronRight
+                  className="mt-1.5 flex-shrink-0 text-[var(--color-text-tertiary)] opacity-60 transition-opacity group-hover:opacity-100"
+                  size={14}
+                  strokeWidth={1.75}
+                  aria-hidden="true"
+                />
               </button>
             </div>
-          </div>
-        ))}
-      </div>
+          )
+        })}
+      </Card>
     </section>
   )
 }
@@ -519,27 +519,23 @@ function formatPluginNames(plugins: PluginSummary[]) {
   return plugins.map((plugin) => plugin.name).join(', ')
 }
 
+/** Label above, figure below: the figure is what the eye lands on. */
 function SummaryCard({
   label,
   value,
-  icon,
+  icon: Icon,
 }: {
   label: string
   value: string
-  icon: string
+  icon: LucideIcon
 }) {
   return (
-    <Card radius="lg" padding="sm" className="min-w-0">
-      <div className="flex min-w-0 items-center gap-1.5 text-[11px] uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-        <span className="material-symbols-outlined text-[14px] flex-shrink-0">{icon}</span>
-        <span className="min-w-0 truncate text-[10px] leading-4">
-          {label}
-        </span>
+    <Card radius="lg" surface="lowest" padding="none" className="min-w-0 px-4 py-3">
+      <div className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
+        <Icon className="flex-shrink-0" size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span className="min-w-0 truncate">{label}</span>
       </div>
-      <div
-        className="mt-1.5 truncate text-[21px] font-semibold leading-none text-[var(--color-text-primary)]"
-        style={{ fontFamily: 'var(--font-headline)' }}
-      >
+      <div className="mt-1 truncate text-[22px] font-semibold leading-7 tabular-nums text-[var(--color-text-primary)]">
         {value}
       </div>
     </Card>

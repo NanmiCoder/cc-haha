@@ -39,7 +39,7 @@ export const workspacePrismTheme: PrismTheme = {
     backgroundColor: 'transparent',
   },
   styles: [
-    { types: ['comment', 'prolog', 'doctype', 'cdata'], style: { color: 'var(--color-code-comment)', fontStyle: 'italic' } },
+    { types: ['comment', 'prolog', 'doctype', 'cdata'], style: { color: 'var(--color-code-comment)' } },
     { types: ['string', 'attr-value', 'template-string'], style: { color: 'var(--color-code-string)' } },
     { types: ['keyword', 'selector', 'important', 'atrule'], style: { color: 'var(--color-code-keyword)' } },
     { types: ['function'], style: { color: 'var(--color-code-function)' } },
@@ -109,12 +109,16 @@ export const InlineHighlightedCode = memo(function InlineHighlightedCode({
   )
 })
 
+/**
+ * The theme's italic bit is dropped on purpose: comments are often CJK, which
+ * has no italic face and renders as a synthetic slant. Bold maps to the
+ * heaviest weight the monospace face is paired with (500).
+ */
 function tokenStyle(token: WorkspaceDiffHighlightToken): CSSProperties {
   const fontStyle = token.fontStyle ?? 0
   return {
     color: token.color,
-    fontStyle: fontStyle & 1 ? 'italic' : undefined,
-    fontWeight: fontStyle & 2 ? 700 : undefined,
+    fontWeight: fontStyle & 2 ? 500 : undefined,
     textDecoration: [
       fontStyle & 4 ? 'underline' : '',
       fontStyle & 8 ? 'line-through' : '',
@@ -228,7 +232,7 @@ function gutterTone(row: WorkspaceDiffRow, selected: boolean) {
   if (row.kind === 'addition') return 'bg-[var(--color-diff-added-bg)]'
   if (row.kind === 'deletion') return 'bg-[var(--color-diff-removed-bg)]'
   if (row.kind === 'hunk') return 'bg-[var(--color-diff-highlight-bg)]'
-  return 'bg-[var(--color-code-bg)] group-hover:bg-[var(--color-surface-hover)]'
+  return 'bg-[var(--color-surface)] group-hover:bg-[var(--color-surface-hover)]'
 }
 
 function prefixTone(row: WorkspaceDiffRow) {
@@ -238,8 +242,8 @@ function prefixTone(row: WorkspaceDiffRow) {
 }
 
 function codeTone(row: WorkspaceDiffRow) {
-  if (row.kind === 'metadata') return 'font-semibold text-[var(--color-text-secondary)]'
-  if (row.kind === 'hunk') return 'font-semibold text-[var(--color-warning)]'
+  if (row.kind === 'metadata') return 'font-medium text-[var(--color-text-secondary)]'
+  if (row.kind === 'hunk') return 'text-[var(--color-text-tertiary)]'
   return ''
 }
 
@@ -252,7 +256,7 @@ function isStructuralMetadata(row: WorkspaceDiffRow, compact = false) {
 export function WorkspaceDiffSurface({
   value,
   path,
-  className = 'min-h-0 flex-1 overflow-auto bg-[var(--color-code-bg)]',
+  className = 'min-h-0 flex-1 overflow-auto bg-[var(--color-surface)]',
   lineLimit = WORKSPACE_PREVIEW_LINE_LIMIT,
   hideSingleFileHeader = false,
   mode = 'unified',
@@ -272,8 +276,13 @@ export function WorkspaceDiffSurface({
     ), 3),
     [rows],
   )
+  // Unified rows carry both coordinates, old then new, like `git diff` itself;
+  // a split side only ever has one.
+  const twoNumberColumns = mode === 'unified'
   const codeStyle = {
-    '--workspace-diff-gutter-width': `${lineNumberCharacters + 3}ch`,
+    '--workspace-diff-gutter-width': twoNumberColumns
+      ? `${lineNumberCharacters * 2 + 4}ch`
+      : `${lineNumberCharacters + 3}ch`,
   } as CSSProperties
   const showFileHeaders = !hideSingleFileHeader || files.length > 1
   const displayItemIds = useMemo(
@@ -555,7 +564,7 @@ export function WorkspaceDiffSurface({
   const renderEditor = () => review.selection && (
     <div
       data-diff-editor=""
-      className="sticky z-[var(--z-raised)] my-1.5 min-w-[280px] max-w-3xl overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] shadow-[var(--shadow-card)]"
+      className="sticky z-[var(--z-raised)] my-1.5 min-w-[280px] max-w-3xl overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-card)]"
       style={{
         left: 'var(--workspace-diff-gutter-width)',
         width: 'min(48rem, calc(100cqi - var(--workspace-diff-gutter-width) - 0.75rem))',
@@ -563,15 +572,15 @@ export function WorkspaceDiffSurface({
     >
       <div className="flex min-h-10 items-center gap-2 px-3 pt-2.5">
         <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
-          <MessageSquare aria-hidden="true" size={14} />
+          <MessageSquare aria-hidden="true" size={14} strokeWidth={1.75} />
         </span>
-        <div className="text-[12px] font-semibold text-[var(--color-text-primary)]">{t('workspace.localComment')}</div>
-        <div className="ml-auto text-[11px] text-[var(--color-text-tertiary)]">
+        <div className="font-body text-[13px] font-medium text-[var(--color-text-primary)]">{t('workspace.localComment')}</div>
+        <div className="ml-auto font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
           {sideLabel(review.selection.side)} L{review.selection.lineStart}{review.selection.lineEnd === review.selection.lineStart ? '' : `-L${review.selection.lineEnd}`}
         </div>
       </div>
       {status && (
-        <div role="status" aria-live="polite" className="px-3 pt-1.5 text-[11px] text-[var(--color-warning)]">
+        <div role="status" aria-live="polite" className="px-3 pt-1.5 font-body text-[12px] text-[var(--color-on-warning-container)]">
           {t(`workspace.diffReview.${status}`)}
         </div>
       )}
@@ -583,7 +592,7 @@ export function WorkspaceDiffSurface({
         onChange={(event) => setReview((current) => ({ ...current, draft: event.target.value }))}
         onKeyDown={handleEditorKeyDown}
         rows={2}
-        className="block min-h-0 w-full resize-y bg-transparent px-3 py-2 font-[var(--font-body)] text-[13px] leading-5 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+        className="block min-h-0 w-full resize-y bg-transparent px-3 py-2 font-body text-[13px] leading-5 text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
       />
       <div className="flex items-center justify-end gap-2 px-2 pb-2">
         <Button variant="ghost" size="base" onClick={closeEditor}>
@@ -598,9 +607,9 @@ export function WorkspaceDiffSurface({
           aria-label={t('workspace.diffReview.submitAria')}
           disabled={!review.draft.trim()}
           onClick={submitComment}
-          className="inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-info)] px-3 text-[12px] font-medium text-[var(--color-surface)] transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-low)] disabled:cursor-not-allowed disabled:opacity-35"
+          className="inline-flex h-8 min-w-8 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[var(--color-info)] px-3 font-body text-[13px] font-medium text-[var(--color-surface)] transition-[opacity,transform] duration-150 ease-out hover:opacity-90 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-low)] disabled:cursor-not-allowed disabled:opacity-35"
         >
-          <CornerDownLeft aria-hidden="true" size={14} />
+          <CornerDownLeft aria-hidden="true" size={14} strokeWidth={1.75} />
           <span>{t('workspace.diffReview.submit')}</span>
         </button>
       </div>
@@ -616,7 +625,7 @@ export function WorkspaceDiffSurface({
           data-highlight-engine={highlightResult.engine}
           role="grid"
           aria-label={t('workspace.diffGridLabel', { path })}
-          className="m-0 min-w-full font-mono text-[13px] leading-5 text-[var(--color-code-fg)]"
+          className="m-0 min-w-full font-mono text-[12px] leading-5 text-[var(--color-code-fg)]"
           style={codeStyle}
         >
           {files.map((file) => {
@@ -637,18 +646,18 @@ export function WorkspaceDiffSurface({
                 {headerVisible && (
                   <div
                     data-testid="workspace-diff-file-header"
-                    className="sticky top-0 z-[var(--z-raised)] flex h-10 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-glass)] px-4 text-[12px] backdrop-blur"
+                    className="sticky top-0 z-[var(--z-raised)] flex h-9 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 text-[12px]"
                   >
-                    <FileCode2 aria-hidden="true" size={15} className="shrink-0 text-[var(--color-text-tertiary)]" />
+                    <FileCode2 aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
                     <span className="min-w-0 truncate">
                       {displayDirectory && (
                         <span className="text-[var(--color-text-tertiary)]">{displayDirectory}</span>
                       )}
-                      <span className="font-semibold text-[var(--color-text-primary)]">{displayName}</span>
+                      <span className="font-medium text-[var(--color-text-primary)]">{displayName}</span>
                     </span>
-                    <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums">
-                      <span className="text-[var(--color-success)]">+{fileAdditions}</span>
-                      <span className="ml-1.5 text-[var(--color-error)]">-{fileDeletions}</span>
+                    <span className="ml-auto shrink-0 tabular-nums">
+                      <span className="text-[var(--color-diff-added-text)]">+{fileAdditions}</span>
+                      <span className="ml-1.5 text-[var(--color-diff-removed-text)]">-{fileDeletions}</span>
                     </span>
                     <span className="sr-only">diff --git {oldPath} {newPath}</span>
                   </div>
@@ -665,7 +674,7 @@ export function WorkspaceDiffSurface({
                       key={row.id}
                       role="row"
                       data-diff-hunk-separator={row.hunkId}
-                      className="group/hunk flex min-h-6 min-w-0 items-center gap-2 border-y border-[var(--color-border)] bg-[var(--color-code-bg)] px-3 text-[11px] text-[var(--color-text-tertiary)]"
+                      className="group/hunk flex min-h-6 min-w-0 items-center gap-2 border-y border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 text-[11px] text-[var(--color-text-tertiary)]"
                       style={mode === 'split' ? { gridColumn: '1 / -1', gridRow: row.displayRow! + (editorRow && row.displayRow! > editorRow ? 1 : 0) } : undefined}
                     >
                       <span className="min-w-0 truncate">{coordinates ? `${range(coordinates[1]!, coordinates[2])} → ${range(coordinates[3]!, coordinates[4])}${coordinates[5] ?? ''}` : row.text}</span>
@@ -708,7 +717,7 @@ export function WorkspaceDiffSurface({
                       >
                         <span
                           data-diff-number-gutter=""
-                          className={`sticky left-0 z-[1] flex min-h-full select-none ${wrapLines ? 'items-start' : 'items-center'} justify-end pl-[2ch] pr-[1ch] text-right text-[11px] text-[var(--color-text-tertiary)] ${gutterTone(row, selected)}`}
+                          className={`sticky left-0 z-[1] flex min-h-full select-none ${wrapLines ? 'items-start' : 'items-center'} justify-end ${twoNumberColumns ? 'gap-[1ch] pl-[1ch]' : 'pl-[2ch]'} pr-[1ch] text-right tabular-nums text-[var(--color-text-tertiary)] ${gutterTone(row, selected)}`}
                         >
                           {selected && (
                             <span
@@ -719,11 +728,18 @@ export function WorkspaceDiffSurface({
                               }`}
                             />
                           )}
+                          {twoNumberColumns ? (
+                            <span data-diff-line-number="old" className="shrink-0" style={{ width: `${lineNumberCharacters}ch` }}>
+                              {row.oldLine ?? ''}
+                            </span>
+                          ) : null}
+                          {/* The comment control lands on the last column, so only it fades. */}
                           <span
-                            data-diff-line-number=""
-                            className={`transition-opacity duration-100 group-hover:opacity-0 group-focus-within:opacity-0 ${selectionFocus ? 'opacity-0' : ''}`}
+                            data-diff-line-number={twoNumberColumns ? 'new' : ''}
+                            className={`shrink-0 transition-opacity duration-100 group-hover:opacity-0 group-focus-within:opacity-0 ${selectionFocus ? 'opacity-0' : ''}`}
+                            style={twoNumberColumns ? { width: `${lineNumberCharacters}ch` } : undefined}
                           >
-                            {line ?? ''}
+                            {(twoNumberColumns ? row.newLine : line) ?? ''}
                           </span>
                           {row.selectable && row.side && line !== null && (
                             <span
@@ -751,7 +767,7 @@ export function WorkspaceDiffSurface({
                                   selectionFocus ? 'bg-[var(--color-info)] text-[var(--color-surface)] opacity-100' : 'text-[var(--color-text-tertiary)] opacity-0 group-hover:opacity-100 focus:opacity-100'
                                 }`}
                               >
-                                {selected ? <MessageSquare aria-hidden="true" size={12} /> : <Plus aria-hidden="true" size={13} />}
+                                {selected ? <MessageSquare aria-hidden="true" size={12} strokeWidth={2} /> : <Plus aria-hidden="true" size={12} strokeWidth={2} />}
                               </button>
                             </span>
                           )}
@@ -788,14 +804,14 @@ export function WorkspaceDiffSurface({
 
         {status && !review.selection && (
           <div className="sticky bottom-0 border-t border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2">
-            <div role="status" aria-live="polite" className="text-[11px] text-[var(--color-warning)]">
+            <div role="status" aria-live="polite" className="font-body text-[12px] text-[var(--color-on-warning-container)]">
               {t(`workspace.diffReview.${status}`)}
             </div>
           </div>
         )}
 
         {displayItemIds.length > lineLimit && (
-          <div className="sticky bottom-0 flex items-center gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
+          <div className="sticky bottom-0 flex items-center gap-3 border-t border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2 font-body text-xs text-[var(--color-text-tertiary)]">
             <span>
               {showAllRows
                 ? t('workspace.previewAllLines', { total: displayItemIds.length })

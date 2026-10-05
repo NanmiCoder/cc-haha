@@ -16,7 +16,7 @@ export function TaskList({ tasks }: Props) {
   return (
     <div>
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-3.5">
+      <div className="grid grid-cols-3 gap-3">
         <StatCard label={t('tasks.totalTasks')} value={String(tasks.length)} />
         <StatCard label={t('tasks.active')} value={String(enabledCount)} />
         <StatCard label={t('tasks.disabled')} value={String(tasks.length - enabledCount)} />
@@ -33,9 +33,10 @@ export function TaskList({ tasks }: Props) {
           last row's tail keeps the row hover fill and the open runs drawer
           inside the card's edge without a clipping context. */}
       <Card
-        radius="xl"
+        radius="lg"
+        surface="lowest"
         padding="none"
-        className="mt-[22px] divide-y divide-[var(--color-border-separator)] [&>*:first-child>*:first-child]:rounded-t-[var(--radius-xl)] [&>*:last-child>*:last-child]:rounded-b-[var(--radius-xl)]"
+        className="mt-4 divide-y divide-[var(--color-border)] [&>*:first-child>*:first-child]:rounded-t-[var(--radius-lg)] [&>*:last-child>*:last-child]:rounded-b-[var(--radius-lg)]"
       >
         {tasks.map((task) => (
           <TaskRow
@@ -50,21 +51,14 @@ export function TaskList({ tasks }: Props) {
   )
 }
 
-/**
- * `surface="none"` rather than one of `Card`'s named layers: the handoff puts
- * these on `--color-surface-container`, which the component has no name for,
- * and an empty surface class cannot fight the one passed below it.
- */
+/** Label above, figure below: the figure is what the eye lands on. */
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <Card radius="xl" surface="none" padding="none" className="bg-[var(--color-surface-container)] px-[22px] py-[18px]">
-      <div
-        className="text-[26px] font-bold leading-none text-[var(--color-text-primary)]"
-        style={{ fontFamily: 'var(--font-headline)' }}
-      >
+    <Card radius="lg" surface="lowest" padding="none" className="flex flex-col gap-1 px-4 py-3.5">
+      <div className="text-xs text-[var(--color-text-tertiary)]">{label}</div>
+      <div className="text-[22px] font-semibold leading-[1.2] tabular-nums text-[var(--color-text-primary)]">
         {value}
       </div>
-      <div className="mt-1.5 text-xs text-[var(--color-text-tertiary)]">{label}</div>
     </Card>
   )
 }

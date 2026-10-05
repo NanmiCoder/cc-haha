@@ -47,11 +47,12 @@ export function DayOfWeekPicker({ selected, onChange }: Props) {
               focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]
               focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]
               ${isActive
-                // The handoff's active chip: terracotta wash, its paired ink,
-                // and the accent border. `--color-brand` as the text would be
-                // 4.3:1 on this fill under the two ink palettes.
-                ? 'border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)]'
-                : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-tertiary)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]'
+                // The ink fill of `SegmentedControl`'s picked chip, so "on"
+                // reads the same here as in every other chip row. The old
+                // terracotta wash made a selected weekday look like the brand
+                // action.
+                ? 'border-[var(--color-btn-primary-bg)] bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)]'
+                : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)]'
               }
             `}
           >

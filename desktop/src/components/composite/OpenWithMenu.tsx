@@ -17,11 +17,11 @@ type Props = {
 }
 
 function ItemIcon({ item }: { item: OpenWithItem }) {
-  if (item.target) return <TargetIcon target={item.target} size={20} />
-  if (item.icon === 'in-app-browser') return <Globe size={18} strokeWidth={1.9} />
-  if (item.icon === 'preview') return <FileText size={18} strokeWidth={1.9} />
-  if (item.icon === 'copy') return <Copy size={18} strokeWidth={1.9} />
-  return <ExternalLink size={18} strokeWidth={1.9} />
+  if (item.target) return <TargetIcon target={item.target} size={16} />
+  if (item.icon === 'in-app-browser') return <Globe size={16} strokeWidth={1.75} />
+  if (item.icon === 'preview') return <FileText size={16} strokeWidth={1.75} />
+  if (item.icon === 'copy') return <Copy size={16} strokeWidth={1.75} />
+  return <ExternalLink size={16} strokeWidth={1.75} />
 }
 
 export function OpenWithMenu({ items, anchor, onClose, triggerEl }: Props) {
@@ -61,21 +61,21 @@ export function OpenWithMenu({ items, anchor, onClose, triggerEl }: Props) {
     <div
       ref={ref}
       role="menu"
-      className="min-w-[min(220px,calc(100vw-16px))] max-w-[min(300px,calc(100vw-16px))] overflow-y-auto overscroll-contain rounded-[12px] border border-[var(--color-border)] bg-[var(--color-surface)] py-1 shadow-[var(--shadow-dropdown)]"
+      className="min-w-[min(220px,calc(100vw-16px))] max-w-[min(300px,calc(100vw-16px))] overflow-y-auto overscroll-contain rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
       style={{ ...positionStyle, zIndex: 'var(--z-dropdown)' }}
     >
       {items.map((item) => (
         <Fragment key={item.id}>
           {item.separatorBefore && (
-            <div className="my-1 border-t border-[var(--color-border)]" role="separator" />
+            <div className="mx-1 my-1 border-t border-[var(--color-border)]" role="separator" />
           )}
           <button
             type="button"
             role="menuitem"
             onClick={() => { item.onSelect(); onClose() }}
-            className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex min-h-8 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:bg-[var(--color-surface-hover)] focus-visible:outline-none"
           >
-            <span className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)]"><ItemIcon item={item} /></span>
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]"><ItemIcon item={item} /></span>
             <span className="min-w-0 truncate">{item.label}</span>
           </button>
         </Fragment>

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { ArrowUpRight, CircleAlert, CircleCheck, LoaderCircle, TimerOff, X } from 'lucide-react'
 import { useTaskStore } from '../../stores/taskStore'
 import { useChatStore } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
@@ -6,6 +7,7 @@ import { useTranslation } from '../../i18n'
 import { parseRunOutput } from '../../lib/parseRunOutput'
 import type { TaskRun } from '../../types/task'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
+import { Badge, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -23,7 +25,7 @@ function RunOutput({ run }: { run: TaskRun }) {
     return (
       <ErrorState
         size="sm"
-        className="mt-3"
+        className="mt-2.5"
         title={t('common.error')}
         detail={
           <span className="block max-h-40 overflow-y-auto whitespace-pre-wrap break-words">{run.error}</span>
@@ -36,17 +38,17 @@ function RunOutput({ run }: { run: TaskRun }) {
 
   if (!text) {
     return (
-      <Card radius="lg" padding="none" className="mt-3 px-[18px] py-3 text-xs italic text-[var(--color-text-tertiary)]">
+      <Card radius="lg" surface="lowest" padding="none" className="mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
         {run.sessionId ? t('tasks.outputHintSession') : t('tasks.noOutputText')}
       </Card>
     )
   }
 
-  // The handoff's "summary card": a bordered sheet on the page ground rather
-  // than a tinted inset, so the commit hashes inside it read as badges against
-  // a surface instead of two greys stacked on each other.
+  // The handoff's "summary card": a white bordered sheet on the drawer's
+  // sunken ground rather than a second tinted inset, so the commit hashes
+  // inside it read as chips against a surface instead of two greys stacked.
   return (
-    <Card radius="lg" padding="none" className="mt-3 max-h-48 overflow-y-auto px-[22px] py-[18px]">
+    <Card radius="lg" surface="lowest" padding="none" className="mt-2.5 max-h-48 overflow-y-auto px-4 py-3">
       <MarkdownRenderer
         content={text}
         variant="compact"
@@ -62,11 +64,15 @@ type Props = {
   refreshKey?: number
 }
 
-const STATUS_CONFIG: Record<string, { icon: string; color: string }> = {
-  running:   { icon: 'sync',         color: 'var(--color-warning)' },
-  completed: { icon: 'check_circle', color: 'var(--color-success)' },
-  failed:    { icon: 'error',        color: 'var(--color-error)' },
-  timeout:   { icon: 'timer_off',    color: 'var(--color-error)' },
+// The app-wide status vocabulary: in progress = info, done = success, failed
+// (including a timeout) = error. Running used to borrow the warning amber,
+// which elsewhere means "waiting for you".
+const ICON_PROPS = { size: 12, strokeWidth: 2, 'aria-hidden': true } as const
+const STATUS_CONFIG: Record<string, { icon: ReactNode; tone: Tone }> = {
+  running:   { icon: <LoaderCircle {...ICON_PROPS} className="animate-spin" />, tone: 'info' },
+  completed: { icon: <CircleCheck {...ICON_PROPS} />, tone: 'success' },
+  failed:    { icon: <CircleAlert {...ICON_PROPS} />, tone: 'danger' },
+  timeout:   { icon: <TimerOff {...ICON_PROPS} />, tone: 'danger' },
 }
 
 export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
@@ -243,12 +249,12 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
   return (
     // A drawer under its row, not a card inside it: the border-top continues
     // the list's own separator and the fill is the next surface layer down.
-    <div className="border-t border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)]">
+    <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-sidebar)]">
       {/* Header */}
-      <div className="flex items-center justify-between px-5 pb-1.5 pt-3.5">
-        <span className="text-[14.5px] font-bold text-[var(--color-text-primary)]">{t('tasks.logsTitle')}</span>
+      <div className="flex items-center justify-between px-4 pb-1 pt-2.5">
+        <span className="text-[13px] font-semibold text-[var(--color-text-secondary)]">{t('tasks.logsTitle')}</span>
         <IconButton
-          icon={<span className="material-symbols-outlined text-[16px]">close</span>}
+          icon={<X size={14} strokeWidth={1.75} aria-hidden="true" />}
           label={t('tasks.close')}
           size="xs"
           tone="muted"
@@ -257,7 +263,7 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
       </div>
 
       {/* Content */}
-      <div className="max-h-64 overflow-y-auto px-5 pb-4">
+      <div className="max-h-64 overflow-y-auto px-4 pb-3">
         {loading ? (
           // Same 16px brand spinner in the same `py-6` box; the label goes from
           // an `aria-label` on the SVG to an `aria-live` region, so the wait is
@@ -266,46 +272,37 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
         ) : runs.length === 0 ? (
           <EmptyState variant="plain" size="sm" description={t('tasks.noLogs')} />
         ) : (
-          <div className="divide-y divide-[var(--color-border-separator)]">
+          <div className="divide-y divide-[var(--color-border)]">
             {runs.map((run) => {
               const cfg = STATUS_CONFIG[run.status] || STATUS_CONFIG.failed!
               const isExpanded = expandedId === run.id
               return (
-                <div key={run.id} className="py-2.5">
-                  <div className="flex items-center gap-[11px]">
-                    {/* Status icon */}
-                    <span
-                      aria-hidden="true"
-                      className={`material-symbols-outlined shrink-0 text-[17px] ${run.status === 'running' ? 'animate-spin' : ''}`}
-                      style={{ color: cfg.color, fontVariationSettings: "'FILL' 1" }}
-                    >
-                      {cfg.icon}
-                    </span>
-
-                    {/* Status text */}
-                    <span className="text-[13.5px] font-bold" style={{ color: cfg.color }}>
+                <div key={run.id} className="py-2">
+                  <div className="flex min-h-7 items-center gap-2.5">
+                    {/* Status */}
+                    <Badge tone={cfg.tone} icon={cfg.icon}>
                       {t(`tasks.runStatus.${run.status}` as any)} {/* dynamic key */}
-                    </span>
+                    </Badge>
 
                     {/* Time — mono, so timestamps line up down the column */}
-                    <span className="font-mono text-[13px] tabular-nums text-[var(--color-text-secondary)]">
+                    <span className="font-mono text-xs tabular-nums text-[var(--color-text-secondary)]">
                       {new Date(run.startedAt).toLocaleString()}
                     </span>
 
                     {/* Duration */}
                     {run.durationMs != null && (
-                      <span className="text-[13px] text-[var(--color-text-tertiary)]">
+                      <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
                         {t('tasks.duration', { s: Math.round(run.durationMs / 1000) })}
                       </span>
                     )}
 
-                    <div className="ml-auto flex items-center gap-2">
+                    <div className="ml-auto flex items-center gap-1">
                       {/* Open session — only after run completes (session is empty while running) */}
                       {run.sessionId && run.status !== 'running' && (
                         <Button
-                          variant="link"
+                          variant="ghost"
                           size="sm"
-                          icon={<span aria-hidden="true" className="material-symbols-outlined text-[13px]">north_east</span>}
+                          icon={<ArrowUpRight size={12} strokeWidth={2} aria-hidden="true" />}
                           iconPosition="end"
                           onClick={() => openSession(run.sessionId!, run.taskName)}
                         >
@@ -331,13 +328,13 @@ export function TaskRunsPanel({ taskId, onClose, refreshKey }: Props) {
                   {isExpanded && (run.output || run.error) ? (
                     <RunOutput run={run} />
                   ) : isExpanded && detailState?.runId === run.id && detailState.status === 'loading' ? (
-                    <Card radius="lg" padding="none" className="mt-3 px-[18px] py-3 text-xs text-[var(--color-text-tertiary)]">
+                    <Card radius="lg" surface="lowest" padding="none" className="mt-2.5 px-4 py-3 text-xs text-[var(--color-text-tertiary)]">
                       {t('common.loading')}
                     </Card>
                   ) : isExpanded && detailState?.runId === run.id && detailState.status === 'error' ? (
                     <ErrorState
                       size="sm"
-                      className="mt-3"
+                      className="mt-2.5"
                       title={t('common.error')}
                       onRetry={() => { void loadDetail(run) }}
                       retryLabel={t('common.retry')}

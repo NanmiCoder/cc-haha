@@ -1,8 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { remoteAccessApi } from '@/api/publicAccess'
 import { ApiError } from '@/api/client'
+import { BrandSeal } from '@/components/composite/BrandSeal'
 import { Button } from '@/components/ui/Button'
 import { Input } from '@/components/ui/Input'
+import { Spinner } from '@/components/ui/Spinner'
 import { useTranslation } from '@/i18n'
 
 export function RemoteAccessGate({ children }: { children: ReactNode }) {
@@ -101,12 +103,30 @@ export function RemoteAccessGate({ children }: { children: ReactNode }) {
     }
   }
   if (state === 'ready') return children
-  return <main className="min-h-screen bg-[var(--color-surface)] p-6 text-[var(--color-text-primary)]">
-    <div className="mx-auto max-w-md space-y-4 py-12">
-      <h1 className="text-2xl font-semibold">{t('publicAccess.title')}</h1>
-      <p id="remote-access-status" role={state === 'error' ? 'alert' : 'status'}>{state === 'pair' ? t('publicAccess.phoneIntro') : state === 'pending' ? t('publicAccess.phonePending') : state === 'error' ? t('publicAccess.phoneError') : state === 'unpaired' ? t('publicAccess.phoneUnpaired') : t('common.loading')}</p>
-      {state === 'pair' && <><Input aria-describedby="remote-access-status" aria-label={t('publicAccess.deviceName')} placeholder={t('publicAccess.deviceName')} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} /><Button disabled={!name.trim()} onClick={() => void pair()}>{t('publicAccess.requestPair')}</Button></>}
-      {state === 'error' && <Button onClick={() => void retry()}>{t('common.retry')}</Button>}
+  const waiting = state === 'loading' || state === 'pending'
+  return <main className="flex min-h-screen items-center justify-center bg-[var(--color-surface)] px-4 py-10 text-[var(--color-text-primary)]">
+    <div className="w-full max-w-[400px] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-6 pb-6 pt-7 shadow-[var(--shadow-card)]">
+      <div className="flex flex-col items-center text-center">
+        <BrandSeal size="lg" />
+        <h1 className="mt-4 text-[18px] font-semibold leading-snug">{t('publicAccess.title')}</h1>
+        <div className="mt-2 flex w-full items-start justify-center gap-2">
+          {waiting && <Spinner size={14} className="mt-[3px] shrink-0 text-[var(--color-text-tertiary)]" />}
+          <p
+            id="remote-access-status"
+            role={state === 'error' ? 'alert' : 'status'}
+            className={state === 'error'
+              ? 'w-full rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-left text-xs leading-[1.6] text-[var(--color-on-error-container)]'
+              : 'text-[13px] leading-[1.6] text-[var(--color-text-secondary)]'}
+          >
+            {state === 'pair' ? t('publicAccess.phoneIntro') : state === 'pending' ? t('publicAccess.phonePending') : state === 'error' ? t('publicAccess.phoneError') : state === 'unpaired' ? t('publicAccess.phoneUnpaired') : t('common.loading')}
+          </p>
+        </div>
+      </div>
+      {state === 'pair' && <div className="mt-5 grid gap-3">
+        <Input size="lg" aria-describedby="remote-access-status" aria-label={t('publicAccess.deviceName')} placeholder={t('publicAccess.deviceName')} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+        <Button variant="primary" size="lg" block disabled={!name.trim()} onClick={() => void pair()}>{t('publicAccess.requestPair')}</Button>
+      </div>}
+      {state === 'error' && <Button variant="secondary" size="lg" block className="mt-4" onClick={() => void retry()}>{t('common.retry')}</Button>}
     </div>
   </main>
 }

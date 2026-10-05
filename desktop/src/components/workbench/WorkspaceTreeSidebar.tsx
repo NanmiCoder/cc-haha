@@ -14,7 +14,7 @@ export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnN
   const t = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
   const [narrow, setNarrow] = useState(false)
-  const [width, setWidth] = useState(300)
+  const [width, setWidth] = useState(260)
   const drag = useRef<{ x: number, width: number } | null>(null)
 
   useEffect(() => {
@@ -66,7 +66,7 @@ export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnN
       }}
     >
       {overlay ? <div className="flex shrink-0 justify-end border-b border-[var(--color-border)] px-2 py-1">
-        <IconButton icon={<X size={14} />} size="xs" tone="muted" label={t('common.close')} data-testid="workspace-tree-overlay-close" onClick={() => onOpenChange(false)} />
+        <IconButton icon={<X size={14} strokeWidth={1.75} />} size="xs" tone="muted" label={t('common.close')} data-testid="workspace-tree-overlay-close" onClick={() => onOpenChange(false)} />
       </div> : null}
         {!fullWidth ? <div
           role="separator"
@@ -86,7 +86,7 @@ export function WorkspaceTreeSidebar({ open, onOpenChange, children, collapseOnN
             event.preventDefault()
             setWidth((current) => Math.max(180, Math.min(480, current + (event.key === 'ArrowLeft' ? 20 : -20))))
           }}
-          onDoubleClick={() => setWidth(300)}
+          onDoubleClick={() => setWidth(260)}
           className="absolute inset-y-0 -left-1 w-2 cursor-col-resize outline-none focus-visible:bg-[var(--color-border-focus)]"
         /> : null}
         {children}

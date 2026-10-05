@@ -3,7 +3,6 @@ import { Mic, Square } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { voiceApi, type VoiceLanguage, type VoiceTranscript } from '@/api/voice'
 import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
 import { useTranslation } from '@/i18n'
 import type { TranslationKey } from '@/i18n/locales/en'
 import { VoiceWave } from '@/features/voiceInput/VoiceWave'
@@ -180,14 +179,14 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
 
       <div className="flex flex-wrap items-center gap-3">
         {phase === 'recording' ? (
-          <Button variant="danger" size="base" icon={<Square size={14} aria-hidden="true" />} onClick={() => void finish()}>
+          <Button variant="danger" size="base" icon={<Square size={14} strokeWidth={1.75} aria-hidden="true" />} onClick={() => void finish()}>
             {t('voice.settings.test.stop')}
           </Button>
         ) : (
           <Button
             variant="secondary"
             size="base"
-            icon={<Mic size={14} aria-hidden="true" />}
+            icon={<Mic size={14} strokeWidth={1.75} aria-hidden="true" />}
             loading={busy}
             disabled={!canStart || busy}
             onClick={() => void start()}
@@ -205,7 +204,7 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
             <div role="img" aria-label={t('voice.settings.test.level')} className="min-w-0 flex-1">
               <VoiceWave getLevel={readLevel} active />
             </div>
-            <span className="shrink-0 text-xs tabular-nums text-[var(--color-text-secondary)]">
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
               <span ref={clockRef} data-testid="voice-clock">0:00</span>
               {` / ${formatClock(maxSeconds)}`}
             </span>
@@ -218,14 +217,14 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
       ) : null}
 
       {transcript ? (
-        <Card radius="lg" surface="base" padding="md" className="space-y-2" aria-label={t('voice.settings.test.result')}>
-          <p className="text-xs font-medium text-[var(--color-text-secondary)]">{t('voice.settings.test.result')}</p>
+        <div role="group" className="space-y-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-4 py-3" aria-label={t('voice.settings.test.result')}>
+          <p className="text-xs font-medium text-[var(--color-text-tertiary)]">{t('voice.settings.test.result')}</p>
           {transcript.text.trim() ? (
-            <p data-testid="voice-transcript" className="whitespace-pre-wrap break-words text-sm leading-6 text-[var(--color-text-primary)]">
+            <p data-testid="voice-transcript" className="whitespace-pre-wrap break-words text-[13px] leading-6 text-[var(--color-text-primary)]">
               {transcript.text}
             </p>
           ) : (
-            <p className="text-sm text-[var(--color-text-tertiary)]">{t('voice.composer.error.noSpeech')}</p>
+            <p className="text-[13px] text-[var(--color-text-tertiary)]">{t('voice.composer.error.noSpeech')}</p>
           )}
           <p className="text-xs text-[var(--color-text-tertiary)]">
             {t('voice.settings.test.stats', {
@@ -233,7 +232,7 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
               inference: transcript.inferenceSeconds.toFixed(2),
             })}
           </p>
-        </Card>
+        </div>
       ) : null}
 
       {playbackUrl ? (

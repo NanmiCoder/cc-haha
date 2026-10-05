@@ -70,7 +70,7 @@ export function UserMessageEditor({
   return (
     <div
       data-testid="user-message-editor"
-      className="flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-2.5"
+      className="flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2.5"
     >
       {draft.attachments.length > 0 ? (
         <AttachmentGallery

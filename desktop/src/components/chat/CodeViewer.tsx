@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType, type CSSProperties } from 'react'
 import { Highlight, type PrismTheme } from 'prism-react-renderer'
+import { Check, Copy } from 'lucide-react'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { useTranslation } from '../../i18n'
 
@@ -27,7 +28,9 @@ const warmPrismTheme: PrismTheme = {
     backgroundColor: 'transparent',
   },
   styles: [
-    { types: ['comment', 'prolog', 'doctype', 'cdata'], style: { color: 'var(--color-code-comment)', fontStyle: 'italic' as const } },
+    // Comments are told apart by colour alone: a slanted comment is often
+    // Chinese, and CJK has no italic — the browser just shears the glyphs.
+    { types: ['comment', 'prolog', 'doctype', 'cdata'], style: { color: 'var(--color-code-comment)' } },
     { types: ['string', 'attr-value', 'template-string'], style: { color: 'var(--color-code-string)' } },
     { types: ['keyword', 'selector', 'important', 'atrule'], style: { color: 'var(--color-code-keyword)' } },
     { types: ['function'], style: { color: 'var(--color-code-function)' } },
@@ -50,7 +53,7 @@ const warmShikiTheme = {
   fg: 'var(--color-code-fg)',
   bg: 'transparent',
   tokenColors: [
-    { scope: ['comment', 'punctuation.definition.comment'], settings: { foreground: 'var(--color-code-comment)', fontStyle: 'italic' } },
+    { scope: ['comment', 'punctuation.definition.comment'], settings: { foreground: 'var(--color-code-comment)' } },
     { scope: ['string', 'string.quoted', 'string.template', 'string.other.link'], settings: { foreground: 'var(--color-code-string)' } },
     { scope: ['string.regexp'], settings: { foreground: 'var(--color-primary-container)' } },
     { scope: ['keyword', 'keyword.control', 'storage', 'storage.type', 'storage.modifier'], settings: { foreground: 'var(--color-code-keyword)' } },
@@ -69,14 +72,14 @@ const warmShikiTheme = {
     { scope: ['meta.decorator', 'punctuation.decorator'], settings: { foreground: 'var(--color-code-type)' } },
     { scope: ['markup.inserted', 'punctuation.definition.inserted'], settings: { foreground: 'var(--color-code-inserted)' } },
     { scope: ['markup.deleted', 'punctuation.definition.deleted'], settings: { foreground: 'var(--color-code-deleted)' } },
-    { scope: ['markup.heading', 'entity.name.section'], settings: { foreground: 'var(--color-code-function)', fontStyle: 'bold' } },
-    { scope: ['markup.bold'], settings: { fontStyle: 'bold' } },
-    { scope: ['markup.italic'], settings: { fontStyle: 'italic' } },
+    // No bold: the mono face ships at 400 only, so "bold" is synthesized smear.
+    { scope: ['markup.heading', 'entity.name.section'], settings: { foreground: 'var(--color-code-function)' } },
   ],
 }
 
-const CODE_AREA_PADDING = '0.5rem 12px'
-const CODE_LINE_HEIGHT = 1.7
+/** Vertical only: the 14px gutter sits on each line (globals.css), so a hovered line is a full-width band. */
+const CODE_AREA_PADDING = '10px 0 12px'
+const CODE_LINE_HEIGHT = 1.65
 
 type ShikiHighlighterProps = {
   language: string
@@ -175,7 +178,7 @@ function PrismCodeContent({
               data-line-number={showLineNumbers ? index + 1 : undefined}
             >
               {showLineNumbers && (
-                <span className="mr-3 inline-block min-w-[2.5ch] select-none text-right text-[var(--color-text-tertiary)]">
+                <span className="mr-3 inline-block min-w-[2.5ch] select-none text-right text-[11px] text-[var(--color-text-tertiary)]">
                   {index + 1}
                 </span>
               )}
@@ -328,32 +331,29 @@ export function CodeViewer({
       className={
         isEmbedded
           ? 'overflow-hidden bg-[var(--color-code-bg)]'
-          : 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-code-bg)]'
+          : 'overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)]'
       }
     >
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
-        <div className="flex items-center gap-2.5">
+      {/* Header: one quiet 30px line on the code's own ground. */}
+      <div className="flex h-[30px] items-center justify-between gap-2 border-b border-[var(--color-border)] pl-3 pr-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+        <div className="flex min-w-0 items-center gap-1.5">
           {label ? (
             <>
-              <span className="font-semibold uppercase tracking-[0.14em]">{label}</span>
-              <span aria-hidden="true">·</span>
+              <span className="shrink-0 font-medium text-[var(--color-text-secondary)]">{label}</span>
+              <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
             </>
           ) : null}
-          <span className={`${label ? 'font-medium' : 'font-semibold'} uppercase tracking-[0.14em]`}>
-            {languageLabel}
-          </span>
-          <span>{lineCountLabel}</span>
+          <span className="truncate font-mono">{languageLabel}</span>
+          <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
+          <span className="shrink-0 tabular-nums">{lineCountLabel}</span>
         </div>
         <CopyButton
           text={code}
           label={t('common.copy')}
           copiedLabel={t('common.copied')}
-          className={
-            isEmbedded
-              ? 'rounded-[var(--radius-sm)] px-2 py-1 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-container-high)] hover:text-[var(--color-text-primary)]'
-              : 'rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2 py-1 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-container-high)] hover:text-[var(--color-text-primary)]'
-          }
+          displayLabel={<><Copy size={12} strokeWidth={2} aria-hidden="true" />{t('common.copy')}</>}
+          displayCopiedLabel={<><Check size={12} strokeWidth={2} aria-hidden="true" />{t('common.copied')}</>}
+          className="inline-flex h-[22px] shrink-0 items-center gap-1 rounded-[var(--radius-xs)] px-1.5 text-[11px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         />
       </div>
 
@@ -369,8 +369,9 @@ export function CodeViewer({
       {/* Expand/collapse toggle */}
       {showExpandToggle && (
         <button
+          type="button"
           onClick={() => setExpanded((value) => !value)}
-          className="w-full border-t border-[var(--color-border)] bg-[var(--color-surface-container)] py-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-container-high)] hover:text-[var(--color-text-primary)]"
+          className="flex h-[30px] w-full items-center justify-center border-t border-[var(--color-border)] text-[11px] font-medium text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
         >
           {expanded
             ? t('codeViewer.collapse')

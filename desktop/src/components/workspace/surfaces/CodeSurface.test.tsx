@@ -96,13 +96,13 @@ describe('CodeSurface', () => {
     expect(screen.getByTestId('workspace-code').textContent).toContain('const c = 3')
   })
 
-  it('keeps the screenshot code rhythm and centers revealed lines using its measured 26px rows', () => {
-    const restore = stubSurfaceLayout(26)
+  it('keeps the 13/22 code rhythm and centers revealed lines using its measured 22px rows', () => {
+    const restore = stubSurfaceLayout(22)
     try {
       renderSurface({ value: makeFile(12), reveal: { line: 10, nonce: 9 } })
       const code = screen.getByTestId('workspace-code')
-      expect(code.closest('pre')).toHaveClass('text-[15px]', 'leading-[26px]')
-      expect(code.closest('[data-workspace-scroll-surface]')!.scrollTop).toBe(223)
+      expect(code.closest('pre')).toHaveClass('text-[13px]', 'leading-[22px]')
+      expect(code.closest('[data-workspace-scroll-surface]')!.scrollTop).toBe(181)
     } finally {
       restore()
     }
@@ -265,7 +265,7 @@ describe('CodeSurface', () => {
     expect(onAddLineComment).toHaveBeenCalledWith(2, 2, 'rename this', 'const b = 2')
   })
 
-  it('renders shiki tokens with their colour and font style once highlighting resolves', async () => {
+  it('renders shiki tokens with their colour and weight, never a synthetic italic', async () => {
     highlightWorkspaceCodeMock.mockResolvedValue({
       engine: 'shiki',
       tokensByLine: [[{ content: 'const a = 1', color: '#ff0000', fontStyle: 3 }]],
@@ -286,17 +286,21 @@ describe('CodeSurface', () => {
       expect(screen.getByTestId('workspace-code')).toHaveAttribute('data-highlight-engine', 'shiki')
     })
     const token = screen.getByTestId('workspace-code').querySelector('[data-workspace-token]')
-    expect(token).toHaveStyle({ color: '#ff0000', fontStyle: 'italic', fontWeight: '700' })
+    expect(token).toHaveStyle({ color: '#ff0000', fontWeight: '500' })
+    expect((token as HTMLElement).style.fontStyle).toBe('')
   })
 })
 
 describe('workspaceCodeTokenStyle', () => {
-  it('maps the shiki font-style bitmask onto CSS', () => {
+  it('maps the shiki font-style bitmask onto CSS without italics', () => {
     expect(workspaceCodeTokenStyle({ content: 'a', color: '#111' }))
-      .toEqual({ color: '#111', fontStyle: undefined, fontWeight: undefined })
-    expect(workspaceCodeTokenStyle({ content: 'a', color: '#111', fontStyle: 1 }).fontStyle).toBe('italic')
-    expect(workspaceCodeTokenStyle({ content: 'a', color: '#111', fontStyle: 2 }).fontWeight).toBe(700)
+      .toEqual({ color: '#111', fontWeight: undefined })
+    // CJK comments have no italic face; the italic bit is dropped on purpose.
+    expect(workspaceCodeTokenStyle({ content: 'a', color: '#111', fontStyle: 1 }))
+      .toEqual({ color: '#111', fontWeight: undefined })
+    // Monospace tops out at medium.
+    expect(workspaceCodeTokenStyle({ content: 'a', color: '#111', fontStyle: 2 }).fontWeight).toBe(500)
     expect(workspaceCodeTokenStyle({ content: 'a', color: '#111', fontStyle: 4 }))
-      .toEqual({ color: '#111', fontStyle: undefined, fontWeight: undefined })
+      .toEqual({ color: '#111', fontWeight: undefined })
   })
 })

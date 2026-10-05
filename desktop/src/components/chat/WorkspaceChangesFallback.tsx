@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, FileDiff } from 'lucide-react'
 import type { WorkspaceChangedFile } from '@/api/sessions'
 import { Button } from '@/components/ui/Button'
 import { FileTypeIcon } from '@/components/ui/FileTypeIcon'
@@ -23,15 +23,16 @@ export function WorkspaceChangesFallback({ sessionId, files }: WorkspaceChangesF
   return (
     <section
       aria-label={t('chat.workspaceChangesFallbackLabel')}
-      className="mx-auto mb-5 mt-2 w-full max-w-[var(--chat-content-max-width)] overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)]"
+      className="mx-auto mb-5 mt-2.5 w-full max-w-[var(--chat-content-max-width)] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]"
     >
-      <div className="space-y-1 bg-[var(--color-surface-container-low)] px-3 py-2">
-        <h3 className="text-sm font-semibold text-[var(--color-text-primary)]">
+      <div className="space-y-0.5 px-3 py-2.5">
+        <h3 className="flex items-center gap-2 text-[13px] font-medium text-[var(--color-text-primary)]">
+          <FileDiff size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
           {files === null
             ? t('chat.workspaceChangesFallbackLabel')
             : t('chat.workspaceChangesFallbackTitle', { count: files.length })}
         </h3>
-        <p role={files === null ? 'alert' : undefined} className="text-xs leading-5 text-[var(--color-text-secondary)]">
+        <p role={files === null ? 'alert' : undefined} className="pl-[23px] text-xs leading-5 text-[var(--color-text-tertiary)]">
           {t(files === null ? 'chat.workspaceChangesFallbackUnavailable' : 'chat.workspaceChangesFallbackExplanation')}
         </p>
       </div>
@@ -43,7 +44,7 @@ export function WorkspaceChangesFallback({ sessionId, files }: WorkspaceChangesF
       ) : null}
 
       {visibleFiles?.length ? (
-        <ul className="divide-y divide-[var(--color-border)] border-t border-[var(--color-border)]">
+        <ul className="border-t border-[var(--color-border)] px-1.5 py-1">
           {visibleFiles.map((file) => (
             <li key={file.path}>
               <button
@@ -51,11 +52,11 @@ export function WorkspaceChangesFallback({ sessionId, files }: WorkspaceChangesF
                 aria-label={t('chat.workspaceChangesFallbackOpenFile', { path: file.path })}
                 title={file.path}
                 onClick={() => workspaceOpen.file(sessionId, file.path)}
-                className="flex min-h-[44px] w-full min-w-0 items-center gap-3 rounded-[var(--radius-md)] px-3 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                className="flex h-8 w-full min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
               >
-                <FileTypeIcon path={file.path} size={20} />
-                <span className="min-w-0 flex-1 truncate text-sm text-[var(--color-text-primary)]">{file.path}</span>
-                <ChevronRight size={16} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+                <FileTypeIcon path={file.path} size={14} />
+                <span className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--color-text-primary)]">{file.path}</span>
+                <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
               </button>
             </li>
           ))}
@@ -63,7 +64,7 @@ export function WorkspaceChangesFallback({ sessionId, files }: WorkspaceChangesF
       ) : null}
 
       {files && files.length > COLLAPSED_COUNT ? (
-        <div className="border-t border-[var(--color-border)] px-3 py-2">
+        <div className="border-t border-[var(--color-border)] px-1.5 py-1">
           <Button
             variant="ghost"
             size="sm"

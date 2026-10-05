@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import { ActivityGroup } from './ActivityGroup'
-import { buildActivitySegments, type ActivityStep } from './activityGroupModel'
+import { buildActivitySegments, formatActivitySummary, type ActivityStep } from './activityGroupModel'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { translate } from '../../i18n'
 import type { UIMessage } from '../../types/chat'
@@ -256,6 +256,79 @@ describe('ActivityGroup', () => {
 
     expect(screen.getByTestId('activity-group').getAttribute('data-running')).toBe('false')
   })
+
+  it('hangs every row of an open run on one timeline rail', () => {
+    const { container } = render(
+      <ActivityGroup
+        steps={[
+          thinkingStep('think-1', 'Check the call sites.', 500),
+          { kind: 'tool', toolCall: readCall },
+          { kind: 'tool', toolCall: bashCall },
+        ]}
+        resultMap={resultsOf([
+          toolResult({ id: 'res-read', toolUseId: 'read-1', timestamp: 1_400 }),
+          toolResult({ id: 'res-bash', toolUseId: 'bash-1', timestamp: 3_000 }),
+        ])}
+        childToolCallsByParent={new Map()}
+        isLive
+      />,
+    )
+
+    const rail = container.querySelector('[data-tool-timeline]')!
+    expect(rail).toBeTruthy()
+    // Each tool is a node on the rail, led by its verb, never its raw name.
+    const rows = rail.querySelectorAll('[data-tool-call-chrome="row"]')
+    expect(rows).toHaveLength(2)
+    expect(rail.querySelectorAll('[data-tool-node]')).toHaveLength(2)
+    expect(rows[0]?.textContent).toContain(t('toolVerb.read'))
+    expect(rows[1]?.textContent).toContain(t('toolVerb.run'))
+    expect(rows[1]?.textContent).not.toContain('Bash')
+  })
+
+  it('marks a call waiting on a permission prompt amber, in its row and in the header', () => {
+    render(
+      <ActivityGroup
+        steps={[
+          { kind: 'tool', toolCall: readCall },
+          { kind: 'tool', toolCall: bashCall },
+        ]}
+        resultMap={resultsOf([toolResult({ id: 'res-read', toolUseId: 'read-1', timestamp: 1_400 })])}
+        childToolCallsByParent={new Map()}
+        awaitingToolUseIds={new Set(['bash-1'])}
+        isLive
+      />,
+    )
+
+    const group = screen.getByTestId('activity-group')
+    expect(group.querySelector('[data-chat-disclosure="true"]')?.textContent).toContain(t('permission.awaitingApproval'))
+    const waiting = group.querySelector('[data-tool-status="waiting"]')
+    expect(waiting?.closest('[data-chat-anchor-id]')?.getAttribute('data-chat-anchor-id')).toBe('use-bash')
+    expect(group.querySelector('[data-tool-status="done"]')?.closest('[data-chat-anchor-id]')?.getAttribute('data-chat-anchor-id')).toBe('use-read')
+  })
+
+  it('shows a resultless call as running only while its run is live', () => {
+    const props = {
+      steps: [
+        { kind: 'tool' as const, toolCall: readCall },
+        { kind: 'tool' as const, toolCall: bashCall },
+      ],
+      resultMap: resultsOf([toolResult({ id: 'res-read', toolUseId: 'read-1', timestamp: 1_400 })]),
+      childToolCallsByParent: new Map(),
+    }
+    const { rerender } = render(<ActivityGroup {...props} isLive />)
+    let group = screen.getByTestId('activity-group')
+    expect(group.querySelector('[data-tool-status="running"]')).toBeTruthy()
+    expect(group.querySelector('[data-chat-disclosure="true"]')?.textContent).toContain(t('agentStatus.running'))
+
+    // A replayed transcript whose last call never got a result is not running —
+    // the process that would have produced it is gone.
+    rerender(<ActivityGroup {...props} isLive={false} />)
+    group = screen.getByTestId('activity-group')
+    expect(group.querySelector('[data-chat-disclosure="true"]')?.textContent).not.toContain(t('agentStatus.running'))
+    fireEvent.click(group.querySelector('[data-chat-disclosure="true"]')!)
+    expect(group.querySelector('[data-tool-status="running"]')).toBeNull()
+    expect(group.querySelector('[data-tool-status="idle"]')).toBeTruthy()
+  })
 })
 
 describe('buildActivitySegments', () => {
@@ -300,7 +373,7 @@ describe('buildActivitySegments', () => {
   it('names a verbless tool rather than hiding it behind a generic count', () => {
     const segments = buildActivitySegments(
       [
-        { kind: 'tool', toolCall: toolCall({ id: 'a', toolUseId: 'a', toolName: 'TaskUpdate' }) },
+        { kind: 'tool', toolCall: toolCall({ id: 'a', toolUseId: 'a', toolName: 'mcp__linear__create_issue' }) },
         { kind: 'tool', toolCall: toolCall({ id: 'b', toolUseId: 'b', toolName: 'SendMessage' }) },
         { kind: 'tool', toolCall: toolCall({ id: 'c', toolUseId: 'c', toolName: 'SendMessage' }) },
       ],
@@ -308,6 +381,41 @@ describe('buildActivitySegments', () => {
     )
 
     // Which tool ran is the point; a single call drops the redundant "(1)".
-    expect(segments.map((segment) => segment.label)).toEqual(['TaskUpdate', 'SendMessage (2)'])
+    expect(segments.map((segment) => segment.label)).toEqual(['mcp__linear__create_issue', 'SendMessage (2)'])
+  })
+
+  it('says what happened to the todo list instead of printing TodoWrite', () => {
+    const segments = buildActivitySegments(
+      [
+        { kind: 'tool', toolCall: toolCall({ id: 'a', toolUseId: 'a', toolName: 'TodoWrite' }) },
+        { kind: 'tool', toolCall: toolCall({ id: 'b', toolUseId: 'b', toolName: 'TodoWrite' }) },
+      ],
+      t,
+    )
+    expect(segments.map((segment) => segment.label)).toEqual([t('toolGroup.updatedTodos')])
+    expect(segments[0]?.label).not.toContain('TodoWrite')
+  })
+
+  it('folds the four task tools into one clause', () => {
+    const segments = buildActivitySegments(
+      ['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskUpdate'].map((toolName, index) => (
+        { kind: 'tool' as const, toolCall: toolCall({ id: `t${index}`, toolUseId: `t${index}`, toolName }) }
+      )),
+      t,
+    )
+    expect(segments.map((segment) => segment.label)).toEqual([t('toolGroup.managedTasks')])
+  })
+
+  it('joins clauses with the locale\'s own list mark', () => {
+    const steps: ActivityStep[] = [
+      { kind: 'tool', toolCall: toolCall({ id: 'a', toolUseId: 'a', toolName: 'Grep' }) },
+      { kind: 'tool', toolCall: toolCall({ id: 'b', toolUseId: 'b', toolName: 'Read' }) },
+      { kind: 'tool', toolCall: toolCall({ id: 'c', toolUseId: 'c', toolName: 'Read' }) },
+    ]
+    const zh = (key: Parameters<typeof translate>[1], params?: Record<string, string | number>) => translate('zh', key, params)
+    const zhSummary = formatActivitySummary(buildActivitySegments(steps, zh), zh)
+    expect(zhSummary).toBe(`${zh('toolGroup.searchedOne')}、${zh('toolGroup.readMany', { count: 2 })}`)
+    expect(zhSummary).not.toContain(',')
+    expect(formatActivitySummary(buildActivitySegments(steps, t), t)).toBe(`${t('toolGroup.searchedOne')}, ${t('toolGroup.readMany', { count: 2 })}`)
   })
 })

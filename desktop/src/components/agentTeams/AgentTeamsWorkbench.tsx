@@ -91,16 +91,16 @@ function stateCounts(snapshot: TeamWorkbenchSnapshot) {
 function TimelineStat({ label, value, tone }: {
   label: string
   value: string | number
-  tone?: 'brand' | 'muted'
+  tone?: 'info' | 'muted'
 }) {
   return (
     <div className="min-w-[52px]">
-      <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
+      <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">{label}</div>
       <div
         className={[
-          'whitespace-nowrap font-mono text-[14px] font-extrabold tabular-nums',
-          tone === 'brand'
-            ? 'text-[var(--color-brand)]'
+          'whitespace-nowrap font-mono text-[14px] font-medium tabular-nums',
+          tone === 'info'
+            ? 'text-[var(--color-info)]'
             : tone === 'muted'
               ? 'text-[var(--color-text-tertiary)]'
               : 'text-[var(--color-text-primary)]',
@@ -324,17 +324,17 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
       <header className="shrink-0 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
         <div className="flex min-w-[1180px] items-center gap-5 px-[18px] py-2.5">
           <div className="min-w-[260px]">
-            <div className="text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--color-text-tertiary)]">
+            <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
               Agent Teams · {t('agentTeams.sharedTaskList')}
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-2">
               <span
-                className="max-w-[300px] truncate font-mono text-[16px] font-extrabold"
+                className="max-w-[300px] truncate text-[15px] font-semibold"
                 title={snapshot.team.name}
               >
                 {snapshot.team.name}
               </span>
-              <span className="shrink-0 rounded-full border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] px-2 py-0.5 text-[10px] font-bold text-[var(--color-on-brand-soft)]">
+              <span className="shrink-0 rounded-full bg-[var(--color-surface-container)] px-2 py-0.5 text-[11px] font-medium text-[var(--color-text-secondary)]">
                 {t('agentTeams.experimental')}
               </span>
             </div>
@@ -342,10 +342,10 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
 
           <div className="flex shrink-0 items-center gap-[18px] border-x border-[var(--color-border)] px-[18px]">
             <div className="min-w-[74px]">
-              <div className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+              <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
                 {t('agentTeams.stats.phase')}
               </div>
-              <div className="whitespace-nowrap text-[14px] font-extrabold">
+              <div className="whitespace-nowrap text-[14px] font-semibold">
                 {phaseLabel(phase, t)}
               </div>
             </div>
@@ -353,20 +353,20 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
               label={t('agentTeams.stats.completed')}
               value={`${counts.completed}/${snapshot.tasks.length}`}
             />
-            <TimelineStat label={t('agentTeams.stats.running')} value={counts.running} tone="brand" />
+            <TimelineStat label={t('agentTeams.stats.running')} value={counts.running} tone="info" />
             <TimelineStat label={t('agentTeams.stats.available')} value={counts.open} />
             <TimelineStat label={t('agentTeams.stats.blocked')} value={counts.blocked} tone="muted" />
           </div>
 
           {followingLive ? (
             <div data-testid="agent-teams-live-controls" className="flex min-w-0 flex-1 items-center gap-3.5">
-              <div className="flex shrink-0 items-center gap-2 rounded-full border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] px-3 py-[7px]">
-                <span className="agent-teams-live-dot h-2 w-2 rounded-full bg-[var(--color-brand)]" aria-hidden="true" />
-                <span className="whitespace-nowrap text-[12.5px] font-extrabold text-[var(--color-on-brand-soft)]">
+              <div className="flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--color-info-container)] px-2.5 py-1">
+                <span className="agent-teams-live-dot h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" aria-hidden="true" />
+                <span className="whitespace-nowrap text-xs font-medium text-[var(--color-on-info-container)]">
                   {t('agentTeams.live.following')}
                 </span>
               </div>
-              <span className="min-w-0 flex-1 truncate text-[11.5px] text-[var(--color-text-secondary)]">
+              <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-secondary)]">
                 {liveHint}
               </span>
               <Button variant="secondary" size="sm" onClick={enterReplay}>
@@ -382,7 +382,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
           ) : (
             <div data-testid="agent-teams-replay-controls" className="flex min-w-0 flex-1 items-center gap-3.5">
               <Button
-                variant="accent"
+                variant="primary"
                 size="base"
                 className="w-[86px]"
                 icon={playing ? <Pause size={13} aria-hidden="true" /> : <Play size={13} aria-hidden="true" />}
@@ -397,7 +397,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
               <div
                 role="group"
                 aria-label={t('agentTeams.replay.speed')}
-                className="flex shrink-0 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-outline)]"
+                className="flex shrink-0 overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)]"
               >
                 {REPLAY_SPEEDS.map((speed) => {
                   const selected = replaySpeed === speed
@@ -408,9 +408,9 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                       aria-pressed={selected}
                       onClick={() => setReplaySpeed(speed)}
                       className={[
-                        'h-7 border-r border-[var(--color-border)] px-2.5 font-mono text-[11px] font-bold outline-none transition-colors last:border-r-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
+                        'h-7 border-r border-[var(--color-border)] px-2.5 font-mono text-[11px] font-medium outline-none transition-colors last:border-r-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
                         selected
-                          ? 'bg-[var(--color-brand)] text-[var(--color-on-primary)]'
+                          ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
                           : 'bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
                       ].join(' ')}
                     >
@@ -420,7 +420,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                 })}
               </div>
               <div className="min-w-[200px] flex-1">
-                <div className="mb-1 flex justify-between text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+                <div className="mb-1 flex justify-between text-[11px] font-semibold text-[var(--color-text-tertiary)]">
                   <span>{t('agentTeams.replay.timeline')}</span>
                   <span className="font-mono tabular-nums">
                     {formatDuration(cursorTime - startTime)} / {formatDuration(totalElapsed)}
@@ -554,17 +554,17 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
             <span className="flex h-[30px] w-[30px] items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-outline)] text-[var(--color-text-secondary)]">
               <ChevronLeft size={14} strokeWidth={2.4} aria-hidden="true" />
             </span>
-            <span className="text-[11px] font-extrabold tracking-[0.28em] text-[var(--color-text-secondary)] [writing-mode:vertical-rl]">
+            <span className="text-[11px] font-semibold text-[var(--color-text-secondary)] [writing-mode:vertical-rl]">
               {t('agentTeams.communication.title')}
             </span>
-            <span className="rounded-full bg-[var(--color-brand)] px-1.5 py-0.5 font-mono text-[10px] font-extrabold text-[var(--color-on-primary)]">
+            <span className="rounded-full bg-[var(--color-surface-container)] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
               {snapshot.messages.length}
             </span>
             <span
               className={[
                 'h-2 w-2 rounded-full',
                 activeMessageId
-                  ? 'agent-teams-live-dot bg-[var(--color-brand)]'
+                  ? 'agent-teams-live-dot bg-[var(--color-info)]'
                   : 'bg-[var(--color-outline)]',
               ].join(' ')}
               aria-hidden="true"
@@ -607,15 +607,15 @@ function TaskDetailPanel({
     <aside
       data-testid="agent-teams-task-detail"
       data-task-id={task.id}
-      className="agent-teams-drawer absolute bottom-4 z-[var(--z-drawer)] w-[360px] rounded-[var(--radius-lg)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] p-4 shadow-[var(--shadow-overlay)]"
+      className="agent-teams-drawer absolute bottom-4 z-[var(--z-drawer)] w-[360px] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 shadow-[var(--shadow-dropdown)]"
       style={{ right: communicationOpen ? 416 : 72 }}
     >
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="font-mono text-[10px] font-extrabold text-[var(--color-text-tertiary)]">
+          <div className="font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">
             #{task.id}
           </div>
-          <h3 className="mt-1 text-[13px] font-extrabold leading-snug">{task.subject}</h3>
+          <h3 className="mt-1 text-[13px] font-semibold leading-snug">{task.subject}</h3>
         </div>
         <IconButton
           icon={<X aria-hidden="true" />}
@@ -630,7 +630,7 @@ function TaskDetailPanel({
           {task.description}
         </p>
       ) : null}
-      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-[var(--color-border)] pt-3 text-[10.5px] text-[var(--color-text-secondary)]">
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-[var(--color-border)] pt-3 text-[11px] text-[var(--color-text-secondary)]">
         <span>{t('agentTeams.task.ownerLabel')}: {ownerMember?.name ?? owner?.identity ?? '—'}</span>
         <span>{t('agentTeams.task.dependsOn')}: {task.blockedBy.map((id) => `#${id}`).join(', ') || '—'}</span>
         <span>{t('agentTeams.task.unblocks')}: {task.blocks.map((id) => `#${id}`).join(', ') || '—'}</span>

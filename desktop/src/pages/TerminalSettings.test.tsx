@@ -242,7 +242,7 @@ describe('TerminalSettings', () => {
     expect(toolbar.className).toContain('bg-[var(--color-terminal-header)]')
     const panel = toolbar.parentElement
     expect(panel?.className).toContain('bg-[var(--color-terminal-bg)]')
-    expect(panel?.className).toContain('rounded-[var(--radius-xl)]')
+    expect(panel?.className).toContain('rounded-[var(--radius-lg)]')
     expect(panel).toContainElement(screen.getByTestId('settings-terminal-frame'))
   })
 
@@ -270,6 +270,26 @@ describe('TerminalSettings', () => {
     expect(screen.getByText('/Users/test').className).toContain('truncate')
     expect(screen.getByText('/Users/test').parentElement?.className).toContain('font-mono')
     expect(screen.getByText('Running')).toBeInTheDocument()
+  })
+
+  it('names the settings page once, in its page header rather than the terminal toolbar', async () => {
+    terminalMocks.available = true
+
+    render(<TerminalSettings showPreferences />)
+
+    await waitFor(() => expect(terminalMocks.spawn).toHaveBeenCalled())
+    // One "Terminal" heading: the page header's. The toolbar keeps the cwd and
+    // status, and the setup guidance moves from the info tooltip to the
+    // page description.
+    expect(screen.getByRole('heading', { name: 'Terminal' })).toBeInTheDocument()
+    const toolbar = screen.getByTestId('settings-terminal-toolbar')
+    expect(toolbar.querySelector('h2')).toBeNull()
+    expect(toolbar).toHaveTextContent('/Users/test')
+    expect(screen.getByText(/plugin, skill, and MCP setup/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Terminal setup help' })).not.toBeInTheDocument()
+    // A bordered panel, without the old lifted shadow.
+    expect(toolbar.parentElement?.className).toContain('border')
+    expect(toolbar.parentElement?.className).not.toContain('shadow-')
   })
 
   it('drops the ink chrome when there is no session to frame', () => {
@@ -590,7 +610,7 @@ describe('TerminalSettings', () => {
     render(<TerminalSettings showPreferences />)
 
     await screen.findByPlaceholderText('Bash Path')
-    fireEvent.click(screen.getByText('folder_open').closest('button')!)
+    fireEvent.click(screen.getByRole('button', { name: 'Browse for a Bash executable' }))
 
     expect(await screen.findByDisplayValue('C:\\Program Files\\Git\\bin\\bash.exe')).toBeInTheDocument()
     expect(open).toHaveBeenCalledWith({

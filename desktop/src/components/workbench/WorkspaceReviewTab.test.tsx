@@ -907,11 +907,54 @@ it('routes a review comment to its task with comparison, line and side identity'
 it('switches between unified and split diff without rereading or changing the snapshot', async () => {
   reviewApi.getStatus.mockResolvedValue(status({ files: [file(MODIFIED)] }))
   await renderReview()
-  fireEvent.click(screen.getByRole('button', { name: 'Split diff' }))
+  fireEvent.click(screen.getByRole('radio', { name: 'Split diff' }))
   expect(screen.getByTestId(`diff-surface-${MODIFIED}`)).toHaveAttribute('data-mode', 'split')
-  fireEvent.click(screen.getByRole('button', { name: 'Unified diff' }))
+  fireEvent.click(screen.getByRole('radio', { name: 'Unified diff' }))
   expect(screen.getByTestId(`diff-surface-${MODIFIED}`)).toHaveAttribute('data-mode', 'unified')
+  expect(screen.getByRole('radio', { name: 'Unified diff' })).toHaveAttribute('aria-checked', 'true')
+  expect(screen.getByRole('radiogroup', { name: 'Diff layout' })).toBeInTheDocument()
   expect(reviewApi.getStatus).toHaveBeenCalledTimes(1)
+})
+
+describe('change summary marks', () => {
+  it('counts the changed files next to the totals', async () => {
+    await renderReview()
+    expect(await screen.findByTestId('workspace-review-file-count')).toHaveTextContent('3 files')
+  })
+
+  it('letters each changed file by what Git did to it', async () => {
+    reviewApi.getStatus.mockResolvedValue(status({
+      files: [
+        file(MODIFIED),
+        file(STAGED_FILE, { staged: true, unstaged: false }),
+        file(UNTRACKED, { status: 'untracked' }),
+        file('src/added.ts', { status: 'added', staged: true, unstaged: false }),
+        file('src/gone.ts', { status: 'deleted' }),
+      ],
+    }))
+    await renderReview()
+
+    const letter = (path: string) => screen.getByTestId(`workspace-review-status-${path}`)
+    expect(await screen.findByTestId(`workspace-review-status-${MODIFIED}`)).toHaveTextContent('M')
+    expect(letter(STAGED_FILE)).toHaveTextContent('S')
+    expect(letter(UNTRACKED)).toHaveTextContent('U')
+    expect(letter('src/added.ts')).toHaveTextContent('A')
+    expect(letter('src/gone.ts')).toHaveTextContent('D')
+    // Additions read green and edits amber, whatever the theme.
+    expect(letter('src/added.ts').className).toContain('text-[var(--color-success)]')
+    expect(letter(MODIFIED).className).toContain('text-[var(--color-warning)]')
+    expect(letter('src/gone.ts').className).toContain('text-[var(--color-error)]')
+  })
+
+  it('badges an untracked file and a newly added one on their cards', async () => {
+    reviewApi.getStatus.mockResolvedValue(status({
+      files: [file(UNTRACKED, { status: 'untracked' }), file('src/added.ts', { status: 'added', staged: true, unstaged: false })],
+    }))
+    await renderReview()
+
+    expect(within(await screen.findByTestId(`workspace-review-section-${UNTRACKED}`)).getByText('Untracked')).toBeInTheDocument()
+    expect(within(screen.getByTestId('workspace-review-section-src/added.ts')).getByText('New file')).toBeInTheDocument()
+  })
 })
 
 describe('review content parity', () => {

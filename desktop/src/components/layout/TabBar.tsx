@@ -23,6 +23,7 @@ import { useCLITaskStore } from '../../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
 import { StatusDot } from '@/components/ui/Badge'
 import { IconButton } from '@/components/ui/IconButton'
+import { tabChipClass, tabChipLabelClass } from '@/components/ui/tabChip'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
@@ -32,7 +33,7 @@ import { SessionAttentionMark } from './SessionAttentionMark'
 import { TabAttentionJump } from './TabAttentionJump'
 import { WindowControls, showWindowControls } from './WindowControls'
 import { OpenProjectMenu } from './OpenProjectMenu'
-import { SquareTerminal } from 'lucide-react'
+import { AppWindow, Bot, CalendarClock, ChevronLeft, ChevronRight, Link, Network, PanelRight, Settings, SquareTerminal, Store, X, type LucideIcon } from 'lucide-react'
 import { WorkspaceLayoutControls } from './WorkspaceLayoutControls'
 import { useWorkspaceHeaderHost } from './WorkspaceHeaderContext'
 import { ActionDialog } from '@/components/ui/ActionDialog'
@@ -83,18 +84,21 @@ function clippedSide(
 // conversation". Chat tabs deliberately have none — a bubble on every tab in a
 // strip that is mostly chats is pure noise, and the slot it occupied is worth
 // more as title.
-const TAB_TYPE_ICON: Partial<Record<TabType, string>> = {
-  settings: 'settings',
-  scheduled: 'schedule',
-  market: 'storefront',
-  connectors: 'link',
-  terminal: 'terminal',
-  workbench: 'view_sidebar',
-  subagent: 'smart_toy',
-  team: 'account_tree',
-  'team-member': 'smart_toy',
+//
+// The sidebar draws the same sections with the same glyphs (settings,
+// scheduled, market), so a tab and the nav item that opened it read as one.
+const TAB_TYPE_ICON: Partial<Record<TabType, LucideIcon>> = {
+  settings: Settings,
+  scheduled: CalendarClock,
+  market: Store,
+  connectors: Link,
+  terminal: SquareTerminal,
+  workbench: PanelRight,
+  subagent: Bot,
+  team: Network,
+  'team-member': Bot,
 }
-const TAB_TYPE_ICON_FALLBACK = 'tab'
+const TAB_TYPE_ICON_FALLBACK: LucideIcon = AppWindow
 const desktopHost = getDesktopHost()
 const isDesktopRuntime = desktopHost.isDesktop
 const EMPTY_DISMISSED_BACKGROUND_TASK_KEYS: readonly string[] = []
@@ -633,8 +637,8 @@ export function TabBar() {
   ) : null
 
   const rightScrollControl = canScrollRight && (
-        <button type="button" onClick={() => scroll('right')} aria-label={t('tabs.scrollRight')} aria-describedby={attentionOffscreen.right ? `${attentionHintId}-right` : undefined} title={attentionOffscreen.right ? t('sidebar.sessionNeedsAttention') : undefined} className="relative flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
-          <span className="material-symbols-outlined text-[16px]">chevron_right</span>
+        <button type="button" onClick={() => scroll('right')} aria-label={t('tabs.scrollRight')} aria-describedby={attentionOffscreen.right ? `${attentionHintId}-right` : undefined} title={attentionOffscreen.right ? t('sidebar.sessionNeedsAttention') : undefined} className="relative flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
+          <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
           {attentionHint('right')}
         </button>
       )
@@ -664,8 +668,8 @@ export function TabBar() {
 
       <div data-testid="workspace-session-header" className={hasWorkspaceHeader ? 'flex min-w-0 flex-1 overflow-hidden' : 'contents'}>
       {canScrollLeft && (
-        <button type="button" onClick={() => scroll('left')} aria-label={t('tabs.scrollLeft')} aria-describedby={attentionOffscreen.left ? `${attentionHintId}-left` : undefined} title={attentionOffscreen.left ? t('sidebar.sessionNeedsAttention') : undefined} className="relative flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
-          <span className="material-symbols-outlined text-[16px]">chevron_left</span>
+        <button type="button" onClick={() => scroll('left')} aria-label={t('tabs.scrollLeft')} aria-describedby={attentionOffscreen.left ? `${attentionHintId}-left` : undefined} title={attentionOffscreen.left ? t('sidebar.sessionNeedsAttention') : undefined} className="relative flex h-[52px] w-7 flex-shrink-0 items-center justify-center text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]">
+          <ChevronLeft size={16} strokeWidth={1.75} aria-hidden="true" />
           {attentionHint('left')}
         </button>
       )}
@@ -676,12 +680,11 @@ export function TabBar() {
         data-testid="tab-bar-scroll-region"
         data-desktop-drag-region={isDesktopRuntime ? true : undefined}
         /*
-          `pt-[6px]` is the shoulder: 52px strip minus 6px leaves the 46px tab,
-          and those 6px are what makes the rounded top read as rounded rather
-          than as a corner clipped by the window frame. The strip, not the tab,
-          owns the giveback, so it stays inside the window drag region.
+          The 28px chips sit centred in the 52px strip, as the workspace's
+          resource tabs do. The space around them stays inside the scroll
+          region, which carries the window drag region; the chips do not.
         */
-        className="tab-strip-scroll flex-1 flex items-stretch gap-[2px] overflow-x-hidden pt-[6px]"
+        className="tab-strip-scroll flex flex-1 items-center gap-0.5 overflow-x-hidden px-1"
         onDragOver={(e) => e.preventDefault()}
       >
         {tabs.map((tab, index) => {
@@ -717,7 +720,7 @@ export function TabBar() {
         <div
           data-testid="tab-bar-hit-region"
           aria-hidden="true"
-          className="tab-strip-hit-region pointer-events-none absolute bottom-0 left-0 top-[6px]"
+          className="tab-strip-hit-region pointer-events-none absolute bottom-[12px] left-0 top-[12px]"
           style={{ width: tabHitWidth }}
         />
       )}
@@ -735,17 +738,18 @@ export function TabBar() {
         which left the toolbar looking welded to the last tab.
       */}
       {/*
-        The frame owns the paper, not the header inside it. The drag gutter —
+        The frame owns the ground, not the header inside it. The drag gutter —
         and, on Windows, the window controls — are the header's siblings in
-        here, and they are transparent: while the workspace is closed that is
-        invisible, because the whole strip is the sidebar's ground. Next to an
-        open panel it showed as a 16px strip of trough welded to the window's
-        top-right corner. One ground for everything above the panel.
+        here, and they are transparent, so whichever element paints has to
+        contain them. With the panel open the workspace's own tab strip sits in
+        this frame, and in 「素」 that strip is a trough like the session tabs:
+        the sidebar's ground, with the active resource tab as the paper sheet
+        that runs into the panel below. One ground for everything above it.
       */}
       <div
         data-testid="workspace-header-frame"
         style={hasWorkspaceHeader ? { width: workspaceHeader.width, maxWidth: '100%' } : undefined}
-        className={`flex min-w-0 shrink-0 items-stretch ${hasWorkspaceHeader ? 'bg-[var(--color-surface)]' : ''}`}
+        className={`flex min-w-0 shrink-0 items-stretch ${hasWorkspaceHeader ? 'bg-[var(--color-surface-sidebar)]' : ''}`}
       >
       <div
         data-testid="workspace-window-header"
@@ -791,10 +795,10 @@ export function TabBar() {
           />
         ) : (
           <IconButton
-            icon={<SquareTerminal size={17} strokeWidth={1.9} />}
+            icon={<SquareTerminal size={16} strokeWidth={1.75} aria-hidden="true" />}
             label={t('tabs.openTerminal')}
             onClick={() => useTabStore.getState().openTerminalTab()}
-            size="md"
+            size="sm"
             tone="muted"
           />
         )}
@@ -817,37 +821,37 @@ export function TabBar() {
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-2 shadow-[var(--shadow-dropdown)]"
+          className="fixed z-[var(--z-dropdown)] min-w-[180px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
             onClick={() => { handleClose(contextMenu.sessionId); setContextMenu(null) }}
-            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.close')}
           </button>
           <button
             onClick={() => handleCloseOthers(contextMenu.sessionId)}
-            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeOthers')}
           </button>
           <button
             onClick={() => handleCloseLeft(contextMenu.sessionId)}
-            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeLeft')}
           </button>
           <button
             onClick={() => handleCloseRight(contextMenu.sessionId)}
-            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeRight')}
           </button>
-          <div className="my-1.5 border-t border-[var(--color-border)]" />
+          <div className="mx-1 my-1 border-t border-[var(--color-border)]" />
           <button
             onClick={handleCloseAll}
-            className="w-full px-4 py-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
+            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeAll')}
           </button>
@@ -923,15 +927,12 @@ const TabItem = forwardRef<HTMLDivElement, {
     ? (needsAttention
       ? <SessionAttentionMark label={attentionLabel} />
       : isRunning
-        ? <StatusDot tone="brand" pulse label={runningLabel} />
+        // Running is `info` everywhere in the app; the brand never marks a state.
+        ? <StatusDot tone="info" pulse label={runningLabel} />
         : tab.status === 'error'
           ? <StatusDot tone="danger" />
           : null)
-    : (
-      <span className="material-symbols-outlined text-[14px] leading-none text-[var(--color-text-tertiary)]">
-        {TAB_TYPE_ICON[tab.type] ?? TAB_TYPE_ICON_FALLBACK}
-      </span>
-    )
+    : <TabTypeIcon type={tab.type} />
 
   return (
     <div
@@ -942,39 +943,13 @@ const TabItem = forwardRef<HTMLDivElement, {
       onClick={onClick}
       onMouseDown={onMouseDown}
       onContextMenu={onContextMenu}
+      // The same chip as the workspace's resource tabs (`ui/tabChip`): one tab
+      // style for both strips. The tiers and why hover shares paper with the
+      // active tab are documented there.
       className={`
-        tab-bar-interactive tab-strip-item group relative flex min-h-[46px] flex-shrink-0 items-center rounded-t-[8px] border border-b-0 px-3
-        ${tab.type === 'settings' ? 'min-w-[195px] max-w-[195px]' : 'min-w-[140px] max-w-[200px]'}
-        ${isDragging ? 'z-[var(--z-sticky)] cursor-grabbing' : 'cursor-grab'}
-        transition-[background-color,border-color,box-shadow,opacity,transform] duration-150 ease-out
-        ${isActive || isDragging
-          // A document tab, still not a pill: the bottom edge stays square and
-          // borderless so paper runs unbroken from the tab into the view below.
-          // What a pill would add — a full radius, a drop shadow, and clearance
-          // from the content — stays banned; only the top two corners round.
-          //
-          // The border is load-bearing, not decoration. The strip is the
-          // sidebar's own ground, which puts this fill at 1.05–1.10:1 against
-          // it in all six themes: without an outline the corners are invisible
-          // and there is nothing to see. `--color-border` cannot stand in — it
-          // is calibrated against paper and lands at 1.12:1 on the trough.
-          ? 'border-[var(--color-tab-edge)] bg-[var(--color-surface)]'
-          // Hover rises toward paper, it does not fall away from it. The
-          // obvious `--color-surface-hover` is wrong here: it is tuned for
-          // hovering *on* paper, so on the two ink themes it lands brighter
-          // than paper itself (dark #2B271F vs #201D17) and a hovered tab
-          // outshines the selected one. Sharing paper with the active tab and
-          // letting the outline plus the label weight carry selection makes
-          // the active state strictly stronger in all six themes.
-          //
-          // It gets the weaker of the two outlines rather than none: the same
-          // 1.05–1.10:1 that hides the selected tab's corners hides a hovered
-          // tab's too, so without it hover is a fill with no discernible
-          // shape. Three legible tiers — no outline, hairline, full edge.
-          : 'border-transparent bg-transparent hover:border-[var(--color-tab-separator)] hover:bg-[var(--color-surface)]'
-        }
-        ${isDragging ? 'opacity-95 shadow-[var(--shadow-overlay)]' : ''}
-        ${isDragOver ? 'before:absolute before:left-0 before:top-[4px] before:bottom-[4px] before:w-[3px] before:bg-[var(--color-brand)] before:rounded-full' : ''}
+        ${tabChipClass(isActive || isDragging)} tab-strip-item
+        ${isDragging ? 'z-[var(--z-sticky)] cursor-grabbing opacity-95' : 'cursor-grab'}
+        ${isDragOver ? 'before:absolute before:-left-[3px] before:top-[4px] before:bottom-[4px] before:w-[2px] before:bg-[var(--color-brand)] before:rounded-full' : ''}
       `}
       style={{
         transform: isDragging ? `translateX(${dragOffsetX}px) scale(1.02)` : undefined,
@@ -996,7 +971,7 @@ const TabItem = forwardRef<HTMLDivElement, {
         {leadingGlyph}
       </span>
 
-      <span className={`min-w-0 flex-1 truncate text-xs ${isActive ? 'text-[var(--color-text-primary)] font-medium' : 'text-[var(--color-text-secondary)]'}`}>
+      <span className={tabChipLabelClass(isActive)}>
         {displayTitle}
       </span>
 
@@ -1005,13 +980,15 @@ const TabItem = forwardRef<HTMLDivElement, {
         `transition-colors`, which does not cover opacity, and a competing
         `transition-[…]` in `className` would resolve by stylesheet order.
       */}
-      <span className="-mr-1 ml-1.5 flex-shrink-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100">
+      {/* The active tab keeps its close button in sight, as Chrome does; the
+          rest reveal it on hover so an idle row stays all title. */}
+      <span className={`ml-1.5 flex-shrink-0 transition-opacity duration-150 group-hover:opacity-100 focus-within:opacity-100 ${isActive ? 'opacity-100' : 'opacity-0'}`}>
         <IconButton
-          icon="close"
+          icon={<X size={12} strokeWidth={2} aria-hidden="true" />}
           label={closeLabel}
           onMouseDown={(e) => { e.stopPropagation() }}
           onClick={(e) => { e.stopPropagation(); onClose() }}
-          size="xs"
+          size="2xs"
           tone="muted"
           showTooltip={false}
         />
@@ -1020,3 +997,16 @@ const TabItem = forwardRef<HTMLDivElement, {
   )
 })
 TabItem.displayName = 'TabItem'
+
+function TabTypeIcon({ type }: { type: TabType }) {
+  const Icon = TAB_TYPE_ICON[type] ?? TAB_TYPE_ICON_FALLBACK
+  return (
+    <Icon
+      size={14}
+      strokeWidth={1.75}
+      aria-hidden="true"
+      data-tab-type-icon={type}
+      className="text-[var(--color-text-tertiary)]"
+    />
+  )
+}

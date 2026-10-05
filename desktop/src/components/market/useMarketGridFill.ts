@@ -16,9 +16,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
  * just stops matching what replaces it.
  */
 export const CATALOG_COLUMN_FLOOR = 340
-export const CATALOG_GAP = 18
-/** `SkillCard`'s `min-h-[208px]`. */
-export const CATALOG_CARD_MIN_HEIGHT = 208
+/** `EXTENSION_CARD_GRID`'s `gap-4`, so both tabs space their cards alike. */
+export const CATALOG_GAP = 16
+/** `SkillCard`'s `min-h-[200px]`. */
+export const CATALOG_CARD_MIN_HEIGHT = 200
 
 /**
  * `min(100%, …)` rather than the floor verbatim: the same bundle serves the

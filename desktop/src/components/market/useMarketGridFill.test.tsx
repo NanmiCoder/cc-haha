@@ -110,7 +110,7 @@ describe('useMarketGridFill', () => {
     stubGridBox({ top: 0, width: 1200 })
 
     render(<Probe />)
-    // (800 - 24) / 250 rounds up to 4 rows across 3 columns.
+    // (800 - 24) / 216 rounds up to 4 rows across 3 columns.
     expect(screen.getByTestId('count')).toHaveTextContent('12')
 
     act(() => {
@@ -119,7 +119,7 @@ describe('useMarketGridFill', () => {
       window.dispatchEvent(new Event('resize'))
     })
 
-    // (1100 - 24) / 250 rounds up to 5 rows, now across 2 columns.
+    // (1100 - 24) / 216 rounds up to 5 rows, now across 2 columns.
     expect(screen.getByTestId('columns')).toHaveTextContent('2')
     expect(screen.getByTestId('count')).toHaveTextContent('10')
   })

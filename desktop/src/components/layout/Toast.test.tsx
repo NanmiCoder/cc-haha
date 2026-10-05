@@ -43,4 +43,23 @@ describe('ToastContainer accessibility', () => {
     expect(screen.getByText('Save failed').closest('[role]')).toHaveAttribute('role', 'alert')
     expect(screen.getAllByRole('button', { name: '关闭通知' })).toHaveLength(2)
   })
+
+  // The tone is carried by a leading glyph, not by colour alone on a rule:
+  // each state has its own outline, in its own status colour.
+  it.each([
+    ['success', 'lucide-circle-check', 'var(--color-success)'],
+    ['error', 'lucide-circle-x', 'var(--color-error)'],
+    ['warning', 'lucide-circle-alert', 'var(--color-warning)'],
+    ['info', 'lucide-info', 'var(--color-info)'],
+  ] as const)('marks a %s toast with its own glyph', (type, glyph, color) => {
+    useUIStore.setState({ toasts: [{ id: type, type, message: `${type} message` }] })
+
+    render(<ToastContainer />)
+
+    const toast = screen.getByText(`${type} message`).closest('[role]') as HTMLElement
+    const icon = toast.querySelector(`svg.${glyph}`)
+    expect(icon).toHaveAttribute('aria-hidden', 'true')
+    expect(icon?.getAttribute('class')).toContain(color)
+    expect(toast.className).not.toMatch(/border-l-/)
+  })
 })

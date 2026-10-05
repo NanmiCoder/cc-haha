@@ -29,7 +29,7 @@ export function SourceStatusBar({
   const t = useTranslation()
   return (
     <div
-      className={`flex flex-wrap items-center gap-x-[18px] gap-y-1.5 ${className}`}
+      className={`flex flex-wrap items-center gap-x-4 gap-y-1.5 ${className}`}
       data-testid="market-source-status"
     >
       {MARKET_SOURCES.map((source) => {
@@ -44,10 +44,10 @@ export function SourceStatusBar({
             key={source}
             data-testid={`market-source-status-${source}`}
             title={info.error || undefined}
-            className="inline-flex items-center gap-[7px] text-[13.5px] text-[var(--color-text-secondary)]"
+            className="inline-flex items-center gap-1.5 text-xs text-[var(--color-text-secondary)]"
           >
-            <StatusDot tone={DOT_TONES[info.status]} size="md" />
-            <span className="font-semibold text-[var(--color-text-primary)]">{t(`market.source.${source}`)}</span>
+            <StatusDot tone={DOT_TONES[info.status]} size="sm" />
+            <span className="font-medium text-[var(--color-text-primary)]">{t(`market.source.${source}`)}</span>
             <span className="text-[var(--color-text-tertiary)]">{statusLabel}</span>
           </span>
         )

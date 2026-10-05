@@ -175,7 +175,7 @@ export function SheetGrid({
         {cells}
       </div>
       {rows < grid.rows || grid.truncatedRows || grid.truncatedColumns ? (
-        <div className="sticky left-0 flex flex-wrap items-center gap-3 px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
+        <div className="sticky left-0 flex flex-wrap items-center gap-3 px-3 py-2 text-[12px] text-[var(--color-text-tertiary)]">
           {rows < grid.rows ? (
             <Button variant="secondary" size="sm" onClick={() => setLimit((current) => current + chunk)}>
               {t('workspace.sheet.showMoreRows')}

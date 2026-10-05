@@ -43,9 +43,9 @@ export function WorkspaceFileIcon({ path, size = 14, className = '' }: Workspace
           : type === 'video' ? FileVideo
             : type === 'spreadsheet' ? FileSpreadsheet
               : type === 'code' || type === 'web' ? FileCode2 : FileText
-  const color = type === 'json' ? 'var(--color-brand)'
+  const color = type === 'json' ? 'var(--color-warning)'
     : type === 'image' ? 'var(--color-info)'
       : type === 'pdf' ? 'var(--color-error)'
         : type === 'spreadsheet' ? 'var(--color-success)' : 'var(--color-text-tertiary)'
-  return <Icon aria-hidden="true" data-file-type={type} size={size} strokeWidth={1.7} className={`shrink-0 ${className}`} style={{ color }} />
+  return <Icon aria-hidden="true" data-file-type={type} size={size} strokeWidth={1.75} className={`shrink-0 ${className}`} style={{ color }} />
 }

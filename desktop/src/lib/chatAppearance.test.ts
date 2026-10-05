@@ -21,6 +21,19 @@ describe('chat appearance preferences', () => {
     expect(font).not.toContain('SimSun')
   })
 
+  it('defaults to 15px text on the 800px standard measure without rewriting saved values', () => {
+    expect(DEFAULT_CHAT_APPEARANCE).toEqual({ font: 'system', fontSize: 15, width: 'standard' })
+    expect(normalizeChatAppearance({}).fontSize).toBe(15)
+    expect(getChatAppearanceStyle(DEFAULT_CHAT_APPEARANCE)).toMatchObject({
+      '--chat-font-size': '15px', '--chat-content-max-width': '800px',
+    })
+    // A v1 record saved under the old default keeps its explicit size; only the
+    // `standard` width it names now resolves to the new measure.
+    localStorage.setItem(CHAT_APPEARANCE_STORAGE_KEY, JSON.stringify({ version: 1, font: 'system', fontSize: 14, width: 'standard' }))
+    expect(migrateChatAppearance(localStorage)).toBe(false)
+    expect(readChatAppearance()).toEqual({ font: 'system', fontSize: 14, width: 'standard' })
+  })
+
   it('round trips preferences while preserving unknown fields', () => {
     localStorage.setItem(CHAT_APPEARANCE_STORAGE_KEY, JSON.stringify({ version: 1, extra: 'keep' }))
     persistChatAppearance({ font: 'serif', fontSize: 18, width: 'full' })

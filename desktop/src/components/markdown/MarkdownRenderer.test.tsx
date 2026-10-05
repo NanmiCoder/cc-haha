@@ -100,7 +100,12 @@ describe('MarkdownRenderer', () => {
     const root = container.firstChild as HTMLDivElement
     expect(root).toBeInTheDocument()
     expect(root.className).toContain('prose-code:text-[var(--color-code-fg)]')
-    expect(root.className).toContain('prose-code:bg-[var(--color-code-bg)]')
+    // A sunken chip, not a bordered box: regular weight, the shared
+    // `surface-container` fill, the smallest radius and no outline.
+    expect(root.className).toContain('prose-code:bg-[var(--color-surface-container)]')
+    expect(root.className).toContain('prose-code:font-normal')
+    expect(root.className).toContain('prose-code:rounded-[var(--radius-xs)]')
+    expect(root.className).not.toContain('prose-code:border')
     expect(root.className).not.toContain('prose-code:text-[var(--color-primary-fixed)]')
     expect(screen.getByText('claude-sonnet-4-6')).toBeInTheDocument()
   })

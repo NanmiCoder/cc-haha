@@ -47,11 +47,9 @@ describe('IconButton', () => {
     expect(container.firstElementChild?.className).toContain('focus-visible:ring-2')
   })
 
-  it('renders a string icon as a material symbol hidden from assistive tech', () => {
-    const { container } = render(<IconButton icon="settings" label="Settings" />)
-    const glyph = container.querySelector('.material-symbols-outlined')
-    expect(glyph).toHaveTextContent('settings')
-    expect(glyph).toHaveAttribute('aria-hidden', 'true')
+  it('renders the icon element it is given and names the button from label', () => {
+    render(<IconButton icon={<svg data-testid="glyph" aria-hidden="true" />} label="Settings" />)
+    expect(screen.getByRole('button', { name: 'Settings' })).toContainElement(screen.getByTestId('glyph'))
   })
 
   it('shows a spinner and disables itself while loading', () => {

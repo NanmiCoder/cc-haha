@@ -136,8 +136,10 @@ const MOCK_SKILL_DETAIL = {
   skillRoot: '/tmp/skill-docs',
 }
 
+// By role, not text: the pane's page title is the nav label verbatim, so once
+// the Agents pane is open "Agents" names both the rail entry and the heading.
 function switchToAgentsTab() {
-  fireEvent.click(screen.getByText('Agents'))
+  fireEvent.click(screen.getByRole('button', { name: 'Agents' }))
 }
 
 function switchToSkillsTab() {
@@ -192,7 +194,15 @@ describe('Settings > Agents tab', () => {
 
   it('renders the Agents tab button in sidebar', () => {
     render(<Settings />)
-    expect(screen.getByText('Agents')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Agents' })).toBeInTheDocument()
+  })
+
+  it('titles the pane with the nav label', () => {
+    render(<Settings />)
+    switchToAgentsTab()
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Agents' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Create Agent' })).toBeInTheDocument()
   })
 
   it('shows loading spinner when fetching agents', () => {
@@ -243,12 +253,14 @@ describe('Settings > Agents tab', () => {
     render(<Settings />)
     switchToAgentsTab()
 
-    expect(screen.getByText('Browse installed agents')).toBeInTheDocument()
-    expect(screen.getByText('Agent Browser')).toBeInTheDocument()
-    expect(screen.getAllByText('User').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Built-in').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Project').length).toBeGreaterThan(0)
-    expect(screen.getAllByText('Plugin').length).toBeGreaterThan(0)
+    // Summary tiles, then one labelled section per source, in source order.
+    expect(screen.getByText('Total agents')).toBeInTheDocument()
+    expect(screen.getByText('Active agents')).toBeInTheDocument()
+    const sourceHeadings = ['User', 'Project', 'Plugin', 'Built-in']
+      .map((name) => screen.getByRole('heading', { level: 3, name: new RegExp(`^${name}\\s*\\d+$`) }))
+    for (const [index, heading] of sourceHeadings.slice(0, -1).entries()) {
+      expect(heading.compareDocumentPosition(sourceHeadings[index + 1]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    }
     expect(screen.getByText('code-reviewer')).toBeInTheDocument()
     expect(screen.getByText('Writes technical documentation')).toBeInTheDocument()
     expect(screen.getByText('telegram:pairing')).toBeInTheDocument()
@@ -334,7 +346,9 @@ describe('Settings > Agents tab', () => {
       await Promise.resolve()
     })
 
-    expect(screen.getByText('Installed Plugins')).toBeInTheDocument()
+    // The Plugins pane is titled with its nav label, which the rail entry also
+    // carries — the heading is what proves the pane itself opened.
+    expect(screen.getByRole('heading', { name: 'Plugins' })).toBeInTheDocument()
   })
 })
 

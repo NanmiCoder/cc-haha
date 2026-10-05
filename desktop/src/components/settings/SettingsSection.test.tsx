@@ -3,10 +3,14 @@ import '@testing-library/jest-dom'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  SettingsBlock,
+  SettingsGroup,
   SettingsPageHeader,
   SettingsPill,
+  SettingsRow,
   SettingsSection,
   SettingsStat,
+  SettingsSwitchRow,
 } from './SettingsSection'
 
 describe('SettingsPageHeader', () => {
@@ -16,11 +20,11 @@ describe('SettingsPageHeader', () => {
     expect(screen.getByText('Pick a default')).toBeInTheDocument()
   })
 
-  it('sets the serif family on the title', () => {
+  it('is the pane-level h2 at the 22px page-title size', () => {
     render(<SettingsPageHeader title="Providers" />)
-    expect(screen.getByRole('heading', { name: 'Providers' })).toHaveStyle({
-      fontFamily: 'var(--font-headline)',
-    })
+    const heading = screen.getByRole('heading', { level: 2, name: 'Providers' })
+    expect(heading.className).toContain('text-[22px]')
+    expect(heading.className).toContain('font-semibold')
   })
 
   it('omits the description line when none is given', () => {
@@ -48,6 +52,75 @@ describe('SettingsSection', () => {
   it('renders as a section element so the heading scopes a region', () => {
     const { container } = render(<SettingsSection title="Appearance">x</SettingsSection>)
     expect(container.firstElementChild?.tagName).toBe('SECTION')
+  })
+
+  it('labels the section with an h3 under the pane title', () => {
+    render(<SettingsSection title="Appearance">x</SettingsSection>)
+    expect(screen.getByRole('heading', { level: 3, name: 'Appearance' })).toBeInTheDocument()
+  })
+})
+
+describe('SettingsGroup / SettingsRow', () => {
+  it('puts rows in one bordered card with a hairline between each', () => {
+    render(
+      <SettingsGroup aria-label="Rows">
+        <SettingsRow title="First">a</SettingsRow>
+        <SettingsRow title="Second">b</SettingsRow>
+      </SettingsGroup>,
+    )
+    const group = screen.getByLabelText('Rows')
+    expect(group.className).toContain('rounded-[var(--radius-lg)]')
+    expect(group.className).toContain('border')
+    expect(group.className).toContain('divide-y')
+    // Not overflow-hidden: rows host Dropdowns whose menus would be clipped.
+    expect(group.className).not.toContain('overflow-hidden')
+  })
+
+  it('shows the title, the description and the control of a row', () => {
+    render(
+      <SettingsRow title="Language" description="Pick one">
+        <button type="button">Choose</button>
+      </SettingsRow>,
+    )
+    expect(screen.getByText('Language')).toBeInTheDocument()
+    expect(screen.getByText('Pick one')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Choose' })).toBeInTheDocument()
+  })
+
+  it('labels a bare input through htmlFor', () => {
+    render(
+      <SettingsRow title="Proxy URL" htmlFor="proxy">
+        <input id="proxy" />
+      </SettingsRow>,
+    )
+    expect(screen.getByLabelText('Proxy URL')).toHaveAttribute('id', 'proxy')
+  })
+
+  it('renders the footer below the row', () => {
+    render(<SettingsRow title="Retention" footer={<p>Failed</p>}>x</SettingsRow>)
+    expect(screen.getByText('Failed')).toBeInTheDocument()
+  })
+
+  it('wraps free-form content in a padded block', () => {
+    render(<SettingsBlock>free</SettingsBlock>)
+    expect(screen.getByText('free').className).toContain('px-4')
+  })
+})
+
+describe('SettingsSwitchRow', () => {
+  it('names the switch with the visible title and reports changes', () => {
+    const onChange = vi.fn()
+    render(<SettingsSwitchRow title="Enable thinking" description="New sessions" checked={false} onChange={onChange} />)
+    const toggle = screen.getByRole('switch', { name: 'Enable thinking' })
+    expect(toggle).not.toBeChecked()
+    expect(screen.getByText('Enable thinking')).toBeVisible()
+    fireEvent.click(toggle)
+    expect(onChange).toHaveBeenCalledWith(true)
+  })
+
+  it('can be disabled', () => {
+    render(<SettingsSwitchRow title="Enable" checked onChange={() => {}} disabled />)
+    expect(screen.getByRole('switch', { name: 'Enable' })).toBeDisabled()
   })
 })
 
@@ -97,9 +170,10 @@ describe('SettingsPill', () => {
 })
 
 describe('SettingsStat', () => {
-  it('renders the value in the serif face and keeps the label readable', () => {
+  it('renders the value as a tabular 22px figure and keeps the label readable', () => {
     render(<SettingsStat label="Sessions" value="128" />)
-    expect(screen.getByText('128')).toHaveStyle({ fontFamily: 'var(--font-headline)' })
+    expect(screen.getByText('128').className).toContain('tabular-nums')
+    expect(screen.getByText('128').className).toContain('text-[22px]')
     expect(screen.getByText('Sessions')).toBeInTheDocument()
   })
 

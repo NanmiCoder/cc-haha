@@ -1,6 +1,7 @@
 import { useSideChatStore } from '@/stores/sideChatStore'
 import { useState, useRef, useEffect, useCallback, useId } from 'react'
 import DOMPurify from 'dompurify'
+import { Check, ChevronDown, CirclePlay, DraftingCompass, Folder, Gavel, ShieldCheck, Zap, type LucideIcon } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useChatStore } from '../../stores/chatStore'
@@ -15,6 +16,12 @@ import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 import { AutoModeOptInDialog } from './AutoModeOptInDialog'
+import {
+  COMPOSER_MENU_ITEM,
+  COMPOSER_MENU_ITEM_ACTIVE,
+  COMPOSER_MENU_SECTION,
+  COMPOSER_POPOVER,
+} from '@/components/chat/composerMenuStyles'
 
 /**
  * The trigger states the mode as a risk-coloured dot rather than repeating the
@@ -22,22 +29,30 @@ import { AutoModeOptInDialog } from './AutoModeOptInDialog'
  * without me" at a glance, and a colour answers that faster than a symbol. The
  * per-mode glyphs stay in the menu, where there is room to tell them apart.
  */
+// Green when every write still asks first, amber once some run unattended,
+// red when nothing asks at all. Brand is not a risk level: terracotta is kept
+// for the brand, the send key and selection.
 const MODE_DOT_TONE: Record<PermissionMode, Tone> = {
-  plan: 'neutral',
-  default: 'neutral',
+  plan: 'success',
+  default: 'success',
   acceptEdits: 'warning',
-  auto: 'brand',
+  auto: 'warning',
   bypassPermissions: 'danger',
   dontAsk: 'danger',
 }
 
-const MODE_ICONS: Record<PermissionMode, string> = {
-  default: 'verified_user',
-  acceptEdits: 'bolt',
-  auto: 'autoplay',
-  plan: 'architecture',
-  bypassPermissions: 'gavel',
-  dontAsk: 'gavel',
+const MODE_ICONS: Record<PermissionMode, LucideIcon> = {
+  default: ShieldCheck,
+  acceptEdits: Zap,
+  auto: CirclePlay,
+  plan: DraftingCompass,
+  bypassPermissions: Gavel,
+  dontAsk: Gavel,
+}
+
+function ItemIcon({ mode }: { mode: PermissionMode }) {
+  const Icon = MODE_ICONS[mode]
+  return <Icon aria-hidden="true" size={16} strokeWidth={1.75} />
 }
 
 type Props = {
@@ -86,7 +101,6 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
     value: PermissionMode
     label: string
     description: string
-    icon: string
     color?: string
     /** Display-only flag on the row; carries no behaviour. */
     badge?: { tone: 'warning' | 'danger'; label: string }
@@ -95,34 +109,27 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
       value: 'default',
       label: t('permMode.askPermissions'),
       description: t('permMode.askPermDesc'),
-      icon: 'verified_user',
     },
     {
       value: 'acceptEdits',
       label: t('permMode.autoAccept'),
       description: t('permMode.autoAcceptDesc'),
-      icon: 'bolt',
     },
     {
       value: 'auto',
       label: t('permMode.autoMode'),
       description: t('permMode.autoModeDesc'),
-      icon: 'autoplay',
-      color: 'text-[var(--color-brand)]',
       badge: { tone: 'warning', label: t('permMode.badge.optIn') },
     },
     {
       value: 'plan',
       label: t('permMode.planMode'),
       description: t('permMode.planModeDesc'),
-      icon: 'architecture',
-      color: 'text-[var(--color-text-tertiary)]',
     },
     {
       value: 'bypassPermissions',
       label: t('permMode.bypass'),
       description: t('permMode.bypassDesc'),
-      icon: 'gavel',
       color: 'text-[var(--color-error)]',
       badge: { tone: 'danger', label: t('permMode.badge.risky') },
     },
@@ -144,11 +151,15 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
     ? value
     : livePermissionMode || (activeSession?.permissionMode as PermissionMode | undefined) || sideChat?.permissionMode || storeMode
   const workDir = workDirProp || activeSession?.workDir || sideChat?.workDir || '~'
+  // A quiet 28px chip on the composer row (risk dot + label + chevron); the
+  // compact desktop form keeps only the mode glyph, and the phone form grows
+  // to the 44px touch target.
   const compactButtonClass = compact
     ? isMobile
-      ? 'h-11 w-11 justify-center rounded-[var(--radius-md)] p-0 border border-[var(--color-border)] bg-[var(--color-surface)]'
-      : 'h-8 w-8 justify-center rounded-full p-0 bg-[var(--color-surface-container-low)]'
-    : 'h-8 gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 text-[13px]'
+      ? 'h-11 w-11 justify-center rounded-[var(--radius-md)] p-0'
+      : 'h-7 w-7 justify-center rounded-[var(--radius-sm)] p-0'
+    : 'h-7 gap-1.5 rounded-[var(--radius-sm)] px-2 text-xs'
+  const TriggerIcon = MODE_ICONS[currentMode]
   const menuPlacementClass = menuPlacement === 'bottom'
     ? 'top-full mt-2'
     : 'bottom-full mb-2'
@@ -226,22 +237,19 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
             setOpen(false)
             interactionTabIdRef.current = null
           }}
-          className={`
-            flex w-full items-start gap-3 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-colors
-            hover:bg-[var(--color-surface-hover)]
-            focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]
-            ${item.value === currentMode ? 'bg-[var(--color-surface-selected)]' : ''}
-          `}
+          className={`${COMPOSER_MENU_ITEM} items-start ${item.value === currentMode ? COMPOSER_MENU_ITEM_ACTIVE : ''}`}
         >
-          {/* Fixed 20px box: the Auto glyph is drawn 2px smaller to match the
-              others optically, and without a box that difference shifted its
-              whole title/description column 2px left of the other four rows. */}
-          <span className={`material-symbols-outlined mt-0.5 w-5 shrink-0 text-center ${item.value === 'auto' ? 'text-[18px]' : 'text-[20px]'} ${item.color || 'text-[var(--color-text-secondary)]'}`}>
-            {item.icon}
+          {/* Fixed 20px box so every title starts on the same column whatever
+              the glyph's own width. */}
+          <span
+            data-mode-icon={item.value}
+            className={`mt-px flex w-5 shrink-0 justify-center ${item.color || 'text-[var(--color-text-tertiary)]'}`}
+          >
+            <ItemIcon mode={item.value} />
           </span>
-          <div className="min-w-0 flex-1">
+          <div className="grid min-w-0 flex-1 gap-px">
             <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-[var(--color-text-primary)]">{item.label}</span>
+              <span className="text-[13px] font-medium text-[var(--color-text-primary)]">{item.label}</span>
               {item.badge && (
                 // `pill={false}` gives the handoff's 6px corner; the pill shape
                 // is reserved for status chips elsewhere.
@@ -250,12 +258,10 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
                 </Badge>
               )}
             </div>
-            <div className="mt-0.5 text-[12.5px] leading-snug text-[var(--color-text-tertiary)]">{item.description}</div>
+            <div className="text-xs leading-snug text-[var(--color-text-tertiary)]">{item.description}</div>
           </div>
           {item.value === currentMode && (
-            <span className="material-symbols-outlined mt-0.5 text-[16px] text-[var(--color-brand)]" style={{ fontVariationSettings: "'FILL' 1" }}>
-              check_circle
-            </span>
+            <Check aria-hidden="true" size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-[var(--color-brand)]" />
           )}
         </button>
       ))}
@@ -285,21 +291,21 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
         // `shrink-0` / `whitespace-nowrap`: it shares the composer toolbar with
         // the run-location pill, whose branch name can be arbitrarily long.
         // Without these the label wrapped to two lines and grew the whole row.
-        className={`flex shrink-0 items-center whitespace-nowrap font-medium text-[var(--color-text-primary)] transition-[background-color,color,border-color] duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] ${
-          isTurnActive ? 'opacity-50 cursor-not-allowed' : 'hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]'
+        className={`flex shrink-0 items-center whitespace-nowrap text-[var(--color-text-secondary)] transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+          isTurnActive
+            ? 'opacity-50 cursor-not-allowed'
+            : `hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] ${open ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''}`
         } ${compactButtonClass}`}
       >
         {compact ? (
-          <span className={`material-symbols-outlined text-[var(--color-text-secondary)] ${currentMode === 'auto' ? 'text-[12px]' : 'text-[14px]'}`}>
-            {MODE_ICONS[currentMode]}
-          </span>
+          <TriggerIcon data-mode-icon={currentMode} aria-hidden="true" size={isMobile ? 18 : 14} strokeWidth={1.75} />
         ) : (
           <StatusDot tone={MODE_DOT_TONE[currentMode]} data-testid="permission-mode-dot" />
         )}
         {!compact && (
           <>
             <span>{MODE_LABELS[currentMode]}</span>
-            <span className="material-symbols-outlined text-[12px] text-[var(--color-text-tertiary)]">expand_more</span>
+            <ChevronDown aria-hidden="true" size={12} strokeWidth={2} className="text-[var(--color-text-tertiary)]" />
           </>
         )}
       </button>
@@ -319,8 +325,8 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
             </div>
           </MobileBottomSheet>
         ) : (
-          <div id={menuId} ref={menuRef} role="menu" className={`absolute left-0 ${menuPlacementClass} z-[var(--z-dropdown)] w-[360px] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1.5 shadow-[var(--shadow-overlay)]`}>
-            <div className="px-3 pb-1 pt-2 text-[10px] font-bold uppercase tracking-widest text-[var(--color-text-tertiary)]">
+          <div id={menuId} ref={menuRef} role="menu" className={`absolute left-0 ${menuPlacementClass} z-[var(--z-dropdown)] w-[340px] ${COMPOSER_POPOVER}`}>
+            <div className={COMPOSER_MENU_SECTION}>
               {t('permMode.executionPermissions')}
             </div>
             {permissionItems}
@@ -345,21 +351,21 @@ export function PermissionModeSelector({ sessionId, workDir: workDirProp, compac
               className="text-xs leading-relaxed text-[var(--color-text-secondary)]"
               dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(t('permMode.enableBypassBody')) }}
             />
-            <div className="flex items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-2" title={workDir}>
-              <span className="material-symbols-outlined shrink-0 text-[16px] text-[var(--color-text-tertiary)]">folder</span>
+            <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2" title={workDir}>
+              <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
               <code className="truncate font-mono text-xs text-[var(--color-text-primary)]">{workDir}</code>
             </div>
             <ul className="space-y-1.5 text-xs text-[var(--color-text-secondary)]">
               <li className="flex items-start gap-2">
-                <span className="material-symbols-outlined mt-0.5 text-[14px] text-[var(--color-error)]">check</span>
+                <Check aria-hidden="true" size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
                 {t('permMode.permReadWrite')}
               </li>
               <li className="flex items-start gap-2">
-                <span className="material-symbols-outlined mt-0.5 text-[14px] text-[var(--color-error)]">check</span>
+                <Check aria-hidden="true" size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
                 {t('permMode.permShell')}
               </li>
               <li className="flex items-start gap-2">
-                <span className="material-symbols-outlined mt-0.5 text-[14px] text-[var(--color-error)]">check</span>
+                <Check aria-hidden="true" size={14} strokeWidth={2} className="mt-0.5 shrink-0 text-[var(--color-error)]" />
                 {t('permMode.permPackages')}
               </li>
             </ul>

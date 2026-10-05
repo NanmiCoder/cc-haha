@@ -6,6 +6,8 @@ import {
 } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useTranslation } from '../../i18n'
+import { ArrowRight, Check, CircleCheck, Info, MessageCircleQuestion, MessagesSquare, Send } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import {
   ASK_USER_QUESTION_CLARIFY_WITH_QUESTIONS_PREFIX,
@@ -439,47 +441,40 @@ export function AskUserQuestion({
   const activeAnswered =
     Boolean(freeTexts[safeActiveTab]?.trim()) || (selections[safeActiveTab]?.length ?? 0) > 0
 
+  const statusBadgeKey = automaticallyAnswered
+    ? 'question.autoAnswered'
+    : hasSentAsMessage || expired
+      ? 'question.expiredBadge'
+      : hasRequestedChat
+        ? 'question.chatBadge'
+        : terminalWithoutAnswers ? 'question.completed' : 'question.answered'
+
   return (
-    <div className={`rounded-[var(--radius-lg)] border overflow-hidden ${
-      submitted
-        ? 'border-[var(--color-border)] bg-[var(--color-surface-container-low)] opacity-70'
-        : 'border-[var(--color-secondary)] bg-[var(--color-surface-container-lowest)]'
+    <div className={`overflow-hidden rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] ${
+      submitted ? 'border-[var(--color-border)]' : 'border-[var(--color-outline)]'
     }`}>
-      {/* Header */}
-      <div className={`flex items-center gap-3 px-4 py-3 ${
-        submitted
-          ? 'bg-[var(--color-surface-container-low)]'
-          : 'bg-[var(--color-surface-container)]'
-      }`}>
-        <div className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] bg-[var(--color-secondary-container)]">
-          <span className="material-symbols-outlined text-[18px] text-[var(--color-secondary)]">
-            help
+      {/* Header: 42px, the shared card head of the ask / plan cards. */}
+      <div className={`flex h-[42px] items-center gap-2 px-3.5 ${submitted ? '' : 'border-b border-[var(--color-border)]'}`}>
+        <MessageCircleQuestion aria-hidden="true" size={15} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="min-w-0 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
+          {t('question.needsInput')}
+        </span>
+        {(submitted || expired) && (
+          // handing the question back is not an answer — saying "answered"
+          // there misreports what the user did; and an expired question was
+          // never answered at all, whatever happened to the answers
+          <Badge className="shrink-0">{t(statusBadgeKey)}</Badge>
+        )}
+        {!submitted && questions.length > 1 && (
+          <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]">
+            <span className="font-medium text-[var(--color-text-primary)]">{safeActiveTab + 1}</span> / {questions.length}
           </span>
-        </div>
-        <div className="flex-1 min-w-0">
-          <span className="text-sm font-semibold text-[var(--color-text-primary)]">
-            {t('question.needsInput')}
-          </span>
-          {(submitted || expired) && (
-            <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-[var(--color-surface-container-high)] text-[var(--color-text-tertiary)]">
-              {/* handing the question back is not an answer — saying "answered"
-                  there misreports what the user did; and an expired question was
-                  never answered at all, whatever happened to the answers */}
-              {t(automaticallyAnswered
-                ? 'question.autoAnswered'
-                : hasSentAsMessage || expired
-                ? 'question.expiredBadge'
-                : hasRequestedChat
-                  ? 'question.chatBadge'
-                  : terminalWithoutAnswers ? 'question.completed' : 'question.answered')}
-            </span>
-          )}
-        </div>
+        )}
       </div>
 
-      {/* Question tabs — horizontal tab bar (only show when multiple questions) */}
-      {questions.length > 1 && (
-        <div className="flex px-4 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)] overflow-x-auto">
+      {/* Question tabs (only when there are several questions) */}
+      {!submitted && questions.length > 1 && (
+        <div className="flex gap-0.5 overflow-x-auto px-2.5 pt-2">
           {questions.map((q, i) => {
             const isActive = safeActiveTab === i
             const isAnswered = Boolean(freeTexts[i]?.trim()) || (selections[i]?.length ?? 0) > 0
@@ -487,20 +482,19 @@ export function AskUserQuestion({
             return (
               <button
                 key={i}
+                type="button"
                 onClick={() => setActiveTab(i)}
-                className={`relative flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium whitespace-nowrap transition-colors ${
+                aria-current={isActive || undefined}
+                className={`flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[var(--radius-sm)] px-2.5 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
                   isActive
-                    ? 'text-[var(--color-secondary)]'
-                    : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)]'
+                    ? 'bg-[var(--color-surface-container)] font-medium text-[var(--color-text-primary)]'
+                    : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
                 }`}
               >
                 {isAnswered && (
-                  <span className="material-symbols-outlined text-[14px] text-[var(--color-success)]">check_circle</span>
+                  <CircleCheck aria-hidden="true" size={12} strokeWidth={2} className="text-[var(--color-success)]" />
                 )}
                 {tabLabel}
-                {isActive && (
-                  <div className="absolute bottom-0 left-2 right-2 h-[2px] bg-[var(--color-secondary)] rounded-t" />
-                )}
               </button>
             )
           })}
@@ -508,81 +502,80 @@ export function AskUserQuestion({
       )}
 
       {/* Active question content */}
-      <div className="px-4 py-3">
-        {/* Nothing is waiting on this question any more. The form below stays
-            usable on purpose — the answers are still worth sending — but which
-            channel they take changes, and that has to be visible. */}
-        {expired && (
-          <div
-            role="status"
-            aria-live="polite"
-            className="mb-3 flex items-start gap-2 text-xs text-[var(--color-text-secondary)]"
-          >
-            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-tertiary)]" aria-hidden="true">
-              info
-            </span>
-            <span>{t('question.expiredNotice')}</span>
-          </div>
-        )}
-        <p className="text-sm font-medium text-[var(--color-text-primary)] mb-3">
-          {activeQuestion.question}
-        </p>
+      {!submitted && (
+        <div className="px-2.5 pt-3">
+          {/* Nothing is waiting on this question any more. The form below stays
+              usable on purpose — the answers are still worth sending — but which
+              channel they take changes, and that has to be visible. */}
+          {expired && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="mx-1 mb-3 flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-secondary)]"
+            >
+              <Info aria-hidden="true" size={14} strokeWidth={1.75} className="mt-px shrink-0 text-[var(--color-text-tertiary)]" />
+              <span>{t('question.expiredNotice')}</span>
+            </div>
+          )}
+          <p className="mb-2 px-1 text-sm font-medium text-[var(--color-text-primary)]">
+            {activeQuestion.question}
+          </p>
 
-        {/* Option cards */}
-        {activeQuestion.options && activeQuestion.options.length > 0 && (
-          <div className="space-y-2 mb-3">
-            {activeQuestion.options.map((opt, optIndex) => {
-              const isSelected = selections[safeActiveTab]?.includes(opt.label) ?? false
-              const isMultiSelect = activeQuestion.multiSelect === true
-              return (
-                <button
-                  key={optIndex}
-                  onClick={() => handleSelect(safeActiveTab, opt.label)}
-                  disabled={submitted}
-                  className={`w-full text-left px-4 py-3 rounded-[var(--radius-md)] border transition-all duration-150 cursor-pointer ${
-                    isSelected
-                      ? 'border-[var(--color-secondary)] bg-[var(--color-secondary-container)]'
-                      : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-container-low)]'
-                  } ${submitted ? 'cursor-default' : ''}`}
-                >
-                  <div className="flex items-start gap-3">
-                    {/* Selection indicator */}
-                    <div className={`mt-0.5 flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
+          {/* Option cards: hairline at rest, a 1.5px terracotta edge on the
+              faint brand wash when picked. */}
+          {activeQuestion.options && activeQuestion.options.length > 0 && (
+            <div className="grid gap-1.5">
+              {activeQuestion.options.map((opt, optIndex) => {
+                const isSelected = selections[safeActiveTab]?.includes(opt.label) ?? false
+                const isMultiSelect = activeQuestion.multiSelect === true
+                return (
+                  <button
+                    key={optIndex}
+                    type="button"
+                    onClick={() => handleSelect(safeActiveTab, opt.label)}
+                    disabled={submitted}
+                    aria-pressed={isSelected}
+                    className={`flex w-full cursor-pointer items-start gap-2.5 rounded-[var(--radius-md)] px-3 py-2.5 text-left transition-[background-color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
                       isSelected
-                        ? 'border-[var(--color-secondary)] bg-[var(--color-secondary)]'
-                        : 'border-[var(--color-outline)]'
-                    } ${isMultiSelect ? 'rounded-[var(--radius-xs)]' : 'rounded-full'}`}>
-                      {isSelected && (
-                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <span className={`text-sm font-medium ${
+                        ? 'bg-[var(--color-brand-soft)] shadow-[inset_0_0_0_1.5px_var(--color-brand)]'
+                        : 'shadow-[inset_0_0_0_1px_var(--color-border)] hover:shadow-[inset_0_0_0_1px_var(--color-outline)]'
+                    }`}
+                  >
+                    {/* Selection indicator: a ring that fills in for single
+                        choice, a checkbox for multi-select. */}
+                    <span
+                      aria-hidden="true"
+                      className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center transition-[background-color,box-shadow] ${
+                        isMultiSelect ? 'rounded-[var(--radius-xs)]' : 'rounded-full'
+                      } ${
                         isSelected
-                          ? 'text-[var(--color-secondary)]'
-                          : 'text-[var(--color-text-primary)]'
-                      }`}>
+                          ? isMultiSelect
+                            ? 'bg-[var(--color-brand)] text-[var(--color-on-primary)]'
+                            : 'shadow-[inset_0_0_0_5px_var(--color-brand)]'
+                          : 'shadow-[inset_0_0_0_1.5px_var(--color-border-strong)]'
+                      }`}
+                    >
+                      {isSelected && isMultiSelect ? <Check size={12} strokeWidth={2.5} /> : null}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[13px] font-medium text-[var(--color-text-primary)]">
                         {opt.label}
                       </span>
                       {opt.description && (
-                        <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">
+                        <span className="mt-0.5 block text-xs text-[var(--color-text-tertiary)]">
                           {opt.description}
-                        </p>
+                        </span>
                       )}
-                    </div>
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        )}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          )}
 
-        {/* Free text input */}
-        {!submitted && (
-          <div>
-            <label className="text-xs text-[var(--color-text-tertiary)] mb-1.5 block">
+          {/* Free text input: the sunken answer slot. */}
+          <div className="mt-2.5">
+            <label className="mb-1 block px-1 text-xs text-[var(--color-text-tertiary)]">
               {t('question.customResponse')}
             </label>
             <textarea
@@ -600,63 +593,63 @@ export function AskUserQuestion({
               placeholder={t('question.typePlaceholder')}
               rows={3}
               wrap="soft"
-              className="max-h-48 min-h-[84px] w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm leading-relaxed text-[var(--color-text-primary)] placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
+              className="max-h-48 min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-transparent bg-[var(--color-surface-container)] px-3 py-2.5 text-[13px] leading-relaxed text-[var(--color-text-primary)] transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-outline)] focus:bg-[var(--color-surface-container-lowest)] focus:outline-none"
             />
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Submitted answer display — the chat handoff wins over any terminal
-            result, whose text is the deny payload and not worth showing. */}
-        {submitted && (hasSentAsMessage ? (
-          <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-            <span className="material-symbols-outlined text-[14px] text-[var(--color-secondary)]">send</span>
-            <span>
-              {t('question.sentAsMessagePrefix')}<strong>{answeredText}</strong>
-            </span>
-          </div>
-        ) : hasRequestedChat ? (
-          <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-            <span className="material-symbols-outlined text-[14px] text-[var(--color-secondary)]">forum</span>
-            <span>{t('question.chatRequested')}</span>
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 text-xs text-[var(--color-text-secondary)]">
-            <span className="material-symbols-outlined text-[14px] text-[var(--color-success)]">check_circle</span>
-            <span>
-              {t(terminalWithoutAnswers ? 'question.resultPrefix' : 'question.answeredPrefix')}<strong>{answeredText}</strong>
-            </span>
-          </div>
-        ))}
-      </div>
+      {/* Submitted answer display — the chat handoff wins over any terminal
+          result, whose text is the deny payload and not worth showing. */}
+      {submitted && (
+        <div className="border-t border-[var(--color-border)] px-3.5 py-2.5">
+          <p className="mb-1 truncate text-xs text-[var(--color-text-tertiary)]">{activeQuestion.question}</p>
+          {hasSentAsMessage ? (
+            <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
+              <Send aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
+              <span>
+                {t('question.sentAsMessagePrefix')}<strong className="font-medium text-[var(--color-text-primary)]">{answeredText}</strong>
+              </span>
+            </div>
+          ) : hasRequestedChat ? (
+            <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
+              <MessagesSquare aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
+              <span>{t('question.chatRequested')}</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-[13px] text-[var(--color-text-secondary)]">
+              <CircleCheck aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-success)]" />
+              <span>
+                {t(terminalWithoutAnswers ? 'question.resultPrefix' : 'question.answeredPrefix')}<strong className="font-medium text-[var(--color-text-primary)]">{answeredText}</strong>
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Action bar. Wraps rather than overflows: the buttons plus a translated
           label (kr/jp run long) can outgrow a narrow side-by-side pane. Next is
           pushed to the end of the row and wraps alone onto a second line when
           it runs out of room. */}
       {!submitted && (
-        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
+        <div className="flex flex-wrap items-center gap-2 px-3.5 pb-3.5 pt-3">
           <Button
             variant="primary"
-            size="sm"
+            size="base"
             // `expired` is the one state where a button may work without a live
             // request: it sends the answers as a message instead of answering.
             disabled={!allAnswered || (!expired && !pendingRequest)}
             onClick={handleSubmit}
-            icon={
-              <span className="material-symbols-outlined text-[14px]">send</span>
-            }
           >
             {t(expired ? 'question.sendAsMessage' : 'question.submit')}
           </Button>
           <Button
-            variant="secondary"
-            size="sm"
+            variant="ghost"
+            size="base"
             disabled={!expired && !pendingRequest}
             onClick={handleChatAboutThis}
             title={t('question.chatAboutThisHint')}
-            icon={
-              <span className="material-symbols-outlined text-[14px]">forum</span>
-            }
+            icon={<MessagesSquare aria-hidden="true" size={14} strokeWidth={1.75} />}
           >
             {t('question.chatAboutThis')}
           </Button>
@@ -665,14 +658,12 @@ export function AskUserQuestion({
               the action that actually ends the exchange. */}
           {questions.length > 1 && safeActiveTab < questions.length - 1 && (
             <Button
-              variant="tonal"
-              size="sm"
+              variant="secondary"
+              size="base"
               className="ml-auto"
               disabled={!activeAnswered}
               onClick={() => setActiveTab(safeActiveTab + 1)}
-              icon={
-                <span className="material-symbols-outlined text-[14px]">arrow_forward</span>
-              }
+              icon={<ArrowRight aria-hidden="true" size={14} strokeWidth={1.75} />}
               iconPosition="end"
             >
               {t('question.next')}

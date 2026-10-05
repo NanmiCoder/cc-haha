@@ -1,4 +1,4 @@
-import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { forwardRef, type ButtonHTMLAttributes, type ReactElement } from 'react'
 
 import { cx } from '@/lib/cx'
 import { Spinner } from './Spinner'
@@ -11,8 +11,12 @@ export type IconButtonSurface = 'default' | 'sidebar' | 'terminal' | 'media'
 
 export type IconButtonProps =
   Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'children' | 'aria-label' | 'title'> & {
-    /** A lucide component, a material-symbols name, or any node. */
-    icon: ReactNode | string
+    /**
+     * A lucide icon element. Strings are rejected at the type level: this prop
+     * used to accept a Material Symbols ligature name, and a string slipping
+     * through now would render as raw text ("chevron_left") instead of a glyph.
+     */
+    icon: ReactElement
     /**
      * Required. An icon-only control has no visible text, so without this it is
      * unreachable by screen readers and unlabeled in the accessibility tree.
@@ -295,15 +299,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       )}
       {...props}
     >
-      {loading
-        ? <Spinner size={iconSize} />
-        : typeof icon === 'string'
-          ? (
-            <span className="material-symbols-outlined" style={{ fontSize: iconSize }} aria-hidden="true">
-              {icon}
-            </span>
-          )
-          : icon}
+      {loading ? <Spinner size={iconSize} /> : icon}
     </button>
   )
 })

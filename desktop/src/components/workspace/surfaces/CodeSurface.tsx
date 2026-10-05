@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import { Highlight } from 'prism-react-renderer'
+import { MessageSquare } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useTranslation } from '@/i18n'
 import { clearWindowSelection, useSelectionPopoverDismiss } from '@/hooks/useSelectionPopoverDismiss'
@@ -17,12 +18,16 @@ import {
   type WorkspaceTextSelection,
 } from './textSelection'
 
+/**
+ * Shiki's font-style bitmask, minus italics: comments are frequently CJK, which
+ * has no italic face. Bold maps to 500, the heaviest weight the monospace face
+ * is paired with.
+ */
 export function workspaceCodeTokenStyle(token: WorkspaceDiffHighlightToken): CSSProperties {
   const fontStyle = token.fontStyle ?? 0
   return {
     color: token.color,
-    fontStyle: fontStyle & 1 ? 'italic' : undefined,
-    fontWeight: fontStyle & 2 ? 700 : undefined,
+    fontWeight: fontStyle & 2 ? 500 : undefined,
   }
 }
 
@@ -164,13 +169,13 @@ export function CodeSurface({
     if (!commentLineStart || commentLineEnd !== lineNumber) return null
 
     return (
-      <div className="grid grid-cols-[32px_minmax(0,720px)] gap-3 bg-[var(--color-brand-soft)] px-3 py-2">
+      <div className="grid grid-cols-[32px_minmax(0,720px)] gap-4 bg-[var(--color-info-container)] px-3 py-2 font-body">
         <span aria-hidden="true" />
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-card)]">
-          <div className="flex items-center gap-2 border-b border-[var(--color-border)] px-3 py-2">
-            <span className="material-symbols-outlined text-[15px] text-[var(--color-text-tertiary)]">chat_bubble</span>
-            <span className="text-[12px] font-semibold text-[var(--color-text-primary)]">{t('workspace.localComment')}</span>
-            <span className="ml-auto text-[11px] text-[var(--color-text-tertiary)]">
+        <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-card)]">
+          <div className="flex h-10 items-center gap-2 border-b border-[var(--color-border)] px-3">
+            <MessageSquare size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+            <span className="text-[13px] font-medium text-[var(--color-text-primary)]">{t('workspace.localComment')}</span>
+            <span className="ml-auto text-[12px] text-[var(--color-text-tertiary)]">
               {commentLineStart === commentLineEnd
                 ? t('workspace.commentLineTarget', { line: commentLineStart })
                 : t('workspace.commentLineRangeTarget', { start: commentLineStart, end: commentLineEnd })}
@@ -220,12 +225,12 @@ export function CodeSurface({
     // A comment selection is something the user just did by hand, so it outranks
     // the reveal mark left over from the reference they clicked to get here.
     if (isCommentLineSelected(lineNumber)) {
-      return 'group grid grid-cols-[32px_minmax(0,1fr)] gap-3 px-3 bg-[var(--color-info-container)]'
+      return 'group grid grid-cols-[32px_minmax(0,1fr)] gap-4 px-3 bg-[var(--color-info-container)]'
     }
     if (revealLine === lineNumber) {
-      return 'group grid grid-cols-[32px_minmax(0,1fr)] gap-3 px-3 bg-[var(--color-brand-soft)] shadow-[inset_2px_0_0_var(--color-brand)]'
+      return 'group grid grid-cols-[32px_minmax(0,1fr)] gap-4 px-3 bg-[var(--color-brand-soft)] shadow-[inset_2px_0_0_var(--color-brand)]'
     }
-    return 'group grid grid-cols-[32px_minmax(0,1fr)] gap-3 px-3 hover:bg-[var(--color-surface-hover)]'
+    return 'group grid grid-cols-[32px_minmax(0,1fr)] gap-4 px-3 hover:bg-[var(--color-surface-hover)]'
   }
 
   const renderLineNumberButton = (lineNumber: number) => {
@@ -242,10 +247,10 @@ export function CodeSurface({
             : { anchorLine: lineNumber, focusLine: lineNumber })
           if (!extendRange) setCommentDraft('')
         }}
-        className={`select-none text-right text-[13px] transition-colors focus-visible:outline-none ${
+        className={`select-none text-right text-[13px] tabular-nums transition-colors focus-visible:outline-none ${
           selected
-            ? 'font-semibold text-[var(--color-info)]'
-            : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-brand)] focus-visible:text-[var(--color-brand)]'
+            ? 'font-medium text-[var(--color-info)]'
+            : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)] focus-visible:text-[var(--color-text-primary)]'
         }`}
       >
         {lineNumber}
@@ -257,7 +262,7 @@ export function CodeSurface({
     <div
       ref={surfaceRef}
       data-workspace-scroll-surface=""
-      className="min-h-0 flex-1 overflow-auto bg-[var(--color-code-bg)]"
+      className="min-h-0 flex-1 overflow-auto bg-[var(--color-surface)]"
       onMouseUp={handleSelectionMouseUp}
       onKeyDown={(event) => {
         if (event.key === 'Escape') setSelectionMenu(null)
@@ -268,7 +273,7 @@ export function CodeSurface({
           <pre
             data-workspace-code=""
             data-testid="workspace-code"
-            className="m-0 font-mono text-[15px] leading-[26px]"
+            className="m-0 font-mono text-[13px] leading-[22px]"
             style={{ color: 'var(--color-code-fg)', background: 'transparent' }}
           >
             {visibleLines.map((line, index) => {
@@ -292,7 +297,7 @@ export function CodeSurface({
             data-workspace-code=""
             data-testid="workspace-code"
             data-highlight-engine="shiki"
-            className="m-0 font-mono text-[15px] leading-[26px]"
+            className="m-0 font-mono text-[13px] leading-[22px]"
             style={{ color: 'var(--color-code-fg)', background: 'transparent' }}
           >
             {shikiTokensByLine.map((line, index) => {
@@ -332,7 +337,7 @@ export function CodeSurface({
                 data-workspace-code=""
                 data-testid="workspace-code"
                 data-highlight-engine="prism"
-                className="m-0 font-mono text-[15px] leading-[26px]"
+                className="m-0 font-mono text-[13px] leading-[22px]"
                 style={{ color: 'var(--color-code-fg)', background: 'transparent' }}
               >
                 {tokens.map((line, index) => {

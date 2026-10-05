@@ -106,7 +106,7 @@ describe('WorkspaceDiffSurface', () => {
     expect(document.querySelector('[data-row-text="const b = 2"]')).not.toBeInTheDocument()
   })
 
-  it('uses the Codex-style compact number gutter without a dedicated comment column', () => {
+  it('numbers unified rows with old and new columns and no dedicated comment column', () => {
     render(<WorkspaceDiffSurface value={diff} path="src/a.ts" />)
 
     const code = screen.getByTestId('workspace-code')
@@ -114,7 +114,7 @@ describe('WorkspaceDiffSurface', () => {
     const gutter = row?.querySelector<HTMLElement>('[data-diff-number-gutter]')
     const commentButton = screen.getByRole('button', { name: 'Comment on src/a.ts new line 11' })
 
-    expect(code.style.getPropertyValue('--workspace-diff-gutter-width')).toBe('6ch')
+    expect(code.style.getPropertyValue('--workspace-diff-gutter-width')).toBe('10ch')
     expect(row).toHaveStyle({
       gridTemplateColumns: 'var(--workspace-diff-gutter-width) minmax(max-content, 1fr)',
     })
@@ -122,10 +122,16 @@ describe('WorkspaceDiffSurface', () => {
     expect(gutter).toContainElement(commentButton)
     expect(gutter?.querySelector('[data-diff-gutter-utility-slot]')).toContainElement(commentButton)
     expect(gutter?.className).toContain('bg-[var(--color-diff-added-bg)]')
-    expect(getCodeRow('const a = 1').closest('[data-diff-row-id]')?.querySelector('[data-diff-number-gutter]')?.className).toContain('bg-[var(--color-code-bg)]')
+    expect(getCodeRow('const a = 1').closest('[data-diff-row-id]')?.querySelector('[data-diff-number-gutter]')?.className).toContain('bg-[var(--color-surface)]')
     expect(commentButton.className).toContain('h-5')
     expect(commentButton.className).toContain('w-5')
-    expect(row?.querySelectorAll('[data-diff-line-number]')).toHaveLength(1)
+    // An added line has no old coordinate: the old column is present but empty.
+    expect(row?.querySelectorAll('[data-diff-line-number]')).toHaveLength(2)
+    expect(row?.querySelector('[data-diff-line-number="old"]')).toHaveTextContent('')
+    expect(row?.querySelector('[data-diff-line-number="new"]')).toHaveTextContent('11')
+    const context = getCodeRow('const a = 1').closest('[data-diff-row-id]')
+    expect(context?.querySelector('[data-diff-line-number="old"]')).toHaveTextContent('10')
+    expect(context?.querySelector('[data-diff-line-number="new"]')).toHaveTextContent('10')
     expect(row?.className).toContain('min-h-5')
   })
 
@@ -189,7 +195,7 @@ describe('WorkspaceDiffSurface', () => {
     })
     expect(firstRow?.className).toContain('bg-[var(--color-info-container)]')
     expect(firstRow?.className).not.toContain('bg-[var(--color-diff-added-bg)]')
-    expect(screen.getByTestId('workspace-code').className).toContain('text-[13px]')
+    expect(screen.getByTestId('workspace-code').className).toContain('text-[12px]')
     const editor = screen.getByRole('textbox', { name: 'Review comment' })
     const editorContainer = editor.closest('[data-diff-editor]')
     expect(editorContainer?.className).toContain('max-w-3xl')

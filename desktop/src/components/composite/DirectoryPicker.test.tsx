@@ -144,10 +144,9 @@ describe('DirectoryPicker', () => {
 
     const trigger = screen.getByRole('button')
     expect(trigger).toHaveTextContent('project')
-    // The workbar trigger shares the launch row's outlined-pill recipe (see
-    // RepositoryLaunchControls.workbarButtonClassName): the directory, branch
-    // and worktree chips sit on one row and must read as one family.
-    expect(trigger.className).toContain('rounded-[var(--radius-lg)]')
+    // The workbar trigger is a form field in ProjectEditorModal, where it stands
+    // in for a secondary button: the same h-9 hairline-bordered 8px block.
+    expect(trigger.className).toContain('rounded-[var(--radius-md)]')
     expect(trigger.className).toContain('border-[var(--color-border)]')
     expect(trigger.className).not.toContain('rounded-full')
   })

@@ -48,20 +48,17 @@ export function H5ConnectionView({
       <Card
         as="section"
         radius="xl"
-        surface="low"
+        surface="lowest"
         padding="lg"
         shadow="card"
         className="w-full max-w-md"
       >
         <div className="mb-5 flex flex-col items-center gap-3 text-center">
           <BrandSeal size="lg" />
-          <h1
-            className="text-[21px] font-semibold tracking-tight text-[var(--color-text-primary)]"
-            style={{ fontFamily: 'var(--font-headline)' }}
-          >
+          <h1 className="mt-1 text-[22px] font-semibold tracking-tight text-[var(--color-text-primary)]">
             {t('h5Connect.title')}
           </h1>
-          <p className="text-sm leading-6 text-[var(--color-text-secondary)]">
+          <p className="text-[13px] leading-6 text-[var(--color-text-tertiary)]">
             {t('h5Connect.subtitle')}
           </p>
         </div>
@@ -88,7 +85,7 @@ export function H5ConnectionView({
           {error ? (
             <div
               role="alert"
-              className="rounded-[var(--radius-md)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-3 py-2 text-sm text-[var(--color-on-error-container)]"
+              className="rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-[13px] text-[var(--color-on-error-container)]"
             >
               {error}
             </div>

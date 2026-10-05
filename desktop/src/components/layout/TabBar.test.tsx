@@ -6,6 +6,7 @@ import type { BackgroundAgentTask, ChatState, ServerMessage, UIMessage } from '.
 import type { TeamWorkbenchSessionTimeline, TeamWorkbenchTask, TeamWorkbenchTimeline } from '../../types/team'
 import type { WorkflowRun } from '../../types/workflow'
 import { browserHost } from '../../lib/desktopHost/browserHost'
+import { tabChipClass } from '@/components/ui/tabChip'
 
 type ToolUseMessage = Extract<UIMessage, { type: 'tool_use' }>
 
@@ -953,7 +954,7 @@ describe('TabBar', () => {
     expect(screen.queryByText('设置')).not.toBeInTheDocument()
   })
 
-  it('matches only the settings tab to the settings rail width', async () => {
+  it('gives the settings tab the same chip width as every other tab', async () => {
     const { TabBar } = await import('./TabBar')
     const { SETTINGS_TAB_ID, useTabStore } = await import('../../stores/tabStore')
 
@@ -972,11 +973,13 @@ describe('TabBar', () => {
     const settingsTab = screen.getByText('Localized Settings').closest('.tab-strip-item')
     const chatTab = screen.getByText('Chat').closest('.tab-strip-item')
 
-    expect(settingsTab?.className).toContain('min-w-[195px]')
-    expect(settingsTab?.className).toContain('max-w-[195px]')
-    expect(chatTab?.className).toContain('min-w-[140px]')
-    expect(chatTab?.className).toContain('max-w-[200px]')
-    expect(chatTab?.className).not.toContain('min-w-[195px]')
+    // The settings tab used to be pinned to 195px to line up with the old
+    // settings rail; that rail is gone, and one strip has one tab width.
+    for (const tab of [settingsTab, chatTab]) {
+      expect(tab?.className).toContain('min-w-[112px]')
+      expect(tab?.className).toContain('max-w-[200px]')
+      expect(tab?.className).not.toContain('195px')
+    }
   })
 
   it('shows current-session CLI tasks without a numeric activity badge', async () => {
@@ -1156,10 +1159,12 @@ describe('TabBar', () => {
     // which is most of the strip, so the row filled up with identical bubbles
     // that said nothing the titles did not. The glyph now carries exactly one
     // message: "this tab is not a conversation".
-    expect(screen.getByText('Idle Session').previousElementSibling?.textContent).toBe('')
-    expect(screen.getByText('Terminal').previousElementSibling?.textContent).toBe('terminal')
-    expect(screen.getByText('Extension Market').previousElementSibling?.textContent).toBe('storefront')
-    expect(screen.queryByText('chat_bubble')).not.toBeInTheDocument()
+    const glyphOf = (title: string) => screen.getByText(title).previousElementSibling
+    expect(glyphOf('Idle Session')?.querySelector('svg')).toBeNull()
+    expect(glyphOf('Terminal')?.querySelector('[data-tab-type-icon="terminal"]')).toHaveClass('lucide-square-terminal')
+    expect(glyphOf('Extension Market')?.querySelector('[data-tab-type-icon="market"]')).toHaveClass('lucide-store')
+    // Glyphs are svg now; no icon-font ligature text leaks into the title row.
+    expect(glyphOf('Terminal')?.textContent).toBe('')
   })
 
   it('keeps the title still when a chat tab starts running', async () => {
@@ -1243,7 +1248,9 @@ describe('TabBar', () => {
     const hitRegion = screen.getByTestId('tab-bar-hit-region')
     expect(hitRegion).toHaveStyle({ width: '282px' })
     expect(strip).not.toContainElement(hitRegion)
-    expect(hitRegion).toHaveClass('pointer-events-none', 'top-[6px]')
+    // The no-drag rectangle covers the 28px chips only (12px above and below
+    // in the 52px strip), so the space around them still drags the window.
+    expect(hitRegion).toHaveClass('pointer-events-none', 'top-[12px]', 'bottom-[12px]')
     viewport = 200
     fireStripResize()
     expect(hitRegion).toHaveStyle({ width: '200px' })
@@ -1290,7 +1297,7 @@ describe('TabBar', () => {
     })
 
     const rightButton = await waitFor(() => {
-      const button = screen.getByText('chevron_right').closest('button')
+      const button = screen.getByRole('button', { name: 'Scroll tabs right' })
       expect(button).toBeInTheDocument()
       return button as HTMLButtonElement
     })
@@ -1419,7 +1426,7 @@ describe('TabBar', () => {
       stubRect(activeTab, 640, 896)
 
       const leftChevron = await waitFor(() => {
-        const button = screen.getByText('chevron_left').closest('button')
+        const button = screen.getByRole('button', { name: 'Scroll tabs left' })
         expect(button).toBeInTheDocument()
         return button as HTMLButtonElement
       })
@@ -1440,7 +1447,7 @@ describe('TabBar', () => {
       stubRect(activeTab, 640, 896)
 
       const leftChevron = await waitFor(() => {
-        const button = screen.getByText('chevron_left').closest('button')
+        const button = screen.getByRole('button', { name: 'Scroll tabs left' })
         expect(button).toBeInTheDocument()
         return button as HTMLButtonElement
       })
@@ -1512,10 +1519,10 @@ describe('TabBar', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('window-controls')).toBeInTheDocument()
-      expect(screen.getByText('chevron_right').closest('button')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Scroll tabs right' })).toBeInTheDocument()
     })
 
-    const rightButton = screen.getByText('chevron_right').closest('button')
+    const rightButton = screen.getByRole('button', { name: 'Scroll tabs right' })
     expect(rightButton?.nextElementSibling).toBe(screen.getByTestId('window-controls'))
   })
 
@@ -1596,15 +1603,13 @@ describe('TabBar', () => {
     expect(tabBar).toHaveClass('min-h-[52px]')
     expect(screen.getByTestId('tab-bar-drag-gutter')).toHaveClass('min-h-[52px]')
 
-    // The tab is 6px shorter and the scroll region pays for it: 46 + 6 = 52.
-    // Those 6px are what makes the top corners read as rounded instead of as
-    // corners clipped by the window frame, so the two numbers are a pair — the
-    // tab cannot be shortened without the padding growing to match, or the
-    // strip stops being 52px tall.
-    expect(scrollRegion).toHaveClass('pt-[6px]')
-    expect(tab).toHaveClass('min-h-[46px]')
-    // The giveback stays inside the drag region: it belongs to the scroll
-    // region, which carries the attribute, not to the tab, which must not.
+    // The tab is a 28px chip centred in the 52px strip, the same chip the
+    // workspace's resource tabs use.
+    expect(scrollRegion).toHaveClass('items-center')
+    expect(scrollRegion.className).not.toMatch(/\bpt-/)
+    expect(tab).toHaveClass('h-7')
+    // The space around the chips stays inside the drag region: it belongs to
+    // the scroll region, which carries the attribute, not to the tab.
     expect(scrollRegion).toHaveAttribute('data-desktop-drag-region')
     expect(tab).not.toHaveAttribute('data-desktop-drag-region')
   })
@@ -1683,18 +1688,17 @@ describe('TabBar', () => {
     const gutter = screen.getByTestId('tab-bar-drag-gutter')
 
     // Closed, the trough runs to the window edge and the gutter disappears
-    // into it. Painting the frame unconditionally would paste a white block
-    // over the end of the strip instead.
-    expect(frame).not.toHaveClass('bg-[var(--color-surface)]')
+    // into it; the frame paints nothing of its own.
+    expect(frame.className).not.toMatch(/\bbg-\[/)
 
-    // Open, everything above the panel is one ground. The gutter is a
-    // transparent sibling of the header, so whichever element paints paper has
-    // to contain it — otherwise the trough shows through the strip and the
-    // window's top-right corner carries a grey notch beside the panel.
+    // Open, everything above the panel is one ground — the trough the
+    // workspace's resource tabs sit in, not paper. The gutter is a transparent
+    // sibling of the header, so the element that paints has to contain it.
     await act(async () => {
       useWorkspaceStore.getState().toggleWorkspace(sessionId)
     })
-    expect(frame).toHaveClass('bg-[var(--color-surface)]')
+    expect(frame).toHaveClass('bg-[var(--color-surface-sidebar)]')
+    expect(frame).not.toHaveClass('bg-[var(--color-surface)]')
     expect(frame).toContainElement(gutter)
   })
 
@@ -1732,7 +1736,7 @@ describe('TabBar', () => {
     expect(header).toHaveAttribute('data-desktop-drag-region')
   })
 
-  it('lifts the active tab onto the paper ground without turning it into a pill', async () => {
+  it('uses the shared tab chip, with selection strictly stronger than hover', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
@@ -1756,62 +1760,34 @@ describe('TabBar', () => {
     const active = screen.getByText('Active One').closest('.tab-bar-interactive')
     const inactive = screen.getByText('Inactive One').closest('.tab-bar-interactive')
 
-    // The fill is the point, and it is not a pill. #1123 landed because the
-    // strip, the active tab and the content below it were all
-    // `--color-surface`: three planes, one colour, nothing but a 3px rule to
-    // separate them. The strip now sits on the sidebar's ground and the active
-    // tab is filled with paper, so it reads as a sheet lifted off the desk and
-    // continuous with the view it opens onto.
+    // One chip for both strips: the session tabs carry exactly the classes the
+    // workspace's resource tabs do.
+    expect(active?.className).toContain(tabChipClass(true))
+    expect(inactive?.className).toContain(tabChipClass(false))
+
+    // #1123 landed because the strip, the active tab and the content were all
+    // `--color-surface`. The strip stays on the sidebar's ground and only the
+    // active chip is filled with paper at rest.
     expect(active?.className).toContain('bg-[var(--color-surface)]')
-    expect(active?.className).not.toContain('bg-transparent')
-    expect(inactive?.className).toContain('bg-transparent')
+    expect(inactive?.className).not.toMatch(/(?:^|\s)bg-/)
 
-    // The outline is load-bearing, not decoration. Keeping the trough on the
-    // sidebar's exact ground is what stops the titlebar reading as a separate
-    // band, and it costs this: paper against that trough is 1.05–1.10:1 in all
-    // six themes, so without an outline there is no visible edge and therefore
-    // no visible corner. `--color-border` cannot stand in — it is calibrated
-    // against paper and lands at 1.12:1 on the trough. See the tab-strip block
-    // in contrast.test.ts for the measured floors.
-    expect(active?.className).toContain('border-[var(--color-tab-edge)]')
-    expect(active?.className).not.toContain('border-[var(--color-border)]')
-    // Same box on both, so switching tabs does not shift the title by the 2px
-    // the border occupies.
-    expect(inactive?.className).toContain('border-transparent')
-    expect(inactive?.className).toContain('border-b-0')
+    // Paper against the trough is 1.05–1.10:1, so the active chip needs the
+    // `--color-tab-edge` ring to have a shape; `--color-border` lands at
+    // 1.12:1 there and cannot draw it (see contrast.test.ts).
+    expect(active?.className).toContain('0_0_0_1px_var(--color-tab-edge)')
+    expect(active?.className).not.toContain('var(--color-border)')
 
-    // What stays banned is still the *shape*. Only the top two corners round
-    // and the bottom border is gone, so the tab's lower edge runs straight
-    // into the view it opens onto; a pill is a fully rounded block floating
-    // clear of both the strip and the content. Guard the properties that would
-    // turn one into the other. (`(?:^|\s)` so the drag-over indicator's
-    // `before:rounded-full` is not mistaken for the tab's own radius.)
-    expect(active?.className).toContain('rounded-t-[8px]')
-    expect(active?.className).toContain('border-b-0')
-    expect(active?.className).not.toMatch(/(?:^|\s)rounded-(?!t-)/)
-    expect(active?.className).not.toMatch(/\bshadow-\[0/)
-    expect(active?.className).not.toMatch(/\bm[xlr]?-/)
-
-    // Selection no longer needs the terracotta rule, and the rule had become
-    // the enemy: a 3px line across the bottom is exactly the cut that the
-    // rounded shape exists to avoid. Weight plus the outline carry it now.
-    expect(active?.className).not.toContain('inset_0_-3px')
-    expect(inactive?.className).not.toContain('inset_0_-3px')
-
-    // Hover shares paper with the active tab instead of using
-    // `--color-surface-hover`. That token is tuned for hovering *on* paper, so
-    // on the ink themes it sits brighter than paper (dark #2B271F vs #201D17)
-    // and a hovered tab would outshine the selected one. Selection stays
-    // strictly stronger because only it adds the full edge and the weight.
+    // Hover rises to paper with the faint ring and never uses
+    // `--color-surface-hover`, which is brighter than paper on the ink themes
+    // and would make a hovered tab outshine the selected one.
     expect(inactive?.className).toContain('hover:bg-[var(--color-surface)]')
-    expect(inactive?.className).not.toContain('hover:bg-[var(--color-surface-hover)]')
-
-    // Three legible tiers, and the middle one needs its own outline for the
-    // same reason the selected tab does: a hover fill at 1.05–1.10:1 against
-    // the trough has no discernible shape. The hairline, not the full edge —
-    // hover must stay strictly weaker than selection.
-    expect(inactive?.className).toContain('hover:border-[var(--color-tab-separator)]')
+    expect(inactive?.className).toContain('hover:shadow-[0_0_0_1px_var(--color-tab-separator)]')
+    expect(inactive?.className).not.toContain('surface-hover')
     expect(active?.className).not.toContain('--color-tab-separator')
+
+    // Rings are shadows, not borders, so selecting a tab never moves its title.
+    expect(active?.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/)
+    expect(inactive?.className).not.toMatch(/(?:^|\s)border(?:-|\s|$)/)
   })
 
   it('keeps the strip on the frame ground so the active tab can lift off it', async () => {
@@ -1849,13 +1825,12 @@ describe('TabBar', () => {
     // of the window instead of the same surface the sidebar is already on.
     expect(strip.className).not.toMatch(/bg-\[var\(--color-(?!surface-sidebar)/)
 
-    // No rule under the strip. The selected tab's bottom edge has to run
-    // straight into the content it opens onto, and a border spanning the whole
-    // strip cuts through exactly that edge.
+    // No rule under the strip: like the workspace's resource strip, it is
+    // separated from the content by its ground alone.
     expect(strip.className).not.toMatch(/\bborder-b\b/)
   })
 
-  it('marks tabs so the CSS sibling rules can place the hairline between them', async () => {
+  it('marks every tab with its selection state', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')
     const { useChatStore } = await import('../../stores/chatStore')
@@ -1879,12 +1854,8 @@ describe('TabBar', () => {
     const active = screen.getByText('Active One').closest('.tab-bar-interactive')
     const inactive = screen.getByText('Inactive One').closest('.tab-bar-interactive')
 
-    // The hairline that keeps a row of same-length titles from smearing into
-    // one block lives in globals.css, because it belongs to the *gap* and has
-    // to disappear when either side of that gap is filled — only sibling
-    // combinators can say "the tab after the selected one". jsdom does not
-    // apply the stylesheet, so what is checkable here is the hook it selects
-    // on: drop either and the rules silently match nothing.
+    // Chips are separated by spacing, not by the old hairline. `tab-strip-item`
+    // stays as the hook drag measurement and these tests locate tabs by.
     expect(active).toHaveClass('tab-strip-item')
     expect(inactive).toHaveClass('tab-strip-item')
     expect(active).toHaveAttribute('data-active', 'true')
@@ -1913,7 +1884,7 @@ describe('TabBar', () => {
 
     const tab = screen.getByText('Short').closest('.tab-bar-interactive') as HTMLElement
 
-    expect(tab.className).toContain('min-w-[140px]')
+    expect(tab.className).toContain('min-w-[112px]')
     expect(tab.className).toContain('max-w-[200px]')
     // The inline `width`/`maxWidth` pair is what pinned every tab to 180px and
     // left short titles trailing dead space. Only `transform` belongs inline

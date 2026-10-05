@@ -1,3 +1,4 @@
+import { Table } from 'lucide-react'
 import { useCallback, useLayoutEffect, useRef, type ReactNode } from 'react'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { useElementSize } from '@/hooks/useElementSize'
@@ -112,14 +113,14 @@ export default function SpreadsheetSurface({
           onRetry={error.kind === 'unavailable' ? retry : undefined}
         />
       )
-      : <PanelMessage icon="progress_activity" message={t('workspace.document.loading')} />
+      : <PanelMessage busy message={t('workspace.document.loading')} />
   } else if (!selected) {
-    cover = <PanelMessage icon="table_chart" message={t('workspace.sheet.empty')} />
+    cover = <PanelMessage icon={Table} message={t('workspace.sheet.empty')} />
   } else if (!onScreen) {
     if (gridError) cover = <DocumentFailure message={failureMessage(gridError, t)} absolutePath={absolutePath} />
-    else if (grid === null) cover = <PanelMessage icon="progress_activity" message={t('workspace.document.loading')} />
+    else if (grid === null) cover = <PanelMessage busy message={t('workspace.document.loading')} />
   } else if (grid && (grid.rows === 0 || grid.columns === 0)) {
-    cover = <PanelMessage icon="table_chart" message={t('workspace.sheet.empty')} />
+    cover = <PanelMessage icon={Table} message={t('workspace.sheet.empty')} />
   }
 
   // A newer version that would not open, or would not read, leaves the last good one up.
@@ -171,7 +172,7 @@ export default function SpreadsheetSurface({
         {cover ? <div className="absolute inset-0 bg-[var(--color-surface)]">{cover}</div> : null}
       </div>
       {refreshFailure ? (
-        <p role="status" className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+        <p role="status" className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[12px] text-[var(--color-text-tertiary)]">
           {t('workspace.files.refreshFailed', { reason: failureMessage(refreshFailure, t) })}
         </p>
       ) : null}

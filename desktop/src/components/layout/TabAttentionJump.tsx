@@ -1,3 +1,4 @@
+import { CircleAlert } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 
 /**
@@ -38,15 +39,7 @@ export function TabAttentionJump({
         size="sm"
         bordered
         className="tabular-nums"
-        icon={(
-          <span
-            aria-hidden="true"
-            className="material-symbols-outlined text-[13px] leading-none"
-            style={{ fontVariationSettings: "'FILL' 1" }}
-          >
-            warning
-          </span>
-        )}
+        icon={<CircleAlert aria-hidden="true" size={12} strokeWidth={2} />}
       >
         {count > 9 ? '9+' : count}
       </Badge>

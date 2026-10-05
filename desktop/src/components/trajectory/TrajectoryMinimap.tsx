@@ -57,7 +57,7 @@ export const TrajectoryMinimap = memo(function TrajectoryMinimap({ model, viewpo
 
   return (
     <div className="flex shrink-0 gap-2 border-b border-[var(--color-border)] px-3 py-1.5" data-testid="trajectory-minimap">
-      <div className="flex w-9 shrink-0 flex-col text-right text-[10px] leading-[14px] text-[var(--color-text-tertiary)]" aria-hidden>
+      <div className="flex w-9 shrink-0 flex-col text-right text-[11px] leading-[14px] text-[var(--color-text-tertiary)]" aria-hidden>
         {lanes.map(({ lane, label }) => <span key={lane}>{label}</span>)}
       </div>
       <div
@@ -93,7 +93,7 @@ export const TrajectoryMinimap = memo(function TrajectoryMinimap({ model, viewpo
             data-row-id={run.rowId}
             data-kind={run.kind}
             className={cx(
-              'trajectory-minimap-span absolute rounded-[1px]',
+              'trajectory-minimap-span absolute',
               run.error ? 'bg-[var(--color-error)]' : KIND_FILL_CLASSES[run.kind],
               run.match && 'ring-1 ring-[var(--color-text-primary)]',
               run.selected && 'ring-2 ring-[var(--color-text-primary)]',
@@ -119,7 +119,7 @@ export const TrajectoryMinimap = memo(function TrajectoryMinimap({ model, viewpo
         {hover && hoverRow && (
           <div
             role="tooltip"
-            className="pointer-events-none absolute top-full z-[var(--z-tooltip)] mt-1 max-w-[320px] -translate-x-1/2 truncate rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 text-[11px] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]"
+            className="pointer-events-none absolute top-full z-[var(--z-tooltip)] mt-1 max-w-[320px] -translate-x-1/2 truncate rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2 py-1 text-[12px] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]"
             style={{ left: hover.left }}
           >
             <span className="text-[var(--color-text-tertiary)]">{t(KIND_LABEL_KEYS[hoverRow.kind])} · </span>

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ExternalLink } from 'lucide-react'
+import { ExternalLink, ImageOff } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { ZoomableImage, type ImageZoom } from '@/components/ui/ZoomableImage'
 import { useTranslation } from '@/i18n'
@@ -41,7 +41,7 @@ export function ImagePreview({
   if (!dataUrl || failedUrl === dataUrl) {
     return (
       <PanelMessage
-        icon="image_not_supported"
+        icon={ImageOff}
         message={(!dataUrl && error) || t('workspace.imagePreviewUnavailable')}
         action={absolutePath ? <OpenInSystemButton absolutePath={absolutePath} /> : undefined}
       />
@@ -70,9 +70,9 @@ export function ImagePreview({
       }}
       actions={absolutePath ? (
         <IconButton
-          icon={<ExternalLink size={16} strokeWidth={1.9} />}
+          icon={<ExternalLink size={14} strokeWidth={1.75} />}
           label={t('workspace.openInSystemApp')}
-          size="md"
+          size="sm"
           tone="secondary"
           onClick={() => {
             void openLocalFileWithSystem(absolutePath).catch(() => reportOpenFailure(absolutePath))

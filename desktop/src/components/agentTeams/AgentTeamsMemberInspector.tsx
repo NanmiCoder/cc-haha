@@ -212,7 +212,7 @@ function stalledTone(state: StalledTaskOwnerState): Tone {
 }
 
 function taskTone(state: WorkbenchTaskState): Tone {
-  if (state === 'running') return 'brand'
+  if (state === 'running') return 'info'
   if (state === 'completed') return 'success'
   if (state === 'open') return 'warning'
   return 'neutral'
@@ -228,7 +228,7 @@ function memberStateLabel(state: MemberWorkState, member: TeamMember, t: Transla
 }
 
 function memberTone(state: MemberWorkState): Tone {
-  if (state === 'working') return 'brand'
+  if (state === 'working') return 'info'
   if (state === 'error') return 'danger'
   if (state === 'retrying') return 'warning'
   if (state === 'exited' || state === 'stopped') return 'neutral'
@@ -441,46 +441,46 @@ export function AgentTeamsMemberInspector({
             />
           </span>
           <div className="min-w-0">
-            <h2 id={headingId} className="truncate font-mono text-[14px] font-extrabold">
+            <h2 id={headingId} className="truncate text-sm font-semibold">
               {name}
             </h2>
-            <p className="truncate text-[10.5px] text-[var(--color-text-secondary)]">
+            <p className="truncate text-[11px] text-[var(--color-text-secondary)]">
               {t('agentTeams.inspector.independentContext', { role: member.role })}
             </p>
           </div>
         </div>
 
-        <dl className="mt-3 grid grid-cols-3 gap-4 text-[11.5px]">
+        <dl className="mt-3 grid grid-cols-3 gap-4 text-xs">
           <div className="min-w-0">
-            <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+            <dt className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
               {t('agentTeams.inspector.current')}
             </dt>
-            <dd className="mt-0.5 flex min-w-0 items-center gap-1.5 font-extrabold">
+            <dd className="mt-0.5 flex min-w-0 items-center gap-1.5 font-semibold">
               <StatusDot tone={memberTone(workState)} pulse={workState === 'working'} />
               <span className="truncate">{currentStatusLabel}</span>
             </dd>
           </div>
           <div>
-            <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+            <dt className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
               {t('agentTeams.inspector.completedTasks')}
             </dt>
-            <dd className="mt-0.5 font-extrabold tabular-nums">{completedTasks}/{taskHistory.length}</dd>
+            <dd className="mt-0.5 font-semibold tabular-nums">{completedTasks}/{taskHistory.length}</dd>
           </div>
           <div>
-            <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+            <dt className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
               {t('agentTeams.inspector.messages')}
             </dt>
-            <dd className="mt-0.5 font-extrabold tabular-nums">{messages.length}</dd>
+            <dd className="mt-0.5 font-semibold tabular-nums">{messages.length}</dd>
           </div>
           {/* Model spans the full width: a model id plus an "inherited from" prefix
               does not fit a third of the drawer, and truncating it would cut the
               model name itself — the one part that matters. */}
           <div className="col-span-3 min-w-0">
-            <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+            <dt className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
               {t('agentTeams.model.label')}
             </dt>
             <dd
-              className="mt-0.5 truncate font-extrabold"
+              className="mt-0.5 truncate font-semibold"
               title={model?.full}
               data-testid="agent-teams-member-model"
               data-model-inherited={model?.inherited ? 'true' : 'false'}
@@ -493,8 +493,8 @@ export function AgentTeamsMemberInspector({
             </dd>
           </div>
           {(member.providerName || member.providerId !== undefined) && <div className="col-span-3 min-w-0">
-            <dt className="text-[10px] font-semibold text-[var(--color-text-tertiary)]">{t('teamPlan.provider')}</dt>
-            <dd className="mt-0.5 truncate font-extrabold" data-testid="agent-teams-member-provider">{member.providerName || member.providerId || t('teamPlan.official')}</dd>
+            <dt className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">{t('teamPlan.provider')}</dt>
+            <dd className="mt-0.5 truncate font-semibold" data-testid="agent-teams-member-provider">{member.providerName || member.providerId || t('teamPlan.official')}</dd>
           </div>}
         </dl>
 
@@ -532,7 +532,7 @@ export function AgentTeamsMemberInspector({
         >
           <h3
             id={`${headingId}-tasks`}
-            className="text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--color-text-tertiary)]"
+            className="text-[11px] font-semibold text-[var(--color-text-tertiary)]"
           >
             {t('agentTeams.inspector.taskHistory')}
             <span className="ml-1 normal-case tracking-normal">
@@ -549,7 +549,7 @@ export function AgentTeamsMemberInspector({
                 if (group === 'upcoming') entries.sort((left, right) => left.task.id.localeCompare(right.task.id, undefined, { numeric: true }))
                 return (
                   <section key={group} data-testid={`agent-teams-member-task-group-${group}`} className="mt-2">
-                    <h4 className="text-[10px] font-semibold text-[var(--color-text-secondary)]">
+                    <h4 className="text-[11px] font-semibold text-[var(--color-text-secondary)]">
                       {t(label)} · {entries.length}
                     </h4>
                     <ol className="mt-0.5">
@@ -569,10 +569,10 @@ export function AgentTeamsMemberInspector({
                             data-task-stalled={stalled}
                             className="flex min-w-0 items-center gap-2 border-b border-[var(--color-border)] py-1.5 last:border-b-0"
                           >
-                            <span className="w-[26px] shrink-0 font-mono text-[10px] font-extrabold text-[var(--color-text-tertiary)]">
+                            <span className="w-[26px] shrink-0 font-mono text-[11px] font-medium text-[var(--color-text-tertiary)]">
                               #{entry.task.id}
                             </span>
-                            <span className="min-w-0 flex-1 truncate text-[11.5px] leading-[1.3]" title={entry.task.subject}>
+                            <span className="min-w-0 flex-1 truncate text-xs leading-[1.3]" title={entry.task.subject}>
                               {entry.task.subject}
                             </span>
                             <Badge
@@ -587,7 +587,7 @@ export function AgentTeamsMemberInspector({
                             </Badge>
                             <time
                               dateTime={entry.startedAt === null ? undefined : new Date(entry.startedAt).toISOString()}
-                              className="w-[82px] shrink-0 truncate text-right font-mono text-[9.5px] tabular-nums text-[var(--color-text-tertiary)]"
+                              className="w-[82px] shrink-0 truncate text-right font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
                               title={aside}
                             >
                               {aside}
@@ -610,7 +610,7 @@ export function AgentTeamsMemberInspector({
         <section aria-labelledby={`${headingId}-messages`} className="px-3.5 py-3">
           <h3
             id={`${headingId}-messages`}
-            className="text-[10px] font-bold uppercase tracking-[0.1em] text-[var(--color-text-tertiary)]"
+            className="text-[11px] font-semibold text-[var(--color-text-tertiary)]"
           >
             {t('agentTeams.inspector.messages')}
           </h3>
@@ -624,21 +624,21 @@ export function AgentTeamsMemberInspector({
                     data-testid={`agent-teams-member-message-${row.message.id}`}
                     data-message-direction={row.direction}
                     data-message-body={row.body.kind}
-                    className={`mb-2 border-l-2 pb-2 pl-2.5 last:mb-0 ${sent ? 'border-l-[var(--color-brand)]' : 'border-l-[var(--color-tertiary)]'}`}
+                    className={`mb-2 border-l-2 pb-2 pl-2.5 last:mb-0 ${sent ? 'border-l-[var(--color-info)]' : 'border-l-[var(--color-tertiary)]'}`}
                   >
                     <div className="flex min-w-0 items-center gap-1.5">
-                      <span className={`shrink-0 text-[9.5px] font-extrabold ${sent ? 'text-[var(--color-brand)]' : 'text-[var(--color-tertiary)]'}`}>
+                      <span className={`shrink-0 text-[11px] font-semibold ${sent ? 'text-[var(--color-info)]' : 'text-[var(--color-tertiary)]'}`}>
                         {t(sent ? 'agentTeams.inspector.sent' : 'agentTeams.inspector.received')}
                       </span>
                       {sent
                         ? <ArrowRight size={11} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                         : <ArrowLeft size={11} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
-                      <span className="min-w-0 truncate font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                      <span className="min-w-0 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">
                         {row.peerName}
                       </span>
                       <time
                         dateTime={row.message.timestamp}
-                        className="ml-auto shrink-0 font-mono text-[10px] tabular-nums text-[var(--color-text-tertiary)]"
+                        className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
                       >
                         {formatWorkbenchMessageTime(row.message.timestamp)}
                       </time>
@@ -647,10 +647,10 @@ export function AgentTeamsMemberInspector({
                       <MarkdownRenderer
                         content={row.body.text}
                         variant="compact"
-                        className="mt-1 text-[12.5px] leading-[1.55] text-[var(--color-text-primary)]"
+                        className="mt-1 text-[13px] leading-[1.55] text-[var(--color-text-primary)]"
                       />
                     ) : (
-                      <p className="mt-1 text-[11.5px] leading-[1.5] text-[var(--color-text-secondary)]">
+                      <p className="mt-1 text-xs leading-[1.5] text-[var(--color-text-secondary)]">
                         {protocolNarration(row, snapshot, t)}
                       </p>
                     )}

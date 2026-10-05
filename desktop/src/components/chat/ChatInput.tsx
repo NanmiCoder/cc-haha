@@ -5,6 +5,7 @@ import { getSessionReferences } from '@/lib/composerMentions'
 import { normalizeSessionReferences } from '@/lib/sessionReferences'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
+import { ArrowUp, CornerDownRight, Pencil, Plus, Square, Trash2 } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
@@ -335,17 +336,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
   const showLaunchControls = !isMemberSession && !sideChat && messageCount === 0
-  // Two different questions, and they used to share one answer.
-  //
-  // `useCompactChrome` is about context: the shell's padding, its top divider
-  // and the toolbar's edge-to-edge band belong to the panel-beside-the-composer
-  // and mobile layouts regardless of how much room those layouts got.
-  //
-  // `useCompactControls` is about room, so it asks the column how wide it is.
-  // Until a measurement lands (jsdom, first paint) it defers to the caller's
-  // `compact`, which keeps the pre-measurement frame from flashing the wrong
-  // layout.
-  const useCompactChrome = compact || isMobileComposer
+  // `useCompactControls` is about room, so it asks the column how wide it is —
+  // never "is a side panel open". Until a measurement lands (jsdom, first
+  // paint) it defers to the caller's `compact`, which keeps the
+  // pre-measurement frame from flashing the wrong layout. (The card itself has
+  // one geometry everywhere; only the shell's outer padding follows `compact`.)
   const fitsAtLeast = (minWidth: number) => shellWidth === null ? !compact : shellWidth >= minWidth
   const useCompactControls = isMobileComposer || !fitsAtLeast(TOOLBAR_LOCATION_MIN_WIDTH)
   const activeLaunchWorkDir = showLaunchControls ? (launchWorkDir || resolvedWorkDir || '') : (resolvedWorkDir || '')
@@ -1280,12 +1275,18 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       ref={shellRef}
       data-testid="chat-input-shell"
       data-session-id={activeTabId ?? undefined}
+      // The docked composer floats over the end of the transcript: no top
+      // divider, and `composer-fade` dissolves the last 28px of the thread into
+      // the page ground above the card instead of cutting it off. The hero
+      // composer sits in open space, so it needs neither.
       className={
         isHeroComposer
           ? `bg-[var(--color-surface)] ${isMobileComposer ? 'px-4 pb-3' : 'px-8 pb-4'}`
-          : compact
-            ? `border-t border-[var(--color-border)] bg-[var(--color-surface)] ${isMobileComposer ? 'px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-2' : 'px-3 py-3'}`
-            : `bg-[var(--color-surface)] ${isMobileComposer ? 'px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-2' : 'px-4 py-4'}`
+          : `composer-fade bg-[var(--color-surface)] ${
+            isMobileComposer
+              ? 'px-3 pb-[calc(env(safe-area-inset-bottom)+10px)] pt-1'
+              : compact ? 'px-4 pb-4 pt-1' : 'px-6 pb-5 pt-1'
+          }`
       }
     >
       <div
@@ -1299,19 +1300,12 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         <div
           ref={panelRef}
           data-testid="chat-input-panel"
-          // `glass-panel--composer` is the middle step of the shadow scale, the
-          // one the handoff gives the composer; `--radius-2xl` (20px) is the
-          // composer corner. Both match EmptySession's shell so the same
-          // control does not render two different panels.
-          className={isHeroComposer
-            // Always fully rounded now: the launch controls used to be a bar
-            // welded to the panel's bottom edge, which is what squared it off.
-            // They are a single pill today — in the toolbar, or on their own
-            // line below — so nothing butts against the panel any more.
-            ? `glass-panel glass-panel--composer relative flex flex-col gap-3 overflow-visible rounded-[var(--radius-2xl)] p-4 transition-colors ${isDragActive ? 'composer-drop-target-active' : ''}`
-            : compact
-              ? `glass-panel glass-panel--composer relative overflow-visible rounded-[var(--radius-2xl)] p-3 transition-colors ${isDragActive ? 'composer-drop-target-active' : ''}`
-              : `glass-panel glass-panel--composer relative overflow-visible rounded-[var(--radius-2xl)] transition-colors ${isMobileComposer ? 'p-3' : 'p-4'} ${isDragActive ? 'composer-drop-target-active' : ''}`}
+          // The floating card (「素」): `glass-panel--composer` supplies the
+          // opaque lifted fill, the hairline and the composer step of the shadow
+          // scale; `--radius-xl` is the composer corner. One geometry for every
+          // variant — the editor and the toolbar carry their own insets, so a
+          // draft turning into a live session moves nothing.
+          className={`glass-panel glass-panel--composer relative flex flex-col overflow-visible rounded-[var(--radius-xl)] p-2 ${isDragActive ? 'composer-drop-target-active' : ''}`}
           {...dragHandlers}
         >
           {isDragActive && (
@@ -1396,7 +1390,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             // rather than as messages waiting their turn.
             <div
               data-testid="pending-user-message-list"
-              className={`flex flex-col gap-1.5 ${isHeroComposer ? '' : 'mb-2'}`}
+              className="flex flex-col gap-1.5 px-1 pb-1 pt-1"
             >
               {queuedUserMessages.map((message) => {
                 const isEditing = editingQueuedMessageId === message.id
@@ -1405,11 +1399,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                     key={message.id}
                     data-testid="pending-user-message"
                     className={[
-                      'flex min-w-0 items-center gap-2.5 rounded-[var(--radius-lg)] px-3.5 py-2',
+                      'flex min-h-9 min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] py-1 pl-3 pr-1',
                       // `--color-outline` rather than `--color-border`: a dashed
                       // line at the lighter weight all but disappears.
                       'border border-dashed border-[var(--color-outline)]',
-                      'text-[13.5px] text-[var(--color-text-secondary)]',
+                      'text-[13px] text-[var(--color-text-secondary)]',
                     ].join(' ')}
                   >
                     {/* The handoff labels the row in words rather than with a
@@ -1438,11 +1432,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                           autoFocus
                         />
                         <Button
-                          variant="tonal"
+                          variant="primary"
                           size="sm"
                           onClick={saveQueuedMessageEdit}
                           disabled={!editingQueuedMessageText.trim()}
-                          className="shrink-0 font-semibold"
+                          className="shrink-0"
                         >
                           {t('common.save')}
                         </Button>
@@ -1464,26 +1458,26 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                             while a question is waiting: sending now would race the
                             prompt the model is blocked on. */}
                         <Button
-                          variant="link"
+                          variant="ghost"
                           size="sm"
                           disabled={questionPending}
                           onClick={() => sendQueuedUserMessage(activeTabId, message.id)}
                           aria-label={t('chat.pendingMessageGuideNow')}
                           title={t('chat.pendingMessageGuideNow')}
-                          className="shrink-0 font-semibold"
-                          icon={<span className="material-symbols-outlined text-[15px]" aria-hidden="true">subdirectory_arrow_right</span>}
+                          className="shrink-0"
+                          icon={<CornerDownRight size={14} strokeWidth={1.75} aria-hidden="true" />}
                         >
                           {t('chat.pendingMessageGuide')}
                         </Button>
                         <IconButton
-                          icon="edit"
+                          icon={<Pencil size={14} strokeWidth={1.75} aria-hidden="true" />}
                           label={t('chat.pendingMessageEdit')}
                           size="sm"
                           tone="muted"
                           onClick={() => startEditingQueuedMessage(message.id, message.displayContent)}
                         />
                         <IconButton
-                          icon="delete"
+                          icon={<Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />}
                           label={t('chat.pendingMessageDelete')}
                           size="sm"
                           tone="muted"
@@ -1499,17 +1493,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           )}
 
           {composerAttachments.length > 0 && (
-            isHeroComposer ? (
+            <div className="px-2 pt-2">
               <AttachmentGallery attachments={composerAttachments} variant="composer" onRemove={removeAttachment} />
-            ) : (
-              <div className="px-3 pt-3">
-                <AttachmentGallery attachments={composerAttachments} variant="composer" onRemove={removeAttachment} />
-              </div>
-            )
+            </div>
           )}
 
           {isHeroComposer ? (
-            <div className="flex items-start gap-3">
+            <div className="flex items-start">
               <MentionComposer
                 ref={composerRef}
                 rootRef={composerContainerRef}
@@ -1531,7 +1521,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 // break-word` does not shrink it. Without this the flex item
                 // refuses to shrink and the whole editor paints past the panel.
                 className="flex-1 min-w-0"
-                editorClassName="chat-reading-text max-h-[200px] overflow-y-auto py-2 leading-relaxed text-[var(--color-text-primary)]"
+                // The new-session card gives the prompt room to start: a taller
+                // resting editor than the docked composer, same type.
+                editorClassName="chat-reading-text min-h-[72px] max-h-[200px] overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)]"
                 aria={{
                   role: isSlashMenuVisible || isReferenceMenuVisible ? 'combobox' : 'textbox',
                   'aria-autocomplete': isSlashMenuVisible || isReferenceMenuVisible ? 'list' : undefined,
@@ -1560,9 +1552,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               onCompositionEnd={() => { composingRef.current = false; dictation.compositionHandlers.onCompositionEnd() }}
               placeholder={composerPlaceholder}
               disabled={composerDisabled}
-              editorClassName={`chat-reading-text max-h-[200px] overflow-y-auto text-sm leading-relaxed text-[var(--color-text-primary)] ${
-                useCompactChrome ? 'py-1.5' : 'py-2'
-              }`}
+              // Type follows the reader's chat size (`chat-reading-text`); the
+              // insets put the first line 14px/16px in from the card edge.
+              editorClassName="chat-reading-text min-h-[36px] max-h-[200px] overflow-y-auto px-2 pb-1 pt-1.5 text-[var(--color-text-primary)]"
               aria={{
                 role: isSlashMenuVisible || isReferenceMenuVisible ? 'combobox' : 'textbox',
                 'aria-autocomplete': isSlashMenuVisible || isReferenceMenuVisible ? 'list' : undefined,
@@ -1576,30 +1568,20 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           )}
 
           {/*
-            The wide composer keeps one geometry for the whole session. The
-            draft and the live session used to render two different rows — the
-            draft's divider was inset inside the panel's padding, the live one
-            ran edge to edge over a `-mx-4 -mb-4` band — so the first message
-            shifted every control left by 4px and widened the divider by 34px.
-            The hero spacing wins because EmptySession renders the same row.
-            Its top gap comes from the panel's own `flex-col gap-3`, which the
-            live panel does not have, so that one repeats here as `mt-3`.
-            The narrow layouts keep the band: `p-3` leaves too little room to
-            spend on inset, and they never swap variants mid-session anyway.
-            The band is keyed to the chrome, not to the control layout — its
-            `-mx-3` has to cancel the panel's `p-3` exactly, and the panel is
-            padded by the same chrome rule.
+            One toolbar geometry for every variant. The draft and the live
+            session used to render two different rows (an inset divider versus
+            an edge-to-edge band), so the first message shifted every control.
+            The card has no divider now — the editor's own bottom inset and this
+            row's top inset separate the two — so the narrow layouts no longer
+            need a band of their own either.
           */}
-          <div data-testid="chat-input-toolbar" className={`flex min-w-0 items-center justify-between gap-2 ${
-            isHeroComposer
-              ? 'pt-3'
-              : useCompactChrome
-                ? `mt-2 -mx-3 -mb-3 px-2.5 py-2 ${isMobileComposer ? 'gap-1' : 'gap-2'}`
-                : 'mt-3 pt-3'
-          }`}>
+          <div
+            data-testid="chat-input-toolbar"
+            className={`flex min-w-0 items-center justify-between pt-1.5 ${isMobileComposer ? 'gap-1' : 'gap-2'}`}
+          >
             <div
               data-testid="chat-input-toolbar-leading"
-              className={`flex min-w-0 shrink-0 items-center ${showLocationInToolbar ? 'max-w-[55%]' : ''} ${isMobileComposer ? 'gap-1' : 'gap-2'}`}
+              className={`flex min-w-0 shrink-0 items-center gap-1 ${showLocationInToolbar ? 'max-w-[55%]' : ''}`}
             >
               {!isMemberSession && (
                 <>
@@ -1616,12 +1598,14 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                       aria-label={t('chat.composerTools')}
                       aria-haspopup="menu"
                       aria-expanded={plusMenuOpen}
-                      // Bordered on desktop so the tools affordance reads as a
-                      // control at rest, not only on hover — it sits next to
-                      // the permission chip, which is bordered too.
-                      className={`inline-flex items-center justify-center rounded-[var(--radius-md)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${isMobileComposer ? 'h-11 w-11' : 'h-8 w-8 border border-[var(--color-border)]'}`}
+                      // A quiet 28px square like every other toolbar control;
+                      // the open state keeps the hover fill so the menu reads as
+                      // anchored to it.
+                      className={`inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                        plusMenuOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
+                      } ${isMobileComposer ? 'h-11 w-11' : 'h-7 w-7'}`}
                     >
-                      <span className="material-symbols-outlined text-[18px]">add</span>
+                      <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
                     </button>
 
                     {plusMenuOpen && (
@@ -1686,7 +1670,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
             <div
               data-testid="chat-input-toolbar-trailing"
-              className={`flex min-w-0 flex-1 items-center justify-end ${isMobileComposer ? 'gap-1' : 'gap-2'}`}
+              className="flex min-w-0 flex-1 items-center justify-end gap-1"
             >
               {!isMemberSession && activeTabId && (
                 <ContextUsageIndicator
@@ -1714,19 +1698,17 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               )}
               <VoiceInputButton dictation={dictation} blocked={composerDisabled} mobile={isMobileComposer} />
               {!isMemberSession && !isActive && (hasRunningSubagents || hasRunningTeam) ? (
+                // Stopping background work while the composer can still send:
+                // the same ink stop circle as a running turn, beside the send key.
                 <Button
-                  variant="danger"
+                  variant="primary"
                   size="base"
                   shape="circle"
                   onClick={() => stopGeneration(activeTabId!)}
                   aria-label={t('common.stop')}
                   title={t('chat.stopTitle')}
                   className={`shrink-0 ${isMobileComposer ? 'h-11 w-11' : ''}`}
-                  icon={(
-                    <span className="material-symbols-outlined text-[18px]">
-                      stop
-                    </span>
-                  )}
+                  icon={<Square size={isMobileComposer ? 12 : 10} strokeWidth={2} fill="currentColor" aria-hidden="true" />}
                 />
               ) : null}
               {/* Same component, shape and icon as EmptySession's send button.
@@ -1741,9 +1723,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   location chip. The arrow points *up* — into the transcript the
                   message is being sent to — which is also what makes it read as
                   send without a word next to it. Dropping the label is why the
-                  name now lives only in `aria-label`, on both breakpoints. */}
+                  name now lives only in `aria-label`, on both breakpoints.
+
+                  Terracotta (`accent`) is the send key's alone; mid-turn the
+                  same circle turns ink (`primary`) with a filled square, so a
+                  running turn does not read as an error. */}
               <Button
-                variant={!isMemberSession && isActive ? 'danger' : 'accent'}
+                variant={!isMemberSession && isActive ? 'primary' : 'accent'}
                 size="base"
                 shape="circle"
                 onClick={!isMemberSession && isActive ? () => stopGeneration(activeTabId!) : handleSubmit}
@@ -1759,11 +1745,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 // 44px on touch is the platform minimum for a primary target;
                 // the desktop circle stays at the size's own 32px.
                 className={`shrink-0 ${isMobileComposer ? 'h-11 w-11' : ''}`}
-                icon={(
-                  <span className="material-symbols-outlined text-[18px]">
-                    {!isMemberSession && isActive ? 'stop' : 'arrow_upward'}
-                  </span>
-                )}
+                icon={!isMemberSession && isActive
+                  ? <Square data-icon="stop" size={isMobileComposer ? 12 : 10} strokeWidth={2} fill="currentColor" aria-hidden="true" />
+                  : <ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
               />
             </div>
           </div>

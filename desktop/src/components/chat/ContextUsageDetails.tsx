@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
+import { Badge } from '@/components/ui/Badge'
 import {
   formatCacheHitRate,
   formatCompactTokens,
@@ -85,7 +86,7 @@ function UsageMeter({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(percent)}
-      className="h-[6px] overflow-hidden rounded-full bg-[var(--color-surface-hover)]"
+      className="h-1.5 overflow-hidden rounded-full bg-[var(--color-surface-container)]"
       data-testid="context-segmented-bar"
     >
       <div
@@ -110,14 +111,14 @@ function SessionStatGrid({
   labels: ContextUsageDetailsProps['labels']
   density: 'compact' | 'comfortable'
 }) {
-  const labelClass = density === 'compact'
-    ? 'text-[12.5px] text-[var(--color-text-tertiary)]'
-    : 'text-xs text-[var(--color-text-tertiary)]'
-  const valueClass = 'mt-[3px] font-mono text-sm text-[var(--color-text-primary)]'
+  const labelClass = 'truncate text-xs text-[var(--color-text-tertiary)]'
+  const valueClass = density === 'compact'
+    ? 'mt-0.5 font-mono text-[13px] tabular-nums text-[var(--color-text-primary)]'
+    : 'mt-0.5 font-mono text-sm tabular-nums text-[var(--color-text-primary)]'
 
   return (
-    <div className="mt-4 grid grid-cols-3 gap-3">
-      <div>
+    <div className="mt-3 grid grid-cols-3 gap-3 border-t border-[var(--color-border)] pt-3">
+      <div className="min-w-0">
         <div className={labelClass}>{labels.sessionSpeed}</div>
         <div className={valueClass} data-testid="session-speed">
           {formatTokensPerSecond(stats.tokensPerSecond ?? 0)}
@@ -126,13 +127,13 @@ function SessionStatGrid({
           )}
         </div>
       </div>
-      <div>
+      <div className="min-w-0">
         <div className={labelClass}>{labels.sessionCacheHit}</div>
         <div className={valueClass} data-testid="session-cache-hit">
           {stats.cacheHitRate === null ? '--' : formatCacheHitRate(stats.cacheHitRate)}
         </div>
       </div>
-      <div>
+      <div className="min-w-0">
         <div className={labelClass}>{labels.sessionCost}</div>
         <div className={`${valueClass} truncate`} data-testid="session-cost" title={stats.costDisplay}>
           {stats.costDisplay}
@@ -154,7 +155,7 @@ function CategoryBars({
   if (categories.length === 0) return null
 
   return (
-    <div className={density === 'compact' ? 'mt-3 flex flex-col gap-3' : 'mt-4 space-y-3'}>
+    <div className={density === 'compact' ? 'mt-2 flex flex-col gap-2.5' : 'mt-3 space-y-3'}>
       {categories.map((category) => {
         const percent = maxTokens > 0
           ? Math.max(0.5, Math.min(100, (category.tokens / maxTokens) * 100))
@@ -162,14 +163,14 @@ function CategoryBars({
         return (
           <div key={category.name}>
             <div className={`flex items-baseline justify-between gap-3 ${density === 'compact' ? '' : 'text-xs'}`}>
-              <span className={`min-w-0 truncate ${density === 'compact' ? 'text-[13.5px] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}>
+              <span className={`min-w-0 truncate ${density === 'compact' ? 'text-[13px] text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}>
                 {category.name}
               </span>
-              <span className={`shrink-0 font-mono ${density === 'compact' ? 'text-[13px] text-[var(--color-text-secondary)]' : 'text-[var(--color-text-tertiary)]'}`}>
+              <span className={`shrink-0 font-mono tabular-nums ${density === 'compact' ? 'text-xs text-[var(--color-text-secondary)]' : 'text-[var(--color-text-tertiary)]'}`}>
                 {formatNumber(category.tokens)}
               </span>
             </div>
-            <div className={`overflow-hidden rounded-full bg-[var(--color-surface-hover)] ${density === 'compact' ? 'mt-[7px] h-[3px]' : 'mt-1.5 h-1.5'}`}>
+            <div className={`mt-1.5 overflow-hidden rounded-full bg-[var(--color-surface-container)] ${density === 'compact' ? 'h-[3px]' : 'h-1.5'}`}>
               <div
                 className="h-full rounded-full"
                 style={{ width: `${percent}%`, backgroundColor: category.color || 'var(--color-brand)' }}
@@ -207,12 +208,11 @@ function ReadyBody({
   return (
     <>
       <div className="mt-3 flex items-baseline justify-between gap-3">
-        <div className="text-[12.5px] text-[var(--color-text-tertiary)]">{labels.remaining}</div>
-        {/* The headline serif carries the one large number on the panel —
-            the same treatment the handoff gives every hero statistic. */}
+        <div className="text-xs text-[var(--color-text-tertiary)]">{labels.remaining}</div>
+        {/* The one large number on the panel: 26 semibold with tabular figures,
+            in the body face — mono never pairs with semibold. */}
         <div
-          className="shrink-0 text-[27px] font-bold leading-none text-[var(--color-text-primary)]"
-          style={{ fontFamily: 'var(--font-headline)' }}
+          className="shrink-0 text-[26px] font-semibold leading-none tabular-nums text-[var(--color-text-primary)]"
           data-testid="context-remaining"
         >
           {remainingLabel}
@@ -225,7 +225,7 @@ function ReadyBody({
 
       {/* This timestamp describes the window composition, so it sits with the used/window figures
           rather than next to the live session totals. */}
-      <div className="mt-2 text-[11px] text-[var(--color-text-tertiary)]">
+      <div className="mt-2 text-xs tabular-nums text-[var(--color-text-tertiary)]">
         {labels.used} {formatNumber(usedTokens)}
         {' · '}
         {labels.window} {maxTokens > 0 ? formatNumber(maxTokens) : '--'}
@@ -242,21 +242,24 @@ function ReadyBody({
       )}
 
       {categories.length > 0 && (
-        <div className="mt-3 border-t border-[var(--color-border)] pt-2.5">
+        <div className="mt-3 border-t border-[var(--color-border)] pt-2">
           <button
             type="button"
             aria-expanded={breakdownOpen}
             onClick={() => setBreakdownOpen((open) => !open)}
             data-testid="context-breakdown-toggle"
-            className="flex w-full items-center justify-between gap-3 rounded-[var(--radius-sm)] text-left text-[12.5px] text-[var(--color-text-secondary)] transition-colors duration-150 hover:text-[var(--color-text-primary)]"
+            className="flex min-h-7 w-full items-center justify-between gap-3 rounded-[var(--radius-sm)] text-left text-xs text-[var(--color-text-secondary)] transition-colors duration-150 hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
             <span className="flex items-center gap-1.5">
               <ChevronRight
-                className={`h-3.5 w-3.5 transition-transform duration-150 ${breakdownOpen ? 'rotate-90' : ''}`}
+                size={14}
+                strokeWidth={1.75}
+                aria-hidden="true"
+                className={`text-[var(--color-text-tertiary)] transition-transform duration-150 ${breakdownOpen ? 'rotate-90' : ''}`}
               />
               {labels.breakdown}
             </span>
-            <span className="shrink-0 font-mono text-[11px] text-[var(--color-text-tertiary)]">
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
               {formatCompactTokens(usedTokens)}
             </span>
           </button>
@@ -305,8 +308,8 @@ export function ContextUsageDetails({
     />
   ) : (
     <div className={variant === 'sheet'
-      ? 'mt-5 rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-4 text-sm leading-6 text-[var(--color-text-secondary)]'
-      : 'mt-4 text-sm leading-6 text-[var(--color-text-secondary)]'
+      ? 'mt-4 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-4 text-[13px] leading-6 text-[var(--color-text-secondary)]'
+      : 'mt-3 text-[13px] leading-6 text-[var(--color-text-secondary)]'
     }>
       {statusMessage}
     </div>
@@ -317,9 +320,7 @@ export function ContextUsageDetails({
     return (
       <div data-testid="context-usage-details" data-variant="sheet">
         {estimate && status === 'ready' && (
-          <span className="inline-flex rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-            {labels.estimate}
-          </span>
+          <Badge variant="outline">{labels.estimate}</Badge>
         )}
         {body}
       </div>
@@ -330,17 +331,16 @@ export function ContextUsageDetails({
     <div data-testid="context-usage-details" data-variant="popover">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-xs font-semibold tracking-[0.08em] text-[var(--color-text-tertiary)]">
+          <div className="text-xs font-semibold text-[var(--color-text-tertiary)]">
             {labels.title}
           </div>
-          <div className="mt-1 truncate text-base font-bold text-[var(--color-text-primary)]">
+          {/* Model ids are identifiers, so mono — at the regular weight. */}
+          <div className="mt-0.5 truncate font-mono text-[13px] text-[var(--color-text-primary)]">
             {modelLabel}
           </div>
         </div>
         {estimate && status === 'ready' && (
-          <span className="shrink-0 rounded-full border border-[var(--color-border)] px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-            {labels.estimate}
-          </span>
+          <Badge variant="outline">{labels.estimate}</Badge>
         )}
       </div>
       {body}

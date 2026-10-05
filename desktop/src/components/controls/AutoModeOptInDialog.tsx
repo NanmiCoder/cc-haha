@@ -1,3 +1,4 @@
+import { TriangleAlert } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 
@@ -24,10 +25,10 @@ export function AutoModeOptInDialog({ open, loading = false, onClose, onConfirm 
               border) and `--color-on-warning-container` is the only readable
               foreground on the container fill. The `/N` alpha this replaced is
               also dropped outright by the Safari 15 WebView. */}
-          <div className="flex items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-3">
-            <span className="material-symbols-outlined mt-0.5 text-[20px] text-[var(--color-warning)]">warning</span>
-            <div className="space-y-2 text-sm leading-6 text-[var(--color-on-warning-container)]">
-              <p className="font-semibold">{t('permMode.enableAutoBody')}</p>
+          <div className="flex items-start gap-3 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-3">
+            <TriangleAlert aria-hidden="true" size={16} strokeWidth={1.75} className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
+            <div className="space-y-2 text-[13px] leading-6 text-[var(--color-on-warning-container)]">
+              <p className="font-medium">{t('permMode.enableAutoBody')}</p>
               <p>{t('permMode.enableAutoDetail')}</p>
             </div>
           </div>

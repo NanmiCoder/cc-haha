@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { ArrowLeft, Plus, RefreshCw, Server, Settings, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
+import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { Switch } from '@/components/ui/Switch'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { EmptyState } from '@/components/ui/EmptyState'
@@ -9,9 +11,17 @@ import { IconButton } from '@/components/ui/IconButton'
 import { mcpStatusTone } from '@/lib/mcpStatus'
 import { getMcpServerIdentityKey } from '@/lib/mcpIdentity'
 import { DirectoryPicker } from '@/components/composite/DirectoryPicker'
-import { SettingsPageHeader } from '@/components/settings/SettingsSection'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+  SettingsStat,
+} from '@/components/settings/SettingsSection'
 import { Input } from '@/components/ui/Input'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { cx } from '@/lib/cx'
 import { useTranslation } from '../i18n'
 import { useUIStore } from '../stores/uiStore'
 import { useMcpStore } from '../stores/mcpStore'
@@ -74,6 +84,11 @@ const MCP_GROUP_ORDER: McpGroupKey[] = [
 ]
 
 const WRITABLE_SCOPES: McpWritableScope[] = ['local', 'project', 'user']
+const TRANSPORTS: TransportKind[] = ['stdio', 'http', 'sse']
+
+/** The settings frame (`pages/Settings.tsx`) owns width and gutters; a pane never sets its own. */
+const PAGE_CLASS = 'w-full min-w-0'
+const ICON_PROPS = { size: 14, strokeWidth: 1.75, 'aria-hidden': true } as const
 
 const SENSITIVE_MCP_FIELD = /(?:api[_-]?key|auth[_-]?token|authorization|bearer|token|secret|password|credential)/i
 const SENSITIVE_CLI_FLAG = /^--(?:api-key|api_key|auth-token|auth_token|authorization|bearer|token|secret|password|credential)$/i
@@ -312,12 +327,53 @@ function statusLabel(server: McpServerRecord, t: ReturnType<typeof useTranslatio
     : t('settings.mcp.status.configured')
 }
 
+function statusTone(server: McpServerRecord): Tone {
+  return isActiveInCurrentContext(server) ? mcpStatusTone(server.status) : 'neutral'
+}
+
+/** The dot leading a server row. A check in flight is "in progress", which reads as info. */
+function statusDotTone(server: McpServerRecord): Tone {
+  if (isActiveInCurrentContext(server) && server.status === 'checking') return 'info'
+  return statusTone(server)
+}
+
 function StatusBadge({ server, t }: { server: McpServerRecord; t: ReturnType<typeof useTranslation> }) {
-  const activeInCurrentContext = isActiveInCurrentContext(server)
   return (
-    <Badge tone={activeInCurrentContext ? mcpStatusTone(server.status) : 'neutral'} size="md" bordered className="font-semibold">
+    <Badge tone={statusTone(server)} size="xs">
       {statusLabel(server, t)}
     </Badge>
+  )
+}
+
+/** Badge plus the one-line reason, shown under a sub-view's title. */
+function StatusLine({ server, t }: { server: McpServerRecord; t: ReturnType<typeof useTranslation> }) {
+  const active = isActiveInCurrentContext(server)
+  return (
+    <span className="mt-2.5 flex flex-wrap items-center gap-2">
+      <StatusBadge server={server} t={t} />
+      {active && server.statusDetail && (
+        <span className="text-xs text-[var(--color-text-tertiary)]">{server.statusDetail}</span>
+      )}
+      {!active && (
+        <span className="text-xs text-[var(--color-text-tertiary)]">
+          {t('settings.mcp.status.configuredElsewhere')}
+        </span>
+      )}
+    </span>
+  )
+}
+
+function BackButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="-ml-2 mb-3"
+      onClick={onClick}
+      icon={<ArrowLeft {...ICON_PROPS} />}
+    >
+      {label}
+    </Button>
   )
 }
 
@@ -345,58 +401,50 @@ function ArraySection({
   displayValue?: (row: KeyValueRow | StringRow, index: number) => string
 }) {
   return (
-    <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-      <div className="text-sm font-semibold text-[var(--color-text-primary)] mb-4">{title}</div>
-      <div className="space-y-3">
-        {rows.map((row, index) => (
-          <div key={row.id} className={`grid gap-3 ${singleValue ? 'grid-cols-[minmax(0,1fr)_32px]' : 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)_32px]'}`}>
-            {!singleValue && 'key' in row && (
-              <Input
-                value={row.key}
-                onChange={(event) => onChange(row.id, 'key', event.target.value)}
-                placeholder={keyPlaceholder}
-              />
-            )}
-            <Input
-              value={displayValue ? displayValue(row, index) : row.value}
-              onChange={(event) => onChange(row.id, 'value', event.target.value)}
-              placeholder={valuePlaceholder}
-            />
-            <IconButton
-              icon="delete"
-              label={addLabel}
-              showTooltip={false}
-              size="md"
-              tone="muted"
-              className="mt-1 h-10"
-              onClick={() => onRemove(row.id)}
-            />
+    <SettingsSection title={title}>
+      <SettingsGroup>
+        <SettingsBlock className="py-3.5">
+          <div className="space-y-2">
+            {rows.map((row, index) => (
+              <div key={row.id} className={`grid gap-2 ${singleValue ? 'grid-cols-[minmax(0,1fr)_32px]' : 'grid-cols-[minmax(0,1fr)_minmax(0,1fr)_32px]'}`}>
+                {!singleValue && 'key' in row && (
+                  <Input
+                    size="md"
+                    value={row.key}
+                    onChange={(event) => onChange(row.id, 'key', event.target.value)}
+                    placeholder={keyPlaceholder}
+                  />
+                )}
+                <Input
+                  size="md"
+                  value={displayValue ? displayValue(row, index) : row.value}
+                  onChange={(event) => onChange(row.id, 'value', event.target.value)}
+                  placeholder={valuePlaceholder}
+                />
+                <IconButton
+                  icon={<Trash2 {...ICON_PROPS} />}
+                  label={addLabel}
+                  showTooltip={false}
+                  size="md"
+                  tone="muted"
+                  hoverTone="danger"
+                  onClick={() => onRemove(row.id)}
+                />
+              </div>
+            ))}
           </div>
-        ))}
-        <Button
-          variant="secondary"
-          size="lg"
-          block
-          className="h-12"
-          onClick={onAdd}
-          icon={<span className="material-symbols-outlined text-[18px]">add</span>}
-        >
-          {addLabel}
-        </Button>
-      </div>
-    </section>
-  )
-}
-
-function StatCard({ label, value, icon }: { label: string; value: number; icon: string }) {
-  return (
-    <div className="rounded-[var(--radius-2xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-5 py-4">
-      <div className="flex items-center gap-2 text-[var(--color-text-tertiary)] mb-2">
-        <span className="material-symbols-outlined text-[18px]">{icon}</span>
-        <span className="text-xs uppercase tracking-[0.18em] font-semibold">{label}</span>
-      </div>
-      <div className="text-3xl font-semibold text-[var(--color-text-primary)]">{value}</div>
-    </div>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="-ml-1.5 mt-2"
+            onClick={onAdd}
+            icon={<Plus {...ICON_PROPS} />}
+          >
+            {addLabel}
+          </Button>
+        </SettingsBlock>
+      </SettingsGroup>
+    </SettingsSection>
   )
 }
 
@@ -413,57 +461,70 @@ function ServerRow({
   onToggle: () => void
   t: ReturnType<typeof useTranslation>
 }) {
+  const active = isActiveInCurrentContext(server)
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-4 px-6 py-5 border-t border-[var(--color-border)] first:border-t-0">
-      <div className="min-w-0">
-        <div className="flex items-center gap-3 mb-2 min-w-0">
-          <div className="text-[1.05rem] font-semibold text-[var(--color-text-primary)] truncate">{server.name}</div>
+    <div className="flex items-start gap-3 px-4 py-3.5">
+      <StatusDot
+        tone={statusDotTone(server)}
+        size="md"
+        pulse={active && server.status === 'checking'}
+        className="mt-[7px]"
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{server.name}</span>
           <StatusBadge server={server} t={t} />
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-          <span className="rounded-full bg-[var(--color-surface-hover)] px-2 py-1 font-medium text-[var(--color-text-secondary)]">
-            {transportLabel(server.transport, t)}
-          </span>
-          <span className="rounded-full bg-[var(--color-surface-hover)] px-2 py-1 font-medium text-[var(--color-text-secondary)]">
-            {scopeLabel(server, t)}
-          </span>
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
+          <span className="shrink-0">{transportLabel(server.transport, t)}</span>
+          <span aria-hidden="true" className="shrink-0">·</span>
+          <span className="shrink-0">{scopeLabel(server, t)}</span>
           {serverHasProjectContext(server) && (
-            <span
-              className="max-w-full truncate rounded-full bg-[var(--color-surface-hover)] px-2 py-1 font-mono text-[11px] text-[var(--color-text-tertiary)]"
-              title={server.projectPath}
-            >
-              {server.projectPath}
-            </span>
+            <>
+              <span aria-hidden="true" className="shrink-0">·</span>
+              <span className="min-w-0 truncate font-mono text-[11px]" title={server.projectPath}>
+                {server.projectPath}
+              </span>
+            </>
           )}
-          <span className="truncate">{redactSensitiveText(server.summary)}</span>
         </div>
-        {!isActiveInCurrentContext(server) && (
-          <div className="mt-2 text-xs text-[var(--color-text-tertiary)]">
+        <div className="mt-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">
+          {redactSensitiveText(server.summary)}
+        </div>
+        {!active && (
+          <div className="mt-1.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
             {t('settings.mcp.status.configuredElsewhere')}
           </div>
         )}
-        {isActiveInCurrentContext(server) && server.statusDetail && (
-          <div className="mt-2 text-xs text-[var(--color-text-tertiary)] truncate">{server.statusDetail}</div>
+        {active && server.statusDetail && (
+          <div
+            className={cx(
+              'mt-1.5 truncate text-xs',
+              server.status === 'failed' ? 'text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]',
+            )}
+          >
+            {server.statusDetail}
+          </div>
         )}
       </div>
 
-      <IconButton
-        icon="settings"
-        label={t('settings.mcp.openServer', { name: server.name })}
-        showTooltip={false}
-        size="xl"
-        shape="circle"
-        tone="secondary"
-        onClick={onOpen}
-      />
-
-      <Switch
-        label={server.name}
-        labelHidden
-        checked={server.enabled}
-        disabled={isBusy || !server.canToggle}
-        onChange={onToggle}
-      />
+      <div className="flex shrink-0 items-center gap-2 self-center">
+        <IconButton
+          icon={<Settings {...ICON_PROPS} />}
+          label={t('settings.mcp.openServer', { name: server.name })}
+          showTooltip={false}
+          size="sm"
+          tone="muted"
+          onClick={onOpen}
+        />
+        <Switch
+          label={server.name}
+          labelHidden
+          checked={server.enabled}
+          disabled={isBusy || !server.canToggle}
+          onChange={onToggle}
+        />
+      </div>
     </div>
   )
 }
@@ -786,58 +847,48 @@ export function McpSettings() {
     const server = view.server
     return (
       <>
-        <div className="max-w-5xl min-w-0">
-          <Button
-            variant="ghost"
-            size="md"
-            className="mb-5"
+        <div className={PAGE_CLASS}>
+          <BackButton
+            label={t('settings.mcp.form.back')}
             onClick={() => {
               setView({ type: 'list' })
               selectServer(null)
             }}
-            icon={<span className="material-symbols-outlined text-[18px]">arrow_back</span>}
-          >
-            {t('settings.mcp.form.back')}
-          </Button>
+          />
 
-          <div className="flex items-start justify-between gap-4 mb-8">
-            <div>
-              <h2 className="text-[32px] font-semibold leading-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{server.name}</h2>
-              <p className="mt-3 text-base text-[var(--color-text-secondary)]">{redactSensitiveText(server.summary)}</p>
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <StatusBadge server={server} t={t} />
-                {isActiveInCurrentContext(server) && server.statusDetail && (
-                  <span className="text-sm text-[var(--color-text-tertiary)]">{server.statusDetail}</span>
-                )}
-                {!isActiveInCurrentContext(server) && (
-                  <span className="text-sm text-[var(--color-text-tertiary)]">
-                    {t('settings.mcp.status.configuredElsewhere')}
-                  </span>
-                )}
-              </div>
-            </div>
-            {server.canReconnect && (
-              <Button variant="secondary" onClick={() => handleReconnect(server)} loading={busyServerKey === getMcpServerIdentityKey(server)}>
-                <span className="material-symbols-outlined text-[16px]">sync</span>
+          <SettingsPageHeader
+            title={server.name}
+            description={(
+              <>
+                <span className="block break-all font-mono text-xs">{redactSensitiveText(server.summary)}</span>
+                <StatusLine server={server} t={t} />
+              </>
+            )}
+            action={server.canReconnect ? (
+              <Button
+                variant="secondary"
+                size="base"
+                onClick={() => handleReconnect(server)}
+                loading={busyServerKey === getMcpServerIdentityKey(server)}
+                icon={<RefreshCw {...ICON_PROPS} />}
+              >
                 {t('settings.mcp.form.reconnect')}
               </Button>
-            )}
-          </div>
+            ) : undefined}
+          />
 
-          <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-6">
-            <div className="grid gap-4 md:grid-cols-2">
-              <InfoPair label={t('settings.mcp.form.transport')} value={transportLabel(server.transport, t)} />
-              <InfoPair label={t('settings.mcp.form.scope')} value={scopeLabel(server, t)} />
-              <InfoPair label={t('settings.mcp.form.status')} value={statusLabel(server, t)} />
-              <InfoPair label={t('settings.mcp.form.location')} value={server.configLocation} />
-            </div>
-            <div className="mt-5">
-              <div className="text-sm font-semibold text-[var(--color-text-primary)] mb-2">{t('settings.mcp.form.rawConfig')}</div>
-              <pre className="overflow-x-auto rounded-[var(--radius-lg)] bg-[var(--color-surface-hover)] p-4 text-xs text-[var(--color-text-secondary)]">
-                {JSON.stringify(redactMcpDisplayValue(server.config), null, 2)}
-              </pre>
-            </div>
-          </section>
+          <SettingsGroup className="mt-6">
+            <InfoRow label={t('settings.mcp.form.transport')} value={transportLabel(server.transport, t)} />
+            <InfoRow label={t('settings.mcp.form.scope')} value={scopeLabel(server, t)} />
+            <InfoRow label={t('settings.mcp.form.status')} value={statusLabel(server, t)} />
+            <InfoRow label={t('settings.mcp.form.location')} value={server.configLocation} mono />
+          </SettingsGroup>
+
+          <SettingsSection title={t('settings.mcp.form.rawConfig')}>
+            <pre className="overflow-x-auto rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3 font-mono text-xs leading-[1.6] text-[var(--color-text-secondary)]">
+              {JSON.stringify(redactMcpDisplayValue(server.config), null, 2)}
+            </pre>
+          </SettingsSection>
         </div>
         {deleteModal}
       </>
@@ -867,166 +918,144 @@ export function McpSettings() {
 
     return (
       <>
-        <div className="max-w-5xl min-w-0">
-          <Button
-            variant="ghost"
-            size="md"
-            className="mb-5"
+        <div className={PAGE_CLASS}>
+          <BackButton
+            label={t('settings.mcp.form.back')}
             onClick={() => {
               setView({ type: 'list' })
               selectServer(null)
             }}
-            icon={<span className="material-symbols-outlined text-[18px]">arrow_back</span>}
-          >
-            {t('settings.mcp.form.back')}
-          </Button>
+          />
 
-          <div className="flex items-start justify-between gap-4 mb-8">
-            <div>
-              <h2 className="text-[32px] font-semibold leading-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
-                {editing ? t('settings.mcp.form.editTitle', { name: targetServer!.name }) : t('settings.mcp.form.createTitle')}
-              </h2>
-              <p className="mt-3 text-base text-[var(--color-text-secondary)]">
+          <SettingsPageHeader
+            title={editing ? t('settings.mcp.form.editTitle', { name: targetServer!.name }) : t('settings.mcp.form.createTitle')}
+            description={(
+              <>
                 {editing ? t('settings.mcp.form.editHint') : t('settings.mcp.form.createHint')}
-              </p>
-              {editing && targetServer && (
-                <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <StatusBadge server={targetServer} t={t} />
-                  {isActiveInCurrentContext(targetServer) && targetServer.statusDetail && (
-                    <span className="text-sm text-[var(--color-text-tertiary)]">{targetServer.statusDetail}</span>
-                  )}
-                  {!isActiveInCurrentContext(targetServer) && (
-                    <span className="text-sm text-[var(--color-text-tertiary)]">
-                      {t('settings.mcp.status.configuredElsewhere')}
-                    </span>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center gap-3">
-              {editing && targetServer?.canReconnect && (
-                <Button variant="secondary" onClick={() => handleReconnect(targetServer)} loading={busyServerKey === getMcpServerIdentityKey(targetServer)}>
-                  <span className="material-symbols-outlined text-[16px]">sync</span>
-                  {t('settings.mcp.form.reconnect')}
-                </Button>
-              )}
-              {editing && targetServer?.canRemove && (
-                <Button
-                  variant="ghost"
-                  className="text-[var(--color-error)] hover:text-[var(--color-error)] hover:bg-[var(--color-error-soft)]"
-                  onClick={() => handleDelete(targetServer)}
-                  loading={isDeleting}
-                >
-                  <span className="material-symbols-outlined text-[16px]">delete</span>
-                  {t('settings.mcp.form.uninstall')}
-                </Button>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-4">
-          <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-            <Input
-              label={t('settings.mcp.form.name')}
-              value={draft.name}
-              onChange={(event) => setDraftField('name', event.target.value)}
-              placeholder={t('settings.mcp.form.namePlaceholder')}
-              disabled={editing}
-              required
-            />
-          </section>
-
-          <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-            <div className="text-sm font-semibold text-[var(--color-text-primary)] mb-2">
-              {t('settings.mcp.form.scope')}
-            </div>
-            <div className="grid gap-2 md:grid-cols-3">
-              {WRITABLE_SCOPES.map((scope) => {
-                const active = draft.scope === scope
-                return (
-                  <button
-                    key={scope}
-                    type="button"
-                    onClick={() => setDraftField('scope', scope)}
-                    className={`rounded-[var(--radius-md)] border p-3 text-left transition-colors ${
-                      active
-                        ? 'border-[var(--color-border-focus)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-                        : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-                    }`}
+                {editing && targetServer && <StatusLine server={targetServer} t={t} />}
+              </>
+            )}
+            action={editing && targetServer && (targetServer.canReconnect || targetServer.canRemove) ? (
+              <>
+                {targetServer.canReconnect && (
+                  <Button
+                    variant="secondary"
+                    size="base"
+                    onClick={() => handleReconnect(targetServer)}
+                    loading={busyServerKey === getMcpServerIdentityKey(targetServer)}
+                    icon={<RefreshCw {...ICON_PROPS} />}
                   >
-                    <span className="block text-sm font-semibold">{t(`settings.mcp.scope.${scope}`)}</span>
-                    <span className="mt-1 block text-xs leading-5 text-[var(--color-text-tertiary)]">
-                      {t(`settings.mcp.scopeDesc.${scope}`)}
-                    </span>
-                  </button>
-                )
-              })}
-            </div>
-          </section>
+                    {t('settings.mcp.form.reconnect')}
+                  </Button>
+                )}
+                {targetServer.canRemove && (
+                  <Button
+                    variant="danger-ghost"
+                    size="base"
+                    onClick={() => handleDelete(targetServer)}
+                    loading={isDeleting}
+                    icon={<Trash2 {...ICON_PROPS} />}
+                  >
+                    {t('settings.mcp.form.uninstall')}
+                  </Button>
+                )}
+              </>
+            ) : undefined}
+          />
 
-          <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold text-[var(--color-text-primary)]">
-                  {needsProjectTarget ? t('settings.mcp.targetProject.title') : t('settings.mcp.targetProject.globalTitle')}
-                </div>
-                <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
-                  {targetProjectHint}
-                </p>
+          <SettingsGroup className="mt-6">
+            <SettingsBlock className="py-3.5">
+              <Input
+                size="md"
+                label={t('settings.mcp.form.name')}
+                value={draft.name}
+                onChange={(event) => setDraftField('name', event.target.value)}
+                placeholder={t('settings.mcp.form.namePlaceholder')}
+                disabled={editing}
+                required
+              />
+            </SettingsBlock>
+
+            <SettingsBlock className="py-3.5">
+              <div className="text-[13px] font-medium leading-5 text-[var(--color-text-primary)]">
+                {t('settings.mcp.form.scope')}
               </div>
+              <div className="mt-2 grid gap-2 md:grid-cols-3">
+                {WRITABLE_SCOPES.map((scope) => {
+                  const active = draft.scope === scope
+                  return (
+                    <button
+                      key={scope}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() => setDraftField('scope', scope)}
+                      className={cx(
+                        'flex flex-col justify-start rounded-[var(--radius-md)] border px-3 py-2.5 text-left transition-colors duration-150',
+                        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
+                        active
+                          ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)]'
+                          : 'border-[var(--color-border)] hover:bg-[var(--color-surface-hover)]',
+                      )}
+                    >
+                      <span className="block text-[13px] font-medium text-[var(--color-text-primary)]">
+                        {t(`settings.mcp.scope.${scope}`)}
+                      </span>
+                      <span className="mt-0.5 block text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                        {t(`settings.mcp.scopeDesc.${scope}`)}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+            </SettingsBlock>
+
+            <SettingsRow
+              title={needsProjectTarget ? t('settings.mcp.targetProject.title') : t('settings.mcp.targetProject.globalTitle')}
+              description={targetProjectHint}
+            >
               {needsProjectTarget && (
                 <DirectoryPicker
                   value={draft.projectPath}
                   onChange={(path) => setDraftField('projectPath', path)}
                 />
               )}
-            </div>
-          </section>
+            </SettingsRow>
 
-          <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
-            <div className="grid grid-cols-3">
-              {(['stdio', 'http', 'sse'] as TransportKind[]).map((transport) => {
-                const active = draft.transport === transport
-                return (
-                  <button
-                    key={transport}
-                    type="button"
-                    disabled={transportLocked}
-                    onClick={() => setDraftField('transport', transport)}
-                    className={`h-14 text-sm font-semibold transition-colors ${
-                      active
-                        ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-                        : 'bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-                    } ${transportLocked ? 'cursor-not-allowed opacity-70' : ''}`}
-                  >
-                    {transport === 'stdio' ? 'STDIO' : transportLabel(transport, t)}
-                  </button>
-                )
-              })}
-            </div>
-          </section>
-
-          {editing && (
-            <div className="text-sm text-[var(--color-text-tertiary)]">
-              {t('settings.mcp.form.transportLocked')}
-            </div>
-          )}
+            <SettingsRow
+              title={t('settings.mcp.form.transport')}
+              description={editing ? t('settings.mcp.form.transportLocked') : undefined}
+            >
+              <SegmentedControl<TransportKind>
+                label={t('settings.mcp.form.transport')}
+                size="sm"
+                value={draft.transport}
+                onChange={(transport) => setDraftField('transport', transport)}
+                items={TRANSPORTS.map((transport) => ({
+                  value: transport,
+                  label: transportLabel(transport, t),
+                  disabled: transportLocked,
+                }))}
+              />
+            </SettingsRow>
+          </SettingsGroup>
 
           {draft.transport === 'stdio' ? (
             <>
-              <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-                <Input
-                  label={t('settings.mcp.form.command')}
-                  value={draft.command}
-                  onChange={(event) => setDraftField('command', event.target.value)}
-                  placeholder={t('settings.mcp.form.commandPlaceholder')}
-                  required
-                />
-                <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
-                  {t('settings.mcp.form.commandHostHint')}
-                </p>
-              </section>
+              <SettingsGroup className="mt-7">
+                <SettingsBlock className="py-3.5">
+                  <Input
+                    size="md"
+                    label={t('settings.mcp.form.command')}
+                    value={draft.command}
+                    onChange={(event) => setDraftField('command', event.target.value)}
+                    placeholder={t('settings.mcp.form.commandPlaceholder')}
+                    required
+                  />
+                  <p className="mt-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                    {t('settings.mcp.form.commandHostHint')}
+                  </p>
+                </SettingsBlock>
+              </SettingsGroup>
 
               <ArraySection
                 title={t('settings.mcp.form.arguments')}
@@ -1054,15 +1083,18 @@ export function McpSettings() {
             </>
           ) : (
             <>
-              <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-                <Input
-                  label={draft.transport === 'http' ? t('settings.mcp.form.url') : t('settings.mcp.form.sseUrl')}
-                  value={draft.url}
-                  onChange={(event) => setDraftField('url', event.target.value)}
-                  placeholder={t('settings.mcp.form.urlPlaceholder')}
-                  required
-                />
-              </section>
+              <SettingsGroup className="mt-7">
+                <SettingsBlock className="py-3.5">
+                  <Input
+                    size="md"
+                    label={draft.transport === 'http' ? t('settings.mcp.form.url') : t('settings.mcp.form.sseUrl')}
+                    value={draft.url}
+                    onChange={(event) => setDraftField('url', event.target.value)}
+                    placeholder={t('settings.mcp.form.urlPlaceholder')}
+                    required
+                  />
+                </SettingsBlock>
+              </SettingsGroup>
 
               <ArraySection
                 title={t('settings.mcp.form.headers')}
@@ -1076,39 +1108,47 @@ export function McpSettings() {
                 addLabel={t('settings.mcp.form.addHeader')}
               />
 
-              <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-                <div className="grid gap-4 md:grid-cols-2">
+              <SettingsGroup className="mt-7">
+                <SettingsBlock className="space-y-4 py-3.5">
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <Input
+                      size="md"
+                      label={t('settings.mcp.form.oauthClientId')}
+                      value={draft.oauthClientId}
+                      onChange={(event) => setDraftField('oauthClientId', event.target.value)}
+                      placeholder={t('settings.mcp.form.oauthClientIdPlaceholder')}
+                    />
+                    <Input
+                      size="md"
+                      label={t('settings.mcp.form.oauthCallbackPort')}
+                      value={draft.oauthCallbackPort}
+                      onChange={(event) => setDraftField('oauthCallbackPort', event.target.value)}
+                      placeholder={t('settings.mcp.form.oauthCallbackPortPlaceholder')}
+                    />
+                  </div>
                   <Input
-                    label={t('settings.mcp.form.oauthClientId')}
-                    value={draft.oauthClientId}
-                    onChange={(event) => setDraftField('oauthClientId', event.target.value)}
-                    placeholder={t('settings.mcp.form.oauthClientIdPlaceholder')}
-                  />
-                  <Input
-                    label={t('settings.mcp.form.oauthCallbackPort')}
-                    value={draft.oauthCallbackPort}
-                    onChange={(event) => setDraftField('oauthCallbackPort', event.target.value)}
-                    placeholder={t('settings.mcp.form.oauthCallbackPortPlaceholder')}
-                  />
-                </div>
-                <div className="mt-4">
-                  <Input
+                    size="md"
                     label={t('settings.mcp.form.headersHelper')}
                     value={draft.headersHelper}
                     onChange={(event) => setDraftField('headersHelper', event.target.value)}
                     placeholder={t('settings.mcp.form.headersHelperPlaceholder')}
                   />
-                </div>
-              </section>
+                </SettingsBlock>
+              </SettingsGroup>
             </>
           )}
 
-          <div className="flex justify-end pt-2">
-            <Button onClick={handleSave} disabled={!isDraftValid(draft) || isBusy} loading={isSaving}>
+          <div className="mt-7 flex justify-end">
+            <Button
+              variant="primary"
+              size="base"
+              onClick={handleSave}
+              disabled={!isDraftValid(draft) || isBusy}
+              loading={isSaving}
+            >
               {t('settings.mcp.form.save')}
             </Button>
           </div>
-        </div>
         </div>
         {deleteModal}
       </>
@@ -1116,26 +1156,25 @@ export function McpSettings() {
   }
 
   return (
-    <div className="max-w-5xl min-w-0">
+    <div className={PAGE_CLASS}>
       <SettingsPageHeader
         title={t('settings.mcp.title')}
         description={t('settings.mcp.description')}
         action={(
-          <Button size="base" onClick={beginCreate}>
-            <span className="material-symbols-outlined text-[16px]">add</span>
+          <Button variant="primary" size="base" onClick={beginCreate} icon={<Plus {...ICON_PROPS} />}>
             {t('settings.mcp.addServer')}
           </Button>
         )}
       />
 
       {showListLoading ? (
-        <LoadingState label={t('common.loading')} variant="dashed" size="lg" />
+        <LoadingState label={t('common.loading')} variant="dashed" size="lg" className="mt-6" />
       ) : (
         <>
-          <div className="grid gap-4 md:grid-cols-3 mb-8">
-            <StatCard label={t('settings.mcp.stats.total')} value={stats.total} icon="dns" />
-            <StatCard label={t('settings.mcp.stats.connected')} value={stats.connected} icon="check_circle" />
-            <StatCard label={t('settings.mcp.stats.attention')} value={stats.attention} icon="error" />
+          <div className="mt-6 grid grid-cols-3 gap-3">
+            <SettingsStat label={t('settings.mcp.stats.total')} value={stats.total} />
+            <SettingsStat label={t('settings.mcp.stats.connected')} value={stats.connected} />
+            <SettingsStat label={t('settings.mcp.stats.attention')} value={stats.attention} />
           </div>
 
           {error ? (
@@ -1144,44 +1183,48 @@ export function McpSettings() {
               title={error}
               retryLabel={t('common.retry')}
               onRetry={() => void fetchServersForKnownProjects(currentWorkDir)}
+              className="mt-7"
             />
           ) : servers.length === 0 ? (
             <EmptyState
               size="md"
-              icon={<span className="material-symbols-outlined text-[20px]" aria-hidden="true">dns</span>}
+              icon={<Server size={18} strokeWidth={1.75} aria-hidden />}
               title={t('settings.mcp.empty')}
               description={t('settings.mcp.emptyHint')}
+              className="mt-7"
             />
           ) : (
-            <div className="flex flex-col gap-6">
-              {MCP_GROUP_ORDER.map((group) => {
-                const groupServers = groupedServers[group]
-                if (!groupServers?.length) return null
+            MCP_GROUP_ORDER.map((group) => {
+              const groupServers = groupedServers[group]
+              if (!groupServers?.length) return null
 
-                return (
-                  <section key={group}>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="text-[1.35rem] font-semibold text-[var(--color-text-primary)]">
-                        {group === 'plugin' ? t('settings.mcp.scope.plugin') : t(`settings.mcp.scope.${group}`)}
-                      </div>
-                      <div className="text-sm text-[var(--color-text-tertiary)]">{groupServers.length}</div>
-                    </div>
-                    <div className="rounded-[28px] border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden">
-                      {groupServers.map((server) => (
-                        <ServerRow
-                          key={getMcpServerIdentityKey(server)}
-                          server={server}
-                          isBusy={busyServerKey === getMcpServerIdentityKey(server)}
-                          onOpen={() => beginEdit(server)}
-                          onToggle={() => void handleToggle(server)}
-                          t={t}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                )
-              })}
-            </div>
+              return (
+                <SettingsSection
+                  key={group}
+                  title={(
+                    <>
+                      {group === 'plugin' ? t('settings.mcp.scope.plugin') : t(`settings.mcp.scope.${group}`)}
+                      <span className="ml-1.5 font-mono text-[11px] font-normal tabular-nums text-[var(--color-text-tertiary)]">
+                        {groupServers.length}
+                      </span>
+                    </>
+                  )}
+                >
+                  <SettingsGroup>
+                    {groupServers.map((server) => (
+                      <ServerRow
+                        key={getMcpServerIdentityKey(server)}
+                        server={server}
+                        isBusy={busyServerKey === getMcpServerIdentityKey(server)}
+                        onOpen={() => beginEdit(server)}
+                        onToggle={() => void handleToggle(server)}
+                        t={t}
+                      />
+                    ))}
+                  </SettingsGroup>
+                </SettingsSection>
+              )
+            })
           )}
         </>
       )}
@@ -1190,11 +1233,18 @@ export function McpSettings() {
   )
 }
 
-function InfoPair({ label, value }: { label: string; value: string }) {
+function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-hover)] px-4 py-3">
-      <div className="text-xs uppercase tracking-[0.16em] font-semibold text-[var(--color-text-tertiary)] mb-2">{label}</div>
-      <div className="text-sm text-[var(--color-text-primary)] break-all">{value}</div>
+    <div className="flex min-h-[52px] items-center gap-6 px-4 py-3">
+      <div className="w-32 shrink-0 text-[13px] font-medium text-[var(--color-text-primary)]">{label}</div>
+      <div
+        className={cx(
+          'min-w-0 flex-1 break-all text-right',
+          mono ? 'font-mono text-xs text-[var(--color-text-secondary)]' : 'text-[13px] text-[var(--color-text-secondary)]',
+        )}
+      >
+        {value}
+      </div>
     </div>
   )
 }

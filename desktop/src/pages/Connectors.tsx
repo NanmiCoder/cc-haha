@@ -6,7 +6,9 @@ import { Checkbox } from '@/components/ui/Checkbox'
 import { SlidersHorizontal } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
+import { Badge, type Tone } from '@/components/ui/Badge'
+import { cx } from '@/lib/cx'
+import { EXTENSION_CARD_GRID, EXTENSION_PAGE_COLUMN } from '@/components/market/pageLayout'
 import { Modal } from '@/components/ui/Modal'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { Input } from '@/components/ui/Input'
@@ -91,6 +93,16 @@ export function Connectors({ mode = 'plugins', embedded = false, externalQuery, 
   const statusLabel = (item: ConnectorDto) => isTool(item) && ['ready', 'configured', 'needs-auth', 'not-installed'].includes(item.status)
     ? t(item.enabled && (item.status === 'ready' || item.status === 'configured') ? 'connectors.skillsLoaded' : 'connectors.skillsPending')
     : item.transport === 'mcp' && item.status === 'needs-auth' ? t('connectors.needsService') : t(`connectors.status.${item.status}`)
+  // One status vocabulary app-wide: working = info, needs you = warning,
+  // usable = success, broken = danger.
+  const statusTone = (item: ConnectorDto): Tone => {
+    if (!item.supported) return 'neutral'
+    if (item.operation) return 'info'
+    if (item.status === 'error') return 'danger'
+    if (item.status === 'ready' || item.status === 'configured') return isTool(item) && !item.enabled ? 'warning' : 'success'
+    if (item.status === 'needs-auth' || (isTool(item) && item.status === 'not-installed')) return 'warning'
+    return 'neutral'
+  }
   const phaseLabel = (phase: string) => t(PHASE_KEYS[phase] || 'connectors.waiting')
   const detail = items.find(item => item.id === selected)
   const detailCapabilities = (detail?.capabilities || []).filter(capability => capability !== detail?.description)
@@ -169,19 +181,18 @@ export function Connectors({ mode = 'plugins', embedded = false, externalQuery, 
       && (category === 'all' || (item.category || 'office') === category)
   })
   return <section className={`${embedded ? '' : 'h-full overflow-y-auto'} bg-[var(--color-surface)] text-[var(--color-text-primary)]`}>
-    <div className={embedded ? 'py-4' : 'mx-auto max-w-7xl px-5 py-6 lg:px-8'}>
+    <div className={embedded ? 'py-4' : cx(EXTENSION_PAGE_COLUMN, 'pb-10 pt-5')}>
       <h1 className="sr-only">{t(mode === 'skills' ? 'extensions.skills' : 'extensions.plugins')}</h1>
-      <header className={embedded ? '' : 'mb-5'}>
-        {embedded && <h2 className="mb-3 text-sm font-semibold">{t('extensions.featuredSkills')}</h2>}
+      <header className={embedded ? '' : 'mb-4'}>
+        {embedded && <h2 className="mb-3 text-[13px] font-semibold text-[var(--color-text-secondary)]">{t('extensions.featuredSkills')}</h2>}
         {!embedded && <>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <SearchField size="md" value={query} onChange={setQuery} label={t(mode === 'skills' ? 'extensions.searchSkills' : 'extensions.searchPlugins')} placeholder={t(mode === 'skills' ? 'extensions.searchSkills' : 'extensions.searchPlugins')} clearLabel={t('connectors.clear')} containerClassName="min-w-0 flex-1" />
             {!management && <div ref={filterRef} className="relative shrink-0">
-              <Button ref={filterButtonRef} size="sm" variant="secondary" aria-expanded={filtersOpen} aria-controls={filterPanelId} onClick={() => setFiltersOpen(value => !value)}>
-                <SlidersHorizontal aria-hidden="true" className="h-4 w-4" />
-                {t('extensions.filter')}{activeFilters.length > 0 && <span className="tabular-nums">{activeFilters.length}</span>}
+              <Button ref={filterButtonRef} size="base" variant="secondary" icon={<SlidersHorizontal aria-hidden="true" size={14} strokeWidth={1.75} />} aria-expanded={filtersOpen} aria-controls={filterPanelId} onClick={() => setFiltersOpen(value => !value)}>
+                {t('extensions.filter')}{activeFilters.length > 0 && <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{activeFilters.length}</span>}
               </Button>
-              {filtersOpen && <div id={filterPanelId} role="region" aria-label={t('extensions.filter')} className="absolute right-0 top-full z-[var(--z-dropdown)] mt-2 w-64 max-w-[calc(100vw-40px)] space-y-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 shadow-[var(--shadow-overlay)]">
+              {filtersOpen && <div id={filterPanelId} role="region" aria-label={t('extensions.filter')} className="absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-64 max-w-[calc(100vw-40px)] space-y-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4 shadow-[var(--shadow-dropdown)]">
                 <Checkbox label={t('connectors.added')} checked={filter === 'added'} onChange={event => setFilter(event.target.checked ? 'added' : 'all')} />
                 {mode === 'plugins' && <SelectField size="md" label={t('connectors.region')} value={region} onChange={setRegion} options={[{ value: 'all', label: t('connectors.region.all') }, { value: 'china', label: t('connectors.region.china') }, { value: 'global', label: t('connectors.region.global') }]} />}
                 <SelectField size="md" label={t('extensions.categories')} value={category} onChange={setCategory} options={[{ value: 'all', label: t('connectors.all') }, ...availableCategories.map(value => ({ value, label: t(`connectors.category.${value}`) }))]} />
@@ -189,34 +200,34 @@ export function Connectors({ mode = 'plugins', embedded = false, externalQuery, 
               </div>}
             </div>}
           </div>
-          {!management && activeFilters.length > 0 && <p className="mt-2 text-xs text-[var(--color-text-secondary)]">{activeFilters.join(' · ')}</p>}
+          {!management && activeFilters.length > 0 && <p className="mt-2 text-xs text-[var(--color-text-tertiary)]">{activeFilters.join(' · ')}</p>}
         </>}
       </header>
       {(error || localError) && (!detail || confirmation) && <div id="connector-error" className="mb-4"><ErrorState size="sm" title={t('connectors.loadFailed')} detail={localError || error} onRetry={() => { setLocalError(null); void refresh() }} retryLabel={t('connectors.retry')} /></div>}
-      {loading ? <div role="status" aria-label={t('connectors.loading')} className="grid grid-cols-1 gap-3 lg:grid-cols-2">{Array.from({ length: 8 }, (_, index) => <div key={index} className="flex h-28 items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] px-4"><Skeleton shape="block" width="40px" height="40px" /><div className="flex-1 space-y-2"><Skeleton width="40%" /><Skeleton /><Skeleton width="72%" /></div></div>)}</div>
-        : visible.length ? <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">{visible.map(item => <ConnectorRow key={item.id} id={item.id} name={name(item)} description={nativeText(item, 'description')} kind={isTool(item) && mode !== 'skills' ? t('connectors.toolKind') : undefined} status={!item.supported ? t('connectors.unsupported') : item.installed || item.operation || item.status === 'error' ? statusLabel(item) : undefined} added={item.installed || !!item.operation || management} actionLabel={t('connectors.details')} action={management && item.installed && !item.operation ? <Button size="sm" variant="secondary" disabled={pending[item.id]} onClick={() => requestAction(item, 'remove')}>{t('market.uninstall.action')}</Button> : undefined} onDetails={() => showDetail(item)} onAction={() => showDetail(item)} />)}</div>
+      {loading ? <div role="status" aria-label={t('connectors.loading')} className={EXTENSION_CARD_GRID}>{Array.from({ length: 8 }, (_, index) => <div key={index} className="flex min-h-[104px] items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-4"><Skeleton shape="block" width="40px" height="40px" /><div className="flex-1 space-y-2 pt-1"><Skeleton width="40%" /><Skeleton /><Skeleton width="72%" /></div></div>)}</div>
+        : visible.length ? <div className={EXTENSION_CARD_GRID}>{visible.map(item => <ConnectorRow key={item.id} id={item.id} name={name(item)} description={nativeText(item, 'description')} kind={isTool(item) && mode !== 'skills' ? t('connectors.toolKind') : undefined} status={!item.supported ? t('connectors.unsupported') : item.installed || item.operation || item.status === 'error' ? statusLabel(item) : undefined} statusTone={statusTone(item)} added={item.installed || !!item.operation || management} actionLabel={t('connectors.details')} action={management && item.installed && !item.operation ? <Button size="sm" variant="secondary" disabled={pending[item.id]} onClick={() => requestAction(item, 'remove')}>{t('market.uninstall.action')}</Button> : undefined} onDetails={() => showDetail(item)} onAction={() => showDetail(item)} />)}</div>
           : <EmptyState variant="plain" size="md" title={t('extensions.empty')} description={t(management ? (externalQuery ?? query).trim() ? 'connectors.emptySearch' : 'connectors.emptyAdded' : filter === 'added' ? 'connectors.emptyAdded' : 'connectors.emptySearch')} action={embedded || management ? undefined : { label: t('connectors.resetFilters'), variant: 'secondary', onClick: () => { setFilter('all'); setCategory('all'); setRegion('all'); setQuery('') } }} />}
     </div>
     <Modal open={!!detail && !confirmation} onClose={closeDetail} title={detail ? name(detail) : ''} width={600} footer={detail ? actions(detail) : undefined}>
-      {detail && <div className="space-y-4 text-xs leading-5">
-        <p className="text-sm text-[var(--color-text-secondary)]">{nativeText(detail, 'description')}</p>
-        <div className="flex items-center gap-2"><Badge tone="neutral">{statusLabel(detail)}</Badge><span className="text-[var(--color-text-tertiary)]">{isTool(detail) ? t(mode === 'skills' ? 'extensions.skills' : 'connectors.toolKind') : detail.transport === 'mcp' ? 'MCP' : 'CLI'}</span></div>
-        <p className="text-[var(--color-text-secondary)]">{nativeText(detail, 'requirements')}</p>
+      {detail && <div className="space-y-4 text-[13px] leading-5">
+        <p className="text-[var(--color-text-secondary)]">{nativeText(detail, 'description')}</p>
+        <div className="flex items-center gap-2"><Badge tone={statusTone(detail)}>{statusLabel(detail)}</Badge><span className="text-xs text-[var(--color-text-tertiary)]">{isTool(detail) ? t(mode === 'skills' ? 'extensions.skills' : 'connectors.toolKind') : detail.transport === 'mcp' ? 'MCP' : 'CLI'}</span></div>
+        <p className="text-xs text-[var(--color-text-tertiary)]">{nativeText(detail, 'requirements')}</p>
         {(error || localError) && <div id="connector-error"><ErrorState size="sm" title={t('connectors.loadFailed')} detail={localError || error} /></div>}
-        {!isTool(detail) && !!detail.setupFields?.length && <div className="space-y-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] p-3">
-          <p className="font-medium">{t('connectors.configuration')}</p>
-          <p className="text-[var(--color-text-tertiary)]">{t('connectors.configurationHint')}</p>
+        {!isTool(detail) && !!detail.setupFields?.length && <div className="space-y-3 rounded-[var(--radius-md)] border border-[var(--color-border)] p-3">
+          <div><p className="font-medium">{t('connectors.configuration')}</p>
+          <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{t('connectors.configurationHint')}</p></div>
           {detail.setupFields.map(field => <Input key={field.key} size="md" label={field.label} type={field.secret ? 'password' : 'text'} autoComplete="off" spellCheck={false} placeholder={field.placeholder} value={configuration[field.key] || ''} error={invalidFields.includes(field.key) ? t('connectors.fieldRequired') : undefined} onChange={event => { setConfiguration(state => ({ ...state, [field.key]: event.target.value })); setInvalidFields(state => state.filter(key => key !== field.key)) }} />)}
         </div>}
         {!!detailCapabilities.length && <div><h3 className="mb-1 font-medium">{t('connectors.capabilities')}</h3><p className="text-[var(--color-text-secondary)]">{detailCapabilities.join(' · ')}</p></div>}
-        <dl className="grid grid-cols-[auto_1fr] gap-x-5 gap-y-2 border-y border-[var(--color-border)] py-3 [&>dt]:text-[var(--color-text-tertiary)] [&>dd]:min-w-0 [&>dd]:break-words">
+        <dl className="grid grid-cols-[auto_1fr] items-baseline gap-x-5 gap-y-2 border-y border-[var(--color-border)] py-3 [&>dt]:text-xs [&>dt]:text-[var(--color-text-tertiary)] [&>dd]:min-w-0 [&>dd]:break-words">
           {!isTool(detail) && <><dt>{t('connectors.account')}</dt><dd>{detail.accountLabel || t(detail.connection === 'connected' ? 'connectors.currentAccount' : 'connectors.noAccount')}</dd></>}
           <dt>{t('connectors.platforms')}</dt><dd>{detail.platforms.map(platform => PLATFORM_LABELS[platform] || platform).join(', ')}</dd>
           <dt>{t('connectors.source')}</dt><dd>{detail.transport === 'mcp' ? t('connectors.officialMcp') : detail.packageName}<Button size="xs" variant="ghost" onClick={() => void openUrl(detail.homepage)}>{t('connectors.homepage')}</Button></dd>
           <dt>{t('connectors.version')}</dt><dd>{detail.installedVersion || detail.version}{detail.updateAvailable && <p>{t('connectors.updateAvailable')}: {detail.version}</p>}</dd>
           <dt>{t('connectors.skills')}</dt><dd>{name(detail)} · {detail.pluginId}</dd>
         </dl>
-        <p className="text-[var(--color-text-tertiary)]">{t(isTool(detail) ? 'connectors.skillsRuntimeInfo' : detail.credentialMode === 'shared' ? 'connectors.shared' : 'connectors.isolated')}</p>
+        <p className="text-xs text-[var(--color-text-tertiary)]">{t(isTool(detail) ? 'connectors.skillsRuntimeInfo' : detail.credentialMode === 'shared' ? 'connectors.shared' : 'connectors.isolated')}</p>
         {!isTool(detail) && detail.status === 'configured' && <p>{t('connectors.localVerification')}</p>}
         <div><h3 className="mb-1 font-medium">{t('connectors.example')}</h3><p className="text-[var(--color-text-secondary)]">{nativeText(detail, 'example')}</p></div>
         {detail.error && <ErrorState size="sm" title={detail.failedPhase ? `${t('connectors.phase.failed')}: ${phaseLabel(detail.failedPhase)}` : t('connectors.status.error')} detail={detail.error} />}

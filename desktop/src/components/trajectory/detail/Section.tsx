@@ -59,7 +59,7 @@ export function Section({
 
   return (
     <section className="border-t border-[var(--color-border)] first:border-t-0">
-      <div className="flex items-center gap-2 px-6 pb-2 pt-4">
+      <div className="flex min-h-[40px] items-center gap-2 pb-1 pt-2">
         <button
           type="button"
           onClick={toggle}
@@ -67,11 +67,11 @@ export function Section({
           className="flex min-w-0 flex-1 items-center gap-2 text-left transition-colors"
         >
           <ChevronRight
-            size={13}
-            strokeWidth={2}
+            size={14}
+            strokeWidth={1.75}
             className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform ${open ? 'rotate-90' : ''}`}
           />
-          <span className="truncate text-[14px] font-bold text-[var(--color-text-primary)]">
+          <span className="truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
             {title}
           </span>
           {badge !== undefined ? (
@@ -82,7 +82,7 @@ export function Section({
         </button>
         {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
       </div>
-      {open ? <div className="px-6 pb-5">{children}</div> : null}
+      {open ? <div className="pb-4">{children}</div> : null}
     </section>
   )
 }

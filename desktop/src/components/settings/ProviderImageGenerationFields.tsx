@@ -1,5 +1,5 @@
 import { Input } from '@/components/ui/Input'
-import { Switch } from '@/components/ui/Switch'
+import { SettingsBlock, SettingsGroup, SettingsSwitchRow } from '@/components/settings/SettingsSection'
 import { useTranslation } from '@/i18n'
 
 export type ImageGenerationFormValue = {
@@ -21,19 +21,16 @@ export function ProviderImageGenerationFields({ value, onChange }: Props) {
   }
 
   return (
-    <div className="overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-      <div className="px-3 py-3">
-        <Switch
-          checked={value.enabled}
-          onChange={(enabled) => update({ enabled })}
-          label={t('settings.providers.imageGenerationEnabled')}
-          description={t('settings.providers.imageGenerationEnabledDesc')}
-          size="sm"
-        />
-      </div>
+    <SettingsGroup>
+      <SettingsSwitchRow
+        title={t('settings.providers.imageGenerationEnabled')}
+        description={t('settings.providers.imageGenerationEnabledDesc')}
+        checked={value.enabled}
+        onChange={(enabled) => update({ enabled })}
+      />
 
       {value.enabled ? (
-        <div className="grid gap-3 border-t border-[var(--color-border)] px-3 py-3 sm:grid-cols-2">
+        <SettingsBlock className="grid gap-3 sm:grid-cols-2">
           <Input
             label={t('settings.providers.imageGenerationModel')}
             required
@@ -62,8 +59,8 @@ export function ProviderImageGenerationFields({ value, onChange }: Props) {
             hint={t('settings.providers.imageGenerationApiKeyHint')}
             className="font-mono text-[13px]"
           />
-        </div>
+        </SettingsBlock>
       ) : null}
-    </div>
+    </SettingsGroup>
   )
 }

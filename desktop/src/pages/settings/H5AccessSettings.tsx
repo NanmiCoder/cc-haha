@@ -8,7 +8,14 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import { Card } from '@/components/ui/Card'
+import { Switch } from '@/components/ui/Switch'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/settings/SettingsSection'
 import { useUIStore } from '../../stores/uiStore'
 import { isBrowserSafePort } from '../../lib/browserSafePort'
 import { copyTextToClipboard } from '@/lib/clipboard'
@@ -264,303 +271,293 @@ export function H5AccessSettings() {
   }
 
   return (
-    <div className="max-w-3xl">
+    <div className="w-full min-w-0">
       <section aria-labelledby="h5-access-title" role="region">
-        <div className="mb-6 flex items-start gap-3">
-          <div className="mt-1 flex h-10 w-10 shrink-0 items-center justify-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-[var(--color-brand)]">
-            <QrCode className="h-5 w-5" aria-hidden="true" />
-          </div>
-          <div className="min-w-0">
-            <h2
-              id="h5-access-title"
-              className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)]"
-             style={{ fontFamily: 'var(--font-headline)' }}>
-              {t('settings.general.h5AccessTitle')}
-            </h2>
-            <p className="mt-1.5 text-[13.5px] leading-6 text-[var(--color-text-secondary)]">
-              {t('settings.general.h5AccessDescription')}
-            </p>
-          </div>
-        </div>
+        <SettingsPageHeader
+          titleId="h5-access-title"
+          title={t('settings.tab.h5Access')}
+          description={t('settings.general.h5AccessDescription')}
+        />
 
-        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
-          <div className="flex items-start justify-between gap-4">
-            <label className="flex min-w-0 items-start gap-3">
-              <input
-                type="checkbox"
-                className="mt-1 h-4 w-4 rounded-[var(--radius-sm)] border-[var(--color-border)] accent-[var(--color-brand)]"
-                checked={h5Access.enabled}
-                disabled={h5ActionRunning}
-                aria-label={t('settings.general.h5AccessEnabled')}
-                onChange={(event) => {
-                  if (event.target.checked) {
-                    setH5EnableConfirmOpen(true)
-                  } else {
-                    void handleH5Disable()
-                  }
-                }}
-              />
-              <span className="min-w-0">
-                <span className="block text-sm font-medium text-[var(--color-text-primary)]">
-                  {t('settings.general.h5AccessEnabled')}
-                </span>
-                <span className="mt-1 block text-xs leading-5 text-[var(--color-text-tertiary)]">
-                  {t('settings.general.h5AccessEnabledHint')}
-                </span>
-              </span>
-            </label>
-            <Badge tone={h5Access.enabled ? 'success' : 'neutral'} size="sm" bordered={!h5Access.enabled}>
+        <SettingsGroup className="mt-7">
+          <SettingsRow
+            layout="inline"
+            title={t('settings.general.h5AccessEnabled')}
+            description={t('settings.general.h5AccessEnabledHint')}
+          >
+            <Badge tone={h5Access.enabled ? 'success' : 'neutral'} size="sm">
               {h5Access.enabled ? t('settings.general.h5AccessStatusEnabled') : t('settings.general.h5AccessDisabledValue')}
             </Badge>
-          </div>
+            <Switch
+              label={t('settings.general.h5AccessEnabled')}
+              labelHidden
+              checked={h5Access.enabled}
+              disabled={h5ActionRunning}
+              onChange={(checked) => {
+                if (checked) {
+                  setH5EnableConfirmOpen(true)
+                } else {
+                  void handleH5Disable()
+                }
+              }}
+            />
+          </SettingsRow>
 
           {h5AccessDiagnostics?.storedHostStaleness === 'unreachable' && h5AccessDiagnostics.storedPublicBaseUrl ? (
-            <div
-              data-testid="h5-access-stale-host-banner"
-              className="mt-4 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-3 text-xs leading-5 text-[var(--color-on-warning-container)]"
-            >
-              <div className="font-semibold">
-                {t('settings.general.h5AccessStaleHostTitle')}
-              </div>
-              <div className="mt-1 text-[var(--color-text-secondary)]">
-                {h5AccessDiagnostics.suggestedHost
-                  ? t('settings.general.h5AccessStaleHostBody', {
-                      storedHost: extractHostnameFromUrl(h5AccessDiagnostics.storedPublicBaseUrl) ?? h5AccessDiagnostics.storedPublicBaseUrl,
-                    })
-                  : t('settings.general.h5AccessStaleHostNoSuggestion', {
-                      storedHost: extractHostnameFromUrl(h5AccessDiagnostics.storedPublicBaseUrl) ?? h5AccessDiagnostics.storedPublicBaseUrl,
-                    })}
-              </div>
-              {h5AccessDiagnostics.suggestedHost && (
-                <div className="mt-2">
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    loading={h5ActionRunning}
-                    onClick={() => void handleH5SwitchToSuggestedHost()}
-                    data-testid="h5-access-stale-host-apply"
-                  >
-                    {t('settings.general.h5AccessStaleHostApply', {
-                      suggestedHost: h5AccessDiagnostics.suggestedHost,
-                    })}
-                  </Button>
+            <SettingsBlock>
+              <div
+                data-testid="h5-access-stale-host-banner"
+                className="rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-3 text-xs leading-[1.5] text-[var(--color-on-warning-container)]"
+              >
+                <div className="font-semibold">
+                  {t('settings.general.h5AccessStaleHostTitle')}
                 </div>
-              )}
-            </div>
+                <div className="mt-1">
+                  {h5AccessDiagnostics.suggestedHost
+                    ? t('settings.general.h5AccessStaleHostBody', {
+                        storedHost: extractHostnameFromUrl(h5AccessDiagnostics.storedPublicBaseUrl) ?? h5AccessDiagnostics.storedPublicBaseUrl,
+                      })
+                    : t('settings.general.h5AccessStaleHostNoSuggestion', {
+                        storedHost: extractHostnameFromUrl(h5AccessDiagnostics.storedPublicBaseUrl) ?? h5AccessDiagnostics.storedPublicBaseUrl,
+                      })}
+                </div>
+                {h5AccessDiagnostics.suggestedHost && (
+                  <div className="mt-2">
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      loading={h5ActionRunning}
+                      onClick={() => void handleH5SwitchToSuggestedHost()}
+                      data-testid="h5-access-stale-host-apply"
+                    >
+                      {t('settings.general.h5AccessStaleHostApply', {
+                        suggestedHost: h5AccessDiagnostics.suggestedHost,
+                      })}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </SettingsBlock>
           ) : null}
 
           {h5AccessDiagnostics?.storedHostStaleness === 'proxy' ? (
-            <div
-              data-testid="h5-access-proxy-note"
-              className="mt-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-xs leading-5 text-[var(--color-text-tertiary)]"
-            >
-              {t('settings.general.h5AccessProxyNote')}
-            </div>
+            <SettingsBlock>
+              <p
+                data-testid="h5-access-proxy-note"
+                className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]"
+              >
+                {t('settings.general.h5AccessProxyNote')}
+              </p>
+            </SettingsBlock>
           ) : null}
+        </SettingsGroup>
 
-          <div className="mt-4 grid grid-cols-1 gap-3">
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_9rem_9rem]">
+        <SettingsSection title={t('settings.general.h5AccessUrl')} description={t('settings.general.h5AccessOpenHint')}>
+          <SettingsGroup>
+            <SettingsRow title={t('settings.general.h5AccessPublicHost')} htmlFor="h5-access-public-url">
               <Input
                 id="h5-access-public-url"
-                label={t('settings.general.h5AccessPublicHost')}
+                size="md"
+                containerClassName="w-full sm:w-[260px]"
+                className="font-mono text-xs"
                 value={h5PublicBaseUrlDraft}
                 placeholder={t('settings.general.h5AccessPublicHostPlaceholder')}
                 onChange={(event) => setH5PublicBaseUrlDraft(event.target.value)}
               />
+            </SettingsRow>
+            <SettingsRow
+              title={t('settings.general.h5AccessFixedPort')}
+              htmlFor="h5-access-fixed-port"
+              description={t('settings.general.h5AccessFixedPortHint')}
+            >
               <Input
                 id="h5-access-fixed-port"
-                label={t('settings.general.h5AccessFixedPort')}
+                size="md"
+                containerClassName="w-full sm:w-[140px]"
+                className="font-mono text-xs tabular-nums"
                 value={h5FixedPortDraft}
                 placeholder={t('settings.general.h5AccessFixedPortPlaceholder')}
                 inputMode="numeric"
                 error={h5FixedPortInvalid ? t('settings.general.h5AccessFixedPortInvalid') : undefined}
                 onChange={(event) => setH5FixedPortDraft(event.target.value)}
               />
+            </SettingsRow>
+            <SettingsRow title={t('settings.general.h5AccessCurrentPort')} htmlFor="h5-access-current-port">
               <Input
                 id="h5-access-current-port"
-                label={t('settings.general.h5AccessCurrentPort')}
+                size="md"
+                containerClassName="w-full sm:w-[140px]"
                 value={h5ActivePort ?? t('settings.general.h5AccessCurrentPortUnknown')}
                 readOnly
-                className="text-[var(--color-text-tertiary)]"
+                className="font-mono text-xs tabular-nums text-[var(--color-text-tertiary)]"
               />
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-[9rem_minmax(0,1fr)] sm:items-start">
+            </SettingsRow>
+            <SettingsRow
+              title={t('settings.general.h5AccessDisconnectGrace')}
+              htmlFor="h5-access-disconnect-grace"
+              description={t('settings.general.h5AccessDisconnectGraceHint')}
+            >
               <Input
                 id="h5-access-disconnect-grace"
-                label={t('settings.general.h5AccessDisconnectGrace')}
+                size="md"
+                containerClassName="w-full sm:w-[140px]"
+                className="font-mono text-xs tabular-nums"
                 value={h5GraceDraft}
                 placeholder={t('settings.general.h5AccessDisconnectGracePlaceholder')}
                 inputMode="numeric"
                 error={h5GraceInvalid ? t('settings.general.h5AccessDisconnectGraceInvalid') : undefined}
                 onChange={(event) => setH5GraceDraft(event.target.value)}
               />
-              <p className="text-xs leading-5 text-[var(--color-text-tertiary)] sm:pt-7">
-                {t('settings.general.h5AccessDisconnectGraceHint')}
-              </p>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-xs text-[var(--color-text-tertiary)]">
-                {t('settings.general.h5AccessOpenHint')}
-                {' '}
-                {t('settings.general.h5AccessFixedPortHint')}
-              </p>
+            </SettingsRow>
+            {h5FixedPortPendingRestart && (
+              <SettingsBlock>
+                <div
+                  data-testid="h5-access-fixed-port-restart-note"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-on-warning-container)]"
+                >
+                  {t('settings.general.h5AccessFixedPortRestartNote', {
+                    fixedPort: String(h5Access.fixedPort),
+                    activePort: h5ActivePort ?? '',
+                  })}
+                </div>
+              </SettingsBlock>
+            )}
+            {h5AccessUrl && (
+              <SettingsBlock>
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1 break-all rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-xs leading-5 text-[var(--color-text-primary)]">
+                    {h5AccessUrl}
+                  </div>
+                  <Button
+                    size="base"
+                    variant="secondary"
+                    className="shrink-0"
+                    icon={<Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
+                    aria-label={t('settings.general.h5AccessCopyUrl')}
+                    onClick={() => void handleH5UrlCopy()}
+                  >
+                    {t('settings.general.h5AccessCopy')}
+                  </Button>
+                </div>
+              </SettingsBlock>
+            )}
+            <SettingsBlock className="flex justify-end">
               <Button
-                size="sm"
+                size="base"
                 variant="secondary"
-                className="shrink-0 whitespace-nowrap"
+                className="whitespace-nowrap"
                 onClick={() => void handleH5SettingsSave()}
                 disabled={!h5AccessDirty || h5FixedPortInvalid || h5GraceInvalid || h5ActionRunning}
                 aria-label={t('settings.general.h5AccessSave')}
               >
                 {t('settings.general.h5AccessSave')}
               </Button>
-            </div>
-            {h5FixedPortPendingRestart && (
-              <div
-                data-testid="h5-access-fixed-port-restart-note"
-                className="rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-on-warning-container)]"
-              >
-                {t('settings.general.h5AccessFixedPortRestartNote', {
-                  fixedPort: String(h5Access.fixedPort),
-                  activePort: h5ActivePort ?? '',
-                })}
-              </div>
-            )}
-          </div>
+            </SettingsBlock>
+          </SettingsGroup>
+        </SettingsSection>
 
-          {h5AccessUrl && (
-            <div className="mt-4 border-t border-[var(--color-border-separator)] pt-4">
-              <div className="flex items-center gap-2">
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
-                    {t('settings.general.h5AccessUrl')}
+        {h5Access.enabled && (
+          <SettingsSection title={t('settings.general.h5AccessQrTitle')}>
+            <SettingsGroup>
+              {h5AccessUrl && (
+                <SettingsBlock className="flex flex-col gap-4 py-4 sm:flex-row">
+                  {/* A white box on purpose, in every theme: scanners need the
+                      contrast, so its placeholder text uses stock neutrals that
+                      stay dark under `data-theme="dark"` too. */}
+                  <div className="flex h-44 w-44 shrink-0 items-center justify-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white p-3">
+                    {h5QrDataUrl ? (
+                      <img
+                        src={h5QrDataUrl}
+                        alt={t('settings.general.h5AccessQrAlt')}
+                        className="h-full w-full"
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center gap-3 px-4 text-center">
+                        <QrCode size={40} strokeWidth={1.5} className="text-neutral-400" aria-hidden="true" />
+                        <p className="text-xs leading-5 text-neutral-500">
+                          {t('settings.general.h5AccessQrEmptyHint')}
+                        </p>
+                      </div>
+                    )}
                   </div>
-                  <div className="mt-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)] px-3 py-2 font-mono text-[12.5px] leading-5 text-[var(--color-text-primary)] break-all">
-                    {h5AccessUrl}
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="shrink-0"
-                  icon={<Copy className="h-3.5 w-3.5" aria-hidden="true" />}
-                  aria-label={t('settings.general.h5AccessCopyUrl')}
-                  onClick={() => void handleH5UrlCopy()}
-                >
-                  {t('settings.general.h5AccessCopy')}
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {h5Access.enabled && h5AccessUrl && (
-            <div className="mt-4 border-t border-[var(--color-border-separator)] pt-4">
-              <div className="flex flex-col gap-4 sm:flex-row">
-                <div className="flex h-48 w-48 shrink-0 items-center justify-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white p-3">
-                  {h5QrDataUrl ? (
-                    <img
-                      src={h5QrDataUrl}
-                      alt={t('settings.general.h5AccessQrAlt')}
-                      className="h-full w-full"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center gap-3 px-4 text-center">
-                      {/* Stock neutrals on purpose: the QR box is a hardcoded
-                          `bg-white` (scanners need the contrast), so this text
-                          must stay dark in all three themes. Theme tokens would
-                          go light-on-white under `data-theme="dark"`. */}
-                      <QrCode className="h-12 w-12 text-neutral-400" aria-hidden="true" />
-                      <p className="text-xs leading-5 text-neutral-500">
-                        {t('settings.general.h5AccessQrEmptyHint')}
-                      </p>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                      {h5Token
+                        ? t('settings.general.h5AccessQrHint')
+                        : t('settings.general.h5AccessQrRefreshHint')}
+                    </p>
+                    {h5LaunchUrl && (
+                      <div className="mt-3 break-all rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-xs leading-5 text-[var(--color-text-primary)]">
+                        {h5LaunchUrl}
+                      </div>
+                    )}
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        size="base"
+                        variant="secondary"
+                        icon={<Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
+                        disabled={!h5LaunchUrl || !h5Token}
+                        onClick={() => void handleH5LaunchUrlCopy()}
+                      >
+                        {t('settings.general.h5AccessCopyLaunchUrl')}
+                      </Button>
+                      <Button
+                        size="base"
+                        variant={h5Token ? 'secondary' : 'primary'}
+                        icon={<RotateCw size={14} strokeWidth={1.75} aria-hidden="true" />}
+                        loading={h5ActionRunning}
+                        onClick={() => void handleH5Regenerate()}
+                      >
+                        {h5Token ? t('settings.general.h5AccessRegenerate') : t('settings.general.h5AccessGenerateToken')}
+                      </Button>
                     </div>
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-xs font-medium uppercase text-[var(--color-text-tertiary)]">
-                    {t('settings.general.h5AccessQrTitle')}
                   </div>
-                  <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
-                    {h5Token
-                      ? t('settings.general.h5AccessQrHint')
-                      : t('settings.general.h5AccessQrRefreshHint')}
-                  </p>
-                  {h5LaunchUrl && (
-                    <div className="mt-3 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-code-bg)] px-3 py-2 font-mono text-[12.5px] leading-5 text-[var(--color-text-primary)] break-all">
-                      {h5LaunchUrl}
-                    </div>
-                  )}
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      icon={<Copy className="h-3.5 w-3.5" aria-hidden="true" />}
-                      disabled={!h5LaunchUrl || !h5Token}
-                      onClick={() => void handleH5LaunchUrlCopy()}
-                    >
-                      {t('settings.general.h5AccessCopyLaunchUrl')}
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={h5Token ? 'secondary' : 'primary'}
-                      icon={<RotateCw className="h-3.5 w-3.5" aria-hidden="true" />}
-                      loading={h5ActionRunning}
-                      onClick={() => void handleH5Regenerate()}
-                    >
-                      {h5Token ? t('settings.general.h5AccessRegenerate') : t('settings.general.h5AccessGenerateToken')}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
+                </SettingsBlock>
+              )}
 
-          {h5Access.enabled && (
-            <div className="mt-4 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-xs font-medium uppercase text-[var(--color-text-tertiary)]">
-                    {t('settings.general.h5AccessTokenPreview')}
-                  </div>
-                  <div className="mt-1 break-all font-mono text-[12.5px] leading-5 text-[var(--color-text-primary)]">
+              <SettingsRow
+                title={t('settings.general.h5AccessTokenPreview')}
+                description={(
+                  <span className="break-all font-mono text-xs text-[var(--color-text-primary)]">
                     {h5TokenVisible && h5Token
                       ? h5Token
                       : h5Access.tokenPreview || t('settings.general.h5AccessTokenNotAvailable')}
-                  </div>
-                </div>
-                <div className="flex shrink-0 flex-wrap justify-end gap-2">
-                  <Button
-                    size="sm"
-                    variant="secondary"
-                    icon={h5TokenVisible ? <EyeOff className="h-3.5 w-3.5" aria-hidden="true" /> : <Eye className="h-3.5 w-3.5" aria-hidden="true" />}
-                    disabled={!h5Token}
-                    onClick={() => setH5TokenVisible((visible) => !visible)}
-                  >
-                    {h5TokenVisible ? t('settings.general.h5AccessHideToken') : t('settings.general.h5AccessShowToken')}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="danger"
-                    icon={<PowerOff className="h-3.5 w-3.5" aria-hidden="true" />}
-                    loading={h5ActionRunning}
-                    onClick={() => void handleH5Disable()}
-                  >
-                    {t('settings.general.h5AccessDisable')}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
+                  </span>
+                )}
+              >
+                <Button
+                  size="base"
+                  variant="secondary"
+                  icon={h5TokenVisible
+                    ? <EyeOff size={14} strokeWidth={1.75} aria-hidden="true" />
+                    : <Eye size={14} strokeWidth={1.75} aria-hidden="true" />}
+                  disabled={!h5Token}
+                  onClick={() => setH5TokenVisible((visible) => !visible)}
+                >
+                  {h5TokenVisible ? t('settings.general.h5AccessHideToken') : t('settings.general.h5AccessShowToken')}
+                </Button>
+                <Button
+                  size="base"
+                  variant="danger-ghost"
+                  icon={<PowerOff size={14} strokeWidth={1.75} aria-hidden="true" />}
+                  loading={h5ActionRunning}
+                  onClick={() => void handleH5Disable()}
+                >
+                  {t('settings.general.h5AccessDisable')}
+                </Button>
+              </SettingsRow>
+            </SettingsGroup>
+          </SettingsSection>
+        )}
 
-          <p className="mt-4 text-xs text-[var(--color-text-tertiary)] leading-5">
-            {t('settings.general.h5AccessSafetyNote')}
+        <p className="mt-3 px-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+          {t('settings.general.h5AccessSafetyNote')}
+        </p>
+        {h5AccessError && (
+          <p className="mt-2 px-0.5 text-xs text-[var(--color-error)]">
+            {h5AccessError}
           </p>
-          {h5AccessError && (
-            <p className="mt-2 text-xs text-[var(--color-error)]">
-              {h5AccessError}
-            </p>
-          )}
-        </Card>
+        )}
       </section>
 
       <PublicAccessSettings />

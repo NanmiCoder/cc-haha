@@ -29,18 +29,18 @@ const FilterTrigger = forwardRef<HTMLButtonElement, FilterTriggerProps>(function
     <button
       ref={ref}
       type="button"
-      className={`inline-flex min-h-11 items-center gap-2 rounded-[var(--radius-lg)] border px-4 text-sm transition-[background-color,color,border-color,box-shadow,transform] duration-150 ease-out focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] active:scale-[0.98] motion-reduce:transition-none ${
+      className={`inline-flex h-8 items-center gap-1.5 rounded-[var(--radius-md)] border px-2.5 text-[13px] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] motion-reduce:transition-none ${
+        // A narrowed filter reads as "selected", in the neutral selected fill:
+        // the brand wash it used to carry is kept for brand and send only.
         active
-          ? // Foreground is the darkened pair; raw terracotta on its own soft
-            // fill only reaches 4.3:1 under the two ink themes.
-            'border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)]'
+          ? 'border-[var(--color-outline)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
           : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]'
       }`}
       {...props}
     >
-      <span className={active ? 'text-[var(--color-on-brand-soft)]' : 'text-[var(--color-text-secondary)]'}>{label}</span>
-      <span className="font-semibold">{value}</span>
-      <ChevronDown className="h-3.5 w-3.5 text-[var(--color-text-tertiary)]" strokeWidth={1.8} aria-hidden="true" />
+      <span className="text-[var(--color-text-tertiary)]">{label}</span>
+      <span className="font-medium">{value}</span>
+      <ChevronDown className="text-[var(--color-text-tertiary)]" size={14} strokeWidth={1.75} aria-hidden="true" />
     </button>
   )
 })

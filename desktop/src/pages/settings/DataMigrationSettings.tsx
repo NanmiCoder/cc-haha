@@ -183,38 +183,44 @@ export function DataMigrationSettings({ environmentControlled, disabled = false,
   )
   const progress = status && status.totalBytes > 0 ? status.bytes / status.totalBytes * 100 : 0
 
+  // Rendered as one row of the storage section's settings group, so it carries
+  // the row padding itself rather than a divider of its own.
   return (
-    <div className="mt-4 border-t border-[var(--color-border-separator)] pt-4">
-      <div className="text-sm font-semibold text-[var(--color-text-primary)]">{t('settings.general.migration.title')}</div>
-      <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">{t('settings.general.migration.description')}</p>
-      <Button
-        type="button"
-        size="sm"
-        variant="secondary"
-        className="mt-3"
-        disabled={environmentControlled || disabled || busy || !!preview}
-        loading={preparing}
-        onClick={() => void chooseTarget()}
-      >
-        <FolderInput size={14} aria-hidden="true" />
-        {t('settings.general.migration.choose')}
-      </Button>
+    <div className="px-4 py-3">
+      <div className="flex flex-col gap-x-6 gap-y-2.5 sm:flex-row sm:items-center">
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium leading-5 text-[var(--color-text-primary)]">{t('settings.general.migration.title')}</div>
+          <p className="mt-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{t('settings.general.migration.description')}</p>
+        </div>
+        <Button
+          type="button"
+          size="base"
+          variant="secondary"
+          className="shrink-0 self-start sm:self-auto"
+          disabled={environmentControlled || disabled || busy || !!preview}
+          loading={preparing}
+          icon={<FolderInput size={14} strokeWidth={1.75} aria-hidden="true" />}
+          onClick={() => void chooseTarget()}
+        >
+          {t('settings.general.migration.choose')}
+        </Button>
+      </div>
       {environmentControlled && (
-        <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">{t('settings.general.migration.environment')}</p>
+        <p className="mt-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{t('settings.general.migration.environment')}</p>
       )}
       {error && !active && <p className="mt-2 text-xs text-[var(--color-error)]" role="alert">{error}</p>}
       {status && !active && (
-        <div className="mt-3 space-y-3 rounded-[var(--radius-lg)] bg-[var(--color-surface)] p-3" role="status">
-          <p className="text-sm font-medium text-[var(--color-text-primary)]">{t(STAGE_LABELS[status.stage])}</p>
+        <div className="mt-3 space-y-3 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3" role="status">
+          <p className="text-[13px] font-medium text-[var(--color-text-primary)]">{t(STAGE_LABELS[status.stage])}</p>
           {status.error && <p className="text-xs text-[var(--color-error)]" role="alert">{status.error}</p>}
           {directories(status.sourceDir, status.targetDir)}
           {status.stage === 'completed' && (
             <>
-              <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('settings.general.migration.retained')}</p>
-              <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">{t('settings.general.migration.cli')}</p>
+              <p className="text-xs leading-[1.5] text-[var(--color-text-secondary)]">{t('settings.general.migration.retained')}</p>
+              <p className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{t('settings.general.migration.cli')}</p>
               <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="secondary" onClick={() => void openPath(status.sourceDir)}>{t('settings.general.migration.openSource')}</Button>
-                <Button size="sm" variant="secondary" onClick={() => void openPath(status.targetDir)}>{t('settings.general.migration.openTarget')}</Button>
+                <Button size="base" variant="secondary" onClick={() => void openPath(status.sourceDir)}>{t('settings.general.migration.openSource')}</Button>
+                <Button size="base" variant="secondary" onClick={() => void openPath(status.targetDir)}>{t('settings.general.migration.openTarget')}</Button>
               </div>
             </>
           )}
@@ -230,7 +236,7 @@ export function DataMigrationSettings({ environmentControlled, disabled = false,
         confirmVariant="primary"
         loading={starting}
         body={preview && (
-          <div className="space-y-3 text-sm leading-6 text-[var(--color-text-secondary)]">
+          <div className="space-y-3 text-[13px] leading-6 text-[var(--color-text-secondary)]">
             {directories(preview.sourceDir, preview.targetDir)}
             <p>{t('settings.general.migration.preview', { files: preview.files, size: formatBytes(preview.bytes) })}</p>
             {preview.activeTasks > 0 && <p>{t('settings.general.migration.activeTasks', { count: preview.activeTasks })}</p>}
@@ -252,7 +258,7 @@ export function DataMigrationSettings({ environmentControlled, disabled = false,
         )}
       >
         {status && (
-          <div className="space-y-3 text-sm text-[var(--color-text-secondary)]" aria-live="polite">
+          <div className="space-y-3 text-[13px] text-[var(--color-text-secondary)]" aria-live="polite">
             <p>{cancelling ? t('settings.general.migration.cancelling') : t(STAGE_LABELS[status.stage])}</p>
             <Progress
               label={t(STAGE_LABELS[status.stage])}

@@ -100,7 +100,7 @@ export function SnapshotDetail({ sessionId, snapshot, tab }: { sessionId: string
 function TruncatedNotice() {
   const t = useTranslation()
   return (
-    <div className="rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-1.5 text-[12px] text-[var(--color-on-warning-container)]">
+    <div className="rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-1.5 text-[12px] text-[var(--color-on-warning-container)]">
       {t('trajectory.detail.truncated')}
     </div>
   )
@@ -121,7 +121,7 @@ function ToolCatalog({ tools, truncated }: { tools: ToolCatalogEntry[]; truncate
                 type="button"
                 aria-expanded={expanded}
                 onClick={() => setOpen(expanded ? null : tool.name)}
-                className="flex w-full min-w-0 items-baseline gap-2 px-3 py-1.5 text-left hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                className="flex min-h-[30px] w-full min-w-0 items-center gap-2 px-3 py-1 text-left hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
               >
                 <span className="shrink-0 font-mono text-[12px] font-medium text-[var(--color-text-primary)]">{tool.name}</span>
                 <span className="min-w-0 truncate text-[12px] text-[var(--color-text-tertiary)]">{tool.description?.split('\n')[0]}</span>
@@ -144,8 +144,8 @@ function ToolCatalogDiff({ before, after }: { before: ToolCatalogEntry[]; after:
   const t = useTranslation()
   const diff = useMemo(() => diffToolCatalogs(before, after), [after, before])
   const groups = [
-    { key: 'added', label: t('trajectory.detail.toolsAdded'), names: diff.added, tone: 'text-[var(--color-success)]' },
-    { key: 'removed', label: t('trajectory.detail.toolsRemoved'), names: diff.removed, tone: 'text-[var(--color-error)]' },
+    { key: 'added', label: t('trajectory.detail.toolsAdded'), names: diff.added, tone: 'text-[var(--color-diff-added-text)]' },
+    { key: 'removed', label: t('trajectory.detail.toolsRemoved'), names: diff.removed, tone: 'text-[var(--color-diff-removed-text)]' },
     { key: 'changed', label: t('trajectory.detail.toolsChanged'), names: diff.changed, tone: 'text-[var(--color-text-primary)]' },
   ].filter((group) => group.names.length)
   return (
@@ -199,10 +199,10 @@ function TextDiff({ before, after }: { before: string; after: string }) {
           data-diff={line.type}
           className={cx(
             'whitespace-pre-wrap break-words px-3',
-            line.type === 'add' && 'bg-[var(--color-success-container)] text-[var(--color-on-success-container)]',
-            line.type === 'remove' && 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]',
+            line.type === 'add' && 'bg-[var(--color-diff-added-bg)] text-[var(--color-diff-added-text)]',
+            line.type === 'remove' && 'bg-[var(--color-diff-removed-bg)] text-[var(--color-diff-removed-text)]',
             line.type === 'same' && 'text-[var(--color-text-secondary)]',
-            line.type === 'gap' && 'bg-[var(--color-surface-container-low)] py-0.5 text-center text-[11px] text-[var(--color-text-tertiary)]',
+            line.type === 'gap' && 'bg-[var(--color-surface-container)] py-0.5 text-center font-sans text-[11px] text-[var(--color-text-tertiary)]',
           )}
         >
           {line.type === 'add' ? '+ ' : line.type === 'remove' ? '- ' : line.type === 'same' ? '  ' : ''}

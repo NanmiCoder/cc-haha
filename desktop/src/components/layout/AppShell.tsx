@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type HTMLAttributes } from 'react'
+import { Menu, X } from 'lucide-react'
 import { Sidebar } from './Sidebar'
 import { ContentRouter } from './ContentRouter'
 import { ToastContainer } from '@/components/layout/Toast'
@@ -273,7 +274,7 @@ export function AppShell() {
 
   if (!ready) {
     return (
-      <div className="app-shell-viewport flex items-center justify-center bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
+      <div className="app-shell-viewport flex items-center justify-center bg-[var(--color-surface)] text-[13px] text-[var(--color-text-tertiary)]">
         {t('app.launching')}
       </div>
     )
@@ -333,7 +334,9 @@ export function AppShell() {
             <span className="relative inline-flex shrink-0">
               <IconButton
                 data-testid="mobile-sidebar-toggle"
-                icon={effectiveSidebarOpen ? 'close' : 'menu'}
+                icon={effectiveSidebarOpen
+                  ? <X size={20} strokeWidth={1.75} aria-hidden="true" />
+                  : <Menu size={20} strokeWidth={1.75} aria-hidden="true" />}
                 label={effectiveSidebarOpen ? t('sidebar.collapse') : t('sidebar.expand')}
                 onClick={toggleEffectiveSidebar}
                 size="2xl"
@@ -345,16 +348,16 @@ export function AppShell() {
               <MobileAttentionDot activeSessionId={activeTabId} />
             </span>
             {activeTab?.type === 'settings' ? (
-              <h1 className="min-w-0 flex-1 truncate text-[15px] font-bold leading-tight text-[var(--color-text-primary)]">{t('sidebar.settings')}</h1>
+              <h1 className="min-w-0 flex-1 truncate text-[15px] font-semibold leading-tight text-[var(--color-text-primary)]">{t('sidebar.settings')}</h1>
             ) : isActiveChatTab ? (
               <div className="min-w-0 flex-1">
-                <h1 className="truncate text-[15px] font-bold leading-tight text-[var(--color-text-primary)]">
+                <h1 className="truncate text-[15px] font-semibold leading-tight text-[var(--color-text-primary)]">
                   {mobileSessionTitle}
                 </h1>
-                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[10px] font-medium text-[var(--color-text-tertiary)]">
+                <div className="mt-0.5 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-[var(--color-text-tertiary)]">
                   {activeTab?.status === 'running' ? (
                     <span className="flex shrink-0 items-center gap-1 text-[var(--color-text-secondary)]">
-                      <StatusDot tone="success" pulse />
+                      <StatusDot tone="info" pulse />
                       {t('session.active')}
                     </span>
                   ) : null}

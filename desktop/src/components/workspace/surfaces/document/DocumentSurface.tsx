@@ -1,3 +1,4 @@
+import { FileQuestion } from 'lucide-react'
 import { Suspense } from 'react'
 import type { WorkspaceDocumentPreviewType } from '@/api/sessions'
 import { useWorkspaceDocumentBlob } from '@/hooks/useWorkspaceDocumentBlob'
@@ -72,7 +73,7 @@ export function DocumentSurface({
   if (!Viewer) {
     return (
       <PanelMessage
-        icon="draft"
+        icon={FileQuestion}
         message={t('workspace.document.unsupported')}
         action={canOpenInSystem ? <OpenInSystemButton absolutePath={absolutePath} /> : undefined}
       />
@@ -90,7 +91,7 @@ export function DocumentSurface({
         />
       )
     }
-    return <PanelMessage icon="progress_activity" message={t('workspace.document.loading')} />
+    return <PanelMessage busy message={t('workspace.document.loading')} />
   }
 
   return (
@@ -105,7 +106,7 @@ export function DocumentSurface({
           />
         }
       >
-        <Suspense fallback={<PanelMessage icon="progress_activity" message={t('workspace.document.loading')} />}>
+        <Suspense fallback={<PanelMessage busy message={t('workspace.document.loading')} />}>
           <Viewer
             path={path}
             absolutePath={absolutePath}

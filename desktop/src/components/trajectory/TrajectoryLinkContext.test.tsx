@@ -28,7 +28,9 @@ describe('view in trajectory', () => {
 
   it('does not toggle the tool card when the action is clicked', () => {
     renderTool('toolu_1', true)
-    const header = screen.getByRole('button', { name: /Bash/ })
+    // The row is named by its verb ("Run ls"); the raw tool name is its tooltip.
+    const header = screen.getByRole('button', { name: /^Run\b/ })
+    expect(header).toHaveAttribute('title', expect.stringContaining('Bash'))
     const before = header.getAttribute('aria-expanded')
     fireEvent.click(screen.getByRole('button', { name: 'View in trajectory' }))
     expect(header.getAttribute('aria-expanded')).toBe(before)

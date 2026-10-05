@@ -23,6 +23,13 @@ it('omits the badge container when no type label is needed', () => {
   expect(container.querySelector('span.border')).toBeNull()
   expect(screen.getByRole('button', { name: 'Service' })).toBeInTheDocument()
 })
+it('shows the status as a toned badge and hovers by deepening the edge, not lifting', () => {
+  const { container } = render(<ConnectorRow id="test" name="Service" description="Search documents" status="Ready" statusTone="success" actionLabel="Details" added onDetails={vi.fn()} onAction={vi.fn()} />)
+  expect(screen.getByText('Ready').className).toContain('bg-[var(--color-success-container)]')
+  const card = container.querySelector('article')!
+  expect(card.className).toContain('hover:border-[var(--color-outline)]')
+  expect(card.className).not.toMatch(/translate-y|hover:shadow/)
+})
 it('renders an explicit management action while preserving access to details', () => {
   const details = vi.fn()
   const remove = vi.fn()

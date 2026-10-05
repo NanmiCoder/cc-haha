@@ -19,15 +19,18 @@ export type MessageEditAction = {
 
 /**
  * The copy chip and the branch chip sit side by side and must look identical.
- * The branch one is an `IconButton size="sm" tone="muted" shape="circle"`;
- * `CopyButton` is styled by className, so its shell is mirrored here.
+ * The branch one is an `IconButton size="xs" tone="muted"`; `CopyButton` is
+ * styled by className, so its shell is mirrored here.
  */
 const ACTION_CHIP_CLASS = [
-  'inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
+  'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)]',
   'text-[var(--color-text-tertiary)] transition-colors duration-150 cursor-pointer',
   'hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
 ].join(' ')
+
+const ICON_SIZE = 14
+const ICON_STROKE = 1.75
 
 type Props = {
   copyText?: string
@@ -44,6 +47,13 @@ type Props = {
    * present affordance hard to find.
    */
   alwaysVisible?: boolean
+  /**
+   * `overlay` hangs the bar just under its message, absolutely positioned, so a
+   * hover-only bar never holds the transcript open by its own height. The
+   * caller's shell must be `relative`; the space it lands in is the turn gap
+   * that `.chat-turn-rail--none` already reserves, not something the bar adds.
+   */
+  placement?: 'inline' | 'overlay'
 }
 
 export function MessageActionBar({
@@ -55,6 +65,7 @@ export function MessageActionBar({
   timestamp,
   metadata,
   alwaysVisible = false,
+  placement = 'inline',
 }: Props) {
   const locale = useSettingsStore((state) => state.locale)
   const hasCopy = Boolean(copyText?.trim())
@@ -71,30 +82,35 @@ export function MessageActionBar({
     <div
       data-message-actions
       data-align={align}
-      className={`mt-2 flex h-7 w-full transition-opacity duration-150 ${
+      data-placement={placement}
+      className={[
+        'flex h-6 transition-opacity duration-150',
+        placement === 'overlay'
+          ? `absolute top-full ${align === 'end' ? 'right-0' : 'left-0'}`
+          : 'mt-1.5 w-full',
         alwaysVisible
           ? ''
-          : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100'
-      } ${align === 'end' ? 'justify-end' : 'justify-start'}`}
+          : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',
+        align === 'end' ? 'justify-end' : 'justify-start',
+      ].filter(Boolean).join(' ')}
     >
-      <div className="flex min-h-7 min-w-0 items-center gap-1.5">
+      <div className="flex min-h-6 min-w-0 items-center gap-0.5">
         {hasCopy ? (
           <CopyButton
             text={copyText!}
             label={copyLabel}
-            displayLabel={<Copy size={13} strokeWidth={2.2} aria-hidden="true" />}
-            displayCopiedLabel={<Check size={13} strokeWidth={2.4} aria-hidden="true" />}
+            displayLabel={<Copy size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+            displayCopiedLabel={<Check size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden="true" />}
             onPointerUp={(event) => event.currentTarget.blur()}
             className={ACTION_CHIP_CLASS}
           />
         ) : null}
         {branchAction ? (
           <IconButton
-            icon={<GitFork size={13} strokeWidth={2.2} aria-hidden="true" />}
+            icon={<GitFork size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden="true" />}
             label={branchAction.label}
-            size="sm"
+            size="xs"
             tone="muted"
-            shape="circle"
             disabled={branchAction.loading}
             onClick={branchAction.onBranch}
             onPointerUp={(event) => event.currentTarget.blur()}
@@ -102,24 +118,23 @@ export function MessageActionBar({
         ) : null}
         {editAction ? (
           <IconButton
-            icon={<Pencil size={13} strokeWidth={2.2} aria-hidden="true" />}
+            icon={<Pencil size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden="true" />}
             label={editAction.label}
-            size="sm"
+            size="xs"
             tone="muted"
-            shape="circle"
             disabled={editAction.disabled}
             onClick={editAction.onEdit}
             onPointerUp={(event) => event.currentTarget.blur()}
           />
         ) : null}
         {metadata ? (
-          <span className={hasCopy || branchAction || editAction ? 'ml-3 min-w-0' : 'min-w-0'}>
+          <span className={hasCopy || branchAction || editAction ? 'ml-2 min-w-0' : 'min-w-0'}>
             {metadata}
           </span>
         ) : null}
         {hoverTimeLabel ? (
           <span
-            className="ml-1 inline-flex items-center text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]"
+            className="ml-1.5 inline-flex items-center whitespace-nowrap text-xs tabular-nums text-[var(--color-text-tertiary)]"
             title={exactTimeLabel || hoverTimeLabel}
           >
             {hoverTimeLabel}

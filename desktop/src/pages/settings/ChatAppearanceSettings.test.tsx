@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -31,9 +31,9 @@ describe('Chat appearance settings', () => {
     expect(preview.querySelector('table')).toBeInTheDocument()
     expect(preview.querySelector('code')).toHaveTextContent('const answer = 42')
 
-    fireEvent.change(screen.getByRole('combobox', { name: 'Chat font' }), { target: { value: 'serif' } })
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Chat font' })).getByRole('radio', { name: 'Serif' }))
     fireEvent.change(screen.getByRole('slider', { name: 'Chat font size' }), { target: { value: '24' } })
-    fireEvent.change(screen.getByRole('combobox', { name: 'Conversation width' }), { target: { value: 'full' } })
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Conversation width' })).getByRole('radio', { name: 'Fill available space' }))
 
     expect(useChatAppearanceStore.getState().appearance).toEqual({ font: 'serif', fontSize: 24, width: 'full' })
     expect(preview.style.getPropertyValue('--chat-font-family')).toContain('Songti SC')
@@ -52,10 +52,10 @@ describe('Chat appearance settings', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Reset chat appearance' }))
 
-    expect(screen.getByRole('combobox', { name: 'Chat font' })).toHaveValue('system')
-    expect(screen.getByRole('slider')).toHaveValue('14')
-    expect(screen.getByRole('combobox', { name: 'Conversation width' })).toHaveValue('standard')
-    expect(screen.getByRole('region').style.getPropertyValue('--chat-font-size')).toBe('14px')
+    expect(within(screen.getByRole('radiogroup', { name: 'Chat font' })).getByRole('radio', { name: 'System default' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('slider')).toHaveValue('15')
+    expect(within(screen.getByRole('radiogroup', { name: 'Conversation width' })).getByRole('radio', { name: 'Standard' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('region').style.getPropertyValue('--chat-font-size')).toBe('15px')
     expect(JSON.parse(localStorage.getItem(CHAT_APPEARANCE_STORAGE_KEY)!)).toMatchObject(DEFAULT_CHAT_APPEARANCE)
   })
 })

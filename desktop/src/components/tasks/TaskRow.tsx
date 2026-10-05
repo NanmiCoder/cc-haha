@@ -1,4 +1,5 @@
-import { useCallback, useState, useRef } from 'react'
+import { Fragment, useCallback, useState, useRef } from 'react'
+import { CirclePause, CirclePlay, Clock, Ellipsis, LoaderCircle, Pencil, Play, ScrollText, Trash2 } from 'lucide-react'
 import type { CronTask } from '../../types/task'
 import { useTaskStore } from '../../stores/taskStore'
 import { useTranslation } from '../../i18n'
@@ -66,49 +67,61 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
     deleteTask(task.id)
   }
 
-  const menuItem = 'flex items-center gap-2.5 w-full px-3 py-2 text-[13px] text-left rounded-[var(--radius-md)] transition-colors'
+  const menuItem = 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] transition-colors'
 
   // One meta line rather than three stacked fragments, per the handoff: the
   // row is scanned for its name and its schedule, and the rest reads as a
-  // single caption.
-  const meta = [
-    `${t('tasks.createdAt')}${new Date(task.createdAt).toLocaleDateString()}`,
-    task.lastFiredAt ? `${t('tasks.lastRunAt')}${new Date(task.lastFiredAt).toLocaleDateString()}` : null,
-    task.description || null,
-  ].filter(Boolean).join(' · ')
+  // single caption. Dates sit in tabular mono so they line up down the list;
+  // the labels and the free-text description stay in the UI face.
+  const meta: Array<{ key: string; label?: string; value: string; mono: boolean }> = [
+    { key: 'created', label: t('tasks.createdAt'), value: new Date(task.createdAt).toLocaleDateString(), mono: true },
+    ...(task.lastFiredAt
+      ? [{ key: 'last', label: t('tasks.lastRunAt'), value: new Date(task.lastFiredAt).toLocaleDateString(), mono: true }]
+      : []),
+    ...(task.description ? [{ key: 'desc', value: task.description, mono: false }] : []),
+  ]
 
   return (
     <div>
-      <div className="group flex items-center gap-3 px-5 py-4 transition-colors hover:bg-[var(--color-surface-hover)]">
+      <div className="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-[var(--color-surface-hover)]">
         {/* Left: status + info */}
         <StatusDot
           tone={task.enabled ? 'success' : 'neutral'}
-          size="lg"
+          size="md"
           label={task.enabled ? t('tasks.active') : t('tasks.disabled')}
         />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[15px] font-bold text-[var(--color-text-primary)]">{task.name}</div>
-          <div className="mt-[3px] truncate text-[12.5px] text-[var(--color-text-tertiary)]">{meta}</div>
+          <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">{task.name}</div>
+          <div className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]">
+            {meta.map((part, index) => (
+              <Fragment key={part.key}>
+                {index > 0 && ' · '}
+                {part.label}
+                {part.mono
+                  ? <span className="font-mono text-[11px] tabular-nums">{part.value}</span>
+                  : part.value}
+              </Fragment>
+            ))}
+          </div>
         </div>
 
-        {/* Right: cron + actions */}
-        <Badge mono size="sm" pill={false} title={task.cron}>
+        {/* Right: schedule + actions. The schedule is a sentence, not code, so
+            it is not set in mono; the raw cron stays on hover. */}
+        <Badge title={task.cron} icon={<Clock size={11} strokeWidth={2} aria-hidden="true" />}>
           {describeCron(task.cron, t)}
         </Badge>
 
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 items-center gap-0.5">
           {/* Run Now */}
           <div className="relative" ref={confirmAction === 'run' ? confirmRef : undefined}>
             <IconButton
-              icon={
-                <span className={`material-symbols-outlined text-[18px] ${isRunning ? 'animate-spin' : ''}`}>
-                  {isRunning ? 'sync' : 'play_arrow'}
-                </span>
-              }
+              icon={isRunning
+                ? <LoaderCircle size={16} strokeWidth={1.75} aria-hidden="true" className="animate-spin text-[var(--color-info)]" />
+                : <Play size={16} strokeWidth={1.75} aria-hidden="true" />}
               label={t('tasks.runNow')}
               showTooltip={task.enabled}
-              tone={task.enabled ? 'brand' : 'muted'}
-              bordered
+              size="sm"
+              tone="secondary"
               disabled={isRunning || !task.enabled}
               onClick={() => setConfirmAction(confirmAction === 'run' ? null : 'run')}
             />
@@ -124,15 +137,15 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
           </div>
 
           {/* View Logs — `pressed` carries both the resting fill and the
-              `aria-pressed` state the hand-rolled className could not. It also
-              supplies its own foreground, so the tone stays `muted` in both
-              states: two `text-[…]` values would be resolved by stylesheet
-              order rather than by which one we meant. */}
+              `aria-pressed` state the hand-rolled className could not. The
+              tone is the same quiet `secondary` as its neighbours in both
+              states; no className color override, since two `text-[…]` values
+              would be resolved by stylesheet order. */}
           <IconButton
-            icon={<span className="material-symbols-outlined text-[18px]">receipt_long</span>}
+            icon={<ScrollText size={16} strokeWidth={1.75} aria-hidden="true" />}
             label={t('tasks.viewLogs')}
-            tone="muted"
-            bordered
+            size="sm"
+            tone="secondary"
             pressed={showLogs}
             onClick={onToggleLogs}
           />
@@ -140,9 +153,10 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
           {/* More menu */}
           <div className="relative" ref={menuRef}>
             <IconButton
-              icon={<span className="material-symbols-outlined text-[18px]">more_vert</span>}
+              icon={<Ellipsis size={16} strokeWidth={1.75} aria-hidden="true" />}
               label={t('tasks.moreActions')}
-              tone="muted"
+              size="sm"
+              tone="secondary"
               aria-haspopup="menu"
               aria-expanded={showMenu}
               onClick={() => { setShowMenu(!showMenu); setConfirmAction(null) }}
@@ -155,7 +169,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                   onClick={() => { setShowMenu(false); setShowEdit(true) }}
                   className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
                 >
-                  <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-[var(--color-text-secondary)]">edit</span>
+                  <Pencil size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
                   {t('tasks.edit')}
                 </button>
 
@@ -164,13 +178,13 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                   onClick={() => setConfirmAction('toggle')}
                   className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
                 >
-                  <span aria-hidden="true" className="material-symbols-outlined text-[16px] text-[var(--color-text-secondary)]">
-                    {task.enabled ? 'pause_circle' : 'play_circle'}
-                  </span>
+                  {task.enabled
+                    ? <CirclePause size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
+                    : <CirclePlay size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />}
                   {task.enabled ? t('common.disable') : t('common.enable')}
                 </button>
 
-                <div className="my-1 h-px bg-[var(--color-border-separator)]" />
+                <div className="mx-1 my-1 h-px bg-[var(--color-border)]" />
 
                 {/* Delete — the hover fill was `--color-error-container` at `/18`
                     alpha, which Safari 15 WebView drops; `-soft` is the opaque
@@ -179,7 +193,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                   onClick={() => setConfirmAction('delete')}
                   className={`${menuItem} text-[var(--color-error)] hover:bg-[var(--color-error-soft)]`}
                 >
-                  <span aria-hidden="true" className="material-symbols-outlined text-[16px]">delete</span>
+                  <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
                   {t('common.delete')}
                 </button>
               </div>

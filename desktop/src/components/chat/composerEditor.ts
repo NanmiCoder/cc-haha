@@ -13,6 +13,43 @@ import { findMentionRanges, mentionToken, tokenOccurrences, safeMentionIcon } fr
 
 export const AT_MENTION_NODE = 'atMention'
 
+const SVG_NS = 'http://www.w3.org/2000/svg'
+
+/**
+ * Path data of the lucide glyphs the mention pill shows (MessageSquare, Puzzle,
+ * Box, Folder, File). The pill is a ProseMirror node rendered through `toDOM`,
+ * not React, so the icon is emitted as a plain SVG with the same 24px grid and
+ * stroke the rest of the composer's lucide icons use.
+ */
+const MENTION_ICON_PATHS: Record<'session' | 'plugin' | 'skill' | 'directory' | 'file', string[]> = {
+  session: ['M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z'],
+  plugin: ['M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z'],
+  skill: ['M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z', 'm3.3 7 8.7 5 8.7-5', 'M12 22V12'],
+  directory: ['M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'],
+  file: ['M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z', 'M14 2v4a2 2 0 0 0 2 2h4'],
+}
+
+function mentionIconSpec(glyph: keyof typeof MENTION_ICON_PATHS): DOMOutputSpec {
+  return [
+    `${SVG_NS} svg`,
+    {
+      class: 'composer-mention-icon',
+      'data-mention-glyph': glyph,
+      viewBox: '0 0 24 24',
+      width: '14',
+      height: '14',
+      fill: 'none',
+      stroke: 'currentColor',
+      'stroke-width': '1.75',
+      'stroke-linecap': 'round',
+      'stroke-linejoin': 'round',
+      'aria-hidden': 'true',
+      focusable: 'false',
+    },
+    ...MENTION_ICON_PATHS[glyph].map((d): DOMOutputSpec => [`${SVG_NS} path`, { d }]),
+  ]
+}
+
 export const composerSchema = new Schema({
   nodes: {
     doc: { content: 'block+' },
@@ -55,15 +92,15 @@ export const composerSchema = new Schema({
         }
         const symbol: DOMOutputSpec = icon
           ? ['img', { class: 'composer-mention-brand-icon', src: `${import.meta.env.BASE_URL}${icon.slice(1)}`, alt: '', draggable: 'false' }]
-          : ['span', { class: 'material-symbols-outlined composer-mention-icon', 'aria-hidden': 'true' }, kind === 'session' ? 'chat' : kind === 'plugin' ? 'extension' : kind === 'skill' ? 'deployed_code' : node.attrs.isDirectory ? 'folder' : 'draft']
+          : mentionIconSpec(kind ?? (node.attrs.isDirectory ? 'directory' : 'file'))
         return ['span', attrs, symbol, `@${node.attrs.label as string}`]
       },
       parseDOM: [
         {
           tag: 'span.composer-mention',
           getAttrs: (dom) => ({
-            // The ligature icon text pollutes textContent, so the label
-            // travels in its own attribute.
+            // The pill's text is decorated (the leading `@`, the icon), so
+            // the label travels in its own attribute.
             label: dom.getAttribute('data-mention-label') ?? '',
             path: dom.getAttribute('data-mention-path') ?? '',
             isDirectory: dom.classList.contains('composer-mention--directory'),

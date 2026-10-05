@@ -2,14 +2,15 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   ArrowLeft,
   ArrowRight,
+  Ellipsis,
   ExternalLink,
   Globe,
-  MessageSquarePlus,
-  MoreVertical,
-  RotateCw,
+  MousePointer2,
+  RefreshCw,
   Search,
   X,
 } from 'lucide-react'
+import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { Spinner } from '@/components/ui/Spinner'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
@@ -410,21 +411,25 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
         data-testid="workspace-browser-unavailable"
         className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-8 text-center"
       >
+        <span aria-hidden="true" className="mb-1 flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
+          <Globe size={16} strokeWidth={1.75} />
+        </span>
         <p className="text-[13px] font-medium text-[var(--color-text-primary)]">
           {t('workspace.browser.unavailableTitle')}
         </p>
-        <p className="max-w-[360px] text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
+        <p className="max-w-[360px] text-[12px] leading-[1.6] text-[var(--color-text-tertiary)]">
           {t('workspace.browser.unavailableBody')}
         </p>
         {tab.url ? (
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
+            className="mt-1"
+            icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
             onClick={() => { void getDesktopHost().shell.open(tab.url!) }}
-            className="mt-1 inline-flex items-center gap-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-1.5 text-[12px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
-            <ExternalLink size={13} aria-hidden="true" />
             {t('workspace.browser.openExternal')}
-          </button>
+          </Button>
         ) : null}
       </div>
     )
@@ -434,28 +439,28 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
     <div ref={browserRootRef} className="relative flex min-h-0 flex-1 flex-col">
       <div
         data-testid="workspace-browser-toolbar"
-        className="flex h-[52px] shrink-0 items-center gap-1 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2.5"
+        className="flex h-10 shrink-0 items-center gap-0.5 border-b border-[var(--color-border)] bg-[var(--color-surface)] px-2"
       >
         <IconButton
-          icon={<ArrowLeft size={15} strokeWidth={1.9} />}
+          icon={<ArrowLeft size={16} strokeWidth={1.75} />}
           label={t('workspace.browser.back')}
-          size="md"
+          size="sm"
           tone="muted"
           disabled={!ready || !page?.canGoBack}
           onClick={() => requestNavigation(() => runNavigationCommand(() => workspaceBrowserHost.goBack(browserTabId)))}
         />
         <IconButton
-          icon={<ArrowRight size={15} strokeWidth={1.9} />}
+          icon={<ArrowRight size={16} strokeWidth={1.75} />}
           label={t('workspace.browser.forward')}
-          size="md"
+          size="sm"
           tone="muted"
           disabled={!ready || !page?.canGoForward}
           onClick={() => requestNavigation(() => runNavigationCommand(() => workspaceBrowserHost.goForward(browserTabId)))}
         />
         <IconButton
-          icon={loading ? <Spinner size={15} /> : <RotateCw size={15} strokeWidth={1.9} />}
+          icon={loading ? <Spinner size={14} /> : <RefreshCw size={14} strokeWidth={1.75} />}
           label={t(loading ? 'workspace.browser.stop' : 'workspace.browser.reload')}
-          size="md"
+          size="sm"
           tone="muted"
           aria-busy={loading}
           disabled={!ready}
@@ -479,7 +484,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
           onOpenExternal={(url) => { void getDesktopHost().shell.open(url) }}
         />
         <IconButton
-          icon={<MessageSquarePlus size={16} strokeWidth={1.75} />}
+          icon={<MousePointer2 size={16} strokeWidth={1.75} />}
           label={t(annotationActive ? 'workspace.browser.annotationActive' : 'workspace.browser.pickElement')}
           pressed={annotationActive}
           onKeyDown={(event) => {
@@ -489,7 +494,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
               runCommand(() => workspaceBrowserHost.message(browserTabId, { v: 1, type: 'exit-picker' }))
             }
           }}
-          size="md"
+          size="sm"
           tone="muted"
           disabled={!ready || !tab.url || !!tab.loadError}
           data-testid="workspace-browser-annotate"
@@ -497,9 +502,9 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
         />
         <IconButton
           ref={menuTriggerRef}
-          icon={<MoreVertical size={15} strokeWidth={1.9} />}
+          icon={<Ellipsis size={16} strokeWidth={1.75} />}
           label={t('workspace.browser.menu')}
-          size="md"
+          size="sm"
           tone="muted"
           pressed={menuOpen}
           aria-haspopup="menu"
@@ -518,9 +523,9 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
       {findOpen ? (
         <div
           data-testid="workspace-browser-find"
-          className="flex h-9 shrink-0 items-center gap-1.5 border-b border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2"
+          className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] pl-3 pr-2"
         >
-          <Search size={13} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <Search size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
           <input
             autoFocus
             value={findText}
@@ -552,9 +557,9 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
               : ''}
           </span>
           <IconButton
-            icon={<X size={13} />}
+            icon={<X size={14} strokeWidth={1.75} />}
             label={t('workspace.browser.findClose')}
-            size="2xs"
+            size="xs"
             tone="muted"
             onClick={() => {
               setFindOpen(false)
@@ -567,12 +572,14 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
       <div className="relative min-h-0 flex-1 overflow-hidden" data-testid="workspace-browser-stage">
         <div ref={stageRef} data-testid="workspace-browser-placeholder" className="absolute inset-0" />
         {!tab.url && !tab.loadError ? (
-          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-3 text-center">
-            <Globe size={32} strokeWidth={1.75} aria-hidden="true" className="mb-2 text-[var(--color-text-tertiary)]" />
-            <p className="text-[16px] font-medium text-[var(--color-text-primary)]">
+          <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 px-8 text-center">
+            <span aria-hidden="true" className="mb-1 flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-tertiary)]">
+              <Globe size={20} strokeWidth={1.75} />
+            </span>
+            <p className="text-[15px] font-medium text-[var(--color-text-primary)]">
               {t('workspace.browser.emptyTitle')}
             </p>
-            <p className="text-[14px] text-[var(--color-text-secondary)]">
+            <p className="max-w-[360px] text-[13px] text-[var(--color-text-tertiary)]">
               {t('workspace.browser.emptyBody')}
             </p>
           </div>
@@ -583,23 +590,28 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
             data-testid="workspace-browser-error"
             className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-[var(--color-surface)] px-8 text-center"
           >
+            <span aria-hidden="true" className="mb-1 flex h-9 w-9 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]">
+              <Globe size={16} strokeWidth={1.75} />
+            </span>
             <p className="text-[13px] font-medium text-[var(--color-text-primary)]">
               {t('workspace.browser.loadFailed', { url: tab.url ?? '' })}
             </p>
-            <p className="max-w-[420px] text-[12px] text-[var(--color-text-secondary)]">
+            <p className="max-w-[420px] break-words font-mono text-[12px] text-[var(--color-text-tertiary)]">
               {tab.loadError}
             </p>
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="sm"
+              className="mt-1"
+              icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
               onClick={() => {
                 useWorkspaceStore.getState().updateBrowserTab(sessionId, browserTabId, { loadError: null })
                 if (ready) runNavigationCommand(() => workspaceBrowserHost.reload(browserTabId, { ignoreCache: true }))
                 else setCreateAttempt((attempt) => attempt + 1)
               }}
-              className="mt-1 rounded-[var(--radius-md)] border border-[var(--color-border)] px-3 py-1.5 text-[12px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               {t('workspace.browser.retry')}
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
@@ -624,21 +636,21 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
         <div
           ref={panelRef}
           data-testid={`workspace-browser-panel-${panel}`}
-          className="absolute inset-x-0 bottom-0 top-[52px] z-[var(--z-raised)] flex flex-col border-t border-[var(--color-border)] bg-[var(--color-surface)]"
+          className="absolute inset-x-0 bottom-0 top-10 z-[var(--z-raised)] flex flex-col border-t border-[var(--color-border)] bg-[var(--color-surface)]"
         >
-          <div className="flex h-9 shrink-0 items-center justify-between border-b border-[var(--color-border)] px-3">
-            <span className="text-[12px] font-medium text-[var(--color-text-primary)]">
+          <div className="flex h-10 shrink-0 items-center justify-between border-b border-[var(--color-border)] pl-3 pr-2">
+            <span className="text-[13px] font-semibold text-[var(--color-text-primary)]">
               {t(panel === 'downloads' ? 'workspace.browser.downloads' : 'workspace.browser.history')}
             </span>
             <IconButton
-              icon={<X size={13} />}
+              icon={<X size={14} strokeWidth={1.75} />}
               label={t('workspace.browser.closeOverlay')}
-              size="2xs"
+              size="xs"
               tone="muted"
               onClick={() => setPanel(null)}
             />
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
             {panel === 'downloads' ? (
               downloads.length === 0 ? (
                 <p className="px-2 py-3 text-[12px] text-[var(--color-text-tertiary)]">
@@ -649,9 +661,9 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
                   {downloads.map((item) => (
                     <li
                       key={item.id}
-                      className="flex items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1.5"
+                      className="flex min-h-[30px] items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1"
                     >
-                      <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--color-text-primary)]">
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-text-primary)]">
                         {item.filename}
                       </span>
                       <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
@@ -661,9 +673,9 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
                       </span>
                       {item.state === 'completed' && item.savePath ? (
                         <IconButton
-                          icon={<ExternalLink size={13} />}
+                          icon={<ExternalLink size={14} strokeWidth={1.75} />}
                           label={t('workspace.browser.revealDownload')}
-                          size="2xs"
+                          size="xs"
                           tone="muted"
                           onClick={() => { void getDesktopHost().shell.openPath(item.savePath!) }}
                         />
@@ -688,7 +700,7 @@ export function WorkspaceBrowserTab({ sessionId, tab, active }: WorkspaceBrowser
                       }}
                       className="flex w-full flex-col items-start gap-0.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                     >
-                      <span className="w-full truncate text-[12px] text-[var(--color-text-primary)]">
+                      <span className="w-full truncate text-[13px] text-[var(--color-text-primary)]">
                         {visit.title || visit.url}
                       </span>
                       <span className="w-full truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">

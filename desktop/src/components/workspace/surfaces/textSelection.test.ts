@@ -97,9 +97,9 @@ describe('getSelectionPosition', () => {
       { focusNode: null, focusOffset: 0 } as unknown as Selection,
     )
 
-    // Centred on the selection (180) minus half the 158px menu, one menu height
+    // Centred on the selection (180) minus half the 140px menu, one 32px menu height
     // plus the 10px offset above the selection top.
-    expect(position).toEqual({ x: 101, y: 46 })
+    expect(position).toEqual({ x: 110, y: 58 })
   })
 
   it('keeps the menu inside the viewport when the selection hugs the left edge', () => {

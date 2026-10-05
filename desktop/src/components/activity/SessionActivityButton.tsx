@@ -18,17 +18,15 @@ export function SessionActivityButton({
   const toggle = useActivityPanelStore((state) => state.toggle)
   return (
     <IconButton
-      icon={<ListChecks size={17} strokeWidth={1.9} />}
+      icon={<ListChecks size={16} strokeWidth={1.75} />}
       label={resolvedLabel}
       size="md"
-      // The design's active toolbar toggle is a terracotta wash with a
-      // terracotta glyph, which `tone="brand"` + `filled` already are. The
-      // `className` fill this replaces raced the tone's own `bg-[…]`, and which
-      // won came down to stylesheet order.
-      tone={isOpen ? 'brand' : 'muted'}
-      filled={isOpen}
+      // An open panel is a pressed toolbar toggle: the neutral selected fill,
+      // not a terracotta wash — brand is kept for the send key and selection
+      // marks. `pressed` also owns `aria-pressed`.
+      tone="muted"
+      pressed={isOpen}
       aria-expanded={isOpen}
-      aria-pressed={isOpen}
       onClick={() => toggle(sessionId)}
       data-active={isOpen ? 'true' : 'false'}
       data-session-activity-trigger="true"

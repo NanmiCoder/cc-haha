@@ -185,7 +185,7 @@ function ImageGenerationCollection({
           data-testid="image-generation-slot"
           data-state="complete"
           onClick={() => setActiveIndex(slot.galleryIndex!)}
-          className="group/image relative aspect-square w-full overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] text-left shadow-[var(--shadow-card)] transition-[border-color,box-shadow,transform] duration-200 hover:-translate-y-0.5 hover:border-[var(--color-outline)] hover:shadow-[var(--shadow-composer)] active:translate-y-0 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          className="group/image relative aspect-square w-full overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border-separator)] bg-[var(--color-surface-container-low)] text-left transition-[border-color,transform] duration-200 hover:border-[var(--color-outline)] active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         >
           <AuthedImage
             src={src}
@@ -220,7 +220,7 @@ function ImageGenerationCollection({
         data-state="error"
         data-error="true"
         title={slot.message}
-        className="flex aspect-square w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-container)] p-3 text-center text-[11px] leading-relaxed text-[var(--color-on-error-container)]"
+        className="flex aspect-square w-full flex-col items-center justify-center gap-2 rounded-[var(--radius-lg)] bg-[var(--color-error-container)] p-3 text-center text-[11px] leading-relaxed text-[var(--color-on-error-container)]"
       >
         <TriangleAlert aria-hidden size={17} strokeWidth={1.75} className="shrink-0" />
         <span className="line-clamp-4">{slot.message}</span>
@@ -255,7 +255,7 @@ function ImageGenerationCollection({
           />
         ) : null}
         {!hasPending && typeof visibleDuration === 'number' ? (
-          <span className="font-mono tabular-nums text-[var(--color-outline)]">
+          <span className="font-mono text-[11px] tabular-nums">
             {formatDuration(visibleDuration)}
           </span>
         ) : null}

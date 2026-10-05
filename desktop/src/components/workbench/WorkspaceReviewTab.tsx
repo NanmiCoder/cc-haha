@@ -4,20 +4,26 @@ import {
   ChevronRight,
   Circle,
   Check,
+  CircleAlert,
+  CircleCheck,
   Copy,
   Eye,
   ExternalLink,
   FolderClosed,
   FolderOpen,
+  FolderX,
   Columns2,
+  History,
   List,
+  ListFilter,
   Plus,
   RefreshCw,
   Undo2,
   WrapText,
 } from 'lucide-react'
-import { Button } from '@/components/ui/Button'
+import { Badge } from '@/components/ui/Badge'
 import { IconButton } from '@/components/ui/IconButton'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { CopyButton } from '@/components/ui/CopyButton'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { ActionDialog } from '@/components/ui/ActionDialog'
@@ -33,7 +39,6 @@ import type { WorkspaceDiffMode } from '@/components/workspace/workspaceDiffLayo
 import { WorkspaceDiffSurface } from '../workspace/WorkspaceDiffSurface'
 import { PanelMessage } from '../workspace/surfaces/PanelMessage'
 import { WorkspaceTreeSidebar } from '@/components/workbench/WorkspaceTreeSidebar'
-import { WorkspaceFileIcon } from '@/components/workbench/WorkspaceFileIcon'
 import { parseWorkspaceDiff } from '@/components/workspace/workspaceDiffModel'
 import { splitReviewHunks } from '@/lib/workspace/reviewHunks'
 import { workspaceOpen } from '@/lib/workspace/openTarget'
@@ -48,6 +53,11 @@ import {
   type WorkspaceReviewTab as WorkspaceReviewTabModel,
 } from '../../lib/workspace/types'
 import type { ReviewFile } from '../../api/review'
+
+const REVIEW_MENU_ITEM = 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]'
+
+/** A labelled action inside the floating bulk-action pill. */
+const REVIEW_PILL_BUTTON = 'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full px-3 text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent'
 
 const SOURCE_OPTIONS: readonly WorkspaceReviewSource[] = [
   { kind: 'unstaged' },
@@ -134,6 +144,25 @@ function buildChangeRows(files: readonly ReviewFile[], collapsed: ReadonlySet<st
   }
   walk(root, 0)
   return rows
+}
+
+/**
+ * The one-letter Git status shown in the change tree, coloured by what it
+ * means for the reader: green adds, amber edits, red removals.
+ */
+function changeLetter(file: ReviewFile, untracked: boolean): { letter: string; tone: string } {
+  if (untracked) return { letter: 'U', tone: 'text-[var(--color-success)]' }
+  switch (file.status) {
+    case 'added':
+    case 'copied':
+      return { letter: 'A', tone: 'text-[var(--color-success)]' }
+    case 'deleted':
+      return { letter: 'D', tone: 'text-[var(--color-error)]' }
+    case 'renamed':
+      return { letter: 'R', tone: 'text-[var(--color-info)]' }
+    default:
+      return { letter: file.staged && !file.unstaged ? 'S' : 'M', tone: 'text-[var(--color-warning)]' }
+  }
 }
 
 /** Split a path so the ellipsis can eat the front and leave the filename whole. */
@@ -406,7 +435,7 @@ export function WorkspaceReviewTab({
     <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       <div
         data-testid="workspace-review-toolbar"
-        className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-2"
+        className="flex h-10 shrink-0 items-center gap-2 border-b border-[var(--color-border)] pl-3 pr-2"
       >
         <span className="relative shrink-0">
           <button
@@ -422,13 +451,13 @@ export function WorkspaceReviewTab({
             aria-haspopup="menu"
             aria-expanded={sourceMenuOpen}
             onClick={() => setSourceMenuOpen((open) => !open)}
-            className="flex h-7 items-center gap-1 rounded-[var(--radius-sm)] px-1.5 text-[12px] font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            className="flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] pl-2.5 pr-2 text-[12px] text-[var(--color-text-primary)] transition-colors hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
             <span id={`${fieldIds}-source-label`} className="sr-only">
               {t('workspace.review.sourceLabel')}
             </span>
             <span id={`${fieldIds}-source-value`}>{sourceLabel(source)}</span>
-            <ChevronDown size={11} aria-hidden="true" />
+            <ChevronDown size={12} strokeWidth={2} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
           </button>
           {sourceMenuOpen ? (
             <div
@@ -436,31 +465,36 @@ export function WorkspaceReviewTab({
               role="menu"
               aria-label={t('workspace.review.sourceLabel')}
               onKeyDown={handleSourceMenuKeyDown}
-              className="absolute left-0 top-8 z-[var(--z-dropdown)] min-w-[200px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1 shadow-[var(--shadow-dropdown)]"
+              className="absolute left-0 top-8 z-[var(--z-dropdown)] min-w-[200px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
             >
-              {sourceOptions.map((option) => (
-                <button
-                  key={`${option.kind}-${'baseRef' in option ? option.baseRef : ''}`}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setSourceMenuOpen(false)
-                    useWorkspaceStore.getState().setReviewSource(sessionId, tab.id, option)
-                  }}
-                  className="w-full px-3.5 py-1.5 text-left text-[12px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
-                >
-                  {sourceLabel(option)}
-                </button>
-              ))}
+              {sourceOptions.map((option) => {
+                const current = reviewSourceKey(option) === reviewSourceKey(source)
+                return (
+                  <button
+                    key={`${option.kind}-${'baseRef' in option ? option.baseRef : ''}`}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setSourceMenuOpen(false)
+                      useWorkspaceStore.getState().setReviewSource(sessionId, tab.id, option)
+                    }}
+                    className={`${REVIEW_MENU_ITEM} ${current ? 'bg-[var(--color-surface-hover)]' : ''}`}
+                  >
+                    <span className="min-w-0 flex-1 truncate">{sourceLabel(option)}</span>
+                    {current ? <Check size={14} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-brand)]" /> : null}
+                  </button>
+                )
+              })}
+              <div role="separator" className="-mx-1 my-1 border-t border-[var(--color-border)]" />
               {(['branch', 'commit'] as const).map(kind => (
                 <button
                   key={kind}
                   type="button"
                   role="menuitem"
                   onClick={() => editRef(kind)}
-                  className="w-full px-3.5 py-1.5 text-left text-[12px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+                  className={REVIEW_MENU_ITEM}
                 >
-                  {t(kind === 'branch' ? 'workspace.review.compareBranch' : 'workspace.review.viewCommit')}
+                  <span className="min-w-0 flex-1 truncate">{t(kind === 'branch' ? 'workspace.review.compareBranch' : 'workspace.review.viewCommit')}</span>
                 </button>
               ))}
             </div>
@@ -498,10 +532,15 @@ export function WorkspaceReviewTab({
         />
 
         {totals ? (
-          <span className="shrink-0 font-mono text-[12px] tabular-nums">
-            <span className="text-[var(--color-success)]">+{totals.additions}</span>
-            {' '}
-            <span className="text-[var(--color-error)]">-{totals.deletions}</span>
+          <span className="flex shrink-0 items-center gap-2 text-[12px]">
+            <span className="font-mono tabular-nums">
+              <span className="text-[var(--color-diff-added-text)]">+{totals.additions}</span>
+              {' '}
+              <span className="text-[var(--color-diff-removed-text)]">-{totals.deletions}</span>
+            </span>
+            <span data-testid="workspace-review-file-count" className="text-[var(--color-text-tertiary)]">
+              {t('workspace.review.fileCount', { count: totals.files })}
+            </span>
           </span>
         ) : null}
         {entry.status?.source.resolvedBase ? (
@@ -512,13 +551,21 @@ export function WorkspaceReviewTab({
           </span>
         ) : null}
 
-        <span className="ml-auto flex shrink-0 items-center gap-0.5">
-          <IconButton icon={<List size={14} strokeWidth={1.9} />} label={t('workspace.review.unified')} pressed={diffMode === 'unified'} size="sm" tone="muted" onClick={() => setDiffMode('unified')} />
-          <IconButton icon={<Columns2 size={14} strokeWidth={1.9} />} label={t('workspace.review.split')} pressed={diffMode === 'split'} size="sm" tone="muted" onClick={() => setDiffMode('split')} />
-          <IconButton icon={<WrapText size={14} strokeWidth={1.9} />} label={t(wrapLines ? 'workspace.review.disableWrap' : 'workspace.review.enableWrap')} pressed={wrapLines} size="sm" tone="muted" onClick={() => setWrapLines(wrap => !wrap)} />
-          <IconButton icon={treeOpen ? <FolderOpen size={14} strokeWidth={1.9} /> : <FolderClosed size={14} strokeWidth={1.9} />} label={t('workspace.files.toggleTree')} size="sm" tone="muted" pressed={treeOpen} onClick={() => setTreeOpen(open => !open)} />
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          <SegmentedControl<WorkspaceDiffMode>
+            size="sm"
+            label={t('workspace.review.diffLayout')}
+            value={diffMode}
+            onChange={setDiffMode}
+            items={[
+              { value: 'unified', title: t('workspace.review.unified'), icon: <List size={14} strokeWidth={1.75} aria-hidden="true" />, label: <span className="sr-only">{t('workspace.review.unified')}</span> },
+              { value: 'split', title: t('workspace.review.split'), icon: <Columns2 size={14} strokeWidth={1.75} aria-hidden="true" />, label: <span className="sr-only">{t('workspace.review.split')}</span> },
+            ]}
+          />
+          <IconButton icon={<WrapText size={14} strokeWidth={1.75} />} label={t(wrapLines ? 'workspace.review.disableWrap' : 'workspace.review.enableWrap')} pressed={wrapLines} size="sm" tone="muted" onClick={() => setWrapLines(wrap => !wrap)} />
+          <IconButton icon={treeOpen ? <FolderOpen size={14} strokeWidth={1.75} /> : <FolderClosed size={14} strokeWidth={1.75} />} label={t('workspace.files.toggleTree')} size="sm" tone="muted" pressed={treeOpen} onClick={() => setTreeOpen(open => !open)} />
           <IconButton
-            icon={<RefreshCw size={14} strokeWidth={1.9} />}
+            icon={<RefreshCw size={14} strokeWidth={1.75} />}
             label={t('workspace.review.refresh')}
             size="sm"
             tone="muted"
@@ -534,7 +581,7 @@ export function WorkspaceReviewTab({
             <p
               role="alert"
               data-testid="workspace-review-stale"
-              className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-warning-container)] px-3 py-1.5 text-[11px] text-[var(--color-on-warning-container)]"
+              className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-warning-container)] px-3 py-1.5 text-[12px] text-[var(--color-on-warning-container)]"
             >
               {t('workspace.review.stale')}
             </p>
@@ -542,7 +589,7 @@ export function WorkspaceReviewTab({
           {operationError ? (
             <p
               role="alert"
-              className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-error-container)] px-3 py-1.5 text-[11px] text-[var(--color-on-error-container)]"
+              className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-error-container)] px-3 py-1.5 text-[12px] text-[var(--color-on-error-container)]"
             >
               {operationError}
             </p>
@@ -550,7 +597,7 @@ export function WorkspaceReviewTab({
           {entry.lastDeletedPaths.length > 0 ? (
             <p
               role="status"
-              className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-warning-container)] px-3 py-1.5 text-[11px] text-[var(--color-on-warning-container)]"
+              className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-warning-container)] px-3 py-1.5 text-[12px] text-[var(--color-on-warning-container)]"
             >
               {t('workspace.review.revertDeleted', {
                 count: entry.lastDeletedPaths.length,
@@ -559,26 +606,28 @@ export function WorkspaceReviewTab({
             </p>
           ) : null}
           {entry.lastBackupDir ? (
-            <p className="shrink-0 border-b border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+            <p className="shrink-0 border-b border-[var(--color-border)] px-3 py-1.5 text-[12px] text-[var(--color-text-tertiary)]">
               {t('workspace.review.backupSaved', { path: entry.lastBackupDir })}
             </p>
           ) : null}
 
-          <div className="min-h-0 flex-1 overflow-y-auto pb-20">
+          {/* The cards scroll vertically here; each card's diff scrolls sideways
+              on its own so a long line never pushes the card frames apart. */}
+          <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden p-3 pb-20">
             {entry.loading && !entry.status ? (
               <div className="flex items-center justify-center py-8">
                 <Spinner size={18} label={t('common.loading')} />
               </div>
             ) : entry.status?.state === 'not_git_repo' ? (
-              <PanelMessage icon="folder_off" message={t('workspace.review.notGitRepo')} />
+              <PanelMessage icon={FolderX} message={t('workspace.review.notGitRepo')} />
             ) : entry.status?.state === 'missing_workdir' ? (
-              <PanelMessage icon="folder_off" tone="error" message={t('workspace.review.missingWorkdir')} />
+              <PanelMessage icon={FolderX} tone="error" message={t('workspace.review.missingWorkdir')} />
             ) : entry.status?.state === 'no_head' ? (
-              <PanelMessage icon="history" message={t('workspace.review.noHead')} />
+              <PanelMessage icon={History} message={t('workspace.review.noHead')} />
             ) : entry.error ? (
-              <PanelMessage icon="error" tone="error" message={source.kind === 'turn' ? t('workspace.review.historyUnavailable') : entry.error} />
+              <PanelMessage icon={CircleAlert} tone="error" message={source.kind === 'turn' ? t('workspace.review.historyUnavailable') : entry.error} />
             ) : visibleFiles.length === 0 ? (
-              <PanelMessage icon="check_circle" message={t('workspace.review.empty')} />
+              <PanelMessage icon={CircleCheck} message={t('workspace.review.empty')} />
             ) : (
               visibleFiles.map((file) => (
                 <ReviewFileSection
@@ -634,42 +683,47 @@ export function WorkspaceReviewTab({
           {writable && files.length > 0 ? (
             <div
               data-testid="workspace-review-bulk-bar"
-              className="absolute bottom-5 left-1/2 z-[var(--z-sticky)] flex max-w-[calc(100%-16px)] -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-card)]"
+              className="absolute bottom-4 left-1/2 z-[var(--z-sticky)] flex max-w-[calc(100%-16px)] -translate-x-1/2 items-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-[3px] shadow-[var(--shadow-dropdown)]"
             >
-              {source.kind !== 'staged' ? <Button
-                variant="ghost"
-                size="base"
-                icon={<Undo2 size={13} strokeWidth={1.9} />}
-                data-testid="workspace-review-revert-all"
-                disabled={entry.stale || entry.loading}
-                onClick={() => setPendingRevert(
-                  // Untracked files are deliberately excluded: a bulk discard
-                  // must not delete files Git has never seen.
-                  files.filter((file) => !untracked.has(file.path)).map((file) => file.path),
-                )}
-              >
-                {t('workspace.review.revertAll')}
-              </Button> : null}
-              <Button
-                variant="ghost"
-                size="base"
-                icon={<Plus size={13} strokeWidth={1.9} />}
+              {source.kind !== 'staged' ? <>
+                <button
+                  type="button"
+                  data-testid="workspace-review-revert-all"
+                  disabled={entry.stale || entry.loading}
+                  onClick={() => setPendingRevert(
+                    // Untracked files are deliberately excluded: a bulk discard
+                    // must not delete files Git has never seen.
+                    files.filter((file) => !untracked.has(file.path)).map((file) => file.path),
+                  )}
+                  className={REVIEW_PILL_BUTTON}
+                >
+                  <Undo2 size={14} strokeWidth={1.75} aria-hidden="true" />
+                  {t('workspace.review.revertAll')}
+                </button>
+                <span aria-hidden="true" className="h-3.5 w-px shrink-0 bg-[var(--color-border)]" />
+              </> : null}
+              <button
+                type="button"
                 data-testid={source.kind === 'staged' ? 'workspace-review-unstage-all' : 'workspace-review-stage-all'}
                 disabled={entry.stale || entry.loading}
                 onClick={() => { void runWrite(source.kind === 'staged' ? 'unstage' : 'stage', files.map((file) => file.path)) }}
+                className={REVIEW_PILL_BUTTON}
               >
+                <Plus size={14} strokeWidth={1.75} aria-hidden="true" />
                 {t(source.kind === 'staged' ? 'workspace.review.unstageAll' : 'workspace.review.stageAll')}
-              </Button>
+              </button>
             </div>
           ) : null}
         </div>
 
         <WorkspaceTreeSidebar open={treeOpen} onOpenChange={setTreeOpen}>
-          <div className="shrink-0 px-2 py-2">
+          <div className="flex min-h-0 flex-1 flex-col border-l border-[var(--color-border)]">
+          <div className="shrink-0 px-2 pb-2 pt-2.5">
             <SearchField
               value={filter}
               onChange={setFilter}
               size="sm"
+              icon={<ListFilter size={14} strokeWidth={1.75} aria-hidden="true" />}
               label={t('workspace.review.filterFiles')}
               placeholder={t('workspace.review.filterFiles')}
               clearLabel={t('workspace.clearFilter')}
@@ -677,7 +731,7 @@ export function WorkspaceReviewTab({
             />
           </div>
           <div
-            className="min-h-0 flex-1 overflow-auto px-1 pb-2"
+            className="min-h-0 flex-1 overflow-auto px-2 pb-2"
             role="tree"
             aria-label={t('workspace.review.changeTree')}
           >
@@ -706,35 +760,43 @@ export function WorkspaceReviewTab({
                     else selectFile(row.path)
                   }}
                   onKeyDown={(event) => handleTreeKeyDown(event, row)}
-                  style={{ paddingLeft: 6 + row.depth * 16 }}
+                  style={{ paddingLeft: 2 + row.depth * 16 }}
                   className={[
-                    'flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] pr-1.5 text-left text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
+                    'flex h-[26px] cursor-default items-center gap-1.5 rounded-[var(--radius-xs)] pr-1.5 text-left text-[12px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
                     selected
-                      ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                      ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
                       : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
                   ].join(' ')}
                 >
-                  <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
-                    {row.isDirectory
-                      ? row.expanded
-                        ? <ChevronDown size={14} strokeWidth={1.9} aria-hidden="true" />
-                        : <ChevronRight size={14} strokeWidth={1.9} aria-hidden="true" />
-                      : <WorkspaceFileIcon path={row.path} size={14} />}
-                  </span>
+                  {row.isDirectory ? (
+                    <>
+                      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
+                        {row.expanded
+                          ? <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
+                          : <ChevronRight size={12} strokeWidth={2} aria-hidden="true" />}
+                      </span>
+                      {row.expanded
+                        ? <FolderOpen size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+                        : <FolderClosed size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
+                    </>
+                  ) : row.file ? (() => {
+                    const { letter, tone } = changeLetter(row.file, untracked.has(row.file.path))
+                    return (
+                      <span data-testid={`workspace-review-status-${row.path}`} className={`flex w-3.5 shrink-0 justify-center font-mono text-[11px] font-medium ${tone}`}>
+                        {letter}
+                      </span>
+                    )
+                  })() : null}
                   <span className="min-w-0 flex-1 truncate" title={row.path}>
                     {row.name}
                   </span>
                   {row.file?.conflicted ? (
                     <Circle size={8} aria-hidden="true" className="shrink-0 fill-[var(--color-error)] text-[var(--color-error)]" />
                   ) : null}
-                  {row.file ? (
-                    <span className="shrink-0 font-mono text-[10px] text-[var(--color-text-tertiary)]">
-                      {untracked.has(row.file.path) ? 'U' : row.file.staged ? 'S' : 'M'}
-                    </span>
-                  ) : null}
                 </div>
               )
             })}
+          </div>
           </div>
         </WorkspaceTreeSidebar>
       </div>
@@ -863,13 +925,23 @@ function ReviewFileSection({
         registerSection(node)
       }}
       data-testid={`workspace-review-section-${file.path}`}
-      className="border-b border-[var(--color-border)]"
+      // `overflow-clip`, not `overflow-hidden`: the rounded frame must clip its
+      // corners without becoming the scroll box its sticky header pins against.
+      className="shrink-0 overflow-clip rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)]"
     >
-      <header className="sticky top-0 z-[var(--z-sticky)] flex h-8 items-center gap-2 bg-[var(--color-surface)] px-2">
-        <WorkspaceFileIcon path={file.path} size={14} />
+      <header className={`sticky top-0 z-[var(--z-sticky)] flex h-9 items-center gap-2 bg-[var(--color-surface-container)] pl-1.5 pr-1.5 ${open ? 'border-b border-[var(--color-border)]' : ''}`}>
+        <IconButton
+          icon={open ? <ChevronDown size={14} strokeWidth={1.75} /> : <ChevronRight size={14} strokeWidth={1.75} />}
+          label={t(open ? 'workspace.review.collapseFile' : 'workspace.review.expandFile')}
+          aria-expanded={open}
+          aria-controls={contentId}
+          size="xs"
+          tone="muted"
+          onClick={onToggleOpen}
+        />
         <span
           data-testid={`workspace-review-path-${file.path}`}
-          className="flex min-w-0 flex-1 items-center text-[12px] text-[var(--color-text-primary)]"
+          className="flex min-w-0 flex-1 items-center font-mono text-[12px] text-[var(--color-text-primary)]"
           title={display}
         >
           {head ? (
@@ -894,94 +966,88 @@ function ReviewFileSection({
               <span dir="ltr">{head}</span>
             </span>
           ) : null}
-          <span data-testid={`workspace-review-path-tail-${file.path}`} className="shrink-0">
+          <span data-testid={`workspace-review-path-tail-${file.path}`} className="shrink-0 font-medium">
             {head ? `/${tail}` : tail}
           </span>
         </span>
+        {untracked ? (
+          <Badge tone="success" size="sm" className="shrink-0">{t('workspace.review.untracked')}</Badge>
+        ) : file.status === 'added' ? (
+          <Badge tone="success" size="sm" className="shrink-0">{t('workspace.review.newFile')}</Badge>
+        ) : null}
         {file.statsTruncated ? (
-          <span className="shrink-0 text-[10px] text-[var(--color-text-tertiary)]">
+          <span className="shrink-0 text-[11px] text-[var(--color-text-tertiary)]">
             {t('workspace.review.statsTruncated')}
           </span>
         ) : (
-          <span className="shrink-0 font-mono text-[10px] tabular-nums">
-            <span className="text-[var(--color-success)]">+{file.additions}</span>
+          <span className="shrink-0 font-mono text-[12px] tabular-nums">
+            <span className="text-[var(--color-diff-added-text)]">+{file.additions}</span>
             {' '}
-            <span className="text-[var(--color-error)]">-{file.deletions}</span>
+            <span className="text-[var(--color-diff-removed-text)]">-{file.deletions}</span>
           </span>
         )}
-        {untracked ? (
-          <span className="shrink-0 text-[10px] text-[var(--color-text-tertiary)]">
-            {t('workspace.review.untracked')}
-          </span>
-        ) : null}
-        <CopyButton
-          text={file.path}
-          label={t('openWith.copyPath')}
-          copiedLabel={t('common.copied')}
-          displayLabel={<Copy size={12} aria-hidden="true" />}
-          displayCopiedLabel={<Check size={12} aria-hidden="true" />}
-          className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
-        />
-        <IconButton
-          icon={open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-          label={t(open ? 'workspace.review.collapseFile' : 'workspace.review.expandFile')}
-          aria-expanded={open}
-          aria-controls={contentId}
-          size="2xs"
-          tone="muted"
-          onClick={onToggleOpen}
-        />
-        <IconButton
-          icon={<ExternalLink size={12} strokeWidth={1.9} />}
-          label={t('workspace.review.openFile')}
-          size="2xs"
-          tone="muted"
-          disabled={file.status === 'deleted'}
-          onClick={() => onOpenFile(firstChangeLine)}
-        />
-        <IconButton
-          icon={<Eye size={12} strokeWidth={1.9} />}
-          label={t(viewed ? 'workspace.review.viewed' : 'workspace.review.markViewed')}
-          size="2xs"
-          tone="muted"
-          pressed={viewed}
-          onClick={onToggleViewed}
-        />
-        {writable ? (
-          <>
-            {source.kind !== 'staged' ? <IconButton
-              icon={<Undo2 size={12} strokeWidth={1.9} />}
-              label={t('workspace.review.revert')}
-              size="2xs"
-              tone="muted"
-              hoverTone="danger"
-              onClick={onRevert}
-            /> : null}
-            <IconButton
-              icon={<Plus size={12} strokeWidth={1.9} />}
-              label={t(unstage ? 'workspace.review.unstage' : 'workspace.review.stage')}
-              size="2xs"
-              tone="muted"
-              onClick={unstage ? onUnstage : onStage}
-            />
-          </>
-        ) : null}
+        {/* The actions never shrink: the path gives up its head first. */}
+        <span className="ml-auto flex shrink-0 items-center">
+          <CopyButton
+            text={file.path}
+            label={t('openWith.copyPath')}
+            copiedLabel={t('common.copied')}
+            displayLabel={<Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
+            displayCopiedLabel={<Check size={14} strokeWidth={1.75} aria-hidden="true" />}
+            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          />
+          <IconButton
+            icon={<ExternalLink size={14} strokeWidth={1.75} />}
+            label={t('workspace.review.openFile')}
+            size="xs"
+            tone="muted"
+            disabled={file.status === 'deleted'}
+            onClick={() => onOpenFile(firstChangeLine)}
+          />
+          <IconButton
+            icon={<Eye size={14} strokeWidth={1.75} />}
+            label={t(viewed ? 'workspace.review.viewed' : 'workspace.review.markViewed')}
+            size="xs"
+            tone="muted"
+            pressed={viewed}
+            onClick={onToggleViewed}
+          />
+          {writable ? (
+            <>
+              {source.kind !== 'staged' ? <IconButton
+                icon={<Undo2 size={14} strokeWidth={1.75} />}
+                label={t('workspace.review.revert')}
+                size="xs"
+                tone="muted"
+                hoverTone="danger"
+                onClick={onRevert}
+              /> : null}
+              <IconButton
+                icon={<Plus size={14} strokeWidth={1.75} />}
+                label={t(unstage ? 'workspace.review.unstage' : 'workspace.review.stage')}
+                size="xs"
+                tone="muted"
+                onClick={unstage ? onUnstage : onStage}
+              />
+            </>
+          ) : null}
+        </span>
       </header>
 
       {open ? <div id={contentId}>{file.conflicted ? (
-        <p className="px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
+        <p className="px-3 py-2.5 text-[12px] text-[var(--color-text-tertiary)]">
           {t('workspace.review.conflicted')}
         </p>
       ) : file.binary ? (
-        <p className="px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
+        <p className="px-3 py-2.5 text-[12px] text-[var(--color-text-tertiary)]">
           {t('workspace.review.binary')}
         </p>
       ) : diffTruncated ? (
-        <p className="px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">
+        <p className="px-3 py-2.5 text-[12px] text-[var(--color-text-tertiary)]">
           {t('workspace.review.diffTruncated', { size: formatBytes(diffBytes ?? 0) })}
         </p>
       ) : diffUnavailable ? (
-        <p role="alert" className="px-3 py-2 text-[11px] text-[var(--color-text-tertiary)]">{t('workspace.review.historyUnavailable')}</p>
+        <p role="alert" className="px-3 py-2.5 text-[12px] text-[var(--color-text-tertiary)]">{t('workspace.review.historyUnavailable')}</p>
       ) : diffLoading ? (
         <div className="flex items-center justify-center py-4">
           <Spinner size={14} label={t('common.loading')} />
@@ -1005,7 +1071,9 @@ function ReviewFileSection({
           value={diff}
           path={file.path}
           hideSingleFileHeader
-          className="bg-[var(--color-code-bg)]"
+          // Sideways only: the gutter buttons' enlarged hit areas poke a few px
+          // below the last row and must not grow a vertical scrollbar.
+          className="overflow-x-auto overflow-y-hidden bg-[var(--color-surface)]"
         />
       ) : null}</div> : null}
     </section>

@@ -75,7 +75,7 @@ describe('Settings section navigation', () => {
     render(<Settings />)
 
     const rail = screen.getByRole('button', { name: 'Model Settings' })
-      .closest('div[class*="w-[195px]"]')
+      .closest('[data-testid="settings-navigation"]')
 
     // This rail is what sits directly under the Settings tab, and the tab is
     // filled with paper precisely so its bottom edge runs unbroken into the
@@ -93,5 +93,21 @@ describe('Settings section navigation', () => {
     // Page chrome stays left-pinned. Chasing the settings tab's strip offset used
     // to shove this rail mid-panel whenever the tab was not leading.
     expect((rail as HTMLElement).style.marginLeft).toBe('')
+  })
+
+  it('gives every pane the same wide, fluid page frame', () => {
+    render(<Settings />)
+
+    const frameFor = () => screen.getByTestId('settings-page-frame')
+    // The old 700px cap left explorer-style panes (memory, skills) squeezed
+    // into the middle of an empty page. The frame now fills the column up to
+    // 1120px and is the only place a pane's width is set.
+    expect(frameFor()).toHaveClass('w-full', 'max-w-[1120px]')
+    expect(frameFor().className).not.toContain('max-w-[700px]')
+
+    // Switching panes must not move the header, so the frame is shared.
+    const providersClass = frameFor().className
+    fireEvent.click(screen.getByRole('button', { name: 'Diagnostics' }))
+    expect(frameFor().className).toBe(providersClass)
   })
 })

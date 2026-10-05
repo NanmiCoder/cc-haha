@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Clock, Info, TriangleAlert } from 'lucide-react'
 import { useTaskStore } from '../../stores/taskStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useAdapterStore } from '../../stores/adapterStore'
@@ -6,7 +7,7 @@ import { Modal } from '@/components/ui/Modal'
 import { Badge } from '@/components/ui/Badge'
 import { Card } from '@/components/ui/Card'
 import { Checkbox } from '@/components/ui/Checkbox'
-import { Input } from '@/components/ui/Input'
+import { FIELD_BASE_CLASSES, FIELD_SIZE_CLASSES, Input, fieldStateClasses } from '@/components/ui/Input'
 import { SelectField } from '@/components/ui/SelectField'
 import { Button } from '@/components/ui/Button'
 import { PromptEditor } from './PromptEditor'
@@ -171,27 +172,26 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
       width={760}
       title={isEdit ? t('tasks.editTitle') : t('newTask.title')}
       footer={
-        <div className="flex w-full flex-wrap items-center gap-2.5 border-t border-[var(--color-border)] pt-4">
+        <div className="flex w-full flex-wrap items-center gap-2 border-t border-[var(--color-border)] pt-4">
           {/* The human-readable schedule reads as the sentence the buttons are
               about to commit to, so it sits with them rather than in the body. */}
-          <span aria-hidden="true" className="material-symbols-outlined shrink-0 text-[16px] text-[var(--color-text-secondary)]">schedule</span>
-          <span className="min-w-0 text-[13.5px] text-[var(--color-text-secondary)]">{cronPreview}</span>
-          <div className="ml-auto flex shrink-0 gap-2.5">
-            <Button variant="secondary" onClick={onClose}>{t('common.cancel')}</Button>
-            <Button onClick={handleSubmit} disabled={!canSubmit} loading={isSubmitting}>
+          <Clock size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+          <span className="min-w-0 text-[13px] text-[var(--color-text-secondary)]">{cronPreview}</span>
+          <div className="ml-auto flex shrink-0 gap-2">
+            <Button variant="secondary" size="base" onClick={onClose}>{t('common.cancel')}</Button>
+            <Button size="base" onClick={handleSubmit} disabled={!canSubmit} loading={isSubmitting}>
               {isEdit ? t('tasks.saveChanges') : t('newTask.create')}
             </Button>
           </div>
         </div>
       }
     >
-      {/* Info banner */}
-      <Card radius="md" surface="low" padding="none" className="mb-5 flex items-center gap-2.5 px-[15px] py-[11px]">
-        <span aria-hidden="true" className="material-symbols-outlined shrink-0 text-[16px] text-[var(--color-text-secondary)]">info</span>
-        <span className="text-[13.5px] text-[var(--color-text-secondary)]">
-          {t('newTask.localWarning')}
-        </span>
-      </Card>
+      {/* Info banner — the same light info strip the page uses for its
+          desktop-online notice. */}
+      <div className="mb-5 flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-info-container)] px-3 py-2 text-[13px] leading-[1.5] text-[var(--color-on-info-container)]">
+        <Info size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
+        <span>{t('newTask.localWarning')}</span>
+      </div>
 
       <div className="flex flex-col gap-4">
         <Input
@@ -251,7 +251,9 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
               aria-label={t('newTask.time')}
               value={time}
               onChange={(e) => setTime(e.target.value)}
-              className="h-10 w-40 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 font-mono text-sm tabular-nums text-[var(--color-text-primary)] outline-none transition-colors focus:border-[var(--color-border-focus)]"
+              // The shared field classes, so this sits flush with the
+              // `SelectField` beside it in height, corner and focus ring.
+              className={`${FIELD_BASE_CLASSES} ${FIELD_SIZE_CLASSES.lg} ${fieldStateClasses(false)} w-40 font-mono tabular-nums`}
             />
           )}
         </div>
@@ -327,7 +329,7 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
             19 across the app that varied in size, accent token and how the
             label was associated; `Checkbox` also carries the disabled styling
             the channel rows were spelling out by hand. */}
-        <Card radius="lg" padding="none" className="flex flex-col gap-3 px-[18px] py-[15px]">
+        <Card radius="lg" surface="lowest" padding="none" className="flex flex-col gap-3 px-4 py-3.5">
           <Checkbox
             label={t('newTask.notifyOnComplete')}
             description={t('newTask.notifyHint')}
@@ -390,10 +392,9 @@ export function NewTaskModal({ open, onClose, editTask }: Props) {
                   tone="warning"
                   size="sm"
                   wrap
-                  bordered
                   pill={false}
                   role="alert"
-                  icon={<span aria-hidden="true" className="material-symbols-outlined text-[13px]">warning</span>}
+                  icon={<TriangleAlert size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />}
                 >
                   {t('newTask.noChannelSelected')}
                 </Badge>

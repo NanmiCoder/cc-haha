@@ -1,9 +1,12 @@
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
+import { ArrowUp, Plus } from 'lucide-react'
 import { BrandSeal } from '@/components/composite/BrandSeal'
+import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
+import { projectTitle } from '@/components/layout/sidebarTaskGroups'
+import { resolveProjectDisplayName } from '../stores/projectDisplayNameStore'
 import { Button } from '@/components/ui/Button'
-import { IconButton } from '@/components/ui/IconButton'
 import { ApiError } from '../api/client'
 import { agentsApi } from '../api/agents'
 import { providersApi } from '../api/providers'
@@ -732,49 +735,61 @@ export function EmptySession() {
     },
   })
 
+  const heroProject = workDir ? (resolveProjectDisplayName(workDir) ?? projectTitle(workDir)) : null
+  // Same merge as the "+" menu's prompt seeds: a draft already typed is kept.
+  const insertSuggestion = (text: string) => {
+    const next = input.trim() ? `${input}\n${text}` : text
+    setInput(next)
+    requestAnimationFrame(() => {
+      composerRef.current?.focus()
+      composerRef.current?.setSelectionOffsets(next.length)
+    })
+  }
+
   return (
+    // The new-session page (「素」, su-12). On desktop the composer sits in the
+    // flow between the hero (bottom-aligned) and the starter row (top-aligned),
+    // which puts it just above the middle of the page. On a phone it stays
+    // docked to the bottom edge, above the keyboard.
     <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
-      <div className={`brand-seal-glow flex flex-1 flex-col items-center justify-center ${
-        isMobileComposer ? 'px-6 pb-[230px] pt-10' : 'p-8 pb-32'
+      <div className={`flex flex-col items-center text-center ${
+        isMobileComposer
+          ? 'flex-1 justify-center px-6 pb-[230px] pt-10'
+          : 'min-h-0 flex-1 justify-end overflow-hidden px-8 pb-7 pt-8'
       }`}>
-        <div className={`flex flex-col items-center text-center ${
-          isMobileComposer ? 'max-w-[300px] gap-3' : 'max-w-[420px] gap-[13px]'
-        }`}>
-          <BrandSeal size={isMobileComposer ? 'lg' : 'xl'} />
+        <div className={`flex flex-col items-center gap-2.5 ${isMobileComposer ? 'max-w-[300px]' : 'max-w-[600px]'}`}>
+          <BrandSeal size={isMobileComposer ? 'md' : 'lg'} />
           <h1
-            className={`font-bold tracking-tight text-[var(--color-text-primary)] ${
-              isMobileComposer ? 'text-2xl' : 'text-[27px]'
+            className={`mt-2 font-semibold leading-[1.3] tracking-tight text-[var(--color-text-primary)] ${
+              isMobileComposer ? 'text-[22px]' : 'text-[26px]'
             }`}
-            style={{ fontFamily: 'var(--font-headline)' }}
           >
-            {t('empty.title')}
+            {heroProject
+              ? t('empty.heroTitle', { project: heroProject })
+              : t('empty.heroTitleNoProject')}
           </h1>
-          <p
-            className={`mx-auto -mt-1 text-[var(--color-text-secondary)] ${
-              isMobileComposer ? 'max-w-[280px] text-sm leading-6' : 'text-[15px] leading-[1.7]'
-            }`}
-            style={{ fontFamily: 'var(--font-body)' }}
-          >
-            {t('empty.subtitle')}
+          <p className="text-[14px] leading-6 text-[var(--color-text-tertiary)]">
+            {t('empty.heroSubtitle')}
           </p>
         </div>
       </div>
 
       <div
         data-testid="empty-session-composer-shell"
-        className={`absolute left-0 right-0 z-[var(--z-nav)] flex justify-center ${
+        className={`flex justify-center ${
         isMobileComposer
-          ? 'bottom-0 px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]'
-          : 'bottom-4 px-8'
+          ? 'absolute bottom-0 left-0 right-0 z-[var(--z-nav)] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]'
+          : 'relative z-[var(--z-raised)] shrink-0 px-8'
       }`}
       >
         <div className={`flex w-full flex-col ${isMobileComposer ? 'max-w-none' : 'max-w-3xl'}`}>
           <div
             ref={panelRef}
             data-testid="empty-session-composer-panel"
-            className={`glass-panel glass-panel--composer relative flex flex-col gap-3 overflow-visible rounded-[var(--radius-2xl)] ${
-              isMobileComposer ? 'p-3' : 'p-0'
-            } ${isDragActive ? 'composer-drop-target-active' : ''}`}
+            // Kept identical to ChatInput's floating card: `--radius-xl`, the
+            // composer shadow step from `glass-panel--composer`, and an 8px
+            // inset that the editor and toolbar pad themselves within.
+            className={`glass-panel glass-panel--composer relative flex flex-col overflow-visible rounded-[var(--radius-xl)] p-2 ${isDragActive ? 'composer-drop-target-active' : ''}`}
             {...dragHandlers}
           >
             {isDragActive && (
@@ -785,7 +800,7 @@ export function EmptySession() {
               />
             )}
 
-            <div className={isMobileComposer ? 'contents' : 'flex flex-col gap-3 p-4'}>
+            <div className="contents">
               {fileSearchOpen && (
                 <ComposerReferenceMenu
                   ref={fileSearchRef}
@@ -854,10 +869,12 @@ export function EmptySession() {
               )}
 
               {attachments.length > 0 && (
-                <AttachmentGallery attachments={attachments} variant="composer" onRemove={removeAttachment} />
+                <div className="px-2 pt-2">
+                  <AttachmentGallery attachments={attachments} variant="composer" onRemove={removeAttachment} />
+                </div>
               )}
 
-              <div className="flex items-start gap-3">
+              <div className="flex items-start">
                 <MentionComposer
                   ref={composerRef}
                   rootRef={composerContainerRef}
@@ -873,8 +890,8 @@ export function EmptySession() {
                   // `min-w-0`: see ChatInput — an unbreakable long run (URL,
                   // hash) otherwise grows this flex item past the panel.
                   className="flex-1 min-w-0"
-                  editorClassName={`overflow-y-auto leading-relaxed text-[var(--color-text-primary)] ${
-                    isMobileComposer ? 'max-h-[132px] min-h-[72px] py-1.5 text-base' : 'max-h-[200px] py-2'
+                  editorClassName={`chat-reading-text min-h-[72px] overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
+                    isMobileComposer ? 'max-h-[132px]' : 'max-h-[200px]'
                   }`}
                   aria={{
                     role: isSlashMenuVisible || fileSearchOpen ? 'combobox' : 'textbox',
@@ -888,22 +905,27 @@ export function EmptySession() {
                 />
               </div>
 
-              <div className={`border-t border-[var(--color-border-separator)] pt-3 ${
-                isMobileComposer ? 'flex flex-wrap items-center gap-2' : 'flex items-center justify-between'
+              {/* No divider: the editor's bottom inset and this row's top inset
+                  separate the two, exactly as in ChatInput. */}
+              <div className={`flex min-w-0 items-center justify-between pt-1.5 ${
+                isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
               }`}>
-                <div className="flex min-w-0 shrink items-center gap-2">
+                <div className="flex min-w-0 shrink items-center gap-1">
                   <div ref={plusMenuRef} className="relative shrink-0">
-                    <IconButton
-                      icon="add"
-                      label={t('chat.composerTools')}
-                      showTooltip={false}
-                      tone="secondary"
-                      size={isMobileComposer ? 'xl' : 'md'}
-                      className={isMobileComposer ? 'h-11 w-11' : undefined}
+                    {/* Hand-rolled like ChatInput's: a quiet 28px square on
+                        desktop, the 44px touch minimum on a phone. */}
+                    <button
+                      type="button"
+                      onClick={() => setPlusMenuOpen((prev) => !prev)}
+                      aria-label={t('chat.composerTools')}
                       aria-haspopup="menu"
                       aria-expanded={plusMenuOpen}
-                      onClick={() => setPlusMenuOpen((prev) => !prev)}
-                    />
+                      className={`inline-flex items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] ${
+                        plusMenuOpen ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''
+                      } ${isMobileComposer ? 'h-11 w-11' : 'h-7 w-7'}`}
+                    >
+                      <Plus size={isMobileComposer ? 18 : 16} strokeWidth={1.75} aria-hidden="true" />
+                    </button>
 
                     {plusMenuOpen && (
                       <ComposerCapabilityMenu
@@ -951,7 +973,7 @@ export function EmptySession() {
                   )}
                 </div>
 
-                <div className={`${isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-2' : 'flex shrink-0 items-center gap-3'}`}>
+                <div className={`${isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}`}>
                   <ContextUsageIndicator
                     chatState="idle"
                     messageCount={0}
@@ -966,7 +988,7 @@ export function EmptySession() {
                       component, shape, size and icon. See the note there for
                       why the label went away. */}
                   <Button
-                    variant="primary"
+                    variant="accent"
                     size="base"
                     shape="circle"
                     onClick={handleSubmit}
@@ -974,7 +996,7 @@ export function EmptySession() {
                     aria-label={t('common.run')}
                     title={t('common.run')}
                     className={`shrink-0 ${isMobileComposer ? 'h-11 w-11' : ''}`}
-                    icon={<span className="material-symbols-outlined text-[18px]">arrow_upward</span>}
+                    icon={<ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
                   />
                 </div>
               </div>
@@ -996,6 +1018,16 @@ export function EmptySession() {
           )}
         </div>
       </div>
+
+      {!isMobileComposer && (
+        <div className="flex min-h-0 flex-[1.3] flex-col items-center overflow-y-auto px-8 pb-8 pt-4">
+          <NewSessionStarter
+            projectPath={workDir || null}
+            projectLabel={heroProject}
+            onSuggestion={insertSuggestion}
+          />
+        </div>
+      )}
 
       <ComposerReferenceDetail mention={referenceDetail} onClose={() => setReferenceDetail(null)} />
       <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />

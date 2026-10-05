@@ -26,6 +26,9 @@ const MAX_VISIBLE_TAGS = 3
  * link. The content above it is `pointer-events-none`, and the install button
  * opts back in — drop either half and the card stops opening or the button
  * stops installing.
+ *
+ * Hover deepens the hairline and nothing else: the old lift-and-shadow made a
+ * grid of 24 cards jump under the pointer while the reader was scanning it.
  */
 export function SkillCard({
   skill,
@@ -49,30 +52,28 @@ export function SkillCard({
   return (
     <Card
       as="article"
-      radius="xl"
-      surface="base"
+      radius="lg"
+      surface="lowest"
       padding="none"
-      interactive
-      lift
-      className="group relative isolate flex min-h-[208px] min-w-0 flex-col gap-3 px-[18px] pb-4 pt-[18px]"
+      className="group relative isolate flex min-h-[200px] min-w-0 flex-col p-4 transition-colors duration-150 hover:border-[var(--color-outline)]"
     >
       <button
         type="button"
         aria-label={skill.name}
         data-market-skill-open-id={skill.id}
         onClick={() => onOpen(skill.id)}
-        className="absolute inset-0 z-0 rounded-[var(--radius-xl)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+        className="absolute inset-0 z-0 rounded-[var(--radius-lg)] focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
       />
 
       <div className="pointer-events-none relative z-10 flex min-w-0 items-center gap-3">
-        <SkillAvatar skill={skill} size={44} />
+        <SkillAvatar skill={skill} size={40} />
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 items-center gap-2">
-            <h3 className="min-w-0 truncate text-[15px] font-semibold leading-[22px] text-[var(--color-text-primary)]">
+            <h3 className="min-w-0 truncate text-sm font-semibold leading-5 text-[var(--color-text-primary)]">
               {skill.name}
             </h3>
             {skill.version && (
-              <Badge variant="outline" size="xs" pill={false} mono>
+              <Badge variant="outline" size="xs" mono>
                 v{skill.version}
               </Badge>
             )}
@@ -89,41 +90,41 @@ export function SkillCard({
         </div>
       </div>
 
-      <p className="pointer-events-none relative z-10 line-clamp-2 min-h-[42px] break-words text-[13px] leading-[21px] text-[var(--color-text-secondary)]">
+      <p className="pointer-events-none relative z-10 mt-3 line-clamp-2 min-h-9 break-words text-xs leading-[18px] text-[var(--color-text-secondary)]">
         {summary || t('market.detail.noDescription')}
       </p>
 
       <div
         data-testid="market-card-chips"
-        className="pointer-events-none relative z-10 flex max-h-6 min-w-0 flex-wrap items-center gap-1.5 overflow-hidden"
+        className="pointer-events-none relative z-10 mt-3 flex max-h-5 min-w-0 flex-wrap items-center gap-1.5 overflow-hidden"
       >
         <SecurityBadge status={skill.securityStatus} short />
         {skill.featured && (
-          <Badge tone="info" size="sm" pill={false} data-testid="market-card-featured">
+          <Badge tone="info" size="xs" data-testid="market-card-featured">
             {t('market.featured')}
           </Badge>
         )}
         {tags.slice(0, MAX_VISIBLE_TAGS).map((tag) => (
-          <Badge key={tag} size="sm" pill={false}>
+          <Badge key={tag} size="xs">
             {tag}
           </Badge>
         ))}
         {extraTags > 0 && (
-          <Badge size="sm" pill={false}>
+          <Badge size="xs">
             {t('market.card.moreTags', { count: String(extraTags) })}
           </Badge>
         )}
       </div>
 
-      <footer className="pointer-events-none relative z-10 mt-auto flex min-h-11 items-center justify-between gap-2.5 border-t border-[var(--color-border-separator)] pt-3">
-        <div className="flex min-w-0 items-center gap-3.5 font-mono text-xs tabular-nums text-[var(--color-text-secondary)]">
-          <span className="inline-flex items-center gap-1.5" title={t('market.detail.downloads')}>
-            <Download className="h-3 w-3" strokeWidth={1.6} aria-hidden="true" />
+      <footer className="pointer-events-none relative z-10 mt-auto flex min-h-8 items-center justify-between gap-2.5 pt-3">
+        <div className="flex min-w-0 items-center gap-3 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+          <span className="inline-flex items-center gap-1" title={t('market.detail.downloads')}>
+            <Download size={12} strokeWidth={1.75} aria-hidden="true" />
             {formatCount(skill.stats.downloads)}
           </span>
           {typeof skill.stats.stars === 'number' && skill.stats.stars > 0 && (
-            <span className="inline-flex items-center gap-1.5" title={t('market.detail.stars')}>
-              <Star className="h-3 w-3" strokeWidth={1.6} aria-hidden="true" />
+            <span className="inline-flex items-center gap-1" title={t('market.detail.stars')}>
+              <Star size={12} strokeWidth={1.75} aria-hidden="true" />
               {formatCount(skill.stats.stars)}
             </span>
           )}
@@ -132,12 +133,12 @@ export function SkillCard({
           // The footer is `pointer-events-none` for the stretched open button
           // underneath, so the install button opts back in and sits above it.
           <Button
-            variant="primary"
-            size="base"
+            variant="secondary"
+            size="sm"
             className="pointer-events-auto relative z-20 flex-shrink-0"
             loading={installing}
             data-market-skill-action-id={skill.id}
-            icon={<Download className="h-3.5 w-3.5" strokeWidth={1.8} aria-hidden="true" />}
+            icon={<Download size={12} strokeWidth={1.75} aria-hidden="true" />}
             onClick={() => onInstall?.(skill.id)}
           >
             {installing ? t('market.install.installing') : t('market.install.action')}

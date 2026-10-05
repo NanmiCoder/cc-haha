@@ -236,7 +236,7 @@ export function ConversationNavigator({
           className="fixed z-[var(--z-tooltip)] w-[min(320px,calc(100vw-88px))] -translate-y-1/2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3.5 py-3 text-left shadow-[var(--shadow-overlay)]"
           style={{ left: previewPosition.left, top: previewPosition.top }}
         >
-          <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)]">
+          <div className="mb-1 text-xs font-semibold tabular-nums text-[var(--color-text-tertiary)]">
             {t('chat.conversationNavigator.turn', {
               current: previewItem.turnNumber,
               total: items.length,

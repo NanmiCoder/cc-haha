@@ -281,12 +281,12 @@ export default function DocxSurface({
               onRetry={error.kind === 'unavailable' ? retry : undefined}
             />
           ) : (
-            <PanelMessage icon="progress_activity" message={t('workspace.document.loading')} />
+            <PanelMessage busy message={t('workspace.document.loading')} />
           )}
         </div>
       )}
       {current && error ? (
-        <p role="status" className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+        <p role="status" className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[12px] text-[var(--color-text-tertiary)]">
           {t('workspace.files.refreshFailed', { reason: failureMessage(error, t) })}
         </p>
       ) : null}

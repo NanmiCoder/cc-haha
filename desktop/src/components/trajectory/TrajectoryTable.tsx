@@ -139,12 +139,12 @@ export function TrajectoryTable({
           <button
             type="button"
             onClick={() => onToggleTurn(item.turn)}
-            className="flex h-full w-full items-center gap-2 pl-[120px] pr-3 text-left text-xs text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+            className="flex h-full w-full items-center gap-2 pl-[120px] pr-3 text-left text-[12px] text-[var(--color-text-tertiary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
           >
             <span>{t('trajectory.table.folded', { count: item.hiddenRows })}</span>
             {item.toolCount > 0 && <span>· {t('trajectory.table.toolCount', { count: item.toolCount })}</span>}
             {item.errors > 0 && <span className="text-[var(--color-error)]">· {t('trajectory.table.errorCount', { count: item.errors })}</span>}
-            {item.durationMs > 0 && <span>· {formatDurationMs(item.durationMs)}</span>}
+            {item.durationMs > 0 && <span className="font-mono text-[11px] tabular-nums">· {formatDurationMs(item.durationMs)}</span>}
           </button>
         )}
       </div>,
@@ -205,9 +205,9 @@ const TrajectoryRowView = memo(function TrajectoryRowView({ item, selected, coll
             onClick={() => onToggleTurn(row.turn!)}
             aria-expanded={!collapsed}
             aria-label={t(collapsed ? 'trajectory.table.expandTurn' : 'trajectory.table.collapseTurn', { turn: turnLabel(row.turn, t) })}
-            className="flex items-center gap-0.5 rounded-[var(--radius-sm)] px-1 text-[10.5px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            className="flex items-center gap-0.5 rounded-[var(--radius-xs)] px-1 text-[11px] font-medium text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
-            {collapsed ? <ChevronRight size={10} aria-hidden /> : <ChevronDown size={10} aria-hidden />}
+            {collapsed ? <ChevronRight size={12} strokeWidth={2} aria-hidden /> : <ChevronDown size={12} strokeWidth={2} aria-hidden />}
             <span className="whitespace-nowrap">{turnLabel(row.turn, t)}</span>
           </button>
         )}
@@ -224,7 +224,7 @@ const TrajectoryRowView = memo(function TrajectoryRowView({ item, selected, coll
         <Badge tone={row.isError ? 'danger' : KIND_TONES[row.kind]} variant={KIND_VARIANTS[row.kind]} size="xs" pill={false} className="min-w-11 justify-center">
           {t(KIND_LABEL_KEYS[row.kind])}
         </Badge>
-        {row.isError && <CircleX size={13} aria-label={t('trajectory.status.error')} className="shrink-0 text-[var(--color-error)]" />}
+        {row.isError && <CircleX size={14} strokeWidth={1.75} aria-label={t('trajectory.status.error')} className="shrink-0 text-[var(--color-error)]" />}
         <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden whitespace-nowrap">
           <RowContent row={row} hiddenTools={hiddenTools} terms={terms} running={running} />
         </div>
@@ -266,7 +266,7 @@ function Highlight({ text, terms }: { text: string; terms: readonly string[] }) 
   marks.forEach(([from, to], index) => {
     if (from < cursor) return
     if (from > cursor) parts.push(text.slice(cursor, from))
-    parts.push(<mark key={index} className="rounded-[2px] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]">{text.slice(from, to)}</mark>)
+    parts.push(<mark key={index} className="rounded-[var(--radius-xs)] bg-[var(--color-search-highlight)] text-[var(--color-on-search-highlight)]">{text.slice(from, to)}</mark>)
     cursor = to
   })
   parts.push(text.slice(cursor))
@@ -320,7 +320,7 @@ function RowContent({ row, hiddenTools, terms, running }: {
             ? <span className="min-w-0 truncate text-[var(--color-text-primary)]"><Highlight text={row.preview} terms={terms} /></span>
             : <span className={muted}>{t(row.hasThinking && !row.toolOnly ? 'trajectory.assistant.thinkingOnly' : 'trajectory.assistant.toolOnly')}</span>}
           {hiddenTools && (
-            <span className="flex min-w-0 shrink items-center gap-1.5 truncate font-mono text-[11.5px] text-[var(--color-text-secondary)]">
+            <span className="flex min-w-0 shrink items-center gap-1.5 truncate font-mono text-[12px] text-[var(--color-text-secondary)]">
               {hiddenTools.names.slice(0, 4).map(([name, count]) => (
                 <span key={name} className="shrink-0">{count > 1 ? `${name} ×${count}` : name}</span>
               ))}

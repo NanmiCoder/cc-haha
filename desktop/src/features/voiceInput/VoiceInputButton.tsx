@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Mic, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation } from '@/i18n'
@@ -112,7 +113,9 @@ export function VoiceInputButton({ dictation, blocked = false, mobile = false }:
           />
         )}
         <IconButton
-          icon={recording ? 'stop' : 'mic'}
+          icon={recording
+            ? <Square size={mobile ? 18 : 14} strokeWidth={1.75} fill="currentColor" aria-hidden="true" />
+            : <Mic size={mobile ? 20 : 16} strokeWidth={1.75} aria-hidden="true" />}
           label={label}
           size={size}
           tone={recording ? 'danger' : 'secondary'}
@@ -150,7 +153,7 @@ export function VoiceInputButton({ dictation, blocked = false, mobile = false }:
             onClick={dictation.dismissIssue}
             className="shrink-0 rounded-[var(--radius-sm)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
           >
-            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">close</span>
+            <X size={14} strokeWidth={1.75} aria-hidden="true" />
           </button>
         </div>
       )}

@@ -9,16 +9,22 @@ import type {
   VoicePreparationStep,
   VoiceProviderStatus,
 } from '@/api/voice'
+import { ChevronDown } from 'lucide-react'
 import { Badge, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { Progress } from '@/components/ui/Progress'
-import { Switch } from '@/components/ui/Switch'
-import { SettingsPageHeader, SettingsSection } from '@/components/settings/SettingsSection'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+  SettingsSwitchRow,
+} from '@/components/settings/SettingsSection'
 import { useTranslation } from '@/i18n'
 import type { TranslationKey } from '@/i18n/locales/en'
 import { formatBytes } from '@/lib/formatBytes'
@@ -43,7 +49,8 @@ const PHASE_KEYS: Record<VoicePreparationPhase, TranslationKey> = {
 
 const PHASE_TONES: Record<VoicePreparationPhase, Tone> = {
   unprepared: 'neutral',
-  downloading: 'brand',
+  // In progress reads as info app-wide; terracotta is never a status.
+  downloading: 'info',
   verifying: 'info',
   ready: 'success',
   failed: 'danger',
@@ -118,14 +125,14 @@ export function VoiceInputSettings() {
 
   const header = (
     <SettingsPageHeader
-      title={t('voice.settings.title')}
+      title={t('settings.tab.voice')}
       description={t('voice.settings.description')}
     />
   )
 
   if (!catalog) {
     return (
-      <div className="max-w-2xl">
+      <div className="w-full min-w-0 [&>*+*]:mt-7">
         {header}
         {storeError ? (
           <ErrorState
@@ -144,7 +151,7 @@ export function VoiceInputSettings() {
 
   if (!catalog.supported) {
     return (
-      <div className="max-w-2xl">
+      <div className="w-full min-w-0 [&>*+*]:mt-7">
         {header}
         <ErrorState
           size="lg"
@@ -190,30 +197,34 @@ export function VoiceInputSettings() {
     }
   }
 
+  const enableNotice = preferences.enabled && !modelReady && phase !== 'downloading' && phase !== 'verifying'
+
   return (
-    <div className="max-w-2xl">
+    <div className="w-full min-w-0">
       {header}
 
       <SettingsSection title={t('voice.settings.engine.title')} description={t('voice.settings.engine.description')}>
-        <Card radius="xl" surface="low" padding="none" className={CARD_ROWS}>
-          <div className="space-y-2 px-4 py-3">
-            <Switch
-              checked={preferences.enabled}
-              onChange={(enabled) => { void savePreferences({ enabled }) }}
-              label={t('voice.settings.enable.label')}
-              description={t('voice.settings.enable.description')}
-            />
-            {preferences.enabled && !modelReady && phase !== 'downloading' && phase !== 'verifying' ? (
-              <p role="status" className="text-[13px] leading-5 text-[var(--color-warning)]">
-                {t('voice.settings.enable.needModel')}
-              </p>
-            ) : null}
-            {saveFailed ? (
-              <p role="alert" className="text-[13px] leading-5 text-[var(--color-error)]">
-                {t('voice.settings.saveFailed')}
-              </p>
-            ) : null}
-          </div>
+        <SettingsGroup>
+          <SettingsSwitchRow
+            title={t('voice.settings.enable.label')}
+            description={t('voice.settings.enable.description')}
+            checked={preferences.enabled}
+            onChange={(enabled) => { void savePreferences({ enabled }) }}
+            footer={enableNotice || saveFailed ? (
+              <div className="space-y-1 text-xs leading-[1.5]">
+                {enableNotice ? (
+                  <p role="status" className="text-[var(--color-warning)]">
+                    {t('voice.settings.enable.needModel')}
+                  </p>
+                ) : null}
+                {saveFailed ? (
+                  <p role="alert" className="text-[var(--color-error)]">
+                    {t('voice.settings.saveFailed')}
+                  </p>
+                ) : null}
+              </div>
+            ) : undefined}
+          />
 
           {provider ? (
             <>
@@ -244,7 +255,7 @@ export function VoiceInputSettings() {
                       })}{' '}
                       <button
                         type="button"
-                        className="font-medium text-[var(--color-brand)] hover:underline"
+                        className="font-medium text-[var(--color-text-accent)] hover:underline"
                         onClick={() => useUIStore.getState().setActiveSettingsTab('general')}
                       >
                         {t('voice.settings.downloadSource.changeProxy')}
@@ -262,9 +273,9 @@ export function VoiceInputSettings() {
                 </SettingRow>
               ) : null}
               {storeError ? (
-                <div className="px-4 py-3">
+                <SettingsBlock>
                   <ErrorState size="sm" title={t('voice.settings.actionFailed')} detail={storeError} />
-                </div>
+                </SettingsBlock>
               ) : null}
               <SettingRow label={t('voice.settings.language.label')}>
                 <Picker
@@ -276,11 +287,11 @@ export function VoiceInputSettings() {
               </SettingRow>
             </>
           ) : null}
-        </Card>
+        </SettingsGroup>
       </SettingsSection>
 
       <SettingsSection title={t('voice.settings.mic.title')} description={t('voice.settings.mic.description')}>
-        <Card radius="xl" surface="low" padding="none" className={CARD_ROWS}>
+        <SettingsGroup>
           {!captureSupported ? (
             <p className="px-4 py-3 text-[13px] leading-5 text-[var(--color-text-tertiary)]">{t('voice.settings.capture.unsupported')}</p>
           ) : (
@@ -307,7 +318,7 @@ export function VoiceInputSettings() {
               </SettingRow>
               {microphone.savedMissing || microphone.error || microphone.noInputDevices || microphone.needsPermission ? (
                 <div className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-                  <div className="min-w-0 space-y-1 text-[13px] leading-5">
+                  <div className="min-w-0 space-y-1 text-xs leading-[1.5]">
                     {microphone.savedMissing ? (
                       <p role="status" className="text-[var(--color-warning)]">{t('voice.settings.mic.missing')}</p>
                     ) : null}
@@ -336,20 +347,22 @@ export function VoiceInputSettings() {
               ) : null}
             </>
           )}
-        </Card>
+        </SettingsGroup>
       </SettingsSection>
 
       <SettingsSection title={t('voice.settings.test.title')} description={t('voice.settings.test.description')}>
-        <Card radius="xl" surface="low" padding="none" className="p-4">
-          <VoiceTranscriptionTest
-            deviceId={microphone.selectedId || undefined}
-            providerId={provider?.info.id ?? preferences.providerId}
-            language={preferences.language}
-            maxSeconds={Math.max(1, Math.min(TEST_MAX_SECONDS, limits.maxAudioSeconds))}
-            ready={modelReady}
-            captureSupported={captureSupported}
-          />
-        </Card>
+        <SettingsGroup>
+          <SettingsBlock className="p-4">
+            <VoiceTranscriptionTest
+              deviceId={microphone.selectedId || undefined}
+              providerId={provider?.info.id ?? preferences.providerId}
+              language={preferences.language}
+              maxSeconds={Math.max(1, Math.min(TEST_MAX_SECONDS, limits.maxAudioSeconds))}
+              ready={modelReady}
+              captureSupported={captureSupported}
+            />
+          </SettingsBlock>
+        </SettingsGroup>
       </SettingsSection>
 
       <ConfirmDialog
@@ -371,22 +384,16 @@ export function VoiceInputSettings() {
 
 type PickerItem<T extends string> = { value: T; label: string }
 
-const CARD_ROWS = 'divide-y divide-[var(--color-border-separator)]'
-
-/** One "name on the left, control on the right" line; stacks on narrow widths. */
+/**
+ * One "name on the left, picker on the right" row of the shared settings
+ * skeleton; the hint is a `<p>` so its inline "Change proxy" link reads as part
+ * of the sentence.
+ */
 function SettingRow({ label, hint, children }: { label: string; hint?: ReactNode; children: ReactNode }) {
-  const row = (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
-      <span className="min-w-0 text-sm font-medium text-[var(--color-text-primary)]">{label}</span>
-      <div className="w-full sm:w-64 sm:shrink-0">{children}</div>
-    </div>
-  )
-  if (!hint) return <div className="px-4 py-3">{row}</div>
   return (
-    <div className="space-y-2 px-4 py-3">
-      {row}
-      <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">{hint}</p>
-    </div>
+    <SettingsRow title={label} description={hint ? <p>{hint}</p> : undefined}>
+      <div className="w-full sm:w-[240px]">{children}</div>
+    </SettingsRow>
   )
 }
 
@@ -408,9 +415,9 @@ function Picker<T extends string>({ label, value, items, onChange }: {
       maxHeight={320}
       className="block w-full"
       trigger={
-        <Button variant="secondary" size="md" block className="h-10 gap-3" aria-label={label}>
+        <Button variant="secondary" size="base" block className="gap-2" aria-label={label}>
           <span className="min-w-0 flex-1 truncate text-left">{selected?.label ?? ''}</span>
-          <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
+          <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
         </Button>
       }
     />
@@ -458,11 +465,11 @@ function ModelStatus({ provider, pending, onDownload, onCancel, onRemove }: Mode
     <div
       data-testid="voice-model-status"
       data-phase={phase}
-      className="space-y-2 px-4 py-3"
+      className="min-h-[52px] space-y-2 px-4 py-3"
     >
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="min-w-0 truncate text-sm font-medium text-[var(--color-text-primary)]">{info.name}</span>
+          <span className="min-w-0 truncate text-[13px] font-medium text-[var(--color-text-primary)]">{info.name}</span>
           <Badge tone={PHASE_TONES[phase]} size="sm">{t(PHASE_KEYS[phase])}</Badge>
         </div>
         <div className="flex items-center gap-2">

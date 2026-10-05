@@ -45,6 +45,10 @@ describe('UserMessage', () => {
     expect(actions?.className).toContain('opacity-0')
     expect(actions?.className).toContain('group-hover:opacity-100')
     expect(actions?.className).toContain('group-focus-within:opacity-100')
+    // Hung under the bubble, out of flow: revealing it never shifts the transcript.
+    expect(actions?.getAttribute('data-placement')).toBe('overlay')
+    expect(actions?.className).toContain('absolute')
+    expect(actions?.parentElement?.className).toContain('relative')
     expect(container.querySelectorAll('[data-message-actions]')).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Fork' }).closest('[data-message-actions]')).toBe(actions)
     expect(button.textContent).toBe('')

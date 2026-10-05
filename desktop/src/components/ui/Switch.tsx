@@ -19,18 +19,18 @@ export type SwitchProps = {
 }
 
 const TRACK_SIZE = {
-  sm: 'h-5 w-9',
-  md: 'h-6 w-11',
+  sm: 'h-4 w-7',
+  md: 'h-[18px] w-8',
 } as const
 
 const THUMB_SIZE = {
-  sm: 'h-3.5 w-3.5',
-  md: 'h-4 w-4',
+  sm: 'h-3 w-3',
+  md: 'h-3.5 w-3.5',
 } as const
 
 const THUMB_OFFSET = {
-  sm: 'translate-x-0.5 peer-checked:translate-x-[18px]',
-  md: 'translate-x-1 peer-checked:translate-x-[22px]',
+  sm: 'translate-x-0.5 peer-checked:translate-x-[14px]',
+  md: 'translate-x-0.5 peer-checked:translate-x-[16px]',
 } as const
 
 /**
@@ -93,7 +93,7 @@ export function Switch({
         />
         <span
           aria-hidden="true"
-          className="absolute inset-0 rounded-full bg-[var(--color-border)] transition-colors peer-checked:bg-[var(--color-switch-checked-bg)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--color-border-focus)]"
+          className="absolute inset-0 rounded-full bg-[var(--color-outline)] transition-colors peer-checked:bg-[var(--color-switch-checked-bg)] peer-focus-visible:ring-2 peer-focus-visible:ring-[var(--color-border-focus)]"
         />
         <span
           aria-hidden="true"

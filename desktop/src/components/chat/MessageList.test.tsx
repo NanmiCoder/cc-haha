@@ -2180,22 +2180,27 @@ describe('MessageList nested tool calls', () => {
     }
 
     setChatState('thinking')
-    render(<MessageList />)
+    const { container } = render(<MessageList />)
     fireEvent.click(screen.getByRole('button', { name: /dispatched 4 agents/i }))
 
+    // One pill for the group; each row carries its state on its avatar.
+    const runningRows = () => container.querySelectorAll('[data-agent-call-layout="row"][data-agent-status="running"]')
     expect(screen.queryByText('Starting')).toBeNull()
-    expect(screen.getAllByText('Running')).toHaveLength(5)
+    expect(screen.getAllByText('Running')).toHaveLength(1)
+    expect(runningRows()).toHaveLength(4)
 
     act(() => setChatState('tool_executing'))
     await waitFor(() => {
       expect(screen.queryByText('Starting')).toBeNull()
-      expect(screen.getAllByText('Running')).toHaveLength(5)
+      expect(screen.getAllByText('Running')).toHaveLength(1)
+      expect(runningRows()).toHaveLength(4)
     })
 
     act(() => setChatState('thinking'))
     await waitFor(() => {
       expect(screen.queryByText('Starting')).toBeNull()
-      expect(screen.getAllByText('Running')).toHaveLength(5)
+      expect(screen.getAllByText('Running')).toHaveLength(1)
+      expect(runningRows()).toHaveLength(4)
     })
   })
 
@@ -2588,7 +2593,8 @@ describe('MessageList nested tool calls', () => {
     render(<MessageList sessionId={ACTIVE_TAB} />)
 
     expect(screen.getByText('1 memory reference(s)')).toBeTruthy()
-    expect(screen.getByText('Bash')).toBeTruthy()
+    // Led by its verb; the raw tool name is the row's tooltip.
+    expect(screen.getByText('Run')).toBeTruthy()
     expect(screen.getByText('bun test')).toBeTruthy()
   })
 
@@ -5884,11 +5890,20 @@ describe('MessageList nested tool calls', () => {
     expect(assistantShell?.className).not.toContain('ml-10')
     expect(userActions?.getAttribute('data-align')).toBe('end')
     expect(assistantActions?.getAttribute('data-align')).toBe('start')
-    expect(userActions?.className).toContain('h-7')
-    expect(userActions?.className).toContain('mt-2')
+    // The prompt's bar hangs under the bubble out of flow: hovering never moves
+    // the transcript, and the bar holds no height of its own when hidden.
+    expect(userShell?.className).toContain('relative')
+    expect(userActions?.getAttribute('data-placement')).toBe('overlay')
+    expect(userActions?.className).toContain('absolute')
+    expect(userActions?.className).toContain('top-full')
+    expect(userActions?.className).toContain('right-0')
+    expect(userActions?.className).not.toContain('mt-2')
     expect(userActions?.className).not.toContain('h-0')
-    expect(userActions?.className).not.toContain('group-hover:h-7')
+    expect(userActions?.className).not.toContain('group-hover:h-')
     expect(userActions?.className).not.toContain('invisible')
+    // The closing reply's bar stays in flow: it is always shown.
+    expect(assistantActions?.getAttribute('data-placement')).toBe('inline')
+    expect(assistantActions?.className).not.toContain('absolute')
     expect(userTime.getAttribute('title')).toBe(formatExactMessageTimestamp(userTimestamp, 'en'))
     // The closing reply's bar is not hover-gated: it is rare and deliberate now,
     // so hiding it until hover would only make a present affordance hard to find.

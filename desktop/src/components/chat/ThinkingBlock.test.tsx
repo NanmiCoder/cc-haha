@@ -69,6 +69,26 @@ describe('ThinkingBlock', () => {
     expect(screen.getByRole('button')).toHaveTextContent('Thought')
   })
 
+  it('draws one upright row whose chevron turns and whose preview yields to the body when open', () => {
+    // CJK has no italic: the old slanted row was the browser shearing glyphs.
+    const { container } = render(<ThinkingBlock content={'Checking the retry path first'} />)
+    const row = screen.getByRole('button')
+    expect(container.querySelector('.italic')).toBeNull()
+    expect(row.textContent).not.toMatch(/[▸▾]/)
+    const chevron = row.querySelector('.lucide-chevron-right')
+    expect(chevron).not.toBeNull()
+    expect(chevron).not.toHaveClass('rotate-90')
+    const preview = screen.getByText('Checking the retry path first')
+    expect(preview).not.toHaveClass('invisible')
+
+    fireEvent.click(row)
+
+    expect(row.querySelector('.lucide-chevron-right')).toHaveClass('rotate-90')
+    // Hidden but kept, so the row does not reflow when it opens.
+    expect(preview).toHaveClass('invisible')
+    expect(container.querySelector('[data-thinking-content="expanded"]')).toHaveClass('border-l')
+  })
+
   it('keeps the expanded state across a virtualized row unmount and remount', () => {
     // Virtualization unmounts rows outside the window. Losing the reader's
     // disclosure choice changes the row height on the way back, which is the

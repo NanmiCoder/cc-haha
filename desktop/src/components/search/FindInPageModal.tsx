@@ -21,7 +21,7 @@ const MAX_FIND_MATCHES = 1_000
 const RESULTS_HL = 'cc-find-results'
 const ACTIVE_HL = 'cc-find-active'
 // Subtrees never searched: sidebar, tab bar, this find bar, non-content tags.
-const SKIP_CLOSEST = '.sidebar-panel, [data-testid="tab-bar"], [data-find-bar], script, style, noscript, .material-symbols-outlined'
+const SKIP_CLOSEST = '.sidebar-panel, [data-testid="tab-bar"], [data-find-bar], script, style, noscript'
 const CONVERSATION_AUXILIARY_CANDIDATES = [
   '[data-testid="workbench-panel"]',
   '[data-testid="session-activity-panel"]',
@@ -211,11 +211,11 @@ export function FindInPageModal({ open, onClose }: Props) {
         ::highlight(${ACTIVE_HL}) { background-color: var(--color-search-highlight-active); color: var(--color-on-search-highlight-active); }
       `}</style>
       <div
-        className="glass-panel animate-overlay-in-top flex items-center gap-1 rounded-[var(--radius-lg)] px-2 py-1.5"
+        className="animate-overlay-in-top flex h-10 items-center gap-1 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] pl-2.5 pr-1.5 shadow-[var(--shadow-dropdown)]"
         role="dialog"
         aria-label={t('search.findInPage.title')}
       >
-        <Search className="h-4 w-4 shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+        <Search size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
         <input
           ref={inputRef}
           type="text"
@@ -223,13 +223,13 @@ export function FindInPageModal({ open, onClose }: Props) {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder={t('search.findInPage.placeholder')}
-          className="w-52 bg-transparent text-[13.5px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+          className="w-52 bg-transparent text-[13px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
         />
-        <span className="min-w-[48px] shrink-0 px-1 text-center font-mono text-[12px] tabular-nums text-[var(--color-text-tertiary)]">
+        <span className="min-w-[48px] shrink-0 px-1 text-center font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
           {count > 0 ? `${activeIndex + 1} / ${count}` : (debouncedQuery.trim() ? '0' : '')}
         </span>
         <IconButton
-          icon={<ChevronUp className="h-4 w-4" aria-hidden="true" />}
+          icon={<ChevronUp size={14} strokeWidth={1.75} aria-hidden="true" />}
           label={t('search.findInPage.previousMatch')}
           size="xs"
           tone="secondary"
@@ -237,7 +237,7 @@ export function FindInPageModal({ open, onClose }: Props) {
           onClick={() => step(false)}
         />
         <IconButton
-          icon={<ChevronDown className="h-4 w-4" aria-hidden="true" />}
+          icon={<ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />}
           label={t('search.findInPage.nextMatch')}
           size="xs"
           tone="secondary"
@@ -245,7 +245,7 @@ export function FindInPageModal({ open, onClose }: Props) {
           onClick={() => step(true)}
         />
         <IconButton
-          icon={<X className="h-4 w-4" aria-hidden="true" />}
+          icon={<X size={14} strokeWidth={1.75} aria-hidden="true" />}
           label={t('search.findInPage.close')}
           size="xs"
           tone="secondary"

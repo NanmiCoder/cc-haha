@@ -315,7 +315,7 @@ export function PdfViewer({
         ) : null}
       </div>
       {refreshError ? (
-        <p role="status" className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
+        <p role="status" className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[12px] text-[var(--color-text-tertiary)]">
           {t('workspace.files.refreshFailed', { reason: refreshReason(refreshError, t) })}
         </p>
       ) : null}

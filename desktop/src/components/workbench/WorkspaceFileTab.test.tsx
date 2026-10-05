@@ -707,10 +707,10 @@ describe('open with', () => {
 
 describe('toolbar density', () => {
   it('matches the shared workbench bar height', () => {
-    // Same height as the resource tab strip and review toolbar; switching
-    // resources must not move the content boundary.
+    // Same 40px as the dock tab strip, review toolbar and browser bar;
+    // switching resources must not move the content boundary.
     renderTab('src/a.ts')
-    expect(screen.getByTestId('workspace-file-header').className).toContain('h-[52px]')
+    expect(screen.getByTestId('workspace-file-header').className).toContain('h-10')
   })
 
   it('opens with the displayed application from the primary half without opening the dropdown', () => {

@@ -78,21 +78,21 @@ export function OpenProjectMenu({ path }: Props) {
           }
           void handleOpenTarget(primaryTarget.id)
         }}
-        className={`inline-flex h-8 items-center justify-center gap-1 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-tertiary)] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] ${
+        className={`inline-flex h-7 items-center justify-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-tertiary)] transition-[background-color,color,border-color,box-shadow] duration-150 ease-out hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)] ${
           hasMenu
-            ? 'min-w-[2.75rem] px-2 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
-            : 'w-8 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+            ? 'min-w-[2.75rem] px-1.5 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
+            : 'w-7 hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]'
         }`}
       >
         <TargetIcon target={primaryTarget} />
-        {hasMenu && <ChevronDown size={14} strokeWidth={1.9} />}
+        {hasMenu && <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />}
       </button>
 
       {open && hasMenu && rect ? createPortal(
         <div
           ref={menuRef}
           role="menu"
-          className="glass-panel fixed z-[var(--z-dropdown)] min-w-[220px] overflow-hidden rounded-[var(--radius-lg)] py-1"
+          className="fixed z-[var(--z-dropdown)] min-w-[220px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
           style={{ top: rect.bottom + 6, right: Math.max(12, window.innerWidth - rect.right) }}
         >
           {targets.map((target) => (
@@ -101,10 +101,10 @@ export function OpenProjectMenu({ path }: Props) {
               type="button"
               role="menuitem"
               onClick={() => void handleOpenTarget(target.id)}
-              className="flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm font-medium text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]"
+              className="flex h-9 w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:bg-[var(--color-surface-hover)]"
             >
-              <span className="flex h-7 w-7 items-center justify-center text-[var(--color-text-secondary)]">
-                <TargetIcon target={target} size={24} />
+              <span className="flex h-6 w-6 items-center justify-center text-[var(--color-text-secondary)]">
+                <TargetIcon target={target} size={20} />
               </span>
               <span className="min-w-0 truncate">{target.label}</span>
             </button>

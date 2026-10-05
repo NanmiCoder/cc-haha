@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { getDisclosure, setDisclosure } from '../../lib/disclosureMemory'
-import { Brain } from 'lucide-react'
+import { Brain, ChevronRight } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 
@@ -63,33 +63,38 @@ export function ThinkingBlock({
           if (disclosureKey) setDisclosure(disclosureKey, next)
         }}
         aria-expanded={expanded}
-        className="-mx-2 flex w-[calc(100%+1rem)] items-baseline gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+        className="-mx-2 flex h-7 w-[calc(100%+1rem)] min-w-0 items-center gap-2 rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
       >
         <Brain
-          size={13}
-          strokeWidth={1.8}
+          size={15}
+          strokeWidth={1.75}
           aria-hidden="true"
-          className="mt-[3px] shrink-0 self-start text-[var(--color-text-tertiary)]"
+          className="shrink-0"
         />
-        <span className="shrink-0 text-[12.5px] italic text-[var(--color-text-tertiary)]">
+        <span className="shrink-0 font-medium text-[var(--color-text-secondary)]">
           {label}
         </span>
         {preview ? (
-          <span className="min-w-0 flex-1 truncate text-[12.5px] italic leading-[1.7] text-[var(--color-text-tertiary)]">
+          // Hidden, not removed, once open: the body below says the same thing
+          // in full, and keeping the box holds the row's chevron in place.
+          <span className={`min-w-0 flex-1 truncate ${expanded ? 'invisible' : ''}`}>
             {preview}
           </span>
         ) : (
           <span className="flex-1" />
         )}
-        <span aria-hidden="true" className="shrink-0 text-[8px] text-[var(--color-text-tertiary)]">
-          {expanded ? '▾' : '▸'}
-        </span>
+        <ChevronRight
+          size={14}
+          strokeWidth={1.75}
+          aria-hidden="true"
+          className={`shrink-0 text-[var(--color-text-tertiary)] transition-transform duration-150 motion-reduce:transition-none ${expanded ? 'rotate-90' : ''}`}
+        />
       </button>
       {expanded && hasDisplayContent && (
         <div
           ref={contentRef}
           data-thinking-content="expanded"
-          className="relative mb-2 mt-1 max-h-[300px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2.5 text-[11px] text-[var(--color-text-secondary)]"
+          className="relative mb-1.5 ml-[7px] mt-1 max-h-[300px] overflow-y-auto border-l border-[var(--color-outline)] py-0.5 pl-[15px] text-[var(--color-text-secondary)]"
         >
           <MarkdownRenderer
             content={displayContent}

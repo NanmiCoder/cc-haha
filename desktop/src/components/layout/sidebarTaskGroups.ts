@@ -44,9 +44,20 @@ export function normalizePathForCompare(pathLike: string): string {
   return pathLike.replace(/\\/g, '/').replace(/\/+$/, '')
 }
 
+/**
+ * macOS exposes `/var`, `/tmp` and `/etc` through symlinks into `/private`, and
+ * the two halves of a session can disagree about which spelling they carry:
+ * the project root is resolved through git (real path), the work dir is kept
+ * as the user's shell typed it. Treat the two spellings as one place, or every
+ * session under a temp directory reads as a separate worktree.
+ */
+function stripPrivateAlias(pathLike: string): string {
+  return pathLike.replace(/^\/private(?=\/(?:var|tmp|etc)(?:\/|$))/, '')
+}
+
 export function isSameOrChildPath(childPath: string, parentPath: string): boolean {
-  const child = normalizePathForCompare(childPath)
-  const parent = normalizePathForCompare(parentPath)
+  const child = stripPrivateAlias(normalizePathForCompare(childPath))
+  const parent = stripPrivateAlias(normalizePathForCompare(parentPath))
   return child === parent || child.startsWith(`${parent}/`)
 }
 

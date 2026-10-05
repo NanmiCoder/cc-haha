@@ -5,9 +5,15 @@ import { getDesktopHost } from '@/lib/desktopHost'
 import { PUBLIC_ACCESS_CONSENT_VERSION } from '@/lib/desktopHost/types'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
-import { Checkbox } from '@/components/ui/Checkbox'
+import { StatusDot } from '@/components/ui/Badge'
 import { Input } from '@/components/ui/Input'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsRow,
+  SettingsSection,
+  SettingsSwitchRow,
+} from '@/components/settings/SettingsSection'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useTranslation } from '@/i18n'
 
@@ -86,38 +92,103 @@ export function PublicAccessSettings() {
   const errorLabels = {
     auth: t('publicAccess.authError'), quota: t('publicAccess.quotaError'), network: t('publicAccess.networkError'), configuration: t('publicAccess.configurationError'),
   }
-  return <section aria-labelledby="public-access-title" className="mt-8">
-    <h2 id="public-access-title" className="mb-3 text-xl font-semibold">{t('publicAccess.title')}</h2>
-    <Card radius="xl" surface="low" padding="none" className="space-y-4 p-4">
-      <p className="text-sm text-[var(--color-text-secondary)]">{t('publicAccess.intro')}</p>
-      <Button variant="secondary" onClick={() => void run(() => host.shell.open('https://dashboard.ngrok.com/get-started/your-authtoken'))}>{t('publicAccess.account')}</Button>
-      <Input aria-describedby="public-access-error" type="password" autoComplete="off" spellCheck={false} aria-label={t('publicAccess.token')} placeholder={status?.hasCredential ? t('publicAccess.tokenSaved') : t('publicAccess.token')} value={token} onChange={(event) => setToken(event.target.value)} />
-      <p role="status" className="text-sm">{status ? stateLabels[status.state] : t('common.loading')}</p>
-      <div className="flex flex-wrap gap-2">
-        <Button disabled={busy || (!token.trim() && !status?.hasCredential) || status?.state === 'online' || status?.state === 'connecting' || status?.state === 'reconnecting'} onClick={() => { if (status?.consentVersion === PUBLIC_ACCESS_CONSENT_VERSION) void start(); else setConsent(true) }}>{t('publicAccess.enable')}</Button>
-        <Button variant="secondary" disabled={stopping || (busy && status?.state !== 'connecting' && status?.state !== 'reconnecting') || !status || status.state === 'unconfigured' || status.state === 'disabled'} onClick={() => void stop()}>{t('publicAccess.disable')}</Button>
-        {status?.hasCredential && <Button variant="danger" disabled={busy} onClick={() => void run(async () => { await bridge.deleteCredential(); setToken(''); setQr(null); setExpiresAt(null) })}>{t('publicAccess.deleteCredential')}</Button>}
-      </div>
-      <Checkbox label={t('publicAccess.autoStart')} checked={status?.autoStart ?? false} disabled={busy || !status?.hasCredential || status.consentVersion !== PUBLIC_ACCESS_CONSENT_VERSION} onChange={(event) => void run(() => bridge.setAutoStart(event.target.checked))} />
-      <p className="text-xs text-[var(--color-text-tertiary)]">{t('publicAccess.freeNotice')}</p>
-      {(error || status?.error) && <p id="public-access-error" role="alert" className="text-sm text-[var(--color-error)]">{status?.error ? errorLabels[status.error] : t('publicAccess.genericError')}</p>}
-      {status?.state === 'online' && status.publicUrl && <div className="space-y-3 border-t border-[var(--color-border)] pt-4">
-        <p className="break-all font-mono text-sm">{status.publicUrl}/remote</p>
-        <div className="flex flex-wrap gap-2"><Button variant="secondary" disabled={busy} onClick={() => void run(async () => { if (!await copyTextToClipboard(`${status.publicUrl}/remote`)) throw new Error('copy') })}>{t('publicAccess.copy')}</Button>
-          <Button disabled={busy} onClick={() => void run(async () => {
-            const pair = await publicAccessApi.pairing()
-            const url = new URL('/remote', status.publicUrl!)
-            url.hash = new URLSearchParams({ pair: pair.secret }).toString()
-            setQr(await QRCode.toDataURL(url.toString(), { margin: 1, width: 192 }))
-            setExpiresAt(pair.expiresAt)
-          })}>{t('publicAccess.pairPhone')}</Button></div>
-        {qr && <><img src={qr} width={192} height={192} alt={t('publicAccess.qrAlt')} /><p className="text-xs">{t('publicAccess.qrHint')}</p></>}
-      </div>}
-      {server?.pending.map((device) => <div key={device.id} className="flex flex-wrap items-center gap-2"><span className="min-w-0 break-all text-sm">{t('publicAccess.pending')}: {device.name}</span><Button disabled={busy} onClick={() => void run(() => publicAccessApi.approve(device.id))}>{t('publicAccess.approve')}</Button><Button variant="secondary" disabled={busy} onClick={() => void run(() => publicAccessApi.reject(device.id))}>{t('publicAccess.reject')}</Button></div>)}
-      {!!server?.devices.length && <h3 className="text-sm font-medium">{t('publicAccess.devices')}</h3>}
-      {server?.devices.map((device) => <div key={device.id} className="flex items-center justify-between gap-3"><span className="min-w-0 break-all text-sm">{device.name}</span><Button variant="danger" disabled={busy} onClick={() => void run(() => publicAccessApi.revoke(device.id))}>{t('publicAccess.revoke')}</Button></div>)}
-      <details className="text-xs text-[var(--color-text-secondary)]"><summary>{t('publicAccess.privacyTitle')}</summary><p className="mt-2 whitespace-pre-line leading-6">{t('publicAccess.privacy')}</p></details>
-    </Card>
+  const online = status?.state === 'online'
+  return <SettingsSection title={t('publicAccess.title')} description={t('publicAccess.intro')}>
+    <SettingsGroup>
+      <SettingsRow
+        title={t('publicAccess.token')}
+        description={(
+          <button
+            type="button"
+            className="font-medium text-[var(--color-text-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+            onClick={() => void run(() => host.shell.open('https://dashboard.ngrok.com/get-started/your-authtoken'))}
+          >
+            {t('publicAccess.account')}
+          </button>
+        )}
+      >
+        <Input
+          aria-describedby="public-access-error"
+          type="password"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label={t('publicAccess.token')}
+          size="md"
+          containerClassName="w-full sm:w-[240px]"
+          className="font-mono text-xs"
+          placeholder={status?.hasCredential ? t('publicAccess.tokenSaved') : t('publicAccess.token')}
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+        />
+      </SettingsRow>
+      <SettingsRow
+        title={(
+          <span className="inline-flex items-center gap-2">
+            <StatusDot tone={online ? 'success' : status?.state === 'failed' ? 'danger' : status?.state === 'connecting' || status?.state === 'reconnecting' ? 'info' : 'neutral'} />
+            <span role="status">{status ? stateLabels[status.state] : t('common.loading')}</span>
+          </span>
+        )}
+        description={t('publicAccess.freeNotice')}
+      >
+        <Button size="base" disabled={busy || (!token.trim() && !status?.hasCredential) || status?.state === 'online' || status?.state === 'connecting' || status?.state === 'reconnecting'} onClick={() => { if (status?.consentVersion === PUBLIC_ACCESS_CONSENT_VERSION) void start(); else setConsent(true) }}>{t('publicAccess.enable')}</Button>
+        <Button size="base" variant="secondary" disabled={stopping || (busy && status?.state !== 'connecting' && status?.state !== 'reconnecting') || !status || status.state === 'unconfigured' || status.state === 'disabled'} onClick={() => void stop()}>{t('publicAccess.disable')}</Button>
+        {status?.hasCredential && <Button size="base" variant="danger-ghost" disabled={busy} onClick={() => void run(async () => { await bridge.deleteCredential(); setToken(''); setQr(null); setExpiresAt(null) })}>{t('publicAccess.deleteCredential')}</Button>}
+      </SettingsRow>
+      <SettingsSwitchRow
+        title={t('publicAccess.autoStart')}
+        checked={status?.autoStart ?? false}
+        disabled={busy || !status?.hasCredential || status.consentVersion !== PUBLIC_ACCESS_CONSENT_VERSION}
+        onChange={(checked) => void run(() => bridge.setAutoStart(checked))}
+      />
+      {(error || status?.error) && (
+        <SettingsBlock>
+          <p id="public-access-error" role="alert" className="text-xs text-[var(--color-error)]">{status?.error ? errorLabels[status.error] : t('publicAccess.genericError')}</p>
+        </SettingsBlock>
+      )}
+      {online && status.publicUrl && (
+        <SettingsBlock className="space-y-3">
+          <p className="break-all rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 py-1 font-mono text-xs text-[var(--color-text-primary)]">{status.publicUrl}/remote</p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(async () => { if (!await copyTextToClipboard(`${status.publicUrl}/remote`)) throw new Error('copy') })}>{t('publicAccess.copy')}</Button>
+            <Button size="base" disabled={busy} onClick={() => void run(async () => {
+              const pair = await publicAccessApi.pairing()
+              const url = new URL('/remote', status.publicUrl!)
+              url.hash = new URLSearchParams({ pair: pair.secret }).toString()
+              setQr(await QRCode.toDataURL(url.toString(), { margin: 1, width: 192 }))
+              setExpiresAt(pair.expiresAt)
+            })}>{t('publicAccess.pairPhone')}</Button>
+          </div>
+          {qr && (
+            <div className="flex flex-col items-start gap-2">
+              <img src={qr} width={192} height={192} alt={t('publicAccess.qrAlt')} className="rounded-[var(--radius-md)] border border-[var(--color-border)]" />
+              <p className="text-xs text-[var(--color-text-tertiary)]">{t('publicAccess.qrHint')}</p>
+            </div>
+          )}
+        </SettingsBlock>
+      )}
+      {server?.pending.map((device) => (
+        <SettingsRow key={device.id} title={`${t('publicAccess.pending')}: ${device.name}`} layout="inline">
+          <Button size="base" disabled={busy} onClick={() => void run(() => publicAccessApi.approve(device.id))}>{t('publicAccess.approve')}</Button>
+          <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => publicAccessApi.reject(device.id))}>{t('publicAccess.reject')}</Button>
+        </SettingsRow>
+      ))}
+      {!!server?.devices.length && (
+        <SettingsBlock className="pb-0">
+          <h4 className="text-xs font-semibold text-[var(--color-text-tertiary)]">{t('publicAccess.devices')}</h4>
+        </SettingsBlock>
+      )}
+      {server?.devices.map((device) => (
+        <SettingsRow key={device.id} title={device.name} layout="inline">
+          <Button size="base" variant="danger-ghost" disabled={busy} onClick={() => void run(() => publicAccessApi.revoke(device.id))}>{t('publicAccess.revoke')}</Button>
+        </SettingsRow>
+      ))}
+      <SettingsBlock>
+        <details className="text-xs text-[var(--color-text-secondary)]">
+          <summary className="cursor-pointer">{t('publicAccess.privacyTitle')}</summary>
+          <p className="mt-2 whitespace-pre-line leading-6 text-[var(--color-text-tertiary)]">{t('publicAccess.privacy')}</p>
+        </details>
+      </SettingsBlock>
+    </SettingsGroup>
     <ConfirmDialog open={consent} onClose={() => { if (!busy) setConsent(false) }} onConfirm={start} title={t('publicAccess.privacyTitle')} body={<p className="whitespace-pre-line">{t('publicAccess.privacy')}</p>} confirmLabel={t('publicAccess.consent')} cancelLabel={t('common.cancel')} loading={busy} />
-  </section>
+  </SettingsSection>
 }

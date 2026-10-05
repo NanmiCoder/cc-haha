@@ -154,6 +154,18 @@ style={{ zIndex: 'var(--z-dialog)' }}
 >
 > **`SearchField` 的 `clearLabel`** — 组件内部一度用 `` `Clear ${label}` `` 拼英文，导致任何已经翻译过清除按钮的调用方采用它反而是 i18n 退化。**组件库自己不许拼用户可见的英文。**
 
+### 3.8 「素 Porcelain」视觉约束
+
+2026-10 的全量改版把界面收敛到一套可检查的约束，`src/theme/designSystem.test.ts` 逐条守住（违规会列出 文件:行）：
+
+- **字号只用** 11 / 12 / 13 / 14 / 15 / 18 / 22 / 26（`text-xs`、`text-sm`、`text-lg` 可用；`text-base/xl/2xl…` 与小数字号不可用）。
+- **字重最高 semibold**：Inter 只自托管到 600，`font-bold` 会让浏览器合成糊掉的粗体；`font-mono` 不配 semibold（JetBrains Mono 只有 400）。
+- **中文不用斜体、不用宽字距大写标签**；摘要列表用「、」。
+- **图标只用 lucide**（`strokeWidth={1.75}`）；`IconButton` 的 `icon` 只接受元素，不再接受 Material 字符串。
+- **圆角只用 token**：`--radius-xs` 4 / `sm` 6 / `md` 8 / `lg` 12 / `xl` 16 / `3xl` 20 / `full`。
+- **状态色语义固定**：运行中＝info、等你确认＝warning、完成＝success、失败＝error；陶土色只给品牌、发送键与选中指示。
+- 设置页统一用 `components/settings/SettingsSection.tsx` 的骨架（PageHeader → Section → Group → Row）。
+
 ---
 
 ## 四、桌面端硬约束

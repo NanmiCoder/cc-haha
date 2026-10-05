@@ -34,15 +34,15 @@ const SIZE_CLASSES: Record<StateSize, string> = {
 }
 
 const ICON_BOX: Record<StateSize, string> = {
-  sm: 'h-8 w-8 text-[16px]',
-  md: 'h-10 w-10 text-[20px]',
-  lg: 'h-12 w-12 text-[24px]',
+  sm: 'h-8 w-8',
+  md: 'h-10 w-10',
+  lg: 'h-12 w-12',
 }
 
 const TITLE_SIZE: Record<StateSize, string> = {
   sm: 'text-xs',
   md: 'text-sm',
-  lg: 'text-base',
+  lg: 'text-[15px]',
 }
 
 /**

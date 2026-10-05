@@ -333,6 +333,33 @@ describe('AdapterSettings config saving', () => {
       },
     })
   })
+
+  // The streaming-card option moved from a bare native checkbox to the shared
+  // Switch; the toggle must still land in the saved Feishu patch both ways.
+  it('round-trips the Feishu streaming card switch into the saved patch', async () => {
+    const updateConfig = vi.fn(async (_patch: Partial<AdapterFileConfig>) => {})
+    renderAdapterSettings({ feishu: { appId: 'cli_x', appSecret: 'secret', streamingCard: false } }, { updateConfig })
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Feishu' }))
+    const toggle = screen.getByRole('switch', { name: 'Streaming Card Mode' })
+    expect(toggle).not.toBeChecked()
+    fireEvent.click(toggle)
+    expect(toggle).toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(updateConfig).toHaveBeenCalledTimes(1)
+    })
+    expect(updateConfig.mock.calls[0]![0].feishu).toMatchObject({ streamingCard: true })
+
+    fireEvent.click(toggle)
+    expect(toggle).not.toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: /^Save/ }))
+    await waitFor(() => {
+      expect(updateConfig).toHaveBeenCalledTimes(2)
+    })
+    expect(updateConfig.mock.calls[1]![0].feishu).toMatchObject({ streamingCard: false })
+  })
 })
 
 describe('AdapterSettings account unbind confirmation', () => {

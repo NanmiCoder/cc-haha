@@ -356,6 +356,27 @@ describe('EmptySession', () => {
     useWorkflowStore.setState(initialWorkflowState, true)
   })
 
+  it('drops a starter into the draft and keeps what was already typed', async () => {
+    render(<EmptySession />)
+
+    const starters = screen.getByRole('group', { name: 'Suggestions' })
+    fireEvent.click(within(starters).getByRole('button', { name: 'Fix the failing tests' }))
+    await waitFor(() => expect(getComposerText()).toBe('Fix the failing tests'))
+
+    // A second pick appends on a new line rather than replacing the draft.
+    fireEvent.click(within(starters).getByRole('button', { name: 'Build a new feature' }))
+    await waitFor(() => expect(getComposerText()).toBe('Fix the failing tests\nBuild a new feature'))
+  })
+
+  it('keeps the starter row off the phone layout, where the composer docks to the bottom', () => {
+    mocks.isMobile = true
+
+    render(<EmptySession />)
+
+    expect(screen.queryByTestId('new-session-starter')).not.toBeInTheDocument()
+    expect(screen.getByTestId('empty-session-composer-shell')).toHaveClass('absolute', 'bottom-0')
+  })
+
   it('uses compact composer controls on phone-sized H5 browsers', async () => {
     mocks.isMobile = true
 
@@ -367,7 +388,7 @@ describe('EmptySession', () => {
     expect(screen.getByTestId('model-selector')).toHaveAttribute('data-compact', 'true')
     expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('h-11', 'w-11')
     expect(screen.getByTestId('empty-session-composer-shell')).toHaveClass('px-3')
-    expect(screen.getByTestId('empty-session-composer-panel')).toHaveClass('rounded-[var(--radius-2xl)]')
+    expect(screen.getByTestId('empty-session-composer-panel')).toHaveClass('rounded-[var(--radius-xl)]')
   })
 
   it.each(['@', '/', '/empty', '+'] as const)('hides withdrawn bundled capabilities in %s while keeping personal skills and other plugins', async (entry) => {
@@ -753,17 +774,17 @@ describe('EmptySession', () => {
     render(<EmptySession />)
 
     const panel = screen.getByTestId('empty-session-composer-panel')
-    // 20px corner and the middle shadow step — the composer's own place on the
-    // handoff's scale. The repository controls live inside this panel, so it
+    // 16px corner and the composer shadow step — the same floating card as
+    // ChatInput's. The repository controls live inside this panel, so it
     // must stay a single rounded block rather than a split top/bottom pair.
-    expect(panel).toHaveClass('rounded-[var(--radius-2xl)]', 'p-0', 'glass-panel--composer')
+    expect(panel).toHaveClass('rounded-[var(--radius-xl)]', 'p-2', 'glass-panel--composer')
     expect(panel).not.toHaveClass('rounded-b-none')
 
     await pickProject()
 
     const pill = await screen.findByRole('button', { name: 'Location: project / main' })
     expect(panel).toContainElement(pill)
-    expect(pill).toHaveClass('h-9')
+    expect(pill).toHaveClass('h-7')
 
     // Same toolbar row as Run — that row is the whole point of the change.
     const toolbarRow = pill.closest('.justify-between')

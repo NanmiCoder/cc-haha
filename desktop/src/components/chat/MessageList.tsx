@@ -429,7 +429,7 @@ function BackgroundTaskEventCard({ message }: { message: BackgroundTaskEvent }) 
       >
         <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center">
           {isRunning ? (
-            <LoaderCircle size={15} strokeWidth={2.25} className="animate-spin text-[var(--color-brand)]" aria-hidden="true" />
+            <LoaderCircle size={15} strokeWidth={1.75} className="animate-spin text-[var(--color-info)]" aria-hidden="true" />
           ) : isFailed ? (
             <XCircle size={15} strokeWidth={2.25} className="text-[var(--color-error)]" aria-hidden="true" />
           ) : isStopped ? (
@@ -1141,7 +1141,7 @@ function TeamCoordinationAudit({ toolCalls }: { toolCalls: ToolCall[] }) {
           const summary = coordinationToolSummary(toolCall)
           return (
             <li key={toolCall.toolUseId} className="flex min-w-0 items-start gap-2">
-              <code className="shrink-0 font-mono text-[10px] font-semibold text-[var(--color-text-tertiary)]">
+              <code className="shrink-0 font-mono text-[11px] text-[var(--color-text-tertiary)]">
                 {toolCall.toolName}
               </code>
               {summary ? <span className="min-w-0 break-words">{summary}</span> : null}
@@ -1512,14 +1512,14 @@ function MemoryEventCard({ message }: { message: MemoryEvent }) {
 
   return (
     <div className="mb-3 flex justify-center px-3">
-      <div className="w-full max-w-2xl rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3.5 py-3 text-xs shadow-[var(--shadow-card)]">
+      <div className="w-full max-w-2xl rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3.5 py-3 text-xs">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-brand)]">
-            <BookMarked size={15} aria-hidden="true" />
+          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]">
+            <BookMarked size={15} strokeWidth={1.75} aria-hidden="true" />
           </div>
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="font-medium text-[var(--color-text-primary)]">
+              <div className="text-[13px] font-medium text-[var(--color-text-primary)]">
                 {t('chat.memorySavedTitle', { count: message.files.length })}
               </div>
               <Button
@@ -1539,13 +1539,13 @@ function MemoryEventCard({ message }: { message: MemoryEvent }) {
                 <span
                   key={file.path}
                   title={file.path}
-                  className="max-w-full truncate rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-[10px] text-[var(--color-text-secondary)]"
+                  className="max-w-full truncate rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-secondary)]"
                 >
                   {memoryFileLabel(file.path)}
                 </span>
               ))}
               {hiddenCount > 0 ? (
-                <span className="rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-[10px] text-[var(--color-text-tertiary)]">
+                <span className="rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-tertiary)]">
                   {t('chat.memoryMoreFiles', { count: hiddenCount })}
                 </span>
               ) : null}
@@ -1795,7 +1795,7 @@ function collectConversationFindRanges(root: Node, query: string) {
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT
-      if (node.parentElement?.closest('[data-find-bar], script, style, noscript, .material-symbols-outlined')) {
+      if (node.parentElement?.closest('[data-find-bar], script, style, noscript')) {
         return NodeFilter.FILTER_REJECT
       }
       return NodeFilter.FILTER_ACCEPT
@@ -3871,7 +3871,7 @@ export function MessageList({
           )}
 
           {!isLoadingTurnChangeCards && visibleTurnChangeCards.length === 0 && turnChangeLoadError && (
-            <div className="mx-auto mb-5 w-full max-w-[var(--chat-content-max-width)] rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-4 py-3 text-xs text-[var(--color-on-error-container)]">
+            <div className="mx-auto mb-5 w-full max-w-[var(--chat-content-max-width)] rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3.5 py-2.5 text-xs text-[var(--color-on-error-container)]">
               {turnChangeLoadError}
             </div>
           )}
@@ -3907,7 +3907,7 @@ export function MessageList({
           aria-label={t('chat.jumpToLatest')}
           // `glass-panel` is unlayered CSS, so it wins over the variant's
           // layered background/border utilities without a tailwind-merge.
-          className="glass-panel absolute bottom-4 right-5 z-20 rounded-full text-[13.5px] font-medium hover:-translate-y-px motion-reduce:hover:translate-y-0"
+          className="glass-panel absolute bottom-4 right-5 z-20 rounded-full text-[13px] font-medium hover:-translate-y-px motion-reduce:hover:translate-y-0"
           icon={<ArrowDown size={15} aria-hidden="true" />}
         >
           {t('chat.jumpToLatest')}
@@ -4115,7 +4115,7 @@ export const MessageBlock = memo(function MessageBlock({
         message.message.trim() !== '' &&
         message.message !== displayMessage
       return (
-        <div className="mb-3 px-4 py-2.5 rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-container)] text-sm text-[var(--color-on-error-container)]">
+        <div className="mb-3 rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3.5 py-2.5 text-[13px] text-[var(--color-on-error-container)]">
           <strong>{t('common.error')}:</strong> {displayMessage}
           {showRawDetail && (
             <div className="mt-1 whitespace-pre-wrap text-xs text-[var(--color-on-error-container)]">

@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react'
-import { RotateCw } from 'lucide-react'
+import { forwardRef, useState, useEffect, useMemo, useRef, type CSSProperties, type ReactNode } from 'react'
+import { AppWindow, Brain, ChevronDown, FolderInput, RotateCw } from 'lucide-react'
 import {
   useSettingsStore,
   UI_ZOOM_DEFAULT,
@@ -14,11 +14,19 @@ import { settingsApi } from '../../api/settings'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { Input } from '@/components/ui/Input'
-import { Button } from '@/components/ui/Button'
-import { Card } from '@/components/ui/Card'
-import { SettingsPill, SettingsSection } from '@/components/settings/SettingsSection'
+import { Button, type ButtonProps } from '@/components/ui/Button'
+import { Badge } from '@/components/ui/Badge'
+import { cx } from '@/lib/cx'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+  SettingsSwitchRow,
+} from '@/components/settings/SettingsSection'
 import { Dropdown } from '@/components/ui/Dropdown'
-import { Switch } from '@/components/ui/Switch'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { SelectField } from '@/components/ui/SelectField'
 import { PermissionModeSelector } from '../../components/controls/PermissionModeSelector'
 import { ReasoningEffortPopover } from '../../components/controls/ReasoningEffortPopover'
@@ -31,7 +39,7 @@ import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { getDesktopNotificationPermission, notifyDesktop, getDesktopNotificationPlatform, openDesktopNotificationSettings, requestDesktopNotificationPermission, type DesktopNotificationPermission } from '../../lib/desktopNotifications'
-import { SETTINGS_CHECKBOX_INPUT_CLASS, SettingsCheckboxMark, isValidHttpProxyUrl } from '../settings/shared'
+import { isValidHttpProxyUrl } from '../settings/shared'
 import { isTouchH5Document } from '../../lib/touchH5'
 import { MODEL_REASONING_EFFORTS } from '../../../../src/shared/modelReasoning'
 import { AUTO_QUESTION_TIMEOUT_OPTIONS } from '../../../../src/shared/autoQuestionSettings'
@@ -44,8 +52,13 @@ import { DataMigrationSettings } from './DataMigrationSettings'
  *
  * Moved verbatim out of `Settings.tsx`. It carries the four output-style label
  * helpers and the network-timeout bounds because nothing else in that file used
- * them; the checkbox mark and the proxy-URL validator stayed behind in `./shared`,
- * which is what more than one panel reaches for.
+ * them; the proxy-URL validator stayed behind in `./shared`, which is what more
+ * than one panel reaches for.
+ *
+ * Laid out on the settings skeleton (`SettingsSection` → `SettingsGroup` →
+ * rows): the toggles that used to stand alone are grouped by topic — theme,
+ * language, chat appearance, zoom, Agent preferences, notifications, network,
+ * WebSearch, trace, retention, storage — in that order.
  */
 
 const NETWORK_TIMEOUT_MIN_SECONDS = 30
@@ -702,328 +715,251 @@ export function GeneralSettings() {
     setUiZoom(nextZoom)
   }
 
-  const uiZoomSection = (
-    <div className="mt-8">
-      <div className="mb-3 flex items-end justify-between gap-3">
-        <div className="min-w-0">
-          <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.uiZoom')}</h2>
-          <p className="text-sm text-[var(--color-text-tertiary)]">{t('settings.general.uiZoomDescription')}</p>
-          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-tertiary)]">
-            <span>{t('settings.general.uiZoomShortcutHint')}</span>
-            <span className="inline-flex items-center gap-1">
-              <span className="font-medium text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutMac')}</span>
-              <kbd className="settings-zoom-kbd">⌘</kbd>
-              <kbd className="settings-zoom-kbd">+</kbd>
-              <span>/</span>
-              <kbd className="settings-zoom-kbd">⌘</kbd>
-              <kbd className="settings-zoom-kbd">-</kbd>
-              <span>/</span>
-              <kbd className="settings-zoom-kbd">⌘</kbd>
-              <kbd className="settings-zoom-kbd">0</kbd>
-            </span>
-            <span className="inline-flex items-center gap-1">
-              <span className="font-medium text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutWindows')}</span>
-              <kbd className="settings-zoom-kbd">Ctrl</kbd>
-              <kbd className="settings-zoom-kbd">+</kbd>
-              <span>/</span>
-              <kbd className="settings-zoom-kbd">Ctrl</kbd>
-              <kbd className="settings-zoom-kbd">-</kbd>
-              <span>/</span>
-              <kbd className="settings-zoom-kbd">Ctrl</kbd>
-              <kbd className="settings-zoom-kbd">0</kbd>
-            </span>
-            <span>{t('settings.general.uiZoomShortcutResetHint')}</span>
-          </div>
-        </div>
-        <div className="flex flex-shrink-0 items-center gap-2">
-          <span className="min-w-[48px] rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] px-2 py-1 text-center text-sm font-medium text-[var(--color-text-secondary)]">
-            {uiZoomPercent}%
-          </span>
-          <Button
-            variant="secondary"
-            size="base"
-            aria-label={t('settings.general.uiZoomReset')}
-            title={t('settings.general.uiZoomReset')}
-            onClick={() => {
-              setIsUiZoomDragging(false)
-              setUiZoomDraft(UI_ZOOM_DEFAULT)
-              setUiZoom(UI_ZOOM_DEFAULT)
-            }}
-            icon={<RotateCw className="h-3.5 w-3.5" aria-hidden="true" />}
-          >
-            100%
-          </Button>
-        </div>
-      </div>
-      <div
-        className={`settings-zoom-control flex items-center gap-3 ${isUiZoomDragging ? 'is-dragging' : ''}`}
-        style={{ '--settings-zoom-range-progress': uiZoomRangeProgress } as CSSProperties}
-      >
-        <span className="w-9 text-right text-xs text-[var(--color-text-tertiary)]">{Math.round(UI_ZOOM_MIN * 100)}%</span>
-        <div className="settings-zoom-range-wrap flex-1">
-          <div className="settings-zoom-preview" aria-hidden="true">
-            {uiZoomPercent}%
-          </div>
-          <input
-            type="range"
-            aria-label={t('settings.general.uiZoom')}
-            min={UI_ZOOM_MIN}
-            max={UI_ZOOM_MAX}
-            step={UI_ZOOM_STEP}
-            value={uiZoomDraft}
-            onPointerDown={() => {
-              setUiZoomDraggingState(true)
-            }}
-            onPointerUp={(e) => commitUiZoom(e.currentTarget.valueAsNumber)}
-            onPointerCancel={() => {
-              setUiZoomDraggingState(false)
-              setUiZoomDraft(uiZoom)
-            }}
-            onChange={(e) => {
-              const nextZoom = Number.isFinite(e.currentTarget.valueAsNumber)
-                ? e.currentTarget.valueAsNumber
-                : UI_ZOOM_DEFAULT
-              setUiZoomDraft(nextZoom)
-              if (!isUiZoomDraggingRef.current) {
-                setUiZoom(nextZoom)
-              }
-            }}
-            onBlur={(e) => {
-              if (uiZoomDraft !== uiZoom) {
-                commitUiZoom(e.currentTarget.valueAsNumber)
-              } else {
-                setUiZoomDraggingState(false)
-              }
-            }}
-            className="settings-zoom-range w-full"
-          />
-        </div>
-        <span className="w-9 text-xs text-[var(--color-text-tertiary)]">{Math.round(UI_ZOOM_MAX * 100)}%</span>
-      </div>
+  const uiZoomShortcuts = (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+      <span>{t('settings.general.uiZoomShortcutHint')}</span>
+      <span className="inline-flex items-center gap-1">
+        <span className="text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutMac')}</span>
+        <kbd className="settings-zoom-kbd">⌘</kbd>
+        <kbd className="settings-zoom-kbd">+</kbd>
+        <span>/</span>
+        <kbd className="settings-zoom-kbd">⌘</kbd>
+        <kbd className="settings-zoom-kbd">-</kbd>
+        <span>/</span>
+        <kbd className="settings-zoom-kbd">⌘</kbd>
+        <kbd className="settings-zoom-kbd">0</kbd>
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <span className="text-[var(--color-text-secondary)]">{t('settings.general.uiZoomShortcutWindows')}</span>
+        <kbd className="settings-zoom-kbd">Ctrl</kbd>
+        <kbd className="settings-zoom-kbd">+</kbd>
+        <span>/</span>
+        <kbd className="settings-zoom-kbd">Ctrl</kbd>
+        <kbd className="settings-zoom-kbd">-</kbd>
+        <span>/</span>
+        <kbd className="settings-zoom-kbd">Ctrl</kbd>
+        <kbd className="settings-zoom-kbd">0</kbd>
+      </span>
+      <span>{t('settings.general.uiZoomShortcutResetHint')}</span>
     </div>
   )
 
+  const uiZoomSection = (
+    <SettingsSection title={t('settings.general.uiZoom')} description={t('settings.general.uiZoomDescription')}>
+      <SettingsGroup>
+        <SettingsBlock className="space-y-3">
+          <div
+            className={`settings-zoom-control flex items-center gap-3 ${isUiZoomDragging ? 'is-dragging' : ''}`}
+            style={{ '--settings-zoom-range-progress': uiZoomRangeProgress } as CSSProperties}
+          >
+            <div className="settings-zoom-range-wrap min-w-0 flex-1">
+              <div className="settings-zoom-preview" aria-hidden="true">
+                {uiZoomPercent}%
+              </div>
+              <input
+                type="range"
+                aria-label={t('settings.general.uiZoom')}
+                min={UI_ZOOM_MIN}
+                max={UI_ZOOM_MAX}
+                step={UI_ZOOM_STEP}
+                value={uiZoomDraft}
+                onPointerDown={() => {
+                  setUiZoomDraggingState(true)
+                }}
+                onPointerUp={(e) => commitUiZoom(e.currentTarget.valueAsNumber)}
+                onPointerCancel={() => {
+                  setUiZoomDraggingState(false)
+                  setUiZoomDraft(uiZoom)
+                }}
+                onChange={(e) => {
+                  const nextZoom = Number.isFinite(e.currentTarget.valueAsNumber)
+                    ? e.currentTarget.valueAsNumber
+                    : UI_ZOOM_DEFAULT
+                  setUiZoomDraft(nextZoom)
+                  if (!isUiZoomDraggingRef.current) {
+                    setUiZoom(nextZoom)
+                  }
+                }}
+                onBlur={(e) => {
+                  if (uiZoomDraft !== uiZoom) {
+                    commitUiZoom(e.currentTarget.valueAsNumber)
+                  } else {
+                    setUiZoomDraggingState(false)
+                  }
+                }}
+                className="settings-zoom-range w-full"
+              />
+            </div>
+            <span className="w-11 shrink-0 text-right font-mono text-xs tabular-nums text-[var(--color-text-secondary)]">
+              {uiZoomPercent}%
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="shrink-0"
+              aria-label={t('settings.general.uiZoomReset')}
+              title={t('settings.general.uiZoomReset')}
+              onClick={() => {
+                setIsUiZoomDragging(false)
+                setUiZoomDraft(UI_ZOOM_DEFAULT)
+                setUiZoom(UI_ZOOM_DEFAULT)
+              }}
+              icon={<RotateCw size={12} strokeWidth={2} aria-hidden="true" />}
+            >
+              100%
+            </Button>
+          </div>
+          {uiZoomShortcuts}
+        </SettingsBlock>
+      </SettingsGroup>
+    </SettingsSection>
+  )
+
+  const selectedProxyMode = NETWORK_PROXY_MODES.find((mode) => mode.value === networkDraft.proxy.mode)
+  const selectedSendBehavior = CHAT_SEND_BEHAVIORS.find((option) => option.value === chatSendBehavior)
+  const fieldInvalidClass = 'aria-[invalid=true]:border-[var(--color-error)]'
+
   return (
-    <div className="max-w-xl">
+    <div className="w-full min-w-0">
+      <SettingsPageHeader title={t('settings.tab.general')} description={t('settings.general.pageDescription')} />
+
       {proxyManagedSettingsWarning && (
         <div
           role="alert"
-          className="mb-5 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-on-warning-container)]"
+          className="mt-5 rounded-[var(--radius-lg)] bg-[var(--color-warning-container)] px-4 py-3 text-xs leading-[1.5] text-[var(--color-on-warning-container)]"
         >
           {t('settings.general.proxyManagedSettingsWarning')}
         </div>
       )}
-      {/* No page header here on purpose: the only title it could carry is the nav
-          label verbatim, with no description to add. The pane opens on its first
-          section instead. */}
-      {/* Appearance selector */}
-      <SettingsSection
-        title={t('settings.general.appearanceTitle')}
-        description={t('settings.general.appearanceDescription')}
-      >
-        <div className="mb-4 rounded-xl border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-          <Switch
+
+      {/* Theme. The six palettes stay, drawn as cards; following the system
+          splits them into the ground each OS mode returns to. */}
+      <SettingsSection title={t('settings.general.appearanceTitle')} description={t('settings.general.appearanceDescription')}>
+        <SettingsGroup>
+          <SettingsBlock className="px-4 py-4">
+            {followSystemTheme ? (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <p className="mb-2 text-xs text-[var(--color-text-tertiary)]">
+                    {t('settings.general.appearance.lightThemeLabel')}
+                  </p>
+                  <div className={`grid grid-cols-4 gap-3 ${THEME_GRID_WIDTH}`}>
+                    {LIGHT_THEMES.map(({ value, label }) => (
+                      <ThemeCard
+                        key={value}
+                        theme={value}
+                        label={label}
+                        selected={lightTheme === value}
+                        onSelect={() => void setTheme(value)}
+                      />
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="mb-2 text-xs text-[var(--color-text-tertiary)]">
+                    {t('settings.general.appearance.darkThemeLabel')}
+                  </p>
+                  <div className={`grid grid-cols-4 gap-3 ${THEME_GRID_WIDTH}`}>
+                    {DARK_THEMES.map(({ value, label }) => (
+                      <ThemeCard
+                        key={value}
+                        theme={value}
+                        label={label}
+                        selected={darkTheme === value}
+                        onSelect={() => void setTheme(value)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className={`grid grid-cols-3 gap-3.5 ${THEME_GRID_WIDTH}`}>
+                {THEMES.map(({ value, label }) => (
+                  <ThemeCard
+                    key={value}
+                    theme={value}
+                    label={label}
+                    selected={theme === value}
+                    onSelect={() => void setTheme(value)}
+                  />
+                ))}
+              </div>
+            )}
+          </SettingsBlock>
+          <SettingsSwitchRow
+            title={t('settings.general.appearance.followSystem')}
+            description={t('settings.general.appearance.followSystemHint')}
             checked={followSystemTheme}
             onChange={setFollowSystemTheme}
-            label={t('settings.general.appearance.followSystem')}
-            description={t('settings.general.appearance.followSystemHint')}
           />
-        </div>
-        {followSystemTheme ? (
-          // The OS decides which ground; what is left to choose is the palette
-          // on each one, so the picker splits into the two grounds.
-          <div className="flex flex-col gap-4">
-            <div>
-              <p className="mb-2 text-[12.5px] text-[var(--color-text-tertiary)]">
-                {t('settings.general.appearance.lightThemeLabel')}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {LIGHT_THEMES.map(({ value, label }) => (
-                  <SettingsPill
-                    key={value}
-                    selected={lightTheme === value}
-                    onClick={() => void setTheme(value)}
-                  >
-                    {label}
-                  </SettingsPill>
-                ))}
-              </div>
-            </div>
-            <div>
-              <p className="mb-2 text-[12.5px] text-[var(--color-text-tertiary)]">
-                {t('settings.general.appearance.darkThemeLabel')}
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {DARK_THEMES.map(({ value, label }) => (
-                  <SettingsPill
-                    key={value}
-                    selected={darkTheme === value}
-                    onClick={() => void setTheme(value)}
-                  >
-                    {label}
-                  </SettingsPill>
-                ))}
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {THEMES.map(({ value, label }) => (
-              <SettingsPill
-                key={value}
-                selected={theme === value}
-                onClick={() => void setTheme(value)}
-              >
-                {label}
-              </SettingsPill>
-            ))}
-          </div>
-        )}
+        </SettingsGroup>
       </SettingsSection>
 
-      {/* Language selector */}
-      <SettingsSection
-        title={t('settings.general.languageTitle')}
-        description={t('settings.general.languageDescription')}
-      >
-        <div className="flex flex-wrap gap-2">
-          {LANGUAGES.map(({ value, label }) => (
-            <SettingsPill
-              key={value}
-              selected={locale === value}
-              onClick={() => setLocale(value)}
-            >
-              {label}
-            </SettingsPill>
-          ))}
-        </div>
+      <SettingsSection title={t('settings.general.languageTitle')}>
+        <SettingsGroup>
+          <SettingsRow title={t('settings.general.languageTitle')} description={t('settings.general.languageDescription')}>
+            <SegmentedControl<Locale>
+              label={t('settings.general.languageTitle')}
+              size="sm"
+              value={locale}
+              onChange={setLocale}
+              items={LANGUAGES}
+            />
+          </SettingsRow>
+          <SettingsRow title={t('settings.general.responseLangTitle')} description={t('settings.general.responseLangDescription')}>
+            <Dropdown<string>
+              items={RESPONSE_LANGUAGES}
+              value={responseLanguage}
+              onChange={(value) => void setResponseLanguage(value)}
+              width={280}
+              maxHeight={320}
+              align="right"
+              trigger={
+                <PickerButton aria-label={t('settings.general.responseLangTitle')}>
+                  {selectedResponseLanguageLabel}
+                </PickerButton>
+              }
+            />
+          </SettingsRow>
+        </SettingsGroup>
       </SettingsSection>
 
-      {/* Response Language */}
-      <h2
-        className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1"
-        style={{ fontFamily: 'var(--font-headline)' }}
-      >
-        {t('settings.general.responseLangTitle')}
-      </h2>
-      <p className="text-[13px] leading-5 text-[var(--color-text-tertiary)] mb-3">{t('settings.general.responseLangDescription')}</p>
-      <Dropdown<string>
-        items={RESPONSE_LANGUAGES}
-        value={responseLanguage}
-        onChange={(value) => void setResponseLanguage(value)}
-        width="100%"
-        maxHeight={320}
-        className="mb-8 block w-full"
-        trigger={
-          <Button
-            variant="secondary"
-            size="md"
-            block
-            className="h-10 gap-3"
-            aria-label={t('settings.general.responseLangTitle')}
+      <ChatAppearanceSettings />
+
+      {uiZoomSection}
+
+      {/* Everything a new session starts from, in one card. */}
+      <SettingsSection title={t('h5Settings.agentPreferences')}>
+        <SettingsGroup>
+          <SettingsRow
+            title={t('settings.general.chatSendBehaviorTitle')}
+            description={selectedSendBehavior?.description ?? t('settings.general.chatSendBehaviorDescription')}
           >
-            <span className="min-w-0 flex-1 truncate text-left">{selectedResponseLanguageLabel}</span>
-            <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
-          </Button>
-        }
-      />
-
-      {/* Output style */}
-      <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.outputStyleTitle')}</h2>
-      <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.outputStyleDescription')}</p>
-      <Card radius="xl" surface="low" padding="none" className="mb-8 px-4 py-4">
-        <Dropdown<string>
-          items={outputStyleItems}
-          value={outputStyle}
-          onChange={(value) => void handleOutputStyleChange(value)}
-          width="100%"
-          maxHeight={360}
-          className="block w-full"
-          trigger={
-            <Button
-              variant="secondary"
-              size="md"
-              block
-              className="h-auto min-h-10 gap-3 py-2"
-              aria-label={t('settings.general.outputStyleSelectLabel')}
-              disabled={outputStylesLoading}
-              icon={<span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">format_paint</span>}
-            >
-              <span className="min-w-0 flex-1 text-left">
-                <span className="block truncate font-medium">
-                  {outputStylesLoading
-                    ? t('settings.general.outputStyleLoading')
-                    : selectedOutputStyleLabel}
-                </span>
-                {selectedOutputStyleDescription && (
-                  <span className="mt-0.5 block truncate text-xs text-[var(--color-text-tertiary)]">
-                    {selectedOutputStyleDescription}
-                  </span>
-                )}
-              </span>
-              <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
-            </Button>
-          }
-        />
-        <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--color-text-tertiary)]">
-          <span className="inline-flex items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-medium text-[var(--color-text-secondary)]">
-            {outputStyleScopeLabel}
-          </span>
-          {selectedOutputStyle && (
-            <span className="inline-flex items-center rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1">
-              {getOutputStyleSourceLabel(selectedOutputStyle.source, t)}
-            </span>
-          )}
-          <span className="min-w-0 flex-1 leading-5">{outputStyleScopeHint}</span>
-        </div>
-        <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
-          {t('settings.general.outputStyleRestartHint')}
-        </p>
-        {outputStyleError && (
-          <p className="mt-2 text-xs leading-5 text-[var(--color-error)]">
-            {outputStyleError}
-          </p>
-        )}
-      </Card>
-
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.defaultPermissionTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.defaultPermissionDescription')}</p>
-        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-sm font-medium text-[var(--color-text-primary)]">
-                {t('settings.general.defaultPermissionLabel')}
-              </div>
-              <div className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
-                {t('settings.general.defaultPermissionHint')}
-              </div>
-            </div>
+            <SegmentedControl<ChatSendBehavior>
+              label={t('settings.general.chatSendBehaviorTitle')}
+              size="sm"
+              value={chatSendBehavior}
+              onChange={(value) => void setChatSendBehavior(value)}
+              items={CHAT_SEND_BEHAVIORS.map(({ value, label }) => ({ value, label }))}
+            />
+          </SettingsRow>
+          <SettingsRow
+            title={t('settings.general.defaultPermissionTitle')}
+            description={t('settings.general.defaultPermissionHint')}
+          >
             <PermissionModeSelector
               value={permissionMode}
               onChange={(mode) => void setPermissionMode(mode)}
               workDir={t('settings.general.defaultPermissionScope')}
               menuPlacement="bottom"
             />
-          </div>
-        </Card>
-      </div>
-
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.effortTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.effortDescription')}</p>
-        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-[var(--color-text-primary)]">
-                {t('settings.general.effortDefaultLabel')}
-              </div>
-              <div className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">
-                {currentModel
-                  ? t('settings.general.effortModelHint', { model: currentModel.name || currentModel.id })
-                  : t('settings.general.effortNoModelHint')}
-              </div>
-            </div>
+          </SettingsRow>
+          <SettingsRow
+            title={t('settings.general.effortDefaultLabel')}
+            description={currentModel
+              ? t('settings.general.effortModelHint', { model: currentModel.name || currentModel.id })
+              : t('settings.general.effortNoModelHint')}
+          >
             <Button
               ref={effortButtonRef}
               variant="secondary"
@@ -1034,137 +970,130 @@ export function GeneralSettings() {
                 : t('settings.general.effortUnavailable')}
               aria-expanded={selectedEffort ? effortOpen : undefined}
               onClick={() => setEffortOpen((open) => !open)}
-              icon={(
-                <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
-                  neurology
-                </span>
-              )}
+              icon={<Brain size={14} strokeWidth={1.75} aria-hidden="true" />}
               iconPosition="start"
             >
               {selectedEffort ? effortLabels[selectedEffort] : t('settings.general.effortUnavailable')}
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">
-                expand_more
-              </span>
+              <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
             </Button>
-          </div>
-        </Card>
-        {selectedEffort && (
-          <ReasoningEffortPopover
-            open={effortOpen}
-            anchorRef={effortButtonRef}
-            options={effortOptions}
-            value={selectedEffort}
-            labels={effortLabels}
-            ariaLabel={t('settings.general.effortDefaultLabel')}
-            onChange={(level) => void setEffort(level)}
-            onClose={() => setEffortOpen(false)}
-          />
-        )}
-      </div>
-
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.thinkingTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.thinkingDescription')}</p>
-        <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
-          <input
-            type="checkbox"
-            aria-label={t('settings.general.thinkingEnabled')}
+            {selectedEffort && (
+              <ReasoningEffortPopover
+                open={effortOpen}
+                anchorRef={effortButtonRef}
+                options={effortOptions}
+                value={selectedEffort}
+                labels={effortLabels}
+                ariaLabel={t('settings.general.effortDefaultLabel')}
+                onChange={(level) => void setEffort(level)}
+                onClose={() => setEffortOpen(false)}
+              />
+            )}
+          </SettingsRow>
+          <SettingsSwitchRow
+            title={t('settings.general.thinkingEnabled')}
+            description={t('settings.general.thinkingDescription')}
             checked={thinkingEnabled}
-            onChange={(e) => void setThinkingEnabled(e.target.checked)}
-            className={SETTINGS_CHECKBOX_INPUT_CLASS}
+            onChange={(enabled) => void setThinkingEnabled(enabled)}
           />
-          <SettingsCheckboxMark checked={thinkingEnabled} />
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-[var(--color-text-primary)]">
-              {t('settings.general.thinkingEnabled')}
-            </div>
-            <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
-              {t('settings.general.thinkingHint')}
-            </div>
-          </div>
-        </label>
-      </div>
-
-      {/*
-        Only the editors we detect, never every installed application: the menu
-        offers one editor slot, and this chooses which. Hidden entirely when none
-        are installed — there is nothing to pick between.
-      */}
-      {detectedEditors.length > 0 && (
-        <SettingsSection
-          className="mt-8"
-          title={t('settings.general.defaultEditorTitle')}
-          description={t('settings.general.defaultEditorDescription')}
-        >
-          <div className="flex flex-wrap gap-2">
-            <SettingsPill
-              selected={editorTargetId === null}
-              onClick={() => setEditorTargetId(null)}
+          <SettingsRow
+            title={t('settings.general.outputStyleTitle')}
+            description={selectedOutputStyleDescription || t('settings.general.outputStyleDescription')}
+            footer={(
+              <div className="space-y-1.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Badge size="sm">{outputStyleScopeLabel}</Badge>
+                  {selectedOutputStyle && (
+                    <Badge size="sm">{getOutputStyleSourceLabel(selectedOutputStyle.source, t)}</Badge>
+                  )}
+                  <span className="min-w-0">{outputStyleScopeHint}</span>
+                </div>
+                <p>{t('settings.general.outputStyleRestartHint')}</p>
+                {outputStyleError && <p className="text-[var(--color-error)]">{outputStyleError}</p>}
+              </div>
+            )}
+          >
+            <Dropdown<string>
+              items={outputStyleItems}
+              value={outputStyle}
+              onChange={(value) => void handleOutputStyleChange(value)}
+              width={360}
+              maxHeight={360}
+              align="right"
+              trigger={
+                <PickerButton
+                  aria-label={t('settings.general.outputStyleSelectLabel')}
+                  disabled={outputStylesLoading}
+                >
+                  {outputStylesLoading
+                    ? t('settings.general.outputStyleLoading')
+                    : selectedOutputStyleLabel}
+                </PickerButton>
+              }
+            />
+          </SettingsRow>
+          {/*
+            Only the editors we detect, never every installed application: the menu
+            offers one editor slot, and this chooses which. Hidden entirely when none
+            are installed — there is nothing to pick between.
+          */}
+          {detectedEditors.length > 0 && (
+            <SettingsRow
+              title={t('settings.general.defaultEditorTitle')}
+              description={t('settings.general.defaultEditorDescription')}
             >
-              {t('settings.general.defaultEditorAuto')}
-            </SettingsPill>
-            {detectedEditors.map((target) => (
-              <SettingsPill
-                key={target.id}
-                selected={editorTargetId === target.id}
-                onClick={() => setEditorTargetId(target.id)}
-              >
-                {target.label}
-              </SettingsPill>
-            ))}
-          </div>
-        </SettingsSection>
-      )}
-
-      <SettingsSection
-        className="mt-8"
-        title={t('settings.general.workflowKeywordTitle')}
-        description={t('settings.general.workflowKeywordDescription')}
-      >
-        <div className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-          <Switch
+              <Dropdown<string>
+                items={[
+                  { value: '', label: t('settings.general.defaultEditorAuto') },
+                  ...detectedEditors.map((target) => ({ value: target.id, label: target.label })),
+                ]}
+                value={editorTargetId ?? ''}
+                onChange={(value) => setEditorTargetId(value || null)}
+                width={240}
+                maxHeight={320}
+                align="right"
+                label={t('settings.general.defaultEditorTitle')}
+                trigger={
+                  <PickerButton aria-label={t('settings.general.defaultEditorTitle')}>
+                    {detectedEditors.find((target) => target.id === editorTargetId)?.label
+                      ?? t('settings.general.defaultEditorAuto')}
+                  </PickerButton>
+                }
+              />
+            </SettingsRow>
+          )}
+          <SettingsSwitchRow
+            title={t('settings.general.workflowKeywordEnabled')}
+            description={t('settings.general.workflowKeywordDescription')}
             checked={workflowKeywordTriggerEnabled}
             onChange={(enabled) => void setWorkflowKeywordTriggerEnabled(enabled)}
-            label={t('settings.general.workflowKeywordEnabled')}
-            description={t('settings.general.workflowKeywordHint')}
           />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        className="mt-8"
-        title={t('settings.general.agentTeamsTitle')}
-        description={t('settings.general.agentTeamsDescription')}
-      >
-        <div className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-          <Switch
+          <SettingsSwitchRow
+            title={t('settings.general.agentTeamsEnabled')}
+            description={(
+              <>
+                <span>{t('settings.general.agentTeamsDescription')}</span>{' '}
+                <span>{t('settings.general.agentTeamsHint')}</span>
+              </>
+            )}
             checked={agentTeamsEnabled}
             onChange={(enabled) => void handleAgentTeamsChange(enabled)}
             disabled={agentTeamsSaving}
-            label={t('settings.general.agentTeamsEnabled')}
-            description={t('settings.general.agentTeamsHint')}
           />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        className="mt-8"
-        title={t('settings.general.autoQuestionTitle')}
-        description={t('settings.general.autoQuestionDescription')}
-      >
-        <div className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-          <Switch
+          <SettingsSwitchRow
+            title={t('settings.general.autoQuestionEnabled')}
+            description={t('settings.general.autoQuestionHint')}
             checked={autoQuestion.enabled}
             onChange={(enabled) => void setAutoQuestion({ ...autoQuestion, enabled }).catch(() => {
               addToast({ type: 'error', message: t('settings.general.autoQuestionSaveFailed') })
             })}
-            label={t('settings.general.autoQuestionEnabled')}
-            description={t('settings.general.autoQuestionHint')}
           />
           {autoQuestion.enabled && (
-            <div className="mt-4">
+            <SettingsRow title={t('settings.general.autoQuestionTimeout')} layout="inline">
               <SelectField
                 label={t('settings.general.autoQuestionTimeout')}
+                labelHidden
+                size="md"
+                className="w-auto min-w-[120px]"
                 value={String(autoQuestion.timeoutMinutes)}
                 options={AUTO_QUESTION_TIMEOUT_OPTIONS.map((minutes) => ({
                   value: String(minutes),
@@ -1177,98 +1106,39 @@ export function GeneralSettings() {
                   addToast({ type: 'error', message: t('settings.general.autoQuestionSaveFailed') })
                 })}
               />
-            </div>
+            </SettingsRow>
           )}
-        </div>
+          <SettingsSwitchRow
+            title={t('settings.general.autoDreamEnabled')}
+            description={autoDreamEnabled
+              ? t('settings.general.autoDreamHintOn')
+              : t('settings.general.autoDreamHintOff')}
+            checked={autoDreamEnabled}
+            onChange={handleAutoDreamToggle}
+          />
+        </SettingsGroup>
       </SettingsSection>
 
-      <div>
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.autoDreamTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.autoDreamDescription')}</p>
-        <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
-          <input
-            type="checkbox"
-            aria-label={t('settings.general.autoDreamEnabled')}
-            checked={autoDreamEnabled}
-            onChange={(e) => handleAutoDreamToggle(e.target.checked)}
-            className={SETTINGS_CHECKBOX_INPUT_CLASS}
+      <SettingsSection title={t('settings.general.notificationsTitle')} description={t('settings.general.notificationsDescription')}>
+        <SettingsGroup>
+          <SettingsSwitchRow
+            title={t('settings.general.notificationsEnabled')}
+            description={desktopNotificationsEnabled
+              ? t('settings.general.notificationsHintOn')
+              : t('settings.general.notificationsHintOff')}
+            checked={desktopNotificationsEnabled}
+            onChange={(enabled) => void handleDesktopNotificationsToggle(enabled)}
           />
-          <SettingsCheckboxMark checked={autoDreamEnabled} />
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-[var(--color-text-primary)]">
-              {t('settings.general.autoDreamEnabled')}
-            </div>
-            <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
-              {autoDreamEnabled
-                ? t('settings.general.autoDreamHintOn')
-                : t('settings.general.autoDreamHintOff')}
-            </div>
-          </div>
-        </label>
-      </div>
-
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.traceTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.traceDescription')}</p>
-        <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
-          <input
-            type="checkbox"
-            aria-label={t('settings.general.traceEnabled')}
-            checked={traceCapture.enabled}
-            onChange={(e) => void setTraceCaptureEnabled(e.target.checked)}
-            className={SETTINGS_CHECKBOX_INPUT_CLASS}
-          />
-          <SettingsCheckboxMark checked={traceCapture.enabled} />
-          <div className="min-w-0 flex-1">
-            <div className="text-sm font-medium text-[var(--color-text-primary)]">
-              {t('settings.general.traceEnabled')}
-            </div>
-            <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
-              {traceCapture.enabled ? t('settings.general.traceHintOn') : t('settings.general.traceHintOff')}
-            </div>
-            {traceCapture.storageDir && (
-              <div className="mt-2 truncate rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-2 py-1 font-mono text-[11px] text-[var(--color-text-secondary)]">
-                {traceCapture.storageDir}
-              </div>
-            )}
-          </div>
-        </label>
-      </div>
-
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.notificationsTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.notificationsDescription')}</p>
-        <Card radius="xl" surface="low" padding="none" className="px-4 py-3">
-          <label className="relative flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
-              aria-label={t('settings.general.notificationsEnabled')}
-              checked={desktopNotificationsEnabled}
-              onChange={(e) => void handleDesktopNotificationsToggle(e.target.checked)}
-              className={SETTINGS_CHECKBOX_INPUT_CLASS}
-            />
-            <SettingsCheckboxMark checked={desktopNotificationsEnabled} />
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-medium text-[var(--color-text-primary)]">
-                {t('settings.general.notificationsEnabled')}
-              </div>
-              <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
-                {desktopNotificationsEnabled
-                  ? t('settings.general.notificationsHintOn')
-                  : t('settings.general.notificationsHintOff')}
-              </div>
-            </div>
-          </label>
           {desktopNotificationsEnabled && (
-            <div className="mt-3 flex items-center justify-between gap-3 border-t border-[var(--color-border-separator)] pt-3">
-              <div className="min-w-0 text-xs text-[var(--color-text-tertiary)]">
-                {t('settings.general.notificationsStatus')}: {notificationStatusLabel[notificationPermission]}
-              </div>
+            <SettingsRow
+              layout="inline"
+              title={<>{t('settings.general.notificationsStatus')}: {notificationStatusLabel[notificationPermission]}</>}
+            >
               {notificationPermission !== 'granted' && notificationPermission !== 'unsupported' && (
                 <Button
-                  size="sm"
+                  size="base"
                   variant="secondary"
-                  className="px-3 whitespace-nowrap"
+                  className="whitespace-nowrap"
                   disabled={notificationActionRunning}
                   onClick={() => void handleNotificationPermissionAction()}
                 >
@@ -1277,79 +1147,50 @@ export function GeneralSettings() {
                     : t('settings.general.notificationsAuthorize')}
                 </Button>
               )}
-            </div>
+            </SettingsRow>
           )}
-        </Card>
-      </div>
+        </SettingsGroup>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.chatSendBehaviorTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.chatSendBehaviorDescription')}</p>
-        <Card radius="xl" surface="low" padding="none" className="grid grid-cols-2 gap-2 p-2">
-          {CHAT_SEND_BEHAVIORS.map((option) => (
-            <button
-              key={option.value}
-              type="button"
-              onClick={() => void setChatSendBehavior(option.value)}
-              aria-pressed={chatSendBehavior === option.value}
-              className={`rounded-[var(--radius-lg)] border px-3 py-2 text-left transition-colors ${
-                chatSendBehavior === option.value
-                  ? 'border-[var(--color-brand)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-                  : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-              }`}
-            >
-              <div className="text-xs font-semibold">{option.label}</div>
-              <div className="mt-1 text-[11px] leading-4 text-[var(--color-text-tertiary)]">
-                {option.description}
-              </div>
-            </button>
-          ))}
-        </Card>
-      </div>
-
-      {uiZoomSection}
-
-      <ChatAppearanceSettings />
-
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.networkTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.networkDescription')}</p>
-        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
-          <div className="grid grid-cols-2 gap-2">
-            {NETWORK_PROXY_MODES.map((mode) => (
-              <button
-                key={mode.value}
-                type="button"
-                onClick={() => {
-                  setNetworkDraft((current) => ({
-                    ...current,
-                    proxy: { ...current.proxy, mode: mode.value },
-                  }))
-                  setNetworkSaveError(null)
-                }}
-                aria-pressed={networkDraft.proxy.mode === mode.value}
-                className={`rounded-[var(--radius-lg)] border px-3 py-2 text-left transition-colors ${
-                  networkDraft.proxy.mode === mode.value
-                    ? 'border-[var(--color-brand)] bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-                    : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-                }`}
-              >
-                <div className="text-xs font-semibold">{mode.label}</div>
-                <div className="mt-1 text-[11px] leading-4 text-[var(--color-text-tertiary)]">
-                  {mode.description}
-                </div>
-              </button>
-            ))}
-          </div>
+      <SettingsSection title={t('settings.general.networkTitle')} description={t('settings.general.networkDescription')}>
+        <SettingsGroup>
+          <SettingsBlock>
+            <SegmentedControl<NetworkProxyMode>
+              label={t('settings.general.networkTitle')}
+              layout="fill"
+              size="sm"
+              value={networkDraft.proxy.mode}
+              onChange={(mode) => {
+                setNetworkDraft((current) => ({
+                  ...current,
+                  proxy: { ...current.proxy, mode },
+                }))
+                setNetworkSaveError(null)
+              }}
+              items={NETWORK_PROXY_MODES.map(({ value, label }) => ({ value, label }))}
+            />
+            {selectedProxyMode && (
+              <p className="mt-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{selectedProxyMode.description}</p>
+            )}
+          </SettingsBlock>
 
           {networkDraft.proxy.mode === 'manual' && (
-            <div className="mt-4">
+            <SettingsRow
+              title={t('settings.general.networkProxyUrl')}
+              htmlFor="network-proxy-url"
+              description={networkProxyError
+                ? <span className="text-[var(--color-error)]">{networkProxyError}</span>
+                : t('settings.general.networkProxyUrlHint')}
+            >
               <Input
                 id="network-proxy-url"
-                label={t('settings.general.networkProxyUrl')}
+                size="md"
+                containerClassName="w-full sm:w-[260px]"
+                className={`font-mono text-xs ${fieldInvalidClass}`}
                 value={networkDraft.proxy.url}
                 placeholder="http://127.0.0.1:7890"
                 autoComplete="off"
+                aria-invalid={networkProxyError ? true : undefined}
                 onChange={(event) => {
                   setNetworkDraft((current) => ({
                     ...current,
@@ -1358,157 +1199,129 @@ export function GeneralSettings() {
                   setNetworkSaveError(null)
                 }}
               />
-              <p className={`mt-1 text-[11px] leading-4 ${networkProxyError ? 'text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]'}`}>
-                {networkProxyError ?? t('settings.general.networkProxyUrlHint')}
-              </p>
-            </div>
+            </SettingsRow>
           )}
 
-          <div className="mt-4">
-            <div className="mb-2 flex items-center justify-between gap-3">
-              <label htmlFor="network-timeout-seconds" className="text-sm font-medium text-[var(--color-text-primary)]">
-                {t('settings.general.networkTimeout')}
-              </label>
-              <span className="rounded-[var(--radius-md)] bg-[var(--color-surface)] px-2 py-1 text-xs font-medium text-[var(--color-text-secondary)]">
-                {t('settings.general.networkTimeoutValue', { seconds: String(timeoutSeconds) })}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                className="h-10 w-10 px-0"
-                aria-label={t('settings.general.networkTimeoutDecrease')}
-                onClick={() => setNetworkTimeoutSeconds((parsedNetworkTimeoutSeconds ?? timeoutSeconds) - NETWORK_TIMEOUT_STEP_SECONDS)}
-              >
-                -30
-              </Button>
-              <div className="relative min-w-0 flex-1">
-                <input
-                  id="network-timeout-seconds"
-                  type="number"
-                  min={NETWORK_TIMEOUT_MIN_SECONDS}
-                  max={NETWORK_TIMEOUT_MAX_SECONDS}
-                  step={1}
-                  inputMode="numeric"
-                  value={networkTimeoutInput}
-                  aria-invalid={networkTimeoutError ? true : undefined}
-                  aria-describedby="network-timeout-help"
-                  onChange={(event) => {
-                    const nextValue = event.currentTarget.value
-                    if (!/^\d*$/.test(nextValue)) return
-                    setNetworkTimeoutInput(nextValue)
-                    const seconds = Number(nextValue)
-                    if (nextValue.length > 0 && seconds >= NETWORK_TIMEOUT_MIN_SECONDS && seconds <= NETWORK_TIMEOUT_MAX_SECONDS) {
-                      setNetworkDraft((current) => ({
-                        ...current,
-                        aiRequestTimeoutMs: seconds * 1000,
-                      }))
-                    }
-                    setNetworkSaveError(null)
-                  }}
-                  className={`h-10 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface)] px-3 pr-12 text-sm text-[var(--color-text-primary)] outline-none transition-colors duration-150 placeholder:text-[var(--color-text-tertiary)] ${
-                    networkTimeoutError
-                      ? 'border-[var(--color-error)] focus:shadow-[var(--shadow-error-ring)]'
-                      : 'border-[var(--color-border)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]'
-                  }`}
-                />
-                <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--color-text-tertiary)]">
-                  {t('settings.general.networkTimeoutUnit')}
-                </span>
-              </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                className="h-10 w-10 px-0"
-                aria-label={t('settings.general.networkTimeoutIncrease')}
-                onClick={() => setNetworkTimeoutSeconds((parsedNetworkTimeoutSeconds ?? timeoutSeconds) + NETWORK_TIMEOUT_STEP_SECONDS)}
-              >
-                +30
-              </Button>
-            </div>
-            <p
-              id="network-timeout-help"
-              className={`mt-2 text-xs leading-5 ${networkTimeoutError ? 'text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]'}`}
-            >
-              {networkTimeoutError ?? t('settings.general.networkTimeoutHint')}
-            </p>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between gap-3">
-            <p className="min-w-0 text-[11px] leading-4 text-[var(--color-text-tertiary)]">
-              {t('settings.general.networkScopeHint')}
-            </p>
+          <SettingsRow
+            title={t('settings.general.networkTimeout')}
+            htmlFor="network-timeout-seconds"
+            descriptionId="network-timeout-help"
+            description={networkTimeoutError
+              ? <span className="text-[var(--color-error)]">{networkTimeoutError}</span>
+              : t('settings.general.networkTimeoutHint')}
+          >
             <Button
-              size="sm"
+              type="button"
+              size="base"
               variant="secondary"
-              className="min-w-[72px] px-4 whitespace-nowrap"
+              className="px-2.5 font-mono tabular-nums"
+              aria-label={t('settings.general.networkTimeoutDecrease')}
+              onClick={() => setNetworkTimeoutSeconds((parsedNetworkTimeoutSeconds ?? timeoutSeconds) - NETWORK_TIMEOUT_STEP_SECONDS)}
+            >
+              -30
+            </Button>
+            <NumberField
+              id="network-timeout-seconds"
+              unit={t('settings.general.networkTimeoutUnit')}
+              min={NETWORK_TIMEOUT_MIN_SECONDS}
+              max={NETWORK_TIMEOUT_MAX_SECONDS}
+              value={networkTimeoutInput}
+              invalid={!!networkTimeoutError}
+              describedBy="network-timeout-help"
+              onChange={(nextValue) => {
+                if (!/^\d*$/.test(nextValue)) return
+                setNetworkTimeoutInput(nextValue)
+                const seconds = Number(nextValue)
+                if (nextValue.length > 0 && seconds >= NETWORK_TIMEOUT_MIN_SECONDS && seconds <= NETWORK_TIMEOUT_MAX_SECONDS) {
+                  setNetworkDraft((current) => ({
+                    ...current,
+                    aiRequestTimeoutMs: seconds * 1000,
+                  }))
+                }
+                setNetworkSaveError(null)
+              }}
+            />
+            <Button
+              type="button"
+              size="base"
+              variant="secondary"
+              className="px-2.5 font-mono tabular-nums"
+              aria-label={t('settings.general.networkTimeoutIncrease')}
+              onClick={() => setNetworkTimeoutSeconds((parsedNetworkTimeoutSeconds ?? timeoutSeconds) + NETWORK_TIMEOUT_STEP_SECONDS)}
+            >
+              +30
+            </Button>
+          </SettingsRow>
+
+          <SettingsBlock className="flex items-center justify-between gap-4">
+            <div className="min-w-0 text-xs leading-[1.5]">
+              <p className="text-[var(--color-text-tertiary)]">{t('settings.general.networkScopeHint')}</p>
+              {networkSaveError && (
+                <p className="mt-1 text-[var(--color-error)]">{networkSaveError}</p>
+              )}
+            </div>
+            <Button
+              size="base"
+              variant="secondary"
+              className="shrink-0 whitespace-nowrap"
               disabled={!networkDirty || !!networkProxyError || !!networkTimeoutError || isSavingNetwork}
               loading={isSavingNetwork}
               onClick={() => void saveNetworkSettings()}
             >
               {t('settings.general.networkSave')}
             </Button>
-          </div>
+          </SettingsBlock>
 
-          {networkSaveError && (
-            <p className="mt-2 text-[11px] leading-4 text-[var(--color-error)]">
-              {networkSaveError}
-            </p>
-          )}
-        </Card>
-      </div>
-
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.webFetchPreflightTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.webFetchPreflightDescription')}</p>
-        <label className="relative flex items-start gap-3 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3 cursor-pointer hover:border-[var(--color-border-focus)] transition-colors">
-          <input
-            type="checkbox"
-            aria-label={t('settings.general.webFetchPreflightEnabled')}
+          <SettingsSwitchRow
+            title={t('settings.general.webFetchPreflightEnabled')}
+            description={(
+              <>
+                <span>{t('settings.general.webFetchPreflightDescription')}</span>{' '}
+                <span>{t('settings.general.webFetchPreflightHint')}</span>
+              </>
+            )}
             checked={skipWebFetchPreflight}
-            onChange={(e) => void setSkipWebFetchPreflight(e.target.checked)}
-            className={SETTINGS_CHECKBOX_INPUT_CLASS}
+            onChange={(enabled) => void setSkipWebFetchPreflight(enabled)}
           />
-          <SettingsCheckboxMark checked={skipWebFetchPreflight} />
-          <div className="min-w-0">
-            <div className="text-sm font-medium text-[var(--color-text-primary)]">
-              {t('settings.general.webFetchPreflightEnabled')}
-            </div>
-            <div className="text-xs text-[var(--color-text-tertiary)] mt-1 leading-5">
-              {t('settings.general.webFetchPreflightHint')}
-            </div>
-          </div>
-        </label>
-      </div>
+        </SettingsGroup>
+      </SettingsSection>
 
-      <div className="mt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.webSearchTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.webSearchDescription')}</p>
-        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
-          <div className="grid grid-cols-5 gap-1.5 mb-4">
-            {WEB_SEARCH_MODES.map(({ value, label }) => (
-              <button
-                key={value}
-                onClick={() => setWebSearchDraft({ ...webSearchDraft, mode: value })}
-                className={`h-9 px-2 text-xs font-semibold rounded-[var(--radius-lg)] border transition-all truncate ${
-                  (webSearchDraft.mode ?? 'auto') === value
-                    ? 'bg-[var(--color-brand)] text-[var(--color-on-primary)] border-[var(--color-brand)]'
-                    : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]'
-                }`}
-                title={label}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="grid grid-cols-1 gap-3">
+      <SettingsSection title={t('settings.general.webSearchTitle')} description={t('settings.general.webSearchDescription')}>
+        <SettingsGroup>
+          <SettingsBlock>
+            <SegmentedControl<WebSearchMode>
+              label={t('settings.general.webSearchTitle')}
+              layout="fill"
+              size="sm"
+              value={webSearchDraft.mode ?? 'auto'}
+              onChange={(mode) => setWebSearchDraft({ ...webSearchDraft, mode })}
+              items={WEB_SEARCH_MODES.map(({ value, label }) => ({ value, label, title: label }))}
+            />
+            <p className="mt-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{t('settings.general.webSearchHint')}</p>
+          </SettingsBlock>
+          <SettingsRow
+            title={t('settings.general.webSearchTavilyKey')}
+            htmlFor="web-search-tavily-key"
+            description={(
+              <>
+                {t('settings.general.webSearchTavilyFreeHint')}{' '}
+                <a
+                  href="https://app.tavily.com/home"
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={t('settings.general.webSearchTavilyApiKeyLink')}
+                  className="whitespace-nowrap text-[var(--color-text-accent)] hover:underline"
+                >
+                  {t('settings.general.webSearchGetApiKey')}
+                </a>
+              </>
+            )}
+          >
             <Input
               id="web-search-tavily-key"
               type="password"
-              label={t('settings.general.webSearchTavilyKey')}
+              size="md"
+              containerClassName="w-full sm:w-[260px]"
               value={webSearchDraft.tavilyApiKey ?? ''}
               placeholder="tvly-..."
               autoComplete="off"
@@ -1519,22 +1332,30 @@ export function GeneralSettings() {
                 })
               }
             />
-            <div className="-mt-1 flex items-center justify-between gap-3 text-xs text-[var(--color-text-tertiary)]">
-              <span>{t('settings.general.webSearchTavilyFreeHint')}</span>
-              <a
-                href="https://app.tavily.com/home"
-                target="_blank"
-                rel="noreferrer"
-                aria-label={t('settings.general.webSearchTavilyApiKeyLink')}
-                className="font-medium text-[var(--color-brand)] hover:underline whitespace-nowrap"
-              >
-                {t('settings.general.webSearchGetApiKey')}
-              </a>
-            </div>
+          </SettingsRow>
+          <SettingsRow
+            title={t('settings.general.webSearchBraveKey')}
+            htmlFor="web-search-brave-key"
+            description={(
+              <>
+                {t('settings.general.webSearchBraveFreeHint')}{' '}
+                <a
+                  href="https://api-dashboard.search.brave.com/app/keys"
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label={t('settings.general.webSearchBraveApiKeyLink')}
+                  className="whitespace-nowrap text-[var(--color-text-accent)] hover:underline"
+                >
+                  {t('settings.general.webSearchGetApiKey')}
+                </a>
+              </>
+            )}
+          >
             <Input
               id="web-search-brave-key"
               type="password"
-              label={t('settings.general.webSearchBraveKey')}
+              size="md"
+              containerClassName="w-full sm:w-[260px]"
               value={webSearchDraft.braveApiKey ?? ''}
               placeholder={t('settings.general.webSearchBravePlaceholder')}
               autoComplete="off"
@@ -1545,37 +1366,36 @@ export function GeneralSettings() {
                 })
               }
             />
-            <div className="-mt-1 flex items-center justify-between gap-3 text-xs text-[var(--color-text-tertiary)]">
-              <span>{t('settings.general.webSearchBraveFreeHint')}</span>
-              <a
-                href="https://api-dashboard.search.brave.com/app/keys"
-                target="_blank"
-                rel="noreferrer"
-                aria-label={t('settings.general.webSearchBraveApiKeyLink')}
-                className="font-medium text-[var(--color-brand)] hover:underline whitespace-nowrap"
-              >
-                {t('settings.general.webSearchGetApiKey')}
-              </a>
-            </div>
-          </div>
-          <div className="mt-4 flex flex-col gap-3">
-            <p className="text-xs text-[var(--color-text-tertiary)] leading-5">
-              {t('settings.general.webSearchHint')}
-            </p>
-            <div className="flex justify-end">
-              <Button
-                size="sm"
-                variant="secondary"
-                className="min-w-[72px] px-4 whitespace-nowrap"
-                disabled={!webSearchDirty}
-                onClick={() => void setWebSearch(webSearchDraft)}
-              >
-                {t('settings.general.webSearchSave')}
-              </Button>
-            </div>
-          </div>
-        </Card>
-      </div>
+          </SettingsRow>
+          <SettingsBlock className="flex justify-end">
+            <Button
+              size="base"
+              variant="secondary"
+              className="whitespace-nowrap"
+              disabled={!webSearchDirty}
+              onClick={() => void setWebSearch(webSearchDraft)}
+            >
+              {t('settings.general.webSearchSave')}
+            </Button>
+          </SettingsBlock>
+        </SettingsGroup>
+      </SettingsSection>
+
+      <SettingsSection title={t('settings.general.traceTitle')} description={t('settings.general.traceDescription')}>
+        <SettingsGroup>
+          <SettingsSwitchRow
+            title={t('settings.general.traceEnabled')}
+            description={traceCapture.enabled ? t('settings.general.traceHintOn') : t('settings.general.traceHintOff')}
+            checked={traceCapture.enabled}
+            onChange={(enabled) => void setTraceCaptureEnabled(enabled)}
+            footer={traceCapture.storageDir ? (
+              <div className="truncate rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 py-1 font-mono text-[11px] text-[var(--color-text-secondary)]">
+                {traceCapture.storageDir}
+              </div>
+            ) : undefined}
+          />
+        </SettingsGroup>
+      </SettingsSection>
 
       {/*
         Retention changes delete transcripts irreversibly and the server only
@@ -1583,202 +1403,167 @@ export function GeneralSettings() {
         would only ever see a 403 here.
       */}
       {!isTouchH5Document() && (
-      <div className="mt-8 border-t border-[var(--color-border)] pt-8">
-        <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.sessionRetentionTitle')}</h2>
-        <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.sessionRetentionDescription')}</p>
-
-        <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <label htmlFor="session-retention-days" className="text-sm font-medium text-[var(--color-text-primary)]">
-              {t('settings.general.sessionRetentionLabel')}
-            </label>
-            <span className="rounded-[var(--radius-md)] bg-[var(--color-surface)] px-2 py-1 text-xs font-medium text-[var(--color-text-secondary)]">
-              {effectiveRetentionDays === 0
-                ? t('settings.general.sessionRetentionCurrentOff')
-                : t('settings.general.sessionRetentionCurrent', { days: String(effectiveRetentionDays) })}
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="relative min-w-0 flex-1">
-              <input
+        <SettingsSection title={t('settings.general.sessionRetentionTitle')} description={t('settings.general.sessionRetentionDescription')}>
+          <SettingsGroup>
+            <SettingsRow
+              title={t('settings.general.sessionRetentionLabel')}
+              htmlFor="session-retention-days"
+              descriptionId="session-retention-help"
+              description={(
+                <>
+                  <span className="text-[var(--color-text-secondary)]">
+                    {effectiveRetentionDays === 0
+                      ? t('settings.general.sessionRetentionCurrentOff')
+                      : t('settings.general.sessionRetentionCurrent', { days: String(effectiveRetentionDays) })}
+                  </span>
+                  {' · '}
+                  {retentionInputError
+                    ? <span className="text-[var(--color-error)]">{retentionInputError}</span>
+                    : <span>{t('settings.general.sessionRetentionHint')}</span>}
+                </>
+              )}
+              footer={retentionSaveError ? (
+                <p className="text-xs text-[var(--color-error)]">{retentionSaveError}</p>
+              ) : undefined}
+            >
+              <NumberField
                 id="session-retention-days"
-                type="number"
+                unit={t('settings.general.sessionRetentionUnit')}
                 min={0}
                 max={MAX_CLEANUP_PERIOD_DAYS}
-                step={1}
-                inputMode="numeric"
                 value={retentionInput}
-                aria-invalid={retentionInputError ? true : undefined}
-                aria-describedby="session-retention-help"
-                onChange={(event) => {
-                  const nextValue = event.currentTarget.value
+                invalid={!!retentionInputError}
+                describedBy="session-retention-help"
+                onChange={(nextValue) => {
                   if (!/^\d*$/.test(nextValue)) return
                   setRetentionInput(nextValue)
                   setRetentionSaveError(null)
                 }}
-                className={`h-10 w-full rounded-[var(--radius-md)] border bg-[var(--color-surface)] px-3 pr-14 text-sm text-[var(--color-text-primary)] outline-none transition-colors duration-150 placeholder:text-[var(--color-text-tertiary)] ${
-                  retentionInputError
-                    ? 'border-[var(--color-error)] focus:shadow-[var(--shadow-error-ring)]'
-                    : 'border-[var(--color-border)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]'
-                }`}
               />
-              <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-[var(--color-text-tertiary)]">
-                {t('settings.general.sessionRetentionUnit')}
-              </span>
-            </div>
-            <Button
-              size="sm"
-              variant="secondary"
-              className="min-w-[72px] px-4 whitespace-nowrap"
-              disabled={
-                !retentionDirty ||
-                !!retentionInputError ||
-                retentionActionRunning ||
-                retentionPreviewLoading
-              }
-              loading={retentionPreviewLoading || retentionActionRunning}
-              onClick={() => void openRetentionConfirm()}
-            >
-              {t('settings.general.sessionRetentionSave')}
-            </Button>
-          </div>
-          <p
-            id="session-retention-help"
-            className={`mt-2 text-xs leading-5 ${retentionInputError ? 'text-[var(--color-error)]' : 'text-[var(--color-text-tertiary)]'}`}
-          >
-            {retentionInputError ?? t('settings.general.sessionRetentionHint')}
-          </p>
-          {retentionSaveError && (
-            <p className="mt-2 text-[11px] leading-4 text-[var(--color-error)]">{retentionSaveError}</p>
-          )}
-        </Card>
-      </div>
+              <Button
+                size="base"
+                variant="secondary"
+                className="whitespace-nowrap"
+                disabled={
+                  !retentionDirty ||
+                  !!retentionInputError ||
+                  retentionActionRunning ||
+                  retentionPreviewLoading
+                }
+                loading={retentionPreviewLoading || retentionActionRunning}
+                onClick={() => void openRetentionConfirm()}
+              >
+                {t('settings.general.sessionRetentionSave')}
+              </Button>
+            </SettingsRow>
+          </SettingsGroup>
+        </SettingsSection>
       )}
 
       {isDesktopRuntime() && (
-        <div className="mt-8 border-t border-[var(--color-border)] pt-8">
-          <h2 className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)] mb-1" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.general.storageTitle')}</h2>
-          <p className="text-sm text-[var(--color-text-tertiary)] mb-3">{t('settings.general.storageDescription')}</p>
+        <SettingsSection title={t('settings.general.storageTitle')} description={t('settings.general.storageDescription')}>
+          <SettingsGroup>
+            <button
+              type="button"
+              disabled={migrationRunning}
+              onClick={() => {
+                if (isEnvironmentConfigDir) {
+                  setModeError(t('settings.general.storageEnvironmentSwitchBlocked'))
+                  return
+                }
+                if (appMode.mode !== 'default') {
+                  openModeSwitchConfirm('default')
+                }
+              }}
+              aria-pressed={appMode.mode === 'default' && !isEnvironmentConfigDir}
+              className="group flex w-full items-start gap-3 px-4 py-3 text-left disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
+            >
+              <StorageOptionText
+                selected={appMode.mode === 'default' && !isEnvironmentConfigDir}
+                icon={<AppWindow size={16} strokeWidth={1.75} aria-hidden="true" />}
+                title={t('settings.general.storageSystemTitle')}
+                description={t('settings.general.storageSystemDescription')}
+              />
+            </button>
 
-          <Card radius="xl" surface="low" padding="none" className="px-4 py-4">
-            <div className="flex flex-col gap-3">
-              <button
-                type="button"
-                disabled={migrationRunning}
-                onClick={() => {
-                  if (isEnvironmentConfigDir) {
-                    setModeError(t('settings.general.storageEnvironmentSwitchBlocked'))
-                    return
-                  }
-                  if (appMode.mode !== 'default') {
-                    openModeSwitchConfirm('default')
-                  }
-                }}
-                aria-pressed={appMode.mode === 'default' && !isEnvironmentConfigDir}
-                className={`flex items-start gap-3 rounded-[var(--radius-lg)] border px-3 py-3 text-left transition-all ${
-                  appMode.mode === 'default' && !isEnvironmentConfigDir
-                    ? 'border-[var(--color-brand)] bg-[var(--color-surface)] shadow-[var(--shadow-focus-ring)]'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface)] hover:border-[var(--color-border-focus)]'
-                }`}
-              >
-                <span className="material-symbols-outlined mt-0.5 text-[20px] text-[var(--color-text-secondary)]">settings_applications</span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-semibold text-[var(--color-text-primary)]">{t('settings.general.storageSystemTitle')}</span>
-                  <span className="mt-1 block text-xs leading-5 text-[var(--color-text-tertiary)]">{t('settings.general.storageSystemDescription')}</span>
-                </span>
-              </button>
-
-              <div
-                className={`rounded-[var(--radius-lg)] border px-3 py-3 transition-all ${
-                  appMode.mode === 'portable' && !isEnvironmentConfigDir
-                    ? 'border-[var(--color-brand)] bg-[var(--color-surface)] shadow-[var(--shadow-focus-ring)]'
-                    : 'border-[var(--color-border)] bg-[var(--color-surface)]'
-                }`}
-              >
-                <div className="mb-3 flex items-start gap-3">
-                  <span className="material-symbols-outlined mt-0.5 text-[20px] text-[var(--color-text-secondary)]">drive_file_move</span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm font-semibold text-[var(--color-text-primary)]">{t('settings.general.storagePortableTitle')}</div>
-                    <div className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">{t('settings.general.storagePortableDescription')}</div>
-                  </div>
-                </div>
-
-                <div className="flex items-end gap-2">
-                  <div className="min-w-0 flex-1">
-                    <Input
-                      id="portable-data-dir"
-                      label={t('settings.general.storagePortableDirLabel')}
-                      value={portableDirDraft}
-                      placeholder={t('settings.general.storagePortableDirPlaceholder')}
-                      onChange={(event) => {
-                        setPortableDirDraft(event.target.value)
-                        setModeError(null)
-                      }}
-                      className="w-full font-mono text-xs"
-                      disabled={migrationRunning}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="h-10 flex-shrink-0 px-3 whitespace-nowrap"
-                    onClick={() => void openPortableDirPicker()}
-                    disabled={migrationRunning}
-                  >
-                    {t('settings.general.storageChooseDir')}
-                  </Button>
-                </div>
-
-                <div className="mt-3 flex justify-end">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    disabled={modeActionRunning || migrationRunning || (appMode.mode === 'portable' && portableDirDraft.trim() === (appMode.portableDir ?? ''))}
-                    onClick={() => openModeSwitchConfirm('portable')}
-                  >
-                    {t('settings.general.storageApplyPortable')}
-                  </Button>
-                </div>
+            <div className="px-4 py-3">
+              <div className="flex items-start gap-3">
+                <StorageOptionText
+                  selected={appMode.mode === 'portable' && !isEnvironmentConfigDir}
+                  icon={<FolderInput size={16} strokeWidth={1.75} aria-hidden="true" />}
+                  title={t('settings.general.storagePortableTitle')}
+                  description={t('settings.general.storagePortableDescription')}
+                />
+              </div>
+              <div className="mt-3 flex items-end gap-2 pl-7">
+                <Input
+                  id="portable-data-dir"
+                  label={t('settings.general.storagePortableDirLabel')}
+                  size="md"
+                  containerClassName="min-w-0 flex-1"
+                  value={portableDirDraft}
+                  placeholder={t('settings.general.storagePortableDirPlaceholder')}
+                  onChange={(event) => {
+                    setPortableDirDraft(event.target.value)
+                    setModeError(null)
+                  }}
+                  className="font-mono text-xs"
+                  disabled={migrationRunning}
+                />
+                <Button
+                  type="button"
+                  size="base"
+                  variant="secondary"
+                  className="shrink-0 whitespace-nowrap"
+                  onClick={() => void openPortableDirPicker()}
+                  disabled={migrationRunning}
+                >
+                  {t('settings.general.storageChooseDir')}
+                </Button>
+              </div>
+              <div className="mt-3 flex justify-end">
+                <Button
+                  type="button"
+                  size="base"
+                  variant="secondary"
+                  disabled={modeActionRunning || migrationRunning || (appMode.mode === 'portable' && portableDirDraft.trim() === (appMode.portableDir ?? ''))}
+                  onClick={() => openModeSwitchConfirm('portable')}
+                >
+                  {t('settings.general.storageApplyPortable')}
+                </Button>
               </div>
             </div>
 
-            {activeConfigDir && (
-              <div className="mt-3 rounded-[var(--radius-lg)] border border-[var(--color-border-separator)] bg-[var(--color-surface)] px-3 py-2">
-                <div className="text-[11px] font-medium uppercase tracking-wide text-[var(--color-text-tertiary)]">{t('settings.general.storageActiveDir')}</div>
-                <div className="mt-1 break-all font-mono text-xs text-[var(--color-text-secondary)]">{activeConfigDir}</div>
-              </div>
-            )}
-
-            {isEnvironmentConfigDir && (
-              <div className="mt-3 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-on-warning-container)]">
-                {t('settings.general.storageEnvironmentHint')}
-              </div>
-            )}
-
-            {appModeRequiresRestart && (
-              <div className="mt-3 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-5 text-[var(--color-on-warning-container)]">
-                {t('settings.general.storageRestartHint')}
-              </div>
-            )}
-
-            <div className="mt-3 text-xs leading-5 text-[var(--color-text-tertiary)]">
-              {t('settings.general.storageMoveHint')}
-            </div>
+            <SettingsBlock className="space-y-3">
+              {activeConfigDir && (
+                <div>
+                  <div className="text-xs text-[var(--color-text-tertiary)]">{t('settings.general.storageActiveDir')}</div>
+                  <div className="mt-1 break-all rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 py-1 font-mono text-xs text-[var(--color-text-secondary)]">
+                    {activeConfigDir}
+                  </div>
+                </div>
+              )}
+              {isEnvironmentConfigDir && (
+                <StorageNotice>{t('settings.general.storageEnvironmentHint')}</StorageNotice>
+              )}
+              {appModeRequiresRestart && (
+                <StorageNotice>{t('settings.general.storageRestartHint')}</StorageNotice>
+              )}
+              <p className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                {t('settings.general.storageMoveHint')}
+              </p>
+              {modeError && (
+                <p className="text-xs text-[var(--color-error)]">{modeError}</p>
+              )}
+            </SettingsBlock>
 
             <DataMigrationSettings
               environmentControlled={isEnvironmentConfigDir}
               disabled={modeActionRunning || appModeRequiresRestart}
               onBusyChange={setMigrationRunning}
             />
-
-            {modeError && (
-              <div className="mt-3 text-xs text-[var(--color-error)]">
-                {modeError}
-              </div>
-            )}
-          </Card>
-        </div>
+          </SettingsGroup>
+        </SettingsSection>
       )}
 
       {/* Confirm dialog for mode switch */}
@@ -1788,14 +1573,14 @@ export function GeneralSettings() {
         onConfirm={() => void confirmModeSwitch()}
         title={t('settings.general.modeSwitchTitle')}
         body={(
-          <div className="space-y-3 text-sm leading-6 text-[var(--color-text-secondary)]">
+          <div className="space-y-3 text-[13px] leading-6 text-[var(--color-text-secondary)]">
             <p>
               {pendingMode === 'portable'
                 ? t('settings.general.storageSwitchPortableBody')
                 : t('settings.general.storageSwitchDefaultBody')}
             </p>
             {pendingMode === 'portable' && pendingPortableDir && (
-              <div className="rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)] px-3 py-2 font-mono text-xs break-all text-[var(--color-text-secondary)]">
+              <div className="break-all rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
                 {pendingPortableDir}
               </div>
             )}
@@ -1831,7 +1616,7 @@ export function GeneralSettings() {
         onConfirm={() => void confirmRetentionChange()}
         title={t('settings.general.sessionRetentionConfirmTitle')}
         body={(
-          <div className="space-y-2 text-sm leading-6">
+          <div className="space-y-2 text-[13px] leading-6">
             <p>
               {retentionPendingDays === 0
                 ? t('settings.general.sessionRetentionConfirmDisable')
@@ -1856,6 +1641,168 @@ export function GeneralSettings() {
         confirmVariant="danger"
         loading={retentionActionRunning}
       />
+    </div>
+  )
+}
+
+/**
+ * The secondary button a `Dropdown` opens from: current value, then a chevron.
+ * Forwards its ref and props because `Dropdown` clones its trigger to attach both.
+ */
+const PickerButton = forwardRef<HTMLButtonElement, ButtonProps & { children: ReactNode }>(
+  function PickerButton({ children, className, ...props }, ref) {
+    return (
+      <Button
+        ref={ref}
+        variant="secondary"
+        size="base"
+        className={cx('max-w-[240px] gap-2', className)}
+        {...props}
+      >
+        <span className="min-w-0 truncate">{children}</span>
+        <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+      </Button>
+    )
+  },
+)
+
+/**
+ * The swatches are previews, not content, so they keep the size they were drawn
+ * at (about 190px across three columns) however wide the settings frame grows,
+ * rather than swelling into 330px posters on a large display. The grid sits at
+ * the start of its block, the way the rows' labels do.
+ */
+const THEME_GRID_WIDTH = 'max-w-[600px]'
+
+/**
+ * A palette card. The miniature is painted from the palette's own source
+ * variables: `data-theme` re-declares the `--cc-*` ramp on the swatch, so it
+ * shows the real colours of that theme without copying a single value here.
+ * The selection ring and frame use the app's current tokens, which the swatch
+ * inherits because the semantic layer resolves them on the root.
+ */
+function ThemeCard({ theme, label, selected, onSelect }: {
+  theme: ThemeMode
+  label: string
+  selected: boolean
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onSelect}
+      className="group grid min-w-0 justify-items-center gap-2 rounded-[var(--radius-md)] text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface-container-lowest)]"
+    >
+      <span
+        aria-hidden="true"
+        data-theme={theme}
+        className={cx(
+          'grid aspect-[16/10] w-full grid-cols-[28%_1fr] overflow-hidden rounded-[var(--radius-md)] transition-shadow duration-150',
+          selected
+            ? 'shadow-[0_0_0_2px_var(--color-brand)]'
+            : 'shadow-[inset_0_0_0_1px_var(--color-outline)] group-hover:shadow-[inset_0_0_0_1px_var(--color-border-strong)]',
+        )}
+      >
+        <span className="flex flex-col gap-1 bg-[var(--cc-s0)] px-[16%] pt-[26%]">
+          <span className="h-[3px] rounded-full bg-[var(--cc-bd2)]" />
+          <span className="h-[3px] w-2/3 rounded-full bg-[var(--cc-bd)]" />
+          <span className="h-[3px] w-3/4 rounded-full bg-[var(--cc-bd)]" />
+        </span>
+        <span className="flex flex-col gap-1.5 bg-[var(--cc-bg)] px-[14%] pb-[12%] pt-[20%]">
+          <span className="h-[3px] w-3/5 rounded-full bg-[var(--cc-t3)]" />
+          <span className="h-[3px] rounded-full bg-[var(--cc-bd2)]" />
+          <span className="h-[3px] w-4/5 rounded-full bg-[var(--cc-bd2)]" />
+          <span className="mt-auto h-2 w-2 self-end rounded-full bg-[var(--cc-ac)]" />
+        </span>
+      </span>
+      <span
+        className={cx(
+          'max-w-full truncate',
+          selected
+            ? 'font-medium text-[var(--color-text-primary)]'
+            : 'text-[var(--color-text-secondary)] group-hover:text-[var(--color-text-primary)]',
+        )}
+      >
+        {label}
+      </span>
+    </button>
+  )
+}
+
+/** Radio mark + icon + title/description for one data-storage choice. */
+function StorageOptionText({ selected, icon, title, description }: {
+  selected: boolean
+  icon: ReactNode
+  title: string
+  description: string
+}) {
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className={cx(
+          'mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full border',
+          selected
+            ? 'border-[1.5px] border-[var(--color-brand)]'
+            : 'border-[var(--color-border-strong)] group-hover:border-[var(--color-text-secondary)]',
+        )}
+      >
+        {selected && <span className="h-2 w-2 rounded-full bg-[var(--color-brand)]" />}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5 text-[13px] font-medium leading-5 text-[var(--color-text-primary)]">
+          <span className="text-[var(--color-text-tertiary)]">{icon}</span>
+          {title}
+        </span>
+        <span className="mt-0.5 block text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{description}</span>
+      </span>
+    </>
+  )
+}
+
+function StorageNotice({ children }: { children: ReactNode }) {
+  return (
+    <div className="rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-on-warning-container)]">
+      {children}
+    </div>
+  )
+}
+
+/**
+ * A short whole-number field with its unit inside the box. Built on `Input`;
+ * the invalid border comes from `aria-invalid` because the error text lives in
+ * the row's description line, not under the field.
+ */
+function NumberField({ id, unit, min, max, value, invalid, describedBy, onChange }: {
+  id: string
+  unit: string
+  min: number
+  max: number
+  value: string
+  invalid: boolean
+  describedBy: string
+  onChange: (value: string) => void
+}) {
+  return (
+    <div className="relative w-[120px]">
+      <Input
+        id={id}
+        type="number"
+        size="md"
+        min={min}
+        max={max}
+        step={1}
+        inputMode="numeric"
+        value={value}
+        aria-invalid={invalid ? true : undefined}
+        aria-describedby={describedBy}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        className="pr-9 tabular-nums aria-[invalid=true]:border-[var(--color-error)]"
+      />
+      <span className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-[var(--color-text-tertiary)]">
+        {unit}
+      </span>
     </div>
   )
 }

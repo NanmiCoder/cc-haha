@@ -23,7 +23,7 @@ export function RequestSummary({ call, response }: { call: TraceCallRecord; resp
       value: (
         <span className="flex items-start gap-2">
           <span className={mono} data-testid="trajectory-request-endpoint">
-            {summary.method ? <span className="mr-1.5 font-semibold">{summary.method}</span> : null}
+            {summary.method ? <span className="mr-1.5 font-medium">{summary.method}</span> : null}
             {summary.url}
           </span>
           <CopyAction text={summary.url} />

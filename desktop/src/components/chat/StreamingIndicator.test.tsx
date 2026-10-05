@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
+import '@testing-library/jest-dom'
 
 vi.mock('../../api/websocket', () => ({
   wsManager: {
@@ -84,6 +85,31 @@ describe('StreamingIndicator', () => {
     render(<StreamingIndicator />)
 
     expect(screen.getByText(/↓ 2\.2k tokens/)).toBeTruthy()
+  })
+
+  it('draws the live line as a running ring, a sweeping verb and monospaced meta', () => {
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSession({ chatState: 'thinking', elapsedSeconds: 12, streamingResponseChars: 8976 }),
+      },
+    })
+
+    render(<StreamingIndicator />)
+
+    const status = screen.getByTestId('turn-status-indicator')
+    // The spinner a running tool shows, in the running colour — not the
+    // generic "AI" sparkle, which said nothing about the turn's state.
+    const ring = status.querySelector('svg.lucide-loader-circle')
+    expect(ring).toHaveClass('motion-safe:animate-spin', 'text-[var(--color-info)]')
+    expect(status.querySelector('svg.lucide-sparkles')).toBeNull()
+    expect(status.querySelector('svg')?.getAttribute('class')).not.toContain('--color-brand')
+    expect(status.textContent).not.toContain('✦')
+    expect(screen.getByText('Thinking...')).toHaveClass('turn-status-shimmer')
+    // Elapsed time and tokens are numbers that tick: mono, tabular, tertiary.
+    const tokens = screen.getByText(/↓ 2\.2k tokens/)
+    expect(tokens).toHaveClass('font-mono', 'tabular-nums', 'text-[11px]')
+    // The keyframes ship beside the line, not inside the live region.
+    expect(status.querySelector('style')).toBeNull()
   })
 
   it('hides the token estimate until this turn has streamed output', () => {

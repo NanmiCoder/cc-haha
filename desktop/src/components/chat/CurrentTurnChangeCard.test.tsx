@@ -279,10 +279,13 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
 
     expect(screen.getByText('main.ts')).toBeInTheDocument()
     expect(screen.getByText('generated.ts')).toBeInTheDocument()
-    expect(screen.getByText('chat.turnChangesConversationOnlySubtitle')).toBeInTheDocument()
     // An unrestorable checkpoint must not cost the user the conversation
     // rollback too — the dialog is where the remaining action is chosen.
     const undoButton = screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })
+    // The limitation is the undo button's hint (its accessible description),
+    // not a line of grey text under the card.
+    expect(undoButton).toHaveAttribute('title', 'chat.turnChangesConversationOnlySubtitle')
+    expect(screen.queryByText('chat.turnChangesConversationOnlySubtitle')).toBeNull()
     expect(undoButton).toBeEnabled()
     fireEvent.click(undoButton)
     expect(onUndo).toHaveBeenCalledTimes(1)
@@ -332,8 +335,9 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
 
     expect(screen.queryByText('chat.turnChangesPartialCoverageSubtitle', { exact: false }))
       .toBeNull()
-    expect(screen.getByText('chat.turnChangesLatestSubtitle')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })).toBeEnabled()
+    const undoButton = screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })
+    expect(undoButton).toHaveAttribute('title', 'chat.turnChangesLatestSubtitle')
+    expect(undoButton).toBeEnabled()
   })
 
   it('prefers the conversation-only message over the coverage warning when restore is unavailable', () => {
@@ -341,10 +345,11 @@ describe('CurrentTurnChangeCard – rich file row (icon / name / type)', () => {
 
     // Both conditions hold, but "files cannot be restored at all" is the one
     // that changes what the user can do, so it wins the subtitle.
-    expect(screen.getByText('chat.turnChangesConversationOnlySubtitle')).toBeInTheDocument()
+    const undoButton = screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })
+    expect(undoButton).toHaveAttribute('title', 'chat.turnChangesConversationOnlySubtitle')
     expect(screen.queryByText('chat.turnChangesPartialCoverageSubtitle', { exact: false }))
       .toBeNull()
-    expect(screen.getByRole('button', { name: 'chat.turnChangesLatestUndoAria' })).toBeEnabled()
+    expect(undoButton).toBeEnabled()
   })
 })
 
@@ -513,9 +518,12 @@ describe('CurrentTurnChangeCard – open-with buttons', () => {
   })
 
   it('shows the same destination chevron on every changed-file row', () => {
-    const { container } = renderExpandedCard(['/w/proj/README.md', '/w/proj/src/main.ts'])
+    renderExpandedCard(['/w/proj/README.md', '/w/proj/src/main.ts'])
 
-    expect(container.querySelectorAll('.lucide-chevron-right')).toHaveLength(2)
+    // The card header carries its own disclosure chevron; count the rows'.
+    const rows = screen.getAllByRole('button', { name: /turnChangesOpen(InWorkspace|File)Aria/ })
+    expect(rows).toHaveLength(2)
+    expect(rows.map((row) => row.querySelectorAll('.lucide-chevron-right').length)).toEqual([1, 1])
   })
 
   it('clicking README.md open-with opens menu with workspace preview item', async () => {
@@ -646,7 +654,8 @@ describe('CurrentTurnChangeCard – conversation continuity', () => {
   it('truthfully labels a historical row as opening the current workspace diff', () => {
     renderExpandedCard(['/w/proj/src/main.ts'], false)
 
-    expect(screen.getByText('chat.turnChangesCurrentWorkspaceDiff')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'chat.turnChangesHistoricalUndoAria' }))
+      .toHaveAttribute('title', 'chat.turnChangesCurrentWorkspaceDiff')
   })
 
   it('records a stable opener id and semantic turn key before opening the diff', () => {

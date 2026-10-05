@@ -350,6 +350,52 @@ describe('McpSettings', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled()
   })
 
+  it('switches transport from the segmented control on create and locks it while editing', async () => {
+    const server = {
+      name: 'global-user',
+      scope: 'user',
+      transport: 'http',
+      enabled: true,
+      status: 'connected',
+      statusLabel: 'Connected',
+      configLocation: '/tmp/config',
+      summary: 'https://example.com/mcp',
+      canEdit: true,
+      canRemove: true,
+      canReconnect: true,
+      canToggle: true,
+      config: { type: 'http', url: 'https://example.com/mcp', headers: {} },
+    } as const
+    useMcpStore.setState({ servers: [server] })
+
+    await renderLoadedMcpSettings()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /add server/i }))
+    })
+
+    const transport = screen.getByRole('radiogroup', { name: 'Transport' })
+    expect(screen.getByRole('radio', { name: 'STDIO' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByLabelText(/Command to launch/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('radio', { name: 'Streamable HTTP' }))
+    expect(screen.getByRole('radio', { name: 'Streamable HTTP' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByLabelText(/Command to launch/)).not.toBeInTheDocument()
+    expect(screen.getByLabelText(/^URL/)).toBeInTheDocument()
+    expect(transport).not.toHaveTextContent(/expand_more|check/)
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /back/i }))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Open global-user' }))
+    })
+
+    for (const radio of screen.getAllByRole('radio')) expect(radio).toBeDisabled()
+    expect(screen.getByRole('radio', { name: 'Streamable HTTP' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByText('If you would like to switch MCP server type, uninstall first.')).toBeInTheDocument()
+  })
+
   it('keeps same-name project MCP servers distinct by project path', async () => {
     useMcpStore.setState({
       servers: [

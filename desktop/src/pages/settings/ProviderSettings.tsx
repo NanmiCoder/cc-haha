@@ -2,7 +2,33 @@ import { useState, useEffect, useMemo, useRef, useId, type CSSProperties, type R
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core'
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { GripVertical, Star } from 'lucide-react'
+import {
+  ArrowLeftRight,
+  ArrowUpRight,
+  ChevronDown,
+  ChevronUp,
+  CircleAlert,
+  CircleCheck,
+  CloudDownload,
+  Download,
+  Eye,
+  EyeOff,
+  Globe,
+  GripVertical,
+  Info,
+  Key,
+  KeyRound,
+  KeySquare,
+  Link,
+  MapPin,
+  MessagesSquare,
+  Network,
+  Plus,
+  Route,
+  Shrink,
+  Star,
+  Wrench,
+} from 'lucide-react'
 import aruhubLogo from '../../../../docs/images/sponsors/aruhub-logo.png'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { useProviderStore } from '../../stores/providerStore'
@@ -10,10 +36,11 @@ import { useUIStore } from '../../stores/uiStore'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { Modal } from '@/components/ui/Modal'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
-import { Input } from '@/components/ui/Input'
+import { FIELD_BASE_CLASSES, FIELD_SIZE_CLASSES, fieldStateClasses, Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
+import { Checkbox } from '@/components/ui/Checkbox'
 import { IconButton } from '@/components/ui/IconButton'
-import { Badge, StatusDot } from '@/components/ui/Badge'
+import { Badge } from '@/components/ui/Badge'
 import { Spinner } from '@/components/ui/Spinner'
 import { SettingsPageHeader, SettingsPill } from '@/components/settings/SettingsSection'
 import { Dropdown } from '@/components/ui/Dropdown'
@@ -38,7 +65,14 @@ import { GROK_OFFICIAL_PROVIDER_ID } from '../../constants/grokOfficialProvider'
 import { ApiError, getBaseUrl } from '../../api/client'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { API_KEY_JSON_PLACEHOLDER, maskSettingsJsonSecrets, restoreSettingsJsonSecrets, stripProviderSettingsJsonEnv } from '../../lib/providerSettingsJson'
-import { SETTINGS_CHECKBOX_INPUT_CLASS, SettingsCheckboxMark } from '../settings/shared'
+import { cx } from '@/lib/cx'
+
+/** Section label inside the provider dialog — the same 13px label as a settings section. */
+const FORM_SECTION_LABEL = 'block text-[13px] font-semibold text-[var(--color-text-secondary)]'
+/** Field label matching `Input`'s own, for the fields that cannot use `Input` directly. */
+const FORM_FIELD_LABEL = 'text-sm font-medium text-[var(--color-text-primary)]'
+/** 11px helper line under a field. */
+const FORM_HINT = 'text-[11px] leading-[1.5] text-[var(--color-text-tertiary)]'
 
 /**
  * The Provider panel and the add/edit provider modal.
@@ -241,10 +275,9 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
   const isGrokOfficialActive = hasLoadedProviders && activeId === GROK_OFFICIAL_PROVIDER_ID
 
   return (
-    <div className="min-w-0 max-w-2xl">
+    <div className="min-w-0">
       <SettingsPageHeader
-        className={browserMode ? 'flex-col' : undefined}
-        title={t('settings.providers.title')}
+        title={t('settings.tab.providers')}
         description={t('settings.providers.description')}
         action={(
           <>
@@ -252,14 +285,14 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
               variant="secondary"
               size="base"
               onClick={() => setShowCcSwitchImport(true)}
-              icon={<span className="material-symbols-outlined text-[16px]">download</span>}
+              icon={<Download size={14} strokeWidth={1.75} aria-hidden="true" />}
             >
               {t('settings.providers.ccSwitch.importButton')}
             </Button>}
             <Button
               size="base"
               onClick={() => setShowCreateModal(true)}
-              icon={<span className="material-symbols-outlined text-[16px]">add</span>}
+              icon={<Plus size={14} strokeWidth={1.75} aria-hidden="true" />}
             >
               {t('settings.providers.addProvider')}
             </Button>
@@ -267,7 +300,7 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
         )}
       />
 
-      {(actionFailed || (browserMode && providerLoadError)) && <p role="alert" className="mb-3 text-sm text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
+      {(actionFailed || (browserMode && providerLoadError)) && <p role="alert" className="mt-4 text-[13px] text-[var(--color-error)]">{t('publicAccess.genericError')}</p>}
       <DndContext
         sensors={sensors}
         collisionDetection={closestCenter}
@@ -277,7 +310,7 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
           items={providerItems.map((item) => item.id)}
           strategy={verticalListSortingStrategy}
         >
-          <div className="flex flex-col gap-2">
+          <div className="mt-5 flex flex-col gap-2">
             {providerItems.map((item) => {
               if (item.kind === 'claude-official') {
                 return (
@@ -291,10 +324,10 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
                     title={t('settings.providers.officialName')}
                     subtitle={t('settings.providers.officialDesc')}
                     badges={isClaudeOfficialActive ? (
-                      <Badge tone="brand" bordered>{t('settings.providers.default')}</Badge>
+                      <Badge tone="brand">{t('settings.providers.default')}</Badge>
                     ) : null}
                     details={!browserMode && isClaudeOfficialActive ? (
-                      <div className="border-t border-[var(--color-border-separator)] px-4 pb-4 pt-3">
+                      <div className="flex flex-col">
                         <ClaudeOfficialLogin />
                         <OfficialProviderModelSettings providerId={CLAUDE_OFFICIAL_PROVIDER_ID} />
                       </div>
@@ -315,10 +348,10 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
                     title={t('settings.providers.openaiOfficialName')}
                     subtitle={t('settings.providers.openaiOfficialDesc')}
                     badges={isOpenAIOfficialActive ? (
-                      <Badge tone="brand" bordered>{t('settings.providers.default')}</Badge>
+                      <Badge tone="brand">{t('settings.providers.default')}</Badge>
                     ) : null}
                     details={!browserMode && isOpenAIOfficialActive ? (
-                      <div className="border-t border-[var(--color-border-separator)] px-4 pb-4 pt-3">
+                      <div className="flex flex-col">
                         <ChatGPTOfficialLogin />
                         <OfficialProviderModelSettings providerId={OPENAI_OFFICIAL_PROVIDER_ID} />
                       </div>
@@ -339,10 +372,10 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
                     title={t('settings.providers.grokOfficialName')}
                     subtitle={t('settings.providers.grokOfficialDesc')}
                     badges={isGrokOfficialActive ? (
-                      <Badge tone="brand" bordered>{t('settings.providers.default')}</Badge>
+                      <Badge tone="brand">{t('settings.providers.default')}</Badge>
                     ) : null}
                     details={!browserMode && isGrokOfficialActive ? (
-                      <div className="border-t border-[var(--color-border-separator)] px-4 pb-4 pt-3">
+                      <div className="flex flex-col">
                         <GrokOfficialLogin />
                         <OfficialProviderModelSettings providerId={GROK_OFFICIAL_PROVIDER_ID} />
                       </div>
@@ -358,14 +391,23 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
 
               return (
                 <SortableProviderCard
-                    browserMode={browserMode}
+                  browserMode={browserMode}
                   key={item.id}
                   item={item}
                   isActive={isActive}
                   dragLabel={t('settings.providers.dragToReorder')}
                   onActivate={!isActive ? () => handleActivate(provider.id) : undefined}
                   title={provider.name}
-                  subtitle={<span className="font-mono text-[11.5px]">{`${provider.baseUrl} · ${provider.models.main}`}</span>}
+                  subtitle={<span className="font-mono text-[11px]">{`${provider.baseUrl} · ${provider.models.main}`}</span>}
+                  modelChips={isActive ? (
+                    <ProviderModelChips
+                      models={provider.models}
+                      labels={MODEL_SLOTS.reduce((labels, slot) => {
+                        labels[slot] = t(MODEL_SLOT_LABEL_KEYS[slot])
+                        return labels
+                      }, {} as Record<ModelSlot, string>)}
+                    />
+                  ) : null}
                   badges={(
                     <>
                       {preset && preset.id !== 'custom' && (
@@ -381,36 +423,23 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
                         </Badge>
                       )}
                       {isActive && (
-                        <Badge tone="brand" bordered>{t('settings.providers.default')}</Badge>
+                        <Badge tone="brand">{t('settings.providers.default')}</Badge>
                       )}
                     </>
                   )}
                   result={test && !test.loading && test.result ? (
-                    <div className="mt-1 flex flex-col gap-0.5 text-xs">
-                      <span className={test.result.connectivity.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}>
-                        {test.result.connectivity.success
-                          ? t('settings.providers.connectivityOk', { latency: String(test.result.connectivity.latencyMs) })
-                          : t('settings.providers.connectivityFailed', { error: test.result.connectivity.error || '' })}
-                      </span>
-                      {test.result.proxy && (
-                        <span className={test.result.proxy.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}>
-                          {test.result.proxy.success
-                            ? t('settings.providers.proxyOk', { latency: String(test.result.proxy.latencyMs) })
-                            : t('settings.providers.proxyFailed', { error: test.result.proxy.error || '' })}
-                        </span>
-                      )}
-                    </div>
+                    <ProviderTestResultLines result={test.result} />
+                  ) : null}
+                  secondaryActions={!isActive ? (
+                    <>
+                      <Button variant="ghost" size="sm" onClick={() => handleActivate(provider.id)}>{t('settings.providers.setDefault')}</Button>
+                      <Button variant="danger-ghost" size="sm" onClick={() => handleDelete(provider)}>{t('common.delete')}</Button>
+                    </>
                   ) : null}
                   actions={(
                     <>
-                      {!isActive && (
-                        <Button variant="ghost" size="sm" onClick={() => handleActivate(provider.id)}>{t('settings.providers.setDefault')}</Button>
-                      )}
                       {!browserMode && <Button variant="ghost" size="sm" onClick={() => handleTest(provider)} loading={test?.loading}>{t('settings.providers.test')}</Button>}
                       <Button variant="ghost" size="sm" onClick={() => setEditingProvider(provider)}>{t('settings.providers.edit')}</Button>
-                      {!isActive && (
-                        <Button variant="ghost" size="sm" onClick={() => handleDelete(provider)} className="text-[var(--color-error)] hover:text-[var(--color-error)]">{t('common.delete')}</Button>
-                      )}
                     </>
                   )}
                 />
@@ -468,10 +497,22 @@ type SortableProviderCardProps = {
   subtitle: ReactNode
   badges?: ReactNode
   result?: ReactNode
+  /** Always-visible actions (Test, Edit). */
   actions?: ReactNode
+  /** Rarely-wanted actions (Set default, Delete), revealed on hover or keyboard focus. */
+  secondaryActions?: ReactNode
+  /** The default provider's model mapping, as a full-width chip row. */
+  modelChips?: ReactNode
   details?: ReactNode
   onActivate?: () => void
 }
+
+/**
+ * Indent of everything under the title line: 6px card padding + 20px grip +
+ * 10px gap + 8px dot + 10px gap, so chips, results and details start in the
+ * name's column.
+ */
+const CARD_TEXT_INDENT = 'pl-12'
 
 function SortableProviderCard({
   browserMode = false,
@@ -483,6 +524,8 @@ function SortableProviderCard({
   badges,
   result,
   actions,
+  secondaryActions,
+  modelChips,
   details,
   onActivate,
 }: SortableProviderCardProps) {
@@ -497,7 +540,7 @@ function SortableProviderCard({
   const style: CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition,
-    zIndex: isDragging ? 20 : undefined,
+    zIndex: isDragging ? 'var(--z-raised)' : undefined,
   }
 
   return (
@@ -505,49 +548,147 @@ function SortableProviderCard({
       ref={setNodeRef}
       style={style}
       data-testid={providerItemTestId(item)}
-      className={`group relative flex flex-col rounded-[var(--radius-xl)] transition-[background-color,border-color,box-shadow] duration-150 ease-out ${
+      className={cx(
+        'group relative flex flex-wrap items-start gap-x-2.5 gap-y-2 rounded-[var(--radius-lg)] border bg-[var(--color-surface-container-lowest)] p-[14px] pl-1.5',
+        'transition-[border-color,box-shadow] duration-150 ease-out',
+        // The default provider: a terracotta-mixed hairline plus a soft brand
+        // halo. Not the focus color, which would collide with the real focus ring.
         isActive
-          ? 'border-[1.5px] border-[var(--color-primary-fixed-dim)] bg-[var(--color-surface-container-low)]'
-          : 'border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]'
-      } ${isDragging ? 'shadow-[var(--shadow-overlay)] opacity-90' : ''}`}
+          ? 'border-[var(--color-primary-fixed-dim)] shadow-[0_0_0_3px_var(--color-brand-soft)]'
+          : 'border-[var(--color-border)] hover:border-[var(--color-outline)]',
+        isDragging && 'opacity-90 shadow-[var(--shadow-dropdown)]',
+      )}
     >
-      <div className={browserMode ? "flex flex-wrap items-center gap-2 px-3.5 py-3" : "flex items-center gap-2 px-3.5 py-3"}>
-        <button
-          type="button"
-          {...attributes}
-          {...listeners}
-          aria-label={dragLabel}
-          title={dragLabel}
-          className="flex h-8 w-8 shrink-0 cursor-grab items-center justify-center rounded-[var(--radius-sm)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-container-high)] hover:text-[var(--color-text-secondary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] active:cursor-grabbing"
-          style={{ touchAction: 'none' }}
-        >
-          <GripVertical className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          onClick={onActivate}
-          aria-disabled={!onActivate}
-          className={`flex min-w-0 flex-1 items-center gap-3 rounded-[var(--radius-sm)] text-left focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] ${
-            onActivate ? 'cursor-pointer' : 'cursor-default'
-          }`}
-        >
-          <StatusDot tone={isActive ? 'success' : 'neutral'} size="lg" />
-          <span className="min-w-0 flex-1">
-            <span className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{title}</span>
-              {badges}
-            </span>
-            <span className="mt-1 block truncate text-[12px] text-[var(--color-text-tertiary)]">{subtitle}</span>
-            {result}
-          </span>
-        </button>
-        {actions && (
-          <div className={browserMode ? "flex w-full flex-wrap items-center justify-end gap-1 [&_button]:min-h-11" : "flex shrink-0 items-center gap-1 opacity-100 transition-opacity sm:opacity-0 sm:group-focus-within:opacity-100 sm:group-hover:opacity-100"}>
-            {actions}
-          </div>
+      <button
+        type="button"
+        {...attributes}
+        {...listeners}
+        aria-label={dragLabel}
+        title={dragLabel}
+        className={cx(
+          'flex h-5 w-5 shrink-0 cursor-grab items-center justify-center rounded-[var(--radius-xs)] text-[var(--color-text-tertiary)] transition-[opacity,color] duration-150',
+          'hover:text-[var(--color-text-secondary)] focus:outline-none focus-visible:opacity-100 focus-visible:shadow-[var(--shadow-focus-ring)] active:cursor-grabbing',
+          // Touch has no hover, so the handle stays visible on the phone.
+          !browserMode && 'opacity-0 group-hover:opacity-100',
         )}
-      </div>
-      {details}
+        style={{ touchAction: 'none' }}
+      >
+        <GripVertical size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        onClick={onActivate}
+        aria-disabled={!onActivate}
+        className={cx(
+          'flex min-w-0 flex-1 items-start gap-2.5 rounded-[var(--radius-sm)] text-left focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]',
+          onActivate ? 'cursor-pointer' : 'cursor-default',
+        )}
+      >
+        <span
+          aria-hidden="true"
+          className={cx(
+            'mt-[6px] size-2 shrink-0 rounded-full',
+            isActive
+              ? 'bg-[var(--color-success)] shadow-[0_0_0_3px_var(--color-success-container)]'
+              : 'bg-[var(--color-outline)]',
+          )}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="min-w-0 truncate text-sm font-semibold leading-5 text-[var(--color-text-primary)]">{title}</span>
+            {badges}
+          </span>
+          <span className="mt-[3px] block truncate text-xs text-[var(--color-text-tertiary)]">{subtitle}</span>
+        </span>
+      </button>
+      {(actions || secondaryActions) && (
+        <div
+          className={cx(
+            'flex items-center gap-0.5',
+            browserMode ? 'w-full flex-wrap justify-end [&_button]:min-h-11' : 'shrink-0',
+          )}
+        >
+          {secondaryActions && (
+            <span
+              className={cx(
+                'flex items-center gap-0.5',
+                !browserMode && 'opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100',
+              )}
+            >
+              {secondaryActions}
+            </span>
+          )}
+          {actions}
+        </div>
+      )}
+      {result && <div className={cx('basis-full', CARD_TEXT_INDENT)}>{result}</div>}
+      {modelChips && <div className={cx('basis-full', CARD_TEXT_INDENT)}>{modelChips}</div>}
+      {details && <div className={cx('basis-full pt-1', CARD_TEXT_INDENT)}>{details}</div>}
+    </div>
+  )
+}
+
+/** The default provider's role mappings — main always, the rest only where they differ. */
+function ProviderModelChips({ models, labels }: { models: ModelMapping; labels: Record<ModelSlot, string> }) {
+  const main = models.main.trim()
+  const slots = MODEL_SLOTS.filter((slot) => {
+    const value = models[slot]?.trim()
+    return slot === 'main' ? Boolean(value) : Boolean(value) && value !== main
+  })
+  if (slots.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {slots.map((slot) => (
+        <span
+          key={slot}
+          className="inline-flex h-6 max-w-full items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 text-[11px] text-[var(--color-text-tertiary)]"
+        >
+          <span className="shrink-0">{labels[slot]}</span>
+          <span className="min-w-0 truncate font-mono text-[var(--color-text-primary)]">{models[slot]}</span>
+        </span>
+      ))}
+    </div>
+  )
+}
+
+/** The two-step connection test result: direct connectivity, then the proxy pipeline. */
+function ProviderTestResultLines({ result }: { result: ProviderTestResult }) {
+  const t = useTranslation()
+  const lines = [
+    {
+      key: 'connectivity',
+      success: result.connectivity.success,
+      text: result.connectivity.success
+        ? t('settings.providers.connectivityOk', { latency: String(result.connectivity.latencyMs) })
+        : t('settings.providers.connectivityFailed', { error: result.connectivity.error || '' }),
+    },
+    ...(result.proxy
+      ? [{
+          key: 'proxy',
+          success: result.proxy.success,
+          text: result.proxy.success
+            ? t('settings.providers.proxyOk', { latency: String(result.proxy.latencyMs) })
+            : t('settings.providers.proxyFailed', { error: result.proxy.error || '' }),
+        }]
+      : []),
+  ]
+  return (
+    <div className="flex min-w-0 flex-col gap-0.5 break-words text-xs">
+      {lines.map((line) => {
+        const Icon = line.success ? CircleCheck : CircleAlert
+        return (
+          <span
+            key={line.key}
+            className={cx(
+              'inline-flex items-start gap-1',
+              line.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]',
+            )}
+          >
+            <Icon size={12} strokeWidth={2} aria-hidden="true" className="mt-[3px] shrink-0" />
+            <span className="min-w-0">{line.text}</span>
+          </span>
+        )
+      })}
     </div>
   )
 }
@@ -1257,11 +1398,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         ? t('settings.providers.regionGlobal')
         : endpoint.region,
     description: endpoint.baseUrl,
-    icon: (
-      <span className="material-symbols-outlined text-[17px]">
-        {endpoint.region === 'cn_zh' ? 'location_on' : endpoint.region === 'global_en' ? 'public' : 'link'}
-      </span>
-    ),
+    icon: endpoint.region === 'cn_zh'
+      ? <MapPin size={16} strokeWidth={1.75} aria-hidden="true" />
+      : endpoint.region === 'global_en'
+        ? <Globe size={16} strokeWidth={1.75} aria-hidden="true" />
+        : <Link size={16} strokeWidth={1.75} aria-hidden="true" />,
   }))
   const selectedRegionalEndpointUrl = regionalEndpointItems.find(
     (option) => normalizeProviderBaseUrl(option.value) === normalizedBaseUrl,
@@ -1275,17 +1416,17 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
     {
       value: 'anthropic' as const,
       label: t('settings.providers.apiFormatAnthropic'),
-      icon: <span className="material-symbols-outlined text-[17px]">hub</span>,
+      icon: <Network size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
     {
       value: 'openai_chat' as const,
       label: t('settings.providers.apiFormatOpenaiChat'),
-      icon: <span className="material-symbols-outlined text-[17px]">forum</span>,
+      icon: <MessagesSquare size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
     {
       value: 'openai_responses' as const,
       label: t('settings.providers.apiFormatOpenaiResponses'),
-      icon: <span className="material-symbols-outlined text-[17px]">route</span>,
+      icon: <Route size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
   ]
   const selectedApiFormatLabel = apiFormatItems.find((item) => item.value === apiFormat)?.label ?? t('settings.providers.apiFormatAnthropic')
@@ -1294,31 +1435,31 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
       value: 'auth_token' as const,
       label: t('settings.providers.authStrategyAuthToken'),
       description: t('settings.providers.authStrategyAuthTokenDesc'),
-      icon: <span className="material-symbols-outlined text-[17px]">key</span>,
+      icon: <KeyRound size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
     {
       value: 'auth_token_empty_api_key' as const,
       label: t('settings.providers.authStrategyAuthTokenEmptyApiKey'),
       description: t('settings.providers.authStrategyAuthTokenEmptyApiKeyDesc'),
-      icon: <span className="material-symbols-outlined text-[17px]">key_off</span>,
+      icon: <KeySquare size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
     {
       value: 'api_key' as const,
       label: t('settings.providers.authStrategyApiKey'),
       description: t('settings.providers.authStrategyApiKeyDesc'),
-      icon: <span className="material-symbols-outlined text-[17px]">vpn_key</span>,
+      icon: <Key size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
     {
       value: 'dual_same_token' as const,
       label: t('settings.providers.authStrategyDualSameToken'),
       description: t('settings.providers.authStrategyDualSameTokenDesc'),
-      icon: <span className="material-symbols-outlined text-[17px]">sync_alt</span>,
+      icon: <ArrowLeftRight size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
     {
       value: 'dual_dummy' as const,
       label: t('settings.providers.authStrategyDualDummy'),
       description: t('settings.providers.authStrategyDualDummyDesc'),
-      icon: <span className="material-symbols-outlined text-[17px]">construction</span>,
+      icon: <Wrench size={16} strokeWidth={1.75} aria-hidden="true" />,
     },
   ] satisfies Array<{ value: ProviderAuthStrategy; label: string; description: string; icon: ReactNode }>
   const selectedAuthStrategyLabel = authStrategyItems.find((item) => item.value === authStrategy)?.label ?? t('settings.providers.authStrategyAuthToken')
@@ -1716,17 +1857,17 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
     >
       <div className="flex min-w-0 flex-col gap-4">
         {browserMode && <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('h5Settings.providerPrivacy')}</p>}
-        {saveFailed && <p role="alert" className="text-sm text-[var(--color-error)]">{t(credentialRequired ? 'h5Settings.credentialRequired' : 'publicAccess.genericError')}</p>}
+        {saveFailed && <p role="alert" className="text-[13px] text-[var(--color-error)]">{t(credentialRequired ? 'h5Settings.credentialRequired' : 'publicAccess.genericError')}</p>}
         {/* Preset chips */}
         {mode === 'create' && (
           <div>
-            <label className="text-sm font-medium text-[var(--color-text-primary)] mb-2 block">{t('settings.providers.preset')}</label>
+            <span className={cx(FORM_SECTION_LABEL, 'mb-2')}>{t('settings.providers.preset')}</span>
             <div className="flex flex-col gap-2">
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5">
                 {regularPresets.map(renderPresetButton)}
               </div>
               {featuredPresets.length > 0 && (
-                <div className="flex flex-wrap gap-2 border-t border-[var(--color-border-separator)] pt-2">
+                <div className="flex flex-wrap gap-1.5 border-t border-[var(--color-border)] pt-2">
                   {featuredPresets.map(renderPresetButton)}
                 </div>
               )}
@@ -1737,8 +1878,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         <Input label={t('settings.providers.name')} required value={name} onChange={(e) => setName(e.target.value)} placeholder={t('settings.providers.namePlaceholder')} />
 
         {regionalEndpointItems.length > 1 && (
-          <div>
-            <label className="text-sm font-medium text-[var(--color-text-primary)] mb-1 block">{t('settings.providers.endpointRegion')}</label>
+          <div className="flex flex-col gap-1">
+            <span className={FORM_FIELD_LABEL}>{t('settings.providers.endpointRegion')}</span>
             <Dropdown<string>
               items={regionalEndpointItems}
               value={selectedRegionalEndpointUrl}
@@ -1749,7 +1890,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
               trigger={
                 <Button variant="secondary" size="md" block className="h-10 gap-3">
                   <span className="min-w-0 flex-1 truncate text-left">{selectedRegionalEndpointLabel}</span>
-                  <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
+                  <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                 </Button>
               }
             />
@@ -1758,13 +1899,13 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
 
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-1">
-            <label htmlFor={baseUrlInputId} className="text-sm font-medium text-[var(--color-text-primary)]">
+            <label htmlFor={baseUrlInputId} className={FORM_FIELD_LABEL}>
               {t('settings.providers.baseUrl')}
               <span className="ml-0.5 text-[var(--color-error)]">*</span>
             </label>
             <Tooltip content={t('settings.providers.baseUrlTooltip')} placement="bottom-start">
               <IconButton
-                icon="info"
+                icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
                 label={t('settings.providers.baseUrlHelp')}
                 showTooltip={false}
                 size="2xs"
@@ -1777,7 +1918,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         </div>
 
         <div className="flex flex-col gap-1">
-          <label htmlFor="provider-api-key" className="text-sm font-medium text-[var(--color-text-primary)]">
+          <label htmlFor="provider-api-key" className={FORM_FIELD_LABEL}>
             {t('settings.providers.apiKey')}
             {mode === 'create' && requiresApiKey && <span className="text-[var(--color-error)] ml-0.5">*</span>}
           </label>
@@ -1790,10 +1931,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
               value={apiKey}
               onChange={(e) => handleApiKeyChange(e.target.value)}
               placeholder="sk-..."
-              className="h-10 w-full rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 pr-10 text-sm text-[var(--color-text-primary)] outline-none transition-colors duration-150 placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
+              className={cx(FIELD_BASE_CLASSES, FIELD_SIZE_CLASSES.lg, fieldStateClasses(false), 'pr-10')}
             />
             <IconButton
-              icon={showApiKey ? 'visibility_off' : 'visibility'}
+              icon={showApiKey
+                ? <EyeOff size={14} strokeWidth={1.75} aria-hidden="true" />
+                : <Eye size={14} strokeWidth={1.75} aria-hidden="true" />}
               label={t(showApiKey ? 'settings.providers.hideApiKey' : 'settings.providers.showApiKey')}
               showTooltip={false}
               size="sm"
@@ -1810,11 +1953,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
               <button
                 type="button"
                 onClick={() => openExternalUrl(apiKeyUrl)}
-                className="group inline-flex h-6 w-fit cursor-pointer items-center gap-1 rounded-[var(--radius-sm)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-1.5 text-[11px] font-medium leading-none text-[var(--color-brand)] transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
+                className="group inline-flex h-6 w-fit cursor-pointer items-center gap-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 text-[11px] font-medium leading-none text-[var(--color-text-accent)] transition-colors hover:bg-[var(--color-surface-hover)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
               >
-                <span className="material-symbols-outlined text-[13px]">key</span>
+                <KeyRound size={12} strokeWidth={2} aria-hidden="true" />
                 {t('settings.providers.getApiKey')}
-                <span className="material-symbols-outlined text-[9px] opacity-60 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5">arrow_outward</span>
+                <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" className="opacity-60 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
               </button>
             )}
             {promoText && (
@@ -1822,10 +1965,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
                 <button
                   type="button"
                   onClick={() => openExternalUrl(apiKeyUrl)}
-                  className="group inline-flex min-w-0 cursor-pointer items-start gap-1 text-left text-[11px] leading-5 text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-brand)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
+                  className="group inline-flex min-w-0 cursor-pointer items-start gap-1 text-left text-[11px] leading-5 text-[var(--color-text-tertiary)] transition-colors hover:text-[var(--color-text-accent)] focus:outline-none focus:shadow-[var(--shadow-focus-ring)]"
                 >
                   <span>{promoText}</span>
-                  <span aria-hidden="true" className="material-symbols-outlined mt-1 shrink-0 text-[10px] opacity-50 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5">arrow_outward</span>
+                  <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" className="mt-1 shrink-0 opacity-50 transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5" />
                 </button>
               ) : (
                 <span className="text-[11px] leading-5 text-[var(--color-text-tertiary)]">{promoText}</span>
@@ -1837,22 +1980,22 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         {/* Model Mapping */}
         <div>
           <div className="mb-2 flex items-center justify-between gap-2">
-            <label className="text-sm font-medium text-[var(--color-text-primary)]">{t('settings.providers.modelMapping')}</label>
+            <span className={FORM_SECTION_LABEL}>{t('settings.providers.modelMapping')}</span>
             {!browserMode && <Button
               variant="secondary"
               size="base"
               onClick={handleFetchModels}
               disabled={!canFetchModels}
               loading={isFetchingModels}
-              icon={<span className="material-symbols-outlined text-[15px]">cloud_download</span>}
+              icon={<CloudDownload size={14} strokeWidth={1.75} aria-hidden="true" />}
             >
               {t('settings.providers.fetchModels')}
             </Button>}
           </div>
           {browserMode ? null : !hasModelsApiKey ? (
-            <p className="mb-2 text-[11px] text-[var(--color-text-tertiary)]">{t('settings.providers.fetchModelsApiKeyHint')}</p>
+            <p className={cx(FORM_HINT, 'mb-2')}>{t('settings.providers.fetchModelsApiKeyHint')}</p>
           ) : !hasModelsBaseUrl ? (
-            <p className="mb-2 text-[11px] text-[var(--color-text-tertiary)]">{t('settings.providers.fetchModelsHint')}</p>
+            <p className={cx(FORM_HINT, 'mb-2')}>{t('settings.providers.fetchModelsHint')}</p>
           ) : modelsErrorCode ? (
             <div role="alert" className="mb-2 flex flex-col gap-0.5">
               <p className="text-[11px] text-[var(--color-error)]">{modelsErrorText}</p>
@@ -1863,13 +2006,13 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
               )}
             </div>
           ) : fetchedModels && fetchedModels.length === 0 ? (
-            <p className="mb-2 text-[11px] text-[var(--color-text-tertiary)]">{t('settings.providers.fetchModelsEmpty')}</p>
+            <p className={cx(FORM_HINT, 'mb-2')}>{t('settings.providers.fetchModelsEmpty')}</p>
           ) : fetchedModels ? (
             <p className="mb-2 text-[11px] text-[var(--color-text-secondary)]">
               {t('settings.providers.fetchModelsLoaded', { count: fetchedModels.length })}
             </p>
           ) : (
-            <p className="mb-2 text-[11px] text-[var(--color-text-tertiary)]">{t('settings.providers.fetchModelsSupportHint')}</p>
+            <p className={cx(FORM_HINT, 'mb-2')}>{t('settings.providers.fetchModelsSupportHint')}</p>
           )}
           <div className={browserMode ? "grid grid-cols-1 sm:grid-cols-2 gap-2" : "grid grid-cols-2 gap-2"}>
             {MODEL_SLOTS.map((slot) => {
@@ -1900,12 +2043,13 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
                   />
                   <Tooltip content={t('settings.providers.model1mSupportTooltip')} placement="bottom-start">
                     <label className="mt-1 inline-flex h-6 w-fit cursor-pointer items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-xs text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]">
+                      {/* Named per slot rather than by the shared visible "1M" text. */}
                       <input
                         type="checkbox"
                         checked={model1mSupport[slot]}
                         onChange={(e) => handleModel1mSupportChange(slot, e.target.checked)}
                         aria-label={t('settings.providers.model1mSupportAria', { slot })}
-                        className="h-3.5 w-3.5 rounded border-[var(--color-border)] text-[var(--color-brand)] accent-[var(--color-brand)] focus:ring-[var(--color-brand)]"
+                        className="h-3.5 w-3.5 shrink-0 rounded-[var(--radius-xs)] border-[var(--color-border-strong)] accent-[var(--color-brand)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                       />
                       <span>{t('settings.providers.model1mSupportShort')}</span>
                     </label>
@@ -1914,7 +2058,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
               )
             })}
           </div>
-          <p className="mt-2 text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+          <p className={cx(FORM_HINT, 'mt-2')}>
             {t('settings.providers.model1mSupportHint')}
           </p>
         </div>
@@ -1924,8 +2068,8 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         {/* API Format — a preset only owns this field when it routes per model;
             every other preset starts on its own format but stays switchable. */}
         {!presetDrivesApiFormat ? (
-          <div>
-            <label className="text-sm font-medium text-[var(--color-text-primary)] mb-1 block">{t('settings.providers.apiFormat')}</label>
+          <div className="flex flex-col gap-1">
+            <span className={FORM_FIELD_LABEL}>{t('settings.providers.apiFormat')}</span>
             <Dropdown<ApiFormat>
               items={apiFormatItems}
               value={apiFormat}
@@ -1935,34 +2079,34 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
               trigger={
                 <Button variant="secondary" size="md" block className="h-10 gap-3">
                   <span className="min-w-0 flex-1 truncate text-left">{selectedApiFormatLabel}</span>
-                  <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
+                  <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                 </Button>
               }
             />
             {apiFormat !== 'anthropic' && (
-              <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.proxyHint')}</p>
+              <p className={FORM_HINT}>{t('settings.providers.proxyHint')}</p>
             )}
             {/* The preset's own endpoint is still in the field above; a custom
                 preset brings none, so there is nothing to warn about. */}
             {apiFormat !== selectedPreset.apiFormat && Boolean(selectedPreset.baseUrl) && (
-              <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.apiFormatOverrideHint')}</p>
+              <p className={FORM_HINT}>{t('settings.providers.apiFormatOverrideHint')}</p>
             )}
           </div>
         ) : (
-          <div>
-            <label className="text-sm font-medium text-[var(--color-text-primary)] mb-1 block">{t('settings.providers.apiFormat')}</label>
-            <div className="text-xs text-[var(--color-text-tertiary)] px-3 py-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] border border-[var(--color-border)]">
+          <div className="flex flex-col gap-1">
+            <span className={FORM_FIELD_LABEL}>{t('settings.providers.apiFormat')}</span>
+            <div className="rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
               {selectedApiFormatLabel}
             </div>
-            <p className="text-[11px] text-[var(--color-text-tertiary)] mt-1">{t('settings.providers.apiFormatPerModelHint')}</p>
+            <p className={FORM_HINT}>{t('settings.providers.apiFormatPerModelHint')}</p>
           </div>
         )}
 
         <ProviderRequestCompatibilityFields value={compatibility} apiFormat={apiFormat} onChange={handleCompatibilityChange} />
 
         {apiFormat === 'anthropic' && (
-          <div>
-            <label className="text-sm font-medium text-[var(--color-text-primary)] mb-1 block">{t('settings.providers.authStrategy')}</label>
+          <div className="flex flex-col gap-1">
+            <span className={FORM_FIELD_LABEL}>{t('settings.providers.authStrategy')}</span>
             <Dropdown<ProviderAuthStrategy>
               items={authStrategyItems}
               value={authStrategy}
@@ -1972,7 +2116,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
               trigger={
                 <Button variant="secondary" size="md" block className="h-auto min-h-10 gap-3 py-2">
                   <span className="min-w-0 flex-1 truncate text-left">{selectedAuthStrategyLabel}</span>
-                  <span className="material-symbols-outlined flex-shrink-0 text-[18px] text-[var(--color-text-secondary)]">expand_more</span>
+                  <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                 </Button>
               }
             />
@@ -1986,58 +2130,60 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
             { key: 'supportsNestedToolResultMedia' as const, checked: supportsNestedToolResultMedia, disabled: nestedToolResultMediaUnsupported, onChange: handleNestedToolResultMediaToggle, description: nestedToolResultMediaDescription },
           ].map((option) => (
             <div key={option.key} className="inline-flex items-center gap-1">
-              <label className={`relative inline-flex items-center gap-2 py-1 text-xs text-[var(--color-text-primary)] ${option.disabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
-                <input
-                  type="checkbox"
-                  aria-label={t(`settings.providers.${option.key}`)}
-                  checked={option.checked}
-                  disabled={option.disabled}
-                  onChange={(e) => option.onChange(e.target.checked)}
-                  className={SETTINGS_CHECKBOX_INPUT_CLASS}
-                />
-                <SettingsCheckboxMark checked={option.checked} disabled={option.disabled} />
-                {t(`settings.providers.${option.key}`)}
-              </label>
+              <Checkbox
+                size="sm"
+                label={t(`settings.providers.${option.key}`)}
+                checked={option.checked}
+                disabled={option.disabled}
+                onChange={(e) => option.onChange(e.target.checked)}
+                containerClassName="py-1"
+              />
               <Tooltip content={option.description} placement="top-start" className="[overflow-wrap:anywhere]">
-                <IconButton icon="info" label={t(`settings.providers.${option.key}`)} showTooltip={false} size="2xs" tone="muted" />
+                <IconButton
+                  icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
+                  label={t(`settings.providers.${option.key}`)}
+                  showTooltip={false}
+                  size="2xs"
+                  tone="muted"
+                />
               </Tooltip>
             </div>
           ))}
         </div>
 
-        <div className="rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
+        <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]">
           <button
             type="button"
             onClick={() => setShowContextSettings((visible) => !visible)}
-            className="flex w-full items-start gap-3 px-3 py-3 text-left outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:shadow-[var(--shadow-focus-ring)]"
+            className="flex w-full items-start gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:shadow-[var(--shadow-focus-ring)]"
             aria-expanded={shouldShowContextFields}
           >
-            <span className="material-symbols-outlined mt-0.5 text-[18px] text-[var(--color-brand)]">compress</span>
+            <Shrink size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
             <span className="min-w-0 flex-1">
-              <span className="block text-sm font-medium text-[var(--color-text-primary)]">
+              <span className="block text-[13px] font-medium text-[var(--color-text-primary)]">
                 {t('settings.providers.contextSettingsTitle')}
               </span>
-              <span className="mt-1 block truncate text-xs text-[var(--color-text-secondary)]">
+              <span className="mt-0.5 block truncate text-xs text-[var(--color-text-secondary)]">
                 {contextSummary}
               </span>
-              <span className="mt-1 block text-[11px] leading-5 text-[var(--color-text-tertiary)]">
+              <span className="mt-1 block text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
                 {t('settings.providers.contextSettingsDesc')}
               </span>
             </span>
-            <span className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-[var(--color-brand)]">
+            <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 text-xs font-medium text-[var(--color-text-secondary)]">
               {shouldShowContextFields
                 ? t('settings.providers.contextSettingsHide')
                 : t('settings.providers.contextSettingsEdit')}
-              <span className="material-symbols-outlined text-[16px]">
-                {shouldShowContextFields ? 'expand_less' : 'expand_more'}
-              </span>
+              {shouldShowContextFields
+                ? <ChevronUp size={14} strokeWidth={1.75} aria-hidden="true" />
+                : <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />}
             </span>
           </button>
 
           {shouldShowContextFields && (
-            <div className="border-t border-[var(--color-border)] px-3 pb-3 pt-3">
+            <div className="border-t border-[var(--color-border)] px-4 pb-4 pt-3">
               <div>
-                <label className="text-sm font-medium text-[var(--color-text-primary)] mb-2 block">{t('settings.providers.modelContextWindows')}</label>
+                <span className={cx(FORM_SECTION_LABEL, 'mb-2')}>{t('settings.providers.modelContextWindows')}</span>
                 <div className={browserMode ? "grid grid-cols-1 sm:grid-cols-2 gap-2" : "grid grid-cols-2 gap-2"}>
                   {MODEL_SLOTS.map((slot) => {
                     const errorKey = getModelContextWindowErrorKey(modelContextInputs[slot])
@@ -2097,30 +2243,19 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
 
         {/* Test connection */}
         {!browserMode && <div className="flex items-center gap-3">
-          <Button variant="secondary" size="sm" className="shrink-0 whitespace-nowrap" onClick={handleTest} loading={isTesting} disabled={!baseUrl.trim() || !models.main.trim() || compatibilityInvalid}>
+          <Button variant="secondary" size="base" className="shrink-0 whitespace-nowrap" onClick={handleTest} loading={isTesting} disabled={!baseUrl.trim() || !models.main.trim() || compatibilityInvalid}>
             {t('settings.providers.testConnection')}
           </Button>
           {testResult && (
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5 break-words">
-              <span className={`text-xs ${testResult.connectivity.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>
-                {testResult.connectivity.success
-                  ? t('settings.providers.connectivityOk', { latency: String(testResult.connectivity.latencyMs) })
-                  : t('settings.providers.connectivityFailed', { error: testResult.connectivity.error || '' })}
-              </span>
-              {testResult.proxy && (
-                <span className={`text-xs ${testResult.proxy.success ? 'text-[var(--color-success)]' : 'text-[var(--color-error)]'}`}>
-                  {testResult.proxy.success
-                    ? t('settings.providers.proxyOk', { latency: String(testResult.proxy.latencyMs) })
-                    : t('settings.providers.proxyFailed', { error: testResult.proxy.error || '' })}
-                </span>
-              )}
+            <div className="min-w-0 flex-1">
+              <ProviderTestResultLines result={testResult} />
             </div>
           )}
         </div>}
 
         {/* Settings JSON stays on the trusted desktop. */}
         {!browserMode && <div>
-          <label className="text-sm font-medium text-[var(--color-text-primary)] mb-2 block">{t('settings.providers.settingsJson')}</label>
+          <span className={cx(FORM_SECTION_LABEL, 'mb-2')}>{t('settings.providers.settingsJson')}</span>
           <textarea
             aria-label={t('settings.providers.settingsJson')}
             value={displayedSettingsJson}

@@ -185,7 +185,8 @@ describe('Content-only pages render without errors', () => {
       await Promise.resolve()
     })
     expect(container.querySelector('[data-composer-editor]')).toBeInTheDocument()
-    expect(container.innerHTML).toContain('New session')
+    // The 「素」 new-session hero asks what to work on (with or without a project).
+    expect(container.innerHTML).toMatch(/What should we work on/)
     expect(container.innerHTML).toContain('Ask anything')
   })
 
@@ -274,8 +275,8 @@ describe('Content-only pages render without errors', () => {
       },
     })
     const { container } = render(<ActiveSession />)
-    // With empty messages, the hero is shown
-    expect(container.innerHTML).toContain('New session')
+    // With empty messages, the new-session hero is shown
+    expect(container.innerHTML).toMatch(/What should we work on/)
     // ChatInput renders the ProseMirror composer
     const composer = container.querySelector('[data-composer-editor]')
     expect(composer).toBeInTheDocument()
@@ -693,7 +694,11 @@ describe('Content-only pages render without errors', () => {
     expect(sendMessage).not.toHaveBeenCalled()
     expect(await screen.findByText('Session inspector')).toBeInTheDocument()
     expect(vi.mocked(sessionsApi.getInspection)).toHaveBeenCalledWith(SESSION_ID, { includeContext: false })
-    expect(container.innerHTML).toContain('bg-[var(--color-inspector-surface)]')
+    // The inspector is a token-colored popover card, not the old hex-tinted sheet.
+    expect(screen.getByText('Session inspector').closest('.absolute')).toHaveClass(
+      'bg-[var(--color-surface-container-lowest)]',
+      'shadow-[var(--shadow-dropdown)]',
+    )
     expect(container.innerHTML).not.toContain('bg-[#fbfaf6]')
     expect(container.innerHTML).not.toContain('bg-[#f4f2ed]')
     expect(container.innerHTML).not.toContain('border-[#d8b3a8]')
@@ -835,7 +840,9 @@ describe('Content-only pages render without errors', () => {
 
     const indicator = await screen.findByLabelText('Context usage loading')
     expect(indicator).toHaveTextContent('--')
-    expect(indicator).toHaveClass('h-8')
+    // Same 28px box as the loaded indicator, so the toolbar does not shift when
+    // the first context reading arrives.
+    expect(indicator).toHaveClass('h-7')
 
     resetPageStores()
   })
@@ -1329,12 +1336,12 @@ describe('AppShell layout renders chrome', () => {
 })
 
 describe('Design system compliance', () => {
-  it('Pages use Material Symbols Outlined icons', () => {
+  it('Pages draw their icons from lucide, never Material Symbols ligatures', () => {
     const pages = [EmptySession]
     for (const Page of pages) {
       const { container, unmount } = render(<Page />)
-      const icons = container.querySelectorAll('.material-symbols-outlined')
-      expect(icons.length).toBeGreaterThan(0)
+      expect(container.querySelectorAll('svg.lucide').length).toBeGreaterThan(0)
+      expect(container.querySelector('.material-symbols-outlined')).toBeNull()
       unmount()
     }
   })

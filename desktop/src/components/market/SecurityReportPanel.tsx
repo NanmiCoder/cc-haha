@@ -37,32 +37,32 @@ export function SecurityReportPanel({
         <div
           role="note"
           data-testid="market-security-note"
-          className="flex items-start gap-2.5 rounded-[var(--radius-lg)] border border-[var(--color-info)] bg-[var(--color-info-container)] px-4 py-3 text-[13px] leading-5 text-[var(--color-on-info-container)]"
+          className="flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-info-container)] px-3 py-2 text-[13px] leading-5 text-[var(--color-on-info-container)]"
         >
-          <Info className="mt-0.5 h-4 w-4 flex-shrink-0" strokeWidth={1.8} aria-hidden="true" />
+          <Info className="mt-[3px] flex-shrink-0" size={14} strokeWidth={1.75} aria-hidden="true" />
           <p className="min-w-0 break-words">
-            <span className="font-semibold">{t('market.detail.securityNote')}</span>
+            <span className="font-medium">{t('market.detail.securityNote')}</span>
             {' · '}
             {securityNote}
           </p>
         </div>
       )}
 
-      <Card radius="xl" surface="base" padding="none" className="px-6 py-5 sm:px-[30px]">
-        <h2 className="text-[15px] font-semibold text-[var(--color-text-primary)]">{t('market.detail.scanReports')}</h2>
+      <Card radius="lg" surface="lowest" padding="none" className="overflow-hidden">
+        <h2 className="flex h-10 items-center border-b border-[var(--color-border)] px-4 text-[13px] font-medium text-[var(--color-text-primary)]">{t('market.detail.scanReports')}</h2>
         {reports.length > 0 ? (
-          <ul className="mt-2 divide-y divide-[var(--color-border-separator)]">
+          <ul className="divide-y divide-[var(--color-border)]">
             {reports.map((report) => {
               const url = safeUrl(report.reportUrl)
               return (
                 <li
                   key={`${report.vendor}:${report.status}`}
                   data-testid="market-security-report"
-                  className="flex flex-col gap-1.5 py-3.5"
+                  className="flex flex-col gap-1 px-4 py-3"
                 >
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-sm font-semibold text-[var(--color-text-primary)]">{report.vendor}</span>
-                    <Badge tone={CLEAN_STATUS.test(report.status) ? 'success' : 'warning'} size="sm" pill={false} wrap>
+                    <span className="font-mono text-xs text-[var(--color-text-primary)]">{report.vendor}</span>
+                    <Badge tone={CLEAN_STATUS.test(report.status) ? 'success' : 'warning'} size="xs" wrap>
                       {report.statusText}
                     </Badge>
                   </div>
@@ -76,10 +76,10 @@ export function SecurityReportPanel({
                       href={url}
                       target="_blank"
                       rel="noreferrer noopener"
-                      className="inline-flex w-fit items-center gap-1 rounded-[var(--radius-sm)] text-[13px] font-medium text-[var(--color-brand)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                      className="inline-flex w-fit items-center gap-1 rounded-[var(--radius-xs)] text-xs text-[var(--color-text-accent)] underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
                     >
                       {t('market.detail.viewReport')}
-                      <ExternalLink className="h-3 w-3" strokeWidth={1.8} aria-hidden="true" />
+                      <ExternalLink size={12} strokeWidth={1.75} aria-hidden="true" />
                     </a>
                   )}
                 </li>
@@ -87,9 +87,9 @@ export function SecurityReportPanel({
             })}
           </ul>
         ) : (
-          <p className="mt-3 text-sm text-[var(--color-text-tertiary)]">{t('market.detail.noReports')}</p>
+          <p className="px-4 py-3 text-[13px] text-[var(--color-text-tertiary)]">{t('market.detail.noReports')}</p>
         )}
-        <p className="mt-3 border-t border-[var(--color-border-separator)] pt-3 text-xs leading-5 text-[var(--color-text-tertiary)]">
+        <p className="border-t border-[var(--color-border)] px-4 py-2.5 text-xs leading-5 text-[var(--color-text-tertiary)]">
           {t('market.detail.scanDisclaimer')}
         </p>
       </Card>

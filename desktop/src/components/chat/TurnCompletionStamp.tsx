@@ -25,14 +25,14 @@ export function TurnCompletionStamp({ completion }: Props) {
   return (
     <span
       data-turn-completion
-      className="inline-flex min-w-0 items-center gap-2 whitespace-nowrap text-[11px] font-medium tabular-nums text-[var(--color-text-tertiary)]"
+      className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap text-xs tabular-nums text-[var(--color-text-tertiary)]"
     >
       <span title={formatExactMessageTimestamp(completion.completedAt, locale) || clockLabel}>
         {clockLabel}
       </span>
       {duration ? (
         <>
-          <span aria-hidden="true">·</span>
+          <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
           <span data-turn-completion-duration>{t('chat.turnDuration', { duration })}</span>
         </>
       ) : null}

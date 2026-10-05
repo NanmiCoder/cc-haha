@@ -2222,7 +2222,7 @@ describe('SubagentRunPage', () => {
     // A running run plays open, so its rows are already there — no need to
     // unfold the summary first, and clicking it here would fold them away.
     expect(await screen.findByTestId('activity-group')).toHaveAttribute('data-expanded', 'true')
-    fireEvent.click(screen.getByRole('button', { name: /Bash.*pwd/i }))
+    fireEvent.click(screen.getByRole('button', { name: /Run.*pwd/i }))
     expect(document.querySelector('[data-shell-output]')).toHaveTextContent('/workspace')
 
     await waitFor(() => expect(subagentsApi.getRunByTool).toHaveBeenCalledTimes(2), { timeout: 2500 })

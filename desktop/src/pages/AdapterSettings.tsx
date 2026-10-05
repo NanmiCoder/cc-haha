@@ -1,11 +1,23 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react'
+import { Bot, ChevronRight, CircleAlert, CircleCheck, ExternalLink, QrCode, TriangleAlert } from 'lucide-react'
 import { useAdapterStore } from '../stores/adapterStore'
 import { useTranslation } from '../i18n'
+import { cx } from '@/lib/cx'
 import { Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
+import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { DirectoryPicker } from '@/components/composite/DirectoryPicker'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+  SettingsSwitchRow,
+} from '@/components/settings/SettingsSection'
 import QRCode from 'qrcode'
 
 type ImTab = 'telegram' | 'feishu' | 'wechat' | 'dingtalk' | 'whatsapp' | 'wecom' | 'qq' | 'slack'
@@ -21,6 +33,23 @@ type AdapterUnbindTarget =
 
 const FEISHU_CREATE_BOT_URL = 'https://open.feishu.cn/page/openclaw?form=multiAgent'
 const IM_CONFIG_DOCS_URL = 'https://cchaha.ai/im/'
+
+// Section heads inside the IM card use the settings-row type: 13 medium title
+// over a 12 tertiary line, matching `SettingsRow`.
+const ROW_TITLE = 'text-[13px] font-medium leading-5 text-[var(--color-text-primary)]'
+const ROW_DESC = 'mt-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]'
+const STATUS_TEXT = 'text-[13px] text-[var(--color-text-secondary)]'
+const URL_LINK = 'block truncate font-mono text-[11px] text-[var(--color-text-accent)] hover:underline'
+// QR codes keep a white field in every theme: scanners need the contrast.
+const QR_IMAGE =
+  'h-40 w-40 shrink-0 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-white object-contain p-2'
+// An external link dressed as `Button variant="secondary" size="sm"`.
+const LINK_BUTTON = [
+  'inline-flex h-6 shrink-0 items-center justify-center gap-1.5 self-start rounded-[var(--radius-md)] px-2',
+  'border border-[var(--color-border)] bg-[var(--color-surface)] text-xs font-medium text-[var(--color-text-primary)]',
+  'transition-[background-color,border-color] duration-150 hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)]',
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]',
+].join(' ')
 
 const IM_TABS: readonly ImTab[] = [
   'telegram',
@@ -880,106 +909,115 @@ export function AdapterSettings() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <LoadingState label={t('common.loading')} variant="inline" size="md" />
+      <div className="min-w-0">
+        <div className="flex items-center justify-center py-12">
+          <LoadingState label={t('common.loading')} variant="inline" size="md" />
+        </div>
       </div>
     )
   }
 
+  const wechatTone: Tone = config.wechat?.accountId ? 'success' : isWechatBinding ? 'info' : 'neutral'
+  const whatsappTone: Tone = config.whatsapp?.accountJid ? 'success' : isWhatsAppBinding ? 'info' : 'neutral'
+  const dingtalkTone: Tone = dtAuthStatus === 'error'
+    ? 'danger'
+    : dtAuthStatus === 'waiting'
+      ? 'info'
+      : dtAuthStatus === 'bound' || config.dingtalk?.clientId
+        ? 'success'
+        : 'neutral'
+
   return (
-    <div className="max-w-2xl space-y-8">
+    <div className="min-w-0">
       {/* Page header. The pane opened straight onto its description, the only
           one of the sixteen sections without a title. */}
-      <div>
-        <h2
-          className="mb-1.5 text-[24px] font-semibold leading-tight text-[var(--color-text-primary)]"
-          style={{ fontFamily: 'var(--font-headline)' }}
-        >
-          {t('settings.tab.adapters')}
-        </h2>
-        <p className="text-[13.5px] leading-6 text-[var(--color-text-secondary)]">
-          {t('settings.adapters.description')}{' '}
-          <a
-            href={IM_CONFIG_DOCS_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 font-medium text-[var(--color-brand)] transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-background)]"
-          >
-            {t('settings.adapters.configurationDocs')}
-            <span className="material-symbols-outlined text-[14px]" aria-hidden="true">open_in_new</span>
-          </a>
-          {t('settings.adapters.descriptionAfterDocs')}
-        </p>
-      </div>
+      <SettingsPageHeader
+        title={t('settings.tab.adapters')}
+        description={(
+          <>
+            {t('settings.adapters.description')}{' '}
+            <a
+              href={IM_CONFIG_DOCS_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-0.5 rounded-[var(--radius-xs)] text-[var(--color-text-accent)] transition-colors hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
+            >
+              {t('settings.adapters.configurationDocs')}
+              <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+            </a>
+            {t('settings.adapters.descriptionAfterDocs')}
+          </>
+        )}
+      />
 
       {/* Pairing */}
-      <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] overflow-hidden">
-        <div className="flex items-center gap-2 px-4 py-3 bg-[var(--color-surface-hover)] border-b border-[var(--color-border)]">
-          <span className="material-symbols-outlined text-[18px] text-[var(--color-text-secondary)]">link</span>
-          <span className="text-sm font-semibold text-[var(--color-text-primary)]">{t('settings.adapters.pairing')}</span>
-        </div>
-        <div className="p-4 space-y-4">
-          <p className="text-sm text-[var(--color-text-secondary)]">{t('settings.adapters.pairingDesc')}</p>
-
-          {/* Generate code */}
-          <div className="flex items-center gap-3">
-            <Button onClick={handleGenerateCode} loading={isGenerating}>
-              {pairingCode || isPairingActive ? t('settings.adapters.regenerateCode') : t('settings.adapters.generateCode')}
-            </Button>
-            {pairingCode && (
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-2xl font-bold tracking-[0.3em] text-[var(--color-brand)]">
-                  {pairingCode}
-                </span>
-                <span className="text-xs text-[var(--color-text-tertiary)]">
-                  {t('settings.adapters.codeExpiresIn')} 60 {t('settings.adapters.minutes')}
-                </span>
-              </div>
-            )}
+      <section className="mt-7">
+        <SettingsGroup>
+          <SettingsRow
+            title={t('settings.adapters.pairing')}
+            description={t('settings.adapters.pairingDesc')}
+            layout="inline"
+          >
             {!pairingCode && isPairingActive && (
-              <span className="text-xs text-[var(--color-text-tertiary)]">
+              <span className="text-xs tabular-nums text-[var(--color-text-tertiary)]">
                 {t('settings.adapters.codeExpiresIn')} {minutesLeft} {t('settings.adapters.minutes')}
               </span>
             )}
-          </div>
+            <Button variant="secondary" size="sm" onClick={handleGenerateCode} loading={isGenerating}>
+              {pairingCode || isPairingActive ? t('settings.adapters.regenerateCode') : t('settings.adapters.generateCode')}
+            </Button>
+          </SettingsRow>
+
           {pairingCode && (
-            <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.pairingCodeHint')}</p>
+            <SettingsBlock>
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2.5">
+                <span className="font-mono text-[22px] font-medium leading-none tabular-nums text-[var(--color-text-primary)]">
+                  {pairingCode}
+                </span>
+                <span className="text-xs tabular-nums text-[var(--color-text-tertiary)]">
+                  {t('settings.adapters.codeExpiresIn')} 60 {t('settings.adapters.minutes')}
+                </span>
+              </div>
+              <p className="mt-2 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{t('settings.adapters.pairingCodeHint')}</p>
+            </SettingsBlock>
           )}
 
           {/* Paired users list */}
-          <div>
-            <h4 className="text-sm font-medium text-[var(--color-text-primary)] mb-2">{t('settings.adapters.pairedUsers')}</h4>
+          <SettingsBlock>
+            <div className="flex items-center gap-1.5">
+              <h4 className="text-xs font-semibold text-[var(--color-text-tertiary)]">{t('settings.adapters.pairedUsers')}</h4>
+              {allPairedUsers.length > 0 && (
+                <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{allPairedUsers.length}</span>
+              )}
+            </div>
             {allPairedUsers.length === 0 ? (
-              <p className="text-sm text-[var(--color-text-tertiary)]">{t('settings.adapters.noPairedUsers')}</p>
+              <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.noPairedUsers')}</p>
             ) : (
-              <div className="space-y-2">
+              <ul className="-mx-2 mt-1.5 grid gap-0.5">
                 {allPairedUsers.map((user) => (
-                  <div
+                  <li
                     key={`${user.platform}-${user.userId}`}
-                    className="flex items-center justify-between px-3 py-2 rounded-[var(--radius-lg)] bg-[var(--color-surface-hover)]"
+                    className="flex min-h-[36px] items-center gap-2 rounded-[var(--radius-sm)] px-2 py-1 transition-colors hover:bg-[var(--color-surface-hover)]"
                   >
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--color-surface)] text-[var(--color-text-secondary)]">
-                        {t(`settings.adapters.platform.${user.platform}`)}
-                      </span>
-                      <span className="text-sm text-[var(--color-text-primary)]">{user.displayName}</span>
-                      <span className="text-xs text-[var(--color-text-tertiary)]">
-                        {new Date(user.pairedAt).toLocaleDateString()}
-                      </span>
-                    </div>
+                    <Badge size="xs">{t(`settings.adapters.platform.${user.platform}`)}</Badge>
+                    <span className="min-w-0 truncate text-[13px] text-[var(--color-text-primary)]">{user.displayName}</span>
+                    <span className="shrink-0 text-xs tabular-nums text-[var(--color-text-tertiary)]">
+                      {new Date(user.pairedAt).toLocaleDateString()}
+                    </span>
                     <Button
-                      variant="danger-outline"
+                      variant="danger-ghost"
                       size="sm"
+                      className="ml-auto"
                       onClick={() => handleUnbind(user.platform, user.userId)}
                     >
                       {t('settings.adapters.unbind')}
                     </Button>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
-          </div>
-        </div>
+          </SettingsBlock>
+        </SettingsGroup>
       </section>
 
       {/* Server URL —— 之前是个手填字段，但桌面端启动 adapter sidecar
@@ -988,120 +1026,121 @@ export function AdapterSettings() {
           运行时完全不会被读到。用户也根本不知道该填什么端口（每次启动随机）。
           Standalone 模式（直接 bun run adapters/...）保留 file 字段兜底就够了。 */}
 
-      {/* Default Project */}
-      <div className="flex flex-col gap-1">
-        <label className="text-sm font-medium text-[var(--color-text-primary)]">
-          {t('settings.adapters.defaultProject')}
-        </label>
-        <div className="flex items-center gap-2">
-          <DirectoryPicker value={defaultProjectDir} onChange={setDefaultProjectDir} />
-          {defaultProjectDir && (
-            <Button variant="ghost" size="sm" onClick={() => setDefaultProjectDir('')}>
-              {t('settings.adapters.clearDefaultProject')}
-            </Button>
-          )}
-        </div>
-        <p className="text-xs text-[var(--color-text-tertiary)]">
-          {t('settings.adapters.defaultProjectHint')}
-        </p>
-      </div>
+      <section className="mt-7">
+        <SettingsGroup>
+          {/* Default Project */}
+          <SettingsRow
+            title={t('settings.adapters.defaultProject')}
+            description={t('settings.adapters.defaultProjectHint')}
+            layout="inline"
+          >
+            {defaultProjectDir && (
+              <Button variant="ghost" size="sm" onClick={() => setDefaultProjectDir('')}>
+                {t('settings.adapters.clearDefaultProject')}
+              </Button>
+            )}
+            <DirectoryPicker value={defaultProjectDir} onChange={setDefaultProjectDir} />
+          </SettingsRow>
 
-      {/* Allowed project roots —— 这是 IM 通道真正的边界。刻意和「默认项目」分开：
-          「默认项目」只决定新会话开在哪，一度被当成唯一允许的根目录，导致 /projects
-          只剩下那一个项目（#1191）。留空 = 主目录，足以覆盖绝大多数用法。 */}
-      <div className="flex flex-col gap-1">
-        <label className="text-sm font-medium text-[var(--color-text-primary)]">
-          {t('settings.adapters.allowedRoots')}
-        </label>
-        {allowedProjectRoots.length > 0 ? (
-          <ul className="flex flex-col gap-1">
-            {allowedProjectRoots.map((root) => (
-              <li
-                key={root}
-                className="flex items-center justify-between gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-1.5"
-              >
-                <span className="truncate text-xs text-[var(--color-text-secondary)]" title={root}>{root}</span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label={t('settings.adapters.removeAllowedRoot')}
-                  onClick={() => setAllowedProjectRoots((prev) => prev.filter((item) => item !== root))}
-                >
-                  {t('settings.adapters.removeAllowedRoot')}
-                </Button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-xs text-[var(--color-text-secondary)]">
-            {t('settings.adapters.allowedRootsDefault')}
-          </p>
-        )}
-        <div className="flex items-center gap-2">
-          <DirectoryPicker
-            value=""
-            onChange={(dir) => {
-              if (!dir) return
-              setAllowedProjectRoots((prev) => (prev.includes(dir) ? prev : [...prev, dir]))
-            }}
-          />
-        </div>
-        <p className="text-xs text-[var(--color-text-tertiary)]">
-          {t('settings.adapters.allowedRootsHint')}
-        </p>
-        {/* A platform-level list replaces the global one, and the docs teach
-            hand-editing adapters.json — so say it, rather than letting a save
-            here look like it applied everywhere. */}
-        {platformsWithOwnRoots.length > 0 && (
-          <p className="text-xs text-[var(--color-text-tertiary)]">
-            {t('settings.adapters.allowedRootsOverridden', {
-              platforms: platformsWithOwnRoots.join(', '),
-            })}
-          </p>
-        )}
-      </div>
+          {/* Allowed project roots —— 这是 IM 通道真正的边界。刻意和「默认项目」分开：
+              「默认项目」只决定新会话开在哪，一度被当成唯一允许的根目录，导致 /projects
+              只剩下那一个项目（#1191）。留空 = 主目录，足以覆盖绝大多数用法。 */}
+          <SettingsRow
+            title={t('settings.adapters.allowedRoots')}
+            description={t('settings.adapters.allowedRootsHint')}
+            layout="inline"
+            footer={(
+              <>
+                {allowedProjectRoots.length > 0 ? (
+                  <ul className="grid gap-1">
+                    {allowedProjectRoots.map((root) => (
+                      <li
+                        key={root}
+                        className="flex items-center justify-between gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] py-1 pl-3 pr-1"
+                      >
+                        <span className="truncate font-mono text-[11px] text-[var(--color-text-secondary)]" title={root}>{root}</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          aria-label={t('settings.adapters.removeAllowedRoot')}
+                          onClick={() => setAllowedProjectRoots((prev) => prev.filter((item) => item !== root))}
+                        >
+                          {t('settings.adapters.removeAllowedRoot')}
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs leading-[1.5] text-[var(--color-text-secondary)]">
+                    {t('settings.adapters.allowedRootsDefault')}
+                  </p>
+                )}
+                {/* A platform-level list replaces the global one, and the docs teach
+                    hand-editing adapters.json — so say it, rather than letting a save
+                    here look like it applied everywhere. */}
+                {platformsWithOwnRoots.length > 0 && (
+                  <StatusBanner tone="warning" className="mt-2.5">
+                    {t('settings.adapters.allowedRootsOverridden', {
+                      platforms: platformsWithOwnRoots.join(', '),
+                    })}
+                  </StatusBanner>
+                )}
+              </>
+            )}
+          >
+            <DirectoryPicker
+              value=""
+              onChange={(dir) => {
+                if (!dir) return
+                setAllowedProjectRoots((prev) => (prev.includes(dir) ? prev : [...prev, dir]))
+              }}
+            />
+          </SettingsRow>
+        </SettingsGroup>
+      </section>
 
       {/* IM Adapter Tabs */}
-      <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] overflow-hidden">
-        <div role="tablist" aria-label={t('settings.adapters.imTabs')} className="flex flex-wrap items-stretch border-b border-[var(--color-border)] bg-[var(--color-surface-hover)]">
-          {IM_TABS.map((tab) => (
-            <ImTabButton
-              key={tab}
-              label={t(`settings.adapters.${tab}` as const)}
-              active={activeIm === tab}
-              onClick={() => setActiveIm(tab)}
+      <SettingsSection title={t('settings.adapters.imTabs')}>
+        <SettingsGroup>
+          <div className="px-3 py-2.5">
+            <SegmentedControl
+              as="tablist"
+              label={t('settings.adapters.imTabs')}
+              items={IM_TABS.map((tab) => ({ value: tab, label: t(`settings.adapters.${tab}` as const) }))}
+              value={activeIm}
+              onChange={setActiveIm}
+              size="sm"
+              layout="fill"
             />
-          ))}
-        </div>
+          </div>
 
-        {activeIm === 'feishu' && (
-          <div className="p-4 space-y-4">
-            {/* Scan-to-create is the primary path: the confirmation page
-                pre-fills the exact scopes and events this adapter calls, and
-                the credentials never pass through the user's clipboard. */}
-            <QrBindPanel
-              title={t('settings.adapters.feishuQrTitle')}
-              description={t('settings.adapters.feishuQrDesc')}
-              bindLabel={hasSavedFeishuCredentials
-                ? t('settings.adapters.feishuRebind')
-                : t('settings.adapters.feishuStartAuth')}
-              unbindLabel={t('settings.adapters.feishuUnbindApp')}
-              qrAlt={t('settings.adapters.feishuQrAlt')}
-              waitingLabel={t('settings.adapters.feishuWaiting')}
-              binding={feishuBinding}
-              isBound={hasSavedFeishuCredentials}
-              isUnbinding={isUnbindingFeishuApp}
-              onUnbind={() => setPendingAdapterUnbind('feishuApp')}
-            />
-            {!hasSavedFeishuCredentials && (
-              <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          {activeIm === 'feishu' && (
+            <>
+              {/* Scan-to-create is the primary path: the confirmation page
+                  pre-fills the exact scopes and events this adapter calls, and
+                  the credentials never pass through the user's clipboard. */}
+              <QrBindPanel
+                title={t('settings.adapters.feishuQrTitle')}
+                description={t('settings.adapters.feishuQrDesc')}
+                bindLabel={hasSavedFeishuCredentials
+                  ? t('settings.adapters.feishuRebind')
+                  : t('settings.adapters.feishuStartAuth')}
+                unbindLabel={t('settings.adapters.feishuUnbindApp')}
+                qrAlt={t('settings.adapters.feishuQrAlt')}
+                waitingLabel={t('settings.adapters.feishuWaiting')}
+                binding={feishuBinding}
+                isBound={hasSavedFeishuCredentials}
+                isUnbinding={isUnbindingFeishuApp}
+                onUnbind={() => setPendingAdapterUnbind('feishuApp')}
+              />
+              {!hasSavedFeishuCredentials && (
+                <div className="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-start sm:justify-between">
                   <div className="flex min-w-0 gap-3">
-                    <span className="material-symbols-outlined mt-0.5 text-[20px] text-[var(--color-brand)]">smart_toy</span>
+                    <Bot size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
                     <div className="min-w-0">
-                      <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">{t('settings.adapters.feishuCreateBotTitle')}</h4>
-                      <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">{t('settings.adapters.feishuCreateBotDesc')}</p>
-                      <ol className="mt-2 space-y-1 text-xs leading-5 text-[var(--color-text-secondary)]">
+                      <h4 className={ROW_TITLE}>{t('settings.adapters.feishuCreateBotTitle')}</h4>
+                      <p className={ROW_DESC}>{t('settings.adapters.feishuCreateBotDesc')}</p>
+                      <ol className="mt-2 space-y-1 text-xs leading-[1.5] text-[var(--color-text-secondary)]">
                         <li>1. {t('settings.adapters.feishuCreateBotStepCreate')}</li>
                         <li>2. {t('settings.adapters.feishuCreateBotStepFill')}</li>
                       </ol>
@@ -1111,450 +1150,433 @@ export function AdapterSettings() {
                     href={FEISHU_CREATE_BOT_URL}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[image:var(--gradient-btn-primary)] px-3 text-xs font-medium text-[var(--color-btn-primary-fg)] shadow-[var(--shadow-button-primary)] transition-colors hover:bg-[image:var(--gradient-btn-primary-hover)] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
+                    className={LINK_BUTTON}
                   >
                     {t('settings.adapters.feishuCreateBotAction')}
-                    <span className="material-symbols-outlined text-[14px]">open_in_new</span>
+                    <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
                   </a>
                 </div>
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-4">
-              <Input
-                label={t('settings.adapters.appId')}
-                value={fsAppId}
-                onChange={(e) => setFsAppId(e.target.value)}
-                placeholder={t('settings.adapters.appIdPlaceholder')}
-              />
-              <Input
-                label={t('settings.adapters.appSecret')}
-                type="password"
-                value={fsAppSecret}
-                onChange={(e) => setFsAppSecret(e.target.value)}
-                placeholder={t('settings.adapters.appSecretPlaceholder')}
-              />
-            </div>
-            <div className="grid grid-cols-2 gap-4">
-              <Input
-                label={t('settings.adapters.encryptKey')}
-                type="password"
-                value={fsEncryptKey}
-                onChange={(e) => setFsEncryptKey(e.target.value)}
-                placeholder={t('settings.adapters.encryptKeyPlaceholder')}
-              />
-              <Input
-                label={t('settings.adapters.verificationToken')}
-                type="password"
-                value={fsVerificationToken}
-                onChange={(e) => setFsVerificationToken(e.target.value)}
-                placeholder={t('settings.adapters.verificationTokenPlaceholder')}
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('settings.adapters.allowedUsers')}
-                value={fsAllowedUsers}
-                onChange={(e) => setFsAllowedUsers(e.target.value)}
-                placeholder={t('settings.adapters.fsAllowedUsersPlaceholder')}
-              />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.allowedUsersHint')}</p>
-            </div>
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={fsStreamingCard}
-                onChange={(e) => setFsStreamingCard(e.target.checked)}
-                className="w-4 h-4 rounded border-[var(--color-border)] accent-[var(--color-brand)]"
-              />
-              <div>
-                <span className="text-sm text-[var(--color-text-primary)]">{t('settings.adapters.streamingCard')}</span>
-                <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.streamingCardDesc')}</p>
-              </div>
-            </label>
-          </div>
-        )}
-
-        {activeIm === 'wechat' && (
-          <div className="p-4 space-y-4">
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-sm font-medium text-[var(--color-text-primary)]">
-                    {config.wechat?.accountId ? t('settings.adapters.wechatConnected') : t('settings.adapters.wechatNotConnected')}
-                  </div>
-                  <p className="text-xs text-[var(--color-text-tertiary)]">
-                    {t('settings.adapters.wechatQrHint')}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button onClick={handleWechatBind} loading={isWechatBinding && !wechatQrUrl} size="sm">
-                    {config.wechat?.accountId ? t('settings.adapters.wechatRebind') : t('settings.adapters.wechatBind')}
-                  </Button>
-                  {config.wechat?.accountId && (
-                    <Button onClick={() => setPendingAdapterUnbind('wechatAccount')} loading={isUnbindingWechatAccount} size="sm" variant="danger">
-                      {t('settings.adapters.wechatUnbindAccount')}
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {wechatQrUrl && (
-                <div className="flex items-start gap-4">
-                  <img
-                    src={wechatQrUrl}
-                    alt={t('settings.adapters.wechatQrAlt')}
-                    className="h-40 w-40 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white object-contain p-2"
+              )}
+              <div className="grid gap-4 p-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <Input
+                    label={t('settings.adapters.appId')}
+                    value={fsAppId}
+                    onChange={(e) => setFsAppId(e.target.value)}
+                    placeholder={t('settings.adapters.appIdPlaceholder')}
                   />
-                  <div className="pt-2 text-sm text-[var(--color-text-secondary)]">
-                    {wechatStatus || t('settings.adapters.wechatWaiting')}
-                  </div>
+                  <Input
+                    label={t('settings.adapters.appSecret')}
+                    type="password"
+                    value={fsAppSecret}
+                    onChange={(e) => setFsAppSecret(e.target.value)}
+                    placeholder={t('settings.adapters.appSecretPlaceholder')}
+                  />
                 </div>
-              )}
-
-              {!wechatQrUrl && wechatStatus && (
-                <p className="text-sm text-[var(--color-text-secondary)]">{wechatStatus}</p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('settings.adapters.allowedUsers')}
-                value={wcAllowedUsers}
-                onChange={(e) => setWcAllowedUsers(e.target.value)}
-                placeholder={t('settings.adapters.wcAllowedUsersPlaceholder')}
+                <div className="grid grid-cols-2 gap-4">
+                  <Input
+                    label={t('settings.adapters.encryptKey')}
+                    type="password"
+                    value={fsEncryptKey}
+                    onChange={(e) => setFsEncryptKey(e.target.value)}
+                    placeholder={t('settings.adapters.encryptKeyPlaceholder')}
+                  />
+                  <Input
+                    label={t('settings.adapters.verificationToken')}
+                    type="password"
+                    value={fsVerificationToken}
+                    onChange={(e) => setFsVerificationToken(e.target.value)}
+                    placeholder={t('settings.adapters.verificationTokenPlaceholder')}
+                  />
+                </div>
+                <Input
+                  label={t('settings.adapters.allowedUsers')}
+                  value={fsAllowedUsers}
+                  onChange={(e) => setFsAllowedUsers(e.target.value)}
+                  placeholder={t('settings.adapters.fsAllowedUsersPlaceholder')}
+                  hint={t('settings.adapters.allowedUsersHint')}
+                />
+              </div>
+              <SettingsSwitchRow
+                title={t('settings.adapters.streamingCard')}
+                description={t('settings.adapters.streamingCardDesc')}
+                checked={fsStreamingCard}
+                onChange={setFsStreamingCard}
               />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.wechatAllowedUsersHint')}</p>
-            </div>
-          </div>
-        )}
+            </>
+          )}
 
-        {activeIm === 'dingtalk' && (
-          <div className="p-4 space-y-4">
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">{t('settings.adapters.dingtalkQrTitle')}</h4>
-                  <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.dingtalkQrDesc')}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button onClick={handleStartDingtalkAuth} loading={isStartingDtAuth} size="sm">
-                    {t('settings.adapters.dingtalkStartAuth')}
-                  </Button>
-                  {(config.dingtalk?.clientId || dtClientId) && (
-                    <Button onClick={() => setPendingAdapterUnbind('dingtalkBot')} loading={isUnbindingDtBot} size="sm" variant="danger">
-                      {t('settings.adapters.dingtalkUnbindBot')}
-                    </Button>
+          {activeIm === 'wechat' && (
+            <>
+              <div className="px-4 py-3.5">
+                <PanelHead
+                  tone={wechatTone}
+                  title={config.wechat?.accountId ? t('settings.adapters.wechatConnected') : t('settings.adapters.wechatNotConnected')}
+                  description={t('settings.adapters.wechatQrHint')}
+                  actions={(
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<QrCode size={14} strokeWidth={1.75} aria-hidden="true" />}
+                        onClick={handleWechatBind}
+                        loading={isWechatBinding && !wechatQrUrl}
+                      >
+                        {config.wechat?.accountId ? t('settings.adapters.wechatRebind') : t('settings.adapters.wechatBind')}
+                      </Button>
+                      {config.wechat?.accountId && (
+                        <Button variant="danger-ghost" size="sm" onClick={() => setPendingAdapterUnbind('wechatAccount')} loading={isUnbindingWechatAccount}>
+                          {t('settings.adapters.wechatUnbindAccount')}
+                        </Button>
+                      )}
+                    </>
                   )}
-                </div>
+                />
+
+                {wechatQrUrl && (
+                  <QrArea src={wechatQrUrl} alt={t('settings.adapters.wechatQrAlt')}>
+                    <p className={STATUS_TEXT}>{wechatStatus || t('settings.adapters.wechatWaiting')}</p>
+                  </QrArea>
+                )}
+
+                {!wechatQrUrl && wechatStatus && (
+                  <p className={`mt-2 pl-5 ${STATUS_TEXT}`}>{wechatStatus}</p>
+                )}
               </div>
 
-              {dtRegistration && (
-                <div className="flex flex-wrap items-center gap-4">
-                  {dtRegistration.qrDataUrl ? (
-                    <img
-                      src={dtRegistration.qrDataUrl}
-                      alt={t('settings.adapters.dingtalkQrAlt')}
-                      className="h-40 w-40 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white object-contain p-2"
-                    />
-                  ) : null}
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <p className="text-sm text-[var(--color-text-primary)]">{t('settings.adapters.dingtalkWaiting')}</p>
+              <div className="p-4">
+                <Input
+                  label={t('settings.adapters.allowedUsers')}
+                  value={wcAllowedUsers}
+                  onChange={(e) => setWcAllowedUsers(e.target.value)}
+                  placeholder={t('settings.adapters.wcAllowedUsersPlaceholder')}
+                  hint={t('settings.adapters.wechatAllowedUsersHint')}
+                />
+              </div>
+            </>
+          )}
+
+          {activeIm === 'dingtalk' && (
+            <>
+              <div className="px-4 py-3.5">
+                <PanelHead
+                  tone={dingtalkTone}
+                  title={t('settings.adapters.dingtalkQrTitle')}
+                  description={t('settings.adapters.dingtalkQrDesc')}
+                  actions={(
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<QrCode size={14} strokeWidth={1.75} aria-hidden="true" />}
+                        onClick={handleStartDingtalkAuth}
+                        loading={isStartingDtAuth}
+                      >
+                        {t('settings.adapters.dingtalkStartAuth')}
+                      </Button>
+                      {(config.dingtalk?.clientId || dtClientId) && (
+                        <Button variant="danger-ghost" size="sm" onClick={() => setPendingAdapterUnbind('dingtalkBot')} loading={isUnbindingDtBot}>
+                          {t('settings.adapters.dingtalkUnbindBot')}
+                        </Button>
+                      )}
+                    </>
+                  )}
+                />
+
+                {dtRegistration && (
+                  <QrArea src={dtRegistration.qrDataUrl} alt={t('settings.adapters.dingtalkQrAlt')}>
+                    <p className={STATUS_TEXT}>{t('settings.adapters.dingtalkWaiting')}</p>
                     <a
                       href={dtRegistration.verificationUriComplete}
                       target="_blank"
                       rel="noreferrer"
-                      className="block truncate text-xs text-[var(--color-brand)] hover:underline"
+                      className={URL_LINK}
                     >
                       {dtRegistration.verificationUriComplete}
                     </a>
-                  </div>
+                  </QrArea>
+                )}
+
+                {dtAuthStatus === 'bound' && (
+                  <StatusBanner tone="success" className="ml-5 mt-3">{t('settings.adapters.dingtalkBound')}</StatusBanner>
+                )}
+                {dtAuthStatus === 'error' && (
+                  <StatusBanner tone="error" className="ml-5 mt-3">{dtAuthError}</StatusBanner>
+                )}
+              </div>
+
+              <div className="grid gap-4 p-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <Input
+                    label={t('settings.adapters.dingtalkClientId')}
+                    value={dtClientId}
+                    onChange={(e) => setDtClientId(e.target.value)}
+                    placeholder={t('settings.adapters.dingtalkClientIdPlaceholder')}
+                  />
+                  <Input
+                    label={t('settings.adapters.dingtalkClientSecret')}
+                    type="password"
+                    value={dtClientSecret}
+                    onChange={(e) => setDtClientSecret(e.target.value)}
+                    placeholder={t('settings.adapters.dingtalkClientSecretPlaceholder')}
+                  />
                 </div>
-              )}
+                <Input
+                  label={t('settings.adapters.dingtalkEndpoint')}
+                  value={dtEndpoint}
+                  onChange={(e) => setDtEndpoint(e.target.value)}
+                  placeholder={t('settings.adapters.dingtalkEndpointPlaceholder')}
+                />
+                <Input
+                  label={t('settings.adapters.dingtalkPermissionCardTemplateId')}
+                  value={dtPermissionCardTemplateId}
+                  onChange={(e) => setDtPermissionCardTemplateId(e.target.value)}
+                  placeholder={t('settings.adapters.dingtalkPermissionCardTemplateIdPlaceholder')}
+                  hint={t('settings.adapters.dingtalkPermissionCardTemplateIdHint')}
+                />
+                <Input
+                  label={t('settings.adapters.allowedUsers')}
+                  value={dtAllowedUsers}
+                  onChange={(e) => setDtAllowedUsers(e.target.value)}
+                  placeholder={t('settings.adapters.dtAllowedUsersPlaceholder')}
+                  hint={t('settings.adapters.allowedUsersHint')}
+                />
+              </div>
+            </>
+          )}
 
-              {dtAuthStatus === 'bound' && (
-                <p className="text-sm text-[var(--color-success)]">{t('settings.adapters.dingtalkBound')}</p>
-              )}
-              {dtAuthStatus === 'error' && (
-                <p className="text-sm text-[var(--color-error)]">{dtAuthError}</p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
+          {activeIm === 'telegram' && (
+            <div className="grid gap-4 p-4">
               <Input
-                label={t('settings.adapters.dingtalkClientId')}
-                value={dtClientId}
-                onChange={(e) => setDtClientId(e.target.value)}
-                placeholder={t('settings.adapters.dingtalkClientIdPlaceholder')}
-              />
-              <Input
-                label={t('settings.adapters.dingtalkClientSecret')}
+                label={t('settings.adapters.botToken')}
                 type="password"
-                value={dtClientSecret}
-                onChange={(e) => setDtClientSecret(e.target.value)}
-                placeholder={t('settings.adapters.dingtalkClientSecretPlaceholder')}
+                value={tgBotToken}
+                onChange={(e) => setTgBotToken(e.target.value)}
+                placeholder={t('settings.adapters.botTokenPlaceholder')}
               />
-            </div>
-            <Input
-              label={t('settings.adapters.dingtalkEndpoint')}
-              value={dtEndpoint}
-              onChange={(e) => setDtEndpoint(e.target.value)}
-              placeholder={t('settings.adapters.dingtalkEndpointPlaceholder')}
-            />
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('settings.adapters.dingtalkPermissionCardTemplateId')}
-                value={dtPermissionCardTemplateId}
-                onChange={(e) => setDtPermissionCardTemplateId(e.target.value)}
-                placeholder={t('settings.adapters.dingtalkPermissionCardTemplateIdPlaceholder')}
-              />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.dingtalkPermissionCardTemplateIdHint')}</p>
-            </div>
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('settings.adapters.allowedUsers')}
-                value={dtAllowedUsers}
-                onChange={(e) => setDtAllowedUsers(e.target.value)}
-                placeholder={t('settings.adapters.dtAllowedUsersPlaceholder')}
-              />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.allowedUsersHint')}</p>
-            </div>
-          </div>
-        )}
-
-        {activeIm === 'telegram' && (
-          <div className="p-4 space-y-4">
-            <Input
-              label={t('settings.adapters.botToken')}
-              type="password"
-              value={tgBotToken}
-              onChange={(e) => setTgBotToken(e.target.value)}
-              placeholder={t('settings.adapters.botTokenPlaceholder')}
-            />
-            <div className="flex flex-col gap-1">
               <Input
                 label={t('settings.adapters.allowedUsers')}
                 value={tgAllowedUsers}
                 onChange={(e) => setTgAllowedUsers(e.target.value)}
                 placeholder={t('settings.adapters.tgAllowedUsersPlaceholder')}
+                hint={t('settings.adapters.allowedUsersHint')}
               />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.allowedUsersHint')}</p>
             </div>
-          </div>
-        )}
+          )}
 
-        {activeIm === 'whatsapp' && (
-          <div className="p-4 space-y-4">
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
-              <div className="flex items-center justify-between gap-4">
-                <div>
-                  <div className="text-sm font-medium text-[var(--color-text-primary)]">
-                    {config.whatsapp?.accountJid ? t('settings.adapters.whatsappConnected') : t('settings.adapters.whatsappNotConnected')}
-                  </div>
-                  <p className="text-xs text-[var(--color-text-tertiary)]">
-                    {t('settings.adapters.whatsappQrHint')}
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Button onClick={handleWhatsAppBind} loading={isWhatsAppBinding && !whatsappQrUrl} size="sm">
-                    {config.whatsapp?.accountJid ? t('settings.adapters.whatsappRebind') : t('settings.adapters.whatsappBind')}
-                  </Button>
-                  {config.whatsapp?.accountJid && (
-                    <Button onClick={() => setPendingAdapterUnbind('whatsappAccount')} loading={isUnbindingWhatsAppAccount} size="sm" variant="danger">
-                      {t('settings.adapters.whatsappUnbindAccount')}
-                    </Button>
+          {activeIm === 'whatsapp' && (
+            <>
+              <div className="px-4 py-3.5">
+                <PanelHead
+                  tone={whatsappTone}
+                  title={config.whatsapp?.accountJid ? t('settings.adapters.whatsappConnected') : t('settings.adapters.whatsappNotConnected')}
+                  description={t('settings.adapters.whatsappQrHint')}
+                  detail={config.whatsapp?.accountJid
+                    ? <p className="mt-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{config.whatsapp.accountJid}</p>
+                    : null}
+                  actions={(
+                    <>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<QrCode size={14} strokeWidth={1.75} aria-hidden="true" />}
+                        onClick={handleWhatsAppBind}
+                        loading={isWhatsAppBinding && !whatsappQrUrl}
+                      >
+                        {config.whatsapp?.accountJid ? t('settings.adapters.whatsappRebind') : t('settings.adapters.whatsappBind')}
+                      </Button>
+                      {config.whatsapp?.accountJid && (
+                        <Button variant="danger-ghost" size="sm" onClick={() => setPendingAdapterUnbind('whatsappAccount')} loading={isUnbindingWhatsAppAccount}>
+                          {t('settings.adapters.whatsappUnbindAccount')}
+                        </Button>
+                      )}
+                    </>
                   )}
-                </div>
+                />
+
+                {whatsappQrUrl && (
+                  <QrArea src={whatsappQrUrl} alt={t('settings.adapters.whatsappQrAlt')}>
+                    <p className={STATUS_TEXT}>{whatsappStatus || t('settings.adapters.whatsappWaiting')}</p>
+                  </QrArea>
+                )}
+
+                {!whatsappQrUrl && whatsappStatus && (
+                  <p className={`mt-2 pl-5 ${STATUS_TEXT}`}>{whatsappStatus}</p>
+                )}
               </div>
 
-              {config.whatsapp?.accountJid && (
-                <p className="text-xs text-[var(--color-text-tertiary)]">{config.whatsapp.accountJid}</p>
-              )}
+              <div className="p-4">
+                <Input
+                  label={t('settings.adapters.allowedUsers')}
+                  value={waAllowedUsers}
+                  onChange={(e) => setWaAllowedUsers(e.target.value)}
+                  placeholder={t('settings.adapters.waAllowedUsersPlaceholder')}
+                  hint={t('settings.adapters.whatsappAllowedUsersHint')}
+                />
+              </div>
+            </>
+          )}
 
-              {whatsappQrUrl && (
-                <div className="flex items-start gap-4">
-                  <img
-                    src={whatsappQrUrl}
-                    alt={t('settings.adapters.whatsappQrAlt')}
-                    className="h-40 w-40 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white object-contain p-2"
+          {activeIm === 'wecom' && (
+            <>
+              <QrBindPanel
+                title={t('settings.adapters.wecomQrTitle')}
+                description={t('settings.adapters.wecomQrDesc')}
+                bindLabel={config.wecom?.botId
+                  ? t('settings.adapters.wecomRebind')
+                  : t('settings.adapters.wecomBind')}
+                unbindLabel={t('settings.adapters.wecomUnbindBot')}
+                qrAlt={t('settings.adapters.wecomQrAlt')}
+                waitingLabel={t('settings.adapters.wecomWaiting')}
+                binding={wecomBinding}
+                isBound={Boolean(config.wecom?.botId)}
+                boundDetail={config.wecom?.botId}
+                isUnbinding={isUnbindingWecomBot}
+                onUnbind={() => setPendingAdapterUnbind('wecomBot')}
+              />
+
+              <div className="p-4">
+                <Input
+                  label={t('settings.adapters.allowedUsers')}
+                  value={wecomAllowedUsers}
+                  onChange={(e) => setWecomAllowedUsers(e.target.value)}
+                  placeholder={t('settings.adapters.wecomAllowedUsersPlaceholder')}
+                  hint={t('settings.adapters.wecomAllowedUsersHint')}
+                />
+              </div>
+            </>
+          )}
+
+          {activeIm === 'qq' && (
+            <>
+              <QrBindPanel
+                title={t('settings.adapters.qqQrTitle')}
+                description={t('settings.adapters.qqQrDesc')}
+                bindLabel={config.qq?.appId
+                  ? t('settings.adapters.qqRebind')
+                  : t('settings.adapters.qqBind')}
+                unbindLabel={t('settings.adapters.qqUnbindBot')}
+                qrAlt={t('settings.adapters.qqQrAlt')}
+                waitingLabel={t('settings.adapters.qqWaiting')}
+                binding={qqBinding}
+                isBound={Boolean(config.qq?.appId)}
+                boundDetail={config.qq?.appId}
+                isUnbinding={isUnbindingQqBot}
+                onUnbind={() => setPendingAdapterUnbind('qqBot')}
+              />
+
+              <div className="p-4">
+                <Input
+                  label={t('settings.adapters.allowedUsers')}
+                  value={qqAllowedUsers}
+                  onChange={(e) => setQqAllowedUsers(e.target.value)}
+                  placeholder={t('settings.adapters.qqAllowedUsersPlaceholder')}
+                  hint={t('settings.adapters.qqAllowedUsersHint')}
+                />
+              </div>
+            </>
+          )}
+
+          {activeIm === 'slack' && (
+            <>
+              {/* Slack has no scan flow. The manifest is the closest equivalent:
+                  one link that opens the create-app dialog fully configured. */}
+              <div className="px-4 py-3.5">
+                <PanelHead
+                  title={t('settings.adapters.slackCreateAppTitle')}
+                  description={t('settings.adapters.slackCreateAppDesc')}
+                  detail={(
+                    <ol className="mt-2 space-y-1 text-xs leading-[1.5] text-[var(--color-text-secondary)]">
+                      <li>1. {t('settings.adapters.slackStepCreate')}</li>
+                      <li>2. {t('settings.adapters.slackStepInstall')}</li>
+                      <li>3. {t('settings.adapters.slackStepTokens')}</li>
+                    </ol>
+                  )}
+                  actions={(slackManifest || config.slack?.botToken || slackBotToken) ? (
+                    <>
+                      {slackManifest && (
+                        <a
+                          href={slackManifest.createAppUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className={LINK_BUTTON}
+                        >
+                          {t('settings.adapters.slackCreateAppAction')}
+                          <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
+                        </a>
+                      )}
+                      {(config.slack?.botToken || slackBotToken) && (
+                        <Button variant="danger-ghost" size="sm" onClick={() => setPendingAdapterUnbind('slackApp')} loading={isUnbindingSlackApp}>
+                          {t('settings.adapters.slackUnbindApp')}
+                        </Button>
+                      )}
+                    </>
+                  ) : null}
+                />
+
+                {slackManifest && (
+                  <details className="group mt-3 text-xs text-[var(--color-text-secondary)]">
+                    <summary className="inline-flex cursor-pointer select-none list-none items-center gap-1 rounded-[var(--radius-sm)] transition-colors hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] [&::-webkit-details-marker]:hidden">
+                      <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" className="transition-transform group-open:rotate-90" />
+                      {t('settings.adapters.slackManifestToggle')}
+                    </summary>
+                    <pre className="mt-2 max-h-56 overflow-auto rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3 font-mono text-[11px] leading-5 text-[var(--color-text-secondary)]">
+                      {slackManifest.manifest}
+                    </pre>
+                  </details>
+                )}
+                {slackManifestError && (
+                  <StatusBanner tone="error" className="mt-3">{slackManifestError}</StatusBanner>
+                )}
+                {slackStatus && (
+                  <p className={`mt-2 ${STATUS_TEXT}`}>{slackStatus}</p>
+                )}
+              </div>
+
+              <div className="grid gap-4 p-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <Input
+                    label={t('settings.adapters.slackBotToken')}
+                    type="password"
+                    value={slackBotToken}
+                    onChange={(e) => setSlackBotToken(e.target.value)}
+                    placeholder={t('settings.adapters.slackBotTokenPlaceholder')}
                   />
-                  <div className="pt-2 text-sm text-[var(--color-text-secondary)]">
-                    {whatsappStatus || t('settings.adapters.whatsappWaiting')}
-                  </div>
+                  <Input
+                    label={t('settings.adapters.slackAppToken')}
+                    type="password"
+                    value={slackAppToken}
+                    onChange={(e) => setSlackAppToken(e.target.value)}
+                    placeholder={t('settings.adapters.slackAppTokenPlaceholder')}
+                  />
                 </div>
-              )}
-
-              {!whatsappQrUrl && whatsappStatus && (
-                <p className="text-sm text-[var(--color-text-secondary)]">{whatsappStatus}</p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('settings.adapters.allowedUsers')}
-                value={waAllowedUsers}
-                onChange={(e) => setWaAllowedUsers(e.target.value)}
-                placeholder={t('settings.adapters.waAllowedUsersPlaceholder')}
-              />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.whatsappAllowedUsersHint')}</p>
-            </div>
-          </div>
-        )}
-
-        {activeIm === 'wecom' && (
-          <div className="p-4 space-y-4">
-            <QrBindPanel
-              title={t('settings.adapters.wecomQrTitle')}
-              description={t('settings.adapters.wecomQrDesc')}
-              bindLabel={config.wecom?.botId
-                ? t('settings.adapters.wecomRebind')
-                : t('settings.adapters.wecomBind')}
-              unbindLabel={t('settings.adapters.wecomUnbindBot')}
-              qrAlt={t('settings.adapters.wecomQrAlt')}
-              waitingLabel={t('settings.adapters.wecomWaiting')}
-              binding={wecomBinding}
-              isBound={Boolean(config.wecom?.botId)}
-              boundDetail={config.wecom?.botId}
-              isUnbinding={isUnbindingWecomBot}
-              onUnbind={() => setPendingAdapterUnbind('wecomBot')}
-            />
-
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('settings.adapters.allowedUsers')}
-                value={wecomAllowedUsers}
-                onChange={(e) => setWecomAllowedUsers(e.target.value)}
-                placeholder={t('settings.adapters.wecomAllowedUsersPlaceholder')}
-              />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.wecomAllowedUsersHint')}</p>
-            </div>
-          </div>
-        )}
-
-        {activeIm === 'qq' && (
-          <div className="p-4 space-y-4">
-            <QrBindPanel
-              title={t('settings.adapters.qqQrTitle')}
-              description={t('settings.adapters.qqQrDesc')}
-              bindLabel={config.qq?.appId
-                ? t('settings.adapters.qqRebind')
-                : t('settings.adapters.qqBind')}
-              unbindLabel={t('settings.adapters.qqUnbindBot')}
-              qrAlt={t('settings.adapters.qqQrAlt')}
-              waitingLabel={t('settings.adapters.qqWaiting')}
-              binding={qqBinding}
-              isBound={Boolean(config.qq?.appId)}
-              boundDetail={config.qq?.appId}
-              isUnbinding={isUnbindingQqBot}
-              onUnbind={() => setPendingAdapterUnbind('qqBot')}
-            />
-
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('settings.adapters.allowedUsers')}
-                value={qqAllowedUsers}
-                onChange={(e) => setQqAllowedUsers(e.target.value)}
-                placeholder={t('settings.adapters.qqAllowedUsersPlaceholder')}
-              />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.qqAllowedUsersHint')}</p>
-            </div>
-          </div>
-        )}
-
-        {activeIm === 'slack' && (
-          <div className="p-4 space-y-4">
-            {/* Slack has no scan flow. The manifest is the closest equivalent:
-                one link that opens the create-app dialog fully configured. */}
-            <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">{t('settings.adapters.slackCreateAppTitle')}</h4>
-                  <p className="mt-1 text-xs leading-5 text-[var(--color-text-tertiary)]">{t('settings.adapters.slackCreateAppDesc')}</p>
-                  <ol className="mt-2 space-y-1 text-xs leading-5 text-[var(--color-text-secondary)]">
-                    <li>1. {t('settings.adapters.slackStepCreate')}</li>
-                    <li>2. {t('settings.adapters.slackStepInstall')}</li>
-                    <li>3. {t('settings.adapters.slackStepTokens')}</li>
-                  </ol>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {slackManifest && (
-                    <a
-                      href={slackManifest.createAppUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex h-9 shrink-0 items-center justify-center gap-1.5 rounded-[var(--radius-md)] bg-[image:var(--gradient-btn-primary)] px-3 text-xs font-medium text-[var(--color-btn-primary-fg)] shadow-[var(--shadow-button-primary)] transition-colors hover:bg-[image:var(--gradient-btn-primary-hover)] hover:brightness-105 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--color-surface)]"
-                    >
-                      {t('settings.adapters.slackCreateAppAction')}
-                      <span className="material-symbols-outlined text-[14px]">open_in_new</span>
-                    </a>
-                  )}
-                  {(config.slack?.botToken || slackBotToken) && (
-                    <Button onClick={() => setPendingAdapterUnbind('slackApp')} loading={isUnbindingSlackApp} size="sm" variant="danger">
-                      {t('settings.adapters.slackUnbindApp')}
-                    </Button>
-                  )}
-                </div>
+                <Input
+                  label={t('settings.adapters.allowedUsers')}
+                  value={slackAllowedUsers}
+                  onChange={(e) => setSlackAllowedUsers(e.target.value)}
+                  placeholder={t('settings.adapters.slackAllowedUsersPlaceholder')}
+                  hint={t('settings.adapters.allowedUsersHint')}
+                />
               </div>
-
-              {slackManifest && (
-                <details className="text-xs text-[var(--color-text-secondary)]">
-                  <summary className="cursor-pointer select-none">{t('settings.adapters.slackManifestToggle')}</summary>
-                  <pre className="mt-2 max-h-56 overflow-auto rounded-[var(--radius-md)] bg-[var(--color-surface-container-low)] p-3 text-[11px] leading-5">
-                    {slackManifest.manifest}
-                  </pre>
-                </details>
-              )}
-              {slackManifestError && (
-                <p className="text-xs text-[var(--color-error)]">{slackManifestError}</p>
-              )}
-              {slackStatus && (
-                <p className="text-sm text-[var(--color-text-secondary)]">{slackStatus}</p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <Input
-                label={t('settings.adapters.slackBotToken')}
-                type="password"
-                value={slackBotToken}
-                onChange={(e) => setSlackBotToken(e.target.value)}
-                placeholder={t('settings.adapters.slackBotTokenPlaceholder')}
-              />
-              <Input
-                label={t('settings.adapters.slackAppToken')}
-                type="password"
-                value={slackAppToken}
-                onChange={(e) => setSlackAppToken(e.target.value)}
-                placeholder={t('settings.adapters.slackAppTokenPlaceholder')}
-              />
-            </div>
-
-            <div className="flex flex-col gap-1">
-              <Input
-                label={t('settings.adapters.allowedUsers')}
-                value={slackAllowedUsers}
-                onChange={(e) => setSlackAllowedUsers(e.target.value)}
-                placeholder={t('settings.adapters.slackAllowedUsersPlaceholder')}
-              />
-              <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.adapters.allowedUsersHint')}</p>
-            </div>
-          </div>
-        )}
-      </section>
+            </>
+          )}
+        </SettingsGroup>
+      </SettingsSection>
 
       {/* Save */}
-      <div className="flex items-center gap-3">
-        <Button onClick={handleSave} loading={isSaving}>
+      <div className="mt-7 flex items-center gap-3">
+        <Button variant="primary" size="base" onClick={handleSave} loading={isSaving}>
           {saveStatus === 'saved' ? t('settings.adapters.saved') : t('settings.adapters.save')}
         </Button>
         {saveStatus === 'saved' && (
-          <span className="text-sm text-[var(--color-success)]">
-            <span className="material-symbols-outlined text-[16px] align-middle mr-1">check_circle</span>
+          <span className="inline-flex items-center gap-1.5 text-xs text-[var(--color-success)]">
+            <CircleCheck size={14} strokeWidth={1.75} aria-hidden="true" />
             {t('settings.adapters.saved')}
           </span>
         )}
         {saveStatus === 'error' && (
-          <span className="text-sm text-[var(--color-error)]">
-            <span className="material-symbols-outlined text-[16px] align-middle mr-1">error</span>
+          <span className="inline-flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-error)]">
+            <CircleAlert size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
             {saveError}
           </span>
         )}
@@ -1593,7 +1615,71 @@ export function AdapterSettings() {
 }
 
 /**
- * The scan-to-bind card shared by Feishu, WeCom and QQ.
+ * The head line of a binding section inside the IM card: status dot, title,
+ * description, and the section's actions pinned right.
+ */
+function PanelHead({
+  tone,
+  title,
+  description,
+  detail,
+  actions,
+}: {
+  tone?: Tone
+  title: string
+  description: string
+  detail?: ReactNode
+  actions?: ReactNode
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      {tone && <StatusDot tone={tone} size="md" className="mt-1.5" />}
+      <div className="min-w-0 flex-1">
+        <h4 className={ROW_TITLE}>{title}</h4>
+        <p className={ROW_DESC}>{description}</p>
+        {detail}
+      </div>
+      {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
+    </div>
+  )
+}
+
+/** A live QR code and the status lines beside it, indented under the head's text. */
+function QrArea({ src, alt, children }: { src?: string | null; alt: string; children: ReactNode }) {
+  return (
+    <div className="mt-3 flex flex-wrap items-start gap-4 pl-5">
+      {src && <img src={src} alt={alt} className={QR_IMAGE} />}
+      <div className="min-w-0 flex-1 space-y-1.5 pt-1">{children}</div>
+    </div>
+  )
+}
+
+const BANNER_TONE = {
+  success: 'bg-[var(--color-success-container)] text-[var(--color-on-success-container)]',
+  warning: 'bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]',
+  error: 'bg-[var(--color-error-container)] text-[var(--color-on-error-container)]',
+} as const
+
+function StatusBanner({
+  tone,
+  className,
+  children,
+}: {
+  tone: keyof typeof BANNER_TONE
+  className?: string
+  children: ReactNode
+}) {
+  const Icon = tone === 'success' ? CircleCheck : tone === 'error' ? CircleAlert : TriangleAlert
+  return (
+    <div className={cx('flex items-start gap-2 rounded-[var(--radius-md)] px-3 py-2 text-xs leading-[1.5]', BANNER_TONE[tone], className)}>
+      <Icon size={14} strokeWidth={1.75} aria-hidden="true" className="mt-px shrink-0" />
+      <span className="min-w-0 break-words">{children}</span>
+    </div>
+  )
+}
+
+/**
+ * The scan-to-bind section shared by Feishu, WeCom and QQ.
  *
  * All three show the same four things — a title, a bind button, the QR image
  * while an attempt is live, and the current status line — so the panel is one
@@ -1628,61 +1714,54 @@ function QrBindPanel({
   // panel keys off the live attempt rather than the picture: the button stops
   // spinning once the code exists, and the raw URL is offered as a fallback.
   const attemptActive = Boolean(binding.sessionKey)
+  const tone: Tone = attemptActive ? 'info' : isBound ? 'success' : 'neutral'
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] p-4 space-y-3">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">{title}</h4>
-          <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">{description}</p>
-          {isBound && boundDetail && (
-            <p className="mt-1 truncate text-xs text-[var(--color-text-tertiary)]">{boundDetail}</p>
-          )}
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button
-            onClick={() => void binding.begin()}
-            loading={binding.isBinding && !attemptActive}
-            size="sm"
-          >
-            {bindLabel}
-          </Button>
-          {isBound && (
-            <Button onClick={onUnbind} loading={isUnbinding} size="sm" variant="danger">
-              {unbindLabel}
+    <div className="px-4 py-3.5">
+      <PanelHead
+        tone={tone}
+        title={title}
+        description={description}
+        detail={isBound && boundDetail
+          ? <p className="mt-1 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{boundDetail}</p>
+          : null}
+        actions={(
+          <>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<QrCode size={14} strokeWidth={1.75} aria-hidden="true" />}
+              onClick={() => void binding.begin()}
+              loading={binding.isBinding && !attemptActive}
+            >
+              {bindLabel}
             </Button>
-          )}
-        </div>
-      </div>
+            {isBound && (
+              <Button variant="danger-ghost" size="sm" onClick={onUnbind} loading={isUnbinding}>
+                {unbindLabel}
+              </Button>
+            )}
+          </>
+        )}
+      />
 
       {attemptActive && (
-        <div className="flex flex-wrap items-start gap-4">
-          {binding.qrDataUrl && (
-            <img
-              src={binding.qrDataUrl}
-              alt={qrAlt}
-              className="h-40 w-40 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-white object-contain p-2"
-            />
+        <QrArea src={binding.qrDataUrl} alt={qrAlt}>
+          <p className={STATUS_TEXT}>{binding.status || waitingLabel}</p>
+          {binding.verificationUrl && (
+            <a
+              href={binding.verificationUrl}
+              target="_blank"
+              rel="noreferrer"
+              className={URL_LINK}
+            >
+              {binding.verificationUrl}
+            </a>
           )}
-          <div className="min-w-0 flex-1 space-y-2 pt-2">
-            <p className="text-sm text-[var(--color-text-secondary)]">
-              {binding.status || waitingLabel}
-            </p>
-            {binding.verificationUrl && (
-              <a
-                href={binding.verificationUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="block truncate text-xs text-[var(--color-brand)] hover:underline"
-              >
-                {binding.verificationUrl}
-              </a>
-            )}
-          </div>
-        </div>
+        </QrArea>
       )}
 
       {!attemptActive && binding.status && (
-        <p className="text-sm text-[var(--color-text-secondary)]">{binding.status}</p>
+        <p className={`mt-2 pl-5 ${STATUS_TEXT}`}>{binding.status}</p>
       )}
     </div>
   )
@@ -1694,30 +1773,4 @@ function splitAllowedUsers(value: string): string[] {
     .split(',')
     .map((entry) => entry.trim())
     .filter(Boolean)
-}
-
-function ImTabButton({
-  label,
-  active,
-  onClick,
-}: {
-  label: string
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      className={`relative px-4 py-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-brand)] focus-visible:ring-inset ${
-        active
-          ? 'text-[var(--color-text-primary)] font-semibold after:absolute after:left-3 after:right-3 after:bottom-0 after:h-[2px] after:bg-[var(--color-brand)]'
-          : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]'
-      }`}
-    >
-      {label}
-    </button>
-  )
 }

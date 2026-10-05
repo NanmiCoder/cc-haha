@@ -24,27 +24,26 @@ describe('SessionAttentionMark', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument()
   })
 
-  it('hides the ligature text so a screen reader does not say "warning" beside the label', () => {
+  it('hides the glyph so a screen reader hears only the label', () => {
     const { container } = render(<SessionAttentionMark label="Waiting for your approval" />)
 
-    const glyph = container.querySelector('.material-symbols-outlined')
-    expect(glyph).toHaveTextContent('warning')
+    const glyph = container.querySelector('svg')
     expect(glyph).toHaveAttribute('aria-hidden', 'true')
+    // The whole name comes from the label; nothing inside adds words to it.
+    expect(screen.getByRole('img')).toHaveTextContent('')
   })
 
-  it('draws a filled glyph', () => {
+  it('draws a ringed exclamation mark rather than another dot', () => {
     const { container } = render(<SessionAttentionMark label="Waiting" />)
 
-    // Outlined at 14px the exclamation mark is a hairline; filled it is a shape.
-    expect(container.querySelector('.material-symbols-outlined')).toHaveStyle({
-      fontVariationSettings: "'FILL' 1",
-    })
+    // Running is a dot; waiting must differ by outline, not only by colour.
+    expect(container.querySelector('svg.lucide-circle-alert')).toBeInTheDocument()
   })
 
   it('pulses three times and then holds still instead of blinking for hours', () => {
     const { container } = render(<SessionAttentionMark label="Waiting" />)
 
-    const glyph = container.querySelector<HTMLElement>('.material-symbols-outlined')
+    const glyph = container.querySelector<SVGElement>('svg')
     expect(glyph).toHaveClass('animate-pulse-dot')
     // Inline, so it overrides the `infinite` the class carries.
     expect(glyph?.style.animationIterationCount).toBe('3')

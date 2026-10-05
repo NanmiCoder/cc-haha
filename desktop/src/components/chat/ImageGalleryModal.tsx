@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { ExternalLink, X } from 'lucide-react'
+import { ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { Modal } from '@/components/ui/Modal'
 import { ZoomableImage, type ZoomableImageProps } from '@/components/ui/ZoomableImage'
@@ -112,7 +112,7 @@ export function ImageGalleryModal({ open, images, activeIndex, onClose, onSelect
             <>
               <div className="absolute left-3 top-1/2 -translate-y-1/2">
                 <IconButton
-                  icon="chevron_left"
+                  icon={<ChevronLeft size={20} strokeWidth={1.75} aria-hidden="true" />}
                   label={t('attachments.previousImage')}
                   size="xl"
                   tone="secondary"
@@ -124,7 +124,7 @@ export function ImageGalleryModal({ open, images, activeIndex, onClose, onSelect
               </div>
               <div className="absolute right-3 top-1/2 -translate-y-1/2">
                 <IconButton
-                  icon="chevron_right"
+                  icon={<ChevronRight size={20} strokeWidth={1.75} aria-hidden="true" />}
                   label={t('attachments.nextImage')}
                   size="xl"
                   tone="secondary"

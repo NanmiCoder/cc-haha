@@ -111,7 +111,7 @@ describe('WorkspaceFileOpenWith', () => {
     const { getAllByRole, getByRole, queryByText } = render(<WorkspaceFileOpenWith absolutePath="/fixture/app.ts" targets={targets} onRefresh={vi.fn()} />)
     const items = getAllByRole('menuitem')
     expect(items.slice(0, 9).map((item) => item.textContent)).toEqual(targets.slice(0, 9).map((target) => target.label))
-    expect(items[0]).toHaveClass('h-9', 'text-[15px]')
+    expect(items[0]).toHaveClass('h-8', 'text-[13px]')
     expect(items[8]?.nextElementSibling).toBe(getByRole('separator'))
     expect(items[9]?.previousElementSibling).toBe(getByRole('separator'))
     expect(items.at(-1)).toHaveTextContent('workspace.refresh')

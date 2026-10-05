@@ -1,4 +1,24 @@
 import { useState } from 'react'
+import {
+  Bot,
+  Box,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Download,
+  FilePen,
+  FilePlus,
+  FileSearch,
+  FileText,
+  Folder,
+  Globe,
+  ListChecks,
+  NotebookPen,
+  Search,
+  Shield,
+  SquareTerminal,
+  type LucideIcon,
+} from 'lucide-react'
 import { getPendingPermission, useChatStore } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
@@ -32,22 +52,37 @@ type Props = {
 }
 
 /**
- * Icons for known tool types.
- * Uses Material Symbols Outlined names.
+ * The glyph in the card's icon block, per tool. The block itself is always the
+ * warning pair (`--color-warning-container` / `--color-on-warning-container`):
+ * the card means "waiting for you", whatever the tool. It used to tint the
+ * block by appending an alpha suffix to a `var(...)` string (`${color}18`),
+ * which is not a color at all and rendered no background.
  */
-const TOOL_META: Record<string, { icon: string; label: string; color: string }> = {
-  Bash: { icon: 'terminal', label: 'Bash', color: 'var(--color-warning)' },
-  Edit: { icon: 'edit_note', label: 'Edit File', color: 'var(--color-brand)' },
-  Write: { icon: 'edit_document', label: 'Write File', color: 'var(--color-success)' },
-  Read: { icon: 'description', label: 'Read File', color: 'var(--color-secondary)' },
-  Glob: { icon: 'search', label: 'Glob Search', color: 'var(--color-secondary)' },
-  Grep: { icon: 'find_in_page', label: 'Grep Search', color: 'var(--color-secondary)' },
-  Agent: { icon: 'smart_toy', label: 'Agent', color: 'var(--color-tertiary)' },
-  WebSearch: { icon: 'travel_explore', label: 'Web Search', color: 'var(--color-secondary)' },
-  WebFetch: { icon: 'cloud_download', label: 'Web Fetch', color: 'var(--color-secondary)' },
-  NotebookEdit: { icon: 'note', label: 'Notebook Edit', color: 'var(--color-brand)' },
-  Skill: { icon: 'auto_awesome', label: 'Skill', color: 'var(--color-tertiary)' },
+const TOOL_ICONS: Record<string, LucideIcon> = {
+  Bash: SquareTerminal,
+  Edit: FilePen,
+  Write: FilePlus,
+  Read: FileText,
+  Glob: Search,
+  Grep: FileSearch,
+  Agent: Bot,
+  WebSearch: Globe,
+  WebFetch: Download,
+  NotebookEdit: NotebookPen,
+  Skill: Box,
 }
+
+/** Card shell shared by the permission and plan-approval cards (「素」). */
+const PENDING_CARD =
+  'mb-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-raised)]'
+
+/** A request that has been answered collapses to one quiet line. */
+const RESOLVED_ROW =
+  'mb-4 flex min-h-9 min-w-0 items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] py-1.5 pl-3 pr-2 text-[13px] text-[var(--color-text-secondary)]'
+
+/** Sunken inset for commands, paths and raw input inside the card. */
+const INSET_BLOCK =
+  'rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2.5 font-mono text-xs leading-[1.6] text-[var(--color-text-primary)]'
 
 /**
  * Extract human-readable detail lines from tool input.
@@ -126,9 +161,9 @@ function renderPermissionPreview(toolName: string, input: unknown) {
 
   if (toolName === 'Bash' && typeof obj.command === 'string') {
     return (
-      <div className="overflow-x-auto rounded-[var(--radius-md)] bg-[var(--color-terminal-bg)] px-3 py-2.5">
-        <pre className="font-mono text-[11px] leading-[1.3] text-[var(--color-terminal-fg)] whitespace-pre-wrap break-words">
-          <span className="text-[var(--color-terminal-accent)] select-none">$ </span>{obj.command}
+      <div className={`overflow-x-auto ${INSET_BLOCK}`}>
+        <pre className="whitespace-pre-wrap break-words font-mono">
+          <span className="select-none text-[var(--color-brand)]">$ </span>{obj.command}
         </pre>
       </div>
     )
@@ -160,7 +195,7 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
     )
   }
 
-  const meta = TOOL_META[toolName] || { icon: 'shield', label: toolName, color: 'var(--color-text-tertiary)' }
+  const ToolIcon = TOOL_ICONS[toolName] ?? Shield
   const details = extractToolDetails(toolName, input, t)
   const rawInput = typeof input === 'string' ? input : JSON.stringify(input, null, 2)
   const preview = renderPermissionPreview(toolName, input)
@@ -168,82 +203,69 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
   const allowRawToggle = !preview
   const permissionContext = (details.primary || description || toolName).slice(0, 160)
 
+  if (!isPending) {
+    return (
+      <div role="group" aria-label={`${title}: ${permissionContext}`} className={RESOLVED_ROW}>
+        <ToolIcon aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        {details.primary ? (
+          <span className="hidden min-w-0 max-w-[45%] truncate font-mono text-xs text-[var(--color-text-tertiary)] sm:block" title={details.primary}>
+            {details.primary}
+          </span>
+        ) : null}
+        <Badge icon={<Check aria-hidden="true" size={12} strokeWidth={2} />}>
+          {t('permission.responded')}
+        </Badge>
+      </div>
+    )
+  }
+
   return (
     <div
       role="group"
       aria-label={`${title}: ${permissionContext}`}
-      className={`mb-4 overflow-hidden rounded-[var(--radius-lg)] border ${
-        isPending
-          ? 'border-[var(--color-warning)] bg-[var(--color-surface-container-lowest)]'
-          : 'border-[var(--color-border)] bg-[var(--color-surface-container-low)] opacity-70'
-      }`}
+      className={PENDING_CARD}
     >
-      {/* Header */}
-      <div className={`flex items-center gap-3 px-4 py-3 ${
-        isPending
-          ? 'bg-[var(--color-surface-container)]'
-          : 'bg-[var(--color-surface-container-low)]'
-      }`}>
-        <div
-          className="flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)]"
-          style={{ backgroundColor: `${meta.color}18` }}
-        >
-          <span
-            aria-hidden="true"
-            className="material-symbols-outlined text-[18px]"
-            style={{ color: meta.color }}
-          >
-            {meta.icon}
-          </span>
+      {/* Header: icon block, title over context, "awaiting" pill. */}
+      <div className="flex items-start gap-3 px-4 pb-3 pt-3.5">
+        <div className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-warning-container)] text-[var(--color-on-warning-container)]">
+          <ToolIcon aria-hidden="true" size={16} strokeWidth={1.75} />
         </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-[var(--color-text-primary)]">
-              {title}
-            </span>
-            {isPending && (
-              <Badge
-                tone="warning"
-                icon={<StatusDot tone="warning" pulse />}
-                className="font-bold uppercase tracking-wider"
-              >
-                {t('permission.awaitingApproval')}
-              </Badge>
-            )}
-            {!isPending && (
-              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-[var(--color-surface-container-high)] text-[var(--color-text-tertiary)]">
-                {t('permission.responded')}
-              </span>
-            )}
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold leading-[1.4] text-[var(--color-text-primary)]">
+            {title}
           </div>
           {description && (
-            <p className="mt-0.5 text-xs text-[var(--color-text-secondary)] truncate">{description}</p>
+            <p className="mt-0.5 truncate text-xs text-[var(--color-text-tertiary)]">{description}</p>
           )}
         </div>
+        <Badge
+          tone="warning"
+          icon={<StatusDot tone="warning" pulse />}
+          className="shrink-0"
+        >
+          {t('permission.awaitingApproval')}
+        </Badge>
       </div>
 
       {/* Tool details */}
-      <div className="border-t border-[var(--color-border)] px-4 py-3">
+      <div className="px-4">
         {preview ? (
           <div className="space-y-2">
             {details.primary && toolName !== 'Bash' ? (
-              <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs font-mono text-[var(--color-text-secondary)]">
-                <span aria-hidden="true" className="material-symbols-outlined text-[14px] text-[var(--color-outline)] flex-shrink-0">
-                  folder_open
-                </span>
+              <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
+                <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
                 <span className="truncate">{details.primary}</span>
               </div>
             ) : null}
             {preview}
           </div>
         ) : details.primary ? (
-          <div className="mb-2">
-            <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs font-mono text-[var(--color-text-secondary)]">
-              <span aria-hidden="true" className="material-symbols-outlined text-[14px] text-[var(--color-outline)] flex-shrink-0">
-                {toolName === 'Glob' || toolName === 'Grep' ? 'search' : 'folder_open'}
-              </span>
-              <span className="truncate">{details.primary}</span>
-            </div>
+          <div className="flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 font-mono text-xs text-[var(--color-text-secondary)]">
+            {toolName === 'Glob' || toolName === 'Grep'
+              ? <Search aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
+              : <Folder aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />}
+            <span className="truncate">{details.primary}</span>
           </div>
         ) : null}
 
@@ -254,66 +276,53 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
 
         {allowRawToggle && (
           <Button
-            variant="link"
-            size="xs"
+            variant="ghost"
+            size="sm"
             onClick={() => setShowRaw(!showRaw)}
-            className="mt-2"
-            icon={(
-              <span aria-hidden="true" className="material-symbols-outlined text-[14px]">
-                {showRaw ? 'expand_less' : 'expand_more'}
-              </span>
-            )}
+            className="-ml-2 mt-1.5"
+            icon={showRaw
+              ? <ChevronUp aria-hidden="true" size={14} strokeWidth={1.75} />
+              : <ChevronDown aria-hidden="true" size={14} strokeWidth={1.75} />}
           >
             {showRaw ? t('permission.hideDetails') : t('permission.showFullInput')}
           </Button>
         )}
 
         {allowRawToggle && showRaw && (
-          <pre className="mt-2 max-h-[220px] overflow-y-auto overflow-x-auto rounded-[var(--radius-md)] bg-[var(--color-terminal-bg)] px-3 py-2.5 font-mono text-[11px] leading-[1.3] text-[var(--color-terminal-fg)] whitespace-pre-wrap break-words">
+          <pre className={`mt-1.5 max-h-[220px] overflow-auto whitespace-pre-wrap break-words ${INSET_BLOCK}`}>
             {rawInput}
           </pre>
         )}
       </div>
 
-      {/* Action buttons */}
-      {isPending && (
-        <div className="flex items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-          <Button
-            variant="primary"
-            size="sm"
-            aria-label={`${t('permission.allow')}: ${permissionContext}`}
-            onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true)}
-            icon={
-              <span aria-hidden="true" className="material-symbols-outlined text-[14px]">check</span>
-            }
-          >
-            {t('permission.allow')}
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            aria-label={`${t('permission.allowForSession')}: ${permissionContext}`}
-            onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true, { rule: 'always' })}
-            icon={
-              <span aria-hidden="true" className="material-symbols-outlined text-[14px]">verified</span>
-            }
-          >
-            {t('permission.allowForSession')}
-          </Button>
-          <div className="flex-1" />
-          <Button
-            variant="danger"
-            size="sm"
-            aria-label={`${t('permission.deny')}: ${permissionContext}`}
-            onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, false)}
-            icon={
-              <span aria-hidden="true" className="material-symbols-outlined text-[14px]">close</span>
-            }
-          >
-            {t('permission.deny')}
-          </Button>
-        </div>
-      )}
+      {/* Actions: confirm on the left, the quiet way out on the right. */}
+      <div className="flex flex-wrap items-center gap-2 px-4 pb-3.5 pt-3">
+        <Button
+          variant="primary"
+          size="base"
+          aria-label={`${t('permission.allow')}: ${permissionContext}`}
+          onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true)}
+        >
+          {t('permission.allow')}
+        </Button>
+        <Button
+          variant="secondary"
+          size="base"
+          aria-label={`${t('permission.allowForSession')}: ${permissionContext}`}
+          onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, true, { rule: 'always' })}
+        >
+          {t('permission.allowForSession')}
+        </Button>
+        <div className="flex-1" />
+        <Button
+          variant="ghost"
+          size="base"
+          aria-label={`${t('permission.deny')}: ${permissionContext}`}
+          onClick={() => targetSessionId && respondToPermission(targetSessionId, requestId, false)}
+        >
+          {t('permission.deny')}
+        </Button>
+      </div>
     </div>
   )
 }
@@ -397,47 +406,40 @@ function ExitPlanModePermissionDialog({
     approve({ permissionUpdates: buildPlanApprovalPermissionUpdates(mode, preview.allowedPrompts) })
   }
 
+  if (!isPending) {
+    return (
+      <div className={RESOLVED_ROW}>
+        <ListChecks aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate">{t('permission.planReadyTitle')}</span>
+        <Badge icon={<Check aria-hidden="true" size={12} strokeWidth={2} />}>
+          {t('permission.responded')}
+        </Badge>
+      </div>
+    )
+  }
+
   return (
-    <div className={`mb-4 overflow-hidden rounded-[var(--radius-lg)] border ${
-      isPending
-        ? 'border-[var(--color-primary-fixed-dim)] bg-[var(--color-surface-container-lowest)]'
-        : 'border-[var(--color-border)] bg-[var(--color-surface-container-low)] opacity-70'
-    }`}>
-      <div className={`flex items-center gap-3 px-4 py-3 ${
-        isPending
-          ? 'bg-[var(--color-surface-container)]'
-          : 'bg-[var(--color-surface-container-low)]'
-      }`}>
-        <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-brand-soft)]">
-          <span className="material-symbols-outlined text-[18px] text-[var(--color-brand)]">architecture</span>
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-semibold text-[var(--color-text-primary)]">
-              {t('permission.planReadyTitle')}
-            </span>
-            {isPending ? (
-              <Badge
-                tone="brand"
-                icon={<StatusDot tone="brand" pulse />}
-                className="font-bold uppercase"
-              >
-                {t('permission.awaitingApproval')}
-              </Badge>
-            ) : (
-              <Badge className="font-bold uppercase">
-                {t('permission.responded')}
-              </Badge>
-            )}
-          </div>
-          {description ? (
-            <p className="mt-0.5 truncate text-xs text-[var(--color-text-secondary)]">{description}</p>
-          ) : null}
-        </div>
+    <div className={PENDING_CARD}>
+      <div className="flex h-[42px] items-center gap-2 border-b border-[var(--color-border)] px-3.5">
+        <ListChecks aria-hidden="true" size={15} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">
+          {t('permission.planReadyTitle')}
+        </span>
+        <Badge
+          tone="warning"
+          icon={<StatusDot tone="warning" pulse />}
+          className="shrink-0"
+        >
+          {t('permission.awaitingApproval')}
+        </Badge>
       </div>
 
-      <div className="space-y-3 border-t border-[var(--color-border)] px-4 py-3">
+      <div className="space-y-3 px-4 pt-3">
+        {description ? (
+          <p className="truncate text-xs text-[var(--color-text-tertiary)]">{description}</p>
+        ) : null}
         <PlanPreviewCard
+          embedded
           title={t('permission.planPreviewTitle')}
           plan={preview.plan}
           filePath={preview.filePath}
@@ -445,84 +447,69 @@ function ExitPlanModePermissionDialog({
           requestedPermissionsTitle={t('permission.planRequestedPermissions')}
           emptyLabel={t('permission.planEmpty')}
         />
-        {isPending ? (
-          <textarea
-            value={feedback}
-            onChange={(event) => setFeedback(event.target.value)}
-            placeholder={t('permission.planFeedbackPlaceholder')}
-            rows={3}
-            className="min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-border-focus)] focus:shadow-[var(--shadow-focus-ring)]"
-          />
-        ) : null}
-      </div>
-
-      {isPending ? (
-        <div className="border-t border-[var(--color-border)] bg-[var(--color-surface-container)] px-4 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <span className="shrink-0 text-xs font-medium text-[var(--color-text-secondary)]">
-              {t('permission.planExecutionModel')}
-            </span>
-            <div
-              className={`flex min-w-0 items-center gap-1.5 rounded-[var(--radius-md)] px-2 py-1 ${
-                executionRuntime
-                  ? 'border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)]'
-                  : ''
-              }`}
-              data-testid="plan-execution-model"
-            >
-              <ModelSelector
-                compact
-                ariaLabel={t('permission.planExecutionModel')}
-                runtimeSelection={executionRuntime ?? currentRuntime}
-                onRuntimeSelectionChange={handleExecutionRuntimeChange}
-              />
-              {executionRuntime ? (
-                <span className="shrink-0 text-[10px] font-medium text-[var(--color-brand)]">
-                  {t('permission.planExecutionModelPending')}
-                </span>
-              ) : null}
-            </div>
+        <textarea
+          value={feedback}
+          onChange={(event) => setFeedback(event.target.value)}
+          placeholder={t('permission.planFeedbackPlaceholder')}
+          rows={3}
+          className="min-h-[72px] w-full resize-y rounded-[var(--radius-md)] border border-transparent bg-[var(--color-surface-container)] px-3 py-2.5 text-[13px] text-[var(--color-text-primary)] outline-none transition-colors placeholder:text-[var(--color-text-tertiary)] focus:border-[var(--color-outline)] focus:bg-[var(--color-surface-container-lowest)]"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <span className="shrink-0 text-xs text-[var(--color-text-tertiary)]">
+            {t('permission.planExecutionModel')}
+          </span>
+          <div
+            className={`flex min-w-0 items-center gap-1.5 rounded-[var(--radius-sm)] ${
+              executionRuntime ? 'bg-[var(--color-surface-container)] pr-2' : ''
+            }`}
+            data-testid="plan-execution-model"
+          >
+            <ModelSelector
+              compact
+              ariaLabel={t('permission.planExecutionModel')}
+              runtimeSelection={executionRuntime ?? currentRuntime}
+              onRuntimeSelectionChange={handleExecutionRuntimeChange}
+            />
+            {executionRuntime ? (
+              <span className="shrink-0 text-[11px] font-medium text-[var(--color-text-secondary)]">
+                {t('permission.planExecutionModelPending')}
+              </span>
+            ) : null}
           </div>
         </div>
-      ) : null}
+      </div>
 
-      {isPending ? (
-        <div className="flex flex-wrap items-center gap-2 border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3">
-          <Button
-            variant="primary"
-            size="base"
-            onClick={() => approve(permissionUpdates.length ? { permissionUpdates } : undefined)}
-            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">check</span>}
-          >
-            {t('permission.planApprove')}
-          </Button>
-          <Button
-            variant="secondary"
-            size="base"
-            onClick={() => approveWithMode('acceptEdits')}
-            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">bolt</span>}
-          >
-            {t('permission.planApproveAcceptEdits')}
-          </Button>
-          <Button
-            variant="danger-outline"
-            size="base"
-            onClick={() => approveWithMode('bypassPermissions')}
-            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">gavel</span>}
-          >
-            {t('permission.planApproveBypass')}
-          </Button>
-          <div className="flex-1" />
-          <Button
-            variant="ghost"
-            size="base"
-            onClick={() => sessionId && respondToPermission(sessionId, requestId, false, trimmedFeedback ? { denyMessage: trimmedFeedback } : undefined)}
-            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">edit_note</span>}
-          >
-            {t('permission.planKeepPlanning')}
-          </Button>
-        </div>
-      ) : null}
+      <div className="flex flex-wrap items-center gap-2 px-4 pb-3.5 pt-3">
+        <Button
+          variant="primary"
+          size="base"
+          onClick={() => approve(permissionUpdates.length ? { permissionUpdates } : undefined)}
+        >
+          {t('permission.planApprove')}
+        </Button>
+        <Button
+          variant="secondary"
+          size="base"
+          onClick={() => approveWithMode('acceptEdits')}
+        >
+          {t('permission.planApproveAcceptEdits')}
+        </Button>
+        <Button
+          variant="danger-ghost"
+          size="base"
+          onClick={() => approveWithMode('bypassPermissions')}
+        >
+          {t('permission.planApproveBypass')}
+        </Button>
+        <div className="flex-1" />
+        <Button
+          variant="ghost"
+          size="base"
+          onClick={() => sessionId && respondToPermission(sessionId, requestId, false, trimmedFeedback ? { denyMessage: trimmedFeedback } : undefined)}
+        >
+          {t('permission.planKeepPlanning')}
+        </Button>
+      </div>
     </div>
   )
 }

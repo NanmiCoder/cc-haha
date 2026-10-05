@@ -1100,7 +1100,7 @@ describe('browser address suggestions', () => {
 it('keeps the browser toolbar aligned with file content and ignores page-only menu actions in a blank tab', async () => {
   const tab = openBrowserTab(null)
   await renderReady(<WorkspaceBrowserTab sessionId={SESSION} tab={tab} active />)
-  expect(screen.getByTestId('workspace-browser-toolbar')).toHaveClass('h-[52px]')
+  expect(screen.getByTestId('workspace-browser-toolbar')).toHaveClass('h-10')
   act(() => screen.getByTestId('workspace-browser-menu-trigger').focus())
   host.message.mockClear()
   for (const action of ['find', 'print', 'capture', 'pickElement'] as const) await openMenuItem(action)

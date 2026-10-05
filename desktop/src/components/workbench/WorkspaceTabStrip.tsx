@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { MessageCircle, FolderClosed, Globe, MoreHorizontal, Plus, SquareTerminal, SquareSplitVertical } from 'lucide-react'
+import { MessageCircle, FolderClosed, Globe, Ellipsis, Plus, SquareTerminal, SquareSplitVertical, X } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
+import { tabChipClass, tabChipLabelClass } from '@/components/ui/tabChip'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
 import { getTerminalRuntime, subscribeTerminalRuntime } from '@/lib/terminalRuntime'
@@ -211,15 +212,15 @@ export function WorkspaceTabStrip({
     <div
       data-testid={`workspace-tab-strip-${dock}`}
       data-desktop-drag-region={placement === 'window' ? true : undefined}
-      className={`flex min-w-0 shrink-0 items-stretch gap-1 bg-[var(--color-surface)] pl-2 pr-1 ${placement === 'window' ? 'h-[52px] flex-1' : 'h-10 border-b border-[var(--color-border)]'}`}
+      className={`flex min-w-0 shrink-0 items-center gap-1 pl-2 pr-1 ${placement === 'window' ? 'h-[52px] flex-1' : 'h-10 border-b border-[var(--color-border)] bg-[var(--color-surface-sidebar)]'}`}
     >
-      <div className="flex min-w-0 flex-1 items-stretch gap-1">
+      <div className="flex min-w-0 flex-1 items-center gap-1">
         <div
           ref={tabListRef}
           role="tablist"
           aria-label={t('workspace.tabStrip')}
           aria-orientation="horizontal"
-          className="flex min-w-0 items-stretch gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          className="flex min-w-0 items-center gap-0.5 overflow-x-auto px-0.5 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           onPointerMove={handlePointerMove}
           onPointerUp={endDrag}
           onPointerLeave={endDrag}
@@ -253,12 +254,8 @@ export function WorkspaceTabStrip({
                 onPointerDown={(event) => handlePointerDown(event, tab, index)}
                 onDoubleClick={() => onPin(tab.id)}
                 onContextMenu={(event) => openMenuAt(event, tab.id)}
-                className={[
-                  `tab-bar-interactive group ${placement === 'window' ? 'my-2.5' : 'my-1'} flex min-w-[112px] max-w-[200px] cursor-default items-center gap-0.5 rounded-[var(--radius-md)] pl-2 pr-1 transition-colors`,
-                  isActive
-                    ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
-                ].join(' ')}
+                // The same chip as the session tabs above the chat (`ui/tabChip`).
+                className={`${tabChipClass(isActive)} cursor-default gap-0.5`}
               >
                 <button
                   ref={(node) => { tabButtonRefs.current.set(tab.id, node) }}
@@ -314,21 +311,22 @@ export function WorkspaceTabStrip({
                   className="flex h-7 min-w-0 flex-1 cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
                 >
                   {tab.kind === 'file' && tab.path ? <WorkspaceFileIcon path={tab.path} /> : (
-                    <Icon size={14} strokeWidth={1.9} aria-hidden="true" className="shrink-0" />
+                    <Icon size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
                   )}
                   {/*
-                    A preview tab is italic and nothing else. A dedicated badge or a
-                    dotted border would make the replaceable state louder than the
-                    file name, and the state only matters at the moment the next
-                    single click replaces it.
+                    A preview tab is quieter and nothing else: it never takes the
+                    active weight. A badge or a dotted border would make the
+                    replaceable state louder than the file name, and the state only
+                    matters at the moment the next single click replaces it.
+                    (Italics were the old signal; CJK titles have no italic face.)
                   */}
-                  <span className={`min-w-0 flex-1 truncate text-[13px] ${tab.preview ? 'italic' : ''}`}>
+                  <span className={tabChipLabelClass(isActive && !tab.preview)}>
                     {title}
                   </span>
                 </button>
                 <span className={`shrink-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 ${isActive ? 'opacity-100' : 'opacity-0'}`}>
                   <IconButton
-                    icon="close"
+                    icon={<X size={12} strokeWidth={2} />}
                     label={t('workspace.tabClose', { title })}
                     size="2xs"
                     tone="muted"
@@ -351,7 +349,7 @@ export function WorkspaceTabStrip({
 
         <span className="tab-bar-interactive flex shrink-0 items-center">
           <IconButton
-            icon={<Plus size={15} strokeWidth={2} />}
+            icon={<Plus size={16} strokeWidth={1.75} />}
             label={t('workspace.tabAdd')}
             size="sm"
             tone="muted"
@@ -374,7 +372,7 @@ export function WorkspaceTabStrip({
       {activeTerminalTab ? (
         <span className="tab-bar-interactive flex shrink-0 items-center">
           <IconButton
-            icon={<MoreHorizontal size={16} />}
+            icon={<Ellipsis size={16} strokeWidth={1.75} />}
             label={t('workspace.tabMenu')}
             size="sm"
             tone="muted"
@@ -396,7 +394,7 @@ export function WorkspaceTabStrip({
           aria-label={t('workspace.tabMenu')}
           data-testid="workspace-tab-menu"
           onKeyDown={handleMenuKeyDown}
-          className="fixed z-[var(--z-dropdown)] min-w-[190px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] py-1.5 shadow-[var(--shadow-dropdown)]"
+          className="fixed z-[var(--z-dropdown)] min-w-[190px] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
           style={menuPosition.style}
         >
           {menuRuntime ? <>
@@ -410,13 +408,13 @@ export function WorkspaceTabStrip({
               disabled={!menuRuntime.restart || menuRuntime.status === 'starting' || menuRuntime.status === 'unavailable'}
               onSelect={() => { menuRuntime.restart?.(); closeMenu() }}
             />
-            <div className="my-1 border-t border-[var(--color-border)]" />
+            <div className="-mx-1 my-1 border-t border-[var(--color-border)]" />
           </> : null}
           <WorkspaceTabMenuItem label={t('workspace.tabCloseCurrent')} onSelect={() => { onClose(menu.tabId); closeMenu() }} />
           <WorkspaceTabMenuItem label={t('workspace.tabCloseOthers')} disabled={!canCloseOthers} onSelect={() => { onCloseScope(menu.tabId, 'others'); closeMenu() }} />
           <WorkspaceTabMenuItem label={t('workspace.tabCloseRight')} disabled={!canCloseRight} onSelect={() => { onCloseScope(menu.tabId, 'right'); closeMenu() }} />
           <WorkspaceTabMenuItem label={t('workspace.tabCloseAll')} onSelect={() => { onCloseScope(menu.tabId, 'all'); closeMenu() }} />
-          <div className="my-1 border-t border-[var(--color-border)]" />
+          <div className="-mx-1 my-1 border-t border-[var(--color-border)]" />
           <WorkspaceTabMenuItem
             label={t('workspace.tabReopenClosed')}
             disabled={!canReopenClosed}
@@ -452,7 +450,7 @@ function WorkspaceTabMenuItem({
       role="menuitem"
       disabled={disabled}
       onClick={onSelect}
-      className="w-full px-3.5 py-1.5 text-left text-[12px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
+      className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2 text-left text-[13px] text-[var(--color-text-primary)] outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
     >
       {label}
     </button>

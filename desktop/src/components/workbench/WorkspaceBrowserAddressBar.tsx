@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { ExternalLink, Globe, Search } from 'lucide-react'
+import { ExternalLink, Globe, Lock, Search } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '@/i18n'
@@ -21,7 +21,7 @@ type WorkspaceBrowserAddressBarProps = {
 
 const SUGGESTION_LIMIT = 6
 
-/** A page address is viewed centered and edited as an omnibox, with local visit suggestions. */
+/** A page address sits in a sunken field behind a lock or globe and is edited as an omnibox, with local visit suggestions. */
 export const WorkspaceBrowserAddressBar = forwardRef<HTMLInputElement, WorkspaceBrowserAddressBarProps>(function WorkspaceBrowserAddressBar({
   currentAddress, active, disabled, blank, visits, resolveAddress, onNavigate, onOpenExternal,
 }, forwardedRef) {
@@ -91,7 +91,7 @@ export const WorkspaceBrowserAddressBar = forwardRef<HTMLInputElement, Workspace
   return (
     <form
       ref={formRef}
-      className={`group/address relative flex h-8 min-w-0 flex-1 items-center rounded-[var(--radius-md)] ${editing ? 'bg-[var(--color-surface-hover)] ring-1 ring-inset ring-[var(--color-border)]' : 'hover:bg-[var(--color-surface-hover)]'}`}
+      className={`group/address relative mx-1 flex h-7 min-w-0 flex-1 items-center rounded-[var(--radius-sm)] pl-2.5 transition-colors ${editing ? 'bg-[var(--color-surface-container-lowest)] ring-1 ring-inset ring-[var(--color-outline)]' : 'bg-[var(--color-surface-container)] hover:bg-[var(--color-surface-hover)]'}`}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) finishEditing()
       }}
@@ -100,6 +100,10 @@ export const WorkspaceBrowserAddressBar = forwardRef<HTMLInputElement, Workspace
         submit(open && selectedIndex >= 0 ? suggestions[selectedIndex]!.input : draft)
       }}
     >
+      {/* Only a committed https page earns the lock; anything else is a globe. */}
+      {!editing && currentAddress.startsWith('https:')
+        ? <Lock size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        : <Globe size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
       <input
         ref={inputRef}
         value={draft}
@@ -145,13 +149,13 @@ export const WorkspaceBrowserAddressBar = forwardRef<HTMLInputElement, Workspace
         aria-label={t('workspace.browser.address')}
         placeholder={t('workspace.browser.addressPlaceholder')}
         data-testid="workspace-browser-address"
-        className={`h-8 min-w-0 flex-1 rounded-[var(--radius-md)] bg-transparent px-3 text-[13px] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] ${editing ? 'text-left' : 'text-center'}`}
+        className={`h-7 min-w-0 flex-1 bg-transparent pl-1.5 pr-2 text-[12px] outline-none placeholder:text-[var(--color-text-tertiary)] ${editing ? 'text-[var(--color-text-primary)]' : 'text-[var(--color-text-secondary)]'}`}
       />
       <span className="opacity-0 transition-opacity group-hover/address:opacity-100 group-focus-within/address:opacity-100">
         <IconButton
-          icon={<ExternalLink size={16} strokeWidth={1.75} />}
+          icon={<ExternalLink size={14} strokeWidth={1.75} />}
           label={t('workspace.browser.openExternal')}
-          size="md"
+          size="xs"
           tone="muted"
           disabled={!(editing ? resolveAddress(draft) : currentAddress)}
           onPointerDown={(event) => event.preventDefault()}
@@ -205,16 +209,16 @@ function AddressSuggestions({ id, items, query, selectedIndex, onHighlight, onSe
           onPointerDown={(event) => event.preventDefault()}
           onPointerMove={() => onHighlight(index)}
           onClick={() => onSelect(item.input)}
-          className={`flex h-11 cursor-pointer items-center gap-3 rounded-[var(--radius-md)] px-3 text-[13px] ${selectedIndex === index ? 'bg-[var(--color-surface-hover)]' : ''}`}
+          className={`flex h-8 cursor-pointer items-center gap-2.5 rounded-[var(--radius-sm)] px-2 text-[13px] ${selectedIndex === index ? 'bg-[var(--color-surface-hover)]' : ''}`}
         >
           {item.action === 'search'
-            ? <Search size={16} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />
-            : <Globe size={16} aria-hidden="true" className="shrink-0 text-[var(--color-text-secondary)]" />}
+            ? <Search size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+            : <Globe size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />}
           <span className="min-w-0 flex-1 truncate text-[var(--color-text-primary)]">
             <HighlightedText text={item.title} query={query} />
             {item.url ? <span className="text-[var(--color-text-tertiary)]"> — <HighlightedText text={item.url} query={query} /></span> : null}
           </span>
-          {item.action ? <span className="shrink-0 text-[var(--color-text-tertiary)]">{t(item.action === 'search' ? 'workspace.browser.searchWeb' : 'workspace.browser.visitAddress')}</span> : null}
+          {item.action ? <span className="shrink-0 text-[12px] text-[var(--color-text-tertiary)]">{t(item.action === 'search' ? 'workspace.browser.searchWeb' : 'workspace.browser.visitAddress')}</span> : null}
         </div>
       ))}
     </div>
@@ -224,5 +228,5 @@ function AddressSuggestions({ id, items, query, selectedIndex, onHighlight, onSe
 function HighlightedText({ text, query }: { text: string; query: string }) {
   const start = query ? text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase()) : -1
   if (start < 0) return text
-  return <>{text.slice(0, start)}<strong className="font-semibold">{text.slice(start, start + query.length)}</strong>{text.slice(start + query.length)}</>
+  return <>{text.slice(0, start)}<strong className="font-medium text-[var(--color-text-primary)]">{text.slice(start, start + query.length)}</strong>{text.slice(start + query.length)}</>
 }

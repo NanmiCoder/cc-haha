@@ -39,7 +39,7 @@ export class RenderItemBoundary extends React.Component<Props, State> {
     if (!this.state.failed) return this.props.children
 
     return (
-      <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-2 text-xs text-[var(--color-text-tertiary)]">
+      <div className="mb-3 flex items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-tertiary)]">
         <TriangleAlert aria-hidden size={14} strokeWidth={1.75} className="shrink-0" />
         <span>{t('errorBoundary.item')}</span>
       </div>

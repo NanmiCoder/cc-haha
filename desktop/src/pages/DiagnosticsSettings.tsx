@@ -1,12 +1,36 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  Archive,
+  ChevronRight,
+  CircleCheck,
+  ClipboardList,
+  Copy,
+  Database,
+  FolderOpen,
+  HeartPulse,
+  Info,
+  RefreshCw,
+  Trash2,
+  TriangleAlert,
+} from 'lucide-react'
 import {
   diagnosticsApi,
   type DiagnosticEvent,
+  type DiagnosticSeverity,
   type DiagnosticsStatus,
   type LocalIndexState,
   type LocalIndexStatus,
 } from '../api/diagnostics'
+import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
+import { EmptyState } from '@/components/ui/EmptyState'
+import {
+  SettingsBlock,
+  SettingsGroup,
+  SettingsPageHeader,
+  SettingsRow,
+  SettingsSection,
+} from '@/components/settings/SettingsSection'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { useTranslation } from '../i18n'
 import { formatBytes } from '../lib/formatBytes'
@@ -227,39 +251,50 @@ export function DiagnosticsSettings() {
   }
 
   return (
-    <div className="max-w-4xl">
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-5">
-        <div>
-          <h2 className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.diagnostics.title')}</h2>
-          <p className="mt-1.5 text-[13.5px] leading-6 text-[var(--color-text-secondary)]">{t('settings.diagnostics.description')}</p>
-        </div>
-        <Button variant="secondary" size="sm" onClick={load} loading={isLoading} disabled={isRebuildingIndex}>
-          <span className="material-symbols-outlined text-[16px]" aria-hidden="true">refresh</span>
-          {t('settings.diagnostics.refresh')}
-        </Button>
-      </div>
+    <div className="min-w-0">
+      <SettingsPageHeader
+        title={t('settings.diagnostics.title')}
+        description={t('settings.diagnostics.description')}
+        action={(
+          <Button
+            variant="secondary"
+            size="base"
+            onClick={load}
+            loading={isLoading}
+            disabled={isRebuildingIndex}
+            icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
+            {t('settings.diagnostics.refresh')}
+          </Button>
+        )}
+      />
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
-        <Metric label={t('settings.diagnostics.totalSize')} value={status ? formatBytes(status.totalBytes) : '-'} />
-        <Metric label={t('settings.diagnostics.completeEvents')} value={status ? t('settings.diagnostics.completeEventsValue', { count: status.eventCount }) : '-'} />
-        <Metric label={t('settings.diagnostics.visibleEvents')} value={t('settings.diagnostics.visibleEventsValue', { count: events.length })} />
-        <Metric label={t('settings.diagnostics.recentErrors')} value={status ? String(status.recentErrorCount) : '-'} />
-        <Metric label={t('settings.diagnostics.retention')} value={status ? t('settings.diagnostics.retentionValue', { days: String(status.retentionDays), size: formatBytes(status.maxBytes) }) : '-'} />
-      </div>
+      {/* One stat card rather than five `SettingsStat` tiles: three of these
+          values are phrases ("600 complete events", "7 days / 50 MB") that do
+          not fit a 22px KPI number in a fifth of the pane. */}
+      <SettingsGroup className="mt-6">
+        <SettingsBlock>
+          <dl className="grid grid-cols-[repeat(auto-fill,minmax(104px,1fr))] gap-x-4 gap-y-3 py-0.5">
+            <Metric label={t('settings.diagnostics.totalSize')} value={status ? formatBytes(status.totalBytes) : '-'} />
+            <Metric label={t('settings.diagnostics.completeEvents')} value={status ? t('settings.diagnostics.completeEventsValue', { count: status.eventCount }) : '-'} />
+            <Metric label={t('settings.diagnostics.visibleEvents')} value={t('settings.diagnostics.visibleEventsValue', { count: events.length })} />
+            <Metric label={t('settings.diagnostics.recentErrors')} value={status ? String(status.recentErrorCount) : '-'} />
+            <Metric label={t('settings.diagnostics.retention')} value={status ? t('settings.diagnostics.retentionValue', { days: String(status.retentionDays), size: formatBytes(status.maxBytes) }) : '-'} />
+          </dl>
+        </SettingsBlock>
+      </SettingsGroup>
 
       {status && status.corruptLineCount > 0 ? (
-        <div role="alert" className="mb-5 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs text-[var(--color-on-warning-container)]">
+        <WarningBanner>
           {t('settings.diagnostics.corruptLinesWarning', {
             count: status.corruptLineCount,
             physical: status.physicalLineCount,
           })}
-        </div>
+        </WarningBanner>
       ) : null}
 
       {status?.storageLimitExceeded ? (
-        <div role="alert" className="mb-5 rounded-[var(--radius-lg)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs text-[var(--color-on-warning-container)]">
-          {t('settings.diagnostics.storageLimitExceededWarning')}
-        </div>
+        <WarningBanner>{t('settings.diagnostics.storageLimitExceededWarning')}</WarningBanner>
       ) : null}
 
       <LocalIndexPanel
@@ -270,59 +305,86 @@ export function DiagnosticsSettings() {
         onRebuild={() => setRebuildConfirmOpen(true)}
       />
 
-      <div className="mb-5">
+      <div className="mt-7">
         <DoctorPanel />
       </div>
 
-      <div className="border border-[var(--color-border)] rounded-[var(--radius-lg)] mb-5">
-        <div className="px-4 py-3 border-b border-[var(--color-border)] flex items-center justify-between gap-3">
-          <div>
-            <div className="text-sm font-medium text-[var(--color-text-primary)]">{t('settings.diagnostics.logDirectory')}</div>
-            <div className="text-xs text-[var(--color-text-tertiary)] font-mono break-all mt-0.5">{status?.logDir ?? '-'}</div>
-          </div>
-          <Button variant="secondary" size="sm" onClick={handleOpenDir}>
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">folder_open</span>
+      <SettingsGroup className="mt-7">
+        <SettingsRow
+          title={t('settings.diagnostics.logDirectory')}
+          description={<span className="break-all font-mono text-[11px]">{status?.logDir ?? '-'}</span>}
+          layout="inline"
+        >
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={handleOpenDir}
+            icon={<FolderOpen size={14} strokeWidth={1.75} aria-hidden="true" />}
+          >
             {t('settings.diagnostics.openDirectory')}
           </Button>
-        </div>
-        <div className="px-4 py-3 flex flex-wrap items-center gap-2">
-          <Button size="sm" onClick={handleExport} loading={isExporting}>
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">archive</span>
-            {t('settings.diagnostics.exportBundle')}
-          </Button>
-          <Button variant="secondary" size="sm" onClick={handleCopySummary}>
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">content_copy</span>
-            {t('settings.diagnostics.copySummary')}
-          </Button>
-          <Button variant="secondary" size="sm" onClick={handleCopyIssueReport} loading={isCopyingIssueReport}>
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">assignment</span>
-            {t('settings.diagnostics.copyIssueReport')}
-          </Button>
-          <Button variant="danger" size="sm" onClick={() => setClearConfirmOpen(true)} loading={isClearing}>
-            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">delete</span>
-            {t('settings.diagnostics.clearLogs')}
-          </Button>
-          {lastExportPath && (
-            <span className="w-full text-xs text-[var(--color-text-tertiary)] font-mono break-all">
-              {lastExportPath}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="mb-3">
-        <h3 className="text-sm font-semibold text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>{t('settings.diagnostics.recentEvents')}</h3>
-        <p className="text-xs text-[var(--color-text-tertiary)] mt-0.5">{t('settings.diagnostics.privacyNote')}</p>
-      </div>
-
-      <div className="border border-[var(--color-border)] rounded-[var(--radius-lg)] overflow-hidden">
-        {events.length === 0 ? (
-          <div className="px-4 py-8 text-sm text-[var(--color-text-tertiary)] text-center">
-            {isLoading ? t('common.loading') : t('settings.diagnostics.noEvents')}
+        </SettingsRow>
+        <SettingsBlock>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={handleExport}
+              loading={isExporting}
+              icon={<Archive size={14} strokeWidth={1.75} aria-hidden="true" />}
+            >
+              {t('settings.diagnostics.exportBundle')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleCopySummary}
+              icon={<Copy size={14} strokeWidth={1.75} aria-hidden="true" />}
+            >
+              {t('settings.diagnostics.copySummary')}
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleCopyIssueReport}
+              loading={isCopyingIssueReport}
+              icon={<ClipboardList size={14} strokeWidth={1.75} aria-hidden="true" />}
+            >
+              {t('settings.diagnostics.copyIssueReport')}
+            </Button>
+            <Button
+              variant="danger-ghost"
+              size="sm"
+              className="ml-auto"
+              onClick={() => setClearConfirmOpen(true)}
+              loading={isClearing}
+              icon={<Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />}
+            >
+              {t('settings.diagnostics.clearLogs')}
+            </Button>
           </div>
-        ) : (
-          <div className="divide-y divide-[var(--color-border)]">
-            {events.map((event) => (
+          {lastExportPath && (
+            <div className="mt-2 break-all font-mono text-[11px] text-[var(--color-text-tertiary)]">
+              {lastExportPath}
+            </div>
+          )}
+        </SettingsBlock>
+      </SettingsGroup>
+
+      <SettingsSection
+        title={t('settings.diagnostics.recentEvents')}
+        description={t('settings.diagnostics.privacyNote')}
+      >
+        <SettingsGroup>
+          {events.length === 0 ? (
+            <EmptyState
+              variant="plain"
+              size="sm"
+              icon={<HeartPulse size={18} strokeWidth={1.75} />}
+              description={isLoading ? t('common.loading') : t('settings.diagnostics.noEvents')}
+            />
+          ) : (
+            events.map((event) => (
               <EventRow
                 key={event.id}
                 event={event}
@@ -333,10 +395,10 @@ export function DiagnosticsSettings() {
                 eventIdCopyFailedLabel={t('settings.diagnostics.eventIdCopyFailed')}
                 addToast={addToast}
               />
-            ))}
-          </div>
-        )}
-      </div>
+            ))
+          )}
+        </SettingsGroup>
+      </SettingsSection>
 
       <ConfirmDialog
         open={rebuildConfirmOpen}
@@ -369,6 +431,25 @@ export function DiagnosticsSettings() {
   )
 }
 
+function WarningBanner({ children }: { children: ReactNode }) {
+  return (
+    <div
+      role="alert"
+      className="mt-3 flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-2 text-xs leading-[1.5] text-[var(--color-on-warning-container)]"
+    >
+      <TriangleAlert size={14} strokeWidth={1.75} className="mt-px shrink-0" aria-hidden="true" />
+      <span className="min-w-0">{children}</span>
+    </div>
+  )
+}
+
+const LOCAL_INDEX_STATE_TONE: Record<LocalIndexState, Tone> = {
+  off: 'neutral',
+  building: 'info',
+  ready: 'success',
+  degraded: 'warning',
+}
+
 function LocalIndexPanel({
   status,
   unavailable,
@@ -391,17 +472,13 @@ function LocalIndexPanel({
       : null
 
   return (
-    <section
-      role="region"
-      aria-labelledby={titleId}
-      className="mb-5 rounded-[var(--radius-lg)] border border-[var(--color-border)]"
-    >
-      <div className="flex flex-col gap-3 border-b border-[var(--color-border)] px-4 py-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-          <h3 id={titleId} className="text-sm font-medium text-[var(--color-text-primary)]" style={{ fontFamily: 'var(--font-headline)' }}>
+    <section role="region" aria-labelledby={titleId} className="mt-7">
+      <div className="mb-2 flex items-end justify-between gap-3 px-0.5">
+        <div className="min-w-0">
+          <h3 id={titleId} className="text-[13px] font-semibold leading-5 text-[var(--color-text-secondary)]">
             {t('settings.diagnostics.localIndex.title')}
           </h3>
-          <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
+          <p className="mt-0.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
             {t('settings.diagnostics.localIndex.description')}
           </p>
         </div>
@@ -411,57 +488,75 @@ function LocalIndexPanel({
           onClick={onRebuild}
           loading={rebuilding}
           disabled={unavailable}
+          icon={<Database size={14} strokeWidth={1.75} aria-hidden="true" />}
         >
-          <span className="material-symbols-outlined text-[16px]" aria-hidden="true">database</span>
           {t('settings.diagnostics.localIndex.rebuild')}
         </Button>
       </div>
 
-      {status ? (
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 px-4 py-3 sm:grid-cols-4">
-          <IndexMetric label={t('settings.diagnostics.localIndex.state')} value={localIndexStateLabel(status.state, t)} />
-          <IndexMetric
-            label={t('settings.diagnostics.localIndex.indexed')}
-            value={`${status.indexed} / ${status.discovered}`}
-          />
-          <IndexMetric label={t('settings.diagnostics.localIndex.degradedSources')} value={String(status.degradedSources)} />
-          <IndexMetric label={t('settings.diagnostics.localIndex.databaseSize')} value={formatBytes(status.databaseBytes)} />
-          <IndexMetric label={t('settings.diagnostics.localIndex.walSize')} value={formatBytes(status.walBytes)} />
-          <IndexMetric
-            label={t('settings.diagnostics.localIndex.lastUpdated')}
-            value={status.lastUpdatedAt ? new Date(status.lastUpdatedAt).toLocaleString() : t('settings.diagnostics.localIndex.never')}
-          />
-          <IndexMetric
-            label={t('settings.diagnostics.localIndex.errorCode')}
-            value={status.lastErrorCode ?? t('settings.diagnostics.localIndex.none')}
-            mono={Boolean(status.lastErrorCode)}
-          />
-        </div>
-      ) : (
-        <div className="px-4 py-4 text-xs text-[var(--color-text-tertiary)]">
-          {unavailable ? t('settings.diagnostics.localIndex.unavailable') : t('common.loading')}
-        </div>
-      )}
+      <SettingsGroup>
+        {status ? (
+          <SettingsBlock>
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(128px,1fr))] gap-x-4 gap-y-3 py-0.5">
+              <IndexMetric
+                label={t('settings.diagnostics.localIndex.state')}
+                value={(
+                  <span className="inline-flex items-center gap-1.5">
+                    <StatusDot tone={LOCAL_INDEX_STATE_TONE[status.state]} size="md" />
+                    <span>{localIndexStateLabel(status.state, t)}</span>
+                  </span>
+                )}
+              />
+              <IndexMetric
+                label={t('settings.diagnostics.localIndex.indexed')}
+                value={`${status.indexed} / ${status.discovered}`}
+              />
+              <IndexMetric label={t('settings.diagnostics.localIndex.degradedSources')} value={String(status.degradedSources)} />
+              <IndexMetric label={t('settings.diagnostics.localIndex.databaseSize')} value={formatBytes(status.databaseBytes)} />
+              <IndexMetric label={t('settings.diagnostics.localIndex.walSize')} value={formatBytes(status.walBytes)} />
+              <IndexMetric
+                label={t('settings.diagnostics.localIndex.lastUpdated')}
+                value={status.lastUpdatedAt ? new Date(status.lastUpdatedAt).toLocaleString() : t('settings.diagnostics.localIndex.never')}
+              />
+              <IndexMetric
+                label={t('settings.diagnostics.localIndex.errorCode')}
+                value={status.lastErrorCode ?? t('settings.diagnostics.localIndex.none')}
+                mono={Boolean(status.lastErrorCode)}
+              />
+            </div>
+          </SettingsBlock>
+        ) : (
+          <SettingsBlock className="text-xs text-[var(--color-text-tertiary)]">
+            {unavailable ? t('settings.diagnostics.localIndex.unavailable') : t('common.loading')}
+          </SettingsBlock>
+        )}
 
-      {stateMessage ? (
-        <div role="status" className="border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-tertiary)]">
-          {stateMessage}
-        </div>
-      ) : null}
-      {rebuildSucceeded ? (
-        <div role="status" className="border-t border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-success)]">
-          {t('settings.diagnostics.localIndex.rebuildSucceeded')}
-        </div>
-      ) : null}
+        {stateMessage ? (
+          <div role="status" className="flex items-start gap-2 px-4 py-2.5 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+            <Info size={14} strokeWidth={1.75} className="mt-px shrink-0" aria-hidden="true" />
+            <span className="min-w-0">{stateMessage}</span>
+          </div>
+        ) : null}
+        {rebuildSucceeded ? (
+          <div role="status" className="flex items-start gap-2 px-4 py-2.5 text-xs leading-[1.5] text-[var(--color-success)]">
+            <CircleCheck size={14} strokeWidth={1.75} className="mt-px shrink-0" aria-hidden="true" />
+            <span className="min-w-0">{t('settings.diagnostics.localIndex.rebuildSucceeded')}</span>
+          </div>
+        ) : null}
+      </SettingsGroup>
     </section>
   )
 }
 
-function IndexMetric({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+function IndexMetric({ label, value, mono = false }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <div className="min-w-0">
-      <div className="text-[11px] text-[var(--color-text-tertiary)]">{label}</div>
-      <div className={`mt-0.5 break-words text-xs font-medium text-[var(--color-text-primary)]${mono ? ' font-mono' : ''}`}>
+      <div className="text-xs text-[var(--color-text-tertiary)]">{label}</div>
+      <div
+        className={`mt-0.5 break-words font-medium tabular-nums text-[var(--color-text-primary)] ${
+          mono ? 'font-mono text-xs' : 'text-[13px]'
+        }`}
+      >
         {value}
       </div>
     </div>
@@ -476,11 +571,18 @@ function localIndexStateLabel(state: LocalIndexState, t: Translation): string {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="border border-[var(--color-border)] rounded-[var(--radius-lg)] px-3 py-2">
-      <div className="text-xs text-[var(--color-text-tertiary)]">{label}</div>
-      <div className="text-sm font-semibold text-[var(--color-text-primary)] mt-1">{value}</div>
+    <div className="min-w-0">
+      <dt className="truncate text-xs text-[var(--color-text-tertiary)]">{label}</dt>
+      <dd className="mt-0.5 break-words text-sm font-semibold leading-snug tabular-nums text-[var(--color-text-primary)]">{value}</dd>
     </div>
   )
+}
+
+const SEVERITY_TONE: Record<DiagnosticSeverity, Tone> = {
+  error: 'danger',
+  warn: 'warning',
+  info: 'neutral',
+  debug: 'neutral',
 }
 
 function EventRow({
@@ -500,49 +602,48 @@ function EventRow({
   eventIdCopyFailedLabel: string
   addToast: ReturnType<typeof useUIStore.getState>['addToast']
 }) {
-  const severityClass =
-    event.severity === 'error'
-      ? 'text-[var(--color-error)]'
-      : event.severity === 'warn'
-        ? 'text-[var(--color-warning)]'
-        : 'text-[var(--color-text-tertiary)]'
+  const tone = SEVERITY_TONE[event.severity] ?? 'neutral'
   const detailsText = formatDetails(event.details)
 
   return (
-    <div className="px-4 py-3 grid grid-cols-1 md:grid-cols-[120px_92px_1fr] gap-3 items-start">
-      <div className="text-xs text-[var(--color-text-tertiary)] font-mono">
-        {new Date(event.timestamp).toLocaleString()}
-      </div>
-      <div className={`text-xs font-semibold uppercase ${severityClass}`}>{event.severity}</div>
-      <div className="min-w-0">
-        <div className="flex items-center gap-2 min-w-0">
-          <span className="text-sm font-medium text-[var(--color-text-primary)] truncate">{event.type}</span>
-          {event.sessionId && (
-            <span className="text-[11px] text-[var(--color-text-tertiary)] font-mono truncate">{event.sessionId}</span>
-          )}
+    <div data-testid="diagnostic-event" className="flex items-start gap-3 px-4 py-3">
+      <StatusDot tone={tone} size="md" className="mt-[7px]" />
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[13px] font-medium text-[var(--color-text-primary)]">{event.type}</span>
+          <Badge tone={tone} size="xs">{event.severity}</Badge>
+          <span className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+            {new Date(event.timestamp).toLocaleString()}
+          </span>
         </div>
-        <div className="text-xs text-[var(--color-text-secondary)] mt-1 break-words">{event.summary}</div>
-        <Button
-          variant="ghost"
-          size="xs"
-          className="mt-1 max-w-full"
-          aria-label={`${copyEventIdLabel}: ${event.id}`}
-          onClick={async () => {
-            const copied = await copyTextToClipboard(event.id)
-            addToast({ type: copied ? 'success' : 'error', message: copied ? eventIdCopiedLabel : eventIdCopyFailedLabel })
-          }}
-          icon={<span className="material-symbols-outlined text-[13px]" aria-hidden="true">content_copy</span>}
-          iconPosition="end"
-        >
-          <span>{eventIdLabel}:</span>
-          <span className="font-mono truncate">{event.id}</span>
-        </Button>
+        {event.sessionId && (
+          <div className="mt-0.5 truncate font-mono text-[11px] text-[var(--color-text-tertiary)]">{event.sessionId}</div>
+        )}
+        <div className="mt-1 break-words text-xs leading-[1.5] text-[var(--color-text-secondary)]">{event.summary}</div>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+          <Button
+            variant="ghost"
+            size="xs"
+            className="-ml-1.5 max-w-full"
+            aria-label={`${copyEventIdLabel}: ${event.id}`}
+            onClick={async () => {
+              const copied = await copyTextToClipboard(event.id)
+              addToast({ type: copied ? 'success' : 'error', message: copied ? eventIdCopiedLabel : eventIdCopyFailedLabel })
+            }}
+            icon={<Copy size={12} strokeWidth={2} aria-hidden="true" />}
+            iconPosition="end"
+          >
+            <span>{eventIdLabel}:</span>
+            <span className="truncate font-mono">{event.id}</span>
+          </Button>
+        </div>
         {detailsText && (
-          <details className="mt-2">
-            <summary className="cursor-pointer text-xs text-[var(--color-text-tertiary)] select-none">
+          <details className="group mt-1">
+            <summary className="inline-flex cursor-pointer select-none list-none items-center gap-1 text-xs text-[var(--color-text-tertiary)] hover:text-[var(--color-text-secondary)] [&::-webkit-details-marker]:hidden">
+              <ChevronRight size={12} strokeWidth={2} className="transition-transform group-open:rotate-90" aria-hidden="true" />
               {detailsLabel}
             </summary>
-            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container)] p-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+            <pre className="mt-1.5 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3 font-mono text-[11px] leading-[1.6] text-[var(--color-text-secondary)]">
               {detailsText}
             </pre>
           </details>

@@ -36,7 +36,7 @@ function ErrorBoundaryFallback() {
   return (
     <div className="h-screen w-screen bg-[var(--color-background)] text-[var(--color-text-primary)] flex items-center justify-center p-6">
       <div className="max-w-md w-full text-center">
-        <div className="text-base font-semibold">{t('errorBoundary.title')}</div>
+        <div className="text-[15px] font-semibold">{t('errorBoundary.title')}</div>
         <div className="mt-2 text-sm text-[var(--color-text-tertiary)]">
           {t('errorBoundary.description')}
         </div>

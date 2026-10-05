@@ -86,18 +86,19 @@ const DISABLED_FILL =
 const DISABLED_FADE = 'disabled:opacity-50'
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
-  // Solid ink that turns terracotta on hover — the handoff's primary action.
-  // It is deliberately not the brand color at rest: on a page where terracotta
-  // marks the accent everywhere, an ink block is what reads as "the button".
+  // Solid ink, and still ink on hover (a lighter one). It is deliberately not
+  // the brand color: terracotta is reserved for the brand, the send key and
+  // selection, so an ink block is what reads as "the button". The old hover
+  // lift and terracotta flip made every confirm look like a marketing CTA.
   primary:
-    `bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-brand)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
+    `bg-[var(--color-btn-primary-bg)] text-[var(--color-btn-primary-fg)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-btn-primary-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   // Terracotta at rest. `primary`'s ink block is right where a button sits among
   // other buttons; `accent` is for the one control on a surface that has no
   // competition and has to be found instantly — the composer's send key. Using
   // it anywhere terracotta already marks something else is what `primary`
   // exists to avoid.
   accent:
-    `bg-[var(--color-brand)] text-[var(--color-on-primary)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-brand-hover)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
+    `bg-[var(--color-brand)] text-[var(--color-on-primary)] shadow-[var(--shadow-button-primary)] hover:bg-[var(--color-brand-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   secondary:
     `bg-[var(--color-surface)] text-[var(--color-text-primary)] border border-[var(--color-border)] hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   tonal:
@@ -111,9 +112,9 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   danger:
     // Foreground from a token, not `white`: dark's --color-error is a light red
     // that white text is unreadable on.
-    `bg-[var(--color-error)] text-[var(--color-on-error)] hover:brightness-110 hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
+    `bg-[var(--color-error)] text-[var(--color-on-error)] hover:brightness-110 active:scale-[0.98] ${DISABLED_FILL}`,
   inverse:
-    `bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)] hover:bg-[var(--color-brand)] hover:-translate-y-px active:translate-y-0 active:scale-[0.97] ${DISABLED_FILL}`,
+    `bg-[var(--color-inverse-surface)] text-[var(--color-inverse-on-surface)] hover:bg-[var(--color-btn-primary-hover)] active:scale-[0.98] ${DISABLED_FILL}`,
   'danger-outline':
     `bg-transparent text-[var(--color-error)] border border-[var(--color-error)] hover:bg-[var(--color-error-soft)] active:scale-[0.98] ${DISABLED_FADE}`,
   'danger-ghost':
@@ -134,7 +135,7 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
 const SIZE_CLASSES: Record<ButtonSize, string> = {
   xs: 'h-5 text-[11px] gap-1',
   sm: 'h-6 text-xs gap-1.5',
-  base: 'h-8 text-xs gap-1.5',
+  base: 'h-8 text-[13px] gap-1.5',
   md: 'h-9 text-sm gap-1.5',
   lg: 'h-10 text-sm gap-2',
 }

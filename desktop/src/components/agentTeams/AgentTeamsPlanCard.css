@@ -20,17 +20,6 @@
   background: var(--color-surface-hover);
 }
 
-.team-plan-chevron {
-  width: 6px;
-  height: 6px;
-  flex-shrink: 0;
-  margin: -3px 2px 0 0;
-  border-right: 1px solid currentColor;
-  border-bottom: 1px solid currentColor;
-  transform: rotate(45deg);
-  opacity: 0.6;
-}
-
 .team-plan-detail,
 .team-plan-batch {
   animation: team-plan-reveal 220ms cubic-bezier(0.16, 1, 0.3, 1) both;

@@ -28,20 +28,20 @@ export function MarketDisclaimer() {
     <div
       role="note"
       data-testid="market-disclaimer"
-      className="flex items-start gap-3 rounded-[var(--radius-lg)] border border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] px-[18px] py-3.5"
+      className="flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] py-2 pl-3 pr-1.5 text-[var(--color-on-warning-container)]"
     >
-      <ShieldAlert className="mt-0.5 h-[17px] w-[17px] flex-shrink-0 text-[var(--color-brand)]" strokeWidth={1.5} aria-hidden="true" />
-      {/* Foreground is the darkened pair, never `--color-brand`: terracotta on
-          its own soft fill measures 4.3:1 under the two ink themes. */}
-      <p className="min-w-0 flex-1 text-[13px] leading-[1.7] text-[var(--color-on-brand-soft)] sm:text-sm">
-        <span className="font-semibold">{t('market.disclaimer.title')}</span>{' '}
+      {/* A caution, so the shared "needs your attention" tone rather than the
+          brand wash: terracotta marks the brand and selection, never a state. */}
+      <ShieldAlert className="mt-[3px] flex-shrink-0" size={14} strokeWidth={1.75} aria-hidden="true" />
+      <p className="min-w-0 flex-1 text-[13px] leading-5">
+        <span className="font-medium">{t('market.disclaimer.title')}</span>{' '}
         {t('market.disclaimer.body')}
       </p>
       <IconButton
-        icon={<X className="h-4 w-4" strokeWidth={2} aria-hidden="true" />}
+        icon={<X size={14} strokeWidth={1.75} aria-hidden="true" />}
         label={t('market.disclaimer.dismiss')}
         tone="muted"
-        className="-mr-1"
+        size="xs"
         onClick={() => {
           setDismissed(true)
           try {

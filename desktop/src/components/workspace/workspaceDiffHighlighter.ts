@@ -221,7 +221,6 @@ const workspaceDiffShikiTheme: ThemeRegistration = {
       },
     },
     { scope: ['markup.bold'], settings: { fontStyle: 'bold' } },
-    { scope: ['markup.italic'], settings: { fontStyle: 'italic' } },
   ],
 }
 
@@ -232,7 +231,7 @@ const workspaceCodeShikiTheme: ThemeRegistration = {
   bg: 'transparent',
   settings: [
     { settings: { foreground: 'var(--color-code-fg)', background: 'transparent' } },
-    { scope: ['comment', 'punctuation.definition.comment'], settings: { foreground: 'var(--color-code-comment)', fontStyle: 'italic' } },
+    { scope: ['comment', 'punctuation.definition.comment'], settings: { foreground: 'var(--color-code-comment)' } },
     { scope: ['string', 'string.quoted', 'string.template', 'string.other.link'], settings: { foreground: 'var(--color-code-string)' } },
     { scope: ['string.regexp'], settings: { foreground: 'var(--color-primary-container)' } },
     { scope: ['keyword', 'keyword.control', 'storage', 'storage.type', 'storage.modifier'], settings: { foreground: 'var(--color-code-keyword)' } },

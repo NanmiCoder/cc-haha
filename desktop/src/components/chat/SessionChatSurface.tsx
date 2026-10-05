@@ -27,18 +27,18 @@ export function SessionChatHeader({
       data-testid="session-header"
       className={[
         'w-full border-b border-[var(--color-border)]',
-        compact ? 'px-4 py-2.5' : 'px-9 py-3',
+        compact ? 'px-4 py-2.5' : 'px-7 py-3.5',
       ].join(' ')}
     >
       <div className="mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)]">
-        <div className="flex min-w-0 items-start gap-3">
+        {/* Top-aligned so a goal / team strip below the meta line does not drag
+            the actions down; they are offset to centre on title + meta. */}
+        <div className="flex min-w-0 items-start gap-4">
           {leading}
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 items-center gap-2">
               <h1
-                className={`min-w-0 truncate font-bold leading-tight tracking-[-0.2px] text-[var(--color-text-primary)] ${
-                  compact ? 'text-[15px]' : 'text-[17px]'
-                }`}
+                className="min-w-0 truncate text-[15px] font-semibold leading-[1.35] tracking-[-0.01em] text-[var(--color-text-primary)]"
                 style={{ fontFamily: 'var(--font-headline)' }}
                 title={title}
               >
@@ -47,10 +47,12 @@ export function SessionChatHeader({
               {titleAddon}
             </div>
             {metadata.length > 0 ? (
-              <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-[11px] text-[var(--color-text-tertiary)]">
+              <div className="mt-[3px] flex min-w-0 items-center gap-2 overflow-hidden whitespace-nowrap text-xs text-[var(--color-text-tertiary)] [&_svg]:shrink-0">
                 {metadata.map((item, index) => (
                   <Fragment key={item.key}>
-                    {index > 0 ? <span aria-hidden="true" className="shrink-0">·</span> : null}
+                    {index > 0 ? (
+                      <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
+                    ) : null}
                     {item.content}
                   </Fragment>
                 ))}
@@ -58,7 +60,7 @@ export function SessionChatHeader({
             ) : null}
             {children}
           </div>
-          {actions ? <div className="flex shrink-0 items-center gap-1">{actions}</div> : null}
+          {actions ? <div className="flex shrink-0 items-center gap-2 pt-1">{actions}</div> : null}
         </div>
       </div>
     </div>

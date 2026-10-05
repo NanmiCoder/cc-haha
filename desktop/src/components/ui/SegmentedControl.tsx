@@ -110,7 +110,7 @@ export function SegmentedControl<T extends string>({
         isChip ? 'flex flex-wrap items-center gap-1.5' : 'inline-flex items-center',
         appearance === 'underline'
           ? 'gap-1 border-b border-[var(--color-border)]'
-          : !isChip && 'gap-0.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container)] p-0.5',
+          : !isChip && 'gap-0.5 rounded-[var(--radius-md)] bg-[var(--color-surface-container-high)] p-0.5',
         layout === 'fill' && 'flex w-full',
         !isChip && SIZE_CLASSES[size],
         className,
@@ -155,11 +155,12 @@ export function SegmentedControl<T extends string>({
                 )
                 : cx(
                   'rounded-[var(--radius-sm)]',
+                  // `solid` and `raised` now share the lifted segment: a
+                  // terracotta-filled segment competed with the send key for
+                  // "the one brand-colored thing on screen".
                   selected
-                    ? appearance === 'raised'
-                      ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]'
-                      : 'bg-[var(--color-brand)] text-[var(--color-on-primary)]'
-                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
+                    ? 'bg-[var(--color-surface)] text-[var(--color-text-primary)] shadow-[var(--shadow-segment)]'
+                    : 'text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]',
                 ),
             )}
           >

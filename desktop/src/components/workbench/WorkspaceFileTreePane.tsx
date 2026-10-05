@@ -269,7 +269,7 @@ export function WorkspaceFileTreePane({
       data-testid="workspace-file-tree"
       className="flex h-full min-h-0 w-full flex-col border-l border-[var(--color-border)] bg-[var(--color-surface)]"
     >
-      <div className="shrink-0 px-2 pb-1 pt-2">
+      <div className="shrink-0 px-2 pb-2 pt-2.5">
         <SearchField
           ref={inputRef}
           data-workspace-autofocus={autoFocus && treeView.open ? '' : undefined}
@@ -281,7 +281,7 @@ export function WorkspaceFileTreePane({
           }}
           value={filter}
           onChange={setFilter}
-          size="md"
+          size="sm"
           label={t('workspace.files.filter')}
           placeholder={t('workspace.files.filter')}
           clearLabel={t('workspace.clearFilter')}
@@ -289,9 +289,9 @@ export function WorkspaceFileTreePane({
         />
       </div>
 
-      {searchError ? <p role="alert" className="px-2 text-xs text-[var(--color-error)]">{searchError}</p> : null}
-      {searching ? <p role="status" className="px-2 text-xs text-[var(--color-text-tertiary)]">{t('workspace.searching')}</p> : null}
-      {search?.truncated ? <p role="status" className="px-2 text-xs text-[var(--color-text-tertiary)]">{t('workspace.searchResultsTruncated', { count: search.entries.length })}</p> : null}
+      {searchError ? <p role="alert" className="px-3 pb-1 text-xs text-[var(--color-error)]">{searchError}</p> : null}
+      {searching ? <p role="status" className="px-3 pb-1 text-xs text-[var(--color-text-tertiary)]">{t('workspace.searching')}</p> : null}
+      {search?.truncated ? <p role="status" className="px-3 pb-1 text-xs text-[var(--color-text-tertiary)]">{t('workspace.searchResultsTruncated', { count: search.entries.length })}</p> : null}
       {treeFailures.length > 0 ? (
         <div className="max-h-[40%] shrink-0 overflow-y-auto px-2 py-1">
           {treeFailures.map((failure) => {
@@ -308,7 +308,7 @@ export function WorkspaceFileTreePane({
           })}
         </div>
       ) : null}
-      <div ref={scrollRef} onScroll={(event) => setTreeView(sessionId, { scrollTop: event.currentTarget.scrollTop })} className="min-h-0 flex-1 overflow-auto px-1 pb-2" role="tree" aria-label={t('workspace.files.tree')}>
+      <div ref={scrollRef} onScroll={(event) => setTreeView(sessionId, { scrollTop: event.currentTarget.scrollTop })} className="min-h-0 flex-1 overflow-auto px-2 pb-2" role="tree" aria-label={t('workspace.files.tree')}>
         {rootLoading && rows.length === 0 ? (
           <div className="flex items-center justify-center py-6">
             <Spinner size={16} label={t('common.loading')} />
@@ -355,9 +355,9 @@ export function WorkspaceFileTreePane({
                 }}
                 style={{ paddingLeft: 6 + row.depth * 16 }}
                 className={[
-                  'relative flex h-[34px] cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] pr-2 text-[14px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
+                  'relative flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-sm)] pr-2 text-[13px] outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]',
                   isSelected
-                    ? 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]'
+                    ? 'bg-[var(--color-surface-selected)] font-medium text-[var(--color-text-primary)]'
                     : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
                 ].join(' ')}
               >
@@ -367,8 +367,8 @@ export function WorkspaceFileTreePane({
                 <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]">
                   {row.isDirectory
                     ? row.expanded
-                      ? <ChevronDown size={14} strokeWidth={1.9} aria-hidden="true" />
-                      : <ChevronRight size={14} strokeWidth={1.9} aria-hidden="true" />
+                      ? <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />
+                      : <ChevronRight size={14} strokeWidth={1.75} aria-hidden="true" />
                     : <WorkspaceFileIcon path={row.path} />}
                 </span>
                 <span className="min-w-0 flex-1 truncate" title={row.path}>

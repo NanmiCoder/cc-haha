@@ -43,7 +43,7 @@ it('asks v1 users to confirm model configuration management before enabling agai
   mocks.getStatus.mockResolvedValue({ ...mocks.status, state: 'disabled', hasCredential: true, autoStart: true, consentVersion: 1 })
   render(<PublicAccessSettings />)
   await screen.findByText('Off')
-  expect(screen.getByRole('checkbox')).toBeDisabled()
+  expect(screen.getByRole('switch', { name: 'Restore public access when the desktop starts' })).toBeDisabled()
   fireEvent.click(screen.getByRole('button', { name: 'Enable public access' }))
   const dialog = within(await screen.findByRole('dialog'))
   expect(dialog.getByText(/add, edit, delete and switch model provider configurations and API keys/)).toBeInTheDocument()

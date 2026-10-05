@@ -7,15 +7,12 @@ import type { InstallState } from '../../types/market'
  * Only the status-to-tone map is left; the shell it used to carry was
  * character-identical to `SecurityBadge`'s.
  *
- * `installable` maps to `brand` rather than a neutral fill. This file
- * previously spelled out brand text on `--color-surface-container-low` because
- * brand-on-`--color-primary-fixed` measures 1.3:1 in the dark theme; the
- * library's `brand` tone pairs brand text with `--color-brand-soft`, which
- * `contrast.test.ts` holds at AA in all three themes.
+ * `installable` is neutral: it is an absence of state, not a state, and the
+ * brand color is reserved for the brand, the send key and selection.
  */
 const TONES: Record<InstallState, Tone> = {
   installed: 'success',
-  installable: 'brand',
+  installable: 'neutral',
   'not-installable': 'danger',
 }
 
@@ -38,11 +35,9 @@ export function InstallStateBadge({ state, className = '' }: { state: InstallSta
     <Badge
       data-testid={`install-badge-${state}`}
       tone={TONES[state]}
-      size="md"
-      pill={false}
-      bordered
+      size="sm"
       className={className}
-      icon={<Icon className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />}
+      icon={<Icon size={12} strokeWidth={2} aria-hidden="true" />}
     >
       {t(LABEL_KEYS[state])}
     </Badge>

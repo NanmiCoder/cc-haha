@@ -420,7 +420,10 @@ describe('chat blocks', () => {
       />,
     )
 
-    expect(container.textContent).toContain('Bash')
+    // A described command is named by its description; the raw tool name and
+    // the command stay in the tooltip.
+    expect(container.textContent).toContain('List files')
+    expect(screen.getByRole('button').getAttribute('title')).toBe('Bash · ls -la')
     expect(container.textContent).not.toContain('file-a')
 
     fireEvent.click(screen.getByRole('button'))
@@ -714,7 +717,8 @@ describe('chat blocks', () => {
       />,
     )
 
-    expect(container.textContent).toContain('Write')
+    expect(container.textContent).toContain('Create')
+    expect(screen.getByRole('button').getAttribute('title')).toContain('Write')
     expect(container.textContent).toContain('ai-code-novel.md')
     expect(container.textContent).toContain('Generating content')
   })
@@ -840,8 +844,9 @@ describe('chat blocks', () => {
       />,
     )
 
-    expect(container.textContent).toContain('Bash')
+    expect(container.textContent).toContain('Show full diff of latest commit')
     expect(container.textContent).toContain('fatal: unrecognized argument: --no-stat')
+    expect(container.querySelector('[data-tool-status]')?.getAttribute('data-tool-status')).toBe('error')
   })
 
   it('shows full bash error output when the tool block is expanded', () => {
@@ -864,7 +869,9 @@ describe('chat blocks', () => {
 
     fireEvent.click(screen.getByRole('button'))
 
-    expect(container.textContent).toContain('Error Output')
+    // A failed command reads as failed in the terminal head — no exit code is
+    // recoverable from this payload, so the pill says so instead of guessing 1.
+    expect(container.querySelector('[data-shell-exit]')?.textContent).toBe('Failed')
     expect(container.textContent).toContain('detail line 8')
     expect(container.textContent).toContain('final remediation hint')
   })

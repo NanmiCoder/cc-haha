@@ -4,6 +4,7 @@ import { createPortal } from 'react-dom'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '../../i18n'
 import type { ReasoningEffortLevel } from '../../types/settings'
+import { COMPOSER_MENU_SECTION, COMPOSER_POPOVER } from '@/components/chat/composerMenuStyles'
 
 type Props = {
   open: boolean
@@ -22,9 +23,9 @@ type PopoverPosition = {
   width: number
 }
 
-const POPOVER_WIDTH = 300
+const POPOVER_WIDTH = 320
 const VIEWPORT_MARGIN = 16
-const POPOVER_GAP = 10
+const POPOVER_GAP = 8
 
 export function ReasoningEffortPopover({
   open,
@@ -46,7 +47,6 @@ export function ReasoningEffortPopover({
   const [position, setPosition] = useState<PopoverPosition | null>(null)
   const selectedIndex = Math.max(0, options.indexOf(value))
   const maxIndex = Math.max(0, options.length - 1)
-  const fillPercent = maxIndex === 0 ? 0 : (selectedIndex / maxIndex) * 100
 
   useLayoutEffect(() => {
     if (!open) {
@@ -113,28 +113,17 @@ export function ReasoningEffortPopover({
     <div
       ref={popoverRef}
       data-testid="reasoning-effort-popover"
-      className="fixed z-[var(--z-popover)] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-[22px] pb-[19px] pt-[19px] shadow-[var(--shadow-overlay)]"
+      className={`fixed z-[var(--z-popover)] ${COMPOSER_POPOVER}`}
       style={{ bottom: position.bottom, left: position.left, width: position.width }}
     >
-      <div
-        data-testid="reasoning-effort-header"
-        className="mb-[15px] flex items-baseline justify-between gap-3"
-      >
-        <div
-          data-testid="reasoning-effort-label"
-          className="text-[19px] font-bold leading-none text-[var(--color-text-primary)]"
-          style={{ fontFamily: 'var(--font-headline)' }}
-        >
-          {labels[value]}
-        </div>
-        <div
-          data-testid="reasoning-effort-context-label"
-          className="text-[12.5px] text-[var(--color-text-tertiary)]"
-        >
-          {label}
-        </div>
+      <div data-testid="reasoning-effort-header" className={COMPOSER_MENU_SECTION}>
+        <span data-testid="reasoning-effort-context-label">{label}</span>
       </div>
 
+      {/* A five-way segmented control that keeps the slider semantics: one
+          tab stop, arrow keys step, Home/End jump, and a press or drag picks
+          the nearest segment. The segments are its visual, so they are not
+          separate controls. */}
       <div
         ref={sliderRef}
         role="slider"
@@ -144,7 +133,8 @@ export function ReasoningEffortPopover({
         aria-valuemax={maxIndex}
         aria-valuenow={selectedIndex}
         aria-valuetext={labels[value]}
-        className="group relative flex h-[26px] touch-none cursor-pointer items-center outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-4 focus-visible:ring-offset-[var(--color-surface-container-lowest)]"
+        className="mx-1 mb-1 mt-0.5 grid h-[30px] touch-none cursor-pointer gap-0.5 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] p-0.5 outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        style={{ gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))` }}
         onClick={(event) => selectFromClientX(event.clientX)}
         onPointerDown={(event) => {
           draggingRef.current = true
@@ -187,40 +177,27 @@ export function ReasoningEffortPopover({
           }
         }}
       >
-        <div
-          data-testid="reasoning-effort-track"
-          className="absolute inset-x-0 h-[14px] overflow-hidden rounded-full bg-[var(--color-surface-hover)]"
-        >
-          <div
-            data-testid="reasoning-effort-fill"
-            className="h-full rounded-full bg-[var(--color-brand)] transition-[width] duration-[180ms] motion-reduce:transition-none"
-            style={{ width: `${fillPercent}%` }}
-          />
-        </div>
-
-        <div className="absolute inset-x-0 flex items-center justify-between px-[11px]">
-          {options.map((option, index) => (
+        {options.map((option, index) => {
+          const selected = index === selectedIndex
+          return (
             <span
               key={option}
               data-testid="reasoning-effort-stop"
-              // Foreground token rather than `white/45`: the `/N` modifier
-              // compiles to a color function Safari 15's WebView drops, and the
-              // unfilled half of the track is a light surface under every
-              // palette, where white dots are invisible.
-              className={`h-[7px] w-[7px] rounded-full ${index <= selectedIndex ? 'bg-[var(--color-on-primary)]' : 'bg-[var(--color-outline)]'}`}
-            />
-          ))}
-        </div>
-
-        <div
-          aria-hidden="true"
-          data-testid="reasoning-effort-thumb"
-          // The hairline is what makes the knob readable on the ink themes,
-          // where `--color-surface` resolves to the same value as the popover
-          // it sits on and `--shadow-card` has nothing lighter to cast against.
-          className="absolute top-1/2 h-6 w-6 -translate-x-1/2 -translate-y-1/2 rounded-full border border-[var(--color-outline)] bg-[var(--color-surface)] shadow-[var(--shadow-card)] transition-[left] duration-[180ms] motion-reduce:transition-none"
-          style={{ left: `${fillPercent}%` }}
-        />
+              data-selected={selected || undefined}
+              title={labels[option]}
+              // The lifted segment of `SegmentedControl`: the selected step sits
+              // on the popover's own white with the segment shadow; the rest are
+              // tertiary type on the sunken track.
+              className={`flex min-w-0 items-center justify-center truncate rounded-[var(--radius-xs)] px-1 text-xs transition-colors ${
+                selected
+                  ? 'bg-[var(--color-surface-container-lowest)] font-medium text-[var(--color-text-primary)] shadow-[var(--shadow-segment)]'
+                  : 'text-[var(--color-text-tertiary)] hover:text-[var(--color-text-primary)]'
+              }`}
+            >
+              {labels[option]}
+            </span>
+          )
+        })}
       </div>
     </div>,
     document.body,

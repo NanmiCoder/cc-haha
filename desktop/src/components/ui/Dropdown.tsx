@@ -11,6 +11,8 @@ import {
   type ReactNode,
 } from 'react'
 
+import { Check } from 'lucide-react'
+
 import { useDismissable } from '@/hooks/useDismissable'
 import { cx } from '@/lib/cx'
 
@@ -230,9 +232,9 @@ export function Dropdown<T extends string>({
           tabIndex={-1}
           onKeyDown={handleListKeyDown}
           className={cx(
-            // 17px — overlays are cards, not card innards. One value here
-            // settles the corner for every Dropdown menu in the app.
-            'absolute z-[var(--z-dropdown)] rounded-[var(--radius-xl)]',
+            // Menus are cards (12px) with padded rows; one value here settles
+            // the corner for every Dropdown menu in the app.
+            'absolute z-[var(--z-dropdown)] rounded-[var(--radius-lg)] p-1',
             'bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)]',
             'shadow-[var(--shadow-dropdown)] focus:outline-none',
             maxHeight ? 'overflow-y-auto' : 'overflow-hidden',
@@ -255,11 +257,9 @@ export function Dropdown<T extends string>({
               }}
               onMouseEnter={() => setActiveIndex(index)}
               className={cx(
-                'flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors',
+                'flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-2 text-left transition-colors',
                 item.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-                index === activeIndex && !item.disabled && 'bg-[var(--color-surface-hover)]',
-                item.value === value && 'bg-[var(--color-model-option-selected-bg)]',
-                index > 0 && 'border-t border-[var(--color-border-separator)]',
+                (index === activeIndex || item.value === value) && !item.disabled && 'bg-[var(--color-surface-hover)]',
               )}
             >
               {item.icon && (
@@ -268,19 +268,13 @@ export function Dropdown<T extends string>({
                 </span>
               )}
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-medium text-[var(--color-text-primary)]">{item.label}</div>
+                <div className="text-[13px] font-medium text-[var(--color-text-primary)]">{item.label}</div>
                 {item.description && (
-                  <div className="mt-0.5 text-xs text-[var(--color-text-secondary)]">{item.description}</div>
+                  <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{item.description}</div>
                 )}
               </div>
               {item.value === value && (
-                <span
-                  aria-hidden="true"
-                  className="material-symbols-outlined flex-shrink-0 text-[16px] text-[var(--color-brand)]"
-                  style={{ fontVariationSettings: "'FILL' 1" }}
-                >
-                  check_circle
-                </span>
+                <Check size={15} strokeWidth={2} aria-hidden="true" className="flex-shrink-0 text-[var(--color-brand)]" />
               )}
             </div>
           ))}

@@ -526,6 +526,64 @@ describe('ActiveSession task polling', () => {
     expect(screen.getByTestId('chat-input')).toHaveAttribute('data-variant', 'default')
   })
 
+  it('turns a blank session into the new-session page: project question, starters and recent threads', () => {
+    const sessionId = 'blank-new-session'
+    const base = Date.now()
+    const listItem = (id: string, title: string, messageCount: number, minutesAgo: number, workDir = '/workspace/project') => ({
+      id,
+      title,
+      createdAt: new Date(base - minutesAgo * 60_000).toISOString(),
+      modifiedAt: new Date(base - minutesAgo * 60_000).toISOString(),
+      messageCount,
+      projectPath: workDir,
+      workDir,
+      workDirExists: true,
+    })
+    useSessionStore.setState({
+      sessions: [
+        listItem(sessionId, 'New Session', 0, 0),
+        listItem('older', 'Older thread', 4, 120),
+        listItem('newer', 'Newer thread', 2, 5),
+        listItem('elsewhere', 'Other project thread', 3, 1, '/workspace/other'),
+      ],
+      activeSessionId: sessionId,
+      isLoading: false,
+      error: null,
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId, title: 'New Session', type: 'session', status: 'idle' }],
+      activeTabId: sessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [sessionId]: {
+          ...useChatStore.getState().getSession(sessionId),
+          connectionState: 'connected',
+          historyStatus: 'ready',
+        },
+      },
+    })
+
+    render(<ActiveSession />)
+
+    const hero = screen.getByTestId('empty-session-hero')
+    expect(within(hero).getByRole('heading', { level: 1 })).toHaveTextContent('project')
+    // Only this project's threads with something in them, newest first; the
+    // blank session itself is not "recent".
+    const starter = screen.getByTestId('new-session-starter')
+    const recentTitles = within(starter).getAllByRole('listitem').map((item) => item.textContent ?? '')
+    expect(recentTitles).toHaveLength(2)
+    expect(recentTitles[0]).toContain('Newer thread')
+    expect(recentTitles[1]).toContain('Older thread')
+
+    // A starter chip goes through the composer's insertion queue, so it lands
+    // at the cursor without wiping attachments a replace would clear.
+    const chips = within(within(starter).getByRole('group')).getAllByRole('button')
+    expect(chips).toHaveLength(4)
+    fireEvent.click(chips[1]!)
+    expect(useChatStore.getState().sessions[sessionId]?.composerInsertion?.text).toBe(chips[1]!.textContent)
+  })
+
   it('labels result usage that includes cache tokens without implying the Trace input/output total', async () => {
     const sessionId = 'deepseek-cache-token-session'
 
@@ -2199,7 +2257,14 @@ describe('ActiveSession task polling', () => {
     const resizeHandle = screen.getByTestId('workspace-resize-handle')
 
     const workbenchPanel = screen.getByTestId('workbench-panel')
-    expect(workbenchPanel.style.maxWidth).toBe('70%')
+    // A bare 70% cap ignored the chat column's 400px floor plus the 1px
+    // handle: at 1160px of row a persisted 860px panel was clamped to 812px and
+    // ran 53px past the window edge. Both bounds now deduct that 401px.
+    expect(workbenchPanel.style.maxWidth).toBe('')
+    expect(workbenchPanel).toHaveClass('max-w-[min(70%,calc(100%_-_401px))]')
+    expect(workbenchPanel).toHaveClass('min-w-[min(420px,54%,calc(100%_-_401px))]')
+    expect(resizeHandle).toHaveClass('w-px')
+    expect(chatColumn).toHaveClass('min-w-[400px]')
 
     expect(within(contentRow).getByTestId('message-list')).toBeInTheDocument()
     expect(within(contentRow).getByTestId('message-list')).toHaveAttribute('data-compact', 'true')
@@ -2703,7 +2768,27 @@ describe('ActiveSession header', () => {
     expect(within(titleRow).queryByText('2 messages')).not.toBeInTheDocument()
     expect(within(meta).getByText('2 messages')).toBeInTheDocument()
     expect(within(meta).getByText('15k API tokens')).toBeInTheDocument()
-    expect(header).toHaveClass('py-3')
+    expect(header).toHaveClass('py-3.5')
+  })
+
+  it('leads the metadata with where the session runs: project folder, then branch', async () => {
+    const sessionId = 'header-place-session'
+    mountSessionWithLongTitle(sessionId)
+
+    render(<ActiveSession />)
+
+    const project = screen.getByTestId('session-header-project')
+    expect(project).toHaveTextContent('project')
+    expect(project.querySelector('svg.lucide-folder')).toHaveAttribute('aria-hidden', 'true')
+    // The branch arrives with the git info request.
+    const branch = await screen.findByTestId('session-header-branch')
+    expect(branch).toHaveTextContent('main')
+    expect(branch.querySelector('svg.lucide-git-branch')).toHaveAttribute('aria-hidden', 'true')
+
+    const metaRow = project.parentElement as HTMLElement
+    const order = [...metaRow.children].map((child) => child.getAttribute('data-testid'))
+    expect(order.indexOf('session-header-project')).toBe(0)
+    expect(order.indexOf('session-header-branch')).toBeGreaterThan(0)
   })
 
   it('keeps the separators between metadata items, never in front of them', () => {
@@ -2715,10 +2800,13 @@ describe('ActiveSession header', () => {
     const heading = within(screen.getByTestId('session-header')).getByRole('heading', { level: 1 })
     const meta = (heading.parentElement as HTMLElement).nextElementSibling as HTMLElement
 
-    // 空闲会话只有三项元数据（tokens / 更新时间 / 消息数），之间两个「·」，开头不该有。
-    // 分隔符是纯装饰，读屏时不该被念出来。
-    expect(meta.textContent?.trimStart().startsWith('·')).toBe(false)
-    expect(meta.querySelectorAll('[aria-hidden="true"]')).toHaveLength(2)
+    // 分隔符（3px 圆点）只出现在两项之间，开头不该有；它是纯装饰，读屏时不该被念出来。
+    // 图标也带 aria-hidden，所以这里只数元数据行的直接子元素。
+    const children = [...meta.children]
+    const separators = children.filter((child) => child.getAttribute('aria-hidden') === 'true')
+    expect(children[0]?.getAttribute('aria-hidden')).not.toBe('true')
+    expect(separators.length).toBeGreaterThan(0)
+    expect(separators).toHaveLength(children.length - separators.length - 1)
   })
 })
 

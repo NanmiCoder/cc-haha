@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { LoaderCircle, RefreshCw } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { useChatStore } from '../../stores/chatStore'
 import { useTabStore } from '../../stores/tabStore'
@@ -96,9 +96,9 @@ export function StreamingIndicator() {
         data-testid="api-retry-indicator"
         role="status"
         aria-live="polite"
-        className="mb-2 flex w-full max-w-[min(720px,100%)] flex-wrap items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-warning)] bg-[var(--color-warning-container)] px-3 py-2 text-xs text-[var(--color-on-warning-container)] shadow-[var(--shadow-card)]"
+        className="mb-2 flex w-full flex-wrap items-center gap-2 rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-2 text-xs text-[var(--color-on-warning-container)]"
       >
-        <RefreshCw size={14} strokeWidth={2.2} className="shrink-0 animate-spin text-[var(--color-warning)]" aria-hidden="true" />
+        <RefreshCw size={14} strokeWidth={1.75} className="shrink-0 animate-spin" aria-hidden="true" />
         <span className="font-medium">{t('chat.retry.title')}</span>
         {/*
           Neutral rather than `tone="warning"`: these chips sit on the warning
@@ -130,17 +130,17 @@ export function StreamingIndicator() {
         data-testid="streaming-fallback-indicator"
         role="status"
         aria-live="polite"
-        className="flex w-fit items-center gap-[9px] py-1 text-[13.5px] text-[var(--color-text-secondary)]"
+        className="flex min-h-7 w-fit max-w-full flex-wrap items-center gap-x-2 text-[13px] text-[var(--color-text-secondary)]"
       >
-        <RefreshCw size={13} strokeWidth={2.2} className="shrink-0 animate-spin text-[var(--color-text-secondary)]" aria-hidden="true" />
+        <RefreshCw size={14} strokeWidth={1.75} className="shrink-0 animate-spin text-[var(--color-text-tertiary)]" aria-hidden="true" />
         <span className="font-medium text-[var(--color-text-primary)]">
           {t('chat.fallback.title')}
         </span>
-        <span className="text-[12.5px] text-[var(--color-text-tertiary)]">
+        <span className="text-xs text-[var(--color-text-tertiary)]">
           {t('chat.fallback.detail')}
         </span>
         {elapsedSeconds > 0 && (
-          <span className="text-[12.5px] text-[var(--color-text-tertiary)]">
+          <span className={STATUS_META_CLASS}>
             {formatDurationSeconds(elapsedSeconds, t)}
           </span>
         )}
@@ -151,28 +151,68 @@ export function StreamingIndicator() {
   const verb = resolveTurnStatusVerb(t, chatState, statusVerb)
 
   return (
-    <div
-      data-testid="turn-status-indicator"
-      role="status"
-      aria-live="polite"
-      // Bare line, not a pill: it now sits at the end of the live turn rail, and
-      // the rail already says "still going". A bordered chip here would read as
-      // a second, competing status object next to the one that is lit.
-      className="flex w-fit items-center gap-[9px] py-1 text-[13.5px] text-[var(--color-text-secondary)]"
-    >
-      <span className="animate-pulse-dot text-[var(--color-brand)]" aria-hidden="true">✦</span>
-      <span className="font-medium text-[var(--color-text-primary)]">{verb}...</span>
-      {elapsedSeconds > 0 && (
-        <span>{formatDurationSeconds(elapsedSeconds, t)}</span>
-      )}
-      {streamingTokens > 0 && (
-        <>
-          <span aria-hidden="true">·</span>
-          <span className="font-mono text-[12.5px]">
-            ↓ {t('common.tokens', { count: formatTokenCount(streamingTokens) })}
-          </span>
-        </>
-      )}
-    </div>
+    <>
+      <style>{TURN_STATUS_STYLES}</style>
+      <div
+        data-testid="turn-status-indicator"
+        role="status"
+        aria-live="polite"
+        // Bare line, not a pill: it sits at the end of the live turn, and a
+        // bordered chip here would read as a second, competing status object.
+        className="flex h-7 w-fit max-w-full items-center gap-2 text-[13px] text-[var(--color-text-secondary)]"
+      >
+        {/* The ring a running tool row spins, in the running colour: the
+            turn is working, and it says so the way the rest of the timeline
+            does rather than with a decorative "AI" glyph. */}
+        <LoaderCircle
+          size={15}
+          strokeWidth={1.75}
+          aria-hidden="true"
+          className="turn-status-spinner shrink-0 text-[var(--color-info)] motion-safe:animate-spin"
+        />
+        <span className="turn-status-shimmer min-w-0 truncate font-medium">{verb}...</span>
+        {elapsedSeconds > 0 && (
+          <span className={STATUS_META_CLASS}>{formatDurationSeconds(elapsedSeconds, t)}</span>
+        )}
+        {streamingTokens > 0 && (
+          <>
+            <span aria-hidden="true" className="h-[3px] w-[3px] shrink-0 rounded-full bg-[var(--color-text-tertiary)]" />
+            <span className={STATUS_META_CLASS}>
+              ↓ {t('common.tokens', { count: formatTokenCount(streamingTokens) })}
+            </span>
+          </>
+        )}
+      </div>
+    </>
   )
 }
+
+/** Elapsed time and token count: small, monospaced, steady-width digits. */
+const STATUS_META_CLASS = 'shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]'
+
+/**
+ * The verb reads as live through a light sweeping across it, and the ring
+ * spins; neither moves the layout. Reduced motion keeps both still and leaves
+ * the text in its plain secondary colour.
+ */
+const TURN_STATUS_STYLES = `
+@keyframes turn-status-sweep {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+.turn-status-shimmer {
+  background: linear-gradient(90deg, var(--color-text-tertiary) 0%, var(--color-text-tertiary) 40%, var(--color-text-primary) 50%, var(--color-text-tertiary) 60%, var(--color-text-tertiary) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: turn-status-sweep 2.2s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .turn-status-shimmer {
+    animation: none;
+    background: none;
+    color: var(--color-text-secondary);
+  }
+}
+`

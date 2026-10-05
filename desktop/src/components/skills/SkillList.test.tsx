@@ -79,8 +79,10 @@ describe('SkillList', () => {
 
     render(<SkillList />)
 
-    expect(screen.getByText('Browse installed skills')).toBeInTheDocument()
-    expect(screen.getByText('Skill Browser')).toBeInTheDocument()
+    // The host page head names the browser; the list opens on search and its
+    // numbers rather than a second title block.
+    expect(screen.queryByText('Browse installed skills')).not.toBeInTheDocument()
+    expect(screen.getByRole('searchbox', { name: 'Search skills' })).toBeInTheDocument()
     expect(screen.getByText('Total skills')).toBeInTheDocument()
     expect(screen.getByText('Alpha Skill')).toBeInTheDocument()
     expect(screen.getByText('Second skill description')).toBeInTheDocument()

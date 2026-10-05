@@ -11,6 +11,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { useTranslation } from '../../i18n'
+import { cx } from '@/lib/cx'
 import { Badge, StatusDot } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
@@ -24,6 +25,7 @@ import { resolveCategory, skillSummary, useMarketLocale, visibleTags } from './c
 import { formatCount, formatIsoDate, safeUrl } from './marketFormat'
 import { SecurityBadge } from './SecurityBadge'
 import { SecurityReportPanel } from './SecurityReportPanel'
+import { EXTENSION_PAGE_COLUMN } from './pageLayout'
 import {
   SkillDetailView,
   type SkillDetailMetaItem,
@@ -86,7 +88,7 @@ export function MarketSkillDetail({
     if (detail.requiresApiKey) {
       items.push({
         label: t('market.detail.requiresApiKey'),
-        value: <KeyRound className="ml-auto h-4 w-4 text-[var(--color-warning)]" strokeWidth={2} aria-hidden="true" />,
+        value: <KeyRound className="ml-auto text-[var(--color-warning)]" size={14} strokeWidth={1.75} aria-hidden="true" />,
       })
     }
     return items
@@ -97,31 +99,32 @@ export function MarketSkillDetail({
   if (isDetailLoading) {
     return (
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-[var(--color-surface)]" data-testid="market-detail-loading">
-        <div className="mx-auto w-full max-w-[1280px] px-6 py-6 lg:px-11">
+        <div className={cx(EXTENSION_PAGE_COLUMN, 'pb-6 pt-5')}>
           <Button
             variant="ghost"
-            size="base"
-            icon={<ArrowLeft className="h-4 w-4" strokeWidth={1.6} aria-hidden="true" />}
+            size="sm"
+            className="-ml-2"
+            icon={<ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
             onClick={backToList}
           >
             {t('market.detail.back')}
           </Button>
-          <SkeletonGroup label={t('market.loading')} className="mt-[18px]">
-            <div className="flex items-start gap-6 pb-6">
-              <Skeleton shape="block" width="72px" height="72px" radius="lg" tone="strong" className="flex-shrink-0" />
+          <SkeletonGroup label={t('market.loading')} className="mt-4">
+            <div className="flex items-start gap-4 pb-5">
+              <Skeleton shape="block" width="56px" height="56px" radius="lg" tone="strong" className="flex-shrink-0" />
               <div className="min-w-0 flex-1 pt-1">
                 <Skeleton height="2rem" tone="strong" className="w-64 max-w-full" />
                 <Skeleton height="0.75rem" className="mt-3 w-48" />
                 <Skeleton height="0.75rem" className="mt-4 w-[min(100%,36rem)]" />
               </div>
             </div>
-            <div className="h-[74px] rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]" />
-            <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1fr)_300px] lg:gap-9">
+            <div className="h-[74px] rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]" />
+            <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px] lg:gap-8">
               <div>
                 <Skeleton height="2.75rem" className="w-72" />
-                <div className="mt-[22px] h-72 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]" />
+                <div className="mt-5 h-72 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]" />
               </div>
-              <div className="order-first h-72 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] lg:order-none" />
+              <div className="order-first h-72 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] lg:order-none" />
             </div>
           </SkeletonGroup>
         </div>
@@ -132,18 +135,21 @@ export function MarketSkillDetail({
   if (detailError || !detail) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-20 text-center" data-testid="market-detail-error">
-        <CircleAlert className="h-9 w-9 text-[var(--color-error)]" strokeWidth={1.7} aria-hidden="true" />
-        <p className="text-sm font-medium text-[var(--color-text-primary)]">{t('market.detail.loadError')}</p>
+        <span className="flex h-10 w-10 items-center justify-center rounded-[var(--radius-md)] bg-[var(--color-error-container)] text-[var(--color-on-error-container)]">
+          <CircleAlert size={20} strokeWidth={1.75} aria-hidden="true" />
+        </span>
+        <p className="text-sm font-semibold text-[var(--color-text-primary)]">{t('market.detail.loadError')}</p>
         {detailError && <p className="max-w-md break-words text-xs text-[var(--color-text-tertiary)]">{detailError}</p>}
         <div className="mt-1 flex items-center gap-2">
           <Button
             variant="secondary"
-            icon={<RefreshCw className="h-3.5 w-3.5" strokeWidth={2} aria-hidden="true" />}
+            size="base"
+            icon={<RefreshCw size={14} strokeWidth={1.75} aria-hidden="true" />}
             onClick={() => void refreshDetail(selectedId)}
           >
             {t('market.retry')}
           </Button>
-          <Button variant="ghost" onClick={backToList}>
+          <Button variant="ghost" size="base" onClick={backToList}>
             {t('market.detail.back')}
           </Button>
         </div>
@@ -246,19 +252,19 @@ export function MarketSkillDetail({
           target="_blank"
           rel="noreferrer noopener"
           data-testid="market-source-page-link"
-          className="inline-flex items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-sm font-medium text-[var(--color-text-secondary)] underline-offset-2 transition-colors hover:text-[var(--color-text-primary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+          className="inline-flex h-8 items-center gap-1 rounded-[var(--radius-md)] px-2 text-[13px] font-medium text-[var(--color-text-secondary)] underline-offset-2 transition-colors hover:text-[var(--color-text-primary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
         >
           {t('market.detail.sourcePage')}
-          <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.8} aria-hidden="true" />
+          <ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />
         </a>
       )}
       {detail.installState === 'installable' && (
         <Button
-          size="lg"
+          size="base"
           data-testid="market-install-button"
           data-market-skill-action-id={detail.id}
           loading={installing}
-          icon={<Download className="h-4 w-4" strokeWidth={2} aria-hidden="true" />}
+          icon={<Download size={14} strokeWidth={1.75} aria-hidden="true" />}
           onClick={() => onRequestInstall(detail.id, selectedOwner ?? undefined)}
         >
           {installing ? t('market.install.installing') : t('market.install.action')}
@@ -267,11 +273,11 @@ export function MarketSkillDetail({
       {detail.installState === 'installed' && (
         <Button
           variant="danger-outline"
-          size="lg"
+          size="base"
           data-testid="market-uninstall-button"
           data-market-skill-action-id={detail.id}
           loading={installing}
-          icon={<Trash2 className="h-4 w-4" strokeWidth={2} aria-hidden="true" />}
+          icon={<Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />}
           onClick={() => onRequestUninstall(detail.id)}
         >
           {installing ? t('market.uninstall.uninstalling') : t('market.uninstall.action')}
@@ -283,16 +289,16 @@ export function MarketSkillDetail({
   const banner = (
     <>
       {mirrorSource && (
-        <p className="mt-3 text-[11px] text-[var(--color-text-tertiary)]">
+        <p className="mt-3 text-xs text-[var(--color-text-tertiary)]">
           {t('market.detail.mirror', { source: t(`market.source.${mirrorSource as 'clawhub' | 'skillhub'}`) })}
         </p>
       )}
       {installError && installError.id === detail.id && (
         <div
           data-testid="market-install-error"
-          className="mt-4 flex items-start gap-2 rounded-[var(--radius-lg)] border border-[var(--color-error)] bg-[var(--color-error-container)] px-3.5 py-2.5 text-sm text-[var(--color-on-error-container)]"
+          className="mt-4 flex items-start gap-2 rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-[13px] text-[var(--color-on-error-container)]"
         >
-          <CircleAlert className="mt-0.5 h-4 w-4 flex-shrink-0" strokeWidth={1.6} aria-hidden="true" />
+          <CircleAlert className="mt-[3px] flex-shrink-0" size={14} strokeWidth={1.75} aria-hidden="true" />
           <span className="break-words">
             {installError.kind === 'generic'
               ? t('market.installError.generic', { message: installError.message })
@@ -304,12 +310,12 @@ export function MarketSkillDetail({
   )
 
   const sideCards = triggers.length > 0 && (
-    <Card radius="xl" surface="base" padding="none" className="px-[18px] py-4" data-testid="market-detail-triggers">
-      <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">{t('market.detail.whenToUse')}</h2>
+    <Card radius="lg" surface="lowest" padding="none" className="px-4 py-3.5" data-testid="market-detail-triggers">
+      <h2 className="text-[13px] font-semibold text-[var(--color-text-primary)]">{t('market.detail.whenToUse')}</h2>
       <ol className="mt-3 flex flex-col gap-2.5">
         {triggers.map((trigger, index) => (
-          <li key={trigger} className="flex items-start gap-2.5 text-[13px] leading-5 text-[var(--color-text-secondary)]">
-            <Badge size="xs" pill={false} mono className="mt-px">
+          <li key={trigger} className="flex items-start gap-2 text-[13px] leading-5 text-[var(--color-text-secondary)]">
+            <Badge size="xs" mono className="mt-0.5">
               {index + 1}
             </Badge>
             <span className="min-w-0 break-words">{trigger}</span>

@@ -338,4 +338,23 @@ describe('SkillDetailView market extensions', () => {
     expect(within(sidebar).getByTestId('side-card')).toBeInTheDocument()
     expect(within(sidebar).getByRole('heading', { name: 'Info' })).toBeInTheDocument()
   })
+
+  it('splits into document and rail by its own width, not the window', () => {
+    // The same view fills the extensions page and sits in the 700px settings
+    // pane; a viewport breakpoint put a 280px rail beside the document there.
+    renderView()
+    const view = screen.getByTestId('skill-detail-view')
+    expect(view.className).toContain('@container')
+    const columns = screen.getByTestId('skill-detail-sidebar').parentElement!
+    expect(columns.className).toContain('@4xl:grid-cols-[minmax(0,1fr)_280px]')
+    expect(columns.className).not.toMatch(/(^|\s)lg:grid-cols/)
+  })
+
+  it('lets a host that already lays out a page column skip the view\'s own', () => {
+    const { unmount } = renderView()
+    expect(screen.getByTestId('skill-detail-view').firstElementChild!.className).toContain('max-w-[1200px]')
+    unmount()
+    renderView({ framed: true })
+    expect(screen.getByTestId('skill-detail-view').firstElementChild!.className).not.toContain('max-w-')
+  })
 })

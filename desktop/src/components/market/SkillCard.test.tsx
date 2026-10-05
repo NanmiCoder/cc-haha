@@ -100,17 +100,15 @@ describe('SkillCard', () => {
     expect(screen.queryByTestId('install-badge-installable')).not.toBeInTheDocument()
   })
 
-  it('renders a deterministic letter avatar when iconUrl is missing', () => {
+  it('renders a letter avatar on the themed sunken tile when iconUrl is missing', () => {
     render(<SkillCard skill={makeSkill()} onOpen={vi.fn()} />)
 
     const avatar = screen.getByTestId('skill-avatar-fallback')
     expect(avatar).toHaveTextContent('D')
-    const background = avatar.style.background
-
-    // Same name → same identity color on re-render.
-    render(<SkillCard skill={makeSkill({ id: 'clawhub:demo-2' })} onOpen={vi.fn()} />)
-    const second = screen.getAllByTestId('skill-avatar-fallback')[1]!
-    expect(second.style.background).toBe(background)
+    // The ground comes from a theme token, not an inline hex gradient that
+    // looked the same in all three themes.
+    expect(avatar.style.background).toBe('')
+    expect(avatar.className).toContain('bg-[var(--color-surface-container)]')
   })
 
   it('renders the icon image when iconUrl is provided', () => {

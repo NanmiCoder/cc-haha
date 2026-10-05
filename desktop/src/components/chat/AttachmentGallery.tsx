@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
-import { ChevronDown, MessageSquare, X } from 'lucide-react'
+import { ChevronDown, Folder, MessageSquare, MousePointerClick, X } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { attachmentImageSource } from '../../lib/attachmentImages'
 import { getDesktopHost } from '../../lib/desktopHost'
@@ -158,7 +158,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
         <div
           data-testid="preview-selection-batch"
           aria-label={t('attachments.selectionBatch', { count: attachments.length })}
-          className="grid w-full max-w-[520px] grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-border)] shadow-[var(--shadow-card)]"
+          className="grid w-full max-w-[520px] grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-border)]"
         >
           {attachments.map((attachment, index) => {
             const src = attachmentImageSource(attachment)
@@ -201,7 +201,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   </Badge>
                 </span>
                 <span className="flex min-h-11 min-w-0 items-center gap-2 border-t border-[var(--color-border)] px-2.5 py-1.5">
-                  <span className="shrink-0 font-mono text-[11px] font-semibold text-[var(--color-text-secondary)]">
+                  <span className="shrink-0 font-mono text-[11px] font-medium text-[var(--color-text-secondary)]">
                     {attachment.name}
                   </span>
                   {note && (
@@ -235,7 +235,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   className={
                     isComposer
                       ? 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)]'
-                      : 'overflow-hidden rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left shadow-[var(--shadow-card)] transition-transform hover:scale-[1.01] motion-reduce:transition-none'
+                      : 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left transition-[border-color] hover:border-[var(--color-outline)] motion-reduce:transition-none'
                   }
                 >
                   <img
@@ -260,7 +260,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                     className="max-w-[min(340px,calc(100vw-3rem))] text-[13px]"
                     content={
                       <>
-                        <span className="block text-[11px] font-medium uppercase tracking-wide opacity-70">
+                        <span className="block text-[11px] font-medium opacity-70">
                           {t('attachments.selectionNoteTitle')}
                         </span>
                         <span className="mt-1 block whitespace-pre-wrap break-words">
@@ -276,14 +276,12 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                       className={[
                         'inline-flex h-7 max-w-[260px] items-center gap-1.5 rounded-full border',
                         'border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5',
-                        'text-[12px] font-medium leading-none text-[var(--color-text-primary)] shadow-[var(--shadow-card)]',
+                        'text-[12px] font-medium leading-none text-[var(--color-text-primary)]',
                         'transition-colors hover:border-[var(--color-primary-fixed-dim)] hover:bg-[var(--color-surface-container)]',
                         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2',
                       ].join(' ')}
                     >
-                      <span className="material-symbols-outlined text-[15px] text-[var(--color-text-tertiary)]">
-                        ads_click
-                      </span>
+                      <MousePointerClick size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
                       <span className="min-w-0 truncate">{attachment.name}</span>
                     </span>
                   </Tooltip>
@@ -292,10 +290,10 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                   <button
                     type="button"
                     onClick={() => onRemove(attachment.id!)}
-                    className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-error)] text-[10px] text-[var(--color-on-error)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                    className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-error)] text-[var(--color-on-error)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
                     aria-label={t('attachments.remove', { name: attachment.name })}
                   >
-                    ×
+                    <X size={12} strokeWidth={2} aria-hidden="true" />
                   </button>
                 )}
               </div>
@@ -321,7 +319,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
               <div
                 key={attachment.id || `${attachment.name}-${index}`}
                 data-testid="diff-comment-card"
-                className="group/diff-comment flex max-w-[min(420px,100%)] min-w-[240px] items-start gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-2.5 py-2 text-left shadow-[var(--shadow-card)]"
+                className="group/diff-comment flex max-w-[min(420px,100%)] min-w-[240px] items-start gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2.5 py-2 text-left"
               >
                 <MessageSquare aria-hidden="true" size={15} className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
                 <span className="min-w-0 flex-1">
@@ -377,14 +375,14 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                 style={{ color: fileIconAccent(fileIcon) }}
               >
                 {attachment.isDirectory
-                  ? <span className="material-symbols-outlined text-[19px]">{fileIcon}</span>
+                  ? <Folder size={18} strokeWidth={1.75} aria-hidden="true" />
                   : <FileTypeIcon path={attachment.path || attachment.name} size={20} />}
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block min-w-0 max-w-[260px] truncate text-[13px] font-semibold leading-5 text-[var(--color-text-primary)]">
+                <span className="block min-w-0 max-w-[260px] truncate text-[13px] font-medium leading-5 text-[var(--color-text-primary)]">
                   {attachment.name}{lineLabel}
                 </span>
-                <span className="block truncate text-[10px] font-semibold uppercase leading-3 tracking-[0.08em] text-[var(--color-text-tertiary)]">
+                <span className="block truncate text-[11px] leading-4 text-[var(--color-text-tertiary)]">
                   {typeLabel}
                 </span>
                 {hasQuotePreview && (
@@ -402,7 +400,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
               data-file-extension={typeInfo.ext || undefined}
               className={[
                 'group/file inline-flex max-w-full min-w-[220px] items-stretch overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]',
-                'bg-[var(--color-surface-container-low)] text-[var(--color-text-secondary)] shadow-[var(--shadow-card)]',
+                'bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)]',
                 'transition-colors hover:border-[var(--color-outline)] hover:bg-[var(--color-surface-container)]',
               ].join(' ')}
             >
@@ -433,14 +431,13 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
               data-file-extension={typeInfo.ext || undefined}
               className={[
                 'group/file inline-flex max-w-full min-w-0 items-center gap-2.5 border border-[var(--color-border)]',
-                'rounded-[var(--radius-lg)] bg-[var(--color-surface-container-low)] px-2.5 py-1.5 text-[var(--color-text-secondary)]',
-                'shadow-[var(--shadow-card)]',
+                'rounded-[var(--radius-lg)] bg-[var(--color-surface-container-lowest)] px-2.5 py-1.5 text-[var(--color-text-secondary)]',
               ].join(' ')}
             >
               {fileVisual}
               {onRemove && attachment.id && (
                 <IconButton
-                  icon={<span className="material-symbols-outlined text-[17px]" aria-hidden="true">close</span>}
+                  icon={<X size={14} strokeWidth={1.75} aria-hidden="true" />}
                   label={t('attachments.remove', { name: attachment.name })}
                   size="2xs"
                   tone="muted"

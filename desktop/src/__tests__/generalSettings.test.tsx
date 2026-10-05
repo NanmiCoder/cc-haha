@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { DesktopSettings as Settings } from '../pages/Settings'
@@ -475,16 +475,27 @@ describe('Settings > General tab', () => {
     const activeItem = screen.getByRole('button', { name: 'General' })
     // Selection is a rounded ground inside the rail, not a full-bleed band:
     // the rail is padded, so a square highlight would touch the divider.
-    expect(activeItem.className).toContain('rounded-[var(--radius-md)]')
-    expect(activeItem.className).toContain('bg-[var(--color-surface-hover)]')
+    expect(activeItem.className).toContain('rounded-[var(--radius-sm)]')
+    expect(activeItem.className).toContain('bg-[var(--color-surface-selected)]')
+    expect(activeItem.className).toContain('h-[30px]')
     expect(activeItem).toHaveAttribute('aria-current', 'page')
 
-    const rail = activeItem.parentElement?.parentElement
-    expect(rail?.className).toContain('w-[195px]')
-    expect(rail?.className).toContain('pl-3')
-    expect(rail?.className).toContain('pr-1')
-    expect(activeItem.className).toContain('pl-3')
-    expect(activeItem.className).toContain('pr-2')
+    const rail = screen.getByTestId('settings-navigation')
+    expect(rail).toContainElement(activeItem)
+    expect(rail.className).toContain('w-[216px]')
+    expect(rail.className).toContain('px-2.5')
+    // The rail opens with its own small title, and "About" sits apart below a rule.
+    expect(within(rail).getByText('Settings')).toBeInTheDocument()
+    const about = within(rail).getByRole('button', { name: 'About' })
+    const diagnostics = within(rail).getByRole('button', { name: 'Diagnostics' })
+    expect((diagnostics.compareDocumentPosition(about) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+  })
+
+  it('titles each pane with its rail label', () => {
+    useUIStore.setState({ activeSettingsTab: 'general', pendingSettingsTab: null })
+    render(<Settings />)
+
+    expect(screen.getByRole('heading', { level: 2, name: 'General' })).toBeInTheDocument()
   })
 
   it('marks the pure white appearance theme as selected', () => {
@@ -539,6 +550,21 @@ describe('Settings > General tab', () => {
     expect(screen.getByRole('button', { name: 'Ink Night' })).toHaveAttribute('aria-pressed', 'false')
   })
 
+  it('keeps the theme swatches at preview size on a wide settings frame', () => {
+    // The settings frame is fluid up to 1120px; the swatch grid must not grow
+    // with it, in either picker layout.
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+    expect(screen.getByRole('button', { name: 'Pure White' }).parentElement).toHaveClass('grid-cols-3', 'max-w-[600px]')
+    cleanup()
+
+    useUIStore.setState({ followSystemTheme: true, lightTheme: 'celadon', darkTheme: 'ink-blue', theme: 'ink-blue', activeSettingsTab: 'general' })
+    render(<Settings />)
+    for (const label of ['Pure White', 'Ink Night']) {
+      expect(screen.getByRole('button', { name: label }).parentElement, label).toHaveClass('grid-cols-4', 'max-w-[600px]')
+    }
+  })
+
   it('hides the light-half hint when not following the system', () => {
     render(<Settings />)
 
@@ -572,41 +598,70 @@ describe('Settings > General tab', () => {
     expect(screen.getByRole('button', { name: 'Pure White' })).toHaveAttribute('aria-pressed', 'false')
   })
 
-  it('keeps UI zoom below system notifications because it is a secondary setting', () => {
+  it('groups General settings into topic sections in a stable order', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
 
-    const notificationsHeading = screen.getByRole('heading', { name: 'System Notifications' })
-    const uiZoomHeading = screen.getByRole('heading', { name: 'UI Zoom' })
-    const networkHeading = screen.getByRole('heading', { name: 'Network' })
-    const webFetchHeading = screen.getByRole('heading', { name: 'WebFetch Preflight' })
+    // The stand-alone toggles are grouped by topic: what the app looks like
+    // first, then what a new session starts from, then plumbing and data.
+    const order = [
+      'Appearance',
+      'Language',
+      'Chat appearance',
+      'UI Zoom',
+      'Agent preferences',
+      'System Notifications',
+      'Network',
+      'WebSearch',
+      'Agent trace',
+      'Session History',
+      'Data Storage Location',
+    ].map((name) => screen.getByRole('heading', { level: 3, name }))
+    for (const [index, heading] of order.slice(0, -1).entries()) {
+      expect(
+        (heading.compareDocumentPosition(order[index + 1]!) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+        `${order[index + 1]!.textContent} should follow ${heading.textContent}`,
+      ).toBe(true)
+    }
 
-    expect((notificationsHeading.compareDocumentPosition(uiZoomHeading) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
-    expect((uiZoomHeading.compareDocumentPosition(networkHeading) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
-    expect((networkHeading.compareDocumentPosition(webFetchHeading) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    // Each Agent switch lives in the shared Agent preferences card rather
+    // than under a heading of its own.
+    const agentSection = screen.getByRole('heading', { name: 'Agent preferences' }).closest('section')!
+    for (const name of [
+      'Enable thinking mode',
+      'Enable Ultracode keyword trigger',
+      'Enable Agent Teams',
+      'Enable Auto-dream',
+    ]) {
+      expect(within(agentSection).getByRole('switch', { name })).toBeInTheDocument()
+    }
+    // WebFetch preflight is a network concern and sits in that card.
+    const networkSection = screen.getByRole('heading', { name: 'Network' }).closest('section')!
+    expect(within(networkSection).getByRole('switch', { name: 'Skip WebFetch domain preflight' })).toBeInTheDocument()
   })
 
   it('lets users choose Ctrl or Command Enter as the chat send shortcut', async () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
-    fireEvent.click(screen.getByRole('button', { name: /Ctrl\/Cmd\+Enter sends/i }))
+    fireEvent.click(screen.getByRole('radio', { name: /Ctrl\/Cmd\+Enter sends/i }))
 
     await waitFor(() => {
       expect(useSettingsStore.getState().setChatSendBehavior).toHaveBeenCalledWith('modifierEnter')
     })
-    expect(screen.getByRole('button', { name: /Ctrl\/Cmd\+Enter sends/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: /Ctrl\/Cmd\+Enter sends/i })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: /^Enter sends/i })).toHaveAttribute('aria-checked', 'false')
   })
 
   it('saves provider network timeout and manual proxy from General settings', async () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
-    expect(screen.getByRole('button', { name: /Direct connection/i })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: /System proxy/i })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Direct connection/i })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('radio', { name: /System proxy/i })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /^Manual proxy/i }))
+    fireEvent.click(screen.getByRole('radio', { name: /^Manual proxy/i }))
     const proxyInput = screen.getByLabelText('Proxy URL')
     const saveButton = screen.getAllByRole('button', { name: 'Save' })[0]!
 
@@ -700,7 +755,7 @@ describe('Settings > General tab', () => {
       expect(input).toHaveValue(365)
 
       const section = screen.getByRole('heading', { name: 'Session History' })
-        .parentElement as HTMLElement
+        .closest('section') as HTMLElement
       const saveButton = within(section).getByRole('button', { name: 'Save' })
       expect(saveButton).toBeDisabled()
 
@@ -758,7 +813,7 @@ describe('Settings > General tab', () => {
       fireEvent.change(input, { target: { value: '0' } })
 
       const section = screen.getByRole('heading', { name: 'Session History' })
-        .parentElement as HTMLElement
+        .closest('section') as HTMLElement
       await act(async () => {
         fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
       })
@@ -792,7 +847,7 @@ describe('Settings > General tab', () => {
       })
 
       const section = screen.getByRole('heading', { name: 'Session History' })
-        .parentElement as HTMLElement
+        .closest('section') as HTMLElement
       await act(async () => {
         fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
       })
@@ -830,7 +885,7 @@ describe('Settings > General tab', () => {
       })
 
       const section = screen.getByRole('heading', { name: 'Session History' })
-        .parentElement as HTMLElement
+        .closest('section') as HTMLElement
       const saveButton = within(section).getByRole('button', { name: 'Save' })
       fireEvent.click(saveButton)
 
@@ -871,7 +926,7 @@ describe('Settings > General tab', () => {
       })
 
       const section = screen.getByRole('heading', { name: 'Session History' })
-        .parentElement as HTMLElement
+        .closest('section') as HTMLElement
       await act(async () => {
         fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
       })
@@ -914,7 +969,7 @@ describe('Settings > General tab', () => {
       })
 
       const section = screen.getByRole('heading', { name: 'Session History' })
-        .parentElement as HTMLElement
+        .closest('section') as HTMLElement
       await act(async () => {
         fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
       })
@@ -1414,7 +1469,7 @@ describe('Settings > General tab', () => {
     expect(useSettingsStore.getState().setAutoDreamEnabled).toHaveBeenCalledWith(false)
   })
 
-  it('keeps General checkbox inputs anchored inside their visible rows', () => {
+  it('renders every General on/off setting as a named switch beside its visible title', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
@@ -1426,12 +1481,14 @@ describe('Settings > General tab', () => {
       'Enable system notifications',
       'Skip WebFetch domain preflight',
     ]) {
-      const toggle = screen.getByLabelText(label)
-      const row = toggle.closest('label') as HTMLElement | null
-      expect(toggle).toHaveClass('settings-checkbox-input')
-      expect(toggle).not.toHaveClass('sr-only')
+      // One control per setting, announced as a switch under the same words
+      // the row shows — the hand-rolled checkbox rows these replaced each
+      // stretched an invisible input over the whole card.
+      const toggle = screen.getByRole('switch', { name: label })
+      expect(screen.getByLabelText(label)).toBe(toggle)
+      const row = toggle.closest('.min-h-\\[52px\\]') as HTMLElement | null
       expect(row).not.toBeNull()
-      expect(row!).toHaveClass('relative')
+      expect(within(row!).getByText(label)).toBeVisible()
     }
   })
 
@@ -1559,8 +1616,8 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByText('General'))
     expect(screen.queryByRole('region', { name: 'H5 Access' })).not.toBeInTheDocument()
 
-    const generalTab = screen.getByText('General')
-    const h5Tab = screen.getByText('H5 Access')
+    const generalTab = screen.getByRole('button', { name: 'General' })
+    const h5Tab = screen.getByRole('button', { name: 'H5 Access' })
     expect((generalTab.compareDocumentPosition(h5Tab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     fireEvent.click(h5Tab)
 
@@ -2098,12 +2155,12 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('General'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Tavily' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Tavily' }))
     fireEvent.change(screen.getByLabelText('Tavily API key'), {
       target: { value: 'tvly-test-key' },
     })
     const webSearchSection = screen.getByRole('heading', { name: 'WebSearch' })
-      .parentElement as HTMLElement
+      .closest('section') as HTMLElement
     fireEvent.click(within(webSearchSection).getByRole('button', { name: 'Save' }))
 
     expect(useSettingsStore.getState().setWebSearch).toHaveBeenCalledWith({
@@ -2186,11 +2243,15 @@ describe('Settings > Providers tab', () => {
     render(<Settings />)
 
     const card = screen.getByTestId('provider-provider-1')
-    // 1.5px so the default row reads as chosen at a glance without the heavier
-    // ring the focus border gave it, which collided with the real focus ring.
-    expect(card.className).toContain('border-[1.5px]')
+    // A terracotta-mixed hairline plus a soft brand halo, so the default row
+    // reads as chosen at a glance — not the focus border, which collided with
+    // the real focus ring.
     expect(card.className).toContain('border-[var(--color-primary-fixed-dim)]')
+    expect(card.className).toContain('shadow-[0_0_0_3px_var(--color-brand-soft)]')
     expect(card.className).not.toContain('border-[var(--color-border-focus)]')
+    // Only the default card carries the accent.
+    const other = screen.getByTestId('claude-official-provider')
+    expect(other.className).not.toContain('border-[var(--color-primary-fixed-dim)]')
   })
 
   it('does not query official OAuth status before providers finish loading', () => {
@@ -2301,17 +2362,18 @@ describe('Settings > Providers tab', () => {
   })
 
   it.each([
-    ['zh', '模型配置', '模型管理', '添加模型', '配置名称'],
-    ['zh-TW', '模型設定', '模型管理', '新增模型', '設定名稱'],
-    ['en', 'Model Settings', 'Model Management', 'Add Model', 'Configuration name'],
-    ['jp', 'モデル設定', 'モデル管理', 'モデルを追加', '設定名'],
-    ['kr', '모델 설정', '모델 관리', '모델 추가', '설정 이름'],
-  ] as const)('uses model terminology throughout settings in %s', (locale, menu, title, add, name) => {
+    ['zh', '模型配置', '添加模型', '配置名称'],
+    ['zh-TW', '模型設定', '新增模型', '設定名稱'],
+    ['en', 'Model Settings', 'Add Model', 'Configuration name'],
+    ['jp', 'モデル設定', 'モデルを追加', '設定名'],
+    ['kr', '모델 설정', '모델 추가', '설정 이름'],
+  ] as const)('uses model terminology throughout settings in %s', (locale, menu, add, name) => {
     useSettingsStore.setState({ locale })
     render(<Settings />)
 
     expect(screen.getByRole('button', { name: new RegExp(menu) })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: title })).toBeInTheDocument()
+    // The pane is titled with the rail label itself, so the two never disagree.
+    expect(screen.getByRole('heading', { level: 2, name: menu })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: new RegExp(add) }))
 
     const dialog = screen.getByRole('dialog')
@@ -3697,10 +3759,10 @@ describe('Settings > About tab', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByRole('button', { name: /Advanced update proxy/i }))
-    expect(screen.getByRole('button', { name: /System proxy/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: /System proxy/i })).toHaveAttribute('aria-checked', 'true')
     expect(screen.getByText('This only affects app update checks and downloads.')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /Manual proxy/i }))
+    fireEvent.click(screen.getByRole('radio', { name: /Manual proxy/i }))
     const proxyInput = screen.getByLabelText('Proxy URL')
     const saveButton = screen.getByRole('button', { name: 'Save' })
 
@@ -3731,9 +3793,9 @@ describe('Settings > About tab', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByRole('button', { name: /Advanced update proxy/i }))
-    expect(screen.getByRole('button', { name: /Manual proxy/i })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('radio', { name: /Manual proxy/i })).toHaveAttribute('aria-checked', 'true')
 
-    fireEvent.click(screen.getByRole('button', { name: /System proxy/i }))
+    fireEvent.click(screen.getByRole('radio', { name: /System proxy/i }))
     const saveButton = screen.getByRole('button', { name: 'Save' })
 
     await act(async () => {

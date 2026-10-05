@@ -19,7 +19,7 @@ export function ViewInTrajectoryButton({ toolUseId, className }: { toolUseId: st
   if (!link || toolUseId.includes('/')) return null
   return (
     <IconButton
-      icon={<ListTree size={13} />}
+      icon={<ListTree size={14} strokeWidth={1.75} />}
       label={t('trajectory.viewInTrajectory')}
       size="xs"
       tone="muted"

@@ -7,6 +7,7 @@ import {
   useState,
   type KeyboardEvent,
 } from 'react'
+import { Check, ChevronDown } from 'lucide-react'
 
 import { IconButton } from '@/components/ui/IconButton'
 import { FIELD_BASE_CLASSES, FIELD_SIZE_CLASSES, fieldStateClasses } from '@/components/ui/Input'
@@ -172,7 +173,7 @@ export function ModelIdCombobox({
         if (!(nextFocus instanceof Node) || !event.currentTarget.contains(nextFocus)) close()
       }}
     >
-      <label htmlFor={inputId} className="text-sm font-medium text-[var(--color-text-primary)]">
+      <label htmlFor={inputId} className="text-[13px] font-medium text-[var(--color-text-primary)]">
         {label}
         {required && <span className="ml-0.5 text-[var(--color-error)]">*</span>}
       </label>
@@ -217,15 +218,12 @@ export function ModelIdCombobox({
         {hasModels && (
           <IconButton
             icon={(
-              <span
+              <ChevronDown
+                size={16}
+                strokeWidth={1.75}
                 aria-hidden="true"
-                className={cx(
-                  'material-symbols-outlined text-[18px] transition-transform duration-150',
-                  open && 'rotate-180',
-                )}
-              >
-                expand_more
-              </span>
+                className={cx('transition-transform duration-150', open && 'rotate-180')}
+              />
             )}
             label={pickerLabel}
             showTooltip={false}
@@ -254,7 +252,7 @@ export function ModelIdCombobox({
             id={listId}
             role="listbox"
             aria-label={pickerLabel}
-            className="max-h-64 overflow-y-auto p-1.5"
+            className="max-h-64 overflow-y-auto p-1"
           >
             {visibleGroups.length === 0 ? (
               <div
@@ -268,7 +266,7 @@ export function ModelIdCombobox({
             ) : visibleGroups.map((group) => (
               <div key={group.group} role="group" aria-label={group.group}>
                 {visibleGroups.length > 1 && (
-                  <div className="px-2.5 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-text-tertiary)] first:pt-1">
+                  <div className="px-2.5 pb-1 pt-2 text-[11px] font-semibold text-[var(--color-text-tertiary)] first:pt-1">
                     {group.group}
                   </div>
                 )}
@@ -292,7 +290,7 @@ export function ModelIdCombobox({
                         onMouseEnter={() => setActiveIndex(index)}
                         onClick={() => selectModel(model.id)}
                         className={cx(
-                          'flex min-h-9 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-sm outline-none transition-colors duration-150',
+                          'flex min-h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 py-1.5 text-left text-[13px] outline-none transition-colors duration-150',
                           active
                             ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]'
                             : selected
@@ -300,11 +298,9 @@ export function ModelIdCombobox({
                               : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)]',
                         )}
                       >
-                        <span className="min-w-0 flex-1 truncate font-mono text-[13px]">{model.id}</span>
+                        <span className="min-w-0 flex-1 truncate font-mono text-xs">{model.id}</span>
                         {selected && (
-                          <span aria-hidden="true" className="material-symbols-outlined flex-none text-[16px] text-[var(--color-brand)]">
-                            check
-                          </span>
+                          <Check size={14} strokeWidth={2} aria-hidden="true" className="flex-none text-[var(--color-brand)]" />
                         )}
                       </button>
                     )

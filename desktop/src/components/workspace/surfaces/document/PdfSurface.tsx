@@ -55,7 +55,7 @@ export default function PdfSurface({
       />
     )
   }
-  return <PanelMessage icon="progress_activity" message={t('workspace.document.loading')} />
+  return <PanelMessage busy message={t('workspace.document.loading')} />
 }
 
 function failureMessage(error: PdfError, t: ReturnType<typeof useTranslation>): string {
@@ -75,7 +75,7 @@ function OpenInBrowserButton({ blob }: { blob: Blob }) {
     <Button
       variant="secondary"
       size="sm"
-      icon={<ExternalLink size={14} strokeWidth={1.9} aria-hidden="true" />}
+      icon={<ExternalLink size={14} strokeWidth={1.75} aria-hidden="true" />}
       onClick={() => {
         const url = URL.createObjectURL(blob)
         window.open(url, '_blank', 'noopener')

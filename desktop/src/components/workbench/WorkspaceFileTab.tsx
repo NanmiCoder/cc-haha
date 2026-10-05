@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, ExternalLink, FolderClosed, FolderOpen, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { Binary, ChevronDown, ChevronRight, CircleAlert, Database, ExternalLink, FolderClosed, FolderOpen, PanelLeftClose, PanelLeftOpen, SearchX } from 'lucide-react'
 import { IconButton } from '@/components/ui/IconButton'
 import { TargetIcon } from '@/components/composite/TargetIcon'
 import { useWorkspaceFileOpenTargets } from '@/components/workspace/workspaceFileOpenTargets'
@@ -197,11 +197,11 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
     <div className="relative flex min-h-0 flex-1 flex-col">
       <div
         data-testid="workspace-file-header"
-        className="flex h-[52px] shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3"
+        className="flex h-10 shrink-0 items-center gap-1 border-b border-[var(--color-border)] pl-3 pr-2"
       >
         <nav
           aria-label={t('workspace.files.breadcrumb')}
-          className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-[14px] text-[var(--color-text-tertiary)]"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden text-[12px] text-[var(--color-text-tertiary)]"
         >
           {breadcrumbSegments.length === 0 ? (
             <span className="truncate">/</span>
@@ -209,10 +209,10 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
             breadcrumbSegments.map((segment, index) => (
               <span key={`${segment}-${index}`} className="flex min-w-0 items-center gap-0.5">
                 {index > 0 ? (
-                  <ChevronRight size={13} aria-hidden="true" className="shrink-0 opacity-60" />
+                  <ChevronRight size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)] opacity-70" />
                 ) : null}
                 <span
-                  className={`truncate ${index === breadcrumbSegments.length - 1 ? 'text-[var(--color-text-primary)]' : ''}`}
+                  className={`truncate ${index === breadcrumbSegments.length - 1 ? 'font-medium text-[var(--color-text-primary)]' : ''}`}
                 >
                   {segment}
                 </span>
@@ -223,8 +223,8 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
         {previewVisible ? <IconButton
           ref={treeToggleRef}
           icon={treeOpen
-            ? <FolderOpen size={18} strokeWidth={1.8} />
-            : <FolderClosed size={18} strokeWidth={1.8} />}
+            ? <FolderOpen size={14} strokeWidth={1.75} />
+            : <FolderClosed size={14} strokeWidth={1.75} />}
           label={t('workspace.files.toggleTree')}
           size="sm"
           tone="muted"
@@ -235,7 +235,7 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
         {path ? (
           <>
             <IconButton
-              icon={previewVisible ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+              icon={previewVisible ? <PanelLeftClose size={14} strokeWidth={1.75} /> : <PanelLeftOpen size={14} strokeWidth={1.75} />}
               label={t(previewVisible ? 'workspace.files.hidePreview' : 'workspace.files.showPreview')}
               size="sm"
               tone="muted"
@@ -245,16 +245,16 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
                 if (previewVisible) setTreeOpen(true)
               }}
             />
-            <span className="relative flex h-8 shrink-0 items-stretch rounded-[var(--radius-md)] border border-[var(--color-border)]">
+            <span className="relative ml-1 flex h-7 shrink-0 items-stretch rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
               <button
                 type="button"
                 data-testid="workspace-file-open-primary"
                 disabled={!fileOpen.primaryTarget}
                 aria-label={fileOpen.primaryTarget ? t('openWith.openInTarget', { target: fileOpen.primaryTarget.label }) : t('workspace.files.openWith')}
                 onClick={() => { if (fileOpen.primaryTarget) fileOpen.openTarget(fileOpen.primaryTarget) }}
-                className="flex min-w-0 items-center gap-2 rounded-l-[var(--radius-md)] px-2 text-[14px] text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-50"
+                className="flex min-w-0 items-center gap-1.5 rounded-l-[var(--radius-md)] pl-2 pr-2.5 text-[12px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:opacity-50"
               >
-                <span aria-hidden="true">{fileOpen.primaryTarget ? <TargetIcon target={fileOpen.primaryTarget} size={16} /> : <ExternalLink size={16} />}</span>
+                <span aria-hidden="true" className="flex">{fileOpen.primaryTarget ? <TargetIcon target={fileOpen.primaryTarget} size={14} /> : <ExternalLink size={14} strokeWidth={1.75} />}</span>
                 {t('workspace.files.openWith')}
               </button>
               <button
@@ -266,9 +266,9 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
                 aria-controls={openWithOpen ? openWithMenuId : undefined}
                 onClick={() => setOpenWithOpen((open) => !open)}
                 aria-label={t('workspace.files.openWith')}
-                className="flex w-7 items-center justify-center rounded-r-[var(--radius-md)] border-l border-[var(--color-border)] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                className="flex w-6 items-center justify-center rounded-r-[var(--radius-md)] border-l border-[var(--color-border)] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
               >
-                <ChevronDown size={14} aria-hidden="true" />
+                <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
               </button>
               {openWithOpen ? (
                 <div
@@ -277,7 +277,7 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
                   role="menu"
                   aria-label={t('workspace.files.openWith')}
                   onKeyDown={handleOpenWithKeyDown}
-                  className="absolute right-0 top-[34px] z-[var(--z-dropdown)] max-h-[65vh] w-[204px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1.5 shadow-[var(--shadow-dropdown)]"
+                  className="absolute right-0 top-[30px] z-[var(--z-dropdown)] max-h-[65vh] w-[220px] max-w-[calc(100vw-24px)] overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]"
                 >
                   <WorkspaceFileOpenWith
                     absolutePath={absolutePath}
@@ -308,15 +308,15 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
           })
         }}>
           {!entry || entry.state === 'loading' ? (
-            <PanelMessage icon="hourglass_empty" message={t('workspace.previewState.loading')} />
+            <PanelMessage busy message={t('workspace.previewState.loading')} />
           ) : entry.state === 'missing' ? (
-            <PanelMessage icon="search_off" message={t('workspace.previewState.missing')} />
+            <PanelMessage icon={SearchX} message={t('workspace.previewState.missing')} />
           ) : entry.state === 'too_large' ? (
-            <PanelMessage icon="database" message={t('workspace.previewState.tooLarge')} action={systemAction} />
+            <PanelMessage icon={Database} message={t('workspace.previewState.tooLarge')} action={systemAction} />
           ) : entry.state === 'binary' ? (
-            <PanelMessage icon="data_object" message={t('workspace.previewState.binary')} action={systemAction} />
+            <PanelMessage icon={Binary} message={t('workspace.previewState.binary')} action={systemAction} />
           ) : entry.state === 'error' ? (
-            <PanelMessage icon="error" tone="error" message={entry.error || t('workspace.loadError')} action={systemAction} />
+            <PanelMessage icon={CircleAlert} tone="error" message={entry.error || t('workspace.loadError')} action={systemAction} />
           ) : entry.previewType === 'image' ? (
             <ImagePreview
               sessionId={sessionId}
@@ -356,7 +356,7 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
           {entry?.refreshError ? (
             <p
               role="status"
-              className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]"
+              className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[12px] text-[var(--color-text-tertiary)]"
             >
               {t('workspace.files.refreshFailed', { reason: entry.refreshError })}
             </p>

@@ -1,4 +1,15 @@
 import { useMemo, useState, type ReactNode } from 'react'
+import {
+  ArrowLeft,
+  Bot,
+  Box,
+  ChevronRight,
+  Network,
+  SquareTerminal,
+  Webhook,
+  Zap,
+  type LucideIcon,
+} from 'lucide-react'
 import { usePluginStore } from '../../stores/pluginStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTranslation } from '../../i18n'
@@ -189,43 +200,51 @@ export function PluginDetail() {
   }
 
   return (
-    <div className="flex flex-col gap-4 min-w-0">
+    <div className="flex min-w-0 flex-col gap-6">
       <div>
         <Button
           variant="ghost"
-          size="base"
-          icon={<span className="material-symbols-outlined text-[16px]">arrow_back</span>}
+          size="sm"
+          className="-ml-2"
+          icon={<ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
           onClick={clearSelection}
         >
           {t('settings.plugins.back')}
         </Button>
       </div>
 
-      <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] shadow-[var(--shadow-card)] overflow-hidden">
-        <div className="grid gap-4 px-5 py-5 lg:grid-cols-[minmax(0,1.5fr)_minmax(280px,0.9fr)] lg:items-start">
-          <div className="min-w-0">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-[var(--color-text-tertiary)] mb-2">
-              {t('settings.plugins.entryEyebrow')}
-            </div>
-            <div className="flex flex-wrap items-center gap-2 mb-2">
-              <h3
-                className="text-[24px] font-semibold leading-tight text-[var(--color-text-primary)] break-all"
-                style={{ fontFamily: 'var(--font-headline)' }}
-              >
-                {selectedPlugin.name}
-              </h3>
-              <StatusPill enabled={selectedPlugin.enabled} hasErrors={selectedPlugin.hasErrors} />
-              <MetaPill>{t(`settings.plugins.scope.${selectedPlugin.scope}`)}</MetaPill>
-              <MetaPill>{selectedPlugin.marketplace}</MetaPill>
-              {selectedPlugin.version && <MetaPill>v{selectedPlugin.version}</MetaPill>}
-            </div>
-            <p className="max-w-4xl text-sm leading-6 text-[var(--color-text-secondary)]">
-              {selectedPlugin.description || t('settings.plugins.noDescription')}
-            </p>
-            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-xs text-[var(--color-text-tertiary)]">
-              {selectedPlugin.authorName && (
+      {/* Page head: name and state, one line of facts, then the actions. */}
+      <header className="-mt-3 flex min-w-0 flex-col gap-3">
+        <div>
+          <p className="text-xs text-[var(--color-text-tertiary)]">{t('settings.plugins.entryEyebrow')}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <h2 className="break-all text-[22px] font-semibold leading-[30px] text-[var(--color-text-primary)]">
+              {selectedPlugin.name}
+            </h2>
+            <StatusPill enabled={selectedPlugin.enabled} hasErrors={selectedPlugin.hasErrors} />
+          </div>
+          <p className="mt-1.5 max-w-[72ch] text-[13px] leading-5 text-[var(--color-text-secondary)]">
+            {selectedPlugin.description || t('settings.plugins.noDescription')}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-[var(--color-text-tertiary)]">
+            <span>{t(`settings.plugins.scope.${selectedPlugin.scope}`)}</span>
+            <span aria-hidden="true">·</span>
+            <span>{selectedPlugin.marketplace}</span>
+            {selectedPlugin.version && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono text-[11px]">v{selectedPlugin.version}</span>
+              </>
+            )}
+            {selectedPlugin.authorName && (
+              <>
+                <span aria-hidden="true">·</span>
                 <span>{t('settings.plugins.author', { value: selectedPlugin.authorName })}</span>
-              )}
+              </>
+            )}
+          </div>
+          {(selectedPlugin.projectPath || selectedPlugin.installPath) && (
+            <div className="mt-1 flex flex-col gap-0.5 break-all font-mono text-[11px] leading-5 text-[var(--color-text-tertiary)]">
               {selectedPlugin.projectPath && (
                 <span>{t('settings.plugins.projectPath', { value: selectedPlugin.projectPath })}</span>
               )}
@@ -233,40 +252,15 @@ export function PluginDetail() {
                 <span>{t('settings.plugins.installPath', { value: selectedPlugin.installPath })}</span>
               )}
             </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-2">
-            <DetailStat
-              label={t('settings.plugins.summary.skills')}
-              value={String(selectedPlugin.componentCounts.skills)}
-              icon="auto_awesome"
-            />
-            <DetailStat
-              label={t('settings.plugins.summary.agents')}
-              value={String(selectedPlugin.componentCounts.agents)}
-              icon="smart_toy"
-            />
-            <DetailStat
-              label={t('settings.plugins.summary.mcp')}
-              value={String(selectedPlugin.componentCounts.mcpServers)}
-              icon="hub"
-            />
-            <DetailStat
-              label={t('settings.plugins.summary.hooks')}
-              value={String(selectedPlugin.componentCounts.hooks)}
-              icon="bolt"
-            />
-          </div>
+          )}
         </div>
-      </section>
 
-      <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)] px-5 py-4">
         <div className="flex flex-wrap gap-2">
           {canMutate && (
             selectedPlugin.enabled ? (
               <Button
                 variant="secondary"
-                size="sm"
+                size="base"
                 loading={isApplying && actionKey === 'disable'}
                 onClick={() => void runAction('disable', () => disablePlugin(selectedPlugin.id, selectedPlugin.scope, currentWorkDir, activeSessionId || undefined))}
               >
@@ -274,7 +268,7 @@ export function PluginDetail() {
               </Button>
             ) : (
               <Button
-                size="sm"
+                size="base"
                 loading={isApplying && actionKey === 'enable'}
                 onClick={() => void runAction('enable', () => enablePlugin(selectedPlugin.id, selectedPlugin.scope, currentWorkDir, activeSessionId || undefined))}
               >
@@ -286,7 +280,7 @@ export function PluginDetail() {
           {canMutate && (
             <Button
               variant="secondary"
-              size="sm"
+              size="base"
               loading={isApplying && actionKey === 'update'}
               onClick={() => void runAction('update', () => updatePlugin(selectedPlugin.id, selectedPlugin.scope, currentWorkDir, activeSessionId || undefined))}
             >
@@ -296,7 +290,7 @@ export function PluginDetail() {
 
           <Button
             variant="secondary"
-            size="sm"
+            size="base"
             loading={isApplying && actionKey === 'reload'}
             onClick={() => void handleReload()}
           >
@@ -305,8 +299,8 @@ export function PluginDetail() {
 
           {canMutate && (
             <Button
-              variant="danger"
-              size="sm"
+              variant="danger-ghost"
+              size="base"
               loading={isApplying && actionKey === 'uninstall'}
               onClick={() => {
                 setShowUninstallDialog(true)
@@ -317,18 +311,40 @@ export function PluginDetail() {
           )}
         </div>
 
-        {!canMutate && (
-          <p className="mt-3 text-xs text-[var(--color-text-tertiary)]">
-            {selectedPlugin.scope === 'managed'
-              ? t('settings.plugins.managedHint')
-              : t('settings.plugins.builtinHint')}
-          </p>
-        )}
+        <div className="flex flex-col gap-1 text-xs text-[var(--color-text-tertiary)]">
+          {!canMutate && (
+            <p>
+              {selectedPlugin.scope === 'managed'
+                ? t('settings.plugins.managedHint')
+                : t('settings.plugins.builtinHint')}
+            </p>
+          )}
+          <p>{t('settings.plugins.applyHint')}</p>
+        </div>
+      </header>
 
-        <p className="mt-3 text-xs text-[var(--color-text-tertiary)]">
-          {t('settings.plugins.applyHint')}
-        </p>
-      </section>
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <DetailStat
+          label={t('settings.plugins.summary.skills')}
+          value={String(selectedPlugin.componentCounts.skills)}
+          icon={Box}
+        />
+        <DetailStat
+          label={t('settings.plugins.summary.agents')}
+          value={String(selectedPlugin.componentCounts.agents)}
+          icon={Bot}
+        />
+        <DetailStat
+          label={t('settings.plugins.summary.mcp')}
+          value={String(selectedPlugin.componentCounts.mcpServers)}
+          icon={Network}
+        />
+        <DetailStat
+          label={t('settings.plugins.summary.hooks')}
+          value={String(selectedPlugin.componentCounts.hooks)}
+          icon={Zap}
+        />
+      </div>
 
       {/* The heading tag and the leading icon are the cost of adopting
           `ErrorState`; `role="alert"` and three fewer alpha fills are what it
@@ -340,11 +356,11 @@ export function PluginDetail() {
           size="lg"
           title={t('settings.plugins.errorsTitle')}
           detail={
-            <span className="mt-1 flex flex-col gap-2">
+            <span className="mt-1 flex flex-col gap-1.5">
               {selectedPlugin.errors.map((error) => (
                 <span
                   key={error}
-                  className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-3 text-sm text-[var(--color-text-secondary)]"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-surface-container-lowest)] px-3 py-2 text-[13px] text-[var(--color-text-secondary)]"
                 >
                   {error}
                 </span>
@@ -354,153 +370,131 @@ export function PluginDetail() {
         />
       )}
 
-      <section className="rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] shadow-[var(--shadow-card)] overflow-hidden">
-        <div className="px-5 py-4 border-b border-[var(--color-border)] bg-[var(--color-surface-container-low)]">
-          <h4
-            className="text-[16.5px] font-semibold leading-tight text-[var(--color-text-primary)]"
-            style={{ fontFamily: 'var(--font-headline)' }}
-          >
+      <section className="flex min-w-0 flex-col gap-4">
+        <div className="px-0.5">
+          <h3 className="text-[13px] font-semibold text-[var(--color-text-secondary)]">
             {t('settings.plugins.capabilitiesTitle')}
-          </h4>
-          <p className="text-xs text-[var(--color-text-tertiary)] mt-1">
+          </h3>
+          <p className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">
             {t('settings.plugins.capabilitiesHint')}
           </p>
         </div>
-        <div className="flex flex-col gap-4 p-4">
-          <CapabilityPreviewSection
-            title={t('settings.plugins.capabilityLabel.skills')}
-            count={selectedPlugin.skillEntries.length}
-            emptyLabel={t('settings.plugins.capabilityEmpty')}
-            hint={!canNavigateSharedCapabilities ? t('settings.plugins.sharedNavigationDisabled') : undefined}
-          >
-            {selectedPlugin.skillEntries.length > 0 ? (
-              <div className="grid gap-3 xl:grid-cols-2">
-                {selectedPlugin.skillEntries.map((skill) => (
-                  <SkillPreviewCard
-                    key={skill.name}
-                    name={skill.displayName || skill.name}
-                    rawName={skill.displayName ? skill.name : undefined}
-                    description={skill.description}
-                    version={skill.version}
-                    onClick={() => void handleOpenSkill(skill.name)}
-                    disabled={!canNavigateSharedCapabilities}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </CapabilityPreviewSection>
 
-          <CapabilityPreviewSection
-            title={t('settings.plugins.capabilityLabel.mcpServers')}
-            count={selectedPlugin.mcpServerEntries.length}
-            emptyLabel={t('settings.plugins.capabilityEmpty')}
-            hint={!canNavigateSharedCapabilities ? t('settings.plugins.sharedNavigationDisabled') : undefined}
-          >
-            {selectedPlugin.mcpServerEntries.length > 0 ? (
-              <div className="grid gap-3 xl:grid-cols-2">
-                {selectedPlugin.mcpServerEntries.map((server) => (
-                  <McpPreviewCard
-                    key={server.name}
-                    name={server.displayName || server.name}
-                    transport={server.transport}
-                    summary={server.summary}
-                    onClick={() => void handleOpenMcpServer(server.name)}
-                    disabled={!canNavigateSharedCapabilities}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </CapabilityPreviewSection>
+        <CapabilityPreviewSection
+          title={t('settings.plugins.capabilityLabel.skills')}
+          icon={Box}
+          count={selectedPlugin.skillEntries.length}
+          emptyLabel={t('settings.plugins.capabilityEmpty')}
+          hint={!canNavigateSharedCapabilities ? t('settings.plugins.sharedNavigationDisabled') : undefined}
+        >
+          {selectedPlugin.skillEntries.map((skill) => (
+            <SkillPreviewCard
+              key={skill.name}
+              name={skill.displayName || skill.name}
+              rawName={skill.displayName ? skill.name : undefined}
+              description={skill.description}
+              version={skill.version}
+              onClick={() => void handleOpenSkill(skill.name)}
+              disabled={!canNavigateSharedCapabilities}
+            />
+          ))}
+        </CapabilityPreviewSection>
 
-          <CapabilityPreviewSection
-            title={t('settings.plugins.capabilityLabel.commands')}
-            count={selectedPlugin.commandEntries.length}
-            emptyLabel={t('settings.plugins.capabilityEmpty')}
-          >
-            {selectedPlugin.commandEntries.length > 0 ? (
-              <div className="grid gap-3 xl:grid-cols-2">
-                {selectedPlugin.commandEntries.map((command) => (
-                  <CommandPreviewCard
-                    key={command.name}
-                    name={command.name}
-                    description={command.description}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </CapabilityPreviewSection>
+        <CapabilityPreviewSection
+          title={t('settings.plugins.capabilityLabel.mcpServers')}
+          icon={Network}
+          count={selectedPlugin.mcpServerEntries.length}
+          emptyLabel={t('settings.plugins.capabilityEmpty')}
+          hint={!canNavigateSharedCapabilities ? t('settings.plugins.sharedNavigationDisabled') : undefined}
+        >
+          {selectedPlugin.mcpServerEntries.map((server) => (
+            <McpPreviewCard
+              key={server.name}
+              name={server.displayName || server.name}
+              transport={server.transport}
+              summary={server.summary}
+              onClick={() => void handleOpenMcpServer(server.name)}
+              disabled={!canNavigateSharedCapabilities}
+            />
+          ))}
+        </CapabilityPreviewSection>
 
-          <CapabilityPreviewSection
-            title={t('settings.plugins.capabilityLabel.agents')}
-            count={selectedPlugin.agentEntries.length}
-            emptyLabel={t('settings.plugins.capabilityEmpty')}
-            hint={!canNavigateSharedCapabilities ? t('settings.plugins.sharedNavigationDisabled') : undefined}
-          >
-            {selectedPlugin.agentEntries.length > 0 ? (
-              <div className="grid gap-3 xl:grid-cols-2">
-                {selectedPlugin.agentEntries.map((agent) => (
-                  <AgentPreviewCard
-                    key={agent.name}
-                    name={agent.displayName || agent.name}
-                    description={agent.description}
-                    onClick={() => void handleOpenAgent(agent.name)}
-                    disabled={!canNavigateSharedCapabilities}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </CapabilityPreviewSection>
+        <CapabilityPreviewSection
+          title={t('settings.plugins.capabilityLabel.commands')}
+          icon={SquareTerminal}
+          count={selectedPlugin.commandEntries.length}
+          emptyLabel={t('settings.plugins.capabilityEmpty')}
+        >
+          {selectedPlugin.commandEntries.map((command) => (
+            <CommandPreviewCard
+              key={command.name}
+              name={command.name}
+              description={command.description}
+            />
+          ))}
+        </CapabilityPreviewSection>
 
-          <CapabilityPreviewSection
-            title={t('settings.plugins.capabilityLabel.hooks')}
-            count={selectedPlugin.hookEntries.length}
-            emptyLabel={t('settings.plugins.capabilityEmpty')}
-          >
-            {selectedPlugin.hookEntries.length > 0 ? (
-              <div className="grid gap-3 xl:grid-cols-2">
-                {selectedPlugin.hookEntries.map((hook, index) => (
-                  <HookPreviewCard
-                    key={`${hook.event}:${hook.matcher || 'all'}:${index}`}
-                    event={hook.event}
-                    matcher={hook.matcher}
-                    actions={hook.actions}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </CapabilityPreviewSection>
+        <CapabilityPreviewSection
+          title={t('settings.plugins.capabilityLabel.agents')}
+          icon={Bot}
+          count={selectedPlugin.agentEntries.length}
+          emptyLabel={t('settings.plugins.capabilityEmpty')}
+          hint={!canNavigateSharedCapabilities ? t('settings.plugins.sharedNavigationDisabled') : undefined}
+        >
+          {selectedPlugin.agentEntries.map((agent) => (
+            <AgentPreviewCard
+              key={agent.name}
+              name={agent.displayName || agent.name}
+              description={agent.description}
+              onClick={() => void handleOpenAgent(agent.name)}
+              disabled={!canNavigateSharedCapabilities}
+            />
+          ))}
+        </CapabilityPreviewSection>
 
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {otherCapabilityItems.map(({ key, items }) => (
-              <div
-                key={key}
-                className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-4 py-3"
-              >
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <div className="text-sm font-semibold text-[var(--color-text-primary)]">
-                    {t(`settings.plugins.capabilityLabel.${key}`)}
-                  </div>
-                  <span className="text-[11px] text-[var(--color-text-tertiary)]">
-                    {items.length}
-                  </span>
+        <CapabilityPreviewSection
+          title={t('settings.plugins.capabilityLabel.hooks')}
+          icon={Webhook}
+          count={selectedPlugin.hookEntries.length}
+          emptyLabel={t('settings.plugins.capabilityEmpty')}
+        >
+          {selectedPlugin.hookEntries.map((hook, index) => (
+            <HookPreviewCard
+              key={`${hook.event}:${hook.matcher || 'all'}:${index}`}
+              event={hook.event}
+              matcher={hook.matcher}
+              actions={hook.actions}
+            />
+          ))}
+        </CapabilityPreviewSection>
+
+        {otherCapabilityItems.map(({ key, items }) => (
+          <Card key={key} radius="lg" surface="lowest" padding="none" className="overflow-hidden">
+            <div className="flex h-10 items-center justify-between gap-2 border-b border-[var(--color-border)] px-4">
+              <div className="text-[13px] font-medium text-[var(--color-text-primary)]">
+                {t(`settings.plugins.capabilityLabel.${key}`)}
+              </div>
+              <span className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">
+                {items.length}
+              </span>
+            </div>
+            <div className="px-4 py-3">
+              {items.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {items.map((item) => (
+                    <Badge key={item} size="sm" wrap mono>
+                      {item}
+                    </Badge>
+                  ))}
                 </div>
-                {items.length > 0 ? (
-                  <div className="flex flex-wrap gap-2">
-                    {items.map((item) => (
-                      <Badge key={item} size="md" bordered wrap mono>
-                        {item}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-xs text-[var(--color-text-tertiary)]">
-                    {t('settings.plugins.capabilityEmpty')}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+              ) : (
+                <div className="text-xs text-[var(--color-text-tertiary)]">
+                  {t('settings.plugins.capabilityEmpty')}
+                </div>
+              )}
+            </div>
+          </Card>
+        ))}
       </section>
 
       <ConfirmDialog
@@ -524,39 +518,59 @@ export function PluginDetail() {
   )
 }
 
+/**
+ * One capability kind: a white card with a 40px header and its entries as
+ * rows under hairlines. The entries used to be bordered cards inside a
+ * bordered, tinted section inside the page card — three nested frames.
+ */
 function CapabilityPreviewSection({
   title,
+  icon: Icon,
   count,
   children,
   emptyLabel,
   hint,
 }: {
   title: string
+  icon: LucideIcon
   count: number
   children: ReactNode
   emptyLabel: string
   hint?: string
 }) {
   return (
-    <section className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--color-border)] px-4 py-3">
-        <div
-          className="text-[14.5px] font-semibold text-[var(--color-text-primary)]"
-          style={{ fontFamily: 'var(--font-headline)' }}
-        >
+    <Card as="section" radius="lg" surface="lowest" padding="none" className="overflow-hidden">
+      <div className="flex h-10 items-center gap-2 border-b border-[var(--color-border)] px-4">
+        <Icon className="flex-shrink-0 text-[var(--color-text-tertiary)]" size={15} strokeWidth={1.75} aria-hidden="true" />
+        <div className="min-w-0 flex-1 text-[13px] font-medium text-[var(--color-text-primary)]">
           {title}
         </div>
         <div className="font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]">{count}</div>
       </div>
-      <div className="p-4">
-        {hint && count > 0 && (
-          <div className="mb-3 text-xs text-[var(--color-text-tertiary)]">{hint}</div>
-        )}
-        {count > 0 ? children : (
-          <div className="text-xs text-[var(--color-text-tertiary)]">{emptyLabel}</div>
-        )}
-      </div>
-    </section>
+      {hint && count > 0 && (
+        <div className="border-b border-[var(--color-border)] px-4 py-2 text-xs text-[var(--color-text-tertiary)]">{hint}</div>
+      )}
+      {count > 0 ? (
+        <div className="divide-y divide-[var(--color-border)]">{children}</div>
+      ) : (
+        <div className="px-4 py-3 text-xs text-[var(--color-text-tertiary)]">{emptyLabel}</div>
+      )}
+    </Card>
+  )
+}
+
+/** A clickable entry row: hover fill, chevron, disabled when navigation is off. */
+const ENTRY_BUTTON =
+  'group flex w-full items-start justify-between gap-3 px-4 py-3 text-left transition-colors duration-150 hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent'
+
+function EntryChevron() {
+  return (
+    <ChevronRight
+      className="mt-0.5 flex-shrink-0 text-[var(--color-text-tertiary)] opacity-60 transition-opacity group-hover:opacity-100"
+      size={14}
+      strokeWidth={1.75}
+      aria-hidden="true"
+    />
   )
 }
 
@@ -579,24 +593,17 @@ function SkillPreviewCard({
   const slashName = rawName || name
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="group rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-left transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default disabled:opacity-70 disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-surface)]"
-    >
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 flex-wrap min-w-0">
-          <span className="text-sm font-semibold text-[var(--color-text-primary)] break-all">{name}</span>
+    <button type="button" onClick={onClick} disabled={disabled} className={ENTRY_BUTTON}>
+      <div className="min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+          <span className="break-all text-[13px] font-medium text-[var(--color-text-primary)]">{name}</span>
           {version && <Badge mono>v{version}</Badge>}
           <Badge variant="outline">{t('settings.skills.slashCommand')}</Badge>
         </div>
-        <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-0.5">
-          chevron_right
-        </span>
+        <div className="mt-0.5 break-all font-mono text-[11px] text-[var(--color-text-tertiary)]">/{slashName}</div>
+        <div className="mt-1 break-words text-xs leading-5 text-[var(--color-text-secondary)]">{description}</div>
       </div>
-      <div className="mt-1 text-[11px] text-[var(--color-text-tertiary)] break-all">/{slashName}</div>
-      <div className="mt-2 text-xs leading-5 text-[var(--color-text-secondary)] break-words">{description}</div>
+      <EntryChevron />
     </button>
   )
 }
@@ -609,9 +616,9 @@ function CommandPreviewCard({
   description: string
 }) {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
-      <div className="text-sm font-semibold text-[var(--color-text-primary)] break-all">/{name}</div>
-      <div className="mt-2 text-xs leading-5 text-[var(--color-text-secondary)] break-words">{description}</div>
+    <div className="px-4 py-3">
+      <div className="break-all font-mono text-xs text-[var(--color-text-primary)]">/{name}</div>
+      <div className="mt-1 break-words text-xs leading-5 text-[var(--color-text-secondary)]">{description}</div>
     </div>
   )
 }
@@ -628,21 +635,12 @@ function AgentPreviewCard({
   disabled?: boolean
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="group rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-left transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default disabled:opacity-70 disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-surface)]"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="text-sm font-semibold text-[var(--color-text-primary)] break-all">{name}</div>
-          <div className="mt-2 text-xs leading-5 text-[var(--color-text-secondary)] break-words">{description}</div>
-        </div>
-        <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-0.5">
-          chevron_right
-        </span>
+    <button type="button" onClick={onClick} disabled={disabled} className={ENTRY_BUTTON}>
+      <div className="min-w-0">
+        <div className="break-all text-[13px] font-medium text-[var(--color-text-primary)]">{name}</div>
+        <div className="mt-1 break-words text-xs leading-5 text-[var(--color-text-secondary)]">{description}</div>
       </div>
+      <EntryChevron />
     </button>
   )
 }
@@ -661,24 +659,15 @@ function McpPreviewCard({
   disabled?: boolean
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className="group rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3 text-left transition-colors hover:border-[var(--color-border-focus)] hover:bg-[var(--color-surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-default disabled:opacity-70 disabled:hover:border-[var(--color-border)] disabled:hover:bg-[var(--color-surface)]"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-[var(--color-text-primary)] break-all">{name}</span>
-            <Badge className="uppercase tracking-[0.12em]">{transport}</Badge>
-          </div>
-          <div className="mt-2 text-xs leading-5 text-[var(--color-text-secondary)] break-all">{summary}</div>
+    <button type="button" onClick={onClick} disabled={disabled} className={ENTRY_BUTTON}>
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="break-all text-[13px] font-medium text-[var(--color-text-primary)]">{name}</span>
+          <Badge mono>{transport}</Badge>
         </div>
-        <span className="material-symbols-outlined text-[18px] text-[var(--color-text-tertiary)] transition-transform group-hover:translate-x-0.5">
-          chevron_right
-        </span>
+        <div className="mt-1 break-all font-mono text-[11px] leading-5 text-[var(--color-text-secondary)]">{summary}</div>
       </div>
+      <EntryChevron />
     </button>
   )
 }
@@ -693,17 +682,17 @@ function HookPreviewCard({
   actions: string[]
 }) {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface)] px-4 py-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <span className="text-sm font-semibold text-[var(--color-text-primary)] break-all">{event}</span>
+    <div className="px-4 py-3">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="break-all text-[13px] font-medium text-[var(--color-text-primary)]">{event}</span>
         {/* `wrap` is what unblocked these two: a hook matcher is a regex and an
             action is a shell command, and a nowrap badge pushed both off the
             card. */}
         {matcher && <Badge wrap mono>{matcher}</Badge>}
       </div>
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className="mt-2 flex flex-wrap gap-1.5">
         {actions.map((action) => (
-          <Badge key={action} size="md" bordered wrap mono>
+          <Badge key={action} size="sm" pill={false} wrap mono>
             {action}
           </Badge>
         ))}
@@ -712,33 +701,23 @@ function HookPreviewCard({
   )
 }
 
-function MetaPill({ children }: { children: ReactNode }) {
-  return (
-    <Badge bordered className="uppercase tracking-[0.12em]">
-      {children}
-    </Badge>
-  )
-}
-
+/** Label above, figure below: the figure is what the eye lands on. */
 function DetailStat({
   label,
   value,
-  icon,
+  icon: Icon,
 }: {
   label: string
   value: string
-  icon: string
+  icon: LucideIcon
 }) {
   return (
-    <Card radius="lg" padding="sm">
-      <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.16em] text-[var(--color-text-tertiary)]">
-        <span className="material-symbols-outlined text-[14px]">{icon}</span>
-        <span>{label}</span>
+    <Card radius="lg" surface="lowest" padding="none" className="min-w-0 px-4 py-3">
+      <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
+        <Icon className="flex-shrink-0" size={14} strokeWidth={1.75} aria-hidden="true" />
+        <span className="truncate">{label}</span>
       </div>
-      <div
-        className="mt-2 text-[21px] font-semibold leading-none text-[var(--color-text-primary)] break-all"
-        style={{ fontFamily: 'var(--font-headline)' }}
-      >
+      <div className="mt-1 break-all text-[22px] font-semibold leading-7 tabular-nums text-[var(--color-text-primary)]">
         {value}
       </div>
     </Card>

@@ -120,10 +120,10 @@ export function SkillDetail({ embedded = false }: { embedded?: boolean }) {
   const actions = marketMeta ? (
     <Button
       variant="danger-outline"
-      size="lg"
+      size="base"
       data-testid="local-skill-uninstall-button"
       loading={uninstalling}
-      icon={<Trash2 className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />}
+      icon={<Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />}
       onClick={() => setConfirmUninstall(true)}
     >
       {uninstalling ? t('market.uninstall.uninstalling') : t('market.uninstall.action')}
@@ -132,12 +132,13 @@ export function SkillDetail({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <>
-      {embedded && !marketMeta && (
-        <p className="mb-4 text-sm leading-6 text-[var(--color-text-secondary)]">
-          {t('extensions.managedSkillHint')}
-        </p>
-      )}
       <SkillDetailView
+        framed={!embedded}
+        banner={embedded && !marketMeta ? (
+          <p className="mt-4 text-xs leading-5 text-[var(--color-text-tertiary)]">
+            {t('extensions.managedSkillHint')}
+          </p>
+        ) : undefined}
         name={skillMeta.displayName || skillMeta.name}
         version={skillMeta.version}
         sourceLabel={t(`settings.skills.source.${skillMeta.source}`)}

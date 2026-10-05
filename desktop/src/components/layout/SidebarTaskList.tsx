@@ -1,4 +1,4 @@
-import { Folder, GitBranch } from 'lucide-react'
+import { Check, Folder, GitBranch } from 'lucide-react'
 import { Spinner } from '@/components/ui/Spinner'
 import type { TranslationKey } from '../../i18n'
 import type { SessionListItem } from '../../types/session'
@@ -68,7 +68,7 @@ export function SidebarTaskList({
         >
           {/* `--color-text-tertiary` 在四个纸系主题下压到 4.31:1，够不上本项目
               4.5 的线。它在别处标的是相对时间那类装饰，这里却是分段本身。 */}
-          <div className="px-1.5 pb-1 pt-1 text-[11px] font-semibold tracking-normal text-[var(--color-text-secondary)]">
+          <div className="flex h-7 items-center px-2 text-[12px] font-semibold text-[var(--color-text-secondary)]">
             {t(GROUP_TITLE_KEYS[group.id])}
           </div>
           <div>
@@ -76,7 +76,7 @@ export function SidebarTaskList({
               <div
                 key={session.id}
                 data-sidebar-session-id={session.id}
-                className="relative mb-0.5 last:mb-0"
+                className="relative mb-px last:mb-0"
               >
                 {renamingId === session.id ? (
                   <input
@@ -88,7 +88,7 @@ export function SidebarTaskList({
                       if (event.key === 'Enter') onFinishRename()
                       if (event.key === 'Escape') onCancelRename()
                     }}
-                    className="w-full rounded-[var(--radius-md)] border border-[var(--color-border-focus)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text-primary)] outline-none"
+                    className="h-[30px] w-full rounded-[var(--radius-sm)] border border-[var(--color-border-focus)] bg-[var(--color-surface)] px-2 text-[13px] text-[var(--color-text-primary)] outline-none"
                   />
                 ) : (
                   <SidebarTaskRow
@@ -148,12 +148,12 @@ function SidebarTaskRow({
       onClick={(event) => onClick(event, session)}
       onContextMenu={(event) => onContextMenu(event, session.id)}
       className={`
-        group/session w-full rounded-[var(--radius-md)] px-2 ${isMobile ? 'py-2.5' : 'py-1.5'} text-left transition-[background,filter,color,box-shadow] duration-200
+        group/session w-full rounded-[var(--radius-sm)] px-2 ${isMobile ? 'py-2.5' : 'py-1.5'} text-left transition-[background,color,box-shadow] duration-150
         focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-1 focus-visible:ring-offset-[var(--color-surface-sidebar)]
         ${isSelected
-          ? 'sidebar-session-row--selected bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[var(--shadow-card)]'
+          ? 'sidebar-session-row--selected bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'
           : isActive
-          ? 'sidebar-session-row--active bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[var(--shadow-card)]'
+          ? 'sidebar-session-row--active bg-[var(--color-sidebar-item-active)] text-[var(--color-text-primary)] shadow-[0_0_0_1px_var(--color-border),var(--shadow-raised)]'
           : 'sidebar-session-row--idle text-[var(--color-text-secondary)] hover:bg-[var(--color-sidebar-item-hover)] hover:text-[var(--color-text-primary)]'
         }
       `}
@@ -163,17 +163,17 @@ function SidebarTaskRow({
       <span className="flex min-w-0 items-center gap-1.5">
         {isBatchMode ? (
           <span
-            className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[5px] border transition-colors ${
+            className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-[var(--radius-xs)] border transition-colors ${
               isSelected
                 ? 'border-[var(--color-brand)] bg-[var(--color-brand)] text-[var(--color-on-primary)]'
                 : 'border-[var(--color-border-strong)] bg-[var(--color-surface)]'
             }`}
             aria-hidden="true"
           >
-            {isSelected && <span className="material-symbols-outlined text-[12px]">check</span>}
+            {isSelected && <Check size={12} strokeWidth={2} aria-hidden="true" />}
           </span>
         ) : null}
-        <span className="min-w-0 flex-1 truncate text-[13px] font-medium tracking-normal">{title}</span>
+        <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive || isSelected ? 'font-medium' : ''}`}>{title}</span>
         <span className="ml-auto flex h-4 flex-shrink-0 items-center justify-end">
           {needsAttention ? (
             <span className="inline-flex h-4 w-4 items-center justify-center">
@@ -182,12 +182,12 @@ function SidebarTaskRow({
             </span>
           ) : isRunning ? (
             <span
-              className="inline-flex h-4 w-4 items-center justify-center text-[var(--color-success)]"
+              className="inline-flex h-4 w-4 items-center justify-center text-[var(--color-info)]"
               aria-label={t('sidebar.sessionRunning')}
               title={t('sidebar.sessionRunning')}
             >
               {/* 外层已经带名字了，spinner 本身保持静默。 */}
-              <Spinner size={14} />
+              <Spinner size={12} />
             </span>
           ) : null}
         </span>
@@ -196,9 +196,9 @@ function SidebarTaskRow({
           装饰文字，所以用能过 4.5 的 secondary，层级交给字号和字重。 */}
       <span className="mt-0.5 flex min-w-0 items-center gap-1 pl-0.5 text-[11px] text-[var(--color-text-secondary)]">
         {isWorktree ? (
-          <GitBranch className="h-3 w-3 flex-shrink-0" strokeWidth={2} aria-hidden="true" />
+          <GitBranch size={12} strokeWidth={2} className="flex-shrink-0" aria-hidden="true" />
         ) : (
-          <Folder className="h-3 w-3 flex-shrink-0" strokeWidth={2} aria-hidden="true" />
+          <Folder size={12} strokeWidth={2} className="flex-shrink-0" aria-hidden="true" />
         )}
         <span className="min-w-0 truncate">{workspaceLabel}</span>
         {isWorktree && <span className="sr-only">{t('sidebar.worktree')}</span>}

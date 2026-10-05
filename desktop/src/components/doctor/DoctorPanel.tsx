@@ -117,13 +117,10 @@ export function DoctorPanel({ compact = false }: DoctorPanelProps) {
   const healthyCount = report?.items.filter((item) => item.status === 'ok').length ?? 0
 
   return (
-    <Card as="section" radius="md" padding={compact ? 'sm' : 'md'}>
+    <Card as="section" radius="lg" surface="lowest" padding={compact ? 'sm' : 'md'}>
       <div className={`flex ${compact ? 'flex-col gap-3' : 'items-start justify-between gap-4'}`}>
         <div className="min-w-0">
-          <div
-            className="text-[14.5px] font-semibold text-[var(--color-text-primary)]"
-            style={{ fontFamily: 'var(--font-headline)' }}
-          >
+          <div className="text-[13px] font-semibold text-[var(--color-text-primary)]">
             {t('settings.diagnostics.doctorTitle')}
           </div>
           <p className="mt-1 text-xs text-[var(--color-text-tertiary)]">
@@ -138,7 +135,7 @@ export function DoctorPanel({ compact = false }: DoctorPanelProps) {
             size="sm"
             onClick={handleRunDoctor}
             loading={runningRequestId !== null}
-            icon={<Stethoscope className="h-4 w-4" aria-hidden="true" />}
+            icon={<Stethoscope size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
             {t('settings.diagnostics.runDoctor')}
           </Button>
@@ -147,14 +144,14 @@ export function DoctorPanel({ compact = false }: DoctorPanelProps) {
             size="sm"
             onClick={() => setResetConfirmOpen(true)}
             loading={resettingRequestId !== null}
-            icon={<RotateCcw className="h-4 w-4" aria-hidden="true" />}
+            icon={<RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />}
           >
             {t('settings.diagnostics.resetSafeUiState')}
           </Button>
         </div>
       </div>
 
-      <div className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-tertiary)]">
+      <div className="mt-3 text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
         {t('settings.diagnostics.doctorSafeKeys')}
       </div>
       <div className="mt-2 text-xs text-[var(--color-text-secondary)]">
@@ -165,7 +162,7 @@ export function DoctorPanel({ compact = false }: DoctorPanelProps) {
 
       {report ? (
         <div className="mt-3 space-y-2">
-          <Card radius="md" surface="none" padding="sm" className="bg-[var(--color-surface-container)] text-xs text-[var(--color-text-secondary)]">
+          <Card radius="md" surface="container" border="none" padding="sm" className="text-xs text-[var(--color-text-secondary)]">
             {t('settings.diagnostics.doctorSummary', {
               healthy: String(healthyCount),
               neutral: String(report.summary.neutralCount),
@@ -186,7 +183,7 @@ export function DoctorPanel({ compact = false }: DoctorPanelProps) {
       ) : null}
 
       {resetResult ? (
-        <Card radius="md" surface="none" padding="sm" className="mt-2 bg-[var(--color-surface-container)] text-xs text-[var(--color-text-secondary)]">
+        <Card radius="md" surface="container" border="none" padding="sm" className="mt-2 text-xs text-[var(--color-text-secondary)]">
           <div>{t('settings.diagnostics.doctorRemovedKeys')}: {formatKeys(resetResult.removedKeys, t('settings.diagnostics.doctorNoKeys'))}</div>
           <div className="mt-1">{t('settings.diagnostics.doctorFailedKeys')}: {formatKeys(resetResult.failedKeys, t('settings.diagnostics.doctorNoKeys'))}</div>
         </Card>
@@ -214,7 +211,7 @@ function DoctorFinding({ item }: { item: DoctorReportItem }) {
   return (
     <Card radius="md" surface="none" padding="sm" className="text-xs">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="font-mono text-[var(--color-text-secondary)] break-all">{item.path}</span>
+        <span className="break-all font-mono text-[var(--color-text-primary)]">{item.path}</span>
         <Badge tone="warning" size="sm">{getStatusLabel(t, item.status)}</Badge>
       </div>
       {item.error ? <div className="mt-1 text-[var(--color-text-tertiary)] break-words">{item.error}</div> : null}

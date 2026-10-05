@@ -3,13 +3,13 @@ import { AppWindow, Code2, ExternalLink, FolderOpen } from 'lucide-react'
 import { apiGetBlob } from '../../api/client'
 import type { OpenTarget } from '../../stores/openTargetStore'
 
-export function getFallbackIcon(kind: OpenTarget['kind'], size = 17) {
+export function getFallbackIcon(kind: OpenTarget['kind'], size = 16) {
   if (kind === 'file_manager') {
-    return <FolderOpen size={size} strokeWidth={1.9} />
+    return <FolderOpen size={size} strokeWidth={1.75} />
   }
-  if (kind === 'application') return <AppWindow size={size} strokeWidth={1.9} />
-  if (kind === 'system_default') return <ExternalLink size={size} strokeWidth={1.9} />
-  return <Code2 size={size} strokeWidth={1.9} />
+  if (kind === 'application') return <AppWindow size={size} strokeWidth={1.75} />
+  if (kind === 'system_default') return <ExternalLink size={size} strokeWidth={1.75} />
+  return <Code2 size={size} strokeWidth={1.75} />
 }
 
 /**
@@ -87,5 +87,5 @@ export function TargetIcon({ target, size = 18 }: { target: OpenTarget; size?: n
     )
   }
 
-  return getFallbackIcon(target.kind, Math.max(16, size - 1))
+  return getFallbackIcon(target.kind, Math.min(18, Math.max(14, size)))
 }

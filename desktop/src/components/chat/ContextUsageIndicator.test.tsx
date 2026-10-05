@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 const { sessionsApiMock, runtimeMocks } = vi.hoisted(() => ({
@@ -630,13 +630,13 @@ describe('ContextUsageIndicator touch target', () => {
   // `compact` is also true on the desktop composer, which narrows for the right
   // panel rather than for touch — so it cannot be the signal that grows this
   // trigger. On the phone shell it sits between two 44px buttons.
-  it('keeps the desktop trigger at 32px even when the composer is compact', () => {
+  it('keeps the desktop trigger at the 28px toolbar height even when the composer is compact', () => {
     sessionsApiMock.getInspection.mockResolvedValue(baseInspection)
 
     render(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} compact />)
 
     const trigger = screen.getByTestId('context-usage-indicator')
-    expect(trigger).toHaveClass('h-8', 'w-8')
+    expect(trigger).toHaveClass('h-7')
     expect(trigger).not.toHaveClass('h-11')
   })
 
@@ -648,7 +648,7 @@ describe('ContextUsageIndicator touch target', () => {
 
     const trigger = screen.getByTestId('context-usage-indicator')
     expect(trigger).toHaveClass('h-11', 'w-11')
-    expect(trigger).not.toHaveClass('h-8')
+    expect(trigger).not.toHaveClass('h-7')
   })
 
   it('leaves the desktop shell alone on a narrow Electron window', () => {
@@ -658,7 +658,7 @@ describe('ContextUsageIndicator touch target', () => {
 
     render(<ContextUsageIndicator sessionId="session-1" chatState="idle" messageCount={1} compact />)
 
-    expect(screen.getByTestId('context-usage-indicator')).toHaveClass('h-8')
+    expect(screen.getByTestId('context-usage-indicator')).toHaveClass('h-7')
   })
 })
 
@@ -702,8 +702,13 @@ describe('ContextUsageIndicator presentation', () => {
       expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('21%')
     })
     const trigger = screen.getByTestId('context-usage-indicator')
-    expect(trigger).toHaveClass('h-8', 'w-8')
-    expect(trigger.querySelector('.font-mono')).not.toBeInTheDocument()
+    expect(trigger).toHaveClass('h-7')
+    // The desktop toolbar shows the ring and the percentage side by side; the
+    // number is visible text in mono 11, not just the accessible name.
+    const percent = within(trigger).getByText('21%')
+    expect(percent).not.toHaveClass('sr-only')
+    expect(percent).toHaveClass('font-mono', 'text-[11px]')
+    expect(within(trigger).getByTestId('context-usage-ring')).toBeInTheDocument()
     expect(screen.queryByTestId('context-usage-popover')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByTestId('context-usage-indicator'))

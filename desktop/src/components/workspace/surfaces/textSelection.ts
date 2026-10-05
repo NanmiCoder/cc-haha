@@ -1,8 +1,8 @@
 import { getSelectionPopoverPosition } from '@/hooks/useSelectionPopoverDismiss'
 
 const SELECTION_MENU_OFFSET = 10
-const SELECTION_MENU_WIDTH = 158
-const SELECTION_MENU_HEIGHT = 44
+const SELECTION_MENU_WIDTH = 140
+const SELECTION_MENU_HEIGHT = 32
 
 export type WorkspaceTextSelection = {
   text: string

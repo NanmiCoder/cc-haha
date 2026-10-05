@@ -1,7 +1,7 @@
 // desktop/src/components/settings/ChatGPTOfficialLogin.tsx
 
 import { useEffect, useState } from 'react'
-import { Copy, LogIn, LogOut } from 'lucide-react'
+import { CircleCheck, Copy, LogIn, LogOut } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { useHahaOpenAIOAuthStore } from '../../stores/hahaOpenAIOAuthStore'
 import { useTranslation } from '../../i18n'
@@ -100,8 +100,9 @@ export function ChatGPTOfficialLogin() {
   if (status.loggedIn) {
     const accountLabel = status.email || status.accountId || t('settings.chatgptOfficialLogin.accountUnknown')
     return (
-      <div data-testid="chatgpt-official-login" className="flex items-center gap-3 text-sm">
-        <span className="text-[var(--color-success)]">
+      <div data-testid="chatgpt-official-login" className="flex flex-wrap items-center gap-3 text-[13px]">
+        <span className="inline-flex min-w-0 items-center gap-1.5 text-[var(--color-success)]">
+          <CircleCheck size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
           {t('settings.chatgptOfficialLogin.loggedInPrefix')} {accountLabel}
         </span>
         <Button
@@ -121,13 +122,14 @@ export function ChatGPTOfficialLogin() {
 
   return (
     <div data-testid="chatgpt-official-login" className="flex flex-col gap-2">
-      <div className="text-sm text-[var(--color-text-secondary)]">
+      <div className="text-[13px] leading-5 text-[var(--color-text-secondary)]">
         {t('settings.chatgptOfficialLogin.intro')}
       </div>
       <Button
+        size="base"
         onClick={handleLogin}
         disabled={isLoading}
-        icon={<LogIn className="h-4 w-4" aria-hidden="true" />}
+        icon={<LogIn size={14} strokeWidth={1.75} aria-hidden="true" />}
         className="self-start"
       >
         {isLoading

@@ -50,7 +50,7 @@ export function WorkspaceTerminalTab({ sessionId, tab, active }: WorkspaceTermin
         <p
           role="status"
           data-testid={`workspace-terminal-exited-${tab.ordinal}`}
-          className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-1.5 text-[11px] text-[var(--color-text-secondary)]"
+          className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-container)] px-3 py-1.5 text-[12px] text-[var(--color-text-secondary)]"
         >
           {t('workspace.terminal.exited')} {t('workspace.terminal.restart')}
         </p>

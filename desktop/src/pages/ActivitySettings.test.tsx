@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { ActivitySettings } from './ActivitySettings'
@@ -239,6 +239,8 @@ describe('ActivitySettings', () => {
     expect(screen.queryByText('Read')).not.toBeInTheDocument()
     expect(screen.getAllByText('May').length).toBeGreaterThan(0)
     expect(screen.queryByText('5月')).not.toBeInTheDocument()
+    // May 2026 starts in the final column, too late to fit its name.
+    expect(screen.getByTestId('activity-month-labels').lastElementChild).toHaveTextContent('Apr')
 
     const todayCell = screen.getByRole('gridcell', {
       name: /May 9, 2026: 4 sessions · 128K Tokens/i,
@@ -281,33 +283,133 @@ describe('ActivitySettings', () => {
     expect(editButton.closest('div')).toHaveClass('group/activity-profile')
   })
 
-  it('uses a compact summary strip instead of the loose card layout', async () => {
+  it('lays the summary out as KPI tiles whose column count comes from the container, not the viewport', async () => {
     render(<ActivitySettings />)
 
     await flushActivityLoad()
 
     const summaryPanel = screen.getByText('Total tokens').closest('section')
     expect(summaryPanel).toHaveClass('activity-summary-panel')
-    expect(summaryPanel).toHaveClass('max-w-[900px]')
+    expect(within(summaryPanel as HTMLElement).getByText('2.9M')).toBeInTheDocument()
 
+    // Breakpoints live in container queries (globals.css), so the settings rail
+    // width cannot push the tiles into a cramped row.
     const summaryGrid = summaryPanel?.querySelector('.activity-summary-grid')
     expect(summaryGrid).not.toHaveClass('sm:grid-cols-2')
     expect(summaryGrid).not.toHaveClass('lg:grid-cols-5')
     expect(summaryGrid).not.toHaveClass('xl:grid-cols-5')
 
+    // The headline tile is the one that spans two columns; the label sits above the number.
     const primaryMetric = screen.getByText('Total tokens').closest('.activity-summary-metric')
     expect(primaryMetric).toHaveClass('activity-summary-metric-primary')
     expect(primaryMetric).not.toHaveClass('sm:col-span-2')
-    expect(primaryMetric).not.toHaveClass('lg:col-span-1')
-    expect(primaryMetric).toHaveClass('text-center')
+    expect(primaryMetric?.firstElementChild).toHaveTextContent('Total tokens')
+    expect(screen.getByText('Peak tokens').closest('.activity-summary-metric')).not.toHaveClass('activity-summary-metric-primary')
 
-    // Two lines, not one truncated line: at a fifth of the strip a duration like
+    // Two lines, not one truncated line: at a third of the row a duration like
     // "436 小时 26 分钟" rendered as "436 小…". Clamping still caps the growth, so
-    // the strip stays compact.
+    // the tiles stay compact.
     const longestTaskValue = screen.getByText('0m')
     expect(longestTaskValue).toHaveClass('activity-summary-value')
     expect(longestTaskValue).toHaveClass('line-clamp-2')
+    expect(longestTaskValue).toHaveClass('tabular-nums')
     expect(longestTaskValue).not.toHaveClass('break-words')
+  })
+
+  it('places heatmap month labels by week without collisions or overhang', async () => {
+    // The 52-week window then opens on Sunday 2024-01-28: January's last four
+    // days sit in column 0 and February starts in column 1.
+    vi.setSystemTime(new Date('2025-01-20T12:00:00'))
+    render(<ActivitySettings />)
+
+    await flushActivityLoad()
+
+    const labels = Array.from(screen.getByTestId('activity-month-labels').children) as HTMLElement[]
+    const texts = labels.map((label) => label.textContent)
+    // January's 4-day tail would have collided with February, so it is dropped.
+    expect(texts[0]).toBe('Feb')
+    expect(texts).toHaveLength(12)
+    expect(texts[texts.length - 1]).toBe('Jan')
+
+    const lefts = labels.map((label) => Number.parseFloat(label.style.left))
+    // February sits in column 1, so its offset is exactly one cell plus gap.
+    const cellPitch = lefts[0]!
+    expect(cellPitch).toBeGreaterThan(0)
+    for (let index = 1; index < lefts.length; index += 1) {
+      expect(lefts[index]! - lefts[index - 1]!).toBeGreaterThanOrEqual(cellPitch * 3)
+    }
+    // No label starts in the last two columns, where it would overhang the grid.
+    expect(Math.max(...lefts)).toBeLessThanOrEqual(cellPitch * 49)
+  })
+
+  it('charts the trailing 14 days ending today and highlights only today', async () => {
+    render(<ActivitySettings />)
+
+    await flushActivityLoad()
+
+    const chart = screen.getByRole('list', { name: 'Token usage by day' })
+    const bars = within(chart).getAllByRole('listitem')
+    expect(bars).toHaveLength(14)
+    expect(bars[0]).toHaveTextContent('Apr 26, 2026: 0 Tokens')
+    expect(bars[11]).toHaveTextContent('May 7, 2026: 64K Tokens')
+    expect(bars[13]).toHaveTextContent('May 9, 2026: 128K Tokens')
+    expect(within(chart).queryByText(/May 10, 2026/)).not.toBeInTheDocument()
+
+    const barFill = (bar: HTMLElement) => bar.firstElementChild as HTMLElement
+    // Heights are relative to the window's own peak, so today's 128K fills the
+    // chart and the 64K day sits at half height.
+    expect(barFill(bars[13]!).style.height).toBe('100%')
+    expect(barFill(bars[11]!).style.height).toBe('50%')
+    expect(barFill(bars[0]!).style.height).toBe('0%')
+    expect(barFill(bars[13]!).className).toContain('--color-brand')
+    expect(barFill(bars[11]!).className).not.toContain('--color-brand')
+  })
+
+  it('breaks tokens and cost down per model, marking unpriced models instead of showing $0', async () => {
+    getStatsMock.mockResolvedValueOnce({
+      ...activityResponse,
+      modelUsage: {
+        'claude-sonnet': {
+          inputTokens: 1_900_000,
+          outputTokens: 700_000,
+          cacheReadInputTokens: 230_000,
+          cacheCreationInputTokens: 34_000,
+          costUSD: 12.5,
+        },
+        'glm-4.6': {
+          inputTokens: 40_000,
+          outputTokens: 2_000,
+          costUSD: 0,
+        },
+      },
+      unpricedModels: ['glm-4.6'],
+    })
+    render(<ActivitySettings />)
+
+    await flushActivityLoad()
+
+    const table = screen.getByRole('table')
+    const rows = within(table).getAllByRole('row')
+    expect(rows).toHaveLength(3)
+    expect(within(rows[0]!).getAllByRole('columnheader').map((cell) => cell.textContent)).toEqual([
+      'Model',
+      'New tokens',
+      'Cache hits',
+      'Estimated cost',
+    ])
+    // Sorted by total tokens, largest first.
+    expect(within(rows[1]!).getAllByRole('cell').map((cell) => cell.textContent)).toEqual([
+      'claude-sonnet',
+      '2.6M',
+      '230K',
+      '$12.50',
+    ])
+    expect(within(rows[2]!).getAllByRole('cell').map((cell) => cell.textContent)).toEqual([
+      'glm-4.6',
+      '42K',
+      '0',
+      '—',
+    ])
   })
 
   it('supports localized heatmap mode switches and persisted display name edits', async () => {
@@ -317,10 +419,15 @@ describe('ActivitySettings', () => {
     await flushActivityLoad()
 
     expect(screen.getByText('Token 活动')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '每周' }))
-    expect(screen.getByRole('button', { name: '每周' })).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(screen.getByRole('button', { name: '累计' }))
-    expect(screen.getByRole('button', { name: '累计' })).toHaveAttribute('aria-pressed', 'true')
+    const modeGroup = screen.getByRole('radiogroup', { name: 'Token 活动' })
+    expect(within(modeGroup).getByRole('radio', { name: '每日' })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(within(modeGroup).getByRole('radio', { name: '每周' }))
+    expect(within(modeGroup).getByRole('radio', { name: '每周' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(modeGroup).getByRole('radio', { name: '每日' })).toHaveAttribute('aria-checked', 'false')
+    // Weekly mode relabels the cells as week ranges.
+    expect(screen.getAllByRole('gridcell', { name: /^2026年5月3日 - 2026年5月9日:/ }).length).toBeGreaterThan(0)
+    fireEvent.click(within(modeGroup).getByRole('radio', { name: '累计' }))
+    expect(within(modeGroup).getByRole('radio', { name: '累计' })).toHaveAttribute('aria-checked', 'true')
 
     fireEvent.click(screen.getByRole('button', { name: '编辑个人资料' }))
     const input = screen.getByLabelText('显示名称')
@@ -335,10 +442,11 @@ describe('ActivitySettings', () => {
       displayName,
       subtitle: 'relakkes.dev',
     })
+    // A long display name wraps inside the profile card instead of being cut off.
     const heading = screen.getByRole('heading', { name: displayName })
     expect(heading).toHaveClass('break-words')
     expect(heading).not.toHaveClass('truncate')
-    expect(heading.parentElement).toHaveClass('w-full')
+    expect(heading.parentElement).toHaveClass('min-w-0')
     expect(screen.getByRole('link', { name: 'relakkes.dev' })).toHaveAttribute('href', 'https://relakkes.dev')
   })
 

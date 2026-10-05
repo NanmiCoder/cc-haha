@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
+import { ChevronDown, UsersRound } from 'lucide-react'
 import { ModelSelector } from '@/components/controls/ModelSelector'
+import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { Modal } from '@/components/ui/Modal'
@@ -13,7 +15,7 @@ import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
 import { useProviderStore } from '@/stores/providerStore'
 import type { RuntimeSelection } from '@/types/runtime'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '@/constants/openaiOfficialProvider'
-import { isValidTeamMemberName, type TeamPlanRuntime, type TeamPlanMember } from '../../../../src/shared/teamPlan'
+import { isValidTeamMemberName, type TeamPlanRecord, type TeamPlanRuntime, type TeamPlanMember } from '../../../../src/shared/teamPlan'
 
 function selection(runtime: TeamPlanRuntime): RuntimeSelection {
   return {
@@ -27,6 +29,23 @@ function selection(runtime: TeamPlanRuntime): RuntimeSelection {
 function runtimeFor(selection: RuntimeSelection): TeamPlanRuntime {
   return { ...selection, providerId: selection.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID }
 }
+
+/**
+ * The app-wide status vocabulary: waiting on a person is `warning`, work under
+ * way is `info`, a failed launch is `danger`, and a plan nobody is acting on
+ * any more is `neutral`.
+ */
+const STATE_TONE: Record<TeamPlanRecord['state'], Tone> = {
+  draft: 'info',
+  review_pending: 'warning',
+  launching: 'info',
+  running: 'info',
+  launch_failed: 'danger',
+  cancelled: 'neutral',
+  interrupted: 'neutral',
+}
+
+const CHEVRON = <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
 
 /** Durable plan review is independent of a running chat turn or permission request. */
 export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
@@ -96,14 +115,23 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
     interrupted: t('teamPlan.state.interrupted'),
   }[plan.state]
 
+  const stateTone = STATE_TONE[plan.state]
+
   return (
-    <section aria-label={t('teamPlan.title')} className="my-4 rounded-[var(--radius-xl)] border border-[var(--color-border)] bg-[var(--color-surface)] p-5">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+    <section aria-label={t('teamPlan.title')} className="my-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+      <div className="flex h-[42px] items-center gap-2 border-b border-[var(--color-border)] px-3.5">
+        <UsersRound size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{t('teamPlan.title')}</span>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-3">
         <div className="min-w-0">
-          <p className="mb-1 text-xs text-[var(--color-text-secondary)]" role="status">{stateLabel} · {t('teamPlan.memberCount', { count: members.length })}</p>
-          <h3 className="truncate text-base font-semibold tracking-tight text-[var(--color-text-primary)]">{plan.teamName}</h3>
+          <h3 className="truncate text-sm font-medium text-[var(--color-text-primary)]">{plan.teamName}</h3>
+          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]" role="status">
+            <StatusDot tone={stateTone} pulse={stateTone === 'warning'} />
+            <span className="truncate">{stateLabel} · {t('teamPlan.memberCount', { count: members.length })}</span>
+          </p>
         </div>
-        <Button data-testid="team-plan-open" variant="secondary" onClick={openEditor}>{t('teamPlan.open')}</Button>
+        <Button data-testid="team-plan-open" size="base" variant={plan.state === 'review_pending' ? 'primary' : 'secondary'} onClick={openEditor}>{t('teamPlan.open')}</Button>
       </div>
       <Modal open={open} onClose={() => { if (!entry.busy) setOpen(false) }} title={t('teamPlan.title')} width={1080} className="team-plan-dialog" typography="interface" footer={(
         <div className="team-plan-footer flex w-full flex-wrap items-center justify-between gap-3">
@@ -132,7 +160,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
               <p className="text-sm text-[var(--color-text-secondary)]">{t('teamPlan.reviewHint')}</p>
               <p className="mt-2 max-w-[65ch] text-xs leading-relaxed text-[var(--color-text-tertiary)]">{t('teamPlan.description')}</p>
             </div>
-            <span className="rounded-full bg-[var(--color-surface-container)] px-3 py-1 text-xs text-[var(--color-text-secondary)]">{stateLabel}</span>
+            <Badge tone={stateTone} size="sm">{stateLabel}</Badge>
           </div>
           {plan.launch?.error && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{plan.launch.error}</p>}
           {entry.error && <p role="alert" className="mb-4 text-sm text-[var(--color-error)]">{entry.error}</p>}
@@ -151,7 +179,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                 {plan.state === 'review_pending' && <Checkbox size="sm" label={t('teamPlan.selectAll')} labelHidden checked={members.length > 0 && members.every(member => selected.includes(member.id))} indeterminate={selected.length > 0 && !members.every(member => selected.includes(member.id))} disabled={!editable} onChange={event => setSelected(event.target.checked ? members.map(member => member.id) : [])} />}
               </div>
               <nav aria-label={t('teamPlan.roster')} className="grid min-w-0 gap-1.5">
-                {members.map((member, index) => <div key={member.id} className={`team-plan-member flex min-w-0 items-center gap-2 rounded-[var(--radius-lg)] p-2 ${member.id === activeMember?.id ? 'bg-[var(--color-surface-container)]' : ''}`}>
+                {members.map((member, index) => <div key={member.id} className={`team-plan-member flex min-w-0 items-center gap-2 rounded-[var(--radius-md)] p-2 ${member.id === activeMember?.id ? 'bg-[var(--color-surface-selected)]' : ''}`}>
                   {plan.state === 'review_pending' && <Checkbox label={member.name} labelHidden size="sm" disabled={!editable} checked={selected.includes(member.id)} onChange={event => setSelected(ids => event.target.checked ? [...ids, member.id] : ids.filter(id => id !== member.id))} />}
                   <button type="button" aria-label={t('teamPlan.configureMember', { name: member.name })} aria-current={member.id === activeMember?.id ? 'true' : undefined} onClick={() => setActiveMemberId(member.id)} className="flex min-w-0 flex-1 items-start gap-3 rounded-[var(--radius-sm)] py-1 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]">
                     <span aria-hidden="true" className={`mt-0.5 font-mono text-[11px] ${member.id === activeMember?.id ? 'text-[var(--color-brand)]' : 'text-[var(--color-text-tertiary)]'}`}>{String(index + 1).padStart(2, '0')}</span>
@@ -166,7 +194,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                 <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">{t('teamPlan.leader')}: {runtimeName(leaderRuntime)}</p>
               </div>
               {plan.state === 'review_pending' && <div className="mt-4 space-y-3">
-                {selected.length > 0 && <div className="team-plan-batch space-y-3 rounded-[var(--radius-lg)] bg-[var(--color-surface-container)] p-3">
+                {selected.length > 0 && <div className="team-plan-batch space-y-3 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3">
                   <p className="text-xs font-medium text-[var(--color-text-primary)]">{t('teamPlan.selectedCount', { count: selected.length })}</p>
                   <ModelSelector appearance="field" fluid ariaLabel={t('teamPlan.batch')} runtimeSelection={selection(members.find(member => selected.includes(member.id))?.runtime ?? leaderRuntime)} onRuntimeSelectionChange={batchRuntime} disabled={!editable} />
                   <Button block size="base" variant="ghost" disabled={!editable} onClick={() => batchRuntime(selection(leaderRuntime))}>{t('teamPlan.followLeader')}</Button>
@@ -179,9 +207,9 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                 <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="mb-1 text-xs text-[var(--color-text-tertiary)]">{t('teamPlan.assignment')}</p>
-                    <h3 className="text-xl font-semibold tracking-tight text-[var(--color-text-primary)]">{activeMember.name}</h3>
+                    <h3 className="text-lg font-semibold text-[var(--color-text-primary)]">{activeMember.name}</h3>
                   </div>
-                  <span className="rounded-full border border-[var(--color-border)] px-2.5 py-1 text-[11px] text-[var(--color-text-secondary)]">{t('teamPlan.difficulty')}: {difficultyLabel(activeMember)}</span>
+                  <Badge size="sm">{t('teamPlan.difficulty')}: {difficultyLabel(activeMember)}</Badge>
                 </div>
                 <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
                   <div className="min-w-0 space-y-2">
@@ -189,7 +217,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                     <Dropdown className="w-full" width="100%" maxHeight={280} label={`${activeMember.name} · ${t('teamPlan.agent')}`} value={activeMember.agentType} items={[
                       ...(!agents.some(agent => agent.agentType === activeMember.agentType) ? [{ value: activeMember.agentType, label: activeMember.agentType }] : []),
                       ...agents.map(agent => ({ value: agent.agentType, label: agent.agentType, description: agent.source ? t(`settings.agents.source.${agent.source}` as TranslationKey) : agent.description })),
-                    ]} onChange={agentType => updateMember(activeMember.id, { agentType })} trigger={<Button block variant="secondary" size="lg" aria-label={`${activeMember.name} · ${t('teamPlan.agent')}`} disabled={!editable || agents.length === 0}><span className="flex min-w-0 flex-1 items-center justify-between gap-2"><span className="truncate">{activeMember.agentType}</span><span aria-hidden="true" className="team-plan-chevron" /></span></Button>} />
+                    ]} onChange={agentType => updateMember(activeMember.id, { agentType })} trigger={<Button block variant="secondary" size="lg" aria-label={`${activeMember.name} · ${t('teamPlan.agent')}`} disabled={!editable || agents.length === 0}><span className="flex min-w-0 flex-1 items-center justify-between gap-2"><span className="truncate">{activeMember.agentType}</span>{CHEVRON}</span></Button>} />
                   </div>
                   <div className="min-w-0 space-y-2">
                     <p className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.model')}</p>
@@ -222,7 +250,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                       </div>
                       <div className="min-w-0 space-y-2">
                         <p className="text-[11px] text-[var(--color-text-tertiary)]">{t('teamPlan.owner')}</p>
-                        <Dropdown className="w-full" width="100%" maxHeight={200} placement="top" label={`${task.subject} · ${t('teamPlan.owner')}`} value={owner?.id ?? ''} items={[{ value: '', label: t('teamPlan.unassigned'), disabled: true }, ...members.map(member => ({ value: member.id, label: member.name, description: member.agentType }))]} onChange={ownerId => edit(sessionId, { tasks: tasks.map(row => row.id === task.id ? { ...row, ownerId: ownerId || undefined } : row) })} trigger={<Button block size="base" variant="secondary" aria-label={`${task.subject} · ${t('teamPlan.owner')}`} aria-invalid={!owner || undefined} aria-describedby={!owner ? `team-plan-unassigned-${task.id}` : undefined} disabled={!editable}><span className="flex min-w-0 flex-1 items-center justify-between gap-2"><span className="truncate">{owner?.name ?? t('teamPlan.unassigned')}</span><span aria-hidden="true" className="team-plan-chevron" /></span></Button>} />
+                        <Dropdown className="w-full" width="100%" maxHeight={200} placement="top" label={`${task.subject} · ${t('teamPlan.owner')}`} value={owner?.id ?? ''} items={[{ value: '', label: t('teamPlan.unassigned'), disabled: true }, ...members.map(member => ({ value: member.id, label: member.name, description: member.agentType }))]} onChange={ownerId => edit(sessionId, { tasks: tasks.map(row => row.id === task.id ? { ...row, ownerId: ownerId || undefined } : row) })} trigger={<Button block size="base" variant="secondary" aria-label={`${task.subject} · ${t('teamPlan.owner')}`} aria-invalid={!owner || undefined} aria-describedby={!owner ? `team-plan-unassigned-${task.id}` : undefined} disabled={!editable}><span className="flex min-w-0 flex-1 items-center justify-between gap-2"><span className="truncate">{owner?.name ?? t('teamPlan.unassigned')}</span>{CHEVRON}</span></Button>} />
                         {plan.state === 'review_pending' && !owner && <p id={`team-plan-unassigned-${task.id}`} role="alert" className="text-xs text-[var(--color-error)]">{t('teamPlan.assignRequired')}</p>}
                       </div>
                     </div>

@@ -729,7 +729,10 @@ describe('ModelSelector', () => {
       .getAllByRole('button', { name: /deepseek-v4-pro/i })
       .find((button) => button.textContent?.includes('Sonnet Model'))
     expect(configuredOption).toBeDefined()
-    expect(configuredOption?.className).toContain('border-[var(--color-model-option-selected-border)]')
+    // 「素」 menu selection: the hover fill at rest plus the terracotta check.
+    expect(configuredOption).toHaveAttribute('aria-current', 'true')
+    expect(configuredOption?.className).toContain('bg-[var(--color-surface-hover)]')
+    expect(configuredOption?.querySelector('svg.lucide-check')).toHaveClass('text-[var(--color-brand)]')
   })
 
   it('closes the focus ring on both halves of the segmented control', () => {
@@ -757,8 +760,8 @@ describe('ModelSelector', () => {
     // The ring traces `border-radius`. Each half is rounded on one side only,
     // so without this the focused half drew a box that was round down one edge
     // and square down the other.
-    expect(modelHalf).toHaveClass('rounded-l-[var(--radius-md)]', 'focus-visible:rounded-[var(--radius-md)]')
-    expect(effortHalf).toHaveClass('rounded-r-[var(--radius-md)]', 'focus-visible:rounded-[var(--radius-md)]')
+    expect(modelHalf).toHaveClass('rounded-l-[var(--radius-sm)]', 'focus-visible:rounded-[var(--radius-sm)]')
+    expect(effortHalf).toHaveClass('rounded-r-[var(--radius-sm)]', 'focus-visible:rounded-[var(--radius-sm)]')
   })
 
   // On the phone composer this control sits between two 44px buttons and opens

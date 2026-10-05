@@ -94,21 +94,21 @@ function categoryLabel(category: FeedCategory, t: TranslationFn): string {
 
 function categoryTagClass(category: FeedCategory): string {
   if (category === 'assignment') {
-    return 'border-[var(--color-primary-fixed-dim)] bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)]'
+    return 'border-transparent bg-[var(--color-info-container)] text-[var(--color-on-info-container)]'
   }
   if (category === 'peer') {
     return 'border-[var(--color-memory-border)] bg-[var(--color-tertiary-container)] text-[var(--color-tertiary)]'
   }
   if (category === 'system') {
-    return 'border-[var(--color-success)] bg-[var(--color-success-container)] text-[var(--color-on-success-container)]'
+    return 'border-transparent bg-[var(--color-surface-container)] text-[var(--color-text-secondary)]'
   }
   return 'border-[var(--color-outline)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)]'
 }
 
 function categoryAccent(category: FeedCategory): string {
-  if (category === 'assignment') return 'var(--color-brand)'
+  if (category === 'assignment') return 'var(--color-info)'
   if (category === 'peer') return 'var(--color-tertiary)'
-  if (category === 'system') return 'var(--color-success)'
+  if (category === 'system') return 'var(--color-text-tertiary)'
   return 'var(--color-text-secondary)'
 }
 
@@ -223,7 +223,7 @@ export function AgentTeamsCommunicationFeed({
     >
       <div className="shrink-0 border-b border-[var(--color-border)] px-3.5 py-3">
         <div className="flex min-w-0 items-baseline gap-2">
-          <h3 className="text-[15px] font-extrabold tracking-[-0.2px]">
+          <h3 className="text-[15px] font-semibold tracking-[-0.2px]">
             {t('agentTeams.communication.title')}
           </h3>
           <span
@@ -250,7 +250,7 @@ export function AgentTeamsCommunicationFeed({
                 aria-pressed={selected}
                 onClick={() => setFilter(option.key)}
                 className={[
-                  'inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[11px] font-bold outline-none transition-[transform,background-color,border-color,color] duration-200 focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:scale-[0.98]',
+                  'inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[11px] font-semibold outline-none transition-[transform,background-color,border-color,color] duration-200 focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:scale-[0.98]',
                   selected
                     ? 'border-[var(--color-text-primary)] bg-[var(--color-text-primary)] text-[var(--color-surface)]'
                     : 'border-[var(--color-border)] bg-[var(--color-surface)] text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-hover)]',
@@ -343,34 +343,34 @@ function FeedRow({
             aria-hidden="true"
           />
           <span
-            className="shrink-0 text-[9.5px] font-extrabold uppercase tracking-[0.08em]"
+            className="shrink-0 text-[11px] font-semibold"
             style={{ color: categoryAccent(category) }}
           >
             {categoryLabel(category, t)}
           </span>
           <p
             data-testid={`agent-teams-message-${message.id}-body`}
-            className="min-w-0 flex-1 truncate text-[11.5px] leading-[1.4] text-[var(--color-text-secondary)]"
+            className="min-w-0 flex-1 truncate text-xs leading-[1.4] text-[var(--color-text-secondary)]"
             title={text}
           >
             {text}
           </p>
           {message.taskId ? (
-            <span className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--color-text-tertiary)]">
+            <span className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-tertiary)]">
               #{message.taskId}
             </span>
           ) : null}
           {repeats > 1 ? (
             <span
               data-testid={`agent-teams-message-${message.id}-repeats`}
-              className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-[var(--color-text-tertiary)]"
+              className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
             >
               ×{repeats}
             </span>
           ) : null}
           <time
             dateTime={message.timestamp}
-            className="shrink-0 font-mono text-[9px] tabular-nums text-[var(--color-text-tertiary)]"
+            className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
           >
             {time}
           </time>
@@ -393,13 +393,13 @@ function FeedRow({
   return (
     <article {...rowProps} className="relative px-3.5 py-3">
       {isLatest ? (
-        <span className="absolute bottom-3 left-0 top-3 w-0.5 rounded-r-full bg-[var(--color-brand)]" aria-hidden="true" />
+        <span className="absolute bottom-3 left-0 top-3 w-0.5 rounded-r-full bg-[var(--color-info)]" aria-hidden="true" />
       ) : null}
 
       <div className="flex min-w-0 items-center gap-2">
         <span
           className={[
-            'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[9.5px] font-extrabold uppercase tracking-[0.08em]',
+            'inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-semibold',
             categoryTagClass(category),
           ].join(' ')}
         >
@@ -407,13 +407,13 @@ function FeedRow({
           {categoryLabel(category, t)}
         </span>
         {message.taskId ? (
-          <span className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--color-text-tertiary)]">
+          <span className="shrink-0 rounded-full bg-[var(--color-surface-container-high)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--color-text-tertiary)]">
             #{message.taskId}
           </span>
         ) : null}
         <time
           dateTime={message.timestamp}
-          className="ml-auto shrink-0 font-mono text-[9px] tabular-nums text-[var(--color-text-tertiary)]"
+          className="ml-auto shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-tertiary)]"
         >
           {time}
         </time>
@@ -443,10 +443,10 @@ function FeedRow({
             className="inline-flex min-w-0 flex-1 items-center gap-1.5"
             title={recipient}
           >
-            <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-brand)]">
+            <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-secondary)]">
               <Megaphone size={11} strokeWidth={2} aria-hidden="true" />
             </span>
-            <span className="min-w-0 truncate font-mono text-[10px] font-semibold text-[var(--color-text-secondary)]">
+            <span className="min-w-0 truncate font-mono text-[11px] font-medium text-[var(--color-text-secondary)]">
               {recipient}
             </span>
           </span>
@@ -456,13 +456,13 @@ function FeedRow({
       <div
         data-testid={`agent-teams-message-${message.id}-body`}
         data-collapsed={collapsed ? 'true' : 'false'}
-        className="relative mt-[7px] text-[12.5px] leading-[1.55]"
+        className="relative mt-[7px] text-[13px] leading-[1.55]"
       >
         <div className={collapsed ? 'max-h-[148px] overflow-hidden' : ''}>
           <MarkdownRenderer
             content={text}
             variant="compact"
-            className="prose-p:first:mt-0 prose-p:last:mb-0 prose-p:text-[12.5px] prose-p:leading-[1.55] prose-li:text-[12.5px] prose-li:leading-[1.55] prose-headings:first:mt-0 prose-headings:text-[var(--color-text-primary)] prose-code:text-[11px]"
+            className="prose-p:first:mt-0 prose-p:last:mb-0 prose-p:text-[13px] prose-p:leading-[1.55] prose-li:text-[13px] prose-li:leading-[1.55] prose-headings:first:mt-0 prose-headings:text-[var(--color-text-primary)] prose-code:text-[11px]"
           />
         </div>
         {collapsed ? (
@@ -477,7 +477,7 @@ function FeedRow({
         <button
           type="button"
           onClick={() => setExpanded((current) => !current)}
-          className="relative mt-2 rounded-[var(--radius-sm)] text-[10px] font-semibold text-[var(--color-brand)] outline-none transition-[transform,color] duration-200 hover:underline focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:scale-[0.98]"
+          className="relative mt-2 rounded-[var(--radius-sm)] text-[11px] font-medium text-[var(--color-text-accent)] outline-none transition-[transform,color] duration-200 hover:underline focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] active:scale-[0.98]"
         >
           {t(expanded ? 'agentTeams.communication.collapse' : 'agentTeams.communication.expand')}
         </button>
@@ -518,7 +518,7 @@ function ParticipantFigure({
       </span>
       <span
         data-testid={nameTestId}
-        className="min-w-0 truncate font-mono text-[10px] font-bold text-[var(--color-text-secondary)]"
+        className="min-w-0 truncate font-mono text-[11px] font-medium text-[var(--color-text-secondary)]"
       >
         {name}
       </span>

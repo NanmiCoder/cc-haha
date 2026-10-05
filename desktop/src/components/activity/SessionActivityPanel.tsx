@@ -165,9 +165,9 @@ function TaskStatusMarker({ status, t }: { status: ActivityRow['status']; t: Tra
     return (
       <span
         aria-label={t('session.activity.task.completed')}
-        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-success)] text-[var(--color-surface)]"
+        className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-success-container)] text-[var(--color-on-success-container)]"
       >
-        <Check size={13} strokeWidth={3} aria-hidden="true" />
+        <Check size={12} strokeWidth={2} aria-hidden="true" />
       </span>
     )
   }
@@ -178,7 +178,7 @@ function TaskStatusMarker({ status, t }: { status: ActivityRow['status']; t: Tra
         aria-label={t('session.activity.status.stopped')}
         className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-[var(--color-outline)] text-[var(--color-text-tertiary)]"
       >
-        <X size={12} strokeWidth={2.4} aria-hidden="true" />
+        <X size={12} strokeWidth={2} aria-hidden="true" />
       </span>
     )
   }
@@ -191,7 +191,7 @@ function TaskStatusMarker({ status, t }: { status: ActivityRow['status']; t: Tra
     return (
       <span
         aria-label={t('session.activity.task.inProgress')}
-        className="inline-flex h-5 w-5 shrink-0 rounded-full border-[2.5px] border-[var(--color-primary-fixed-dim)] border-t-[var(--color-brand)] motion-safe:animate-spin motion-reduce:animate-none"
+        className="inline-flex h-5 w-5 shrink-0 rounded-full border-2 border-[var(--color-info-container)] border-t-[var(--color-info)] motion-safe:animate-spin motion-reduce:animate-none"
       />
     )
   }
@@ -199,7 +199,7 @@ function TaskStatusMarker({ status, t }: { status: ActivityRow['status']; t: Tra
   return (
     <span
       aria-label={t('session.activity.task.pending')}
-      className="inline-flex h-5 w-5 shrink-0 rounded-full border-[1.8px] border-[var(--color-outline)]"
+      className="inline-flex h-5 w-5 shrink-0 rounded-full border-[1.5px] border-[var(--color-border-strong)]"
     />
   )
 }
@@ -223,7 +223,7 @@ function getRowIcon(row: ActivityRow) {
 }
 
 function getStatusTone(status: ActivityRow['status']): Tone {
-  if (status === 'running' || status === 'in_progress') return 'brand'
+  if (status === 'running' || status === 'in_progress') return 'info'
   if (status === 'completed' || status === 'idle') return 'success'
   if (status === 'failed' || status === 'error' || status === 'stopped') return 'danger'
   return 'neutral'
@@ -251,7 +251,7 @@ function getTaskProgress(rows: ActivityRow[]): { completed: number; total: numbe
  */
 function getRowIconToneClass(status: ActivityRow['status']): string {
   if (status === 'running' || status === 'in_progress') {
-    return 'bg-[var(--color-brand-soft)] text-[var(--color-on-brand-soft)]'
+    return 'bg-[var(--color-info-container)] text-[var(--color-on-info-container)]'
   }
   if (status === 'completed' || status === 'idle') {
     return 'bg-[var(--color-success-container)] text-[var(--color-on-success-container)]'
@@ -287,7 +287,7 @@ function ActivityRowIcon({
       data-tone-status={status}
       className={`inline-flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-[var(--radius-md)] ${getRowIconToneClass(status)}`}
     >
-      <Icon size={15} strokeWidth={2} aria-hidden="true" />
+      <Icon size={16} strokeWidth={1.75} aria-hidden="true" />
     </span>
   )
 }
@@ -333,9 +333,9 @@ function BackgroundTaskStopButton({
   return (
     <IconButton
       icon={stopping ? (
-        <LoaderCircle size={14} strokeWidth={2.2} className="motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />
+        <LoaderCircle size={14} strokeWidth={1.75} className="motion-safe:animate-spin motion-reduce:animate-none" aria-hidden="true" />
       ) : (
-        <Square size={12} strokeWidth={2.4} aria-hidden="true" />
+        <Square size={12} strokeWidth={2} aria-hidden="true" />
       )}
       label={label}
       size="md"
@@ -370,7 +370,7 @@ function WorkflowPhaseHeader({
       data-status={status}
       className="flex items-center gap-2 px-2 pb-1 pt-2.5 first:pt-1"
     >
-      <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-secondary)]">
+      <span className="truncate text-[12px] font-semibold text-[var(--color-text-tertiary)]">
         {label}
       </span>
       <span className="h-px flex-1 bg-[var(--color-border)]" aria-hidden="true" />
@@ -456,7 +456,7 @@ function ActivityRowView({
         </span>
         {detail ? (
           <span
-            className="mt-px block truncate text-[11.5px] leading-4 text-[var(--color-text-tertiary)]"
+            className="mt-px block truncate text-[12px] leading-4 text-[var(--color-text-tertiary)]"
             title={detail}
           >
             {detail}
@@ -471,12 +471,12 @@ function ActivityRowView({
         />
       )}
       {!isTask && row.openable ? (
-        <ChevronRight size={13} strokeWidth={2.2} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
+        <ChevronRight size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" aria-hidden="true" />
       ) : null}
     </>
   )
   const interactiveRowClassName =
-    'flex min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5 text-left transition-[background-color,transform] duration-150 ease-out hover:bg-[var(--color-surface-hover)] active:translate-y-px motion-reduce:active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
+    'flex min-w-0 items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5 text-left transition-[background-color,transform] duration-150 ease-out hover:bg-[var(--color-surface-hover)] active:translate-y-px motion-reduce:active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]'
   const stopButton = row.section === 'backgroundTasks' && onStopBackgroundTask ? (
     <BackgroundTaskStopButton
       row={row}
@@ -539,7 +539,7 @@ function ActivityRowView({
         aria-label={t('session.activity.openBackgroundTask', { name: row.label })}
         aria-expanded={selected}
         onClick={() => onOpenBackgroundTask(row)}
-        className={`${interactiveRowClassName} ${stopButton ? 'flex-1' : 'w-full'} ${selected ? 'bg-[var(--color-surface-container)]' : ''}`}
+        className={`${interactiveRowClassName} ${stopButton ? 'flex-1' : 'w-full'} ${selected ? 'bg-[var(--color-surface-selected)]' : ''}`}
       >
         {content}
       </button>
@@ -556,7 +556,7 @@ function ActivityRowView({
   if (stopButton) {
     return (
       <div className="flex w-full items-center gap-1">
-        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5">
+        <div className="flex min-w-0 flex-1 items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5">
           {content}
         </div>
         {stopButton}
@@ -565,7 +565,7 @@ function ActivityRowView({
   }
 
   return (
-    <div className="flex items-center gap-2.5 rounded-[var(--radius-md)] px-2 py-1.5">
+    <div className="flex items-center gap-2.5 rounded-[var(--radius-sm)] px-2 py-1.5">
       {content}
     </div>
   )
@@ -601,14 +601,14 @@ function BackgroundTaskDetail({ row }: { row: ActivityRow }) {
   if (details.length === 0) return null
 
   return (
-    <div className="mx-2 mb-1.5 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] p-3">
-      <div className="mb-2 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+    <div className="mx-2 mb-1.5 rounded-[var(--radius-md)] bg-[var(--color-surface-container)] p-3">
+      <div className="mb-2 text-[12px] font-semibold text-[var(--color-text-tertiary)]">
         {t('session.activity.details.title')}
       </div>
       <dl className="space-y-2">
         {details.map((detail) => (
           <div key={detail.label} className="min-w-0">
-            <dt className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+            <dt className="text-[11px] font-medium text-[var(--color-text-tertiary)]">
               {detail.label}
             </dt>
             <dd className="max-h-28 overflow-auto whitespace-pre-wrap break-words text-[12px] leading-relaxed text-[var(--color-text-secondary)]">
@@ -713,12 +713,12 @@ export function SessionActivityPanel({
       data-placement={placement}
       className={className}
     >
-      <div className="flex items-center gap-2 px-4 pb-2 pt-3.5">
-        <h2 className="min-w-0 flex-1 truncate text-[15px] font-semibold text-[var(--color-text-primary)]">
+      <div className="flex h-12 shrink-0 items-center gap-2 pl-4 pr-3">
+        <h2 className="min-w-0 flex-1 truncate text-[14px] font-semibold text-[var(--color-text-primary)]">
           {t('session.activity.title')}
         </h2>
         <IconButton
-          icon={<X size={14} strokeWidth={2.2} aria-hidden="true" />}
+          icon={<X size={14} strokeWidth={1.75} aria-hidden="true" />}
           label={t('session.activity.close')}
           size="sm"
           tone="muted"
@@ -742,7 +742,7 @@ export function SessionActivityPanel({
             >
               <div className="mb-1.5 flex items-center justify-between gap-2 px-2">
                 <div className="flex min-w-0 items-center gap-2">
-                  <h3 className="text-[12px] font-semibold text-[var(--color-text-secondary)]">
+                  <h3 className="text-[12px] font-semibold text-[var(--color-text-tertiary)]">
                     {sectionTitle}
                   </h3>
                   {section.rows.length > 0 ? (

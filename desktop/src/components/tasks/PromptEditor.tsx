@@ -1,3 +1,4 @@
+import { Gavel, TriangleAlert } from 'lucide-react'
 import { ModelSelector } from '../controls/ModelSelector'
 import { DirectoryPicker } from '@/components/composite/DirectoryPicker'
 import { useTranslation } from '../../i18n'
@@ -42,19 +43,19 @@ export function PromptEditor({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
         rows={4}
-        className="w-full resize-y bg-transparent px-4 py-3.5 text-sm leading-[1.8] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
+        className="w-full resize-y bg-transparent px-4 py-3 text-sm leading-[1.7] text-[var(--color-text-primary)] outline-none placeholder:text-[var(--color-text-tertiary)]"
         style={{ minHeight: 120 }}
       />
 
       {/* Bottom toolbar. The rule was `--color-border` at `/40`, which Safari 15
           WebView drops entirely — the toolbar then floated with no seam. */}
-      <div className="flex flex-col gap-2 rounded-b-[var(--radius-xl)] border-t border-[var(--color-border)] bg-[var(--color-surface-container-low)] px-3 py-2.5">
+      <div className="flex flex-col gap-2 rounded-b-[var(--radius-xl)] border-t border-[var(--color-border)] bg-[var(--color-surface-sidebar)] px-3 py-2.5">
         {/* Row 1: Permission + Model selectors */}
         <div className="flex items-center justify-between">
           <Badge
             tone="danger"
             size="md"
-            icon={<span aria-hidden="true" className="material-symbols-outlined text-[14px]">gavel</span>}
+            icon={<Gavel size={12} strokeWidth={2} aria-hidden="true" />}
           >
             {t('newTask.fullPermissions')}
           </Badge>
@@ -73,10 +74,10 @@ export function PromptEditor({
         </div>
 
         {/* `wrap` matters here: the sentence ends in an absolute folder path,
-            which a default badge would push onto one unbreakable line. The
-            fill also moves off `bg-[var(--color-error)]/8` — Safari 15 WebView
-            drops that color function, so the strip had no background there. */}
-        <Badge tone="danger" size="sm" wrap bordered pill={false} className="w-full" icon={<span aria-hidden="true" className="material-symbols-outlined text-[13px]">warning</span>}>
+            which a default badge would push onto one unbreakable line. Fill
+            only, no border: a tinted strip with an edge as well is the
+            "fill + border" double the spec rules out for inset blocks. */}
+        <Badge tone="danger" size="sm" wrap pill={false} className="w-full" icon={<TriangleAlert size={12} strokeWidth={2} aria-hidden="true" className="shrink-0" />}>
           {t('promptEditor.bypassWarning')}{folderPath ? ` ${t('promptEditor.within')} ${folderPath}` : ` ${t('promptEditor.selectFolder')}`}.
         </Badge>
       </div>

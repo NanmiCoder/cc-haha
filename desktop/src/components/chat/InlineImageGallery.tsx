@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Image as ImageIcon, Maximize2 } from 'lucide-react'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { useTranslation } from '@/i18n'
 import { AuthedImage } from './AuthedImage'
@@ -188,8 +189,8 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
   return (
     <>
       <div className="mt-3 space-y-2">
-        <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-outline)]">
-          <span className="material-symbols-outlined text-[12px]">image</span>
+        <div className="flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
+          <ImageIcon size={12} strokeWidth={2} aria-hidden="true" />
           {t(visibleImages.length === 1 ? 'chat.imageCountOne' : 'chat.imageCountOther', { count: visibleImages.length })}
         </div>
         <div className={`grid gap-2 ${visibleImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2'}`}>
@@ -216,7 +217,7 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
               key={`${sessionId ?? ''}|${workDir ?? ''}|${img.src}`}
               type="button"
               onClick={() => setActiveIndex(i)}
-              className="group/image relative overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left shadow-[var(--shadow-card)] transition-[border-color,box-shadow] duration-150 hover:shadow-[var(--shadow-composer)] hover:border-[var(--color-primary-fixed-dim)]"
+              className="group/image relative overflow-hidden rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-low)] text-left transition-[border-color] duration-150 hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
             >
               <AuthedImage
                 src={img.src}
@@ -230,12 +231,12 @@ export function InlineImageGallery({ text, sessionId, workDir, changedFiles, sup
                 }))}
               />
               <div className="absolute inset-0 flex items-center justify-center bg-black/0 opacity-0 transition-all group-hover/image:bg-black/20 group-hover/image:opacity-100">
-                <span className="material-symbols-outlined rounded-full bg-white/90 p-2 text-[20px] text-[var(--color-text-primary)] shadow-lg">
-                  fullscreen
+                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--color-surface-container-lowest)] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]">
+                  <Maximize2 size={16} strokeWidth={1.75} aria-hidden="true" />
                 </span>
               </div>
               <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent px-2.5 pb-2 pt-6">
-                <span className="text-[10px] font-medium text-white/90 drop-shadow-sm">
+                <span className="text-[11px] font-medium text-white/90 drop-shadow-sm">
                   {img.name}
                 </span>
               </div>

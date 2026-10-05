@@ -104,14 +104,14 @@ export function TrajectoryDetailPanel({
       {!drawer && <ResizeHandle width={Math.min(width, maxWidth)} maxWidth={maxWidth} onWidthChange={onWidthChange} />}
       <header className="flex shrink-0 items-center gap-2 px-4 pt-3">
         {drawer && (
-          <IconButton icon={<ArrowLeft size={14} />} label={t('trajectory.detail.back')} size="sm" onClick={onClose} />
+          <IconButton icon={<ArrowLeft size={14} strokeWidth={1.75} />} label={t('trajectory.detail.back')} size="sm" tone="muted" onClick={onClose} />
         )}
         <Badge tone={row.isError ? 'danger' : KIND_TONES[row.kind]} variant={KIND_VARIANTS[row.kind]} size="xs" pill={false}>{t(KIND_LABEL_KEYS[row.kind])}</Badge>
-        <span className="min-w-0 truncate text-[12.5px] text-[var(--color-text-secondary)]">
+        <span className="min-w-0 truncate text-[13px] text-[var(--color-text-secondary)]">
           {row.snapshot ? kindLabel : subtitle}
           {row.snapshot && subtitle ? ` · ${subtitle}` : ''}
         </span>
-        {!drawer && <IconButton icon={<X size={14} />} label={t('common.close')} size="sm" className="ml-auto" onClick={onClose} />}
+        {!drawer && <IconButton icon={<X size={14} strokeWidth={1.75} />} label={t('common.close')} size="sm" tone="muted" className="ml-auto" onClick={onClose} />}
       </header>
       <div className="shrink-0 px-4 pt-2">
         <SegmentedControl
@@ -252,7 +252,7 @@ function RowDetail({
                 key={use.id}
                 type="button"
                 onClick={() => onSelectRow(`t:${use.id}`)}
-                className="rounded-full border border-[var(--color-border)] px-2.5 py-0.5 font-mono text-[11.5px] text-[var(--color-text-secondary)] hover:border-[var(--color-outline)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                className="rounded-[var(--radius-xs)] bg-[var(--color-surface-container)] px-2 py-0.5 font-mono text-[12px] text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
               >
                 {use.name}
               </button>
@@ -294,7 +294,7 @@ function Overview({
     items.push({
       label: t('trajectory.detail.status'),
       value: row.isError
-        ? <span className="inline-flex items-center gap-1 text-[var(--color-error)]"><CircleX size={13} aria-hidden />{t('trajectory.status.error')}</span>
+        ? <span className="inline-flex items-center gap-1 text-[var(--color-error)]"><CircleX size={14} strokeWidth={1.75} aria-hidden />{t('trajectory.status.error')}</span>
         : toolHasResult(row)
           ? t('trajectory.status.done')
           : t(running ? 'trajectory.tool.running' : 'trajectory.tool.noResult'),
@@ -328,7 +328,7 @@ function Overview({
     items.push({
       label: t('trajectory.detail.issuedBy'),
       value: (
-        <button type="button" className="rounded-[var(--radius-sm)] text-[var(--color-brand)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]" onClick={() => onSelectRow(row.parentId!)}>
+        <button type="button" className="rounded-[var(--radius-xs)] text-[var(--color-text-accent)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]" onClick={() => onSelectRow(row.parentId!)}>
           {t('trajectory.kind.assistant')}
         </button>
       ),
@@ -347,12 +347,12 @@ function Overview({
       {(onLocateInChat || row.agentId) && (
         <div className="flex flex-wrap gap-2">
           {onLocateInChat && (row.kind === 'user' || row.kind === 'assistant' || row.kind === 'tool') && (
-            <Button size="sm" variant="secondary" icon={<LocateFixed size={13} />} onClick={() => onLocateInChat(row)}>
+            <Button size="sm" variant="secondary" icon={<LocateFixed size={14} strokeWidth={1.75} />} onClick={() => onLocateInChat(row)}>
               {t('trajectory.detail.locateInChat')}
             </Button>
           )}
           {row.agentId && (
-            <Button size="sm" variant="secondary" icon={<Bot size={13} />} onClick={() => onOpenAgent(row.agentId!, agentLabelFromInput(row.inputPreview, row.agentId!))}>
+            <Button size="sm" variant="secondary" icon={<Bot size={14} strokeWidth={1.75} />} onClick={() => onOpenAgent(row.agentId!, agentLabelFromInput(row.inputPreview, row.agentId!))}>
               {t('trajectory.subagent.view')}
             </Button>
           )}

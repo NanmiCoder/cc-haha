@@ -427,17 +427,29 @@ describe('RepositoryLaunchControls', () => {
     renderControls({ placement: 'toolbar' })
 
     const pill = await screen.findByRole('button', { name: 'Location: cc-haha / main' })
-    // 36px matches the other controls in the composer's toolbar; the standalone
-    // line uses 40px for touch.
-    expect(pill).toHaveClass('h-9')
+    // 28px matches the other controls in the composer's toolbar; the H5 line
+    // below the composer uses 40px for touch.
+    expect(pill).toHaveClass('h-7')
     expect(pill).not.toHaveClass('h-10')
   })
 
-  it('sizes the pill for touch when it stands on its own line', async () => {
+  it('keeps the pointer-sized pill on its own line in a narrow desktop column', async () => {
     renderControls({ placement: 'outside' })
 
     const pill = await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+    expect(pill).toHaveClass('h-7')
+    expect(pill).not.toHaveClass('h-10')
+  })
+
+  it('sizes the pill for touch when it stands on its own line in the H5 browser', async () => {
+    viewportMocks.isMobile = true
+    viewportMocks.isTauri = false
+    // A toolbar placement still falls back to the standalone line on H5.
+    renderControls({ placement: 'toolbar' })
+
+    const pill = await screen.findByRole('button', { name: 'Location: cc-haha / main' })
     expect(pill).toHaveClass('h-10')
+    expect(pill).not.toHaveClass('h-7')
   })
 
   it('keeps a dirty-branch warning compact and inline in the toolbar', async () => {
