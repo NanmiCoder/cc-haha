@@ -2333,7 +2333,21 @@ async function fetchAndMapSessionHistory(
   // jobs and notifications into the parent rail after every reload.
   const rootRunMessages = messages.filter((message) => !message.parentToolUseId)
   const rootToolUseIds = transcriptToolUseIds(rootRunMessages)
-  const rootRunNotifications = (taskNotifications ?? []).filter(
+  const rootShellTasks = reconstructBackgroundShellTasks(rootRunMessages)
+  const rootRunNotifications = (taskNotifications ?? []).map((notification) => {
+    // After a server restart, a late Stop can only persist the task ID as its
+    // tool anchor. Recover the real anchor from this root run's Bash result so
+    // the terminal survives cold history loading and links to the right tool.
+    const rootShellTask = rootShellTasks[notification.taskId]
+    if (
+      !notification.ownerAgentId &&
+      notification.toolUseId === notification.taskId &&
+      rootShellTask?.toolUseId
+    ) {
+      return { ...notification, toolUseId: rootShellTask.toolUseId }
+    }
+    return notification
+  }).filter(
     (notification) => (
       !notification.ownerAgentId && (
         // workflow_run_id predates owner_agent_id. Keep restoring those

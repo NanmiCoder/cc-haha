@@ -1787,6 +1787,90 @@ describe('chatStore history mapping', () => {
       .toBeUndefined()
   })
 
+  it.each(['Bash:0', 'root-shell-task'])(
+    'restores a stopped shell on cold load with terminal toolUseId %s',
+    async (toolUseId) => {
+      vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({
+        messages: [
+          {
+            id: 'root-shell-use',
+            type: 'assistant',
+            timestamp: '2026-04-06T00:00:00.000Z',
+            content: [{
+              type: 'tool_use',
+              id: 'Bash:0',
+              name: 'Bash',
+              input: { command: 'bun test', run_in_background: true },
+            }],
+          },
+          {
+            id: 'root-shell-result',
+            type: 'tool_result',
+            timestamp: '2026-04-06T00:00:01.000Z',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: 'Bash:0',
+              content: 'Command running in background with ID: root-shell-task',
+            }],
+          },
+        ],
+        taskNotifications: [
+          {
+            taskId: 'root-shell-task',
+            toolUseId,
+            status: 'stopped',
+            summary: 'Background task stopped',
+            timestamp: '2026-04-06T00:00:02.000Z',
+          },
+          {
+            taskId: 'root-shell-task',
+            toolUseId: 'unrelated-shell-tool',
+            status: 'failed',
+            summary: 'A task ID match must not override an unrelated real tool anchor',
+            timestamp: '2026-04-06T00:00:03.000Z',
+          },
+          {
+            taskId: 'root-shell-task',
+            toolUseId: 'root-shell-task',
+            ownerAgentId: 'child-agent',
+            status: 'failed',
+            summary: 'An owned child notification must not replace the root outcome',
+            timestamp: '2026-04-06T00:00:03.000Z',
+          },
+          {
+            taskId: 'unjoined-child-task',
+            toolUseId: 'unjoined-child-task',
+            status: 'stopped',
+            summary: 'An unowned task with no root transcript anchor must stay excluded',
+          },
+        ],
+      })
+      useChatStore.setState({
+        sessions: {
+          [TEST_SESSION_ID]: makeSession({ messages: [] }),
+        },
+      })
+
+      await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+      const session = useChatStore.getState().sessions[TEST_SESSION_ID]
+      expect(session?.backgroundAgentTasks?.['root-shell-task']).toMatchObject({
+        taskId: 'root-shell-task',
+        toolUseId: 'Bash:0',
+        status: 'stopped',
+        summary: 'Background task stopped',
+      })
+      expect(session?.agentTaskNotifications?.['Bash:0']).toMatchObject({
+        taskId: 'root-shell-task',
+        toolUseId: 'Bash:0',
+        status: 'stopped',
+      })
+      expect(session?.agentTaskNotifications?.['root-shell-task']).toBeUndefined()
+      expect(session?.agentTaskNotifications?.['unrelated-shell-tool']).toBeUndefined()
+      expect(session?.backgroundAgentTasks?.['unjoined-child-task']).toBeUndefined()
+    },
+  )
+
   it('does not assign an unjoined child notification to the root run', async () => {
     vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({
       messages: [{
