@@ -377,28 +377,52 @@ describe('EmptySession', () => {
     expect(screen.getByTestId('empty-session-composer-shell')).toHaveClass('absolute', 'bottom-0')
   })
 
-  it('puts the phone home list where the hero was, with the composer docked under it', () => {
+  it('puts the project above the hero on a phone, where the keyboard cannot cover it', async () => {
     mocks.isMobile = true
 
-    render(<EmptySession mobileHome={<div>session list</div>} />)
+    render(<EmptySession />)
 
-    expect(screen.getByTestId('mobile-home')).toHaveTextContent('session list')
-    expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument()
-    // In the flow, not floating over the list: the list scrolls above it.
-    const shell = screen.getByTestId('empty-session-composer-shell')
-    expect(shell).toHaveClass('shrink-0')
-    expect(shell).not.toHaveClass('absolute')
-    // Home is read first; the keyboard must not jump up over the list.
-    expect(document.activeElement).not.toBe(screen.getByRole('textbox'))
+    const launch = screen.getByTestId('empty-session-mobile-launch')
+    const pill = await within(launch).findByRole('button', { name: /^Location:/ })
+    expect(pill).toHaveClass('h-10')
+    // Read before the hero and outside the docked composer.
+    expect(launch.compareDocumentPosition(screen.getByRole('heading', { level: 1 })) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getByTestId('empty-session-composer-shell')).not.toContainElement(pill)
+    expect(screen.getAllByRole('button', { name: /^Location:/ })).toHaveLength(1)
   })
 
-  it('ignores the phone home slot on a desktop window', () => {
-    mocks.isMobile = false
+  it('starts in the folder it is given, holding Run until that repository is read', async () => {
+    mocks.isMobile = true
+    // Its own id: the session store keeps per-id bookkeeping across tests.
+    mocks.createSession.mockResolvedValue({ sessionId: 'phone-session' })
+    let resolveContext: (context: RepositoryContextResult) => void = () => {}
+    mocks.getRepositoryContext.mockReturnValue(new Promise<RepositoryContextResult>((resolve) => {
+      resolveContext = resolve
+    }))
 
-    render(<EmptySession mobileHome={<div>session list</div>} />)
+    render(<EmptySession initialWorkDir="/workspace/project" />)
+    setComposerText('draft question', 14)
 
-    expect(screen.queryByTestId('mobile-home')).not.toBeInTheDocument()
-    expect(screen.getByRole('heading', { level: 1 })).toBeInTheDocument()
+    const runButton = screen.getByRole('button', { name: /Run/i })
+    expect(mocks.getRepositoryContext).toHaveBeenCalledWith('/workspace/project')
+    expect(runButton).toBeDisabled()
+
+    await act(async () => { resolveContext(okRepositoryContext()) })
+    expect(await screen.findByRole('button', { name: 'Location: project / main' })).toBeInTheDocument()
+    await waitFor(() => expect(runButton).not.toBeDisabled())
+
+    fireEvent.click(runButton)
+
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({
+        workDir: '/workspace/project',
+        repository: { branch: 'main', worktree: false },
+        permissionMode: 'default',
+      })
+    })
+    await waitFor(() => {
+      expect(mocks.wsSend).toHaveBeenCalledWith('phone-session', expect.objectContaining({ content: 'draft question' }))
+    })
   })
 
   it('uses compact composer controls on phone-sized H5 browsers', async () => {

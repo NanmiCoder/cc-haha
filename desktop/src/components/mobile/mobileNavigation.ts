@@ -102,10 +102,19 @@ function isGuardState(state: unknown): state is HistoryGuardState {
  * the two paths stay one path. When the shell reaches home some other way (a
  * deleted session, a redirect), the spare entry is consumed quietly so the
  * next back leaves the app as expected instead of doing nothing.
+ *
+ * `goUp` is what one level up means; the shell passes its own when something
+ * other than a route (the new-task sheet) is the top level.
  */
-export function useMobileHistoryGuard(depth: number, enabled: boolean): () => void {
+export function useMobileHistoryGuard(
+  depth: number,
+  enabled: boolean,
+  goUp: () => void = navigateMobileUp,
+): () => void {
   const guardedRef = useRef(false)
   const ignoreNextPopRef = useRef(false)
+  const goUpRef = useRef(goUp)
+  goUpRef.current = goUp
 
   useEffect(() => {
     if (!enabled) return
@@ -130,7 +139,7 @@ export function useMobileHistoryGuard(depth: number, enabled: boolean): () => vo
       }
       if (!guardedRef.current) return
       guardedRef.current = false
-      navigateMobileUp()
+      goUpRef.current()
     }
     window.addEventListener('popstate', handlePopState)
     return () => window.removeEventListener('popstate', handlePopState)
@@ -141,6 +150,6 @@ export function useMobileHistoryGuard(depth: number, enabled: boolean): () => vo
       window.history.back()
       return
     }
-    navigateMobileUp()
+    goUpRef.current()
   }
 }

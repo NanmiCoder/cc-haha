@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Search, Settings, X } from 'lucide-react'
+import { Plus, Search, Settings, X } from 'lucide-react'
 import { useTranslation } from '../../i18n'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -23,6 +23,7 @@ import {
 import { getSessionProjectKey, getSessionWorkspaceLabel } from '../layout/sidebarTaskGroups'
 import { MobileSessionList } from './MobileSessionList'
 import { openMobileSession } from './mobileNavigation'
+import { resolveNewTaskWorkDir } from './mobileNewTask'
 import {
   buildMobileSessionGroups,
   filterMobileSessions,
@@ -33,19 +34,22 @@ import { useLiveSessionActivity } from './useLiveSessionActivity'
 
 type Props = {
   /**
-   * `home` is the phone's first page (the composer sits below it); `pane` is
-   * the tablet's left column, where the open session is shown beside it.
+   * `home` is the phone's first page; `pane` is the tablet's left column,
+   * where the open session is shown beside it.
    */
   variant: 'home' | 'pane'
   selectedSessionId?: string | null
   preferencesRequest?: Promise<DesktopUiPreferencesResponse> | null
+  /** Starts a new task, in the folder the list suggests (empty: none). */
+  onNewTask: (workDir: string) => void
 }
 
 /**
- * Header, search, project filter and the status-grouped session list: what
- * the phone opens on, and what the tablet keeps on its left.
+ * Header, search, project filter and the status-grouped session list, with
+ * the New task button floating over its lower corner: what the phone opens
+ * on, and what the tablet keeps on its left.
  */
-export function MobileSessionBrowser({ variant, selectedSessionId = null, preferencesRequest = null }: Props) {
+export function MobileSessionBrowser({ variant, selectedSessionId = null, preferencesRequest = null, onNewTask }: Props) {
   const t = useTranslation()
   const sessions = useSessionStore((state) => state.sessions)
   const isLoading = useSessionStore((state) => state.isLoading)
@@ -114,7 +118,7 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
   return (
     <div
       data-testid={`mobile-session-browser-${variant}`}
-      className="flex min-h-0 flex-1 flex-col bg-[var(--color-surface)]"
+      className="relative flex min-h-0 flex-1 flex-col bg-[var(--color-surface)]"
     >
       <header className="flex h-14 shrink-0 items-center gap-1 pl-4 pr-1">
         <h1 className="min-w-0 flex-1 truncate text-[22px] font-semibold leading-tight tracking-tight text-[var(--color-text-primary)]">
@@ -174,7 +178,8 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
         </div>
       ) : null}
 
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+      {/* The bottom padding lets the last row scroll clear of the button. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-24">
         {showInitialLoading ? (
           <div className="px-4 pt-2"><SkeletonRows count={6} divided label={t('common.loading')} /></div>
         ) : error && sessions.length === 0 ? (
@@ -200,6 +205,16 @@ export function MobileSessionBrowser({ variant, selectedSessionId = null, prefer
           />
         )}
       </div>
+
+      <button
+        type="button"
+        data-testid="mobile-new-task"
+        onClick={() => onNewTask(resolveNewTaskWorkDir(visibleSessions, effectiveProjectKey))}
+        className="absolute bottom-5 right-4 z-[var(--z-raised)] inline-flex h-12 items-center gap-1.5 rounded-[var(--radius-full)] bg-[var(--color-text-primary)] pl-4 pr-5 text-[15px] font-medium text-[var(--color-surface)] shadow-[var(--shadow-overlay)] transition-transform active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] focus-visible:ring-offset-2"
+      >
+        <Plus size={18} strokeWidth={2} aria-hidden="true" />
+        {t('mobile.home.newTask')}
+      </button>
     </div>
   )
 }

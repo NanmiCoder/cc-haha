@@ -1,5 +1,5 @@
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { ArrowUp, Cpu, Plus, ShieldCheck } from 'lucide-react'
 import { BrandSeal } from '@/components/composite/BrandSeal'
@@ -127,14 +127,11 @@ function resolveCreateSessionErrorMessage(error: unknown, t: Translate): string 
 const EMPTY_COMPOSER_REFERENCES: ComposerReferenceCandidate[] = []
 
 type EmptySessionProps = {
-  /**
-   * The phone's home page puts its session list where the hero would be, with
-   * this composer docked under it, so a new task starts from the list.
-   */
-  mobileHome?: ReactNode
+  /** The folder the task starts in; the phone's new-task sheet suggests one. */
+  initialWorkDir?: string
 }
 
-export function EmptySession({ mobileHome }: EmptySessionProps = {}) {
+export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
   const t = useTranslation()
   const [input, setInput] = useState('')
   const [mentions, setMentions] = useState<ComposerMention[]>([])
@@ -142,10 +139,11 @@ export function EmptySession({ mobileHome }: EmptySessionProps = {}) {
   const [referenceOptionId, setReferenceOptionId] = useState<string | undefined>()
   const [referenceState, setReferenceState] = useState<{ context: string, items: ComposerReferenceCandidate[], loading: boolean, error: boolean } | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [workDir, setWorkDir] = useState('')
+  const [workDir, setWorkDir] = useState(initialWorkDir)
   const [selectedBranch, setSelectedBranch] = useState<string | null>(null)
   const [useWorktree, setUseWorktree] = useState(false)
-  const [repositoryLaunchReady, setRepositoryLaunchReady] = useState(true)
+  // Same rule as picking a folder: hold Send until its repository is read.
+  const [repositoryLaunchReady, setRepositoryLaunchReady] = useState(!initialWorkDir)
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
   const [slashMenuOpen, setSlashMenuOpen] = useState(false)
@@ -224,12 +222,7 @@ export function EmptySession({ mobileHome }: EmptySessionProps = {}) {
   // recording bar takes their row.
   const dictationLive = dictation.phase !== 'idle'
 
-  const showMobileHome = isMobileComposer && mobileHome !== undefined
-
   useEffect(() => {
-    // The phone's home is a list to read first; focusing the composer would
-    // throw the keyboard over it every time someone comes back to it.
-    if (showMobileHome) return
     composerRef.current?.focus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -812,16 +805,26 @@ export function EmptySession({ mobileHome }: EmptySessionProps = {}) {
     // The new-session page (「素」, su-12). On desktop the composer sits in the
     // flow between the hero (bottom-aligned) and the starter row (top-aligned),
     // which puts it just above the middle of the page. On a phone it stays
-    // docked to the bottom edge, above the keyboard.
+    // docked to the bottom edge, above the keyboard, and the project sits at
+    // the top, where the keyboard cannot cover it and it is read before Send.
     <div className="relative flex flex-1 flex-col overflow-hidden bg-[var(--color-surface)]">
-      {showMobileHome ? (
-        <div data-testid="mobile-home" className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {mobileHome}
+      {isMobileComposer && (
+        <div data-testid="empty-session-mobile-launch" className="flex shrink-0 justify-center px-4 pt-1">
+            <RepositoryLaunchControls
+              workDir={workDir}
+              onWorkDirChange={handleWorkDirChange}
+              branch={selectedBranch}
+              onBranchChange={setSelectedBranch}
+              useWorktree={useWorktree}
+              onUseWorktreeChange={setUseWorktree}
+              onLaunchReadyChange={setRepositoryLaunchReady}
+              disabled={isSubmitting}
+            />
         </div>
-      ) : (
+      )}
       <div className={`flex flex-col items-center text-center ${
         isMobileComposer
-          ? 'flex-1 justify-center px-6 pb-[230px] pt-10'
+          ? 'min-h-0 flex-1 justify-center overflow-hidden px-6 pb-[230px] pt-6'
           : 'min-h-0 flex-1 justify-end overflow-hidden px-8 pb-7 pt-8'
       }`}>
         <div className={`flex flex-col items-center gap-2.5 ${isMobileComposer ? 'max-w-[300px]' : 'max-w-[600px]'}`}>
@@ -840,14 +843,11 @@ export function EmptySession({ mobileHome }: EmptySessionProps = {}) {
           </p>
         </div>
       </div>
-      )}
 
       <div
         data-testid="empty-session-composer-shell"
         className={`flex justify-center ${
-        showMobileHome
-          ? 'relative z-[var(--z-raised)] shrink-0 border-t border-[var(--color-border)] bg-[var(--color-surface)] px-3 pb-2 pt-2'
-          : isMobileComposer
+        isMobileComposer
           ? 'absolute bottom-0 left-0 right-0 z-[var(--z-nav)] px-3 pb-[calc(env(safe-area-inset-bottom)+10px)]'
           : 'relative z-[var(--z-raised)] shrink-0 px-8'
       }`}
@@ -960,7 +960,7 @@ export function EmptySession({ mobileHome }: EmptySessionProps = {}) {
                   // `min-w-0`: see ChatInput — an unbreakable long run (URL,
                   // hash) otherwise grows this flex item past the panel.
                   className="flex-1 min-w-0"
-                  editorClassName={`chat-reading-text ${showMobileHome ? 'min-h-[44px]' : 'min-h-[72px]'} overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
+                  editorClassName={`chat-reading-text min-h-[72px] overflow-y-auto px-2.5 pb-1 pt-2 text-[var(--color-text-primary)] ${
                     isMobileComposer ? 'max-h-[132px]' : 'max-h-[200px]'
                   }`}
                   aria={{
@@ -1087,19 +1087,6 @@ export function EmptySession({ mobileHome }: EmptySessionProps = {}) {
             </div>
 
           </div>
-
-          {isMobileComposer && (
-            <RepositoryLaunchControls
-              workDir={workDir}
-              onWorkDirChange={handleWorkDirChange}
-              branch={selectedBranch}
-              onBranchChange={setSelectedBranch}
-              useWorktree={useWorktree}
-              onUseWorktreeChange={setUseWorktree}
-              onLaunchReadyChange={setRepositoryLaunchReady}
-              disabled={isSubmitting}
-            />
-          )}
         </div>
       </div>
 

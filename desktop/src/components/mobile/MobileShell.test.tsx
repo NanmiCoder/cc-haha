@@ -41,11 +41,8 @@ vi.mock('../layout/ContentRouter', () => ({
 }))
 
 vi.mock('../../pages/EmptySession', () => ({
-  EmptySession: ({ mobileHome }: { mobileHome?: ReactNode }) => (
-    <div>
-      {mobileHome}
-      <div>new task composer</div>
-    </div>
+  EmptySession: ({ initialWorkDir }: { initialWorkDir?: string }) => (
+    <div data-testid="new-task-page">new task in {initialWorkDir || '(no project)'}</div>
   ),
 }))
 
@@ -53,6 +50,7 @@ vi.mock('../layout/UpdateChecker', () => ({ UpdateChecker: () => null }))
 vi.mock('../layout/Toast', () => ({ ToastContainer: () => null }))
 
 import { MobileShell } from './MobileShell'
+import { SHEET_DISMISS_DISTANCE_PX } from './MobileNewTaskSheet'
 
 class TestPointerEvent extends MouseEvent {
   pointerType: string
@@ -64,7 +62,7 @@ class TestPointerEvent extends MouseEvent {
   }
 }
 
-function session(id: string, title: string, minutesAgo = 5): SessionListItem {
+function session(id: string, title: string, minutesAgo = 5, project = '/work/cc-haha'): SessionListItem {
   const modifiedAt = new Date(Date.now() - minutesAgo * 60_000).toISOString()
   return {
     id,
@@ -72,9 +70,9 @@ function session(id: string, title: string, minutesAgo = 5): SessionListItem {
     createdAt: modifiedAt,
     modifiedAt,
     messageCount: 3,
-    projectPath: '/work/cc-haha',
-    projectRoot: '/work/cc-haha',
-    workDir: '/work/cc-haha',
+    projectPath: project,
+    projectRoot: project,
+    workDir: project,
     workDirExists: true,
   }
 }
@@ -84,10 +82,14 @@ const disconnectSession = vi.fn()
 const renameSession = vi.fn(async () => undefined)
 const deleteSession = vi.fn(async () => undefined)
 
-function seed({ tabs = [], activeTabId = null }: { tabs?: Tab[]; activeTabId?: string | null } = {}) {
+function seed({
+  tabs = [],
+  activeTabId = null,
+  sessions = [session('s-login', 'Fix login i18n'), session('s-release', 'Draft release notes', 90)],
+}: { tabs?: Tab[]; activeTabId?: string | null; sessions?: SessionListItem[] } = {}) {
   useTabStore.setState({ tabs, activeTabId })
   useSessionStore.setState({
-    sessions: [session('s-login', 'Fix login i18n'), session('s-release', 'Draft release notes', 90)],
+    sessions,
     isLoading: false,
     error: null,
     fetchSessions: vi.fn(async () => undefined),
@@ -129,8 +131,94 @@ describe('MobileShell', () => {
     })
     const sections = within(list).getAllByRole('region')
     expect(within(sections[0]!).getByText('Draft release notes')).toBeInTheDocument()
-    expect(screen.getByText('new task composer')).toBeInTheDocument()
+    // Home is the list alone; a new task is one tap away, not a composer.
+    expect(screen.queryByTestId('new-task-page')).not.toBeInTheDocument()
+    expect(screen.getByTestId('mobile-new-task')).toHaveTextContent('mobile.home.newTask')
     expect(screen.queryByTestId('mobile-top-bar')).not.toBeInTheDocument()
+  })
+
+  it('opens a new task over the list in the filtered project, and the back gesture closes it', async () => {
+    seed({
+      sessions: [
+        session('s-login', 'Fix login i18n'),
+        session('s-crawl', 'Export comments', 60, '/work/media-crawler'),
+      ],
+    })
+    renderShell()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'media-crawler' }))
+    fireEvent.click(screen.getByTestId('mobile-new-task'))
+
+    const sheet = screen.getByTestId('mobile-new-task-sheet')
+    expect(within(sheet).getByRole('dialog', { name: 'mobile.newTask.title' })).toBeInTheDocument()
+    expect(within(sheet).getByTestId('new-task-page')).toHaveTextContent('new task in /work/media-crawler')
+    // The list stays underneath, and the sheet is a level the system back leaves.
+    expect(screen.getByTestId('mobile-session-list')).toBeInTheDocument()
+    expect(window.history.state).toEqual({ ccHahaMobileGuard: true })
+
+    act(() => { window.history.back() })
+
+    await waitFor(() => expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument())
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(window.history.state).toBeNull()
+  })
+
+  it('starts a new task in the project of the newest task when no filter is picked', async () => {
+    seed({
+      sessions: [
+        // Touched most recently, but started long ago.
+        { ...session('s-old', 'Long running refactor', 600, '/work/legacy'), modifiedAt: new Date().toISOString() },
+        session('s-new', 'Export comments', 30, '/work/media-crawler'),
+      ],
+    })
+    renderShell()
+
+    fireEvent.click(await screen.findByTestId('mobile-new-task'))
+
+    expect(screen.getByTestId('new-task-page')).toHaveTextContent('new task in /work/media-crawler')
+  })
+
+  it('closes the new task with Cancel or a long enough pull on its bar', async () => {
+    renderShell()
+
+    fireEvent.click(await screen.findByTestId('mobile-new-task'))
+    fireEvent.click(within(screen.getByTestId('mobile-new-task-sheet')).getByRole('button', { name: 'common.cancel' }))
+    await waitFor(() => expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('mobile-new-task'))
+    const grabber = screen.getByTestId('mobile-new-task-grabber')
+    // A small nudge springs back.
+    fireEvent.pointerDown(grabber, { clientY: 100 })
+    fireEvent.pointerMove(grabber, { clientY: 115 })
+    fireEvent.pointerUp(grabber, { clientY: 115 })
+    // Closing goes through history.back(), which lands a tick later: wait it out.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)) })
+    expect(screen.getByTestId('mobile-new-task-sheet')).toBeInTheDocument()
+    expect(window.history.state).toEqual({ ccHahaMobileGuard: true })
+
+    fireEvent.pointerDown(grabber, { clientY: 100 })
+    fireEvent.pointerMove(grabber, { clientY: 100 + SHEET_DISMISS_DISTANCE_PX + 10 })
+    fireEvent.pointerUp(grabber, { clientY: 100 + SHEET_DISMISS_DISTANCE_PX + 10 })
+    await waitFor(() => expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument())
+    expect(window.history.state).toBeNull()
+  })
+
+  it('swaps the new task for the session it started, with Back going to the list', async () => {
+    renderShell()
+    fireEvent.click(await screen.findByTestId('mobile-new-task'))
+
+    // What sending does: open the new session's tab.
+    act(() => useTabStore.getState().openTab('s-started', 'New Session'))
+
+    expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument()
+    expect(screen.getByTestId('routed-page')).toHaveTextContent('page for s-started')
+    expect(window.history.state).toEqual({ ccHahaMobileGuard: true })
+
+    fireEvent.click(screen.getByTestId('mobile-back'))
+
+    await waitFor(() => expect(useTabStore.getState().activeTabId).toBeNull())
+    expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument()
+    expect(screen.getByTestId('mobile-session-list')).toBeInTheDocument()
   })
 
   it('goes into a session and comes back with the Back button', async () => {
@@ -197,6 +285,22 @@ describe('MobileShell', () => {
     expect(row.closest('button')).toHaveAttribute('aria-current', 'true')
     expect(screen.getByTestId('mobile-top-bar')).toHaveTextContent('Fix login i18n')
     expect(screen.queryByTestId('mobile-back')).not.toBeInTheDocument()
+  })
+
+  it('shows a new task beside the list on a tablet instead of a sheet over it', async () => {
+    seed({
+      tabs: [{ sessionId: 's-login', title: 'Fix login i18n', type: 'session', status: 'idle' }],
+      activeTabId: 's-login',
+    })
+    renderShell('tablet')
+    const pane = screen.getByTestId('mobile-tablet-pane')
+    await within(pane).findByText('Fix login i18n')
+
+    fireEvent.click(within(pane).getByTestId('mobile-new-task'))
+
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(screen.getByTestId('new-task-page')).toHaveTextContent('new task in /work/cc-haha')
+    expect(screen.queryByTestId('mobile-new-task-sheet')).not.toBeInTheDocument()
   })
 
   it('puts the parallel work behind a pill in the session bar, once there is some', async () => {

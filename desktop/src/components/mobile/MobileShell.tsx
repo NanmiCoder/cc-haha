@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from '../../i18n'
 import { StatusDot } from '@/components/ui/Badge'
 import type { DesktopUiPreferencesResponse } from '../../api/desktopUiPreferences'
@@ -15,6 +15,7 @@ import { ToastContainer } from '../layout/Toast'
 import { UpdateChecker } from '../layout/UpdateChecker'
 import { WorkspaceHeaderProvider } from '../layout/WorkspaceHeaderContext'
 import { MobileSessionBrowser } from './MobileSessionBrowser'
+import { MobileNewTaskSheet } from './MobileNewTaskSheet'
 import { MobileTopBar } from './MobileTopBar'
 import { MobileActivityPill } from './MobileActivityPill'
 import type { MobileShellLayout } from './mobileShellLayout'
@@ -22,6 +23,7 @@ import {
   goMobileHome,
   isMobileRoutableTab,
   mobileRouteDepth,
+  navigateMobileUp,
   resolveMobileRoute,
   useMobileHistoryGuard,
   type MobileRoute,
@@ -32,21 +34,47 @@ type Props = {
   preferencesRequest: Promise<DesktopUiPreferencesResponse> | null
 }
 
+/** A new task asked for from the list, and the folder it starts in. */
+type NewTaskRequest = { workDir: string; id: number }
+
 /**
  * The phone and tablet app frame.
  *
- * Phone: one page at a time. Home is the session list with the new-task
- * composer under it; a session, Settings or a detail page replaces it, with a
- * Back that the system back gesture also drives.
+ * Phone: one page at a time. Home is the session list; a session, Settings or
+ * a detail page replaces it, with a Back that the system back gesture also
+ * drives. A new task rises over the list as a sheet, one level above it.
  *
- * Tablet: the same session list stays on the left and the page sits beside it.
+ * Tablet: the same session list stays on the left and the page sits beside
+ * it; a new task is the new-session page on the right.
  */
 export function MobileShell({ layout, preferencesRequest }: Props) {
   const tabs = useTabStore((state) => state.tabs)
   const activeTabId = useTabStore((state) => state.activeTabId)
   const route = resolveMobileRoute(tabs, activeTabId)
   const activeTab = tabs.find((tab) => tab.sessionId === activeTabId)
-  const goBack = useMobileHistoryGuard(mobileRouteDepth(route), true)
+  const [newTask, setNewTask] = useState<NewTaskRequest | null>(null)
+  const sheetOpen = layout === 'phone' && newTask !== null
+  const goUp = useCallback(() => {
+    if (sheetOpen) setNewTask(null)
+    else navigateMobileUp()
+  }, [sheetOpen])
+  const goBack = useMobileHistoryGuard(mobileRouteDepth(route) + (sheetOpen ? 1 : 0), true, goUp)
+
+  const nextNewTaskId = useRef(0)
+  const startNewTask = useCallback((workDir: string) => {
+    nextNewTaskId.current += 1
+    setNewTask({ workDir, id: nextNewTaskId.current })
+    // On a tablet the new-session page is what the right side shows at home.
+    if (layout === 'tablet') goMobileHome()
+  }, [layout])
+
+  // Sending opens the new session (a slash command may open Settings): the
+  // page changing is what takes the sheet away.
+  const sheetTabIdRef = useRef(activeTabId)
+  useEffect(() => {
+    if (sheetTabIdRef.current !== activeTabId && layout === 'phone') setNewTask(null)
+    sheetTabIdRef.current = activeTabId
+  }, [activeTabId, layout])
 
   // A desktop-only tab (terminal, scheduled tasks, the team canvas…) restored
   // from storage or opened by a link has no page here: show home instead of a
@@ -72,6 +100,7 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
             variant="pane"
             selectedSessionId={route.kind === 'session' ? route.tabId : null}
             preferencesRequest={preferencesRequest}
+            onNewTask={startNewTask}
           />
         </aside>
       ) : null}
@@ -85,11 +114,13 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
         <WorkspaceHeaderProvider>
           <ContentRouter
             homePage={layout === 'phone'
-              ? <EmptySession mobileHome={<MobileSessionBrowser variant="home" preferencesRequest={preferencesRequest} />} />
-              : undefined}
+              ? <MobileSessionBrowser variant="home" preferencesRequest={preferencesRequest} onNewTask={startNewTask} />
+              // Keyed so each New task starts clean, in the folder it asked for.
+              : <EmptySession key={newTask?.id ?? 0} initialWorkDir={newTask?.workDir} />}
           />
         </WorkspaceHeaderProvider>
       </main>
+      {sheetOpen ? <MobileNewTaskSheet key={newTask.id} workDir={newTask.workDir} onCancel={goBack} /> : null}
       <ToastContainer />
       <UpdateChecker />
     </div>

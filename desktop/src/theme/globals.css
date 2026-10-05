@@ -2373,8 +2373,15 @@ body.sidebar-resizing * {
 .animate-overlay-in-top { animation: overlay-in-from-top 150ms ease-out; }
 .animate-overlay-in-bottom { animation: overlay-in-from-bottom 150ms ease-out; }
 .animate-overlay-in-right { animation: overlay-in-from-right 200ms cubic-bezier(0.22, 1, 0.36, 1); }
+/* A full-height sheet rising from the bottom edge (the phone's new task). */
+@keyframes sheet-rise {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+.animate-sheet-rise { animation: sheet-rise 280ms cubic-bezier(0.22, 1, 0.36, 1); }
 
 @media (prefers-reduced-motion: reduce) {
+  .animate-sheet-rise,
   .animate-overlay-in,
   .animate-overlay-in-top,
   .animate-overlay-in-bottom,
