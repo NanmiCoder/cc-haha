@@ -84,7 +84,9 @@ import {
   activeNonAgentTasks,
   authoritativeStoppedTaskIds,
   agentStopRequestedSessions,
+  nonAgentStopRequestedSessions,
   runtimeExitStoppedSessions,
+  runtimeExitFailedSessions,
   getCliBackgroundTaskLifecycle,
   isAgentTaskType,
   untrackCliBackgroundTask,
@@ -96,6 +98,7 @@ import {
 } from './agentTaskState.js'
 import type {
   ActiveAgentTaskState,
+  ActiveNonAgentTaskState,
   CliBackgroundTaskLifecycle,
 } from './agentTaskState.js'
 import {
@@ -312,6 +315,12 @@ function trackCliBackgroundTaskLifecycle(
   const lifecycle = getCliBackgroundTaskLifecycle(cliMsg)
   if (!lifecycle) return null
 
+  const existingNonAgentTask = activeNonAgentTasks.get(sessionId)?.get(lifecycle.taskId)
+  if (existingNonAgentTask?.localStopConfirmed) {
+    void emitAuthoritativeNonAgentStopped(sessionId, existingNonAgentTask)
+    return { ...lifecycle, running: false, status: 'stopped', suppressForward: true }
+  }
+
   const existingAgentTask = activeAgentTasks.get(sessionId)?.get(lifecycle.taskId)
   if (
     lifecycle.running &&
@@ -402,6 +411,11 @@ function trackCliBackgroundTaskLifecycle(
     return { ...lifecycle, suppressForward: true }
   }
 
+  if (existingNonAgentTask?.stopRequested) {
+    existingNonAgentTask.localStopConfirmed = true
+    void emitAuthoritativeNonAgentStopped(sessionId, existingNonAgentTask)
+    return { ...lifecycle, suppressForward: true }
+  }
   untrackCliBackgroundTask(sessionId, lifecycle.taskId)
   return lifecycle
 }
@@ -656,6 +670,9 @@ export const handleWebSocket = {
       turnActive: hasLiveUserTurnForClient(sessionId),
     })
     replayAgentStopFailures(ws, sessionId)
+    for (const task of activeNonAgentTasks.get(sessionId)?.values() ?? []) {
+      if (task.localStopConfirmed) void emitAuthoritativeNonAgentStopped(sessionId, task)
+    }
   },
 
   message(ws: SessionConnection, rawMessage: string | Buffer) {
@@ -819,7 +836,12 @@ export const handleWebSocket = {
       // A deliberate restart never reaches here: it stops the runtime without
       // emitting an error result, and startSession re-creates the session.
       if (!conversationService.hasSession(sessionId) && hasTrackedTaskRecords(sessionId)) {
+        const knownExit = runtimeExitStoppedSessions.has(sessionId)
         runtimeExitStoppedSessions.add(sessionId)
+        if (!knownExit) runtimeExitFailedSessions.add(sessionId)
+        activeCliRuns.delete(sessionId)
+        const turn = activeUserTurns.get(sessionId)
+        if (turn && !sessionStartupPromises.has(sessionId)) clearActiveUserTurn(sessionId, turn)
         void emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
         void emitAuthoritativeStoppedForActiveAgents(sessionId)
         scheduleDisconnectCleanup(sessionId)
@@ -889,6 +911,8 @@ async function handleUserMessage(
     sessionStopRequested.has(sessionId) || agentStopRequestedSessions.has(sessionId)
   activeTurn.admissionPending = !collaboration
   activeUserTurns.set(sessionId, activeTurn)
+  nonAgentStopRequestedSessions.delete(sessionId)
+  clearBackgroundTaskDisconnectCeiling(sessionId)
 
   const content = await resolveSessionReferenceContext(message.content, message.sessionReferences,
     async id => Boolean(await sessionService.getSessionSummary(id)))
@@ -1205,9 +1229,25 @@ function bindSessionTurnObserver(sessionId: string): void {
     // The observer is independent of renderer subscriptions, so background
     // sessions keep their task/permission lifecycle when no page is open.
     if (!hasActiveClients(sessionId)) {
-      trackCliRunState(sessionId, message)
-      trackCliBackgroundTaskLifecycle(sessionId, message)
-      persistThenForwardCliMessage(sessionId, message, () => {})
+      const cliRunState = trackCliRunState(sessionId, message)
+      const taskLifecycle = trackCliBackgroundTaskLifecycle(sessionId, message)
+      stopLateAgentTaskIfRequested(sessionId, taskLifecycle)
+      stopLateNonAgentTaskIfRequested(sessionId, taskLifecycle)
+      closeLateNonAgentTaskAfterRuntimeExit(sessionId, taskLifecycle)
+      closeStoppedAgentsAfterRuntimeExit(sessionId, message)
+      if (!sessionStartupPromises.has(sessionId)) {
+        refreshBackgroundTaskDisconnectCeiling(sessionId)
+        // Control-only sessions never had a renderer disconnect. Observe their
+        // completion after work actually starts; an initial idle frame must
+        // not arm cleanup ahead of a side-question/Agent control request.
+        if (!sessionDisconnectWatchers.has(sessionId) &&
+          (cliRunState === 'running' || taskLifecycle?.running === true)) {
+          watchTurnCompletionForCleanup(sessionId)
+        }
+      }
+      if (!taskLifecycle?.suppressForward) {
+        persistThenForwardCliMessage(sessionId, message, () => {})
+      }
     }
     queueMicrotask(() => {
       if (sessionTurnObservers.get(sessionId) === callback) {
@@ -1228,6 +1268,7 @@ function clearSessionTurnObserver(sessionId: string): void {
 function clearActiveUserTurn(sessionId: string, activeTurn: ActiveUserTurnState): void {
   if (activeUserTurns.get(sessionId) === activeTurn) {
     activeUserTurns.delete(sessionId)
+    refreshBackgroundTaskDisconnectCeiling(sessionId)
   }
 }
 
@@ -1272,7 +1313,13 @@ function forceStopSharedRuntimeForAgentCancellation(sessionId: string): void {
   // slash command), otherwise its result can be consumed as the dead turn's.
   pendingInterruptedTurnResults.delete(sessionId)
   runtimeExitStoppedSessions.add(sessionId)
+  // Losing the CLI cannot confirm every shell descendant stopped: POSIX jobs
+  // can create their own process groups, and Windows has no lifetime guard.
+  runtimeExitFailedSessions.add(sessionId)
   conversationService.stopSession(sessionId)
+  activeCliRuns.delete(sessionId)
+  clearBackgroundTaskDisconnectCeiling(sessionId)
+  cancelSessionDisconnectWatcher(sessionId)
   const stoppedTurn = activeUserTurns.get(sessionId)
   if (
     stoppedTurn?.cancelled &&
@@ -1280,7 +1327,9 @@ function forceStopSharedRuntimeForAgentCancellation(sessionId: string): void {
   ) {
     clearActiveUserTurn(sessionId, stoppedTurn)
   }
-  void emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
+  void emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId).then(() => {
+    scheduleDisconnectedSessionCleanupIfIdle(sessionId)
+  })
 }
 
 function consumeInterruptedTurnResult(sessionId: string, cliMsg: any): boolean {
@@ -1319,7 +1368,9 @@ function acknowledgeActiveTurnReplay(sessionId: string, cliMsg: any): boolean {
   pendingInterruptedTurnResults.delete(sessionId)
   sessionStopRequested.delete(sessionId)
   agentStopRequestedSessions.delete(sessionId)
+  nonAgentStopRequestedSessions.delete(sessionId)
   runtimeExitStoppedSessions.delete(sessionId)
+  runtimeExitFailedSessions.delete(sessionId)
   return true
 }
 
@@ -2103,6 +2154,7 @@ async function restartSessionWithPermissionMode(
     await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
     if (!agentStopRequestedSessions.has(sessionId)) {
       runtimeExitStoppedSessions.delete(sessionId)
+      runtimeExitFailedSessions.delete(sessionId)
     }
 
     await commitConfirmedPermissionMode(sessionId, mode, workDir)
@@ -2220,6 +2272,7 @@ async function restartSessionWithRuntimeConfig(
     const sdkUrl = buildSdkWebSocketUrl(ws, sessionId)
     await conversationService.startSession(sessionId, workDir, sdkUrl, runtimeSettings)
     runtimeExitStoppedSessions.delete(sessionId)
+    runtimeExitFailedSessions.delete(sessionId)
 
     broadcastAppliedRuntimeConfig(sessionId)
     sendMessage(ws, { type: 'status', state: 'idle' })
@@ -2261,9 +2314,10 @@ function handleStopGeneration(
   // the Agent-stop bookkeeping below never touches — left alone they keep
   // running after the user asked everything to stop, and keep the CLI alive.
   // Programmatic stops (stopSessionTurn, runtime-config restart) stay narrow.
-  const backgroundTaskIds = options.reapBackgroundTasks === true
-    ? [...(activeNonAgentTasks.get(sessionId)?.keys() ?? [])]
+  const backgroundTasks = options.reapBackgroundTasks === true
+    ? [...(activeNonAgentTasks.get(sessionId)?.values() ?? [])]
     : []
+  const backgroundTaskIds = backgroundTasks.map((task) => task.taskId)
   console.log(`[WS] Stop generation requested for session: ${sessionId}`)
 
   if (stoppedTurn) {
@@ -2305,6 +2359,7 @@ function handleStopGeneration(
     agentTasks.map((task) => requestStopTrackedAgentTask(sessionId, task, ws)),
   )
 
+  if (options.reapBackgroundTasks) nonAgentStopRequestedSessions.add(sessionId)
   for (const taskId of backgroundTaskIds) {
     stopTrackedBackgroundTask(sessionId, taskId)
   }
@@ -2354,11 +2409,17 @@ function handleStopGeneration(
         [...(activeAgentTasks.get(sessionId)?.values() ?? [])].some(
           (task) => !task.localStopConfirmed,
         )
-      const stoppedBackgroundStillActive = backgroundTaskIds.some((taskId) =>
-        activeNonAgentTasks.get(sessionId)?.has(taskId),
-      )
+      const currentTurn = activeUserTurns.get(sessionId)
+      const stoppedBackgroundStillActive =
+        nonAgentStopRequestedSessions.has(sessionId) &&
+        (!currentTurn || currentTurn === stoppedTurn) &&
+        backgroundTasks.some((task) =>
+          activeNonAgentTasks.get(sessionId)?.get(task.taskId) === task &&
+          !task.localStopConfirmed,
+        )
       if (
         (stoppedForegroundStillCurrent || stoppedAgentsStillActive || stoppedBackgroundStillActive) &&
+        !migrationMaintenance.isActive &&
         conversationService.hasSession(sessionId)
       ) {
         console.log(`[WS] Force-killing CLI subprocess for session: ${sessionId}`)
@@ -2401,13 +2462,25 @@ async function requestStopBackgroundTask(
     return
   }
 
+  const tracked = activeNonAgentTasks.get(sessionId)?.get(taskId)
+  if (tracked?.localStopConfirmed) {
+    await emitAuthoritativeNonAgentStopped(sessionId, tracked)
+    return
+  }
+  if (tracked) tracked.stopRequested = true
   try {
     const response = await conversationService.requestControl(sessionId, {
       subtype: 'stop_task',
       task_id: taskId,
     })
+    if (activeNonAgentTasks.get(sessionId)?.get(taskId) !== tracked) return
     if (response?.reason === 'not_found') {
-      convergeEvictedBackgroundTaskStop(sessionId, taskId)
+      await convergeEvictedBackgroundTaskStop(sessionId, taskId)
+    } else if (tracked && !tracked.localStopConfirmed &&
+      activeNonAgentTasks.get(sessionId)?.get(taskId) === tracked) {
+      tracked.localStopConfirmed = true
+      tracked.terminalStatus = 'stopped'
+      await emitAuthoritativeNonAgentStopped(sessionId, tracked)
     }
   } catch (error) {
     reportBackgroundTaskStopFailure(sessionId, ws, taskId, error)
@@ -2421,12 +2494,20 @@ async function requestStopBackgroundTask(
  * panel's per-task Stop.
  */
 function stopTrackedBackgroundTask(sessionId: string, taskId: string): void {
-  if (!activeNonAgentTasks.get(sessionId)?.has(taskId)) return
-  void conversationService
+  const task = activeNonAgentTasks.get(sessionId)?.get(taskId)
+  if (!task || task.stopRequested || task.localStopConfirmed) return
+  task.stopRequested = true
+  void migrationMaintenance.track(conversationService
     .requestControl(sessionId, { subtype: 'stop_task', task_id: taskId })
     .then((response) => {
+      if (activeNonAgentTasks.get(sessionId)?.get(taskId) !== task) return
       if (response?.reason === 'not_found') {
-        convergeEvictedBackgroundTaskStop(sessionId, taskId)
+        return convergeEvictedBackgroundTaskStop(sessionId, taskId)
+      }
+      if (!task.localStopConfirmed && activeNonAgentTasks.get(sessionId)?.get(taskId) === task) {
+        task.localStopConfirmed = true
+        task.terminalStatus = 'stopped'
+        return emitAuthoritativeNonAgentStopped(sessionId, task)
       }
     })
     .catch((error) => {
@@ -2434,36 +2515,64 @@ function stopTrackedBackgroundTask(sessionId: string, taskId: string): void {
         `[WS] Failed to stop background task ${taskId} for session ${sessionId}:`,
         error,
       )
-    })
+    }))
+}
+
+function stopLateNonAgentTaskIfRequested(
+  sessionId: string,
+  lifecycle: CliBackgroundTaskLifecycle | null,
+): void {
+  if (!lifecycle?.running || isAgentTaskType(lifecycle.taskType) ||
+    !nonAgentStopRequestedSessions.has(sessionId) || runtimeExitStoppedSessions.has(sessionId)) return
+  const task = activeNonAgentTasks.get(sessionId)?.get(lifecycle.taskId)
+  if (!task || task.stopRequested) return
+  if (!conversationService.hasSession(sessionId)) {
+    runtimeExitStoppedSessions.add(sessionId)
+    runtimeExitFailedSessions.add(sessionId)
+    void emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId, 'failed')
+    return
+  }
+  const stoppedTurn = activeUserTurns.get(sessionId)
+  stopTrackedBackgroundTask(sessionId, lifecycle.taskId)
+  // A queued shell start can arrive after the original Stop's task snapshot.
+  // Its fallback belongs to that Stop, never to a newly admitted user turn.
+  setTimeout(() => {
+    const currentTurn = activeUserTurns.get(sessionId)
+    if (migrationMaintenance.isActive || !nonAgentStopRequestedSessions.has(sessionId) ||
+      (currentTurn && currentTurn !== stoppedTurn) || currentTurn?.replacementAfterStop ||
+      activeNonAgentTasks.get(sessionId)?.get(task.taskId) !== task ||
+      task.localStopConfirmed || !conversationService.hasSession(sessionId)) return
+    forceStopSharedRuntimeForAgentCancellation(sessionId)
+    void emitAuthoritativeStoppedForActiveAgents(sessionId)
+  }, 3_000)
 }
 
 /**
  * The CLI evicts a shell task the turn after it terminates (and a process
  * restart clears the registry outright), so a Stop that lands late is
- * answered with `not_found`. That is the stop's goal state, not a failure:
- * drop the task from local tracking and send the terminal notification
+ * answered with `not_found`. Persist that terminal state before dropping
+ * local tracking and sending the terminal notification
  * clients need to converge an entry they still show as running. Reporting
  * `No task found with ID` here only re-arms the stop button for a task that
  * can never be stopped again.
  */
-function convergeEvictedBackgroundTaskStop(sessionId: string, taskId: string): void {
-  const tracked = activeNonAgentTasks.get(sessionId)?.get(taskId)
-  untrackCliBackgroundTask(sessionId, taskId)
-  const description = tracked?.description
-  sendToSession(sessionId, {
-    type: 'system_notification',
-    subtype: 'task_notification',
-    message: description ? `${description} stopped` : 'Background task stopped',
-    data: {
-      type: 'system',
-      subtype: 'task_notification',
-      task_id: taskId,
-      tool_use_id: tracked?.toolUseId,
-      status: 'stopped',
-      summary: description ? `${description} stopped` : 'Background task stopped',
-      timestamp: new Date().toISOString(),
-    },
-  })
+function convergeEvictedBackgroundTaskStop(sessionId: string, taskId: string): Promise<boolean> {
+  let tracked = activeNonAgentTasks.get(sessionId)?.get(taskId)
+  if (!tracked) {
+    tracked = { taskId, toolUseId: taskId }
+    let tasks = activeNonAgentTasks.get(sessionId)
+    if (!tasks) {
+      tasks = new Map()
+      activeNonAgentTasks.set(sessionId, tasks)
+    }
+    tasks.set(taskId, tracked)
+  }
+  if (!tracked.localStopConfirmed || !tracked.terminalStatus) {
+    tracked.terminalStatus = 'stopped'
+    tracked.terminalMessage = true
+  }
+  tracked.localStopConfirmed = true
+  return emitAuthoritativeNonAgentStopped(sessionId, tracked)
 }
 
 const AGENT_STOP_CONTROL_TIMEOUT_MS = 3_000
@@ -2862,29 +2971,96 @@ function emitAuthoritativeStoppedForActiveAgents(sessionId: string): Promise<boo
   }))
 }
 
-function emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId: string): Promise<void[]> {
+function emitAuthoritativeNonAgentStopped(
+  sessionId: string,
+  task: ActiveNonAgentTaskState,
+): Promise<boolean> {
+  if (activeNonAgentTasks.get(sessionId)?.get(task.taskId) !== task ||
+    sessionClearInProgress.has(sessionId)) return Promise.resolve(false)
+  if (task.finalization) return task.finalization
+  clearAgentStopFinalizationRetry(task)
+  task.localStopConfirmed = true
+  task.terminalStatus ??= 'stopped'
+  const status = task.terminalStatus
+  const cliMsg = {
+    type: 'system',
+    subtype: 'task_notification',
+    task_id: task.taskId,
+    tool_use_id: task.toolUseId,
+    ...(task.taskType ? { task_type: task.taskType } : {}),
+    ...(task.description ? { description: task.description } : {}),
+    ...(task.ownerAgentId ? { owner_agent_id: task.ownerAgentId } : {}),
+    status,
+    ...(task.terminalMessage
+      ? { message: task.terminalSummary ?? `${task.description ?? 'Background task'} ${status}` }
+      : {}),
+    summary: task.terminalSummary ?? `${task.description ?? 'Background task'} ${status}`,
+    timestamp: new Date().toISOString(),
+  }
+  const finalization = migrationMaintenance.track((async () => {
+    for (let attempt = 0; attempt < AUTHORITATIVE_STOP_PERSIST_ATTEMPTS; attempt++) {
+      if (activeNonAgentTasks.get(sessionId)?.get(task.taskId) !== task ||
+        sessionClearInProgress.has(sessionId)) return false
+      try {
+        await (persistCliTaskNotification(sessionId, cliMsg, {
+          propagateFailure: true,
+          timeoutMs: AUTHORITATIVE_STOP_PERSIST_TIMEOUT_MS,
+        }) ?? Promise.resolve())
+        if (activeNonAgentTasks.get(sessionId)?.get(task.taskId) !== task ||
+          sessionClearInProgress.has(sessionId)) return false
+        task.stopFailureMessage = undefined
+        markTaskAuthoritativelyStopped(sessionId, task.taskId)
+        untrackCliBackgroundTask(sessionId, task.taskId)
+        forwardCliMessageToSessionClients(sessionId, cliMsg)
+        scheduleDisconnectedSessionCleanupIfIdle(sessionId)
+        return true
+      } catch {
+        // A rejected write is evicted from the cache so each attempt retries it.
+      }
+    }
+    if (activeNonAgentTasks.get(sessionId)?.get(task.taskId) !== task ||
+      sessionClearInProgress.has(sessionId)) return false
+    task.stopFailureMessage = 'Background task ended, but its terminal state could not be saved'
+    sendToSession(sessionId, {
+      type: 'background_task_stop_failed',
+      taskId: task.taskId,
+      message: task.stopFailureMessage,
+    })
+    const retryCount = task.finalizationRetryCount ?? 0
+    const delay = AGENT_STOP_FINALIZATION_RETRY_DELAYS_MS[retryCount]
+    if (delay !== undefined && !migrationMaintenance.isActive) {
+      task.finalizationRetryCount = retryCount + 1
+      task.finalizationRetryTimer = setTimeout(() => {
+        task.finalizationRetryTimer = undefined
+        if (!migrationMaintenance.isActive) void emitAuthoritativeNonAgentStopped(sessionId, task)
+      }, delay)
+      if (typeof task.finalizationRetryTimer === 'object') task.finalizationRetryTimer.unref?.()
+    }
+    scheduleDisconnectedSessionCleanupIfIdle(sessionId)
+    return false
+  })())
+  task.finalization = finalization
+  void finalization.then(() => {
+    if (task.finalization === finalization) task.finalization = undefined
+  })
+  return finalization
+}
+
+function emitStoppedForNonAgentTasksAfterRuntimeExit(
+  sessionId: string,
+  status: 'stopped' | 'failed' = 'failed',
+): Promise<void[]> {
+  if (status === 'failed') runtimeExitFailedSessions.add(sessionId)
   const tasks = [...(activeNonAgentTasks.get(sessionId)?.values() ?? [])]
   return Promise.all(tasks.map(async (task) => {
-    if (activeNonAgentTasks.get(sessionId)?.get(task.taskId) !== task) return
-    // Killing the shared CLI also terminates Bash/Dream/workflow work. Claim
-    // each task before awaiting persistence so concurrent force-stop paths
-    // cannot publish duplicate terminal bookends.
-    markTaskAuthoritativelyStopped(sessionId, task.taskId)
-    untrackCliBackgroundTask(sessionId, task.taskId)
-    const cliMsg = {
-      type: 'system',
-      subtype: 'task_notification',
-      task_id: task.taskId,
-      tool_use_id: task.toolUseId,
-      ...(task.taskType ? { task_type: task.taskType } : {}),
-      ...(task.description ? { description: task.description } : {}),
-      ...(task.ownerAgentId ? { owner_agent_id: task.ownerAgentId } : {}),
-      status: 'stopped',
-      summary: `${task.description ?? task.taskId} stopped because the runtime exited`,
-      timestamp: new Date().toISOString(),
+    if (!task.localStopConfirmed || !task.terminalStatus) {
+      task.terminalStatus = status
+      task.terminalSummary = status === 'failed'
+        ? `${task.description ?? task.taskId}: runtime connection lost; task completion could not be confirmed`
+        : `${task.description ?? task.taskId} stopped because the runtime exited`
     }
-    await (persistCliTaskNotification(sessionId, cliMsg) ?? Promise.resolve())
-    forwardCliMessageToSessionClients(sessionId, cliMsg)
+    task.localStopConfirmed = true
+    await emitAuthoritativeNonAgentStopped(sessionId, task)
   }))
 }
 
@@ -2921,13 +3097,13 @@ function closeStoppedAgentsAfterRuntimeExit(sessionId: string, cliMsg: any): voi
     cliMsg.is_error &&
     !conversationService.hasSession(sessionId)
   ) {
-    // The runtime is gone (crash, hard kill, or non-graceful exit). Any tracked
-    // Agent or background shell task died with it, so publish terminal bookends
-    // even when the user never pressed Stop — otherwise a reconnect re-hydrates
-    // a stale "Running" entry that can never reach a terminal state.
+    // A vanished runtime cannot deliver further task results. Record failed
+    // shell outcomes instead of claiming their process termination was confirmed;
+    // even without a user Stop, reconnects must not rehydrate ghost Running tasks.
     runtimeExitStoppedSessions.add(sessionId)
+    runtimeExitFailedSessions.add(sessionId)
     void emitAuthoritativeStoppedForActiveAgents(sessionId)
-    void emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
+    void emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId, 'failed')
   }
 }
 
@@ -3432,6 +3608,7 @@ async function ensureCliSessionStarted(
     await conversationService.startSession(sessionId, workDir, sdkUrl, startupSettings)
     bindSessionTurnObserver(sessionId)
     runtimeExitStoppedSessions.delete(sessionId)
+    runtimeExitFailedSessions.delete(sessionId)
   })()
 
   sessionStartupPromises.set(sessionId, startup)
@@ -3480,7 +3657,9 @@ export async function ensureCliSessionStartedForControl(
       sdkUrl.toString(),
       { ...runtimeSettings, resumeInterruptedTurn: false },
     )
+    bindSessionTurnObserver(sessionId)
     runtimeExitStoppedSessions.delete(sessionId)
+    runtimeExitFailedSessions.delete(sessionId)
   })()
 
   sessionStartupPromises.set(sessionId, startup)
@@ -4214,6 +4393,16 @@ function scheduleDisconnectCleanup(sessionId: string): void {
     }
 
     console.log(`[WS] Session ${sessionId} not reconnected after ${cleanupDelayMs}ms, stopping CLI subprocess`)
+    if (permissionBoundExpired) {
+      const turn = activeUserTurns.get(sessionId)
+      if (turn) {
+        turn.cancelled = true
+        turn.replacementAfterStop = false
+      }
+      forceStopSharedRuntimeForAgentCancellation(sessionId)
+      void emitAuthoritativeStoppedForActiveAgents(sessionId)
+      return
+    }
     conversationService.stopSession(sessionId)
     cleanupSessionRuntimeState(sessionId, { preserveRetryableAgentStops: true })
   }, cleanupDelayMs)
@@ -4221,6 +4410,7 @@ function scheduleDisconnectCleanup(sessionId: string): void {
 }
 
 function scheduleDisconnectedSessionCleanupIfIdle(sessionId: string): void {
+  refreshBackgroundTaskDisconnectCeiling(sessionId)
   if (
     hasActiveClients(sessionId) ||
     hasActiveSessionWork(sessionId)
@@ -4246,8 +4436,10 @@ function watchTurnCompletionForCleanup(sessionId: string): void {
     const cliRunState = trackCliRunState(sessionId, cliMsg)
     const taskLifecycle = trackCliBackgroundTaskLifecycle(sessionId, cliMsg)
     stopLateAgentTaskIfRequested(sessionId, taskLifecycle)
+    stopLateNonAgentTaskIfRequested(sessionId, taskLifecycle)
     closeLateNonAgentTaskAfterRuntimeExit(sessionId, taskLifecycle)
     closeStoppedAgentsAfterRuntimeExit(sessionId, cliMsg)
+    refreshBackgroundTaskDisconnectCeiling(sessionId)
     if (
       (cliRunState === 'running' || taskLifecycle?.running) &&
       !hasActiveClients(sessionId)
@@ -4263,9 +4455,7 @@ function watchTurnCompletionForCleanup(sessionId: string): void {
         // Arm the hard ceiling for a non-Agent background task that never
         // reports back. Running Agent tasks keep their existing handling: only
         // they can prove their own stop through the Agent finalization path.
-        if (hasTrackedNonAgentTasks(sessionId)) {
-          armBackgroundTaskDisconnectCeiling(sessionId)
-        }
+        refreshBackgroundTaskDisconnectCeiling(sessionId)
       }
       return
     }
@@ -4286,7 +4476,7 @@ function watchTurnCompletionForCleanup(sessionId: string): void {
     const backgroundTaskCompleted = taskLifecycle?.running === false
     if (!foregroundTurnCompleted && !cliRunCompleted && !backgroundTaskCompleted) return
     if (hasActiveCliRun(sessionId)) return
-    if (hasActiveBackgroundTasks(sessionId)) return
+    if (hasActiveBackgroundTasks(sessionId) || hasActiveTeamWorkForParent(sessionId)) return
     if (
       !foregroundTurnCompleted &&
       !cliRunCompleted &&
@@ -4302,6 +4492,7 @@ function watchTurnCompletionForCleanup(sessionId: string): void {
     }
   }
 
+  refreshBackgroundTaskDisconnectCeiling(sessionId)
   conversationService.onOutput(sessionId, onComplete)
   sessionDisconnectWatchers.set(sessionId, () => {
     conversationService.removeOutputCallback(sessionId, onComplete)
@@ -4342,12 +4533,32 @@ function cancelSessionDisconnectWatcher(sessionId: string): void {
  * shell tasks. Idempotent: an already-armed ceiling is left in place so the
  * clock measures from the first observation, not from the latest event.
  */
+function isDisconnectedBackgroundOnlySession(sessionId: string): boolean {
+  return !migrationMaintenance.isActive &&
+    !hasActiveClients(sessionId) &&
+    hasTrackedNonAgentTasks(sessionId) &&
+    !hasPendingOrActiveUserTurn(sessionId) &&
+    !hasActiveCliRun(sessionId) &&
+    (activeAgentTasks.get(sessionId)?.size ?? 0) === 0 &&
+    !hasActiveTeamWorkForParent(sessionId) &&
+    conversationService.getPendingPermissionRequests(sessionId).length === 0 &&
+    computerUseApprovalService.getPendingRequests(sessionId).length === 0
+}
+
+function refreshBackgroundTaskDisconnectCeiling(sessionId: string): void {
+  if (isDisconnectedBackgroundOnlySession(sessionId)) {
+    armBackgroundTaskDisconnectCeiling(sessionId)
+  } else {
+    clearBackgroundTaskDisconnectCeiling(sessionId)
+  }
+}
+
 function armBackgroundTaskDisconnectCeiling(sessionId: string): void {
   if (backgroundTaskCleanupTimers.has(sessionId)) return
   const timer = setTimeout(() => {
+    if (backgroundTaskCleanupTimers.get(sessionId) !== timer) return
     backgroundTaskCleanupTimers.delete(sessionId)
-    if (hasActiveClients(sessionId)) return
-    if (!hasTrackedNonAgentTasks(sessionId)) return
+    if (!isDisconnectedBackgroundOnlySession(sessionId)) return
     console.log(
       `[WS] Session ${sessionId} kept alive by background tasks for ${BACKGROUND_TASK_DISCONNECT_MAX_MS}ms without a client; stopping CLI subprocess`,
     )
@@ -4380,7 +4591,8 @@ function hasTrackedTaskRecords(sessionId: string): boolean {
  * lifecycle is owned by the Agent finalization path.
  */
 function hasTrackedNonAgentTasks(sessionId: string): boolean {
-  return (activeNonAgentTasks.get(sessionId)?.size ?? 0) > 0
+  return [...(activeNonAgentTasks.get(sessionId)?.values() ?? [])]
+    .some((task) => !task.localStopConfirmed)
 }
 
 function replayPendingPermissionRequests(
@@ -4682,6 +4894,7 @@ function bindClientSessionOutput(
     trackCliRunState(sessionId, cliMsg)
     const taskLifecycle = trackCliBackgroundTaskLifecycle(sessionId, cliMsg)
     stopLateAgentTaskIfRequested(sessionId, taskLifecycle)
+    stopLateNonAgentTaskIfRequested(sessionId, taskLifecycle)
     closeLateNonAgentTaskAfterRuntimeExit(sessionId, taskLifecycle)
     closeStoppedAgentsAfterRuntimeExit(sessionId, cliMsg)
     if (taskLifecycle?.suppressForward) return
@@ -5337,7 +5550,9 @@ export function __resetWebSocketHandlerStateForTests(): void {
   activeNonAgentTasks.clear()
   authoritativeStoppedTaskIds.clear()
   agentStopRequestedSessions.clear()
+  nonAgentStopRequestedSessions.clear()
   runtimeExitStoppedSessions.clear()
+  runtimeExitFailedSessions.clear()
   pendingInterruptedTurnResults.clear()
   sessionClearInProgress.clear()
   sessionStopRequested.clear()

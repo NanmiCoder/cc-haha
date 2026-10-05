@@ -1364,13 +1364,13 @@ describe('WebSocket handler session isolation', () => {
     expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
       taskId: 'bash-collateral-task',
       toolUseId: 'bash-collateral-tool',
-      status: 'stopped',
+      status: 'failed',
     }))
     expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
       taskId: 'provider-analyzer-teammate',
       toolUseId: 'provider-analyzer-teammate-tool',
       ownerAgentId: 'provider-analyzer',
-      status: 'stopped',
+      status: 'failed',
     }))
     expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'system_notification',
@@ -1385,7 +1385,7 @@ describe('WebSocket handler session isolation', () => {
       subtype: 'task_notification',
       data: expect.objectContaining({
         task_id: 'bash-collateral-task',
-        status: 'stopped',
+        status: 'failed',
       }),
     })
     expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
@@ -1394,7 +1394,7 @@ describe('WebSocket handler session isolation', () => {
       data: expect.objectContaining({
         task_id: 'provider-analyzer-teammate',
         owner_agent_id: 'provider-analyzer',
-        status: 'stopped',
+        status: 'failed',
       }),
     })
 
@@ -1420,14 +1420,14 @@ describe('WebSocket handler session isolation', () => {
       notification.taskId === 'bash-collateral-task')).toHaveLength(1)
     expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
       taskId: 'late-bash-after-force-kill',
-      status: 'stopped',
+      status: 'failed',
     }))
     expect(ws.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'system_notification',
       subtype: 'task_notification',
       data: expect.objectContaining({
         task_id: 'late-bash-after-force-kill',
-        status: 'stopped',
+        status: 'failed',
       }),
     })
   })
@@ -2681,14 +2681,14 @@ describe('WebSocket handler session isolation', () => {
     expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
       taskId: 'bash-clear-failed',
       toolUseId: 'bash-clear-failed-tool',
-      status: 'stopped',
+      status: 'failed',
     }))
     expect(first.sent.map((payload) => JSON.parse(payload))).toContainEqual({
       type: 'system_notification',
       subtype: 'task_notification',
       data: expect.objectContaining({
         task_id: 'bash-clear-failed',
-        status: 'stopped',
+        status: 'failed',
       }),
     })
   })
@@ -4780,7 +4780,8 @@ describe('WebSocket handler session isolation', () => {
       summary: 'Desktop verification passed',
     })
 
-    expect(setTimeoutSpy).not.toHaveBeenCalled()
+    expect(setTimeoutSpy).toHaveBeenCalledTimes(1)
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(31 * 60_000)
     expect(stopSession).not.toHaveBeenCalled()
 
     outputCallbacks[1]?.({
@@ -4793,11 +4794,11 @@ describe('WebSocket handler session isolation', () => {
       summary: 'Focused tests passed',
     })
 
-    expect(setTimeoutSpy).toHaveBeenCalledTimes(1)
-    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(30_000)
+    expect(setTimeoutSpy).toHaveBeenCalledTimes(2)
+    expect(setTimeoutSpy.mock.calls[1]?.[1]).toBe(30_000)
     expect(stopSession).not.toHaveBeenCalled()
 
-    const expireIdleGrace = setTimeoutSpy.mock.calls[0]?.[0] as (() => void) | undefined
+    const expireIdleGrace = setTimeoutSpy.mock.calls[1]?.[0] as (() => void) | undefined
     expireIdleGrace?.()
     expect(stopSession).toHaveBeenCalledWith(sessionId)
   })
@@ -5266,7 +5267,7 @@ describe('WebSocket handler session isolation', () => {
     expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
       taskId: 'ceiling-bash-1',
       toolUseId: 'ceiling-bash-tool-1',
-      status: 'stopped',
+      status: 'failed',
     }))
   })
 
@@ -5353,7 +5354,7 @@ describe('WebSocket handler session isolation', () => {
     expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
       taskId: 'residual-bash-1',
       toolUseId: 'residual-bash-tool-1',
-      status: 'stopped',
+      status: 'failed',
     }))
     expect(stopSession).not.toHaveBeenCalled()
   })

@@ -2,13 +2,13 @@
  * Agent and background-task lifecycle state for the session WebSocket handler.
  *
  * Moved verbatim out of `handler.ts` as the first cut of that file. This slice was
- * chosen because it is provably closed: these functions read and write only the six
+ * chosen because it is provably closed: these functions read and write only the lifecycle
  * containers declared here and call nothing outside them, so relocating them cannot
  * change behavior. The functions that emit stop bookends stayed behind on purpose —
  * they reach into the broadcast layer and the socket registry, so moving them would
  * have required injecting dependencies rather than moving code.
  *
- * All six containers are per-session and released by `clearAgentRuntimeState`, which
+ * All lifecycle containers are per-session and released by `clearAgentRuntimeState`, which
  * `cleanupSessionRuntimeState` calls. `src/server/__tests__/sessionStateCleanup.test.ts`
  * follows that closure across this module boundary.
  *
@@ -23,6 +23,15 @@ export type ActiveNonAgentTaskState = {
   toolUseId: string
   description?: string
   ownerAgentId?: string
+  terminalStatus?: 'stopped' | 'failed'
+  terminalSummary?: string
+  terminalMessage?: boolean
+  stopRequested?: boolean
+  localStopConfirmed?: boolean
+  finalizationRetryCount?: number
+  finalizationRetryTimer?: ReturnType<typeof setTimeout>
+  finalization?: Promise<boolean>
+  stopFailureMessage?: string
 }
 
 export type ActiveAgentTaskState = {
@@ -54,7 +63,11 @@ export const authoritativeStoppedTaskIds = new Map<string, Set<string>>()
 
 export const agentStopRequestedSessions = new Set<string>()
 
+export const nonAgentStopRequestedSessions = new Set<string>()
+
 export const runtimeExitStoppedSessions = new Set<string>()
+
+export const runtimeExitFailedSessions = new Set<string>()
 
 export type CliBackgroundTaskLifecycle = {
   taskId: string
@@ -123,6 +136,8 @@ export function untrackCliBackgroundTask(sessionId: string, taskId: string): voi
   if (sessionAgentTasks?.size === 0) activeAgentTasks.delete(sessionId)
 
   const sessionNonAgentTasks = activeNonAgentTasks.get(sessionId)
+  const nonAgentTask = sessionNonAgentTasks?.get(taskId)
+  if (nonAgentTask) clearAgentStopFinalizationRetry(nonAgentTask)
   sessionNonAgentTasks?.delete(taskId)
   if (sessionNonAgentTasks?.size === 0) activeNonAgentTasks.delete(sessionId)
 }
@@ -139,7 +154,14 @@ export function clearAgentRuntimeState(
       )
     : new Map<string, ActiveAgentTaskState>()
 
+  const retryableNonAgentStops = options?.preserveRetryableStops
+    ? new Map([...(activeNonAgentTasks.get(sessionId)?.entries() ?? [])]
+        .filter(([, task]) => task.localStopConfirmed))
+    : new Map<string, ActiveNonAgentTaskState>()
   for (const task of activeAgentTasks.get(sessionId)?.values() ?? []) {
+    clearAgentStopFinalizationRetry(task)
+  }
+  for (const task of activeNonAgentTasks.get(sessionId)?.values() ?? []) {
     clearAgentStopFinalizationRetry(task)
   }
   activeBackgroundTaskIds.delete(sessionId)
@@ -147,8 +169,13 @@ export function clearAgentRuntimeState(
   activeNonAgentTasks.delete(sessionId)
   authoritativeStoppedTaskIds.delete(sessionId)
   agentStopRequestedSessions.delete(sessionId)
+  nonAgentStopRequestedSessions.delete(sessionId)
   runtimeExitStoppedSessions.delete(sessionId)
+  runtimeExitFailedSessions.delete(sessionId)
 
+  if (retryableNonAgentStops.size > 0) {
+    activeNonAgentTasks.set(sessionId, retryableNonAgentStops)
+  }
   if (retryableStops.size > 0) {
     activeAgentTasks.set(sessionId, retryableStops)
     activeBackgroundTaskIds.set(sessionId, new Set(retryableStops.keys()))
@@ -171,11 +198,12 @@ export function hasActiveBackgroundTasks(sessionId: string): boolean {
   const sessionAgentTasks = activeAgentTasks.get(sessionId)
   return [...taskIds].some((taskId) => {
     const agentTask = sessionAgentTasks?.get(taskId)
-    return !agentTask || !agentTask.localStopConfirmed || agentTask.bookendPending
+    if (agentTask) return !agentTask.localStopConfirmed || agentTask.bookendPending
+    return !activeNonAgentTasks.get(sessionId)?.get(taskId)?.localStopConfirmed
   })
 }
 
-export function clearAgentStopFinalizationRetry(task: ActiveAgentTaskState): void {
+export function clearAgentStopFinalizationRetry(task: { finalizationRetryTimer?: ReturnType<typeof setTimeout> }): void {
   if (task.finalizationRetryTimer === undefined) return
   clearTimeout(task.finalizationRetryTimer)
   task.finalizationRetryTimer = undefined
