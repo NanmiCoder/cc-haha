@@ -15,9 +15,15 @@ import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.j
 import { createGunzip, createInflate } from 'node:zlib'
 
 import { ProviderService } from '../services/providerService.js'
+import { diagnosticsService } from '../services/diagnosticsService.js'
 import type { ProviderAuthStrategy } from '../types/provider.js'
 import { resolvePromptCacheKey } from './promptCacheKey.js'
-import { anthropicToOpenaiChat } from './transform/anthropicToOpenaiChat.js'
+import {
+  getOpenAIChatImageContentMode,
+  isOpenAIChatImageRejection,
+  rememberOpenAIChatTextOnlyModel,
+} from './openaiChatImageSupport.js'
+import { anthropicToOpenaiChat, type OpenAIChatImageContentMode } from './transform/anthropicToOpenaiChat.js'
 import { anthropicToOpenaiResponses } from './transform/anthropicToOpenaiResponses.js'
 import { RequestCompatibilityError, resolveRequestCompatibility, type RequestCompatibilityOptions } from './transform/requestCompatibility.js'
 import { ProtocolTraceObserver, observeProtocolStream, type ProtocolTraceTransport } from './protocolTrace.js'
@@ -698,20 +704,22 @@ async function handleOpenaiChat(
   traceContext: ProxyTraceContext | null,
   requestOptions: RequestCompatibilityOptions = {},
   upstreamHeaders: Record<string, string> = {},
+  imageContentModeOverride?: OpenAIChatImageContentMode,
 ): Promise<Response> {
   const knownDeepSeekHost = shouldUseDeepSeekReasoningCompat(baseUrl)
   const reasoningProfile = resolveModelReasoningProfile(body.model, 'openai_chat')
+  const url = buildOpenaiEndpoint(baseUrl, 'chat/completions')
+  const imageContentMode = imageContentModeOverride ?? getOpenAIChatImageContentMode(url, body.model)
   const transformed = anthropicToOpenaiChat(body, {
     ...requestOptions,
     roundTripReasoningContent: knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4',
     passThinkingToggle: knownDeepSeekHost,
-    imageContentMode: shouldUseTextOnlyOpenAIChatContent(baseUrl, body.model) ? 'text_only' : 'vision',
+    imageContentMode,
   })
   if (traceContext) {
     traceContext.protocolTrace = new ProtocolTraceObserver('openai_chat', transformed,
       resolveRequestCompatibility(body, { ...requestOptions, protocol: 'openai_chat' }).outputBudget)
   }
-  const url = buildOpenaiEndpoint(baseUrl, 'chat/completions')
   // Preset-declared headers first: `Authorization` is applied last so a preset can
   // never shadow the credential, and the resolver already drops framing headers.
   const upstreamRequestHeaders: Record<string, string> = {}
@@ -760,6 +768,40 @@ async function handleOpenaiChat(
 
   if (!upstream.ok) {
     const errText = await upstream.text().catch(() => '')
+    if (imageContentMode === 'vision' && isOpenAIChatImageRejection(upstream.status, errText, transformed)) {
+      // The upstream refused the request before generating anything, so the
+      // client has seen no output and resending is safe. The model is only
+      // remembered once the same request succeeds without images, so an
+      // unrelated failure of the resend cannot disable images for good.
+      if (traceContext) {
+        recordProxyTraceInBackground({
+          context: traceContext,
+          callId: traceCallId,
+          model: body.model,
+          upstreamUrl: url,
+          upstreamRequest: transformed,
+          requestHeaders: upstreamRequestHeaders,
+          startedAt,
+          startedAtMs,
+          responseStatus: upstream.status,
+          upstreamResponseBody: errText,
+          responseHeaders: upstream.headers,
+        })
+      }
+      const resent = await handleOpenaiChat(
+        body, baseUrl, apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders, 'text_only',
+      )
+      if (resent.ok) {
+        rememberOpenAIChatTextOnlyModel(url, body.model)
+        void diagnosticsService.recordEvent({
+          type: 'openai_chat_image_input_disabled',
+          severity: 'info',
+          summary: `Upstream rejected image input for ${body.model}; images are omitted for this model for 30 minutes`,
+          details: { model: body.model, upstreamUrl: url, httpStatus: upstream.status, upstreamError: errText.slice(0, 500) },
+        })
+      }
+      return resent
+    }
     let policyError = null
     try {
       policyError = getOpenAIPolicyError(JSON.parse(errText))
@@ -878,29 +920,6 @@ function shouldUseDeepSeekReasoningCompat(baseUrl: string): boolean {
     /(^|[./-])deepseek([./-]|$)/i.test(baseUrl) ||
     /(^|[./-])opencode\.ai([:/]|$)/i.test(baseUrl)
   )
-}
-
-function shouldUseTextOnlyOpenAIChatContent(baseUrl: string, model: string): boolean {
-  // Keep classic DeepSeek text models compatible without dropping images for
-  // explicitly vision-capable models served by the same Chat endpoint.
-  if (/(^|[./-])deepseek([./-]|$)/i.test(baseUrl)) {
-    return !hasExplicitVisionModelMarker(model)
-  }
-
-  // OpenCode Go's Kimi K3 and Space Bunny Free accept image_url despite lacking
-  // "vision" in their model ids. Keep other unverified gateway models on the
-  // text-only path. Context-window suffixes have already been stripped.
-  if (/(^|[./-])opencode\.ai([:/]|$)/i.test(baseUrl)) {
-    return !hasExplicitVisionModelMarker(model) && !['kimi-k3', 'space-bunny-free'].includes(model.toLowerCase())
-  }
-
-  // Preserve the existing behavior for generic compatible providers whose
-  // capabilities are not controlled by either compatibility policy above.
-  return false
-}
-
-function hasExplicitVisionModelMarker(model: string): boolean {
-  return /(^|[/:._-])vision([/:._-]|$)/i.test(model)
 }
 
 async function handleOpenaiResponses(

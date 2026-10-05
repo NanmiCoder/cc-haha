@@ -10,6 +10,8 @@ import { ProviderService } from '../services/providerService.js'
 import { readActiveProviderManagedEnv } from '../services/providerRuntimeEnv.js'
 import { handleProvidersApi } from '../api/providers.js'
 import { handleProxyRequest } from '../proxy/handler.js'
+import { resetOpenAIChatImageSupportForTests } from '../proxy/openaiChatImageSupport.js'
+import { diagnosticsService } from '../services/diagnosticsService.js'
 import {
   clearTraceCaptureStateForTests,
   drainTraceCaptureForTests,
@@ -32,11 +34,15 @@ async function setup() {
   process.env.CLAUDE_CONFIG_DIR = tmpDir
   process.env.HOME = tmpDir
   clearTraceCaptureStateForTests()
+  resetOpenAIChatImageSupportForTests()
 }
 
 async function teardown() {
   await drainTraceCaptureForTests()
   clearTraceCaptureStateForTests()
+  // Diagnostics resolve their path when the queued write runs; flush them
+  // while CLAUDE_CONFIG_DIR still points at the temp dir.
+  await diagnosticsService.drainForMigration()
   if (originalConfigDir !== undefined) {
     process.env.CLAUDE_CONFIG_DIR = originalConfigDir
   } else {
@@ -2304,33 +2310,294 @@ describe('ProviderService', () => {
 
     test.each([
       {
-        name: 'opencode non-vision model',
-        baseUrl: 'https://opencode.ai/zen',
+        name: 'DeepSeek schema error relayed by OpenCode Go',
+        baseUrl: 'https://opencode.ai/zen/go/v1',
         model: 'deepseek-v4-flash',
+        status: 400,
+        error: 'Error from provider (DeepSeek): Failed to deserialize the JSON body into the target type: messages[0]: unknown variant `image_url`, expected `text` at line 1 column 120',
       },
       {
         name: 'classic DeepSeek text model',
         baseUrl: 'https://api.deepseek.com',
-        model: 'deepseek-v4-flash',
+        model: 'deepseek-v4-pro',
+        status: 400,
+        error: 'This model does not support image input',
       },
-    ])('uses text-only Computer Use content for $name', async ({ baseUrl, model }) => {
-      const body = await captureOpenAIChatRequest({
-        baseUrl,
-        model,
-        content: [{
-          type: 'image',
-          source: { type: 'base64', media_type: 'image/jpeg', data: 'private-screenshot-data' },
-        }],
-      })
+      {
+        name: 'generic gateway validation error',
+        baseUrl: 'https://gateway.example.test/v1',
+        model: 'text-model',
+        status: 422,
+        error: "messages.0.content.1.type: Input should be 'text'; received 'image_url'",
+      },
+    ])('retries without images once $name rejects them, then stays text-only for that model', async ({ baseUrl, model, status, error }) => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<Record<string, unknown>> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        calls.push(body)
+        if (JSON.stringify(body).includes('image_url')) {
+          return Response.json({ error: { type: 'invalid_request_error', message: error } }, { status })
+        }
+        return Response.json({
+          id: 'chatcmpl-text-only',
+          object: 'chat.completion',
+          created: 0,
+          model: body.model,
+          choices: [{ index: 0, message: { role: 'assistant', content: 'described from text' }, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        })
+      }) as typeof fetch
 
-      const messages = body.messages as Array<Record<string, unknown>>
-      expect(messages[0]).toEqual({
-        role: 'tool',
-        tool_call_id: 'computer_1',
-        content: '\n[Image omitted: this OpenAI-compatible chat endpoint only supports text content.]\n',
-      })
-      expect(JSON.stringify(body)).not.toContain('private-screenshot-data')
-      expect(JSON.stringify(body)).not.toContain('image_url')
+      try {
+        const otherModel = `${model}-sibling`
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({
+          apiFormat: 'openai_chat',
+          baseUrl,
+          models: { main: model, haiku: otherModel, sonnet: model, opus: model },
+        }))
+        await svc.activateProvider(provider.id)
+        const send = (requestModel: string) => {
+          const req = new Request('http://localhost:3456/proxy/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Claude-Code-Session-Id': `image-retry-${requestModel}` },
+            body: JSON.stringify({
+              model: requestModel,
+              max_tokens: 64,
+              messages: [{
+                role: 'user',
+                content: [
+                  { type: 'text', text: 'Describe this picture.' },
+                  { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'rejected-picture' } },
+                ],
+              }],
+            }),
+          })
+          return handleProxyRequest(req, new URL(req.url))
+        }
+
+        const first = await send(model)
+        expect(first.status).toBe(200)
+        expect(await first.json()).toMatchObject({ content: [{ type: 'text', text: 'described from text' }] })
+        expect(calls).toHaveLength(2)
+        expect(JSON.stringify(calls[0])).toContain('data:image/png;base64,rejected-picture')
+        expect(calls[1].messages).toEqual([{
+          role: 'user',
+          content: 'Describe this picture.\n[Image omitted: the upstream rejected image input for this model.]\n',
+        }])
+
+        const trace = await waitForCompletedProxyTrace(`image-retry-${model}`)
+        expect(trace.calls.map(call => call.response?.status).sort()).toEqual([200, status].sort())
+        await diagnosticsService.drainForMigration()
+        const [learned] = (await diagnosticsService.readRecentEvents(20))
+          .filter(event => event.type === 'openai_chat_image_input_disabled')
+        expect(learned).toMatchObject({ severity: 'info', details: { model, httpStatus: status } })
+        expect(JSON.stringify(learned)).not.toContain('sk-test-key-123')
+
+        // The rejection is remembered: later turns skip the failing attempt.
+        const second = await send(model)
+        expect(second.status).toBe(200)
+        expect(calls).toHaveLength(3)
+        expect(JSON.stringify(calls[2])).not.toContain('image_url')
+        expect(JSON.stringify(calls[2])).not.toContain('rejected-picture')
+
+        // The learned limit belongs to that model, not to the whole endpoint.
+        await send(otherModel)
+        expect(calls[3].model).toBe(otherModel)
+        expect(JSON.stringify(calls[3])).toContain('data:image/png;base64,rejected-picture')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test.each([
+      { name: 'an oversized image', status: 400, error: 'image exceeds maximum allowed size', withImage: true },
+      {
+        name: 'an unsupported image format',
+        status: 400,
+        error: "You uploaded an unsupported image. Please make sure your image has of one the following formats: ['png', 'jpeg', 'gif', 'webp'].",
+        withImage: true,
+      },
+      { name: 'an unsupported image MIME type', status: 400, error: "Invalid image_url: unsupported MIME type 'image/heic'", withImage: true },
+      { name: 'a server failure', status: 500, error: 'image input is not supported right now', withImage: true },
+      { name: 'a request without images', status: 400, error: 'This model does not support image input', withImage: false },
+    ])('surfaces $name without dropping images from later requests', async ({ status, error, withImage }) => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<Record<string, unknown>> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+        return Response.json({ error: { type: 'invalid_request_error', message: error } }, { status })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({
+          apiFormat: 'openai_chat',
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          models: { main: 'deepseek-flash', haiku: 'deepseek-flash', sonnet: 'deepseek-flash', opus: 'deepseek-flash' },
+        }))
+        await svc.activateProvider(provider.id)
+        const send = (content: unknown) => {
+          const req = new Request('http://localhost:3456/proxy/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'deepseek-flash', max_tokens: 64, messages: [{ role: 'user', content }] }),
+          })
+          return handleProxyRequest(req, new URL(req.url))
+        }
+        const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'kept-picture' } }
+
+        const res = await send(withImage ? [{ type: 'text', text: 'Look.' }, image] : 'Look.')
+        expect(res.status).toBe(status)
+        expect(JSON.stringify(await res.json())).toContain(error)
+        expect(calls).toHaveLength(1)
+
+        // The next turn still offers its image to the model first.
+        await send([{ type: 'text', text: 'Look again.' }, image])
+        expect(JSON.stringify(calls[1])).toContain('data:image/png;base64,kept-picture')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test.each([
+      'https://api.deepseek.com',
+      'https://opencode.ai/zen/v1',
+      'https://opencode.ai/zen/go/v1',
+      'https://gateway.example.test/v1',
+    ].flatMap(baseUrl => ['deepseek-v4-pro', 'deepseek-flash', 'glm-5.3'].map(model => ({ baseUrl, model }))))(
+      'offers images to $model at $baseUrl before any rejection',
+      async ({ baseUrl, model }) => {
+        // Guard: image support must never be predicted from host or model names.
+        const body = await captureOpenAIChatRequest({
+          baseUrl,
+          model,
+          contentSource: 'user',
+          content: [
+            { type: 'text', text: 'Look.' },
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'guard-picture' } },
+          ],
+        })
+
+        expect(JSON.stringify(body)).toContain('data:image/png;base64,guard-picture')
+        expect(JSON.stringify(body)).not.toContain('Image omitted:')
+      },
+    )
+
+    test('keeps offering images when the text-only resend fails for another reason', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<Record<string, unknown>> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        calls.push(body)
+        return JSON.stringify(body).includes('image_url')
+          ? Response.json({ error: { message: 'This model does not support image input' } }, { status: 400 })
+          : Response.json({ error: { message: 'Rate limit reached' } }, { status: 429 })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({
+          apiFormat: 'openai_chat',
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          models: { main: 'deepseek-flash', haiku: 'deepseek-flash', sonnet: 'deepseek-flash', opus: 'deepseek-flash' },
+        }))
+        await svc.activateProvider(provider.id)
+        const send = () => {
+          const req = new Request('http://localhost:3456/proxy/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: 'deepseek-flash',
+              max_tokens: 64,
+              messages: [{
+                role: 'user',
+                content: [
+                  { type: 'text', text: 'Look.' },
+                  { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'retry-picture' } },
+                ],
+              }],
+            }),
+          })
+          return handleProxyRequest(req, new URL(req.url))
+        }
+
+        const first = await send()
+        expect(first.status).toBe(429)
+        expect(calls).toHaveLength(2)
+
+        await send()
+        expect(JSON.stringify(calls[2])).toContain('data:image/png;base64,retry-picture')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('resends a streaming request without images after an image rejection', async () => {
+      const originalFetch = globalThis.fetch
+      const encoder = new TextEncoder()
+      const calls: Array<Record<string, unknown>> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+        calls.push(body)
+        if (JSON.stringify(body).includes('image_url')) {
+          return Response.json({
+            error: { message: 'Error from provider (DeepSeek): unknown variant `image_url`, expected `text`' },
+          }, { status: 400 })
+        }
+        return new Response(new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode([
+              'data: {"id":"chatcmpl-stream-retry","object":"chat.completion.chunk","model":"deepseek-flash","choices":[{"index":0,"delta":{"role":"assistant","content":"text answer"},"finish_reason":null}]}',
+              '',
+              'data: {"id":"chatcmpl-stream-retry","object":"chat.completion.chunk","model":"deepseek-flash","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":7}}',
+              '',
+              'data: [DONE]',
+              '',
+            ].join('\n')))
+            controller.close()
+          },
+        }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({
+          apiFormat: 'openai_chat',
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          models: { main: 'deepseek-flash', haiku: 'deepseek-flash', sonnet: 'deepseek-flash', opus: 'deepseek-flash' },
+        }))
+        await svc.activateProvider(provider.id)
+        const req = new Request('http://localhost:3456/proxy/v1/messages', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'deepseek-flash[1m]',
+            max_tokens: 64,
+            stream: true,
+            messages: [{
+              role: 'user',
+              content: [
+                { type: 'text', text: 'Look.' },
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'stream-picture' } },
+              ],
+            }],
+          }),
+        })
+
+        const res = await handleProxyRequest(req, new URL(req.url))
+        expect(res.status).toBe(200)
+        expect(res.headers.get('Content-Type')).toBe('text/event-stream')
+        const text = await res.text()
+        expect(text).toContain('text answer')
+        expect(text).toContain('message_stop')
+        expect(calls).toHaveLength(2)
+        expect(calls[1].stream).toBe(true)
+        expect(JSON.stringify(calls[1])).not.toContain('stream-picture')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
     })
 
     test.each([
@@ -2365,6 +2632,10 @@ describe('ProviderService', () => {
       { model: 'space-bunny-free', contentSource: 'tool' },
       { model: 'space-bunny-free[1m]', contentSource: 'user' },
       { model: 'space-bunny-free[1m]', contentSource: 'tool' },
+      { model: 'deepseek-flash', contentSource: 'user' },
+      { model: 'deepseek-flash', contentSource: 'tool' },
+      { model: 'deepseek-flash[1m]', contentSource: 'user' },
+      { model: 'some-future-model', contentSource: 'tool' },
     ] as const)('forwards OpenCode Go images for $model from $contentSource content', async ({ model, contentSource }) => {
       const body = await captureOpenAIChatRequest({
         baseUrl: 'https://opencode.ai/zen/go/v1',

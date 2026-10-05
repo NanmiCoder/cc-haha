@@ -56,6 +56,9 @@ import {
   StreamEndedEarlyError,
 } from './streamFallback.js'
 import { StreamWatchdogTimeoutError } from './streamWatchdog.js'
+import { isUnsupportedImageInputErrorMessage } from './unsupportedImageInput.js'
+
+export { isUnsupportedImageInputErrorMessage }
 
 // Presentation only: classifiers, retries and diagnostic metadata keep the
 // original SDK error. Decode envelopes structurally so escaped quotes/newlines
@@ -594,48 +597,6 @@ export function extractUnknownErrorFormat(value: unknown): string | undefined {
   }
 
   return undefined
-}
-
-export function isUnsupportedImageInputErrorMessage(message: string): boolean {
-  const raw = message.toLowerCase()
-  if (!raw.includes('image')) return false
-  if (isOpenAIImageUrlTextOnlySchemaError(raw)) {
-    return true
-  }
-  return (
-    raw.includes('not support') ||
-    raw.includes('not supported') ||
-    raw.includes('unsupported') ||
-    raw.includes('vision') ||
-    raw.includes('multimodal') ||
-    raw.includes('multi-modal') ||
-    raw.includes('modality')
-  )
-}
-
-function isOpenAIImageUrlTextOnlySchemaError(raw: string): boolean {
-  if (!raw.includes('image_url')) return false
-  if (
-    raw.includes('not allowed') ||
-    raw.includes('not permitted') ||
-    raw.includes('disallowed') ||
-    raw.includes('forbidden')
-  ) {
-    return true
-  }
-  if (!raw.includes('text')) return false
-  return (
-    raw.includes('expected') ||
-    raw.includes('input should be') ||
-    raw.includes('not one of') ||
-    raw.includes('permitted') ||
-    raw.includes('received') ||
-    raw.includes('unknown variant') ||
-    raw.includes('invalid value') ||
-    raw.includes('invalid type') ||
-    raw.includes('valid enumeration') ||
-    raw.includes('only text')
-  )
 }
 
 // Deep-walk a request payload looking for image blocks. Images can sit at the

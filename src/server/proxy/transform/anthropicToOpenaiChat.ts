@@ -18,7 +18,7 @@ import { stripLeadingBillingHeader } from './billingHeader.js'
 import { normalizeOpenAIReasoningEffort } from './effort.js'
 import { resolveRequestCompatibility, type RequestCompatibilityOptions } from './requestCompatibility.js'
 
-type OpenAIChatImageContentMode = 'vision' | 'text_only'
+export type OpenAIChatImageContentMode = 'vision' | 'text_only'
 
 // Synthetic text parts (degraded documents, search results) carry an internal
 // marker so serializers can preserve their boundaries. The marker is removed
@@ -35,7 +35,7 @@ export type OpenAIChatTransformOptions = RequestCompatibilityOptions & {
 // Synthetic degradation text carries its own separators: the parts are
 // joined without a separator, so a notice must not glue itself to the
 // surrounding user text.
-const OMITTED_IMAGE_TEXT = '\n[Image omitted: this OpenAI-compatible chat endpoint only supports text content.]\n'
+const OMITTED_IMAGE_TEXT = '\n[Image omitted: the upstream rejected image input for this model.]\n'
 const FILE_IMAGE_OMITTED_TEXT = '\n[Image omitted: file-based image source is not supported by this endpoint.]\n'
 const MEDIA_RESULT_ATTACHED_TEXT = 'Media result attached after this tool result.'
 const DOCUMENT_TEXT_INLINE_LIMIT = 2000
