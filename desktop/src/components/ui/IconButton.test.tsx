@@ -205,6 +205,16 @@ describe('IconButton', () => {
     expect(container.firstElementChild?.className).not.toContain('hover:bg-[var(--color-error-soft)]')
   })
 
+  it('soft rests on a neutral disc with no border, and owns the only hover fill', () => {
+    // `filled` is a bordered card face; the recording bar's cancel and stop sit
+    // beside a waveform and need a ground without becoming separate objects.
+    const { container } = render(<IconButton icon={<span />} label="Cancel" tone="default" soft filled />)
+    const classes = container.firstElementChild!.className.split(/\s+/)
+    expect(classes).toContain('bg-[var(--color-btn-soft-bg)]')
+    expect(classes.filter((c) => c.startsWith('hover:bg-'))).toEqual(['hover:bg-[var(--color-btn-soft-hover)]'])
+    expect(classes.some((c) => c === 'border' || c.startsWith('border-'))).toBe(false)
+  })
+
   it('emits exactly one disabled opacity', () => {
     // Same trap as the hover text: a caller passing `disabled:opacity-0` via
     // className loses to the component's own `disabled:opacity-50`, because

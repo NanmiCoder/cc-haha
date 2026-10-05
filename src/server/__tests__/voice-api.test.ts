@@ -62,7 +62,7 @@ describe('GET /api/voice/catalog', () => {
           preparation: { phase: 'unprepared' },
         },
       ],
-      preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
+      preferences: { enabled: true, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
       limits: VOICE_LIMITS,
     })
   })

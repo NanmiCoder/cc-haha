@@ -1,10 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
-import { Mic, Square, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Mic, X } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation } from '@/i18n'
 import type { TranslationKey } from '@/i18n/locales/en'
-import { selectVoiceInputReady, useVoiceInputStore } from '@/stores/voiceInputStore'
+import { isDesktopRuntime } from '@/lib/desktopRuntime'
+import { SETTINGS_TAB_ID, useTabStore } from '@/stores/tabStore'
+import { useUIStore } from '@/stores/uiStore'
+import {
+  selectActiveVoiceProvider,
+  selectVoiceInputNeedsModel,
+  selectVoiceInputReady,
+  useVoiceInputStore,
+} from '@/stores/voiceInputStore'
 import { isVoiceCaptureSupported } from './recorder'
 import type { ComposerDictation, DictationIssue } from './useComposerDictation'
 
@@ -33,106 +41,60 @@ const ISSUE_KEYS: Record<DictationIssue, TranslationKey> = {
 /** Nothing was wrong; there was just nothing to write. */
 const SOFT_ISSUES = new Set<DictationIssue>(['noSpeech', 'tooShort'])
 
-function formatElapsed(ms: number): string {
-  const total = Math.max(0, Math.floor(ms / 1000))
-  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
-}
-
 /**
- * The composer's dictation control. Renders nothing until the voice service is
- * enabled, its model is downloaded, and this environment can capture audio.
+ * The composer's dictation control. Shown in the desktop app while voice input
+ * is switched on.
+ *
+ * Once the model is downloaded it starts a dictation and reports how the last
+ * one ended (an issue, or text held back from the draft); while one is under
+ * way the composer hides its toolbar, this button with it, and shows
+ * `VoiceRecordingBar` instead. Until then it opens Settings → Voice input,
+ * where the download is — the model is never fetched behind the user's back.
+ *
+ * Never in the browser (H5): over the usual plain-HTTP LAN address the page is
+ * not a secure context, so the browser offers no microphone at all; the HTTPS
+ * path has not been verified on phones; and the H5 settings have no voice page
+ * to send anyone to.
  */
 export function VoiceInputButton({ dictation, blocked = false, mobile = false }: VoiceInputButtonProps) {
   const t = useTranslation()
   const ready = useVoiceInputStore(selectVoiceInputReady)
+  const needsModel = useVoiceInputStore(selectVoiceInputNeedsModel)
+  const modelPhase = useVoiceInputStore(state => selectActiveVoiceProvider(state)?.preparation.phase)
   const loadCatalog = useVoiceInputStore(state => state.loadCatalog)
-  const [supported] = useState(isVoiceCaptureSupported)
-  const { phase, issue, pendingText, startedAt, getLevel } = dictation
-  const haloRef = useRef<HTMLSpanElement>(null)
-  const [elapsed, setElapsed] = useState(0)
+  const [supported] = useState(() => isDesktopRuntime() && isVoiceCaptureSupported())
+  const { phase, issue, pendingText } = dictation
 
   useEffect(() => {
-    void loadCatalog()
-  }, [loadCatalog])
-
-  // Loudness drives the halo straight through the DOM: a 60 Hz value has no
-  // business re-rendering the composer.
-  useEffect(() => {
-    if (phase !== 'recording') return
-    let frame = 0
-    const tick = () => {
-      const halo = haloRef.current
-      if (halo) {
-        const level = getLevel()
-        halo.style.transform = `scale(${1 + level * 0.6})`
-        halo.style.opacity = String(0.25 + level * 0.75)
-      }
-      frame = requestAnimationFrame(tick)
-    }
-    frame = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(frame)
-  }, [getLevel, phase])
-
-  useEffect(() => {
-    if (phase !== 'recording') return
-    setElapsed(0)
-    const timer = setInterval(() => setElapsed(Date.now() - startedAt), 250)
-    return () => clearInterval(timer)
-  }, [phase, startedAt])
+    if (supported) void loadCatalog()
+  }, [loadCatalog, supported])
 
   const engaged = phase !== 'idle' || pendingText !== null || issue !== null
-  if (!supported || (!ready && !engaged)) return null
+  if (!supported || (!ready && !needsModel && !engaged)) return null
 
-  const size = mobile ? '2xl' : 'md'
-  const recording = phase === 'recording'
-  const label = phase === 'idle'
+  const openVoiceSettings = () => {
+    useUIStore.getState().setPendingSettingsTab('voice')
+    useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
+  }
+  const label = !needsModel
     ? t('voice.composer.start')
-    : phase === 'starting'
-      ? t('voice.composer.starting')
-      : recording
-        ? t('voice.composer.stop')
-        : t('voice.composer.transcribing')
+    : modelPhase === 'downloading' || modelPhase === 'verifying'
+      ? t('voice.composer.modelDownloading')
+      : t('voice.composer.needsModel')
 
   return (
-    <div data-testid="voice-input" className="relative flex shrink-0 items-center gap-1.5">
-      {recording && (
-        <span
-          data-testid="voice-input-timer"
-          className="text-xs tabular-nums text-[var(--color-error)]"
-          title={t('voice.composer.recordingHint')}
-        >
-          {formatElapsed(elapsed)}
-        </span>
-      )}
-      <span className="relative inline-flex">
-        {recording && (
-          <span
-            ref={haloRef}
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 rounded-[var(--radius-lg)] bg-[var(--color-error-soft)]"
-          />
-        )}
-        <IconButton
-          icon={recording
-            ? <Square size={mobile ? 18 : 14} strokeWidth={1.75} fill="currentColor" aria-hidden="true" />
-            : <Mic size={mobile ? 20 : 16} strokeWidth={1.75} aria-hidden="true" />}
-          label={label}
-          size={size}
-          tone={recording ? 'danger' : 'secondary'}
-          solid={recording}
-          loading={phase === 'transcribing'}
-          // A toggle only while it is recording. The label changes with the
-          // phase, so pressed would contradict it during the other phases;
-          // those are busy instead (`loading` already sets it for transcribing).
-          pressed={recording ? true : undefined}
-          aria-busy={phase === 'starting' || phase === 'transcribing' ? true : undefined}
-          // Keep the caret in the composer: a click would otherwise blur it, and
-          // the write-back position is the caret the user left there.
-          onMouseDown={event => event.preventDefault()}
-          onClick={dictation.toggle}
-          className="relative"
-        />
-      </span>
+    <div data-testid="voice-input" className="relative flex shrink-0 items-center">
+      <IconButton
+        icon={<Mic size={mobile ? 20 : 16} strokeWidth={1.75} aria-hidden="true" />}
+        label={label}
+        size={mobile ? '2xl' : 'md'}
+        tone="secondary"
+        data-needs-model={needsModel || undefined}
+        // Keep the caret in the composer: a click would otherwise blur it, and
+        // the write-back position is the caret the user left there.
+        onMouseDown={event => event.preventDefault()}
+        onClick={needsModel ? openVoiceSettings : dictation.toggle}
+      />
 
       {issue && (
         <div

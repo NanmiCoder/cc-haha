@@ -151,3 +151,14 @@ export function selectVoiceInputReady(state: Pick<VoiceInputState, 'catalog'>): 
   if (!catalog?.supported || !catalog.preferences.enabled) return false
   return selectActiveVoiceProvider(state)?.preparation.phase === 'ready'
 }
+
+/**
+ * Switched on, but the model cannot transcribe yet: never downloaded, still
+ * downloading, failed, or removed. The composer keeps the microphone and sends
+ * the user to the download instead of recording.
+ */
+export function selectVoiceInputNeedsModel(state: Pick<VoiceInputState, 'catalog'>): boolean {
+  const catalog = state.catalog
+  if (!catalog?.supported || !catalog.preferences.enabled) return false
+  return selectActiveVoiceProvider(state)?.preparation.phase !== 'ready'
+}

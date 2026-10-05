@@ -3362,6 +3362,10 @@ describe('ChatInput file mentions', () => {
     beforeEach(() => {
       activeRecording = recording()
       armVoice()
+      // Voice input exists only in the desktop app.
+      window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+      // jsdom has no canvas; the recording bar's trace draws nothing without one.
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
     })
 
     it('puts the microphone between the model picker and the send button', () => {
@@ -3384,6 +3388,12 @@ describe('ChatInput file mentions', () => {
       expect(screen.queryByTestId('voice-input')).toBeNull()
     })
 
+    it('does not render the microphone in the browser (H5)', () => {
+      Reflect.deleteProperty(window, 'desktopHost')
+      render(<ChatInput />)
+      expect(screen.queryByTestId('voice-input')).toBeNull()
+    })
+
     it('writes dictated text at the caret without sending anything', async () => {
       render(<ChatInput />)
       setComposerText('ab', 1)
@@ -3399,12 +3409,54 @@ describe('ChatInput file mentions', () => {
       expect(mocks.wsSend).not.toHaveBeenCalled()
     })
 
+    it('hands the toolbar row to the recording bar and gives it back', async () => {
+      render(<ChatInput />)
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Dictate' }))
+      })
+
+      expect(screen.getByTestId('voice-recording-bar')).toBeVisible()
+      expect(screen.getByTestId('chat-input-toolbar-leading')).not.toBeVisible()
+      expect(screen.getByTestId('chat-input-toolbar-trailing')).not.toBeVisible()
+      // Hidden, not unmounted: the model picker keeps its own state.
+      expect(screen.getByTestId('model-selector-shell')).toBeInTheDocument()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel recording (Esc)' }))
+
+      expect(screen.queryByTestId('voice-recording-bar')).toBeNull()
+      expect(screen.getByTestId('chat-input-toolbar-trailing')).toBeVisible()
+      expect(screen.getByRole('button', { name: 'Dictate' })).toBeVisible()
+    })
+
+    it('sends the dictated text through the composer\'s own send path', async () => {
+      render(<ChatInput />)
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Dictate' }))
+      })
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: 'Transcribe and send' }))
+      })
+      expect(mocks.wsSend).not.toHaveBeenCalled()
+
+      await act(async () => {
+        finishTranscription('你好')
+      })
+
+      expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+        type: 'user_message',
+        content: '你好',
+      }))
+      expect(getComposerText()).toBe('')
+    })
+
     it('keeps the text aside when the message was sent while it was being recognised', async () => {
+      useSettingsStore.setState({ chatSendBehavior: 'enter' })
       render(<ChatInput />)
       setComposerText('question')
 
       await dictate()
-      fireEvent.click(screen.getByRole('button', { name: 'Run' }))
+      // The send button is hidden behind the recording bar; Enter still sends.
+      fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
       expect(getComposerText()).toBe('')
       await act(async () => {
         finishTranscription('late words')

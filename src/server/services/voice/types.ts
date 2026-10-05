@@ -106,8 +106,14 @@ export const VOICE_LIMITS: VoiceLimits = {
   maxAudioBytes: 4 * 1024 * 1024,
 }
 
+/**
+ * `enabled` is on by default: the composer shows the microphone from the start
+ * and its first click leads to the model download. This only fills in a value
+ * that was never saved — every desktop-ui.json write since voice input shipped
+ * stores `enabled` explicitly, and an explicit `false` is kept.
+ */
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
-  enabled: false,
+  enabled: true,
   providerId: 'sensevoice-local',
   language: 'auto',
   downloadSource: 'auto',

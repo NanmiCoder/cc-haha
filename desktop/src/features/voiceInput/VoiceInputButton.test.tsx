@@ -5,14 +5,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
 import { ApiError } from '@/api/client'
 import type { VoiceCatalog } from '@/api/voice'
-import { getComposerViewForTesting, MentionComposer, type MentionComposerHandle } from '@/components/chat/MentionComposer'
+import {
+  getComposerViewForTesting,
+  INSERTION_FLASH_MS,
+  MentionComposer,
+  type MentionComposerHandle,
+} from '@/components/chat/MentionComposer'
 import { translate } from '@/i18n'
+import { browserHost } from '@/lib/desktopHost/browserHost'
 import type { TranslationKey } from '@/i18n/locales/en'
 import { useSettingsStore } from '@/stores/settingsStore'
+import { SETTINGS_TAB_ID, useTabStore } from '@/stores/tabStore'
+import { useUIStore } from '@/stores/uiStore'
 import { selectVoiceInputReady, useVoiceInputStore } from '@/stores/voiceInputStore'
 import { VoiceRecorderError, type StartRecordingOptions } from './recorder'
 import { useComposerDictation } from './useComposerDictation'
 import { VoiceInputButton } from './VoiceInputButton'
+import { COUNTDOWN_SECONDS, VoiceRecordingBar } from './VoiceRecordingBar'
 
 const mocks = vi.hoisted(() => ({
   transcribe: vi.fn(),
@@ -41,7 +50,10 @@ vi.mock('./recorder', async (importOriginal) => ({
 
 const en = (key: TranslationKey) => translate('en', key)
 
-function catalogFixture(overrides: Partial<VoiceCatalog['preferences']> = {}, phase: 'ready' | 'unprepared' = 'ready'): VoiceCatalog {
+function catalogFixture(
+  overrides: Partial<VoiceCatalog['preferences']> = {},
+  phase: 'ready' | 'unprepared' | 'downloading' = 'ready',
+): VoiceCatalog {
   return {
     supported: true,
     providers: [{
@@ -74,16 +86,30 @@ let failTranscription: (error: unknown) => void
 let transcribeSignal: AbortSignal | undefined
 let handle: MentionComposerHandle | null
 
-type HarnessProps = { initial?: string; blocked?: boolean; contextKey?: string | null }
+type HarnessProps = {
+  initial?: string
+  blocked?: boolean
+  contextKey?: string | null
+  /** Receives the draft as the render that submits it sees it. */
+  onSubmit?: (draft: string) => void
+}
 
-function Harness({ initial = '', blocked = false, contextKey = 'session-a' }: HarnessProps) {
+/** Wired like ChatInput and EmptySession: the bar takes the toolbar's place while dictating. */
+function Harness({ initial = '', blocked = false, contextKey = 'session-a', onSubmit }: HarnessProps) {
   const [input, setInput] = useState(initial)
   const [mentions, setMentions] = useState<never[]>([])
   const ref = useRef<MentionComposerHandle>(null)
-  const dictation = useComposerDictation({ composerRef: ref, draft: input, blocked, contextKey })
+  const dictation = useComposerDictation({
+    composerRef: ref,
+    draft: input,
+    blocked,
+    contextKey,
+    onSubmit: onSubmit ? () => onSubmit(input) : undefined,
+  })
   useEffect(() => {
     handle = ref.current
   })
+  const live = dictation.phase !== 'idle'
   return (
     <div>
       <MentionComposer
@@ -94,7 +120,12 @@ function Harness({ initial = '', blocked = false, contextKey = 'session-a' }: Ha
         onCompositionStart={dictation.compositionHandlers.onCompositionStart}
         onCompositionEnd={dictation.compositionHandlers.onCompositionEnd}
       />
-      <VoiceInputButton dictation={dictation} blocked={blocked} />
+      <div data-testid="toolbar">
+        {live && <VoiceRecordingBar dictation={dictation} />}
+        <div data-testid="toolbar-controls" hidden={live}>
+          <VoiceInputButton dictation={dictation} blocked={blocked} />
+        </div>
+      </div>
       <output data-testid="draft">{input}</output>
     </div>
   )
@@ -125,6 +156,9 @@ const draft = () => screen.getByTestId('draft').textContent
 
 const startButton = () => screen.getByRole('button', { name: en('voice.composer.start') })
 const stopButton = () => screen.getByRole('button', { name: en('voice.composer.stop') })
+const cancelButton = () => screen.getByRole('button', { name: en('voice.composer.cancel') })
+const sendButton = () => screen.getByRole('button', { name: en('voice.composer.sendNow') })
+const recordingBar = () => screen.queryByTestId('voice-recording-bar')
 
 async function beginRecording() {
   await act(async () => {
@@ -167,6 +201,10 @@ beforeEach(() => {
   useSettingsStore.setState({ locale: 'en' })
   useVoiceInputStore.setState({ catalog: catalogFixture(), loading: false, error: null })
   localStorage.clear()
+  // Voice input exists only in the desktop app.
+  window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+  // jsdom has no canvas; the trace draws nothing without a context.
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
   // jsdom has no layout. ProseMirror reads Range geometry when a transaction
   // scrolls the new selection into view.
   Object.defineProperties(Range.prototype, {
@@ -178,6 +216,7 @@ beforeEach(() => {
 afterEach(() => {
   Reflect.deleteProperty(Range.prototype, 'getClientRects')
   Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect')
+  Reflect.deleteProperty(window, 'desktopHost')
   cleanup()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -191,7 +230,9 @@ describe('visibility', () => {
 
   it.each([
     ['dictation is disabled', () => useVoiceInputStore.setState({ catalog: catalogFixture({ enabled: false }) })],
-    ['the model is not downloaded', () => useVoiceInputStore.setState({ catalog: catalogFixture({}, 'unprepared') })],
+    // Plain-HTTP H5 has no microphone, HTTPS H5 is unverified on phones, and
+    // the H5 settings have no voice page: the browser never offers it.
+    ['running in the browser (H5), even with the model ready', () => Reflect.deleteProperty(window, 'desktopHost')],
     ['the platform does not support it', () => useVoiceInputStore.setState({ catalog: { ...catalogFixture(), supported: false } })],
     ['the environment cannot capture audio', () => mocks.supported.mockReturnValue(false)],
   ])('renders nothing and takes no space when %s', (_name, arrange) => {
@@ -211,7 +252,17 @@ describe('visibility', () => {
     expect(await screen.findByRole('button', { name: en('voice.composer.start') })).toBeInTheDocument()
   })
 
-  it('keeps the button mounted mid-recording if the service is switched off meanwhile', async () => {
+  it('does not even ask for the catalog in the browser (H5)', () => {
+    Reflect.deleteProperty(window, 'desktopHost')
+    useVoiceInputStore.setState({ catalog: null })
+
+    render(<Harness />)
+
+    expect(mocks.catalog).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('voice-input')).toBeNull()
+  })
+
+  it('keeps the recording controls mid-recording if the service is switched off meanwhile', async () => {
     render(<Harness />)
     await beginRecording()
 
@@ -220,10 +271,65 @@ describe('visibility', () => {
     expect(stopButton()).toBeInTheDocument()
   })
 
-  it('does not steal focus from the composer on mouse down', () => {
+  it('does not steal focus from the composer on mouse down', async () => {
     render(<Harness />)
     // fireEvent returns false when the default action was prevented.
     expect(fireEvent.mouseDown(startButton())).toBe(false)
+
+    await beginRecording()
+    for (const button of [cancelButton(), stopButton(), sendButton()]) {
+      expect(fireEvent.mouseDown(button)).toBe(false)
+    }
+  })
+})
+
+describe('before the model is downloaded, in the desktop app', () => {
+  const needsModelButton = () => screen.getByRole('button', { name: en('voice.composer.needsModel') })
+
+  beforeEach(() => {
+    useTabStore.setState({ tabs: [], activeTabId: null })
+    useUIStore.setState({ pendingSettingsTab: null })
+    useVoiceInputStore.setState({ catalog: catalogFixture({}, 'unprepared') })
+  })
+
+  it('shows the microphone, and a click opens Settings → Voice input instead of recording', () => {
+    render(<Harness />)
+
+    fireEvent.click(needsModelButton())
+
+    expect(mocks.startRecording).not.toHaveBeenCalled()
+    expect(useUIStore.getState().pendingSettingsTab).toBe('voice')
+    expect(useTabStore.getState().activeTabId).toBe(SETTINGS_TAB_ID)
+    expect(recordingBar()).toBeNull()
+  })
+
+  it('says the model is downloading while it is', () => {
+    useVoiceInputStore.setState({ catalog: catalogFixture({}, 'downloading') })
+    render(<Harness />)
+
+    fireEvent.click(screen.getByRole('button', { name: en('voice.composer.modelDownloading') }))
+
+    expect(useUIStore.getState().pendingSettingsTab).toBe('voice')
+    expect(mocks.startRecording).not.toHaveBeenCalled()
+  })
+
+  it('records with the same button as soon as the download finishes, without a reload', async () => {
+    render(<Harness />)
+    expect(needsModelButton()).toBeInTheDocument()
+
+    // The settings page and the composer share the store: its status poll lands here.
+    act(() => useVoiceInputStore.setState({ catalog: catalogFixture() }))
+
+    await beginRecording()
+    expect(mocks.startRecording).toHaveBeenCalledTimes(1)
+    expect(useTabStore.getState().activeTabId).toBeNull()
+  })
+
+  it('shows nothing once voice input is switched off', () => {
+    useVoiceInputStore.setState({ catalog: catalogFixture({ enabled: false }, 'unprepared') })
+    render(<Harness />)
+
+    expect(screen.queryByTestId('voice-input')).toBeNull()
   })
 })
 
@@ -310,31 +416,240 @@ describe('recording and transcription', () => {
 })
 
 describe('button semantics', () => {
-  it('is a pressed toggle only while recording; starting and transcribing are busy, not pressed', async () => {
+  it('names the stop control for each phase; opening the microphone and recognition are busy', async () => {
     let grant!: (value: FakeRecording) => void
     mocks.startRecording.mockImplementation((options: StartRecordingOptions) => {
       startOptions = options
       return new Promise(resolve => { grant = resolve as typeof grant })
     })
     render(<Harness />)
-    expect(startButton()).not.toHaveAttribute('aria-pressed')
 
     await act(async () => {
       fireEvent.click(startButton())
     })
     const starting = screen.getByRole('button', { name: en('voice.composer.starting') })
     expect(starting).toHaveAttribute('aria-busy', 'true')
-    expect(starting).not.toHaveAttribute('aria-pressed')
+    // Nothing has been recorded yet, so there is nothing to send.
+    expect(sendButton()).toBeDisabled()
 
     await act(async () => {
       grant(recording)
     })
-    expect(stopButton()).toHaveAttribute('aria-pressed', 'true')
+    expect(stopButton()).not.toHaveAttribute('aria-busy')
+    expect(sendButton()).toBeEnabled()
 
     await stopRecording()
     const transcribing = screen.getByRole('button', { name: en('voice.composer.transcribing') })
     expect(transcribing).toHaveAttribute('aria-busy', 'true')
-    expect(transcribing).not.toHaveAttribute('aria-pressed')
+  })
+})
+
+describe('recording bar', () => {
+  it("takes the toolbar's place while dictating and gives it back afterwards", async () => {
+    render(<Harness />)
+    expect(recordingBar()).toBeNull()
+
+    await beginRecording()
+    expect(recordingBar()).toBeVisible()
+    expect(screen.getByTestId('toolbar-controls')).not.toBeVisible()
+    expect(screen.queryByRole('button', { name: en('voice.composer.start') })).toBeNull()
+
+    await stopRecording()
+    expect(recordingBar()).toBeVisible()
+
+    await deliver('hello')
+    expect(recordingBar()).toBeNull()
+    expect(startButton()).toBeVisible()
+  })
+
+  it('cancels from its own button, without transcribing', async () => {
+    render(<Harness initial="keep" />)
+    await beginRecording()
+
+    fireEvent.click(cancelButton())
+
+    expect(recording.cancel).toHaveBeenCalledTimes(1)
+    expect(mocks.transcribe).not.toHaveBeenCalled()
+    expect(recordingBar()).toBeNull()
+    expect(draft()).toBe('keep')
+  })
+
+  it('cancels recognition from its own button and ignores a late answer', async () => {
+    render(<Harness />)
+    await beginRecording()
+    await stopRecording()
+
+    fireEvent.click(cancelButton())
+    expect(transcribeSignal?.aborted).toBe(true)
+    await deliver('too late')
+
+    expect(draft()).toBe('')
+  })
+
+  it('does not paint a recording in the error color: red is reserved for failures', async () => {
+    render(<Harness />)
+    await beginRecording()
+
+    expect(recordingBar()!.outerHTML).not.toMatch(/--color-error/)
+  })
+
+  it('shows recognition in place of the clock', async () => {
+    render(<Harness />)
+    await beginRecording()
+    expect(screen.getByTestId('voice-input-timer')).toHaveTextContent('0:00')
+
+    await stopRecording()
+    expect(screen.queryByTestId('voice-input-timer')).toBeNull()
+    expect(recordingBar()).toHaveTextContent(en('voice.composer.transcribing'))
+  })
+
+  it(`counts down the last ${COUNTDOWN_SECONDS} seconds before the limit`, async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    render(<Harness />)
+    await beginRecording()
+
+    // The fixture's limit is 60 s.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(44_000)
+    })
+    const clock = screen.getByTestId('voice-input-timer')
+    expect(clock).toHaveTextContent(/^0:4[45]$/)
+    expect(clock).not.toHaveAttribute('data-countdown')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000)
+    })
+    expect(clock).toHaveAttribute('data-countdown', 'true')
+    expect(clock).toHaveTextContent(/^0:1[34] left$/)
+  })
+
+  it('hands focus to stop when started from the keyboard, and back to the draft when done', async () => {
+    render(<Harness />)
+    startButton().focus()
+    await beginRecording()
+    expect(stopButton()).toHaveFocus()
+
+    await stopRecording()
+    await deliver('hello')
+
+    expect(document.activeElement).toBe(editorView().editor)
+  })
+
+  it('leaves focus in the draft when dictation was started with the mouse', async () => {
+    render(<Harness />)
+    const { editor } = editorView()
+    editor.focus()
+    // A real click cannot move focus: the button prevents its mousedown.
+    fireEvent.mouseDown(startButton())
+    await beginRecording()
+
+    expect(editor).toHaveFocus()
+  })
+
+  it('does not pull a mouse user into the draft when nothing had focus', async () => {
+    // Focusing the editor would put its caret at the start, and a held result
+    // inserted later would land there instead of at the end.
+    render(<Harness />)
+    await beginRecording()
+    expect(document.activeElement).toBe(document.body)
+
+    await stopRecording()
+    await deliver('hello')
+
+    expect(document.activeElement).toBe(document.body)
+  })
+})
+
+describe('send from the recording bar', () => {
+  it('writes the text, then submits the draft that already carries it', async () => {
+    const onSubmit = vi.fn()
+    render(<Harness initial="hello" onSubmit={onSubmit} />)
+    await beginRecording()
+
+    await act(async () => {
+      fireEvent.click(sendButton())
+    })
+    expect(recording.stop).toHaveBeenCalledTimes(1)
+    expect(sendButton()).toHaveAttribute('aria-busy', 'true')
+    expect(recordingBar()).toHaveTextContent(en('voice.composer.transcribingThenSend'))
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    await deliver('dictated')
+
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(onSubmit).toHaveBeenCalledWith('hello dictated')
+  })
+
+  it('can still be chosen while the text is being recognised', async () => {
+    const onSubmit = vi.fn()
+    render(<Harness onSubmit={onSubmit} />)
+    await beginRecording()
+    await stopRecording()
+
+    await act(async () => {
+      fireEvent.click(sendButton())
+    })
+    expect(recording.stop).toHaveBeenCalledTimes(1)
+    await deliver('later')
+
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    expect(onSubmit).toHaveBeenCalledWith('later')
+  })
+
+  it('stop alone never sends', async () => {
+    const onSubmit = vi.fn()
+    render(<Harness onSubmit={onSubmit} />)
+    await beginRecording()
+    await stopRecording()
+    await deliver('just text')
+
+    expect(draft()).toBe('just text')
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('never sends text it had to hold back because the draft changed', async () => {
+    const onSubmit = vi.fn()
+    render(<Harness initial="hello" onSubmit={onSubmit} />)
+    await beginRecording()
+    await act(async () => {
+      fireEvent.click(sendButton())
+    })
+    typeText(' typed', 5)
+    await deliver('dictated')
+
+    expect(screen.getByTestId('voice-input-pending-text')).toHaveTextContent('dictated')
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    // Inserting the held text later is an edit, not a send.
+    fireEvent.click(screen.getByRole('button', { name: en('voice.composer.insertText') }))
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('sends nothing when recognition finds no speech', async () => {
+    const onSubmit = vi.fn()
+    render(<Harness initial="keep" onSubmit={onSubmit} />)
+    await beginRecording()
+    await act(async () => {
+      fireEvent.click(sendButton())
+    })
+    await deliver('  ')
+
+    expect(screen.getByRole('alert')).toHaveTextContent(en('voice.composer.error.noSpeech'))
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
+  it('a cancelled send does not fire on the next edit', async () => {
+    const onSubmit = vi.fn()
+    render(<Harness onSubmit={onSubmit} />)
+    await beginRecording()
+    await act(async () => {
+      fireEvent.click(sendButton())
+    })
+    fireEvent.click(cancelButton())
+    await deliver('too late')
+    typeText('typed', 0)
+
+    expect(onSubmit).not.toHaveBeenCalled()
   })
 })
 
@@ -494,6 +809,34 @@ describe('write-back position', () => {
     await deliver('你')
 
     expect(handle!.getSelectionOffsets()).toEqual({ start: 2, end: 2 })
+  })
+
+  it('marks the dictated text for a moment so the user can find it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    render(<Harness initial="keep" />)
+    await beginRecording()
+    await stopRecording()
+    await deliver('added')
+
+    const { editor } = editorView()
+    expect(editor.querySelector('.composer-insertion-flash')).toHaveTextContent('added')
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(INSERTION_FLASH_MS)
+    })
+    expect(editor.querySelector('.composer-insertion-flash')).toBeNull()
+    expect(draft()).toBe('keep added')
+  })
+
+  it('drops the mark as soon as the user edits', async () => {
+    render(<Harness initial="keep" />)
+    await beginRecording()
+    await stopRecording()
+    await deliver('added')
+
+    typeText('!', 0)
+
+    expect(editorView().editor.querySelector('.composer-insertion-flash')).toBeNull()
   })
 
   it('is one undoable editor step', async () => {

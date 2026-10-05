@@ -723,7 +723,8 @@ describe('VoiceInputSettings transcription test', () => {
   let frames: Array<FrameRequestCallback>
   let now: number
   const canvasContext = {
-    setTransform: vi.fn(), clearRect: vi.fn(), beginPath: vi.fn(), moveTo: vi.fn(), lineTo: vi.fn(), stroke: vi.fn(),
+    setTransform: vi.fn(), clearRect: vi.fn(), beginPath: vi.fn(), roundRect: vi.fn(), fill: vi.fn(), fillRect: vi.fn(),
+    globalAlpha: 1, fillStyle: '',
   }
 
   beforeEach(() => {
@@ -759,7 +760,9 @@ describe('VoiceInputSettings transcription test', () => {
     expect(start).not.toHaveBeenCalled()
   })
 
-  it('records with the chosen device, draws the wave, and shows text, duration and timing', async () => {
+  it('records with the chosen device, draws the trace, and shows text, duration and timing', async () => {
+    // Only the clock's interval and Date: the trace's frames are driven by hand.
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] })
     localStorage.setItem('cc-haha-voice-input-device', 'mic-b')
     listInputs.mockResolvedValue([
       { deviceId: 'mic-a', label: 'Built-in Microphone' },
@@ -777,20 +780,30 @@ describe('VoiceInputSettings transcription test', () => {
     expect(start).toHaveBeenCalledTimes(1)
     expect(start.mock.calls[0]![0]).toMatchObject({ deviceId: 'mic-b', maxSeconds: 30 })
 
-    // The wave is decorative (canvas, aria-hidden); the wrapper carries the name for screen readers.
-    const wave = screen.getByRole('img', { name: 'Microphone level' })
-    expect(wave.querySelector('canvas')).toHaveAttribute('aria-hidden', 'true')
+    // The trace is decorative (canvas, aria-hidden); the wrapper carries the name for screen readers.
+    const trace = screen.getByRole('img', { name: 'Microphone level' })
+    expect(trace.querySelector('canvas')).toHaveAttribute('aria-hidden', 'true')
     runFrame()
     expect(recording.getLevel).toHaveBeenCalled()
-    expect(canvasContext.stroke).toHaveBeenCalled()
-    expect(screen.getByTestId('voice-clock')).toHaveTextContent('0:00')
+    expect(canvasContext.fill).toHaveBeenCalled()
+    expect(screen.getByTestId('voice-input-timer')).toHaveTextContent('0:00')
 
-    now += 3_200
-    runFrame()
-    expect(screen.getByTestId('voice-clock')).toHaveTextContent('0:03')
+    act(() => { vi.advanceTimersByTime(3_200) })
+    expect(screen.getByTestId('voice-input-timer')).toHaveTextContent('0:03')
+    // Recording is not a failure: the composer's recording bar and this test
+    // share one look, and neither is painted in the error color.
+    expect(stopButton.closest('div')!.outerHTML).not.toMatch(/--color-error/)
 
-    api.transcribe.mockResolvedValue(TRANSCRIPT)
+    let finishTranscription!: (value: typeof TRANSCRIPT) => void
+    api.transcribe.mockImplementation(() => new Promise((resolve) => { finishTranscription = resolve }))
     fireEvent.click(stopButton)
+
+    // Recognition keeps the recorded trace on screen and puts its state where the clock was.
+    const recognizing = await screen.findByRole('button', { name: 'Recognizing…' })
+    expect(recognizing).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('img', { name: 'Microphone level' })).toBe(trace)
+    expect(screen.queryByTestId('voice-input-timer')).toBeNull()
+    await act(async () => { finishTranscription(TRANSCRIPT) })
 
     expect(await screen.findByTestId('voice-transcript')).toHaveTextContent('hello from the microphone')
     expect(screen.getByText('Audio 5.6 s · Inference 0.10 s')).toBeInTheDocument()

@@ -563,6 +563,7 @@ export function ComponentGallery() {
               ))}
               <IconButton icon={<X size={16} strokeWidth={1.75} />} label="Filled" tone={tone} filled />
               <IconButton icon={<SlidersHorizontal size={16} strokeWidth={1.75} />} label="Bordered" tone={tone} bordered />
+              <IconButton icon={<X size={16} strokeWidth={1.75} />} label="Soft" tone={tone} shape="circle" soft />
               <IconButton icon={<RefreshCw size={16} strokeWidth={1.75} />} label="Circle" tone={tone} shape="circle" />
               <IconButton icon={<RefreshCw size={16} strokeWidth={1.75} />} label="Loading" tone={tone} loading />
             </div>

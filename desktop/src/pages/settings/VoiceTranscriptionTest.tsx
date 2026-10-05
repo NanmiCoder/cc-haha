@@ -3,9 +3,10 @@ import { Mic, Square } from 'lucide-react'
 import { ApiError } from '@/api/client'
 import { voiceApi, type VoiceLanguage, type VoiceTranscript } from '@/api/voice'
 import { Button } from '@/components/ui/Button'
+import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation } from '@/i18n'
 import type { TranslationKey } from '@/i18n/locales/en'
-import { VoiceWave } from '@/features/voiceInput/VoiceWave'
+import { VoiceRecordingTrace } from '@/features/voiceInput/VoiceRecordingBar'
 import { startRecording, type ActiveRecording, type RecordingResult } from '@/features/voiceInput/recorder'
 import { recorderErrorKey, voiceErrorKey } from './useMicrophoneSelection'
 
@@ -13,12 +14,6 @@ type Phase = 'idle' | 'starting' | 'recording' | 'transcribing'
 
 function transcribeErrorKey(error: unknown): TranslationKey {
   return voiceErrorKey(error instanceof ApiError ? (error.body as { error?: unknown } | null)?.error : undefined)
-}
-
-function formatClock(totalSeconds: number): string {
-  const minutes = Math.floor(totalSeconds / 60)
-  const seconds = totalSeconds % 60
-  return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
 type Props = {
@@ -35,9 +30,8 @@ type Props = {
 /**
  * Record a few seconds, run them through the real transcription route, and show
  * what came back — the same path the composer uses, so a passing test means
- * dictation will work. The wave and clock are drawn straight from requestAnimationFrame;
- * routing 60 updates a second through React state would re-render the whole
- * result card for a purely visual element.
+ * dictation will work. It also looks like the composer's recording bar (the
+ * same trace, clock and stop disc), so the test reads as the feature it tests.
  */
 export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeconds, ready, captureSupported }: Props) {
   const t = useTranslation()
@@ -45,13 +39,13 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
   const [errorKey, setErrorKey] = useState<TranslationKey | null>(null)
   const [transcript, setTranscript] = useState<VoiceTranscript | null>(null)
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null)
+  const [startedAt, setStartedAt] = useState(0)
 
   const recordingRef = useRef<ActiveRecording | null>(null)
   const startAbortRef = useRef<AbortController | null>(null)
   const transcribeAbortRef = useRef<AbortController | null>(null)
   const playbackUrlRef = useRef<string | null>(null)
   const mountedRef = useRef(true)
-  const clockRef = useRef<HTMLSpanElement>(null)
   // The limit/interrupt callbacks outlive the render that created them by up to
   // `maxSeconds`, so they read the latest choices from here, not from closure.
   const latestRef = useRef({ providerId, language })
@@ -76,23 +70,6 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
       playbackUrlRef.current = null
     }
   }, [])
-
-  useEffect(() => {
-    if (phase !== 'recording') return
-    const startedAt = performance.now()
-    let frame = 0
-    let shownSecond = -1
-    const tick = () => {
-      const elapsed = Math.floor((performance.now() - startedAt) / 1000)
-      if (elapsed !== shownSecond && clockRef.current) {
-        shownSecond = elapsed
-        clockRef.current.textContent = formatClock(elapsed)
-      }
-      frame = requestAnimationFrame(tick)
-    }
-    frame = requestAnimationFrame(tick)
-    return () => cancelAnimationFrame(frame)
-  }, [phase])
 
   const readLevel = useCallback(() => recordingRef.current?.getLevel() ?? 0, [])
 
@@ -156,6 +133,7 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
         return
       }
       recordingRef.current = recording
+      setStartedAt(Date.now())
       setPhase('recording')
     } catch (error) {
       if (!mountedRef.current) return
@@ -167,7 +145,6 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
   }
 
   const canStart = ready && captureSupported
-  const busy = phase === 'starting' || phase === 'transcribing'
 
   return (
     <div className="space-y-3">
@@ -177,40 +154,40 @@ export function VoiceTranscriptionTest({ deviceId, providerId, language, maxSeco
         <p className="text-[13px] leading-5 text-[var(--color-text-tertiary)]">{t('voice.settings.test.needModel')}</p>
       ) : null}
 
-      <div className="flex flex-wrap items-center gap-3">
-        {phase === 'recording' ? (
-          <Button variant="danger" size="base" icon={<Square size={14} strokeWidth={1.75} aria-hidden="true" />} onClick={() => void finish()}>
-            {t('voice.settings.test.stop')}
-          </Button>
-        ) : (
-          <Button
-            variant="secondary"
-            size="base"
-            icon={<Mic size={14} strokeWidth={1.75} aria-hidden="true" />}
-            loading={busy}
-            disabled={!canStart || busy}
-            onClick={() => void start()}
-          >
-            {phase === 'starting'
-              ? t('voice.settings.test.starting')
-              : phase === 'transcribing'
-                ? t('voice.settings.test.transcribing')
-                : t('voice.settings.test.start')}
-          </Button>
-        )}
-
-        {phase === 'recording' ? (
-          <div className="flex min-w-[180px] flex-1 items-center gap-3">
-            <div role="img" aria-label={t('voice.settings.test.level')} className="min-w-0 flex-1">
-              <VoiceWave getLevel={readLevel} active />
-            </div>
-            <span className="shrink-0 font-mono text-[11px] tabular-nums text-[var(--color-text-secondary)]">
-              <span ref={clockRef} data-testid="voice-clock">0:00</span>
-              {` / ${formatClock(maxSeconds)}`}
-            </span>
-          </div>
-        ) : null}
-      </div>
+      {phase === 'recording' || phase === 'transcribing' ? (
+        // One element across both phases, so recognition freezes the trace that
+        // was just recorded instead of starting a new one.
+        <div className="flex min-w-0 items-center gap-2">
+          <VoiceRecordingTrace
+            phase={phase}
+            startedAt={startedAt}
+            limitSeconds={maxSeconds}
+            transcribingLabel={t('voice.settings.test.transcribing')}
+            getLevel={readLevel}
+            height={32}
+            levelLabel={t('voice.settings.test.level')}
+          />
+          <IconButton
+            icon={<Square size={12} strokeWidth={1.75} fill="currentColor" aria-hidden="true" />}
+            label={phase === 'transcribing' ? t('voice.settings.test.transcribing') : t('voice.settings.test.stop')}
+            shape="circle"
+            soft
+            loading={phase === 'transcribing'}
+            onClick={() => void finish()}
+          />
+        </div>
+      ) : (
+        <Button
+          variant="secondary"
+          size="base"
+          icon={<Mic size={14} strokeWidth={1.75} aria-hidden="true" />}
+          loading={phase === 'starting'}
+          disabled={!canStart || phase === 'starting'}
+          onClick={() => void start()}
+        >
+          {phase === 'starting' ? t('voice.settings.test.starting') : t('voice.settings.test.start')}
+        </Button>
+      )}
 
       {errorKey ? (
         <p role="alert" className="text-[13px] leading-5 text-[var(--color-error)]">{t(errorKey)}</p>

@@ -80,6 +80,7 @@ import { getSessionWorkspaceState, getSessionSeedWorkDir } from '../../lib/sessi
 import { hasRunningSubagentTasks } from '../../lib/backgroundTasks'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
+import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
 
 type GitInfo = SessionGitInfo
 
@@ -331,7 +332,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     draft: input,
     blocked: composerDisabled,
     contextKey: visible ? activeTabId : null,
+    // Called from an effect, after this render has declared `handleSubmit`;
+    // it is the same path Enter takes, queueing behind a running turn.
+    onSubmit: () => { void handleSubmit() },
   })
+  // While dictating, the toolbar's controls stay mounted but hidden, and the
+  // recording bar takes their row.
+  const dictationLive = dictation.phase !== 'idle'
   const hasWorkspaceReferences = !isMemberSession && workspaceReferences.length > 0
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
@@ -1581,8 +1588,10 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             data-testid="chat-input-toolbar"
             className={`flex min-w-0 items-center justify-between pt-1.5 ${isMobileComposer ? 'gap-1' : 'gap-2'}`}
           >
+            {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
             <div
               data-testid="chat-input-toolbar-leading"
+              hidden={dictationLive}
               className={`flex min-w-0 shrink-0 items-center gap-1 ${showLocationInToolbar ? 'max-w-[55%]' : ''}`}
             >
               {!isMemberSession && (
@@ -1672,6 +1681,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
             <div
               data-testid="chat-input-toolbar-trailing"
+              hidden={dictationLive}
               className="flex min-w-0 flex-1 items-center justify-end gap-1"
             >
               {!isMemberSession && activeTabId && (

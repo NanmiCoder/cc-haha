@@ -15,6 +15,7 @@ vi.mock('@/api/voice', () => ({
 import { voiceApi } from '@/api/voice'
 import {
   selectActiveVoiceProvider,
+  selectVoiceInputNeedsModel,
   selectVoiceInputReady,
   useVoiceInputStore,
 } from './voiceInputStore'
@@ -368,5 +369,22 @@ describe('selectVoiceInputReady', () => {
     expect(selectActiveVoiceProvider({
       catalog: { ...ready, preferences: { ...ready.preferences, providerId: 'missing' } },
     })).toBeUndefined()
+  })
+})
+
+describe('selectVoiceInputNeedsModel', () => {
+  it.each(['unprepared', 'downloading', 'verifying', 'failed', 'cancelled'] as const)('is true while switched on and the model is %s', (value) => {
+    expect(selectVoiceInputNeedsModel({ catalog: catalog({ phase: value }) })).toBe(true)
+  })
+
+  it('is false once the model is ready: the button records instead', () => {
+    expect(selectVoiceInputNeedsModel({ catalog: catalog({ phase: 'ready' }) })).toBe(false)
+  })
+
+  it('is false while switched off, unsupported, or before the catalog loads', () => {
+    const missing = catalog({ phase: 'unprepared' })
+    expect(selectVoiceInputNeedsModel({ catalog: { ...missing, preferences: { ...missing.preferences, enabled: false } } })).toBe(false)
+    expect(selectVoiceInputNeedsModel({ catalog: { ...missing, supported: false } })).toBe(false)
+    expect(selectVoiceInputNeedsModel({ catalog: null })).toBe(false)
   })
 })

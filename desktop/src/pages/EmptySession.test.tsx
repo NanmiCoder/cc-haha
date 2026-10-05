@@ -1554,6 +1554,10 @@ describe('EmptySession', () => {
       mocks.voiceTranscribe.mockImplementation(() => new Promise((resolve) => {
         finishTranscription = (text) => resolve({ text, audioSeconds: 2, inferenceSeconds: 0.1 })
       }))
+      // Voice input exists only in the desktop app (the outer beforeEach resets this).
+      mocks.isTauriRuntime = true
+      // jsdom has no canvas; the recording bar's trace draws nothing without one.
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null)
     })
 
     async function dictate() {
@@ -1582,6 +1586,12 @@ describe('EmptySession', () => {
       expect(screen.queryByTestId('voice-input')).toBeNull()
     })
 
+    it('does not render the microphone in the browser (H5)', () => {
+      mocks.isTauriRuntime = false
+      render(<EmptySession />)
+      expect(screen.queryByTestId('voice-input')).toBeNull()
+    })
+
     it('writes dictated text at the caret without starting a session', async () => {
       render(<EmptySession />)
       setComposerText('ab', 1)
@@ -1595,6 +1605,32 @@ describe('EmptySession', () => {
 
       expect(getComposerText()).toBe('a你好b')
       expect(mocks.createSession).not.toHaveBeenCalled()
+    })
+
+    it('starts the session with the dictated text when sent from the recording bar', async () => {
+      render(<EmptySession />)
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Dictate' }))
+      })
+      // The bar takes the toolbar's row: its controls, Run included, are hidden.
+      expect(screen.getByTestId('voice-recording-bar')).toBeVisible()
+      expect(screen.queryByRole('button', { name: 'Run' })).toBeNull()
+
+      await act(async () => {
+        fireEvent.click(await screen.findByRole('button', { name: 'Transcribe and send' }))
+      })
+      expect(mocks.createSession).not.toHaveBeenCalled()
+      await act(async () => {
+        finishTranscription('你好')
+      })
+
+      await waitFor(() => {
+        expect(mocks.wsSend).toHaveBeenCalledWith('draft-session', {
+          type: 'user_message',
+          content: '你好',
+          attachments: [],
+        })
+      })
     })
 
     it('keeps the text aside when the draft was edited while it was being recognised', async () => {

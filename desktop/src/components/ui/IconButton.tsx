@@ -44,6 +44,13 @@ export type IconButtonProps =
      * washes out against a photo.
      */
     solid?: boolean
+    /**
+     * A neutral resting disc with no border, for controls that share a strip
+     * with something busy and need their own ground: the composer's recording
+     * bar sets cancel and stop beside a live waveform. `filled` is a bordered
+     * card face, which reads as a separate object instead.
+     */
+    soft?: boolean
     /** Hairline border on a transparent background. */
     bordered?: boolean
     /**
@@ -212,6 +219,9 @@ const SOLID_CLASSES: Record<IconButtonTone, string> = {
   danger: 'bg-[var(--color-error)] text-[var(--color-on-error)]',
 }
 
+/** `soft`: its own resting fill and the hover that steps past it. */
+const SOFT_CLASSES = 'bg-[var(--color-btn-soft-bg)] hover:bg-[var(--color-btn-soft-hover)]'
+
 const PRESSED_CLASSES: Record<IconButtonSurface, string> = {
   default: 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]',
   sidebar: 'bg-[var(--color-sidebar-item-hover)] text-[var(--color-text-primary)]',
@@ -251,6 +261,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
   shape = 'square',
   filled = false,
   solid = false,
+  soft = false,
   bordered = false,
   hoverTone,
   pressed,
@@ -281,9 +292,9 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         // color and hover fill are skipped rather than left to compete.
         solid ? SOLID_CLASSES[tone] : (SURFACE_REST_TEXT[surface] ?? REST_TEXT)[tone],
         solid && 'hover:brightness-110',
-        // A pressed button carries its own fill and hover; skipping the tone's
-        // hover here keeps two `hover:bg-[…]` values from competing.
-        !solid && (pressed ? PRESSED_CLASSES[surface] : HOVER_BG[surface][tone]),
+        // A pressed or soft button carries its own fill and hover; skipping the
+        // tone's hover here keeps two `hover:bg-[…]` values from competing.
+        !solid && (pressed ? PRESSED_CLASSES[surface] : soft ? SOFT_CLASSES : HOVER_BG[surface][tone]),
         // Exactly one hover text color — `hoverTone` replaces the tone's own
         // rather than stacking on top of it, which Tailwind would silently
         // resolve the wrong way.
@@ -292,7 +303,7 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
             ? 'hover:text-[var(--color-error)]'
             : (SURFACE_HOVER_TEXT[surface] ?? HOVER_TEXT)[tone]
         ),
-        filled && !pressed && !solid && FILLED_CLASSES[tone],
+        filled && !pressed && !solid && !soft && FILLED_CLASSES[tone],
         bordered && !filled && 'border border-[var(--color-border)]',
         shape === 'circle' && 'rounded-full',
         className,

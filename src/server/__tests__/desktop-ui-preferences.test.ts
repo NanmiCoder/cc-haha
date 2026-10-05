@@ -19,7 +19,7 @@ const DEFAULT_PET_PREFERENCES = {
 }
 
 const DEFAULT_VOICE_INPUT_PREFERENCES = {
-  enabled: false,
+  enabled: true,
   providerId: 'sensevoice-local',
   language: 'auto',
   downloadSource: 'auto',
@@ -990,6 +990,28 @@ describe('DesktopUiPreferencesService voiceInput section', () => {
       sidebar: { projectOrder: ['/workspace/alpha'] },
       voiceInput: { enabled: true, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' },
     })
+  })
+
+  test('turns voice input on only where enabled was never saved; a saved false stays off', async () => {
+    // v0.6.8 shipped voice input off by default, and every write since then
+    // stores `enabled` explicitly. The new default must not override that.
+    await writeDesktopUiFile({
+      schemaVersion: 6,
+      sidebar: { projectOrder: ['/workspace/alpha'] },
+      voiceInput: { enabled: false, providerId: 'sensevoice-local', language: 'zh', downloadSource: 'auto' },
+    })
+    const service = new DesktopUiPreferencesService()
+    expect((await service.readPreferences()).preferences.voiceInput.enabled).toBe(false)
+
+    await service.updateSidebarPreferences({ pinnedProjects: ['/workspace/alpha'] })
+    await service.updateVoiceInputPreferences({ language: 'en' })
+    expect((await readDesktopUiFile()).voiceInput).toMatchObject({ enabled: false, language: 'en' })
+
+    // A section saved without the field, and a file with no section at all.
+    await writeDesktopUiFile({ schemaVersion: 6, voiceInput: { providerId: 'sensevoice-local', language: 'zh' } })
+    expect((await service.readPreferences()).preferences.voiceInput.enabled).toBe(true)
+    await writeDesktopUiFile({ schemaVersion: 5, sidebar: { projectOrder: [] } })
+    expect((await service.readPreferences()).preferences.voiceInput.enabled).toBe(true)
   })
 
   test('applies partial voice updates and keeps unknown voiceInput fields', async () => {

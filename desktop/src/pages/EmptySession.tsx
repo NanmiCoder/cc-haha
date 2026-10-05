@@ -79,6 +79,7 @@ import type { PermissionMode } from '../types/settings'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
+import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
 
 type Attachment = ComposerAttachment
 
@@ -204,7 +205,12 @@ export function EmptySession() {
     draft: input,
     blocked: isSubmitting,
     contextKey: 'empty-session',
+    // Called from an effect, after this render has declared `handleSubmit`.
+    onSubmit: () => { void handleSubmit() },
   })
+  // While dictating, the toolbar's controls stay mounted but hidden, and the
+  // recording bar takes their row.
+  const dictationLive = dictation.phase !== 'idle'
 
   useEffect(() => {
     composerRef.current?.focus()
@@ -910,7 +916,8 @@ export function EmptySession() {
               <div className={`flex min-w-0 items-center justify-between pt-1.5 ${
                 isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
               }`}>
-                <div className="flex min-w-0 shrink items-center gap-1">
+                {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
+                <div hidden={dictationLive} className="flex min-w-0 shrink items-center gap-1">
                   <div ref={plusMenuRef} className="relative shrink-0">
                     {/* Hand-rolled like ChatInput's: a quiet 28px square on
                         desktop, the 44px touch minimum on a phone. */}
@@ -973,7 +980,10 @@ export function EmptySession() {
                   )}
                 </div>
 
-                <div className={`${isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}`}>
+                <div
+                  hidden={dictationLive}
+                  className={`${isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}`}
+                >
                   <ContextUsageIndicator
                     chatState="idle"
                     messageCount={0}

@@ -1343,6 +1343,11 @@
   --color-btn-primary-fg: var(--cc-bg);
   /* Primary stays ink on hover (a lighter ink), it no longer flips to brand. */
   --color-btn-primary-hover: rgba(var(--cc-t1-rgb), 0.86);
+  /* A neutral disc one step up from the dialog surface it sits on (`IconButton
+     soft`). The ink themes raise that surface to `--cc-s1`, so they raise this
+     too — the same value would vanish into the composer. */
+  --color-btn-soft-bg: var(--cc-s1);
+  --color-btn-soft-hover: var(--cc-bd);
   /* Flat ink, not a gradient: the handoff's primary action is a solid ink
      block that turns terracotta on hover. Kept as gradient-shaped tokens so
      existing call sites keep resolving. */
@@ -1570,6 +1575,8 @@
   /* Ink themes run the background at the bottom of the ramp, so a lifted
      surface has to climb it — `--cc-s1`, not the light themes' `--cc-bg`. */
   --color-surface-dialog: var(--cc-s1);
+  --color-btn-soft-bg: var(--cc-bd);
+  --color-btn-soft-hover: var(--cc-bd2);
   --color-surface-glass: rgba(var(--cc-bg-rgb), 0.93);
   --color-modal-scrim: rgba(var(--cc-scrim-rgb), 0.66);
   --color-overlay-scrim: rgba(var(--cc-scrim-rgb), 0.56);
@@ -1752,6 +1759,27 @@ button, input, textarea, select, a, [role="button"] {
   -webkit-box-decoration-break: clone;
   padding: 0 2px;
   font-weight: 500;
+}
+
+/* Dictated text that was just written into the draft. Held, then faded, so the
+   eye can find where it landed; the same tint as a navigation target, because
+   it answers the same question. `MentionComposer` drops the decoration after
+   `INSERTION_FLASH_MS`, which this duration matches. */
+@keyframes composer-insertion-flash {
+  0%, 55% { background-color: var(--color-chat-navigation-target); }
+  100% { background-color: transparent; }
+}
+.composer-insertion-flash {
+  border-radius: var(--radius-xs);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  animation: composer-insertion-flash 1.6s ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .composer-insertion-flash {
+    animation: none;
+    background-color: var(--color-chat-navigation-target);
+  }
 }
 
 /* Floated zero-height placeholder: the empty paragraph keeps its own caret,

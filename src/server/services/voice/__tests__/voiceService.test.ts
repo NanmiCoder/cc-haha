@@ -41,7 +41,7 @@ describe('VoiceService catalog', () => {
 
     expect(catalog.supported).toBe(true)
     expect(catalog.limits).toEqual(VOICE_LIMITS)
-    expect(catalog.preferences).toEqual({ enabled: false, providerId: 'alpha', language: 'auto', downloadSource: 'auto' })
+    expect(catalog.preferences).toEqual({ enabled: true, providerId: 'alpha', language: 'auto', downloadSource: 'auto' })
     expect(catalog.providers.map(item => [item.info.id, item.preparation.phase])).toEqual([
       ['alpha', 'unprepared'],
       ['beta', 'ready'],
@@ -370,7 +370,7 @@ describe('VoiceService transcribe', () => {
 
   test('still transcribes while the feature is disabled so settings can test it', async () => {
     const { service, provider, preferences } = readyService()
-    expect(preferences.current.enabled).toBe(false)
+    preferences.current = { ...preferences.current, enabled: false }
 
     await service.transcribe('alpha', makeWav(1), 'auto', signal())
 
