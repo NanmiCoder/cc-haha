@@ -1,7 +1,7 @@
 /**
  * Providers REST API
  *
- * GET    /api/providers                  — list all saved providers + activeId
+ * GET    /api/providers                  — list all saved providers + activeId + providerOrder
  * GET    /api/providers/presets           — list available presets
  * GET    /api/providers/auth-status       — check whether any usable auth exists
  * GET    /api/providers/settings          — read cc-haha managed settings.json
@@ -134,8 +134,8 @@ export async function handleProvidersApi(
     // /api/providers (no ID)
     if (!id) {
       if (req.method === 'GET') {
-        const { providers, activeId } = await providerService.listProviders()
-        return Response.json({ providers, activeId })
+        const { providers, activeId, providerOrder } = await providerService.listProviders()
+        return Response.json({ providers, activeId, providerOrder })
       }
       if (req.method === 'POST') {
         return await handleCreate(req)

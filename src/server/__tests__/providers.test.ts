@@ -3345,6 +3345,52 @@ describe('Providers API', () => {
     expect(body.providers[0].apiKey).toBe('sk-test-key-123')
   })
 
+  test('GET /api/providers should return the providerOrder persisted by a reorder', async () => {
+    const svc = new ProviderService()
+    const a = await svc.addProvider(sampleInput({ name: 'A' }))
+    const b = await svc.addProvider(sampleInput({ name: 'B' }))
+
+    const draggedOrder = ['grok-official', b.id, 'claude-official', 'openai-official', a.id]
+    const reorder = makeRequest('PUT', '/api/providers/reorder', { orderedIds: draggedOrder })
+    const reorderRes = await handleProvidersApi(reorder.req, reorder.url, reorder.segments)
+    expect(reorderRes.status).toBe(200)
+    expect(((await reorderRes.json()) as { providerOrder: string[] }).providerOrder).toEqual(draggedOrder)
+
+    const { req, url, segments } = makeRequest('GET', '/api/providers')
+    const res = await handleProvidersApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { providers: { id: string }[]; providerOrder: string[] }
+    // The desktop rebuilds its local order from this field on every settings mount,
+    // so dropping it here silently reverts the user's drag.
+    expect(body.providerOrder).toEqual(draggedOrder)
+    expect(body.providers.map((provider) => provider.id)).toEqual([b.id, a.id])
+  })
+
+  test('GET /api/providers returns providerOrder after a legacy saved-only reorder', async () => {
+    const svc = new ProviderService()
+    const a = await svc.addProvider(sampleInput({ name: 'A' }))
+    const b = await svc.addProvider(sampleInput({ name: 'B' }))
+
+    const reorder = makeRequest('PUT', '/api/providers/reorder', { orderedIds: [b.id, a.id] })
+    const reorderRes = await handleProvidersApi(reorder.req, reorder.url, reorder.segments)
+    expect(reorderRes.status).toBe(200)
+
+    const { req, url, segments } = makeRequest('GET', '/api/providers')
+    const res = await handleProvidersApi(req, url, segments)
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { providers: { id: string }[]; providerOrder: string[] }
+    expect(body.providerOrder).toEqual([
+      b.id,
+      a.id,
+      'claude-official',
+      'openai-official',
+      'grok-official',
+    ])
+    expect(body.providers.map((provider) => provider.id)).toEqual([b.id, a.id])
+  })
+
   // ─── POST /api/providers ─────────────────────────────────────────────────
 
   test('POST /api/providers should create a provider', async () => {
