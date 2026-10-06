@@ -331,7 +331,7 @@ export class PluginService {
       this.toSummary(detail),
     )
 
-    const marketplaces = Object.entries(marketplaceConfig.marketplaces ?? {})
+    const marketplaces = Object.entries(marketplaceConfig ?? {})
       .map(([name, entry]) => ({
         name,
         source: getMarketplaceSourceDisplay(entry.source),
