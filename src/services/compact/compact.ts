@@ -62,7 +62,6 @@ import {
   createCompactBoundaryMessage,
   createUserMessage,
   getAssistantMessageText,
-  getLastAssistantMessage,
   getMessagesAfterCompactBoundary,
   isCompactBoundaryMessage,
   normalizeMessagesForAPI,
@@ -340,6 +339,39 @@ function stripStaleUsageFromPreservedMessages(messages: Message[]): Message[] {
       },
     }
   })
+}
+
+/**
+ * Every Anthropic content block is yielded as its own assistant message, so a
+ * provider that emits an empty block (an openai_responses relay keeping the
+ * connection warm, for example) appends an assistant with no text after the real
+ * reply. Selecting the last message alone would report a completed summary as
+ * missing. Walk back to the newest assistant that actually said something.
+ *
+ * Only blank assistants are skipped. API error messages and truncated responses
+ * still win the walk, so a real failure is never downgraded into an older,
+ * successful summary (#1451).
+ */
+export function findLastAssistantWithText(messages: Message[]) {
+  return messages.findLast(
+    (message): message is AssistantMessage =>
+      message.type === 'assistant' &&
+      (message.isApiErrorMessage === true || getAssistantMessageText(message) !== null),
+  )
+}
+
+/**
+ * Streaming counterpart of {@link findLastAssistantWithText}: decide whether an
+ * incoming assistant message may become the compaction response seen so far.
+ * A blank message can only claim an empty slot, never displace a real summary,
+ * while API errors always win so a failure is not masked by older text (#1451).
+ */
+export function shouldAdoptCompactionResponse(
+  current: AssistantMessage | undefined,
+  next: AssistantMessage,
+): boolean {
+  if (current === undefined) return true
+  return next.isApiErrorMessage === true || getAssistantMessageText(next) !== null
 }
 
 /**
@@ -1264,10 +1296,12 @@ async function streamCompactSummary({
             apiAttemptBudget,
           },
         })
-        const assistantMsg = getLastAssistantMessage(result.messages)
-        const assistantText = assistantMsg
-          ? getAssistantMessageText(assistantMsg)
-          : null
+        // Each content block becomes its own assistant message, so a provider
+        // that emits an empty trailing block would otherwise hide a real summary
+        // that arrived just before it. Walk back to the newest assistant that
+        // actually said something; API error messages still win the walk so a
+        // real failure is never reported as a successful summary (#1451).
+        const assistantMsg = findLastAssistantWithText(result.messages)
         // Guard isApiErrorMessage: query() catches API errors (including
         // APIUserAbortError on ESC) and yields them as synthetic assistant
         // messages. Without this check, an aborted compact "succeeds" with
@@ -1427,7 +1461,7 @@ async function streamCompactSummary({
           reportProgress(event.event)
         }
 
-        if (event.type === 'assistant') {
+        if (event.type === 'assistant' && shouldAdoptCompactionResponse(response, event)) {
           response = event
         }
 
