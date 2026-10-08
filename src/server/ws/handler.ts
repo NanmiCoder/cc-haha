@@ -2496,6 +2496,13 @@ async function requestStopBackgroundTask(
     await emitAuthoritativeNonAgentStopped(sessionId, tracked)
     return
   }
+  // With no CLI process, nothing is running the task any more (it only survives
+  // in the history of an exited or external CLI run), so Stop converges it to a
+  // terminal record instead of failing with "CLI session is not running".
+  if (!conversationService.hasSession(sessionId)) {
+    await convergeEvictedBackgroundTaskStop(sessionId, taskId)
+    return
+  }
   if (tracked) tracked.stopRequested = true
   try {
     const response = await conversationService.requestControl(sessionId, {

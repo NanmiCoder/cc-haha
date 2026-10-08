@@ -3927,6 +3927,7 @@ describe('WebSocket handler session isolation', () => {
     const sessionId = `stop-background-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
     const requestControl = spyOn(conversationService, 'requestControl').mockResolvedValue({})
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
     handleWebSocket.open(ws)
 
     handleWebSocket.message(ws, JSON.stringify({
@@ -3945,6 +3946,7 @@ describe('WebSocket handler session isolation', () => {
     const sessionId = `stop-background-failed-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
     spyOn(conversationService, 'requestControl').mockRejectedValue(new Error('Task is not running'))
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
     handleWebSocket.open(ws)
 
     handleWebSocket.message(ws, JSON.stringify({
@@ -3969,6 +3971,7 @@ describe('WebSocket handler session isolation', () => {
     const ws = makeClientSocket(sessionId)
     spyOn(conversationService, 'requestControl')
       .mockRejectedValue(new Error('No task found with ID: bash-task-1'))
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
     handleWebSocket.open(ws)
 
     handleWebSocket.message(ws, JSON.stringify({
@@ -4030,6 +4033,39 @@ describe('WebSocket handler session isolation', () => {
     // The task is untracked server-side, so reconnect snapshots no longer
     // list it as active and the terminal state survives a refresh.
     expect(activeBackgroundTaskIds.get(sessionId)?.has('bash-evicted-1') ?? false).toBe(false)
+  })
+
+  it('converges a history-only running task to stopped when no CLI process exists', async () => {
+    // A session run by an exited (or external) CLI has no process to ask, so a
+    // task its history still shows as running is stopped locally, not reported
+    // as "CLI session is not running".
+    const sessionId = `stop-background-no-cli-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    const requestControl = spyOn(conversationService, 'requestControl')
+      .mockRejectedValue(new Error('CLI session is not running'))
+    const append = spyOn(sessionService, 'appendSessionTaskNotification').mockResolvedValue()
+    handleWebSocket.open(ws)
+    ws.sent.length = 0
+
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'stop_background_task',
+      taskId: 'bdlrow0cg',
+    }))
+    await flushMicrotasks()
+
+    expect(requestControl).not.toHaveBeenCalled()
+    expect(append).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      taskId: 'bdlrow0cg',
+      status: 'stopped',
+    }))
+    const sent = ws.sent.map((payload) => JSON.parse(payload))
+    expect(sent.some((payload) => payload.type === 'background_task_stop_failed')).toBe(false)
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: 'system_notification',
+      subtype: 'task_notification',
+      data: expect.objectContaining({ task_id: 'bdlrow0cg', status: 'stopped' }),
+    }))
   })
 
   it('rejects malformed background task ids without throwing from the async handler', async () => {

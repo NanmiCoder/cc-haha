@@ -2153,6 +2153,36 @@ export class SessionService {
     }
   }
 
+  // A notification the CLI drains while a turn is running is recorded as a
+  // queued_command attachment instead of a user turn, and one that was queued
+  // but never delivered (e.g. the session exited first) only as a
+  // queue-operation. For a session the desktop never ran, these are the only
+  // records that the task finished.
+  private parseQueuedTaskNotification(
+    entry: RawEntry,
+  ): SessionTaskNotification | null {
+    if (entry.type === 'queue-operation') {
+      return this.parseTaskNotificationContent(entry.content, entry.timestamp)
+    }
+    if (entry.type !== 'attachment') return null
+    const attachment = entry.attachment
+    if (
+      !attachment ||
+      typeof attachment !== 'object' ||
+      Array.isArray(attachment)
+    ) {
+      return null
+    }
+    const record = attachment as Record<string, unknown>
+    if (
+      record.type !== 'queued_command' ||
+      record.commandMode === 'prompt'
+    ) {
+      return null
+    }
+    return this.parseTaskNotificationContent(record.prompt, entry.timestamp)
+  }
+
   private parsePersistedTaskNotification(
     value: unknown,
     timestamp?: string,
@@ -5363,7 +5393,7 @@ export class SessionService {
 
     const entries = await this.readTargetedJsonlEntries(
       found,
-      ['user', PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE],
+      ['user', 'attachment', 'queue-operation', PERSISTED_TASK_NOTIFICATION_ENTRY_TYPE],
     ) ?? await this.readJsonlFile(found.filePath)
     return this.taskNotificationsFromEntries(entries)
   }
@@ -5377,7 +5407,7 @@ export class SessionService {
         ? this.parsePersistedTaskNotification(entry.taskNotification, entry.timestamp)
         : entry.message?.role === 'user'
           ? this.parseTaskNotificationContent(entry.message.content, entry.timestamp)
-          : null
+          : this.parseQueuedTaskNotification(entry)
       if (notification) {
         notifications.set(sessionTaskNotificationIdentity(notification), notification)
       }

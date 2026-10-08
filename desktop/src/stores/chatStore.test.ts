@@ -10,6 +10,7 @@ import {
   hasVisibleSessionActivity,
 } from '../components/activity/sessionActivityModel'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
+import { hasRunningBackgroundTasks } from '../lib/backgroundTasks'
 import { registerSideChatSession, unregisterSideChatSession } from '../lib/sideChatSessions'
 
 const {
@@ -4242,6 +4243,85 @@ describe('chatStore history mapping', () => {
       lastToolName: undefined,
       usage: undefined,
     })
+  })
+
+  it('restores a background shell stopped by TaskStop when no notification was recorded', () => {
+    const shellStart = (toolUseId: string, taskId: string, minute: number): MessageEntry[] => [
+      {
+        id: `${toolUseId}-use`,
+        type: 'assistant',
+        timestamp: `2026-04-06T00:0${minute}:00.000Z`,
+        content: [{
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'Bash',
+          input: { command: 'bun run dev', description: `Start ${taskId}`, run_in_background: true },
+        }],
+      },
+      {
+        id: `${toolUseId}-result`,
+        type: 'tool_result',
+        timestamp: `2026-04-06T00:0${minute}:01.000Z`,
+        content: [{
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: `Command running in background with ID: ${taskId}. Output is being written to: /tmp/${taskId}.output`,
+        }],
+      },
+    ]
+    const taskStop = (
+      toolUseId: string,
+      taskId: string,
+      minute: number,
+      isError = false,
+    ): MessageEntry[] => [
+      {
+        id: `${toolUseId}-use`,
+        type: 'assistant',
+        timestamp: `2026-04-06T00:0${minute}:00.000Z`,
+        content: [{ type: 'tool_use', id: toolUseId, name: 'TaskStop', input: { task_id: taskId } }],
+      },
+      {
+        id: `${toolUseId}-result`,
+        type: 'tool_result',
+        timestamp: `2026-04-06T00:0${minute}:01.000Z`,
+        content: [{
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          // The CLI records the stop as a JSON string and leaves no task-notification.
+          content: isError
+            ? 'No task found with ID: ' + taskId
+            : JSON.stringify({
+              message: `Successfully stopped task: ${taskId} (bun run dev)`,
+              task_id: taskId,
+              task_type: 'local_bash',
+              command: 'bun run dev',
+            }),
+          ...(isError ? { is_error: true } : {}),
+        }],
+      },
+    ]
+
+    const restored = reconstructRunActivityFromTranscript([
+      ...shellStart('shell-tool-stopped', 'stopped-task', 0),
+      ...shellStart('shell-tool-live', 'live-task', 1),
+      ...taskStop('stop-tool-1', 'stopped-task', 2),
+      ...taskStop('stop-tool-2', 'live-task', 3, true),
+      ...taskStop('stop-tool-3', 'unknown-task', 4),
+    ])
+
+    expect(restored.backgroundAgentTasks['stopped-task']).toMatchObject({
+      taskId: 'stopped-task',
+      toolUseId: 'shell-tool-stopped',
+      status: 'stopped',
+      description: 'Start stopped-task',
+      taskType: 'local_bash',
+    })
+    expect(restored.backgroundAgentTasks['live-task']?.status).toBe('running')
+    expect(restored.backgroundAgentTasks['unknown-task']).toBeUndefined()
+    expect(hasRunningBackgroundTasks({
+      'stopped-task': restored.backgroundAgentTasks['stopped-task']!,
+    })).toBe(false)
   })
 
   it('recognizes manually backgrounded PowerShell from structured tool output', () => {

@@ -6990,6 +6990,7 @@ function reconstructBackgroundShellTasks(
   messages: MessageEntry[],
 ): Record<string, BackgroundAgentTask> {
   const shellToolUses = new Map<string, TranscriptShellToolUse>()
+  const taskStopInputs = new Map<string, Record<string, unknown>>()
   let tasks: Record<string, BackgroundAgentTask> = {}
 
   for (const message of messages) {
@@ -6999,11 +7000,12 @@ function reconstructBackgroundShellTasks(
     ) continue
 
     for (const block of message.content as AssistantHistoryBlock[]) {
-      if (
-        block.type !== 'tool_use' ||
-        !block.id ||
-        !BACKGROUND_SHELL_TOOL_NAMES.has(block.name ?? '')
-      ) continue
+      if (block.type !== 'tool_use' || !block.id) continue
+      if (TASK_STOP_TOOL_NAMES.has(block.name ?? '')) {
+        taskStopInputs.set(block.id, readRecord(block.input) ?? {})
+        continue
+      }
+      if (!BACKGROUND_SHELL_TOOL_NAMES.has(block.name ?? '')) continue
       const input = readRecord(block.input) ?? {}
       const description = readNonEmptyString(input, 'description', 'command')
       if (!description) continue
@@ -7024,6 +7026,22 @@ function reconstructBackgroundShellTasks(
 
     for (const block of message.content as UserHistoryBlock[]) {
       if (block.type !== 'tool_result' || !block.tool_use_id) continue
+      const taskStopInput = taskStopInputs.get(block.tool_use_id)
+      if (taskStopInput) {
+        // A TaskStop leaves no task-notification behind, so its own result is
+        // the only record that a restored shell stopped running.
+        if (block.is_error) continue
+        const output = parseJsonRecord(block.content) ?? readRecord(message.toolUseResult) ?? {}
+        const taskId = readNonEmptyString(output, 'task_id', 'taskId') ??
+          readNonEmptyString(taskStopInput, 'task_id', 'taskId', 'shell_id', 'shellId')
+        if (!taskId || !tasks[taskId]) continue
+        tasks = upsertBackgroundAgentTask(tasks, {
+          taskId,
+          status: 'stopped',
+          summary: readNonEmptyString(output, 'message'),
+        }, transcriptTimestamp(message.timestamp))
+        continue
+      }
       const shellToolUse = shellToolUses.get(block.tool_use_id)
       if (!shellToolUse) continue
       const taskId = shellBackgroundTaskIdFromResult(
