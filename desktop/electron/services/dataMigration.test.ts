@@ -1,5 +1,6 @@
 import * as fs from 'node:fs/promises'
 import nativeFs from 'node:fs/promises'
+import { spawn } from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,6 +9,7 @@ import { DataMigration, MIGRATION_JOURNAL_FILE, type DataMigrationHooks } from '
 import type { AppModeAppLike } from './appMode'
 import { resolveRelocatedAttachmentPath } from '../../../src/utils/storageRelocations'
 import { assertMigrationManifest, migrationManifest, validateMigrationManifest } from './dataMigrationFiles'
+import { preserveWindowsMigrationPermissions, restrictWindowsMigrationStaging } from './migrationPermissions'
 
 const roots: string[] = []
 async function fixture() {
@@ -39,7 +41,212 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true })
 })
 
+// A real Windows handle without FILE_SHARE_DELETE, as held by a scanner or
+// indexer. All paths and ACL writes belong to the disposable migration fixture.
+async function lockWindowsEntry(entry: string) {
+  const script = `
+    $ErrorActionPreference = 'Stop'
+    [Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+public static class MigrationFixtureHandle {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+}
+'@
+    $payload = ConvertFrom-Json -InputObject ([Console]::In.ReadLine())
+    $handle = [MigrationFixtureHandle]::CreateFileW($payload.entry, 1, 3, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
+    if ($handle.IsInvalid) { exit 1 }
+    try {
+      [Console]::Out.WriteLine('locked')
+      [Console]::Out.Flush()
+      $null = [Console]::In.ReadLine()
+    } finally { $handle.Dispose() }
+  `
+  const executable = path.win32.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+  const child = spawn(executable, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'ignore'], timeout: 15_000,
+  })
+  const closed = new Promise<number | null>(resolve => child.once('close', resolve))
+  const ready = new Promise<void>((resolve, reject) => {
+    let output = ''
+    child.stdout.setEncoding('utf8')
+    child.stdout.on('data', chunk => { output += chunk; if (output.includes('locked')) resolve() })
+    child.once('error', () => reject(new Error('Windows lock fixture could not start')))
+    child.stdin.once('error', () => reject(new Error('Windows lock fixture input failed')))
+    child.once('close', () => reject(new Error('Windows lock fixture exited before readiness')))
+  })
+  child.stdin.write(JSON.stringify({ entry }) + '\n', 'utf8')
+  try { await ready } catch (error) { child.stdin.end(); await closed; throw error }
+  return async () => {
+    child.stdin.end('\n')
+    if (await closed !== 0) throw new Error('Windows lock fixture did not exit cleanly')
+  }
+}
+
 describe('data directory migration', () => {
+  it.skipIf(process.platform !== 'win32')('publishes verified data after a real Windows sharing lock releases', async () => {
+    const f = await fixture()
+    await f.put('cc-haha/tasks/pending.json', '{"task":"preserved"}')
+    f.hooks.permissions = { restrictStaging: restrictWindowsMigrationStaging, preserve: preserveWindowsMigrationPermissions }
+    const rename = fs.rename
+    let release: (() => Promise<void>) | undefined
+    const failures: NodeJS.ErrnoException[] = []
+    let attempts = 0
+    vi.spyOn(nativeFs, 'rename').mockImplementation(async (source, target) => {
+      if (!String(source).includes('.cc-haha-migration-') || path.basename(String(source)) !== 'cc-haha') return rename(source, target)
+      attempts += 1
+      if (attempts === 1) release = await lockWindowsEntry(path.join(String(source), 'tasks', 'pending.json'))
+      try { return await rename(source, target) } catch (error) {
+        failures.push(error as NodeJS.ErrnoException)
+        await release?.()
+        release = undefined
+        throw error
+      }
+    })
+    syncBuiltinESMExports()
+    try {
+      const preview = await f.migration.prepare(f.target)
+      await f.migration.start(preview.id)
+      await f.migration.wait()
+      expect(failures).toHaveLength(1)
+      expect(failures[0]).toMatchObject({ code: 'EPERM', syscall: 'rename', path: path.join(f.target, `.cc-haha-migration-${preview.id}`, 'cc-haha'), dest: path.join(f.target, 'cc-haha') })
+      expect(f.migration.status?.stage, failures[0]?.message).toBe('restarting')
+      expect(attempts).toBe(2)
+      expect(f.hooks.restart).toHaveBeenCalledOnce()
+      expect(f.hooks.resume).not.toHaveBeenCalled()
+      expect(await fs.readFile(path.join(f.target, 'cc-haha/tasks/pending.json'), 'utf8')).toBe('{"task":"preserved"}')
+      expect(await fs.readFile(path.join(f.source, 'cc-haha/tasks/pending.json'), 'utf8')).toBe('{"task":"preserved"}')
+      const relaunched = new DataMigration(f.app, f.hooks, {})
+      expect(await relaunched.recover()).toBe('validate')
+      await relaunched.completeValidation()
+      expect(relaunched.status?.stage).toBe('completed')
+    } finally { await release?.() }
+  }, 20_000)
+
+  it.skipIf(process.platform !== 'win32')('bounds retries for a persistent real Windows lock and keeps the original startup pointer', async () => {
+    const f = await fixture()
+    await f.put('cc-haha/tasks/pending.json', '{"task":"preserved"}')
+    await fs.mkdir(f.userData)
+    const oldMode = '{"mode":"default","portable_dir":null,"unknown":42}'
+    await fs.writeFile(path.join(f.userData, 'app-mode.json'), oldMode)
+    f.hooks.permissions = { restrictStaging: restrictWindowsMigrationStaging, preserve: preserveWindowsMigrationPermissions }
+    const rename = fs.rename
+    let release: (() => Promise<void>) | undefined
+    let attempts = 0
+    vi.spyOn(nativeFs, 'rename').mockImplementation(async (source, target) => {
+      if (!String(source).includes('.cc-haha-migration-') || path.basename(String(source)) !== 'cc-haha') return rename(source, target)
+      attempts += 1
+      if (attempts === 1) release = await lockWindowsEntry(path.join(String(source), 'tasks', 'pending.json'))
+      return rename(source, target)
+    })
+    syncBuiltinESMExports()
+    try {
+      const preview = await f.migration.prepare(f.target)
+      await f.migration.start(preview.id)
+      await f.migration.wait()
+      expect(attempts).toBe(6)
+      expect(f.migration.status).toMatchObject({ stage: 'failed', error: expect.stringContaining('EPERM') })
+      expect(f.hooks.restart).not.toHaveBeenCalled()
+      expect(f.hooks.resume).toHaveBeenCalledOnce()
+      expect(await fs.readFile(path.join(f.userData, 'app-mode.json'), 'utf8')).toBe(oldMode)
+      expect(await fs.readFile(path.join(f.source, 'cc-haha/tasks/pending.json'), 'utf8')).toBe('{"task":"preserved"}')
+      await expect(fs.stat(path.join(f.target, 'cc-haha'))).rejects.toMatchObject({ code: 'ENOENT' })
+    } finally { await release?.() }
+  }, 20_000)
+
+  it.each(['EPERM', 'EACCES', 'EBUSY'])('retries transient Windows %s publication errors before switching directories', async code => {
+    const f = await fixture()
+    const rename = fs.rename
+    let attempts = 0
+    vi.spyOn(nativeFs, 'rename').mockImplementation(async (source, target) => {
+      if (!String(source).includes('.cc-haha-migration-') || path.basename(String(source)) !== 'cc-haha') return rename(source, target)
+      attempts += 1
+      expect(f.hooks.restart).not.toHaveBeenCalled()
+      await expect(fs.stat(path.join(f.userData, 'app-mode.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+      if (attempts < 3) throw Object.assign(new Error('Temporary publication lock'), { code })
+      return rename(source, target)
+    })
+    syncBuiltinESMExports()
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(attempts).toBe(3)
+    expect(f.migration.status?.stage).toBe('restarting')
+    expect(f.hooks.restart).toHaveBeenCalledOnce()
+    expect(f.hooks.resume).not.toHaveBeenCalled()
+  })
+
+  it('does not retry publication errors on other platforms', async () => {
+    const f = await fixture()
+    f.hooks.platform = 'linux'
+    const rename = fs.rename
+    let attempts = 0
+    vi.spyOn(nativeFs, 'rename').mockImplementation(async (source, target) => {
+      if (!String(source).includes('.cc-haha-migration-') || path.basename(String(source)) !== 'cc-haha') return rename(source, target)
+      attempts += 1
+      throw Object.assign(new Error('Permanent publication permission error'), { code: 'EPERM' })
+    })
+    syncBuiltinESMExports()
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(attempts).toBe(1)
+    expect(f.migration.status?.stage).toBe('failed')
+    expect(f.hooks.restart).not.toHaveBeenCalled()
+    expect(f.hooks.resume).toHaveBeenCalledOnce()
+  })
+
+  it('refuses an independently created destination before retrying publication', async () => {
+    const f = await fixture()
+    const rename = fs.rename
+    let attempts = 0
+    vi.spyOn(nativeFs, 'rename').mockImplementation(async (source, target) => {
+      if (!String(source).includes('.cc-haha-migration-') || path.basename(String(source)) !== 'cc-haha') return rename(source, target)
+      attempts += 1
+      await fs.mkdir(target)
+      await fs.writeFile(path.join(String(target), 'keep'), 'independent data')
+      throw Object.assign(new Error('Temporary publication lock'), { code: 'EPERM' })
+    })
+    syncBuiltinESMExports()
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(attempts).toBe(1)
+    expect(f.migration.status).toMatchObject({ stage: 'failed', error: 'Target directory changed during migration' })
+    expect(await fs.readFile(path.join(f.target, 'cc-haha/keep'), 'utf8')).toBe('independent data')
+    expect(f.hooks.restart).not.toHaveBeenCalled()
+    expect(f.hooks.resume).toHaveBeenCalledOnce()
+  })
+
+  it.each(['source', 'target', 'staging'])('refuses a replaced %s directory before retrying publication', async directory => {
+    const f = await fixture()
+    const rename = fs.rename
+    let attempts = 0
+    let replacement = ''
+    vi.spyOn(nativeFs, 'rename').mockImplementation(async (source, target) => {
+      if (!String(source).includes('.cc-haha-migration-') || path.basename(String(source)) !== 'cc-haha') return rename(source, target)
+      attempts += 1
+      replacement = directory === 'source' ? f.source : directory === 'target' ? f.target : path.dirname(String(source))
+      await rename(replacement, `${replacement}-original`)
+      await fs.mkdir(replacement)
+      await fs.writeFile(path.join(replacement, 'keep'), 'replacement data')
+      throw Object.assign(new Error('Temporary publication lock'), { code: 'EBUSY' })
+    })
+    syncBuiltinESMExports()
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(attempts).toBe(1)
+    expect(f.migration.status).toMatchObject({ stage: 'failed', error: expect.stringContaining('replaced') })
+    expect(await fs.readFile(path.join(replacement, 'keep'), 'utf8')).toBe('replacement data')
+    expect(await fs.readFile(path.join(directory === 'source' ? `${f.source}-original` : f.source, 'settings.json'), 'utf8')).toContain('preserve')
+    expect(f.hooks.restart).not.toHaveBeenCalled()
+    expect(f.hooks.resume).toHaveBeenCalledOnce()
+  })
+
   it('previews without stopping work and switches only after a verified complete copy', async () => {
     const f = await fixture()
     await f.put('cc-haha/db/index-v1.sqlite', 'regenerable')

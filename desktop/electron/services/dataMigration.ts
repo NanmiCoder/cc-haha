@@ -199,6 +199,29 @@ export class DataMigration {
     if (isWithin(directories.source.canonical, directories.target.canonical) || isWithin(directories.target.canonical, directories.source.canonical)) throw new Error('Source and target data directories must be separate')
   }
 
+  private async publishStagedEntry(name: string): Promise<void> {
+    const journal = this.journal!
+    const output = path.join(journal.status.targetDir, name)
+    for (let attempt = 0; ; attempt += 1) {
+      // A Windows scanner can briefly open a copied descendant without sharing
+      // delete access. Recheck transaction boundaries after every wait so a
+      // retry never publishes through a replaced directory or overwrites data.
+      await this.assertDirectories(journal.directories!, journal.status.sourceDir, journal.status.targetDir)
+      await assertMigrationDirectory(journal.stagingDir, journal.stagingIdentity!)
+      if (await exists(output)) throw new Error('Target directory changed during migration')
+      try {
+        await fs.rename(path.join(journal.stagingDir, name), output)
+        return
+      } catch (error) {
+        if ((this.hooks.platform ?? process.platform) !== 'win32' || attempt >= 5 ||
+          !['EPERM', 'EACCES', 'EBUSY'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error
+        // Six attempts, at most 3.1 seconds of backoff. Persistent permission
+        // failures still roll back without changing ACLs or the startup pointer.
+        await new Promise(resolve => setTimeout(resolve, 100 * 2 ** attempt))
+      }
+    }
+  }
+
   private async execute(preview: MigrationPreview, directories: NonNullable<Journal['directories']>, signal: AbortSignal): Promise<void> {
     let quiescing = false
     let switched = false
@@ -277,11 +300,7 @@ export class DataMigration {
       await this.assertDirectories(directories, preview.sourceDir, preview.targetDir)
       await assertMigrationDirectory(stagingDir, this.journal.stagingIdentity)
       for (const name of await fs.readdir(stagingDir)) {
-        await assertMigrationDirectory(preview.targetDir, directories.target)
-        await assertMigrationDirectory(stagingDir, this.journal.stagingIdentity)
-        const output = path.join(preview.targetDir, name)
-        if (await exists(output)) throw new Error('Target directory changed during migration')
-        await fs.rename(path.join(stagingDir, name), output)
+        await this.publishStagedEntry(name)
       }
       await fs.rmdir(stagingDir)
       await assertMigrationDirectory(preview.targetDir, directories.target)
