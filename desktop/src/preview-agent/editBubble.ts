@@ -17,7 +17,10 @@ type Deps = {
   onCancel: () => void
   mode?: 'single' | 'batch'
   copy?: EditBubbleCopy
+  /** Where the pick was clicked, in viewport coordinates. */
+  pointer?: BubblePointer
 }
+type BubblePointer = { x: number; y: number }
 
 const DEFAULT_COPY: EditBubbleCopy = {
   cancel: '取消',
@@ -224,7 +227,11 @@ function buildPatch(key: keyof EditableSnapshot, value: string): EditInput {
   return patch
 }
 
-function computeBubbleLayout(rect: DOMRect, contentHeight: number) {
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(value, max))
+}
+
+function computeBubbleLayout(rect: DOMRect, contentHeight: number, pointer?: BubblePointer) {
   const viewportWidth = Math.max(window.innerWidth || 0, BUBBLE_WIDTH + VIEWPORT_MARGIN * 2)
   const viewportHeight = Math.max(window.innerHeight || 0, BUBBLE_MIN_HEIGHT + VIEWPORT_MARGIN * 2)
   const desiredHeight = Math.min(
@@ -234,21 +241,26 @@ function computeBubbleLayout(rect: DOMRect, contentHeight: number) {
   const belowTop = rect.bottom + BUBBLE_GAP
   const spaceBelow = viewportHeight - VIEWPORT_MARGIN - belowTop
   const spaceAbove = rect.top - BUBBLE_GAP - VIEWPORT_MARGIN
+  const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - BUBBLE_WIDTH - VIEWPORT_MARGIN)
   let top: number
+  let left = rect.left
 
   if (spaceBelow >= desiredHeight) {
     top = belowTop
   } else if (spaceAbove >= desiredHeight) {
     top = rect.top - BUBBLE_GAP - desiredHeight
-  } else if (spaceAbove > spaceBelow) {
-    top = VIEWPORT_MARGIN
   } else {
-    top = Math.min(Math.max(belowTop, VIEWPORT_MARGIN), viewportHeight - VIEWPORT_MARGIN - BUBBLE_MIN_HEIGHT)
+    // Neither side has room: the target fills the view (a picked <body>, a
+    // full-bleed section). The bubble has to cover part of it anyway, so it
+    // opens at full height where the pick was clicked rather than squeezing
+    // into a sliver at whichever edge had a little more space.
+    const anchor = pointer ?? { x: rect.left, y: rect.top }
+    top = clamp(anchor.y + BUBBLE_GAP, VIEWPORT_MARGIN, viewportHeight - VIEWPORT_MARGIN - desiredHeight)
+    left = anchor.x + BUBBLE_GAP
   }
 
   top = Math.max(VIEWPORT_MARGIN, Math.round(top))
-  const maxLeft = Math.max(VIEWPORT_MARGIN, viewportWidth - BUBBLE_WIDTH - VIEWPORT_MARGIN)
-  const left = Math.max(VIEWPORT_MARGIN, Math.min(Math.round(rect.left), maxLeft))
+  left = clamp(Math.round(left), VIEWPORT_MARGIN, maxLeft)
   const maxHeight = Math.max(BUBBLE_MIN_HEIGHT, viewportHeight - VIEWPORT_MARGIN - top)
   return { top, left, maxHeight }
 }
@@ -523,7 +535,7 @@ export function createEditBubble(target: HTMLElement, deps: Deps): { host: HTMLE
   if (textArea) autoGrow(textArea, TEXT_AREA_MAX_HEIGHT)
 
   const measuredHeight = wrap.getBoundingClientRect().height || wrap.scrollHeight || BUBBLE_ESTIMATED_HEIGHT
-  const layout = computeBubbleLayout(rect, measuredHeight)
+  const layout = computeBubbleLayout(rect, measuredHeight, deps.pointer)
   host.style.setProperty('top', `${layout.top}px`)
   host.style.setProperty('left', `${layout.left}px`)
   host.style.setProperty('visibility', 'visible')
