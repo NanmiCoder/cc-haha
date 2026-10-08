@@ -2392,7 +2392,7 @@ describe('Settings > Providers tab', () => {
     fireEvent.click(addButton)
 
     const dialog = screen.getByRole('dialog')
-    expect(within(dialog).getByLabelText(/Name/i)).toHaveValue('Custom')
+    expect(within(dialog).getByLabelText(/Name/i)).toHaveValue('Custom API')
     expect(within(dialog).getByRole('textbox', { name: /Base URL/i })).toBeEnabled()
 
     const baseUrlInfo = within(dialog).getByRole('button', { name: 'Base URL help' })

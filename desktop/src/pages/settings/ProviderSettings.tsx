@@ -1173,6 +1173,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const initialPreset = provider
     ? availablePresets.find((p) => p.id === provider.presetId) ?? fallbackPreset
     : selectablePresets[0] ?? fallbackPreset
+  // The custom preset's catalog name is a bare English "Custom"; show a localized
+  // label that says what it is for.
+  const presetLabel = (preset: ProviderPreset) =>
+    preset.id === 'custom' ? t('settings.providers.customPreset') : preset.name
   const initialModels = stripModel1mMarkers(provider?.models ?? initialPreset.defaultModels)
   const initialImageGeneration = provider
     ? provider.imageGeneration
@@ -1187,7 +1191,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   )
 
   const [selectedPreset, setSelectedPreset] = useState<ProviderPreset>(initialPreset)
-  const [name, setName] = useState(provider?.name ?? initialPreset.name)
+  const [name, setName] = useState(provider?.name ?? presetLabel(initialPreset))
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? initialPreset.baseUrl)
   // A preset that decides the protocol per model owns this field: the picked value
   // is only the fallback for models no rule matches, so a record carrying a stale
@@ -1349,7 +1353,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
     settingsJsonUserEditedRef.current = false
     setSelectedPreset(preset)
     setCompatibility(compatibilityForm())
-    setName(preset.name)
+    setName(presetLabel(preset))
     setBaseUrl(preset.baseUrl)
     setImageGeneration({
       enabled: Boolean(preset.defaultImageGeneration),
@@ -1687,14 +1691,14 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const renderPresetButton = (preset: ProviderPreset) => (
     <SettingsPill
       key={preset.id}
-      aria-label={preset.name}
+      aria-label={presetLabel(preset)}
       className="relative"
       tone="terracotta"
       selected={selectedPreset.id === preset.id}
       onClick={() => handlePresetChange(preset)}
     >
       {preset.id === 'aruhub' && <img src={aruhubLogo} alt="" className="size-4 rounded-[var(--radius-sm)] object-contain" />}
-      {preset.name}
+      {presetLabel(preset)}
       {preset.id === 'aruhub' && <Star size={12} className="fill-[var(--color-warning)] text-[var(--color-warning)]" aria-label={t('settings.providers.sponsor')} />}
       {preset.isNew && (
         <Badge tone="warning" size="xs" className="absolute -right-1 -top-2">

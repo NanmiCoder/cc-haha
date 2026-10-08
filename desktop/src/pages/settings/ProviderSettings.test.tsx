@@ -237,7 +237,19 @@ describe('retired sponsor providers', () => {
       expect(dialog.queryByRole('button', { name: provider.name })).not.toBeInTheDocument()
     }
     expect(dialog.getByRole('button', { name: 'Atlas Cloud' })).toBeInTheDocument()
-    expect(dialog.getByRole('button', { name: 'Custom' })).toBeInTheDocument()
+    expect(dialog.getByRole('button', { name: 'Custom API' })).toBeInTheDocument()
+  })
+
+  it('labels the custom preset in the active locale and prefills that label as the name', async () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    render(<ProviderSettings />)
+    await screen.findByTestId(`provider-${savedProviders[0]!.id}`)
+
+    fireEvent.click(screen.getByRole('button', { name: /添加模型/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.queryByRole('button', { name: 'Custom' })).not.toBeInTheDocument()
+    fireEvent.click(dialog.getByRole('button', { name: '自定义模型 API' }))
+    expect(dialog.getByLabelText(/配置名称/)).toHaveValue('自定义模型 API')
   })
 
   it.each(savedProviders)('edits and saves an existing $presetId provider without losing its connection', async (provider) => {

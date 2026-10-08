@@ -1443,6 +1443,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.providers.regionChina': '中国本土',
   'settings.providers.regionGlobal': 'グローバル',
   'settings.providers.regionCustom': 'カスタム',
+  'settings.providers.customPreset': 'カスタム API',
   'settings.providers.apiKey': 'API キー',
   'settings.providers.apiKeyKeep': 'API キー（空欄のままにすると現在の値を保持）',
   'settings.providers.showApiKey': 'API キーを表示',

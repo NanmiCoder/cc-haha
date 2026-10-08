@@ -1442,6 +1442,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.providers.regionChina': 'China mainland',
   'settings.providers.regionGlobal': 'Global',
   'settings.providers.regionCustom': 'Custom',
+  'settings.providers.customPreset': 'Custom API',
   'settings.providers.apiKey': 'API Key',
   'settings.providers.apiKeyKeep': 'API Key (leave blank to keep current)',
   'settings.providers.showApiKey': 'Show API Key',
