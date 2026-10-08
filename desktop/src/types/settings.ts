@@ -5,26 +5,26 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'auto' | 'plan' | 'bypa
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 export type ReasoningEffortLevel = EffortLevel
 /**
- * The six 「纸 · 墨 · 印」 palettes, in the order the appearance picker shows
- * them: four paper grounds, then two ink ones. Each name matches a
+ * The eight palettes, in the order the appearance picker shows them: five
+ * light grounds, then three dark ones. Each name matches a
  * `[data-theme]` block in theme/globals.css.
  *
  * `light` was the pre-redesign key for the warm workspace; it migrates to
  * `warm-classic` (see lib/persistenceMigrations.ts).
  */
-export const THEME_MODES = ['white', 'paper', 'warm-classic', 'celadon', 'dark', 'ink-blue'] as const
+export const THEME_MODES = ['white', 'glaze-white', 'paper', 'warm-classic', 'celadon', 'dark', 'deep-night', 'ink-blue'] as const
 export type ThemeMode = (typeof THEME_MODES)[number]
 
-/** The two themes on a dark ground. Drives `color-scheme` and Mermaid. */
-export const DARK_THEME_MODES = ['dark', 'ink-blue'] as const
+/** The three themes on a dark ground. Drives `color-scheme` and Mermaid. */
+export const DARK_THEME_MODES = ['dark', 'deep-night', 'ink-blue'] as const
 export type DarkThemeMode = (typeof DARK_THEME_MODES)[number]
 
 /**
- * The four paper grounds. Following the system only yields a dark/light
+ * The five light grounds. Following the system only yields a dark/light
  * signal, so each half carries its own preference — these are the values the
  * light half can resolve to.
  */
-export const LIGHT_THEME_MODES = ['white', 'paper', 'warm-classic', 'celadon'] as const
+export const LIGHT_THEME_MODES = ['white', 'glaze-white', 'paper', 'warm-classic', 'celadon'] as const
 export type LightThemeMode = (typeof LIGHT_THEME_MODES)[number]
 
 /**

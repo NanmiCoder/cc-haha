@@ -58,10 +58,10 @@
           var read = function (key) {
             try { return window.localStorage.getItem(key) } catch (_) { return null }
           }
-          // The six palettes, split by ground. Keep in step with
+          // The eight palettes, split by ground. Keep in step with
           // LIGHT_THEME_MODES / DARK_THEME_MODES in src/types/settings.ts.
-          var LIGHT = ['white', 'paper', 'warm-classic', 'celadon']
-          var DARK = ['dark', 'ink-blue']
+          var LIGHT = ['white', 'glaze-white', 'paper', 'warm-classic', 'celadon']
+          var DARK = ['dark', 'deep-night', 'ink-blue']
           var has = function (list, value) { return list.indexOf(value) !== -1 }
           var isDark = function (value) { return has(DARK, value) }
           // Mirrors THEME_BACKGROUNDS in src/theme/systemAppearance.ts; the
@@ -69,10 +69,12 @@
           // copies to the same values.
           var BACKGROUND = {
             white: '#FFFFFF',
+            'glaze-white': '#F9F9F9',
             paper: '#FBF9F4',
             'warm-classic': '#F6F0E1',
             celadon: '#F5F8F5',
             dark: '#201D17',
+            'deep-night': '#202020',
             'ink-blue': '#1A1D24'
           }
           var paintBrowserChrome = function (value) {
@@ -126,10 +128,12 @@
          than a fixed white, so that degraded case stays self-consistent. */
       html { background: #FFFFFF; }
       html[data-theme="white"] { background: #FFFFFF; }
+      html[data-theme="glaze-white"] { background: #F9F9F9; }
       html[data-theme="paper"] { background: #FBF9F4; }
       html[data-theme="warm-classic"] { background: #F6F0E1; }
       html[data-theme="celadon"] { background: #F5F8F5; }
       html[data-theme="dark"] { background: #201D17; }
+      html[data-theme="deep-night"] { background: #202020; }
       html[data-theme="ink-blue"] { background: #1A1D24; }
       html[data-window-kind="pet"],
       html[data-window-kind="pet"] body,
