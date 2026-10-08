@@ -19,6 +19,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import type { Readable, Writable } from 'node:stream'
+import dgram from 'node:dgram'
 import http from 'node:http'
 import net from 'node:net'
 import os from 'node:os'
@@ -127,6 +128,23 @@ export function httpToWebSocketUrl(serverHttpUrl: string): string {
 
 export type ReserveLocalPortDeps = {
   reserveCandidate?: (bindHost: string) => Promise<number>
+  udpPortAvailableFn?: (port: number) => Promise<boolean>
+}
+
+function canBindUdpPort(bindHost: string, port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const socket = dgram.createSocket('udp4')
+    const done = (available: boolean) => {
+      try {
+        socket.close()
+      } catch {
+        // already closed by an earlier path; availability is already decided
+      }
+      resolve(available)
+    }
+    socket.once('error', () => done(false))
+    socket.bind(port, bindHost, () => done(true))
+  })
 }
 
 async function reserveLocalPortCandidate(bindHost: string): Promise<number> {
@@ -150,11 +168,24 @@ export async function reserveLocalPort(
   bindHost = SERVER_BIND_HOST,
   deps: ReserveLocalPortDeps = {},
 ): Promise<number> {
+  const udpPortAvailable = deps.udpPortAvailableFn
+    ?? ((port: number) => canBindUdpPort(bindHost, port))
   const reserveCandidate = deps.reserveCandidate ?? reserveLocalPortCandidate
   for (let attempt = 0; attempt < MAX_PORT_RESERVATION_ATTEMPTS; attempt++) {
     const port = await reserveCandidate(bindHost)
-    if (isBrowserSafePort(port)) return port
-    console.error(`[desktop] OS assigned browser-blocked server port ${port}; retrying`)
+    if (!isBrowserSafePort(port)) {
+      console.error(`[desktop] OS assigned browser-blocked server port ${port}; retrying`)
+      continue
+    }
+    // The same number must also be free on UDP: always-on software (remote
+    // desktop, voice chat) parks UDP sockets on random ports, and the Bun
+    // sidecar bound over such a number on Windows comes up unable to serve
+    // any request — it logs "running" yet every healthcheck times out.
+    if (!(await udpPortAvailable(port))) {
+      console.error(`[desktop] candidate server port ${port} is taken on UDP; retrying`)
+      continue
+    }
+    return port
   }
   throw new Error('Could not reserve a browser-safe local port')
 }

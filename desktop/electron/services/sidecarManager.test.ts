@@ -713,6 +713,26 @@ describe('Electron sidecar manager', () => {
     await expect(reserveServerPort('127.0.0.1', [0, -1, 1.5, 70000])).resolves.toBeGreaterThan(0)
   })
 
+  it('skips candidates whose port number is taken on UDP and retries', async () => {
+    // Remote-desktop/voice software parks UDP sockets on random ports; the
+    // sidecar bound over such a number logs "running" but serves nothing.
+    const udpPortAvailableFn = vi.fn<(port: number) => Promise<boolean>>()
+      .mockResolvedValueOnce(false)
+      .mockResolvedValueOnce(true)
+    const reserveCandidate = vi.fn(async () => 58081)
+    await expect(reserveLocalPort('0.0.0.0', { reserveCandidate, udpPortAvailableFn }))
+      .resolves.toBe(58081)
+    expect(reserveCandidate).toHaveBeenCalledTimes(2)
+  })
+
+  it('gives up when every candidate is taken on UDP', async () => {
+    const reserveCandidate = vi.fn(async () => 58082)
+    await expect(reserveLocalPort('0.0.0.0', {
+      reserveCandidate,
+      udpPortAvailableFn: async () => false,
+    })).rejects.toThrow('Could not reserve a browser-safe local port')
+  })
+
   it('skips preferred ports blocked by browser fetch', async () => {
     const port = await reserveServerPort('127.0.0.1', [5061])
     expect(port).not.toBe(5061)
