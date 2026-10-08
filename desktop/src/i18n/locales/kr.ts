@@ -1200,6 +1200,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.activity.messages': '메시지',
   'settings.activity.tools': '도구',
   'settings.activity.activityInsights': '활동 인사이트',
+  'settings.activity.modelUsage': '모델별 사용량',
   'settings.activity.activeRate': '활성 비율',
   'settings.activity.mostUsedModel': '가장 많이 쓴 모델',
   'settings.activity.exploredSkills': '사용한 스킬',

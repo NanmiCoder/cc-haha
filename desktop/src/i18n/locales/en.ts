@@ -1197,6 +1197,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'settings.activity.messages': 'Messages',
   'settings.activity.tools': 'Tools',
   'settings.activity.activityInsights': 'Activity insights',
+  'settings.activity.modelUsage': 'Usage by model',
   'settings.activity.activeRate': 'Active rate',
   'settings.activity.mostUsedModel': 'Most used model',
   'settings.activity.exploredSkills': 'Skills explored',

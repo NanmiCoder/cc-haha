@@ -1001,34 +1001,6 @@ export function ActivitySettings() {
         </Card>
       )}
 
-      {!isLoading && !error && hasUsage && modelRows.length > 0 && (
-        <Card surface="lowest" padding="none" role="table" className="mt-3 overflow-hidden">
-          <div
-            role="row"
-            className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)] gap-3 bg-[var(--color-surface-container)] px-4 py-2.5 text-xs font-semibold text-[var(--color-text-tertiary)]"
-          >
-            <span role="columnheader" className="min-w-0 truncate">{t('settings.agents.model')}</span>
-            <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.freshTokens')}</span>
-            <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.cachedTokens')}</span>
-            <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.estimatedCost')}</span>
-          </div>
-          {modelRows.map((row) => (
-            <div
-              key={row.model}
-              role="row"
-              className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)] items-center gap-3 border-t border-[var(--color-border)] px-4 py-2.5 text-[13px] tabular-nums text-[var(--color-text-primary)]"
-            >
-              <span role="cell" className="min-w-0 truncate font-mono text-xs" title={row.model}>{row.model}</span>
-              <span role="cell" className="min-w-0 truncate text-right">{formatTokens(row.fresh)}</span>
-              <span role="cell" className="min-w-0 truncate text-right">{formatTokens(row.cached)}</span>
-              <span role="cell" className="min-w-0 truncate text-right">
-                {row.unpriced ? <span className="text-[var(--color-text-tertiary)]">—</span> : formatCostUSD(row.costUSD, locale)}
-              </span>
-            </div>
-          ))}
-        </Card>
-      )}
-
       <Modal
         open={isEditingProfile}
         onClose={cancelProfileEdit}
@@ -1264,6 +1236,36 @@ export function ActivitySettings() {
               </dl>
             </Card>
           </SettingsSection>
+
+          {modelRows.length > 0 && (
+            <SettingsSection title={t('settings.activity.modelUsage')}>
+            <Card surface="lowest" padding="none" role="table" className="overflow-hidden">
+              <div
+                role="row"
+                className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)] gap-3 bg-[var(--color-surface-container)] px-4 py-2.5 text-xs font-semibold text-[var(--color-text-tertiary)]"
+              >
+                <span role="columnheader" className="min-w-0 truncate">{t('settings.agents.model')}</span>
+                <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.freshTokens')}</span>
+                <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.cachedTokens')}</span>
+                <span role="columnheader" className="min-w-0 truncate text-right">{t('settings.activity.estimatedCost')}</span>
+              </div>
+              {modelRows.map((row) => (
+                <div
+                  key={row.model}
+                  role="row"
+                  className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,0.8fr)_minmax(0,0.8fr)_minmax(0,0.8fr)] items-center gap-3 border-t border-[var(--color-border)] px-4 py-2.5 text-[13px] tabular-nums text-[var(--color-text-primary)]"
+                >
+                  <span role="cell" className="min-w-0 truncate font-mono text-xs" title={row.model}>{row.model}</span>
+                  <span role="cell" className="min-w-0 truncate text-right">{formatTokens(row.fresh)}</span>
+                  <span role="cell" className="min-w-0 truncate text-right">{formatTokens(row.cached)}</span>
+                  <span role="cell" className="min-w-0 truncate text-right">
+                    {row.unpriced ? <span className="text-[var(--color-text-tertiary)]">—</span> : formatCostUSD(row.costUSD, locale)}
+                  </span>
+                </div>
+              ))}
+            </Card>
+            </SettingsSection>
+          )}
 
           {topPluginItems.length > 0 && (
             <SettingsSection title={t('settings.activity.mostUsedPluginsAndSkills')}>

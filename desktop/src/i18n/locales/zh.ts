@@ -1196,6 +1196,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.activity.messages': '消息',
   'settings.activity.tools': '工具',
   'settings.activity.activityInsights': '活动洞察',
+  'settings.activity.modelUsage': '模型用量',
   'settings.activity.activeRate': '活跃率',
   'settings.activity.mostUsedModel': '最常用模型',
   'settings.activity.exploredSkills': '已使用的技能',

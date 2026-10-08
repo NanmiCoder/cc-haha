@@ -1198,6 +1198,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.activity.messages': 'メッセージ',
   'settings.activity.tools': 'ツール',
   'settings.activity.activityInsights': 'アクティビティ分析',
+  'settings.activity.modelUsage': 'モデル別の使用量',
   'settings.activity.activeRate': 'アクティブ率',
   'settings.activity.mostUsedModel': '最も使ったモデル',
   'settings.activity.exploredSkills': '使用したスキル',
