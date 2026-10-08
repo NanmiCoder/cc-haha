@@ -4952,7 +4952,11 @@ function bindClientSessionOutput(
       // Agents, and permission resolutions must pass so open prompts can close.
       return
     }
-    if (options?.shouldForward && !options.shouldForward(cliMsg)) {
+    if (
+      taskLifecycle === null &&
+      options?.shouldForward &&
+      !options.shouldForward(cliMsg)
+    ) {
       return
     }
 
