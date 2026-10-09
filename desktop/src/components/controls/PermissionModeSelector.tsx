@@ -73,6 +73,11 @@ type Props = {
    */
   trigger?: 'chip' | 'elevatedOnly'
   menuPlacement?: 'top' | 'bottom'
+  /**
+   * Which trigger edge the desktop menu lines up with. `right` keeps it inside
+   * the container when the trigger sits at the end of a row, as in Settings.
+   */
+  menuAlign?: 'left' | 'right'
   /** Controlled mode: override current value */
   value?: PermissionMode
   /** Controlled mode: called on change instead of updating global store */
@@ -80,7 +85,7 @@ type Props = {
 }
 
 export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, Props>(function PermissionModeSelector(
-  { sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', value, onChange }: Props = {},
+  { sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', menuAlign = 'left', value, onChange }: Props = {},
   handleRef,
 ) {
   const t = useTranslation()
@@ -175,6 +180,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
   const menuPlacementClass = menuPlacement === 'bottom'
     ? 'top-full mt-2'
     : 'bottom-full mb-2'
+  const menuAlignClass = menuAlign === 'right' ? 'right-0' : 'left-0'
   // Generated, not hard-coded: the previous literal id was rendered by both the
   // sheet branch and the desktop branch, so `aria-controls` pointed at whichever
   // duplicate the browser resolved first.
@@ -350,7 +356,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
             </div>
           </MobileBottomSheet>
         ) : (
-          <div id={menuId} ref={menuRef} role="menu" className={`absolute left-0 ${menuPlacementClass} z-[var(--z-dropdown)] w-[340px] ${COMPOSER_POPOVER}`}>
+          <div id={menuId} ref={menuRef} role="menu" className={`absolute ${menuAlignClass} ${menuPlacementClass} z-[var(--z-dropdown)] w-[340px] ${COMPOSER_POPOVER}`}>
             <div className={COMPOSER_MENU_SECTION}>
               {t('permMode.executionPermissions')}
             </div>

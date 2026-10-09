@@ -952,6 +952,7 @@ export function GeneralSettings() {
               onChange={(mode) => void setPermissionMode(mode)}
               workDir={t('settings.general.defaultPermissionScope')}
               menuPlacement="bottom"
+              menuAlign="right"
             />
           </SettingsRow>
           <SettingsRow
