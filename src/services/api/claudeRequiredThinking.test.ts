@@ -659,7 +659,7 @@ for (const [disableBetas, disableAdaptive] of [[false, false], [true, false], [f
   }, 10_000)
 }
 
-test('drops a tool call truncated at the output-token boundary', async () => {
+test('drops a tool call truncated at the output-token boundary and marks it for continuation retry', async () => {
   const { content, apiError, error, requests } = await captureQueryRequest({
     model: 'deepseek-v4-flash',
     configureCapabilityOverrides: false,
@@ -668,6 +668,16 @@ test('drops a tool call truncated at the output-token boundary', async () => {
     }),
   })
 
+  // End-to-end through the real stream loop with a max_tokens cut on a
+  // pending tool_use: the incomplete tool block is still dropped from the
+  // committed assistant, but the resulting message now carries the
+  // apiError tag that engages query.ts's recovery gate
+  // (isWithheldMaxOutputTokens): the turn resumes on a "break it into
+  // smaller pieces" continuation (bounded by
+  // MAX_OUTPUT_TOKENS_RECOVERY_LIMIT) instead of hard-failing the session,
+  // and the error itself is withheld from SDK callers until that loop
+  // exhausts. queryWithModel here is single-shot, so this locks the
+  // boundary contract that makes the continuation happen, not the loop.
   expect(requests).toHaveLength(1)
   expect(content).toEqual([
     expect.objectContaining({
@@ -676,7 +686,7 @@ test('drops a tool call truncated at the output-token boundary', async () => {
     }),
   ])
   expect(content).not.toContainEqual(expect.objectContaining({ type: 'tool_use' }))
-  expect(apiError).toBeUndefined()
+  expect(apiError).toBe('max_output_tokens')
   expect(error).toBe('max_output_tokens')
 }, 10_000)
 
