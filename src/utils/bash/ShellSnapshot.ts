@@ -453,6 +453,7 @@ export const createAndSaveSnapshot = async (
         binShell,
         ['-c', '-l', snapshotScript],
         {
+          windowsHide: true,
           env: {
             ...((process.env.CLAUDE_CODE_DONT_INHERIT_ENV
               ? {}

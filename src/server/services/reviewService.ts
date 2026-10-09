@@ -1988,6 +1988,7 @@ export class ReviewService {
       const result = await execFile('git', fullArgs, {
         cwd,
         timeout: GIT_TIMEOUT_MS,
+        windowsHide: true,
         maxBuffer: MAX_GIT_BUFFER_BYTES,
         encoding: 'utf8',
         env: this.buildGitEnv(),

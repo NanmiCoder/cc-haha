@@ -172,6 +172,7 @@ async function runGit(
     const { stdout, stderr } = await execFile('git', args, {
       cwd,
       timeout,
+      windowsHide: true,
       maxBuffer: MAX_GIT_BUFFER_BYTES,
       env: { ...process.env, ...GIT_NO_PROMPT_ENV },
     })

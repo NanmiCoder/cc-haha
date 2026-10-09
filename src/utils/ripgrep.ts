@@ -372,6 +372,7 @@ function ripGrepRaw(
       maxBuffer: MAX_BUFFER_SIZE,
       signal: abortSignal,
       timeout,
+      windowsHide: true,
       killSignal: process.platform === 'win32' ? undefined : 'SIGKILL',
     },
     callback,
