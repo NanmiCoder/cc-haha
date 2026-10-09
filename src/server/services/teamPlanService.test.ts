@@ -91,6 +91,37 @@ test('validation failure starts no process; launch failure requires explicit rev
   expect(failed.launch?.error).toBe('fixture launch failed')
   expect((await service.action('review', 'retry', identity(failed))).state).toBe('review_pending')
 })
+test('approving after an app restart starts the disconnected lead before launching', async () => {
+  // The real launch refuses a lead without a process ("Team leader must be
+  // connected before launching"); after a restart nothing had started it.
+  let leaderConnected = false
+  const started: string[] = []
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => {
+    if (!leaderConnected) throw new Error('Team leader must be connected before launching')
+    return { memberIds: { worker: 'child-1' } }
+  }, stop: async () => {} })
+  const startLeader = async (sessionId: string) => { started.push(sessionId); leaderConnected = true }
+  const plan = await ready()
+  expect((await service.approve('review', identity(plan), { startLeader })).state).toBe('launching')
+  expect((await settle('running')).launch?.memberIds).toEqual({ worker: 'child-1' })
+  // A replayed approval is already launching: it starts no second lead.
+  await service.approve('review', identity(plan), { startLeader })
+  expect(started).toEqual(['session'])
+})
+test('a lead that cannot start leaves the plan reviewable and launches nothing', async () => {
+  let launches = 0
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => { launches++; return { memberIds: {} } }, stop: async () => {} })
+  const plan = await ready()
+  await expect(service.approve('review', identity(plan), { startLeader: async () => { throw new Error('CLI runtime crashed during startup (code 3)') } }))
+    .rejects.toThrow('Team leader could not start: CLI runtime crashed during startup (code 3)')
+  expect(launches).toBe(0)
+  const pending = await readTeamPlan('review')
+  expect(pending?.state).toBe('review_pending')
+  // Once the lead can start, the same reviewed plan approves without a retry step.
+  expect((await service.approve('review', identity(pending!), { startLeader: async () => {} })).state).toBe('launching')
+  await settle('running')
+  expect(launches).toBe(1)
+})
 test('cold server observes durable pending launch as interrupted instead of replaying', async () => {
   const plan = await ready()
   await approveTeamPlan('review', identity(plan), 'request', plan)

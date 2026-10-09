@@ -2533,6 +2533,17 @@ export class ConversationService {
     }
 
     const normalizedDetail = detail.trim()
+    // A Windows Bun that crashes before running any code almost always failed
+    // to commit memory for JavaScriptCore: the machine's commit limit (RAM +
+    // page file) is used up, which every extra CLI process (e.g. each team
+    // member) brings closer. The raw crash report alone points at Bun instead.
+    if (/Bun has crashed/i.test(normalizedDetail) && /\bWindows\b/.test(normalizedDetail)) {
+      return new ConversationStartupError(
+        `CLI runtime crashed during startup (code ${exitCode}). On Windows this usually means the system has run out of commit memory (RAM + page file). Close other programs, set the page file (virtual memory) to system managed, or start fewer team members, then retry. Crash output: ${normalizedDetail}`,
+        'CLI_START_FAILED',
+        true,
+      )
+    }
     return new ConversationStartupError(
       normalizedDetail
         ? `CLI exited during startup (code ${exitCode}): ${normalizedDetail}`
