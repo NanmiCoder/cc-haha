@@ -27,9 +27,26 @@ describe('ProviderRequestCompatibilityFields', () => {
     expect(budget).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Advanced compatibility' })).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Known endpoint output limit')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Sampling parameters')).not.toBeInTheDocument()
 
     fireEvent.change(budget, { target: { value: '1000' } })
     expect(budget).toHaveValue('1000')
+  })
+
+  it('exposes the reasoning selector for anthropic providers and records explicit choices', () => {
+    render(<Harness apiFormat="anthropic" />)
+
+    const reasoning = screen.getByLabelText('Reasoning parameters')
+    expect(reasoning).toBeInTheDocument()
+    // The default stays automatic — behavior unchanged until the user picks.
+    expect(reasoning).toHaveValue('auto')
+
+    fireEvent.change(reasoning, { target: { value: 'supported' } })
+    expect(reasoning).toHaveValue('supported')
+    fireEvent.change(reasoning, { target: { value: 'unsupported' } })
+    expect(reasoning).toHaveValue('unsupported')
+    fireEvent.change(reasoning, { target: { value: 'auto' } })
+    expect(reasoning).toHaveValue('auto')
   })
 
   it('keeps the budget field and advanced controls for openai chat providers', () => {
