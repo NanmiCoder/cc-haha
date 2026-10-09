@@ -3573,6 +3573,9 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
 
   // ─── Update Checker ──────────────────────────────────────
   'update.available': 'v{version} available',
+  'update.autoUpdate': 'Automatic updates',
+  'update.autoUpdateDescription': 'Automatically check for new versions and download updates in the background. Manual checks and installation remain available when turned off.',
+  'update.autoUpdateSaveFailed': 'Could not save automatic update settings: {error}',
   'update.availableLabel': 'Available',
   'update.checking': 'Checking for updates...',
   'update.checkNow': 'Check now',
@@ -3580,7 +3583,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'update.currentVersionUnknown': 'Unknown',
   'update.newVersion': 'New version v{version} available',
   'update.downloading': 'Downloading...',
-  'update.downloaded': 'Update downloaded. Restart when you are ready to use it.',
+  'update.downloaded': 'Update downloaded. Click “Install and restart” to apply it.',
   'update.idle': 'Check for updates to compare your installed version with the latest GitHub Release.',
   'update.installAndRestart': 'Install and restart',
   'update.installing': 'Installing update...',
@@ -3600,7 +3603,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'update.proxyUrlInvalid': 'Enter an HTTP or HTTPS proxy URL.',
   'update.proxyUrlRequired': 'Enter a proxy URL.',
   'update.releaseNotes': 'Release Notes',
-  'update.readyBody': 'v{version} has been downloaded. Restart when you are ready to use it.',
+  'update.readyBody': 'v{version} has been downloaded. Click “Install and restart” to apply it.',
   'update.readyTitle': 'Update ready',
   'update.restarting': 'Restarting to finish update...',
   'update.upToDate': 'You are up to date on v{version}.',

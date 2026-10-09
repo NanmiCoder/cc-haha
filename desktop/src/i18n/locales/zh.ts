@@ -3572,6 +3572,9 @@ export const zh: Record<TranslationKey, string> = {
 
   // ─── 更新检查 ──────────────────────────────────────
   'update.available': 'v{version} 可用',
+  'update.autoUpdate': '自动更新',
+  'update.autoUpdateDescription': '自动检查新版本并在后台下载；关闭后仍可手动检查与安装。',
+  'update.autoUpdateSaveFailed': '自动更新设置保存失败：{error}',
   'update.availableLabel': '可更新版本',
   'update.checking': '正在检查更新...',
   'update.checkNow': '检查更新',
@@ -3579,7 +3582,7 @@ export const zh: Record<TranslationKey, string> = {
   'update.currentVersionUnknown': '未知版本',
   'update.newVersion': '新版本 v{version} 可用',
   'update.downloading': '下载中...',
-  'update.downloaded': '更新已下载。方便时重启即可使用新版。',
+  'update.downloaded': '更新已下载。点击「安装并重启」后应用新版。',
   'update.idle': '点击检查更新，对比当前安装版本和 GitHub Releases 的最新版本。',
   'update.installAndRestart': '安装并重启',
   'update.installing': '正在安装更新...',
@@ -3599,7 +3602,7 @@ export const zh: Record<TranslationKey, string> = {
   'update.proxyUrlInvalid': '请输入 HTTP 或 HTTPS 代理地址。',
   'update.proxyUrlRequired': '请输入代理地址。',
   'update.releaseNotes': '更新说明',
-  'update.readyBody': 'v{version} 已下载。方便时重启即可使用新版。',
+  'update.readyBody': 'v{version} 已下载。点击「安装并重启」后应用新版。',
   'update.readyTitle': '更新已准备好',
   'update.restarting': '正在重启以完成更新...',
   'update.upToDate': '当前已是最新版本 v{version}。',

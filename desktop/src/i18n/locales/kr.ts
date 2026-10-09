@@ -3576,6 +3576,9 @@ export const kr: Record<TranslationKey, string> = {
 
   // ─── Update Checker ──────────────────────────────────────
   'update.available': 'v{version} 사용 가능',
+  'update.autoUpdate': '자동 업데이트',
+  'update.autoUpdateDescription': '새 버전을 자동으로 확인하고 백그라운드에서 다운로드합니다. 꺼도 수동 확인과 설치는 계속 사용할 수 있습니다.',
+  'update.autoUpdateSaveFailed': '자동 업데이트 설정을 저장하지 못했습니다: {error}',
   'update.availableLabel': '사용 가능',
   'update.checking': '업데이트 확인 중...',
   'update.checkNow': '지금 확인',
@@ -3583,7 +3586,7 @@ export const kr: Record<TranslationKey, string> = {
   'update.currentVersionUnknown': '알 수 없음',
   'update.newVersion': '새 버전 v{version} 사용 가능',
   'update.downloading': '다운로드 중...',
-  'update.downloaded': '업데이트를 다운로드했습니다. 사용할 준비가 되면 다시 시작하세요.',
+  'update.downloaded': '업데이트를 다운로드했습니다. 적용하려면 “설치하고 다시 시작”을 클릭하세요.',
   'update.idle': '업데이트를 확인하여 설치된 버전을 최신 GitHub Release와 비교합니다.',
   'update.installAndRestart': '설치하고 다시 시작',
   'update.installing': '업데이트 설치 중...',
@@ -3603,7 +3606,7 @@ export const kr: Record<TranslationKey, string> = {
   'update.proxyUrlInvalid': 'HTTP 또는 HTTPS 프록시 URL을 입력하세요.',
   'update.proxyUrlRequired': '프록시 URL을 입력하세요.',
   'update.releaseNotes': '릴리스 노트',
-  'update.readyBody': 'v{version}을(를) 다운로드했습니다. 사용할 준비가 되면 다시 시작하세요.',
+  'update.readyBody': 'v{version}을(를) 다운로드했습니다. 적용하려면 “설치하고 다시 시작”을 클릭하세요.',
   'update.readyTitle': '업데이트 준비 완료',
   'update.restarting': '업데이트를 완료하기 위해 다시 시작 중...',
   'update.upToDate': 'v{version}은(는) 최신입니다.',

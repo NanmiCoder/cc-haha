@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { EventEmitter } from 'node:events'
 import { ElectronUpdaterService, normalizeUpdateInfo, updaterSessionProxyConfig, type ElectronUpdaterLike } from './updater'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -13,6 +14,7 @@ function fakeUpdater(): ElectronUpdaterLike & {
   let progressHandler: ((progress: { transferred?: number, total?: number }) => void) | null = null
   const updater = {
     autoDownload: true,
+    autoInstallOnAppQuit: true,
     checkForUpdates: vi.fn(),
     downloadUpdate: vi.fn(),
     quitAndInstall: vi.fn(),
@@ -168,6 +170,34 @@ describe('Electron updater service', () => {
     await expect(service.checkForUpdates()).rejects.toThrow('feed unavailable')
   })
 
+  it('does not offer metadata that electron-updater marks unavailable', async () => {
+    const localUpdater = fakeUpdater()
+    // A release can be newer but unavailable due to its minimum OS version
+    // or staged rollout. electron-updater still returns its metadata.
+    localUpdater.checkForUpdates.mockResolvedValue({
+      isUpdateAvailable: false,
+      updateInfo: { version: '9.9.9', body: 'Not eligible for this installation' },
+    })
+    const service = new ElectronUpdaterService(localUpdater)
+
+    await expect(service.checkForUpdates()).resolves.toBeNull()
+    await expect(service.downloadUpdate(() => {})).rejects.toThrow('No Electron update')
+    expect(localUpdater.downloadUpdate).not.toHaveBeenCalled()
+  })
+
+  it('offers metadata that electron-updater explicitly marks available', async () => {
+    const localUpdater = fakeUpdater()
+    localUpdater.checkForUpdates.mockResolvedValue({
+      isUpdateAvailable: true,
+      updateInfo: { version: '1.2.4', body: 'Eligible update' },
+    })
+    const service = new ElectronUpdaterService(localUpdater)
+
+    await expect(service.checkForUpdates()).resolves.toEqual({ version: '1.2.4', body: 'Eligible update' })
+    await service.downloadUpdate(() => {})
+    expect(localUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+  })
+
   it('stages then installs through quitAndInstall only after an update has downloaded', async () => {
     const service = new ElectronUpdaterService(updater)
     updater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.4' } })
@@ -183,12 +213,98 @@ describe('Electron updater service', () => {
     expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
   })
 
+  it('keeps ordinary quits and cached-download restarts from installing an update', async () => {
+    const install = vi.fn()
+    const cache = { downloaded: false }
+    for (let restart = 0; restart < 3; restart += 1) {
+      const app = new EventEmitter()
+      const localUpdater = fakeUpdater()
+      localUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.4' } })
+      localUpdater.downloadUpdate.mockImplementation(async () => {
+        cache.downloaded = true
+        // BaseUpdater registers this after either a fresh or cached download.
+        app.once('quit', () => {
+          if (localUpdater.autoInstallOnAppQuit && cache.downloaded) install()
+        })
+      })
+      const service = new ElectronUpdaterService(localUpdater)
+      await service.checkForUpdates()
+      await service.downloadUpdate(() => {})
+      app.emit('quit')
+    }
+
+    expect(cache.downloaded).toBe(true)
+    expect(install).not.toHaveBeenCalled()
+  })
+
+  it('requires an explicit install request before the downloaded update may restart into installation', async () => {
+    const localUpdater = fakeUpdater()
+    localUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.4' } })
+    localUpdater.downloadUpdate.mockResolvedValue(undefined)
+    const service = new ElectronUpdaterService(localUpdater)
+    await service.checkForUpdates()
+    await service.downloadUpdate(() => {})
+
+    expect(service.hasStagedUpdate()).toBe(false)
+    expect(() => service.quitAndInstallDownloadedUpdate({})).toThrow('has not been requested')
+    expect(localUpdater.quitAndInstall).not.toHaveBeenCalled()
+
+    service.stageDownloadedUpdate()
+    expect(service.hasStagedUpdate()).toBe(true)
+    service.quitAndInstallDownloadedUpdate({})
+
+    expect(localUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(localUpdater.quitAndInstall).toHaveBeenCalledWith(false, true)
+    expect(localUpdater.autoInstallOnAppQuit).toBe(false)
+  })
+
+  it('disarms canceled installs while keeping the download available for an explicit retry', async () => {
+    const localUpdater = fakeUpdater()
+    localUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.4' } })
+    localUpdater.downloadUpdate.mockResolvedValue(undefined)
+    const service = new ElectronUpdaterService(localUpdater)
+    await service.checkForUpdates()
+    await service.downloadUpdate(() => {})
+    service.stageDownloadedUpdate()
+    service.cancelInstall()
+
+    expect(service.hasDownloadedUpdate()).toBe(true)
+    expect(service.hasStagedUpdate()).toBe(false)
+    expect(() => service.quitAndInstallDownloadedUpdate({})).toThrow('has not been requested')
+
+    await service.downloadUpdate(() => {})
+    service.stageDownloadedUpdate()
+    service.quitAndInstallDownloadedUpdate({})
+
+    expect(localUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+    expect(localUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not carry install consent over to a newly checked version', async () => {
+    const localUpdater = fakeUpdater()
+    localUpdater.checkForUpdates
+      .mockResolvedValueOnce({ updateInfo: { version: '1.2.4' } })
+      .mockResolvedValueOnce({ updateInfo: { version: '1.2.5' } })
+    localUpdater.downloadUpdate.mockResolvedValue(undefined)
+    const service = new ElectronUpdaterService(localUpdater)
+    await service.checkForUpdates()
+    await service.downloadUpdate(() => {})
+    service.stageDownloadedUpdate()
+    await service.checkForUpdates()
+    await service.downloadUpdate(() => {})
+
+    expect(service.hasStagedUpdate()).toBe(false)
+    expect(() => service.quitAndInstallDownloadedUpdate({})).toThrow('has not been requested')
+    expect(localUpdater.quitAndInstall).not.toHaveBeenCalled()
+  })
+
   it('hands the spawned installer an environment without the app-managed portable selection', async () => {
     const service = new ElectronUpdaterService(updater)
     updater.checkForUpdates.mockResolvedValue({ updateInfo: { version: '1.2.4' } })
     updater.downloadUpdate.mockResolvedValue(undefined)
     await service.checkForUpdates()
     await service.downloadUpdate(() => {})
+    service.stageDownloadedUpdate()
 
     const env: NodeJS.ProcessEnv = {
       CLAUDE_CONFIG_DIR: 'E:\\cc-haha-data',
@@ -208,6 +324,7 @@ describe('Electron updater service', () => {
     updater.downloadUpdate.mockResolvedValue(undefined)
     await service.checkForUpdates()
     await service.downloadUpdate(() => {})
+    service.stageDownloadedUpdate()
 
     const env: NodeJS.ProcessEnv = { CLAUDE_CONFIG_DIR: 'E:\\external-data' }
     service.quitAndInstallDownloadedUpdate(env)

@@ -502,7 +502,32 @@ describe('Settings API', () => {
 
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body).toEqual({ agentTeamsEnabled: true })
+    expect(body).toEqual({ agentTeamsEnabled: true, autoUpdateEnabled: true })
+  })
+
+  it('persists automatic updates through the user settings API and preserves unrelated fields', async () => {
+    const settingsPath = path.join(tmpDir, 'settings.json')
+    const original = JSON.stringify({ futureSetting: { keep: true } })
+    await fs.writeFile(settingsPath, original)
+    const initial = makeRequest('GET', '/api/settings/user')
+    const oldSettings = await handleSettingsApi(initial.req, initial.url, initial.segments)
+    expect(await oldSettings.json()).toMatchObject({ autoUpdateEnabled: true, futureSetting: { keep: true } })
+    expect(await fs.readFile(settingsPath, 'utf-8')).toBe(original)
+
+    for (const enabled of [false, true]) {
+      const put = makeRequest('PUT', '/api/settings/user', { autoUpdateEnabled: enabled })
+      expect((await handleSettingsApi(put.req, put.url, put.segments)).status).toBe(200)
+      const get = makeRequest('GET', '/api/settings/user')
+      const response = await handleSettingsApi(get.req, get.url, get.segments)
+      expect(await response.json()).toMatchObject({ autoUpdateEnabled: enabled, futureSetting: { keep: true } })
+      expect(JSON.parse(await fs.readFile(settingsPath, 'utf-8'))).toEqual({ futureSetting: { keep: true }, autoUpdateEnabled: enabled })
+    }
+  })
+
+  it.each(['false', null, 1])('rejects invalid automatic update preference %j without changing settings', async value => {
+    const put = makeRequest('PUT', '/api/settings/user', { autoUpdateEnabled: value })
+    expect((await handleSettingsApi(put.req, put.url, put.segments)).status).toBe(400)
+    expect(await new SettingsService().getUserSettings()).toEqual({})
   })
 
   it('persists the General team preference across reads and overrides legacy env', async () => {

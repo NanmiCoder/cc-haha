@@ -237,6 +237,153 @@ describe('settingsStore Auto mode consent', () => {
   })
 })
 
+describe('settingsStore automatic update preference', () => {
+  function installSettingsFixture(user: Record<string, unknown> = {}, updateUser = vi.fn().mockResolvedValue({ ok: true })) {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn(async () => ({ ...user })),
+        updateUser,
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: { get: vi.fn().mockResolvedValue({ settings: { enabled: false } }) },
+    }))
+    return updateUser
+  }
+
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('upgrades an old settings fixture without the preference to enabled', async () => {
+    const original = { unknownFuturePreference: { keep: true }, updateProxy: { mode: 'system' } }
+    const updateUser = installSettingsFixture(original)
+    const { useSettingsStore } = await import('./settingsStore')
+
+    expect(useSettingsStore.getState().autoUpdateEnabled).toBe(true)
+    await useSettingsStore.getState().fetchAll()
+
+    expect(useSettingsStore.getState().autoUpdateEnabled).toBe(true)
+    expect(updateUser).not.toHaveBeenCalled()
+    expect(original).toEqual({ unknownFuturePreference: { keep: true }, updateProxy: { mode: 'system' } })
+  })
+
+  it('persists disabled automatic updates and restores them on the next store startup', async () => {
+    const user: Record<string, unknown> = { unknownFuturePreference: 'keep' }
+    const updateUser = vi.fn(async (patch: Record<string, unknown>) => {
+      Object.assign(user, patch)
+      return { ok: true }
+    })
+    installSettingsFixture(user, updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().fetchAll()
+    await useSettingsStore.getState().setAutoUpdateEnabled(false)
+
+    expect(updateUser).toHaveBeenCalledWith({ autoUpdateEnabled: false })
+    expect(useSettingsStore.getState().autoUpdateEnabled).toBe(false)
+
+    vi.resetModules()
+    const restarted = await import('./settingsStore')
+    await restarted.useSettingsStore.getState().fetchAll()
+
+    expect(restarted.useSettingsStore.getState().autoUpdateEnabled).toBe(false)
+    expect(user).toEqual({ unknownFuturePreference: 'keep', autoUpdateEnabled: false })
+    await restarted.useSettingsStore.getState().setAutoUpdateEnabled(true)
+    expect(updateUser).toHaveBeenLastCalledWith({ autoUpdateEnabled: true })
+  })
+
+  it.each([true, false])('rolls back to the persisted value %s when saving fails', async previous => {
+    const failure = new Error('fixture write failed')
+    const updateUser = vi.fn().mockRejectedValue(failure)
+    installSettingsFixture({ autoUpdateEnabled: previous }, updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().fetchAll()
+    const saving = useSettingsStore.getState().setAutoUpdateEnabled(!previous)
+
+    expect(useSettingsStore.getState().autoUpdateEnabled).toBe(!previous)
+    await expect(saving).rejects.toBe(failure)
+    expect(useSettingsStore.getState().autoUpdateEnabled).toBe(previous)
+  })
+
+  it('keeps overlapping saves ordered and does not restore a stale failed choice', async () => {
+    let rejectFirst!: (error: Error) => void
+    const updateUser = vi.fn()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject }))
+      .mockResolvedValueOnce({ ok: true })
+    installSettingsFixture({}, updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+    const first = useSettingsStore.getState().setAutoUpdateEnabled(false)
+    const firstRejected = expect(first).rejects.toThrow('fixture first save failed')
+    await vi.waitFor(() => expect(updateUser).toHaveBeenCalledTimes(1))
+    const second = useSettingsStore.getState().setAutoUpdateEnabled(true)
+    rejectFirst(new Error('fixture first save failed'))
+    await firstRejected
+    await second
+
+    expect(updateUser.mock.calls).toEqual([[{ autoUpdateEnabled: false }], [{ autoUpdateEnabled: true }]])
+    expect(useSettingsStore.getState().autoUpdateEnabled).toBe(true)
+  })
+
+  it.each(['load-before-save', 'load-during-save', 'load-during-save-completes-after-save'] as const)('does not let %s restore automatic updates from a stale settings response', async timing => {
+    let finishSave!: () => void
+    let finishRead!: (settings: Record<string, unknown>) => void
+    const user: Record<string, unknown> = { autoUpdateEnabled: true }
+    const updateUser = vi.fn()
+      .mockImplementationOnce(async (patch: Record<string, unknown>) => {
+        await new Promise<void>(resolve => { finishSave = resolve })
+        Object.assign(user, patch)
+        return { ok: true }
+      })
+      .mockRejectedValueOnce(new Error('fixture later save failed'))
+    installSettingsFixture(user, updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+    const { settingsApi } = await import('../api/settings')
+    await useSettingsStore.getState().fetchAll()
+    vi.mocked(settingsApi.getUser).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
+    let loading: Promise<void>
+    let saving: Promise<void>
+    if (timing === 'load-before-save') {
+      loading = useSettingsStore.getState().fetchAll()
+      saving = useSettingsStore.getState().setAutoUpdateEnabled(false)
+      await vi.waitFor(() => expect(updateUser).toHaveBeenCalledTimes(1))
+      finishSave()
+      await saving
+      finishRead({ autoUpdateEnabled: true })
+      await loading
+    } else {
+      saving = useSettingsStore.getState().setAutoUpdateEnabled(false)
+      await vi.waitFor(() => expect(updateUser).toHaveBeenCalledTimes(1))
+      loading = useSettingsStore.getState().fetchAll()
+      if (timing === 'load-during-save-completes-after-save') {
+        finishSave()
+        await saving
+      }
+      finishRead({ autoUpdateEnabled: true })
+      await loading
+      expect(useSettingsStore.getState().autoUpdateEnabled).toBe(false)
+      if (timing === 'load-during-save') {
+        finishSave()
+        await saving
+      }
+    }
+
+    expect(useSettingsStore.getState().autoUpdateEnabled).toBe(false)
+    expect(user.autoUpdateEnabled).toBe(false)
+    await expect(useSettingsStore.getState().setAutoUpdateEnabled(true)).rejects.toThrow('fixture later save failed')
+    expect(useSettingsStore.getState().autoUpdateEnabled).toBe(false)
+  })
+})
+
 describe('settingsStore update proxy persistence', () => {
   beforeEach(() => {
     vi.resetModules()

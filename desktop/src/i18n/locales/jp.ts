@@ -3574,6 +3574,9 @@ export const jp: Record<TranslationKey, string> = {
 
   // ─── Update Checker ──────────────────────────────────────
   'update.available': 'v{version} が利用可能',
+  'update.autoUpdate': '自動更新',
+  'update.autoUpdateDescription': '新しいバージョンを自動で確認し、バックグラウンドでダウンロードします。オフにしても手動での確認とインストールは利用できます。',
+  'update.autoUpdateSaveFailed': '自動更新の設定を保存できませんでした：{error}',
   'update.availableLabel': '利用可能',
   'update.checking': '更新を確認中...',
   'update.checkNow': '今すぐ確認',
@@ -3581,7 +3584,7 @@ export const jp: Record<TranslationKey, string> = {
   'update.currentVersionUnknown': '不明',
   'update.newVersion': '新しいバージョン v{version} が利用可能',
   'update.downloading': 'ダウンロード中...',
-  'update.downloaded': '更新をダウンロードしました。使用する準備ができたら再起動してください。',
+  'update.downloaded': '更新をダウンロードしました。「インストールして再起動」をクリックして適用してください。',
   'update.idle': '更新を確認して、インストール済みのバージョンを最新の GitHub Release と比較します。',
   'update.installAndRestart': 'インストールして再起動',
   'update.installing': '更新をインストール中...',
@@ -3601,7 +3604,7 @@ export const jp: Record<TranslationKey, string> = {
   'update.proxyUrlInvalid': 'HTTP または HTTPS のプロキシ URL を入力してください。',
   'update.proxyUrlRequired': 'プロキシ URL を入力してください。',
   'update.releaseNotes': 'リリースノート',
-  'update.readyBody': 'v{version} をダウンロードしました。使用する準備ができたら再起動してください。',
+  'update.readyBody': 'v{version} をダウンロードしました。「インストールして再起動」をクリックして適用してください。',
   'update.readyTitle': '更新の準備完了',
   'update.restarting': '更新を完了するために再起動中...',
   'update.upToDate': 'v{version} は最新です。',

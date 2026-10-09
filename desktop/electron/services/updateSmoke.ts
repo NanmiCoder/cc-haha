@@ -44,6 +44,7 @@ function writeLog(logPath: string | undefined, payload: Record<string, unknown>)
 
 class UpdateSmokeUpdater implements ElectronUpdaterLike {
   autoDownload = true
+  autoInstallOnAppQuit = true
   logger: unknown = null
   private progressHandler: ProgressHandler | null = null
 

@@ -101,8 +101,10 @@ export async function handleSettingsApi(
 
 async function handleUserSettings(req: Request): Promise<Response> {
   if (req.method === 'GET') {
+    const userSettings = await settingsService.getUserSettings()
     return Response.json({
-      ...await settingsService.getUserSettings(),
+      ...userSettings,
+      autoUpdateEnabled: await settingsService.getAutoUpdateEnabled(userSettings),
       agentTeamsEnabled: await settingsService.getAgentTeamsEnabled(),
     })
   }

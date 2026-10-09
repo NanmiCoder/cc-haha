@@ -104,6 +104,14 @@ export class SettingsService {
     return this.readJsonFile(this.getUserSettingsPath())
   }
 
+  /** Read-time upgrade for settings written before the desktop update toggle.
+   * Do not rewrite the user-owned file until an explicit preference is saved.
+   */
+  async getAutoUpdateEnabled(settings?: Record<string, unknown>): Promise<boolean> {
+    const user = settings ?? await this.getUserSettings()
+    return user.autoUpdateEnabled !== false
+  }
+
   /** Read-time upgrade for older settings that only stored the team env flag.
    * Keep the original file intact until the user explicitly saves a choice.
    */
@@ -189,6 +197,9 @@ export class SettingsService {
 
   /** 更新用户级设置（顶层浅合并，并保留桌面终端的未知子字段） */
   async updateUserSettings(settings: Record<string, unknown>): Promise<void> {
+    if (Object.hasOwn(settings, 'autoUpdateEnabled') && typeof settings.autoUpdateEnabled !== 'boolean') {
+      throw ApiError.badRequest('autoUpdateEnabled must be a boolean')
+    }
     if (Object.hasOwn(settings, 'agentTeamsEnabled') && typeof settings.agentTeamsEnabled !== 'boolean') {
       throw ApiError.badRequest('agentTeamsEnabled must be a boolean')
     }

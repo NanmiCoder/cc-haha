@@ -185,9 +185,9 @@ describe('E2E: Full Flow', () => {
   // 3. Settings
   // =============================================
 
-  it('should expose the default team preference in initial settings', async () => {
+  it('should expose the default team and automatic update preferences in initial settings', async () => {
     const { data } = await api('GET', '/api/settings/user')
-    expect(data).toEqual({ agentTeamsEnabled: true })
+    expect(data).toEqual({ agentTeamsEnabled: true, autoUpdateEnabled: true })
   })
 
   it('should update and read user settings', async () => {

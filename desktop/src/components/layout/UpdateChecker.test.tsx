@@ -9,7 +9,7 @@ import { useUpdateStore } from '../../stores/updateStore'
 
 describe('UpdateChecker', () => {
   beforeEach(() => {
-    useSettingsStore.setState({ locale: 'en' })
+    useSettingsStore.setState({ locale: 'en', autoUpdateEnabled: true })
     Reflect.deleteProperty(window, '__TAURI__')
     window.desktopHost = {
       ...browserHost,
@@ -44,12 +44,36 @@ describe('UpdateChecker', () => {
     render(<UpdateChecker />)
 
     expect(screen.getByText('Update ready')).toBeInTheDocument()
-    expect(screen.getByText('v0.1.5 has been downloaded. Restart when you are ready to use it.')).toBeInTheDocument()
+    expect(screen.getByText('v0.1.5 has been downloaded. Click “Install and restart” to apply it.')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Claude Code Haha v0.1.5' })).toBeInTheDocument()
 
     const link = screen.getByRole('link', { name: 'Release notes' })
     expect(link).toHaveAttribute('href', 'https://example.com/releases/v0.1.5')
     expect(link).toHaveAttribute('target', '_blank')
+  })
+
+  it('keeps automatic updates quiet when disabled and starts them when re-enabled', async () => {
+    const initialize = vi.fn().mockResolvedValue(undefined)
+    useSettingsStore.setState({ autoUpdateEnabled: false })
+    useUpdateStore.setState({ status: 'downloaded', initialize })
+    render(<UpdateChecker />)
+
+    expect(initialize).not.toHaveBeenCalled()
+    expect(screen.queryByText('Update ready')).not.toBeInTheDocument()
+
+    await act(async () => {
+      useSettingsStore.setState({ autoUpdateEnabled: true })
+    })
+
+    expect(initialize).toHaveBeenCalledTimes(1)
+    expect(screen.getByText('Update ready')).toBeInTheDocument()
+
+    await act(async () => {
+      useSettingsStore.setState({ autoUpdateEnabled: false })
+    })
+
+    expect(screen.queryByText('Update ready')).not.toBeInTheDocument()
+    expect(initialize).toHaveBeenCalledTimes(1)
   })
 
   it('renders the update prompt in Electron desktop runtime', () => {
@@ -176,7 +200,7 @@ describe('UpdateChecker', () => {
     })
 
     expect(await screen.findByText('Update ready')).toBeInTheDocument()
-    expect(screen.getByText('v0.2.0 has been downloaded. Restart when you are ready to use it.')).toBeInTheDocument()
+    expect(screen.getByText('v0.2.0 has been downloaded. Click “Install and restart” to apply it.')).toBeInTheDocument()
     await act(async () => {
       fireEvent.click(screen.getByText('Install and restart'))
     })

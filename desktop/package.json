@@ -63,7 +63,10 @@
     },
     "win": {
       "target": "nsis",
-      "icon": "src-tauri/icons/icon.ico"
+      "icon": "src-tauri/icons/icon.ico",
+      "extraResources": [
+        { "from": "src-tauri/icons/icon.ico", "to": "app-icon.ico" }
+      ]
     },
     "nsis": {
       "oneClick": false,

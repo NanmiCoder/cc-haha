@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import {
@@ -16,7 +16,19 @@ import {
 // These fixtures contain synthetic Mach-O headers, not runnable executables.
 // Resource execution has dedicated cases below with an explicit runner.
 function inspectPackagedArtifacts(rootDir: string, options: Parameters<typeof inspectPackage>[1]) {
-  return inspectPackage(rootDir, { hostPlatform: 'linux', ...options })
+  return inspectPackage(rootDir, {
+    hostPlatform: 'linux',
+    ...(options.platform === 'windows' ? {
+      commandRunner: (command: string, args: string[]) => {
+        expect(command).toBe('bun')
+        expect(args[0]).toBe('run')
+        expect(args[1]).toBe(join(rootDir, 'desktop', 'scripts', 'assert-windows-icon.ts'))
+        const branded = readFileSync(args[2], 'utf8') === 'synthetic branded executable'
+        return { status: branded ? 0 : 1, stderr: branded ? '' : 'The Windows executable icon differs from the application ICO' }
+      },
+    } : {}),
+    ...options,
+  })
 }
 
 function createRepoRoot() {
@@ -83,6 +95,15 @@ function thinMachO(arch: 'arm64' | 'x64', minimum = '14.4') {
   bytes.writeUInt32LE(encodedMinimum, 44)
   bytes.writeUInt32LE(15 << 16, 48)
   return bytes
+}
+
+function writeWindowsBranding(rootDir: string, unpackedDir: string) {
+  // The root-only policy lane mocks the parser process; the desktop parser
+  // suite separately verifies real synthetic PE resource tables.
+  const icon = 'synthetic application ICO'
+  writeFile(rootDir, `${unpackedDir}/Claude Code Haha.exe`, 'synthetic branded executable')
+  writeFile(rootDir, `${unpackedDir}/resources/app-icon.ico`, icon)
+  writeFile(rootDir, 'desktop/src-tauri/icons/icon.ico', icon)
 }
 
 const tempDirs: string[] = []
@@ -171,7 +192,7 @@ describe('final macOS helper cursor resource verification', () => {
       commandRunner: (command, args, options) => {
         expect(args).toEqual(['--probe-cursor-resources'])
         expect(command.startsWith(source.helper)).toBe(false)
-        expect(command).toContain('Relocated Helper.app/Contents/MacOS/cc-haha-computer-use')
+        expect(command.replaceAll('\\', '/')).toContain('Relocated Helper.app/Contents/MacOS/cc-haha-computer-use')
         expect(options?.timeout).toBe(10_000)
         expect(options?.maxBuffer).toBe(1024 * 1024)
         temporaryRoot = options!.cwd
@@ -638,6 +659,7 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
     writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/pty.node')
     writeFile(rootDir, 'desktop/build-artifacts/electron/latest.yml', 'path: Claude Code Haha Setup 0.3.1.exe\n')
+    writeWindowsBranding(rootDir, 'desktop/build-artifacts/electron/win-unpacked')
 
     const report = await inspectPackagedArtifacts(rootDir, { platform: 'windows' })
 
@@ -658,6 +680,7 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/windows-x64/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
     writeFile(rootDir, 'desktop/build-artifacts/windows-x64/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/pty.node')
     writeFile(rootDir, 'desktop/build-artifacts/windows-x64/latest.yml', 'path: Claude-Code-Haha-0.3.1-x64.exe\n')
+    writeWindowsBranding(rootDir, 'desktop/build-artifacts/windows-x64/win-unpacked')
 
     const report = await inspectPackagedArtifacts(rootDir, {
       platform: 'windows',
@@ -667,7 +690,7 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.artifactsDir.endsWith('desktop/build-artifacts/windows-x64')).toBe(true)
+    expect(report.artifactsDir.replaceAll('\\', '/').endsWith('desktop/build-artifacts/windows-x64')).toBe(true)
   })
 
   test('passes Windows arm64 checks only when arm64 sidecar and node-pty native module are present', async () => {
@@ -682,6 +705,7 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/windows-arm64/win-arm64-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
     writeFile(rootDir, 'desktop/build-artifacts/windows-arm64/win-arm64-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-arm64/pty.node')
     writeFile(rootDir, 'desktop/build-artifacts/windows-arm64/latest.yml', 'path: Claude-Code-Haha-0.3.1-arm64.exe\n')
+    writeWindowsBranding(rootDir, 'desktop/build-artifacts/windows-arm64/win-arm64-unpacked')
 
     const report = await inspectPackagedArtifacts(rootDir, {
       platform: 'windows',
@@ -729,12 +753,28 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar-x86_64-pc-windows-msvc.exe')
     writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
     writeFile(rootDir, 'desktop/build-artifacts/electron/win-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/win32-x64/pty.node')
+    writeWindowsBranding(rootDir, 'desktop/build-artifacts/electron/win-unpacked')
 
     const report = await inspectPackagedArtifacts(rootDir, { platform: 'windows', packageKind: 'dir' })
 
     expect(report.passed).toBe(true)
     expect(report.notes.join('\n')).toContain('directory-only development package')
     expect(report.notes.join('\n')).toContain('Windows app-update.yml was not required')
+  })
+
+  test.each(['missing-icon', 'wrong-icon', 'wrong-executable'] as const)('rejects Windows branding with %s', async failure => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    const unpackedDir = 'desktop/build-artifacts/electron/win-unpacked'
+    writeFile(rootDir, `${unpackedDir}/resources/app.asar`)
+    writeWindowsBranding(rootDir, unpackedDir)
+    if (failure === 'missing-icon') rmSync(join(rootDir, unpackedDir, 'resources/app-icon.ico'))
+    if (failure === 'wrong-icon') writeFile(rootDir, `${unpackedDir}/resources/app-icon.ico`, 'wrong icon')
+    if (failure === 'wrong-executable') writeFile(rootDir, `${unpackedDir}/Claude Code Haha.exe`, 'unbranded executable')
+
+    const report = await inspectPackagedArtifacts(rootDir, { platform: 'windows', packageKind: 'dir' })
+    expect(report.missingChecks.some(check => check.label === 'Windows application and taskbar icons')).toBe(true)
+    expect(report.notes.join('\n')).toContain('Windows icon inspection failed:')
   })
 
   test('does not treat the win-unpacked app executable as a Windows release installer', async () => {
@@ -798,7 +838,7 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.artifactsDir.endsWith('desktop/build-artifacts/linux-x64')).toBe(true)
+    expect(report.artifactsDir.replaceAll('\\', '/').endsWith('desktop/build-artifacts/linux-x64')).toBe(true)
   })
 
   test('accepts Linux architecture-specific update metadata from arm64 builds', async () => {
@@ -872,7 +912,7 @@ describe('packaged artifact inspection', () => {
     })
 
     expect(report.passed).toBe(true)
-    expect(report.passedChecks.some((check) => check.path.includes('linux-arm64-unpacked/resources/app.asar'))).toBe(true)
+    expect(report.passedChecks.some((check) => check.path.replaceAll('\\', '/').includes('linux-arm64-unpacked/resources/app.asar'))).toBe(true)
     expect(report.packagedArtifacts.some((artifact) => artifact.label === 'Linux RPM package')).toBe(true)
   })
 
