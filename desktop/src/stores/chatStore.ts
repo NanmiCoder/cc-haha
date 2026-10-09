@@ -1921,6 +1921,88 @@ function overlayLiveHistoryMessage(
   return restoredMessage
 }
 
+type CoalescibleProseMessage = Extract<UIMessage, { type: 'thinking' | 'assistant_text' | 'user_text' }>
+
+function isCoalescibleProse(message: UIMessage): message is CoalescibleProseMessage {
+  return message.type === 'thinking' ||
+    message.type === 'assistant_text' ||
+    message.type === 'user_text'
+}
+
+function sameRestoredProse(live: CoalescibleProseMessage, restored: UIMessage): boolean {
+  if (restored.type !== live.type) return false
+  // Live thinking concatenates consecutive streamed blocks while history joins
+  // them with blank lines, so only the non-whitespace text identifies it.
+  if (live.type === 'thinking') {
+    return live.content.replace(/\s+/g, '') === restored.content.replace(/\s+/g, '')
+  }
+  return live.content.trim() === restored.content.trim()
+}
+
+/**
+ * Thinking has no durable identity, and live text only carries a transcript id
+ * once an unchanged cache was hydrated. Without this pass a cold merge keeps
+ * the live copy beside its durable copy (issue #1476). A live row is the same
+ * output only when both lists put it in the same gap between shared rows and
+ * the same number of user turns away from that shared row; equal prose with no
+ * shared anchor may still be a genuine newer reply and stays separate.
+ */
+function coalesceAnchoredLiveProse(
+  merged: UIMessage[],
+  liveIndexes: number[],
+  restoredCount: number,
+): void {
+  const claimed = new Set(liveIndexes.filter((index) => index < restoredCount))
+  const countUserRows = (rows: UIMessage[]) =>
+    rows.reduce((count, row) => count + (row.type === 'user_text' ? 1 : 0), 0)
+  const liveRowsBetween = (from: number, to: number) =>
+    liveIndexes.slice(from, to).map((index) => merged[index]!)
+
+  let previousAnchorOffset = -1
+  for (let offset = 0; offset < liveIndexes.length; offset++) {
+    const index = liveIndexes[offset]!
+    if (index < restoredCount) {
+      previousAnchorOffset = offset
+      continue
+    }
+    const liveMessage = merged[index]!
+    if (!isCoalescibleProse(liveMessage)) continue
+
+    let nextAnchorOffset = offset + 1
+    while (
+      nextAnchorOffset < liveIndexes.length &&
+      liveIndexes[nextAnchorOffset]! >= restoredCount
+    ) nextAnchorOffset++
+    const hasNextAnchor = nextAnchorOffset < liveIndexes.length
+    if (previousAnchorOffset < 0 && !hasNextAnchor) continue
+
+    const lowerBound = previousAnchorOffset < 0 ? -1 : liveIndexes[previousAnchorOffset]!
+    const upperBound = hasNextAnchor ? liveIndexes[nextAnchorOffset]! : restoredCount
+    if (upperBound <= lowerBound) continue
+
+    // Count user turns from the preceding shared row when there is one,
+    // otherwise back from the following shared row.
+    const liveTurnDistance = previousAnchorOffset >= 0
+      ? countUserRows(liveRowsBetween(previousAnchorOffset + 1, offset))
+      : countUserRows(liveRowsBetween(offset + 1, nextAnchorOffset))
+    let matchedIndex: number | undefined
+    for (let candidate = lowerBound + 1; candidate < upperBound; candidate++) {
+      if (claimed.has(candidate) || !sameRestoredProse(liveMessage, merged[candidate]!)) continue
+      const restoredTurnDistance = previousAnchorOffset >= 0
+        ? countUserRows(merged.slice(lowerBound + 1, candidate))
+        : countUserRows(merged.slice(candidate + 1, upperBound))
+      if (restoredTurnDistance !== liveTurnDistance) continue
+      matchedIndex = candidate
+      break
+    }
+    if (matchedIndex === undefined) continue
+
+    claimed.add(matchedIndex)
+    liveIndexes[offset] = matchedIndex
+    previousAnchorOffset = offset
+  }
+}
+
 function mergeColdRestoredHistoryIntoLiveMessages(
   restoredMessages: UIMessage[],
   liveMessages: UIMessage[],
@@ -1988,10 +2070,12 @@ function mergeColdRestoredHistoryIntoLiveMessages(
     }
   }
 
+  const restoredCount = restoredMessages.length
+  coalesceAnchoredLiveProse(merged, liveIndexes, restoredCount)
+
   // A bounded REST page is only a suffix of the transcript. Unmatched live
   // rows can be an older cached prefix, not just new output. Place them by
   // shared identities while leaving the durable page's order untouched.
-  const restoredCount = restoredMessages.length
   const earliestTimestamp = restoredMessages.reduce((earliest, message) =>
     Number.isFinite(message.timestamp) ? Math.min(earliest, message.timestamp) : earliest, Infinity)
   const olderPrefix = new Set<number>()
@@ -5186,9 +5270,13 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const base = pendingText.trim()
             ? appendAssistantTextMessage(s.messages, pendingText, Date.now())
             : s.messages
+          const lastIndex = findStreamMergeTargetIndex(base)
+          const last = lastIndex >= 0 ? base[lastIndex] : undefined
           // 服务端两个 thinking 发射点都做了非空过滤，但 `&& delta.thinking` 是真值
           // 判断，纯空白仍能漏过来，落到下面就是一个点开什么都没有的空壳气泡。
-          if (!msg.text.trim()) {
+          // 只挡整块空白和会新开气泡的空白；正在流式的思考里，单独的空格/换行
+          // 增量是正文的一部分，丢掉它会让实时内容和 transcript 对不上（#1476）。
+          if (!msg.text.trim() && (msg.complete === true || last?.type !== 'thinking')) {
             skippedThinkingBlock = true
             return { messages: base, streamingText: '' }
           }
@@ -5200,8 +5288,6 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             skippedThinkingBlock = true
             return { messages: base, streamingText: '' }
           }
-          const lastIndex = findStreamMergeTargetIndex(base)
-          const last = lastIndex >= 0 ? base[lastIndex] : undefined
           if (last && last.type === 'thinking') {
             const updated = [...base]
             updated[lastIndex] = {
