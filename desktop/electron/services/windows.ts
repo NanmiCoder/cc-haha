@@ -256,6 +256,30 @@ export function refreshWindowsDragHitTest(
   return () => clearTimeout(timer)
 }
 
+export function installWindowsDragHitTestRefresh(
+  window: BrowserWindow,
+  platform: NodeJS.Platform = process.platform,
+  delayMs = 100,
+) {
+  if (platform !== 'win32') return
+
+  // Windows caches the native drag hit-test map for frameless windows, so the
+  // title bar stops responding to drags after any frame change (#1370). One
+  // state change emits several of these events back to back; cancelling the
+  // pending nudge collapses each burst into a single ±1px bounds bounce.
+  let cancelPending: (() => void) | undefined
+  const rearm = () => {
+    cancelPending?.()
+    cancelPending = refreshWindowsDragHitTest(window, platform, delayMs)
+  }
+  window.on('maximize', rearm)
+  window.on('unmaximize', rearm)
+  window.on('restore', rearm)
+  window.on('enter-full-screen', rearm)
+  window.on('leave-full-screen', rearm)
+  window.on('focus', rearm)
+}
+
 export function installWindowLifecycle({
   app,
   window,

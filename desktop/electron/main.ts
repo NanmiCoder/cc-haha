@@ -97,6 +97,7 @@ import {
 } from './services/pets'
 import {
   installWindowLifecycle,
+  installWindowsDragHitTestRefresh,
   readWindowState,
   refreshWindowsDragHitTest,
   restoreWindowMaximized,
@@ -951,6 +952,10 @@ async function createMainWindow() {
     window: mainWindow,
     shouldQuit: () => isQuitting,
   })
+  // The one-shot refresh below only covers the first frameless show; the
+  // native drag map also goes stale on every later window state change, so
+  // keep it re-armed from window events as well.
+  installWindowsDragHitTestRefresh(mainWindow)
 
   const window = mainWindow
   const diagnosticsFile = electronHostDiagnosticsFile(process.env)
