@@ -444,7 +444,13 @@ export async function executeAgentFlowAgainstProvider(
   const sandbox = createQualityGateSandbox({
     label: options.label,
     seedProviders: options.seedProviders,
-    envOverrides: { CC_HAHA_DISABLE_TERMINAL_SHELL_ENV: '1' },
+    envOverrides: {
+      CC_HAHA_DISABLE_TERMINAL_SHELL_ENV: '1',
+      // This lane stands in for a desktop user's machine, which has no CI flag. With
+      // CI set, the CLI insists on ANTHROPIC_API_KEY (src/utils/auth.ts) and exits at
+      // startup on the desktop provider path, which hands credentials over differently.
+      CI: '',
+    },
   })
 
   const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(port)], {

@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { CONNECTORS } from './catalog.js'
-import { getArtifactPins, downloadVerified, managedInstallation, prepareManagedRuntime, runConnectorProcess, verifyIntegrity, type RuntimeDependencies } from './managedRuntime.js'
+import { defaultRuntimeDependencies, getArtifactPins, downloadVerified, managedInstallation, prepareManagedRuntime, runConnectorProcess, verifyIntegrity, type RuntimeDependencies } from './managedRuntime.js'
 
 const roots: string[] = []
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }) })
@@ -129,7 +129,9 @@ test('released pins remain addressable by their exact installed version, never c
   expect(getArtifactPins(installedDefinition, 'win32-x64').binaryIntegrity).toBe('sha256-403b56ab849b28b4072b46799bd898959dc55382c18d7f4e83cd65f49f570b3f')
   expect(() => getArtifactPins(futureCatalogDefinition, 'darwin-arm64')).toThrow('no pinned artifact')
   const directory = await root()
-  await expect(prepareManagedRuntime(futureCatalogDefinition, directory, signal(), () => {})).rejects.toThrow('no pinned artifact')
+  // Real pins on a supported host: Linux CI must not fail earlier on the platform check.
+  const supportedHost = { ...defaultRuntimeDependencies, platform: 'darwin', arch: 'arm64' }
+  await expect(prepareManagedRuntime(futureCatalogDefinition, directory, signal(), () => {}, supportedHost)).rejects.toThrow('no pinned artifact')
   expect(await readdir(directory)).toEqual([])
   // Only an explicitly injected fixture checksum admits unpublished versions.
   expect(getArtifactPins(futureCatalogDefinition, 'darwin-arm64', fakeRuntime()).binaryIntegrity).toBe(fakeRuntime().binaryIntegrity!(futureCatalogDefinition, 'darwin-arm64'))

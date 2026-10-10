@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 
-import { chmodSync, closeSync, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep, win32 } from 'node:path'
 import { rootBunTestFilter } from '../pr/bun-test-filter'
-import { createSandboxedTestEnvironment } from '../pr/test-environment'
+import { createSandboxedTestEnvironment, removeTestSandbox } from '../pr/test-environment'
 import { loadQuarantineManifest, quarantinedPathSet } from './quarantine'
 
 type CoverageMetric = {
@@ -449,35 +449,12 @@ export function hasUsableCoverageSummary(summary: CoverageSummary) {
   return Object.values(summary).some((coverage) => coverage.total > 0)
 }
 
-function openDirectoryTree(directory: string) {
-  const stat = lstatSync(directory)
-  if (!stat.isDirectory()) return
-  if ((stat.mode & 0o700) !== 0o700) chmodSync(directory, stat.mode | 0o700)
-  for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (entry.isDirectory()) openDirectoryTree(join(directory, entry.name))
-  }
-}
-
 /**
  * Remove a suite's sandbox HOME without letting a test's leftovers discard the
- * finished coverage run. A read-only directory left under the sandboxed TMPDIR
- * blocks a plain recursive rm on POSIX, so open the tree up (never following
- * links) and retry; anything still in the way becomes a warning.
+ * finished coverage run. See `removeTestSandbox`.
  */
 export function removeSandboxHome(directory: string, warn: (message: string) => void = console.warn) {
-  try {
-    rmSync(directory, { recursive: true, force: true })
-    return
-  } catch {
-    // Retry below with the tree made writable.
-  }
-  try {
-    openDirectoryTree(directory)
-    rmSync(directory, { recursive: true, force: true })
-  } catch (error) {
-    const prefix = process.env.GITHUB_ACTIONS === 'true' ? '::warning::' : ''
-    warn(`${prefix}coverage: could not remove test sandbox ${directory}: ${error instanceof Error ? error.message : String(error)}`)
-  }
+  removeTestSandbox(directory, 'coverage', warn)
 }
 
 export async function runCommand(command: string[], cwd: string, logPath: string) {

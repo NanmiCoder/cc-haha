@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { createSandboxedTestEnvironment } from './test-environment'
+import { createSandboxedTestEnvironment, removeTestSandbox } from './test-environment'
 
 type SwiftCheckRunner = (
   command: string[],
@@ -42,7 +42,9 @@ export async function runSwiftChecks(options: {
       'bun', 'test', join(root, 'native/cu-helper/build.test.ts'),
     ], { cwd: root, env })
   } finally {
-    rmSync(sandboxHome, { recursive: true, force: true })
+    // The tests already reported. A leftover the runner refuses to delete must not
+    // turn a passing Swift lane red (seen as EROFS on GitHub macOS runners).
+    removeTestSandbox(sandboxHome, 'swift-checks')
   }
 }
 
