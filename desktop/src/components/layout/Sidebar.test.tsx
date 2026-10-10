@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Profiler, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
@@ -649,6 +649,74 @@ describe('Sidebar', () => {
       expect(rows.at(-2)).toContain('Alpha folded')
       expect(rows.at(-1)).toContain('Alpha waiting')
     })
+  })
+
+  it('stays still while a session streams and updates only when it starts or stops running (#1480)', () => {
+    // Every streamed token rewrote the chat-store session map. The sidebar read
+    // the whole map, so each token re-rendered every project and row — with a
+    // few hundred sessions and two long /goal runs streaming, the window spent
+    // most of its time here and a click on New Session waited seconds.
+    const base = new Date('2026-05-15T10:00:00.000Z').getTime()
+    useSessionStore.setState({
+      sessions: [
+        makeSession('alpha-1', 'Alpha streaming', '/workspace/alpha', new Date(base).toISOString()),
+        makeSession('alpha-2', 'Alpha quiet', '/workspace/alpha', new Date(base - 1000).toISOString()),
+      ],
+    })
+    useChatStore.setState({
+      sessions: { 'alpha-1': makeChatSessionState({ chatState: 'streaming' }) },
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    const onRender = vi.fn()
+    render(<Profiler id="sidebar" onRender={onRender}><Sidebar /></Profiler>)
+    expect(within(screen.getByRole('button', { name: /Alpha streaming/ })).getByLabelText('Session running')).toBeInTheDocument()
+
+    onRender.mockClear()
+    for (const chunk of ['Run', 'Running the', 'Running the tests']) {
+      act(() => {
+        useChatStore.setState((state) => ({
+          sessions: {
+            ...state.sessions,
+            'alpha-1': { ...state.sessions['alpha-1']!, streamingText: chunk, streamingResponseChars: chunk.length },
+          },
+        }))
+      })
+    }
+    expect(onRender).not.toHaveBeenCalled()
+
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: { ...state.sessions, 'alpha-1': { ...state.sessions['alpha-1']!, chatState: 'idle' } },
+      }))
+    })
+    expect(onRender).toHaveBeenCalled()
+    expect(within(screen.getByRole('button', { name: /Alpha streaming/ })).queryByLabelText('Session running')).not.toBeInTheDocument()
+
+    onRender.mockClear()
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: { ...state.sessions, 'alpha-2': makeChatSessionState({ chatState: 'thinking' }) },
+      }))
+    })
+    expect(onRender).toHaveBeenCalled()
+    expect(within(screen.getByRole('button', { name: /Alpha quiet/ })).getByLabelText('Session running')).toBeInTheDocument()
+  })
+
+  it('keeps row times current on its own once streaming no longer re-renders it (#1480)', () => {
+    // Row times used to refresh only because every streamed token re-rendered
+    // the sidebar. Without that they need their own clock.
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-05-15T10:00:00.000Z'))
+    useSessionStore.setState({
+      sessions: [makeSession('alpha-1', 'Alpha quiet', '/workspace/alpha', '2026-05-15T10:00:00.000Z')],
+    })
+    render(<Sidebar />)
+    const row = () => screen.getByRole('button', { name: /Alpha quiet/ })
+    expect(within(row()).getByText('just now')).toBeInTheDocument()
+
+    act(() => {
+      vi.advanceTimersByTime(10 * 60_000)
+    })
+    expect(within(row()).getByText('10m ago')).toBeInTheDocument()
   })
 
   it('does not show a fold control when a project is at or below the collapse threshold', () => {

@@ -52,7 +52,7 @@ import {
   SessionActivityPanel,
   type OpenSubagentPayload,
 } from '../components/activity/SessionActivityPanel'
-import { buildMainSessionActivityModel, hasVisibleSessionActivity } from '../components/activity/sessionActivityModel'
+import { getMainSessionActivityModel, hasVisibleSessionActivity } from '../components/activity/sessionActivityModel'
 import { runsForSession, useWorkflowStore } from '../stores/workflowStore'
 import type { SessionListItem } from '../types/session'
 import type { ActiveGoalState, TokenUsage } from '../types/chat'
@@ -595,7 +595,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     const includeCliTasks = trackedTaskSessionId === activeTabId
     const teamTaskWindows = teamTaskWindowsForSnapshot(agentTeamsSnapshot, activeTeamStartedAt)
 
-    return buildMainSessionActivityModel({
+    return getMainSessionActivityModel({
       sessionId: activeTabId,
       messages,
       // cliTaskStore is explicitly loaded from the session-id list, so these

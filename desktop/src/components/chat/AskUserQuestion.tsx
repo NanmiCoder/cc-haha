@@ -109,7 +109,7 @@ export function AskUserQuestion({
   supersededByUserMessage,
   markerWhenPending = false,
 }: Props) {
-  const { respondToPermission } = useChatStore()
+  const respondToPermission = useChatStore((s) => s.respondToPermission)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const targetSessionId = sessionId ?? activeTabId
   const pendingRequest = useChatStore((s) => targetSessionId

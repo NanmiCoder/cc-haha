@@ -355,7 +355,7 @@ export const ActivityGroup = memo(function ActivityGroup({
 })
 
 /** A thought on the rail: a small hollow stop, its row hung on the text column. */
-function TimelineThinking({ content, isActive }: { content: string; isActive: boolean }) {
+const TimelineThinking = memo(function TimelineThinking({ content, isActive }: { content: string; isActive: boolean }) {
   return (
     <div className="relative pl-[30px]">
       <span
@@ -365,7 +365,7 @@ function TimelineThinking({ content, isActive }: { content: string; isActive: bo
       <ThinkingBlock content={content} isActive={isActive} />
     </div>
   )
-}
+})
 
 type RunImageStrip = ToolResultImageExtraction & {
   id: string
@@ -426,15 +426,7 @@ function CollapsedRunImages({
   )
 }
 
-/** A tool row plus, indented under it on its own rail, the rows of anything it dispatched. */
-function ActivityToolRow({
-  toolCall,
-  resultMap,
-  childToolCallsByParent,
-  revealToolUseId,
-  awaitingToolUseIds,
-  live = false,
-}: {
+type ActivityToolRowProps = {
   toolCall: ToolCall
   resultMap: Map<string, ToolResult>
   childToolCallsByParent: Map<string, ToolCall[]>
@@ -442,9 +434,44 @@ function ActivityToolRow({
   awaitingToolUseIds?: ReadonlySet<string>
   /** The run is still being written to, so a resultless call is executing. */
   live?: boolean
-}) {
+}
+
+const NO_CHILD_TOOL_CALLS: ToolCall[] = []
+
+/**
+ * Whether `toolCall`'s row, and the rows it dispatched, read the same inputs
+ * from both prop sets. The maps themselves are rebuilt from the whole
+ * transcript on every streamed token, so comparing them by identity would
+ * re-render every row of a run on every token — a live /goal run reached 1,400
+ * rows and stalled the window for seconds (#1480). The message objects inside
+ * them keep their identity until that message itself changes.
+ */
+function sameRowInputs(
+  toolCall: ToolCall,
+  prev: ActivityToolRowProps,
+  next: ActivityToolRowProps,
+): boolean {
+  if (prev.resultMap.get(toolCall.toolUseId) !== next.resultMap.get(toolCall.toolUseId)) return false
+  if (isAwaiting(toolCall, prev.awaitingToolUseIds) !== isAwaiting(toolCall, next.awaitingToolUseIds)) return false
+  const prevChildren = prev.childToolCallsByParent.get(toolCall.toolUseId) ?? NO_CHILD_TOOL_CALLS
+  const nextChildren = next.childToolCallsByParent.get(toolCall.toolUseId) ?? NO_CHILD_TOOL_CALLS
+  if (prevChildren.length !== nextChildren.length) return false
+  return nextChildren.every((child, index) => (
+    child === prevChildren[index] && sameRowInputs(child, prev, next)
+  ))
+}
+
+/** A tool row plus, indented under it on its own rail, the rows of anything it dispatched. */
+const ActivityToolRow = memo(function ActivityToolRow({
+  toolCall,
+  resultMap,
+  childToolCallsByParent,
+  revealToolUseId,
+  awaitingToolUseIds,
+  live = false,
+}: ActivityToolRowProps) {
   const result = resultMap.get(toolCall.toolUseId)
-  const childToolCalls = childToolCallsByParent.get(toolCall.toolUseId) ?? []
+  const childToolCalls = childToolCallsByParent.get(toolCall.toolUseId) ?? NO_CHILD_TOOL_CALLS
 
   return (
     <div data-chat-anchor-id={toolCall.id}>
@@ -452,7 +479,9 @@ function ActivityToolRow({
         chrome="row"
         toolName={toolCall.toolName}
         input={toolCall.input}
-        result={result ? { content: result.content, isError: result.isError } : null}
+        // The transcript's own result object, not a copy: `ToolCallBlock` is
+        // memoized, and a fresh `{ content, isError }` here defeated it.
+        result={result ?? null}
         isPending={toolCall.isPending}
         status={toolCall.status}
         partialInput={toolCall.partialInput}
@@ -478,4 +507,9 @@ function ActivityToolRow({
       )}
     </div>
   )
-}
+}, (prev, next) => (
+  prev.toolCall === next.toolCall &&
+  prev.live === next.live &&
+  prev.revealToolUseId === next.revealToolUseId &&
+  sameRowInputs(next.toolCall, prev, next)
+))
