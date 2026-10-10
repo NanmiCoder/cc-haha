@@ -930,6 +930,11 @@ async function handleUserMessage(
   // own activity lifecycle.
   beginSessionChatActivity(sessionId)
   clearPrewarmState(sessionId)
+  // A prewarmed session binds only metadata capture (bindPrewarmMetadataCapture),
+  // which swallows CLI output. Once a real user turn starts, the session belongs
+  // to the conversation — rebind the full output forwarding so streaming,
+  // transcript writes and results reach this client instead of vanishing.
+  bindClientSessionOutput(sessionId, ws)
 
   // Send thinking status
   sendMessage(ws, { type: 'status', state: 'thinking', verb: 'Thinking' })
