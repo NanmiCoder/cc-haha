@@ -33,6 +33,7 @@ import { useUIStore } from '@/stores/uiStore'
 import { selectActiveVoiceProvider, useVoiceInputStore } from '@/stores/voiceInputStore'
 import type { NetworkProxyMode } from '@/types/settings'
 import { recorderErrorKey, useMicrophoneSelection } from './useMicrophoneSelection'
+import { VoiceShortcutSettings } from './VoiceShortcutSettings'
 import { VoiceTranscriptionTest } from './VoiceTranscriptionTest'
 
 /** Upper bound for one settings test; the server limit can only lower it. */
@@ -349,6 +350,8 @@ export function VoiceInputSettings() {
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      {captureSupported ? <VoiceShortcutSettings /> : null}
 
       <SettingsSection title={t('voice.settings.test.title')} description={t('voice.settings.test.description')}>
         <SettingsGroup>

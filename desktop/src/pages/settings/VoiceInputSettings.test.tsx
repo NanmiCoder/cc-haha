@@ -180,13 +180,14 @@ describe('VoiceInputSettings loading states', () => {
 })
 
 describe('VoiceInputSettings layout', () => {
-  it('keeps three cards under short headings: recognition, microphone, test', async () => {
+  it('keeps four cards under short headings: recognition, microphone, shortcut, test', async () => {
     await renderPage(makeCatalog(READY))
 
     expect(screen.getAllByRole('heading', { level: 2 }).map(heading => heading.textContent)).toEqual(['Voice Input'])
     expect(screen.getAllByRole('heading', { level: 3 }).map(heading => heading.textContent)).toEqual([
       'Recognition engine',
       'Microphone',
+      'Keyboard shortcut',
       'Transcription test',
     ])
     // Enable, engine, model and language are rows of the first card, not cards of their own.

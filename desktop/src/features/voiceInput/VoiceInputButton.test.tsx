@@ -19,6 +19,7 @@ import { SETTINGS_TAB_ID, useTabStore } from '@/stores/tabStore'
 import { useUIStore } from '@/stores/uiStore'
 import { selectVoiceInputReady, useVoiceInputStore } from '@/stores/voiceInputStore'
 import { VoiceRecorderError, type StartRecordingOptions } from './recorder'
+import { useVoiceShortcutStore } from './shortcutPreference'
 import { useComposerDictation } from './useComposerDictation'
 import { VoiceInputButton } from './VoiceInputButton'
 import { COUNTDOWN_SECONDS, VoiceRecordingBar } from './VoiceRecordingBar'
@@ -200,6 +201,8 @@ beforeEach(() => {
   })
   useSettingsStore.setState({ locale: 'en' })
   useVoiceInputStore.setState({ catalog: catalogFixture(), loading: false, error: null })
+  // The button's own flows are about the microphone; the shortcut has its own block.
+  useVoiceShortcutStore.setState({ enabled: false, shortcut: null, platform: 'mac' })
   localStorage.clear()
   // Voice input exists only in the desktop app.
   window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
@@ -1074,5 +1077,226 @@ describe('errors', () => {
       await vi.advanceTimersByTimeAsync(9000)
     })
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
+})
+
+describe('keyboard shortcut', () => {
+  const RIGHT_OPTION = { code: 'AltRight', key: 'Alt', altKey: true }
+  const RIGHT_OPTION_UP = { code: 'AltRight', key: 'Alt' }
+
+  type KeyInit = { code: string; key: string; altKey?: boolean; ctrlKey?: boolean; shiftKey?: boolean; metaKey?: boolean }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    useVoiceShortcutStore.setState({ enabled: true, shortcut: null, platform: 'mac' })
+  })
+
+  async function press(init: KeyInit, target: Element = document.body) {
+    await act(async () => {
+      fireEvent.keyDown(target, init)
+    })
+  }
+
+  async function release(init: KeyInit, target: Element = document.body) {
+    await act(async () => {
+      fireEvent.keyUp(target, init)
+    })
+  }
+
+  async function tap(target: Element = document.body) {
+    await press(RIGHT_OPTION, target)
+    await release(RIGHT_OPTION_UP, target)
+  }
+
+  async function wait(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms)
+    })
+  }
+
+  it('names the shortcut in the microphone tooltip, per platform', () => {
+    const { unmount } = render(<Harness />)
+    expect(screen.getByRole('button', { name: 'Dictate (Right ⌥)' })).toHaveAttribute('title', 'Dictate (Right ⌥)')
+    unmount()
+
+    useVoiceShortcutStore.setState({ platform: 'windows' })
+    render(<Harness />)
+    expect(screen.getByRole('button', { name: 'Dictate (Right Ctrl)' })).toBeInTheDocument()
+  })
+
+  it('leaves the tooltip plain while the shortcut is switched off', () => {
+    useVoiceShortcutStore.setState({ enabled: false })
+    render(<Harness />)
+    expect(startButton()).toBeInTheDocument()
+  })
+
+  it('a tap starts recording and keeps it running; the next press stops and transcribes', async () => {
+    render(<Harness initial="note:" />)
+
+    await tap()
+    expect(mocks.startRecording).toHaveBeenCalledTimes(1)
+    await wait(2_000)
+    expect(recording.stop).not.toHaveBeenCalled()
+    expect(stopButton()).toBeInTheDocument()
+
+    await press(RIGHT_OPTION)
+    expect(recording.stop).toHaveBeenCalledTimes(1)
+    await release(RIGHT_OPTION_UP)
+    await deliver('hello')
+
+    expect(draft()).toBe('note: hello')
+    // The release of the stopping press must not open the microphone again.
+    expect(mocks.startRecording).toHaveBeenCalledTimes(1)
+  })
+
+  it('a hold records only while the key is down', async () => {
+    render(<Harness />)
+
+    await press(RIGHT_OPTION)
+    expect(mocks.startRecording).not.toHaveBeenCalled()
+    await wait(300)
+    expect(mocks.startRecording).toHaveBeenCalledTimes(1)
+
+    await wait(1_500)
+    expect(recording.stop).not.toHaveBeenCalled()
+    await release(RIGHT_OPTION_UP)
+    expect(recording.stop).toHaveBeenCalledTimes(1)
+    await deliver('held to talk')
+    expect(draft()).toBe('held to talk')
+  })
+
+  it('stops a hold released while the microphone is still opening, once it opens', async () => {
+    let grant!: (value: FakeRecording) => void
+    mocks.startRecording.mockImplementation((options: StartRecordingOptions) => {
+      startOptions = options
+      return new Promise(resolve => { grant = resolve as typeof grant })
+    })
+    render(<Harness />)
+
+    await press(RIGHT_OPTION)
+    await wait(300)
+    await release(RIGHT_OPTION_UP)
+    expect(recording.stop).not.toHaveBeenCalled()
+
+    await act(async () => {
+      grant(recording)
+    })
+    expect(recording.stop).toHaveBeenCalledTimes(1)
+  })
+
+  it('never opens the microphone for a combination such as ⌥E', async () => {
+    render(<Harness />)
+
+    await press(RIGHT_OPTION)
+    await press({ code: 'KeyE', key: '´', altKey: true })
+    await wait(1_000)
+    await release({ code: 'KeyE', key: '´', altKey: true })
+    await release(RIGHT_OPTION_UP)
+
+    expect(mocks.startRecording).not.toHaveBeenCalled()
+  })
+
+  it('drops a hold that turns into a combination, without transcribing it', async () => {
+    render(<Harness />)
+
+    await press(RIGHT_OPTION)
+    await wait(400)
+    expect(mocks.startRecording).toHaveBeenCalledTimes(1)
+    await press({ code: 'KeyE', key: '´', altKey: true })
+
+    expect(recording.cancel).toHaveBeenCalledTimes(1)
+    expect(recording.stop).not.toHaveBeenCalled()
+  })
+
+  it('stops a dictation started from the microphone button', async () => {
+    render(<Harness />)
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Dictate (Right ⌥)' }))
+    })
+    await screen.findByRole('button', { name: en('voice.composer.stop') })
+
+    await tap()
+
+    expect(recording.stop).toHaveBeenCalledTimes(1)
+    expect(mocks.startRecording).toHaveBeenCalledTimes(1)
+  })
+
+  it('is ignored while another text field has focus', async () => {
+    render(
+      <>
+        <input aria-label="other field" />
+        <Harness />
+      </>,
+    )
+    const other = screen.getByRole('textbox', { name: 'other field' })
+    other.focus()
+
+    await tap(other)
+
+    expect(mocks.startRecording).not.toHaveBeenCalled()
+  })
+
+  it('works while the composer itself has focus', async () => {
+    render(<Harness />)
+    focusComposerAt(0)
+
+    await tap(editorView().editor)
+
+    expect(mocks.startRecording).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing for a hidden composer, before the model is ready, or when switched off', async () => {
+    const { rerender } = render(<Harness contextKey={null} />)
+    await tap()
+
+    rerender(<Harness />)
+    act(() => useVoiceInputStore.setState({ catalog: catalogFixture({}, 'unprepared') }))
+    await tap()
+
+    act(() => {
+      useVoiceInputStore.setState({ catalog: catalogFixture() })
+      useVoiceShortcutStore.setState({ enabled: false })
+    })
+    await tap()
+
+    expect(mocks.startRecording).not.toHaveBeenCalled()
+    expect(useTabStore.getState().activeTabId).not.toBe(SETTINGS_TAB_ID)
+  })
+
+  it('records into the composer that has focus when two are on screen', async () => {
+    render(
+      <>
+        <Harness contextKey="main" />
+        <Harness contextKey="side" />
+      </>,
+    )
+    // The main composer has focus; the side one mounted later, so without the
+    // focus check it would win as the newest.
+    const editors = document.querySelectorAll<HTMLElement>('[data-composer-editor]')
+    const mainView = getComposerViewForTesting(editors[0] ?? null)!
+    vi.spyOn(mainView, 'hasFocus').mockReturnValue(true)
+
+    await tap()
+    await tap()
+    await deliver('to the main one')
+
+    const drafts = screen.getAllByTestId('draft')
+    expect(drafts[0]).toHaveTextContent('to the main one')
+    expect(drafts[1]).toHaveTextContent(/^$/)
+  })
+
+  it('follows a recorded chord: a short press latches, the next press stops', async () => {
+    useVoiceShortcutStore.setState({ shortcut: { kind: 'chord', modifiers: ['shift', 'meta'], code: 'Space' } })
+    render(<Harness />)
+    const chord = { code: 'Space', key: ' ', shiftKey: true, metaKey: true }
+
+    await press(chord)
+    expect(mocks.startRecording).toHaveBeenCalledTimes(1)
+    await release(chord)
+    await wait(1_000)
+    expect(recording.stop).not.toHaveBeenCalled()
+
+    await press(chord)
+    expect(recording.stop).toHaveBeenCalledTimes(1)
   })
 })
