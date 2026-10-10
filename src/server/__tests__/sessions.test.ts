@@ -577,6 +577,39 @@ describe('SessionService', () => {
     await expect(fs.access(collaborationTranscript)).resolves.toBeNull()
   })
 
+  it('keeps the live transcript when another project directory name reaches the same file', async () => {
+    // At system/init the CLI has not flushed the turn yet, so its own file is
+    // still metadata-only. Reaching it through a second directory name must not
+    // make it look like a stray placeholder.
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const transcript = await writeSessionFile('-tmp-worktree', sessionId, [
+      makeSnapshotEntry(),
+      { type: 'session-meta', isMeta: true, workDir: '/tmp/worktree', timestamp: '2026-01-01T00:00:00.000Z' },
+    ])
+    const aliasDir = path.join(tmpDir, 'projects', '-tmp-alias')
+    await fs.mkdir(aliasDir, { recursive: true })
+    await fs.link(transcript, path.join(aliasDir, `${sessionId}.jsonl`))
+
+    expect(await service.deletePlaceholderSessionFiles(sessionId, '/tmp/worktree')).toBe(0)
+    await expect(fs.access(transcript)).resolves.toBeNull()
+  })
+
+  it('keeps the live transcript when the project directory differs only by case on a case-insensitive file system', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    // Windows and default macOS volumes resolve both spellings to one folder;
+    // readdir reports the spelling it was created with.
+    const transcript = await writeSessionFile('-tmp-Worktree', sessionId, [
+      makeSnapshotEntry(),
+      { type: 'session-meta', isMeta: true, workDir: '/tmp/Worktree', timestamp: '2026-01-01T00:00:00.000Z' },
+    ])
+    const caseInsensitive = await fs.access(path.join(tmpDir, 'projects', '-tmp-worktree', `${sessionId}.jsonl`))
+      .then(() => true, () => false)
+    if (!caseInsensitive) return
+
+    expect(await service.deletePlaceholderSessionFiles(sessionId, '/tmp/worktree')).toBe(0)
+    await expect(fs.access(transcript)).resolves.toBeNull()
+  })
+
   it('prefers a transcript with an oversized turn over a newer metadata-only placeholder', async () => {
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
     const transcript = await writeSessionFile('-tmp-large-transcript', sessionId, [

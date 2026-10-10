@@ -639,6 +639,21 @@ function providerModelLooksRelated(
   ))
 }
 
+type FileIdentity = { dev: bigint, ino: bigint }
+
+async function statFileIdentity(filePath: string): Promise<FileIdentity | null> {
+  try {
+    const stat = await fs.stat(filePath, { bigint: true })
+    return { dev: stat.dev, ino: stat.ino }
+  } catch {
+    return null
+  }
+}
+
+function isSameFileIdentity(left: FileIdentity, right: FileIdentity | null): boolean {
+  return right !== null && left.dev === right.dev && left.ino === right.ino
+}
+
 // ============================================================================
 // Service
 // ============================================================================
@@ -5130,6 +5145,11 @@ export class SessionService {
     }
 
     const keepProjectDir = this.sanitizePath(normalizeDriveRootPathForPlatform(keepWorkDir))
+    // Windows and default macOS volumes are case-insensitive: `D--repo` and
+    // `d--repo` are one folder, and readdir reports whichever spelling created
+    // it. Compare file identity so the CLI's own transcript, still metadata-only
+    // when init arrives, is never mistaken for a stray placeholder.
+    const keepFile = await statFileIdentity(path.join(projectsDir, keepProjectDir, `${sessionId}.jsonl`))
     let removed = 0
     for (const projectDir of projectDirs) {
       if (!projectDir.isDirectory()) continue
@@ -5139,6 +5159,7 @@ export class SessionService {
       if (entries.length === 0) continue
 
       if (this.hasConversationTranscript(entries)) continue
+      if (keepFile && isSameFileIdentity(keepFile, await statFileIdentity(filePath))) continue
 
       await fs.rm(filePath, { force: true })
       removed += 1
