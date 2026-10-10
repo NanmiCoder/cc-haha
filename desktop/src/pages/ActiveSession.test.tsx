@@ -210,13 +210,59 @@ describe('ActiveSession trajectory view', () => {
     expect(trajectory).toHaveAttribute('data-session-id', id)
     expect(screen.getByTestId('message-list')).toBe(list)
     expect(list.parentElement).toHaveClass('hidden')
+    // The composer leaves the ledger the full height but stays mounted, so its
+    // draft is still there on the way back.
     expect(screen.getByTestId('chat-input')).toBe(input)
+    expect(input).toHaveAttribute('data-visible', 'false')
+    expect(screen.getByTestId('session-composer-slot')).toHaveClass('hidden')
 
     fireEvent.click(screen.getByRole('tab', { name: 'Chat' }))
     expect(screen.getByTestId('trajectory-view')).toBe(trajectory)
     expect(trajectory).toHaveAttribute('data-visible', 'false')
     expect(screen.getByTestId('session-trajectory-panel')).toHaveClass('hidden')
     expect(list.parentElement).not.toHaveClass('hidden')
+    expect(screen.getByTestId('chat-input')).toBe(input)
+    expect(input).toHaveAttribute('data-visible', 'true')
+    expect(screen.getByTestId('session-composer-slot')).not.toHaveClass('hidden')
+  })
+
+  it('marks 对话 while a card waits there and the trajectory hides it', async () => {
+    const id = 'attention-session'
+    seedSession(id)
+    render(<ActiveSession sessionId={id} />)
+    const chatTab = () => screen.getByRole('tab', { name: /^Chat/ })
+    const mark = () => within(chatTab()).queryByRole('img', { name: 'Waiting for your approval' })
+    const setPending = (pending: boolean) => act(() => {
+      const session = useChatStore.getState().sessions[id]!
+      const permission = { requestId: 'req-1', toolName: 'Bash', input: { command: 'ls' } }
+      useChatStore.setState({
+        sessions: {
+          [id]: {
+            ...session,
+            pendingPermission: pending ? permission : null,
+            pendingPermissions: pending ? { 'req-1': permission } : {},
+          },
+        },
+      })
+    })
+
+    // In 对话 the card itself is on screen; the mark would only repeat it.
+    setPending(true)
+    expect(mark()).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Trajectory' }))
+    await screen.findByTestId('trajectory-view')
+    expect(mark()).toBeInTheDocument()
+    expect(chatTab()).toHaveAccessibleName('Chat Waiting for your approval')
+
+    setPending(false)
+    expect(mark()).toBeNull()
+    setPending(true)
+    expect(mark()).toBeInTheDocument()
+
+    fireEvent.click(chatTab())
+    expect(chatTab()).toHaveAttribute('aria-selected', 'true')
+    expect(mark()).toBeNull()
   })
 
   it('opens the trajectory when a chat tool card asks to reveal a row there', async () => {

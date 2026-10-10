@@ -1038,13 +1038,21 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             <AgentTeamsPlanCard key={activeTabId} sessionId={activeTabId} />
           </div>}
 
-          <ChatInput
-            sessionId={activeTabId ?? undefined}
-            visible={active}
-            variant={isEmpty && !showRightPanel ? 'hero' : 'default'}
-            // The ledger needs the height more than the composer needs its full chrome.
-            compact={showRightPanel || showTrajectory}
-          />
+          {/*
+            轨迹 is for reading: a reply sent from it would land in the hidden
+            chat, and the card — centred under a two-pane ledger, with its fade
+            over both panes' last rows — cost the ledger its bottom. Hidden, not
+            unmounted, so the draft survives; Stop moves to the 轨迹 toolbar and
+            a waiting card marks 对话.
+          */}
+          <div className={showTrajectory ? 'hidden' : 'contents'} data-testid="session-composer-slot">
+            <ChatInput
+              sessionId={activeTabId ?? undefined}
+              visible={active && !showTrajectory}
+              variant={isEmpty && !showRightPanel ? 'hero' : 'default'}
+              compact={showRightPanel}
+            />
+          </div>
 
           {showNewSessionStarter && activeTabId ? (
             <div className="flex min-h-0 flex-[1.3] flex-col items-center overflow-y-auto px-8 pb-8 pt-1">

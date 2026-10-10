@@ -21,6 +21,7 @@ import type { TrajectoryRow } from '../../types/trajectory'
 import { TrajectoryDetailPanel } from './TrajectoryDetailPanel'
 import { TrajectoryMinimap } from './TrajectoryMinimap'
 import { TrajectoryTable, type TableRange, type TableScrollRequest } from './TrajectoryTable'
+import { TrajectoryStopButton } from './TrajectoryStopButton'
 import { TrajectoryToolbar } from './TrajectoryToolbar'
 import { turnLabel } from './trajectoryLabels'
 import { useTrajectoryData } from './useTrajectoryData'
@@ -369,6 +370,7 @@ export default function TrajectoryView({ sessionId, visible, running, activityKe
           setSelectedId(null)
           if (parentSelection) setPendingRestore(parentSelection)
         }}
+        actions={<TrajectoryStopButton sessionId={sessionId} />}
       />
       {ordered.length > 0 && <TrajectoryMinimap model={minimap} viewport={viewport} rowsById={rowsById} onSelect={reveal} />}
       {currentTurn !== null && currentStats && !terms.length && (
