@@ -135,6 +135,13 @@ type PendingComputerUsePermissions = Record<string, PendingComputerUsePermission
 export type PerSessionState = {
   messages: UIMessage[]
   chatState: ChatState
+  /**
+   * The CLI's own run state (`session_state_changed`). A run stays `running`
+   * while it waits on background tasks and through the replies their
+   * notifications trigger; it turns `idle` only when nothing is left to do.
+   * Undefined until this connection has seen one.
+   */
+  cliRunState?: 'running' | 'idle'
   permissionMode?: PermissionMode
   /**
    * The first prompt is waiting for an empty placeholder session to be
@@ -403,7 +410,12 @@ type ChatStore = {
       minimalBootstrap?: boolean
     },
   ) => void
-  disconnectSession: (sessionId: string) => void
+  /**
+   * Closes the session's socket. `keepTranscript` keeps the cached
+   * conversation (marked disconnected) for a session that is still open but
+   * off screen, so coming back to it redraws at once and only backfills.
+   */
+  disconnectSession: (sessionId: string, options?: { keepTranscript?: boolean }) => void
   sendMessage: (
     sessionId: string,
     content: string,
@@ -3379,7 +3391,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     }
   },
 
-  disconnectSession: (sessionId) => {
+  disconnectSession: (sessionId, options) => {
     const session = get().sessions[sessionId]
     if (session?.elapsedTimer) clearInterval(session.elapsedTimer)
     if (pendingDeltaBySession.has(sessionId)) {
@@ -3391,6 +3403,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     clearPendingToolParentUseIds(sessionId)
     advanceHistoryLifecycle(sessionId)
     wsManager.disconnect(sessionId)
+    if (options?.keepTranscript) {
+      // connectToSession reopens a disconnected session on top of this cache.
+      set((s) => ({
+        sessions: updateSessionIn(s.sessions, sessionId, () => ({
+          connectionState: 'disconnected',
+          connectionSnapshotReady: false,
+          elapsedTimer: null,
+        })),
+      }))
+      return
+    }
     set((s) => {
       const { [sessionId]: _, ...rest } = s.sessions
       const { [sessionId]: _drafts, ...remainingDrafts } = s.askUserQuestionDrafts
@@ -5830,6 +5853,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         useTabStore.getState().updateTabTitle(msg.sessionId, msg.title)
         break
       case 'system_notification':
+        if (msg.subtype === 'session_state_changed') {
+          const runState = (msg.data as { state?: unknown } | undefined)?.state
+          if (runState === 'running' || runState === 'idle') {
+            update(() => ({ cliRunState: runState }))
+          }
+        }
         if (msg.subtype === 'session_collaboration_updated') {
           // Collaboration creates/renames sibling sessions and delivers messages
           // into this transcript; refresh the list so titles resolve. History
