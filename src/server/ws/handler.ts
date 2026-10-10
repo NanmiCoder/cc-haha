@@ -4178,10 +4178,14 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       }
       if (subtype === 'status') {
         if (cliMsg.status === 'compacting') {
+          const outputChars = cliMsg.compact_progress?.output_chars
           return [{
             type: 'status',
             state: 'compacting',
             verb: 'Compacting conversation',
+            ...(typeof outputChars === 'number' && Number.isFinite(outputChars)
+              ? { compactProgress: { outputChars } }
+              : {}),
           }]
         }
         // CLI 在权限模式变化时也会 enqueue 一条 status 事件（status:null +

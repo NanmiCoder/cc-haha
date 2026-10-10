@@ -2718,6 +2718,7 @@ export const zh: Record<TranslationKey, string> = {
   'chat.goalEvent.budget': '预算：{value}',
   'chat.goalEvent.continuations': '续作次数：{value}',
   'chat.compactSummary.compacting': '上下文正在压缩',
+  'chat.compactSummary.generated': '已生成 {count} 字符',
   'chat.compactSummary.title': '上下文已压缩',
   'chat.compactSummary.autoTitle': '上下文已自动压缩',
   'chat.compactSummary.manualTitle': '上下文已手动压缩',

@@ -716,6 +716,7 @@ async function* queryLoop(
                 toolUseContext.options.effortValueOverridesEnv,
               advisorModel: appState.advisorModel,
               skipCacheWrite,
+              apiAttemptBudget: toolUseContext.apiAttemptBudget,
               agentId: toolUseContext.agentId,
               addNotification: toolUseContext.addNotification,
               ...(params.taskBudget && {

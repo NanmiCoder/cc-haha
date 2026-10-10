@@ -295,6 +295,20 @@ describe('WebSocket compact events', () => {
     expect(translateCliMessage({
       type: 'system',
       subtype: 'status',
+      status: 'compacting',
+      compact_progress: { output_chars: 3214 },
+    }, 'session-1')).toEqual([
+      {
+        type: 'status',
+        state: 'compacting',
+        verb: 'Compacting conversation',
+        compactProgress: { outputChars: 3214 },
+      },
+    ])
+
+    expect(translateCliMessage({
+      type: 'system',
+      subtype: 'status',
       status: null,
     }, 'session-1')).toEqual([
       {

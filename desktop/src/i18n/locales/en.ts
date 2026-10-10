@@ -2719,6 +2719,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'chat.goalEvent.budget': 'Budget: {value}',
   'chat.goalEvent.continuations': 'Continuations: {value}',
   'chat.compactSummary.compacting': 'Compacting context',
+  'chat.compactSummary.generated': '{count} chars generated',
   'chat.compactSummary.title': 'Context compacted',
   'chat.compactSummary.autoTitle': 'Context automatically compacted',
   'chat.compactSummary.manualTitle': 'Context manually compacted',

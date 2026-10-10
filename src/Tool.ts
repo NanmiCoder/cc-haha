@@ -75,6 +75,7 @@ export type {
 import type { SpinnerMode } from './components/Spinner.js'
 import type { QuerySource } from './constants/querySource.js'
 import type { SDKStatus } from './entrypoints/agentSdkTypes.js'
+import type { ApiAttemptBudget } from './services/api/withRetry.js'
 import type { AppState } from './state/AppState.js'
 import type {
   HookProgress,
@@ -154,6 +155,11 @@ export type CompactProgressEvent =
     }
   | { type: 'compact_start' }
   | { type: 'compact_end' }
+
+/** Live progress attached to a 'compacting' SDK status. */
+export type SDKStatusDetail = {
+  compactProgress?: { outputChars: number }
+}
 
 export type ToolUseContext = {
   options: {
@@ -235,7 +241,12 @@ export type ToolUseContext = {
   pushApiMetricsEntry?: (ttftMs: number) => void
   setStreamMode?: (mode: SpinnerMode) => void
   onCompactProgress?: (event: CompactProgressEvent) => void
-  setSDKStatus?: (status: SDKStatus) => void
+  /**
+   * API attempts this query may still make across all retry layers. Set only
+   * by callers that bound a whole operation (compaction); never inherited.
+   */
+  apiAttemptBudget?: ApiAttemptBudget
+  setSDKStatus?: (status: SDKStatus, detail?: SDKStatusDetail) => void
   openMessageSelector?: () => void
   updateFileHistoryState: (
     updater: (prev: FileHistoryState) => FileHistoryState,

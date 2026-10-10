@@ -287,6 +287,7 @@ import {
 import { recordPromptSnapshot } from "./promptSnapshot.js";
 import { withStreamRetry } from "./streamRetry.js";
 import {
+  type ApiAttemptBudget,
   CannotRetryError,
   FallbackTriggeredError,
   getStreamRetryKind,
@@ -795,6 +796,8 @@ export type Options = {
   // so the model can pace itself. `remaining` is computed by the caller
   // (query.ts decrements across the agentic loop).
   taskBudget?: { total: number; remaining?: number };
+  /** Shared across every retry layer of this request (see ApiAttemptBudget). */
+  apiAttemptBudget?: ApiAttemptBudget;
 };
 
 export async function queryModelWithoutStreaming({
@@ -830,7 +833,7 @@ export async function queryModelWithoutStreaming({
         ),
       options.model,
       messages,
-      { signal },
+      { signal, apiAttemptBudget: options.apiAttemptBudget },
     );
   })) {
     if (message.type === "assistant") {
@@ -881,7 +884,7 @@ export async function* queryModelWithStreaming({
         ),
       options.model,
       messages,
-      { signal },
+      { signal, apiAttemptBudget: options.apiAttemptBudget },
     );
   });
 }
@@ -938,6 +941,7 @@ export async function* executeNonStreamingRequest(
     signal: AbortSignal;
     initialConsecutive529Errors?: number;
     querySource?: QuerySource;
+    apiAttemptBudget?: ApiAttemptBudget;
   },
   paramsFromContext: (context: RetryContext) => BetaMessageStreamParams,
   onAttempt: (attempt: number, start: number, maxOutputTokens: number) => void,
@@ -1014,6 +1018,7 @@ export async function* executeNonStreamingRequest(
       signal: retryOptions.signal,
       initialConsecutive529Errors: retryOptions.initialConsecutive529Errors,
       querySource: retryOptions.querySource,
+      apiAttemptBudget: retryOptions.apiAttemptBudget,
     },
   );
 
@@ -2108,6 +2113,7 @@ async function* queryModel(
         ...(isFastModeEnabled() ? { fastMode: isFastMode } : false),
         signal,
         querySource: options.querySource,
+        apiAttemptBudget: options.apiAttemptBudget,
       },
     );
 
@@ -3183,6 +3189,7 @@ async function* queryModel(
           signal,
           initialConsecutive529Errors: is529Error(streamingError) ? 1 : 0,
           querySource: options.querySource,
+          apiAttemptBudget: options.apiAttemptBudget,
         },
         paramsFromContext,
         (attempt, _startTime, tokens) => {

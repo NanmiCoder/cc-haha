@@ -12433,6 +12433,68 @@ describe('chatStore history mapping', () => {
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
   })
 
+  it('carries live compaction progress on the tail divider without losing its start time', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000_000)
+      useChatStore.setState({
+        sessions: {
+          [TEST_SESSION_ID]: makeSession({
+            chatState: 'thinking',
+            messages: [{ id: 'old-user', type: 'user_text', content: 'old context', timestamp: 1 }],
+          }),
+        },
+      })
+      const store = useChatStore.getState()
+      const tailDivider = () => {
+        const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+        const dividers = messages.filter((message) => message.type === 'compact_summary')
+        expect(dividers).toHaveLength(messages.length - 1)
+        return messages[messages.length - 1]
+      }
+
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'compacting', verb: 'Compacting conversation' })
+      expect(tailDivider()).toEqual(expect.objectContaining({ type: 'compact_summary', phase: 'compacting', timestamp: 1_000_000 }))
+      expect(tailDivider()).not.toHaveProperty('outputChars')
+
+      vi.setSystemTime(1_005_000)
+      store.handleServerMessage(TEST_SESSION_ID, {
+        type: 'status', state: 'compacting', verb: 'Compacting conversation', compactProgress: { outputChars: 1_200 },
+      })
+      expect(tailDivider()).toMatchObject({ phase: 'compacting', outputChars: 1_200, timestamp: 1_000_000 })
+
+      // The 30s CLI keep-alive re-sends a bare compacting status; it must not
+      // wipe the progress already shown.
+      vi.setSystemTime(1_030_000)
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'compacting', verb: 'Compacting conversation' })
+      expect(tailDivider()).toMatchObject({ phase: 'compacting', outputChars: 1_200, timestamp: 1_000_000 })
+
+      store.handleServerMessage(TEST_SESSION_ID, {
+        type: 'status', state: 'compacting', verb: 'Compacting conversation', compactProgress: { outputChars: 3_400 },
+      })
+      expect(tailDivider()).toMatchObject({ outputChars: 3_400, timestamp: 1_000_000 })
+
+      store.handleServerMessage(TEST_SESSION_ID, {
+        type: 'system_notification', subtype: 'compact_boundary', message: 'Context compacted', data: { trigger: 'auto' },
+      })
+      expect(tailDivider()).toMatchObject({ phase: 'complete', trigger: 'auto', timestamp: 1_000_000 })
+      expect(tailDivider()).not.toHaveProperty('outputChars')
+
+      // A later compaction gets its own divider and start time, with no
+      // leftover progress from the finished one.
+      vi.setSystemTime(2_000_000)
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'compacting', verb: 'Compacting conversation' })
+      const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+      expect(messages).toHaveLength(3)
+      expect(messages[1]).toMatchObject({ type: 'compact_summary', phase: 'complete', timestamp: 1_000_000 })
+      expect(messages[2]).toMatchObject({ type: 'compact_summary', phase: 'compacting', timestamp: 2_000_000 })
+      expect(messages[2]).not.toHaveProperty('outputChars')
+    } finally {
+      useChatStore.getState().handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'idle' })
+      vi.useRealTimers()
+    }
+  })
+
   it('starts an elapsed timer when a reconnected session reports running status', () => {
     vi.useFakeTimers()
 

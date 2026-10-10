@@ -23,7 +23,7 @@ import { EMPTY_USAGE, type NonNullableUsage } from '../services/api/logging.js'
 import type { ToolUseContext } from '../Tool.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { AgentId } from '../types/ids.js'
-import type { Message } from '../types/message.js'
+import type { Message, StreamEvent } from '../types/message.js'
 import { createChildAbortController } from './abortController.js'
 import { logForDebugging } from './debug.js'
 import { cloneFileStateCache } from './fileStateCache.js'
@@ -105,6 +105,8 @@ export type ForkedAgentParams = {
   maxTurns?: number
   /** Optional callback invoked for each message as it arrives (for streaming UI) */
   onMessage?: (message: Message) => void
+  /** Optional callback for each raw stream event (for progress reporting) */
+  onStreamEvent?: (event: StreamEvent['event']) => void
   /** Skip sidechain transcript recording (e.g., for ephemeral work like speculation) */
   skipTranscript?: boolean
   /** Skip writing new prompt cache entries on the last message. For
@@ -285,6 +287,8 @@ export type SubagentContextOverrides = {
   readFileState?: ToolUseContext['readFileState']
   /** Override the abortController */
   abortController?: AbortController
+  /** Bound every API attempt of this fork (see ApiAttemptBudget) */
+  apiAttemptBudget?: ToolUseContext['apiAttemptBudget']
   /** Override the getAppState function */
   getAppState?: ToolUseContext['getAppState']
 
@@ -462,6 +466,7 @@ export function createSubagentContext(
     // Generate new agentId for subagents (each subagent should have its own ID)
     agentId: overrides?.agentId ?? createAgentId(),
     agentType: overrides?.agentType,
+    apiAttemptBudget: overrides?.apiAttemptBudget,
 
     // Create new query tracking chain for subagent with incremented depth
     queryTracking: {
@@ -511,6 +516,7 @@ export async function runForkedAgent({
   maxOutputTokens,
   maxTurns,
   onMessage,
+  onStreamEvent,
   skipTranscript,
   skipCacheWrite,
 }: ForkedAgentParams): Promise<ForkedAgentResult> {
@@ -571,6 +577,7 @@ export async function runForkedAgent({
     })) {
       // Extract real usage from message_delta stream events (final usage per API call)
       if (message.type === 'stream_event') {
+        onStreamEvent?.(message.event)
         if (
           'event' in message &&
           message.event?.type === 'message_delta' &&

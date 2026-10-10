@@ -44,6 +44,7 @@ import type {
   BackgroundAgentTask,
   BackgroundAgentTaskUsage,
   ChatState,
+  CompactProgress,
   ComputerUsePermissionRequest,
   ComputerUsePermissionResponse,
   GoalEventAction,
@@ -1249,6 +1250,9 @@ function appendOrUpdateTailCompactSummary(
       title: update.title ?? existing.title,
       timestamp: existing.timestamp,
     }
+    // Live progress belongs to a running compaction only; a finished divider
+    // must not keep showing how far the summary had streamed.
+    if (next.phase !== 'compacting') delete next.outputChars
     return [
       ...messages.slice(0, existingIndex),
       next,
@@ -1262,6 +1266,43 @@ function appendOrUpdateTailCompactSummary(
       id: nextId(),
       type: 'compact_summary',
       title: update.title ?? 'Context compacted',
+      ...update,
+      timestamp,
+    },
+  ]
+}
+
+function normalizeCompactOutputChars(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined
+}
+
+/**
+ * Starts or refreshes the tail "compacting" divider from a `status` event.
+ * The divider's timestamp is the compaction start, so a status that continues
+ * a running compaction updates it in place, while any other tail (including a
+ * divider of an already finished compaction) gets a fresh divider. A status
+ * without progress keeps the last known count of the running compaction.
+ */
+function upsertCompactingSummaryFromStatus(
+  messages: UIMessage[],
+  progress: CompactProgress | undefined,
+  timestamp: number,
+): UIMessage[] {
+  const tail = messages[messages.length - 1]
+  const continuing = tail?.type === 'compact_summary' && tail.phase === 'compacting'
+  const outputChars = normalizeCompactOutputChars(progress?.outputChars)
+    ?? (continuing ? tail.outputChars : undefined)
+  const update = {
+    title: 'Context compacted',
+    phase: 'compacting' as const,
+    ...(outputChars !== undefined ? { outputChars } : {}),
+  }
+  if (continuing) return appendOrUpdateTailCompactSummary(messages, update, timestamp)
+  return [
+    ...messages,
+    {
+      id: nextId(),
+      type: 'compact_summary',
       ...update,
       timestamp,
     },
@@ -4967,12 +5008,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             nextMessages = appendAssistantTextMessage(nextMessages, pendingText, Date.now())
           }
           if (msg.state === 'compacting') {
-            nextMessages = appendOrUpdateTailCompactSummary(
+            nextMessages = upsertCompactingSummaryFromStatus(
               nextMessages,
-              {
-                title: 'Context compacted',
-                phase: 'compacting',
-              },
+              msg.compactProgress,
               Date.now(),
             )
           } else {

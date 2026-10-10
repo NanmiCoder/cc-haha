@@ -27,6 +27,7 @@ import type {
   HookResultMessage,
   Message,
   PartialCompactDirection,
+  StreamEvent,
   SystemCompactBoundaryMessage,
   SystemMessage,
   UserMessage,
@@ -108,7 +109,12 @@ import {
   startsWithApiErrorPrefix,
 } from '../api/errors.js'
 import { notifyCompaction } from '../api/promptCacheBreakDetection.js'
-import { getRetryDelay } from '../api/withRetry.js'
+import {
+  type ApiAttemptBudget,
+  getDefaultMaxRetries,
+  getRetryDelay,
+  hasApiAttemptsLeft,
+} from '../api/withRetry.js'
 import { logPermissionContextForAnts } from '../internalLogging.js'
 import {
   roughTokenCountEstimation,
@@ -131,6 +137,24 @@ export const POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
 export const POST_COMPACT_MAX_TOKENS_PER_SKILL = 5_000
 export const POST_COMPACT_SKILLS_TOKEN_BUDGET = 25_000
 const MAX_COMPACT_STREAMING_RETRIES = 2
+
+/**
+ * Every API attempt one compaction may make — the cache-sharing fork, the
+ * streaming fallback and prompt-too-long rounds combined. Each layer keeps its
+ * own retry budget (mid-stream transport re-sends alone allow 10), so without
+ * a shared count a failing provider re-sends the full context dozens of times
+ * while the UI shows "compacting". One compaction gets the attempts a single
+ * ordinary request would.
+ */
+export function createCompactApiAttemptBudget(): ApiAttemptBudget {
+  const retries = getDefaultMaxRetries()
+  return {
+    remaining: (Number.isFinite(retries) && retries >= 0 ? retries : 10) + 1,
+  }
+}
+
+/** Minimum gap between live 'compacting' progress statuses. */
+export const COMPACT_PROGRESS_INTERVAL_MS = 1_000
 
 /**
  * Strip image blocks from user messages before sending for compaction.
@@ -437,6 +461,7 @@ export async function compactConversation(
     const summaryRequest = createUserMessage({
       content: compactPrompt,
     })
+    const apiAttemptBudget = createCompactApiAttemptBudget()
 
     let messagesToSummarize = messages
     let retryCacheSafeParams = cacheSafeParams
@@ -451,6 +476,7 @@ export async function compactConversation(
         context,
         preCompactTokenCount,
         cacheSafeParams: retryCacheSafeParams,
+        apiAttemptBudget,
       })
       summary = getAssistantMessageText(summaryResponse)
       if (!summary?.startsWith(PROMPT_TOO_LONG_ERROR_MESSAGE)) break
@@ -459,7 +485,7 @@ export async function compactConversation(
       // oldest API-round groups and retry rather than leaving the user stuck.
       ptlAttempts++
       const truncated =
-        ptlAttempts <= MAX_PTL_RETRIES
+        ptlAttempts <= MAX_PTL_RETRIES && hasApiAttemptsLeft(apiAttemptBudget)
           ? truncateHeadForPTLRetry(messagesToSummarize, summaryResponse)
           : null
       if (!truncated) {
@@ -855,6 +881,7 @@ export async function partialCompactConversation(
     let summaryResponse: AssistantMessage
     let summary: string | null
     let ptlAttempts = 0
+    const apiAttemptBudget = createCompactApiAttemptBudget()
     for (;;) {
       summaryResponse = await streamCompactSummary({
         messages: apiMessages,
@@ -863,13 +890,14 @@ export async function partialCompactConversation(
         context,
         preCompactTokenCount,
         cacheSafeParams: retryCacheSafeParams,
+        apiAttemptBudget,
       })
       summary = getAssistantMessageText(summaryResponse)
       if (!summary?.startsWith(PROMPT_TOO_LONG_ERROR_MESSAGE)) break
 
       ptlAttempts++
       const truncated =
-        ptlAttempts <= MAX_PTL_RETRIES
+        ptlAttempts <= MAX_PTL_RETRIES && hasApiAttemptsLeft(apiAttemptBudget)
           ? truncateHeadForPTLRetry(apiMessages, summaryResponse)
           : null
       if (!truncated) {
@@ -1129,6 +1157,41 @@ export function createCompactCanUseTool(): CanUseToolFn {
   })
 }
 
+/**
+ * Counts summary characters as they stream and reports them, so a long
+ * compaction visibly makes progress instead of showing a bare spinner: the
+ * REPL response counter every delta, SDK consumers (desktop) through a
+ * 'compacting' status at most once per COMPACT_PROGRESS_INTERVAL_MS. Every
+ * attempt opens with message_start, so a re-sent attempt restarts the count.
+ */
+export function createCompactProgressReporter(
+  context: Pick<ToolUseContext, 'setResponseLength' | 'setSDKStatus'>,
+  now: () => number = Date.now,
+): (event: StreamEvent['event']) => void {
+  let outputChars = 0
+  let lastReportedAt = 0
+  return event => {
+    if (event.type === 'message_start') {
+      outputChars = 0
+      context.setResponseLength?.(() => 0)
+      return
+    }
+    if (
+      event.type !== 'content_block_delta' ||
+      event.delta.type !== 'text_delta'
+    ) {
+      return
+    }
+    const charactersStreamed = event.delta.text.length
+    outputChars += charactersStreamed
+    context.setResponseLength?.(length => length + charactersStreamed)
+    const time = now()
+    if (time - lastReportedAt < COMPACT_PROGRESS_INTERVAL_MS) return
+    lastReportedAt = time
+    context.setSDKStatus?.('compacting', { compactProgress: { outputChars } })
+  }
+}
+
 async function streamCompactSummary({
   messages,
   summaryRequest,
@@ -1136,6 +1199,7 @@ async function streamCompactSummary({
   context,
   preCompactTokenCount,
   cacheSafeParams,
+  apiAttemptBudget,
 }: {
   messages: Message[]
   summaryRequest: UserMessage
@@ -1143,6 +1207,7 @@ async function streamCompactSummary({
   context: ToolUseContext
   preCompactTokenCount: number
   cacheSafeParams: CacheSafeParams
+  apiAttemptBudget: ApiAttemptBudget
 }): Promise<AssistantMessage> {
   // When prompt cache sharing is enabled, use forked agent to reuse the
   // main conversation's cached prefix (system prompt, tools, context messages).
@@ -1170,6 +1235,7 @@ async function streamCompactSummary({
         context.setSDKStatus,
       )
     : undefined
+  const reportProgress = createCompactProgressReporter(context)
 
   try {
     if (promptCacheSharingEnabled) {
@@ -1189,10 +1255,14 @@ async function streamCompactSummary({
           forkLabel: 'compact',
           maxTurns: 1,
           skipCacheWrite: true,
+          onStreamEvent: reportProgress,
           // Pass the compact context's abortController so user Esc aborts the
           // fork — same signal the streaming fallback uses at
           // `signal: context.abortController.signal` below.
-          overrides: { abortController: context.abortController },
+          overrides: {
+            abortController: context.abortController,
+            apiAttemptBudget,
+          },
         })
         const assistantMsg = getLastAssistantMessage(result.messages)
         const assistantText = assistantMsg
@@ -1224,6 +1294,15 @@ async function streamCompactSummary({
           }
           return assistantMsg
         }
+        // The fork's retries already spent the shared budget: a fallback would
+        // only re-send the full context again. Surface the fork's error.
+        if (assistantMsg && !hasApiAttemptsLeft(apiAttemptBudget)) {
+          logForDebugging(
+            'Compact cache sharing: API attempt budget spent, not falling back',
+            { level: 'warn' },
+          )
+          return assistantMsg
+        }
         logForDebugging(
           `Compact cache sharing: no text in response, falling back. Response: ${jsonStringify(assistantMsg)}`,
           { level: 'warn' },
@@ -1251,6 +1330,13 @@ async function streamCompactSummary({
     const maxAttempts = retryEnabled ? MAX_COMPACT_STREAMING_RETRIES : 1
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      if (!hasApiAttemptsLeft(apiAttemptBudget)) {
+        logForDebugging(
+          `Compact streaming: API attempt budget spent before attempt ${attempt}`,
+          { level: 'error' },
+        )
+        throw new Error(ERROR_MESSAGE_INCOMPLETE_RESPONSE)
+      }
       // Reset state for retry
       let hasStartedStreaming = false
       let response: AssistantMessage | undefined
@@ -1318,6 +1404,7 @@ async function streamCompactSummary({
           agents: context.options.agentDefinitions.activeAgents,
           mcpTools: [],
           effortValue: appState.effortValue,
+          apiAttemptBudget,
         },
       })
       const streamIter = streamingGen[Symbol.asyncIterator]()
@@ -1336,13 +1423,8 @@ async function streamCompactSummary({
           context.setStreamMode?.('responding')
         }
 
-        if (
-          event.type === 'stream_event' &&
-          event.event.type === 'content_block_delta' &&
-          event.event.delta.type === 'text_delta'
-        ) {
-          const charactersStreamed = event.event.delta.text.length
-          context.setResponseLength?.(length => length + charactersStreamed)
+        if (event.type === 'stream_event') {
+          reportProgress(event.event)
         }
 
         if (event.type === 'assistant') {

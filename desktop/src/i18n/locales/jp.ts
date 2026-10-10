@@ -2720,6 +2720,7 @@ export const jp: Record<TranslationKey, string> = {
   'chat.goalEvent.budget': '予算: {value}',
   'chat.goalEvent.continuations': '継続回数: {value}',
   'chat.compactSummary.compacting': 'コンテキストを圧縮中',
+  'chat.compactSummary.generated': '{count} 文字を生成済み',
   'chat.compactSummary.title': 'コンテキストを圧縮しました',
   'chat.compactSummary.autoTitle': 'コンテキストを自動的に圧縮しました',
   'chat.compactSummary.manualTitle': 'コンテキストを手動で圧縮しました',

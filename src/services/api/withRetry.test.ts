@@ -202,6 +202,63 @@ describe('context overflow wrapped in 401 (#1162)', () => {
   })
 })
 
+describe('withRetry shared API attempt budget', () => {
+  test('gives up when the shared budget is spent even with retries left', async () => {
+    _resetKeepAliveForTesting()
+    let attempts = 0
+    const budget = { remaining: 2 }
+    const connectionError = new APIConnectionError({ message: 'Connection error.' })
+    const generator = withRetry(
+      async () => ({} as Anthropic),
+      async () => {
+        attempts += 1
+        throw connectionError
+      },
+      {
+        model: 'claude-opus-4-7',
+        thinkingConfig: { type: 'disabled' },
+        maxRetries: 10,
+        apiAttemptBudget: budget,
+      },
+    )
+
+    let thrown: unknown
+    try {
+      for (;;) {
+        const next = await generator.next()
+        if (next.done) break
+      }
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(CannotRetryError)
+    expect((thrown as CannotRetryError).originalError).toBe(connectionError)
+    expect(attempts).toBe(2)
+    expect(budget.remaining).toBe(0)
+    _resetKeepAliveForTesting()
+  })
+
+  test('makes no request when another layer already spent the budget', async () => {
+    let attempts = 0
+    const generator = withRetry(
+      async () => ({} as Anthropic),
+      async () => {
+        attempts += 1
+        return 'ok'
+      },
+      {
+        model: 'claude-opus-4-7',
+        thinkingConfig: { type: 'disabled' },
+        apiAttemptBudget: { remaining: 0 },
+      },
+    )
+
+    await expect(generator.next()).rejects.toBeInstanceOf(CannotRetryError)
+    expect(attempts).toBe(0)
+  })
+})
+
 describe('isRetryableStreamError', () => {
   // The SDK embeds the serialized error body in `error.message`; mirror that so
   // the matcher sees the same shape it does in production.

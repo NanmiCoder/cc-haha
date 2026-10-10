@@ -19,8 +19,10 @@ import {
 } from "../analytics/index.js";
 import { getAssistantMessageFromError } from "./errors.js";
 import {
+  type ApiAttemptBudget,
   getMaxStreamRetries,
   getRetryDelay,
+  hasApiAttemptsLeft,
   RetriableStreamError,
 } from "./withRetry.js";
 
@@ -36,6 +38,8 @@ type StreamRetryOptions = {
   signal?: AbortSignal;
   /** Injectable for tests. Must resolve (not reject) when `signal` aborts. */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Shared with the attempt's withRetry; a spent budget ends re-sends. */
+  apiAttemptBudget?: ApiAttemptBudget;
 };
 
 /**
@@ -69,7 +73,7 @@ export async function* withStreamRetry(
   attempt: () => AsyncGenerator<StreamQueryMessage, void>,
   model: string,
   messages: Message[],
-  { signal, sleep: wait = sleep }: StreamRetryOptions = {},
+  { signal, sleep: wait = sleep, apiAttemptBudget }: StreamRetryOptions = {},
 ): AsyncGenerator<StreamQueryMessage, void> {
   for (let retries = 0; ; retries++) {
     let committedOutput = false;
@@ -84,7 +88,8 @@ export async function* withStreamRetry(
         throw error;
       }
       const maxRetries = getMaxStreamRetries(error.kind);
-      if (committedOutput || retries >= maxRetries) {
+      const budgetSpent = !hasApiAttemptsLeft(apiAttemptBudget);
+      if (committedOutput || retries >= maxRetries || budgetSpent) {
         // Surface the original error as an assistant message, matching
         // queryModel's normal terminal-error behavior.
         logForDebugging(
@@ -92,9 +97,13 @@ export async function* withStreamRetry(
             ? `Mid-stream ${error.kind} error after the attempt committed output; not replaying: ${errorMessage(
                 error.originalError,
               )}`
-            : `Mid-stream ${error.kind} error: retries exhausted after ${maxRetries} attempt(s): ${errorMessage(
-                error.originalError,
-              )}`,
+            : budgetSpent
+              ? `Mid-stream ${error.kind} error: shared API attempt budget spent after ${retries} retr${retries === 1 ? "y" : "ies"}: ${errorMessage(
+                  error.originalError,
+                )}`
+              : `Mid-stream ${error.kind} error: retries exhausted after ${maxRetries} attempt(s): ${errorMessage(
+                  error.originalError,
+                )}`,
           { level: "error" },
         );
         logEvent("tengu_stream_transient_retry_exhausted", {

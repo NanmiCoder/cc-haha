@@ -2722,6 +2722,7 @@ export const kr: Record<TranslationKey, string> = {
   'chat.goalEvent.budget': '예산: {value}',
   'chat.goalEvent.continuations': '연속 실행: {value}',
   'chat.compactSummary.compacting': '컨텍스트 압축 중',
+  'chat.compactSummary.generated': '{count}자 생성됨',
   'chat.compactSummary.title': '컨텍스트가 압축됨',
   'chat.compactSummary.autoTitle': '컨텍스트가 자동으로 압축됨',
   'chat.compactSummary.manualTitle': '컨텍스트가 수동으로 압축됨',
