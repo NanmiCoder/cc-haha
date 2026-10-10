@@ -4,6 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   clearTraceCaptureStateForTests,
+  drainTraceCaptureForTests,
+  getTraceCaptureDiagnosticsForTests,
+  setTraceProjectionAfterIndexHookForTests,
   traceCaptureService,
   TRACE_RECORD_BYTES_LIMIT,
   TRACE_WINDOW_RECORD_LIMIT,
@@ -276,3 +279,127 @@ test('appends cannot grow a full metadata window beyond its row budget', () => f
   const next = await traceCaptureService.getSessionTraceOverview('fixture', { scanCursor: full.window?.nextScanCursor })
   expect(next.calls.map(call => call.id)).toEqual(['new-1', 'new-2'])
 }))
+
+function blankLines(megabytes: number) {
+  const line = Buffer.alloc(1024 * 1024, 0x20)
+  line[line.length - 1] = 0x0a
+  return Array.from({ length: megabytes }, () => line)
+}
+
+async function recordTail(id: string, padding = 0) {
+  await traceCaptureService.recordCall({
+    id,
+    sessionId: 'fixture',
+    source: 'proxy',
+    startedAt: '2026-01-01T00:00:00Z',
+    request: { body: { padding: 'x'.repeat(padding) } },
+    response: { status: 200, body: { ok: true } },
+  })
+}
+
+test('appends past a truncated byte window refresh its fingerprint without rescanning the window', () => fixture(async filePath => {
+  // Rescanning the frozen 64MB prefix on every append made each proxied model
+  // call of a long session cost hundreds of milliseconds, so trace writes
+  // queued up (with full request bodies) faster than they drained.
+  await fs.writeFile(filePath, Buffer.concat([...blankLines(65), Buffer.from(callLine('head'))]))
+  const first = await traceCaptureService.getSessionTraceOverview('fixture')
+  expect(first.window).toMatchObject({ state: 'limited', startByte: 0 })
+  const initial = await traceCaptureService.getSessionTraceRevision('fixture')
+  const before = getTraceCaptureDiagnosticsForTests()
+
+  for (let i = 0; i < 8; i++) await recordTail(`tail-${i}`)
+  await drainTraceCaptureForTests()
+
+  const after = getTraceCaptureDiagnosticsForTests()
+  expect(after.fullJsonlBytesRead - before.fullJsonlBytesRead).toBe(0)
+  expect(after.incrementalJsonlBytesRead + after.fingerprintBytesRead
+    - before.incrementalJsonlBytesRead - before.fingerprintBytesRead).toBeLessThan(8 * 1024 * 1024)
+  expect(after.appendedEntriesProjected - before.appendedEntriesProjected).toBe(8)
+  expect(await traceCaptureService.getSessionTraceRevision('fixture', initial.revision, initial.revisionToken))
+    .toMatchObject({ changed: true, reset: false })
+
+  const appended = await traceCaptureService.getSessionTraceOverview('fixture')
+  expect(appended.window).toMatchObject({
+    state: 'limited',
+    startByte: 0,
+    totalCalls: first.window!.totalCalls,
+    scannedBytes: first.window!.scannedBytes,
+  })
+  await expect(traceCaptureService.getSessionTraceOverview('fixture', { scanCursor: first.window!.nextScanCursor }))
+    .rejects.toMatchObject({ code: 'TRACE_PAGE_STALE' })
+  const next = await traceCaptureService.getSessionTraceOverview('fixture', { scanCursor: appended.window!.nextScanCursor })
+  expect(next.calls.map(call => call.id)).toEqual(['head', ...Array.from({ length: 8 }, (_, i) => `tail-${i}`)])
+}), 30_000)
+
+test('in-process appends across the byte limit produce the same window as a cold rebuild', () => fixture(async filePath => {
+  await fs.writeFile(filePath, Buffer.concat([...blankLines(63), Buffer.from(callLine('before-limit'))]))
+  await traceCaptureService.getSessionTraceOverview('fixture')
+  for (let i = 0; i < 6; i++) await recordTail(`crossing-${i}`, 400 * 1024)
+  await drainTraceCaptureForTests()
+
+  const describeWindows = async () => {
+    const pages: Array<{ ids: string[]; totalCalls?: number; scannedBytes?: number; state?: string }> = []
+    let page = await traceCaptureService.getSessionTraceOverview('fixture')
+    while (true) {
+      pages.push({ ids: page.calls.map(call => call.id), totalCalls: page.window?.totalCalls, scannedBytes: page.window?.scannedBytes, state: page.window?.state })
+      if (!page.window?.nextScanCursor) return pages
+      page = await traceCaptureService.getSessionTraceOverview('fixture', { scanCursor: page.window.nextScanCursor })
+    }
+  }
+  const incremental = await describeWindows()
+  expect(incremental.length).toBeGreaterThan(1)
+
+  clearTraceCaptureStateForTests()
+  await fs.rm(join(process.env.CLAUDE_CONFIG_DIR!, 'cc-haha', 'db'), { recursive: true, force: true })
+  expect(await describeWindows()).toEqual(incremental)
+}), 30_000)
+
+async function describeTraceWindows() {
+  const pages: Array<{ ids: string[]; totalCalls?: number; scannedBytes?: number; state?: string }> = []
+  let page = await traceCaptureService.getSessionTraceOverview('fixture')
+  while (true) {
+    pages.push({ ids: page.calls.map(call => call.id), totalCalls: page.window?.totalCalls, scannedBytes: page.window?.scannedBytes, state: page.window?.state })
+    if (!page.window?.nextScanCursor) return pages
+    page = await traceCaptureService.getSessionTraceOverview('fixture', { scanCursor: page.window.nextScanCursor })
+  }
+}
+
+test('appends across the record limit produce the same window as a cold rebuild', () => fixture(async filePath => {
+  // Each call is written twice (pending, then completed): append budgets count
+  // projected calls while a cold scan counts lines, so the two used to disagree.
+  const pair = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => {
+    const id = `pair-${from + i}`
+    return callLine(id) + callLine(id, 'done')
+  }).join('')
+  await fs.writeFile(filePath, pair(0, 4_500))
+  await traceCaptureService.getSessionTraceOverview('fixture')
+  await fs.appendFile(filePath, pair(4_500, 10_500))
+  const incremental = await describeTraceWindows()
+  expect(incremental[0]?.state).toBe('limited')
+
+  clearTraceCaptureStateForTests()
+  await fs.rm(join(process.env.CLAUDE_CONFIG_DIR!, 'cc-haha', 'db'), { recursive: true, force: true })
+  expect(await describeTraceWindows()).toEqual(incremental)
+}), 30_000)
+
+test('a busy projection queue does not force the next append to rebuild the window', () => fixture(async filePath => {
+  await fs.writeFile(filePath, Buffer.concat([...blankLines(65), Buffer.from(callLine('head'))]))
+  await traceCaptureService.getSessionTraceOverview('fixture')
+  let busy = true
+  setTraceProjectionAfterIndexHookForTests(async () => {
+    if (busy) throw Object.assign(new Error('Trace reader queue is full; retry shortly'), { code: 'TRACE_INDEX_BUSY' })
+  })
+  try {
+    await recordTail('during-busy')
+    await drainTraceCaptureForTests()
+  } finally {
+    busy = false
+    setTraceProjectionAfterIndexHookForTests(null)
+  }
+  const before = getTraceCaptureDiagnosticsForTests()
+  await recordTail('after-busy')
+  await drainTraceCaptureForTests()
+  expect(getTraceCaptureDiagnosticsForTests().fullJsonlBytesRead - before.fullJsonlBytesRead).toBe(0)
+  const windows = await describeTraceWindows()
+  expect(windows.at(-1)?.ids).toEqual(['head', 'during-busy', 'after-busy'])
+}), 30_000)
