@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { spawn, type ChildProcess } from 'child_process'
+import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import { closeSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
@@ -32,8 +32,8 @@ function exited(child: ChildProcess): Promise<number | null> {
   })
 }
 
-async function waitUntil(predicate: () => boolean): Promise<void> {
-  const deadline = Date.now() + 3_000
+async function waitUntil(predicate: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
   while (!predicate()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for fixture process')
     await wait(10)
@@ -75,7 +75,10 @@ test.skipIf(process.platform === 'win32')('kills a detached shell and its descen
     runtime.kill('SIGKILL')
     await exited(runtime)
     expect(runtime.signalCode).toBe('SIGKILL')
-    await wait(150)
+    // The guardian polls the runtime once per second.
+    await waitUntil(() => {
+      try { process.kill(-shellPid!, 0); return false } catch { return true }
+    }, 4_000)
     const afterExit = ticks(output)
     await wait(150)
     expect(ticks(output)).toBe(afterExit)
@@ -84,6 +87,71 @@ test.skipIf(process.platform === 'win32')('kills a detached shell and its descen
       try { process.kill(-shellPid, 'SIGKILL') } catch {}
     }
   }
+})
+
+test.skipIf(process.platform === 'win32')('runs back-to-back commands without the guard killing any of them', async () => {
+  // An extra stdio pipe made Bun fail "Failed to connect" inside spawn() and
+  // the guardian SIGKILL roughly a quarter of healthy commands. Collecting a
+  // finished child's fd-3 socket closed an fd number a newer spawn had reused,
+  // so this test must not retain finished children (Shell.exec doesn't).
+  const directory = fixtureDirectory()
+  const rejections: unknown[] = []
+  const onRejection = (reason: unknown) => { rejections.push(reason) }
+  process.on('unhandledRejection', onRejection)
+  const outcomes: string[] = []
+  try {
+    for (let i = 0; i < 200; i++) {
+      const output = join(directory, `out-${i}`)
+      const fd = openSync(output, 'a')
+      let child: ChildProcess
+      try {
+        child = spawnWithParentProcessGuard('/bin/sh', ['-c', 'echo ok'], {
+          detached: true,
+          stdio: ['pipe', fd, fd],
+        })
+      } finally {
+        closeSync(fd)
+      }
+      const code = await exited(child)
+      outcomes.push(`${code}:${child.signalCode}:${readFileSync(output, 'utf8').trim()}`)
+    }
+  } finally {
+    process.off('unhandledRejection', onRejection)
+  }
+  expect(outcomes.filter(outcome => outcome !== '0:null:ok')).toEqual([])
+  expect(rejections).toEqual([])
+}, 30_000)
+
+test.skipIf(process.platform === 'win32')('a short command does not wait out the guardian poll', async () => {
+  // Where /bin/sh is dash (Ubuntu), `jobs -p` is empty inside the guardian's
+  // TERM trap, so every command waited for the in-flight `sleep 1` to finish.
+  for (let i = 0; i < 3; i++) {
+    const started = performance.now()
+    const child = spawnWithParentProcessGuard('/bin/sh', ['-c', 'exit 3'], { detached: true, stdio: 'ignore' })
+    expect(await exited(child)).toBe(3)
+    expect(performance.now() - started).toBeLessThan(500)
+  }
+})
+
+test.skipIf(process.platform === 'win32')('does not spin when the command environment has no sleep on PATH', async () => {
+  // The guardian runs with the command's env. Without a fallback PATH,
+  // `sleep 1 &` failed instantly and the poll loop forked as fast as it could.
+  const child = spawnWithParentProcessGuard('/bin/sleep', ['1.5'], {
+    detached: true,
+    env: { PATH: '/nonexistent' },
+    stdio: ['ignore', 'ignore', 'ignore'],
+  })
+  children.push(child)
+  await wait(1_000)
+  const descendants = spawnSync('pgrep', ['-P', String(child.pid)]).stdout.toString().split('\n').filter(Boolean)
+  const cpuSeconds = descendants.map(pid => {
+    const time = spawnSync('ps', ['-o', 'time=', '-p', pid]).stdout.toString().trim()
+    const [minutes, seconds] = time.split(':')
+    return Number(minutes) * 60 + Number(seconds)
+  })
+  expect(descendants.length).toBeGreaterThan(0)
+  expect(Math.max(...cpuSeconds)).toBeLessThan(0.2)
+  expect(await exited(child)).toBe(0)
 })
 
 test.skipIf(process.platform === 'win32')('preserves stdin, arguments, bare wait, stdout, stderr and the exit code', async () => {
