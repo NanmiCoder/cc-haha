@@ -310,6 +310,23 @@ export function getRelativeSettingsFilePathForSource(
   }
 }
 
+/** 独立校验并发字段，避免无关的旧配置错误解除已保存的上限。 */
+export function getMaxConcurrentSubagentsUncached(): number | null {
+  const path = getSettingsFilePathForSource('userSettings')!
+  try {
+    const { resolvedPath } = safeResolvePath(getFsImplementation(), path)
+    const content = readFileSync(resolvedPath)
+    if (content.trim() === '') return null
+    const result = SettingsSchema()
+      .pick({ maxConcurrentSubagents: true })
+      .safeParse(safeParseJSON(content, false))
+    return result.success ? result.data.maxConcurrentSubagents ?? null : null
+  } catch (error) {
+    handleFileSystemError(error, path)
+    return null
+  }
+}
+
 export function getSettingsForSource(
   source: SettingSource,
   projectRootOverride?: string,
