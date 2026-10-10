@@ -916,7 +916,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
               {effortLabels[selectedRuntimeEffort]}
             </span>
             {showOpenAIFastMode && activeRuntimeSelection?.openAIFastMode && (
-              <span className="text-[11px] text-[var(--color-text-secondary)]">Fast</span>
+              <span className="text-[11px] text-[var(--color-text-secondary)]">{t('model.openAIFastMode')}</span>
             )}
             <ChevronDown aria-hidden="true" size={12} strokeWidth={2} className="flex-shrink-0" />
           </button>
