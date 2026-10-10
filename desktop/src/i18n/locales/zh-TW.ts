@@ -3263,6 +3263,8 @@ export const zh: Record<TranslationKey, string> = {
   'model.clearSearch': '清除模型搜尋',
   'model.noMatches': '沒有匹配的模型',
   'model.effort': '推理強度',
+  'model.openAIFastMode': 'Fast 模式',
+  'model.openAIFastModeDescription': '加速效果因模型而異（部分約 1.5 倍），可能增加額度消耗',
 
   // ─── Directory Picker ──────────────────────────────────────
   'dirPicker.selectProject': '選擇專案...',

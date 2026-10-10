@@ -5787,6 +5787,22 @@ describe('chatStore history mapping', () => {
     ])
   })
 
+  it('replays OAuth Fast and confirms both enabling and disabling without treating the old ack as current', () => {
+    const enabled = { providerId: 'openai-official', modelId: 'gpt-6-sol', effortLevel: 'high' as const, openAIFastMode: true }
+    useSessionRuntimeStore.getState().setSelection(TEST_SESSION_ID, enabled)
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, { prewarm: false, minimalBootstrap: true })
+    expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, { type: 'set_runtime_config', ...enabled })
+
+    const disabled = { ...enabled, openAIFastMode: false }
+    useSessionRuntimeStore.getState().setSelection(TEST_SESSION_ID, disabled)
+    useChatStore.getState().setSessionRuntime(TEST_SESSION_ID, disabled)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, { type: 'runtime_config_applied', ...enabled })
+    expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]).toEqual(disabled)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, { type: 'runtime_config_applied', ...disabled })
+    expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]).toEqual(disabled)
+    expect(sendMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, { type: 'set_runtime_config', ...disabled })
+  })
+
   it.each(['reconnect', 'send'] as const)('recovers a removed provider before %s without replaying its stale model or effort', (action) => {
     useSettingsStore.setState({ effortLevel: 'high' })
     providerStoreSnapshot.hasLoadedProviders = true

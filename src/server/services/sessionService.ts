@@ -107,6 +107,7 @@ export type SessionListItem = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
+  openAIFastMode?: boolean
 }
 
 export type SubagentTranscriptFragment = {
@@ -196,6 +197,7 @@ export type SessionLaunchInfo = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
+  openAIFastMode?: boolean
 }
 
 type ProviderContextWindowHint = Pick<SessionLaunchInfo, 'runtimeProviderId' | 'runtimeModelId'>
@@ -1093,6 +1095,7 @@ export class SessionService {
       runtimeProviderId?: string | null
       runtimeModelId?: string
       effortLevel?: string
+      openAIFastMode?: boolean
     },
   ): boolean {
     if (!launchInfo) return false
@@ -1122,6 +1125,9 @@ export class SessionService {
       return false
     }
     if (launchInfo.effortLevel !== resolveSessionEffortLevel(metadata, launchInfo.effortLevel)) {
+      return false
+    }
+    if (typeof metadata.openAIFastMode === 'boolean' && launchInfo.openAIFastMode !== metadata.openAIFastMode) {
       return false
     }
     return true
@@ -1372,6 +1378,7 @@ export class SessionService {
         permissionMode: undefined as string | undefined,
         runtimeProviderId: undefined as string | null | undefined,
         runtimeModelId: undefined as string | undefined, effortLevel: undefined as string | undefined,
+        openAIFastMode: undefined as boolean | undefined,
         customTitle: null as string | null, nonemptyCustomTitle: null as string | null,
         goalTitle: null as string | null, aiTitle: null as string | null, firstUserTitle: null as string | null,
         createdAt: null as string | null, modifiedAt: null as string | null,
@@ -1395,6 +1402,7 @@ export class SessionService {
           if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') state.runtimeProviderId = record.runtimeProviderId as string | null
           if (typeof record.runtimeModelId === 'string') state.runtimeModelId = record.runtimeModelId
           state.effortLevel = resolveSessionEffortLevel(record, state.effortLevel)
+          if (typeof record.openAIFastMode === 'boolean') state.openAIFastMode = record.openAIFastMode
         }
         state.repository = this.resolveRepositoryFromEntries([entry]) ?? state.repository
         const worktree = this.resolveWorktreeSessionFromEntries([entry])
@@ -1419,6 +1427,7 @@ export class SessionService {
         ...(state.runtimeProviderId !== undefined ? { runtimeProviderId: state.runtimeProviderId } : {}),
         ...(state.runtimeModelId ? { runtimeModelId: state.runtimeModelId } : {}),
         ...(state.effortLevel ? { effortLevel: state.effortLevel } : {}),
+        ...(state.openAIFastMode !== undefined ? { openAIFastMode: state.openAIFastMode } : {}),
         ...(state.repository ? { repository: state.repository } : {}),
         ...(state.worktreeSession !== undefined ? { worktreeSession: state.worktreeSession } : {}),
       })
@@ -3238,6 +3247,7 @@ export class SessionService {
     let runtimeProviderId: string | null | undefined
     let runtimeModelId: string | undefined
     let effortLevel: string | undefined
+    let openAIFastMode: boolean | undefined
     let customTitle: string | null = null
     let transcriptMessageCount = 0
     const metadata: TranscriptMetadataSnapshot = {}
@@ -3287,6 +3297,7 @@ export class SessionService {
           runtimeModelId = record.runtimeModelId
         }
         effortLevel = resolveSessionEffortLevel(record, effortLevel)
+        if (typeof record.openAIFastMode === 'boolean') openAIFastMode = record.openAIFastMode
       }
 
       const candidateRepository = (entry as Record<string, unknown>)?.repository
@@ -3419,6 +3430,7 @@ export class SessionService {
       ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
       ...(runtimeModelId ? { runtimeModelId } : {}),
       ...(effortLevel ? { effortLevel } : {}),
+      ...(openAIFastMode !== undefined ? { openAIFastMode } : {}),
     }
 
     for (const modelUsage of models.values()) {
@@ -3875,6 +3887,7 @@ export class SessionService {
         : {}),
       ...(row.runtimeModelId ? { runtimeModelId: row.runtimeModelId } : {}),
       ...(row.effortLevel ? { effortLevel: row.effortLevel } : {}),
+      ...(row.openAIFastMode !== undefined ? { openAIFastMode: row.openAIFastMode } : {}),
     }
   }
 
@@ -3898,6 +3911,7 @@ export class SessionService {
       'runtimeProviderId',
       'runtimeModelId',
       'effortLevel',
+      'openAIFastMode',
     ]
     const hash = (value: unknown): string => createHash('sha256')
       .update(JSON.stringify(value) ?? 'undefined')
@@ -4047,6 +4061,7 @@ export class SessionService {
             : {}),
           ...(summary.runtimeModelId ? { runtimeModelId: summary.runtimeModelId } : {}),
           ...(summary.effortLevel ? { effortLevel: summary.effortLevel } : {}),
+          ...(summary.openAIFastMode !== undefined ? { openAIFastMode: summary.openAIFastMode } : {}),
         })
       } catch {
         // Skip unreadable files
@@ -4996,6 +5011,7 @@ export class SessionService {
       runtimeProviderId?: string | null
       runtimeModelId?: string
       effortLevel?: string
+      openAIFastMode?: boolean
     }
   ): Promise<void> {
     if (isSideChatId(sessionId)) {
@@ -5003,6 +5019,7 @@ export class SessionService {
       if (side && !side.closed) {
         Object.assign(side.launchInfo, metadata, {
           effortLevel: resolveSessionEffortLevel(metadata, side.launchInfo.effortLevel),
+          openAIFastMode: typeof metadata.openAIFastMode === 'boolean' ? metadata.openAIFastMode : side.launchInfo.openAIFastMode,
         })
       }
       return
@@ -5030,6 +5047,7 @@ export class SessionService {
         ...(metadata.runtimeProviderId !== undefined ? { runtimeProviderId: metadata.runtimeProviderId } : {}),
         ...(metadata.runtimeModelId ? { runtimeModelId: metadata.runtimeModelId } : {}),
         effortLevel: resolveSessionEffortLevel(metadata, previousInfo.effortLevel),
+        openAIFastMode: typeof metadata.openAIFastMode === 'boolean' ? metadata.openAIFastMode : previousInfo.openAIFastMode,
       })
     }
     if (!persist || !this.shouldPersistSession()) {
@@ -5115,6 +5133,7 @@ export class SessionService {
       ...(metadata.effortLevel && VALID_SESSION_EFFORT_LEVELS.has(metadata.effortLevel)
         ? { effortLevel: metadata.effortLevel }
         : {}),
+      ...(typeof metadata.openAIFastMode === 'boolean' ? { openAIFastMode: metadata.openAIFastMode } : {}),
       timestamp: new Date().toISOString(),
     })
 

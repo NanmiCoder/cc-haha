@@ -350,6 +350,7 @@ export type SessionStartOptions = {
   permissionMode?: string
   model?: string
   effort?: string
+  openAIFastMode?: boolean
   thinking?: 'enabled' | 'adaptive' | 'disabled'
   providerId?: string | null
   resumeInterruptedTurn?: boolean
@@ -676,6 +677,17 @@ export class ConversationService {
         undefined,
         launchInfo.customTitle,
       )
+      // Replacing the empty placeholder must not erase the session's runtime
+      // choice before its first turn writes a real transcript.
+      if (launchInfo.runtimeModelId) {
+        await sessionService.appendSessionMetadata(sessionId, {
+          workDir,
+          runtimeProviderId: launchInfo.runtimeProviderId,
+          runtimeModelId: launchInfo.runtimeModelId,
+          ...(launchInfo.effortLevel ? { effortLevel: launchInfo.effortLevel } : {}),
+          ...(launchInfo.openAIFastMode !== undefined ? { openAIFastMode: launchInfo.openAIFastMode } : {}),
+        })
+      }
     }
 
     let launchWorkDir = workDir
@@ -2114,6 +2126,7 @@ export class ConversationService {
       OPENAI_OAUTH_PROVIDER_ENV_KEY,
       OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
       OPENAI_CODEX_REASONING_EFFORT_ENV_KEY,
+      'CC_HAHA_OPENAI_FAST_MODE',
       GROK_OAUTH_PROVIDER_ENV_KEY,
       GROK_OAUTH_FILE_ENV_KEY,
       IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
@@ -2133,6 +2146,7 @@ export class ConversationService {
     delete cleanEnv.CC_HAHA_SESSION_COLLABORATION_TOKEN
     delete cleanEnv.CC_HAHA_SESSION_ID
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
+    delete cleanEnv.CC_HAHA_OPENAI_FAST_MODE
     if (options?.resumeInterruptedTurn === false) {
       delete cleanEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
     }
@@ -2165,6 +2179,7 @@ export class ConversationService {
     const explicitProviderEnv = explicitProvider
       ? await this.providerService.getProviderRuntimeEnv(explicitProvider.id)
       : null
+    if (explicitProviderEnv) delete explicitProviderEnv.CC_HAHA_OPENAI_FAST_MODE
     const networkEnv = buildNetworkEnvironment(
       networkSettingsOverride ?? await loadNetworkSettings(),
       cleanEnv,
@@ -2309,6 +2324,8 @@ export class ConversationService {
           ? { [OPENAI_CODEX_REASONING_EFFORT_ENV_KEY]: options.effort }
           : {}
       ),
+      ...(isOpenAIOfficialProviderId(options?.providerId) && options?.openAIFastMode === true
+        ? { CC_HAHA_OPENAI_FAST_MODE: '1' } : {}),
       ...networkEnv,
       ...(this.shouldMarkManagedOAuth(options?.providerId)
         ? await this.buildOfficialOAuthEnv()

@@ -226,7 +226,8 @@ type RuntimeOverride = {
   providerId: string | null
   modelId: string
   effort?: string
-  requestedConfig?: { providerId: string | null; modelId: string; effortLevel?: string }
+  openAIFastMode?: boolean
+  requestedConfig?: { providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean }
 }
 
 type ActiveUserTurnState = {
@@ -1868,10 +1869,15 @@ async function handlePlanApprovalWithRuntimeOverride(
     })
     return
   }
-  const nextOverride = normalized.override
+  let nextOverride = normalized.override
 
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
   const prevOverride = runtimeOverrides.get(sessionId)
+  // Older ExitPlanMode clients only supply a model. Preserve the existing
+  // process-scoped OAuth tier when the approval does not explicitly change it.
+  if (isOpenAIOfficialProviderId(nextOverride.providerId) && message.runtimeOverride!.openAIFastMode === undefined) {
+    nextOverride = { ...nextOverride, openAIFastMode: prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false }
+  }
   const currentProviderId = prevOverride?.providerId ?? launchInfo?.runtimeProviderId ?? null
   const currentModelId = prevOverride?.modelId ?? launchInfo?.runtimeModelId ?? undefined
   const currentEffort = prevOverride?.effort ?? launchInfo?.effortLevel ?? undefined
@@ -1879,14 +1885,15 @@ async function handlePlanApprovalWithRuntimeOverride(
   if (
     currentProviderId === nextOverride.providerId &&
     currentModelId === nextOverride.modelId &&
-    currentEffort === nextOverride.effort
+    currentEffort === nextOverride.effort &&
+    (prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false) === (nextOverride.openAIFastMode ?? false)
   ) {
     rejectedRuntimeConfigs.delete(sessionId)
     finalizePermissionResponse(ws, message)
     return
   }
 
-  if (isSideChatId(sessionId) && (currentProviderId !== nextOverride.providerId || (nextOverride.effort !== undefined && nextOverride.effort !== currentEffort))) {
+  if (isSideChatId(sessionId) && (currentProviderId !== nextOverride.providerId || (nextOverride.effort !== undefined && nextOverride.effort !== currentEffort) || (prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false) !== (nextOverride.openAIFastMode ?? false))) {
     sendMessage(ws, { type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', message: 'Open a new side chat to change provider or reasoning effort.' })
     return
   }
@@ -1894,7 +1901,8 @@ async function handlePlanApprovalWithRuntimeOverride(
   const canSwitchInProcess =
     conversationService.hasSession(sessionId) &&
     currentProviderId === nextOverride.providerId &&
-    (nextOverride.effort === undefined || nextOverride.effort === currentEffort)
+    (nextOverride.effort === undefined || nextOverride.effort === currentEffort) &&
+    (prevOverride?.openAIFastMode ?? launchInfo?.openAIFastMode ?? false) === (nextOverride.openAIFastMode ?? false)
 
   if (canSwitchInProcess) {
     // Same provider: the CLI is blocked on this very permission request, so a
@@ -2085,7 +2093,7 @@ async function applyPermissionModeToActiveSession(
  * the requested effort against the provider's reasoning profile.
  */
 async function normalizeRuntimeOverrideInput(
-  input: { providerId: string | null; modelId: string; effortLevel?: string },
+  input: { providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean },
 ): Promise<
   | { ok: true; override: RuntimeOverride }
   | { ok: false; reason: 'model' | 'effort' }
@@ -2115,6 +2123,7 @@ async function normalizeRuntimeOverrideInput(
             providerId: input.providerId,
             modelId,
             ...(requestedEffort !== undefined ? { effortLevel: requestedEffort } : {}),
+            ...(typeof input.openAIFastMode === 'boolean' ? { openAIFastMode: input.openAIFastMode } : {}),
           },
         },
       }
@@ -2133,6 +2142,8 @@ async function normalizeRuntimeOverrideInput(
       providerId: input.providerId ?? null,
       modelId,
       ...(effortResolution.effort ? { effort: effortResolution.effort } : {}),
+      ...(isOpenAIOfficialProviderId(input.providerId) && typeof input.openAIFastMode === 'boolean'
+        ? { openAIFastMode: input.openAIFastMode } : {}),
     },
   }
 }
@@ -2165,7 +2176,7 @@ async function handleSetRuntimeConfig(
       const current = runtimeOverrides.get(sessionId)
       const provider = current?.providerId ?? side.launchInfo.runtimeProviderId ?? null
       const effort = current?.effort ?? side.launchInfo.effortLevel
-      if (!conversationService.hasSession(sessionId) || provider !== nextOverride.providerId || (nextOverride.effort !== undefined && nextOverride.effort !== effort)) {
+      if (!conversationService.hasSession(sessionId) || provider !== nextOverride.providerId || (nextOverride.effort !== undefined && nextOverride.effort !== effort) || (current?.openAIFastMode ?? side.launchInfo.openAIFastMode ?? false) !== (nextOverride.openAIFastMode ?? false)) {
         sendMessage(ws, { type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE', message: 'A temporary side chat cannot restart without losing its history. Open a new side chat to change provider or reasoning effort.' })
         return
       }
@@ -2182,7 +2193,8 @@ async function handleSetRuntimeConfig(
       prevOverride &&
       prevOverride.providerId === nextOverride.providerId &&
       prevOverride.modelId === nextOverride.modelId &&
-      prevOverride.effort === nextOverride.effort
+      prevOverride.effort === nextOverride.effort &&
+      (prevOverride.openAIFastMode ?? false) === (nextOverride.openAIFastMode ?? false)
     ) {
       // Replayed selections still need confirmation, including the original
       // stale provider that this request resolved to the existing runtime.
@@ -2224,6 +2236,7 @@ async function handleSetRuntimeConfig(
         currentOverride?.providerId !== nextOverride.providerId ||
         currentOverride.modelId !== nextOverride.modelId ||
         currentOverride.effort !== nextOverride.effort ||
+        (currentOverride.openAIFastMode ?? false) !== (nextOverride.openAIFastMode ?? false) ||
         !conversationService.hasSession(sessionId)
       ) {
         return
@@ -2334,7 +2347,7 @@ async function persistSessionPermissionMode(
 
 async function persistSessionRuntimeConfig(
   sessionId: string,
-  runtime: { providerId: string | null; modelId: string; effort?: string },
+  runtime: RuntimeOverride,
 ): Promise<void> {
   const workDir =
     conversationService.getSessionWorkDir(sessionId) ||
@@ -2347,6 +2360,7 @@ async function persistSessionRuntimeConfig(
     runtimeProviderId: runtime.providerId,
     runtimeModelId: runtime.modelId,
     ...(runtime.effort ? { effortLevel: runtime.effort } : {}),
+    openAIFastMode: isOpenAIOfficialProviderId(runtime.providerId) && runtime.openAIFastMode === true,
   })
 }
 
@@ -2359,6 +2373,8 @@ function broadcastAppliedRuntimeConfig(sessionId: string): void {
     providerId: runtime.providerId,
     modelId: runtime.modelId,
     ...(runtime.effort ? { effortLevel: runtime.effort } : {}),
+    ...(isOpenAIOfficialProviderId(runtime.providerId)
+      ? { openAIFastMode: runtime.openAIFastMode === true } : {}),
   })
 }
 
@@ -5184,6 +5200,7 @@ type RuntimeSettings = {
   permissionMode?: string
   model?: string
   effort?: string
+  openAIFastMode?: boolean
   thinking?: 'disabled'
   providerId?: string | null
 }
@@ -5322,6 +5339,7 @@ export async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSet
           providerId: launchInfo.runtimeProviderId ?? null,
           modelId: launchInfo.runtimeModelId,
           ...(launchInfo.effortLevel ? { effort: launchInfo.effortLevel } : {}),
+          openAIFastMode: launchInfo.openAIFastMode === true,
         }
       : undefined
   const runtimeOverride = sessionId
@@ -5384,6 +5402,7 @@ export async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSet
       effort,
       thinking,
       providerId: runtimeOverride.providerId,
+      openAIFastMode: isOpenAIOfficialProviderId(runtimeOverride.providerId) && runtimeOverride.openAIFastMode === true,
     }
   }
 

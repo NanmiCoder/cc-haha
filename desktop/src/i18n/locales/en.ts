@@ -3263,6 +3263,8 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'model.clearSearch': 'Clear model search',
   'model.noMatches': 'No matching models',
   'model.effort': 'Effort',
+  'model.openAIFastMode': 'Fast mode',
+  'model.openAIFastModeDescription': 'Speed varies by model (about 1.5× for some); may use more quota',
 
   // ─── Directory Picker ──────────────────────────────────────
   'dirPicker.selectProject': 'Select a project...',

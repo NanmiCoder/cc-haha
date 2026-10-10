@@ -3266,6 +3266,8 @@ export const kr: Record<TranslationKey, string> = {
   'model.clearSearch': '모델 검색 지우기',
   'model.noMatches': '일치하는 모델이 없습니다',
   'model.effort': '노력',
+  'model.openAIFastMode': 'Fast 모드',
+  'model.openAIFastModeDescription': '속도는 모델에 따라 다릅니다(일부 모델 약 1.5배). 사용 한도 소모가 늘 수 있습니다',
 
   // ─── Directory Picker ──────────────────────────────────────
   'dirPicker.selectProject': '프로젝트 선택...',

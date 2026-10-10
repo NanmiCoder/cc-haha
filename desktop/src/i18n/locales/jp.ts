@@ -3264,6 +3264,8 @@ export const jp: Record<TranslationKey, string> = {
   'model.clearSearch': 'モデル検索をクリア',
   'model.noMatches': '一致するモデルはありません',
   'model.effort': '労力',
+  'model.openAIFastMode': 'Fast モード',
+  'model.openAIFastModeDescription': '速度はモデルにより異なります（一部は約1.5倍）。利用枠の消費が増える場合があります',
 
   // ─── Directory Picker ──────────────────────────────────────
   'dirPicker.selectProject': 'プロジェクトを選択...',

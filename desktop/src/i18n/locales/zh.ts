@@ -3262,6 +3262,8 @@ export const zh: Record<TranslationKey, string> = {
   'model.clearSearch': '清除模型搜索',
   'model.noMatches': '没有匹配的模型',
   'model.effort': '推理强度',
+  'model.openAIFastMode': 'Fast 模式',
+  'model.openAIFastModeDescription': '提速因模型而异（部分约 1.5 倍），可能增加额度消耗',
 
   // ─── Directory Picker ──────────────────────────────────────
   'dirPicker.selectProject': '选择项目...',

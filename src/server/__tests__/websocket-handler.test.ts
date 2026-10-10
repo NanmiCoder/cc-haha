@@ -4247,6 +4247,107 @@ describe('WebSocket handler session isolation', () => {
     }
   })
 
+  it('switches Fast mode on and off through WS, restarts the child, and restores metadata on reconnect', async () => {
+    const sessionId = `fast-mode-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const launchInfo = {
+      filePath: '/tmp/fast-mode.jsonl', projectDir: '/tmp', workDir: '/tmp',
+      transcriptMessageCount: 0, customTitle: null,
+      runtimeProviderId: 'openai-official', runtimeModelId: 'future-codex-model', openAIFastMode: false,
+    }
+    spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => launchInfo)
+    spyOn(sessionService, 'appendSessionMetadata').mockImplementation(async (_id, metadata) => { Object.assign(launchInfo, metadata) })
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'stopSession').mockImplementation(() => {})
+    const start = spyOn(conversationService, 'startSession').mockResolvedValue()
+    for (const value of [true, false]) {
+      handleWebSocket.open(ws)
+      handleWebSocket.message(ws, JSON.stringify({ type: 'set_runtime_config', providerId: 'openai-official', modelId: 'future-codex-model', openAIFastMode: value }))
+      for (let attempt = 0; attempt < 30 && start.mock.calls.length < (value ? 1 : 2); attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 10))
+      }
+      expect(start).toHaveBeenLastCalledWith(sessionId, '/tmp', expect.any(String), expect.objectContaining({ providerId: 'openai-official', openAIFastMode: value }))
+      expect(launchInfo.openAIFastMode).toBe(value)
+      expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({ type: 'runtime_config_applied', openAIFastMode: value }))
+      closeSessionConnection(sessionId)
+      expect((await getRuntimeSettings(sessionId)).openAIFastMode).toBe(value)
+    }
+  })
+
+  it('rejects Fast toggles on started side chats instead of acknowledging a stale child env', async () => {
+    const sessionId = `side-fast-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(sideChatRegistry, 'getSideChat').mockReturnValue({
+      sessionId, parentSessionId: 'parent-fast', cliSessionId: 'side-fast-cli',
+      resumePath: '/tmp/side-fast.jsonl', resumeAt: 'boundary',
+      createdAt: new Date().toISOString(), started: true, closed: false,
+      launchInfo: {
+        filePath: '/tmp/side-fast.jsonl', projectDir: '/tmp', workDir: '/tmp',
+        transcriptMessageCount: 0, customTitle: null,
+        runtimeProviderId: 'openai-official', runtimeModelId: 'gpt-6-sol', openAIFastMode: false,
+      },
+    })
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    const setModel = spyOn(conversationService, 'setModel').mockResolvedValue(true)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'set_runtime_config', providerId: 'openai-official', modelId: 'gpt-6-sol', openAIFastMode: true }))
+    for (let attempt = 0; attempt < 30 && ws.sent.length === 0; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({ type: 'error', code: 'SIDE_CHAT_RUNTIME_RESTART_UNAVAILABLE' }))
+    expect(setModel).not.toHaveBeenCalled()
+  })
+
+  it('preserves OAuth Fast mode when ExitPlanMode only changes the model', async () => {
+    const sessionId = `fast-plan-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const launchInfo = {
+      filePath: '/tmp/fast-plan.jsonl', projectDir: '/tmp', workDir: '/tmp', transcriptMessageCount: 0,
+      customTitle: null, runtimeProviderId: 'openai-official', runtimeModelId: 'gpt-6-sol', openAIFastMode: true,
+    }
+    spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => launchInfo)
+    spyOn(sessionService, 'appendSessionMetadata').mockResolvedValue()
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionToolName').mockReturnValue('ExitPlanMode')
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'setModel').mockResolvedValue(true)
+    const respond = spyOn(conversationService, 'respondToPermission').mockReturnValue(true)
+    const start = spyOn(conversationService, 'startSession').mockResolvedValue()
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'permission_response', requestId: 'fast-plan-permission', allowed: true,
+      runtimeOverride: { providerId: 'openai-official', modelId: 'future-codex-model' },
+    }))
+    for (let attempt = 0; attempt < 30 && respond.mock.calls.length === 0; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect((await getRuntimeSettings(sessionId)).openAIFastMode).toBe(true)
+    expect(start).not.toHaveBeenCalled()
+    expect(respond).toHaveBeenCalled()
+    expect(conversationService.setModel).toHaveBeenCalledWith(sessionId, 'future-codex-model')
+  })
+
+  it('does not accept a Fast mode flag on non-OAuth runtime selections', async () => {
+    mockSavedDeepSeekProvider()
+    const sessionId = `fast-other-provider-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
+      filePath: '/tmp/fast-other.jsonl', projectDir: '/tmp', workDir: '/tmp', transcriptMessageCount: 0,
+      customTitle: null, runtimeProviderId: 'deepseek', runtimeModelId: 'deepseek-v4-flash',
+    })
+    spyOn(sessionService, 'appendSessionMetadata').mockResolvedValue()
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'set_runtime_config', providerId: 'deepseek', modelId: 'deepseek-v4-flash', openAIFastMode: true }))
+    for (let attempt = 0; attempt < 30 && !ws.sent.some(payload => JSON.parse(payload).type === 'runtime_config_applied'); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(await getRuntimeSettings(sessionId)).toMatchObject({ providerId: 'deepseek', openAIFastMode: false })
+    expect(ws.sent.map(payload => JSON.parse(payload)).find(message => message.type === 'runtime_config_applied')?.openAIFastMode).toBeUndefined()
+    expect(sessionService.appendSessionMetadata).toHaveBeenCalledWith(sessionId, expect.objectContaining({ openAIFastMode: false }))
+  })
+
   it('preserves effort through a same-provider model-only plan approval and session restoration', async () => {
     mockSavedDeepSeekProvider()
     const sessionId = `plan-same-provider-${crypto.randomUUID()}`
@@ -4301,6 +4402,7 @@ describe('WebSocket handler session isolation', () => {
       runtimeProviderId: 'deepseek',
       runtimeModelId: 'deepseek-v4-flash',
       effortLevel: 'high',
+      openAIFastMode: false,
     })
     expect(startSession).not.toHaveBeenCalled()
     expect(stopSession).not.toHaveBeenCalled()
