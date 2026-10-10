@@ -79,11 +79,12 @@ function terminal(reason = 'end_turn') {
   return { type: 'message_delta', delta: { stop_reason: reason, stop_sequence: null }, usage: { output_tokens: 5 } }
 }
 
-async function receiveResponse(events: unknown[], fallback = false) {
+async function receiveResponse(events: unknown[], fallback = false, { finalBlankLine = true } = {}) {
   const model = 'fixture-model'
   process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK = fallback ? '0' : '1'
   requests = 0
   responseBody = events.map((event: any) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('')
+  if (!finalBlankLine) responseBody = responseBody.replace(/\n+$/, '')
   const assistants: AssistantMessage[] = []
   for await (const message of queryModelWithStreaming({
     messages: [createUserMessage({ content: 'fixture' })],
@@ -100,11 +101,27 @@ async function receiveResponse(events: unknown[], fallback = false) {
 }
 
 for (const block of ['text', 'tool_use']) {
-  test(`missing message_stop rejects completed ${block} without replay`, async () => {
-    const messages = await receiveResponse([...fixtureEvents(block), terminal(block === 'text' ? 'end_turn' : 'tool_use')], true)
-    expect(messages.some(message => message.isApiErrorMessage)).toBe(true)
-    expect(messages.flatMap(message => message.message.content).some(block => block.type === 'tool_use')).toBe(false)
-    if (block === 'text') expect(JSON.stringify(messages)).toContain('partial fixture')
+  test(`missing message_stop after the terminal stop_reason completes ${block}`, async () => {
+    const reason = block === 'text' ? 'end_turn' : 'tool_use'
+    const messages = await receiveResponse([...fixtureEvents(block), terminal(reason)], true)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.isApiErrorMessage).not.toBe(true)
+    expect(messages[0]?.message.stop_reason).toBe(reason)
+    expect(messages[0]?.message.content[0]?.type).toBe(block)
+  })
+  // #1481: the gateway sent message_stop, but without the blank line that ends
+  // an SSE event, so the SDK decoder dropped it at EOF.
+  test(`unterminated final message_stop frame completes ${block}`, async () => {
+    const reason = block === 'text' ? 'end_turn' : 'tool_use'
+    const messages = await receiveResponse(
+      [...fixtureEvents(block), terminal(reason), { type: 'message_stop' }],
+      true,
+      { finalBlankLine: false },
+    )
+    expect(responseBody.endsWith('{"type":"message_stop"}')).toBe(true)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]?.isApiErrorMessage).not.toBe(true)
+    expect(messages[0]?.message.content[0]?.type).toBe(block)
   })
   test(`duplicate ${block} stop releases only one block`, async () => {
     const events = fixtureEvents(block)
@@ -123,9 +140,14 @@ test('a reply cut mid-text reports the open block it was cut in', async () => {
   expect(text).toContain('The upstream model provider closed the stream')
   expect(text).toContain('3 events · last content_block_delta · stop_reason none · message_stop missing · 1 block open')
 })
-test('a reply that only dropped message_stop reports the stop_reason it sent', async () => {
-  const text = upstreamInterruption(await receiveResponse([...fixtureEvents(), terminal()], true))
-  expect(text).toContain('5 events · last message_delta · stop_reason end_turn · message_stop missing')
+test('content after the stop_reason still requires message_stop', async () => {
+  const lateBlock = [
+    { type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'late fixture' } },
+    { type: 'content_block_stop', index: 1 },
+  ]
+  const text = upstreamInterruption(await receiveResponse([...fixtureEvents(), terminal(), ...lateBlock], true))
+  expect(text).toContain('8 events · last content_block_stop · stop_reason end_turn · message_stop missing')
   expect(text).not.toContain('open')
 })
 for (const reason of ['max_tokens', 'model_context_window_exceeded', 'refusal']) {
