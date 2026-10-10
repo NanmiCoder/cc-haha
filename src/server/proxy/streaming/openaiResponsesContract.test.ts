@@ -275,4 +275,30 @@ describe('Responses empty text deltas never open a block (#1451)', () => {
   test('keep-alives no longer mask a completed response that is missing output', async () => {
     await expect(collect(keepAlive + completed())).rejects.toThrow('missing output')
   })
+
+  // The empty-delta guard now runs before ensureTextBlock, which makes the
+  // "arrived after block completion" throw reachable only for non-empty deltas.
+  // It was unasserted before; pin it so a refactor cannot drop the invariant
+  // along with the guard.
+  test('a non-empty delta after output_text.done still rejects the stream', async () => {
+    const input = summaryDelta + summaryDone + event('response.output_text.delta', { output_index: 1, content_index: 0, delta: 'late arrival' }) + completed()
+    await expect(collect(input)).rejects.toThrow('text delta arrived after block completion')
+  })
+})
+
+// `response.refusal.delta` falls through the same edited case, so an empty
+// refusal delta is dropped by the same guard. It had no contract case at all.
+describe('Responses refusal deltas follow the same empty-delta contract (#1451)', () => {
+  const refusalDelta = (delta: string) => event('response.refusal.delta', { output_index: 0, content_index: 0, delta })
+  const refusalDone = (refusal: string) => event('response.refusal.done', { output_index: 0, content_index: 0, refusal })
+
+  test('an empty refusal delta produces no block of its own', async () => {
+    const events = await collect(refusalDelta('') + refusalDelta('I cannot help with that') + refusalDone('I cannot help with that') + completed())
+    expect(events.filter(item => item.type === 'content_block_start')).toHaveLength(1)
+  })
+
+  test('a real refusal delta still reaches the collector', async () => {
+    const input = refusalDelta('') + refusalDelta('I cannot help with that') + refusalDone('I cannot help with that') + completed()
+    expect(await openaiResponsesStreamToAnthropicResponse(stream(input), 'fixture')).toMatchObject({ content: [{ type: 'text', text: 'I cannot help with that' }] })
+  })
 })

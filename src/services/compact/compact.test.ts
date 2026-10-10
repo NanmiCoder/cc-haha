@@ -287,7 +287,7 @@ describe('a trailing blank assistant does not hide the compaction summary (#1451
     expect(getAssistantMessageText(found!)).toBe('valid summary')
   })
 
-  test('the walk still returns a blank-only response rather than nothing', () => {
+  test('a blank-only response yields nothing so the caller falls back', () => {
     const blank = blankAssistant()
 
     expect(findLastAssistantWithText([blank])).toBeUndefined()
