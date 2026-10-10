@@ -438,7 +438,9 @@ describe('WebSocket handler session isolation', () => {
       task_type: 'local_agent',
     }))
 
-    expect(oldSocket.close).toHaveBeenCalledWith(1008, 'Stale SDK token')
+    // 4003 is in the CLI transport's PERMANENT_CLOSE_CODES: the superseded
+    // runtime shuts down instead of reconnecting with its stale token.
+    expect(oldSocket.close).toHaveBeenCalledWith(4003, 'Stale SDK token')
     expect(handleSdkPayload).not.toHaveBeenCalled()
 
     handleWebSocket.open(newSocket)
@@ -449,6 +451,19 @@ describe('WebSocket handler session isolation', () => {
     expect(handleSdkPayload).toHaveBeenCalledTimes(1)
     expect(handleSdkPayload.mock.calls[0]?.[0]).toBe(sessionId)
     expect(handleSdkPayload.mock.calls[0]?.[1]).toBe(currentPayload)
+  })
+
+  it('rejects an SDK socket for a runtime the server does not own with a permanent close code', () => {
+    const sessionId = `sdk-unknown-runtime-${crypto.randomUUID()}`
+    const socket = makeSdkSocket(sessionId, 'token-from-a-forgotten-runtime')
+    const attach = spyOn(conversationService, 'attachSdkConnection')
+
+    handleWebSocket.open(socket)
+
+    // With 1008 the CLI retried, and every accepted upgrade reset its give-up
+    // budget, so a CLI the server had lost track of reconnected forever.
+    expect(socket.close).toHaveBeenCalledWith(4003, 'Invalid SDK token')
+    expect(attach).not.toHaveBeenCalled()
   })
 
   it('closes and removes an active client socket when a session is deleted', () => {

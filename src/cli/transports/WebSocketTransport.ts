@@ -45,6 +45,11 @@ const PERMANENT_CLOSE_CODES = new Set([
   4003, // unauthorized
 ])
 
+/** The server ended this session for good; the transport will not reconnect. */
+export function isPermanentCloseCode(closeCode: number | undefined): boolean {
+  return closeCode != null && PERMANENT_CLOSE_CODES.has(closeCode)
+}
+
 export type WebSocketTransportOptions = {
   /** When false, the transport does not attempt automatic reconnection on
    *  disconnect. Use this when the caller has its own recovery mechanism

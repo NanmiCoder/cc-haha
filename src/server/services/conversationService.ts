@@ -67,6 +67,10 @@ import {
   type NetworkSettings,
 } from './networkSettings.js'
 import { readTraceCaptureSettings } from './traceCaptureService.js'
+import {
+  killWindowsProcessTree,
+  type WindowsTaskkillSpawn,
+} from '../../utils/windowsProcessTree.js'
 import { logError } from '../../utils/log.js'
 import { normalizeAutoQuestionSettings } from '../../shared/autoQuestionSettings.js'
 import { decideAutoQuestionAnswers, type AutoQuestion } from './autoQuestionDecisionService.js'
@@ -368,6 +372,16 @@ export class ConversationStartupError extends Error {
   }
 }
 
+/**
+ * How a CLI's process tree is stopped. Production uses the real platform,
+ * environment and Bun.spawn; tests inject them.
+ */
+export type ConversationServiceProcessDeps = {
+  platform?: NodeJS.Platform
+  env?: NodeJS.ProcessEnv
+  spawnTaskkill?: WindowsTaskkillSpawn
+}
+
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
   private teamStopOperations = new Map<string, Promise<void>>()
@@ -375,6 +389,11 @@ export class ConversationService {
   private deletedSessions = new Set<string>()
   private providerService = new ProviderService()
   private pendingPermissionModeChanges = new Map<string, Map<string, number>>()
+  private readonly processDeps: ConversationServiceProcessDeps
+
+  constructor(processDeps: ConversationServiceProcessDeps = {}) {
+    this.processDeps = processDeps
+  }
 
   private clearAutoAnswerWait(request: TrackedPermissionRequest | undefined): void {
     if (request?.autoAnswerTimer) clearTimeout(request.autoAnswerTimer)
@@ -742,10 +761,30 @@ export class ConversationService {
       delete childEnv.CLAUDE_CODE_DIAGNOSTICS_FILE
     }
     if (side?.closed) throw new ConversationStartupError('This temporary side chat has expired. Open a new side chat.', 'SESSION_DELETED')
+    // A delete can land during any await above (transcript reset, workspace,
+    // network settings, child env); spawning now would start a CLI for a
+    // session that no longer exists.
+    if (this.deletedSessions.has(sessionId)) {
+      throw new ConversationStartupError(
+        `Session was deleted before startup completed: ${sessionId}`,
+        'SESSION_DELETED',
+      )
+    }
     const usesOfficialOAuth = this.shouldMarkManagedOAuth(options?.providerId)
 
     let proc: ReturnType<typeof Bun.spawn>
     migrationMaintenance.assertAvailable()
+    // Another start registered a CLI for this session while this one was
+    // awaiting. Overwriting the entry would leave that process running with
+    // no owner, so retire it the way a runtime restart does (approved team
+    // members keep running) and continue with this newer start.
+    const registered = this.sessions.get(sessionId)
+    if (registered) {
+      console.warn(
+        `[ConversationService] Replacing CLI pid ${registered.proc.pid} for ${sessionId}: a newer start reached spawn`,
+      )
+      this.stopSession(sessionId, { keepTeamWorkers: true })
+    }
     try {
       proc = Bun.spawn(args, buildConversationCliSpawnOptions(launchWorkDir, childEnv))
       if (side) side.started = true
@@ -827,6 +866,15 @@ export class ConversationService {
       ),
     ])
     if (startupGraceTimer) clearTimeout(startupGraceTimer)
+
+    const currentSession = this.sessions.get(sessionId)
+    if (currentSession && currentSession !== session) {
+      // A newer start retired this process while it was still starting and
+      // now owns the session. Its exit is not a startup failure: tearing down,
+      // retrying or writing metadata here would act on the newer CLI.
+      console.log(`[ConversationService] CLI startup for ${sessionId} was superseded by a newer start`)
+      return
+    }
 
     const startupExitCode = earlyExitCode ?? session.startupExitCode
     if (startupExitCode !== null) {
@@ -1774,6 +1822,33 @@ export class ConversationService {
   }
 
   private killProcess(
+    sessionId: string,
+    session: SessionProcess,
+    signal?: NodeJS.Signals,
+  ): void {
+    const platform = this.processDeps.platform ?? process.platform
+    const pid = session.proc.pid
+    if (platform === 'win32' && pid > 0 && session.proc.exitCode == null) {
+      // Windows has no signals: proc.kill() is TerminateProcess on the CLI
+      // alone. Its MCP servers (`cmd /c npx …` → node), shells and their
+      // children survive it and lose the parent link that `taskkill /T`
+      // follows, so the tree must be stopped while the CLI still anchors it.
+      void killWindowsProcessTree(pid, {
+        env: this.processDeps.env,
+        spawn: this.processDeps.spawnTaskkill,
+      }).then((stopped) => {
+        if (stopped) return
+        console.warn(
+          `[ConversationService] taskkill could not stop the CLI process tree for ${sessionId}; terminating the CLI only`,
+        )
+        this.signalProcess(sessionId, session, signal)
+      })
+      return
+    }
+    this.signalProcess(sessionId, session, signal)
+  }
+
+  private signalProcess(
     sessionId: string,
     session: SessionProcess,
     signal?: NodeJS.Signals,
