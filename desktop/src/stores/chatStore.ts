@@ -18,6 +18,7 @@ import { useProviderStore } from './providerStore'
 import { reconcileRuntimeSelection, resolveActiveProviderRuntimeSelection } from '../lib/runtimeSelection'
 import { useSettingsStore } from './settingsStore'
 import { isModelReasoningEffort } from '../../../src/shared/modelReasoning'
+import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
 import { useTabStore } from './tabStore'
 import { randomSpinnerVerb } from '../config/spinnerVerbs'
 import { notifyDesktop } from '../lib/desktopNotifications'
@@ -5073,9 +5074,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
       case 'runtime_config_applied': {
         const selected = useSessionRuntimeStore.getState().selections[sessionId]
-        const matchesSelection = (runtime: { providerId: string | null; modelId: string; effortLevel?: string }) =>
+        const matchesSelection = (runtime: { providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean }) =>
           Boolean(selected) && selected?.providerId === runtime.providerId &&
-          selected?.modelId === runtime.modelId && selected?.effortLevel === runtime.effortLevel
+          selected?.modelId === runtime.modelId && selected?.effortLevel === runtime.effortLevel &&
+          (selected?.openAIFastMode ?? false) === (runtime.openAIFastMode ?? false)
         const matchesCurrentSelection = matchesSelection(msg)
         const correctsCurrentSelection = msg.requestedConfig && matchesSelection(msg.requestedConfig)
         if (matchesCurrentSelection || correctsCurrentSelection) {
@@ -5083,6 +5085,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             useSessionRuntimeStore.getState().setSelection(sessionId, {
               providerId: msg.providerId, modelId: msg.modelId,
               ...(msg.effortLevel && isModelReasoningEffort(msg.effortLevel) ? { effortLevel: msg.effortLevel } : {}),
+              ...(msg.providerId === OPENAI_OFFICIAL_PROVIDER_ID && msg.openAIFastMode !== undefined
+                ? { openAIFastMode: msg.openAIFastMode } : {}),
             })
           }
           useSessionRuntimeStore.getState().settleSelection(sessionId)

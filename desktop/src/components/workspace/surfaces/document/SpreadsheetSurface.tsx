@@ -1,14 +1,21 @@
 import { Table } from 'lucide-react'
-import { useCallback, useLayoutEffect, useRef, type ReactNode } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { useElementSize } from '@/hooks/useElementSize'
 import { useTranslation } from '@/i18n'
+import { fileExtension } from '@/lib/fileCapabilities'
 import { PanelMessage } from '../PanelMessage'
+import { DelimitedSource } from './DelimitedSource'
 import { DocumentFailure } from './DocumentFailure'
 import { DocumentToolbar } from './DocumentToolbar'
 import type { DocumentViewerProps } from './documentViewers'
 import { SheetGrid } from './SheetGrid'
-import { defaultSpreadsheetEngine, type SpreadsheetEngine, type SpreadsheetError } from './spreadsheetEngine'
+import {
+  defaultSpreadsheetEngine,
+  type DelimitedFormat,
+  type SpreadsheetEngine,
+  type SpreadsheetError,
+} from './spreadsheetEngine'
 import { useSheetGrid, useSpreadsheetDocument } from './useSpreadsheetDocument'
 
 export type SpreadsheetSurfaceProps = DocumentViewerProps & {
@@ -22,6 +29,13 @@ function fileNameOf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path
 }
 
+function delimitedFormatOf(path: string): DelimitedFormat | undefined {
+  const extension = fileExtension(path)
+  return extension === 'csv' || extension === 'tsv' ? extension : undefined
+}
+
+type DelimitedView = 'table' | 'source'
+
 function failureMessage(error: SpreadsheetError, t: ReturnType<typeof useTranslation>): string {
   if (error.kind === 'tooComplex') return t('workspace.document.tooComplex')
   if (error.kind === 'unavailable') return t('workspace.document.engineUnavailable')
@@ -29,7 +43,8 @@ function failureMessage(error: SpreadsheetError, t: ReturnType<typeof useTransla
 }
 
 /**
- * The spreadsheet viewer `DocumentSurface` loads for `.xlsx` files.
+ * The spreadsheet viewer `DocumentSurface` loads for `.xlsx` files, and for `.csv` and
+ * `.tsv`, which are one sheet with no tabs and a way back to the text they are.
  *
  * A workbook is a row of sheet tabs over one sheet at a time, drawn as a grid of text (see
  * `SheetGrid`). Which sheet the reader is on is remembered with the file, and so is where
@@ -42,10 +57,15 @@ export default function SpreadsheetSurface({
   sheet,
   onSheetChange,
   initialView,
+  source,
   engine = defaultSpreadsheetEngine,
 }: SpreadsheetSurfaceProps) {
   const t = useTranslation()
-  const { current, error, retry } = useSpreadsheetDocument(engine, blob)
+  const delimited = delimitedFormatOf(path)
+  const { current, error, retry } = useSpreadsheetDocument(engine, blob, delimited)
+  // A reference to a line of the file (`data.csv:12`) is about its text, so it opens there.
+  const [view, setView] = useState<DelimitedView>(delimited && source?.reveal ? 'source' : 'table')
+  const showSource = delimited !== undefined && source !== undefined && view === 'source'
 
   const { selected, grid, gridName, error: gridError } = useSheetGrid(current, sheet)
   // The sheet asked for is the one on screen. While it is not, the last one stays up.
@@ -126,7 +146,23 @@ export default function SpreadsheetSurface({
   // A newer version that would not open, or would not read, leaves the last good one up.
   const refreshFailure = current ? (error ?? (onScreen ? gridError : null)) : null
 
-  const tabs = current && selected
+  const viewToggle = delimited && source
+    ? (
+      <SegmentedControl
+        label={t('workspace.delimited.view')}
+        size="sm"
+        value={view}
+        onChange={setView}
+        items={[
+          { value: 'table', label: t('workspace.delimited.table') },
+          { value: 'source', label: t('workspace.delimited.source') },
+        ]}
+      />
+    )
+    : null
+
+  // One anonymous sheet has nothing to switch between.
+  const tabs = current && selected && !current.delimited
     ? (
       <div className="min-w-0 overflow-x-auto">
         <SegmentedControl
@@ -146,12 +182,18 @@ export default function SpreadsheetSurface({
     <div className="relative flex min-h-0 flex-1 flex-col">
       {current ? (
         <DocumentToolbar
-          leading={tabs}
+          leading={<>{viewToggle}{tabs}</>}
           absolutePath={absolutePath}
-          note={t('workspace.document.approximate.xlsx')}
+          note={showSource ? undefined : t(delimited ? 'workspace.document.approximate.csv' : 'workspace.document.approximate.xlsx')}
         />
       ) : null}
-      <div className="relative min-h-0 flex-1">
+      {showSource && source ? (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <DelimitedSource blob={blob} source={source} />
+        </div>
+      ) : null}
+      {/* Kept mounted behind the source view: a hidden table keeps where the reader was. */}
+      <div className={showSource ? 'hidden' : 'relative min-h-0 flex-1'}>
         <div
           ref={setScroller}
           // The grid arrives after this mounts, so the panel leaves restoring the scroll position

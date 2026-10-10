@@ -669,6 +669,111 @@ describe('TabBar', () => {
     expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
   })
 
+  it('does not re-derive Activity when another session streams (#1480)', async () => {
+    // The strip derived Activity inside a store selector, and selectors run on
+    // every update of every session. Each token of a background run cost one
+    // pass over the on-screen session's whole transcript.
+    const actual = await vi.importActual<typeof import('../activity/sessionActivityModel')>('../activity/sessionActivityModel')
+    const derivedFor = vi.fn<(sessionId: string) => void>()
+    vi.doMock('../activity/sessionActivityModel', () => ({
+      ...actual,
+      buildMainSessionActivityModel: (input: Parameters<typeof actual.buildMainSessionActivityModel>[0]) => {
+        derivedFor(input.sessionId)
+        return actual.buildMainSessionActivityModel(input)
+      },
+      getMainSessionActivityModel: (input: Parameters<typeof actual.getMainSessionActivityModel>[0]) => {
+        derivedFor(input.sessionId)
+        return actual.getMainSessionActivityModel(input)
+      },
+    }))
+    try {
+      const { TabBar } = await import('./TabBar')
+      const { useTabStore } = await import('../../stores/tabStore')
+      const { useChatStore } = await import('../../stores/chatStore')
+      const onScreen = makeChatSession('idle')
+      onScreen.messages = [completedTodoWriteMessage()]
+      useTabStore.setState({
+        tabs: [
+          { sessionId: 'session-1', title: 'On screen', type: 'session', status: 'idle' },
+          { sessionId: 'session-2', title: 'Background', type: 'session', status: 'running' },
+        ],
+        activeTabId: 'session-1',
+      })
+      useChatStore.setState({
+        sessions: { 'session-1': onScreen, 'session-2': makeChatSession('streaming') },
+        disconnectSession: vi.fn(),
+      } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+      await act(async () => {
+        render(<TabBar />)
+      })
+      expect(screen.getByRole('button', { name: /activity/i })).toBeInTheDocument()
+
+      derivedFor.mockClear()
+      for (const chunk of ['Adding', 'Adding vehicle', 'Adding vehicle 401']) {
+        act(() => {
+          useChatStore.setState((state) => ({
+            sessions: {
+              ...state.sessions,
+              'session-2': { ...state.sessions['session-2']!, streamingText: chunk },
+            },
+          }))
+        })
+      }
+      expect(derivedFor).not.toHaveBeenCalled()
+
+      // The on-screen session still drives it: clearing its history hides the button.
+      act(() => {
+        useChatStore.setState((state) => ({
+          sessions: { ...state.sessions, 'session-1': { ...state.sessions['session-1']!, messages: [] } },
+        }))
+      })
+      expect(derivedFor).toHaveBeenCalledWith('session-1')
+      expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+    } finally {
+      vi.doUnmock('../activity/sessionActivityModel')
+    }
+  })
+
+  it('shows the activity button for a background task that starts after mount', async () => {
+    // The strip derives Activity from inputs it selects one by one, so each of
+    // them has to reach the derivation when it changes on its own.
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    useTabStore.setState({
+      tabs: [{ sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' }],
+      activeTabId: 'session-1',
+    })
+    useChatStore.setState({
+      sessions: { 'session-1': makeChatSession('idle') },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+    expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+
+    // Only the task record changes: the transcript array keeps its identity.
+    const withTasks = (tasks: BackgroundAgentTask[]) => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          'session-1': {
+            ...state.sessions['session-1']!,
+            backgroundAgentTasks: Object.fromEntries(tasks.map((task) => [task.taskId, task])),
+          },
+        },
+      }))
+    }
+    act(() => withTasks([makeBackgroundTask('bg-1', { taskType: 'local_agent' })]))
+    expect(screen.getByRole('button', { name: /activity/i })).toBeInTheDocument()
+
+    act(() => withTasks([]))
+    expect(screen.queryByRole('button', { name: /activity/i })).not.toBeInTheDocument()
+  })
+
   it('shows the activity button without a numeric badge for running or failed activity', async () => {
     const { TabBar } = await import('./TabBar')
     const { useTabStore } = await import('../../stores/tabStore')

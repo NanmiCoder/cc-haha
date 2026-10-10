@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -8,6 +8,7 @@ import {
   DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
 } from '../services/conversationService.js'
 import { ProviderService } from '../services/providerService.js'
+import { sessionService } from '../services/sessionService.js'
 import { updateTraceCaptureSettings } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
@@ -1295,6 +1296,52 @@ describe('ConversationService', () => {
     expect(env.ANTHROPIC_API_KEY).toBeUndefined()
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
+  })
+
+  test('first launch retains the saved Fast selection when replacing its empty placeholder', async () => {
+    const service = new ConversationService() as any
+    const sessionId = 'fast-placeholder-fixture'
+    const info = {
+      filePath: path.join(tmpDir, 'placeholder.jsonl'), projectDir: tmpDir, workDir: tmpDir,
+      transcriptMessageCount: 0, customTitle: null,
+      runtimeProviderId: 'openai-official', runtimeModelId: 'future-model', openAIFastMode: true,
+    }
+    const load = spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue(info)
+    const clear = spyOn(sessionService, 'clearSessionTranscript').mockResolvedValue()
+    const persist = spyOn(sessionService, 'appendSessionMetadata').mockResolvedValue()
+    const args = spyOn(service, 'buildSessionCliArgs').mockImplementation(() => { throw new Error('Fixture stops before spawning') })
+    try {
+      await expect(service.startSession(sessionId, tmpDir, 'ws://127.0.0.1/sdk/fixture', {
+        providerId: 'openai-official', model: 'future-model', openAIFastMode: true,
+      })).rejects.toThrow('Fixture stops before spawning')
+      expect(clear).toHaveBeenCalledWith(sessionId, tmpDir, undefined, null)
+      expect(persist).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+        runtimeProviderId: 'openai-official', runtimeModelId: 'future-model', openAIFastMode: true,
+      }))
+    } finally {
+      load.mockRestore()
+      clear.mockRestore()
+      persist.mockRestore()
+      args.mockRestore()
+    }
+  })
+
+  test('Fast mode is isolated to explicit ChatGPT OAuth launches and cannot leak from parent env', async () => {
+    const original = process.env.CC_HAHA_OPENAI_FAST_MODE
+    process.env.CC_HAHA_OPENAI_FAST_MODE = '1'
+    try {
+      const service = new ConversationService() as any
+      const build = (providerId: string | null, openAIFastMode?: boolean) =>
+        service.buildChildEnv('/tmp', undefined, { providerId, model: 'future-model', openAIFastMode })
+      expect((await build('openai-official', true)).CC_HAHA_OPENAI_FAST_MODE).toBe('1')
+      expect((await build('openai-official', false)).CC_HAHA_OPENAI_FAST_MODE).toBeUndefined()
+      expect((await build('openai-official')).CC_HAHA_OPENAI_FAST_MODE).toBeUndefined()
+      expect((await build('grok-official', true)).CC_HAHA_OPENAI_FAST_MODE).toBeUndefined()
+      expect((await build(null, true)).CC_HAHA_OPENAI_FAST_MODE).toBeUndefined()
+    } finally {
+      if (original === undefined) delete process.env.CC_HAHA_OPENAI_FAST_MODE
+      else process.env.CC_HAHA_OPENAI_FAST_MODE = original
+    }
   })
 
   test('buildChildEnv injects isolated Grok Official runtime env for session-scoped selection', async () => {

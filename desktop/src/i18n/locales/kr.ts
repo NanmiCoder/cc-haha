@@ -948,6 +948,7 @@ export const kr: Record<TranslationKey, string> = {
   'workspace.document.tooComplex': '파일이 너무 크거나 복잡해서 안전하게 미리 볼 수 없습니다.',
   'workspace.document.approximate.docx': '간이 미리 보기: 수식과 일부 도형은 표시되지 않을 수 있습니다. 정확한 레이아웃은 원본 파일을 열어 확인하세요.',
   'workspace.document.approximate.xlsx': '셀을 서식이 적용된 텍스트로 표시합니다. 차트, 이미지, 수식은 표시되지 않습니다.',
+  'workspace.document.approximate.csv': '파일을 표로 표시하며 값은 작성된 그대로입니다. 앞쪽의 행과 열만 표시됩니다.',
   'workspace.pdf.pages': '페이지',
   'workspace.pdf.pageNumber': '페이지 번호',
   'workspace.pdf.pageOfTotal': '{total}페이지 중 {page}페이지',
@@ -956,6 +957,9 @@ export const kr: Record<TranslationKey, string> = {
   'workspace.sheet.truncated': '처음 {rows}행, {columns}열만 표시합니다.',
   'workspace.sheet.showMoreRows': '행 더 보기',
   'workspace.sheet.empty': '이 워크시트는 비어 있습니다.',
+  'workspace.delimited.view': '보기',
+  'workspace.delimited.table': '표',
+  'workspace.delimited.source': '원본',
   'workspace.previewLineLimit': '불러온 {total}줄 중 처음 {count}줄을 표시합니다.',
   'workspace.previewAllLines': '불러온 {total}줄을 모두 표시합니다.',
   'workspace.showAllLoadedLines': '불러온 줄 모두 표시',
@@ -3266,6 +3270,8 @@ export const kr: Record<TranslationKey, string> = {
   'model.clearSearch': '모델 검색 지우기',
   'model.noMatches': '일치하는 모델이 없습니다',
   'model.effort': '노력',
+  'model.openAIFastMode': 'Fast 모드',
+  'model.openAIFastModeDescription': '속도는 모델에 따라 다릅니다(일부 모델 약 1.5배). 사용 한도 소모가 늘 수 있습니다',
 
   // ─── Directory Picker ──────────────────────────────────────
   'dirPicker.selectProject': '프로젝트 선택...',

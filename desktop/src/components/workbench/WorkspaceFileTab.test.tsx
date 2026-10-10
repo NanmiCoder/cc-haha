@@ -76,6 +76,7 @@ vi.mock('../workspace/surfaces/document/DocumentSurface', () => ({
     previewType: string
     version: string | undefined
     initialView: { scrollTop: number; scrollLeft: number } | undefined
+    source?: { onAddSelection: (selection: { startLine: number; endLine: number; text: string }) => void }
   }) => (
     <div
       data-testid="document-surface"
@@ -96,6 +97,12 @@ vi.mock('../workspace/surfaces/document/DocumentSurface', () => ({
           }
         }}
       />
+      <button
+        type="button"
+        onClick={() => props.source?.onAddSelection({ startLine: 2, endLine: 2, text: 'a,b' })}
+      >
+        add source selection
+      </button>
     </div>
   ),
 }))
@@ -307,6 +314,17 @@ describe('content states', () => {
       expect(surface).toHaveAttribute('data-absolute-path', `/repo/out/file.${previewType}`)
       expect(screen.queryByTestId('code-surface')).toBeNull()
       expect(screen.queryByTestId('markdown-surface')).toBeNull()
+    })
+
+    it('lets a table document hand a selection of its source text to the chat, as a text file does', () => {
+      seedEntry('data/results.csv', { state: 'ok', previewType: 'xlsx', version: 'v1' })
+      renderTab('data/results.csv')
+
+      fireEvent.click(screen.getByRole('button', { name: 'add source selection' }))
+
+      expect(useWorkspaceChatContextStore.getState().referencesBySession[SESSION]).toMatchObject([
+        { kind: 'code-selection', path: 'data/results.csv', name: 'results.csv', lineStart: 2, lineEnd: 2, quote: 'a,b' },
+      ])
     })
 
     it('passes the position this file was last left at, for the viewer to restore once it has laid out', () => {

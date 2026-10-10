@@ -946,6 +946,7 @@ export const jp: Record<TranslationKey, string> = {
   'workspace.document.tooComplex': 'ファイルが大きすぎる、または複雑すぎるため、安全にプレビューできません。',
   'workspace.document.approximate.docx': '簡易プレビュー：数式や一部の図形は表示されない場合があります。正確なレイアウトは元のファイルを開いて確認してください。',
   'workspace.document.approximate.xlsx': 'セルを書式設定済みのテキストで表示します。グラフ、画像、数式は表示されません。',
+  'workspace.document.approximate.csv': 'ファイルを表として表示します。値は書かれたままです。先頭の行と列のみ表示されます。',
   'workspace.pdf.pages': 'ページ',
   'workspace.pdf.pageNumber': 'ページ番号',
   'workspace.pdf.pageOfTotal': '{total} ページ中 {page} ページ目',
@@ -954,6 +955,9 @@ export const jp: Record<TranslationKey, string> = {
   'workspace.sheet.truncated': '最初の {rows} 行、{columns} 列のみ表示しています。',
   'workspace.sheet.showMoreRows': 'さらに行を表示',
   'workspace.sheet.empty': 'このワークシートは空です。',
+  'workspace.delimited.view': '表示',
+  'workspace.delimited.table': '表',
+  'workspace.delimited.source': 'ソース',
   'workspace.previewLineLimit': '読み込まれた {total} 行のうち最初の {count} 行を表示しています。',
   'workspace.previewAllLines': '読み込まれた {total} 行すべてを表示しています。',
   'workspace.showAllLoadedLines': '読み込まれた行をすべて表示',
@@ -3264,6 +3268,8 @@ export const jp: Record<TranslationKey, string> = {
   'model.clearSearch': 'モデル検索をクリア',
   'model.noMatches': '一致するモデルはありません',
   'model.effort': '労力',
+  'model.openAIFastMode': 'Fast モード',
+  'model.openAIFastModeDescription': '速度はモデルにより異なります（一部は約1.5倍）。利用枠の消費が増える場合があります',
 
   // ─── Directory Picker ──────────────────────────────────────
   'dirPicker.selectProject': 'プロジェクトを選択...',

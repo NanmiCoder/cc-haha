@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   buildMainSessionActivityModel,
   buildSessionActivityModel,
+  getMainSessionActivityModel,
   getVisibleActivitySections,
   hasVisibleSessionActivity,
 } from './sessionActivityModel'
 import { createBackgroundTaskDismissKey } from '../../lib/backgroundTasks'
 import type { BackgroundAgentTask, AgentTaskNotification, UIMessage } from '../../types/chat'
 import type { CLITask } from '../../types/cliTask'
+import type { WorkflowRun } from '../../types/workflow'
 
 const task = (overrides: Partial<CLITask>): CLITask => ({
   id: 'task-1',
@@ -2836,5 +2838,72 @@ describe('workflow section', () => {
   it('shows the workflow above the individual subagents it spawned', () => {
     const order = getVisibleActivitySections(build()).map((section) => section.id)
     expect(order).toEqual(['workflow'])
+  })
+})
+
+describe('getMainSessionActivityModel', () => {
+  // The tab bar and the session page both derive the on-screen session's model
+  // from the same store state, each rebuilding its own arrays and sets. The
+  // model walks the whole transcript, so the second caller reuses the first.
+  const todoMessages: UIMessage[] = [{
+    id: 'todo-1',
+    type: 'tool_use',
+    toolName: 'TodoWrite',
+    toolUseId: 'todo-1',
+    input: { todos: [{ content: 'Add vehicle 401', status: 'in_progress' }] },
+    timestamp: 1,
+  }]
+  const runningTask = background({ taskId: 'bg-1' })
+  const input = (overrides: Partial<Parameters<typeof getMainSessionActivityModel>[0]> = {}) => ({
+    sessionId: 'session-1',
+    messages: todoMessages,
+    tasks: [],
+    teamTaskWindows: [{ startedAt: 10, endedAt: 20 }],
+    completedAndDismissed: false,
+    isForegroundTurnActive: true,
+    backgroundTasks: [runningTask],
+    dismissedBackgroundTaskKeys: new Set<string>(),
+    agentNotifications: [],
+    workflowRuns: [],
+    ...overrides,
+  })
+
+  it('reuses the model for the same state passed through freshly built arrays and sets', () => {
+    const first = getMainSessionActivityModel(input())
+    const second = getMainSessionActivityModel(input())
+    expect(second).toBe(first)
+    expect(second).toEqual(buildMainSessionActivityModel(input()))
+  })
+
+  it.each([
+    ['the transcript', { messages: [...todoMessages] }],
+    ['the session', { sessionId: 'session-2' }],
+    ['a background task', { backgroundTasks: [background({ taskId: 'bg-1', status: 'completed' })] }],
+    ['a dismissed task', { dismissedBackgroundTaskKeys: new Set([createBackgroundTaskDismissKey(runningTask)]) }],
+    ['the turn state', { isForegroundTurnActive: false }],
+    ['when a team window ends', { teamTaskWindows: [{ startedAt: 10 }] }],
+    ['when a team window starts', { teamTaskWindows: [{ startedAt: 11, endedAt: 20 }] }],
+    ['an agent notification', { agentNotifications: [notification({})] }],
+    ['the workflow runs', {
+      workflowRuns: [{
+        taskId: 'w1',
+        sessionId: 'session-1',
+        workflowName: 'vehicle-sweep',
+        status: 'running',
+        startedAt: 0,
+        updatedAt: 0,
+        agentCount: 1,
+        totalTokens: 0,
+        toolCalls: 0,
+        progress: [{ type: 'workflow_agent', index: 1, label: 'check vehicle 401', state: 'progress', phaseIndex: 0, agentId: 'a1' }],
+      } as unknown as WorkflowRun],
+    }],
+    ['the CLI tasks', { tasks: [task({ status: 'in_progress' })] }],
+    ['the dismissal of finished tasks', { completedAndDismissed: true }],
+  ])('rebuilds when %s changes', (_label, change) => {
+    const first = getMainSessionActivityModel(input())
+    const next = getMainSessionActivityModel(input(change))
+    expect(next).not.toBe(first)
+    expect(next).toEqual(buildMainSessionActivityModel(input(change)))
   })
 })

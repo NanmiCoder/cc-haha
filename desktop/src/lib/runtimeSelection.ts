@@ -138,6 +138,13 @@ export function normalizeRuntimeSelection(
   apiFormat?: ModelReasoningApiFormat,
   providerKind?: ModelReasoningProviderKind,
 ): RuntimeSelection {
+  if (selection.openAIFastMode !== undefined && (
+    selection.providerId !== OPENAI_OFFICIAL_PROVIDER_ID ||
+    typeof selection.openAIFastMode !== 'boolean'
+  )) {
+    const { openAIFastMode: _ignoredFastMode, ...runtime } = selection
+    selection = runtime
+  }
   if (
     selection.effortLevel === undefined ||
     selection.providerId === null

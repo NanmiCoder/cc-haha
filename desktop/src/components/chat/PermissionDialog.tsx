@@ -84,7 +84,7 @@ function renderPermissionPreview(toolName: string, input: unknown) {
 }
 
 export function PermissionDialog({ sessionId, requestId, toolName, input, description, displayName, markerWhenPending = false }: Props) {
-  const { respondToPermission } = useChatStore()
+  const respondToPermission = useChatStore((s) => s.respondToPermission)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const targetSessionId = sessionId ?? activeTabId
   const pendingPermission = useChatStore((s) => targetSessionId
@@ -258,7 +258,7 @@ function ExitPlanModePermissionDialog({
   isPending: boolean
   markerWhenPending: boolean
 }) {
-  const { respondToPermission } = useChatStore()
+  const respondToPermission = useChatStore((s) => s.respondToPermission)
   const t = useTranslation()
   const [feedback, setFeedback] = useState('')
   // null = execute on the planning model (unchanged); non-null = the staged

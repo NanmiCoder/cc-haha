@@ -29,6 +29,7 @@ import { sessionsApi } from '../../api/sessions'
 import type { SessionListItem } from '../../types/session'
 import { useTabStore, SETTINGS_TAB_ID, SCHEDULED_TAB_ID, MARKET_TAB_ID, CONNECTORS_TAB_ID } from '../../stores/tabStore'
 import { useChatStore } from '../../stores/chatStore'
+import { useShallow } from 'zustand/react/shallow'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import {
   resetProjectDisplayName,
@@ -150,7 +151,16 @@ export function Sidebar({
   const closeModal = useUIStore((s) => s.closeModal)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
-  const chatSessions = useChatStore((s) => s.sessions)
+  // Only which sessions are running or waiting, never the session map itself:
+  // that changes on every streamed token of every session, and re-rendering the
+  // whole project tree for each one kept the window busy while long runs
+  // streamed (#1480). `useShallow` keeps an unchanged id list from re-rendering.
+  const runningChatSessionIds = useChatStore(useShallow((s) =>
+    Object.keys(s.sessions).filter((sessionId) => {
+      const sessionState = s.sessions[sessionId]!
+      return sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks)
+    })))
+  const attentionSessionIdList = useChatStore(useShallow((s) => collectAttentionIds(s.sessions)))
   const closeTab = useTabStore((s) => s.closeTab)
   const disconnectSession = useChatStore((s) => s.disconnectSession)
   const fileManagerPlatform = useOpenTargetStore((s) => (
@@ -300,27 +310,33 @@ export function Sidebar({
     for (const tab of tabs) {
       if (tab.type === 'session' && tab.status === 'running') ids.add(tab.sessionId)
     }
-    for (const [sessionId, sessionState] of Object.entries(chatSessions)) {
-      if (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks)) {
-        ids.add(sessionId)
-      }
-    }
+    for (const sessionId of runningChatSessionIds) ids.add(sessionId)
     return ids
-  }, [chatSessions, tabs])
+  }, [runningChatSessionIds, tabs])
   // 停在权限请求上的会话在 `runningSessionIds` 里也算「没结束」，但它不是在
   // 干活而是在等人。两个视图都要把这两种状态分开显示。
   // 判定看挂起的请求记录而不是 `chatState`：`status` / `session_state` 消息会在
   // 卡片还开着的时候把 chatState 改掉，按它判定会在有卡的会话上熄灯。tab 栏与
   // 这里共用同一个 `sessionNeedsAttention`，不要各写各的。
-  const attentionSessionIds = useMemo(() => new Set(collectAttentionIds(chatSessions)), [chatSessions])
+  const attentionSessionIds = useMemo(() => new Set(attentionSessionIdList), [attentionSessionIdList])
+  // Row times ("10m ago") and the task view's day buckets read the clock. They
+  // used to refresh as a side effect of re-rendering on every streamed token;
+  // a minute tick keeps them current without that.
+  const [clockMinute, setClockMinute] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setClockMinute(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
   const taskGroups = useMemo(() => {
     if (!isTaskView) return []
     // 隐藏的项目在任务视图里也要隐藏，否则两个视图对「有哪些会话」说法不一致。
     const visibleSessions = hiddenProjectKeys.size === 0
       ? filteredSessions
       : filteredSessions.filter((session) => !hiddenProjectKeys.has(getSessionProjectKey(session)))
+    // `clockMinute` only schedules the regrouping; the buckets read the clock now.
+    void clockMinute
     return buildSidebarTaskGroups(visibleSessions, runningSessionIds, Date.now())
-  }, [filteredSessions, hiddenProjectKeys, isTaskView, runningSessionIds])
+  }, [clockMinute, filteredSessions, hiddenProjectKeys, isTaskView, runningSessionIds])
   const workspaceLabelFor = useCallback(
     (session: SessionListItem) => getSessionWorkspaceLabel(session, resolveProjectDisplayName),
     // 改过的项目名要跟着变；与 projectGroups 同一个 revision 依赖。

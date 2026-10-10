@@ -461,7 +461,7 @@
 }
 
 .agent-teams-flow {
-  animation: agent-teams-flow 700ms linear infinite;
+  animation: agent-teams-flow 545ms linear infinite;
 }
 
 /* The collaboration board uses motion only to explain state transitions:
@@ -523,8 +523,10 @@
   100% { opacity: 0; transform: translate(7px, -11px); }
 }
 
+/* Must be a whole multiple of every flowing stroke-dasharray period (all 14px);
+   otherwise the dashes snap back at each loop and the line stutters. */
 @keyframes agent-teams-flow {
-  to { stroke-dashoffset: -18; }
+  to { stroke-dashoffset: -14; }
 }
 
 @keyframes agent-teams-pulse {

@@ -32,6 +32,7 @@ export type SessionListItem = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: ReasoningEffortLevel
+  openAIFastMode?: boolean
 }
 
 export type SessionWorkspaceState = 'available' | 'worktree_removed' | 'missing'

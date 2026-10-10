@@ -85,6 +85,7 @@ export function buildOpenAICodexFetch(
       },
       include: ['reasoning.encrypted_content'],
       stream: true,
+      ...(process.env.CC_HAHA_OPENAI_FAST_MODE === '1' ? { service_tier: 'priority' as const } : {}),
     }
 
     const tokens = await ensureFreshOpenAITokens()

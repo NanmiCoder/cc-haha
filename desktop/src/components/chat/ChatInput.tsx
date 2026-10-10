@@ -5,6 +5,7 @@ import { getSessionReferences } from '@/lib/composerMentions'
 import { normalizeSessionReferences } from '@/lib/sessionReferences'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { ArrowUp, CornerDownRight, Cpu, Gauge, Pencil, Plus, ShieldCheck, Square, Trash2 } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { Button } from '@/components/ui/Button'
@@ -231,7 +232,17 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     removeQueuedUserMessage,
     sendQueuedUserMessage,
     setPreparingTurn,
-  } = useChatStore()
+  } = useChatStore(useShallow((s) => ({
+    sendMessage: s.sendMessage,
+    stopGeneration: s.stopGeneration,
+    clearComposerPrefill: s.clearComposerPrefill,
+    clearComposerInsertion: s.clearComposerInsertion,
+    queueUserMessage: s.queueUserMessage,
+    updateQueuedUserMessage: s.updateQueuedUserMessage,
+    removeQueuedUserMessage: s.removeQueuedUserMessage,
+    sendQueuedUserMessage: s.sendQueuedUserMessage,
+    setPreparingTurn: s.setPreparingTurn,
+  })))
   const selectedTabId = useTabStore((s) => s.activeTabId)
   const activeTabId = sessionId ?? selectedTabId
   const activeTabType = useTabStore((s) =>

@@ -945,6 +945,7 @@ export const zh: Record<TranslationKey, string> = {
   'workspace.document.tooComplex': '文件过大或结构过于复杂，无法安全预览。',
   'workspace.document.approximate.docx': '近似预览：公式和部分形状可能无法显示。如需精确排版，请打开原文件。',
   'workspace.document.approximate.xlsx': '以格式化文本显示单元格，不含图表、图片与公式。',
+  'workspace.document.approximate.csv': '以表格显示文件，单元格保持原文。仅显示前面的行和列。',
   'workspace.pdf.pages': '页面',
   'workspace.pdf.pageNumber': '页码',
   'workspace.pdf.pageOfTotal': '第 {page} 页，共 {total} 页',
@@ -953,6 +954,9 @@ export const zh: Record<TranslationKey, string> = {
   'workspace.sheet.truncated': '仅显示前 {rows} 行、{columns} 列。',
   'workspace.sheet.showMoreRows': '显示更多行',
   'workspace.sheet.empty': '此工作表为空。',
+  'workspace.delimited.view': '视图',
+  'workspace.delimited.table': '表格',
+  'workspace.delimited.source': '源文本',
   'workspace.previewLineLimit': '正在显示已加载内容的前 {count} / {total} 行。',
   'workspace.previewAllLines': '正在显示全部 {total} 行已加载内容。',
   'workspace.showAllLoadedLines': '显示全部已加载行',
@@ -3262,6 +3266,8 @@ export const zh: Record<TranslationKey, string> = {
   'model.clearSearch': '清除模型搜索',
   'model.noMatches': '没有匹配的模型',
   'model.effort': '推理强度',
+  'model.openAIFastMode': 'Fast 模式',
+  'model.openAIFastModeDescription': '提速因模型而异（部分约 1.5 倍），可能增加额度消耗',
 
   // ─── Directory Picker ──────────────────────────────────────
   'dirPicker.selectProject': '选择项目...',

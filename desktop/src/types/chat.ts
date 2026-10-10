@@ -149,7 +149,8 @@ export type ServerMessage =
       providerId: string | null
       modelId: string
       effortLevel?: string
-      requestedConfig?: { providerId: string | null; modelId: string; effortLevel?: string }
+      openAIFastMode?: boolean
+      requestedConfig?: { providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean }
     }
   // CLI 回传的权限模式变化（如 ExitPlanMode 退出 plan 后恢复、Shift+Tab）。
   // 桌面端据此把选择器校正回 CLI 的真实权限，避免本地影子值漂移。

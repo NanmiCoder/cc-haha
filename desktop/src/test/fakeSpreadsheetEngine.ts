@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 import type {
+  DelimitedFormat,
   Grid,
   GridCell,
   SpreadsheetDocument,
@@ -69,11 +70,12 @@ export function createFakeSpreadsheetEngine({
   let current = sheets
 
   const engine: SpreadsheetEngine & { open: ReturnType<typeof vi.fn> } = {
-    open: vi.fn((bytes: Uint8Array) => new Promise<SpreadsheetDocument>((resolve, reject) => {
+    open: vi.fn((bytes: Uint8Array, options?: { delimited?: DelimitedFormat }) => new Promise<SpreadsheetDocument>((resolve, reject) => {
       const workbook = current
       const documentNumber = opens.length
       const document: SpreadsheetDocument = {
         sheets: workbook.flatMap((sheet, index) => (sheet.hidden ? [] : [{ index, name: sheet.name }])),
+        delimited: options?.delimited ? true : undefined,
         readSheet: (index) => new Promise<Grid>((resolveRead, rejectRead) => {
           const read: FakeRead = {
             document: documentNumber,

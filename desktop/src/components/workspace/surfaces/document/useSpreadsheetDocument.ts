@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   SpreadsheetError,
+  type DelimitedFormat,
   type Grid,
   type SheetInfo,
   type SpreadsheetDocument,
@@ -34,7 +35,11 @@ function toSpreadsheetError(reason: unknown): SpreadsheetError {
  * looking at until the next one is open, and one that will not open changes nothing but the
  * note under the sheet.
  */
-export function useSpreadsheetDocument(engine: SpreadsheetEngine, blob: Blob): SpreadsheetDocumentState {
+export function useSpreadsheetDocument(
+  engine: SpreadsheetEngine,
+  blob: Blob,
+  delimited?: DelimitedFormat,
+): SpreadsheetDocumentState {
   const [current, setCurrent] = useState<SpreadsheetDocument | null>(null)
   const [error, setError] = useState<SpreadsheetError | null>(null)
   const [attempt, setAttempt] = useState(0)
@@ -46,7 +51,8 @@ export function useSpreadsheetDocument(engine: SpreadsheetEngine, blob: Blob): S
     void (async () => {
       try {
         // Our own copy of the bytes: the Blob is held for the next tab switch.
-        const document = await engine.open(new Uint8Array(await blob.arrayBuffer()))
+        const bytes = new Uint8Array(await blob.arrayBuffer())
+        const document = await engine.open(bytes, delimited ? { delimited } : undefined)
         if (!superseded) setCurrent(document)
       } catch (reason) {
         if (!superseded) setError(toSpreadsheetError(reason))
@@ -56,7 +62,7 @@ export function useSpreadsheetDocument(engine: SpreadsheetEngine, blob: Blob): S
     return () => {
       superseded = true
     }
-  }, [engine, blob, attempt])
+  }, [engine, blob, delimited, attempt])
 
   const retry = useCallback(() => setAttempt((count) => count + 1), [])
 

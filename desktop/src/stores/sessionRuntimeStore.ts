@@ -169,11 +169,17 @@ export const useSessionRuntimeStore = create<SessionRuntimeStore>((set) => ({
           providerId: session.runtimeProviderId,
           modelId: session.runtimeModelId,
           ...(session.effortLevel ? { effortLevel: session.effortLevel } : {}),
+          ...(session.openAIFastMode !== undefined
+            ? { openAIFastMode: session.openAIFastMode }
+            : current?.providerId === session.runtimeProviderId && current.modelId === session.runtimeModelId && current.openAIFastMode !== undefined
+              ? { openAIFastMode: current.openAIFastMode }
+              : {}),
         })
         const matchesCurrent = selection &&
           current?.providerId === selection.providerId &&
           current.modelId === selection.modelId &&
-          current.effortLevel === selection.effortLevel
+          current.effortLevel === selection.effortLevel &&
+          (current.openAIFastMode ?? false) === (selection.openAIFastMode ?? false)
         const pending = current && pendingRuntimes.has(current)
         if (pending && !matchesCurrent) continue
         if (!selection) {

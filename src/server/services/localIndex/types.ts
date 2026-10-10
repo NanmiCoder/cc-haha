@@ -47,6 +47,7 @@ export type SessionListSummary = {
   runtimeProviderId?: string | null
   runtimeModelId?: string
   effortLevel?: string
+  openAIFastMode?: boolean
   repository?: PersistedRepositorySession
   worktreeSession?: PersistedWorktreeSession | null
 }
