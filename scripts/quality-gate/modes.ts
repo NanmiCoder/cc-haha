@@ -97,6 +97,16 @@ export function lanesForMode(mode: QualityGateMode, baselineTargets: BaselineTar
       category: 'integration',
     },
     {
+      id: 'agent-e2e-checks',
+      title: 'Agent loop against a mock LLM',
+      description: 'Run the real server and the real CLI agent loop against a loopback Anthropic-compatible endpoint backed by a scripted model: first turn, tool execution with permission allow/deny, tool results returned upstream, interrupt closing the upstream stream, upstream error recovery, reconnect, and session recovery. No provider, credentials, or network.',
+      kind: 'command',
+      command: ['bun', 'run', 'check:agent-e2e'],
+      impactRequiredCheck: 'bun run check:agent-e2e',
+      requiredForModes: ['pr', 'baseline', 'release'],
+      category: 'integration',
+    },
+    {
       id: 'desktop-ui-smoke',
       title: 'Deterministic desktop UI smoke',
       description: 'Drive the real desktop web app with agent-browser against the mock SDK CLI: send a task, wait for the real permission dialog, click Allow, and verify the edit lands. Needs agent-browser and desktop dependencies; skips with a reason when either is missing. No provider or credentials.',

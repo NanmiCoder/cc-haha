@@ -38,13 +38,13 @@ Do not commit local artifacts such as `artifacts/quality-runs/`, `node_modules/`
 | Tier | Trigger | What runs | Constraint |
 | --- | --- | --- | --- |
 | Local | manual | The narrowest relevant tests, then whatever `bun run check:impact` selects | seconds |
-| PR (required) | `pull_request` | The deterministic lanes the impact report selects, including `check:agent-flow` | no model, no provider, no secret, runs on an untrusted fork |
-| Full sweep | Maintainer-triggered (`workflow_dispatch`) | Every deterministic lane with no path selection, plus module-graph health and `check:desktop-ui-smoke` | still no model, no secret |
+| PR (required) | `pull_request`, and `push` to `main` after a merge | The deterministic lanes the impact report selects, including `check:agent-flow` and `check:agent-e2e`; coverage is reported, not blocking | no model, no provider, no secret, runs on an untrusted fork |
+| Full sweep | Daily (19:00 UTC) plus maintainer-triggered | Every deterministic lane with no path selection, plus module-graph health and `check:desktop-ui-smoke` | still no model, no secret |
 | Release | maintainer-run `bun run quality:release` (**not** `release-desktop.yml`) | Everything above, plus native/packaging smoke and maintainer-authorized live provider baselines | live models only here, only with explicit authorization |
 
-Note: `release-desktop.yml` deliberately runs no quality gate — tagging must not be blocked by `bun run verify`, and `scripts/pr/release-workflow.test.ts` guards that decision. Release-time evidence therefore comes from the PRs that were merged, plus whatever full sweeps the maintainer ran, plus the manual `quality:release`. The full sweep is deliberately not scheduled: spending ~90 minutes of CI is a decision, not a default, and `pr-quality-workflow.test.ts` fails if a `schedule:` is added back.
+Note: `release-desktop.yml` deliberately runs no quality gate — tagging must not be blocked by `bun run verify`, and `scripts/pr/release-workflow.test.ts` guards that decision. Release-time evidence therefore comes from the PRs that were merged, plus whatever full sweeps the maintainer ran, plus the manual `quality:release`. The full sweep runs once a day (maintainer decision, 2026-10); the frequency is pinned in `pr-quality-workflow.test.ts`, so changing it is a maintainer decision too.
 
-The split follows from what each tier can prove. A per-PR gate only ever covers what the diff reaches, so it is structurally blind to checks no recent PR selected and to failures that only appear when the whole suite runs together — the full sweep closes both, when the maintainer asks for it. Live model quota is spent only at release time, so every contributor can pass the required gate with no provider at all.
+The split follows from what each tier can prove. A per-PR gate only ever covers what the diff reaches, so it is structurally blind to checks no recent PR selected and to failures that only appear when the whole suite runs together — the daily full sweep closes both. Live model quota is spent only at release time, so every contributor can pass the required gate with no provider at all.
 
 ## Path-Aware PR Checks
 
@@ -62,10 +62,15 @@ The graph only widens *check selection*. Areas, labels, and every blocking rule 
 
 ```bash
 bun run check:agent-flow       # real server + real WebSocket + mock CLI
+bun run check:agent-e2e        # real server + real CLI agent loop + mock LLM
 bun run check:desktop-ui-smoke # real desktop UI + real permission dialog + mock CLI
 ```
 
-Neither needs a provider, credentials, or the public network. `check:agent-flow` covers session creation, runtime selection, first-turn streaming, tool execution, permission allow/deny, tool failure, API error, interrupt, reconnect permission replay, and session recovery. `check:desktop-ui-smoke` clicks the real Allow button in a real browser; it needs `agent-browser` and installed desktop dependencies and skips with a printed reason when either is missing.
+None of them needs a provider, credentials, or the public network.
+
+`check:agent-e2e` fakes only the model: a loopback Anthropic-compatible endpoint (`scripts/quality-gate/mock-llm/`) is registered as a provider through the same API as the desktop "add provider" form, and the real CLI runs its real agent loop with real tools on a real (throwaway) disk. The scripted model reacts to plain-language prompts the way a model would, so it shares one scenario catalog with `check:agent-flow:live` (`agent-flow/liveScenarios.ts`): the mock proves the plumbing, the live lane proves a real model lands on the same outcome. Mock-only scenarios assert what only the upstream side can see — the tool's output really went back to the model (nonce check), a denied permission reaches the model as an error result, stopping really closes the upstream connection, and the session recovers after an upstream error. When you change the agent loop, tools, permissions, or provider wiring, add a scenario here rather than only a unit test.
+
+ `check:agent-flow` covers session creation, runtime selection, first-turn streaming, tool execution, permission allow/deny, tool failure, API error, interrupt, reconnect permission replay, and session recovery. `check:desktop-ui-smoke` clicks the real Allow button in a real browser; it needs `agent-browser` and installed desktop dependencies and skips with a printed reason when either is missing.
 
 `agent-browser` belongs to that committed lane (which runs headless on Linux CI) and to the maintainer-run `desktop/scripts/e2e-*-agent-browser.sh` scripts. For ad-hoc browser work (manual verification, screenshots, exploratory UI checks), use the `ego-browser` skill instead; do not treat `agent-browser` as a general-purpose browser tool just because it appears in the repository.
 
@@ -92,7 +97,7 @@ artifacts/coverage/<timestamp>/coverage-report.json
 
 Include the commands you ran and the report summary in your PR description. `quality:pr` / `quality:verify` remain available for contributors who prefer explicit quality command names, but docs and AI prompts should prefer `bun run verify`.
 
-The coverage gate does four things: measures source-only coverage, enforces the baseline ratchet, reports target gaps against 75-80%+ maintained-area goals, and enforces changed-line coverage for new or modified executable production lines. The current baseline lives in `scripts/quality-gate/coverage-baseline.json`, and CI compares against the base branch baseline when available. New PRs must not lower coverage beyond the allowed window. Changes to `coverage-baseline.json` or `coverage-thresholds.json` require the maintainer-only `allow-coverage-baseline-change` label. Quarantine is reserved for maintainer baseline/release tracking and must never hide deterministic provider/chat contract tests; the normal PR gate does not depend on quarantine to pass.
+Coverage is reported on pull requests but never blocks a merge (a failed job is only a warning in `pr-quality-gate`). It still does four things: measures source-only coverage, enforces the baseline ratchet, reports target gaps against 75-80%+ maintained-area goals, and enforces changed-line coverage for new or modified executable production lines. The current baseline lives in `scripts/quality-gate/coverage-baseline.json`, and CI compares against the base branch baseline when available. New PRs must not lower coverage beyond the allowed window. Changes to `coverage-baseline.json` or `coverage-thresholds.json` require the maintainer-only `allow-coverage-baseline-change` label. Quarantine is reserved for maintainer baseline/release tracking and must never hide deterministic provider/chat contract tests; the normal PR gate does not depend on quarantine to pass.
 
 ## AI Coding Agent Fix Loop
 
@@ -179,9 +184,18 @@ bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:
 
 ## PR CI Merge Gate
 
-`.github/workflows/pr-quality.yml` runs for PR `opened`, `synchronize`, `reopened`, `ready_for_review`, `labeled`, and `unlabeled` events. `scope-plan` installs no dependencies and only produces the stable impact plan. `policy-enforcement` installs the frozen dependency graph independently and runs policy, so a policy failure cannot swallow product-test results. Product jobs depend only on `scope-plan` and select desktop, server, adapter, native, provider contract, chat contract, persistence, docs, and coverage lanes by path. The final `pr-quality-gate` validates every result strictly: selected jobs must succeed, unselected jobs must be skipped, and cancelled or missing results cannot be mistaken for success.
+`.github/workflows/pr-quality.yml` runs for PR `opened`, `synchronize`, `reopened`, `ready_for_review`, `labeled`, and `unlabeled` events, and again after each merge to `main`, scoped to what that push changed (label-based exceptions are judged on the PR only and never re-block `main`). `scope-plan` installs no dependencies and only produces the stable impact plan. `policy-enforcement` installs the frozen dependency graph independently and runs policy, so a policy failure cannot swallow product-test results. Product jobs depend only on `scope-plan` and select desktop, server, adapter, native, provider contract, chat contract, persistence, docs, and coverage lanes by path. The final `pr-quality-gate` validates every result strictly: selected jobs must succeed, unselected jobs must be skipped, and cancelled or missing results cannot be mistaken for success.
 
 Repository settings should protect `main` with GitHub branch protection / rulesets and require the `pr-quality-gate` status check. CODEOWNERS requires maintainer review for workflows, quality policy, and high-risk provider/WebSocket boundaries. The local hook only reminds; the PR gate is what blocks low-quality merges.
+
+### When the gate is red
+
+The gate is only useful while green means mergeable, so `main` has to stay green:
+
+- **You changed behavior and a test went red**: the gate is working. Update the test in the same PR and say why the old assertion no longer holds.
+- **The failure is not from your change**: check whether the latest PR Quality (push) run and the full sweep on `main` are red too. If so, fix it in a separate PR, or quarantine it in `scripts/quality-gate/quarantine.json` with an owner and a review date (`check:quarantine` fails once it expires). Do not merge around the gate.
+- **Intermittent failure (flaky)**: re-run once to confirm, then treat it as above. Do not hide it with longer timeouts or looser assertions.
+- **The gate itself needs to change**: edit `scripts/pr/change-policy.ts`, the workflow, and their tests (`check:policy`). Keep the `pr-quality-gate` check name stable so branch protection does not need to change.
 
 ## Area-Specific Checks
 
