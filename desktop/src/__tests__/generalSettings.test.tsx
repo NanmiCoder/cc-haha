@@ -663,7 +663,8 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByRole('radio', { name: /^Manual proxy/i }))
     const proxyInput = screen.getByLabelText('Proxy URL')
-    const saveButton = screen.getAllByRole('button', { name: 'Save' })[0]!
+    const networkSection = screen.getByRole('heading', { name: 'Network' }).closest('section')!
+    const saveButton = within(networkSection).getByRole('button', { name: 'Save' })
 
     expect(screen.getByText('Enter a proxy URL.')).toBeInTheDocument()
     expect(saveButton).toBeDisabled()
@@ -704,7 +705,8 @@ describe('Settings > General tab', () => {
     fireEvent.change(timeoutInput, { target: { value: String(seconds) } })
     fireEvent.blur(timeoutInput)
     expect(timeoutInput).toHaveValue(seconds)
-    const saveButton = screen.getAllByRole('button', { name: 'Save' })[0]!
+    const networkSection = screen.getByRole('heading', { name: 'Network' }).closest('section')!
+    const saveButton = within(networkSection).getByRole('button', { name: 'Save' })
     expect(saveButton).not.toBeDisabled()
 
     await act(async () => {
@@ -720,7 +722,8 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('General'))
     const timeoutInput = screen.getByLabelText('AI request timeout')
-    const saveButton = screen.getAllByRole('button', { name: 'Save' })[0]!
+    const networkSection = screen.getByRole('heading', { name: 'Network' }).closest('section')!
+    const saveButton = within(networkSection).getByRole('button', { name: 'Save' })
 
     fireEvent.change(timeoutInput, { target: { value: '2147484' } })
     expect(screen.getByText('Enter a whole number from 30 to 2147483 seconds.')).toBeInTheDocument()
