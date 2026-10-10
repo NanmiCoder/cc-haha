@@ -30,6 +30,7 @@ export type ChangePolicyResult = {
     providerContract: boolean
     chatContract: boolean
     agentFlow: boolean
+    agentE2e: boolean
     persistence: boolean
     policy: boolean
     docs: boolean
@@ -122,6 +123,20 @@ const chatContractPrefixes = [
  * session lifecycle, WebSocket framing, tool permission round-trips, reconnect
  * replay, and the mock runtime that stands in for a provider.
  */
+/**
+ * Harness of the mock-LLM agent lane. Product code reaches it through the broader
+ * `src/` rule in the selector: that lane runs the real CLI, so any runtime change
+ * can break the agent loop it proves.
+ */
+const agentE2eHarnessPaths = [
+  'scripts/quality-gate/mock-llm/',
+  'scripts/quality-gate/agent-flow/',
+  'scripts/quality-gate/sandbox.ts',
+  'preload.ts',
+  'package.json',
+  'bun.lock',
+]
+
 const agentFlowPrefixes = [
   'src/server/api/sessions',
   'src/server/services/conversationService',
@@ -373,6 +388,10 @@ export function evaluateChangePolicy(
   const touchesProviderContract = selectionFiles.some((file) => startsWithAny(file, providerContractPrefixes))
   const touchesChatContract = selectionFiles.some((file) => startsWithAny(file, chatContractPrefixes))
   const touchesAgentFlow = selectionFiles.some((file) => startsWithAny(file, agentFlowPrefixes))
+  const touchesAgentE2e = selectionFiles.some((file) => (
+    (file.startsWith('src/') && isExecutableSourcePath(file) && !isAgentInstructionPath(file)) ||
+    startsWithAny(file, agentE2eHarnessPaths)
+  ))
   const touchesPersistence = selectionFiles.some((file) => startsWithAny(file, persistencePrefixes))
   const touchesPolicy = files.some((file) => (
     startsWithAny(file, policyPrefixes) ||
@@ -421,6 +440,7 @@ export function evaluateChangePolicy(
       providerContract: touchesProviderContract,
       chatContract: touchesChatContract,
       agentFlow: touchesAgentFlow,
+      agentE2e: touchesAgentE2e,
       persistence: touchesPersistence,
       policy: touchesPolicy,
       docs: touchesDocs,
@@ -466,7 +486,7 @@ function formatSummary(result: ChangePolicyResult) {
     'PR change policy',
     `  Areas: ${result.areas.length ? result.areas.join(', ') : 'none'}`,
     `  Labels: ${result.labels.length ? result.labels.join(', ') : 'none'}`,
-    `  Checks: desktop=${result.checks.desktop}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, providerContract=${result.checks.providerContract}, chatContract=${result.checks.chatContract}, agentFlow=${result.checks.agentFlow}, persistence=${result.checks.persistence}, policy=${result.checks.policy}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
+    `  Checks: desktop=${result.checks.desktop}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, providerContract=${result.checks.providerContract}, chatContract=${result.checks.chatContract}, agentFlow=${result.checks.agentFlow}, agentE2e=${result.checks.agentE2e}, persistence=${result.checks.persistence}, policy=${result.checks.policy}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
   ]
 
   if (result.cliCoreFiles.length > 0) {
@@ -518,6 +538,7 @@ function writeGithubOutputs(result: ChangePolicyResult) {
     provider_contract_checks: String(result.checks.providerContract),
     chat_contract_checks: String(result.checks.chatContract),
     agent_flow_checks: String(result.checks.agentFlow),
+    agent_e2e_checks: String(result.checks.agentE2e),
     persistence_checks: String(result.checks.persistence),
     policy_checks: String(result.checks.policy),
     docs_checks: String(result.checks.docs),

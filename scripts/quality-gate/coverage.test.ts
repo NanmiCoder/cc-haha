@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -14,6 +14,7 @@ import {
   parseChangedLinesFromDiff,
   parseLcov,
   prefixRelativeLcovSourcePaths,
+  removeSandboxHome,
   runCommand,
 } from './coverage'
 
@@ -477,5 +478,48 @@ describe('coverage subprocess output', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+
+  // Root ignores directory permissions, so only a non-root POSIX run proves the retry.
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('removes a sandbox whose tests left read-only directories behind', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-readonly-'))
+    const script = join(root, 'leaves-readonly.ts')
+    const logPath = join(root, 'logs', 'coverage.log')
+    try {
+      writeFileSync(script, `
+        import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+        import { tmpdir } from 'node:os'
+        import { join } from 'node:path'
+        // Mirrors a fixture that restores a read-only mode and fails before cleanup.
+        const locked = join(tmpdir(), 'fixture', 'locked')
+        mkdirSync(join(locked, 'nested'), { recursive: true })
+        writeFileSync(join(locked, 'nested', 'data.txt'), 'read-only data')
+        chmodSync(join(locked, 'nested'), 0o500)
+        chmodSync(locked, 0o500)
+        process.stdout.write(process.env.HOME ?? '')
+      `)
+      const warnings: string[] = []
+      const originalWarn = console.warn
+      console.warn = (message: string) => { warnings.push(message) }
+      let result: Awaited<ReturnType<typeof runCommand>>
+      try {
+        result = await runCommand([process.execPath, '--no-env-file', script], root, logPath)
+      } finally {
+        console.warn = originalWarn
+      }
+      expect(result.exitCode).toBe(0)
+      expect(result.output).toContain('cc-haha-coverage-test-')
+      expect(existsSync(result.output)).toBe(false)
+      expect(warnings).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports a sandbox it cannot remove instead of failing the finished run', () => {
+    const warnings: string[] = []
+    expect(() => removeSandboxHome(join(tmpdir(), 'cc-haha-coverage-missing-\0-sandbox'), message => warnings.push(message))).not.toThrow()
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('could not remove test sandbox')
   })
 })

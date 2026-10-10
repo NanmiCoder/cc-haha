@@ -11,12 +11,18 @@ it('the real adapter launcher confirms inactivity when migration races credentia
   const data = path.join(root, 'data')
   await mkdir(data)
   const repo = path.resolve(import.meta.dirname, '../..')
-  const child = spawn('bun', [path.join(repo, 'desktop/sidecars/claude-sidecar.ts'), 'adapters', '--app-root', repo, '--feishu', '--telegram', '--wechat', '--dingtalk', '--whatsapp', '--wecom', '--qq', '--slack'], {
+  // Run from the fixture with env files off: Bun would otherwise load a `.env`
+  // from the caller's checkout, and adapter credentials there change the gate.
+  const child = spawn('bun', ['--no-env-file', path.join(repo, 'desktop/sidecars/claude-sidecar.ts'), 'adapters', '--app-root', repo, '--feishu', '--telegram', '--wechat', '--dingtalk', '--whatsapp', '--wecom', '--qq', '--slack'], {
+    cwd: root,
     env: {
       PATH: process.env.PATH,
       SystemRoot: process.env.SystemRoot,
       HOME: root,
       USERPROFILE: root,
+      TMPDIR: root,
+      TMP: root,
+      TEMP: root,
       CLAUDE_CONFIG_DIR: data,
       CC_HAHA_MIGRATION_CONTROL: '1',
       CC_HAHA_LOCAL_ACCESS_TOKEN: 'isolated-migration-token',

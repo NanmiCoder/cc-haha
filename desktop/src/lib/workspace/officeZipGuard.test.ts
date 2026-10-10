@@ -1,6 +1,6 @@
 // @vitest-environment node
-import { strToU8, unzipSync, zipSync } from 'fflate'
-import { describe, expect, it } from 'vitest'
+import { Inflate, strToU8, unzipSync, zipSync } from 'fflate'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_OFFICE_ZIP_LIMITS,
   OfficeZipError,
@@ -167,10 +167,19 @@ describe('inspectOfficeZip', () => {
       const lying = declaring(zipOf({ 'a.bin': zeros(32 * MIB) }), 100)
       const limits: OfficeZipLimits = { ...DEFAULT_OFFICE_ZIP_LIMITS, maxEntryBytes: 256 * KIB }
 
-      const started = performance.now()
-      expect(rejection(lying, limits).reason).toBe('entry-too-large')
+      // Count what is fed to the inflater rather than timing it: wall-clock bounds
+      // fail under coverage instrumentation on a shared runner.
+      const push = vi.spyOn(Inflate.prototype, 'push')
+      try {
+        expect(rejection(lying, limits).reason).toBe('entry-too-large')
 
-      expect(performance.now() - started).toBeLessThan(250)
+        const fed = push.mock.calls.reduce((sum, [chunk]) => sum + chunk.length, 0)
+        expect(push).toHaveBeenCalled()
+        expect(push.mock.calls.some(([, final]) => final === true)).toBe(false)
+        expect(fed).toBeLessThan(lying.length / 2)
+      } finally {
+        push.mockRestore()
+      }
     })
 
     it('does not trouble an honest archive, whatever it holds or how it is stored', () => {
