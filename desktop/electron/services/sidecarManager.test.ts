@@ -24,6 +24,7 @@ import {
   createAdapterPlan,
   createServerPlan,
   electronHostDiagnosticsFile,
+  formatStartupError,
   httpToWebSocketUrl,
   HOST_DIAGNOSTICS_BYTE_LIMIT,
   HOST_DIAGNOSTICS_LINE_LIMIT,
@@ -619,6 +620,40 @@ describe('Electron sidecar manager', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     })
+  })
+
+  it('explains a sidecar that exists but cannot be executed after a broken install', () => {
+    const plan = {
+      command: 'C:\\Program Files\\Claude Code Haha\\resources\\claude-sidecar-x86_64-pc-windows-msvc.exe',
+      args: ['server', '--port', '49321'],
+      env: {},
+    }
+    const badExe = Object.assign(new Error('spawn EFTYPE'), { code: 'EFTYPE', errno: -4028, syscall: 'spawn' })
+    const spawnFn = vi.fn(() => { throw badExe })
+
+    let thrown: unknown
+    try {
+      spawnSidecar(plan, { existsSyncFn: () => true, spawnFn: spawnFn as never })
+    } catch (error) {
+      thrown = error
+    }
+
+    expect(thrown).toBeInstanceOf(Error)
+    expect((thrown as Error).message).toContain('Electron sidecar could not be executed (EFTYPE)')
+    expect((thrown as Error).message).toContain(plan.command)
+    expect((thrown as Error).message).toContain('Reinstall Claude Code Haha with the full installer')
+    expect((thrown as Error).cause).toBe(badExe)
+    expect(formatStartupError((thrown as Error).message, [])).not.toContain('timeout')
+  })
+
+  it('rethrows unrelated sidecar spawn failures unchanged', () => {
+    const plan = { command: '/app/claude-sidecar', args: ['server'], env: {} }
+    const failure = Object.assign(new Error('spawn ENOMEM'), { code: 'ENOMEM' })
+
+    expect(() => spawnSidecar(plan, {
+      existsSyncFn: () => true,
+      spawnFn: (() => { throw failure }) as never,
+    })).toThrow(failure)
   })
 
   it('forwards a PowerShell shell choice to the sidecar only on Windows', () => {

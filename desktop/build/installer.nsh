@@ -1,9 +1,11 @@
 !include "LogicLib.nsh"
 !include "getProcessInfo.nsh"
+!include "${BUILD_RESOURCES_DIR}\check-install-processes.nsh"
 !define /ifndef INSTALL_REGISTRY_KEY "Software\${APP_GUID}"
 !define /ifndef UNINSTALL_REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}"
 Var pid
 Var ccHahaProcessDiagnostic
+Var ccHahaProcessHelperWriteBlocked
 
 !ifndef BUILD_UNINSTALLER
 Var ccHahaRecoveryDone
@@ -292,7 +294,15 @@ FunctionEnd
     ${If} $ccHahaProcessDiagnostic != ""
       DetailPrint "$ccHahaProcessDiagnostic"
     ${EndIf}
-  ${Else}
+    ; The helper only exits 0 (found or failed closed) or 1 (nothing found).
+    ; Anything else means it never ran, e.g. a security tool removed it.
+    ${If} ${_RETURN} != 0
+    ${AndIf} ${_RETURN} != 1
+      DetailPrint "PowerShell process helper did not run (result: ${_RETURN}); using the tasklist fallback."
+      StrCpy $IsPowerShellAvailable 1
+    ${EndIf}
+  ${EndIf}
+  ${If} $IsPowerShellAvailable != 0
     Delete "$PLUGINSDIR\cc-haha-processes.csv"
     !ifdef INSTALL_MODE_PER_ALL_USERS
       nsExec::Exec '"$CmdPath" /D /C tasklist /FO CSV /NH > "$PLUGINSDIR\cc-haha-processes.csv"'
@@ -343,8 +353,18 @@ FunctionEnd
 
 !macro customCheckAppRunning
   InitPluginsDir
-  File /oname=$PLUGINSDIR\check-install-processes.ps1 "${BUILD_RESOURCES_DIR}\check-install-processes.ps1"
   !insertmacro IS_POWERSHELL_AVAILABLE
+  ${If} $IsPowerShellAvailable == 0
+    ; `File` aborts setup when a security tool blocks the .ps1 write (#1486);
+    ; a failed FileWrite falls back to the tasklist path instead.
+    !insertmacro CcHahaWriteInstallProcessHelper "$PLUGINSDIR\check-install-processes.ps1"
+    ${If} ${Errors}
+    ${OrIfNot} ${FileExists} "$PLUGINSDIR\check-install-processes.ps1"
+      DetailPrint "Could not write the PowerShell process helper (often blocked by security software); using the tasklist fallback."
+      StrCpy $IsPowerShellAvailable 1
+      StrCpy $ccHahaProcessHelperWriteBlocked "1"
+    ${EndIf}
+  ${EndIf}
   StrCpy $ccHahaProcessDiagnostic ""
   ${GetProcessInfo} 0 $pid $1 $2 $3 $4
   ${If} $3 != "${APP_EXECUTABLE_FILENAME}"
@@ -410,6 +430,36 @@ FunctionEnd
     Abort
   FunctionEnd
   Page custom CcHahaRecoveryBeforeInstall
+!macroend
+
+; Installed 0.6.x and older uninstallers still extract the process helper with
+; `File`, so a security tool that blocks the .ps1 write makes them abort in
+; un.onInit before touching any file (#1486). electron-builder would then quit
+; and strand the user on the old version. Only when this installer saw the
+; same block itself, install over the old files; exit code 22 (the old
+; uninstaller found the app running) and every other failure stay fatal.
+!macro CcHahaHandleOldUninstallerResult
+  ${If} $R0 != 0
+  ${AndIf} $R0 != 22
+  ${AndIf} $ccHahaProcessHelperWriteBlocked == "1"
+    DetailPrint `Old uninstaller exited with code $R0 and this installer could not write its helper script either (security software); installing over the existing files.`
+  ${ElseIf} $R0 != 22
+  ${AndIf} ${Errors}
+    DetailPrint `Uninstall was not successful. Not able to launch uninstaller!`
+  ${ElseIf} $R0 != 0
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
+    DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
+    SetErrorLevel 2
+    Quit
+  ${EndIf}
+!macroend
+
+!macro customUnInstallCheck
+  !insertmacro CcHahaHandleOldUninstallerResult
+!macroend
+
+!macro customUnInstallCheckCurrentUser
+  !insertmacro CcHahaHandleOldUninstallerResult
 !macroend
 
 !macro customInit

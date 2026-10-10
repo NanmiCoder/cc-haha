@@ -538,7 +538,7 @@ function sanitizeUrlUserinfo(candidate: string): string {
 export function formatStartupError(message: string, logs: string[]): string {
   const logText = logs.length > 0
     ? logs.join('\n')
-    : 'No server stdout/stderr was captured before the timeout.'
+    : 'No server stdout/stderr was captured before startup failed.'
   return `${message}\n\nRecent server logs:\n${logText}`
 }
 
@@ -703,16 +703,31 @@ export function createAdapterPlan({
   }
 }
 
+// Synchronous spawn errors that mean the sidecar file exists but the OS refused
+// to run it (Node reports EACCES/ENOENT asynchronously instead). On Windows
+// EFTYPE is ERROR_BAD_EXE_FORMAT: a truncated or replaced binary, typically
+// left by an interrupted install or a security tool (#1486).
+const UNEXECUTABLE_SIDECAR_ERROR_CODES = new Set(['EFTYPE', 'ENOEXEC', 'EPERM', 'EBUSY', 'UNKNOWN'])
+
 export function spawnSidecar(plan: SidecarPlan, deps: SpawnSidecarDeps = {}): SidecarChild {
   const exists = deps.existsSyncFn ?? existsSync
   if (!exists(plan.command)) {
     throw new Error(`Electron sidecar binary not found: ${plan.command}. Run "cd desktop && bun run build:sidecars" first.`)
   }
-  return (deps.spawnFn ?? spawn)(plan.command, plan.args, {
-    env: plan.env,
-    stdio: [plan.env.CC_HAHA_MIGRATION_CONTROL === '1' && plan.args[0] === 'adapters' ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-  }) as SidecarChild
+  try {
+    return (deps.spawnFn ?? spawn)(plan.command, plan.args, {
+      env: plan.env,
+      stdio: [plan.env.CC_HAHA_MIGRATION_CONTROL === '1' && plan.args[0] === 'adapters' ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      windowsHide: true,
+    }) as SidecarChild
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | null)?.code
+    if (typeof code !== 'string' || !UNEXECUTABLE_SIDECAR_ERROR_CODES.has(code)) throw error
+    throw new Error(
+      `Electron sidecar could not be executed (${code}): ${plan.command}. The file may be damaged, incomplete, or blocked by security software. Reinstall Claude Code Haha with the full installer, and allow its install directory in your security software if this keeps happening.`,
+      { cause: error },
+    )
+  }
 }
 
 export type KillSidecarDeps = {
