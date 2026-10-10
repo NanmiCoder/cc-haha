@@ -15,7 +15,7 @@ import { shouldOfferStaticHtmlPreview } from '../../lib/htmlPreviewPolicy'
 import { getServerBaseUrl } from '../../lib/desktopRuntime'
 import { useOpenTargetStore } from '../../stores/openTargetStore'
 import { workspaceOpen } from '../../lib/workspace/openTarget'
-import { isWorkspaceDocumentFile, isWorkspacePreviewableFile } from '../../lib/fileCapabilities'
+import { isDelimitedTextFile, isWorkspaceDocumentFile, isWorkspacePreviewableFile } from '../../lib/fileCapabilities'
 import { openLocalFileWithSystem, reportOpenFailure } from '../../lib/systemFileOpen'
 import { useMobileViewport } from '../../hooks/useMobileViewport'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
@@ -109,7 +109,9 @@ export function CurrentTurnChangeCard({
     }
     // A document has no line diff: the turn's recorded change for it is empty, so
     // the review view would open onto nothing. What was asked for is the document.
-    if (isWorkspaceDocumentFile(fileEntry.displayPath)) {
+    // Delimited text is the exception: it is a document to the viewer but still text
+    // to the checkpoint, so its diff is real.
+    if (isWorkspaceDocumentFile(fileEntry.displayPath) && !isDelimitedTextFile(fileEntry.displayPath)) {
       workspaceOpen.file(sessionId, fileEntry.displayPath, { origin })
       return
     }

@@ -13,7 +13,7 @@ import { OpenInSystemButton } from '../OpenInSystemButton'
 import { PanelMessage } from '../PanelMessage'
 import { DocumentFailure } from './DocumentFailure'
 import { DocumentViewerBoundary } from './DocumentViewerBoundary'
-import { documentViewers, type DocumentViewers } from './documentViewers'
+import { documentViewers, type DocumentSourceActions, type DocumentViewers } from './documentViewers'
 
 export type DocumentSurfaceProps = {
   sessionId: string
@@ -24,6 +24,8 @@ export type DocumentSurfaceProps = {
   version: string | undefined
   /** The scroll position this file had when its tab was last open. */
   initialView: WorkspaceFileView | undefined
+  /** For a document that is text underneath (`.csv`): how to show and annotate its source. */
+  source?: DocumentSourceActions
   /** Overridable so a test can supply a viewer without loading a real engine. */
   viewers?: DocumentViewers
   /** What "try again" does when the viewer itself could not be loaded. Overridable so a test need not reload the window. */
@@ -55,6 +57,7 @@ export function DocumentSurface({
   previewType,
   version,
   initialView,
+  source,
   viewers = documentViewers,
   reloadPage = reloadWindow,
 }: DocumentSurfaceProps) {
@@ -118,6 +121,7 @@ export function DocumentSurface({
             sheet={sheet}
             onSheetChange={(next) => useWorkspaceContentStore.getState().setFileSheet(sessionId, path, next)}
             initialView={initialView}
+            source={source}
           />
         </Suspense>
       </DocumentViewerBoundary>

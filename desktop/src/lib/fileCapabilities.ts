@@ -21,7 +21,15 @@ const SYSTEM_OPEN_EXTENSIONS: ReadonlySet<string> = new Set([
  * not before, and the server (`workspaceDocumentPreview.ts`) serves exactly
  * these: a parity test pins the two lists together.
  */
-export const WORKSPACE_DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set<string>(['pdf', 'docx', 'xlsx', 'xlsm', 'xls'])
+export const WORKSPACE_DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set<string>([
+  'pdf', 'docx', 'xlsx', 'xlsm', 'xls', 'csv', 'tsv',
+])
+
+/**
+ * Documents that are really plain text, shown as a table. Unlike a workbook they
+ * have a line diff, so a changed one is reviewed like source, not just opened.
+ */
+const DELIMITED_TEXT_EXTENSIONS: ReadonlySet<string> = new Set(['csv', 'tsv'])
 
 // These are user-facing deliverables often created without being repeated in the
 // final prose. Source files stay in the changed-file card unless the assistant
@@ -82,6 +90,11 @@ export function isShellProducedDeliverable(path: string): boolean {
 /** Whether the workspace renders this path as a document (PDF, Word, Excel…) from raw bytes. */
 export function isWorkspaceDocumentFile(path: string): boolean {
   return WORKSPACE_DOCUMENT_EXTENSIONS.has(fileExtension(path))
+}
+
+/** Whether this path is delimited text (`.csv`, `.tsv`), which the workspace shows as a table. */
+export function isDelimitedTextFile(path: string): boolean {
+  return DELIMITED_TEXT_EXTENSIONS.has(fileExtension(path))
 }
 
 /** Whether the workspace can render this path as text/source, an image or a document. */
