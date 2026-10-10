@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test'
 import { WsBridge } from '../ws-bridge.js'
 import { restoreSelectedSession } from '../session-selection.js'
+import { restoreStoredSessionBinding } from '../session-recovery.js'
 import { WebSocketServer, type WebSocket as WsServerSocket } from 'ws'
 
 async function waitFor(
@@ -371,5 +372,171 @@ describe('WsBridge: handler serialization', () => {
     expect(events).toEqual(['fresh-new'])
 
     bridge.destroy()
+  })
+})
+
+// Issue #1485: an IM chat's socket keeps its session's CLI and MCP servers
+// alive on the desktop host. A chat quiet for long enough lets them go; its
+// next message reconnects through restoreStoredSessionBinding.
+describe('WsBridge: idle release', () => {
+  const IDLE_MS = 1_000
+  let server: WebSocketServer
+  let serverUrl: string
+  let connections: WsServerSocket[]
+  let closeCodes: number[]
+  let now: number
+  let bridge: WsBridge
+
+  beforeEach(async () => {
+    connections = []
+    closeCodes = []
+    now = 0
+    server = new WebSocketServer({ port: 0 })
+    server.on('connection', (ws) => {
+      connections.push(ws)
+      ws.on('close', (code) => closeCodes.push(code))
+    })
+    await new Promise<void>((resolve) => server.on('listening', () => resolve()))
+    serverUrl = `ws://127.0.0.1:${(server.address() as { port: number }).port}`
+    bridge = new WsBridge(serverUrl, 'test', undefined, { idleReleaseMs: IDLE_MS, now: () => now })
+  })
+
+  afterEach(async () => {
+    bridge.destroy()
+    for (const ws of connections) {
+      try { ws.terminate() } catch {}
+    }
+    await new Promise<void>((resolve) => {
+      const t = setTimeout(() => resolve(), 500)
+      server.close(() => {
+        clearTimeout(t)
+        resolve()
+      })
+    })
+  })
+
+  const cliRun = (state: 'running' | 'idle') => ({
+    type: 'system_notification',
+    subtype: 'session_state_changed',
+    data: { type: 'system', subtype: 'session_state_changed', state },
+  })
+
+  /** Opens a chat and returns a way to push server frames it has seen. */
+  async function openChat(chatId: string, sessionId: string) {
+    const received: string[] = []
+    bridge.onServerMessage(chatId, (msg) => { received.push(msg.type) })
+    bridge.connectSession(chatId, sessionId)
+    expect(await bridge.waitForOpen(chatId)).toBe(true)
+    expect(await waitFor(() => connections.length > 0)).toBe(true)
+    const serverWs = connections[connections.length - 1]!
+    const say = async (...messages: object[]) => {
+      const before = received.length
+      for (const message of messages) serverWs.send(JSON.stringify(message))
+      expect(await waitFor(() => received.length === before + messages.length)).toBe(true)
+    }
+    return { say }
+  }
+
+  function restore(chatId: string, sessionId: string) {
+    return restoreStoredSessionBinding({
+      chatId,
+      bridge,
+      sessionStore: { get: () => ({ sessionId, workDir: '/tmp/im-chat' }), delete: () => {} } as any,
+      httpClient: { sessionExists: async () => true },
+      onServerMessage: () => {},
+      logPrefix: '[test]',
+    })
+  }
+
+  it('closes a quiet chat, and its next message reconnects the same session', async () => {
+    const chat = await openChat('chat-quiet', 'sess-quiet')
+    expect(bridge.sendUserMessage('chat-quiet', 'hello')).toBe(true)
+    await chat.say(cliRun('running'), { type: 'status', state: 'thinking' }, { type: 'message_complete' }, cliRun('idle'))
+
+    now = IDLE_MS - 1
+    expect(bridge.releaseIdleSessions()).toEqual([])
+    now = IDLE_MS
+    expect(bridge.releaseIdleSessions()).toEqual(['chat-quiet'])
+    expect(bridge.hasSession('chat-quiet')).toBe(false)
+    expect(await waitFor(() => closeCodes.length === 1)).toBe(true)
+    expect(closeCodes).toEqual([1000])
+
+    const restored = await restore('chat-quiet', 'sess-quiet')
+    expect(restored.status).toBe('restored')
+    expect(bridge.isSessionOpen('chat-quiet', 'sess-quiet')).toBe(true)
+    expect(connections).toHaveLength(2)
+  })
+
+  it('keeps a chat whose CLI still works on background tasks', async () => {
+    const chat = await openChat('chat-background', 'sess-background')
+    await chat.say(cliRun('running'), { type: 'message_complete' })
+
+    now = 10 * IDLE_MS
+    expect(bridge.releaseIdleSessions()).toEqual([])
+
+    // The task's result arrives, the CLI replies about it and goes idle.
+    await chat.say({ type: 'message_complete' }, cliRun('idle'))
+    now += IDLE_MS
+    expect(bridge.releaseIdleSessions()).toEqual(['chat-background'])
+  })
+
+  it('keeps a chat that waits on an approval until it is answered', async () => {
+    const chat = await openChat('chat-approval', 'sess-approval')
+    expect(bridge.sendUserMessage('chat-approval', 'push it')).toBe(true)
+    await chat.say({ type: 'permission_request', requestId: 'req-1', toolName: 'Bash' })
+
+    now = 10 * IDLE_MS
+    expect(bridge.releaseIdleSessions()).toEqual([])
+
+    expect(bridge.sendPermissionResponse('chat-approval', 'req-1', true)).toBe(true)
+    await chat.say({ type: 'message_complete' })
+    now += IDLE_MS
+    expect(bridge.releaseIdleSessions()).toEqual(['chat-approval'])
+  })
+
+  it('keeps a chat with an approval waiting even without a turn of its own', async () => {
+    // A team member's request reaches the user through the lead's socket.
+    const chat = await openChat('chat-lead', 'sess-lead')
+    await chat.say({ type: 'permission_requests_snapshot', toolRequestIds: ['member-req'], computerUseRequestIds: [], turnActive: false })
+
+    now = 10 * IDLE_MS
+    expect(bridge.releaseIdleSessions()).toEqual([])
+
+    await chat.say({ type: 'permission_resolved', requestId: 'member-req', permissionType: 'tool' })
+    now += IDLE_MS
+    expect(bridge.releaseIdleSessions()).toEqual(['chat-lead'])
+  })
+
+  it('sweeps on its heartbeat without anyone asking', async () => {
+    bridge.destroy()
+    bridge = new WsBridge(serverUrl, 'test', undefined, { idleReleaseMs: 50, heartbeatIntervalMs: 20 })
+    await openChat('chat-swept', 'sess-swept')
+
+    expect(await waitFor(() => !bridge.hasSession('chat-swept'), 2_000)).toBe(true)
+    expect(await waitFor(() => closeCodes.length === 1)).toBe(true)
+    expect(closeCodes).toEqual([1000])
+  })
+
+  it('keeps a chat with a turn in progress', async () => {
+    const chat = await openChat('chat-busy', 'sess-busy')
+    expect(bridge.sendUserMessage('chat-busy', 'refactor this')).toBe(true)
+    await chat.say({ type: 'status', state: 'thinking' })
+
+    now = 10 * IDLE_MS
+    expect(bridge.releaseIdleSessions()).toEqual([])
+  })
+
+  it('counts traffic either way, and a restore about to send, as activity', async () => {
+    const chat = await openChat('chat-active', 'sess-active')
+    now = IDLE_MS - 100
+    await chat.say({ type: 'session_title_updated', title: 'Mirrored desktop work' })
+    now = IDLE_MS + 100
+    expect(bridge.releaseIdleSessions()).toEqual([])
+
+    now = 2 * IDLE_MS - 100
+    expect((await restore('chat-active', 'sess-active')).status).toBe('restored')
+    now = 2 * IDLE_MS + 100
+    expect(bridge.releaseIdleSessions()).toEqual([])
+    expect(connections).toHaveLength(1)
   })
 })
