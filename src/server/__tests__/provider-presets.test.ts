@@ -131,6 +131,7 @@ describe('provider presets API', () => {
     const xuanshuapi = PROVIDER_PRESETS.find((preset) => preset.id === 'xuanshuapi')
     const fennoai = PROVIDER_PRESETS.find((preset) => preset.id === 'fennoai')
     const qiniuai = PROVIDER_PRESETS.find((preset) => preset.id === 'qiniuai')
+    const opper = PROVIDER_PRESETS.find((preset) => preset.id === 'opper')
 
     expect(lmstudio?.baseUrl).toBe('http://localhost:1234')
     expect(lmstudio?.apiFormat).toBe('anthropic')
@@ -223,6 +224,17 @@ describe('provider presets API', () => {
     // (claude-opus-5, and every namespaced 七牛云 id).
     expect(fennoai?.modelContextWindows?.['claude-opus-5']).toBe(1000000)
     expect(qiniuai?.modelContextWindows?.['deepseek/deepseek-v4-pro']).toBe(1000000)
+    // Opper serves Anthropic Messages under /v3/compat, so Claude Code's own
+    // /v1/messages suffix lands on the right path. Model ids are bare pool names.
+    expect(opper?.baseUrl).toBe('https://api.opper.ai/v3/compat')
+    expect(opper?.apiFormat).toBe('anthropic')
+    expect(opper?.authStrategy).toBe('auth_token')
+    expect(opper?.defaultModels).toEqual({
+      main: 'claude-sonnet-4-6',
+      haiku: 'claude-haiku-4-5',
+      sonnet: 'claude-sonnet-4-6',
+      opus: 'claude-opus-5',
+    })
   })
 
   test('configured presets can expose optional API key and promo metadata', () => {

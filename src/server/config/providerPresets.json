@@ -403,6 +403,23 @@
     }
   },
   {
+    "id": "opper",
+    "name": "Opper",
+    "baseUrl": "https://api.opper.ai/v3/compat",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "claude-sonnet-4-6",
+      "haiku": "claude-haiku-4-5",
+      "sonnet": "claude-sonnet-4-6",
+      "opus": "claude-opus-5"
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://opper.ai",
+    "apiKeyUrl": "https://platform.opper.ai",
+    "authStrategy": "auth_token",
+    "defaultEnv": {}
+  },
+  {
     "id": "lmstudio",
     "name": "LM Studio",
     "baseUrl": "http://localhost:1234",
