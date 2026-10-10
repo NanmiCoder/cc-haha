@@ -11,6 +11,18 @@ if ($env:CI -ne 'true') {
   throw 'This installer smoke mutates Windows installer registry state and may run only on an ephemeral CI runner.'
 }
 
+# The package step has populated electron-builder's NSIS cache. Exercise the
+# actual helper writer and uninstall result handling before touching install state.
+Push-Location (Join-Path $PSScriptRoot '..\..')
+try {
+  & bun test ./scripts/pr/windows-installer-process-check.test.ts
+  if ($LASTEXITCODE -ne 0) {
+    throw 'Native installer helper write regression failed.'
+  }
+} finally {
+  Pop-Location
+}
+
 $resolvedArtifactsDir = (Resolve-Path -LiteralPath $ArtifactsDir).Path
 $installers = @(Get-ChildItem -LiteralPath $resolvedArtifactsDir -File |
   Where-Object { $_.Name -like "Claude-Code-Haha-*-win-$Arch.exe" })

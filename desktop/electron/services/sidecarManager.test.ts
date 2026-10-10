@@ -622,13 +622,13 @@ describe('Electron sidecar manager', () => {
     })
   })
 
-  it('explains a sidecar that exists but cannot be executed after a broken install', () => {
+  it.each(['EFTYPE', 'UNKNOWN'])('explains a sidecar that exists but cannot be executed after a broken install (%s)', code => {
     const plan = {
       command: 'C:\\Program Files\\Claude Code Haha\\resources\\claude-sidecar-x86_64-pc-windows-msvc.exe',
       args: ['server', '--port', '49321'],
       env: {},
     }
-    const badExe = Object.assign(new Error('spawn EFTYPE'), { code: 'EFTYPE', errno: -4028, syscall: 'spawn' })
+    const badExe = Object.assign(new Error(`spawn ${code}`), { code, syscall: 'spawn' })
     const spawnFn = vi.fn(() => { throw badExe })
 
     let thrown: unknown
@@ -639,7 +639,7 @@ describe('Electron sidecar manager', () => {
     }
 
     expect(thrown).toBeInstanceOf(Error)
-    expect((thrown as Error).message).toContain('Electron sidecar could not be executed (EFTYPE)')
+    expect((thrown as Error).message).toContain(`Electron sidecar could not be executed (${code})`)
     expect((thrown as Error).message).toContain(plan.command)
     expect((thrown as Error).message).toContain('Reinstall Claude Code Haha with the full installer')
     expect((thrown as Error).cause).toBe(badExe)

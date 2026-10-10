@@ -357,8 +357,10 @@ FunctionEnd
   ${If} $IsPowerShellAvailable == 0
     ; `File` aborts setup when a security tool blocks the .ps1 write (#1486);
     ; a failed FileWrite falls back to the tasklist path instead.
-    !insertmacro CcHahaWriteInstallProcessHelper "$PLUGINSDIR\check-install-processes.ps1"
-    ${If} ${Errors}
+    !insertmacro CcHahaWriteInstallProcessHelper "$PLUGINSDIR\check-install-processes.ps1" $ccHahaProcessHelperWriteBlocked
+    ; IfErrors consumes the flag. The writer returns an explicit status so an
+    ; existing but locked file cannot mask an open or partial-write failure.
+    ${If} $ccHahaProcessHelperWriteBlocked == "1"
     ${OrIfNot} ${FileExists} "$PLUGINSDIR\check-install-processes.ps1"
       DetailPrint "Could not write the PowerShell process helper (often blocked by security software); using the tasklist fallback."
       StrCpy $IsPowerShellAvailable 1
@@ -447,7 +449,7 @@ FunctionEnd
   ${AndIf} ${Errors}
     DetailPrint `Uninstall was not successful. Not able to launch uninstaller!`
   ${ElseIf} $R0 != 0
-    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0"
+    MessageBox MB_OK|MB_ICONEXCLAMATION "$(uninstallFailed): $R0" /SD IDOK
     DetailPrint `Uninstall was not successful. Uninstaller error code: $R0.`
     SetErrorLevel 2
     Quit
