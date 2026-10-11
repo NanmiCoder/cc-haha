@@ -22,8 +22,6 @@ import { useUIStore } from '../../stores/uiStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useTeamStore } from '../../stores/teamStore'
-import { getMemberWorkState, resolveTeamMemberIdentity } from '../agentTeams/agentTeamsModel'
-import { useTeamPlanStore } from '@/stores/teamPlanStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import {
   formatWorkspaceReferencePrompt,
@@ -87,7 +85,7 @@ import {
 } from '../../lib/composerMentions'
 import type { PermissionMode } from '../../types/settings'
 import { getSessionWorkspaceState, getSessionSeedWorkDir } from '../../lib/sessionWorkspace'
-import { hasRunningSubagentTasks } from '../../lib/backgroundTasks'
+import { useSessionStopOffer } from '../../hooks/useSessionStopOffer'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
 import { VoiceInputButton } from '@/features/voiceInput/VoiceInputButton'
 import { VoiceRecordingBar } from '@/features/voiceInput/VoiceRecordingBar'
@@ -325,25 +323,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const isMemberSession = !!memberInfo || activeTabType === 'subagent'
   const isActive = chatState !== 'idle'
   const resolvedPermissionMode = useResolvedPermissionMode(activeTabId ?? undefined)
-  const hasRunningSubagents = hasRunningSubagentTasks(sessionState?.backgroundAgentTasks)
-  // Approved team processes are tracked by their plan, not background-agent
-  // notifications. Keep Stop available after the review card is dismissed.
-  const teamPlanRunning = useTeamPlanStore(state => {
-    const plan = activeTabId ? state.bySession[activeTabId]?.plan : undefined
-    return plan?.state === 'launching' || plan?.state === 'running'
-  })
-  // Stop pauses a running team without ending its plan, so the plan alone
-  // would keep offering Stop after every member is already stopped.
-  const teamMembersAllStopped = useTeamStore(state => {
-    const team = activeTabId ? state.workbenchesBySession[activeTabId]?.snapshots.at(-1)?.team : undefined
-    if (!team) return false
-    const members = team.members.filter(member => !resolveTeamMemberIdentity(team, member.agentId).isLead)
-    return members.length > 0 && members.every(member => {
-      const work = getMemberWorkState(member)
-      return work === 'stopped' || work === 'exited'
-    })
-  })
-  const hasRunningTeam = teamPlanRunning && !teamMembersAllStopped
+  const stopOffer = useSessionStopOffer(activeTabId)
   const workspaceState = getSessionWorkspaceState(activeSession)
   const isWorkspaceMissing = workspaceState !== 'available'
   // Both composer branches (hero and inline) and the drop handler share this:
@@ -1819,7 +1799,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 />
               )}
               <VoiceInputButton dictation={dictation} blocked={composerDisabled} mobile={isMobileComposer} />
-              {!isMemberSession && !isActive && (hasRunningSubagents || hasRunningTeam) ? (
+              {stopOffer === 'background' ? (
                 // Stopping background work while the composer can still send:
                 // the same ink stop circle as a running turn, beside the send key.
                 <Button
@@ -1851,14 +1831,14 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   same circle turns ink (`primary`) with a filled square, so a
                   running turn does not read as an error. */}
               <Button
-                variant={!isMemberSession && isActive ? 'primary' : 'accent'}
+                variant={stopOffer === 'turn' ? 'primary' : 'accent'}
                 size="base"
                 shape="circle"
-                onClick={!isMemberSession && isActive ? () => stopGeneration(activeTabId!) : handleSubmit}
-                disabled={!isMemberSession && isActive ? false : !canSubmit}
-                aria-label={!isMemberSession && isActive ? t('common.stop') : isMemberSession ? t('common.send') : t('common.run')}
+                onClick={stopOffer === 'turn' ? () => stopGeneration(activeTabId!) : handleSubmit}
+                disabled={stopOffer === 'turn' ? false : !canSubmit}
+                aria-label={stopOffer === 'turn' ? t('common.stop') : isMemberSession ? t('common.send') : t('common.run')}
                 title={
-                  !isMemberSession && isActive
+                  stopOffer === 'turn'
                     ? t('chat.stopTitle')
                     : isMemberSession
                       ? t('common.send')
@@ -1867,7 +1847,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                 // 44px on touch is the platform minimum for a primary target;
                 // the desktop circle stays at the size's own 32px.
                 className={`shrink-0 ${isMobileComposer ? 'h-11 w-11' : ''}`}
-                icon={!isMemberSession && isActive
+                icon={stopOffer === 'turn'
                   ? <Square data-icon="stop" size={isMobileComposer ? 12 : 10} strokeWidth={2} fill="currentColor" aria-hidden="true" />
                   : <ArrowUp data-icon="send" size={isMobileComposer ? 18 : 16} strokeWidth={2} aria-hidden="true" />}
               />

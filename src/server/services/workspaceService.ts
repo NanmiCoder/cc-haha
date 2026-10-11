@@ -1316,18 +1316,19 @@ export class WorkspaceService {
     { workDir, ...workspaceRoot }: ResolvedWorkspaceRoot,
     requestedPath: string,
   ): Promise<WorkspacePathResolution> {
-    const absolutePath = path.resolve(workDir, requestedPath || '.')
-    if (!this.isWithinRoot(absolutePath, workDir)) {
+    const requestedAbsolutePath = path.resolve(workDir, requestedPath || '.')
+    if (!this.isWithinRoot(requestedAbsolutePath, workDir)) {
       // Files this session changed outside its workdir (the user pointed the
       // model at an absolute path elsewhere, possibly another drive) are
       // registered as access roots when the turn checkpoint is built. Preview
       // those by absolute path — they have no workspace-relative form — instead
       // of rejecting them as out-of-sandbox.
-      if (this.isAbsoluteRequestPath(requestedPath) && isWithinRegisteredFilesystemRoot(absolutePath)) {
-        return this.resolveOutsideWorkspacePath(absolutePath, requestedPath)
+      if (this.isAbsoluteRequestPath(requestedPath) && isWithinRegisteredFilesystemRoot(requestedAbsolutePath)) {
+        return this.resolveOutsideWorkspacePath(requestedAbsolutePath, requestedPath)
       }
       throw new Error(`Path is outside workspace: ${requestedPath}`)
     }
+    const absolutePath = await this.matchUnicodeNormalization(workDir, requestedAbsolutePath)
 
     const canonicalTargetPath = await this.resolveCanonicalTargetPath(
       workspaceRoot.canonicalWorkspaceRoot,
@@ -1345,6 +1346,40 @@ export class WorkspaceService {
         path.relative(workspaceRoot.workspaceRoot, absolutePath),
       ),
     }
+  }
+
+  /**
+   * Models emit NFC names while some tools and file systems persist NFD (and
+   * vice versa). APFS treats both spellings as one file, but ext4 and NTFS
+   * compare bytes, so a missing path is matched segment by segment against
+   * the directory entries in a common normalization form. Anything that does
+   * not match keeps the requested spelling and stays missing.
+   */
+  private async matchUnicodeNormalization(workDir: string, absolutePath: string): Promise<string> {
+    const relativePath = path.relative(workDir, absolutePath)
+    if (!relativePath || /^[\x00-\x7f]*$/.test(relativePath)) return absolutePath
+    const exists = (candidate: string) => fs.lstat(candidate).then(() => true, () => false)
+    if (await exists(absolutePath)) return absolutePath
+
+    let current = workDir
+    for (const segment of relativePath.split(path.sep)) {
+      const exact = path.join(current, segment)
+      if (await exists(exact)) {
+        current = exact
+        continue
+      }
+      const wanted = segment.normalize('NFC')
+      let entries: string[]
+      try {
+        entries = await fs.readdir(current)
+      } catch {
+        return absolutePath
+      }
+      const match = entries.find((entry) => entry !== segment && entry.normalize('NFC') === wanted)
+      if (!match) return absolutePath
+      current = path.join(current, match)
+    }
+    return current
   }
 
   /**

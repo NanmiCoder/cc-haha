@@ -80,6 +80,18 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
+// Staging receives the source's permissions before publication, so a rollback
+// can meet read-only directories. POSIX unlink needs write access to the
+// parent; open those directories up without following any link.
+async function makeDirectoryTreeRemovable(directory: string): Promise<void> {
+  const stat = await fs.lstat(directory)
+  if (!stat.isDirectory()) return
+  if ((stat.mode & 0o700) !== 0o700) await fs.chmod(directory, stat.mode | 0o700)
+  for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) await makeDirectoryTreeRemovable(path.join(directory, entry.name))
+  }
+}
+
 async function atomicWrite(file: string, value: string): Promise<void> {
   await fs.mkdir(path.dirname(file), { recursive: true })
   const temporary = `${file}.${randomUUID()}.tmp`
@@ -201,7 +213,14 @@ export class DataMigration {
 
   private async publishStagedEntry(name: string): Promise<void> {
     const journal = this.journal!
+    const staged = path.join(journal.stagingDir, name)
     const output = path.join(journal.status.targetDir, name)
+    // POSIX rename(2) needs write access to a moved directory itself, to
+    // rewrite its ".." entry. Lift a restored read-only mode for the move and
+    // put it back on the published directory.
+    const entry = await fs.lstat(staged)
+    const readOnlyDirectory = entry.isDirectory() && (entry.mode & 0o200) === 0
+    if (readOnlyDirectory) await fs.chmod(staged, entry.mode | 0o200)
     for (let attempt = 0; ; attempt += 1) {
       // A Windows scanner can briefly open a copied descendant without sharing
       // delete access. Recheck transaction boundaries after every wait so a
@@ -210,7 +229,8 @@ export class DataMigration {
       await assertMigrationDirectory(journal.stagingDir, journal.stagingIdentity!)
       if (await exists(output)) throw new Error('Target directory changed during migration')
       try {
-        await fs.rename(path.join(journal.stagingDir, name), output)
+        await fs.rename(staged, output)
+        if (readOnlyDirectory) await fs.chmod(output, entry.mode)
         return
       } catch (error) {
         if ((this.hooks.platform ?? process.platform) !== 'win32' || attempt >= 5 ||
@@ -360,6 +380,7 @@ export class DataMigration {
     const stageReal = await fs.realpath(expected)
     if (path.relative(targetReal, path.dirname(stageReal)) !== '' || path.basename(stageReal) !== path.basename(expected)) throw new Error('Invalid migration staging path')
     if (journal.stagingIdentity) await assertMigrationDirectory(expected, journal.stagingIdentity)
+    await makeDirectoryTreeRemovable(expected)
     await fs.rm(expected, { recursive: true, force: true })
   }
 

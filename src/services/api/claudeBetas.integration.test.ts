@@ -92,6 +92,10 @@ async function runRelay(options: {
       }),
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
       CLAUDE_CODE_SKIP_UPDATE_CHECK: '1',
+      // The desktop launches this CLI without a CI flag. With CI inherited from the
+      // runner, the CLI demands ANTHROPIC_API_KEY (src/utils/auth.ts), which the
+      // provider-managed env deliberately does not use, and exits before any request.
+      CI: '',
       ...options.env,
     }),
     stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',

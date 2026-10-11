@@ -45,6 +45,9 @@ function commandList(result: ReturnType<typeof evaluateChangePolicy>) {
   if (result.checks.agentFlow) {
     commands.push('bun run check:agent-flow')
   }
+  if (result.checks.agentE2e) {
+    commands.push('bun run check:agent-e2e')
+  }
   if (result.checks.adapters) {
     commands.push('bun run check:adapters')
   }

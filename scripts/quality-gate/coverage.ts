@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, sep, win32 } from 'node:path'
 import { rootBunTestFilter } from '../pr/bun-test-filter'
-import { createSandboxedTestEnvironment } from '../pr/test-environment'
+import { createSandboxedTestEnvironment, removeTestSandbox } from '../pr/test-environment'
 import { loadQuarantineManifest, quarantinedPathSet } from './quarantine'
 
 type CoverageMetric = {
@@ -449,6 +449,14 @@ export function hasUsableCoverageSummary(summary: CoverageSummary) {
   return Object.values(summary).some((coverage) => coverage.total > 0)
 }
 
+/**
+ * Remove a suite's sandbox HOME without letting a test's leftovers discard the
+ * finished coverage run. See `removeTestSandbox`.
+ */
+export function removeSandboxHome(directory: string, warn: (message: string) => void = console.warn) {
+  removeTestSandbox(directory, 'coverage', warn)
+}
+
 export async function runCommand(command: string[], cwd: string, logPath: string) {
   const started = Date.now()
   const sandboxHome = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-test-'))
@@ -481,7 +489,7 @@ export async function runCommand(command: string[], cwd: string, logPath: string
     }
   } finally {
     if (logFd !== undefined) closeSync(logFd)
-    rmSync(sandboxHome, { recursive: true, force: true })
+    removeSandboxHome(sandboxHome)
   }
 }
 

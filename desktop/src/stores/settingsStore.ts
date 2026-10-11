@@ -5,6 +5,7 @@ import { modelsApi } from '../api/models'
 import { h5AccessApi } from '../api/h5Access'
 import { tracesApi } from '../api/traces'
 import {
+  isMaxConcurrentSubagents,
   type AppMode,
   type AppModeConfig,
   type ChatSendBehavior,
@@ -67,6 +68,7 @@ type SettingsStore = {
   thinkingEnabled: boolean
   workflowKeywordTriggerEnabled: boolean
   agentTeamsEnabled: boolean
+  maxConcurrentSubagents: number | null
   autoDreamEnabled: boolean
   autoQuestion: AutoQuestionSettings
   autoModeOptInAccepted: boolean
@@ -114,6 +116,7 @@ type SettingsStore = {
   setThinkingEnabled: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
+  setMaxConcurrentSubagents: (value: number | null) => Promise<void>
   setAutoDreamEnabled: (enabled: boolean) => Promise<void>
   setAutoQuestion: (settings: AutoQuestionSettings) => Promise<void>
   acceptAutoModeOptIn: () => Promise<void>
@@ -214,6 +217,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   thinkingEnabled: true,
   workflowKeywordTriggerEnabled: true,
   agentTeamsEnabled: true,
+  maxConcurrentSubagents: null,
   autoDreamEnabled: false,
   autoQuestion: DEFAULT_AUTO_QUESTION_SETTINGS,
   autoModeOptInAccepted: false,
@@ -301,6 +305,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
         agentTeamsEnabled: userSettings.agentTeamsEnabled !== false,
+        // 读取时升级：旧设置或非法值归一为不限，不改写用户 JSON。
+        maxConcurrentSubagents: isMaxConcurrentSubagents(userSettings.maxConcurrentSubagents)
+          ? userSettings.maxConcurrentSubagents
+          : null,
         autoDreamEnabled: userSettings.autoDreamEnabled === true,
         autoQuestion: normalizeAutoQuestionSettings(userSettings.autoQuestion),
         autoModeOptInAccepted: userSettings.skipAutoPermissionPrompt === true,
@@ -394,6 +402,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ agentTeamsEnabled: enabled })
     } catch (error) {
       set({ agentTeamsEnabled: prev })
+      throw error
+    }
+  },
+
+  setMaxConcurrentSubagents: async (value) => {
+    if (!isMaxConcurrentSubagents(value)) {
+      throw new Error('SubAgent concurrency limit must be a positive safe integer or null')
+    }
+    const previous = get().maxConcurrentSubagents
+    set({ maxConcurrentSubagents: value })
+    try {
+      await settingsApi.updateUser({ maxConcurrentSubagents: value })
+    } catch (error) {
+      set({ maxConcurrentSubagents: previous })
       throw error
     }
   },

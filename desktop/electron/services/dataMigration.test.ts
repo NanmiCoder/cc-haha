@@ -13,7 +13,9 @@ import { preserveWindowsMigrationPermissions, restrictWindowsMigrationStaging } 
 
 const roots: string[] = []
 async function fixture() {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'haha-migration-'))
+  // macOS hands out a temp directory behind the /var -> /private/var link, and
+  // migration refuses linked paths. Start from the real path, as Linux CI does.
+  const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), 'haha-migration-'))
   roots.push(root)
   const home = path.join(root, 'home')
   const source = path.join(home, '.claude')
@@ -382,6 +384,30 @@ describe('data directory migration', () => {
       // Leave disposable fixtures writable for cleanup on Unix too.
       await fs.chmod(directory, 0o700)
       await fs.chmod(path.join(f.target, 'protected'), 0o700).catch(() => {})
+    }
+  })
+
+  it('rolls back staging that already carries restored read-only permissions', async () => {
+    const f = await fixture()
+    await f.put('protected/nested/unknown.txt', 'read-only data')
+    const directory = path.join(f.source, 'protected')
+    await fs.chmod(path.join(directory, 'nested'), 0o500)
+    await fs.chmod(directory, 0o500)
+    // The third check sits at the commit boundary, after permissions were restored.
+    let previews = 0
+    f.hooks.preview = async () => ({ activeTasks: 0, externalProcesses: ++previews >= 3 ? 1 : 0 })
+    try {
+      const preview = await f.migration.prepare(f.target)
+      await f.migration.start(preview.id)
+      await f.migration.wait()
+      expect(previews).toBe(3)
+      expect(f.migration.status).toMatchObject({ stage: 'failed', error: 'Another Claude process is using this data directory' })
+      expect(await fs.readdir(f.target)).toEqual([])
+      expect(await fs.readFile(path.join(directory, 'nested/unknown.txt'), 'utf8')).toBe('read-only data')
+      if (process.platform !== 'win32') expect((await fs.stat(directory)).mode & 0o777).toBe(0o500)
+    } finally {
+      await fs.chmod(directory, 0o700)
+      await fs.chmod(path.join(directory, 'nested'), 0o700)
     }
   })
 

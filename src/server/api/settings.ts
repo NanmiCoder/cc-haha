@@ -106,6 +106,7 @@ async function handleUserSettings(req: Request): Promise<Response> {
       ...userSettings,
       autoUpdateEnabled: await settingsService.getAutoUpdateEnabled(userSettings),
       agentTeamsEnabled: await settingsService.getAgentTeamsEnabled(),
+      maxConcurrentSubagents: await settingsService.getMaxConcurrentSubagents(userSettings),
     })
   }
 

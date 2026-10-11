@@ -147,6 +147,11 @@ export type ModelInfo = {
   supportedReasoningEfforts?: ReasoningEffortLevel[]
 }
 
+/** 缺省或 null 表示不限；配置上限时必须使用正安全整数。 */
+export function isMaxConcurrentSubagents(value: unknown): value is number | null {
+  return value === null || (typeof value === 'number' && Number.isSafeInteger(value) && value > 0)
+}
+
 export type UserSettings = {
   model?: string
   modelContext?: string
@@ -154,6 +159,8 @@ export type UserSettings = {
   alwaysThinkingEnabled?: boolean
   workflowKeywordTriggerEnabled?: boolean
   agentTeamsEnabled?: boolean
+  /** 同一会话的普通前台/后台 SubAgent 并发上限，缺省或 null 表示不限。 */
+  maxConcurrentSubagents?: number | null
   autoDreamEnabled?: boolean
   autoQuestion?: import('../../../src/shared/autoQuestionSettings').AutoQuestionSettings
   skipAutoPermissionPrompt?: boolean

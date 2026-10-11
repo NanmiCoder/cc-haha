@@ -4879,7 +4879,9 @@ describe('WebSocket Chat Integration', () => {
   }, 20_000)
 
   it('should defer bypass permission changes until the active turn completes without restarting', async () => {
-    await withMockStreamDelay(350, async () => {
+    // The inspection below must land while the turn is still streaming. 350ms left
+    // too little headroom on a busy CI runner, where the turn could finish first.
+    await withMockStreamDelay(1_500, async () => {
       await fetch(`${baseUrl}/api/permissions/mode`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -4921,6 +4923,14 @@ describe('WebSocket Chat Integration', () => {
             ws.close()
             reject(new Error(`Timed out waiting for active-turn permission switch for session ${sessionId}`))
           }, 10_000)
+          // Resolve only once all three have happened: settling on the first two let
+          // a slow inspection response arrive after the assertions had already run.
+          const settleIfDone = () => {
+            if (turnComplete && modeConfirmed && deferredInspectionChecked) {
+              clearTimeout(timeout)
+              resolve()
+            }
+          }
 
           ws.onmessage = async (event) => {
             const msg = JSON.parse(event.data as string)
@@ -4964,25 +4974,20 @@ describe('WebSocket Chat Integration', () => {
                 reject(new Error(`Deferred permission switch was exposed before restart: ${inspectionBody.status?.permissionMode}`))
                 return
               }
+              settleIfDone()
               return
             }
 
             if (msg.type === 'permission_mode_changed' && msg.mode === 'bypassPermissions') {
               modeConfirmed = true
-              if (turnComplete) {
-                clearTimeout(timeout)
-                resolve()
-              }
+              settleIfDone()
               return
             }
 
             if (msg.type === 'message_complete' && switchTriggered && !turnComplete) {
               turnComplete = true
               expect(startCalls).toHaveLength(1)
-              if (modeConfirmed) {
-                clearTimeout(timeout)
-                resolve()
-              }
+              settleIfDone()
               return
             }
           }

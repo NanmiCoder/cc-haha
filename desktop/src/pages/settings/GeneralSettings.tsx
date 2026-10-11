@@ -30,7 +30,7 @@ import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { SelectField } from '@/components/ui/SelectField'
 import { PermissionModeSelector } from '../../components/controls/PermissionModeSelector'
 import { ReasoningEffortPopover } from '../../components/controls/ReasoningEffortPopover'
-import { isDarkThemeMode, isLightThemeMode } from '../../types/settings'
+import { isDarkThemeMode, isLightThemeMode, isMaxConcurrentSubagents } from '../../types/settings'
 import type { ThemeMode, NetworkProxyMode, WebSearchMode, AppMode, ChatSendBehavior, OutputStyleSource, ReasoningEffortLevel } from '../../types/settings'
 import type { Locale } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
@@ -89,6 +89,8 @@ export function GeneralSettings() {
     setWorkflowKeywordTriggerEnabled,
     agentTeamsEnabled,
     setAgentTeamsEnabled,
+    maxConcurrentSubagents,
+    setMaxConcurrentSubagents,
     permissionMode,
     setPermissionMode,
     autoDreamEnabled,
@@ -151,6 +153,10 @@ export function GeneralSettings() {
   const [autoDreamConfirmOpen, setAutoDreamConfirmOpen] = useState(false)
   const [autoDreamActionRunning, setAutoDreamActionRunning] = useState(false)
   const [agentTeamsSaving, setAgentTeamsSaving] = useState(false)
+  const [subagentLimitInput, setSubagentLimitInput] = useState(String(maxConcurrentSubagents ?? ''))
+  const [subagentLimitBadInput, setSubagentLimitBadInput] = useState(false)
+  const [subagentLimitSaving, setSubagentLimitSaving] = useState(false)
+  const [subagentLimitError, setSubagentLimitError] = useState<string | null>(null)
   const [modeSwitchConfirmOpen, setModeSwitchConfirmOpen] = useState(false)
   const [pendingMode, setPendingMode] = useState<AppMode | null>(null)
   const [pendingPortableDir, setPendingPortableDir] = useState<string | null>(null)
@@ -222,6 +228,29 @@ export function GeneralSettings() {
   useEffect(() => {
     setRetentionInput(String(cleanupPeriodDays ?? DEFAULT_CLEANUP_PERIOD_DAYS))
   }, [cleanupPeriodDays])
+
+  useEffect(() => {
+    setSubagentLimitInput(String(maxConcurrentSubagents ?? ''))
+    setSubagentLimitBadInput(false)
+  }, [maxConcurrentSubagents])
+
+  async function handleSubagentLimitSave() {
+    const input = subagentLimitInput.trim()
+    const value = input === '' ? null : Number(input)
+    if (subagentLimitBadInput || (input !== '' && !/^\d+$/.test(input)) || !isMaxConcurrentSubagents(value)) {
+      setSubagentLimitError(t('settings.general.subagentConcurrencyInvalid'))
+      return
+    }
+    setSubagentLimitSaving(true)
+    setSubagentLimitError(null)
+    try {
+      await setMaxConcurrentSubagents(value)
+    } catch {
+      setSubagentLimitError(t('settings.general.subagentConcurrencySaveFailed'))
+    } finally {
+      setSubagentLimitSaving(false)
+    }
+  }
 
   useEffect(() => {
     if (!isUiZoomDragging) {
@@ -1080,6 +1109,52 @@ export function GeneralSettings() {
             onChange={(enabled) => void handleAgentTeamsChange(enabled)}
             disabled={agentTeamsSaving}
           />
+          <SettingsRow
+            title={t('settings.general.subagentConcurrencyTitle')}
+            description={t('settings.general.subagentConcurrencyDescription')}
+            data-testid="subagent-concurrency-setting"
+            footer={(
+              <p className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                {t('settings.general.subagentConcurrencyHint')}
+              </p>
+            )}
+          >
+            <Input
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={Number.MAX_SAFE_INTEGER}
+              step={1}
+              size="md"
+              containerClassName="w-[180px]"
+              aria-label={t('settings.general.subagentConcurrencyTitle')}
+              placeholder={t('settings.general.subagentConcurrencyUnlimited')}
+              value={subagentLimitInput}
+              disabled={subagentLimitSaving}
+              error={subagentLimitError ?? undefined}
+              onInput={(event) => {
+                // 清空未完成的数字输入时 value="" 可能不变，单靠 React
+                // onChange 不会再次触发，会留下过期的 badInput 标记。
+                setSubagentLimitBadInput(event.currentTarget.validity.badInput)
+                setSubagentLimitError(null)
+              }}
+              onChange={(event) => {
+                setSubagentLimitInput(event.target.value)
+                // 浏览器会将未完成或非法的数字文本暴露为空值。
+                // 只有真正清空输入框才表示不限。
+                setSubagentLimitBadInput(event.target.validity.badInput)
+                setSubagentLimitError(null)
+              }}
+            />
+            <Button
+              variant="secondary"
+              size="base"
+              disabled={subagentLimitSaving}
+              onClick={() => void handleSubagentLimitSave()}
+            >
+              {t('common.save')}
+            </Button>
+          </SettingsRow>
           <SettingsSwitchRow
             title={t('settings.general.autoQuestionEnabled')}
             description={t('settings.general.autoQuestionHint')}

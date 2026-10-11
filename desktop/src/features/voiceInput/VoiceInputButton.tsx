@@ -14,6 +14,8 @@ import {
   useVoiceInputStore,
 } from '@/stores/voiceInputStore'
 import { isVoiceCaptureSupported } from './recorder'
+import { selectActiveVoiceShortcut, useVoiceShortcutStore } from './shortcutPreference'
+import { voiceShortcutText } from './shortcutText'
 import type { ComposerDictation, DictationIssue } from './useComposerDictation'
 
 type VoiceInputButtonProps = {
@@ -63,6 +65,8 @@ export function VoiceInputButton({ dictation, blocked = false, mobile = false }:
   const modelPhase = useVoiceInputStore(state => selectActiveVoiceProvider(state)?.preparation.phase)
   const loadCatalog = useVoiceInputStore(state => state.loadCatalog)
   const [supported] = useState(() => isDesktopRuntime() && isVoiceCaptureSupported())
+  const shortcut = useVoiceShortcutStore(selectActiveVoiceShortcut)
+  const platform = useVoiceShortcutStore(state => state.platform)
   const { phase, issue, pendingText } = dictation
 
   useEffect(() => {
@@ -77,7 +81,9 @@ export function VoiceInputButton({ dictation, blocked = false, mobile = false }:
     useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
   }
   const label = !needsModel
-    ? t('voice.composer.start')
+    ? shortcut
+      ? t('voice.composer.startWithShortcut', { shortcut: voiceShortcutText(shortcut, platform, t) })
+      : t('voice.composer.start')
     : modelPhase === 'downloading' || modelPhase === 'verifying'
       ? t('voice.composer.modelDownloading')
       : t('voice.composer.needsModel')

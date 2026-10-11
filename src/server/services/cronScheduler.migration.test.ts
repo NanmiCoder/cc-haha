@@ -61,14 +61,21 @@ test('a gracefully interrupted scheduled turn is saved as failed and remains ava
   process.env.CLAUDE_CLI_PATH = cli
   const cron = new CronService()
   const scheduler = new CronScheduler(cron) as any
-  const childEnv = spyOn(scheduler, 'buildTaskChildEnv').mockResolvedValue({ CLAUDE_CONFIG_DIR: root })
+  // The script launcher runs `bun` by name, and Bun.spawn resolves it from the
+  // child env's PATH: without it the fixture never starts.
+  const childEnv = spyOn(scheduler, 'buildTaskChildEnv').mockResolvedValue({ CLAUDE_CONFIG_DIR: root, PATH: process.env.PATH ?? '' })
   try {
-    const task = await cron.createTask({ name: 'Migration fixture', prompt: 'Fixture only', cron: '* * * * *', workDir: root, enabled: true, recurring: false })
+    const task = await cron.createTask({ name: 'Migration fixture', prompt: 'Fixture only', cron: '* * * * *', folderPath: root, enabled: true, recurring: false })
     const execution = scheduler.executeTask(task)
-    for (let attempt = 0; attempt < 300; attempt++) {
+    let finished: unknown
+    execution.then(run => { finished = run }, error => { finished = error })
+    // Bun cold start on a loaded CI runner can take seconds; a run that ends
+    // before the fixture is ready is reported as itself, not as a missing file.
+    for (let attempt = 0; attempt < 2_000 && finished === undefined; attempt++) {
       if (await stat(ready).then(() => true, () => false)) break
       await Bun.sleep(5)
     }
+    expect(finished).toBeUndefined()
     await stat(ready)
     await scheduler.stopAndWait()
     expect(await execution).toMatchObject({ status: 'failed', error: 'Interrupted for data migration', exitCode: 0 })

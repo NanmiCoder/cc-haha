@@ -1,16 +1,21 @@
 name: PR Quality
 
+# Also runs after every merge to main, scoped to what that push changed. A gate
+# that only ever looks at pull requests lets main drift red unnoticed, and then
+# every later pull request inherits failures it did not cause.
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+  push:
+    branches: [main]
 
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: pr-quality-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  group: pr-quality-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   scope-plan:
@@ -28,6 +33,7 @@ jobs:
       provider_contract_checks: ${{ steps.policy.outputs.provider_contract_checks }}
       chat_contract_checks: ${{ steps.policy.outputs.chat_contract_checks }}
       agent_flow_checks: ${{ steps.policy.outputs.agent_flow_checks }}
+      agent_e2e_checks: ${{ steps.policy.outputs.agent_e2e_checks }}
       persistence_checks: ${{ steps.policy.outputs.persistence_checks }}
       policy_checks: ${{ steps.policy.outputs.policy_checks }}
       docs_checks: ${{ steps.policy.outputs.docs_checks }}
@@ -47,11 +53,25 @@ jobs:
       - name: Collect changed files
         env:
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPOSITORY: ${{ github.repository }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
         run: |
-          gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename' > changed-files.txt
-          jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH" > labels.txt
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename' > changed-files.txt
+            jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH" > labels.txt
+          else
+            # A push to main: scope the run to what the push brought in. A new branch
+            # or a force push has no usable "before", so fall back to the last commit.
+            if git cat-file -e "${PUSH_BEFORE}^{commit}" 2>/dev/null; then
+              git diff --name-only "$PUSH_BEFORE" "$PUSH_AFTER" > changed-files.txt
+            else
+              git diff --name-only "${PUSH_AFTER}~1" "$PUSH_AFTER" > changed-files.txt
+            fi
+            : > labels.txt
+          fi
 
       - name: Build deterministic scope plan
         id: policy
@@ -85,9 +105,16 @@ jobs:
 
       - name: Enforce change policy
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BLOCKED: ${{ needs.scope-plan.outputs.blocked }}
           BLOCKING_REASONS: ${{ needs.scope-plan.outputs.blocking_reasons }}
         run: |
+          # Label-based exceptions are granted on the pull request. After the merge the
+          # labels are gone, so re-blocking main on them would only make main red.
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Change policy was enforced on the pull request"
+            exit 0
+          fi
           if [ "$BLOCKED" = "true" ]; then
             echo "::error::${BLOCKING_REASONS:-Change policy blocked this pull request}"
             exit 1
@@ -110,6 +137,11 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install desktop dependencies
         working-directory: desktop
+        run: bun install --frozen-lockfile
+      # Desktop sidecar tests compile the production sidecar entry, which bundles the
+      # IM adapters; without their packages the build fails before any test runs.
+      - name: Install adapter dependencies
+        working-directory: adapters
         run: bun install --frozen-lockfile
       - name: Run desktop checks
         run: bun run check:desktop
@@ -198,6 +230,31 @@ jobs:
         with:
           name: agent-flow
           path: artifacts/agent-flow/
+          retention-days: 7
+
+  agent-e2e-checks:
+    name: agent-e2e-checks
+    needs: scope-plan
+    if: needs.scope-plan.outputs.agent_e2e_checks == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+      - name: Run the agent loop against a mock LLM
+        run: bun run check:agent-e2e
+      - name: Upload agent e2e artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-e2e
+          path: artifacts/agent-e2e/
           retention-days: 7
 
   adapter-checks:
@@ -300,10 +357,13 @@ jobs:
       - name: Run docs checks
         run: npm --prefix site ci && npm --prefix site run build && npm --prefix site run check
 
+  # Advisory: reported on the pull request, never a merge blocker. None of the agent
+  # projects this gate was modelled on block on coverage, and a 16-minute job that
+  # fails for reasons unrelated to the diff trains everyone to ignore the gate.
   coverage-checks:
     name: coverage-checks
     needs: scope-plan
-    if: needs.scope-plan.outputs.coverage_checks == 'true'
+    if: github.event_name == 'pull_request' && needs.scope-plan.outputs.coverage_checks == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -352,6 +412,7 @@ jobs:
       - provider-contract-checks
       - chat-contract-checks
       - agent-flow-checks
+      - agent-e2e-checks
       - adapter-checks
       - desktop-native-checks
       - macos-swift-checks
@@ -376,6 +437,18 @@ jobs:
             fi
           }
 
+          # Advisory lanes report their result without failing the gate.
+          advise_selected() {
+            local name="$1"
+            local expected="$2"
+            local result="$3"
+            if [ "$expected" = "true" ] && [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "::warning::$name (advisory) ended with result: $result"
+            else
+              echo "$name (advisory): $result"
+            fi
+          }
+
           require_selected() {
             local name="$1"
             local expected="$2"
@@ -397,12 +470,13 @@ jobs:
           require_selected "provider-contract-checks" "${{ needs.scope-plan.outputs.provider_contract_checks }}" "${{ needs.provider-contract-checks.result }}"
           require_selected "chat-contract-checks" "${{ needs.scope-plan.outputs.chat_contract_checks }}" "${{ needs.chat-contract-checks.result }}"
           require_selected "agent-flow-checks" "${{ needs.scope-plan.outputs.agent_flow_checks }}" "${{ needs.agent-flow-checks.result }}"
+          require_selected "agent-e2e-checks" "${{ needs.scope-plan.outputs.agent_e2e_checks }}" "${{ needs.agent-e2e-checks.result }}"
           require_selected "adapter-checks" "${{ needs.scope-plan.outputs.adapter_checks }}" "${{ needs.adapter-checks.result }}"
           require_selected "desktop-native-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.desktop-native-checks.result }}"
           require_selected "macos-swift-checks" "${{ needs.scope-plan.outputs.desktop_native_checks }}" "${{ needs.macos-swift-checks.result }}"
           require_selected "persistence-checks" "${{ needs.scope-plan.outputs.persistence_checks }}" "${{ needs.persistence-checks.result }}"
           require_selected "docs-checks" "${{ needs.scope-plan.outputs.docs_checks }}" "${{ needs.docs-checks.result }}"
-          require_selected "coverage-checks" "${{ needs.scope-plan.outputs.coverage_checks }}" "${{ needs.coverage-checks.result }}"
+          advise_selected "coverage-checks" "${{ needs.scope-plan.outputs.coverage_checks }}" "${{ needs.coverage-checks.result }}"
 
           if [ "$failures" -gt 0 ]; then
             exit 1

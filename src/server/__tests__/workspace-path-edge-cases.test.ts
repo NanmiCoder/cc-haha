@@ -35,14 +35,23 @@ describe('workspace file lookup edge cases', () => {
   })
 
   it('finds a CJK-named file when the request uses the other Unicode normalization form', async () => {
-    const workDir = await makeWorkDir()
     const name = '毕业设计（论文）开题报告 é.docx'
-    await fs.writeFile(path.join(workDir, name.normalize('NFD')), 'PK')
-    const service = new WorkspaceService(async () => workDir)
-
+    const folder = 'résumé'
     // Models emit NFC; some file systems and tools persist NFD (and vice versa).
-    const outcome = await service.readFile('s1', name.normalize('NFC'))
-    expect(outcome.state).not.toBe('missing')
+    // APFS matches either spelling by itself; ext4 and NTFS compare bytes.
+    for (const [stored, requested] of [['NFD', 'NFC'], ['NFC', 'NFD']] as const) {
+      const workDir = await makeWorkDir()
+      await fs.mkdir(path.join(workDir, folder.normalize(stored)))
+      await fs.writeFile(path.join(workDir, folder.normalize(stored), name.normalize(stored)), 'PK')
+      const service = new WorkspaceService(async () => workDir)
+
+      await expect(service.readFile('s1', `${folder}/${name}`.normalize(requested)))
+        .resolves.toMatchObject({ state: 'ok', previewType: 'docx', size: 2 })
+      const raw = await service.resolveRawFile('s1', `${folder}/${name}`.normalize(requested))
+      expect(await fs.readFile(raw.canonicalPath, 'utf8')).toBe('PK')
+      await expect(service.readFile('s1', `${folder}/other ${name}`.normalize(requested)))
+        .resolves.toMatchObject({ state: 'missing' })
+    }
   })
 
   it('serves a CJK path through the URL-encoded preview route', async () => {

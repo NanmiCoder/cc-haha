@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { chmodSync, lstatSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 const SAFE_INHERITED_ENV_NAMES = new Set([
@@ -80,4 +80,36 @@ export function createSandboxedTestEnvironment(
     NODE_ENV: 'test',
     ...overrides,
   }, source)
+}
+
+function openDirectoryTree(directory: string) {
+  const stat = lstatSync(directory)
+  if (!stat.isDirectory()) return
+  if ((stat.mode & 0o700) !== 0o700) chmodSync(directory, stat.mode | 0o700)
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isDirectory()) openDirectoryTree(join(directory, entry.name))
+  }
+}
+
+/**
+ * Remove a lane's sandbox HOME without letting a test's leftovers turn a finished,
+ * passing run red. A read-only directory left under the sandboxed TMPDIR blocks a
+ * plain recursive rm on POSIX, so open the tree up (never following links) and
+ * retry; anything still in the way (macOS runners have reported EROFS) becomes a
+ * warning. The sandbox lives under the OS temp dir, so nothing user-owned leaks.
+ */
+export function removeTestSandbox(directory: string, label: string, warn: (message: string) => void = console.warn) {
+  try {
+    rmSync(directory, { recursive: true, force: true })
+    return
+  } catch {
+    // Retry below with the tree made writable.
+  }
+  try {
+    openDirectoryTree(directory)
+    rmSync(directory, { recursive: true, force: true })
+  } catch (error) {
+    const prefix = process.env.GITHUB_ACTIONS === 'true' ? '::warning::' : ''
+    warn(`${prefix}${label}: could not remove test sandbox ${directory}: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
