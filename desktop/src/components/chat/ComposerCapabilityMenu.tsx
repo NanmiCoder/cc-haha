@@ -35,6 +35,10 @@ type Props = {
 const ROOT_WIDTH = 288
 const FLYOUT_WIDTH = 320
 const PANEL_GAP = 4
+/** The side panel's title bar, centred on the row that opened it. */
+const FLYOUT_HEADER_HEIGHT = 40
+/** Space the side panel keeps from the window edges. */
+const VIEWPORT_MARGIN = 8
 /** The full skill list reuses the @ menu's reference browser. */
 const BROWSE_REFERENCES_KEY = 'skills:all'
 const PANEL = 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]'
@@ -98,6 +102,8 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
   // categories in place, as the sheet does.
   const [narrow, setNarrow] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
+  const flyoutRef = useRef<HTMLDivElement>(null)
+  const [flyoutTop, setFlyoutTop] = useState(0)
   const referenceRef = useRef<ComposerReferenceMenuHandle>(null)
   useLayoutEffect(() => {
     if (sheet) return
@@ -136,6 +142,32 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
       ? subIndex < 0 ? undefined : getCapabilitySubMenuOptionId(id, subIndex)
       : rootIndex < 0 ? undefined : getCapabilityMenuOptionId(id, rootIndex)
   const controlsId = showReferences ? referencesId : drillParent ? subListId : listId
+  const flyoutAnchorIndex = flyoutOpen ? rootItems.findIndex(item => item.key === path[0]) : -1
+
+  // Like a desktop submenu, the side panel opens level with its row and only
+  // moves off it when it would otherwise run past the window.
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    const flyout = flyoutRef.current
+    if (!container || !flyout || flyoutAnchorIndex < 0) return
+    const doc = container.ownerDocument
+    const place = () => {
+      const row = doc.getElementById(getCapabilityMenuOptionId(id, flyoutAnchorIndex))
+      if (!row) return
+      const containerTop = container.getBoundingClientRect().top
+      const rowRect = row.getBoundingClientRect()
+      const viewHeight = doc.defaultView?.innerHeight ?? Infinity
+      const level = rowRect.top - containerTop + (rowRect.height - FLYOUT_HEADER_HEIGHT) / 2
+      const lowest = viewHeight - VIEWPORT_MARGIN - flyout.offsetHeight - containerTop
+      setFlyoutTop(Math.max(VIEWPORT_MARGIN - containerTop, Math.min(level, lowest)))
+    }
+    place()
+    const View = doc.defaultView
+    if (!View?.ResizeObserver) return
+    const observer = new View.ResizeObserver(place)
+    observer.observe(flyout)
+    return () => observer.disconnect()
+  }, [id, flyoutAnchorIndex, path.length, browseReferences])
 
   const openCategory = (nextPath: string[]) => {
     setPath(nextPath)
@@ -308,12 +340,12 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
     </div>
   }
 
-  return <div ref={containerRef} className="absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 flex items-end" style={{ gap: PANEL_GAP }} onMouseDown={event => event.preventDefault()}>
-    <div className={`${PANEL} shrink-0 ${searching ? 'w-[min(480px,calc(100vw-32px))]' : ''}`} style={searching ? undefined : { width: ROOT_WIDTH }}>
+  return <div ref={containerRef} className="absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2" onMouseDown={event => event.preventDefault()}>
+    <div className={`${PANEL} ${searching ? 'w-[min(480px,calc(100vw-32px))]' : ''}`} style={searching ? undefined : { width: ROOT_WIDTH }}>
       {searchRow}
       {searching ? referenceMenu : rootList}
     </div>
-    {flyoutOpen ? <div data-testid="capability-flyout" className={`${PANEL} shrink-0`} style={{ width: FLYOUT_WIDTH }}>
+    {flyoutOpen ? <div ref={flyoutRef} data-testid="capability-flyout" className={`${PANEL} absolute`} style={{ left: ROOT_WIDTH + PANEL_GAP, top: flyoutTop, width: FLYOUT_WIDTH }}>
       <div className="flex h-10 items-center gap-1.5 border-b border-[var(--color-border)] px-2">
         {path.length > 1 ? <IconButton icon={<ChevronLeft size={14} strokeWidth={1.75} />} label={t('chat.capabilities.back')} size="xs" tone="muted" onClick={goBack} /> : null}
         <span className="min-w-0 flex-1 truncate px-1 text-[13px] font-semibold text-[var(--color-text-primary)]">{drillParent!.label}</span>

@@ -256,6 +256,43 @@ function getCompactSummaryTitle(message: CompactSummaryEvent, t: ReturnType<type
   return message.title
 }
 
+function formatCompactElapsed(elapsedMs: number) {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1000))
+  return `${Math.floor(totalSeconds / 60)}:${String(totalSeconds % 60).padStart(2, '0')}`
+}
+
+/**
+ * Live meta for a running compaction: time since the divider appeared (its
+ * timestamp is the compaction start) and how much summary has streamed so far.
+ * Without it a slow compaction looks hung for minutes.
+ */
+function CompactingProgressMeta({ startedAt, outputChars }: { startedAt?: number; outputChars?: number }) {
+  const t = useTranslation()
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (startedAt === undefined) return
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [startedAt])
+
+  const parts = [
+    startedAt !== undefined ? formatCompactElapsed(now - startedAt) : null,
+    outputChars ? t('chat.compactSummary.generated', { count: formatTokenCount(outputChars) }) : null,
+  ].filter((part): part is string => part !== null)
+  if (parts.length === 0) return null
+  return (
+    <span data-testid="compact-progress" className="shrink-0 whitespace-nowrap text-[12px] font-normal tabular-nums text-[var(--color-text-tertiary)]">
+      {parts.map((part) => (
+        <span key={part}>
+          <span aria-hidden="true"> · </span>
+          {part}
+        </span>
+      ))}
+    </span>
+  )
+}
+
 function CompactStatusDivider({ message, state }: { message?: CompactSummaryEvent; state: 'compacting' | 'complete' }) {
   const t = useTranslation()
   const [expanded, setExpanded] = useState(false)
@@ -295,6 +332,9 @@ function CompactStatusDivider({ message, state }: { message?: CompactSummaryEven
           <span className="min-w-0 truncate font-medium text-[var(--color-text-primary)]">
             {title}
           </span>
+          {state === 'compacting' && (
+            <CompactingProgressMeta startedAt={message?.timestamp} outputChars={message?.outputChars} />
+          )}
         </button>
         <div className="h-px flex-1 bg-[var(--color-border)]" aria-hidden="true" />
       </div>

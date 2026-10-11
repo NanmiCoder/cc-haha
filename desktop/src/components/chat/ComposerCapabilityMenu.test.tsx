@@ -183,6 +183,43 @@ describe('ComposerCapabilityMenu', () => {
     expect(onAction).toHaveBeenCalledWith({ type: 'insertMention', reference: designSkill })
   })
 
+  it('opens the side panel level with its row and keeps it inside the window', () => {
+    const rowTops: Record<string, number> = { Skills: 160, Connectors: 192 }
+    let flyoutHeight = 120
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const label = this.getAttribute('role') === 'option' ? Object.keys(rowTops).find(key => this.querySelector(`#${this.id}-label`)?.textContent === key) : undefined
+      const top = label ? rowTops[label]! : this.className.includes('bottom-full') ? 100 : 0
+      return { top, height: label ? 32 : 0, bottom: top + (label ? 32 : 0), left: 0, right: 0, width: 0, x: 0, y: top, toJSON: () => ({}) } as DOMRect
+    })
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.testid === 'capability-flyout' ? flyoutHeight : 0
+    })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 })
+    try {
+      renderMenu()
+      // Row top relative to the menu, title bar centred on the 32px row.
+      fireEvent.mouseEnter(screen.getByRole('option', { name: /Skills/ }))
+      expect(screen.getByTestId('capability-flyout').style.top).toBe('56px')
+      fireEvent.mouseEnter(screen.getByRole('option', { name: /Connectors/ }))
+      expect(screen.getByTestId('capability-flyout').style.top).toBe('88px')
+
+      // Near the window bottom it lifts just enough to stay 8px clear.
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 })
+      fireEvent.mouseEnter(screen.getByRole('option', { name: /Skills/ }))
+      expect(screen.getByTestId('capability-flyout').style.top).toBe('56px')
+      fireEvent.mouseEnter(screen.getByRole('option', { name: /Connectors/ }))
+      expect(screen.getByTestId('capability-flyout').style.top).toBe('72px')
+
+      // A panel taller than the window keeps its top edge on screen.
+      flyoutHeight = 400
+      fireEvent.mouseEnter(screen.getByRole('option', { name: /Skills/ }))
+      expect(screen.getByTestId('capability-flyout').style.top).toBe('-92px')
+    } finally {
+      vi.restoreAllMocks()
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: 768 })
+    }
+  })
+
   it('walks into a category with the keyboard and steps back one panel per Escape', () => {
     const { onAction, onClose } = renderMenu()
     const input = searchInput()

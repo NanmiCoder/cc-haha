@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import {
+  __markActiveTurnForTests,
   __resetWebSocketHandlerStateForTests,
   getSessionChatActivityState,
   getSessionTurnState,
@@ -93,7 +94,10 @@ describe('background task cleanup boundaries', () => {
     expect(authoritativeStoppedTaskIds.has(s.sessionId)).toBe(false)
   })
 
-  it('starts the shell ceiling after the real foreground turn and CLI run both settle', async () => {
+  // Real CLI frame order (print.ts): a shell task does not hold back the turn's
+  // result, and run() stays in its waiting_for_agents loop until the shell
+  // ends, so session_state_changed:idle never arrives while it still runs.
+  it('starts the shell ceiling from the root result while the CLI run keeps waiting on the shell', async () => {
     const s = setup()
     handleWebSocket.message(s.ws, JSON.stringify({ type: 'user_message', content: 'work' }))
     await flushMicrotasks()
@@ -101,11 +105,104 @@ describe('background task cleanup boundaries', () => {
     s.startTask()
     s.close()
     expect(s.ceiling()).toBeUndefined()
-    s.dispatch({ type: 'system', subtype: 'session_state_changed', state: 'idle' })
-    expect(s.ceiling()).toBeUndefined()
     s.dispatch({ type: 'result', subtype: 'success', is_error: false, result: 'done' })
-    expect(s.ceiling()).toBeDefined()
+    const ceiling = s.ceiling()
+    expect(ceiling).toBeDefined()
+    expect(getSessionTurnState(s.sessionId)).toBe('running')
     expect(s.stop).not.toHaveBeenCalled()
+    ceiling!.callback()
+    await flushMicrotasks()
+    expect(s.stop).toHaveBeenCalledWith(s.sessionId)
+    expect(s.append).toHaveBeenCalledWith(s.sessionId, expect.objectContaining({ taskId: 'bash-1', status: 'failed' }))
+  })
+
+  it('arms the shell ceiling when the renderer leaves after the turn while the shell keeps the CLI running', async () => {
+    const s = setup()
+    handleWebSocket.message(s.ws, JSON.stringify({ type: 'user_message', content: 'start the dev server' }))
+    await flushMicrotasks()
+    s.dispatch({ type: 'system', subtype: 'session_state_changed', state: 'running' })
+    s.startTask()
+    s.dispatch({ type: 'result', subtype: 'success', is_error: false, result: 'started' })
+    expect(s.ceiling()).toBeUndefined()
+    s.close()
+    expect(s.ceiling()).toBeDefined()
+    expect(s.timers.some(timer => timer.delay === 30_000)).toBe(false)
+  })
+
+  it('lets a task-notification follow-up finish, then re-arms a full ceiling from its own root result', async () => {
+    const s = setup()
+    handleWebSocket.message(s.ws, JSON.stringify({ type: 'user_message', content: 'work' }))
+    await flushMicrotasks()
+    s.dispatch({ type: 'system', subtype: 'session_state_changed', state: 'running' })
+    s.startTask()
+    s.startTask('bash-2')
+    s.dispatch({ type: 'result', subtype: 'success', is_error: false, result: 'done' })
+    s.close()
+    const first = s.ceiling()!
+    expect(first).toBeDefined()
+    // bash-2 ends while bash-1 keeps running: the same run drains its
+    // notification into a root model follow-up (system/init, stream, reply).
+    s.dispatch({ type: 'system', subtype: 'task_notification', task_id: 'bash-2', status: 'completed' })
+    expect(s.ceiling()!.id).toBe(first.id)
+    s.dispatch({ type: 'system', subtype: 'init', session_id: 'cli-session', model: 'fixture-model' })
+    expect(s.cancelled.has(first.id)).toBe(true)
+    s.dispatch({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'message_start' } })
+    s.dispatch({ type: 'assistant', parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'text', text: 'bash-2 finished' }] } })
+    first.callback()
+    expect(s.stop).not.toHaveBeenCalled()
+    expect(s.timers.filter(timer => timer.delay === 31 * 60_000)).toHaveLength(1)
+    s.dispatch({ type: 'result', subtype: 'success', is_error: false, result: 'reported' })
+    const second = s.ceiling()!
+    expect(second.id).not.toBe(first.id)
+    expect(second.delay).toBe(31 * 60_000)
+    second.callback()
+    await flushMicrotasks()
+    expect(s.stop).toHaveBeenCalledTimes(1)
+  })
+
+  describe('keeps the ceiling off work it must not shorten, in the real frame order', () => {
+    async function settledShellTurn(prepare: (s: ReturnType<typeof setup>) => void) {
+      const s = setup()
+      handleWebSocket.message(s.ws, JSON.stringify({ type: 'user_message', content: 'work' }))
+      await flushMicrotasks()
+      s.dispatch({ type: 'system', subtype: 'session_state_changed', state: 'running' })
+      s.startTask()
+      prepare(s)
+      s.dispatch({ type: 'result', subtype: 'success', is_error: false, result: 'done' })
+      s.close()
+      return s
+    }
+    const liveCeilings = (s: ReturnType<typeof setup>) =>
+      s.timers.filter(timer => timer.delay === 31 * 60_000 && !s.cancelled.has(timer.id))
+
+    it('an Agent task', async () => {
+      const s = await settledShellTurn(s => s.startTask('agent-1', 'local_agent'))
+      expect(liveCeilings(s)).toHaveLength(0)
+    })
+
+    it('approved team work', async () => {
+      const s = await settledShellTurn(s => s.teamWork.mockReturnValue(true))
+      expect(liveCeilings(s)).toHaveLength(0)
+    })
+
+    it('a pending tool permission (only its own 31-min bound)', async () => {
+      const s = await settledShellTurn(s => s.permissions.mockReturnValue([{ requestId: 'tool-permission', request: { subtype: 'can_use_tool' } }] as any))
+      expect(liveCeilings(s)).toHaveLength(1)
+      expect(s.timers.filter(timer => timer.delay === 31 * 60_000)).toHaveLength(1)
+    })
+
+    it('a pending computer-use approval', async () => {
+      const s = await settledShellTurn(s => s.computerPermissions.mockReturnValue([{ requestId: 'computer-permission' }] as any))
+      expect(liveCeilings(s)).toHaveLength(0)
+    })
+
+    it('a user turn admitted before the ceiling expires', async () => {
+      const s = await settledShellTurn(() => {})
+      const ceiling = s.ceiling()!
+      __markActiveTurnForTests(s.sessionId)
+      ceiling.callback()
+      expect(s.stop).not.toHaveBeenCalled()
+    })
   })
 
   it('does not reap a foreground run that starts after the shell ceiling was queued', async () => {

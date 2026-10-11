@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const getLiveStatus = vi.hoisted(() => vi.fn())
 
-vi.mock('../../api/sessions', () => ({
+vi.mock('../api/sessions', () => ({
   sessionsApi: { getLiveStatus },
 }))
 

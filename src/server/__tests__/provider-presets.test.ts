@@ -51,7 +51,7 @@ describe('provider presets API', () => {
     const sponsors = presets.filter((preset: { featured?: boolean }) => preset.featured)
     expect(sponsors[0]).toMatchObject({
       id: 'aruhub',
-      baseUrl: 'https://direct.aruhub.com:8443',
+      baseUrl: 'https://agent.aruhub.com',
       apiFormat: 'anthropic',
       authStrategy: 'api_key',
       apiKeyUrl: 'https://aruhub.com/sign-up?aff=Z54g',

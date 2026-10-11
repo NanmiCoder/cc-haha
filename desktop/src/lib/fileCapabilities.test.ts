@@ -3,6 +3,7 @@ import {
   WORKSPACE_DOCUMENT_EXTENSIONS,
   fileExtension,
   isEditorOpenableFile,
+  isDelimitedTextFile,
   isGeneratedArtifactFile,
   isOutputResourceFile,
   isWorkspaceDocumentFile,
@@ -10,16 +11,26 @@ import {
 } from './fileCapabilities'
 
 describe('the workspace document gate', () => {
-  it('ships viewers for PDF, Word and Excel: the real list routes them, with no test double standing in', () => {
+  it('ships viewers for PDF, Word, Excel and delimited text: the real list routes them, with no test double standing in', () => {
     // This pins what users get. A format joins the list when its viewer lands, and the
     // server-side parity test refuses one that has no viewer.
-    expect([...WORKSPACE_DOCUMENT_EXTENSIONS].sort()).toEqual(['docx', 'pdf', 'xls', 'xlsm', 'xlsx'])
+    expect([...WORKSPACE_DOCUMENT_EXTENSIONS].sort()).toEqual(['csv', 'docx', 'pdf', 'tsv', 'xls', 'xlsm', 'xlsx'])
   })
 
   it('previews a listed document in the workspace, whatever the case of its extension', () => {
     expect(isWorkspaceDocumentFile('out/thesis.pdf')).toBe(true)
     expect(isWorkspaceDocumentFile('out/THESIS.PDF')).toBe(true)
     expect(isWorkspacePreviewableFile('out/thesis.pdf')).toBe(true)
+  })
+
+  it('previews CSV and TSV as tables, and tells them from the binary documents that have no line diff', () => {
+    for (const path of ['data/results.csv', 'data/RESULTS.TSV', 'data/results.csv:12']) {
+      expect(isWorkspaceDocumentFile(path)).toBe(true)
+      expect(isDelimitedTextFile(path)).toBe(true)
+    }
+    for (const path of ['out/thesis.pdf', 'budget.xlsx', 'notes.txt']) {
+      expect(isDelimitedTextFile(path)).toBe(false)
+    }
   })
 
   it('still keeps a document away from code editors: rendering it is not editing it', () => {
@@ -55,9 +66,10 @@ describe('the workspace document gate', () => {
     expect(isOutputResourceFile('out/thesis.pdf')).toBe(true)
   })
 
-  it('holds only extensions the editor gate refuses, so previewing a document never opens an IDE menu for it', () => {
+  it('holds only extensions the editor gate refuses, so previewing a binary document never opens an IDE menu for it', () => {
     for (const extension of WORKSPACE_DOCUMENT_EXTENSIONS) {
-      expect(isEditorOpenableFile(`file.${extension}`)).toBe(false)
+      // Delimited text is the exception: it is a table to the viewer and plain text to an editor.
+      expect(isEditorOpenableFile(`file.${extension}`)).toBe(extension === 'csv' || extension === 'tsv')
     }
   })
 })

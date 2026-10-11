@@ -183,6 +183,32 @@ describe('sessionRuntimeStore runtime cleanup', () => {
     })
   })
 
+  it('migrates legacy selections without Fast to standard mode and strips Fast from non-OAuth providers', async () => {
+    localStorage.setItem('cc-haha-session-runtime', JSON.stringify({
+      legacy: { providerId: 'openai-official', modelId: 'gpt-6-sol', effortLevel: 'high' },
+      invalid: { providerId: 'api-provider', modelId: 'gpt-6-sol', effortLevel: 'high', openAIFastMode: true },
+      enabled: { providerId: 'openai-official', modelId: 'gpt-6-sol', effortLevel: 'high', openAIFastMode: true },
+    }))
+    vi.resetModules()
+    const { useSessionRuntimeStore: loadedStore } = await import('./sessionRuntimeStore')
+    expect(loadedStore.getState().selections.legacy?.openAIFastMode).toBeUndefined()
+    expect(loadedStore.getState().selections.invalid?.openAIFastMode).toBeUndefined()
+    expect(loadedStore.getState().selections.enabled?.openAIFastMode).toBe(true)
+    expect(JSON.parse(localStorage.getItem('cc-haha-session-runtime')!).invalid.openAIFastMode).toBeUndefined()
+  })
+
+  it('keeps Fast through stale session-list refreshes and accepts an explicit remote disable', () => {
+    const store = useSessionRuntimeStore.getState()
+    store.setSelection('fast', { providerId: 'openai-official', modelId: 'gpt-6-sol', effortLevel: 'high', openAIFastMode: true })
+    store.syncFromSessions([{ id: 'fast', runtimeProviderId: 'openai-official', runtimeModelId: 'gpt-6-sol', effortLevel: 'high' } as SessionListItem])
+    expect(useSessionRuntimeStore.getState().selections.fast?.openAIFastMode).toBe(true)
+    store.settleSelection('fast')
+    store.syncFromSessions([{
+      id: 'fast', runtimeProviderId: 'openai-official', runtimeModelId: 'gpt-6-sol', effortLevel: 'high', openAIFastMode: false,
+    } as SessionListItem])
+    expect(useSessionRuntimeStore.getState().selections.fast?.openAIFastMode).toBe(false)
+  })
+
   it('does not restore a legacy Claude Official default from old session metadata', () => {
     useSessionRuntimeStore.getState().syncFromSessions([{
       id: 'legacy-claude-session',

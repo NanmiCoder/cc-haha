@@ -473,4 +473,32 @@ describe('withStreamRetry backoff and budgets', () => {
       restore()
     }
   })
+
+  test('stops re-sending once the shared API attempt budget is spent', async () => {
+    const restore = withEnv({ [RETRY_ENV]: undefined, [API_RETRY_ENV]: undefined })
+    try {
+      const budget = { remaining: 3 }
+      let calls = 0
+      const attempt = () =>
+        // biome-ignore lint/suspicious/noExplicitAny: mock stream messages
+        (async function* (): AsyncGenerator<any, void> {
+          calls++
+          // The attempt's own withRetry takes one attempt from the budget.
+          budget.remaining--
+          throw proxyTruncation()
+        })()
+
+      const out = await collect(withStreamRetry(attempt, 'test-model', [], {
+        sleep: noSleep,
+        apiAttemptBudget: budget,
+      }))
+
+      // A transport failure alone would allow 1 + 10 attempts.
+      expect(calls).toBe(3)
+      expect(retryStatuses(out)).toHaveLength(2)
+      expect(out.at(-1)?.isApiErrorMessage).toBe(true)
+    } finally {
+      restore()
+    }
+  })
 })

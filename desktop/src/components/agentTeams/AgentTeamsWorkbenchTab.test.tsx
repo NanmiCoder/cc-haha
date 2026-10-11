@@ -89,7 +89,7 @@ describe('AgentTeamsWorkbenchTab', () => {
   it('opens the 400px communication feed from a collapsed 56px rail', () => {
     installTimeline()
 
-    render(<AgentTeamsWorkbenchTab tabId="__team__lead-session" leadSessionId="lead-session" />)
+    render(<AgentTeamsWorkbenchTab leadSessionId="lead-session" />)
 
     expect(screen.getByTestId('agent-teams-canvas')).toBeTruthy()
     expect(screen.queryByTestId('agent-teams-communication')).toBeNull()
@@ -105,7 +105,8 @@ describe('AgentTeamsWorkbenchTab', () => {
     expect(screen.getByTestId('agent-teams-communication').className).toContain('h-full')
     expect(screen.getByText('Review is in progress.')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /Open the workbench full screen/i })).toBeNull()
-    expect(screen.getByRole('button', { name: 'Back to session' })).toBeTruthy()
+    // The window header's breadcrumb leads back to the session.
+    expect(screen.queryByRole('button', { name: 'Back to session' })).toBeNull()
   })
 
   it('opens a member inspector before routing to execution and restores the Canvas on return', async () => {
@@ -127,7 +128,7 @@ describe('AgentTeamsWorkbenchTab', () => {
           </button>
         )
       }
-      return <AgentTeamsWorkbenchTab tabId={teamTabId} leadSessionId="lead-session" />
+      return <AgentTeamsWorkbenchTab leadSessionId="lead-session" />
     }
 
     render(<RoutedWorkbench />)

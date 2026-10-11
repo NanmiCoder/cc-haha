@@ -1,7 +1,7 @@
 /**
- * One tab style for every tab strip in the app: the session tabs above the chat
- * and the resource tabs above the workspace panel. Both strips sit on the
- * sidebar's ground (the "trough"), and a tab is a 28px chip on it.
+ * The tab style of the workspace's resource tabs, the one tab strip left in
+ * the window. The strip sits on the sidebar's ground (the "trough") in the
+ * window header, and a tab is a 28px chip on it.
  *
  * Three tiers, each strictly stronger than the one before:
  *

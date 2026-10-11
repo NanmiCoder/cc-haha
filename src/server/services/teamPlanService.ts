@@ -86,7 +86,7 @@ export class TeamPlanService {
     this.launches.set(plan.planId, operation)
     void operation.catch(() => {})
   }
-  async approve(teamName: string, action: TeamPlanAction): Promise<TeamPlanRecord> {
+  async approve(teamName: string, action: TeamPlanAction, options: { startLeader?: (sessionId: string) => Promise<void> } = {}): Promise<TeamPlanRecord> {
     const current = await readTeamPlan(teamName)
     if (!current) throw new TeamPlanError('Plan not found', 404)
     // Idempotent replay still goes through store identity/incarnation checks.
@@ -95,6 +95,13 @@ export class TeamPlanService {
       if (current.planId !== action.planId || current.sessionId !== action.sessionId || current.incarnationId !== action.incarnationId || current.revision !== action.expectedRevision) throw new TeamPlanError('Plan changed; refresh before continuing')
       try { validated = await this.runtime.validate(current) }
       catch (error) { throw new TeamPlanError(error instanceof Error ? error.message : 'Team configuration is unavailable', 400) }
+      // The launch needs a connected lead. After an app restart the lead's
+      // process is gone until something starts it, and approving a reviewed
+      // plan is that something: refusing left the plan unlaunchable.
+      if (current.state === 'review_pending' && options.startLeader) {
+        try { await options.startLeader(current.sessionId) }
+        catch (error) { throw new TeamPlanError(`Team leader could not start: ${error instanceof Error ? error.message : String(error)}`) }
+      }
     }
     // The approval commits `launching` before this call can register the
     // launch; a plan read in between must not take it for an orphaned launch.

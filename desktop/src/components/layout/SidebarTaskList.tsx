@@ -3,6 +3,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import type { TranslationKey } from '../../i18n'
 import type { SessionListItem } from '../../types/session'
 import { SessionAttentionMark } from './SessionAttentionMark'
+import { displaySessionTitle } from '../../lib/sessionTitle'
 import { isWorktreeSession, type SidebarTaskGroup, type SidebarTaskGroupId } from './sidebarTaskGroups'
 
 /**
@@ -135,7 +136,7 @@ function SidebarTaskRow({
   t: Translate
 }) {
   const isWorktree = isWorktreeSession(session)
-  const title = session.title || 'Untitled'
+  const title = displaySessionTitle(session.title, t('tabs.untitled'))
 
   return (
     <button

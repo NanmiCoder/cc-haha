@@ -76,7 +76,7 @@ export function MobileShell({ layout, preferencesRequest }: Props) {
     sheetTabIdRef.current = activeTabId
   }, [activeTabId, layout])
 
-  // A desktop-only tab (terminal, scheduled tasks, the team canvas…) restored
+  // A desktop-only tab (scheduled tasks, the team canvas…) restored
   // from storage or opened by a link has no page here: show home instead of a
   // blank frame. The tab itself is kept for when the desktop opens it.
   useEffect(() => {

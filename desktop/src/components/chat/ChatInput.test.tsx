@@ -3531,7 +3531,7 @@ describe('ChatInput file mentions', () => {
 
     async function dictate() {
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Dictate' }))
+        fireEvent.click(screen.getByRole('button', { name: /^Dictate( \(.+\))?$/ }))
       })
       await act(async () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Stop recording and transcribe' }))
@@ -3592,7 +3592,7 @@ describe('ChatInput file mentions', () => {
     it('hands the toolbar row to the recording bar and gives it back', async () => {
       render(<ChatInput />)
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Dictate' }))
+        fireEvent.click(screen.getByRole('button', { name: /^Dictate( \(.+\))?$/ }))
       })
 
       expect(screen.getByTestId('voice-recording-bar')).toBeVisible()
@@ -3605,13 +3605,13 @@ describe('ChatInput file mentions', () => {
 
       expect(screen.queryByTestId('voice-recording-bar')).toBeNull()
       expect(screen.getByTestId('chat-input-toolbar-trailing')).toBeVisible()
-      expect(screen.getByRole('button', { name: 'Dictate' })).toBeVisible()
+      expect(screen.getByRole('button', { name: /^Dictate( \(.+\))?$/ })).toBeVisible()
     })
 
     it('sends the dictated text through the composer\'s own send path', async () => {
       render(<ChatInput />)
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Dictate' }))
+        fireEvent.click(screen.getByRole('button', { name: /^Dictate( \(.+\))?$/ }))
       })
       await act(async () => {
         fireEvent.click(await screen.findByRole('button', { name: 'Transcribe and send' }))
@@ -3664,7 +3664,7 @@ describe('ChatInput file mentions', () => {
     it('abandons the recording when the composer is hidden', async () => {
       const { rerender } = render(<ChatInput sessionId={sessionId} />)
       await act(async () => {
-        fireEvent.click(screen.getByRole('button', { name: 'Dictate' }))
+        fireEvent.click(screen.getByRole('button', { name: /^Dictate( \(.+\))?$/ }))
       })
       await screen.findByRole('button', { name: 'Stop recording and transcribe' })
 

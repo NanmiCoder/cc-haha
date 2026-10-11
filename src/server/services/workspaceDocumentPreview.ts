@@ -51,6 +51,18 @@ export const WORKSPACE_DOCUMENT_FORMATS: Readonly<Record<string, WorkspaceDocume
     mimeType: 'application/vnd.ms-excel',
     maxBytes: 30 * MIB,
   },
+  // Delimited text is plain text, but it is read as a table. The viewer decodes it
+  // whole before it keeps the first rows, so the limit is lower than a workbook's.
+  csv: {
+    previewType: 'xlsx',
+    mimeType: 'text/csv',
+    maxBytes: 10 * MIB,
+  },
+  tsv: {
+    previewType: 'xlsx',
+    mimeType: 'text/tab-separated-values',
+    maxBytes: 10 * MIB,
+  },
 }
 
 /** Extensions (without the dot) the workspace can preview as documents. */

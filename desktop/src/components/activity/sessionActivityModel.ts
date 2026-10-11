@@ -1332,3 +1332,81 @@ export function buildMainSessionActivityModel(
     includeTeamActivity: false,
   })
 }
+
+function sameItems<T>(a: readonly T[] | undefined, b: readonly T[] | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b || a.length !== b.length) return false
+  return a.every((item, index) => item === b[index])
+}
+
+function sameKeys(a: ReadonlySet<string> | undefined, b: ReadonlySet<string> | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b || a.size !== b.size) return false
+  for (const key of a) if (!b.has(key)) return false
+  return true
+}
+
+function sameWindows(
+  a: BuildMainSessionActivityModelInput['teamTaskWindows'],
+  b: BuildMainSessionActivityModelInput['teamTaskWindows'],
+): boolean {
+  if (a === b) return true
+  if (!a || !b || a.length !== b.length) return false
+  return a.every((window, index) => (
+    window.startedAt === b[index]!.startedAt && window.endedAt === b[index]!.endedAt
+  ))
+}
+
+// Every input field must be compared below; a new field fails to type-check
+// here until it is, instead of being silently served from a stale model.
+const COMPARED_MAIN_SESSION_ACTIVITY_INPUTS = {
+  sessionId: true,
+  messages: true,
+  completedAndDismissed: true,
+  isForegroundTurnActive: true,
+  tasks: true,
+  backgroundTasks: true,
+  agentNotifications: true,
+  workflowRuns: true,
+  dismissedBackgroundTaskKeys: true,
+  teamTaskWindows: true,
+} as const satisfies Record<keyof BuildMainSessionActivityModelInput, true>
+void COMPARED_MAIN_SESSION_ACTIVITY_INPUTS
+
+function sameMainSessionActivityInput(
+  a: BuildMainSessionActivityModelInput,
+  b: BuildMainSessionActivityModelInput,
+): boolean {
+  return a.sessionId === b.sessionId &&
+    a.messages === b.messages &&
+    a.completedAndDismissed === b.completedAndDismissed &&
+    Boolean(a.isForegroundTurnActive) === Boolean(b.isForegroundTurnActive) &&
+    sameItems(a.tasks, b.tasks) &&
+    sameItems(a.backgroundTasks, b.backgroundTasks) &&
+    sameItems(a.agentNotifications, b.agentNotifications) &&
+    sameItems(a.workflowRuns, b.workflowRuns) &&
+    sameKeys(a.dismissedBackgroundTaskKeys, b.dismissedBackgroundTaskKeys) &&
+    sameWindows(a.teamTaskWindows, b.teamTaskWindows)
+}
+
+let lastMainSessionActivity: {
+  input: BuildMainSessionActivityModelInput
+  model: SessionActivityModel
+} | null = null
+
+/**
+ * `buildMainSessionActivityModel` for the session on screen, shared by the tab
+ * bar and the session page. The model walks the whole transcript, and both of
+ * them derive it for the same session from the same store state, so the second
+ * caller reuses the first one's result. Inputs are compared by identity, item
+ * by item, because each caller rebuilds its arrays and sets from that state.
+ */
+export function getMainSessionActivityModel(
+  input: BuildMainSessionActivityModelInput,
+): SessionActivityModel {
+  const last = lastMainSessionActivity
+  if (last && sameMainSessionActivityInput(last.input, input)) return last.model
+  const model = buildMainSessionActivityModel(input)
+  lastMainSessionActivity = { input, model }
+  return model
+}

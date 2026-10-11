@@ -761,6 +761,8 @@ describe('WorkspaceService document previews', () => {
     ['data.xlsx', 'xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
     ['macro.xlsm', 'xlsx', 'application/vnd.ms-excel.sheet.macroEnabled.12'],
     ['legacy.XLS', 'xlsx', 'application/vnd.ms-excel'],
+    ['results.csv', 'xlsx', 'text/csv'],
+    ['results.TSV', 'xlsx', 'text/tab-separated-values'],
   ])('classifies %s as a %s document and does not ship its bytes', async (name, previewType, mimeType) => {
     const workDir = await makeTempDir('workspace-service-docs-')
     const service = new WorkspaceService(async () => workDir)
@@ -947,6 +949,24 @@ describe('WorkspaceService document previews', () => {
 
       await expect(service.resolveRawFile('session-1', 'missing.pdf')).rejects.toMatchObject({ statusCode: 404 })
       await expect(service.resolveRawFile('session-1', 'folder.pdf')).rejects.toMatchObject({ statusCode: 404 })
+    })
+
+    it('serves delimited text as a table document, and refuses it above its own, lower limit', async () => {
+      const workDir = await makeTempDir('workspace-service-raw-')
+      const service = new WorkspaceService(async () => workDir)
+      await fs.writeFile(path.join(workDir, 'results.csv'), 'a,b\n1,2\n')
+
+      const raw = await service.resolveRawFile('session-1', 'results.csv')
+      expect(raw.format).toMatchObject({ previewType: 'xlsx', mimeType: 'text/csv' })
+
+      const limit = WORKSPACE_DOCUMENT_FORMATS.csv!.maxBytes
+      expect(limit).toBeLessThan(WORKSPACE_DOCUMENT_FORMATS.xlsx!.maxBytes)
+      const target = path.join(workDir, 'huge.csv')
+      await fs.writeFile(target, '')
+      await fs.truncate(target, limit + 1)
+
+      await expect(service.resolveRawFile('session-1', 'huge.csv')).rejects.toMatchObject({ statusCode: 413 })
+      await expect(service.readFile('session-1', 'huge.csv')).resolves.toMatchObject({ state: 'too_large' })
     })
 
     it('answers 413 above the format limit', async () => {

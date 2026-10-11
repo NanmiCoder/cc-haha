@@ -266,7 +266,7 @@
   {
     "id": "aruhub",
     "name": "AruHub",
-    "baseUrl": "https://direct.aruhub.com:8443",
+    "baseUrl": "https://agent.aruhub.com",
     "apiFormat": "anthropic",
     "defaultModels": {
       "main": "claude-opus-5",

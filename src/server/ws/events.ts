@@ -33,7 +33,7 @@ export type ClientMessage =
       // applied in-process via the SDK set_model control request before the
       // allow response; cross-provider switches approve → interrupt → restart
       // the CLI with the new env → auto-continue execution.
-      runtimeOverride?: { providerId: string | null; modelId: string; effortLevel?: string }
+      runtimeOverride?: { providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean }
     }
   | {
       type: 'computer_use_permission_response'
@@ -41,7 +41,7 @@ export type ClientMessage =
       response: ComputerUsePermissionResponse
     }
   | { type: 'set_permission_mode'; mode: PermissionMode }
-  | { type: 'set_runtime_config'; providerId: string | null; modelId: string; effortLevel?: string }
+  | { type: 'set_runtime_config'; providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean }
   | { type: 'stop_generation' }
   | { type: 'ask_user_question_activity'; requestId: string }
   | { type: 'stop_background_task'; taskId: string }
@@ -116,13 +116,14 @@ export type ServerMessage =
    * the renderer to guess from content.
    */
   | { type: 'thinking'; text: string; complete?: boolean }
-  | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
+  | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean; compactProgress?: { outputChars: number } }
   | {
       type: typeof RUNTIME_CONFIG_APPLIED_EVENT
-      requestedConfig?: { providerId: string | null; modelId: string; effortLevel?: string }
+      requestedConfig?: { providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean }
       providerId: string | null
       modelId: string
       effortLevel?: string
+      openAIFastMode?: boolean
     }
   // CLI 是权限模式的唯一真相来源。当 CLI 内部 mode 变化（如 ExitPlanMode 后
   // 恢复到进入 plan 前的模式、Shift+Tab 切换）时，把新模式回传给前端，让桌面端
@@ -158,7 +159,7 @@ export type AgentRunStreamMessage =
   | { type: 'tool_use_complete'; toolName: string; toolUseId: string; originalToolUseId?: string; input: unknown; parentToolUseId?: string }
   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
   | { type: 'thinking'; text: string; complete?: boolean }
-  | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
+  | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean; compactProgress?: { outputChars: number } }
   | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string }
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }

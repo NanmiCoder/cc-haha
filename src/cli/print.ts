@@ -17,7 +17,7 @@ import {
 } from 'src/commands.js'
 import { createStreamlinedTransformer } from 'src/utils/streamlinedTransform.js'
 import { installStreamJsonStdoutGuard } from 'src/utils/streamJsonStdoutGuard.js'
-import type { ToolPermissionContext } from 'src/Tool.js'
+import type { SDKStatusDetail, ToolPermissionContext } from 'src/Tool.js'
 import type { ThinkingConfig } from 'src/utils/thinking.js'
 import { assembleToolPool, filterToolsByDenyRules } from 'src/tools.js'
 import uniqBy from 'lodash-es/uniqBy.js'
@@ -619,7 +619,7 @@ export async function runHeadless(
     workload: string | undefined
     setupTrigger?: 'init' | 'maintenance' | undefined
     sessionStartHooksPromise?: ReturnType<typeof processSessionStartHooks>
-    setSDKStatus?: (status: SDKStatus) => void
+    setSDKStatus?: (status: SDKStatus, detail?: SDKStatusDetail) => void
   },
 ): Promise<void> {
   if (
@@ -1193,7 +1193,7 @@ function runHeadlessStreaming(
     includePartialMessages?: boolean | undefined
     enableAuthStatus?: boolean | undefined
     agent?: string | undefined
-    setSDKStatus?: (status: SDKStatus) => void
+    setSDKStatus?: (status: SDKStatus, detail?: SDKStatusDetail) => void
     promptSuggestions?: boolean | undefined
     workload?: string | undefined
     outputFormat: string | undefined
@@ -2369,11 +2369,16 @@ function runHeadlessStreaming(
                 ),
               agents: currentAgents,
               orphanedPermission: cmd.orphanedPermission,
-              setSDKStatus: status => {
+              setSDKStatus: (status, detail) => {
                 output.enqueue({
                   type: 'system',
                   subtype: 'status',
                   status,
+                  ...(detail?.compactProgress && {
+                    compact_progress: {
+                      output_chars: detail.compactProgress.outputChars,
+                    },
+                  }),
                   session_id: getSessionId(),
                   uuid: randomUUID(),
                 })

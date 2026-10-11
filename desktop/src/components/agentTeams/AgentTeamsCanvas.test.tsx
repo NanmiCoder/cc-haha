@@ -355,6 +355,26 @@ describe('AgentTeamsCanvas', () => {
     )
   })
 
+  it('loops every flowing line by whole dash periods so the dashes never snap back', () => {
+    const css = readFileSync(join(__dirname, '../../theme/globals.css'), 'utf8')
+    const offset = Number(css.match(/@keyframes agent-teams-flow\s*\{\s*to\s*\{\s*stroke-dashoffset:\s*(-?[\d.]+);/)?.[1])
+    expect(offset).not.toBe(0)
+
+    const { container } = render(<AgentTeamsCanvas {...props()} />)
+    const flowing = [...container.querySelectorAll('.agent-teams-flow')]
+    expect(flowing.some(path => path.getAttribute('data-testid')?.startsWith('agent-teams-canvas-tether-'))).toBe(true)
+    expect(flowing.some(path => path.getAttribute('data-testid') === 'agent-teams-active-flight-path')).toBe(true)
+    expect(flowing.some(path => path.closest('[data-testid="agent-teams-legend"]'))).toBe(true)
+
+    for (const path of flowing) {
+      const period = path.getAttribute('stroke-dasharray')!.split(/[\s,]+/).map(Number).reduce((sum, dash) => sum + dash, 0)
+      expect({ dasharray: path.getAttribute('stroke-dasharray'), remainder: Math.abs(offset) % period }).toEqual({
+        dasharray: path.getAttribute('stroke-dasharray'),
+        remainder: 0,
+      })
+    }
+  })
+
   it('chips each member card with its model family and keeps the full id on hover', () => {
     const current = snapshot('current')
     const withModels: TeamWorkbenchSnapshot = {

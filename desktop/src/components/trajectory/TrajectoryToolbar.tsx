@@ -23,6 +23,8 @@ type Props = {
   /** Subagent breadcrumb: shown when viewing a subagent's trajectory. */
   agentLabel: string | null
   onExitAgent: () => void
+  /** Session controls after the search field: Stop, while 轨迹 hides the composer. */
+  actions?: ReactNode
 }
 
 /** A labeled on/off toggle; icon-only toggles were too hard to discover. */
@@ -62,6 +64,7 @@ export function TrajectoryToolbar({
   totalsPartial,
   agentLabel,
   onExitAgent,
+  actions,
 }: Props) {
   const t = useTranslation()
   const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite
@@ -124,6 +127,7 @@ export function TrajectoryToolbar({
           size="sm"
           containerClassName="w-44"
         />
+        {actions}
       </div>
     </div>
   )

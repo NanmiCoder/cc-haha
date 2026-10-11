@@ -63,7 +63,7 @@ import { useWorkspaceBrowserStore } from '../../stores/workspaceBrowserStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { WorkspaceSurface, useWorkspaceBrowserEventBridge } from './WorkspaceSurface'
 import { WorkspaceHeaderProvider } from '../layout/WorkspaceHeaderContext'
-import { TabBar } from '../layout/TabBar'
+import { AppHeader } from '../layout/AppHeader'
 import type { WorkspaceBrowserTab } from '../../lib/workspace/types'
 import { installFakeBrowserGuests } from '../../test/fakeBrowserGuests'
 
@@ -471,15 +471,16 @@ describe('WorkspaceSurface', () => {
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} unobserve() {} })
     const sideId = useWorkspaceStore.getState().openTarget(SESSION, { kind: 'terminal', cwd: '/repo', dock: 'side' })!
     useWorkspaceStore.getState().openTarget(SESSION, { kind: 'terminal', cwd: '/repo', dock: 'bottom' })
+    useTabStore.setState({ tabs: [{ sessionId: SESSION, title: 'Session A', type: 'session', status: 'idle' }], activeTabId: SESSION })
     render(<WorkspaceHeaderProvider>
-      <TabBar />
+      <AppHeader />
       <WorkspaceSurface sessionId={SESSION} dock="side" cwd="/repo" />
       <WorkspaceSurface sessionId={SESSION} dock="bottom" cwd="/repo" />
     </WorkspaceHeaderProvider>)
     const header = screen.getByTestId('workspace-window-header')
     // Session overflow must stay in its own shrinkable region when the resource header fills the window.
     const sessionHeader = screen.getByTestId('workspace-session-header')
-    expect(sessionHeader).toContainElement(screen.getByTestId('tab-bar-scroll-region'))
+    expect(sessionHeader).toContainElement(screen.getByTestId('app-header-session'))
     expect(sessionHeader).toHaveClass('min-w-0', 'overflow-hidden')
     expect(sessionHeader).not.toContainElement(screen.getByTestId('workspace-header-frame'))
     expect(within(header).getByTestId('workspace-tab-strip-side')).toBeInTheDocument()

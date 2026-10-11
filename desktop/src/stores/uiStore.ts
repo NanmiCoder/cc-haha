@@ -277,6 +277,11 @@ type UIStore = {
   pendingMemoryPath: string | null
   /** Where the extension market should open next (set by the composer + menu). */
   pendingMarketTarget: MarketTarget | null
+  /**
+   * Bumped by Cmd+N. The sidebar's "New session" item answers it, so the
+   * shortcut it advertises does exactly what clicking it does.
+   */
+  newSessionRequest: number
   activeModal: string | null
   toasts: Toast[]
 
@@ -291,6 +296,7 @@ type UIStore = {
   setPendingSettingsTab: (tab: SettingsTab | null) => void
   setPendingMemoryPath: (path: string | null) => void
   setPendingMarketTarget: (target: MarketTarget | null) => void
+  requestNewSession: () => void
   openModal: (id: string) => void
   closeModal: () => void
   addToast: (toast: Omit<Toast, 'id'>) => void
@@ -311,6 +317,7 @@ export const useUIStore = create<UIStore>((set) => ({
   pendingSettingsTab: null,
   pendingMemoryPath: null,
   pendingMarketTarget: null,
+  newSessionRequest: 0,
   activeModal: null,
   toasts: [],
 
@@ -385,6 +392,7 @@ export const useUIStore = create<UIStore>((set) => ({
   setPendingSettingsTab: (tab) => set({ pendingSettingsTab: tab }),
   setPendingMemoryPath: (path) => set({ pendingMemoryPath: path }),
   setPendingMarketTarget: (target) => set({ pendingMarketTarget: target }),
+  requestNewSession: () => set((state) => ({ newSessionRequest: state.newSessionRequest + 1 })),
   openModal: (id) => set({ activeModal: id }),
   closeModal: () => set({ activeModal: null }),
 

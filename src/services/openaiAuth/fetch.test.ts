@@ -24,11 +24,14 @@ describe('buildOpenAICodexFetch', () => {
   let originalTokenFile: string | undefined
   let originalReasoningEffort: string | undefined
   let originalCompression: string | undefined
+  let originalFastMode: string | undefined
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'openai-codex-fetch-'))
     originalTokenFile = process.env.OPENAI_CODEX_OAUTH_FILE
     originalCompression = process.env.CC_HAHA_OPENAI_REQUEST_COMPRESSION
+    originalFastMode = process.env.CC_HAHA_OPENAI_FAST_MODE
+    delete process.env.CC_HAHA_OPENAI_FAST_MODE
     delete process.env.CC_HAHA_OPENAI_REQUEST_COMPRESSION
     originalReasoningEffort = process.env[OPENAI_CODEX_REASONING_EFFORT_ENV_KEY]
     delete process.env[OPENAI_CODEX_REASONING_EFFORT_ENV_KEY]
@@ -48,6 +51,8 @@ describe('buildOpenAICodexFetch', () => {
   })
 
   afterEach(async () => {
+    if (originalFastMode === undefined) delete process.env.CC_HAHA_OPENAI_FAST_MODE
+    else process.env.CC_HAHA_OPENAI_FAST_MODE = originalFastMode
     if (originalCompression === undefined) delete process.env.CC_HAHA_OPENAI_REQUEST_COMPRESSION
     else process.env.CC_HAHA_OPENAI_REQUEST_COMPRESSION = originalCompression
     if (originalTokenFile === undefined) {
@@ -62,6 +67,26 @@ describe('buildOpenAICodexFetch', () => {
     }
     clearOpenAIOAuthTokenCache()
     await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  test('only explicit Fast mode adds priority to OAuth Responses wire for unknown models', async () => {
+    const bodies: Record<string, any>[] = []
+    const fetcher = buildOpenAICodexFetch(async (_input, init) => {
+      bodies.push(readWireBody(init))
+      return Response.json({ id: 'fixture', status: 'completed', output: [] })
+    }, 'test')!
+    const request = () => fetcher('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      body: JSON.stringify({ model: 'future-codex-model', max_tokens: 64, messages: [{ role: 'user', content: 'Hi' }] }),
+    })
+    await request()
+    process.env.CC_HAHA_OPENAI_FAST_MODE = '1'
+    await request()
+    process.env.CC_HAHA_OPENAI_FAST_MODE = '0'
+    await request()
+    expect(bodies.map(body => body.service_tier)).toEqual([undefined, 'priority', undefined])
+    expect(bodies[0]).not.toHaveProperty('service_tier')
+    expect(bodies[2]).not.toHaveProperty('service_tier')
   })
 
   test('preserves a structured policy rejection even when upstream wraps it in HTTP 503', async () => {

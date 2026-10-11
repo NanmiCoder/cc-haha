@@ -224,7 +224,10 @@ const SOFT_CLASSES = 'bg-[var(--color-btn-soft-bg)] hover:bg-[var(--color-btn-so
 
 const PRESSED_CLASSES: Record<IconButtonSurface, string> = {
   default: 'bg-[var(--color-surface-selected)] text-[var(--color-text-primary)]',
-  sidebar: 'bg-[var(--color-sidebar-item-hover)] text-[var(--color-text-primary)]',
+  // The sidebar's hover fill is the faintest step on its ground; a toggle that
+  // is on must not look like one the pointer is merely over, so it takes the
+  // theme accent.
+  sidebar: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]',
   terminal: 'bg-[var(--color-terminal-selection)] text-[var(--color-terminal-fg)]',
   media: 'bg-[var(--color-media-selection)] text-[var(--color-media-fg)]',
 }
@@ -288,9 +291,10 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
         BASE_CLASSES,
         DISABLED_OPACITY[disabledStyle],
         SIZE_CLASSES[size],
-        // `solid` supplies both fill and foreground, so the tone's resting text
-        // color and hover fill are skipped rather than left to compete.
-        solid ? SOLID_CLASSES[tone] : (SURFACE_REST_TEXT[surface] ?? REST_TEXT)[tone],
+        // `solid` and `pressed` supply both fill and foreground, so the tone's
+        // resting text color is skipped rather than left to compete: two
+        // `text-[…]` values resolve by alphabetical order, not by intent.
+        solid ? SOLID_CLASSES[tone] : !pressed && (SURFACE_REST_TEXT[surface] ?? REST_TEXT)[tone],
         solid && 'hover:brightness-110',
         // A pressed or soft button carries its own fill and hover; skipping the
         // tone's hover here keeps two `hover:bg-[…]` values from competing.

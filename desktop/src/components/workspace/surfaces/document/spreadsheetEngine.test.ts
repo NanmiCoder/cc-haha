@@ -402,3 +402,117 @@ describe('the default engine', () => {
     expect(document.sheets.map((sheet) => sheet.name)).toEqual(['结果 Results', 'Second'])
   })
 })
+
+describe('delimited text', () => {
+  const bytesOf = (text: string) => new TextEncoder().encode(text)
+  const textsOf = (grid: Awaited<ReturnType<typeof firstGrid>>) => grid.cells.map((row) => row.map((cell) => cell?.text))
+
+  async function delimitedGrid(bytes: Uint8Array, delimited: 'csv' | 'tsv' = 'csv', using: SpreadsheetEngine = engine) {
+    const document = await using.open(bytes, { delimited })
+    return { document, grid: await document.readSheet(document.sheets[0]!.index) }
+  }
+
+  it('is one sheet that says it is not a workbook, so the viewer has no tabs to draw', async () => {
+    const { document } = await delimitedGrid(bytesOf('a,b\n1,2\n'))
+
+    expect(document.sheets).toHaveLength(1)
+    expect(document.delimited).toBe(true)
+  })
+
+  it('reads quoted fields with commas, quotes and line breaks as single cells', async () => {
+    const { grid } = await delimitedGrid(bytesOf('name,note\n"Smith, J.","said ""hi""\nthen left"\n'))
+
+    expect(textsOf(grid)).toEqual([
+      ['name', 'note'],
+      ['Smith, J.', 'said "hi"\nthen left'],
+    ])
+  })
+
+  it('keeps what is written: leading zeros and numbers are not reinterpreted', async () => {
+    const { grid } = await delimitedGrid(bytesOf('id,qty\n007,1e5\n'))
+
+    expect(textsOf(grid)[1]).toEqual(['007', '1e5'])
+  })
+
+  it('reads Chinese, with or without a byte-order mark', async () => {
+    const plain = await delimitedGrid(bytesOf('姓名,成绩\n张三,90\n'))
+    const withBom = await delimitedGrid(new Uint8Array([0xef, 0xbb, 0xbf, ...bytesOf('姓名,成绩\n')]))
+
+    expect(textsOf(plain.grid)[1]).toEqual(['张三', '90'])
+    // The mark is not part of the first header.
+    expect(textsOf(withBom.grid)[0]).toEqual(['姓名', '成绩'])
+  })
+
+  it('reads the GB18030 an Excel "CSV" is written in under a Chinese locale', async () => {
+    // 姓名,成绩 in GB18030.
+    const gbk = new Uint8Array([0xd0, 0xd5, 0xc3, 0xfb, 0x2c, 0xb3, 0xc9, 0xbc, 0xa8, 0x0a])
+
+    const { grid } = await delimitedGrid(gbk)
+
+    expect(textsOf(grid)).toEqual([['姓名', '成绩']])
+  })
+
+  it('splits a tsv on tabs, and leaves the commas in it alone', async () => {
+    const { grid } = await delimitedGrid(bytesOf('a,b\tc\n1\t2,3\n'), 'tsv')
+
+    expect(textsOf(grid)).toEqual([['a,b', 'c'], ['1', '2,3']])
+  })
+
+  it('splits a csv on commas only, not on whatever SheetJS would guess from the first line', async () => {
+    const { grid } = await delimitedGrid(bytesOf('a;b\tc,d\n'))
+
+    expect(textsOf(grid)).toEqual([['a;b\tc', 'd']])
+  })
+
+  it('stops at the row limit and says there is more', async () => {
+    const limited = createSpreadsheetEngine({
+      loadSheetJs: () => import('xlsx'),
+      limits: { ...DEFAULT_SPREADSHEET_LIMITS, maxRows: 3 },
+    })
+
+    const { grid } = await delimitedGrid(bytesOf('1\n2\n3\n4\n5\n'), 'csv', limited)
+
+    expect(grid.rows).toBe(3)
+    expect(grid.truncatedRows).toBe(true)
+  })
+
+  it('keeps markup as text', async () => {
+    const { grid } = await delimitedGrid(bytesOf('<img src=x onerror=alert(1)>\n'))
+
+    expect(grid.cells[0]![0]!.text).toBe('<img src=x onerror=alert(1)>')
+  })
+
+  it.each([
+    ['markup', '<b>bold</b>,x\n1,2\n', [['<b>bold</b>', 'x'], ['1', '2']]],
+    ['an ID header, which SheetJS would take for another format', 'ID,name\n1,a\n', [['ID', 'name'], ['1', 'a']]],
+    ['PK, which SheetJS would take for a zip', 'PK,name\n1,a\n', [['PK', 'name'], ['1', 'a']]],
+    ['an empty first cell in a tsv', '\tb\n1\t2\n', [['', 'b'], ['1', '2']]],
+  ])('reads a table that begins with %s as a table', async (_label, text, expected) => {
+    const { grid } = await delimitedGrid(bytesOf(text), text.startsWith('\t') ? 'tsv' : 'csv')
+
+    // A row is sparse where a cell is empty; `Array.from` visits the holes.
+    expect(textsOf(grid).map((row) => Array.from(row, (cell) => cell ?? ''))).toEqual(expected)
+  })
+
+  it('does not make a row of the line break that ends the file, and keeps blank lines inside it', async () => {
+    const { grid } = await delimitedGrid(bytesOf('a\r\n\r\nb\r\n'))
+
+    expect(grid.rows).toBe(3)
+    expect(textsOf(grid).map((row) => row[0])).toEqual(['a', undefined, 'b'])
+  })
+
+  it('refuses a binary file whatever it is called', async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+
+    const failure = await failureOf(engine.open(png, { delimited: 'csv' }))
+
+    expect(failure).toBeInstanceOf(SpreadsheetError)
+    expect((failure as SpreadsheetError).kind).toBe('invalid')
+  })
+
+  it('still takes HTML for what it is when it is not named as delimited text', async () => {
+    const failure = await failureOf(engine.open(bytesOf('<html><table><tr><td>x</td></tr></table></html>')))
+
+    expect(failure).toBeInstanceOf(SpreadsheetError)
+  })
+})

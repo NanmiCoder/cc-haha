@@ -21,7 +21,7 @@ const MAX_FIND_MATCHES = 1_000
 const RESULTS_HL = 'cc-find-results'
 const ACTIVE_HL = 'cc-find-active'
 // Subtrees never searched: sidebar, tab bar, this find bar, non-content tags.
-const SKIP_CLOSEST = '.sidebar-panel, [data-testid="tab-bar"], [data-find-bar], script, style, noscript'
+const SKIP_CLOSEST = '.sidebar-panel, [data-testid="app-header"], [data-find-bar], script, style, noscript'
 const CONVERSATION_AUXILIARY_CANDIDATES = [
   '[data-testid="workbench-panel"]',
   '[data-testid="session-activity-panel"]',

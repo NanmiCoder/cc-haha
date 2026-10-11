@@ -16,7 +16,7 @@ To learn by doing, choose a task from the [practical guides](../cases/index.md).
 ## Three places to know
 
 - **Sidebar** — under the brand seal: New session, Scheduled, Skills Market. Below that, the search bar and your projects and past sessions. Settings sits at the bottom. Drag the edge to resize it.
-- **Tab bar** — sessions side by side, switched like browser tabs. The four buttons on the right are Activity, Open project, Open terminal, and Show/hide workspace.
+- **Top bar** — on the left, the current session's title and status (double-click the title to rename it); on Settings, the market and scheduled tasks, a Back button; on a subagent page, the path back to its session. On the right: the waiting-sessions jump, Activity, Open project, the bottom terminal, and Show/hide workspace. Switch sessions from the sidebar.
 - **Composer toolbar** — left to right: attachments, permission mode, launch location, context usage ring, model and effort, and the run button.
 
 ## What you'll use daily

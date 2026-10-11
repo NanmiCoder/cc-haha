@@ -90,6 +90,7 @@ type ReducerState = {
   runtimeProviderId: string | null | undefined
   runtimeModelId: string | undefined
   effortLevel: string | undefined
+  openAIFastMode: boolean | undefined
   repository: PersistedRepositorySession | undefined
   worktreeSession: PersistedWorktreeSession | null | undefined
   nextOrdinal: number
@@ -269,6 +270,7 @@ function createInitialState(
     runtimeProviderId: undefined,
     runtimeModelId: undefined,
     effortLevel: undefined,
+    openAIFastMode: undefined,
     isTeamWorker: false,
     repository: undefined,
     worktreeSession: undefined,
@@ -566,6 +568,7 @@ function applyEntry(state: ReducerState, entry: ReducerEntry): void {
       state.runtimeModelId = record.runtimeModelId
     }
     state.effortLevel = resolveSessionEffortLevel(record, state.effortLevel)
+    if (typeof record.openAIFastMode === 'boolean') state.openAIFastMode = record.openAIFastMode
   }
 
   if (typeof entry.cwd === 'string' && entry.cwd.trim()) {
@@ -630,6 +633,7 @@ function summaryFromState(state: ReducerState): SessionListSummary {
       : {}),
     ...(state.runtimeModelId ? { runtimeModelId: state.runtimeModelId } : {}),
     ...(state.effortLevel ? { effortLevel: state.effortLevel } : {}),
+    ...(state.openAIFastMode !== undefined ? { openAIFastMode: state.openAIFastMode } : {}),
     ...(state.isTeamWorker ? { isTeamWorker: true } : {}),
     ...(state.repository ? { repository: { ...state.repository } } : {}),
     ...(state.worktreeSession !== undefined

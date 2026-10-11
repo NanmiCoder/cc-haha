@@ -458,6 +458,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
         session.id === id ? { ...session, title } : session,
       ),
     }))
+    // A chat outside the loaded list is named by its tab alone.
+    useTabStore.getState().updateTabTitle(id, title)
   },
 
   updateSessionTitle: (id, title) => {

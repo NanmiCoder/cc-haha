@@ -5,6 +5,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { useChatStore, type PerSessionState } from '../stores/chatStore'
 import { useTabStore } from '../stores/tabStore'
+import { useUIStore } from '../stores/uiStore'
 
 function ShortcutHost() {
   useKeyboardShortcuts()
@@ -41,6 +42,47 @@ function makeIdleSession(overrides: Partial<PerSessionState> = {}): PerSessionSt
     ...overrides,
   }
 }
+
+describe('useKeyboardShortcuts new session', () => {
+  afterEach(() => {
+    cleanup()
+    useTabStore.setState({ tabs: [], activeTabId: null })
+  })
+
+  it('asks for a new session, as the sidebar item that shows ⌘N does', () => {
+    setNavigatorPlatform('MacIntel')
+    const before = useUIStore.getState().newSessionRequest
+    render(<ShortcutHost />)
+
+    const event = new KeyboardEvent('keydown', { key: 'n', metaKey: true, bubbles: true, cancelable: true })
+    document.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(useUIStore.getState().newSessionRequest).toBe(before + 1)
+  })
+
+  it('leaves Ctrl+N alone on macOS, where it moves the caret to the next line', () => {
+    setNavigatorPlatform('MacIntel')
+    const before = useUIStore.getState().newSessionRequest
+    render(<ShortcutHost />)
+
+    const event = new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true, cancelable: true })
+    document.dispatchEvent(event)
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(useUIStore.getState().newSessionRequest).toBe(before)
+  })
+
+  it('uses Ctrl+N elsewhere', () => {
+    setNavigatorPlatform('Win32')
+    const before = useUIStore.getState().newSessionRequest
+    render(<ShortcutHost />)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true, cancelable: true }))
+
+    expect(useUIStore.getState().newSessionRequest).toBe(before + 1)
+  })
+})
 
 describe('useKeyboardShortcuts app zoom', () => {
   beforeEach(() => {

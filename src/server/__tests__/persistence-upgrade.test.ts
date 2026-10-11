@@ -56,6 +56,66 @@ describe('persistent storage upgrade migrations', () => {
     expect(await new SettingsService().getAgentTeamsEnabled()).toBe(false)
   })
 
+  test('upgrades the legacy automatic update preference on read without rewriting shared user settings', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const legacy = {
+      env: { UNKNOWN_ENV: 'preserved' },
+      updateProxy: { mode: 'manual', url: 'http://127.0.0.1:7890' },
+      unknownFuturePreference: { keep: true },
+    }
+    const original = JSON.stringify(legacy)
+    await fs.writeFile(userPath, original)
+    const service = new SettingsService()
+
+    expect(await service.getAutoUpdateEnabled()).toBe(true)
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+    await service.updateUserSettings({ autoUpdateEnabled: false })
+
+    expect(await new SettingsService().getAutoUpdateEnabled()).toBe(false)
+    expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({ ...legacy, autoUpdateEnabled: false })
+    await service.updateUserSettings({ autoUpdateEnabled: true })
+    expect(await new SettingsService().getAutoUpdateEnabled()).toBe(true)
+  })
+
+  test('rejects a non-boolean automatic update choice without changing the settings file', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const original = JSON.stringify({ autoUpdateEnabled: false, unknownFuturePreference: 'keep' })
+    await fs.writeFile(userPath, original)
+
+    await expect(new SettingsService().updateUserSettings({ autoUpdateEnabled: 'false' })).rejects.toThrow('autoUpdateEnabled must be a boolean')
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+  })
+
+  test('旧配置读取为不限，保存并发上限再恢复不限时保留未知设置', async () => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const legacy = {
+      env: { UNKNOWN_ENV: 'preserved' },
+      unknownFuturePreference: { keep: true },
+    }
+    const original = JSON.stringify(legacy)
+    await fs.writeFile(userPath, original)
+    const service = new SettingsService()
+
+    expect(await service.getMaxConcurrentSubagents()).toBeNull()
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+    for (const limit of [3, 1, null]) {
+      await service.updateUserSettings({ maxConcurrentSubagents: limit })
+      expect(await new SettingsService().getMaxConcurrentSubagents()).toBe(limit)
+      expect(JSON.parse(await fs.readFile(userPath, 'utf-8'))).toEqual({ ...legacy, maxConcurrentSubagents: limit })
+    }
+  })
+
+  test.each([0, -1, 1.5, '3', false, Number.MAX_SAFE_INTEGER + 1])('拒绝非法并发上限 %j 且不改写旧设置', async value => {
+    const userPath = path.join(tempDir, 'settings.json')
+    const original = JSON.stringify({ maxConcurrentSubagents: 2, unknownFuturePreference: 'keep' })
+    await fs.writeFile(userPath, original)
+
+    await expect(new SettingsService().updateUserSettings({ maxConcurrentSubagents: value })).rejects.toThrow(
+      'maxConcurrentSubagents must be null or a positive safe integer',
+    )
+    expect(await fs.readFile(userPath, 'utf-8')).toBe(original)
+  })
+
   test('migrates legacy providers index and writes a backup before changing it', async () => {
     const ccHahaDir = path.join(tempDir, 'cc-haha')
     await fs.mkdir(ccHahaDir, { recursive: true })

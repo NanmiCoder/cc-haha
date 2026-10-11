@@ -170,8 +170,11 @@ test('a member whose process died restarts from its own transcript when the lead
     await messageMember(h, 'reader', 'team-lead', 'Check one more file')
     await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'crash to be recorded')
     expect(h.service.hasSession(sessionId)).toBe(false)
-    const crashNotice = (await h.leadNotifications()).find(item => item.type === 'idle_notification' && item.idleReason === 'failed')
-    expect(crashNotice?.failureReason).toContain('restarts it from its saved conversation')
+    // The runtime records `terminated` before it notifies the lead, so wait for the
+    // notice itself rather than reading the mailbox the moment the flag flips.
+    const crashNotice = async () => (await h.leadNotifications()).find(item => item.type === 'idle_notification' && item.idleReason === 'failed')
+    await h.waitFor(async () => (await crashNotice()) !== undefined, 'crash notice to reach the lead')
+    expect((await crashNotice())?.failureReason).toContain('restarts it from its saved conversation')
 
     const before = h.requests.length
     await messageMember(h, 'reader', 'team-lead', 'Please continue')

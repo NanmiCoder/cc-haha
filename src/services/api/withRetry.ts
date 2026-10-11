@@ -132,6 +132,19 @@ export interface RetryContext {
   fastMode?: boolean
 }
 
+/**
+ * API attempts one logical operation may still make, shared by every layer
+ * that re-sends it: stream-open retries, mid-stream re-sends and a caller's own
+ * fallback request. Each layer has its own retry budget, so without a shared
+ * count a failing provider multiplies one large request across nested loops.
+ * Mirrors Claude Code's `compactionApiAttemptsLeft`.
+ */
+export type ApiAttemptBudget = { remaining: number }
+
+export function hasApiAttemptsLeft(budget: ApiAttemptBudget | undefined): boolean {
+  return budget === undefined || budget.remaining > 0
+}
+
 interface RetryOptions {
   maxRetries?: number
   model: string
@@ -140,6 +153,8 @@ interface RetryOptions {
   fastMode?: boolean
   signal?: AbortSignal
   querySource?: QuerySource
+  /** Each attempt takes one; when none are left the last error is final. */
+  apiAttemptBudget?: ApiAttemptBudget
   /**
    * Pre-seed the consecutive 529 counter. Used when this retry loop is a
    * non-streaming fallback after a streaming 529 — the streaming 529 should
@@ -408,6 +423,15 @@ export async function* withRetry<T>(
     if (options.signal?.aborted) {
       throw new APIUserAbortError()
     }
+    if (options.apiAttemptBudget) {
+      if (options.apiAttemptBudget.remaining <= 0) {
+        throw new CannotRetryError(
+          lastError ?? new Error('No API attempts left for this request'),
+          retryContext,
+        )
+      }
+      options.apiAttemptBudget.remaining--
+    }
 
     // Capture whether fast mode is active before this attempt
     // (fallback may change the state mid-loop)
@@ -584,7 +608,10 @@ export async function* withRetry<T>(
       // Only retry if the error indicates we should
       const persistent =
         isPersistentRetryEnabled() && isTransientCapacityError(error)
-      if (attempt > maxRetries && !persistent) {
+      if (
+        (attempt > maxRetries && !persistent) ||
+        !hasApiAttemptsLeft(options.apiAttemptBudget)
+      ) {
         throw new CannotRetryError(error, retryContext)
       }
 

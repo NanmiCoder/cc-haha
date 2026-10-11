@@ -199,6 +199,7 @@ Thanks to the following open-source projects and community practices for referen
 - [Electron](https://github.com/electron/electron): cross-platform desktop app capabilities and engineering practices.
 - [cc-switch](https://github.com/farion1231/cc-switch): reference for model provider configuration.
 - [LINUX DO](https://linux.do/): a new ideal developer community.
+- [AtomGit](https://atomgit.com/NanmiCoder/cc-haha): code hosting for this project in China.
 
 ---
 

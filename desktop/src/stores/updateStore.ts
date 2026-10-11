@@ -65,7 +65,7 @@ function scheduleRelaunchWatchdog(host: DesktopHost) {
     useUpdateStore.setState((state) => ({
       ...state,
       status: 'downloaded',
-      error: 'Restart did not start automatically. Restart the app manually to finish installing the update.',
+      error: 'Restart did not start automatically. Try installing the update again.',
       shouldPrompt: true,
       progressPercent: 100,
     }))
@@ -136,7 +136,7 @@ async function setPendingUpdate(next: DesktopUpdate | null, proxyKey: string | n
 }
 
 function shouldPromptForVersion(version: string | null) {
-  return !!version && readDismissedUpdateVersion() !== version
+  return useSettingsStore.getState().autoUpdateEnabled && !!version && readDismissedUpdateVersion() !== version
 }
 
 function getErrorMessage(error: unknown) {
@@ -194,7 +194,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   shouldPrompt: false,
 
   initialize: async () => {
-    if (!getUpdateHost()) return
+    if (!getUpdateHost() || !useSettingsStore.getState().autoUpdateEnabled) return
     if (!startupCheckPromise) {
       startupCheckPromise = (async () => {
         await new Promise((resolve) => setTimeout(resolve, 5000))
@@ -210,6 +210,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   checkForUpdates: async ({ silent = false, autoDownload = true } = {}) => {
     const host = getUpdateHost()
     if (!host) return null
+    if (silent && !useSettingsStore.getState().autoUpdateEnabled) return null
     if (downloadPromise && get().status === 'downloading' && pendingUpdate) return pendingUpdate
     clearRelaunchWatchdog()
 
@@ -281,7 +282,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
         shouldPrompt: false,
       }))
 
-      if (autoDownload && (shouldOffer || !silent)) {
+      if (autoDownload && useSettingsStore.getState().autoUpdateEnabled && (shouldOffer || !silent)) {
         void get().downloadUpdate().catch(() => {
           // The store records the failure and keeps the manual install path retryable.
         })

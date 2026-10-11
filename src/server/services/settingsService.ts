@@ -104,6 +104,21 @@ export class SettingsService {
     return this.readJsonFile(this.getUserSettingsPath())
   }
 
+  /** Read-time upgrade for settings written before the desktop update toggle.
+   * Do not rewrite the user-owned file until an explicit preference is saved.
+   */
+  async getAutoUpdateEnabled(settings?: Record<string, unknown>): Promise<boolean> {
+    const user = settings ?? await this.getUserSettings()
+    return user.autoUpdateEnabled !== false
+  }
+
+  /** 旧设置缺少并发上限时按不限读取，不自动改写用户文件。 */
+  async getMaxConcurrentSubagents(settings?: Record<string, unknown>): Promise<number | null> {
+    const user = settings ?? await this.getUserSettings()
+    const value = user.maxConcurrentSubagents
+    return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
+  }
+
   /** Read-time upgrade for older settings that only stored the team env flag.
    * Keep the original file intact until the user explicitly saves a choice.
    */
@@ -189,8 +204,17 @@ export class SettingsService {
 
   /** 更新用户级设置（顶层浅合并，并保留桌面终端的未知子字段） */
   async updateUserSettings(settings: Record<string, unknown>): Promise<void> {
+    if (Object.hasOwn(settings, 'autoUpdateEnabled') && typeof settings.autoUpdateEnabled !== 'boolean') {
+      throw ApiError.badRequest('autoUpdateEnabled must be a boolean')
+    }
     if (Object.hasOwn(settings, 'agentTeamsEnabled') && typeof settings.agentTeamsEnabled !== 'boolean') {
       throw ApiError.badRequest('agentTeamsEnabled must be a boolean')
+    }
+    if (Object.hasOwn(settings, 'maxConcurrentSubagents')) {
+      const value = settings.maxConcurrentSubagents
+      if (value !== null && !(typeof value === 'number' && Number.isSafeInteger(value) && value > 0)) {
+        throw ApiError.badRequest('maxConcurrentSubagents must be null or a positive safe integer')
+      }
     }
     const filePath = this.getUserSettingsPath()
     await this.withWriteLock(filePath, async () => {

@@ -5,6 +5,7 @@ import { modelsApi } from '../api/models'
 import { h5AccessApi } from '../api/h5Access'
 import { tracesApi } from '../api/traces'
 import {
+  isMaxConcurrentSubagents,
   type AppMode,
   type AppModeConfig,
   type ChatSendBehavior,
@@ -67,6 +68,7 @@ type SettingsStore = {
   thinkingEnabled: boolean
   workflowKeywordTriggerEnabled: boolean
   agentTeamsEnabled: boolean
+  maxConcurrentSubagents: number | null
   autoDreamEnabled: boolean
   autoQuestion: AutoQuestionSettings
   autoModeOptInAccepted: boolean
@@ -89,6 +91,7 @@ type SettingsStore = {
   desktopTerminal: DesktopTerminalSettings
   webSearch: WebSearchSettings
   updateProxy: UpdateProxySettings
+  autoUpdateEnabled: boolean
   network: NetworkSettings
   /** null = never configured; the UI falls back to DEFAULT_CLEANUP_PERIOD_DAYS. */
   cleanupPeriodDays: number | null
@@ -113,6 +116,7 @@ type SettingsStore = {
   setThinkingEnabled: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
+  setMaxConcurrentSubagents: (value: number | null) => Promise<void>
   setAutoDreamEnabled: (enabled: boolean) => Promise<void>
   setAutoQuestion: (settings: AutoQuestionSettings) => Promise<void>
   acceptAutoModeOptIn: () => Promise<void>
@@ -126,6 +130,7 @@ type SettingsStore = {
   setDesktopTerminal: (settings: DesktopTerminalSettings) => Promise<void>
   setWebSearch: (settings: WebSearchSettings) => Promise<void>
   setUpdateProxy: (settings: UpdateProxySettings) => Promise<void>
+  setAutoUpdateEnabled: (enabled: boolean) => Promise<void>
   setNetwork: (settings: NetworkSettings) => Promise<void>
   setCleanupPeriodDays: (days: number) => Promise<void>
   setTraceCaptureEnabled: (enabled: boolean) => Promise<void>
@@ -170,6 +175,10 @@ const DEFAULT_UPDATE_PROXY_SETTINGS: UpdateProxySettings = {
   mode: 'system',
   url: '',
 }
+let autoUpdateSaveQueue: Promise<void> = Promise.resolve()
+let autoUpdateSaveVersion = 0
+let autoUpdatePendingSaves = 0
+let lastPersistedAutoUpdateEnabled = true
 
 // Keep milliseconds within the signed 32-bit timer limit, matching the server.
 export const NETWORK_TIMEOUT_MAX_SECONDS = Math.floor(2_147_483_647 / 1000)
@@ -208,6 +217,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   thinkingEnabled: true,
   workflowKeywordTriggerEnabled: true,
   agentTeamsEnabled: true,
+  maxConcurrentSubagents: null,
   autoDreamEnabled: false,
   autoQuestion: DEFAULT_AUTO_QUESTION_SETTINGS,
   autoModeOptInAccepted: false,
@@ -226,6 +236,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   desktopTerminal: DEFAULT_DESKTOP_TERMINAL_SETTINGS,
   webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
+  autoUpdateEnabled: true,
   network: DEFAULT_NETWORK_SETTINGS,
   cleanupPeriodDays: null,
   traceCapture: DEFAULT_TRACE_CAPTURE_SETTINGS,
@@ -252,6 +263,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   fetchAll: async () => {
+    const autoUpdateVersionAtStart = autoUpdateSaveVersion
+    const autoUpdateSavePendingAtStart = autoUpdatePendingSaves > 0
     set({ isLoading: true, error: null })
     try {
       const previousH5Access = get().h5Access
@@ -274,6 +287,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       ])
       const desktopTerminal = normalizeDesktopTerminalSettings(userSettings.desktopTerminal)
       lastPersistedDesktopTerminal = desktopTerminal
+      // Read-time upgrade: existing settings keep automatic checks enabled
+      // until the user explicitly saves the new preference.
+      const hydrateAutoUpdate = !autoUpdateSavePendingAtStart && autoUpdatePendingSaves === 0 &&
+        autoUpdateVersionAtStart === autoUpdateSaveVersion
+      if (hydrateAutoUpdate) lastPersistedAutoUpdateEnabled = userSettings.autoUpdateEnabled !== false
       // Nothing to do for the theme here: uiStore already applied it at
       // startup, and re-applying would re-persist and re-report it on every
       // provider switch.
@@ -287,6 +305,10 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
         agentTeamsEnabled: userSettings.agentTeamsEnabled !== false,
+        // 读取时升级：旧设置或非法值归一为不限，不改写用户 JSON。
+        maxConcurrentSubagents: isMaxConcurrentSubagents(userSettings.maxConcurrentSubagents)
+          ? userSettings.maxConcurrentSubagents
+          : null,
         autoDreamEnabled: userSettings.autoDreamEnabled === true,
         autoQuestion: normalizeAutoQuestionSettings(userSettings.autoQuestion),
         autoModeOptInAccepted: userSettings.skipAutoPermissionPrompt === true,
@@ -297,6 +319,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         desktopTerminal,
         webSearch: normalizeWebSearchSettings(userSettings.webSearch),
         updateProxy: normalizeUpdateProxySettings(userSettings.updateProxy),
+        autoUpdateEnabled: hydrateAutoUpdate ? lastPersistedAutoUpdateEnabled : get().autoUpdateEnabled,
         network: normalizeNetworkSettings(userSettings.network),
         cleanupPeriodDays: normalizeCleanupPeriodDays(userSettings.cleanupPeriodDays),
         traceCapture,
@@ -379,6 +402,20 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       await settingsApi.updateUser({ agentTeamsEnabled: enabled })
     } catch (error) {
       set({ agentTeamsEnabled: prev })
+      throw error
+    }
+  },
+
+  setMaxConcurrentSubagents: async (value) => {
+    if (!isMaxConcurrentSubagents(value)) {
+      throw new Error('SubAgent concurrency limit must be a positive safe integer or null')
+    }
+    const previous = get().maxConcurrentSubagents
+    set({ maxConcurrentSubagents: value })
+    try {
+      await settingsApi.updateUser({ maxConcurrentSubagents: value })
+    } catch (error) {
+      set({ maxConcurrentSubagents: previous })
       throw error
     }
   },
@@ -569,6 +606,31 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     } catch (error) {
       set({ updateProxy: prev })
       throw error
+    }
+  },
+
+  setAutoUpdateEnabled: async (enabled) => {
+    const saveVersion = ++autoUpdateSaveVersion
+    autoUpdatePendingSaves += 1
+    set({ autoUpdateEnabled: enabled })
+    const save = autoUpdateSaveQueue
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          await settingsApi.updateUser({ autoUpdateEnabled: enabled })
+          lastPersistedAutoUpdateEnabled = enabled
+        } catch (error) {
+          if (saveVersion === autoUpdateSaveVersion) {
+            set({ autoUpdateEnabled: lastPersistedAutoUpdateEnabled })
+          }
+          throw error
+        }
+      })
+    autoUpdateSaveQueue = save
+    try {
+      await save
+    } finally {
+      autoUpdatePendingSaves -= 1
     }
   },
 

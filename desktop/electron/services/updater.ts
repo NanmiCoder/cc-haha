@@ -9,6 +9,7 @@ export type ElectronUpdateInfo = {
 }
 
 export type ElectronUpdateCheckResult = {
+  isUpdateAvailable?: boolean
   updateInfo?: ElectronUpdateInfo
 } | null
 
@@ -18,6 +19,7 @@ export type ElectronUpdateCheckOptions = {
 
 export type ElectronUpdaterLike = {
   autoDownload: boolean
+  autoInstallOnAppQuit: boolean
   disableDifferentialDownload?: boolean
   logger?: unknown
   checkForUpdates(): Promise<ElectronUpdateCheckResult>
@@ -93,6 +95,7 @@ export class ElectronUpdaterService {
   private readonly updateConfigPath?: string
   private pendingUpdate: ElectronUpdateMetadata | null = null
   private downloaded = false
+  private installRequested = false
   private proxyKey: string | null = null
 
   constructor(
@@ -104,6 +107,10 @@ export class ElectronUpdaterService {
     this.proxyController = proxyController
     this.updateConfigPath = runtimeOptions.updateConfigPath
     this.updater.autoDownload = false
+    // Background downloads must stay pending after "Later", normal quits,
+    // and app-mode restarts. On macOS this also keeps the ZIP out of Squirrel
+    // until the user explicitly requests quitAndInstall.
+    this.updater.autoInstallOnAppQuit = false
     // Differential download issues many small sequential range requests and is
     // RTT-bound against the GitHub CDN, so it downloads far below line speed.
     this.updater.disableDifferentialDownload = true
@@ -122,6 +129,7 @@ export class ElectronUpdaterService {
   }
 
   async checkForUpdates(options?: ElectronUpdateCheckOptions): Promise<ElectronUpdateMetadata | null> {
+    this.installRequested = false
     let result: ElectronUpdateCheckResult
     try {
       await this.applyProxy(options)
@@ -134,7 +142,7 @@ export class ElectronUpdaterService {
       if (!isMissingUpdateMetadataError(error)) throw error
       result = null
     }
-    this.pendingUpdate = normalizeUpdateInfo(result?.updateInfo)
+    this.pendingUpdate = result?.isUpdateAvailable === false ? null : normalizeUpdateInfo(result?.updateInfo)
     this.downloaded = false
     return this.pendingUpdate
   }
@@ -177,8 +185,9 @@ export class ElectronUpdaterService {
   }
 
   cancelInstall() {
-    this.pendingUpdate = null
-    this.downloaded = false
+    // The renderer retains the downloaded update on an install/relaunch
+    // failure. Revoke the install request, but keep the download retryable.
+    this.installRequested = false
   }
 
   stageDownloadedUpdate() {
@@ -188,14 +197,21 @@ export class ElectronUpdaterService {
     if (!this.downloaded) {
       throw new Error('Electron update has not finished downloading')
     }
+    this.installRequested = true
   }
 
   hasDownloadedUpdate(): boolean {
     return !!this.pendingUpdate && this.downloaded
   }
 
+  hasStagedUpdate(): boolean {
+    return this.hasDownloadedUpdate() && this.installRequested
+  }
+
   quitAndInstallDownloadedUpdate(env: NodeJS.ProcessEnv = process.env) {
-    this.stageDownloadedUpdate()
+    if (!this.hasStagedUpdate()) {
+      throw new Error('Electron update installation has not been requested')
+    }
     // The NSIS installer spawned here inherits this process's environment.
     // Hand it the same clean environment a manually launched setup gets, so
     // its legacy-data checks read the persisted app-mode.json instead of a

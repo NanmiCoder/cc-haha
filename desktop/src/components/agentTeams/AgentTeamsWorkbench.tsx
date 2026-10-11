@@ -321,9 +321,12 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
       aria-label={t('agentTeams.title')}
       className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[var(--color-surface)] text-[var(--color-text-primary)]"
     >
-      <header className="shrink-0 overflow-x-auto border-b border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
-        <div className="flex min-w-[1180px] items-center gap-5 px-[18px] py-2.5">
-          <div className="min-w-[260px]">
+      {/* A narrow pane wraps the controls onto a row of their own instead of
+          scrolling the header sideways; the team block and counters stay on
+          the first row. Nothing in a control wraps, only hint text truncates. */}
+      <header className="shrink-0 border-b border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5 px-[18px] py-2.5">
+          <div className="min-w-0 max-w-full">
             <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
               Agent Teams · {t('agentTeams.sharedTaskList')}
             </div>
@@ -340,7 +343,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-[18px] border-x border-[var(--color-border)] px-[18px]">
+          <div className="flex shrink-0 items-center gap-[18px] border-l border-[var(--color-border)] pl-[18px]">
             <div className="min-w-[74px]">
               <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
                 {t('agentTeams.stats.phase')}
@@ -359,7 +362,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
           </div>
 
           {followingLive ? (
-            <div data-testid="agent-teams-live-controls" className="flex min-w-0 flex-1 items-center gap-3.5">
+            <div data-testid="agent-teams-live-controls" className="flex min-w-0 flex-[1_1_480px] items-center gap-3.5">
               <div className="flex shrink-0 items-center gap-1.5 rounded-full bg-[var(--color-info-container)] px-2.5 py-1">
                 <span className="agent-teams-live-dot h-1.5 w-1.5 rounded-full bg-[var(--color-info)]" aria-hidden="true" />
                 <span className="whitespace-nowrap text-xs font-medium text-[var(--color-on-info-container)]">
@@ -369,7 +372,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
               <span className="min-w-0 flex-1 truncate text-xs text-[var(--color-text-secondary)]">
                 {liveHint}
               </span>
-              <Button variant="secondary" size="sm" onClick={enterReplay}>
+              <Button variant="secondary" size="sm" className="shrink-0 whitespace-nowrap" onClick={enterReplay}>
                 {t('agentTeams.reviewHistory')}
               </Button>
               <div className="shrink-0 border-l border-[var(--color-border)] pl-3.5">
@@ -380,11 +383,11 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
               </div>
             </div>
           ) : (
-            <div data-testid="agent-teams-replay-controls" className="flex min-w-0 flex-1 items-center gap-3.5">
+            <div data-testid="agent-teams-replay-controls" className="flex min-w-0 flex-[1_1_560px] flex-wrap items-center gap-x-3.5 gap-y-2">
               <Button
                 variant="primary"
                 size="base"
-                className="w-[86px]"
+                className="w-[86px] shrink-0 whitespace-nowrap"
                 icon={playing ? <Pause size={13} aria-hidden="true" /> : <Play size={13} aria-hidden="true" />}
                 onClick={togglePlayback}
               >
@@ -419,10 +422,10 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                   )
                 })}
               </div>
-              <div className="min-w-[200px] flex-1">
-                <div className="mb-1 flex justify-between text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-                  <span>{t('agentTeams.replay.timeline')}</span>
-                  <span className="font-mono tabular-nums">
+              <div className="min-w-[180px] flex-1">
+                <div className="mb-1 flex justify-between gap-2 text-[11px] font-semibold text-[var(--color-text-tertiary)]">
+                  <span className="min-w-0 truncate">{t('agentTeams.replay.timeline')}</span>
+                  <span className="shrink-0 whitespace-nowrap font-mono tabular-nums">
                     {formatDuration(cursorTime - startTime)} / {formatDuration(totalElapsed)}
                   </span>
                 </div>
@@ -472,6 +475,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
                 <Button
                   variant="secondary"
                   size="sm"
+                  className="shrink-0 whitespace-nowrap"
                   icon={<Radio size={12} aria-hidden="true" />}
                   onClick={returnToLive}
                 >

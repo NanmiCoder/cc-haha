@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
 import { useTabStore } from '../stores/tabStore'
 import { useUIStore } from '../stores/uiStore'
@@ -9,10 +8,9 @@ import {
 } from '../lib/appZoom'
 import { useSettingsStore } from '../stores/settingsStore'
 import { hasRunningSubagentTasks } from '../lib/backgroundTasks'
+import { detectPlatform } from '../lib/workspace/shortcuts'
 
 export function useKeyboardShortcuts() {
-  const setActiveSession = useSessionStore((s) => s.setActiveSession)
-  const setActiveView = useUIStore((s) => s.setActiveView)
   const openModal = useUIStore((s) => s.openModal)
   const closeModal = useUIStore((s) => s.closeModal)
   const activeModal = useUIStore((s) => s.activeModal)
@@ -50,11 +48,12 @@ export function useKeyboardShortcuts() {
 
       const meta = e.metaKey || e.ctrlKey
 
-      // Cmd+N — New session
-      if (meta && e.key === 'n') {
+      // Cmd+N — what the sidebar's "New session" item does (it shows ⌘N).
+      // Cmd only on macOS: Ctrl+N is "next line" in a macOS text field.
+      const newSessionChord = detectPlatform() === 'mac' ? e.metaKey && !e.ctrlKey : e.ctrlKey
+      if (newSessionChord && e.key === 'n' && !e.shiftKey && !e.altKey) {
         e.preventDefault()
-        setActiveSession(null)
-        setActiveView('code')
+        useUIStore.getState().requestNewSession()
       }
 
       // Cmd+K — Open global session search
@@ -87,5 +86,5 @@ export function useKeyboardShortcuts() {
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [closeModal, openModal, setActiveSession, setActiveView, setUiZoom, stopGeneration])
+  }, [closeModal, openModal, setUiZoom, stopGeneration])
 }

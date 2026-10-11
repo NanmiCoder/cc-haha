@@ -479,6 +479,26 @@ describe('PermissionModeSelector', () => {
     expect(onChange).toHaveBeenCalledWith('acceptEdits')
   })
 
+  it('opens the desktop menu from the trigger start edge by default', () => {
+    render(<PermissionModeSelector value="default" onChange={vi.fn()} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+
+    const menu = screen.getByRole('menu')
+    expect(menu).toHaveClass('left-0')
+    expect(menu).not.toHaveClass('right-0')
+  })
+
+  it('anchors the desktop menu to the trigger end edge when asked to align right', () => {
+    render(<PermissionModeSelector value="default" onChange={vi.fn()} menuAlign="right" />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+
+    const menu = screen.getByRole('menu')
+    expect(menu).toHaveClass('right-0')
+    expect(menu).not.toHaveClass('left-0')
+  })
+
   it('shows Auto beside the existing permission modes', () => {
     render(<PermissionModeSelector value="default" onChange={vi.fn()} />)
 

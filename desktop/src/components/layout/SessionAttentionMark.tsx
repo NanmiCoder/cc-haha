@@ -1,8 +1,8 @@
 import { CircleAlert } from 'lucide-react'
 
 /**
- * "This session is waiting for you". The tab strip and both sidebar views draw
- * it through this one component, so `sessionNeedsAttention` keeping them in step
+ * "This session is waiting for you". The window header and both sidebar views
+ * draw it through this one component, so `sessionNeedsAttention` keeping them in step
  * in state is matched by them staying in step in pixels.
  *
  * A glyph, not a coloured dot. A session parked on a permission card is still

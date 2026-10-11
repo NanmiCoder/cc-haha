@@ -573,7 +573,7 @@ function assertCursorResourcesContained(helperApp: string, directory: string) {
     const target = pending.pop()!
     const canonical = realpathSync(target)
     const withinApp = relative(app, canonical)
-    if (isAbsolute(withinApp) || withinApp === '..' || withinApp.startsWith('../')) {
+    if (isAbsolute(withinApp) || withinApp === '..' || normalizePath(withinApp).startsWith('../')) {
       throw new Error(`cursor resource escapes the helper app: ${target}`)
     }
     if (visited.has(canonical)) continue
@@ -1049,7 +1049,7 @@ function inspectMacosArtifacts(rootDir: string, report: PackageSmokeReport, opti
   }
 }
 
-function inspectWindowsArtifacts(rootDir: string, report: PackageSmokeReport) {
+function inspectWindowsArtifacts(rootDir: string, report: PackageSmokeReport, options: InspectOptions) {
   const installers = findMatches(report.artifactsDir, (candidate) => {
     const normalized = normalizePath(candidate)
     return normalized.endsWith('.exe') && !isInsideWindowsUnpackedDir(normalized)
@@ -1079,6 +1079,34 @@ function inspectWindowsArtifacts(rootDir: string, report: PackageSmokeReport) {
 
   if (unpackedDir) {
     const resourcesDir = join(unpackedDir, 'resources')
+    const executable = join(unpackedDir, `${report.productName}.exe`)
+    const shellIcon = join(resourcesDir, 'app-icon.ico')
+    const iconRecord = { label: 'Windows application and taskbar icons', path: toRelative(rootDir, executable) }
+    let iconProbeRoot: string | undefined
+    try {
+      const expectedIconPath = join(rootDir, 'desktop', 'src-tauri', 'icons', 'icon.ico')
+      const expectedIcon = readFileSync(expectedIconPath)
+      if (!readFileSync(shellIcon).equals(expectedIcon)) throw new Error('The taskbar ICO differs from the application ICO')
+      if (!existsSync(executable)) throw new Error('The Windows app executable is missing')
+      // Desktop packaging installs the builder's PE parser; the root-only
+      // policy lane must not import desktop dependencies while checking Linux.
+      iconProbeRoot = mkdtempSync(join(tmpdir(), 'cc-haha-windows-icon-'))
+      const result = (options.commandRunner ?? defaultCommandRunner)('bun', [
+        'run', join(rootDir, 'desktop', 'scripts', 'assert-windows-icon.ts'), executable, expectedIconPath,
+      ], {
+        cwd: rootDir,
+        env: createSandboxedTestEnvironment(iconProbeRoot, undefined, process.env),
+        timeout: 30_000,
+        maxBuffer: 1024 * 1024,
+      })
+      if (result.status !== 0) throw new Error(firstDiagnosticLine(result.stderr ?? '') ?? 'The Windows executable icon inspection failed')
+      report.passedChecks.push(iconRecord)
+    } catch (error) {
+      report.missingChecks.push(iconRecord)
+      report.notes.push(`Windows icon inspection failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      if (iconProbeRoot) rmSync(iconProbeRoot, { recursive: true, force: true })
+    }
     const unpackedResourcesDir = join(resourcesDir, 'app.asar.unpacked')
     const nodePtyDir = join(unpackedResourcesDir, 'node_modules', 'node-pty')
     const sidecarDir = join(unpackedResourcesDir, 'src-tauri', 'binaries')
@@ -1298,7 +1326,7 @@ export async function inspectPackagedArtifacts(rootDir: string, options: Inspect
   if (options.platform === 'macos') {
     inspectMacosArtifacts(resolvedRootDir, report, options)
   } else if (options.platform === 'windows') {
-    inspectWindowsArtifacts(resolvedRootDir, report)
+    inspectWindowsArtifacts(resolvedRootDir, report, options)
   } else {
     inspectLinuxArtifacts(resolvedRootDir, report)
   }

@@ -37,6 +37,11 @@ const originalLowerHttpsProxy = process.env.https_proxy
 const isWindows = process.platform === 'win32'
 const unixOnly = isWindows ? it.skip : it
 
+// The fake CLIs below follow the stream-json turn protocol the scheduler uses:
+// it keeps stdin open as a control stream until the terminal `result`, then
+// closes it. So a fake answers after the first input line and only then waits
+// for EOF; draining stdin first would deadlock until the task timeout.
+
 async function createTmpDir(): Promise<string> {
   const dir = path.join(
     os.tmpdir(),
@@ -176,8 +181,9 @@ describe('cron scheduler launcher resolution', () => {
       sidecarPath,
       [
         '#!/bin/sh',
-        '/bin/cat >/dev/null',
+        'IFS= read -r turn',
         'printf \'%s\\n\' \'{"type":"result","result":"timeout env ok"}\'',
+        '/bin/cat >/dev/null',
         'exit 0',
         '',
       ].join('\n'),
@@ -306,8 +312,9 @@ describe('cron scheduler launcher resolution', () => {
       [
         '#!/bin/sh',
         `printf '%s\\n' "$@" > "${sidecarArgsPath}"`,
-        '/bin/cat >/dev/null',
+        'IFS= read -r turn',
         'printf \'%s\\n\' \'{"type":"result","result":"sidecar ok"}\'',
+        '/bin/cat >/dev/null',
         'exit 0',
         '',
       ].join('\n'),
@@ -365,8 +372,9 @@ describe('cron scheduler launcher resolution', () => {
         '#!/bin/sh',
         `printf '%s\\n' "$@" > "${sidecarArgsPath}"`,
         `env | sort > "${sidecarEnvPath}"`,
-        '/bin/cat >/dev/null',
+        'IFS= read -r turn',
         'printf \'%s\\n\' \'{"type":"result","result":"provider ok"}\'',
+        '/bin/cat >/dev/null',
         'exit 0',
         '',
       ].join('\n'),
@@ -451,8 +459,9 @@ describe('cron scheduler launcher resolution', () => {
       [
         '#!/bin/sh',
         `env | sort > "${sidecarEnvPath}"`,
-        '/bin/cat >/dev/null',
+        'IFS= read -r turn',
         'printf \'%s\\n\' \'{"type":"result","result":"network env ok"}\'',
+        '/bin/cat >/dev/null',
         'exit 0',
         '',
       ].join('\n'),
@@ -531,8 +540,9 @@ describe('cron scheduler launcher resolution', () => {
     await fs.writeFile(sidecarPath, [
       '#!/bin/sh',
       `printf '%s\\n' "$CC_HAHA_AGENT_TEAMS_DEFAULT" "\${CC_HAHA_AGENT_TEAMS_ENABLED-unset}" "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" > "${teamEnvPath}"`,
-      '/bin/cat >/dev/null',
+      'IFS= read -r turn',
       'printf \'%s\\n\' \'{"type":"result","result":"team env ok"}\'',
+      '/bin/cat >/dev/null',
       '',
     ].join('\n'))
     await fs.chmod(sidecarPath, 0o755)
@@ -585,8 +595,9 @@ describe('cron scheduler launcher resolution', () => {
       [
         '#!/bin/sh',
         `printf '%s\\n' "$@" > "${sidecarArgsPath}"`,
-        '/bin/cat >/dev/null',
+        'IFS= read -r turn',
         'printf \'%s\\n\' \'{"type":"result","result":"permissions ok"}\'',
+        '/bin/cat >/dev/null',
         'exit 0',
         '',
       ].join('\n'),
@@ -691,8 +702,9 @@ describe('cron scheduler launcher resolution', () => {
       [
         '#!/bin/sh',
         `env | sort > "${sidecarEnvPath}"`,
-        '/bin/cat >/dev/null',
+        'IFS= read -r turn',
         'printf \'%s\\n\' \'{"type":"result","result":"shell env ok"}\'',
+        '/bin/cat >/dev/null',
         'exit 0',
         '',
       ].join('\n'),

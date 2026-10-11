@@ -58,6 +58,7 @@ import { subagentsApi } from '../api/subagents'
 import { createDefaultSessionState, useChatStore } from '../stores/chatStore'
 import { useActivityPanelStore } from '../stores/activityPanelStore'
 import { SUBAGENT_TAB_PREFIX, useTabStore } from '../stores/tabStore'
+import { returnFromDetailTab } from '../lib/tabNavigation'
 import { memberSessionId, useTeamStore } from '../stores/teamStore'
 import { useWorkflowStore } from '../stores/workflowStore'
 import { SubagentRunPage, TeamMemberRunPage } from './SubagentRunPage'
@@ -191,7 +192,7 @@ describe('SubagentRunPage', () => {
     expect(screen.getByText('Previously readable answer')).toBeInTheDocument()
   })
 
-  it('returns to the parent session and closes its own tab via the back button', async () => {
+  it('leaves Back to the window header, which returns to the parent session and carries the activity panel', async () => {
     vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun())
     useTabStore.getState().openTab('session-1', 'Parent session')
     const tabId = useTabStore.getState().openSubagentTab('session-1', 'tool-1', 'Kuhn')
@@ -199,7 +200,10 @@ describe('SubagentRunPage', () => {
 
     render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" taskId="agent-1" title="Kuhn" />)
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Back to parent session' }))
+    await screen.findByTestId('subagent-conversation')
+    // The header's breadcrumb is the way back; a second one here said the same thing twice.
+    expect(screen.queryByRole('button', { name: 'Back to parent session' })).not.toBeInTheDocument()
+    act(() => returnFromDetailTab(tabId))
 
     expect(useTabStore.getState().activeTabId).toBe('session-1')
     expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['session-1'])
@@ -220,7 +224,7 @@ describe('SubagentRunPage', () => {
       />,
     )
 
-    expect(await screen.findByText('survey response.js')).toBeInTheDocument()
+    await screen.findByTestId('subagent-conversation')
     expect(subagentsApi.getRunByAgent).toHaveBeenCalledWith('session-1', 'wfagent1')
     expect(subagentsApi.getRunByTool).not.toHaveBeenCalled()
     expectSharedSessionSurface('subagent')
@@ -415,8 +419,8 @@ describe('SubagentRunPage', () => {
       />,
     )
 
-    const titleRow = (await screen.findByRole('heading', { name: 'Workflow reviewer' })).parentElement!
-    expect(within(titleRow).getByText('Running')).toBeInTheDocument()
+    await screen.findByTestId('subagent-conversation')
+    expect(within(screen.getByTestId('session-header-meta')).getByText('Running')).toBeInTheDocument()
     expect(
       useChatStore.getState().sessions['__subagent__session-1__agent:abc123']?.chatState,
     ).toBe('thinking')
@@ -437,7 +441,7 @@ describe('SubagentRunPage', () => {
       })
     })
 
-    await waitFor(() => expect(within(titleRow).getByText('Completed')).toBeInTheDocument())
+    await waitFor(() => expect(within(screen.getByTestId('session-header-meta')).getByText('Completed')).toBeInTheDocument())
     expect(
       useChatStore.getState().sessions['__subagent__session-1__agent:abc123']?.chatState,
     ).toBe('idle')
@@ -450,7 +454,10 @@ describe('SubagentRunPage', () => {
 
     render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" taskId="agent-1" title="Kuhn" />)
 
-    expect(await screen.findByText('Kuhn')).toBeInTheDocument()
+    await screen.findByTestId('subagent-conversation')
+    // The window header's breadcrumb names the run; the page does not repeat it.
+    expect(within(screen.getByTestId('session-header')).queryByText('Kuhn')).not.toBeInTheDocument()
+    expect(within(screen.getByTestId('session-header')).queryByRole('heading')).toBeNull()
     expect(subagentsApi.getRunByTool).toHaveBeenCalledWith('session-1', 'tool-1', 'agent-1')
     expect(screen.getByText('Agent: abc123')).toBeInTheDocument()
     expect(screen.getAllByText('Explore repo').length).toBeGreaterThan(0)
@@ -465,6 +472,17 @@ describe('SubagentRunPage', () => {
     expect(transcript).toHaveTextContent('Finding')
     expect(transcript).not.toHaveTextContent('assistant_text')
     expectSharedSessionSurface('subagent')
+  })
+
+  it('does not repeat the run description when it is the name the run is shown under', async () => {
+    vi.mocked(subagentsApi.getRunByTool).mockResolvedValue(subagentRun())
+
+    render(<SubagentRunPage sourceSessionId="session-1" toolUseId="tool-1" taskId="agent-1" title="Explore repo" />)
+
+    await screen.findByTestId('subagent-conversation')
+    const header = screen.getByTestId('session-header')
+    expect(within(header).getByText('Agent: abc123')).toBeInTheDocument()
+    expect(within(header).queryByText('Explore repo')).not.toBeInTheDocument()
   })
 
   it('shows the model the newest transcript turn answered on, not an earlier one', async () => {
@@ -1445,7 +1463,8 @@ describe('SubagentRunPage', () => {
     })
 
     useActivityPanelStore.getState().open(tabId)
-    fireEvent.click(screen.getByRole('button', { name: 'Back to team overview' }))
+    expect(screen.queryByRole('button', { name: 'Back to team overview' })).not.toBeInTheDocument()
+    act(() => returnFromDetailTab(tabId))
     expect(useTabStore.getState().activeTabId).toBe(workbenchTabId)
     expect(useTabStore.getState().tabs.some((tab) => tab.sessionId === tabId)).toBe(false)
     expect(useActivityPanelStore.getState().openSessionId).toBe('lead-session')

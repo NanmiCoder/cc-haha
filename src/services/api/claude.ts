@@ -287,6 +287,7 @@ import {
 import { recordPromptSnapshot } from "./promptSnapshot.js";
 import { withStreamRetry } from "./streamRetry.js";
 import {
+  type ApiAttemptBudget,
   CannotRetryError,
   FallbackTriggeredError,
   getStreamRetryKind,
@@ -795,6 +796,8 @@ export type Options = {
   // so the model can pace itself. `remaining` is computed by the caller
   // (query.ts decrements across the agentic loop).
   taskBudget?: { total: number; remaining?: number };
+  /** Shared across every retry layer of this request (see ApiAttemptBudget). */
+  apiAttemptBudget?: ApiAttemptBudget;
 };
 
 export async function queryModelWithoutStreaming({
@@ -830,7 +833,7 @@ export async function queryModelWithoutStreaming({
         ),
       options.model,
       messages,
-      { signal },
+      { signal, apiAttemptBudget: options.apiAttemptBudget },
     );
   })) {
     if (message.type === "assistant") {
@@ -881,7 +884,7 @@ export async function* queryModelWithStreaming({
         ),
       options.model,
       messages,
-      { signal },
+      { signal, apiAttemptBudget: options.apiAttemptBudget },
     );
   });
 }
@@ -938,6 +941,7 @@ export async function* executeNonStreamingRequest(
     signal: AbortSignal;
     initialConsecutive529Errors?: number;
     querySource?: QuerySource;
+    apiAttemptBudget?: ApiAttemptBudget;
   },
   paramsFromContext: (context: RetryContext) => BetaMessageStreamParams,
   onAttempt: (attempt: number, start: number, maxOutputTokens: number) => void,
@@ -1014,6 +1018,7 @@ export async function* executeNonStreamingRequest(
       signal: retryOptions.signal,
       initialConsecutive529Errors: retryOptions.initialConsecutive529Errors,
       querySource: retryOptions.querySource,
+      apiAttemptBudget: retryOptions.apiAttemptBudget,
     },
   );
 
@@ -2003,6 +2008,11 @@ async function* queryModel(
   let costUSD = 0;
   let hasStreamingUsage = false;
   let stopReason: BetaStopReason | null = null;
+  // True while the last content-bearing event was a message_delta carrying a
+  // stop_reason. Gateways that omit the blank line after their final SSE event
+  // lose message_stop inside the SDK decoder (#1481); like the official CLI, a
+  // reply whose stop_reason was not followed by more content is complete.
+  let stopReasonIsTerminal = false;
   const completedBlockIndexes = new Set<number>();
   const completedToolUseIds = new Set<string>();
   const handledStopReasons = new Set<BetaStopReason>();
@@ -2103,6 +2113,7 @@ async function* queryModel(
         ...(isFastModeEnabled() ? { fastMode: isFastMode } : false),
         signal,
         querySource: options.querySource,
+        apiAttemptBudget: options.apiAttemptBudget,
       },
     );
 
@@ -2125,6 +2136,7 @@ async function* queryModel(
     contentBlocks.length = 0;
     usage = EMPTY_USAGE;
     stopReason = null;
+    stopReasonIsTerminal = false;
     isAdvisorInProgress = false;
 
     // Streaming idle timeout watchdog: abort the stream if no chunks arrive
@@ -2393,6 +2405,7 @@ async function* queryModel(
             break;
           }
           case "content_block_start":
+            stopReasonIsTerminal = false;
             switch (part.content_block.type) {
               case "tool_use":
                 contentBlocks[part.index] = {
@@ -2452,6 +2465,7 @@ async function* queryModel(
             }
             break;
           case "content_block_delta": {
+            stopReasonIsTerminal = false;
             const contentBlock = contentBlocks[part.index];
             const delta = part.delta as typeof part.delta | ConnectorTextDelta;
             if (!contentBlock) {
@@ -2574,6 +2588,7 @@ async function* queryModel(
           }
           case "content_block_stop": {
             if (completedBlockIndexes.has(part.index)) continue;
+            stopReasonIsTerminal = false;
             completedBlockIndexes.add(part.index);
             toolInputDurationGuard.stop(part.index);
             const contentBlock = contentBlocks[part.index];
@@ -2662,6 +2677,7 @@ async function* queryModel(
             const isNewStopReason = hasStopReason && !handledStopReasons.has(part.delta.stop_reason);
             if (hasStopReason) {
               stopReason = part.delta.stop_reason;
+              stopReasonIsTerminal = true;
               handledStopReasons.add(stopReason);
             }
 
@@ -2856,10 +2872,13 @@ async function* queryModel(
 
       // A clean socket EOF is not a successful Anthropic response. Explicit
       // output limits already have a recovery message and may omit message_stop.
+      // A missing message_stop alone is tolerated once the stop_reason was the
+      // last content event (see stopReasonIsTerminal).
       if (
         stopReason !== "max_tokens" &&
         stopReason !== "model_context_window_exceeded" &&
-        (!streamWatchdogState.snapshot().messageStopReceived || stopReason === null ||
+        ((!streamWatchdogState.snapshot().messageStopReceived && !stopReasonIsTerminal) ||
+          stopReason === null ||
           contentBlocks.some((block, index) => block && !completedBlockIndexes.has(index)))
       ) {
         throw new StreamEndedEarlyError("incomplete", streamEndEvidence());
@@ -3170,6 +3189,7 @@ async function* queryModel(
           signal,
           initialConsecutive529Errors: is529Error(streamingError) ? 1 : 0,
           querySource: options.querySource,
+          apiAttemptBudget: options.apiAttemptBudget,
         },
         paramsFromContext,
         (attempt, _startTime, tokens) => {

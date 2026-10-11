@@ -38,13 +38,13 @@ bun install
 | 层级 | 触发 | 运行内容 | 约束 |
 | --- | --- | --- | --- |
 | 本地迭代 | 手动 | 最窄的相关测试；`bun run check:impact` 选中的命令 | 秒级反馈 |
-| PR（必过） | `pull_request` | impact 选中的确定性 lane，含 `check:agent-flow` | 无模型、无 provider、无 secret、fork 可跑 |
-| 全量 | 维护者手动触发（`workflow_dispatch`） | 全部确定性 lane（不做路径选择）+ 模块图健康度 + `check:desktop-ui-smoke` | 仍然无模型、无 secret |
+| PR（必过） | `pull_request`，以及合入 `main` 后的 `push` | impact 选中的确定性 lane，含 `check:agent-flow`、`check:agent-e2e`；覆盖率只报告不阻塞 | 无模型、无 provider、无 secret、fork 可跑 |
+| 全量 | 每天定时（北京时间 03:00）+ 维护者手动触发 | 全部确定性 lane（不做路径选择）+ 模块图健康度 + `check:desktop-ui-smoke` | 仍然无模型、无 secret |
 | Release | 维护者手动 `bun run quality:release`（**不是** `release-desktop.yml`） | PR + 全量层全部内容 + native/打包 smoke + 维护者授权的真实 provider baseline | 真实模型只在此层，且需显式授权 |
 
-注意：`release-desktop.yml` 按设计**不跑任何质量门禁**——打 tag 不应被 `bun run verify` 阻塞，`scripts/pr/release-workflow.test.ts` 有守卫测试锁定这一点。因此发版前的质量证据来自「合并进来的那些 PR」+ 维护者手动跑的全量层 + `quality:release`。全量层刻意不设定时：跑不跑、什么时候跑由维护者决定，`pr-quality-workflow.test.ts` 会拦住重新加回 `schedule:` 的改动。
+注意：`release-desktop.yml` 按设计**不跑任何质量门禁**——打 tag 不应被 `bun run verify` 阻塞，`scripts/pr/release-workflow.test.ts` 有守卫测试锁定这一点。因此发版前的质量证据来自「合并进来的那些 PR」+ 维护者手动跑的全量层 + `quality:release`。全量层每天跑一次（2026-10 维护者决定），频率写死在 `pr-quality-workflow.test.ts` 里，改频率需要维护者决定。
 
-分层原则：**PR 只跑改动能影响到的范围**，因此它天然无法覆盖"没有 PR 碰过的检查"和"只有全套一起跑才暴露的问题"——这两个盲区交给手动触发的全量层；**真实模型/额度只出现在 Release 与维护者手动 smoke**，任何贡献者在没有 provider 的情况下都必须能跑通 PR 层的全部门禁。
+分层原则：**PR 只跑改动能影响到的范围**，因此它天然无法覆盖"没有 PR 碰过的检查"和"只有全套一起跑才暴露的问题"——这两个盲区交给每天的全量层；**真实模型/额度只出现在 Release 与维护者手动 smoke**，任何贡献者在没有 provider 的情况下都必须能跑通 PR 层的全部门禁。
 
 ## 普通 PR 的影响面检查
 
@@ -62,10 +62,15 @@ bun run check:impact
 
 ```bash
 bun run check:agent-flow       # 真实 server + 真实 WebSocket + mock CLI
+bun run check:agent-e2e        # 真实 server + 真实 CLI agent 循环 + mock LLM
 bun run check:desktop-ui-smoke # 真实桌面 UI + 真实权限对话框 + mock CLI
 ```
 
-两条通道都不需要 provider、凭据或公网。`check:agent-flow` 覆盖新建 Session → 选运行时 → 首轮流式 → 工具调用 → 权限批准/拒绝 → 工具失败 → API 错误 → 中断 → 断线重连权限重放 → 会话恢复。`check:desktop-ui-smoke` 在真实浏览器里点真实的 Allow 按钮，需要 `agent-browser` 与已安装的 desktop 依赖，缺失时会打印原因并跳过。
+三条通道都不需要 provider、凭据或公网。
+
+`check:agent-e2e` 只假一个模型：本机回环起一个 Anthropic 兼容端点（`scripts/quality-gate/mock-llm/`），通过桌面端「新增服务商」同一个 API 注册成 provider，真实 CLI 照常跑 agent 循环、真实工具改真实（临时）磁盘。脚本化模型对自然语言提示做出模型式的反应，所以它和 `check:agent-flow:live` 共用同一份场景（`agent-flow/liveScenarios.ts`）：mock 证明管线，live 证明真模型也落到同样结果。另有只有 mock 能确定性断言的场景——工具输出真的回传给了模型（nonce 核对）、拒绝授权以错误结果回到模型、停止生成真的掐断了上游连接、上游报错后会话还能继续。改 agent 循环、工具、权限、provider 接线时，新增行为优先在这里加场景，而不是只写单元测试。
+
+`check:agent-flow` 覆盖新建 Session → 选运行时 → 首轮流式 → 工具调用 → 权限批准/拒绝 → 工具失败 → API 错误 → 中断 → 断线重连权限重放 → 会话恢复。`check:desktop-ui-smoke` 在真实浏览器里点真实的 Allow 按钮，需要 `agent-browser` 与已安装的 desktop 依赖，缺失时会打印原因并跳过。
 
 `agent-browser` 只属于这条已提交的 lane（在 Linux CI 上以 headless 方式运行）以及维护者手动执行的 `desktop/scripts/e2e-*-agent-browser.sh`。临时的浏览器操作（手动验证、截图、探索性 UI 检查）请走 `ego-browser` skill，不要因为仓库里出现 `agent-browser` 就把它当通用浏览器工具。
 
@@ -92,7 +97,7 @@ artifacts/coverage/<timestamp>/coverage-report.json
 
 PR 描述里请贴出你实际运行的命令和 summary。`quality:pr` / `quality:verify` 仍然保留给习惯显式质量命名的用户，但推荐文档和 AI prompt 都使用 `bun run verify`。
 
-覆盖率门禁同时执行四件事：按源码口径统计覆盖率、执行 baseline ratchet、报告 75-80%+ 的目标差距，并对新增/变更的可执行生产代码行执行 changed-line coverage。当前 baseline 记录在 `scripts/quality-gate/coverage-baseline.json`，CI 会优先对比 base branch 的 baseline，新增 PR 不允许覆盖率下降超过允许窗口。`coverage-baseline.json` 或 `coverage-thresholds.json` 变更必须由维护者加 `allow-coverage-baseline-change` 后才能合并。Quarantine 只用于维护者的 baseline/release 追踪，不得隐藏确定性的 provider/chat 契约测试；当前普通 PR gate 不依赖 quarantine 才能通过。
+覆盖率在 PR 上只报告、不阻塞合并（job 失败只在 `pr-quality-gate` 里打 warning）；它仍然执行四件事：按源码口径统计覆盖率、执行 baseline ratchet、报告 75-80%+ 的目标差距，并对新增/变更的可执行生产代码行执行 changed-line coverage。当前 baseline 记录在 `scripts/quality-gate/coverage-baseline.json`，CI 会优先对比 base branch 的 baseline，新增 PR 不允许覆盖率下降超过允许窗口。`coverage-baseline.json` 或 `coverage-thresholds.json` 变更必须由维护者加 `allow-coverage-baseline-change` 后才能合并。Quarantine 只用于维护者的 baseline/release 追踪，不得隐藏确定性的 provider/chat 契约测试；当前普通 PR gate 不依赖 quarantine 才能通过。
 
 ## AI Coding Agent 修复循环
 
@@ -179,9 +184,18 @@ bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:
 
 ## PR CI 合并门禁
 
-`.github/workflows/pr-quality.yml` 会在 PR `opened`、`synchronize`、`reopened`、`ready_for_review`、`labeled`、`unlabeled` 时触发。`scope-plan` 不安装依赖，只负责稳定地产生影响面计划；`policy-enforcement` 独立安装锁定依赖并执行 policy，因此 policy 失败也不会吞掉产品测试结果。产品 job 只依赖 `scope-plan`，按路径选择 desktop、server、adapter、native、provider contract、chat contract、persistence、docs 和 coverage lane。最后的 `pr-quality-gate` 会严格核对每个 job：选中的必须 success，未选中的必须 skipped，cancelled 或缺失结果都不能误判为通过。
+`.github/workflows/pr-quality.yml` 会在 PR `opened`、`synchronize`、`reopened`、`ready_for_review`、`labeled`、`unlabeled` 时触发，合入 `main` 后还会按这次 push 的改动范围再跑一次（标签类例外只在 PR 上判定，不会在 main 上重新阻塞）。`scope-plan` 不安装依赖，只负责稳定地产生影响面计划；`policy-enforcement` 独立安装锁定依赖并执行 policy，因此 policy 失败也不会吞掉产品测试结果。产品 job 只依赖 `scope-plan`，按路径选择 desktop、server、adapter、native、provider contract、chat contract、persistence、docs 和 coverage lane。最后的 `pr-quality-gate` 会严格核对每个 job：选中的必须 success，未选中的必须 skipped，cancelled 或缺失结果都不能误判为通过。
 
 仓库侧应在 GitHub branch protection / ruleset 中保护 `main`，并把 `pr-quality-gate` 设为 required status check。CODEOWNERS 要求维护者审查 workflow、quality policy 以及 provider/WebSocket 等高风险边界；本机 hook 只做提醒，真正阻止低质量 merge 的是 PR gate。
+
+### 门禁红了怎么办
+
+门禁只有在「绿 = 可以合」时才有用，所以 `main` 必须一直是绿的：
+
+- **你改了行为，测试红了**：门禁在正常工作。在同一个 PR 里更新测试，说明为什么旧断言不再成立。
+- **红的不是你的改动造成的**：先看 `main` 上最近一次 PR Quality（push）和全量是否也红。是的话单独开 PR 修，修不了就进 `scripts/quality-gate/quarantine.json`（写明负责人和到期日，`check:quarantine` 会在到期后报错），不要绕过门禁合并。
+- **偶发失败（flaky）**：重跑一次确认，然后按上一条处理；不要给测试加长超时或放宽断言来掩盖。
+- **门禁本身要调整**：改 `scripts/pr/change-policy.ts`、workflow 和对应测试（`check:policy`），保持 `pr-quality-gate` 这个汇总检查名不变，分支保护就不用动。
 
 ## 按改动范围补充测试
 

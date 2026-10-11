@@ -94,6 +94,33 @@ describe('preview agent picker flow', () => {
     if (mode === 'bubble') expect(bubbleButton('confirm').isConnected).toBe(true)
   })
 
+  it('holds the native capture until the page has painted without the bubble', async () => {
+    const frames: FrameRequestCallback[] = []
+    const raf = vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback => frames.push(callback))
+    try {
+      const captureId = confirmSelection()
+      // By the time the host captures, the bubble is gone and the annotation is up…
+      expect(document.querySelector('[data-preview-selection-annotation]')).not.toBeNull()
+      expect(() => bubbleButton('confirm')).toThrow()
+
+      // …but the frame showing that only exists after the page paints again.
+      const hide = (window as unknown as { __PREVIEW_AGENT_SET_CHROME_HIDDEN__: (hidden: boolean) => Promise<void> | undefined })
+        .__PREVIEW_AGENT_SET_CHROME_HIDDEN__
+      let painted = false
+      const ready = hide(true)!.then(() => { painted = true })
+      await Promise.resolve()
+      expect(painted).toBe(false)
+      frames.shift()!(0)
+      frames.shift()!(16)
+      await ready
+      expect(painted).toBe(true)
+      expect(hide(false)).toBeUndefined()
+      finishNativeCapture(captureId)
+    } finally {
+      raf.mockRestore()
+    }
+  })
+
   it('does not let an older capture remove the newest annotation overlay', () => {
     const chrome = showZoomControls()
     const oldCapture = confirmSelection()

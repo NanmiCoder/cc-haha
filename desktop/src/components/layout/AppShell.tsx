@@ -24,7 +24,7 @@ import {
   hydrateProjectDisplayNames,
 } from '../../stores/projectDisplayNameStore'
 import { openDesktopNotificationTarget } from '../../lib/desktopNotificationNavigation'
-import { TabBar } from './TabBar'
+import { AppHeader } from './AppHeader'
 import { WorkspaceHeaderProvider } from './WorkspaceHeaderContext'
 import { StartupErrorView } from './StartupErrorView'
 import { useTabStore, SETTINGS_TAB_ID } from '../../stores/tabStore'
@@ -254,7 +254,7 @@ export function AppShell() {
         className="min-w-0 flex-1 flex flex-col overflow-hidden"
       >
         <WorkspaceHeaderProvider>
-          <TabBar />
+          <AppHeader />
           <ContentRouter />
         </WorkspaceHeaderProvider>
       </main>

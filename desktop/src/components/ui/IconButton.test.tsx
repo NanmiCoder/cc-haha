@@ -106,6 +106,15 @@ describe('IconButton', () => {
     expect(screen.getByRole('button', { name: 'Refresh' })).not.toHaveAttribute('aria-pressed')
   })
 
+  it('marks a pressed sidebar toggle with the theme accent, not the hover fill', () => {
+    const { container } = render(<IconButton icon={<span />} label="Tasks" tone="muted" surface="sidebar" pressed />)
+    const className = container.firstElementChild!.className
+    expect(className).toContain('bg-[var(--color-brand-soft)]')
+    expect(className).toContain('text-[var(--color-brand)]')
+    expect(className).not.toContain('bg-[var(--color-sidebar-item-hover)]')
+    expect(className).not.toContain('text-[var(--color-text-tertiary)]')
+  })
+
   it('drops the tone hover while pressed so two fills cannot compete', () => {
     const { container } = render(<IconButton icon={<span />} label="Filter" pressed />)
     const className = container.firstElementChild!.className

@@ -55,6 +55,26 @@ async function expectSelection(reader: SessionService, provider: string | null, 
   }
 }
 
+test('old transcripts default Fast off and explicit false replaces true in every metadata reader', async () => {
+  const filePath = await seedLegacySelection()
+  expect((await service.getSessionLaunchInfo(sessionId))?.openAIFastMode).toBeUndefined()
+  await service.appendSessionMetadata(sessionId, {
+    workDir: directory, runtimeProviderId: 'openai-official', runtimeModelId: 'future-model', openAIFastMode: true,
+  })
+  for (const reader of [service, new SessionService()]) {
+    expect((await reader.getSessionLaunchInfo(sessionId))?.openAIFastMode).toBe(true)
+    expect((await reader.getSessionSummary(sessionId))?.openAIFastMode).toBe(true)
+    expect((await reader.listSessions()).sessions.find(item => item.id === sessionId)?.openAIFastMode).toBe(true)
+  }
+  await service.appendSessionMetadata(sessionId, { workDir: directory, openAIFastMode: false })
+  for (const reader of [service, new SessionService()]) {
+    expect((await reader.getSessionLaunchInfo(sessionId))?.openAIFastMode).toBe(false)
+    expect((await reader.getSessionSummary(sessionId))?.openAIFastMode).toBe(false)
+    expect((await reader.listSessions()).sessions.find(item => item.id === sessionId)?.openAIFastMode).toBe(false)
+  }
+  expect(JSON.parse((await readFile(filePath, 'utf8')).trim().split('\n').at(-1)!).openAIFastMode).toBe(false)
+})
+
 test('a complete runtime replacement clears old effort from warm readers and after restart', async () => {
   const filePath = await seedLegacySelection()
   await expectSelection(service, 'old-provider', 'old-model', 'high')

@@ -13,9 +13,9 @@ A session is one complete collaboration: you describe what you want, Claude read
 
 Click **New session** in the sidebar, or press `⌘N` (`Ctrl+N` on Windows and Linux). The empty session asks you for exactly one thing: a project directory. After that you can start typing — the model and permission mode come from your defaults in Settings.
 
-Each session opens as a tab, and you can run many side by side. A dot on the tab means that session is still running; closing a running tab asks whether you want to **Keep running** or **Stop and close**, and **Stop and close** also stops the background tasks that session still has running.
+Switch between sessions from the sidebar; you can run many at once. A dot in the sidebar and the top bar means a session is still running, including sessions started on a phone, from an IM channel or by a scheduled task. Switching away never stops a session; use the stop button in the composer for that. The current session and the three you used before it stay connected, so going back is instant. Older sessions disconnect once they are idle but keep their conversation and draft; going back reconnects them, and the first message takes a few seconds longer. A new session you leave without using is deleted.
 
-When a session is stopped on a permission request, a question or a plan review and needs you, the dot on its tab becomes an amber warning triangle, and so does its row in the sidebar. It stays until you have dealt with it, whether or not system notifications are on. When so many tabs are open that some scroll out of view, the scroll arrow on that side gets an amber dot, and the number button on the right of the tab bar shows how many other sessions are waiting; press it to jump to the next one. On a phone there is no tab bar: a dot on the menu button means another session is waiting, and its row in the sidebar carries the triangle.
+When a session is stopped on a permission request, a question or a plan review and needs you, an amber warning triangle appears next to its title in the top bar and on its row in the sidebar. It stays until you have dealt with it, whether or not system notifications are on. When other sessions are waiting, the top bar shows **N waiting** on the right; press it to jump to the next one. On a phone, a dot on the menu button means another session is waiting, and its row in the sidebar carries the triangle.
 
 The small line under the session title is metadata: project path, branch, model. A session is bound to one directory — to work on a different project, start a new session.
 
@@ -98,7 +98,7 @@ Editing a message from before a context compaction rewinds past the compaction, 
 
 ## The Activity panel
 
-The first button on the right of the tab bar opens the Activity panel, which lists everything running in parallel for this session:
+The Activity button on the right of the top bar opens the Activity panel, which lists everything running in parallel for this session:
 
 - **Tasks** — the to-do list Claude maintains for itself, with "Task progress 3/7" at the top.
 - **SubAgents** — the agents it delegated to. Open one to read its full transcript.

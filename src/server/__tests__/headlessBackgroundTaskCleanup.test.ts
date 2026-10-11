@@ -77,7 +77,12 @@ test('a control-started silent shell gets a ceiling without a client disconnect 
   const s = setup()
   await s.ensure()
   expect(s.timers.some(timer => timer.delay === 30_000)).toBe(false)
+  // Real CLI order: the run starts, the shell is backgrounded, and the root
+  // result arrives while run() keeps waiting on the shell (no idle frame).
+  s.dispatch({ type: 'system', subtype: 'session_state_changed', state: 'running' })
   s.task()
+  expect(s.timers.some(timer => timer.delay === 31 * 60_000)).toBe(false)
+  s.dispatch({ type: 'result', subtype: 'success', is_error: false, result: 'shell started' })
   const ceiling = s.timers.find(timer => timer.delay === 31 * 60_000)
   expect(ceiling).toBeDefined()
   ceiling!.callback()

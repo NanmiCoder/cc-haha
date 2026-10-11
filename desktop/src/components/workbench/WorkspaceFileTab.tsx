@@ -334,6 +334,12 @@ export function WorkspaceFileTab({ sessionId, tab }: WorkspaceFileTabProps) {
               previewType={entry.previewType}
               version={entry.version}
               initialView={savedView}
+              source={{
+                reveal: tab.reveal,
+                revealScroll,
+                onAddLineComment: addLineComment,
+                onAddSelection: addSelectionToChat,
+              }}
             />
           ) : isMarkdown(path) ? (
             <MarkdownSurface

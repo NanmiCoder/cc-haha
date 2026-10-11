@@ -264,8 +264,8 @@ describe('MobileShell', () => {
 
   it('sends a desktop-only tab home instead of showing a blank frame', async () => {
     seed({
-      tabs: [{ sessionId: '__terminal__1', title: 'Terminal', type: 'terminal', status: 'idle' }],
-      activeTabId: '__terminal__1',
+      tabs: [{ sessionId: '__team__lead', title: 'Agent Teams', type: 'team', status: 'idle', teamLeadSessionId: 'lead' }],
+      activeTabId: '__team__lead',
     })
     renderShell()
 

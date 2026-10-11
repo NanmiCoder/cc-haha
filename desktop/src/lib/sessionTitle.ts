@@ -46,3 +46,13 @@ export function deriveSessionTitle(raw: string): string | null {
 export function isPlaceholderSessionTitle(title: string | null | undefined): boolean {
   return PLACEHOLDER_TITLES.has((title ?? '').trim())
 }
+
+/**
+ * The title to show for a session: its own, or `untitled` (already in the
+ * user's language) in place of a server placeholder such as "Untitled
+ * Session", so the sidebar and the window header name an unnamed session the
+ * same way.
+ */
+export function displaySessionTitle(title: string | null | undefined, untitled: string): string {
+  return title && !isPlaceholderSessionTitle(title) ? title : untitled
+}

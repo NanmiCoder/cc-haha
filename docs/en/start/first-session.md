@@ -88,7 +88,7 @@ To stop mid-run, use the stop button at the bottom right of the composer or pres
 
 After each edit lands, the session shows an **inline diff**: the file path, an `+8 / -3` line count, and old and new lines side by side with syntax highlighting. That's the right view for following a single change as it happens.
 
-Once a turn finishes and the changes pile up, open the **workspace** panel on the right ("Show Workspace" at the top right of the tab bar). It collects everything changed this turn into a list you can open for a full review, comment on specific lines, and send those comments — with their code location attached — straight back into the composer for another round.
+Once a turn finishes and the changes pile up, open the **workspace** panel on the right ("Show Workspace" at the top right of the top bar). It collects everything changed this turn into a list you can open for a full review, comment on specific lines, and send those comments — with their code location attached — straight back into the composer for another round.
 
 The full workspace walkthrough is in [Workspace](../desktop/workspace.md).
 

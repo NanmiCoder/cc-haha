@@ -11,7 +11,7 @@ The conversation tells you what Claude said. The workspace tells you what it act
 
 ## Opening it
 
-Click **Show Workspace** on the right of the tab bar. Click it again to collapse. Drag the panel's left edge to resize.
+Click **Show Workspace** on the right of the top bar. Click it again to collapse. Drag the panel's left edge to resize.
 
 The empty panel offers **Side chat**, **Review**, **Terminal**, **Browser**, and **Files**. Each opens in its own tab. Use the `+` at the top to add more tabs and switch between tools.
 

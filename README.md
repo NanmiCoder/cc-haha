@@ -199,6 +199,7 @@ cp .env.example .env
 - [Electron](https://github.com/electron/electron)：跨端桌面应用能力与工程实践。
 - [cc-switch](https://github.com/farion1231/cc-switch)：模型供应商配置能力参考。
 - [LINUX DO](https://linux.do/)：新的理想型开发者社区。
+- [AtomGit](https://atomgit.com/NanmiCoder/cc-haha)：为本项目提供国内代码托管。
 
 ---
 

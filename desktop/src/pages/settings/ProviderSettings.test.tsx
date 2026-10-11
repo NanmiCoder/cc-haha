@@ -59,7 +59,7 @@ describe('ApiSmart sponsor provider', () => {
       expect(within(dialog.getByRole('button', { name })).queryByLabelText('Sponsor')).not.toBeInTheDocument()
     }
     fireEvent.click(sponsor)
-    expect(dialog.getByDisplayValue('https://direct.aruhub.com:8443')).toBeInTheDocument()
+    expect(dialog.getByDisplayValue('https://agent.aruhub.com')).toBeInTheDocument()
     expect(dialog.getAllByDisplayValue('claude-opus-5')).toHaveLength(2)
     expect(dialog.getAllByDisplayValue('claude-sonnet-5')).toHaveLength(2)
     const offer = dialog.getByRole('button', { name: /注册即送 1 美元全模型通用额度/ })
@@ -69,13 +69,13 @@ describe('ApiSmart sponsor provider', () => {
     expect(open).toHaveBeenCalledTimes(2)
     fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-aruhub-key' } })
     expect(dialog.getByText(/注册即送 1 美元全模型通用额度/)).toBeInTheDocument()
-    fireEvent.change(dialog.getByDisplayValue('https://direct.aruhub.com:8443'), { target: { value: 'https://other.invalid' } })
+    fireEvent.change(dialog.getByDisplayValue('https://agent.aruhub.com'), { target: { value: 'https://other.invalid' } })
     expect(dialog.queryByText(/注册即送 1 美元全模型通用额度/)).not.toBeInTheDocument()
-    fireEvent.change(dialog.getByDisplayValue('https://other.invalid'), { target: { value: 'https://direct.aruhub.com:8443' } })
+    fireEvent.change(dialog.getByDisplayValue('https://other.invalid'), { target: { value: 'https://agent.aruhub.com' } })
     fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       presetId: 'aruhub',
-      baseUrl: 'https://direct.aruhub.com:8443',
+      baseUrl: 'https://agent.aruhub.com',
       apiFormat: 'anthropic',
       authStrategy: 'api_key',
       apiKey: 'fake-aruhub-key',
@@ -102,13 +102,13 @@ describe('ApiSmart sponsor provider', () => {
 
     expect(dialog.getByText(/point the base URL at an endpoint that serves it/)).toBeInTheDocument()
     // The address is the user's to replace, so switching must not rewrite it.
-    expect(dialog.getByDisplayValue('https://direct.aruhub.com:8443')).toBeInTheDocument()
+    expect(dialog.getByDisplayValue('https://agent.aruhub.com')).toBeInTheDocument()
 
     fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-aruhub-key' } })
     fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
     await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
       presetId: 'aruhub',
-      baseUrl: 'https://direct.aruhub.com:8443',
+      baseUrl: 'https://agent.aruhub.com',
       apiFormat: 'openai_chat',
       apiKey: 'fake-aruhub-key',
     })))
@@ -237,7 +237,19 @@ describe('retired sponsor providers', () => {
       expect(dialog.queryByRole('button', { name: provider.name })).not.toBeInTheDocument()
     }
     expect(dialog.getByRole('button', { name: 'Atlas Cloud' })).toBeInTheDocument()
-    expect(dialog.getByRole('button', { name: 'Custom' })).toBeInTheDocument()
+    expect(dialog.getByRole('button', { name: 'Custom API' })).toBeInTheDocument()
+  })
+
+  it('labels the custom preset in the active locale and prefills that label as the name', async () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    render(<ProviderSettings />)
+    await screen.findByTestId(`provider-${savedProviders[0]!.id}`)
+
+    fireEvent.click(screen.getByRole('button', { name: /添加模型/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.queryByRole('button', { name: 'Custom' })).not.toBeInTheDocument()
+    fireEvent.click(dialog.getByRole('button', { name: '自定义模型 API' }))
+    expect(dialog.getByLabelText(/配置名称/)).toHaveValue('自定义模型 API')
   })
 
   it.each(savedProviders)('edits and saves an existing $presetId provider without losing its connection', async (provider) => {

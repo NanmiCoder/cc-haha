@@ -207,8 +207,16 @@ describe('bounded workspace watches', () => {
     await fs.writeFile(path.join(root, 'src/a.ts'), 'one')
     await fs.writeFile(path.join(root, 'src/a.ts'), 'two')
     await fs.rename(path.join(root, 'src/a.ts'), path.join(root, 'src/b.ts'))
-    await until(() => events.some((event) => event.paths.includes('src/b.ts')))
-    expect(events.flatMap((event) => event.paths)).toContain('src/a.ts')
+    // The contract is the dirty directory: the desktop re-lists every reported
+    // directory, which is how a renamed file appears. Named paths are a bonus that
+    // varies by platform — macOS names both ends of a rename, while Bun's Linux
+    // watcher names only the source — so the test waits for the source name and
+    // only checks the destination where the platform reports one.
+    await until(() => events.some((event) => event.paths.includes('src/a.ts')))
+    await new Promise((resolve) => setTimeout(resolve, 150))
+    const named = events.flatMap((event) => event.paths)
+    expect(named.every((changed) => changed === 'src/a.ts' || changed === 'src/b.ts')).toBe(true)
+    if (process.platform === 'darwin') expect(named).toContain('src/b.ts')
     expect(events.every((event) => new Set(event.paths).size === event.paths.length)).toBe(true)
     expect(events.every((event) => event.directories.includes('src'))).toBe(true)
 

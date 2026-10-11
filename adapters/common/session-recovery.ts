@@ -18,7 +18,7 @@ type BridgeSessionOps = Pick<
   | 'onServerMessage'
   | 'resetSession'
   | 'waitForOpen'
->
+> & Partial<Pick<WsBridge, 'markActive'>>
 
 type RestoreStoredSessionBindingOptions = {
   chatId: string
@@ -61,6 +61,9 @@ export async function restoreStoredSessionBinding({
   }
 
   if (bridge.isSessionOpen(chatId, stored.sessionId)) {
+    // The caller is about to use this socket; an idle sweep in between (an
+    // attachment download, say) would close it under the send.
+    bridge.markActive?.(chatId)
     return { status: 'restored', session: stored }
   }
 

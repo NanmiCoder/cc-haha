@@ -4,6 +4,7 @@ import { createPicker } from './picker'
 import { buildElementMetadata } from './metadata'
 import { createEditBubble, type EditBubbleCopy } from './editBubble'
 import { createZoomControls } from './zoomControls'
+import { afterNextPaint } from './paint'
 
 ;(() => {
   ;(window as unknown as { __PREVIEW_AGENT__?: boolean }).__PREVIEW_AGENT__ = true
@@ -24,7 +25,13 @@ import { createZoomControls } from './zoomControls'
   previewWindow.__PREVIEW_BRIDGE__ = bridge
   previewWindow.__PREVIEW_AGENT_CAPTURE__ = captureToDataUrl
   const zoomControls = createZoomControls(action => bridge.send({ type: 'browser-zoom', action }))
-  previewWindow.__PREVIEW_AGENT_SET_CHROME_HIDDEN__ = (hidden: boolean) => zoomControls.setCaptureSuppressed(hidden)
+  // The host awaits this before a native capture, so hiding resolves only once
+  // the page has painted without its chrome, the closed edit bubble and with
+  // the selection annotation in place.
+  previewWindow.__PREVIEW_AGENT_SET_CHROME_HIDDEN__ = (hidden: boolean) => {
+    zoomControls.setCaptureSuppressed(hidden)
+    return hidden ? afterNextPaint() : undefined
+  }
   bridge.on('browser-controls', message => zoomControls.update(message))
   window.addEventListener('pagehide', () => zoomControls.destroy())
   window.addEventListener('pageshow', () => zoomControls.restore())
@@ -197,6 +204,7 @@ import { createZoomControls } from './zoomControls'
       },
       mode: pickerMode,
       copy: pickerCopy,
+      pointer: { x: e.clientX, y: e.clientY },
     })
     updateChromeSuppression()
   }, true)

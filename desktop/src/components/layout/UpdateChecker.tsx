@@ -4,9 +4,11 @@ import { useTranslation } from '../../i18n'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
 import { isDesktopRuntime } from '../../lib/desktopRuntime'
 import { useUpdateStore } from '../../stores/updateStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 
 export function UpdateChecker() {
   const t = useTranslation()
+  const autoUpdateEnabled = useSettingsStore((s) => s.autoUpdateEnabled)
   const status = useUpdateStore((s) => s.status)
   const availableVersion = useUpdateStore((s) => s.availableVersion)
   const releaseNotes = useUpdateStore((s) => s.releaseNotes)
@@ -17,10 +19,10 @@ export function UpdateChecker() {
   const dismissPrompt = useUpdateStore((s) => s.dismissPrompt)
 
   useEffect(() => {
-    void initialize()
-  }, [initialize])
+    if (autoUpdateEnabled) void initialize()
+  }, [autoUpdateEnabled, initialize])
 
-  if (!isDesktopRuntime()) return null
+  if (!isDesktopRuntime() || !autoUpdateEnabled) return null
 
   const showPopup = shouldPrompt && !!availableVersion && status === 'downloaded'
 

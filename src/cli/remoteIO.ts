@@ -27,6 +27,7 @@ import { CCRClient, CCRInitError } from './transports/ccrClient.js'
 import { SSETransport } from './transports/SSETransport.js'
 import type { Transport } from './transports/Transport.js'
 import { getTransportForUrl } from './transports/transportUtils.js'
+import { isPermanentCloseCode } from './transports/WebSocketTransport.js'
 
 /**
  * Bidirectional streaming for SDK mode with session tracking
@@ -103,9 +104,16 @@ export class RemoteIO extends StructuredIO {
     })
 
     // Set up close callback to handle connection failures
-    this.transport.setOnClose(() => {
+    this.transport.setOnClose((closeCode?: number) => {
       // End the input stream to trigger graceful shutdown
       this.inputStream.end()
+      // Ending the input still lets a run that waits on background tasks (a
+      // dev server, a watcher) keep this process — and its MCP servers and
+      // shells — alive for as long as they run. A permanent rejection means
+      // nothing owns this runtime any more (the server replaced it, deleted
+      // its session, or restarted without it), so nothing could ever observe
+      // or stop it.
+      if (isPermanentCloseCode(closeCode)) void gracefulShutdown(0, 'other')
     })
 
     // Initialize CCR v2 client (heartbeats, epoch, state reporting, event writes).

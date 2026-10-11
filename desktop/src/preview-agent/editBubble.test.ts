@@ -78,6 +78,29 @@ describe('createEditBubble', () => {
     bubble.destroy()
   })
 
+  it('opens at full height beside the click when the picked element fills the view', () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 720 })
+    const el = document.getElementById('t')!
+    // A picked <body>: taller than the viewport, no room above or below.
+    vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 0, top: 0, right: 1024, bottom: 1400, left: 0, width: 1024, height: 1400, toJSON: () => ({}),
+    })
+
+    const atClick = createEditBubble(el, { onConfirm: vi.fn(), onCancel: vi.fn(), pointer: { x: 300, y: 200 } })
+    expect(atClick.host.style.top).toBe('208px')
+    expect(atClick.host.style.left).toBe('308px')
+    // Full estimated height (380), not squeezed to the 160px minimum.
+    expect((atClick.host.shadowRoot!.querySelector('.bubble') as HTMLElement).style.maxHeight).toBe('504px')
+    atClick.destroy()
+
+    // A click near the bottom right lifts and shifts it just enough to fit.
+    const nearEdge = createEditBubble(el, { onConfirm: vi.fn(), onCancel: vi.fn(), pointer: { x: 1000, y: 700 } })
+    expect(nearEdge.host.style.top).toBe('332px')
+    expect(nearEdge.host.style.left).toBe('676px')
+    nearEdge.destroy()
+  })
+
   it('prefills the text field and live-applies edits to the element', () => {
     const el = document.getElementById('t')!
     const bubble = createEditBubble(el, { onConfirm: vi.fn(), onCancel: vi.fn() })

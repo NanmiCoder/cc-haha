@@ -3,7 +3,14 @@ import { sessionsApi } from '../api/sessions'
 import { ApiError } from '../api/client'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSessionStore } from './sessionStore'
-import { SETTINGS_TAB_ID, MARKET_TAB_ID, CONNECTORS_TAB_ID, useTabStore } from './tabStore'
+import { SETTINGS_TAB_ID, MARKET_TAB_ID, CONNECTORS_TAB_ID, SCHEDULED_TAB_ID, WARM_SESSION_LIMIT, useTabStore } from './tabStore'
+
+/** The new-session page: no tab is shown and the chats stay warm. */
+function showNewSessionPage() {
+  useTabStore.setState((state) => ({ tabs: state.tabs.filter((tab) => tab.type === 'session'), activeTabId: null }))
+  useTabStore.getState().saveTabs()
+}
+
 
 vi.mock('../api/sessions', () => ({
   sessionsApi: {
@@ -101,23 +108,162 @@ describe('tabStore', () => {
     expect(useTabStore.getState().activeTabId).toBe(SETTINGS_TAB_ID)
   })
 
-  it('stores a promoted terminal runtime id on new terminal tabs', () => {
-    const tabId = useTabStore.getState().openTerminalTab('/tmp/project', '__session_terminal__session-1')
+  describe('as a navigation stack', () => {
+    const ids = () => useTabStore.getState().tabs.map((tab) => tab.sessionId)
 
-    expect(useTabStore.getState().tabs).toEqual([
-      {
-        sessionId: tabId,
-        title: 'Terminal 1',
-        type: 'terminal',
-        status: 'idle',
-        terminalCwd: '/tmp/project',
-        terminalRuntimeId: '__session_terminal__session-1',
-      },
-    ])
-    expect(useTabStore.getState().activeTabId).toBe(tabId)
+    it('keeps the shown chat last and the three before it warm, dropping the least recent', () => {
+      expect(WARM_SESSION_LIMIT).toBe(4)
+      for (const id of ['s1', 's2', 's3', 's4']) useTabStore.getState().openTab(id, id)
+      expect(ids()).toEqual(['s1', 's2', 's3', 's4'])
+
+      // Going back to s1 makes it the most recent, so s2 is now the oldest.
+      useTabStore.getState().setActiveTab('s1')
+      expect(ids()).toEqual(['s2', 's3', 's4', 's1'])
+
+      useTabStore.getState().openTab('s5', 's5')
+      expect(ids()).toEqual(['s3', 's4', 's1', 's5'])
+      expect(useTabStore.getState().activeTabId).toBe('s5')
+      // Only chats count: a page on top does not push one out.
+      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+      expect(ids()).toEqual(['s3', 's4', 's1', 's5', SETTINGS_TAB_ID])
+    })
+
+    it('never drops the chat an open page belongs to', () => {
+      const run = '__subagent__s1__tool-1'
+      // One chat over the limit, and the oldest is the one the run reads.
+      useTabStore.setState({
+        tabs: [
+          ...['s1', 's2', 's3', 's4', 's5'].map((sessionId) => ({ sessionId, title: sessionId, type: 'session' as const, status: 'idle' as const })),
+          { sessionId: run, title: 'Run', type: 'subagent', status: 'idle', sourceSessionId: 's1', subagentToolUseId: 'tool-1' },
+        ],
+        activeTabId: run,
+      })
+
+      useTabStore.getState().setActiveTab(run)
+
+      expect(ids()).toEqual(['s1', 's3', 's4', 's5', run])
+    })
+
+    it('leaves every page behind when a chat is shown', () => {
+      useTabStore.getState().openTab('s1', 's1')
+      const run = useTabStore.getState().openSubagentTab('s1', 'tool-1', 'Run')
+      useTabStore.getState().openSubagentTab('s1', 'tool-2', 'Nested', undefined, run)
+      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+      expect(ids()).toHaveLength(4)
+
+      useTabStore.getState().openTab('s2', 's2')
+
+      expect(ids()).toEqual(['s1', 's2'])
+      expect(useTabStore.getState().activeTabId).toBe('s2')
+    })
+
+    it('keeps a root page under the one opened from it, and no deeper', () => {
+      useTabStore.getState().openTab('s1', 's1')
+      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+      useTabStore.getState().openTab(SCHEDULED_TAB_ID, 'Scheduled', 'scheduled')
+      useTabStore.getState().openTab(MARKET_TAB_ID, 'Market', 'market')
+
+      // Settings is dropped: only the page the market was opened over stays.
+      expect(ids()).toEqual(['s1', SCHEDULED_TAB_ID, MARKET_TAB_ID])
+
+      useTabStore.getState().closeTab(MARKET_TAB_ID)
+      expect(useTabStore.getState().activeTabId).toBe(SCHEDULED_TAB_ID)
+
+      // Scheduled's own way back (Settings) is gone, so it falls back to the chat.
+      useTabStore.getState().closeTab(SCHEDULED_TAB_ID)
+      expect(ids()).toEqual(['s1'])
+      expect(useTabStore.getState().activeTabId).toBe('s1')
+    })
+
+    it('leads Back from a page opened over the market to the market', () => {
+      useTabStore.getState().openTab('s1', 's1')
+      useTabStore.getState().openTab(MARKET_TAB_ID, 'Market', 'market')
+      // A plugin's "open settings" link.
+      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+
+      useTabStore.getState().closeTab(SETTINGS_TAB_ID)
+
+      expect(useTabStore.getState().activeTabId).toBe(MARKET_TAB_ID)
+      expect(ids()).toEqual(['s1', MARKET_TAB_ID])
+    })
+
+    it('leads Back from a page opened on the new-session page to the new-session page', () => {
+      useTabStore.getState().openTab('s1', 's1')
+      showNewSessionPage()
+      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+      // A deep link into Settings while it is already open keeps its way back.
+      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+
+      useTabStore.getState().closeTab(SETTINGS_TAB_ID)
+
+      expect(useTabStore.getState().activeTabId).toBeNull()
+      expect(ids()).toEqual(['s1'])
+    })
+
+    it('stacks a root page on a run page, so Back from it lands on the run', () => {
+      useTabStore.getState().openTab('s1', 's1')
+      const run = useTabStore.getState().openSubagentTab('s1', 'tool-1', 'Run')
+      useTabStore.getState().openTab(SETTINGS_TAB_ID, 'Settings', 'settings')
+
+      useTabStore.getState().closeTab(SETTINGS_TAB_ID)
+
+      expect(useTabStore.getState().activeTabId).toBe(run)
+    })
+
+    it('goes home to the new-session page without dropping the warm chats', () => {
+      useTabStore.getState().openTab('s1', 's1')
+      useTabStore.getState().openTab('s2', 's2')
+      useTabStore.getState().openSubagentTab('s2', 'tool-1', 'Run')
+
+      showNewSessionPage()
+
+      expect(useTabStore.getState().activeTabId).toBeNull()
+      expect(ids()).toEqual(['s1', 's2'])
+      expect(JSON.parse(localStorage.getItem('cc-haha-open-tabs')!).activeTabId).toBeNull()
+    })
+
+    it('restarts where it stopped: the new-session page, or the chat a run page belongs to', async () => {
+      vi.mocked(sessionsApi.list).mockResolvedValue({
+        sessions: ['a', 'b', 'c', 'd'].map((id) => ({ ...historicalSummary(id), title: id })),
+        total: 4,
+      } as never)
+      for (const id of ['a', 'b', 'c', 'd']) useTabStore.getState().openTab(id, id)
+      useTabStore.getState().setActiveTab('b')
+      useTabStore.getState().openSubagentTab('b', 'tool-1', 'Run')
+      expect(JSON.parse(localStorage.getItem('cc-haha-open-tabs')!).activeTabId).toBe('b')
+
+      showNewSessionPage()
+      useTabStore.setState({ tabs: [], activeTabId: 'stale' })
+      await useTabStore.getState().restoreTabs()
+
+      expect(useTabStore.getState().activeTabId).toBeNull()
+      // All four chats come back warm, not three.
+      expect(ids()).toEqual(['a', 'c', 'd', 'b'])
+    })
+
+    it('restores an old strip of many tabs as the shown one plus the three chats nearest its end', async () => {
+      const saved = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+      localStorage.setItem('cc-haha-open-tabs', JSON.stringify({
+        openTabs: [
+          ...saved.map((sessionId) => ({ sessionId, title: sessionId, type: 'session' })),
+          { sessionId: SETTINGS_TAB_ID, title: 'Settings', type: 'settings' },
+          { sessionId: MARKET_TAB_ID, title: 'Market', type: 'market' },
+        ],
+        activeTabId: 'b',
+      }))
+      vi.mocked(sessionsApi.list).mockResolvedValue({
+        sessions: saved.map((id) => ({ ...historicalSummary(id), title: id })),
+        total: saved.length,
+      } as never)
+
+      await useTabStore.getState().restoreTabs()
+
+      // Pages that were not showing are not worth a slot; b was showing, so
+      // it is kept and comes last.
+      expect(ids()).toEqual(['e', 'f', 'g', 'b'])
+      expect(useTabStore.getState().activeTabId).toBe('b')
+    })
   })
-
-
 
   it('returns a subagent tab to its source session before closing it', () => {
     useTabStore.getState().openTab('session-a', 'Session A')
@@ -286,6 +432,7 @@ describe('tabStore', () => {
         title: 'Settings',
         type: 'settings',
         status: 'idle',
+        returnTabId: '',
       },
     ])
   })
@@ -469,7 +616,8 @@ describe('tabStore', () => {
 
     expect(sessionsApi.getSummary).toHaveBeenCalledTimes(ids.length)
     expect(maximumActiveRequests).toBe(1)
-    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(ids)
+    // The restored active tab is the top of the stack.
+    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['history-b', 'history-c', 'history-a'])
     expect(sessionsApi.list).toHaveBeenCalledExactlyOnceWith({ limit: 200 })
   })
 
@@ -568,17 +716,12 @@ describe('tabStore', () => {
 
     await useTabStore.getState().restoreTabs()
 
+    // Only the page that was showing comes back; one root page at a time.
     expect(useTabStore.getState().tabs).toEqual([
       {
         sessionId: SETTINGS_TAB_ID,
         title: 'Settings',
         type: 'settings',
-        status: 'idle',
-      },
-      {
-        sessionId: MARKET_TAB_ID,
-        title: 'Market',
-        type: 'market',
         status: 'idle',
       },
     ])
@@ -604,6 +747,6 @@ it('restores duplicate legacy markets as one tab and retains their active select
     { sessionId: CONNECTORS_TAB_ID, title: 'Connectors', type: 'connectors' },
   ], activeTabId: CONNECTORS_TAB_ID }))
   await useTabStore.getState().restoreTabs()
-  expect(useTabStore.getState().tabs.map(tab => tab.sessionId)).toEqual([SETTINGS_TAB_ID, MARKET_TAB_ID])
+  expect(useTabStore.getState().tabs.map(tab => tab.sessionId)).toEqual([MARKET_TAB_ID])
   expect(useTabStore.getState().activeTabId).toBe(MARKET_TAB_ID)
 })

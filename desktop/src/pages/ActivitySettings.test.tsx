@@ -412,6 +412,22 @@ describe('ActivitySettings', () => {
     ])
   })
 
+  it('orders the page usage, then activity, then the per-model breakdown', async () => {
+    render(<ActivitySettings />)
+
+    await flushActivityLoad()
+
+    const usage = screen.getByRole('list', { name: 'Token usage by day' })
+    const activity = screen.getByRole('heading', { name: 'Token Activity' })
+    const insights = screen.getByRole('heading', { name: 'Activity insights' })
+    const models = screen.getByRole('heading', { name: 'Usage by model' })
+    const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(follows(usage, activity)).toBe(true)
+    expect(follows(activity, insights)).toBe(true)
+    expect(follows(insights, models)).toBe(true)
+    expect(follows(models, screen.getByRole('table'))).toBe(true)
+  })
+
   it('supports localized heatmap mode switches and persisted display name edits', async () => {
     useSettingsStore.setState({ locale: 'zh' })
     render(<ActivitySettings />)

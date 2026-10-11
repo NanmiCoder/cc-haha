@@ -14,10 +14,11 @@ import { teamPlanActionSchema, teamPlanPatchRequestSchema, teamPlanService } fro
 import { TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
 import { teamService } from '../services/teamService.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import { ensureCliSessionStartedForControl } from '../ws/handler.js'
 
 export async function handleTeamsApi(
   req: Request,
-  _url: URL,
+  requestUrl: URL,
   segments: string[],
 ): Promise<Response> {
   try {
@@ -42,7 +43,11 @@ export async function handleTeamsApi(
       const parsed = teamPlanActionSchema.safeParse(raw)
       if (!parsed.success) throw ApiError.badRequest('Invalid team plan action')
       const action = segments[4]
-      if (action === 'approve') return Response.json({ plan: await teamPlanService.approve(teamName, parsed.data) })
+      if (action === 'approve') {
+        return Response.json({ plan: await teamPlanService.approve(teamName, parsed.data, {
+          startLeader: sessionId => ensureCliSessionStartedForControl(sessionId, requestUrl),
+        }) })
+      }
       if (action === 'return' || action === 'cancel' || action === 'retry') return Response.json({ plan: await teamPlanService.action(teamName, action, parsed.data) })
       throw ApiError.badRequest('Unknown team plan action')
     }

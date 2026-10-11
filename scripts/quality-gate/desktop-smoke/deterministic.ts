@@ -48,15 +48,15 @@ export const DESKTOP_UI_SMOKE_LOCALE = 'en'
 export const DESKTOP_UI_SMOKE_ALLOW_SELECTOR = 'button[aria-label^="Allow: "]'
 
 /**
- * The tab of a session stopped on a decision only the user can make.
- * `data-attention` is set on the tab by TabBar; the strip is the only place it
- * appears, so the selector is anchored there.
+ * The window header's mark for the session on screen when it is stopped on a
+ * decision only the user can make. `data-attention` is set by AppHeader; the
+ * selector is anchored there so a sidebar row cannot satisfy it.
  */
-export const DESKTOP_UI_SMOKE_ATTENTION_TAB = '[data-testid="tab-bar"] [data-attention="true"]'
+export const DESKTOP_UI_SMOKE_ATTENTION_TAB = '[data-testid="app-header"] [data-attention="true"]'
 
 /**
- * True while that tab carries the warning mark and has *not* also been given the
- * running dot. A session parked on a permission card is "running" by chatState
+ * True while the header carries the warning mark and has *not* also been given
+ * the running dot. A session parked on a permission card is "running" by chatState
  * too, and the running dot said the one thing that is not true of it.
  */
 export const DESKTOP_UI_SMOKE_ATTENTION_PROBE =
@@ -278,7 +278,7 @@ export async function executeDeterministicDesktopSmoke(
       throw new Error('the tool wrote the fixture file before the permission dialog was answered')
     }
     await browserStep(['screenshot', join(artifactDir, 'permission-dialog.png')], { allowFailure: true })
-    // While the dialog is open the session's tab has to say the session is
+    // While the dialog is open the window header has to say the session is
     // waiting on the person, not running, and has to stop saying it once the
     // request is answered. A marker derived from anything but the open request
     // gets one of those two wrong.

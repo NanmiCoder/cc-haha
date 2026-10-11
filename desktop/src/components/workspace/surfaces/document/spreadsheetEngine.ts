@@ -74,11 +74,19 @@ export type SheetInfo = {
 export type SpreadsheetDocument = {
   /** The visible worksheets, in order. */
   sheets: SheetInfo[]
+  /** Delimited text (`.csv`, `.tsv`) has one anonymous sheet; there is nothing to pick between. */
+  delimited?: boolean
   readSheet(index: number): Promise<Grid>
 }
 
+/**
+ * Plain-text tables, which have no magic number to recognise them by. The caller names
+ * the format from the file's extension; nothing is guessed from the contents.
+ */
+export type DelimitedFormat = 'csv' | 'tsv'
+
 export type SpreadsheetEngine = {
-  open(bytes: Uint8Array): Promise<SpreadsheetDocument>
+  open(bytes: Uint8Array, options?: { delimited?: DelimitedFormat }): Promise<SpreadsheetDocument>
 }
 
 export type SpreadsheetEngineOptions = {
@@ -106,6 +114,90 @@ function isZip(bytes: Uint8Array): boolean {
 function isCompoundFile(bytes: Uint8Array): boolean {
   const magic = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]
   return bytes.length >= magic.length && magic.every((byte, index) => bytes[index] === byte)
+}
+
+/** How many leading bytes are checked for the NUL that marks a binary file. */
+const BINARY_SNIFF_BYTES = 8_192
+
+/**
+ * Delimited text as a string. SheetJS reads a byte array as Windows-1252, which turns
+ * every Chinese character to noise, so the text is decoded here: a byte-order mark names
+ * UTF-16, otherwise UTF-8, otherwise GB18030 for what Excel's "CSV" export writes in a
+ * Chinese locale. Anything else is read as UTF-8 with replacement characters.
+ */
+export function decodeDelimitedText(bytes: Uint8Array): string {
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return new TextDecoder('utf-16le').decode(bytes)
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return new TextDecoder('utf-16be').decode(bytes)
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    // not UTF-8
+  }
+  try {
+    return new TextDecoder('gb18030', { fatal: true }).decode(bytes)
+  } catch {
+    return new TextDecoder('utf-8').decode(bytes)
+  }
+}
+
+function looksBinary(bytes: Uint8Array): boolean {
+  // UTF-16 text is full of NULs; its byte-order mark is what tells it from a binary file.
+  if (bytes.length >= 2 && ((bytes[0] === 0xff && bytes[1] === 0xfe) || (bytes[0] === 0xfe && bytes[1] === 0xff))) return false
+  const end = Math.min(bytes.length, BINARY_SNIFF_BYTES)
+  for (let index = 0; index < end; index += 1) if (bytes[index] === 0) return true
+  return false
+}
+
+/**
+ * Rows of delimited text, per RFC 4180: a quoted field may hold the delimiter, line breaks and
+ * doubled quotes. It stops at `maxRows` rows and keeps `maxColumns` fields of each, so a
+ * file far beyond what is shown costs a scan, not a table. SheetJS is not used for this: it
+ * decides what a string is from its first characters, and a table that begins `<` or `ID`
+ * would be read as markup or as another format.
+ */
+function parseDelimited(text: string, delimiter: string, maxRows: number, maxColumns: number): string[][] {
+  const rows: string[][] = []
+  let row: string[] = []
+  let field = ''
+  let quoted = false
+  let touched = false
+
+  const endField = () => {
+    if (row.length < maxColumns) row.push(field)
+    field = ''
+    touched = true
+  }
+  const endRow = () => {
+    endField()
+    rows.push(row)
+    row = []
+    touched = false
+  }
+
+  for (let index = 0; index < text.length && rows.length < maxRows; index += 1) {
+    const char = text[index]!
+    if (quoted) {
+      if (char !== '"') field += char
+      else if (text[index + 1] === '"') {
+        field += '"'
+        index += 1
+      } else quoted = false
+    } else if (char === '"' && field === '') {
+      quoted = true
+      touched = true
+    } else if (char === delimiter) {
+      endField()
+    } else if (char === '\n' || char === '\r') {
+      if (char === '\r' && text[index + 1] === '\n') index += 1
+      endRow()
+    } else {
+      field += char
+      touched = true
+    }
+  }
+  // A last line with no break after it; a break at the very end does not make another row.
+  if (touched && rows.length < maxRows) endRow()
+  return rows
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -226,15 +318,35 @@ function toGrid(sheet: SheetJs.WorkSheet, limits: SpreadsheetLimits): Grid {
  *
  * It accepts only what it can name: a zip (.xlsx, .xlsm) or an OLE compound file (.xls).
  * SheetJS itself would take a file's contents for whatever they look like — HTML, CSV, XML —
- * whatever the extension says, and a preview has no business parsing those.
+ * whatever the extension says, and a preview has no business parsing those. Delimited text
+ * is the one exception, and only when the caller names it (`options.delimited`).
  */
 export function createSpreadsheetEngine({
   loadSheetJs,
   limits = DEFAULT_SPREADSHEET_LIMITS,
   zipLimits,
 }: SpreadsheetEngineOptions): SpreadsheetEngine {
+  async function openDelimited(bytes: Uint8Array, format: DelimitedFormat): Promise<SpreadsheetDocument> {
+    if (looksBinary(bytes)) throw new SpreadsheetError('invalid', 'Not a text table')
+
+    const text = decodeDelimitedText(bytes)
+    return {
+      sheets: [{ index: 0, name: 'Sheet1' }],
+      delimited: true,
+      async readSheet() {
+        // One more row and column than are shown: see `toGrid`.
+        const rows = parseDelimited(text, format === 'tsv' ? '\t' : ',', limits.maxRows + 1, limits.maxColumns + 1)
+        // Every value stays the text that was written: `007` is not 7 and `1e5` is not 100000.
+        const data = rows.map((row) => row.map((value): SheetJs.CellObject => ({ t: 's', v: value })))
+        return toGrid({ '!data': data } as unknown as SheetJs.WorkSheet, limits)
+      },
+    }
+  }
+
   return {
-    async open(bytes) {
+    async open(bytes, options) {
+      if (options?.delimited) return openDelimited(bytes, options.delimited)
+
       if (isZip(bytes)) {
         try {
           inspectOfficeZip(bytes, zipLimits)

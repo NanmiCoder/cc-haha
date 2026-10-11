@@ -122,9 +122,19 @@ describe('AgentTeamsWorkbench', () => {
     expect(screen.getByTestId('agent-teams-canvas-task-2').getAttribute('data-state')).toBe('completed')
     expect(screen.getByTestId('agent-teams-canvas-task-3').getAttribute('data-state')).toBe('running')
 
+    // A narrow pane wraps the controls onto their own row rather than forcing
+    // a fixed-width header that scrolls sideways and squeezes button labels.
+    const headerRow = screen.getByTestId('agent-teams-live-controls').parentElement!
+    expect(headerRow.className).toContain('flex-wrap')
+    expect(headerRow.className).not.toMatch(/\bmin-w-\[\d+px\]/)
+    expect(headerRow.parentElement!.className).not.toContain('overflow-x-auto')
+
     fireEvent.click(screen.getByRole('button', { name: 'Review history' }))
     expect(screen.queryByTestId('agent-teams-live-controls')).toBeNull()
     expect(screen.getByTestId('agent-teams-replay-controls')).toBeTruthy()
+    for (const name of [/^(Play|Pause|Replay)$/, 'Back to live']) {
+      expect(screen.getByRole('button', { name }).className).toMatch(/(?=.*\bshrink-0\b)(?=.*\bwhitespace-nowrap\b)/)
+    }
 
     const timeline = screen.getByRole('slider', { name: 'Replay timeline · click to seek' }) as HTMLInputElement
     expect(timeline.value).toBe('1000')

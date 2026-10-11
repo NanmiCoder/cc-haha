@@ -34,12 +34,37 @@ type Session = {
   ws: WebSocket
   reconnectAttempts: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
+  /** Last traffic either way; heartbeats do not count. */
+  lastActivityAt: number
+  /** A user turn the server has not finished yet. */
+  turnActive: boolean
+  /**
+   * The CLI's own run state (`session_state_changed`). It stays running while
+   * background tasks run and through the replies their results trigger.
+   */
+  cliRunning: boolean
+  /** Approval requests still waiting for the user. */
+  pendingRequests: Set<string>
 }
 
 const HEARTBEAT_INTERVAL_MS = 30_000
 const RECONNECT_BASE_MS = 1000
 const RECONNECT_MAX_MS = 30_000
 const MAX_RECONNECT_ATTEMPTS = 10
+/**
+ * A chat's socket keeps its session's CLI — and the MCP servers under it —
+ * alive on the desktop host for as long as it stays open (#1485). After this
+ * long without any traffic, with nothing running and nothing waiting for an
+ * approval, the socket is closed; the chat's next message reopens it through
+ * restoreStoredSessionBinding, at the cost of one CLI start.
+ */
+export const IDLE_SESSION_RELEASE_MS = 30 * 60_000
+
+export type WsBridgeOptions = {
+  idleReleaseMs?: number
+  heartbeatIntervalMs?: number
+  now?: () => number
+}
 
 export class WsBridge {
   private sessions = new Map<string, Session>()
@@ -54,16 +79,21 @@ export class WsBridge {
   private localAccessToken: string | null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private destroyed = false
+  private readonly idleReleaseMs: number
+  private readonly now: () => number
 
   constructor(
     serverUrl: string,
     platform: string,
     localAccessToken = process.env.CC_HAHA_LOCAL_ACCESS_TOKEN,
+    options: WsBridgeOptions = {},
   ) {
     this.serverUrl = serverUrl.replace(/\/$/, '')
     this.platform = platform
     this.localAccessToken = localAccessToken?.trim() || null
-    this.startHeartbeat()
+    this.idleReleaseMs = options.idleReleaseMs ?? IDLE_SESSION_RELEASE_MS
+    this.now = options.now ?? Date.now
+    this.startHeartbeat(options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS)
   }
 
   /** Connect to a session with a known sessionId. Returns false if already connected. */
@@ -180,11 +210,18 @@ export class WsBridge {
       this.closeSocket(prev.ws, 1000, 'session replaced')
     }
 
+    // A reconnect to the same session is not new activity; its snapshot on
+    // open refreshes the turn and approval state.
+    const carried = prev?.sessionId === sessionId ? prev : undefined
     const session: Session = {
       sessionId,
       ws,
       reconnectAttempts: prev?.reconnectAttempts ?? 0,
       reconnectTimer: null,
+      lastActivityAt: carried?.lastActivityAt ?? this.now(),
+      turnActive: carried?.turnActive ?? false,
+      cliRunning: false,
+      pendingRequests: carried?.pendingRequests ?? new Set(),
     }
     this.sessions.set(chatId, session)
 
@@ -203,6 +240,7 @@ export class WsBridge {
       }
       if (msg.type === 'pong') return
       if (this.sessions.get(chatId) !== session) return
+      this.trackInbound(session, msg)
       if (!this.handlers.has(chatId)) return
 
       // Serialize per-chat handler calls: chain each message onto the previous
@@ -314,7 +352,80 @@ export class WsBridge {
       return false
     }
     session.ws.send(JSON.stringify(message))
+    session.lastActivityAt = this.now()
+    if (message.type === 'user_message') session.turnActive = true
+    if (message.type === 'permission_response' && typeof message.requestId === 'string') {
+      session.pendingRequests.delete(message.requestId)
+    }
     return true
+  }
+
+  private trackInbound(session: Session, msg: ServerMessage): void {
+    session.lastActivityAt = this.now()
+    switch (msg.type) {
+      case 'status':
+        session.turnActive = msg.state !== 'idle'
+        break
+      case 'message_complete':
+        session.turnActive = false
+        session.pendingRequests.clear()
+        break
+      case 'error':
+        session.turnActive = false
+        break
+      case 'permission_request':
+      case 'computer_use_permission_request':
+        if (typeof msg.requestId === 'string') session.pendingRequests.add(msg.requestId)
+        break
+      case 'permission_resolved':
+        if (typeof msg.requestId === 'string') session.pendingRequests.delete(msg.requestId)
+        break
+      case 'permission_requests_snapshot':
+        session.turnActive = msg.turnActive === true
+        session.pendingRequests = new Set(
+          [...(msg.toolRequestIds ?? []), ...(msg.computerUseRequestIds ?? [])]
+            .filter((id): id is string => typeof id === 'string'),
+        )
+        break
+      case 'system_notification':
+        if (msg.subtype === 'session_state_changed') {
+          session.cliRunning = msg.data?.state === 'running'
+        }
+        break
+    }
+  }
+
+  /**
+   * Counts as activity for a chat whose socket is about to be used, so the
+   * idle sweep cannot close it between a caller's check and its send.
+   */
+  markActive(chatId: string): void {
+    const session = this.sessions.get(chatId)
+    if (session) session.lastActivityAt = this.now()
+  }
+
+  /**
+   * Closes the sockets of chats quiet for the idle period (see
+   * IDLE_SESSION_RELEASE_MS). A chat whose turn runs, whose CLI still works on
+   * background tasks, or that waits on an approval keeps its socket. The
+   * chat's binding is the adapter's and stays, so its next message reconnects.
+   */
+  releaseIdleSessions(): string[] {
+    const released: string[] = []
+    const now = this.now()
+    for (const [chatId, session] of this.sessions) {
+      if (
+        session.ws.readyState !== WebSocket.OPEN ||
+        session.turnActive ||
+        session.cliRunning ||
+        session.pendingRequests.size > 0 ||
+        now - session.lastActivityAt < this.idleReleaseMs
+      ) continue
+      console.log(`[WsBridge] Releasing idle session ${session.sessionId} (chat ${chatId})`)
+      this.resetSession(chatId)
+      released.push(chatId)
+    }
+    return released
   }
 
   private scheduleReconnect(chatId: string, sessionId: string): void {
@@ -342,13 +453,14 @@ export class WsBridge {
     }, delay)
   }
 
-  private startHeartbeat(): void {
+  private startHeartbeat(intervalMs: number): void {
     this.heartbeatTimer = setInterval(() => {
+      this.releaseIdleSessions()
       for (const [, session] of this.sessions) {
         if (session.ws.readyState === WebSocket.OPEN) {
           session.ws.send(JSON.stringify({ type: 'ping' }))
         }
       }
-    }, HEARTBEAT_INTERVAL_MS)
+    }, intervalMs)
   }
 }

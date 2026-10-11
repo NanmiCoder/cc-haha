@@ -10,6 +10,7 @@ import {
   hasVisibleSessionActivity,
 } from '../components/activity/sessionActivityModel'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
+import { hasRunningBackgroundTasks } from '../lib/backgroundTasks'
 import { registerSideChatSession, unregisterSideChatSession } from '../lib/sideChatSessions'
 
 const {
@@ -4244,6 +4245,85 @@ describe('chatStore history mapping', () => {
     })
   })
 
+  it('restores a background shell stopped by TaskStop when no notification was recorded', () => {
+    const shellStart = (toolUseId: string, taskId: string, minute: number): MessageEntry[] => [
+      {
+        id: `${toolUseId}-use`,
+        type: 'assistant',
+        timestamp: `2026-04-06T00:0${minute}:00.000Z`,
+        content: [{
+          type: 'tool_use',
+          id: toolUseId,
+          name: 'Bash',
+          input: { command: 'bun run dev', description: `Start ${taskId}`, run_in_background: true },
+        }],
+      },
+      {
+        id: `${toolUseId}-result`,
+        type: 'tool_result',
+        timestamp: `2026-04-06T00:0${minute}:01.000Z`,
+        content: [{
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          content: `Command running in background with ID: ${taskId}. Output is being written to: /tmp/${taskId}.output`,
+        }],
+      },
+    ]
+    const taskStop = (
+      toolUseId: string,
+      taskId: string,
+      minute: number,
+      isError = false,
+    ): MessageEntry[] => [
+      {
+        id: `${toolUseId}-use`,
+        type: 'assistant',
+        timestamp: `2026-04-06T00:0${minute}:00.000Z`,
+        content: [{ type: 'tool_use', id: toolUseId, name: 'TaskStop', input: { task_id: taskId } }],
+      },
+      {
+        id: `${toolUseId}-result`,
+        type: 'tool_result',
+        timestamp: `2026-04-06T00:0${minute}:01.000Z`,
+        content: [{
+          type: 'tool_result',
+          tool_use_id: toolUseId,
+          // The CLI records the stop as a JSON string and leaves no task-notification.
+          content: isError
+            ? 'No task found with ID: ' + taskId
+            : JSON.stringify({
+              message: `Successfully stopped task: ${taskId} (bun run dev)`,
+              task_id: taskId,
+              task_type: 'local_bash',
+              command: 'bun run dev',
+            }),
+          ...(isError ? { is_error: true } : {}),
+        }],
+      },
+    ]
+
+    const restored = reconstructRunActivityFromTranscript([
+      ...shellStart('shell-tool-stopped', 'stopped-task', 0),
+      ...shellStart('shell-tool-live', 'live-task', 1),
+      ...taskStop('stop-tool-1', 'stopped-task', 2),
+      ...taskStop('stop-tool-2', 'live-task', 3, true),
+      ...taskStop('stop-tool-3', 'unknown-task', 4),
+    ])
+
+    expect(restored.backgroundAgentTasks['stopped-task']).toMatchObject({
+      taskId: 'stopped-task',
+      toolUseId: 'shell-tool-stopped',
+      status: 'stopped',
+      description: 'Start stopped-task',
+      taskType: 'local_bash',
+    })
+    expect(restored.backgroundAgentTasks['live-task']?.status).toBe('running')
+    expect(restored.backgroundAgentTasks['unknown-task']).toBeUndefined()
+    expect(hasRunningBackgroundTasks({
+      'stopped-task': restored.backgroundAgentTasks['stopped-task']!,
+    })).toBe(false)
+  })
+
   it('recognizes manually backgrounded PowerShell from structured tool output', () => {
     const restored = reconstructRunActivityFromTranscript([
       {
@@ -5705,6 +5785,22 @@ describe('chatStore history mapping', () => {
       ],
       [TEST_SESSION_ID, { type: 'prewarm_session' }],
     ])
+  })
+
+  it('replays OAuth Fast and confirms both enabling and disabling without treating the old ack as current', () => {
+    const enabled = { providerId: 'openai-official', modelId: 'gpt-6-sol', effortLevel: 'high' as const, openAIFastMode: true }
+    useSessionRuntimeStore.getState().setSelection(TEST_SESSION_ID, enabled)
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, { prewarm: false, minimalBootstrap: true })
+    expect(sendMock).toHaveBeenCalledWith(TEST_SESSION_ID, { type: 'set_runtime_config', ...enabled })
+
+    const disabled = { ...enabled, openAIFastMode: false }
+    useSessionRuntimeStore.getState().setSelection(TEST_SESSION_ID, disabled)
+    useChatStore.getState().setSessionRuntime(TEST_SESSION_ID, disabled)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, { type: 'runtime_config_applied', ...enabled })
+    expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]).toEqual(disabled)
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, { type: 'runtime_config_applied', ...disabled })
+    expect(useSessionRuntimeStore.getState().selections[TEST_SESSION_ID]).toEqual(disabled)
+    expect(sendMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, { type: 'set_runtime_config', ...disabled })
   })
 
   it.each(['reconnect', 'send'] as const)('recovers a removed provider before %s without replaying its stale model or effort', (action) => {
@@ -12353,6 +12449,68 @@ describe('chatStore history mapping', () => {
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
   })
 
+  it('carries live compaction progress on the tail divider without losing its start time', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(1_000_000)
+      useChatStore.setState({
+        sessions: {
+          [TEST_SESSION_ID]: makeSession({
+            chatState: 'thinking',
+            messages: [{ id: 'old-user', type: 'user_text', content: 'old context', timestamp: 1 }],
+          }),
+        },
+      })
+      const store = useChatStore.getState()
+      const tailDivider = () => {
+        const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+        const dividers = messages.filter((message) => message.type === 'compact_summary')
+        expect(dividers).toHaveLength(messages.length - 1)
+        return messages[messages.length - 1]
+      }
+
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'compacting', verb: 'Compacting conversation' })
+      expect(tailDivider()).toEqual(expect.objectContaining({ type: 'compact_summary', phase: 'compacting', timestamp: 1_000_000 }))
+      expect(tailDivider()).not.toHaveProperty('outputChars')
+
+      vi.setSystemTime(1_005_000)
+      store.handleServerMessage(TEST_SESSION_ID, {
+        type: 'status', state: 'compacting', verb: 'Compacting conversation', compactProgress: { outputChars: 1_200 },
+      })
+      expect(tailDivider()).toMatchObject({ phase: 'compacting', outputChars: 1_200, timestamp: 1_000_000 })
+
+      // The 30s CLI keep-alive re-sends a bare compacting status; it must not
+      // wipe the progress already shown.
+      vi.setSystemTime(1_030_000)
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'compacting', verb: 'Compacting conversation' })
+      expect(tailDivider()).toMatchObject({ phase: 'compacting', outputChars: 1_200, timestamp: 1_000_000 })
+
+      store.handleServerMessage(TEST_SESSION_ID, {
+        type: 'status', state: 'compacting', verb: 'Compacting conversation', compactProgress: { outputChars: 3_400 },
+      })
+      expect(tailDivider()).toMatchObject({ outputChars: 3_400, timestamp: 1_000_000 })
+
+      store.handleServerMessage(TEST_SESSION_ID, {
+        type: 'system_notification', subtype: 'compact_boundary', message: 'Context compacted', data: { trigger: 'auto' },
+      })
+      expect(tailDivider()).toMatchObject({ phase: 'complete', trigger: 'auto', timestamp: 1_000_000 })
+      expect(tailDivider()).not.toHaveProperty('outputChars')
+
+      // A later compaction gets its own divider and start time, with no
+      // leftover progress from the finished one.
+      vi.setSystemTime(2_000_000)
+      store.handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'compacting', verb: 'Compacting conversation' })
+      const messages = useChatStore.getState().sessions[TEST_SESSION_ID]?.messages ?? []
+      expect(messages).toHaveLength(3)
+      expect(messages[1]).toMatchObject({ type: 'compact_summary', phase: 'complete', timestamp: 1_000_000 })
+      expect(messages[2]).toMatchObject({ type: 'compact_summary', phase: 'compacting', timestamp: 2_000_000 })
+      expect(messages[2]).not.toHaveProperty('outputChars')
+    } finally {
+      useChatStore.getState().handleServerMessage(TEST_SESSION_ID, { type: 'status', state: 'idle' })
+      vi.useRealTimers()
+    }
+  })
+
   it('starts an elapsed timer when a reconnected session reports running status', () => {
     vi.useFakeTimers()
 
@@ -17005,5 +17163,186 @@ describe('chatStore closed-session edit recovery', () => {
     expect(useChatStore.getState().sessions[sessionId]?.connectionState).toBe('connecting')
     expect(sessionsApi.getFullHistory).not.toHaveBeenCalled()
     expect(sendMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('chatStore streamed turn against its durable copy (#1476)', () => {
+  const sessionId = 'streamed-turn-durable-copy'
+  const THINKING = 'This is a large change (72 files, 14k insertions).'
+  const REPLY = 'Context gathered. Setting up the loop.'
+
+  beforeEach(() => {
+    sendMock.mockReset()
+    vi.mocked(sessionsApi.getFullHistory).mockReset()
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [] })
+    useChatStore.setState({ ...initialState, sessions: {} })
+  })
+
+  afterEach(() => {
+    const timer = useChatStore.getState().sessions[sessionId]?.elapsedTimer
+    if (timer) clearInterval(timer)
+    useChatStore.setState({ ...initialState, sessions: {} })
+  })
+
+  const send = (message: ServerMessage) => useChatStore.getState().handleServerMessage(sessionId, message)
+  const timeline = () => (useChatStore.getState().sessions[sessionId]?.messages ?? []).map((message) =>
+    message.type === 'thinking' || message.type === 'assistant_text' || message.type === 'user_text'
+      ? `${message.type}: ${message.content}`
+      : message.type)
+
+  // DeepSeek-style tokenization streams the gap between words as its own delta.
+  async function streamTurn() {
+    send({ type: 'thinking', text: 'This is a large change (72 files,' })
+    send({ type: 'thinking', text: ' ' })
+    send({ type: 'thinking', text: '14k insertions).' })
+    send({ type: 'content_start', blockType: 'tool_use', toolName: 'Bash', toolUseId: 'toolu_status' })
+    send({ type: 'tool_use_complete', toolName: 'Bash', toolUseId: 'toolu_status', input: { command: 'git status' } })
+    send({ type: 'tool_result', toolUseId: 'toolu_status', content: 'clean', isError: false })
+    send({ type: 'content_start', blockType: 'text' })
+    send({ type: 'content_delta', text: REPLY })
+    await new Promise((resolve) => setTimeout(resolve, 80))
+    send({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+  }
+
+  // The CLI persists each block when it completes, after its first live delta.
+  function durableTurn(): MessageEntry[] {
+    const at = (offset: number) => new Date(Date.now() + offset).toISOString()
+    return [
+      { id: 'durable-user', type: 'user', timestamp: at(-60_000), content: 'review it' },
+      { id: 'durable-thinking', type: 'assistant', timestamp: at(1_000), content: [{ type: 'thinking', thinking: THINKING }] },
+      { id: 'durable-tool', type: 'assistant', timestamp: at(2_000), content: [{ type: 'tool_use', id: 'toolu_status', name: 'Bash', input: { command: 'git status' } }] },
+      { id: 'durable-result', type: 'user', timestamp: at(3_000), content: [{ type: 'tool_result', tool_use_id: 'toolu_status', content: 'clean' }] },
+      { id: 'durable-reply', type: 'assistant', timestamp: at(4_000), content: [{ type: 'text', text: REPLY }] },
+    ]
+  }
+
+  const expectedTimeline = [
+    'user_text: review it',
+    `thinking: ${THINKING}`,
+    'tool_use',
+    'tool_result',
+    `assistant_text: ${REPLY}`,
+  ]
+
+  function touchLiveMessages() {
+    useChatStore.setState((state) => ({
+      sessions: {
+        ...state.sessions,
+        [sessionId]: { ...state.sessions[sessionId]!, messages: [...state.sessions[sessionId]!.messages] },
+      },
+    }))
+  }
+
+  it('keeps whitespace-only thinking deltas that continue a streaming block', () => {
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'thinking' }) } })
+
+    send({ type: 'thinking', text: '\n\n' })
+    send({ type: 'thinking', text: 'first' })
+    send({ type: 'thinking', text: '\n\n' })
+    send({ type: 'thinking', text: 'second' })
+    send({ type: 'thinking', text: '  ', complete: true })
+
+    expect(useChatStore.getState().sessions[sessionId]?.messages).toMatchObject([
+      { type: 'thinking', content: 'first\n\nsecond' },
+    ])
+  })
+
+  it('does not duplicate the streamed turn when completion runs a cold history load', async () => {
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({
+      chatState: 'thinking',
+      historyHydrated: false,
+      historyStatus: 'error',
+      messages: [{ id: 'live-user', type: 'user_text', content: 'review it', timestamp: Date.now() - 60_000 }],
+    }) } })
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+
+    await streamTurn()
+    // Live activity (for example a background agent row) lands while REST is
+    // in flight, so the cold merge cannot hydrate transcript ids first.
+    touchLiveMessages()
+    resolveHistory({ messages: durableTurn() })
+    await vi.waitFor(() => expect(useChatStore.getState().sessions[sessionId]?.historyHydrated).toBe(true))
+
+    expect(timeline()).toEqual(expectedTimeline)
+  })
+
+  it('does not duplicate the streamed turn when a bounded reload merges it', async () => {
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({
+      chatState: 'thinking',
+      historyHydrated: true,
+      historyStatus: 'ready',
+      messages: [{ id: 'live-user', type: 'user_text', content: 'review it', timestamp: Date.now() - 60_000, transcriptMessageId: 'durable-user' }],
+    }) } })
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({ messages: durableTurn() })
+    await streamTurn()
+    await vi.waitFor(() => expect(sessionsApi.getFullHistory).toHaveBeenCalledTimes(1))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    let resolveHistory!: (value: SessionHistoryPage) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+    const session = useChatStore.getState().sessions[sessionId]!
+    const reload = useChatStore.getState().reloadHistory(sessionId, {
+      messages: session.messages,
+      backgroundAgentTasks: session.backgroundAgentTasks,
+    })
+    await vi.waitFor(() => expect(sessionsApi.getFullHistory).toHaveBeenCalledTimes(2))
+    // An oversized tool result was omitted, so the page is not authoritative.
+    resolveHistory({
+      messages: durableTurn(),
+      page: {
+        historyComplete: false,
+        omittedOversizedEntries: 1,
+        contentTruncated: false,
+        nextCursor: null,
+        hasMore: false,
+      },
+    } as SessionHistoryPage)
+    await reload
+
+    expect(timeline()).toEqual(expectedTimeline)
+  })
+
+  it('keeps an identical reply to a newer live prompt beside the durable one', async () => {
+    const now = Date.now()
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({
+      chatState: 'idle',
+      historyHydrated: false,
+      historyStatus: 'error',
+      messages: [
+        { id: 'live-tool', type: 'tool_use', toolName: 'Bash', toolUseId: 'toolu_status', input: {}, timestamp: now - 3_000 },
+        { id: 'live-result', type: 'tool_result', toolUseId: 'toolu_status', content: 'clean', isError: false, timestamp: now - 2_000 },
+        { id: 'live-again', type: 'user_text', content: 'again', timestamp: now - 1_000 },
+        { id: 'live-done', type: 'assistant_text', content: 'Done.', timestamp: now },
+      ],
+    }) } })
+    let resolveHistory!: (value: { messages: MessageEntry[] }) => void
+    vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => {
+      resolveHistory = resolve
+    }))
+
+    const load = useChatStore.getState().loadHistory(sessionId)
+    touchLiveMessages()
+    const at = (offset: number) => new Date(now + offset).toISOString()
+    resolveHistory({ messages: [
+      { id: 'durable-user', type: 'user', timestamp: at(-5_000), content: 'review it' },
+      { id: 'durable-tool', type: 'assistant', timestamp: at(-3_000), content: [{ type: 'tool_use', id: 'toolu_status', name: 'Bash', input: {} }] },
+      { id: 'durable-result', type: 'user', timestamp: at(-2_000), content: [{ type: 'tool_result', tool_use_id: 'toolu_status', content: 'clean' }] },
+      { id: 'durable-done', type: 'assistant', timestamp: at(-1_500), content: [{ type: 'text', text: 'Done.' }] },
+    ] })
+    await load
+
+    expect(timeline()).toEqual([
+      'user_text: review it',
+      'tool_use',
+      'tool_result',
+      'assistant_text: Done.',
+      'user_text: again',
+      'assistant_text: Done.',
+    ])
   })
 })

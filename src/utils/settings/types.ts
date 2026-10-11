@@ -462,6 +462,14 @@ export const SettingsSchema = lazySchema(() =>
           'Explicitly enable dynamic workflows. Only consulted when they are not ' +
             'disabled; `disableWorkflows` and CLAUDE_CODE_DISABLE_WORKFLOWS win.',
         ),
+      maxConcurrentSubagents: z
+        .number()
+        .int()
+        .positive()
+        .max(Number.MAX_SAFE_INTEGER)
+        .nullable()
+        .optional()
+        .describe('Maximum concurrent ordinary subagents in one CLI process. Missing or null means unlimited.'),
       agentTeamsEnabled: z
         .boolean()
         .optional()

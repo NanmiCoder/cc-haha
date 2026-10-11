@@ -25,10 +25,16 @@ test('HTTP plan review edits only allocation, handles stale clients and resumes 
   process.env.CLAUDE_CONFIG_DIR = root
   let release!: () => void
   const barrier = new Promise<void>(resolve => { release = resolve })
+  const startedLeaders: string[] = []
   const runtime = new TeamPlanService({ validate: async plan => plan, launch: async () => { await barrier; return { memberIds: { worker: 'session-child' } } }, stop: async () => {} })
   const spies = [
     spyOn(teamPlanService, 'getForSession').mockImplementation(id => runtime.getForSession(id)),
-    spyOn(teamPlanService, 'approve').mockImplementation((name, action) => runtime.approve(name, action)),
+    // The route must hand approval a way to start a disconnected lead; the
+    // fixture records the start instead of spawning a CLI.
+    spyOn(teamPlanService, 'approve').mockImplementation((name, action, options) => {
+      expect(typeof options?.startLeader).toBe('function')
+      return runtime.approve(name, action, { startLeader: async id => { startedLeaders.push(id) } })
+    }),
     spyOn(teamPlanService, 'action').mockImplementation((name, kind, action) => runtime.action(name, kind, action)),
   ]
   const request = async (method: string, pathname: string, body?: unknown) => {
@@ -57,6 +63,7 @@ test('HTTP plan review edits only allocation, handles stale clients and resumes 
     const approveBody = { ...identity(pending), requestId: 'approve' }
     expect((await request('POST', '/api/teams/review/plan/approve', approveBody)).status).toBe(200)
     expect((await request('POST', '/api/teams/review/plan/approve', approveBody)).status).toBe(200)
+    expect(startedLeaders).toEqual(['leader'])
     release()
     for (let i = 0; i < 100 && (await readTeamPlan('review'))?.state !== 'running'; i++) await Bun.sleep(5)
     const resumed = await request('GET', '/api/teams/session/leader/plan')

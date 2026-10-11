@@ -129,8 +129,8 @@ vi.mock('./ContentRouter', () => ({
   ContentRouter: () => <section>content loaded</section>,
 }))
 
-vi.mock('./TabBar', () => ({
-  TabBar: () => <nav>tabs loaded</nav>,
+vi.mock('./AppHeader', () => ({
+  AppHeader: () => <nav>header loaded</nav>,
 }))
 
 vi.mock('./H5ConnectionView', () => ({
@@ -216,7 +216,7 @@ describe('AppShell boot flow', () => {
     expect(screen.getByText('app.launching')).toBeInTheDocument()
 
     expect(await screen.findByText('sidebar loaded')).toBeInTheDocument()
-    expect(screen.getByText('tabs loaded')).toBeInTheDocument()
+    expect(screen.getByText('header loaded')).toBeInTheDocument()
     expect(screen.getByText('content loaded')).toBeInTheDocument()
     expect(screen.getByText('updates loaded')).toBeInTheDocument()
   })
@@ -553,7 +553,7 @@ describe('AppShell boot flow', () => {
     // The phone list reads hidden projects from this request.
     expect(shell).toHaveAttribute('data-has-preferences', 'yes')
     expect(screen.queryByText('sidebar loaded')).not.toBeInTheDocument()
-    expect(screen.queryByText('tabs loaded')).not.toBeInTheDocument()
+    expect(screen.queryByText('header loaded')).not.toBeInTheDocument()
     await waitFor(() => {
       expect(resolveProjectDisplayName('/workspace/project')).toBe('Mobile alias')
     })
@@ -567,17 +567,17 @@ describe('AppShell boot flow', () => {
 
     expect(await screen.findByTestId('mobile-shell-stub')).toHaveAttribute('data-layout', 'tablet')
     expect(screen.queryByTestId('sidebar-shell')).not.toBeInTheDocument()
-    expect(screen.queryByText('tabs loaded')).not.toBeInTheDocument()
+    expect(screen.queryByText('header loaded')).not.toBeInTheDocument()
   })
 
-  it('keeps the sidebar, tab strip and resize handle on a desktop window', async () => {
+  it('keeps the sidebar, header and resize handle on a desktop window', async () => {
     mocks.layout = 'desktop'
 
     render(<AppShell />)
 
     await screen.findByText('content loaded')
     expect(screen.getByText('sidebar loaded')).toBeInTheDocument()
-    expect(screen.getByText('tabs loaded')).toBeInTheDocument()
+    expect(screen.getByText('header loaded')).toBeInTheDocument()
     expect(screen.getByTestId('sidebar-resize-handle')).toBeInTheDocument()
     expect(screen.queryByTestId('mobile-shell-stub')).not.toBeInTheDocument()
   })

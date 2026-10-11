@@ -2219,6 +2219,70 @@ describe('MessageList nested tool calls', () => {
     const divider = screen.getByTestId('compact-status-divider')
     expect(within(divider).getByText('Compacting context')).toBeTruthy()
     expect(screen.queryByText('Compacting context...')).toBeNull()
+    // No divider message yet means no known start time, so no fake 0:00 timer.
+    expect(within(divider).queryByTestId('compact-progress')).toBeNull()
+  })
+
+  it('ticks compaction elapsed time and shows the generated summary size', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-10T08:00:00Z'))
+    const startedAt = Date.now() - 65_000
+    const compactingDivider = (outputChars?: number): UIMessage => ({
+      id: 'compacting-1',
+      type: 'compact_summary',
+      title: 'Context compacted',
+      phase: 'compacting',
+      ...(outputChars !== undefined ? { outputChars } : {}),
+      timestamp: startedAt,
+    })
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          chatState: 'compacting',
+          statusVerb: 'Compacting conversation',
+          messages: [compactingDivider()],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    const progress = () => within(screen.getByTestId('compact-status-divider')).getByTestId('compact-progress')
+    expect(screen.getAllByTestId('compact-status-divider')).toHaveLength(1)
+    expect(within(screen.getByTestId('compact-status-divider')).getByText('Compacting context')).toBeTruthy()
+    expect(progress().textContent).toBe(' · 1:05')
+
+    act(() => { vi.advanceTimersByTime(2_000) })
+    expect(progress().textContent).toBe(' · 1:07')
+
+    act(() => {
+      useChatStore.setState({
+        sessions: {
+          [ACTIVE_TAB]: makeSessionState({
+            chatState: 'compacting',
+            statusVerb: 'Compacting conversation',
+            messages: [compactingDivider(3_240)],
+          }),
+        },
+      })
+    })
+    expect(progress().textContent).toBe(' · 1:07 · 3.2k chars generated')
+
+    act(() => { vi.advanceTimersByTime(60_000) })
+    expect(progress().textContent).toBe(' · 2:07 · 3.2k chars generated')
+
+    act(() => {
+      useChatStore.setState({
+        sessions: {
+          [ACTIVE_TAB]: makeSessionState({
+            chatState: 'thinking',
+            messages: [{ ...compactingDivider(3_240), phase: 'complete' } as UIMessage],
+          }),
+        },
+      })
+    })
+    expect(within(screen.getByTestId('compact-status-divider')).queryByTestId('compact-progress')).toBeNull()
+    expect(vi.getTimerCount()).toBe(0)
   })
 
   it('shows API retry metadata in the active turn indicator', () => {

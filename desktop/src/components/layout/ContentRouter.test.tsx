@@ -1,6 +1,6 @@
 vi.mock('../../pages/ExtensionMarket', () => ({ ExtensionMarket: () => <div data-testid="extension-market-page" /> }))
 vi.mock('../../pages/Connectors', () => ({ Connectors: () => <div data-testid="connectors-page" /> }))
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import '@testing-library/jest-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,14 +24,6 @@ vi.mock('../../pages/Market', () => ({
   Market: () => <div data-testid="market-page" />,
 }))
 
-vi.mock('../../pages/TerminalSettings', () => ({
-  TerminalSettings: ({ active, cwd, onNewTerminal, runtimeId, testId }: { active: boolean; cwd?: string; onNewTerminal: () => void; runtimeId?: string; testId: string }) => (
-    <div data-active={active ? 'true' : 'false'} data-cwd={cwd ?? ''} data-runtime-id={runtimeId ?? ''} data-testid={testId}>
-      <button type="button" onClick={onNewTerminal}>New Terminal</button>
-    </div>
-  ),
-}))
-
 vi.mock('../../pages/SubagentRunPage', () => ({
   SubagentRunPage: ({ sourceSessionId, taskId, toolUseId, title }: { sourceSessionId: string; taskId?: string; toolUseId: string; title: string }) => (
     <div data-testid="subagent-run-page">{sourceSessionId}:{toolUseId}:{taskId}:{title}</div>
@@ -50,38 +42,6 @@ describe('ContentRouter tab surfaces', () => {
     cleanup()
     useTabStore.setState({ tabs: [], activeTabId: null })
     useUIStore.setState({ pendingSettingsTab: null })
-  })
-
-  it('renders the active terminal tab as main content', () => {
-    useTabStore.setState({
-      tabs: [{ sessionId: '__terminal__1', title: 'Terminal 1', type: 'terminal', status: 'idle', terminalCwd: '/tmp/project' }],
-      activeTabId: '__terminal__1',
-    })
-
-    render(<ContentRouter />)
-
-    expect(screen.getByTestId('terminal-host-__terminal__1')).toHaveAttribute('data-active', 'true')
-    expect(screen.getByTestId('terminal-host-__terminal__1')).toHaveAttribute('data-cwd', '/tmp/project')
-    expect(screen.getByTestId('terminal-host-__terminal__1')).toHaveAttribute('data-runtime-id', '__terminal__1')
-    expect(screen.queryByTestId('active-session')).not.toBeInTheDocument()
-  })
-
-  it('uses a promoted docked runtime when rendering a terminal tab', () => {
-    useTabStore.setState({
-      tabs: [{
-        sessionId: '__terminal__1',
-        title: 'Terminal 1',
-        type: 'terminal',
-        status: 'idle',
-        terminalCwd: '/tmp/project',
-        terminalRuntimeId: '__session_terminal__session-1',
-      }],
-      activeTabId: '__terminal__1',
-    })
-
-    render(<ContentRouter />)
-
-    expect(screen.getByTestId('terminal-host-__terminal__1')).toHaveAttribute('data-runtime-id', '__session_terminal__session-1')
   })
 
   it('keeps one browser page layer for the life of the window, inside the session panel', () => {
@@ -115,35 +75,6 @@ describe('ContentRouter tab surfaces', () => {
     }))
     expect(screen.queryByTestId('active-session')).toBeNull()
     expect(screen.getByTestId('workspace-browser-guest-layer')).toBe(layer)
-  })
-
-  it('keeps terminal tabs mounted while chat content is active', () => {
-    useTabStore.setState({
-      tabs: [
-        { sessionId: '__terminal__1', title: 'Terminal 1', type: 'terminal', status: 'idle' },
-        { sessionId: 'session-1', title: 'Chat', type: 'session', status: 'idle' },
-      ],
-      activeTabId: 'session-1',
-    })
-
-    render(<ContentRouter />)
-
-    expect(screen.getByTestId('terminal-host-__terminal__1')).toHaveAttribute('data-active', 'false')
-    expect(screen.getByTestId('active-session')).toBeInTheDocument()
-  })
-
-  it('can open another terminal tab from a terminal page', () => {
-    useTabStore.setState({
-      tabs: [{ sessionId: '__terminal__1', title: 'Terminal 1', type: 'terminal', status: 'idle', terminalCwd: '/tmp/project' }],
-      activeTabId: '__terminal__1',
-    })
-
-    render(<ContentRouter />)
-    fireEvent.click(screen.getByRole('button', { name: 'New Terminal' }))
-
-    expect(useTabStore.getState().tabs.filter((tab) => tab.type === 'terminal')).toHaveLength(2)
-    expect(useTabStore.getState().activeTabId).not.toBe('__terminal__1')
-    expect(useTabStore.getState().tabs.find((tab) => tab.sessionId === useTabStore.getState().activeTabId)?.terminalCwd).toBe('/tmp/project')
   })
 
   it('renders SubAgent run tabs', () => {

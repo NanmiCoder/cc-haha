@@ -2478,11 +2478,16 @@ async function readStableTraceProjectionNow(
     let position = append?.source.indexedBytes ?? scan?.byteStart ?? 0
     if (position > before.size) throw traceResourceError('TRACE_PAGE_STALE', 'Trace file changed; restart from the first window')
     const windowStartByte = append?.source.windowStartByte ?? position
+    // A truncated window is a frozen prefix of the file: later appends land
+    // past it, so they only refresh the fingerprint (size, tail hash and the
+    // continuation cursor). Rescanning the window per append cost O(64MB).
+    const frozenWindow = append?.source.scanTruncated === true
     const startOrdinal = scan?.ordinal ?? 0
     let oversizedRecords = append?.source.oversizedRecords ?? 0
-    let scanTruncated = false
+    let scanTruncated = frozenWindow
     let skippingOversizedLine = scan?.skipLine === true
-    let oversizedContinuation = false
+    let oversizedContinuation = frozenWindow &&
+      append.source.lastErrorCode === 'TRACE_OVERSIZED_RECORD_CONTINUATION'
     let recordsScanned = 0
     const recordBudget = scan?.remainingRecords ?? TRACE_WINDOW_RECORD_LIMIT
     let indexedBytes = position
@@ -2519,9 +2524,12 @@ async function readStableTraceProjectionNow(
       boundaryWindow = await readTraceRange(filePath, Math.max(0, position - TRACE_FINGERPRINT_WINDOW_BYTES), position, 'fingerprint')
       lastWindow = boundaryWindow
     }
-    scanChunks: while (position < before.size) {
+    scanChunks: while (!frozenWindow && position < before.size) {
       scan?.signal?.throwIfAborted()
       if (recordsScanned >= recordBudget) { scanTruncated = true; break }
+      // An append that starts at the byte limit truncates at the same boundary
+      // a cold rebuild would, instead of growing the window one record at a time.
+      if (indexedBytes - windowStartByte >= TRACE_WINDOW_BYTES_LIMIT) { scanTruncated = true; break }
       const chunk = Buffer.allocUnsafe(Math.min(256 * 1024, before.size - position))
       const { bytesRead } = await handle.read(chunk, 0, chunk.length, position)
       if (bytesRead === 0) return null
@@ -2692,8 +2700,10 @@ async function appendTraceProjection(
   filePath: string,
   scan?: TraceScanOptions,
 ): Promise<TraceSessionOverview | null> {
-  const page = index.getSessionPage(source.sessionId, 0, 1)
-  const remainingRecords = Math.max(0, TRACE_WINDOW_RECORD_LIMIT - (page?.totalCalls ?? 0) - (page?.totalEvents ?? 0) - source.oversizedRecords)
+  const page = source.scanTruncated ? null : index.getSessionPage(source.sessionId, 0, 1)
+  const remainingRecords = source.scanTruncated
+    ? 0
+    : Math.max(0, TRACE_WINDOW_RECORD_LIMIT - (page?.totalCalls ?? 0) - (page?.totalEvents ?? 0) - source.oversizedRecords)
   const snapshot = await readStableTraceProjection(filePath, { source, fingerprint: previousFingerprint }, { ...scan, remainingRecords })
   return snapshot ? commitTraceProjection(index, source.sessionId, filePath, snapshot, true, scan?.signal) : null
 }
@@ -2792,7 +2802,7 @@ async function ensureTraceProjectionNow(
       return null
     }
     traceReadCache.delete(filePath)
-    if (change.kind === 'append' && !source.scanTruncated) {
+    if (change.kind === 'append') {
       const appended = await appendTraceProjection(index, source, fingerprint, filePath, scan)
       if (!appended && attempt < 1) {
         return ensureTraceProjectionNow(
@@ -2804,9 +2814,20 @@ async function ensureTraceProjectionNow(
           scan,
         )
       }
+      // The window just filled up. Rebuild it once so it freezes at the
+      // boundary a cold scan picks: append budgets count projected entries
+      // while a cold scan counts lines, and windows from older builds could
+      // overrun the byte limit. Later appends only refresh the fingerprint.
+      if (appended && !source.scanTruncated && index.getSource(sessionId)?.scanTruncated) {
+        const rebuilt = await rebuildTraceProjection(index, sessionId, filePath, scan)
+        // A failed rebuild (the file moved under the read) must not freeze the
+        // append-sized window; degrading makes the next access rebuild again.
+        if (!rebuilt) index.markDegraded(sessionId, 'TRACE_INDEX_SYNC_FAILED')
+        return rebuilt
+      }
       return appended
     }
-    if (change.kind === 'rebuild' || (change.kind === 'append' && source.scanTruncated)) {
+    if (change.kind === 'rebuild') {
       const rebuilt = await rebuildTraceProjection(index, sessionId, filePath, scan)
       if (!rebuilt && attempt < 1) {
         return ensureTraceProjectionNow(
@@ -2831,6 +2852,9 @@ async function ensureTraceProjectionNow(
       quarantineTraceIndexFailure(target ?? currentTraceIndexTarget(), error)
       return null
     }
+    // A full reader queue is transient; degrading would force the next append
+    // to rebuild the whole window instead of catching up incrementally.
+    if ((error as { code?: unknown })?.code === 'TRACE_INDEX_BUSY') return null
     withTraceIndex(
       activeIndex => activeIndex.markDegraded(sessionId, 'TRACE_INDEX_SYNC_FAILED'),
       target,
@@ -2860,7 +2884,10 @@ async function projectAppendedTraceEntry(
     if (previousRevision !== undefined && projection && projection.revision > previousRevision) {
       traceCaptureDiagnostics.appendedEntriesProjected += 1
     }
-  } catch {
+  } catch (error) {
+    // A full projection queue is transient. Keeping the old fingerprint lets
+    // the next append catch up incrementally; degrading forces a full rebuild.
+    if ((error as { code?: unknown })?.code === 'TRACE_INDEX_BUSY') return
     // The JSONL append has already succeeded; projection failures are non-fatal.
     withTraceIndex(
       activeIndex => activeIndex.markDegraded(sessionId, 'TRACE_INDEX_APPEND_FAILED'),

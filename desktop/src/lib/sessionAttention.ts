@@ -15,8 +15,8 @@ type AttentionSource = Pick<PerSessionState, 'pendingPermission' | 'pendingPermi
  * that was still waiting. Computer Use records are left out on purpose: nothing
  * renders them, so counting them would light a marker with no card to answer.
  *
- * This is the one place that decides. The tab strip, both sidebar views and the
- * mobile header all call it; a surface that grows its own rule will drift.
+ * This is the one place that decides. The window header, both sidebar views and
+ * the mobile header all call it; a surface that grows its own rule will drift.
  */
 export function sessionNeedsAttention(session: AttentionSource | undefined): boolean {
   return listPendingPermissions(session).length > 0
@@ -31,9 +31,10 @@ export function collectAttentionIds(
 }
 
 /**
- * The next waiting session after `activeId` in strip order, wrapping past the
- * end and never returning `activeId` itself. An `activeId` that is not in the
- * strip (Settings, a session with no tab) starts from the first entry.
+ * The next waiting session after `activeId` in `orderedIds` (the sidebar's
+ * order), wrapping past the end and never returning `activeId` itself. An
+ * `activeId` that is not in the list (Settings, the new-session page) starts
+ * from the first entry.
  */
 export function nextAttentionSessionId(
   orderedIds: readonly string[],

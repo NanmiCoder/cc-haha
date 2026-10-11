@@ -118,6 +118,28 @@ describe('session projector', () => {
     }
   })
 
+  it('stores explicit Fast false in the index after previously enabled OAuth metadata', async () => {
+    const root = await createTempDir('projector-fast-mode')
+    const database = openLocalIndexDatabase({ path: join(root, 'index.sqlite') })
+    const index = createSessionIndex(database)
+    const candidate = await createCandidate({
+      root, projectPath: '-repo', sessionId: 'fast-mode',
+      content: [
+        { type: 'session-meta', runtimeProviderId: 'openai-official', runtimeModelId: 'unknown-model', openAIFastMode: true },
+        user('Existing conversation', '2026-01-01T00:00:00Z'),
+        { type: 'session-meta', openAIFastMode: false },
+      ].map(line).join(''),
+    })
+    try {
+      await createSessionProjector({ database, index, scope: root }).projectSource(candidate)
+      expect(index.getSession(candidate.sessionId)?.openAIFastMode).toBe(false)
+      expect(index.listSessions().sessions[0]?.openAIFastMode).toBe(false)
+      expect(index.getProjectionSeed(candidate.path)?.summary.openAIFastMode).toBe(false)
+    } finally {
+      database.close()
+    }
+  })
+
   it('persists an immediate title patch without waiting for transcript reprojection', async () => {
     const root = await createTempDir('projector-title-patch')
     const databasePath = join(root, 'index.sqlite')

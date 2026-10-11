@@ -57,6 +57,17 @@ function assistant(timestamp: string, extra: Record<string, unknown> = {}) {
 }
 
 describe('reduceTranscript', () => {
+  it('preserves Fast mode across old partial metadata and applies explicit false incrementally', () => {
+    const old = { type: 'session-meta', runtimeProviderId: 'openai-official', runtimeModelId: 'future-model' }
+    const enabled = { type: 'session-meta', openAIFastMode: true }
+    const disabled = { type: 'session-meta', openAIFastMode: false }
+    const first = reduceTranscript(completeChunks([old, enabled]), initialProjection())
+    expect(first.summary.openAIFastMode).toBe(true)
+    const next = reduceTranscript(completeChunks([disabled], first.indexedBytes), first)
+    expect(next.summary.openAIFastMode).toBe(false)
+    expect(reduceTranscript(completeChunks([old, enabled, disabled]), initialProjection()).summary.openAIFastMode).toBe(false)
+  })
+
   it('clears inherited effort on full runtime replacements in complete and incremental projections', () => {
     const oldSelection = { type: 'session-meta', runtimeProviderId: 'old-provider', runtimeModelId: 'old-model', effortLevel: 'high' }
     const replacement = { type: 'session-meta', runtimeProviderId: 'new-provider', runtimeModelId: 'new-model' }

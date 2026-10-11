@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { browserHost } from '../lib/desktopHost/browserHost'
+import { createElectronHost } from '../lib/desktopHost/electronHost'
+import type { DesktopUpdateDownloadEvent } from '../lib/desktopHost/types'
+import { ELECTRON_IPC_CHANNELS, type ElectronIpcChannel } from '../../electron/ipc/channels'
+import { ElectronUpdaterService, type ElectronUpdaterLike } from '../../electron/services/updater'
 
 const check = vi.fn()
 const relaunch = vi.fn()
@@ -308,6 +312,238 @@ describe('updateStore', () => {
     expect(useUpdateStore.getState().availableVersion).toBe('0.2.0')
     expect(useUpdateStore.getState().shouldPrompt).toBe(false)
     expect(download).toHaveBeenCalledTimes(1)
+  })
+
+  it('honors the existing Later fixture across repeated startups until explicit installation', async () => {
+    vi.useFakeTimers()
+    try {
+      // Existing releases already persist this string; no new schema is needed.
+      window.localStorage.setItem('cc-haha-dismissed-update-version', '0.2.0')
+      const download = vi.fn().mockResolvedValue(undefined)
+      const install = vi.fn().mockResolvedValue(undefined)
+      check.mockResolvedValue({ version: '0.2.0', download, install, close: vi.fn() })
+
+      for (let restart = 0; restart < 3; restart += 1) {
+        vi.resetModules()
+        const { useUpdateStore } = await import('./updateStore')
+        const startup = useUpdateStore.getState().initialize()
+        await vi.advanceTimersByTimeAsync(5000)
+        await startup
+
+        expect(useUpdateStore.getState().availableVersion).toBe('0.2.0')
+        expect(useUpdateStore.getState().shouldPrompt).toBe(false)
+        expect(download).not.toHaveBeenCalled()
+        expect(install).not.toHaveBeenCalled()
+        expect(relaunch).not.toHaveBeenCalled()
+      }
+
+      const { useUpdateStore } = await import('./updateStore')
+      await useUpdateStore.getState().installUpdate()
+
+      expect(download).toHaveBeenCalledTimes(1)
+      expect(install).toHaveBeenCalledTimes(1)
+      expect(relaunch).toHaveBeenCalledTimes(1)
+      expect(window.localStorage.getItem('cc-haha-dismissed-update-version')).toBeNull()
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not start automatic checks after automatic updates have been disabled', async () => {
+    vi.resetModules()
+    const { useSettingsStore } = await import('./settingsStore')
+    useSettingsStore.setState({ autoUpdateEnabled: false })
+    const { useUpdateStore } = await import('./updateStore')
+
+    await useUpdateStore.getState().initialize()
+    await useUpdateStore.getState().checkForUpdates({ silent: true })
+
+    expect(check).not.toHaveBeenCalled()
+    expect(useUpdateStore.getState().status).toBe('idle')
+  })
+
+  it('honors disabling automatic updates during the startup delay', async () => {
+    vi.useFakeTimers()
+    try {
+      vi.resetModules()
+      const { useSettingsStore } = await import('./settingsStore')
+      useSettingsStore.setState({ autoUpdateEnabled: true })
+      const { useUpdateStore } = await import('./updateStore')
+      const startup = useUpdateStore.getState().initialize()
+
+      useSettingsStore.setState({ autoUpdateEnabled: false })
+      await vi.advanceTimersByTimeAsync(5000)
+      await startup
+
+      expect(check).not.toHaveBeenCalled()
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('starts a fresh automatic check when re-enabled after a skipped startup check', async () => {
+    vi.useFakeTimers()
+    try {
+      check.mockResolvedValue(null)
+      vi.resetModules()
+      const { useSettingsStore } = await import('./settingsStore')
+      const { useUpdateStore } = await import('./updateStore')
+      const firstStartup = useUpdateStore.getState().initialize()
+      useSettingsStore.setState({ autoUpdateEnabled: false })
+      await vi.advanceTimersByTimeAsync(5000)
+      await firstStartup
+      expect(check).not.toHaveBeenCalled()
+
+      useSettingsStore.setState({ autoUpdateEnabled: true })
+      const nextStartup = useUpdateStore.getState().initialize()
+      const duplicateStartup = useUpdateStore.getState().initialize()
+      await vi.advanceTimersByTimeAsync(5000)
+      await Promise.all([nextStartup, duplicateStartup])
+
+      expect(check).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps manual checking and explicit installation available with automatic updates disabled', async () => {
+    vi.useFakeTimers()
+    try {
+      const download = vi.fn().mockResolvedValue(undefined)
+      const install = vi.fn().mockResolvedValue(undefined)
+      check.mockResolvedValue({ version: '0.2.0', download, install, close: vi.fn() })
+      vi.resetModules()
+      const { useSettingsStore } = await import('./settingsStore')
+      useSettingsStore.setState({ autoUpdateEnabled: false })
+      const { useUpdateStore } = await import('./updateStore')
+
+      await useUpdateStore.getState().checkForUpdates()
+
+      expect(check).toHaveBeenCalledTimes(1)
+      expect(download).not.toHaveBeenCalled()
+      expect(useUpdateStore.getState().status).toBe('available')
+      expect(useUpdateStore.getState().shouldPrompt).toBe(false)
+
+      await useUpdateStore.getState().installUpdate()
+
+      expect(download).toHaveBeenCalledTimes(1)
+      expect(install).toHaveBeenCalledTimes(1)
+      expect(relaunch).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not start a background download if automatic updates are disabled while checking', async () => {
+    const download = vi.fn().mockResolvedValue(undefined)
+    let resolveCheck!: (update: unknown) => void
+    check.mockImplementation(() => new Promise(resolve => { resolveCheck = resolve }))
+    vi.resetModules()
+    const { useSettingsStore } = await import('./settingsStore')
+    useSettingsStore.setState({ autoUpdateEnabled: true })
+    const { useUpdateStore } = await import('./updateStore')
+    const checking = useUpdateStore.getState().checkForUpdates({ silent: true })
+
+    useSettingsStore.setState({ autoUpdateEnabled: false })
+    resolveCheck({ version: '0.2.0', download, close: vi.fn() })
+    await checking
+
+    expect(download).not.toHaveBeenCalled()
+    expect(useUpdateStore.getState().shouldPrompt).toBe(false)
+  })
+
+  it('keeps a finishing download quiet when automatic updates have been disabled', async () => {
+    let finishDownload!: () => void
+    const download = vi.fn(() => new Promise<void>(resolve => { finishDownload = resolve }))
+    check.mockResolvedValue({ version: '0.2.0', download, close: vi.fn() })
+    vi.resetModules()
+    const { useSettingsStore } = await import('./settingsStore')
+    useSettingsStore.setState({ autoUpdateEnabled: true })
+    const { useUpdateStore } = await import('./updateStore')
+    await useUpdateStore.getState().checkForUpdates({ silent: true })
+    const downloading = useUpdateStore.getState().downloadUpdate()
+
+    useSettingsStore.setState({ autoUpdateEnabled: false })
+    finishDownload()
+    await downloading
+
+    expect(useUpdateStore.getState().status).toBe('downloaded')
+    expect(useUpdateStore.getState().shouldPrompt).toBe(false)
+  })
+
+  it.each(['rejected', 'watchdog'] as const)('retries a %s restart through the real Electron host and updater without losing its download', async (failure) => {
+    vi.useFakeTimers()
+    try {
+      const updater: ElectronUpdaterLike = {
+        autoDownload: true,
+        autoInstallOnAppQuit: true,
+        checkForUpdates: vi.fn(async () => ({ updateInfo: { version: '0.2.0' } })),
+        downloadUpdate: vi.fn(async () => {}),
+        quitAndInstall: vi.fn(),
+        on: () => updater,
+        off: () => updater,
+      }
+      const service = new ElectronUpdaterService(updater)
+      let downloadHandler: ((event: DesktopUpdateDownloadEvent) => void) | null = null
+      let firstRelaunch = true
+      window.desktopHost = createElectronHost({
+        async invoke<T>(channel: ElectronIpcChannel) {
+          let result: unknown
+          switch (channel) {
+            case ELECTRON_IPC_CHANNELS.appGetVersion: result = '0.1.0'; break
+            case ELECTRON_IPC_CHANNELS.updateCheck: result = await service.checkForUpdates(); break
+            case ELECTRON_IPC_CHANNELS.updateDownload:
+              await service.downloadUpdate(event => downloadHandler?.(event))
+              break
+            case ELECTRON_IPC_CHANNELS.updateInstall: service.stageDownloadedUpdate(); break
+            case ELECTRON_IPC_CHANNELS.updateCancelInstall: service.cancelInstall(); break
+            case ELECTRON_IPC_CHANNELS.updatePrepareInstall: break
+            case ELECTRON_IPC_CHANNELS.runtimeGetServerUrl: result = 'http://127.0.0.1:3456'; break
+            case ELECTRON_IPC_CHANNELS.updateRelaunch:
+              if (firstRelaunch) {
+                firstRelaunch = false
+                if (failure === 'rejected') throw new Error('fixture restart failed')
+                break
+              }
+              service.quitAndInstallDownloadedUpdate({})
+              break
+            default: throw new Error(`Unexpected fixture IPC: ${channel}`)
+          }
+          return result as T
+        },
+        async subscribe(_channel, handler) {
+          downloadHandler = handler as (event: DesktopUpdateDownloadEvent) => void
+          return () => { downloadHandler = null }
+        },
+      })
+      vi.resetModules()
+      const { useUpdateStore } = await import('./updateStore')
+      await useUpdateStore.getState().checkForUpdates()
+      await useUpdateStore.getState().downloadUpdate()
+      await useUpdateStore.getState().installUpdate()
+      if (failure === 'watchdog') await vi.advanceTimersByTimeAsync(15_000)
+
+      expect(useUpdateStore.getState().status).toBe('downloaded')
+      expect(useUpdateStore.getState().error).toContain(failure === 'rejected'
+        ? 'fixture restart failed'
+        : 'Try installing the update again')
+      expect(service.hasStagedUpdate()).toBe(false)
+      expect(service.hasDownloadedUpdate()).toBe(true)
+
+      await useUpdateStore.getState().installUpdate()
+
+      expect(useUpdateStore.getState().status).toBe('restarting')
+      expect(updater.downloadUpdate).toHaveBeenCalledTimes(1)
+      expect(updater.quitAndInstall).toHaveBeenCalledTimes(1)
+      expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
+    } finally {
+      vi.clearAllTimers()
+      vi.useRealTimers()
+    }
   })
 
   it('prompts again when a newer version is available after dismissing an older one', async () => {

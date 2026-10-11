@@ -231,6 +231,101 @@ describe('background task notification persistence', () => {
     }])
   })
 
+  it('restores terminal notifications the CLI recorded as queued attachments or queue operations', async () => {
+    const sessionId = crypto.randomUUID()
+    const projectDir = path.join(configDir, 'projects', '-tmp-attachment-notification')
+    const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`)
+    await fs.mkdir(projectDir, { recursive: true })
+    const notificationXml = (taskId: string, toolUseId: string, status: string) =>
+      `<task-notification>\n<task-id>${taskId}</task-id>\n<tool-use-id>${toolUseId}</tool-use-id>\n<output-file>/tmp/tasks/${taskId}.output</output-file>\n<status>${status}</status>\n<summary>Background command "Install desktop dependencies" ${status} (exit code 0)</summary>\n</task-notification>`
+    // A notification drained mid-turn is written as an attachment, not a user turn
+    // (official CLI 2.1.288 shape); its prompt may also be a content-block array.
+    const entries = [
+      {
+        type: 'queue-operation',
+        operation: 'enqueue',
+        timestamp: '2026-10-05T10:52:39.100Z',
+        sessionId,
+        content: notificationXml('bdlrow0cg', 'toolu_bash_1', 'completed'),
+      },
+      {
+        type: 'attachment',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-10-05T10:52:39.100Z',
+        attachment: {
+          type: 'queued_command',
+          prompt: notificationXml('bdlrow0cg', 'toolu_bash_1', 'completed'),
+          commandMode: 'task-notification',
+          origin: { kind: 'task-notification', producer: 'session-task' },
+        },
+      },
+      {
+        type: 'attachment',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-10-05T11:00:00.000Z',
+        attachment: {
+          type: 'queued_command',
+          prompt: [{ type: 'text', text: notificationXml('b2', 'toolu_bash_2', 'killed') }],
+          commandMode: 'task-notification',
+        },
+      },
+      {
+        // Queued but never delivered: the session exited before draining it.
+        type: 'queue-operation',
+        operation: 'enqueue',
+        timestamp: '2026-10-05T11:02:00.000Z',
+        sessionId,
+        content: notificationXml('b3', 'toolu_bash_3', 'failed'),
+      },
+      {
+        type: 'queue-operation',
+        operation: 'remove',
+        timestamp: '2026-10-05T11:03:00.000Z',
+        sessionId,
+      },
+      {
+        // A prompt the user typed while a turn was running stays a prompt.
+        type: 'attachment',
+        uuid: crypto.randomUUID(),
+        timestamp: '2026-10-05T11:01:00.000Z',
+        attachment: {
+          type: 'queued_command',
+          prompt: notificationXml('typed', 'toolu_typed', 'completed'),
+          commandMode: 'prompt',
+        },
+      },
+    ]
+    await fs.writeFile(transcriptPath, `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`, 'utf8')
+
+    const service = new SessionService()
+    expect(await service.getSessionTaskNotifications(sessionId)).toEqual([
+      {
+        taskId: 'bdlrow0cg',
+        toolUseId: 'toolu_bash_1',
+        status: 'completed',
+        summary: 'Background command "Install desktop dependencies" completed (exit code 0)',
+        outputFile: '/tmp/tasks/bdlrow0cg.output',
+        timestamp: '2026-10-05T10:52:39.100Z',
+      },
+      {
+        taskId: 'b2',
+        toolUseId: 'toolu_bash_2',
+        status: 'stopped',
+        summary: 'Background command "Install desktop dependencies" killed (exit code 0)',
+        outputFile: '/tmp/tasks/b2.output',
+        timestamp: '2026-10-05T11:00:00.000Z',
+      },
+      {
+        taskId: 'b3',
+        toolUseId: 'toolu_bash_3',
+        status: 'failed',
+        summary: 'Background command "Install desktop dependencies" failed (exit code 0)',
+        outputFile: '/tmp/tasks/b3.output',
+        timestamp: '2026-10-05T11:02:00.000Z',
+      },
+    ])
+  })
+
   it('restores workflow run identity from task-notification transcript turns', async () => {
     const sessionId = crypto.randomUUID()
     const projectDir = path.join(configDir, 'projects', '-tmp-workflow-notification')

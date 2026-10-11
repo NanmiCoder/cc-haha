@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { ArrowLeft, RefreshCw } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import {
   isAgentIdRef,
   readAgentIdRef,
@@ -21,7 +21,6 @@ import {
 import { taskOwnedByMember } from '../components/agentTeams/agentTeamsModel'
 import type { TeamTaskAnchor } from '../api/teams'
 import { Badge, type Tone as BadgeTone } from '@/components/ui/Badge'
-import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
 import { useTranslation } from '../i18n'
 import {
@@ -158,18 +157,6 @@ export function SubagentRunPage({
       includeTeammateMessages: true,
     })
   }, [data?.activityMessages, data?.messages, data?.activityComplete])
-
-  const handleReturn = () => {
-    const store = useTabStore.getState()
-    const activeTab = store.tabs.find((tab) => tab.sessionId === store.activeTabId)
-    const returningTabId = activeTab?.type === 'subagent' && activeTab.subagentToolUseId === toolUseId
-      ? activeTab.sessionId
-      : `${SUBAGENT_TAB_PREFIX}${sourceSessionId}__${toolUseId}`
-    if (useActivityPanelStore.getState().isOpen(returningTabId)) {
-      useActivityPanelStore.getState().open(activeTab?.returnTabId ?? sourceSessionId)
-    }
-    store.returnFromSubagent(returningTabId)
-  }
 
   const load = useCallback(async (options?: { resetData?: boolean }) => {
     const requestId = requestIdRef.current + 1
@@ -326,13 +313,13 @@ export function SubagentRunPage({
       details={data ? (
         <>
           <span>{t('subagentRun.agent')}: {data.agentId ?? t('subagentRun.unknown')}</span>
-          {data.description ? <span>{data.description}</span> : null}
+          {/* The run is named by its description already (the header's trail
+              on the desktop, the top bar on a phone); only a different one adds anything. */}
+          {data.description && data.description.trim() !== title.trim() ? <span>{data.description}</span> : null}
           {data.outputFile ? <span>{t('subagentRun.output')}: {data.outputFile}</span> : null}
           {data.historyComplete === false ? <span role="status">{t('subagentRun.incompleteHistory')}</span> : null}
         </>
       ) : null}
-      backLabel={t('subagentRun.backToParent')}
-      onBack={handleReturn}
       refreshLabel={t('subagentRun.refresh')}
       onRefresh={() => void load()}
       loading={loading}
@@ -519,13 +506,6 @@ export function TeamMemberRunPage({
       ? snapshot?.tasks.find((task) => task.id === openAnchor.taskId)?.subject
       : undefined
   }, [memberTaskAnchors, snapshot])
-  const handleReturn = useCallback(() => {
-    if (useActivityPanelStore.getState().isOpen(tabId)) {
-      useActivityPanelStore.getState().open(leadSessionId)
-    }
-    useTabStore.getState().returnFromTeamMember(tabId)
-  }, [leadSessionId, tabId])
-
   return (
     <AgentSessionView
       kind="team-member"
@@ -550,8 +530,6 @@ export function TeamMemberRunPage({
             : null}
         </>
       ) : null}
-      backLabel={t('agentTeams.backToOverview')}
-      onBack={handleReturn}
       refreshLabel={t('subagentRun.refresh')}
       onRefresh={() => void refresh()}
       loading={loading}
@@ -582,8 +560,6 @@ function AgentSessionView({
   status,
   identity,
   details,
-  backLabel,
-  onBack,
   refreshLabel,
   onRefresh,
   loading,
@@ -610,8 +586,6 @@ function AgentSessionView({
   status?: SubagentRunStatus
   identity: string
   details?: ReactNode
-  backLabel: string
-  onBack: () => void
   refreshLabel: string
   onRefresh: () => void
   loading: boolean
@@ -770,21 +744,13 @@ function AgentSessionView({
       ) : null}
     >
       <SessionChatHeader
-        title={title}
+        // The window header's breadcrumb ends with this run's name on the
+        // desktop; only the phone, whose top bar names the session, repeats it.
+        title={isMobileLayout ? title : undefined}
         compact={isMobileLayout}
-        // On a phone the shell's top bar already carries Back (and the system
-        // back gesture drives it); a second one here said the same thing twice.
-        leading={isMobileLayout ? undefined : (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onBack}
-            icon={<ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />}
-            className="mt-px shrink-0"
-          >
-            {backLabel}
-          </Button>
-        )}
+        // No Back here: the window header's breadcrumb leads back on the
+        // desktop, and the phone shell's top bar (and the system back
+        // gesture) does on a phone. A second one said the same thing twice.
         titleAddon={(
           <>
             {status ? <StatusBadge status={status} t={t} /> : null}

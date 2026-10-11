@@ -12,6 +12,7 @@ import {
   SettingsPageHeader,
   SettingsRow,
   SettingsSection,
+  SettingsSwitchRow,
 } from '@/components/settings/SettingsSection'
 import type { UpdateProxyMode } from '../../types/settings'
 import { MarkdownRenderer } from '../../components/markdown/MarkdownRenderer'
@@ -46,6 +47,8 @@ export function AboutSettings() {
   const [version, setVersion] = useState('')
   const updateProxy = useSettingsStore((s) => s.updateProxy)
   const setUpdateProxy = useSettingsStore((s) => s.setUpdateProxy)
+  const autoUpdateEnabled = useSettingsStore((s) => s.autoUpdateEnabled)
+  const setAutoUpdateEnabled = useSettingsStore((s) => s.setAutoUpdateEnabled)
   const updateStatus = useUpdateStore((s) => s.status)
   const availableVersion = useUpdateStore((s) => s.availableVersion)
   const releaseNotes = useUpdateStore((s) => s.releaseNotes)
@@ -61,6 +64,8 @@ export function AboutSettings() {
   const [updateProxyDraft, setUpdateProxyDraft] = useState(updateProxy)
   const [updateProxySaveError, setUpdateProxySaveError] = useState<string | null>(null)
   const [isSavingUpdateProxy, setIsSavingUpdateProxy] = useState(false)
+  const [isSavingAutoUpdate, setIsSavingAutoUpdate] = useState(false)
+  const [autoUpdateSaveError, setAutoUpdateSaveError] = useState<string | null>(null)
   const [communityOpen, setCommunityOpen] = useState(false)
 
   useEffect(() => {
@@ -80,8 +85,8 @@ export function AboutSettings() {
   }, [])
 
   useEffect(() => {
-    void initialize()
-  }, [initialize])
+    if (autoUpdateEnabled) void initialize()
+  }, [autoUpdateEnabled, initialize])
 
   useEffect(() => {
     setUpdateProxyDraft(updateProxy)
@@ -141,6 +146,18 @@ export function AboutSettings() {
       setUpdateProxySaveError(error instanceof Error ? error.message : String(error))
     } finally {
       setIsSavingUpdateProxy(false)
+    }
+  }
+
+  const saveAutoUpdateEnabled = async (enabled: boolean) => {
+    setIsSavingAutoUpdate(true)
+    setAutoUpdateSaveError(null)
+    try {
+      await setAutoUpdateEnabled(enabled)
+    } catch (error) {
+      setAutoUpdateSaveError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setIsSavingAutoUpdate(false)
     }
   }
 
@@ -229,6 +246,18 @@ export function AboutSettings() {
         )}
       >
         <SettingsGroup>
+          <SettingsSwitchRow
+            title={t('update.autoUpdate')}
+            description={t('update.autoUpdateDescription')}
+            checked={autoUpdateEnabled}
+            disabled={isSavingAutoUpdate}
+            onChange={(enabled) => void saveAutoUpdateEnabled(enabled)}
+            footer={autoUpdateSaveError ? (
+              <p role="alert" className="text-xs leading-[1.5] text-[var(--color-error)]">
+                {t('update.autoUpdateSaveFailed', { error: autoUpdateSaveError })}
+              </p>
+            ) : undefined}
+          />
           <SettingsRow
             title={(
               <span className="inline-flex flex-wrap items-center gap-2">

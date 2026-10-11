@@ -5,6 +5,7 @@ import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '../../i18n'
 import type { ReasoningEffortLevel } from '../../types/settings'
 import { COMPOSER_MENU_SECTION, COMPOSER_POPOVER } from '@/components/chat/composerMenuStyles'
+import { Switch } from '@/components/ui/Switch'
 
 type Props = {
   open: boolean
@@ -13,6 +14,8 @@ type Props = {
   value: ReasoningEffortLevel
   labels: Record<ReasoningEffortLevel, string>
   onChange: (value: ReasoningEffortLevel) => void
+  fastMode?: boolean
+  onFastModeChange?: (enabled: boolean) => void
   onClose: () => void
   ariaLabel?: string
 }
@@ -34,6 +37,8 @@ export function ReasoningEffortPopover({
   value,
   labels,
   onChange,
+  fastMode = false,
+  onFastModeChange,
   onClose,
   ariaLabel,
 }: Props) {
@@ -199,6 +204,17 @@ export function ReasoningEffortPopover({
           )
         })}
       </div>
+      {onFastModeChange && (
+        <div className="mt-1 border-t border-[var(--color-border)] px-2 py-2">
+          <Switch
+            size="sm"
+            checked={fastMode}
+            onChange={onFastModeChange}
+            label={t('model.openAIFastMode')}
+            description={t('model.openAIFastModeDescription')}
+          />
+        </div>
+      )}
     </div>,
     document.body,
   )

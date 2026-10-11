@@ -4,6 +4,7 @@ import { voiceApi } from '@/api/voice'
 import { useVoiceInputStore } from '@/stores/voiceInputStore'
 import type { MentionComposerHandle } from '@/components/chat/MentionComposer'
 import { getPreferredMicrophoneId } from './devicePreference'
+import { registerDictationTarget } from './shortcutController'
 import {
   normalizeDictationText,
   placeDictationResult,
@@ -41,6 +42,8 @@ type Run = {
   stopping: boolean
   /** Send the draft once the text is written. Can be asked for until recognition ends. */
   send: boolean
+  /** Asked to stop while the microphone was still opening (a short hold). */
+  stopWhenReady: boolean
 }
 
 type ComposerDictationOptions = {
@@ -260,6 +263,7 @@ export function useComposerDictation({ composerRef, draft, blocked, contextKey, 
       point: capturePoint(),
       stopping: false,
       send: false,
+      stopWhenReady: false,
     }
     activeRef.current = run
     submitAfterWriteRef.current = false
@@ -299,6 +303,7 @@ export function useComposerDictation({ composerRef, draft, blocked, contextKey, 
     setStartedAt(Date.now())
     setLimitSeconds(settings.maxSeconds)
     setPhase('recording')
+    if (run.stopWhenReady) void finish(run)
   }, [capturePoint, finish, setPending, settle])
 
   const toggle = useCallback(() => {
@@ -311,6 +316,14 @@ export function useComposerDictation({ composerRef, draft, blocked, contextKey, 
       cancel()
     }
   }, [cancel, finish, start])
+
+  /** Ends the recording and transcribes it, as soon as there is one to end. */
+  const stop = useCallback(() => {
+    const run = activeRef.current
+    if (!run) return
+    if (run.recording) void finish(run)
+    else run.stopWhenReady = true
+  }, [finish])
 
   /**
    * Ends the recording and sends the draft once the text is in it. Also works
@@ -375,6 +388,22 @@ export function useComposerDictation({ composerRef, draft, blocked, contextKey, 
   }, [abandon, contextKey])
 
   useEffect(() => abandon, [abandon])
+
+  // The keyboard shortcut records into a composer the user can see; a hidden
+  // one (contextKey null) is not a target.
+  const shortcutHandlersRef = useRef({ start, stop, cancel })
+  shortcutHandlersRef.current = { start, stop, cancel }
+  const listening = contextKey !== null && contextKey !== undefined
+  useEffect(() => {
+    if (!listening) return
+    return registerDictationTarget({
+      hasFocus: () => composerRef.current?.hasFocus() ?? false,
+      isActive: () => activeRef.current !== null,
+      start: () => { void shortcutHandlersRef.current.start() },
+      stop: () => shortcutHandlersRef.current.stop(),
+      cancel: () => shortcutHandlersRef.current.cancel(),
+    })
+  }, [composerRef, listening])
 
   const getLevel = useCallback(() => activeRef.current?.recording?.getLevel() ?? 0, [])
 

@@ -43,7 +43,8 @@ import type {
 // 8: complete runtime selections clear the previous effort when no override is saved.
 // 9: usage cost rates were corrected (Sonnet 5, Sonnet 5.5, Opus 5.5, fast mode); rebuild the
 //    persisted per-model dollars.
-export const SESSION_SUMMARY_PARSER_VERSION = 9
+// 10: project the explicit per-session ChatGPT OAuth Fast selection.
+export const SESSION_SUMMARY_PARSER_VERSION = 10
 
 export type SessionSourceCandidate = {
   path: string
@@ -163,7 +164,7 @@ const UNPARSEABLE_RECORD_TEXT = '{'
 const SKELETON_ROOT_SCALARS = new Set([
   'type', 'subtype', 'content', 'isMeta', 'isSidechain', 'entrypoint', 'timestamp',
   'cwd', 'workDir', 'permissionMode', 'runtimeProviderId', 'runtimeModelId',
-  'effortLevel', 'customTitle', 'aiTitle', 'uuid', 'parentUuid', 'messageId',
+  'effortLevel', 'openAIFastMode', 'customTitle', 'aiTitle', 'uuid', 'parentUuid', 'messageId',
   'parent_tool_use_id', 'requestId', 'version', 'sessionId', 'timeSavedMs',
 ])
 const SKELETON_ROOT_SUBTREES = new Set(['repository', 'worktreeSession', 'forkedFrom'])
@@ -418,7 +419,7 @@ async function streamProjection(options: {
           isSubagent: options.isSubagent,
           validateRetainedMetadata(entry) {
             const fields = ['type', 'uuid', 'messageId', 'timestamp', 'parent_tool_use_id',
-              'cwd', 'workDir', 'runtimeProviderId', 'runtimeModelId', 'customTitle', 'aiTitle',
+              'cwd', 'workDir', 'runtimeProviderId', 'runtimeModelId', 'openAIFastMode', 'customTitle', 'aiTitle',
               'repository', 'worktreeSession', 'requestId', 'version', 'sessionId']
             const message = entry.message as Record<string, unknown> | undefined
             const values: unknown[] = fields.map(field => entry[field])
@@ -843,8 +844,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
           transcript_path, session_id, project_path, title, created_at,
           modified_at, modified_at_ms, message_count, work_dir, repository_json,
           worktree_session_json, permission_mode, runtime_provider_id,
-          runtime_provider_present, runtime_model_id, effort_level, is_team_worker
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          runtime_provider_present, runtime_model_id, effort_level, is_team_worker, openai_fast_mode
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(transcript_path) DO UPDATE SET
           session_id = excluded.session_id,
           project_path = excluded.project_path,
@@ -861,7 +862,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
           runtime_provider_present = excluded.runtime_provider_present,
           runtime_model_id = excluded.runtime_model_id,
           effort_level = excluded.effort_level,
-          is_team_worker = excluded.is_team_worker
+          is_team_worker = excluded.is_team_worker,
+          openai_fast_mode = excluded.openai_fast_mode
       `,
       bundle.candidate.path,
       bundle.candidate.sessionId,
@@ -881,7 +883,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
       runtimeProviderPresent,
       summary.runtimeModelId ?? null,
       summary.effortLevel ?? null,
-      summary.isTeamWorker ? 1 : 0)
+      summary.isTeamWorker ? 1 : 0,
+      summary.openAIFastMode === undefined ? null : Number(summary.openAIFastMode))
 
       writeBackfillState(
         writer,
