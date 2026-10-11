@@ -343,6 +343,54 @@ describe('providerStore reorderProviders', () => {
     expect(useProviderStore.getState().providers.map((p) => p.id)).toEqual(['b', 'a'])
   })
 
+  it('keeps the dragged order after the settings page refetches the list', async () => {
+    const a = makeProvider({ id: 'a', name: 'A' })
+    const b = makeProvider({ id: 'b', name: 'B' })
+    const draggedOrder = ['openai-official', 'b', 'claude-official', 'a', 'grok-official']
+    providersApiMock.reorder.mockResolvedValue({ providers: [b, a], providerOrder: draggedOrder })
+    providersApiMock.list.mockResolvedValue({ providers: [b, a], activeId: a.id, providerOrder: draggedOrder })
+
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState({
+      providers: [a, b],
+      providerOrder: ['a', 'b', 'claude-official', 'openai-official', 'grok-official'],
+      activeId: null,
+    })
+
+    await useProviderStore.getState().reorderProviders(draggedOrder)
+    // Settings is reopened, so the page refetches the list route.
+    await useProviderStore.getState().fetchProviders()
+
+    expect(useProviderStore.getState().providerOrder).toEqual(draggedOrder)
+    expect(useProviderStore.getState().providers.map((p) => p.id)).toEqual(['b', 'a'])
+    expect(useProviderStore.getState().activeId).toBe(a.id)
+  })
+
+  it('falls back to saved providers plus built-ins when the list omits providerOrder', async () => {
+    const a = makeProvider({ id: 'a', name: 'A' })
+    const b = makeProvider({ id: 'b', name: 'B' })
+    // Older servers do not return the field; the desktop must stay compatible.
+    providersApiMock.list.mockResolvedValue({ providers: [b, a], activeId: null })
+
+    const { useProviderStore } = await import('./providerStore')
+    useProviderStore.setState({
+      providers: [],
+      providerOrder: ['claude-official', 'openai-official', 'grok-official'],
+      activeId: null,
+    })
+
+    await useProviderStore.getState().fetchProviders()
+
+    expect(useProviderStore.getState().providerOrder).toEqual([
+      'b',
+      'a',
+      'claude-official',
+      'openai-official',
+      'grok-official',
+    ])
+    expect(useProviderStore.getState().providers.map((p) => p.id)).toEqual(['b', 'a'])
+  })
+
   it('rolls back to the previous order when the request fails', async () => {
     const a = makeProvider({ id: 'a', name: 'A' })
     const b = makeProvider({ id: 'b', name: 'B' })
