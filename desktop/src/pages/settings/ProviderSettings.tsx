@@ -13,6 +13,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  Fingerprint,
   Globe,
   GripVertical,
   Info,
@@ -37,6 +38,7 @@ import { useTranslation, type TranslationKey } from '../../i18n'
 import { Modal } from '@/components/ui/Modal'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { FIELD_BASE_CLASSES, FIELD_SIZE_CLASSES, fieldStateClasses, Input } from '@/components/ui/Input'
+import { TextArea } from '@/components/ui/TextArea'
 import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { IconButton } from '@/components/ui/IconButton'
@@ -714,6 +716,63 @@ function requirePreset(preset: ProviderPreset | undefined): ProviderPreset {
 const AUTO_COMPACT_WINDOW_ENV_KEY = 'CLAUDE_CODE_AUTO_COMPACT_WINDOW'
 const MODEL_CONTEXT_WINDOWS_ENV_KEY = 'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS'
 const DISABLE_EXPERIMENTAL_BETAS_ENV_KEY = 'CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS'
+
+/**
+ * RFC 9110 field-name token, mirroring the server-side validation for
+ * user-configured upstream headers (issue #1509) so the form rejects a line
+ * the server would refuse anyway.
+ */
+const UPSTREAM_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
+const UPSTREAM_USER_AGENT_HEADER = 'user-agent'
+
+/** The saved record's User-Agent, however the user cased the name when saving. */
+function providerUpstreamUserAgent(upstreamHeaders: Record<string, string> | undefined): string {
+  const entry = Object.entries(upstreamHeaders ?? {}).find(([name]) => name.toLowerCase() === UPSTREAM_USER_AGENT_HEADER)
+  return entry?.[1] ?? ''
+}
+
+/** Everything but the User-Agent, back to one "Name: Value" per line. */
+function serializeUpstreamExtraHeaders(upstreamHeaders: Record<string, string> | undefined): string {
+  return Object.entries(upstreamHeaders ?? {})
+    .filter(([name]) => name.toLowerCase() !== UPSTREAM_USER_AGENT_HEADER)
+    .map(([name, value]) => `${name}: ${value}`)
+    .join('\n')
+}
+
+/**
+ * The form's upstream headers: the extra "Name: Value" lines plus the dedicated
+ * User-Agent input, which is applied last so the input always wins over a line
+ * naming the same header. Duplicate names replace rather than add, matching the
+ * server's overlay; `invalid` reports lines that are not parseable pairs with a
+ * well-formed header name so the submit can be blocked.
+ */
+function parseUpstreamHeadersForm(userAgent: string, extra: string): { headers: Record<string, string>; invalid: boolean } {
+  const entries: Array<[string, string]> = []
+  let invalid = false
+  for (const line of extra.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed) continue
+    const sep = trimmed.indexOf(':')
+    const name = sep > 0 ? trimmed.slice(0, sep).trim() : ''
+    const value = sep > 0 ? trimmed.slice(sep + 1).trim() : ''
+    if (!name || !value || !UPSTREAM_HEADER_NAME_RE.test(name)) {
+      invalid = true
+      continue
+    }
+    entries.push([name, value])
+  }
+  if (userAgent.trim()) entries.push(['User-Agent', userAgent.trim()])
+
+  const headers: Record<string, string> = {}
+  for (const [name, value] of entries) {
+    for (const existing of Object.keys(headers)) {
+      if (existing.toLowerCase() === name.toLowerCase()) delete headers[existing]
+    }
+    headers[name] = value
+  }
+  return { headers, invalid }
+}
+
 const DEFAULT_MODEL_1M_SUPPORT: Model1mSupport = {
   main: false,
   fable: false,
@@ -1215,6 +1274,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const [toolSearchConfirmOpen, setToolSearchConfirmOpen] = useState(false)
   const [disableExperimentalBetas, setDisableExperimentalBetas] = useState(provider?.disableExperimentalBetas ?? false)
   const [supportsNestedToolResultMedia, setSupportsNestedToolResultMedia] = useState(provider?.supportsNestedToolResultMedia ?? true)
+  const [upstreamUserAgent, setUpstreamUserAgent] = useState(() => providerUpstreamUserAgent(provider?.upstreamHeaders))
+  const [upstreamExtraHeaders, setUpstreamExtraHeaders] = useState(() => serializeUpstreamExtraHeaders(provider?.upstreamHeaders))
+  const [showUpstreamHeaders, setShowUpstreamHeaders] = useState(false)
   const [imageGeneration, setImageGeneration] = useState<ImageGenerationFormValue>({
     enabled: Boolean(initialImageGeneration),
     model: initialImageGeneration?.model ?? '',
@@ -1382,7 +1444,14 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
   const compatibilityInvalid = invalidCompatibilityNumber(compatibility.maxOutputTokens)
     || (apiFormat !== 'anthropic' && invalidCompatibilityNumber(compatibility.outputTokenLimit))
-  const canSubmit = !compatibilityInvalid && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
+  const { headers: formUpstreamHeaders, invalid: upstreamHeadersInvalid } = useMemo(
+    () => parseUpstreamHeadersForm(upstreamUserAgent, upstreamExtraHeaders),
+    [upstreamUserAgent, upstreamExtraHeaders],
+  )
+  // Saved only when at least one header is configured; an empty map carries no
+  // information and would be indistinguishable from "never configured".
+  const storedUpstreamHeaders = Object.keys(formUpstreamHeaders).length > 0 ? formUpstreamHeaders : undefined
+  const canSubmit = !compatibilityInvalid && !upstreamHeadersInvalid && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
   const normalizedBaseUrl = normalizeProviderBaseUrl(baseUrl)
   const isPresetDefaultEndpoint = normalizedBaseUrl === normalizeProviderBaseUrl(selectedPreset.baseUrl)
   const apiKeyUrl = isPresetDefaultEndpoint ? selectedPreset.apiKeyUrl?.trim() : undefined
@@ -1759,6 +1828,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           toolSearchEnabled,
           ...(disableExperimentalBetas && { disableExperimentalBetas }),
           supportsNestedToolResultMedia,
+          ...(storedUpstreamHeaders !== undefined && { upstreamHeaders: storedUpstreamHeaders }),
           ...(storedImageGeneration !== undefined && { imageGeneration: storedImageGeneration }),
           notes: notes.trim() || undefined,
         })
@@ -1769,6 +1839,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           authStrategy,
           apiFormat,
           requestCompatibility: storedCompatibility ?? null,
+          upstreamHeaders: storedUpstreamHeaders ?? null,
           models: normalizedModels,
           model1mSupport: storedModel1mSupport ?? null,
           autoCompactWindow: parsedAutoCompactWindow ?? null,
@@ -1813,6 +1884,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         apiFormat === provider.apiFormat &&
         authStrategy === provider.authStrategy &&
         supportsNestedToolResultMedia === (provider.supportsNestedToolResultMedia ?? true) &&
+        JSON.stringify(storedUpstreamHeaders ?? {}) === JSON.stringify(provider.upstreamHeaders ?? {}) &&
         JSON.stringify(formCompatibility) === JSON.stringify(provider.requestCompatibility)
       if (savedConfigUnchanged && provider) {
         result = await useProviderStore.getState().testProvider(provider.id, {
@@ -1828,6 +1900,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           apiFormat,
           supportsNestedToolResultMedia,
           presetId: selectedPreset.id,
+          ...(storedUpstreamHeaders ? { upstreamHeaders: storedUpstreamHeaders } : {}),
           ...(formCompatibility ? { requestCompatibility: formCompatibility } : {}),
         })
       }
@@ -2103,6 +2176,58 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         )}
 
         <ProviderRequestCompatibilityFields value={compatibility} apiFormat={apiFormat} onChange={handleCompatibilityChange} />
+
+        <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)]">
+          <button
+            type="button"
+            onClick={() => setShowUpstreamHeaders((visible) => !visible)}
+            className="flex w-full items-start gap-3 px-4 py-3 text-left outline-none transition-colors hover:bg-[var(--color-surface-hover)] focus-visible:shadow-[var(--shadow-focus-ring)]"
+            aria-expanded={showUpstreamHeaders}
+          >
+            <Fingerprint size={16} strokeWidth={1.75} aria-hidden="true" className="mt-0.5 shrink-0 text-[var(--color-text-tertiary)]" />
+            <span className="min-w-0 flex-1">
+              <span className="block text-[13px] font-medium text-[var(--color-text-primary)]">
+                {t('settings.providers.upstreamHeadersTitle')}
+              </span>
+              <span className="mt-0.5 block truncate text-xs text-[var(--color-text-secondary)]">
+                {upstreamUserAgent.trim() || t('settings.providers.upstreamHeadersNone')}
+              </span>
+              <span className="mt-1 block text-xs leading-[1.5] text-[var(--color-text-tertiary)]">
+                {t('settings.providers.upstreamHeadersDesc')}
+              </span>
+            </span>
+            <span className="mt-0.5 inline-flex shrink-0 items-center gap-1 text-xs font-medium text-[var(--color-text-secondary)]">
+              {showUpstreamHeaders
+                ? t('settings.providers.contextSettingsHide')
+                : t('settings.providers.contextSettingsEdit')}
+              {showUpstreamHeaders
+                ? <ChevronUp size={14} strokeWidth={1.75} aria-hidden="true" />
+                : <ChevronDown size={14} strokeWidth={1.75} aria-hidden="true" />}
+            </span>
+          </button>
+
+          {showUpstreamHeaders && (
+            <div className="flex flex-col gap-3 border-t border-[var(--color-border)] px-4 pb-4 pt-3">
+              <Input
+                label={t('settings.providers.upstreamHeadersUserAgent')}
+                value={upstreamUserAgent}
+                onChange={(e) => setUpstreamUserAgent(e.target.value)}
+                placeholder={t('settings.providers.upstreamHeadersUserAgentPlaceholder')}
+              />
+              <TextArea
+                label={t('settings.providers.upstreamHeadersExtra')}
+                value={upstreamExtraHeaders}
+                onChange={(e) => setUpstreamExtraHeaders(e.target.value)}
+                placeholder={t('settings.providers.upstreamHeadersExtraPlaceholder')}
+                rows={3}
+                spellCheck={false}
+                className="font-mono text-xs leading-relaxed"
+                error={upstreamHeadersInvalid ? t('settings.providers.upstreamHeadersInvalid') : undefined}
+                hint={upstreamHeadersInvalid ? undefined : t('settings.providers.upstreamHeadersHint')}
+              />
+            </div>
+          )}
+        </div>
 
         {apiFormat === 'anthropic' && (
           <div className="flex flex-col gap-1">

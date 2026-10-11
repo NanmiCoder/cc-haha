@@ -63,6 +63,8 @@ export type SavedProvider = {
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
   requestCompatibility?: RequestCompatibility
+  /** User-configured upstream headers, merged over the preset's with user values winning. */
+  upstreamHeaders?: Record<string, string>
   imageGeneration?: ImageGenerationConfig
   notes?: string
 }
@@ -83,6 +85,7 @@ export type CreateProviderInput = {
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
   requestCompatibility?: RequestCompatibility
+  upstreamHeaders?: Record<string, string>
   imageGeneration?: ImageGenerationConfig
   notes?: string
 }
@@ -102,6 +105,7 @@ export type UpdateProviderInput = {
   disableExperimentalBetas?: boolean
   supportsNestedToolResultMedia?: boolean
   requestCompatibility?: RequestCompatibility | null
+  upstreamHeaders?: Record<string, string> | null
   imageGeneration?: ImageGenerationConfig | null
   notes?: string
 }
@@ -114,6 +118,7 @@ export type TestProviderConfigInput = {
   apiFormat?: ApiFormat
   supportsNestedToolResultMedia?: boolean
   requestCompatibility?: RequestCompatibility
+  upstreamHeaders?: Record<string, string>
   /**
    * Preset the form is based on, so the server can resolve per-model protocol
    * rules and upstream headers for an unsaved config. Only the id is sent.

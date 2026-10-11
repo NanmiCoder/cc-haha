@@ -1061,6 +1061,23 @@ describe('ProviderService', () => {
       expect(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBeUndefined()
     })
 
+    test('updating upstream headers persists them and clears them back off (#1509)', async () => {
+      const svc = new ProviderService()
+      const added = await svc.addProvider(sampleInput())
+
+      const updated = await svc.updateProvider(added.id, {
+        upstreamHeaders: { 'User-Agent': 'my-agent/1.0' },
+      })
+      expect(updated.upstreamHeaders).toEqual({ 'User-Agent': 'my-agent/1.0' })
+      const stored = (await readProvidersConfig()).providers as Array<Record<string, unknown>>
+      expect(stored[0].upstreamHeaders).toEqual({ 'User-Agent': 'my-agent/1.0' })
+
+      const cleared = await svc.updateProvider(added.id, { upstreamHeaders: null })
+      expect(cleared.upstreamHeaders).toBeUndefined()
+      const persisted = (await readProvidersConfig()).providers as Array<Record<string, unknown>>
+      expect(persisted[0].upstreamHeaders).toBeUndefined()
+    })
+
     test('updating an active provider drives image routing in both directions', async () => {
       const svc = new ProviderService()
       const added = await svc.addProvider(sampleInput())
@@ -1692,6 +1709,36 @@ describe('ProviderService', () => {
       expect(config?.authStrategy).toBe('auth_token_empty_api_key')
     })
 
+    test('merges user-configured upstream headers over the preset headers, user winning (#1509)', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        presetId: 'opencode-go',
+        upstreamHeaders: {
+          'User-Agent': 'my-agent/1.0',
+          'X-Custom-Trace': 'from-user',
+        },
+      }))
+
+      const config = await svc.getProviderForProxy(provider.id)
+
+      expect(config?.upstreamHeaders).toEqual({
+        // Preset-only headers survive the merge…
+        'x-opencode-session': '$SESSION_ID',
+        // …and the user's explicit value wins the name collision.
+        'User-Agent': 'my-agent/1.0',
+        'X-Custom-Trace': 'from-user',
+      })
+    })
+
+    test('keeps empty upstream headers for a provider that configures none (#1509)', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput())
+
+      const config = await svc.getProviderForProxy(provider.id)
+
+      expect(config?.upstreamHeaders).toEqual({})
+    })
+
     test('should return null when ChatGPT Official is the active provider', async () => {
       const svc = new ProviderService()
       await svc.activateProvider('openai-official')
@@ -1828,6 +1875,59 @@ describe('ProviderService', () => {
         expect(trace.calls[0].response.body.preview).toContain('chatcmpl-trace')
         expect(upstreamHeaders[0].get('Authorization')).toBe('Bearer sk-test-key-123')
         expect(upstreamHeaders[0].get('Authorization')).not.toContain('desktop-local-secret')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('sends the user-configured User-Agent upstream and keeps custom headers off the credential (#1509)', async () => {
+      const originalFetch = globalThis.fetch
+      const captured: Headers[] = []
+      globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+        captured.push(new Headers(init?.headers))
+        return new Response(JSON.stringify({
+          type: 'message',
+          role: 'assistant',
+          model: 'model-main',
+          content: [{ type: 'text', text: 'ok' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({
+          authStrategy: 'api_key',
+          supportsNestedToolResultMedia: false,
+          upstreamHeaders: {
+            'User-Agent': 'claude-cli/2.1.220 (external, gateway-allowed)',
+            Authorization: 'Bearer hijack-attempt',
+          },
+        }))
+        await svc.activateProvider(provider.id)
+
+        const req = new Request('http://localhost:3456/proxy/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'claude-cli/2.1.220.693 (external, cli)',
+          },
+          body: JSON.stringify({
+            model: 'model-main',
+            max_tokens: 64,
+            messages: [{ role: 'user', content: 'hi' }],
+          }),
+        })
+
+        const res = await handleProxyRequest(req, new URL(req.url))
+        expect(res.status).toBe(200)
+        await res.text()
+
+        // The inbound claude-cli UA is dropped as an internal client
+        // fingerprint, and the user-configured one takes its place; the
+        // credential cannot be hijacked through the same mechanism.
+        expect(captured[0].get('user-agent')).toBe('claude-cli/2.1.220 (external, gateway-allowed)')
+        expect(captured[0].get('x-api-key')).toBe('sk-test-key-123')
+        expect(captured[0].get('authorization')).toBeNull()
       } finally {
         globalThis.fetch = originalFetch
       }
@@ -2764,6 +2864,83 @@ describe('ProviderService', () => {
         expect(result.connectivity.success).toBe(true)
         expect(calls[0].headers.Authorization).toBe('Bearer lmstudio')
         expect(calls[0].headers['x-api-key']).toBeUndefined()
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('carries the saved provider\'s custom User-Agent on the connectivity probe (#1509)', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ headers: Record<string, string> }> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ headers: init?.headers as Record<string, string> })
+        return new Response(JSON.stringify({
+          type: 'message',
+          model: 'model-main',
+          content: [],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({
+          upstreamHeaders: { 'User-Agent': 'my-agent/1.0' },
+        }))
+
+        const result = await svc.testProvider(provider.id)
+
+        expect(result.connectivity.success).toBe(true)
+        expect(calls[0].headers['User-Agent']).toBe('my-agent/1.0')
+      } finally {
+        globalThis.fetch = originalFetch
+      }
+    })
+
+    test('carries draft-configured upstream headers on the probe and rejects malformed names (#1509)', async () => {
+      const originalFetch = globalThis.fetch
+      const calls: Array<{ headers: Record<string, string> }> = []
+      globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ headers: init?.headers as Record<string, string> })
+        return new Response(JSON.stringify({
+          type: 'message',
+          model: 'draft-model',
+          content: [],
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      }) as typeof fetch
+
+      try {
+        const svc = new ProviderService()
+        const result = await svc.testProviderConfig({
+          baseUrl: 'https://draft.example.com',
+          apiKey: 'draft-key',
+          modelId: 'draft-model',
+          authStrategy: 'auth_token',
+          upstreamHeaders: { 'User-Agent': 'draft-agent/2.0' },
+        })
+        expect(result.connectivity.success).toBe(true)
+        expect(calls[0].headers['User-Agent']).toBe('draft-agent/2.0')
+
+        // A name that would break the request is rejected at the boundary,
+        // before any upstream call happens.
+        const { req, url, segments } = makeRequest(
+          'POST',
+          '/api/providers/test',
+          {
+            baseUrl: 'https://draft.example.com',
+            apiKey: 'draft-key',
+            modelId: 'draft-model',
+            upstreamHeaders: { 'bad name': 'v' },
+          },
+        )
+        const response = await handleProvidersApi(req, url, segments)
+        expect(response.status).toBe(400)
+        expect(calls).toHaveLength(1)
       } finally {
         globalThis.fetch = originalFetch
       }
