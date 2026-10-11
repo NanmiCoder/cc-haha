@@ -13,6 +13,7 @@ import {
   createAssistantAPIErrorMessage,
   createAssistantMessage,
   createUserMessage,
+  findLastAssistantWithText,
   normalizeMessagesForAPI,
   normalizeContentFromAPI,
   replaceMediaWithPlaceholders,
@@ -536,5 +537,43 @@ describe('stream retry display', () => {
     toolUses = [{ index: 0 }] as never[]
     handleMessageFromStream(createUserMessage({ content: 'unrelated' }), () => {}, () => {}, () => {}, update)
     expect(toolUses).toHaveLength(1)
+  })
+})
+
+// #1468: a provider ending its stream with an empty text block must not hide
+// the real reply from callers that read the last assistant message.
+describe('findLastAssistantWithText', () => {
+  // A raw empty text block: createAssistantMessage('') would substitute
+  // NO_CONTENT_MESSAGE and no longer reproduce the blank-trailing shape.
+  const assistantWith = (text: string): AssistantMessage =>
+    createAssistantMessage({ content: [{ type: 'text', text }] })
+  const blankAssistant = (): AssistantMessage =>
+    createAssistantMessage({ content: [{ type: 'text', text: '' }] })
+
+  test('returns the only assistant when it carries text', () => {
+    const reply = assistantWith('real answer')
+    expect(findLastAssistantWithText([createUserMessage({ content: 'hi' }), reply])).toBe(reply)
+  })
+
+  test('skips a blank trailing block and finds the earlier reply', () => {
+    const reply = assistantWith('real answer')
+    expect(findLastAssistantWithText([reply, blankAssistant()])).toBe(reply)
+  })
+
+  test('returns undefined when no assistant carries text', () => {
+    expect(findLastAssistantWithText([blankAssistant()])).toBeUndefined()
+  })
+
+  test('an API error wins the walk even after valid text', () => {
+    const error = createAssistantAPIErrorMessage({
+      content: 'API Error: 529 Overloaded',
+    })
+    expect(findLastAssistantWithText([assistantWith('real answer'), blankAssistant(), error])).toBe(error)
+  })
+
+  test('a whitespace-only text block is not treated as content', () => {
+    const reply = assistantWith('real answer')
+    const whitespace = createAssistantMessage({ content: [{ type: 'text', text: '  \n\t ' }] })
+    expect(findLastAssistantWithText([reply, whitespace])).toBe(reply)
   })
 })

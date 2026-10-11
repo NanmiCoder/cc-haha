@@ -137,7 +137,7 @@ import { registerPendingAsyncHook } from './hooks/AsyncHookRegistry.js'
 import { enqueuePendingNotification } from './messageQueueManager.js'
 import {
   extractTextContent,
-  getLastAssistantMessage,
+  findLastAssistantWithText,
   wrapInSystemReminder,
 } from './messages.js'
 import {
@@ -3646,6 +3646,21 @@ export async function executeStopFailureHooks(
 }
 
 /**
+ * The final reply a Stop/SubagentStop hook should see: the newest assistant
+ * message that carries text, skipping blank trailing blocks (a provider
+ * heartbeat, #1468); an API error message always wins the walk. Returns
+ * undefined when no assistant said anything.
+ */
+export function getLastAssistantTextForHook(
+  messages: Message[],
+): string | undefined {
+  const last = findLastAssistantWithText(messages)
+  return last
+    ? extractTextContent(last.message.content, '\n').trim() || undefined
+    : undefined
+}
+
+/**
  * Execute stop hooks if configured
  * @param toolUseContext ToolUseContext for prompt-based hooks
  * @param permissionMode permission mode from toolPermissionContext
@@ -3678,12 +3693,8 @@ export async function* executeStopHooks(
 
   // Extract text content from the last assistant message so hooks can
   // inspect the final response without reading the transcript file.
-  const lastAssistantMessage = messages
-    ? getLastAssistantMessage(messages)
-    : undefined
-  const lastAssistantText = lastAssistantMessage
-    ? extractTextContent(lastAssistantMessage.message.content, '\n').trim() ||
-      undefined
+  const lastAssistantText = messages
+    ? getLastAssistantTextForHook(messages)
     : undefined
 
   const hookInput: StopHookInput | SubagentStopHookInput = subagentId

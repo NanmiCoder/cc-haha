@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { PromptCommand } from '../commands.js'
+import type { Message } from '../types/message.js'
 import type { ToolUseContext } from '../Tool.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
-import { prepareForkedCommandContext } from './forkedAgent.js'
+import { createAssistantMessage } from './messages.js'
+import { extractResultText, prepareForkedCommandContext } from './forkedAgent.js'
 
 const makeAgent = (agentType: string): AgentDefinition => ({
   agentType,
@@ -63,5 +65,30 @@ describe('prepareForkedCommandContext', () => {
         },
       ),
     ).rejects.toThrow('Agent not available: debugger')
+  })
+})
+
+// #1468: a provider ending the stream with an empty text block appends a
+// blank assistant message; the extracted result must be the real reply, not
+// the default placeholder.
+describe('extractResultText', () => {
+  const reply = (text: string): Message =>
+    createAssistantMessage({ content: [{ type: 'text', text }] }) as Message
+  const blank = (): Message =>
+    createAssistantMessage({ content: [{ type: 'text', text: '' }] }) as Message
+
+  test('returns the last assistant text', () => {
+    expect(extractResultText([reply('done early'), reply('final answer')])).toBe(
+      'final answer',
+    )
+  })
+
+  test('skips a blank trailing assistant and returns the real text', () => {
+    expect(extractResultText([reply('real output'), blank()])).toBe('real output')
+  })
+
+  test('falls back to the default text when no assistant carries text', () => {
+    expect(extractResultText([blank()], 'Command completed')).toBe('Command completed')
+    expect(extractResultText([], 'Command completed')).toBe('Command completed')
   })
 })

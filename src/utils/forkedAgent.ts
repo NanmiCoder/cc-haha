@@ -31,7 +31,7 @@ import type { REPLHookContext } from './hooks/postSamplingHooks.js'
 import {
   createUserMessage,
   extractTextContent,
-  getLastAssistantMessage,
+  findLastAssistantWithText,
 } from './messages.js'
 import { createDenialTrackingState } from './permissions/denialTracking.js'
 import { parseToolListFromCLI } from './permissions/permissionSetup.js'
@@ -249,13 +249,15 @@ export async function prepareForkedCommandContext(
 }
 
 /**
- * Extracts result text from agent messages.
+ * Extracts result text from agent messages. A blank trailing assistant (a
+ * provider heartbeat block, #1468) is skipped so the real reply is returned
+ * instead of the default placeholder.
  */
 export function extractResultText(
   agentMessages: Message[],
   defaultText = 'Execution completed',
 ): string {
-  const lastAssistantMessage = getLastAssistantMessage(agentMessages)
+  const lastAssistantMessage = findLastAssistantWithText(agentMessages)
   if (!lastAssistantMessage) return defaultText
 
   const textContent = extractTextContent(

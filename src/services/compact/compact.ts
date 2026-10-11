@@ -61,6 +61,7 @@ import { MEMORY_TYPE_VALUES } from '../../utils/memory/types.js'
 import {
   createCompactBoundaryMessage,
   createUserMessage,
+  findLastAssistantWithText,
   getAssistantMessageText,
   getMessagesAfterCompactBoundary,
   isCompactBoundaryMessage,
@@ -342,23 +343,11 @@ function stripStaleUsageFromPreservedMessages(messages: Message[]): Message[] {
 }
 
 /**
- * Every Anthropic content block is yielded as its own assistant message, so a
- * provider that emits an empty block (an openai_responses relay keeping the
- * connection warm, for example) appends an assistant with no text after the real
- * reply. Selecting the last message alone would report a completed summary as
- * missing. Walk back to the newest assistant that actually said something.
- *
- * Only blank assistants are skipped, and an API error message wins the walk even
- * when it carries no text, so a real failure is never downgraded into an older,
- * successful summary (#1451).
+ * Moved to utils/messages.ts (#1468) so AgentTool, forkedAgent, Stop hooks and
+ * the swarm runner share one implementation; re-exported to keep the compaction
+ * import surface stable.
  */
-export function findLastAssistantWithText(messages: Message[]) {
-  return messages.findLast(
-    (message): message is AssistantMessage =>
-      message.type === 'assistant' &&
-      (message.isApiErrorMessage === true || getAssistantMessageText(message) !== null),
-  )
-}
+export { findLastAssistantWithText }
 
 /**
  * Streaming counterpart of {@link findLastAssistantWithText}: decide whether an
