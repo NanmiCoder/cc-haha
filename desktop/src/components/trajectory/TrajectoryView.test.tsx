@@ -95,8 +95,10 @@ describe('TrajectoryView', () => {
     expect(within(options[4]!).getByText('Bash')).toBeInTheDocument()
     expect(within(options[4]!).getByText('package.json')).toBeInTheDocument()
     expect(within(table).getByText('Turn 1')).toBeInTheDocument()
-    // The sticky bar names the turn in view even when its first row has scrolled away.
-    expect(within(screen.getByTestId('trajectory-turn-bar')).getByText('Turn 1')).toBeInTheDocument()
+    // The table reports its visible range in an effect after mounting, so the
+    // sticky bar can arrive after the listbox. Wait for that specific boundary.
+    const turnBar = await screen.findByTestId('trajectory-turn-bar')
+    expect(within(turnBar).getByText('Turn 1')).toBeInTheDocument()
     expect(screen.getByTestId('trajectory-totals').textContent).toContain('1 turns · 1 steps · 1 tool calls')
   })
 

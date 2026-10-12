@@ -53,12 +53,14 @@ import {
   hasSidebarProjectPreferences,
   normalizeSidebarProjectPreferences,
   readCachedSidebarProjectPreferences,
+  readStoredProjectCollapsed,
   readStoredProjectHidden,
   readStoredProjectOrder,
   readStoredProjectOrganization,
   readStoredProjectPins,
   readStoredProjectSortBy,
   writeCachedSidebarProjectPreferences,
+  writeStoredProjectCollapsed,
   type SidebarProjectOrganization,
   type SidebarProjectSortBy,
 } from './sidebarProjectPreferenceStorage'
@@ -178,7 +180,7 @@ export function Sidebar({
   const [renameValue, setRenameValue] = useState('')
   const [lastSelectedSessionId, setLastSelectedSessionId] = useState<string | null>(null)
   const [expandedProjectKeys, setExpandedProjectKeys] = useState<Set<string>>(new Set())
-  const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(new Set())
+  const [collapsedProjectKeys, setCollapsedProjectKeys] = useState<Set<string>>(() => readStoredProjectCollapsed())
   const [projectOrder, setProjectOrder] = useState<string[]>(() => readStoredProjectOrder())
   const [pinnedProjectKeys, setPinnedProjectKeys] = useState<Set<string>>(() => readStoredProjectPins())
   const [hiddenProjectKeys, setHiddenProjectKeys] = useState<Set<string>>(() => readStoredProjectHidden())
@@ -906,6 +908,7 @@ export function Sidebar({
       } else {
         next.add(projectKey)
       }
+      writeStoredProjectCollapsed(next)
       return next
     })
   }, [])

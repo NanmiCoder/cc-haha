@@ -66,6 +66,10 @@ beforeEach(() => {
   frames = new Map()
   nextFrameId = 1
   clock = 1_000
+  // layout() reads performance.now(), while tick() receives the RAF timestamp.
+  // Both must share the same origin, as they do in the browser; mixing real
+  // worker uptime with our fake frames makes the frozen sweep phase random.
+  vi.spyOn(performance, 'now').mockImplementation(() => clock)
   disconnect = vi.fn()
   reducedMotion = false
   hidden = false
@@ -169,7 +173,8 @@ describe('VoiceTrail', () => {
     expect(bars().map((mark) => mark.x)).toEqual(recorded)
   })
 
-  it('sweeps a highlight across the frozen trace', () => {
+  it.each([0, 3_000, 1_000_000])('sweeps a highlight across the frozen trace from clock origin %i', (origin) => {
+    clock = origin
     const { rerender } = render(<VoiceTrail getLevel={() => 0.8} frozen={false} height={HEIGHT} />)
     play(1_000)
     rerender(<VoiceTrail getLevel={() => 0.8} frozen height={HEIGHT} />)

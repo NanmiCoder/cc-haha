@@ -30,6 +30,10 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
     title: 'Stopping a streaming reply closes the upstream connection instead of letting it run on',
   },
   {
+    id: 'mock-stop-question-compact-recovers',
+    title: 'Cancel a question, compact with visible progress, reconnect, and complete another turn',
+  },
+  {
     id: 'mock-upstream-error-recovers',
     title: 'An upstream error ends the turn visibly and the next turn still works',
   },
@@ -151,6 +155,44 @@ export function createMockOnlyRunners(requests: readonly RecordedRequest[]): Rec
         if (stream.outcome !== 'cancelled') {
           throw new Error(`5s after stop the upstream stream was still ${stream.outcome}, not cancelled`)
         }
+      } finally {
+        socket.close()
+      }
+    },
+
+    async 'mock-stop-question-compact-recovers'(ctx) {
+      const sessionId = await ctx.createSession()
+      let socket = await ctx.openSocket(sessionId)
+      try {
+        ctx.pinRuntime(socket)
+        const seed = socket.messages.length
+        socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+        await socket.waitFor(m => m.type === 'message_complete', ctx.stepTimeoutMs, 'seed completion', seed)
+        const questionStart = socket.messages.length
+        socket.send({ type: 'user_message', content: 'MOCK_ASK_BEFORE_COMPACT: ask me to choose A or B.' })
+        await socket.waitFor(m => m.type === 'permission_request' && m.toolName === 'AskUserQuestion',
+          ctx.stepTimeoutMs, 'pending AskUserQuestion', questionStart)
+        const stopStart = socket.messages.length
+        socket.send({ type: 'stop_generation' })
+        await socket.waitFor(m => m.type === 'message_complete', ctx.stepTimeoutMs, 'interrupted result', stopStart)
+        const compactStart = socket.messages.length
+        socket.send({ type: 'user_message', content: '/compact' })
+        const progress = await socket.waitFor(m => m.type === 'status' && m.state === 'compacting' &&
+          Number((m.compactProgress as { outputChars?: number } | undefined)?.outputChars) > 0,
+        ctx.stepTimeoutMs, 'compact output progress after Stop', compactStart)
+        const firstOutputChars = Number((progress.compactProgress as { outputChars: number }).outputChars)
+        await socket.waitFor(m => m.type === 'status' && m.state === 'compacting' &&
+          Number((m.compactProgress as { outputChars?: number } | undefined)?.outputChars) > firstOutputChars,
+        ctx.stepTimeoutMs, 'increasing compact output progress after Stop', compactStart)
+        await socket.waitFor(m => m.type === 'system_notification' && m.subtype === 'compact_boundary',
+          ctx.stepTimeoutMs, 'compact boundary after Stop', compactStart)
+        await socket.waitFor(m => m.type === 'message_complete', ctx.stepTimeoutMs, 'compact completion after Stop', compactStart)
+        socket.close()
+        socket = await ctx.openSocket(sessionId)
+        const nextStart = socket.messages.length
+        socket.send({ type: 'user_message', content: 'Reply with one short sentence after compact.' })
+        await socket.waitFor(m => m.type === 'message_complete', ctx.stepTimeoutMs, 'next turn after reconnect', nextStart)
+        if (!streamedText(socket.messages.slice(nextStart)).trim()) throw new Error('no reply after compact and reconnect')
       } finally {
         socket.close()
       }

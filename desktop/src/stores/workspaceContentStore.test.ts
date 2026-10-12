@@ -140,6 +140,40 @@ describe('tree', () => {
 })
 
 describe('invalidation', () => {
+  it('notifies searches for an accepted watch refresh with no cached tree and keeps revisions task scoped', async () => {
+    const signal = new AbortController().signal
+    await store().refreshWatchedPaths(SESSION, ['src/new.ts'], ['src'], signal)
+    expect(store().watchRevisionBySession[SESSION]).toBe(1)
+    expect(store().treeByKey).toEqual({})
+    await store().refreshWatchedPaths('session-b', ['other.ts'], [''], signal)
+    expect(store().watchRevisionBySession[SESSION]).toBe(1)
+    expect(store().watchRevisionBySession['session-b']).toBe(1)
+    store().clearSession(SESSION)
+    expect(store().watchRevisionBySession[SESSION]).toBeUndefined()
+    expect(store().watchRevisionBySession['session-b']).toBe(1)
+  })
+
+  it('does not increment aborted watch revisions or recreate them after an in-flight task release', async () => {
+    const abort = new AbortController()
+    abort.abort()
+    await store().refreshWatchedPaths(SESSION, ['src/a.ts'], ['src'], abort.signal)
+    expect(store().watchRevisionBySession[SESSION]).toBeUndefined()
+    mocks.getWorkspaceFile.mockResolvedValueOnce({ state: 'ok', path: 'src/a.ts', content: 'before', language: 'ts', size: 6 })
+    await store().loadFile(SESSION, 'src/a.ts')
+    const pending = deferred<unknown>()
+    mocks.getWorkspaceFile.mockReturnValueOnce(pending.promise)
+    const active = new AbortController()
+    const refresh = store().refreshWatchedPaths(SESSION, ['src/a.ts'], ['src'], active.signal)
+    expect(store().watchRevisionBySession[SESSION]).toBe(1)
+    active.abort()
+    store().clearSession(SESSION)
+    pending.resolve({ state: 'ok', path: 'src/a.ts', content: 'late', language: 'ts', size: 4 })
+    await refresh
+    await store().refreshWatchedPaths(SESSION, ['src/a.ts'], ['src'], active.signal)
+    expect(store().watchRevisionBySession[SESSION]).toBeUndefined()
+    expect(store().getFile(SESSION, 'src/a.ts')).toBeUndefined()
+  })
+
   it.each([
     { name: 'coarse-only', paths: [], directories: ['src'] },
     { name: 'mixed', paths: ['other/b.ts'], directories: ['src', 'other'] },

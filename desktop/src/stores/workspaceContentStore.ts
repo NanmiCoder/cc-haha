@@ -71,6 +71,8 @@ export type WorkspaceFileView = {
 type WorkspaceContentStore = {
   filesByKey: Record<string, WorkspaceFileEntry | undefined>
   treeByKey: Record<string, WorkspaceTreeResult | undefined>
+  /** Accepted watch refreshes, in memory only; searches may have no cached parent tree. */
+  watchRevisionBySession: Record<string, number | undefined>
   treeLoadingByKey: Record<string, boolean | undefined>
   expandedBySession: Record<string, string[] | undefined>
   statusBySession: Record<string, WorkspaceStatusResult | undefined>
@@ -135,6 +137,7 @@ function dropSessionKeys<T>(record: Record<string, T>, sessionId: string) {
 export const useWorkspaceContentStore = create<WorkspaceContentStore>((set, get) => ({
   filesByKey: {},
   treeByKey: {},
+  watchRevisionBySession: {},
   treeLoadingByKey: {},
   expandedBySession: {},
   statusBySession: {},
@@ -346,6 +349,13 @@ export const useWorkspaceContentStore = create<WorkspaceContentStore>((set, get)
 
   refreshWatchedPaths: async (sessionId, paths, directories, signal) => {
     if (signal.aborted) return
+    // A watched file parent need not be loaded (for example, a restored search
+    // already has its remote results). Notify query consumers independently of
+    // whether any cached directory listing can be replaced by this refresh.
+    set(state => ({ watchRevisionBySession: {
+      ...state.watchRevisionBySession,
+      [sessionId]: (state.watchRevisionBySession[sessionId] ?? 0) + 1,
+    } }))
     const prefix = `${sessionId}::`
     const changed = (candidate: string) => paths.some((path) => candidate === path || candidate.startsWith(`${path}/`))
     // Directory invalidations remain authoritative when either batching layer
@@ -402,6 +412,7 @@ export const useWorkspaceContentStore = create<WorkspaceContentStore>((set, get)
       const { [sessionId]: _removed, ...expandedBySession } = state.expandedBySession
       const { [sessionId]: _status, ...statusBySession } = state.statusBySession
       const { [sessionId]: _treeView, ...treeViewBySession } = state.treeViewBySession
+      const { [sessionId]: _watchRevision, ...watchRevisionBySession } = state.watchRevisionBySession
       return {
         filesByKey: dropSessionKeys(state.filesByKey, sessionId),
         treeByKey: dropSessionKeys(state.treeByKey, sessionId),
@@ -409,6 +420,7 @@ export const useWorkspaceContentStore = create<WorkspaceContentStore>((set, get)
         expandedBySession,
         statusBySession,
         treeViewBySession,
+        watchRevisionBySession,
         fileViewByKey: dropSessionKeys(state.fileViewByKey, sessionId),
       }
     })

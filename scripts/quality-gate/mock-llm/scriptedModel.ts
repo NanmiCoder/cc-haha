@@ -141,6 +141,13 @@ export function decideReply(request: MockRequest): MockReply {
   const last = messages[messages.length - 1]
   const prompt = latestUserPrompt(messages)
 
+  // Compaction is a real CLI side request. Keep it streaming long enough for
+  // progress to cross the server after a canceled question, rather than using
+  // the generic neutral title reply that ends before the throttle can fire.
+  if (textOf(blocksOf(last)).includes('CRITICAL: Respond with TEXT ONLY')) {
+    return text(`<summary>${'The user canceled an A/B question. Nothing was changed. Continue normally.\n'.repeat(24)}</summary>`, 60)
+  }
+
   if (prompt.includes(UPSTREAM_ERROR_TRIGGER)) {
     return { kind: 'error', status: 400, errorType: 'invalid_request_error', message: UPSTREAM_ERROR_MESSAGE }
   }
@@ -154,6 +161,13 @@ export function decideReply(request: MockRequest): MockReply {
     const result = results[results.length - 1]!
     const body = toolResultText(result).trim()
     return text(result.is_error ? `The tool failed: ${body}` : `Tool result: ${body}`)
+  }
+
+  if (prompt.includes('MOCK_ASK_BEFORE_COMPACT') && hasTool(request, 'AskUserQuestion')) {
+    return toolUse('AskUserQuestion', { questions: [{
+      question: 'Choose A or B', header: 'Choice', multiSelect: false,
+      options: [{ label: 'A', description: 'First option' }, { label: 'B', description: 'Second option' }],
+    }] })
   }
 
   const cwd = workingDirectoryOf(request)

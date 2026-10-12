@@ -169,6 +169,73 @@ describe('task-owned file watch', () => {
     hook.unmount()
   })
 
+  it('restores cached missing ancestors and the preview through automatic reattachments, then observes new children', async () => {
+    useWorkspaceContentStore.setState({ refreshWatchedPaths: originalRefresh })
+    const content = () => useWorkspaceContentStore.getState()
+    const file = '/repo/src/nested/restore.txt'
+    let stage: 'before' | 'missing' | 'parent' | 'restored' | 'created' = 'before'
+    mocks.readFile.mockImplementation(async () => stage === 'missing' || stage === 'parent'
+      ? { state: 'missing', path: 'src/nested/restore.txt', language: 'text', size: 0 }
+      : { state: 'ok', path: 'src/nested/restore.txt', content: stage === 'before' ? 'before' : 'after', language: 'text', size: 5 })
+    mocks.readTree.mockImplementation(async (_task, path) => {
+      const missing = path === 'src' ? stage === 'missing' : path === 'src/nested' && (stage === 'missing' || stage === 'parent')
+      const entries = missing || (path === '' && stage === 'missing') ? [] : path === ''
+        ? [{ name: 'src', path: 'src', isDirectory: true }]
+        : path === 'src' && stage !== 'parent'
+          ? [{ name: 'nested', path: 'src/nested', isDirectory: true }]
+          : path === 'src/nested'
+            ? [{ name: 'restore.txt', path: 'src/nested/restore.txt', isDirectory: false }, ...(stage === 'created' ? [{ name: 'new.txt', path: 'src/nested/new.txt', isDirectory: false }] : [])]
+            : []
+      return { state: missing ? 'missing' : 'ok', path, entries }
+    })
+    useWorkspaceStore.getState().openTarget('a', { kind: 'file', path: file })
+    await content().loadFile('a', file)
+    for (const directory of ['', 'src', 'src/nested']) await content().loadTree('a', directory)
+    const hook = renderHook(() => useWorkspaceFileWatch('a', true))
+    const notify = async (paths: string[], directories: string[]) => {
+      await act(async () => {
+        subscriptions.at(-1)!.notify({ type: 'change', paths, directories })
+        await Promise.resolve()
+      })
+      act(() => subscriptions.at(-1)!.notify({ type: 'ready' }))
+      await act(() => vi.advanceTimersByTimeAsync(120))
+    }
+    try {
+      act(() => subscriptions[0]!.notify({ type: 'ready' }))
+      await act(() => vi.advanceTimersByTimeAsync(120))
+      stage = 'missing'
+      // The service explicitly names the lost target, even if a root watcher
+      // has not delivered its ancestor event yet.
+      await notify(['src/nested'], ['src/nested'])
+      expect(subscriptions).toHaveLength(2)
+      expect(content().getTree('a', 'src')?.state).toBe('missing')
+      expect(content().getTree('a', 'src/nested')?.state).toBe('missing')
+      expect(content().getTree('a', '')?.entries).toEqual([])
+      expect(content().getFile('a', file)).toMatchObject({ content: 'before', refreshError: 'missing', watchPath: 'src/nested/restore.txt' })
+      stage = 'parent'
+      await notify(['src'], [''])
+      expect(subscriptions).toHaveLength(3)
+      expect(content().getTree('a', 'src')?.state).toBe('ok')
+      expect(content().getTree('a', 'src/nested')?.state).toBe('missing')
+      stage = 'restored'
+      await notify(['src/nested'], ['src'])
+      expect(subscriptions).toHaveLength(4)
+      expect(content().getTree('a', 'src/nested')?.state).toBe('ok')
+      expect(content().getFile('a', file)).toMatchObject({ content: 'after', refreshError: null })
+      stage = 'created'
+      await act(async () => {
+        subscriptions.at(-1)!.notify({ type: 'change', paths: ['src/nested/new.txt'], directories: ['src/nested'] })
+        await vi.advanceTimersByTimeAsync(120)
+      })
+      expect(content().getTree('a', 'src/nested')?.entries.map(entry => entry.path)).toContain('src/nested/new.txt')
+      expect(subscriptions).toHaveLength(4)
+      expect(hook.result.current).toBeNull()
+    } finally {
+      hook.unmount()
+      content().clearSession('a')
+    }
+  })
+
   it('watches loaded directories and file parents, coalesces events, and preserves subscriptions across activation', async () => {
     const id = useWorkspaceStore.getState().openTarget('a', { kind: 'file', path: 'src/nested/a.ts' })!
     useWorkspaceContentStore.setState({ treeByKey: { 'a::src': { state: 'ok', path: 'src', entries: [] } } })

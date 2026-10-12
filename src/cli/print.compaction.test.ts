@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment.js'
 
 // Compaction through the real CLI and request path against a loopback
 // Anthropic upstream: the prompt that goes out, the live progress the desktop
@@ -148,7 +149,7 @@ async function runCli(port: number, args: string[], env: Record<string, string> 
   const child = Bun.spawn([CLI, ...args], {
     cwd: join(sandbox!, 'project'),
     env: {
-      ...process.env,
+      ...createSandboxedTestEnvironment(sandbox!),
       CALLER_DIR: undefined,
       HOME: sandbox!,
       NODE_ENV: 'production',
@@ -237,6 +238,17 @@ describe('print mode compaction', () => {
       )
 
       expect(exitCode).toBe(0)
+      // After Stop, the desktop server fences old output until this command's
+      // own input marker acknowledges the replacement. A boundary and result
+      // alone are not sufficient: both can belong to the interrupted turn.
+      const commandIndex = events.findIndex(event =>
+        event.type === 'system' && event.subtype === 'local_command' &&
+        String(event.content).includes('<command-name>/compact</command-name>'),
+      )
+      expect(commandIndex).toBeGreaterThanOrEqual(0)
+      expect(events.findIndex(event => event.status === 'compacting')).toBeGreaterThan(commandIndex)
+      expect(events.findIndex(event => event.subtype === 'compact_boundary')).toBeGreaterThan(commandIndex)
+      expect(events.findIndex(event => event.type === 'result')).toBeGreaterThan(commandIndex)
       const compactionPrompts = requests.filter(r => r.compaction)
       expect(compactionPrompts).toHaveLength(1)
       const prompt = compactionPrompts[0]!.prompt
@@ -302,6 +314,10 @@ describe('print mode compaction', () => {
       // Without the shared budget the cache-sharing fork re-sends 1 + 2 times,
       // then the streaming fallback re-sends the full context 1 + 2 more.
       expect(requests.filter(r => r.compaction)).toHaveLength(3)
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'system', subtype: 'local_command',
+        content: expect.stringContaining('<command-name>/compact</command-name>'),
+      }))
       expect(
         events.some(
           event => event.type === 'system' && event.subtype === 'compact_boundary',

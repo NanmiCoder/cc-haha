@@ -18,6 +18,18 @@ describe('scripted model', () => {
     expect(reply).toEqual({ kind: 'message', content: [{ type: 'text', text: 'Mock title' }], stopReason: 'end_turn' })
   })
 
+  test('scripts a real pending question and a streaming compaction summary', () => {
+    const question = decideReply({ ...agentRequest([{ role: 'user', content: 'MOCK_ASK_BEFORE_COMPACT' }]),
+      tools: [...AGENT_TOOLS, { name: 'AskUserQuestion' }],
+    })
+    expect(question).toMatchObject({ kind: 'message', stopReason: 'tool_use', content: [{
+      type: 'tool_use', name: 'AskUserQuestion', input: { questions: [{ question: 'Choose A or B' }] },
+    }] })
+    const summary = decideReply({ messages: [{ role: 'user', content: 'CRITICAL: Respond with TEXT ONLY' }] })
+    expect(summary).toMatchObject({ kind: 'message', stopReason: 'end_turn', chunkDelayMs: 60 })
+    if (summary.kind === 'message') expect(summary.content[0]).toMatchObject({ type: 'text', text: expect.stringContaining('<summary>') })
+  })
+
   test('writes to an absolute path under the working directory the CLI announced', () => {
     const reply = decideReply(agentRequest([{
       role: 'user',

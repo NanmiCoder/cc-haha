@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getWorkspaceTree: vi.fn(),
   searchWorkspace: vi.fn(),
   getWorkspaceStatus: vi.fn(),
+  getWorkspaceFile: vi.fn(),
   openTarget: vi.fn().mockResolvedValue(undefined),
   copyText: vi.fn().mockResolvedValue(true),
 }))
@@ -14,7 +15,7 @@ vi.mock('../../api/sessions', () => ({
   sessionsApi: {
     getWorkspaceTree: mocks.getWorkspaceTree,
     searchWorkspace: mocks.searchWorkspace,
-    getWorkspaceFile: vi.fn(),
+    getWorkspaceFile: mocks.getWorkspaceFile,
     getWorkspaceStatus: mocks.getWorkspaceStatus,
   },
 }))
@@ -83,6 +84,7 @@ beforeEach(() => {
     { path: 'src/changed.ts', status: 'modified', additions: 1, deletions: 0 },
   ] })
   mocks.searchWorkspace.mockReset()
+  mocks.getWorkspaceFile.mockReset()
   mocks.searchWorkspace.mockImplementation(async (_session: string, query: string) => ({
     state: 'ok', query, truncated: false,
     entries: SRC.entries.filter((entry) => entry.path.includes(query)),
@@ -94,6 +96,152 @@ afterEach(() => {
 })
 
 describe('WorkspaceFileTreePane', () => {
+  it.each(['create', 'rename', 'delete'] as const)('refreshes a restored filter after a watched %s when the file parent has no cached listing', async change => {
+    const file = '/repo/large/zz-last.txt'
+    const base = { name: 'zz-last.txt', path: 'large/zz-last.txt', isDirectory: false }
+    const old = { name: 'zz-last-existing.txt', path: 'large/zz-last-existing.txt', isDirectory: false }
+    const next = { name: 'zz-last-new.txt', path: 'large/zz-last-new.txt', isDirectory: false }
+    let matches = change === 'create' ? [base] : [base, old]
+    mocks.getWorkspaceTree.mockResolvedValue({ state: 'ok', path: '', entries: [{ name: 'large', path: 'large', isDirectory: true }] })
+    mocks.getWorkspaceFile.mockResolvedValue({ state: 'ok', path: base.path, content: 'after', language: 'text', size: 5 })
+    mocks.searchWorkspace.mockImplementation(async (_task, query) => ({ state: 'ok', query, truncated: false, entries: [...matches] }))
+    useWorkspaceContentStore.getState().setTreeView(SESSION, { filter: 'zz-last' })
+    useWorkspaceContentStore.setState({ filesByKey: {
+      [`${SESSION}::${file}`]: { path: file, watchPath: base.path, state: 'ok', content: 'before' },
+    } })
+    render(<WorkspaceFileTreePane sessionId={SESSION} selectedPath={file} onOpen={vi.fn()} />)
+    await screen.findByTestId(`workspace-tree-row-${change === 'create' ? base.path : old.path}`)
+    expect(mocks.searchWorkspace).toHaveBeenCalledTimes(1)
+    expect(useWorkspaceContentStore.getState().getTree(SESSION, 'large')).toBeUndefined()
+    matches = change === 'delete' ? [base] : [base, next]
+    await act(async () => {
+      await useWorkspaceContentStore.getState().refreshWatchedPaths(SESSION, change === 'create' ? [next.path] : [old.path, next.path], ['large'], new AbortController().signal)
+    })
+    // The preview receives its update: a valid watch event arrived. There is
+    // no cached parent tree to replace, as on cold restore with a saved query.
+    expect(useWorkspaceContentStore.getState().getFile(SESSION, file)?.content).toBe('after')
+    expect(mocks.getWorkspaceTree).toHaveBeenCalledTimes(1)
+    await waitFor(() => {
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(2)
+      if (change !== 'delete') expect(screen.getByTestId(`workspace-tree-row-${next.path}`)).toBeInTheDocument()
+      if (change !== 'create') expect(screen.queryByTestId(`workspace-tree-row-${old.path}`)).toBeNull()
+    })
+    expect(screen.getByRole('searchbox')).toHaveValue('zz-last')
+  })
+
+  it.each(['create', 'rename', 'delete'] as const)('refreshes an unchanged filter after a watched %s in a large loaded directory', async change => {
+    let entries = [
+      ...Array.from({ length: 300 }, (_, index) => ({ name: `${index}.txt`, path: `large/${index}.txt`, isDirectory: false })),
+      { name: 'zz-last.txt', path: 'large/zz-last.txt', isDirectory: false },
+    ]
+    mocks.getWorkspaceTree.mockImplementation(async (_session, path) => ({
+      state: 'ok', path, entries: path === 'large' ? [...entries] : [{ name: 'large', path: 'large', isDirectory: true }],
+    }))
+    mocks.searchWorkspace.mockImplementation(async (_session, query) => ({ state: 'ok', query, truncated: false, entries: entries.filter(entry => entry.path.includes(query)) }))
+    await renderPane()
+    fireEvent.click(screen.getByTestId('workspace-tree-row-large'))
+    await screen.findByTestId('workspace-tree-row-large/zz-last.txt')
+    const input = screen.getByRole('searchbox')
+    act(() => input.focus())
+    fireEvent.change(input, { target: { value: 'zz-last' } })
+    await waitFor(() => expect(mocks.searchWorkspace).toHaveBeenCalledTimes(1))
+    const old = 'large/zz-last.txt'
+    const next = 'large/zz-last-new.txt'
+    if (change !== 'create') entries = entries.filter(entry => entry.path !== old)
+    if (change !== 'delete') entries.push({ name: 'zz-last-new.txt', path: next, isDirectory: false })
+    await act(async () => {
+      await useWorkspaceContentStore.getState().refreshWatchedPaths(SESSION, change === 'create' ? [next] : [old, next], ['large'], new AbortController().signal)
+    })
+    await waitFor(() => {
+      if (change !== 'delete') expect(screen.getByTestId(`workspace-tree-row-${next}`)).toBeInTheDocument()
+      if (change !== 'create') expect(screen.queryByTestId(`workspace-tree-row-${old}`)).toBeNull()
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(2)
+    })
+    expect(input).toHaveValue('zz-last')
+    expect(input).toHaveFocus()
+    expect(mocks.searchWorkspace).toHaveBeenLastCalledWith(SESSION, 'zz-last', expect.any(AbortSignal))
+  })
+
+  it('coalesces watched refreshes without searching on idle, other tasks, preview updates or an empty filter', async () => {
+    mocks.getWorkspaceTree.mockImplementation(async (_session, path) => ({ ...(path === 'src' ? SRC : ROOT) }))
+    const view = await renderPane()
+    await act(async () => { await useWorkspaceContentStore.getState().loadTree(SESSION, 'src') })
+    vi.useFakeTimers()
+    try {
+      const input = screen.getByRole('searchbox')
+      fireEvent.change(input, { target: { value: 'adapters' } })
+      await act(() => vi.advanceTimersByTimeAsync(120))
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(1)
+      const signal = new AbortController().signal
+      await act(async () => {
+        await useWorkspaceContentStore.getState().refreshWatchedPaths('other-task', [], [''], signal)
+        await useWorkspaceContentStore.getState().loadTree('other-task', 'src')
+        useWorkspaceContentStore.setState(state => ({
+          treeByKey: { ...state.treeByKey },
+          filesByKey: { ...state.filesByKey, [`${SESSION}::preview.ts`]: { path: 'preview.ts', state: 'ok', content: 'after' } },
+        }))
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(1)
+      await act(async () => {
+        for (let index = 0; index < 3; index++) {
+          await useWorkspaceContentStore.getState().refreshWatchedPaths(SESSION, ['src/adapters.ts'], ['src'], signal)
+        }
+      })
+      await act(() => vi.advanceTimersByTimeAsync(119))
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(1)
+      await act(() => vi.advanceTimersByTimeAsync(1))
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(2)
+      fireEvent.change(input, { target: { value: '' } })
+      await act(async () => {
+        await useWorkspaceContentStore.getState().refreshWatchedPaths(SESSION, [], ['src'], signal)
+        await vi.advanceTimersByTimeAsync(60_000)
+      })
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(2)
+    } finally {
+      view.unmount()
+      vi.useRealTimers()
+    }
+  })
+
+  it('aborts an in-flight unchanged-query search after a watch refresh and ignores its late result', async () => {
+    let resolveOld!: (result: unknown) => void
+    mocks.searchWorkspace.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve }))
+    mocks.searchWorkspace.mockImplementationOnce(async (_task, query) => ({
+      state: 'ok', query, truncated: false,
+      entries: [{ name: 'adapters-new.ts', path: 'src/adapters-new.ts', isDirectory: false }],
+    }))
+    const view = await renderPane()
+    await act(async () => { await useWorkspaceContentStore.getState().loadTree(SESSION, 'src') })
+    vi.useFakeTimers()
+    try {
+      fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'adapters' } })
+      await act(() => vi.advanceTimersByTimeAsync(120))
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(1)
+      const oldSignal = mocks.searchWorkspace.mock.calls[0]![2] as AbortSignal
+      mocks.getWorkspaceTree.mockResolvedValueOnce({ ...SRC, entries: [{ name: 'adapters-new.ts', path: 'src/adapters-new.ts', isDirectory: false }] })
+      await act(async () => {
+        await useWorkspaceContentStore.getState().refreshWatchedPaths(SESSION, ['src/adapters-new.ts'], ['src'], new AbortController().signal)
+      })
+      expect(oldSignal.aborted).toBe(true)
+      await act(() => vi.advanceTimersByTimeAsync(120))
+      expect(mocks.searchWorkspace).toHaveBeenCalledTimes(2)
+      expect(screen.getByTestId('workspace-tree-row-src/adapters-new.ts')).toBeInTheDocument()
+      await act(async () => resolveOld({
+        state: 'ok', query: 'adapters', truncated: false,
+        entries: [{ name: 'adapters-stale.ts', path: 'src/adapters-stale.ts', isDirectory: false }],
+      }))
+      expect(screen.queryByTestId('workspace-tree-row-src/adapters-stale.ts')).toBeNull()
+      expect(screen.getByTestId('workspace-tree-row-src/adapters-new.ts')).toBeInTheDocument()
+      const currentSignal = mocks.searchWorkspace.mock.calls[1]![2] as AbortSignal
+      view.unmount()
+      expect(currentSignal.aborted).toBe(true)
+    } finally {
+      view.unmount()
+      vi.useRealTimers()
+    }
+  })
+
   it('groups interleaved search hits under their real parent for display and keyboard navigation', async () => {
     mocks.searchWorkspace.mockImplementationOnce(async (_session: string, query: string) => ({
       state: 'ok', query, truncated: false,

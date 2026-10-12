@@ -11,6 +11,7 @@ import {
   __resolveRuntimeRestartWorkDirForTests,
   closeSessionConnection,
   getActiveSessionIds,
+  getSessionTurnState,
   getRuntimeSettings,
   handleWebSocket,
   stopSessionTurn,
@@ -3659,6 +3660,84 @@ describe('WebSocket handler session isolation', () => {
       type: 'message_complete',
       usage: { input_tokens: 0, output_tokens: 0 },
     })
+  })
+
+  it.each(['success', 'failure'])('settles /compact after stopping a pending question (%s)', async (outcome) => {
+    const sessionId = `stop-question-compact-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const outputCallbacks = new Set<(cliMsg: any) => void>()
+    const sentUuids: string[] = []
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.add(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_sid, callback) => {
+      outputCallbacks.delete(callback)
+    })
+    spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Existing title')
+    spyOn(conversationService, 'sendMessage').mockImplementation(
+      async (_sid, _content, _attachments, options) => {
+        sentUuids.push(options?.messageUuid ?? '')
+        options?.onCommitted?.()
+        return true
+      },
+    )
+    const emit = (event: any) => {
+      for (const callback of [...outputCallbacks]) callback(event)
+    }
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Ask me A or B' }))
+    await flushMicrotasks(30)
+    emit({ type: 'control_request', request_id: 'question', request: {
+      subtype: 'can_use_tool', tool_name: 'AskUserQuestion', tool_use_id: 'question-tool',
+      input: { questions: [{ question: 'A or B?', header: 'Choice', options: [
+        { label: 'A', description: 'A' }, { label: 'B', description: 'B' },
+      ], multiSelect: false }] },
+    } })
+    handleWebSocket.message(ws, JSON.stringify({ type: 'stop_generation' }))
+    emit({ type: 'control_cancel_request', request_id: 'question' })
+    emit({ type: 'result', subtype: 'error', is_error: true, result: 'Interrupted' })
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: '/compact' }))
+    await flushMicrotasks(30)
+    ws.sent.length = 0
+    // A bare compacting status is not an acknowledgement of the new turn.
+    emit({ type: 'system', subtype: 'status', status: 'compacting' })
+    expect(ws.sent).toHaveLength(0)
+    emit({ type: 'system', subtype: 'local_command', uuid: sentUuids[1],
+      content: '<command-name>/compact</command-name>' })
+    emit({ type: 'system', subtype: 'status', status: 'compacting' })
+    if (outcome === 'success') {
+      emit({ type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: 1234 } })
+      emit({ type: 'user', message: { role: 'user', content: 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\nSummary: canceled question' } })
+    } else {
+      emit({ type: 'system', subtype: 'local_command_output', content: '<local-command-stderr>Compaction failed</local-command-stderr>' })
+    }
+    const result = { type: 'result', subtype: 'success', is_error: false, usage: { input_tokens: 1, output_tokens: 1 } }
+    emit(result)
+    await flushMicrotasks()
+    expect(getSessionTurnState(sessionId)).toBe('idle')
+    expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual({
+      type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    if (outcome === 'success') {
+      expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({
+        type: 'system_notification', subtype: 'compact_boundary',
+      }))
+    } else {
+      expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual({ type: 'content_delta', text: 'Compaction failed' })
+    }
+    // A duplicate completion cannot leave admission busy; the next ordinary
+    // message uses its own UUID replay and completes normally.
+    emit(result)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Continue after compact' }))
+    await flushMicrotasks(30)
+    expect(getSessionTurnState(sessionId)).toBe('running')
+    emit({ type: 'user', isReplay: true, uuid: sentUuids[2], message: { role: 'user', content: 'Continue after compact' } })
+    emit({ ...result })
+    await flushMicrotasks()
+    expect(getSessionTurnState(sessionId)).toBe('idle')
   })
 
   it('completes a local slash replacement after Agent control failure kills the runtime', async () => {

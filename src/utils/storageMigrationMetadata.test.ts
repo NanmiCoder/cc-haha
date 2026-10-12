@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { cp, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { cp, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { relocateManagedData } from './storageMigrationMetadata.js'
@@ -10,7 +10,9 @@ afterEach(async () => {
 })
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'storage-metadata-'))
+  // macOS tmpdir may use /var while realpath uses /private/var. The
+  // explicit alias fixture below supplies the alternate root intentionally.
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'storage-metadata-')))
   roots.push(root)
   const source = join(root, 'source')
   const target = join(root, 'target')

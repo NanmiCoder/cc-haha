@@ -154,7 +154,6 @@ export function GeneralSettings() {
   const [autoDreamActionRunning, setAutoDreamActionRunning] = useState(false)
   const [agentTeamsSaving, setAgentTeamsSaving] = useState(false)
   const [subagentLimitInput, setSubagentLimitInput] = useState(String(maxConcurrentSubagents ?? ''))
-  const [subagentLimitBadInput, setSubagentLimitBadInput] = useState(false)
   const [subagentLimitSaving, setSubagentLimitSaving] = useState(false)
   const [subagentLimitError, setSubagentLimitError] = useState<string | null>(null)
   const [modeSwitchConfirmOpen, setModeSwitchConfirmOpen] = useState(false)
@@ -231,13 +230,12 @@ export function GeneralSettings() {
 
   useEffect(() => {
     setSubagentLimitInput(String(maxConcurrentSubagents ?? ''))
-    setSubagentLimitBadInput(false)
   }, [maxConcurrentSubagents])
 
   async function handleSubagentLimitSave() {
     const input = subagentLimitInput.trim()
     const value = input === '' ? null : Number(input)
-    if (subagentLimitBadInput || (input !== '' && !/^\d+$/.test(input)) || !isMaxConcurrentSubagents(value)) {
+    if ((input !== '' && !/^\d+$/.test(input)) || !isMaxConcurrentSubagents(value)) {
       setSubagentLimitError(t('settings.general.subagentConcurrencyInvalid'))
       return
     }
@@ -1120,11 +1118,8 @@ export function GeneralSettings() {
             )}
           >
             <Input
-              type="number"
+              type="text"
               inputMode="numeric"
-              min={1}
-              max={Number.MAX_SAFE_INTEGER}
-              step={1}
               size="md"
               containerClassName="w-[180px]"
               aria-label={t('settings.general.subagentConcurrencyTitle')}
@@ -1132,17 +1127,10 @@ export function GeneralSettings() {
               value={subagentLimitInput}
               disabled={subagentLimitSaving}
               error={subagentLimitError ?? undefined}
-              onInput={(event) => {
-                // 清空未完成的数字输入时 value="" 可能不变，单靠 React
-                // onChange 不会再次触发，会留下过期的 badInput 标记。
-                setSubagentLimitBadInput(event.currentTarget.validity.badInput)
-                setSubagentLimitError(null)
-              }}
               onChange={(event) => {
+                // 保留非法草稿供保存时校验，避免 number 控件将 abc
+                // 等输入过滤为空值后误保存为不限。
                 setSubagentLimitInput(event.target.value)
-                // 浏览器会将未完成或非法的数字文本暴露为空值。
-                // 只有真正清空输入框才表示不限。
-                setSubagentLimitBadInput(event.target.validity.badInput)
                 setSubagentLimitError(null)
               }}
             />

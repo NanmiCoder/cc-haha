@@ -15,6 +15,7 @@ export type SidebarProjectSortBy = 'createdAt' | 'updatedAt'
 const PROJECT_ORDER_STORAGE_KEY = 'cc-haha-sidebar-project-order'
 const PROJECT_PINNED_STORAGE_KEY = 'cc-haha-sidebar-pinned-projects'
 const PROJECT_HIDDEN_STORAGE_KEY = 'cc-haha-sidebar-hidden-projects'
+const PROJECT_COLLAPSED_STORAGE_KEY = 'cc-haha-sidebar-collapsed-projects'
 const PROJECT_ORGANIZATION_STORAGE_KEY = 'cc-haha-sidebar-project-organization'
 const PROJECT_SORT_STORAGE_KEY = 'cc-haha-sidebar-project-sort'
 
@@ -72,6 +73,25 @@ export function writeStoredProjectHidden(projectKeys: Set<string>): void {
     localStorage.setItem(PROJECT_HIDDEN_STORAGE_KEY, JSON.stringify([...projectKeys]))
   } catch {
     // Hidden projects are a local UI preference; ignore storage failures.
+  }
+}
+
+export function readStoredProjectCollapsed(): Set<string> {
+  if (typeof localStorage === 'undefined') return new Set()
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PROJECT_COLLAPSED_STORAGE_KEY) ?? '[]')
+    return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string') : [])
+  } catch {
+    return new Set()
+  }
+}
+
+export function writeStoredProjectCollapsed(projectKeys: Set<string>): void {
+  if (typeof localStorage === 'undefined') return
+  try {
+    localStorage.setItem(PROJECT_COLLAPSED_STORAGE_KEY, JSON.stringify([...projectKeys]))
+  } catch {
+    // Project collapse state is a UI preference; ignore storage failures.
   }
 }
 

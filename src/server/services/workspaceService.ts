@@ -9,6 +9,13 @@ import type { MessageEntry } from './sessionService.js'
 import type { FileHistorySnapshot } from '../../utils/fileHistory.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { isWithinRegisteredFilesystemRoot } from './filesystemAccessRoots.js'
+import {
+  changedWorkspaceWatchEntries,
+  createWorkspaceWatchScan,
+  readWorkspaceWatchState,
+  WORKSPACE_WATCH_RECONCILIATION,
+  type WorkspaceWatchState,
+} from './workspaceWatchState.js'
 import { collectErroredToolUseIds } from './transcriptToolResults.js'
 import {
   isSameOrInsidePathForPlatform,
@@ -623,34 +630,111 @@ export class WorkspaceService {
     const paths = new Set<string>()
     const directories = new Set<string>()
     let timer: ReturnType<typeof setTimeout> | undefined
+    let reconciliationTimer: ReturnType<typeof setTimeout> | undefined
+    const scanAbort = new AbortController()
     let stopped = false
     const stop = () => {
       if (stopped) return
       stopped = true
       if (timer !== undefined) clearTimeout(timer)
+      if (reconciliationTimer !== undefined) clearTimeout(reconciliationTimer)
+      scanAbort.abort()
+      for (const scan of scans.values()) void scan.close().catch(() => {})
+      scans.clear()
       signal.removeEventListener('abort', stop)
       for (const watcher of watchers) watcher.close()
       paths.clear()
       directories.clear()
     }
     signal.addEventListener('abort', stop, { once: true })
+    const notify = (directory: string, names: string[]) => {
+      if (stopped || signal.aborted) return
+      directories.add(directory)
+      for (const name of names) paths.add(this.normalizeRelativePath(path.join(directory, name)))
+      if (timer !== undefined) return
+      timer = setTimeout(() => {
+        timer = undefined
+        if (stopped || signal.aborted) return
+        const event = { paths: [...paths], directories: [...directories] }
+        paths.clear()
+        directories.clear()
+        onChange(event)
+      }, 60)
+    }
+    const targetList = [...targets.values()]
+    const states = new Map<string, WorkspaceWatchState>()
+    const scans = new Map<string, ReturnType<typeof createWorkspaceWatchScan>>()
+    const validate = async (target: typeof targetList[number]) => {
+      scanAbort.signal.throwIfAborted()
+      // Use the original workspace spelling too: a replaced symlink or a
+      // changed session root must not keep scanning the former watch target.
+      const resolved = await this.resolveWorkspacePath(sessionId, target.relativePath)
+      if (resolved.canonicalTargetPath !== target.absolutePath) {
+        throw new Error(`Watch directory changed its canonical path: ${target.relativePath}`)
+      }
+      scanAbort.signal.throwIfAborted()
+    }
+    const snapshot = async (target: typeof targetList[number]) => {
+      await validate(target)
+      const state = await readWorkspaceWatchState(target.absolutePath, scanAbort.signal, isVcsMetadataDirectoryName)
+      await validate(target)
+      return state
+    }
+    const reconcile = async (target: typeof targetList[number]) => {
+      await validate(target)
+      let scan = scans.get(target.absolutePath)
+      if (!scan) {
+        scan = createWorkspaceWatchScan(target.absolutePath, scanAbort.signal, isVcsMetadataDirectoryName)
+        scans.set(target.absolutePath, scan)
+      }
+      const state = await scan.readChunk()
+      await validate(target)
+      if (stopped || signal.aborted) return
+      if (!state) return
+      scans.delete(target.absolutePath)
+      const before = states.get(target.absolutePath)!
+      const names = changedWorkspaceWatchEntries(before, state)
+      // A dead/replaced native watch must move to a live ancestor (and then
+      // back to the restored target). A coarse dirty directory alone is also
+      // used for ordinary child edits, so explicitly name the target itself.
+      if (before.identity !== state.identity && target.relativePath !== '') names.push('')
+      if (names.length || before.identity !== state.identity || before.fingerprint !== state.fingerprint) {
+        notify(target.relativePath, names)
+      }
+      states.set(target.absolutePath, state)
+    }
+    let cursor = 0
+    const scheduleReconciliation = () => {
+      if (stopped || signal.aborted) return
+      reconciliationTimer = setTimeout(async () => {
+        reconciliationTimer = undefined
+        try {
+          const count = Math.min(targetList.length, WORKSPACE_WATCH_RECONCILIATION.directoriesPerTick)
+          for (let index = 0; index < count; index++) {
+            if (stopped || signal.aborted) return
+            await reconcile(targetList[cursor]!)
+            cursor = (cursor + 1) % targetList.length
+          }
+          // Schedule after completion, so slow disks cannot accumulate scans.
+          scheduleReconciliation()
+        } catch (error) {
+          if (stopped || signal.aborted) return
+          stop()
+          onError?.(error instanceof Error ? error : new Error(String(error)))
+        }
+      }, WORKSPACE_WATCH_RECONCILIATION.intervalMs)
+    }
     try {
-      for (const target of targets.values()) {
+      // Capture before registration, then reconcile once before ready. Ongoing
+      // reconciliation also covers native stream rebuild gaps after startup.
+      for (const target of targetList) states.set(target.absolutePath, await snapshot(target))
+      for (const target of targetList) {
+        scanAbort.signal.throwIfAborted()
         const watcher = watch(target.absolutePath, { recursive: false }, (_eventType, filename) => {
           if (stopped || signal.aborted) return
           const name = filename?.toString()
           if (name && isVcsMetadataDirectoryName(name.split(/[\\/]/)[0]!)) return
-          directories.add(target.relativePath)
-          if (name) paths.add(this.normalizeRelativePath(path.join(target.relativePath, name)))
-          if (timer !== undefined) return
-          timer = setTimeout(() => {
-            timer = undefined
-            if (stopped || signal.aborted) return
-            const event = { paths: [...paths], directories: [...directories] }
-            paths.clear()
-            directories.clear()
-            onChange(event)
-          }, 60)
+          notify(target.relativePath, name ? [name] : [])
         })
         watchers.push(watcher)
         watcher.on('error', (error) => {
@@ -658,6 +742,8 @@ export class WorkspaceService {
           onError?.(error)
         })
       }
+      for (const target of targetList) await reconcile(target)
+      scheduleReconciliation()
     } catch (error) {
       stop()
       throw error
