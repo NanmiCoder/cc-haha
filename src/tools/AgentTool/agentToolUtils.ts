@@ -45,6 +45,7 @@ import type { CacheSafeParams } from '../../utils/forkedAgent.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import {
   extractTextContent,
+  findLastAssistantWithText,
   getLastAssistantMessage,
 } from '../../utils/messages.js'
 import type { PermissionMode } from '../../utils/permissions/PermissionMode.js'
@@ -301,22 +302,14 @@ export function finalizeAgentTool(
     throw new Error('No assistant messages found')
   }
   // Extract text content from the agent's response. If the final assistant
-  // message is a pure tool_use block (loop exited mid-turn), fall back to
-  // the most recent assistant message that has text content.
-  let content = lastAssistantMessage.message.content.filter(
+  // message is blank (a provider heartbeat block, #1468) or a pure tool_use
+  // block (loop exited mid-turn), fall back to the most recent assistant
+  // message that actually carries text.
+  const contentSource =
+    findLastAssistantWithText(agentMessages) ?? lastAssistantMessage
+  const content = contentSource.message.content.filter(
     _ => _.type === 'text',
   )
-  if (content.length === 0) {
-    for (let i = agentMessages.length - 1; i >= 0; i--) {
-      const m = agentMessages[i]!
-      if (m.type !== 'assistant') continue
-      const textBlocks = m.message.content.filter(_ => _.type === 'text')
-      if (textBlocks.length > 0) {
-        content = textBlocks
-        break
-      }
-    }
-  }
 
   const totalTokens = getTokenCountFromUsage(lastAssistantMessage.message.usage)
   const totalToolUseCount = countToolUses(agentMessages)

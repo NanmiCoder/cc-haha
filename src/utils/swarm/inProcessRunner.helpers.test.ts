@@ -110,6 +110,10 @@ describe('teammate turn failure', () => {
 
   test('ignores turns that ended normally or were cancelled', () => {
     expect(classifyTeammateTurnFailure([
+      createAssistantMessage({ content: 'Working' }),
+      createAssistantMessage({ content: 'Recovered' }),
+    ])).toBeUndefined()
+    expect(classifyTeammateTurnFailure([
       createAssistantAPIErrorMessage({ content: 'API Error: 529 Overloaded' }),
       createAssistantMessage({ content: 'Recovered' }),
     ])).toBeUndefined()
@@ -118,6 +122,21 @@ describe('teammate turn failure', () => {
     ])).toBeUndefined()
     expect(classifyTeammateTurnFailure([
       createAssistantAPIErrorMessage({ content: ERROR_MESSAGE_USER_ABORT }),
+    ])).toBeUndefined()
+  })
+
+  test('still classifies a failure when a blank trailing block follows the API error (#1468)', () => {
+    expect(classifyTeammateTurnFailure([
+      createAssistantMessage({ content: 'Working' }),
+      createAssistantAPIErrorMessage({ content: 'API Error: 529 Overloaded\nretry later' }),
+      createAssistantMessage({ content: [{ type: 'text', text: '' }] as never }),
+    ])).toEqual({ reason: 'API Error: 529 Overloaded', isTransient: true })
+  })
+
+  test('ignores a blank trailing block after a normal turn (#1468)', () => {
+    expect(classifyTeammateTurnFailure([
+      createAssistantMessage({ content: 'Recovered' }),
+      createAssistantMessage({ content: [{ type: 'text', text: '' }] as never }),
     ])).toBeUndefined()
   })
 })

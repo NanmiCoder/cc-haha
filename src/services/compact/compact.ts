@@ -61,8 +61,8 @@ import { MEMORY_TYPE_VALUES } from '../../utils/memory/types.js'
 import {
   createCompactBoundaryMessage,
   createUserMessage,
+  findLastAssistantWithText,
   getAssistantMessageText,
-  getLastAssistantMessage,
   getMessagesAfterCompactBoundary,
   isCompactBoundaryMessage,
   normalizeMessagesForAPI,
@@ -340,6 +340,32 @@ function stripStaleUsageFromPreservedMessages(messages: Message[]): Message[] {
       },
     }
   })
+}
+
+/**
+ * Moved to utils/messages.ts (#1468) so AgentTool, forkedAgent, Stop hooks and
+ * the swarm runner share one implementation; re-exported to keep the compaction
+ * import surface stable.
+ */
+export { findLastAssistantWithText }
+
+/**
+ * Streaming counterpart of {@link findLastAssistantWithText}: decide whether an
+ * incoming assistant message may become the compaction response seen so far.
+ * A blank message can only claim an empty slot, never displace a real summary,
+ * while API errors always win so a failure is not masked by older text (#1451).
+ *
+ * Deliberately asymmetric: the first message is always adopted, blank included.
+ * A stream that never says anything still has to terminate as a response so the
+ * caller reaches its own incomplete-response handling, instead of burning the
+ * whole retry budget re-requesting a summary that is not coming.
+ */
+export function shouldAdoptCompactionResponse(
+  current: AssistantMessage | undefined,
+  next: AssistantMessage,
+): boolean {
+  if (current === undefined) return true
+  return next.isApiErrorMessage === true || getAssistantMessageText(next) !== null
 }
 
 /**
@@ -1192,7 +1218,10 @@ export function createCompactProgressReporter(
   }
 }
 
-async function streamCompactSummary({
+// Exported so a regression test can drive the cache-sharing and streaming
+// branches directly; the summary-selection logic below is the whole point of the
+// function and is otherwise only reachable through the full compact pipeline.
+export async function streamCompactSummary({
   messages,
   summaryRequest,
   appState,
@@ -1264,7 +1293,12 @@ async function streamCompactSummary({
             apiAttemptBudget,
           },
         })
-        const assistantMsg = getLastAssistantMessage(result.messages)
+        // Each content block becomes its own assistant message, so a provider
+        // that emits an empty trailing block would otherwise hide a real summary
+        // that arrived just before it. Walk back to the newest assistant that
+        // actually said something; API error messages still win the walk so a
+        // real failure is never reported as a successful summary (#1451).
+        const assistantMsg = findLastAssistantWithText(result.messages)
         const assistantText = assistantMsg
           ? getAssistantMessageText(assistantMsg)
           : null
@@ -1427,7 +1461,7 @@ async function streamCompactSummary({
           reportProgress(event.event)
         }
 
-        if (event.type === 'assistant') {
+        if (event.type === 'assistant' && shouldAdoptCompactionResponse(response, event)) {
           response = event
         }
 

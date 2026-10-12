@@ -358,6 +358,27 @@ export function getLastAssistantMessage(
   )
 }
 
+/**
+ * Walk back to the newest assistant that actually said something, so a
+ * provider that ends its stream with an empty text block (an openai_responses
+ * relay keeping the connection warm, for example) does not hide the real
+ * result from callers that read the last assistant message (#1468, #1451).
+ *
+ * Deliberately stricter than {@link getLastAssistantMessage}: a blank message
+ * (trim-empty text) does not count as content, but an API error message always
+ * wins the walk even when it carries no text, so a real failure is never
+ * downgraded into an older, successful reply.
+ */
+export function findLastAssistantWithText(
+  messages: readonly Message[],
+): AssistantMessage | undefined {
+  return messages.findLast(
+    (message): message is AssistantMessage =>
+      message.type === 'assistant' &&
+      (message.isApiErrorMessage === true || getAssistantMessageText(message) !== null),
+  )
+}
+
 export function hasToolCallsInLastAssistantTurn(messages: Message[]): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
