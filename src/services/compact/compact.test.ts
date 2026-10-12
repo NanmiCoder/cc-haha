@@ -1,6 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 
-import { buildPostCompactMessages, stripImagesFromMessages, truncateHeadForPTLRetry, type CompactionResult } from './compact.js'
+import {
+  buildPostCompactMessages,
+  findLastAssistantWithText,
+  shouldAdoptCompactionResponse,
+  stripImagesFromMessages,
+  truncateHeadForPTLRetry,
+  type CompactionResult,
+} from './compact.js'
+import { getAssistantMessageText } from '../../utils/messages.js'
+import { PROMPT_TOO_LONG_ERROR_MESSAGE } from '../api/errors.js'
 import { getCurrentUsage } from '../../utils/tokens.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 
@@ -238,5 +247,70 @@ describe('stripImagesFromMessages', () => {
 
     expect(result[0]).toBe(plain)
     expect(result[1]).toBe(assistant)
+  })
+})
+
+// #1451: an openai_responses relay that keeps the connection warm with empty
+// text deltas makes the transform emit a blank trailing content block, which
+// claude.ts turns into its own blank assistant message. Compaction must read
+// the real summary instead of reporting the response as empty.
+describe('a trailing blank assistant does not hide the compaction summary (#1451)', () => {
+  const assistantWith = (text: string): AssistantMessage =>
+    ({
+      type: 'assistant',
+      uuid: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      message: { id: crypto.randomUUID(), role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }] },
+    }) as unknown as AssistantMessage
+  const blankAssistant = () =>
+    ({
+      type: 'assistant',
+      uuid: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      message: { id: crypto.randomUUID(), role: 'assistant', model: 'mock-model', content: [{ type: 'text', text: '' }] },
+    }) as unknown as AssistantMessage
+  const apiErrorAssistant = (text: string): AssistantMessage =>
+    ({
+      type: 'assistant',
+      uuid: crypto.randomUUID(),
+      timestamp: new Date().toISOString(),
+      isApiErrorMessage: true,
+      message: { id: crypto.randomUUID(), role: 'assistant', model: 'mock-model', content: [{ type: 'text', text }] },
+    }) as unknown as AssistantMessage
+
+  test('the summary before a blank trailing block is still found', () => {
+    const summary = assistantWith('valid summary')
+
+    const found = findLastAssistantWithText([summary, blankAssistant()])
+
+    expect(found).toBe(summary)
+    expect(getAssistantMessageText(found!)).toBe('valid summary')
+  })
+
+  test('a blank-only response yields nothing so the caller falls back', () => {
+    const blank = blankAssistant()
+
+    expect(findLastAssistantWithText([blank])).toBeUndefined()
+  })
+
+  test('an API error after a valid summary still wins the walk', () => {
+    const error = apiErrorAssistant('API Error: upstream refused the request')
+
+    expect(findLastAssistantWithText([assistantWith('valid summary'), blankAssistant(), error])).toBe(error)
+  })
+
+  test('a blank streaming assistant cannot displace a collected summary', () => {
+    const summary = assistantWith('valid summary')
+
+    expect(shouldAdoptCompactionResponse(summary, blankAssistant())).toBe(false)
+    expect(shouldAdoptCompactionResponse(summary, summary)).toBe(true)
+    expect(shouldAdoptCompactionResponse(undefined, blankAssistant())).toBe(true)
+  })
+
+  test('a prompt-too-long error still replaces a collected summary', () => {
+    const ptl = assistantWith(PROMPT_TOO_LONG_ERROR_MESSAGE)
+
+    expect(shouldAdoptCompactionResponse(assistantWith('valid summary'), ptl)).toBe(true)
+    expect(shouldAdoptCompactionResponse(assistantWith('valid summary'), apiErrorAssistant('API Error: 500'))).toBe(true)
   })
 })
