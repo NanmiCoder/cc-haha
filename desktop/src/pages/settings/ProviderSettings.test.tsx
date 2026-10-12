@@ -488,3 +488,87 @@ describe('OpenCode Go provider', () => {
   })
 
 })
+
+/**
+ * Issue #1509: user-configured upstream headers. The form owns a dedicated
+ * User-Agent input plus "Name: Value" lines, both round-tripping through the
+ * saved record and the connectivity test.
+ */
+describe('provider upstream headers', () => {
+  const provider: SavedProvider = {
+    ...savedProviders[0]!,
+    id: 'headers-provider',
+    apiFormat: 'anthropic',
+    upstreamHeaders: { 'User-Agent': 'saved-agent/1.0', 'X-Custom-Trace': 'from-save' },
+  }
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [provider], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+    vi.spyOn(providersApi, 'update').mockImplementation(async (_id, input) => ({ provider: { ...provider, ...input } as SavedProvider }))
+  })
+  afterEach(() => { cleanup(); vi.restoreAllMocks() })
+
+  const open = async () => {
+    render(<ProviderSettings />)
+    const card = await screen.findByTestId('provider-headers-provider')
+    fireEvent.click(within(card).getByRole('button', { name: 'Edit' }))
+    return within(screen.getByRole('dialog'))
+  }
+
+  it('loads the saved headers and saves an edited User-Agent', async () => {
+    const dialog = await open()
+    fireEvent.click(dialog.getByRole('button', { name: /Custom request headers/ }))
+    const userAgent = dialog.getByLabelText('Custom User-Agent', { selector: 'input' })
+    expect(userAgent).toHaveValue('saved-agent/1.0')
+    expect(dialog.getByRole('textbox', { name: 'Additional headers' })).toHaveValue('X-Custom-Trace: from-save')
+
+    fireEvent.change(userAgent, { target: { value: 'edited-agent/2.0' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(providersApi.update).toHaveBeenCalledWith('headers-provider', expect.objectContaining({
+      upstreamHeaders: { 'User-Agent': 'edited-agent/2.0', 'X-Custom-Trace': 'from-save' },
+    })))
+  })
+
+  it('clears the headers back off when both inputs are emptied', async () => {
+    const dialog = await open()
+    fireEvent.click(dialog.getByRole('button', { name: /Custom request headers/ }))
+    fireEvent.change(dialog.getByLabelText('Custom User-Agent', { selector: 'input' }), { target: { value: '' } })
+    fireEvent.change(dialog.getByRole('textbox', { name: 'Additional headers' }), { target: { value: '' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(providersApi.update).toHaveBeenCalledWith('headers-provider', expect.objectContaining({ upstreamHeaders: null })))
+  })
+
+  it('blocks saving while a line is not a valid header pair', async () => {
+    const dialog = await open()
+    fireEvent.click(dialog.getByRole('button', { name: /Custom request headers/ }))
+    fireEvent.change(dialog.getByRole('textbox', { name: 'Additional headers' }), { target: { value: 'not a pair' } })
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(dialog.getByText(/valid header name/)).toBeInTheDocument()
+  })
+
+  it('sends the draft headers with the connectivity test of an unsaved config', async () => {
+    const testConfig = vi.spyOn(useProviderStore.getState(), 'testConfig').mockResolvedValue({
+      connectivity: { success: true, latencyMs: 1 },
+    })
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'Custom' }))
+    // The connectivity probe refuses to run on an incomplete draft, so fill in
+    // the same fields the OpenCode Go draft test does before asserting headers.
+    // Labels carry the required-field asterisk, so match with regexes.
+    fireEvent.change(dialog.getByLabelText(/Base URL/, { selector: 'input' }), { target: { value: 'https://draft.example.com' } })
+    fireEvent.change(dialog.getByLabelText(/API Key/, { selector: 'input' }), { target: { value: 'draft-key' } })
+    fireEvent.change(dialog.getByLabelText(/Main Model/, { selector: 'input' }), { target: { value: 'draft-model' } })
+    fireEvent.click(dialog.getByRole('button', { name: /Custom request headers/ }))
+    fireEvent.change(dialog.getByLabelText('Custom User-Agent', { selector: 'input' }), { target: { value: 'draft-agent/3.0' } })
+    fireEvent.click(dialog.getByRole('button', { name: /Test Connection/ }))
+
+    await waitFor(() => expect(testConfig).toHaveBeenCalledWith(expect.objectContaining({
+      upstreamHeaders: { 'User-Agent': 'draft-agent/3.0' },
+    })))
+  })
+})
