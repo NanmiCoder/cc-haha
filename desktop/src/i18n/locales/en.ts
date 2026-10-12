@@ -1140,6 +1140,9 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'pet.window.sessionCount': '{count} tasks',
   'pet.window.expandTasks': 'Show {count} active tasks',
   'pet.window.hideTasks': 'Hide {count} active tasks',
+  'pet.window.permissionCount': '{count} conversations awaiting approval',
+  'pet.window.expandPermissions': 'Show {count} conversations awaiting approval',
+  'pet.window.hidePermissions': 'Hide {count} conversations awaiting approval',
   'pet.window.untitledSession': 'Untitled task',
 
   // Settings > Usage

@@ -7,7 +7,7 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react'
-import { ChevronDown } from 'lucide-react'
+import { TriangleAlert } from 'lucide-react'
 import {
   desktopUiPreferencesApi,
   type DesktopPetPreferences,
@@ -26,15 +26,15 @@ import {
   type PetAnimationState,
   type PetLookDirection,
 } from './petAnimation'
+import { PetActivityPanel } from './PetActivityPanel'
 import { PetRenderer } from './PetRenderer'
 import {
   buildPetSessionActivities,
   petStatusAnimation,
-  type PetSessionStatus,
 } from './petSessionModel'
 import type { CustomPet, PetDescriptor } from './types'
 
-const OBSERVED_SESSION_LIMIT = 9
+const TASK_SESSION_LIMIT = 9
 const SESSION_REFRESH_INTERVAL_MS = 5_000
 const STATUS_REFRESH_INTERVAL_MS = 2_000
 const CUSTOM_PET_REFRESH_INTERVAL_MS = 30_000
@@ -61,16 +61,6 @@ function toCustomPets(result: Awaited<ReturnType<ReturnType<typeof getDesktopHos
   return result.pets.map((pet) => ({ source: 'custom' as const, ...pet }))
 }
 
-function statusDotClass(status: PetSessionStatus): string {
-  switch (status) {
-    case 'waiting': return 'is-waiting'
-    case 'failed': return 'is-failed'
-    case 'review': return 'is-review'
-    case 'running': return 'is-running'
-    case 'idle': return 'is-idle'
-  }
-}
-
 export function PetApp() {
   const t = useTranslation()
   const sessions = useSessionStore((state) => state.sessions)
@@ -80,6 +70,7 @@ export function PetApp() {
   const [observedStatuses, setObservedStatuses] = useState<Record<string, PetSessionRuntimeStatus>>({})
   const [startupError, setStartupError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [permissionPanelOpen, setPermissionPanelOpen] = useState(false)
   const [transientState, setTransientState] = useState<PetAnimationState | null>(null)
   const [isMascotDragging, setIsMascotDragging] = useState(false)
   const [dragDirection, setDragDirection] = useState<'left' | 'right' | null>(null)
@@ -95,6 +86,7 @@ export function PetApp() {
   const stackRef = useRef<HTMLDivElement | null>(null)
   const mascotRef = useRef<HTMLButtonElement | null>(null)
   const taskBadgeRef = useRef<HTMLButtonElement | null>(null)
+  const permissionBadgeRef = useRef<HTMLButtonElement | null>(null)
   const activityCardRef = useRef<HTMLElement | null>(null)
   const panelToggleRef = useRef<HTMLButtonElement | null>(null)
   const dragGestureRef = useRef<PetDragGesture | null>(null)
@@ -246,8 +238,7 @@ export function PetApp() {
 
   const observedSessions = useMemo(
     () => [...sessions]
-      .sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt))
-      .slice(0, OBSERVED_SESSION_LIMIT),
+      .sort((left, right) => Date.parse(right.modifiedAt) - Date.parse(left.modifiedAt)),
     [sessions],
   )
   const observedSessionKey = observedSessions.map((session) => session.id).join('\u0000')
@@ -292,11 +283,23 @@ export function PetApp() {
   }, [observedSessionKey, observedSessions])
 
   const activities = useMemo(() => buildPetSessionActivities({
+    sessions: observedSessions.slice(0, TASK_SESSION_LIMIT),
+    chats,
+    observedStatuses,
+    limit: TASK_SESSION_LIMIT,
+  }).filter((activity) => activity.status !== 'idle'), [chats, observedSessions, observedStatuses])
+
+  // Older approvals must not be hidden by the recent-task display limit.
+  const permissionActivities = useMemo(() => buildPetSessionActivities({
     sessions: observedSessions,
     chats,
     observedStatuses,
-    limit: OBSERVED_SESSION_LIMIT,
-  }).filter((activity) => activity.status !== 'idle'), [chats, observedSessions, observedStatuses])
+    limit: observedSessions.length,
+  }).filter((activity) => activity.status === 'waiting'), [chats, observedSessions, observedStatuses])
+
+  useEffect(() => {
+    if (permissionActivities.length === 0) setPermissionPanelOpen(false)
+  }, [permissionActivities.length])
 
   useEffect(() => () => {
     if (transientTimerRef.current) clearTimeout(transientTimerRef.current)
@@ -328,7 +331,7 @@ export function PetApp() {
     }
   }, [persistPreferences, t])
 
-  const primaryActivity = activities[0]
+  const primaryActivity = permissionActivities[0] ?? activities[0]
   const baseAnimation = primaryActivity ? petStatusAnimation(primaryActivity.status) : 'idle'
   const animationState = dragDirection
     ? `running-${dragDirection}` as const
@@ -336,8 +339,11 @@ export function PetApp() {
   const allPets: readonly PetDescriptor[] = [...BUILTIN_PETS, ...customPets]
   const selectedPet = allPets.find((pet) => pet.id === preferences?.selectedPetId)
     ?? findBuiltinPet(preferences?.selectedPetId ?? '')
-  const showActivityCard = Boolean(actionError)
-    || Boolean(preferences?.showTaskPanel && activities.length > 0)
+  const showPermissionCard = permissionPanelOpen && permissionActivities.length > 0
+  const showTaskCard = !showPermissionCard && (
+    Boolean(actionError) || Boolean(preferences?.showTaskPanel && activities.length > 0)
+  )
+  const showActivityCard = showPermissionCard || showTaskCard
   const expanded = showActivityCard
 
   // Ignoring an unchanged placement matters: the host answers every region
@@ -372,6 +378,7 @@ export function PetApp() {
     const elements = [
       mascotRef.current,
       taskBadgeRef.current,
+      permissionBadgeRef.current,
       activityCardRef.current,
       panelToggleRef.current,
     ]
@@ -411,14 +418,17 @@ export function PetApp() {
     // the old side. The host needs the new ones to hold the mascot still.
     panelPlacement.horizontal,
     panelPlacement.vertical,
+    permissionActivities.length,
     preferences?.size,
     selectedPet,
     showActivityCard,
+    showPermissionCard,
   ])
 
   const isInteractivePoint = useCallback((x: number, y: number) => [
     mascotRef.current,
     taskBadgeRef.current,
+    permissionBadgeRef.current,
     activityCardRef.current,
     panelToggleRef.current,
   ].some((element) => {
@@ -478,6 +488,7 @@ export function PetApp() {
     const remainsInteractive = nextNode !== null && [
       mascotRef.current,
       taskBadgeRef.current,
+      permissionBadgeRef.current,
       activityCardRef.current,
       panelToggleRef.current,
     ].some((element) => element?.contains(nextNode))
@@ -629,85 +640,58 @@ export function PetApp() {
                 : undefined}
             />
           </button>
-          {activities.length > 0 && !showActivityCard && (
+          {activities.length > 0 && !showTaskCard && (
             <button
               ref={taskBadgeRef}
               type="button"
               className="pet-task-badge"
               aria-label={t('pet.window.expandTasks', { count: activities.length })}
+              aria-expanded="false"
+              aria-controls={showActivityCard ? 'pet-activity-panel' : undefined}
               onMouseEnter={() => void getDesktopHost().pets.setIgnoreMouseEvents(false)}
               onMouseLeave={(event) => releasePointerPassthrough(event.relatedTarget)}
-              onClick={() => void persistPreferences({ showTaskPanel: true })}
+              onClick={() => {
+                setPermissionPanelOpen(false)
+                void persistPreferences({ showTaskPanel: true })
+              }}
             >
               {activities.length}
+            </button>
+          )}
+          {permissionActivities.length > 0 && !showPermissionCard && (
+            <button
+              ref={permissionBadgeRef}
+              type="button"
+              className="pet-task-badge pet-permission-badge"
+              aria-label={t('pet.window.expandPermissions', { count: permissionActivities.length })}
+              aria-expanded="false"
+              aria-controls={showActivityCard ? 'pet-activity-panel' : undefined}
+              title={t('pet.window.expandPermissions', { count: permissionActivities.length })}
+              onMouseEnter={() => void getDesktopHost().pets.setIgnoreMouseEvents(false)}
+              onMouseLeave={(event) => releasePointerPassthrough(event.relatedTarget)}
+              onClick={() => setPermissionPanelOpen(true)}
+            >
+              <TriangleAlert size={11} strokeWidth={1.75} aria-hidden="true" />
+              {permissionActivities.length}
             </button>
           )}
         </div>
 
         {showActivityCard && (
-          <section
-            ref={activityCardRef}
-            className="pet-activity-card"
-            data-expanded={expanded ? 'true' : 'false'}
-            aria-label={t('pet.window.sessionCount', { count: activities.length })}
+          <PetActivityPanel
+            activities={showPermissionCard ? permissionActivities : activities}
+            permissions={showPermissionCard}
+            error={actionError}
+            cardRef={activityCardRef}
+            toggleRef={panelToggleRef}
             onMouseEnter={() => void getDesktopHost().pets.setIgnoreMouseEvents(false)}
             onMouseLeave={(event) => releasePointerPassthrough(event.relatedTarget)}
-          >
-            {actionError && (
-              <p
-                role="alert"
-                className="mx-3 mt-2 rounded-[var(--radius-md)] bg-[var(--color-error-container)] px-3 py-2 text-xs text-[var(--color-on-error-container)]"
-              >
-                {actionError}
-              </p>
-            )}
-
-            <div
-              className="pet-session-list"
-              data-expanded={expanded ? 'true' : 'false'}
-              role="list"
-              aria-live="polite"
-              aria-label={t('pet.window.sessionCount', { count: activities.length })}
-            >
-              {activities.map((activity) => {
-                const title = activity.session.title || t('pet.window.untitledSession')
-                const status = t(`pet.window.status.${activity.status}` as Parameters<typeof t>[0])
-                return (
-                  <div
-                    role="listitem"
-                    key={activity.session.id}
-                  >
-                    <button
-                      type="button"
-                      className="pet-session-row"
-                      aria-label={`${title}, ${status}`}
-                      onClick={() => void getDesktopHost().pets.focusSession(activity.session.id)}
-                    >
-                      <span className="pet-session-copy">
-                        <span className="pet-session-title">{title}</span>
-                        <span className="pet-session-status">{status}</span>
-                      </span>
-                      <span className={`pet-session-indicator ${statusDotClass(activity.status)}`} />
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-
-            <button
-              ref={panelToggleRef}
-              type="button"
-              className="pet-panel-toggle"
-              data-expanded={expanded ? 'true' : 'false'}
-              aria-label={t('pet.window.hideTasks', { count: activities.length })}
-              onClick={() => {
-                setActionError(null)
-                void persistPreferences({ showTaskPanel: false })
-              }}
-            >
-              <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" />
-            </button>
-          </section>
+            onCollapse={() => {
+              setPermissionPanelOpen(false)
+              setActionError(null)
+              if (!showPermissionCard) void persistPreferences({ showTaskPanel: false })
+            }}
+          />
         )}
       </div>
     </main>

@@ -1141,6 +1141,9 @@ export const jp: Record<TranslationKey, string> = {
   'pet.window.sessionCount': '{count} 件のタスク',
   'pet.window.expandTasks': '実行中のタスク {count} 件を表示',
   'pet.window.hideTasks': '実行中のタスク {count} 件を隠す',
+  'pet.window.permissionCount': '承認待ちの会話 {count} 件',
+  'pet.window.expandPermissions': '承認待ちの会話 {count} 件を表示',
+  'pet.window.hidePermissions': '承認待ちの会話 {count} 件を折りたたむ',
   'pet.window.untitledSession': '無題のタスク',
 
   // Settings > Usage

@@ -311,6 +311,283 @@ describe('PetApp', () => {
     })
   })
 
+  it('shows a separate permission badge even when the task card is expanded', async () => {
+    mocks.sessions.push(session('session-waiting', 'Approve file edit', '2026-07-19T12:02:00Z'))
+    mocks.chats['session-waiting'] = chat('permission_pending', '')
+    render(<PetApp />)
+
+    const badge = await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' })
+    expect(badge).toHaveTextContent('1')
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.sessionCount:2')
+    await waitFor(() => {
+      expect(mocks.setInteractiveRegions.mock.calls.at(-1)?.[0]).toHaveLength(4)
+    })
+  })
+
+  it('expands only waiting sessions, focuses their conversation, and collapses back to both badges', async () => {
+    mocks.preferences.showTaskPanel = false
+    mocks.sessions.push(
+      session('session-first-permission', 'Approve file edit', '2026-07-19T12:02:00Z'),
+      session('session-second-permission', 'Approve command', '2026-07-19T12:03:00Z'),
+    )
+    mocks.chats['session-first-permission'] = chat('permission_pending', '')
+    mocks.chats['session-second-permission'] = chat('permission_pending', '')
+    render(<PetApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'pet.window.expandPermissions:2' }))
+
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.permissionCount:2')
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.queryByText('Build pet window')).not.toBeInTheDocument()
+    expect(screen.queryByText('Review animation')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'pet.window.expandPermissions:2' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'pet.window.expandTasks:3' })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', {
+      name: 'Approve file edit, pet.window.status.waiting',
+    }))
+    expect(mocks.focusSession).toHaveBeenCalledWith('session-first-permission')
+
+    fireEvent.click(screen.getByRole('button', { name: 'pet.window.hidePermissions:2' }))
+    expect(screen.queryByRole('list')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'pet.window.expandPermissions:2' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'pet.window.expandTasks:3' })).toBeInTheDocument()
+    await waitFor(() => {
+      expect(mocks.setInteractiveRegions.mock.calls.at(-1)?.[0]).toHaveLength(3)
+    })
+  })
+
+  it.each([true, false])('preserves the task panel preference %s when opening and closing approvals', async (showTaskPanel) => {
+    mocks.preferences.showTaskPanel = showTaskPanel
+    mocks.sessions.push(session('session-waiting', 'Approve command', '2026-07-19T12:02:00Z'))
+    mocks.chats['session-waiting'] = chat('permission_pending', '')
+    render(<PetApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' }))
+    expect(screen.getAllByRole('list')).toHaveLength(1)
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.permissionCount:1')
+    expect(mocks.updatePetPreferences).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'pet.window.hidePermissions:1' }))
+    expect(screen.getByRole('button', { name: 'pet.window.expandPermissions:1' })).toBeInTheDocument()
+    if (showTaskPanel) {
+      expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.sessionCount:2')
+    } else {
+      expect(screen.queryByRole('list')).not.toBeInTheDocument()
+    }
+    expect(mocks.updatePetPreferences).not.toHaveBeenCalled()
+  })
+
+  it('restores the expanded task panel after the last approval resolves without saving preferences', async () => {
+    mocks.sessions.push(session('session-waiting', 'Approve command', '2026-07-19T12:02:00Z'))
+    mocks.chats['session-waiting'] = chat('permission_pending', '')
+    const { rerender } = render(<PetApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' }))
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.permissionCount:1')
+
+    mocks.chats = { ...mocks.chats, 'session-waiting': chat('thinking', '') }
+    rerender(<PetApp />)
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.sessionCount:2')
+    expect(screen.queryByRole('button', { name: 'pet.window.expandPermissions:1' })).not.toBeInTheDocument()
+    expect(mocks.updatePetPreferences).not.toHaveBeenCalled()
+  })
+
+  it('omits panel controls from collapsed badges until the activity panel is mounted', async () => {
+    mocks.preferences.showTaskPanel = false
+    mocks.sessions.push(session('session-waiting', 'Approve command', '2026-07-19T12:02:00Z'))
+    mocks.chats['session-waiting'] = chat('permission_pending', '')
+    const { container } = render(<PetApp />)
+
+    const permissionBadge = await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' })
+    const taskBadge = screen.getByRole('button', { name: 'pet.window.expandTasks:2' })
+    expect(permissionBadge).toHaveAttribute('aria-expanded', 'false')
+    expect(taskBadge).toHaveAttribute('aria-expanded', 'false')
+    expect(permissionBadge).not.toHaveAttribute('aria-controls')
+    expect(taskBadge).not.toHaveAttribute('aria-controls')
+    expect(container.querySelector('#pet-activity-panel')).not.toBeInTheDocument()
+
+    fireEvent.click(permissionBadge)
+    const collapse = screen.getByRole('button', { name: 'pet.window.hidePermissions:1' })
+    expect(collapse).toHaveAttribute('aria-expanded', 'true')
+    expect(collapse).toHaveAttribute('aria-controls', 'pet-activity-panel')
+    expect(screen.getByRole('button', { name: 'pet.window.expandTasks:2' }))
+      .toHaveAttribute('aria-controls', 'pet-activity-panel')
+    expect(container.querySelector('#pet-activity-panel')).toBeInTheDocument()
+
+    fireEvent.click(collapse)
+    expect(container.querySelector('[aria-controls]')).not.toBeInTheDocument()
+    expect(container.querySelector('#pet-activity-panel')).not.toBeInTheDocument()
+  })
+
+  it('keeps badge controls linked to the mounted shared panel when switching lists', async () => {
+    mocks.sessions.push(session('session-waiting', 'Approve command', '2026-07-19T12:02:00Z'))
+    mocks.chats['session-waiting'] = chat('permission_pending', '')
+    const { container } = render(<PetApp />)
+
+    const permissionBadge = await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' })
+    expect(permissionBadge).toHaveAttribute('aria-controls', 'pet-activity-panel')
+    expect(container.querySelector('#pet-activity-panel')).toBeInTheDocument()
+
+    fireEvent.click(permissionBadge)
+    const taskBadge = screen.getByRole('button', { name: 'pet.window.expandTasks:2' })
+    expect(taskBadge).toHaveAttribute('aria-controls', 'pet-activity-panel')
+    fireEvent.click(taskBadge)
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.sessionCount:2')
+    expect(screen.getByRole('button', { name: 'pet.window.expandPermissions:1' }))
+      .toHaveAttribute('aria-controls', 'pet-activity-panel')
+    expect(container.querySelector('#pet-activity-panel')).toBeInTheDocument()
+  })
+
+  it('focuses the correct conversation when approval rows share the same title', async () => {
+    mocks.preferences.showTaskPanel = false
+    mocks.sessions.push(
+      session('session-first-permission', 'Approve command', '2026-07-19T12:02:00Z'),
+      session('session-second-permission', 'Approve command', '2026-07-19T12:03:00Z'),
+    )
+    mocks.chats['session-first-permission'] = chat('permission_pending', '')
+    mocks.chats['session-second-permission'] = chat('permission_pending', '')
+    render(<PetApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'pet.window.expandPermissions:2' }))
+    const rows = screen.getAllByRole('button', {
+      name: 'Approve command, pet.window.status.waiting',
+    })
+    expect(rows).toHaveLength(2)
+
+    fireEvent.click(rows[0]!)
+    fireEvent.click(rows[1]!)
+    expect(mocks.focusSession.mock.calls).toEqual([
+      ['session-second-permission'],
+      ['session-first-permission'],
+    ])
+  })
+
+  it('switches between the task and permission cards without showing two lists', async () => {
+    mocks.sessions.push(session('session-waiting', 'Approve command', '2026-07-19T12:02:00Z'))
+    mocks.chats['session-waiting'] = chat('permission_pending', '')
+    render(<PetApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' }))
+    expect(screen.getAllByRole('list')).toHaveLength(1)
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.permissionCount:1')
+    expect(screen.queryByText('Build pet window')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'pet.window.expandTasks:2' }))
+    expect(screen.getAllByRole('list')).toHaveLength(1)
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.sessionCount:2')
+    expect(screen.getByText('Build pet window')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'pet.window.expandPermissions:1' })).toBeInTheDocument()
+  })
+
+  it('removes the permission surface when the last request resolves and keeps the next request collapsed', async () => {
+    mocks.preferences.showTaskPanel = false
+    mocks.sessions.push(session('session-waiting', 'Approve file edit', '2026-07-19T12:02:00Z'))
+    mocks.chats['session-waiting'] = chat('permission_pending', '')
+    const { rerender } = render(<PetApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' }))
+    expect(screen.getByRole('list')).toHaveAccessibleName('pet.window.permissionCount:1')
+
+    mocks.chats = { ...mocks.chats, 'session-waiting': chat('thinking', '') }
+    rerender(<PetApp />)
+    expect(screen.queryByRole('list')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'pet.window.expandPermissions:1' })).not.toBeInTheDocument()
+    await waitFor(() => {
+      expect(mocks.setInteractiveRegions.mock.calls.at(-1)?.[0]).toHaveLength(2)
+    })
+
+    mocks.chats = { ...mocks.chats, 'session-waiting': chat('permission_pending', '') }
+    rerender(<PetApp />)
+    expect(screen.getByRole('button', { name: 'pet.window.expandPermissions:1' })).toBeInTheDocument()
+    expect(screen.queryByRole('list')).not.toBeInTheDocument()
+  })
+
+  it('detects permission requests in the polled runtime without loading the conversation', async () => {
+    mocks.preferences.showTaskPanel = false
+    mocks.sessions.push(session('session-remote', 'Approve remote task', '2026-07-19T12:02:00Z'))
+    mocks.getChatStatus.mockImplementation(async (sessionId: string) => ({
+      state: 'thinking',
+      activityState: sessionId === 'session-remote' ? 'waiting' : 'running',
+    }))
+    render(<PetApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' }))
+    expect(screen.getByRole('button', {
+      name: 'Approve remote task, pet.window.status.waiting',
+    })).toBeInTheDocument()
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
+    expect(mocks.chats['session-remote']).toBeUndefined()
+  })
+
+  it('updates permission hit regions even when the total number of active tasks stays the same', async () => {
+    mocks.preferences.showTaskPanel = false
+    const { rerender } = render(<PetApp />)
+    await screen.findByRole('button', { name: 'pet.window.expandTasks:1' })
+    await waitFor(() => {
+      expect(mocks.setInteractiveRegions.mock.calls.at(-1)?.[0]).toHaveLength(2)
+    })
+
+    mocks.chats = { ...mocks.chats, 'session-running': chat('permission_pending', '') }
+    rerender(<PetApp />)
+    const permissionBadge = screen.getByRole('button', { name: 'pet.window.expandPermissions:1' })
+    await waitFor(() => {
+      expect(mocks.setInteractiveRegions.mock.calls.at(-1)?.[0]).toHaveLength(3)
+    })
+
+    mocks.setIgnoreMouseEvents.mockClear()
+    fireEvent.mouseLeave(permissionBadge, {
+      relatedTarget: screen.getByRole('button', { name: 'pet.window.expandTasks:1' }),
+    })
+    expect(mocks.setIgnoreMouseEvents).not.toHaveBeenCalledWith(true)
+  })
+
+  it('keeps older approvals visible even when nine newer idle conversations fill the task window', async () => {
+    mocks.preferences.showTaskPanel = false
+    mocks.sessions = Array.from({ length: 10 }, (_, index) => session(
+      `session-${index}`,
+      index === 0 ? 'Older approval' : `Idle conversation ${index}`,
+      `2026-07-19T12:${String(index).padStart(2, '0')}:00Z`,
+    ))
+    mocks.chats = {}
+    mocks.getChatStatus.mockImplementation(async (sessionId: string) => ({
+      state: 'idle',
+      activityState: sessionId === 'session-0' ? 'waiting' : 'idle',
+    }))
+    render(<PetApp />)
+
+    fireEvent.click(await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' }))
+    expect(screen.getByRole('button', {
+      name: 'Older approval, pet.window.status.waiting',
+    })).toBeInTheDocument()
+    expect(mocks.getChatStatus).toHaveBeenCalledWith('session-0', expect.any(AbortSignal))
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
+  })
+
+  it('counts conversations rather than the number of permission requests', async () => {
+    mocks.preferences.showTaskPanel = false
+    mocks.chats['session-running'] = {
+      ...chat('permission_pending', ''),
+      pendingPermissions: {
+        'permission-write': { requestId: 'permission-write', toolName: 'Write' },
+        'permission-command': { requestId: 'permission-command', toolName: 'Bash' },
+      },
+    }
+    render(<PetApp />)
+
+    expect(await screen.findByRole('button', { name: 'pet.window.expandPermissions:1' })).toHaveTextContent('1')
+    fireEvent.click(screen.getByRole('button', { name: 'pet.window.expandPermissions:1' }))
+    expect(screen.getAllByRole('listitem')).toHaveLength(1)
+  })
+
+  it('does not show a permission badge for running or idle sessions', async () => {
+    render(<PetApp />)
+    await screen.findByRole('button', { name: 'pet.window.interact' })
+    await waitFor(() => expect(mocks.getChatStatus).toHaveBeenCalledTimes(2))
+
+    expect(screen.queryByRole('button', { name: /pet\.window\.expandPermissions/ })).not.toBeInTheDocument()
+  })
+
   it('moves the task card below the mascot when the host says there is no room above', async () => {
     // The host clamps the mascot to the display edge through the window's
     // transparent padding, which puts the card behind the macOS menu bar. It

@@ -1140,6 +1140,9 @@ export const zh: Record<TranslationKey, string> = {
   'pet.window.sessionCount': '{count} 個任務',
   'pet.window.expandTasks': '顯示 {count} 個進行中的任務',
   'pet.window.hideTasks': '隱藏 {count} 個進行中的任務',
+  'pet.window.permissionCount': '{count} 個對話等待允許',
+  'pet.window.expandPermissions': '顯示 {count} 個等待允許的對話',
+  'pet.window.hidePermissions': '收合 {count} 個等待允許的對話',
   'pet.window.untitledSession': '未命名任務',
 
   // Settings > Usage

@@ -1143,6 +1143,9 @@ export const kr: Record<TranslationKey, string> = {
   'pet.window.sessionCount': '작업 {count}개',
   'pet.window.expandTasks': '진행 중인 작업 {count}개 표시',
   'pet.window.hideTasks': '진행 중인 작업 {count}개 숨기기',
+  'pet.window.permissionCount': '승인 대기 중인 대화 {count}개',
+  'pet.window.expandPermissions': '승인 대기 중인 대화 {count}개 표시',
+  'pet.window.hidePermissions': '승인 대기 중인 대화 {count}개 접기',
   'pet.window.untitledSession': '제목 없는 작업',
 
   // Settings > Usage

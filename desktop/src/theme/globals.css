@@ -2749,6 +2749,20 @@ html[data-window-kind='pet'] #root {
   outline-offset: 2px;
 }
 
+.pet-permission-badge {
+  top: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  background: #f1ad3b;
+  color: #352408;
+}
+
+.pet-permission-badge:hover {
+  background: #f6bd5d;
+}
+
 .pet-mascot-button[data-dragging='true'] {
   cursor: grabbing;
   transform: scale(0.96);
