@@ -2163,6 +2163,32 @@ describe('openaiUsageToAnthropic', () => {
     })
   })
 
+  test('subtracts direct cache fields from inclusive Chat prompt tokens', () => {
+    expect(openaiUsageToAnthropic({
+      prompt_tokens: 100,
+      completion_tokens: 5,
+      cache_read_input_tokens: 60,
+      cache_creation_input_tokens: 10,
+    })).toEqual({
+      input_tokens: 30,
+      output_tokens: 5,
+      cache_read_input_tokens: 60,
+      cache_creation_input_tokens: 10,
+    })
+  })
+
+  test('subtracts direct cache fields when Chat input is derived from total tokens', () => {
+    expect(openaiUsageToAnthropic({
+      total_tokens: 105,
+      completion_tokens: 5,
+      cache_read_input_tokens: 60,
+    })).toEqual({
+      input_tokens: 40,
+      output_tokens: 5,
+      cache_read_input_tokens: 60,
+    })
+  })
+
   test('derives missing prompt and completion counts from total tokens', () => {
     expect(openaiUsageToAnthropic({
       total_tokens: 120,

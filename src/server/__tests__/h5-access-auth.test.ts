@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { getCwdState, setCwdState } from '../../bootstrap/state.js'
 import { startServer, stopServerRuntimeForShutdown } from '../index.js'
 import {
   clearFilesystemAccessRootsForTests,
@@ -17,6 +18,7 @@ let wsBaseUrl = ''
 let lanBaseUrl = ''
 let lanWsBaseUrl = ''
 let tmpDir = ''
+let originalCwd = ''
 let originalConfigDir: string | undefined
 let originalAnthropicApiKey: string | undefined
 let originalH5DistDir: string | undefined
@@ -216,6 +218,8 @@ beforeEach(async () => {
   clearFilesystemAccessRootsForTests()
   registerFilesystemAccessRoot(process.cwd())
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'h5-access-auth-test-'))
+  originalCwd = getCwdState()
+  setCwdState(tmpDir)
   originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
   originalH5DistDir = process.env.CLAUDE_H5_DIST_DIR
@@ -246,6 +250,7 @@ afterEach(async () => {
   await stopRemoteServer()
   clearFilesystemAccessRootsForTests()
   ProviderService.setServerPort(originalServerPort)
+  setCwdState(originalCwd)
 
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir

@@ -23,10 +23,17 @@ export function openaiUsageToAnthropic(usage: OpenAICompatibleUsage | undefined)
   if (!usage) return { input_tokens: 0, output_tokens: 0 }
 
   const total = validTokenCount(usage.total_tokens)
-  let input = validTokenCount(usage.input_tokens)
-    ?? validTokenCount(usage.prompt_tokens)
-  let output = validTokenCount(usage.output_tokens)
-    ?? validTokenCount(usage.completion_tokens)
+  const inputTokens = validTokenCount(usage.input_tokens)
+  const promptTokens = validTokenCount(usage.prompt_tokens)
+  const outputTokens = validTokenCount(usage.output_tokens)
+  const completionTokens = validTokenCount(usage.completion_tokens)
+  let input = inputTokens ?? promptTokens
+  let output = outputTokens ?? completionTokens
+  const hasOpenAIInclusiveInput =
+    inputTokens === undefined &&
+    (promptTokens !== undefined ||
+      (total !== undefined &&
+        (outputTokens !== undefined || completionTokens !== undefined)))
 
   // Some compatibility relays omit one half of usage but still provide the
   // total. Recover the missing half only when the arithmetic is unambiguous.
@@ -63,17 +70,20 @@ export function openaiUsageToAnthropic(usage: OpenAICompatibleUsage | undefined)
     usage.input_tokens_details?.cached_tokens,
   ) ?? validTokenCount(usage.prompt_tokens_details?.cached_tokens) ?? 0
 
-  // Positive direct cache_* fields use Anthropic's exclusive-input semantics.
+  // Direct cache_* fields use exclusive-input semantics with Anthropic-style
+  // input_tokens. Chat-style prompt_tokens (or input derived from total_tokens)
+  // includes cached tokens, so subtract direct cache counts in that case.
   // Some Chat gateways include zero placeholders alongside real nested counts;
-  // those placeholders must not suppress the nested cache hit accounting. Nested
-  // OpenAI details are inclusive in input/prompt and must be subtracted. Cap
-  // malformed nested cache counts at the reported input to preserve totals.
+  // those placeholders must not suppress nested cache accounting. Cap malformed
+  // nested cache counts at the reported input to preserve totals.
   const cacheRead = hasDirectCacheUsage
     ? (directCacheRead ?? 0)
     : Math.min(nestedCacheRead, input)
   const cacheCreation = directCacheCreation ?? 0
   const nonCacheInput = hasDirectCacheUsage
-    ? input
+    ? hasOpenAIInclusiveInput
+      ? Math.max(0, input - (directCacheRead ?? 0) - cacheCreation)
+      : input
     : Math.max(0, input - cacheRead)
 
   const result: AnthropicResponse['usage'] = {
