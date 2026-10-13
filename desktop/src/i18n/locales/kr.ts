@@ -96,6 +96,10 @@ export const kr: Record<TranslationKey, string> = {
   "settings.chatAppearance.widthWide": "넓게",
   "settings.chatAppearance.widthFull": "사용 가능한 너비 채우기",
   "settings.chatAppearance.hint": "시스템에 있는 글꼴을 사용합니다. 코드는 고정폭을 유지합니다. 너비는 메시지와 입력창에 적용되며 작은 창에서는 자동 조정됩니다.",
+  "settings.chatAppearance.selectionMenuPlacement": "선택 메뉴 위치",
+  "settings.chatAppearance.selectionMenuPlacementHint": "텍스트를 선택하면 나타나는 작업 메뉴입니다. 자동은 여러 줄 선택 시 오른쪽에 표시하고, 항상 위는 선택 영역 위에 표시해 이어서 읽을 텍스트를 가리지 않습니다.",
+  "settings.chatAppearance.selectionMenuPlacementAuto": "자동",
+  "settings.chatAppearance.selectionMenuPlacementAbove": "항상 위",
   "settings.chatAppearance.preview": "글꼴 미리보기",
   "settings.chatAppearance.previewMarkdown": "### 편안하게 읽는 대화\n\n글자를 조정하여 편안하게 읽으세요. 中文・日本語・한국어 · Hello 123.\n\n- 목록에도 선택한 글꼴과 크기가 적용됩니다.\n- 인라인 코드는 고정폭을 유지합니다: `const answer = 42`.\n\n| 내용 | 예시 |\n| --- | --- |\n| 본문 | 자신의 속도로 읽기 |",
 

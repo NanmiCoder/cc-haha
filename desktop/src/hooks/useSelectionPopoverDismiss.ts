@@ -137,12 +137,20 @@ export function getSelectionPopoverPosition(
     offset,
     fallbackPointer,
     selectionFocus,
+    preferAbove = false,
   }: {
     menuWidth: number
     menuHeight: number
     offset: number
     fallbackPointer?: { clientX: number; clientY: number }
     selectionFocus?: SelectionFocus
+    /**
+     * False keeps the upstream rule: a multi-line selection gets the slot beside
+     * where it ends. True drops that slot so the menu goes above the selection
+     * instead. See `SelectionMenuPlacement` in
+     * stores/selectionMenuPlacementStore.ts.
+     */
+    preferAbove?: boolean
   },
 ) {
   const geometry = getRangeSelectionGeometry(range)
@@ -177,16 +185,21 @@ export function getSelectionPopoverPosition(
   })
   const centerX = anchorRect.left + anchorRect.width / 2
   const centerY = anchorRect.top + anchorRect.height / 2
+  // Preferring above changes where the slot is measured from. The default
+  // anchors on the focus line, which is what the right-side slot below needs;
+  // measuring above from there would drop the menu onto the earlier selected
+  // lines, so that mode measures from the whole selection instead.
+  const aboveAnchor = preferAbove ? selectionRect : anchorRect
   const above = {
-    x: centerX - menuWidth / 2,
-    y: anchorRect.top - menuHeight - offset,
+    x: aboveAnchor.left + aboveAnchor.width / 2 - menuWidth / 2,
+    y: aboveAnchor.top - menuHeight - offset,
   }
 
   const right = {
     x: anchorRect.right + offset,
     y: centerY - menuHeight / 2,
   }
-  if (geometry?.isMultiLine && right.x + menuWidth <= viewportWidth - VIEWPORT_MARGIN) return clampPosition(right)
+  if (!preferAbove && geometry?.isMultiLine && right.x + menuWidth <= viewportWidth - VIEWPORT_MARGIN) return clampPosition(right)
 
   if (above.y >= VIEWPORT_MARGIN) return clampPosition(above)
 

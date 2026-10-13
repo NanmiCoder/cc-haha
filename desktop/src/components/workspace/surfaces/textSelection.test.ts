@@ -6,6 +6,10 @@ import {
   getSelectionPosition,
   getTextSelectionFromContainer,
 } from './textSelection'
+import {
+  DEFAULT_SELECTION_MENU_PLACEMENT,
+  useSelectionMenuPlacementStore,
+} from '@/stores/selectionMenuPlacementStore'
 
 function stubRect(target: object, rect: { left: number; top: number; right: number; bottom: number }) {
   Object.assign(target, {
@@ -124,6 +128,36 @@ describe('getTextSelectionFromContainer', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     window.getSelection()?.removeAllRanges()
+    useSelectionMenuPlacementStore.setState({ placement: DEFAULT_SELECTION_MENU_PLACEMENT })
+  })
+
+  it('places the menu beside a multi-line selection under the upstream rule', () => {
+    const root = renderCodeRows(['const a = 1', 'const b = 2'])
+    stubRect(root, { left: 100, top: 24, right: 520, bottom: 420 })
+    const range = document.createRange()
+    range.setStart(findTextNode(root.children[0]!), 0)
+    range.setEnd(findTextNode(root.children[1]!), 11)
+    // A 40px-tall bounding box is how the library classifies a wrapped range as
+    // multi-line when the environment reports no per-line rects.
+    stubRect(range, { left: 120, top: 100, right: 240, bottom: 140 })
+    window.getSelection()!.addRange(range)
+
+    // Beside where the selection ends (240 + 10), centred on its box.
+    expect(getTextSelectionFromContainer(root)).toMatchObject({ x: 250, y: 104 })
+  })
+
+  it('places the menu above a multi-line selection when the preference asks for it', () => {
+    const root = renderCodeRows(['const a = 1', 'const b = 2'])
+    stubRect(root, { left: 100, top: 24, right: 520, bottom: 420 })
+    const range = document.createRange()
+    range.setStart(findTextNode(root.children[0]!), 0)
+    range.setEnd(findTextNode(root.children[1]!), 11)
+    stubRect(range, { left: 120, top: 100, right: 240, bottom: 140 })
+    window.getSelection()!.addRange(range)
+    useSelectionMenuPlacementStore.setState({ placement: 'above' })
+
+    // Centred on the whole selection (120..240) and clear of its first line.
+    expect(getTextSelectionFromContainer(root)).toMatchObject({ x: 110, y: 58 })
   })
 
   it('returns the selected text with the line span it covers', () => {

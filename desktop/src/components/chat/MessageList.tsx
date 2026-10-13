@@ -14,6 +14,7 @@ import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore
 import { useUIStore } from '../../stores/uiStore'
 import { useChatAppearanceStore } from '../../stores/chatAppearanceStore'
 import { t as translateNow, useTranslation } from '../../i18n'
+import { prefersSelectionMenuAbove } from '../../stores/selectionMenuPlacementStore'
 import type { TranslationKey } from '../../i18n/locales/en'
 import { UserMessage } from './UserMessage'
 import { AssistantMessage } from './AssistantMessage'
@@ -181,6 +182,9 @@ function getChatSelectionPosition(
     offset: CHAT_SELECTION_MENU_OFFSET,
     fallbackPointer: pointer,
     selectionFocus: { node: selection.focusNode, offset: selection.focusOffset },
+    // Read from the store: the settled-selection listener that calls this is not
+    // a render, so there is no hook to subscribe with.
+    preferAbove: prefersSelectionMenuAbove(),
   })
 }
 

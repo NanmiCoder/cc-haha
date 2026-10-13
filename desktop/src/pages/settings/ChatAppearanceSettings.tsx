@@ -11,10 +11,15 @@ import { MarkdownRenderer } from '@/components/markdown/MarkdownRenderer'
 import { useTranslation } from '@/i18n'
 import { getChatAppearanceStyle, type ChatAppearance } from '@/lib/chatAppearance'
 import { useChatAppearanceStore } from '@/stores/chatAppearanceStore'
+import {
+  type SelectionMenuPlacement,
+  useSelectionMenuPlacementStore,
+} from '@/stores/selectionMenuPlacementStore'
 
 export function ChatAppearanceSettings() {
   const t = useTranslation()
   const { appearance, setAppearance, resetAppearance } = useChatAppearanceStore()
+  const { placement, setPlacement } = useSelectionMenuPlacementStore()
   const sizeId = useId()
   const previewId = useId()
 
@@ -71,6 +76,21 @@ export function ChatAppearanceSettings() {
               { value: 'standard', label: t('settings.chatAppearance.widthStandard') },
               { value: 'wide', label: t('settings.chatAppearance.widthWide') },
               { value: 'full', label: t('settings.chatAppearance.widthFull') },
+            ]}
+          />
+        </SettingsRow>
+        <SettingsRow
+          title={t('settings.chatAppearance.selectionMenuPlacement')}
+          description={t('settings.chatAppearance.selectionMenuPlacementHint')}
+        >
+          <SegmentedControl<SelectionMenuPlacement>
+            label={t('settings.chatAppearance.selectionMenuPlacement')}
+            size="sm"
+            value={placement}
+            onChange={setPlacement}
+            items={[
+              { value: 'auto', label: t('settings.chatAppearance.selectionMenuPlacementAuto') },
+              { value: 'above', label: t('settings.chatAppearance.selectionMenuPlacementAbove') },
             ]}
           />
         </SettingsRow>
