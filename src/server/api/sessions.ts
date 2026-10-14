@@ -1455,6 +1455,7 @@ async function runGitInfoCommand(workDir: string, args: string[]): Promise<strin
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'ignore',
+      windowsHide: true,
     })
 
     const output = new Response(proc.stdout).text()

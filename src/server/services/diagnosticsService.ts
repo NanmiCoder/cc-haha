@@ -417,7 +417,7 @@ export class DiagnosticsService {
       return
     }
     if (process.platform === 'win32') {
-      Bun.spawn(['cmd', '/c', 'start', '', dir], { stdout: 'ignore', stderr: 'ignore' })
+      Bun.spawn(['cmd', '/c', 'start', '', dir], { stdout: 'ignore', stderr: 'ignore', windowsHide: true })
       return
     }
     Bun.spawn(['xdg-open', dir], { stdout: 'ignore', stderr: 'ignore' })

@@ -229,7 +229,7 @@ function pidsRunningCuHelper(pids: number[]): Set<number> {
   if (pids.length === 0) return found
   try {
     const command = psProbeCommand(pids)
-    const res = spawnSync(command.command, command.args, { encoding: 'utf8' })
+    const res = spawnSync(command.command, command.args, { encoding: 'utf8', windowsHide: true })
     if (res.status !== 0 || !res.stdout) return found
     for (const line of res.stdout.split('\n')) {
       const m = line.trim().match(/^(\d+)\s+(.*)$/)
