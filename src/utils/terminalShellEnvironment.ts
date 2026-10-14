@@ -136,7 +136,6 @@ async function captureTerminalShellEnvironment(
       ['-l', '-i', '-c', script],
       {
         env: captureEnv,
-        windowsHide: true,
         timeout: TERMINAL_SHELL_ENV_TIMEOUT_MS,
         maxBuffer: 1024 * 1024,
         encoding: 'utf8',
