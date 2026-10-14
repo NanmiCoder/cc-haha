@@ -132,11 +132,34 @@ export async function prepareRipgrep({
 
     const extractDir = path.join(temporaryDir, 'extracted')
     await mkdir(extractDir, { recursive: true })
-    const extract = Bun.spawn(['tar', '-xf', downloadedArchive, '-C', extractDir], {
-      stdout: 'inherit',
-      stderr: 'inherit',
-    })
-    const extractExit = await extract.exited
+    // GNU tar cannot read zip archives ("This does not look like a tar
+    // archive") and Git Bash on Windows ships GNU tar as `tar`, so dispatch
+    // on extension: zip goes to unzip, with Expand-Archive as the fallback
+    // when unzip is unavailable.
+    const isZip = downloadedArchive.toLowerCase().endsWith('.zip')
+    let extract = Bun.spawn(
+      isZip
+        ? ['unzip', '-q', '-o', downloadedArchive, '-d', extractDir]
+        : ['tar', '-xf', downloadedArchive, '-C', extractDir],
+      {
+        stdout: 'inherit',
+        stderr: 'inherit',
+      },
+    )
+    let extractExit = await extract.exited
+    if (extractExit !== 0 && isZip && process.platform === 'win32') {
+      extract = Bun.spawn(
+        [
+          'powershell',
+          '-NoLogo',
+          '-NoProfile',
+          '-Command',
+          `Expand-Archive -LiteralPath '${downloadedArchive}' -DestinationPath '${extractDir}' -Force`,
+        ],
+        { stdout: 'inherit', stderr: 'inherit' },
+      )
+      extractExit = await extract.exited
+    }
     if (extractExit !== 0) {
       throw new Error(`[prepare-ripgrep] Failed to extract ${asset.archiveName} (exit ${extractExit})`)
     }
