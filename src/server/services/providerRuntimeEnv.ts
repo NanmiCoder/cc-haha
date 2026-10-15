@@ -564,7 +564,16 @@ export function buildProviderManagedEnv(
     // differs (see applyDeepSeekAccountRuntimeEnv).
     return applyDeepSeekAccountRuntimeEnv(
       buildProviderManagedEnv(
-        { ...provider, runtimeKind: 'anthropic_compatible', apiKey: '' },
+        {
+          ...provider,
+          runtimeKind: 'anthropic_compatible',
+          apiKey: '',
+          // The built-in account copies preset windows, not user provider overrides.
+          // Resolve those as preset defaults so global explicit windows can win.
+          modelContextWindows: isDeepSeekAccountProviderId(provider.id)
+            ? undefined
+            : provider.modelContextWindows,
+        },
         options,
       ),
     )
@@ -649,7 +658,7 @@ export function readActiveProviderManagedEnv(
       const models = index.officialProviderModels[DEEPSEEK_ACCOUNT_PROVIDER_ID]
       return buildProviderManagedEnv(
         { ...DEEPSEEK_ACCOUNT_PROVIDER, ...(models && { models }) },
-        { serverPort: options?.serverPort },
+        { serverPort: options?.serverPort, configDir },
       )
     }
 

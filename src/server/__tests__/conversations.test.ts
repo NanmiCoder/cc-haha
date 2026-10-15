@@ -1467,6 +1467,10 @@ describe('ConversationService', () => {
       const saveWindow = (window: number) => fs.writeFile(settingsPath, JSON.stringify({
         env: { CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({ 'gpt-6.1-sol': window }) },
       }))
+      // Development-mode cost accounting reads CLI config for external models.
+      // Enable it only after all user-state paths point at disposable fixtures.
+      const { enableConfigs } = await import('../../utils/config.js')
+      enableConfigs()
       await saveWindow(1000000)
       await new ProviderService().activateProvider('openai-official')
       const svc = new SessionService()

@@ -66,6 +66,23 @@ describe('providerRuntimeEnv', () => {
     expect(readActiveProviderManagedEnv(tmpDir)).toEqual(env)
   })
 
+  test('honors a smaller global DeepSeek Account window without changing runtime defaults', async () => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'deepseek-account', providers: [],
+    })
+    const baseline = readActiveProviderManagedEnv(tmpDir)!
+    expect(JSON.parse(baseline.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)['deepseek-v4-flash']).toBe(1000000)
+    await writeJson(path.join(tmpDir, 'settings.json'), {
+      env: { CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({ 'deepseek-v4-flash': 777777 }) },
+    })
+    const env = readActiveProviderManagedEnv(tmpDir)!
+    expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)['deepseek-v4-flash']).toBe(777777)
+    expect({ ...env, CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: undefined }).toEqual({
+      ...baseline, CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: undefined,
+    })
+    expect(env.DISABLE_AUTO_COMPACT).toBeUndefined()
+  })
+
   test('uses provider-specific windows over global overrides and preserves unrelated defaults', async () => {
     await writeJson(path.join(tmpDir, 'settings.json'), {
       env: {
