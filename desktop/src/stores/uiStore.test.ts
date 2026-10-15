@@ -75,10 +75,10 @@ describe('uiStore theme handling', () => {
     expect(document.documentElement.style.colorScheme).toBe('light')
   })
 
-  it('cycles through all six palettes and wraps back to pure white', async () => {
+  it('cycles through all eight palettes and wraps back to pure white', async () => {
     const { useUIStore } = await import('./uiStore')
 
-    const cycle = ['paper', 'warm-classic', 'celadon', 'dark', 'ink-blue', 'white']
+    const cycle = ['glaze-white', 'paper', 'warm-classic', 'celadon', 'dark', 'deep-night', 'ink-blue', 'white']
     for (const expected of cycle) {
       useUIStore.getState().toggleTheme()
       expect(useUIStore.getState().theme).toBe(expected)
@@ -276,12 +276,12 @@ describe('uiStore following the system appearance', () => {
     initializeTheme()
     expect(useUIStore.getState().followSystemTheme).toBe(true)
 
-    // white -> paper, the next palette in the rotation.
+    // white -> glaze-white, the next palette in the rotation.
     useUIStore.getState().toggleTheme()
 
     expect(useUIStore.getState().followSystemTheme).toBe(false)
     media.emit(true)
-    expect(useUIStore.getState().theme).toBe('paper')
+    expect(useUIStore.getState().theme).toBe('glaze-white')
     teardownTheme()
   })
 
