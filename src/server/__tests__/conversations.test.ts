@@ -1454,6 +1454,48 @@ describe('ConversationService', () => {
     }
   })
 
+  it('invalidates transcript inspection when user model window overrides change without new messages', async () => {
+    const keys = ['CLAUDE_CONFIG_DIR', 'NODE_ENV', 'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS']
+    const previous = keys.map(key => process.env[key])
+    const tmpConfigDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-user-context-'))
+    const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-user-context-workdir-'))
+    process.env.CLAUDE_CONFIG_DIR = tmpConfigDir
+    process.env.NODE_ENV = 'development'
+    delete process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
+    try {
+      const settingsPath = path.join(tmpConfigDir, 'settings.json')
+      const saveWindow = (window: number) => fs.writeFile(settingsPath, JSON.stringify({
+        env: { CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({ 'gpt-6.1-sol': window }) },
+      }))
+      await saveWindow(1000000)
+      await new ProviderService().activateProvider('openai-official')
+      const svc = new SessionService()
+      const { sessionId } = await svc.createSession(workDir)
+      const found = await svc.findSessionFile(sessionId)
+      expect(found).not.toBeNull()
+      await fs.appendFile(found!.filePath, JSON.stringify({
+        type: 'assistant', uuid: crypto.randomUUID(), timestamp: '2026-10-15T00:00:00.000Z',
+        cwd: workDir, version: '999.0.0-test',
+        message: { role: 'assistant', model: 'gpt-6.1-sol', content: [{ type: 'text', text: 'fixture' }],
+          usage: { input_tokens: 100, output_tokens: 20 } },
+      }) + '\n')
+      const first = await svc.getInspectionTranscriptSnapshot(sessionId)
+      expect(first?.contextEstimate?.rawMaxTokens).toBe(1000000)
+      expect(first?.usage?.models[0]?.contextWindow).toBe(1000000)
+      await saveWindow(128000)
+      const second = await svc.getInspectionTranscriptSnapshot(sessionId)
+      expect(second?.contextEstimate?.rawMaxTokens).toBe(128000)
+      expect(second?.usage?.models[0]?.contextWindow).toBe(128000)
+    } finally {
+      keys.forEach((key, index) => {
+        if (previous[index] === undefined) delete process.env[key]
+        else process.env[key] = previous[index]
+      })
+      await fs.rm(tmpConfigDir, { recursive: true, force: true })
+      await fs.rm(workDir, { recursive: true, force: true })
+    }
+  })
+
   it('should use active provider model context windows for transcript estimates', async () => {
     const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
     const previousNodeEnv = process.env.NODE_ENV

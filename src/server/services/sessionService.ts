@@ -54,6 +54,7 @@ import {
   roughTokenCountEstimationForMessage,
 } from '../../services/tokenEstimation.js'
 import { ProviderService } from './providerService.js'
+import { readUserModelContextWindows } from './providerRuntimeEnv.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
@@ -3329,6 +3330,7 @@ export class SessionService {
     const providers = await this.providerService.listProviders().catch(() => null)
     const contextRevision = createHash('sha256').update(JSON.stringify({
       activeId: providers?.activeId,
+      userModelContextWindows: readUserModelContextWindows(this.getConfigDir()),
       providers: providers?.providers.map(provider => ({
         id: provider.id,
         models: provider.models,
@@ -5532,6 +5534,7 @@ export class SessionService {
     const providers = await this.providerService.listProviders().catch(() => null)
     const contextRevision = createHash('sha256').update(JSON.stringify({
       activeId: providers?.activeId,
+      userModelContextWindows: readUserModelContextWindows(this.getConfigDir()),
       providers: providers?.providers.map(provider => ({
         id: provider.id,
         models: provider.models,

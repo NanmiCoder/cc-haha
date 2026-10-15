@@ -9,7 +9,11 @@ import {
   resolveModelApiFormat,
   type ModelApiFormatRule,
 } from '../../shared/modelApiFormats.js'
-import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
+import {
+  MODEL_CONTEXT_WINDOWS_ENV_KEY,
+  findConfiguredModelContextWindow,
+  normalizeConfiguredContextWindows,
+} from '../../utils/model/modelContextWindows.js'
 import { PROVIDER_MAX_OUTPUT_TOKENS_ENV_KEY } from '../../utils/managedEnvConstants.js'
 import {
   IMAGE_GENERATION_API_KEY_ENV_KEY,
@@ -507,15 +511,53 @@ export function providerNeedsProxy(
   return apiFormat !== 'anthropic' || supportsNestedToolResultMedia === false
 }
 
+export function readUserModelContextWindows(configDir: string): Record<string, number> {
+  try {
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf-8'))
+    const raw = settings?.env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY]
+    return typeof raw === 'string' ? normalizeConfiguredContextWindows(JSON.parse(raw)) : {}
+  } catch {
+    return {}
+  }
+}
+
+function applyUserModelContextWindows(
+  env: Record<string, string>,
+  configDir?: string,
+  providerWindows?: Record<string, number>,
+): Record<string, string> {
+  if (!configDir) return env
+  try {
+    // 用户配置与宿主生成的 cc-haha/settings.json 分离，避免旧快照反过来覆盖供应商配置。
+    const overrides = readUserModelContextWindows(configDir)
+    if (Object.keys(overrides).length === 0) return env
+    const defaults = normalizeConfiguredContextWindows(JSON.parse(env[MODEL_CONTEXT_WINDOWS_ENV_KEY] ?? '{}'))
+    const providerOverrides = normalizeConfiguredContextWindows(providerWindows)
+    const windows = { ...defaults, ...overrides, ...providerOverrides }
+    // 先按配置层选择窗口，再展开完整模型名；不能让低优先级的精确键压过高优先级的基础名。
+    for (const model of Object.keys(windows)) {
+      windows[model] = findConfiguredModelContextWindow(model, providerOverrides)
+        ?? findConfiguredModelContextWindow(model, overrides)
+        ?? defaults[model]!
+    }
+    return {
+      ...env,
+      [MODEL_CONTEXT_WINDOWS_ENV_KEY]: JSON.stringify(windows),
+    }
+  } catch {
+    return env
+  }
+}
+
 export function buildProviderManagedEnv(
   provider: SavedProvider,
-  options?: { proxyPath?: string; serverPort?: number },
+  options?: { proxyPath?: string; serverPort?: number; configDir?: string },
 ): Record<string, string> {
   if (provider.runtimeKind === 'openai_oauth') {
-    return buildOpenAIOfficialRuntimeEnv(provider.models)
+    return applyUserModelContextWindows(buildOpenAIOfficialRuntimeEnv(provider.models), options?.configDir)
   }
   if (provider.runtimeKind === 'grok_oauth') {
-    return buildGrokOfficialRuntimeEnv(provider.models)
+    return applyUserModelContextWindows(buildGrokOfficialRuntimeEnv(provider.models), options?.configDir)
   }
   if (provider.runtimeKind === 'deepseek_oauth') {
     // Same request shape as the DeepSeek API provider; only the credential
@@ -552,7 +594,7 @@ export function buildProviderManagedEnv(
   const providerCapabilityEnv = getProviderCapabilityEnv(provider, models)
   const maxOutputTokens = provider.requestCompatibility?.maxOutputTokens
 
-  return {
+  return applyUserModelContextWindows({
     ...providerCapabilityEnv,
     ...omitAuthEnv(presetDefaultEnv),
     ...(typeof maxOutputTokens === 'number' && Number.isSafeInteger(maxOutputTokens) && maxOutputTokens > 0 && {
@@ -581,7 +623,7 @@ export function buildProviderManagedEnv(
     ANTHROPIC_DEFAULT_OPUS_MODEL: runtimeModels.opus,
     ...attributionHeaderEnvForModel(runtimeModels.main),
     ...buildImageGenerationManagedEnv(provider),
-  }
+  }, options?.configDir, provider.modelContextWindows)
 }
 
 export function readActiveProviderManagedEnv(
@@ -594,10 +636,14 @@ export function readActiveProviderManagedEnv(
     if (!index?.activeId) return null
 
     if (isOpenAIOfficialProviderId(index.activeId)) {
-      return buildOpenAIOfficialRuntimeEnv(index.officialProviderModels[OPENAI_OFFICIAL_PROVIDER_ID])
+      return applyUserModelContextWindows(
+        buildOpenAIOfficialRuntimeEnv(index.officialProviderModels[OPENAI_OFFICIAL_PROVIDER_ID]), configDir,
+      )
     }
     if (isGrokOfficialProviderId(index.activeId)) {
-      return buildGrokOfficialRuntimeEnv(index.officialProviderModels[GROK_OFFICIAL_PROVIDER_ID])
+      return applyUserModelContextWindows(
+        buildGrokOfficialRuntimeEnv(index.officialProviderModels[GROK_OFFICIAL_PROVIDER_ID]), configDir,
+      )
     }
     if (isDeepSeekAccountProviderId(index.activeId)) {
       const models = index.officialProviderModels[DEEPSEEK_ACCOUNT_PROVIDER_ID]
@@ -612,6 +658,7 @@ export function readActiveProviderManagedEnv(
 
     return buildProviderManagedEnv(provider, {
       serverPort: options?.serverPort,
+      configDir,
     })
   } catch {
     return null

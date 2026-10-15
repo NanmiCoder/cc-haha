@@ -38,6 +38,73 @@ describe('providerRuntimeEnv', () => {
     await fs.rm(tmpDir, { recursive: true, force: true })
   })
 
+  test.each(['openai-official', 'grok-official'])('honors explicit model windows for %s without changing auth or compaction', async (activeId) => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId,
+      providers: [],
+    })
+    const baseline = readActiveProviderManagedEnv(tmpDir)!
+    await writeJson(path.join(tmpDir, 'settings.json'), {
+      env: {
+        CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({
+          'gpt-6.1-sol': 1000000,
+          'grok-4.7': 1000000,
+          'small-model': 128000,
+        }),
+      },
+    })
+    const env = readActiveProviderManagedEnv(tmpDir)!
+    const windows = JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)
+    expect(windows['gpt-6.1-sol']).toBe(1000000)
+    expect(windows['grok-4.7']).toBe(1000000)
+    expect(windows['small-model']).toBe(128000)
+    expect({ ...env, CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: undefined }).toEqual({
+      ...baseline, CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: undefined,
+    })
+    expect(env.DISABLE_COMPACT).toBeUndefined()
+    expect(env.DISABLE_AUTO_COMPACT).toBeUndefined()
+    expect(readActiveProviderManagedEnv(tmpDir)).toEqual(env)
+  })
+
+  test('uses provider-specific windows over global overrides and preserves unrelated defaults', async () => {
+    await writeJson(path.join(tmpDir, 'settings.json'), {
+      env: {
+        CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({
+          'CUSTOM-LONG[1m]': 1000000,
+          'custom-small': 1000000,
+        }),
+      },
+    })
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'custom',
+      providers: [{
+        id: 'custom', presetId: 'custom', name: 'Custom', apiKey: 'fixture-key',
+        baseUrl: 'https://fixture.example.test', apiFormat: 'openai_chat',
+        models: { main: 'custom-long', haiku: 'custom-small', sonnet: 'custom-long', opus: 'custom-long' },
+        modelContextWindows: { 'custom-small': 128000 },
+        autoCompactWindow: 800000,
+      }],
+    })
+    const env = readActiveProviderManagedEnv(tmpDir)!
+    expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)).toMatchObject({
+      'custom-long': 1000000,
+      'custom-small': 128000,
+    })
+    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe('800000')
+    expect(env.ANTHROPIC_MODEL).toBe('custom-long')
+  })
+
+  test.each(['not-json', '[]', '{"gpt-6.1-sol":0}', '{"gpt-6.1-sol":"1000000"}', '{"gpt-6.1-sol":10000001}'])('rejects invalid global context overrides: %s', async (raw) => {
+    await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
+      activeId: 'openai-official', providers: [],
+    })
+    const baseline = readActiveProviderManagedEnv(tmpDir)
+    await writeJson(path.join(tmpDir, 'settings.json'), {
+      env: { CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: raw },
+    })
+    expect(readActiveProviderManagedEnv(tmpDir)).toEqual(baseline)
+  })
+
   test('routes Anthropic providers without nested tool media through the proxy', async () => {
     await writeJson(path.join(tmpDir, 'cc-haha', 'providers.json'), {
       activeId: 'provider-media-compat',

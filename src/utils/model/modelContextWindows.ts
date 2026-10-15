@@ -88,7 +88,7 @@ function normalizeWindow(value: unknown): number | undefined {
   return value
 }
 
-function normalizeConfiguredContextWindows(parsed: unknown): Record<string, number> {
+export function normalizeConfiguredContextWindows(parsed: unknown): Record<string, number> {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return {}
   }
@@ -103,7 +103,7 @@ function normalizeConfiguredContextWindows(parsed: unknown): Record<string, numb
   return windows
 }
 
-function findConfiguredModelContextWindow(
+export function findConfiguredModelContextWindow(
   model: string,
   configured: Record<string, number>,
 ): number | undefined {
