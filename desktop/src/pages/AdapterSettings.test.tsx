@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import '@testing-library/jest-dom'
 
 import { AdapterSettings } from './AdapterSettings'
@@ -74,7 +74,7 @@ function renderAdapterSettings(
     ...overrides,
   } as Partial<ReturnType<typeof useAdapterStore.getState>>)
 
-  render(<AdapterSettings />)
+  return render(<AdapterSettings />)
 }
 
 afterEach(() => {
@@ -138,6 +138,47 @@ describe('AdapterSettings allowed project roots', () => {
     })
     expect(updateConfig.mock.calls[0]![0]).toMatchObject({
       allowedProjectRoots: ['/Users/me/work'],
+    })
+  })
+
+  describe('the "Saved" label', () => {
+    // Only the timers this page uses are faked: waitFor and the store promises
+    // keep running, so a save is flushed with `act` instead.
+    async function saveAndFlush() {
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await act(async () => {})
+    }
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('goes back to "Save" after two seconds', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      renderAdapterSettings({ allowedProjectRoots: ['/Users/me/work'] })
+
+      await saveAndFlush()
+      expect(screen.getByRole('button', { name: 'Saved' })).toBeInTheDocument()
+
+      act(() => {
+        vi.advanceTimersByTime(2000)
+      })
+      expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
+    })
+
+    // The reset used to be a bare setTimeout, so leaving Settings within the
+    // two seconds (or a test ending) let it fire into a torn-down tree and
+    // fail the whole run with "window is not defined".
+    it('leaves no timer behind once the page is closed', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      const { unmount } = renderAdapterSettings({ allowedProjectRoots: ['/Users/me/work'] })
+
+      await saveAndFlush()
+      expect(vi.getTimerCount()).toBe(1)
+
+      unmount()
+
+      expect(vi.getTimerCount()).toBe(0)
     })
   })
 

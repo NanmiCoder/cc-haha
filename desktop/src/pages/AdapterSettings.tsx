@@ -548,6 +548,15 @@ export function AdapterSettings() {
     }
   }, [activeIm, slackManifest, getSlackManifest, t])
 
+  // The "Saved" label fades after a moment. A timer started from `handleSave`
+  // outlived the page: leaving Settings (or a test ending) within the two
+  // seconds let it fire into an unmounted component.
+  useEffect(() => {
+    if (saveStatus !== 'saved') return
+    const timer = setTimeout(() => setSaveStatus('idle'), 2000)
+    return () => clearTimeout(timer)
+  }, [saveStatus])
+
   async function handleSave() {
     setIsSaving(true)
     setSaveStatus('idle')
@@ -634,7 +643,6 @@ export function AdapterSettings() {
 
       await updateConfig(patch)
       setSaveStatus('saved')
-      setTimeout(() => setSaveStatus('idle'), 2000)
     } catch (err) {
       setSaveStatus('error')
       setSaveError(err instanceof Error ? err.message : 'Save failed')
