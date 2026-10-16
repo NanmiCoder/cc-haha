@@ -541,6 +541,7 @@ export class ProviderService {
     return buildProviderManagedEnv(provider, {
       proxyPath: options?.proxyPath,
       serverPort: ProviderService.serverPort,
+      configDir: this.getConfigDir(),
     })
   }
 

@@ -3,6 +3,8 @@ import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from '../services/providerService.js'
+import { getContextWindowForModel } from '../../utils/context.js'
+import { getAutoCompactThreshold } from '../../services/compact/autoCompact.js'
 
 const MODEL_MAPPING = {
   main: 'MiniMax-M3',
@@ -45,6 +47,69 @@ describe('provider settings isolation', () => {
       return false
     }
   }
+
+  test('official runtime and regenerated settings honor global model windows across provider switches', async () => {
+    const userSettings = {
+      unknownField: { preserved: true },
+      env: {
+        CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({
+          'gpt-6.1-sol': 1000000,
+          'grok-4.7': 1000000,
+        }),
+      },
+    }
+    await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify(userSettings))
+    for (const id of ['openai-official', 'grok-official', 'openai-official']) {
+      await service.activateProvider(id)
+      const runtime = await service.getProviderRuntimeEnv(id)
+      const managed = (await readCcHahaSettings()).env as Record<string, string>
+      expect(JSON.parse(runtime.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toMatchObject({
+        'gpt-6.1-sol': 1000000, 'grok-4.7': 1000000,
+      })
+      expect(managed.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS).toBe(runtime.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)
+      expect(runtime.DISABLE_COMPACT).toBeUndefined()
+      expect(runtime.DISABLE_AUTO_COMPACT).toBeUndefined()
+    }
+    expect(JSON.parse(await fs.readFile(path.join(tmpDir, 'settings.json'), 'utf-8'))).toEqual(userSettings)
+  })
+
+  test.each([
+    ['vendor/small-model', 'small-model'],
+    ['small-model', 'vendor/small-model'],
+  ])('keeps provider precedence across namespaces and switches: global %s, provider %s', async (globalModel, providerModel) => {
+    await fs.writeFile(path.join(tmpDir, 'settings.json'), JSON.stringify({
+      env: { CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [globalModel]: 1000000 }) },
+    }))
+    const models = { main: 'vendor/small-model', haiku: 'vendor/small-model', sonnet: 'vendor/small-model', opus: 'vendor/small-model' }
+    const small = await service.addProvider({
+      presetId: 'custom', name: 'Small', baseUrl: 'https://small.example.test', apiKey: 'fixture-small',
+      apiFormat: 'openai_chat', models, modelContextWindows: { [providerModel]: 128000 },
+    })
+    const large = await service.addProvider({
+      presetId: 'custom', name: 'Large', baseUrl: 'https://large.example.test', apiKey: 'fixture-large',
+      apiFormat: 'openai_chat', models, modelContextWindows: { [providerModel]: 1000000 },
+    })
+    const keys = ['CLAUDE_CODE_MODEL_CONTEXT_WINDOWS', 'CLAUDE_CODE_MAX_OUTPUT_TOKENS',
+      'CLAUDE_CODE_AUTO_COMPACT_WINDOW', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE',
+      'CLAUDE_CODE_DISABLE_1M_CONTEXT', 'CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS', 'USER_TYPE']
+    const saved = keys.map(key => process.env[key])
+    try {
+      for (const key of keys) delete process.env[key]
+      process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '32000'
+      for (const [provider, expected] of [[small, 128000], [large, 1000000], [small, 128000]] as const) {
+        await service.activateProvider(provider.id)
+        const env = await service.getProviderRuntimeEnv(provider.id)
+        process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS = env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS
+        expect(getContextWindowForModel(models.main)).toBe(expected)
+        expect(getAutoCompactThreshold(models.main)).toBe(expected - 33000)
+      }
+    } finally {
+      keys.forEach((key, index) => {
+        if (saved[index] === undefined) delete process.env[key]
+        else process.env[key] = saved[index]
+      })
+    }
+  })
 
   test('activating a provider writes only cc-haha/settings.json', async () => {
     const minimax = await service.addProvider({

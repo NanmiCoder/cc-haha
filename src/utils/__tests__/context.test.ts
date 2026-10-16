@@ -1,5 +1,42 @@
 import { describe, expect, test } from 'bun:test'
 import { calculateCurrentContextTokenTotal, getContextWindowForModel, getModelMaxOutputTokens, hasKnownContextWindow, modelSupports1M } from '../context.js'
+import { normalizeConfiguredContextWindows } from '../model/modelContextWindows.js'
+import { getAutoCompactThreshold } from '../../services/compact/autoCompact.js'
+
+test('validates and normalizes per-model overrides without assuming every model supports 1M', () => {
+  expect(normalizeConfiguredContextWindows({
+    ' LONG-MODEL[1m] ': 1000000,
+    'small-model': 128000,
+    invalid: '1000000',
+    tooLarge: 10000001,
+    fractional: 1000000.5,
+  })).toEqual({ 'long-model': 1000000, 'small-model': 128000 })
+})
+
+test('injected external model windows scale the real compaction budget without promoting smaller models', () => {
+  const keys = ['CLAUDE_CODE_MODEL_CONTEXT_WINDOWS', 'CLAUDE_CODE_DISABLE_1M_CONTEXT',
+    'CLAUDE_CODE_AUTO_COMPACT_WINDOW', 'CLAUDE_AUTOCOMPACT_PCT_OVERRIDE',
+    'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS', 'USER_TYPE']
+  const saved = keys.map(key => process.env[key])
+  try {
+    for (const key of keys) delete process.env[key]
+    process.env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS = JSON.stringify({
+      'gpt-6.1-sol': 1000000, 'fixture-small': 128000,
+    })
+    process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS = '32000'
+    expect(getContextWindowForModel('gpt-6.1-sol')).toBe(1000000)
+    expect(getContextWindowForModel('fixture-small')).toBe(128000)
+    expect(getAutoCompactThreshold('gpt-6.1-sol')).toBe(967000)
+    expect(getAutoCompactThreshold('fixture-small')).toBe(95000)
+    process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT = '1'
+    expect(getContextWindowForModel('gpt-6.1-sol')).toBe(200000)
+  } finally {
+    keys.forEach((key, index) => {
+      if (saved[index] === undefined) delete process.env[key]
+      else process.env[key] = saved[index]
+    })
+  }
+})
 
 describe('calculateCurrentContextTokenTotal', () => {
   test('includes assistant output tokens in the current context total', () => {
