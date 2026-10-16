@@ -42,6 +42,15 @@ export function ProviderRequestCompatibilityFields({ value, apiFormat, onChange 
         hint={t('settings.providers.compatibilityBudgetHint')}
         error={invalidCompatibilityNumber(value.maxOutputTokens) ? t('settings.providers.compatibilityNumberError') : undefined}
       />
+      {/* Anthropic-format providers skip the OpenAI proxy transform, so only
+          the thinking selection reaches the runtime (via the managed env);
+          keep that one knob visible and hide the rest of the advanced grid. */}
+      {apiFormat === 'anthropic' && <SelectField<NonNullable<RequestCompatibility['reasoning']>>
+        label={t('settings.providers.compatibilityReasoning')}
+        value={value.options.reasoning ?? 'auto'}
+        options={capabilityOptions}
+        onChange={next => updateOption('reasoning', next)}
+      />}
       {apiFormat !== 'anthropic' && <>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <Button variant="ghost" size="sm" aria-expanded={expanded} aria-controls={detailsId} onClick={() => setExpanded(!expanded)}>

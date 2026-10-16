@@ -16,12 +16,19 @@ import {
   modelSupportsXHighEffort,
 } from '../effort.js'
 import {
+  applyProviderThinkingSetting,
+  getConfiguredProviderThinking,
   modelSupportsAdaptiveThinking,
   modelRequiresThinking,
   modelSupportsThinking,
   resolveModelThinkingEnabled,
   shouldSendExplicitDisabledThinking,
 } from '../thinking.js'
+import {
+  isProviderManagedEnvVar,
+  PROVIDER_THINKING_ENV_KEY,
+  SAFE_ENV_VARS,
+} from '../managedEnvConstants.js'
 
 describe('provider-aware thinking support', () => {
   let originalApiKey: string | undefined
@@ -240,6 +247,47 @@ describe('provider-aware thinking support', () => {
     expect(resolveSideQueryThinkingConfig(undefined, 1024)).toEqual({ type: 'disabled' })
     expect(resolveSideQueryThinkingConfig(false, 1024)).toEqual({ type: 'disabled' })
     expect(resolveSideQueryThinkingConfig(256, 1024)).toEqual({ type: 'enabled', budget_tokens: 256 })
+  })
+})
+
+describe('provider thinking env override', () => {
+  let originalThinkingEnv: string | undefined
+
+  beforeEach(() => {
+    originalThinkingEnv = process.env[PROVIDER_THINKING_ENV_KEY]
+    delete process.env[PROVIDER_THINKING_ENV_KEY]
+  })
+
+  afterEach(() => {
+    restoreEnv(PROVIDER_THINKING_ENV_KEY, originalThinkingEnv)
+  })
+
+  test('only enabled/disabled count as explicit provider settings', () => {
+    expect(getConfiguredProviderThinking()).toBeUndefined()
+    process.env[PROVIDER_THINKING_ENV_KEY] = 'auto'
+    expect(getConfiguredProviderThinking()).toBeUndefined()
+    process.env[PROVIDER_THINKING_ENV_KEY] = ' ENABLED '
+    expect(getConfiguredProviderThinking()).toBe('enabled')
+    process.env[PROVIDER_THINKING_ENV_KEY] = 'Disabled'
+    expect(getConfiguredProviderThinking()).toBe('disabled')
+    process.env[PROVIDER_THINKING_ENV_KEY] = 'nonsense'
+    expect(getConfiguredProviderThinking()).toBeUndefined()
+  })
+
+  test('an explicit setting wins over the requested state; auto keeps it', () => {
+    expect(applyProviderThinkingSetting(false)).toBe(false)
+    expect(applyProviderThinkingSetting(true)).toBe(true)
+    process.env[PROVIDER_THINKING_ENV_KEY] = 'enabled'
+    expect(applyProviderThinkingSetting(false)).toBe(true)
+    process.env[PROVIDER_THINKING_ENV_KEY] = 'disabled'
+    expect(applyProviderThinkingSetting(true)).toBe(false)
+    expect(applyProviderThinkingSetting(false)).toBe(false)
+  })
+
+  test('the thinking env key is provider-managed and safe', () => {
+    expect(PROVIDER_THINKING_ENV_KEY).toBe('CLAUDE_CODE_PROVIDER_THINKING')
+    expect(isProviderManagedEnvVar(PROVIDER_THINKING_ENV_KEY)).toBe(true)
+    expect(SAFE_ENV_VARS.has(PROVIDER_THINKING_ENV_KEY)).toBe(true)
   })
 })
 

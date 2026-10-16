@@ -6,11 +6,12 @@ import { ProviderService } from './providerService.js'
 import {
   resetPersistentStorageMigrationsForTests,
 } from './persistentStorageMigrations.js'
-import { buildProviderManagedEnv, mergeActiveProviderManagedEnv } from './providerRuntimeEnv.js'
+import { buildProviderManagedEnv, mergeActiveProviderManagedEnv, providerThinkingEnvValue } from './providerRuntimeEnv.js'
 import { CreateProviderSchema, TestProviderSchema, UpdateProviderSchema } from '../types/provider.js'
 import { isProviderManagedEnvVar, SAFE_ENV_VARS } from '../../utils/managedEnvConstants.js'
 
 const budgetEnvKey = 'CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS'
+const thinkingEnvKey = 'CLAUDE_CODE_PROVIDER_THINKING'
 const fixture = {
   presetId: 'custom',
   name: 'Fixture compatible provider',
@@ -107,6 +108,43 @@ describe('provider request compatibility configuration', () => {
         requestCompatibility: { maxOutputTokens: invalid },
       })[budgetEnvKey]).toBeUndefined()
     }
+  })
+
+  test('injects the thinking setting only for native Anthropic providers with an explicit reasoning selection', () => {
+    const anthropic = { ...fixture, id: 'anthropic-fixture', apiFormat: 'anthropic' as const }
+    expect(buildProviderManagedEnv({ ...anthropic, requestCompatibility: { reasoning: 'supported' } })[thinkingEnvKey]).toBe('enabled')
+    expect(buildProviderManagedEnv({ ...anthropic, requestCompatibility: { reasoning: 'unsupported' } })[thinkingEnvKey]).toBe('disabled')
+    // Auto and unset keep the CLI's model-family inference untouched.
+    expect(buildProviderManagedEnv({ ...anthropic, requestCompatibility: { reasoning: 'auto' } })[thinkingEnvKey]).toBeUndefined()
+    expect(buildProviderManagedEnv({ ...anthropic, requestCompatibility: {} })[thinkingEnvKey]).toBeUndefined()
+    expect(buildProviderManagedEnv(anthropic)[thinkingEnvKey]).toBeUndefined()
+    // Proxy-routed formats already apply the reasoning selection in the
+    // request transform; injecting the env there would change their envelope.
+    expect(buildProviderManagedEnv({ ...fixture, id: 'fixture', requestCompatibility: { reasoning: 'supported' } })[thinkingEnvKey]).toBeUndefined()
+    expect(providerThinkingEnvValue('supported')).toBe('enabled')
+    expect(providerThinkingEnvValue('unsupported')).toBe('disabled')
+    expect(providerThinkingEnvValue(undefined)).toBeUndefined()
+    expect(isProviderManagedEnvVar(thinkingEnvKey)).toBe(true)
+    expect(SAFE_ENV_VARS.has(thinkingEnvKey)).toBe(true)
+  })
+
+  test('round-trips the thinking setting through activation and provider switch', async () => {
+    const service = new ProviderService()
+    const anthropic = { ...fixture, name: 'Anthropic fixture', apiFormat: 'anthropic' as const }
+    const configured = await service.addProvider({ ...anthropic, requestCompatibility: { reasoning: 'supported' } })
+    const automatic = await service.addProvider({ ...anthropic, name: 'Automatic fixture' })
+    await service.activateProvider(configured.id)
+    let env = mergeActiveProviderManagedEnv({}, configDir)
+    expect(env[thinkingEnvKey]).toBe('enabled')
+    await service.updateProvider(configured.id, { requestCompatibility: null })
+    env = mergeActiveProviderManagedEnv(env, configDir)
+    expect(env[thinkingEnvKey]).toBeUndefined()
+    await service.updateProvider(configured.id, { requestCompatibility: { reasoning: 'unsupported' } })
+    env = mergeActiveProviderManagedEnv(env, configDir)
+    expect(env[thinkingEnvKey]).toBe('disabled')
+    await service.activateProvider(automatic.id)
+    env = mergeActiveProviderManagedEnv(env, configDir)
+    expect(env[thinkingEnvKey]).toBeUndefined()
   })
 
   test('uses saved compatibility for connectivity and transformed probes without expanding their explicit budgets', async () => {
