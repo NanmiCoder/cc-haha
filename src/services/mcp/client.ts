@@ -689,7 +689,18 @@ function clearServerFetchCaches(name: string, connectionKey: string): void {
 }
 
 /**
- * Generates the cache key for a server connection
+ * Generates the cache key for a server connection.
+ *
+ * `scope` is deliberately excluded: it records where the definition came from
+ * (.mcp.json, settings.json, a plugin, or a runtime injection), not what the
+ * connection is. Two definitions with the same name, cwd and content are the
+ * same server and must share one connection — the rule `areMcpConfigsEqual`
+ * and `hashMcpConfig` already apply. Including it here broke cleanup:
+ * `mcp_reconnect` resolves its config through `getMcpConfigByName`
+ * (file-scoped) while the live connection is cached under `scope:'dynamic'`
+ * (from `toScopedConfig`), so `clearServerCache` missed and the old
+ * connection — with its child process — stayed alive.
+ *
  * @param name Server name
  * @param serverRef Server configuration
  * @returns Cache key string
@@ -698,7 +709,8 @@ export function getServerCacheKey(
   name: string,
   serverRef: ScopedMcpServerConfig,
 ): string {
-  return jsonStringify([getCwd(), name, serverRef])
+  const { scope: _scope, ...content } = serverRef
+  return jsonStringify([getCwd(), name, content])
 }
 
 /**
