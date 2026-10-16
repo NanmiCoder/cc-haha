@@ -508,6 +508,33 @@ describe('RepositoryLaunchControls', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('caps the menu at the room left below the pill in a short window', async () => {
+    const originalInnerHeight = window.innerHeight
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 620 })
+
+    try {
+      renderControls()
+      const pill = await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      vi.spyOn(pill, 'getBoundingClientRect').mockReturnValue({
+        x: 40, y: 260, top: 260, left: 40, right: 200, bottom: 290, width: 160, height: 30,
+        toJSON: () => ({}),
+      } as DOMRect)
+
+      fireEvent.click(pill)
+
+      // 620 - 290 (pill bottom) - 6 (gap) - 12 (viewport gutter): more room
+      // below than above, yet less than the menu wants. It used to run off the
+      // bottom edge of a window this short.
+      await screen.findByRole('menu', { name: 'Location' })
+      // The pill's `aria-controls` points at the portalled container itself,
+      // not at the menu role inside it.
+      const container = document.getElementById(pill.getAttribute('aria-controls') ?? '')
+      expect(container).toHaveStyle({ top: '296px', maxHeight: '312px' })
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalInnerHeight })
+    }
+  })
+
   it('uses the full-width mobile bottom sheet in H5 mobile browser mode', async () => {
     viewportMocks.isMobile = true
     viewportMocks.isTauri = false

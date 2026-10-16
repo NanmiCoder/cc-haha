@@ -23,6 +23,7 @@ import { useTranslation } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
 import { setProjectDisplayName, useProjectDisplayName } from '../../stores/projectDisplayNameStore'
 import { RecentProjectsPanel } from '@/components/composite/DirectoryPicker'
+import { resolveVerticalPlacement } from '@/lib/verticalPlacement'
 import {
   ProjectEditorModal,
   type ProjectEditorSubmission,
@@ -54,6 +55,8 @@ type Props = {
 
 const MENU_WIDTH = 400
 const VIEWPORT_GUTTER = 12
+/** Shortest the menu is squeezed to; below this a window is too small to use it in anyway. */
+const MENU_MIN_HEIGHT = 160
 
 /**
  * `root` lists directory, branch and the worktree modes; `directory` and
@@ -154,7 +157,7 @@ export function RepositoryLaunchControls({
   const [createBranchError, setCreateBranchError] = useState<string | null>(null)
   const [projectCreateOpen, setProjectCreateOpen] = useState(false)
   const [projectCreateFolder, setProjectCreateFolder] = useState('')
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number; direction: 'up' | 'down' } | null>(null)
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; direction: 'up' | 'down'; maxHeight: number } | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const pillRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -192,15 +195,19 @@ export function RepositoryLaunchControls({
   const updateMenuPos = useCallback((forView: MenuView) => {
     if (!pillRef.current) return
     const rect = pillRef.current.getBoundingClientRect()
-    const height = VIEW_HEIGHTS[forView]
-    const spaceAbove = rect.top
-    const spaceBelow = window.innerHeight - rect.bottom
-    const direction = spaceBelow >= height || spaceBelow >= spaceAbove ? 'down' : 'up'
+    const { direction, edge, maxHeight } = resolveVerticalPlacement(rect, {
+      viewportHeight: window.innerHeight,
+      preferredHeight: VIEW_HEIGHTS[forView],
+      gap: 6,
+      margin: VIEWPORT_GUTTER,
+      minHeight: MENU_MIN_HEIGHT,
+    })
     const maxLeft = Math.max(VIEWPORT_GUTTER, window.innerWidth - MENU_WIDTH - VIEWPORT_GUTTER)
     setMenuPos({
-      top: direction === 'down' ? rect.bottom + 6 : rect.top - 6,
+      top: edge,
       left: Math.min(Math.max(rect.left, VIEWPORT_GUTTER), maxLeft),
       direction,
+      maxHeight,
     })
   }, [])
 
@@ -939,10 +946,11 @@ export function RepositoryLaunchControls({
     </button>
   )
 
-  const menuClassName = 'w-[400px] overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
+  const menuClassName = 'flex w-[400px] flex-col overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
   const menuStyle = {
     position: 'fixed' as const,
     left: menuPos?.left,
+    maxHeight: menuPos?.maxHeight,
     ...(menuPos?.direction === 'down'
       ? { top: menuPos.top }
       : { bottom: window.innerHeight - (menuPos?.top ?? 0) }),

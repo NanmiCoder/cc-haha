@@ -216,6 +216,32 @@ describe('DirectoryPicker', () => {
     expect(menu).toHaveStyle({ left: '612px', width: '400px' })
   })
 
+  it('caps the menu at the room left below the trigger in a short window', async () => {
+    const originalInnerHeight = window.innerHeight
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 620 })
+    vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({ projects: [] })
+
+    try {
+      render(<DirectoryPicker value="/workspace/project" onChange={vi.fn()} />)
+
+      const trigger = screen.getByRole('button')
+      vi.spyOn(trigger, 'getBoundingClientRect').mockReturnValue({
+        x: 40, y: 260, top: 260, left: 40, right: 130, bottom: 290, width: 90, height: 30,
+        toJSON: () => ({}),
+      } as DOMRect)
+
+      fireEvent.click(trigger)
+
+      // 620 - 290 (trigger bottom) - 4 (gap) - 12 (viewport margin): more room
+      // below than above, yet less than the menu wants. It used to run off the
+      // bottom edge of a window this short.
+      const menu = await screen.findByTestId('directory-picker-menu')
+      expect(menu).toHaveStyle({ top: '294px', maxHeight: '314px' })
+    } finally {
+      Object.defineProperty(window, 'innerHeight', { configurable: true, value: originalInnerHeight })
+    }
+  })
+
   it('renders browse entries without nesting interactive buttons', async () => {
     vi.mocked(sessionsApi.getRecentProjects).mockResolvedValue({ projects: [] })
     vi.mocked(filesystemApi.browse).mockResolvedValue({

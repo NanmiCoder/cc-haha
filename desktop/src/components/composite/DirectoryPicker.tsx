@@ -24,6 +24,7 @@ import {
 } from '../../stores/projectDisplayNameStore'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { fuzzyFilter } from '../../lib/fuzzyScore'
+import { resolveVerticalPlacement } from '../../lib/verticalPlacement'
 import {
   getCachedRecentProjects,
   invalidateRecentProjectsCache,
@@ -49,6 +50,7 @@ const DESKTOP_WORKTREE_MARKER = '/.claude/worktrees/'
 const DROPDOWN_WIDTH = 400
 const DROPDOWN_VIEWPORT_MARGIN = 12
 const DROPDOWN_HEIGHT = 380 // approximate max height
+const DROPDOWN_MIN_HEIGHT = 160
 
 function isDesktopRuntime() {
   return typeof window !== 'undefined' && getDesktopHost().isDesktop
@@ -468,7 +470,7 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
   const [isOpen, setIsOpen] = useState(false)
   const [mode, setMode] = useState<DirectoryPanelMode>('recent')
   const [projects, setProjects] = useState<RecentProject[]>([])
-  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number; direction: 'up' | 'down' } | null>(null)
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number; width: number; direction: 'up' | 'down'; maxHeight: number } | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const isMobileBrowser = useMobileViewport() && !isDesktopRuntime()
@@ -478,17 +480,22 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
   const updateDropdownPos = useCallback(() => {
     if (!triggerRef.current) return
     const rect = triggerRef.current.getBoundingClientRect()
-    const spaceAbove = rect.top
-    const spaceBelow = window.innerHeight - rect.bottom
-    const direction = spaceBelow >= DROPDOWN_HEIGHT || spaceBelow >= spaceAbove ? 'down' : 'up'
+    const { direction, edge, maxHeight } = resolveVerticalPlacement(rect, {
+      viewportHeight: window.innerHeight,
+      preferredHeight: DROPDOWN_HEIGHT,
+      gap: 4,
+      margin: DROPDOWN_VIEWPORT_MARGIN,
+      minHeight: DROPDOWN_MIN_HEIGHT,
+    })
     const width = Math.min(DROPDOWN_WIDTH, Math.max(0, window.innerWidth - DROPDOWN_VIEWPORT_MARGIN * 2))
     const maxLeft = Math.max(DROPDOWN_VIEWPORT_MARGIN, window.innerWidth - width - DROPDOWN_VIEWPORT_MARGIN)
     const left = Math.min(Math.max(rect.left, DROPDOWN_VIEWPORT_MARGIN), maxLeft)
     setDropdownPos({
-      top: direction === 'down' ? rect.bottom + 4 : rect.top - 4,
+      top: edge,
       left,
       width,
       direction,
+      maxHeight,
     })
   }, [])
 
@@ -545,11 +552,12 @@ export function DirectoryPicker({ value, onChange, variant = 'chip', isGitProjec
     ? `relative min-w-0 ${isMobileBrowser ? 'flex-1' : 'max-w-[320px] shrink'}`
     : 'relative'
 
-  const dropdownClassName = 'overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
+  const dropdownClassName = 'flex flex-col overflow-y-auto rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-dropdown)]'
   const dropdownStyle = {
     position: 'fixed' as const,
     left: dropdownPos?.left,
     width: dropdownPos?.width,
+    maxHeight: dropdownPos?.maxHeight,
     ...(dropdownPos?.direction === 'down'
       ? { top: dropdownPos.top }
       : { bottom: window.innerHeight - (dropdownPos?.top ?? 0) }),
