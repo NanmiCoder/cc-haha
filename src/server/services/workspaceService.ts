@@ -316,16 +316,24 @@ export class WorkspaceService {
     }
 
     const repoInfo = await this.getGitRepoInfo(workDir)
+    // Inside a repository git status is authoritative and recorded session
+    // evidence only adds paths git cannot see, so evidence past its viewing
+    // budget is dropped. Without git it is the only evidence, and an
+    // incomplete record must fail rather than under-report.
+    const sessionEvidence = (changes: Promise<SessionFileChange[]>) => changes.catch((error) => {
+      if (repoInfo.kind === 'ok' && error instanceof ApiError && error.statusCode === 413) return []
+      throw error
+    })
     const sessionChanges = this.mergeSessionFileChanges(
       [
-        ...await this.getSessionFileChanges(
+        ...await sessionEvidence(this.getSessionFileChanges(
           sessionId,
           workspaceInfo.workspaceRoot,
-        ),
-        ...await this.getFileHistoryChanges(
+        )),
+        ...await sessionEvidence(this.getFileHistoryChanges(
           sessionId,
           workspaceInfo.workspaceRoot,
-        ),
+        )),
       ],
     )
 
@@ -1974,6 +1982,7 @@ export class WorkspaceService {
       const result = await execFile('git', args, {
         cwd: workDir,
         timeout: GIT_TIMEOUT_MS,
+        windowsHide: true,
         maxBuffer: MAX_GIT_BUFFER_BYTES,
         encoding: 'utf8',
       })

@@ -8,6 +8,7 @@ import {
   splitTextByFilePaths,
 } from './filePathBoundary'
 import { isGeneratedArtifactFile, isOutputResourceFile, isShellProducedDeliverable } from './fileCapabilities'
+import { classifyPreviewLink } from './previewLinkRouter'
 
 export type AssistantOutputTargetKind =
   | 'local-html'
@@ -166,7 +167,11 @@ export function extractAssistantOutputTargets(
     const authoredTitle = match.title
     const href = resolveAssistantFileHref(match.href, content)
     const localhostTarget = toLocalhostTarget(href)
-    const fileTarget = toWorkspaceFileTarget(href, workDir)
+    const parsedHref = classifyPreviewLink(match.href)
+    const filePath = parsedHref.path && !match.href.startsWith('file://')
+      ? resolveAssistantFileHref({ path: parsedHref.path }, content).path
+      : href
+    const fileTarget = toWorkspaceFileTarget(filePath, workDir)
 
     if (isInCodeBlock(match.start, codeBlocks)) {
       continue
@@ -456,11 +461,15 @@ function reconcileTargetsWithChangedFiles(
     // An authored absolute path (including an explicit prose root) is identity,
     // not a basename hint: it matches only the very same changed file. A
     // checkpoint cannot disprove a shell-created output.
+    // normalizedPath is already decoded and may be workspace-relative. Rebuild
+    // identity from it, never from the original URL-encoded authored href.
     const explicitPath = isAbsoluteFilePath(target.href)
+      ? resolveFilePath(mentioned, workDir ?? '/')
+      : null
     // The longer reading of an ambiguous name wins when the turn really wrote it
     // (`报告v2.docx`, not the `v2.docx` the prose scan settled on).
     const match = explicitPath
-      ? findSameChangedFile(resolveFilePath(target.href), changedFiles)
+      ? findSameChangedFile(explicitPath, changedFiles)
       : [...(target.nameCandidates ?? []), mentioned]
         .sort((left, right) => getBasename(right).length - getBasename(left).length)
         .map((name) => matchChangedFile(name, changedFiles))
@@ -479,7 +488,7 @@ function reconcileTargetsWithChangedFiles(
     }
 
     const corrected = explicitPath
-      ? resolveFilePath(target.href)
+      ? explicitPath
       : match
         ? correctedChangedFilePath(match, workDir)
         : correctedChangedFilePath(anchorToChangedDirectory(mentioned, changedFiles), workDir)

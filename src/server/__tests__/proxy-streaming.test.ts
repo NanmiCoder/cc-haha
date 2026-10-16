@@ -540,6 +540,33 @@ describe('openaiResponsesStreamToAnthropic', () => {
     expect(events.some((event) => event.event === 'message_stop')).toBe(false)
   })
 
+  test('OpenAI OAuth mode reports a response.failed the request caused as a rejection, not a server fault', async () => {
+    const failedWith = async (code: string, message: string) => {
+      const events = await collectSse(openaiResponsesStreamToAnthropic(
+        makeStream([
+          'event: response.created\ndata: {"response":{"id":"r10","model":"gpt-5.6-terra","status":"in_progress"}}\n\n',
+          `event: response.failed\ndata: ${JSON.stringify({ response: { id: 'r10', status: 'failed', error: { code, message } } })}\n\n`,
+        ]),
+        'gpt-5.6-terra',
+        { openAICodexOAuth: true },
+      ))
+      return events.find((event) => event.event === 'error')?.data.error
+    }
+
+    // The CLI re-sends an api_error on its API retry budget; this one cannot succeed.
+    expect(await failedWith(
+      'context_length_exceeded',
+      'Your input exceeds the context window of this model. Please adjust your input and try again.',
+    )).toEqual({
+      type: 'invalid_request_error',
+      message: 'Your input exceeds the context window of this model. Please adjust your input and try again.',
+    })
+    expect(await failedWith('server_error', 'An error occurred while processing your request.')).toEqual({
+      type: 'api_error',
+      message: 'An error occurred while processing your request.',
+    })
+  })
+
   test('OpenAI OAuth mode maps a max-token incomplete response to a clean Anthropic stop', async () => {
     const incomplete = [
       'event: response.created\ndata: {"response":{"id":"r8","model":"gpt-5.6-terra","status":"in_progress"}}\n\n',

@@ -88,7 +88,9 @@ describe('restored session prewarm', () => {
     const restoredSessionId = useTabStore.getState().activeTabId
 
     expect(restoredSessionId).toBe(SESSION_ID)
-    expect(useSessionStore.getState().sessions).toEqual([])
+    expect(useSessionStore.getState().sessions).toEqual([
+      expect.objectContaining({ id: SESSION_ID, title: 'Existing transcript', messageCount: 4 }),
+    ])
 
     useChatStore.getState().connectToSession(restoredSessionId!)
 

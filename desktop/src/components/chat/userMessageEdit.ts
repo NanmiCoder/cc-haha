@@ -1,4 +1,7 @@
+import { stripAgentTeamRequest, withAgentTeamRequest } from '@/lib/agentTeamRequest'
 import { splitSessionReferenceContext } from '@/lib/sessionReferences'
+import { parseUserMessageSegments } from '@/lib/userMessageCapabilities'
+import { capabilityKey, useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import {
   extractLeadingFileReferences,
   extractRestoredUserDisplay,
@@ -23,7 +26,13 @@ export type UserMessageEditDraft = {
   text: string
   attachments: EditableAttachment[]
   sessionReferences: Array<{ sessionId: string }>
+  /** The message was sent with the composer's Agent Team switch on. */
+  agentTeam?: boolean
+  /** Skill/plugin pills shown as `@label` in `text`, with the model text each one sends. */
+  mentions?: CapabilityDraftMention[]
 }
+
+export type CapabilityDraftMention = { label: string, modelText: string }
 
 export type UserMessageResendPayload = {
   content: string
@@ -146,14 +155,45 @@ export function createUserMessageEditDraft(
       sendable: isSendable(attachment),
     }))
 
-  const body = parsed.content.trim()
+  const capabilities = projectCapabilityPills(parsed.content.trim())
+  const body = capabilities.text
   const text = attachments.length > 0 && ATTACHMENT_ONLY_PLACEHOLDERS.has(body) ? '' : body
 
   return {
     text,
     attachments,
     sessionReferences: message.sessionReferences ?? referenceContext.sessionReferences,
+    ...(stripAgentTeamRequest(source).requested ? { agentTeam: true } : {}),
+    ...(capabilities.mentions.length > 0 ? { mentions: capabilities.mentions } : {}),
   }
+}
+
+/** Show skill/plugin sentences as the `@label` the user picked, remembering what each sends. */
+function projectCapabilityPills(body: string): { text: string, mentions: CapabilityDraftMention[] } {
+  const mentions: CapabilityDraftMention[] = []
+  const catalog = useCapabilityCatalogStore.getState().entries
+  const text = parseUserMessageSegments(body).map((segment) => {
+    if (segment.type === 'text') return segment.text
+    if (segment.type === 'command') return segment.name
+    if (!segment.modelText) return `Skill(${segment.id})`
+    const label = `@${catalog[capabilityKey(segment.type, segment.id)]?.label ?? segment.label}`
+    mentions.push({ label, modelText: segment.modelText })
+    return label
+  }).join('')
+  return { text, mentions }
+}
+
+/** Put back the model text of every pill the user kept; a deleted `@label` sends nothing. */
+function expandCapabilityPills(text: string, mentions: CapabilityDraftMention[]): string {
+  let result = text
+  let searchFrom = 0
+  for (const mention of mentions) {
+    const index = result.indexOf(mention.label, searchFrom)
+    if (index < 0) continue
+    result = result.slice(0, index) + mention.modelText + result.slice(index + mention.label.length)
+    searchFrom = index + mention.modelText.length
+  }
+  return result
 }
 
 function hasReferenceContext(attachment: UIAttachment): boolean {
@@ -205,7 +245,9 @@ export function buildUserMessageResendPayload(
       .filter((attachment) => attachment.type === 'file' && attachment.path && hasReferenceContext(attachment))
       .map(toWorkspaceReference),
   )
-  const content = [referencePrompt, text].filter(Boolean).join('\n\n')
+  const joined = [referencePrompt, expandCapabilityPills(text, draft.mentions ?? [])].filter(Boolean).join('\n\n')
+  // Same order as the composer: the team block wraps everything else.
+  const content = draft.agentTeam ? withAgentTeamRequest(joined) : joined
 
   const attachments: AttachmentRef[] = sendable.map((attachment) =>
     attachment.type === 'image'

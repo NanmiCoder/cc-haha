@@ -6,13 +6,21 @@ import { ApiError } from '../../api/client'
 import { getDesktopHost } from '../../lib/desktopHost'
 import { useProviderStore } from '../../stores/providerStore'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { BUNDLED_PROVIDER_PRESETS } from '../../config/providerPresets'
 import type { SavedProvider } from '../../types/provider'
 import { ProviderSettings } from './ProviderSettings'
 
 vi.mock('../../components/settings/ClaudeOfficialLogin', () => ({ ClaudeOfficialLogin: () => null }))
 vi.mock('../../components/settings/ChatGPTOfficialLogin', () => ({ ChatGPTOfficialLogin: () => null }))
 vi.mock('../../components/settings/GrokOfficialLogin', () => ({ GrokOfficialLogin: () => null }))
-vi.mock('../../components/settings/OfficialProviderModelSettings', () => ({ OfficialProviderModelSettings: () => null }))
+vi.mock('../../components/settings/DeepSeekAccountLogin', () => ({
+  DeepSeekAccountLogin: () => <div data-testid="deepseek-account-login-stub" />,
+}))
+vi.mock('../../components/settings/OfficialProviderModelSettings', () => ({
+  OfficialProviderModelSettings: ({ providerId }: { providerId: string }) => (
+    <div data-testid="official-model-settings" data-provider-id={providerId} />
+  ),
+}))
 
 const savedProviders: SavedProvider[] = ([
   ['xuanshuapi', '玄枢API', 'https://www.xuanshuapi.com', 'claude-sonnet-5'],
@@ -28,7 +36,91 @@ const savedProviders: SavedProvider[] = ([
   models: { main: model, haiku: model, sonnet: model, opus: model },
 }))
 
-describe('ApiSmart sponsor provider', () => {
+describe('image generation protocol settings', () => {
+  let originalPresets = useProviderStore.getState().presets
+  beforeEach(() => {
+    originalPresets = useProviderStore.getState().presets
+    useProviderStore.setState({ presets: BUNDLED_PROVIDER_PRESETS })
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState({ presets: originalPresets })
+  })
+
+  it.each(['gemini_native', 'xai_images'] as const)('keeps saved %s image protocol when editing other image fields', async (protocol) => {
+    const provider: SavedProvider = {
+      ...savedProviders[0]!, id: 'saved-image-provider',
+      imageGeneration: { model: 'image-fixture', protocol, baseUrl: 'https://images.example.test/v1', apiKey: 'fake-image-key' },
+    }
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [provider], activeId: null })
+    const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider })
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId('provider-saved-image-provider')).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.change(dialog.getByRole('textbox', { name: /Image model/ }), { target: { value: 'image-fixture-updated' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(provider.id, expect.objectContaining({
+      imageGeneration: { model: 'image-fixture-updated', protocol, baseUrl: 'https://images.example.test/v1', apiKey: 'fake-image-key' },
+    })))
+  })
+
+  it('defaults an older image configuration to OpenAI-compatible Images', async () => {
+    const provider: SavedProvider = { ...savedProviders[0]!, id: 'old-images', imageGeneration: { model: 'old-image-model' } }
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [provider], activeId: null })
+    const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider })
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId('provider-old-images')).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('combobox', { name: 'Image API protocol' })).toHaveValue('openai_images')
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(provider.id, expect.objectContaining({
+      imageGeneration: { model: 'old-image-model', protocol: 'openai_images' },
+    })))
+  })
+
+  it('saves a newly selected image protocol independently from the chat protocol', async () => {
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'new-images', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'AruHub' }))
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-new-key' } })
+    fireEvent.click(dialog.getByRole('switch', { name: 'Enable image generation' }))
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Image API protocol' }), { target: { value: 'gemini_native' } })
+    fireEvent.change(dialog.getByRole('textbox', { name: /Image model/ }), { target: { value: 'gemini-image-fixture' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      apiFormat: 'anthropic', imageGeneration: { model: 'gemini-image-fixture', protocol: 'gemini_native' },
+    })))
+  })
+
+  it('applies the selected preset image protocol and resets to the default when switching presets', async () => {
+    useProviderStore.setState({ presets: BUNDLED_PROVIDER_PRESETS.map((preset) => preset.id === 'aruhub'
+      ? { ...preset, defaultImageGeneration: { model: 'grok-image-fixture', protocol: 'xai_images' as const } }
+      : preset) })
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'AruHub' }))
+    expect(dialog.getByRole('combobox', { name: 'Image API protocol' })).toHaveValue('xai_images')
+    expect(dialog.getByRole('textbox', { name: /Image model/ })).toHaveValue('grok-image-fixture')
+    fireEvent.click(dialog.getByRole('button', { name: 'Atlas Cloud' }))
+    expect(dialog.getByRole('switch', { name: 'Enable image generation' })).not.toBeChecked()
+    fireEvent.click(dialog.getByRole('switch', { name: 'Enable image generation' }))
+    expect(dialog.getByRole('combobox', { name: 'Image API protocol' })).toHaveValue('openai_images')
+  })
+})
+
+describe('active sponsor providers', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'en' })
     vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
@@ -55,13 +147,11 @@ describe('ApiSmart sponsor provider', () => {
     expect(sponsor.parentElement).toBe(dialog.getByRole('button', { name: 'Atlas Cloud' }).parentElement)
     expect(within(sponsor).getByText('New')).toBeInTheDocument()
     expect(within(sponsor).getByLabelText('Sponsor')).toBeInTheDocument()
-    for (const name of ['Atlas Cloud', 'ApiSmart']) {
-      expect(within(dialog.getByRole('button', { name })).queryByLabelText('Sponsor')).not.toBeInTheDocument()
-    }
+    expect(within(dialog.getByRole('button', { name: 'Atlas Cloud' })).queryByLabelText('Sponsor')).not.toBeInTheDocument()
     fireEvent.click(sponsor)
     expect(dialog.getByDisplayValue('https://agent.aruhub.com')).toBeInTheDocument()
-    expect(dialog.getAllByDisplayValue('claude-opus-5')).toHaveLength(2)
-    expect(dialog.getAllByDisplayValue('claude-sonnet-5')).toHaveLength(2)
+    expect(dialog.getAllByDisplayValue('claude-opus-5-5')).toHaveLength(2)
+    expect(dialog.getAllByDisplayValue('claude-sonnet-5-5')).toHaveLength(2)
     const offer = dialog.getByRole('button', { name: /注册即送 1 美元全模型通用额度/ })
     fireEvent.click(offer)
     expect(open).toHaveBeenCalledWith('https://aruhub.com/sign-up?aff=Z54g')
@@ -79,7 +169,66 @@ describe('ApiSmart sponsor provider', () => {
       apiFormat: 'anthropic',
       authStrategy: 'api_key',
       apiKey: 'fake-aruhub-key',
-      models: { main: 'claude-opus-5', haiku: 'claude-sonnet-5', sonnet: 'claude-sonnet-5', opus: 'claude-opus-5' },
+      models: { main: 'claude-opus-5-5', haiku: 'claude-sonnet-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' },
+    })))
+  })
+
+  it('adds Modelflare from the second sponsor pill with badges, model discovery and Claude 5.5 defaults', async () => {
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'saved-modelflare', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+    const fetchModels = vi.spyOn(providersApi, 'fetchModels').mockResolvedValue({
+      ok: true,
+      endpoint: 'https://modelflare.dev/v1/models',
+      models: [
+        { id: 'claude-opus-5-5', ownedBy: 'anthropic' },
+        { id: 'claude-sonnet-5-5', ownedBy: 'anthropic' },
+        { id: 'claude-haiku-5-5', ownedBy: 'anthropic' },
+      ],
+    })
+    const open = vi.spyOn(getDesktopHost().shell, 'open').mockResolvedValue()
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    const sponsor = dialog.getByRole('button', { name: 'Modelflare' })
+    expect(sponsor.previousElementSibling).toBe(dialog.getByRole('button', { name: 'AruHub' }))
+    expect(sponsor.nextElementSibling).toBe(dialog.getByRole('button', { name: 'Atlas Cloud' }))
+    expect(within(sponsor).getByText('New')).toBeInTheDocument()
+    expect(within(sponsor).getByLabelText('Sponsor')).toBeInTheDocument()
+    expect(sponsor.querySelector('img')?.getAttribute('src')).toContain('modelflare-logo')
+    expect(dialog.getByRole('button', { name: 'AruHub' }).querySelector('img')?.getAttribute('src')).toContain('aruhub-logo')
+    expect(dialog.getByRole('button', { name: 'Atlas Cloud' }).querySelector('img')).toBeNull()
+    expect(dialog.queryByRole('button', { name: 'ApiSmart' })).not.toBeInTheDocument()
+
+    fireEvent.click(sponsor)
+    expect(dialog.getByDisplayValue('https://modelflare.dev')).toBeInTheDocument()
+    expect(dialog.getAllByDisplayValue('claude-opus-5-5')).toHaveLength(2)
+    expect(dialog.getByDisplayValue('claude-sonnet-5-5')).toBeInTheDocument()
+    expect(dialog.getByDisplayValue('claude-haiku-5-5')).toBeInTheDocument()
+    expect(dialog.getByRole('button', { name: 'Fetch models' })).toBeDisabled()
+    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    expect(open).toHaveBeenCalledWith('https://modelflare.dev/sign-up?utm_source=github&utm_campaign=cchaha')
+
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-modelflare-key' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Fetch models' }))
+    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith({
+      baseUrl: 'https://modelflare.dev', apiKey: 'fake-modelflare-key',
+    }))
+    await dialog.findByText(/Model list loaded \(3\)/)
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      presetId: 'modelflare',
+      baseUrl: 'https://modelflare.dev',
+      apiFormat: 'anthropic',
+      authStrategy: 'auth_token',
+      apiKey: 'fake-modelflare-key',
+      models: {
+        main: 'claude-opus-5-5', haiku: 'claude-haiku-5-5',
+        sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5',
+      },
+      modelContextWindows: {
+        'claude-opus-5-5': 1000000, 'claude-sonnet-5-5': 1000000, 'claude-haiku-5-5': 1000000,
+      },
     })))
   })
 
@@ -118,64 +267,10 @@ describe('ApiSmart sponsor provider', () => {
     render(<ProviderSettings />)
     fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
     const dialog = within(screen.getByRole('dialog'))
-    fireEvent.click(dialog.getByRole('button', { name: 'ApiSmart' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Atlas Cloud' }))
 
     expect(dialog.getByRole('button', { name: /OpenAI Chat Completions \(proxy\)/ })).toBeInTheDocument()
     expect(dialog.queryByText(/point the base URL at an endpoint that serves it/)).not.toBeInTheDocument()
-  })
-
-  it('prefills the sponsor connection, opens its landing page, and saves the selected models', async () => {
-    const open = vi.spyOn(getDesktopHost().shell, 'open').mockResolvedValue()
-    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
-      provider: { ...input, id: 'saved-apismart', apiFormat: input.apiFormat ?? 'anthropic' },
-    }))
-    render(<ProviderSettings />)
-    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
-    const dialog = within(screen.getByRole('dialog'))
-    const sponsor = dialog.getByRole('button', { name: 'ApiSmart' })
-    expect(sponsor.parentElement).toBe(dialog.getByRole('button', { name: 'Atlas Cloud' }).parentElement)
-    fireEvent.click(sponsor)
-    expect(dialog.getByDisplayValue('https://gw.apismart.ai/v1')).toBeInTheDocument()
-    expect(dialog.getAllByDisplayValue('deepseek-v4-pro-0813')).toHaveLength(3)
-    expect(dialog.getByDisplayValue('deepseek-v4-flash-0731-tem')).toBeInTheDocument()
-    expect(dialog.getByRole('switch', { name: 'Enable image generation' })).toBeChecked()
-    expect(dialog.getByDisplayValue('doubao-seedream-5-0')).toBeInTheDocument()
-    fireEvent.change(dialog.getByRole('textbox', { name: 'Reply output budget' }), { target: { value: '48000' } })
-
-    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
-    expect(open).toHaveBeenCalledWith('https://www.apismart.ai')
-    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-apismart-key' } })
-    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
-    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
-      presetId: 'apismart',
-      name: 'ApiSmart',
-      baseUrl: 'https://gw.apismart.ai/v1',
-      apiFormat: 'openai_chat',
-      authStrategy: 'api_key',
-      apiKey: 'fake-apismart-key',
-      imageGeneration: { model: 'doubao-seedream-5-0' },
-      requestCompatibility: { maxOutputTokens: 48000 },
-      models: {
-        main: 'deepseek-v4-pro-0813',
-        haiku: 'deepseek-v4-flash-0731-tem',
-        sonnet: 'deepseek-v4-pro-0813',
-        opus: 'deepseek-v4-pro-0813',
-      },
-    })))
-    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
-  })
-
-  it('resets image credentials and defaults when switching presets', async () => {
-    render(<ProviderSettings />)
-    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
-    const dialog = within(screen.getByRole('dialog'))
-    fireEvent.click(dialog.getByRole('button', { name: 'ApiSmart' }))
-    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[1]!, { target: { value: 'fake-image-only-key' } })
-    fireEvent.click(dialog.getByRole('button', { name: 'Atlas Cloud' }))
-    expect(dialog.getByRole('switch', { name: 'Enable image generation' })).not.toBeChecked()
-    fireEvent.click(dialog.getByRole('button', { name: 'ApiSmart' }))
-    expect(dialog.getByDisplayValue('doubao-seedream-5-0')).toBeInTheDocument()
-    expect(dialog.getAllByPlaceholderText('sk-...')[1]).toHaveValue('')
   })
 
   it('preserves image generation disabled on an older saved ApiSmart provider', async () => {
@@ -188,6 +283,74 @@ describe('ApiSmart sponsor provider', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Edit' }))
     expect(within(screen.getByRole('dialog')).getByRole('switch', { name: 'Enable image generation' }))
       .not.toBeChecked()
+  })
+
+  it('keeps a saved ApiSmart provider but no longer offers it as a new provider', async () => {
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [{
+      ...savedProviders[0]!, id: 'old-apismart', presetId: 'apismart', name: 'ApiSmart',
+      baseUrl: 'https://gw.apismart.ai/v1', apiFormat: 'openai_chat',
+    }], activeId: null })
+    render(<ProviderSettings />)
+    expect(await screen.findByTestId('provider-old-apismart')).toHaveTextContent('ApiSmart')
+
+    fireEvent.click(screen.getByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('button', { name: 'Atlas Cloud' })).toBeInTheDocument()
+    expect(dialog.queryByRole('button', { name: 'ApiSmart' })).not.toBeInTheDocument()
+  })
+})
+
+describe('built-in DeepSeek Account provider', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(useSettingsStore.getState(), 'setModel').mockResolvedValue()
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'getOfficialModels').mockResolvedValue({
+      models: { main: 'deepseek-v4-pro[1m]', haiku: 'deepseek-v4-flash', sonnet: 'deepseek-v4-pro[1m]', opus: 'deepseek-v4-pro[1m]' },
+    })
+    useProviderStore.setState({
+      providers: [], activeId: null, hasLoadedProviders: false, isLoading: false,
+      providerOrder: ['claude-official', 'openai-official', 'grok-official', 'deepseek-account'],
+    })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('lists the account provider, activates it and then shows its login and model mapping', async () => {
+    let activeId: string | null = null
+    vi.spyOn(providersApi, 'list').mockImplementation(async () => ({ providers: [], activeId }))
+    const activate = vi.spyOn(providersApi, 'activate').mockImplementation(async (id) => {
+      activeId = id
+      return { ok: true }
+    })
+
+    render(<ProviderSettings />)
+
+    const card = await screen.findByTestId('deepseek-account-provider')
+    expect(within(card).getByText('DeepSeek Account')).toBeInTheDocument()
+    expect(within(card).getByText(/no API key required/)).toBeInTheDocument()
+    expect(within(card).queryByTestId('deepseek-account-login-stub')).not.toBeInTheDocument()
+
+    fireEvent.click(within(card).getByRole('button', { name: /DeepSeek Account/ }))
+
+    await waitFor(() => expect(activate).toHaveBeenCalledWith('deepseek-account'))
+    expect(await within(card).findByTestId('deepseek-account-login-stub')).toBeInTheDocument()
+    expect(within(card).getByTestId('official-model-settings')).toHaveAttribute('data-provider-id', 'deepseek-account')
+    expect(within(card).getByText('Default')).toBeInTheDocument()
+  })
+
+  it('shows no account login for the browser (phone) settings view', async () => {
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: 'deepseek-account' })
+
+    render(<ProviderSettings browserMode />)
+
+    const card = await screen.findByTestId('deepseek-account-provider')
+    expect(within(card).getByText('DeepSeek Account')).toBeInTheDocument()
+    expect(within(card).queryByTestId('deepseek-account-login-stub')).not.toBeInTheDocument()
   })
 })
 

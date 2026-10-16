@@ -3,6 +3,7 @@ import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
 import { getSideChat, isSideChatId, registerSideChat, SIDE_CHAT_PREFIX, type SideChat } from '../services/sideChatRegistry.js'
 import { ApiError } from '../middleware/errorHandler.js'
+import { loadMessagesFromJsonlPath } from '../../utils/conversationRecovery.js'
 
 const inputSchema = z.strictObject({ sideChatId: z.uuid().optional() })
 function response(entry: SideChat): Response {
@@ -35,11 +36,11 @@ export async function handleSideChatsRoute(req: Request, parentSessionId: string
   if (!info) throw ApiError.notFound('Parent session not found')
   // Capture a stable transcript boundary. The CLI truncates at this UUID even
   // if the parent appends more messages before the child starts.
-  const page = await sessionService.getSessionHistoryPage(parentSessionId, { limit: 100, projectContext: false })
-  const last = page.messages.findLast(message => message.type !== 'system')
+  const { messages } = await loadMessagesFromJsonlPath(info.filePath)
+  const last = messages.findLast(message => message.type !== 'system')
   if (!last) throw ApiError.conflict('Start a conversation before opening a side chat')
   const entry: SideChat = {
-    sessionId, parentSessionId, cliSessionId, resumePath: info.filePath, resumeAt: last.id,
+    sessionId, parentSessionId, cliSessionId, resumePath: info.filePath, resumeAt: last.uuid,
     launchInfo: { ...info, filePath: '', repository: undefined, worktreeSession: undefined, transcriptMessageCount: 0, customTitle: 'Side chat' },
     createdAt: new Date().toISOString(), started: false, closed: false,
   }

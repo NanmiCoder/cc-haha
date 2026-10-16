@@ -49,13 +49,44 @@ test('temporary side chat forks a fixed boundary, supports independent multi-tur
     }
     const parent = await api('/api/sessions', { workDir })
     const launch = await sessionService.getSessionLaunchInfo(parent.sessionId)
-    const record = (text: string) => JSON.stringify({ uuid: crypto.randomUUID(), type: 'user', timestamp: new Date().toISOString(), sessionId: parent.sessionId, cwd: workDir, message: { role: 'user', content: text } }) + '\n'
-    await appendFile(launch!.filePath, record('parent context snapshot'))
+    const ids = {
+      rootUser: crypto.randomUUID(),
+      rootAssistant: crypto.randomUUID(),
+      mainUser: crypto.randomUUID(),
+      mainAssistant: crypto.randomUUID(),
+      staleBranch: crypto.randomUUID(),
+    }
+    const timestamp = Date.now()
+    const record = (
+      uuid: string,
+      parentUuid: string | null,
+      type: 'user' | 'assistant',
+      text: string,
+      offset: number,
+      isSidechain = false,
+    ) => JSON.stringify({
+      uuid,
+      parentUuid,
+      isSidechain,
+      type,
+      timestamp: new Date(timestamp + offset).toISOString(),
+      sessionId: parent.sessionId,
+      cwd: workDir,
+      message: { id: uuid, role: type, content: text },
+    }) + '\n'
+    await appendFile(launch!.filePath, [
+      record(ids.rootUser, null, 'user', 'shared ancestor context', 0),
+      record(ids.rootAssistant, ids.rootUser, 'assistant', 'branch point', 1000),
+      record(ids.mainUser, ids.rootAssistant, 'user', 'parent context snapshot', 3000),
+      record(ids.mainAssistant, ids.mainUser, 'assistant', 'main branch head', 4000),
+      // This older sidechain is physically last, but the CLI resumes the main chain.
+      record(ids.staleBranch, ids.rootAssistant, 'user', 'stale side branch context', 2000, true),
+    ].join(''))
     const endpoint = `/api/sessions/${parent.sessionId}/side-chats`
     const side = await api(endpoint, {})
     expect(side).toMatchObject({ parentSessionId: parent.sessionId, workDir: parent.workDir, ephemeral: true })
     expect(side.sessionId).toStartWith('side-')
-    await appendFile(launch!.filePath, record('later parent content excluded'))
+    await appendFile(launch!.filePath, record(crypto.randomUUID(), ids.mainAssistant, 'user', 'later parent content excluded', 5000))
     const parentBefore = await readFile(launch!.filePath, 'utf8')
     const main = await connect(parent.sessionId)
     main.socket.send(JSON.stringify({ type: 'user_message', content: 'MOCK_RECONNECT_GATE parent remains active' }))
@@ -64,6 +95,7 @@ test('temporary side chat forks a fixed boundary, supports independent multi-tur
     child.socket.send(JSON.stringify({ type: 'user_message', content: 'MOCK_SIDE_CONTEXT first' }))
     await eventually(() => child.events.some(event => JSON.stringify(event).includes('parent context snapshot')), 'inherited context')
     expect(JSON.stringify(child.events)).not.toContain('later parent content excluded')
+    expect(JSON.stringify(child.events)).not.toContain('stale side branch context')
     expect(JSON.stringify(child.events)).toContain('reference context only')
     await eventually(() => child.events.some(event => event.type === 'message_complete'), 'first done')
     child.socket.send(JSON.stringify({ type: 'set_runtime_config', providerId: null, modelId: 'mock-next' }))

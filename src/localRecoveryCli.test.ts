@@ -2,7 +2,7 @@ import { describe, expect, spyOn, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Readable } from 'node:stream'
+import { PassThrough, Readable } from 'node:stream'
 import { createSandboxedTestEnvironment } from '../scripts/pr/test-environment.js'
 import { run } from './localRecoveryCli.js'
 
@@ -142,5 +142,91 @@ describe('local recovery Anthropic base URL compatibility', () => {
         }
       })
     }
+  }
+})
+
+describe('local recovery interactive input lifecycle', () => {
+  for (const firstResponse of ['success', 'failure'] as const) {
+    test(`processes buffered commands after input ends during a ${firstResponse} response`, async () => {
+      const sandboxHome = await mkdtemp(join(tmpdir(), 'recovery-input-lifecycle-'))
+      const previousEnv = { ...process.env }
+      const testEnv = createSandboxedTestEnvironment(sandboxHome, {
+        ANTHROPIC_API_KEY: 'sk-test-recovery',
+        ANTHROPIC_MODEL: 'claude-sonnet-4-6',
+      })
+      for (const key of Object.keys(process.env)) delete process.env[key]
+      Object.assign(process.env, testEnv)
+      const input = new PassThrough()
+      const inputEnded = new Promise<void>(resolve => input.once('end', resolve))
+      let requestStarted!: () => void
+      let finishResponse!: () => void
+      const firstRequestStarted = new Promise<void>(resolve => { requestStarted = resolve })
+      const responseReady = new Promise<void>(resolve => { finishResponse = resolve })
+      const requests: Array<{ messages: unknown }> = []
+      let stdout = ''
+      let stderr = ''
+      const stdoutSpy = spyOn(process.stdout, 'write').mockImplementation(chunk => {
+        stdout += String(chunk)
+        return true
+      })
+      const stderrSpy = spyOn(process.stderr, 'write').mockImplementation(chunk => {
+        stderr += String(chunk)
+        return true
+      })
+      const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(async (_input, init) => {
+        requests.push(JSON.parse(String(init?.body)))
+        if (requests.length === 1) {
+          requestStarted()
+          await responseReady
+          if (firstResponse === 'failure') {
+            return Response.json({ error: { type: 'api_error', message: 'deferred test failure' } }, { status: 500 })
+          }
+        }
+        return Response.json({
+          id: 'msg-recovery-input-lifecycle',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: requests.length === 1 ? 'first response' : 'second response' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        })
+      })
+      let running: Promise<void> | undefined
+
+      try {
+        running = run([], input)
+        input.write('first\n')
+        await firstRequestStarted
+        input.end('\n/clear\nsecond\n/exit\n')
+        await inputEnded
+        finishResponse()
+        await running
+
+        expect(stdout).toContain('history cleared\n')
+        expect(stdout).toContain('claude> second response\n')
+        if (firstResponse === 'success') {
+          expect(stdout).toContain('claude> first response\n')
+          expect(stderr).toBe('')
+        } else {
+          expect(stderr).toContain('deferred test failure')
+        }
+        expect(requests.map(request => request.messages)).toEqual([
+          [{ role: 'user', content: 'first' }],
+          [{ role: 'user', content: 'second' }],
+        ])
+      } finally {
+        finishResponse()
+        input.destroy()
+        await running?.catch(() => {})
+        fetchSpy.mockRestore()
+        stdoutSpy.mockRestore()
+        stderrSpy.mockRestore()
+        for (const key of Object.keys(process.env)) delete process.env[key]
+        Object.assign(process.env, previousEnv)
+        await rm(sandboxHome, { recursive: true, force: true })
+      }
+    })
   }
 })

@@ -116,12 +116,11 @@ export const SYSTEM_PROMPT_DYNAMIC_BOUNDARY =
 
 // @[MODEL LAUNCH]: Update the model family IDs below to the latest in each tier, and the
 // matching names in the "most recent Claude models" sentence in computeSimpleEnvInfo.
-// The Haiku ID is the pinned snapshot, as in the official Claude Code prompt.
 const LATEST_CLAUDE_MODEL_IDS = {
   fable: 'claude-fable-5-1',
   opus: 'claude-opus-5-5',
   sonnet: 'claude-sonnet-5-5',
-  haiku: 'claude-haiku-4-5-20251001',
+  haiku: 'claude-haiku-5-5',
 }
 
 function getHooksSection(): string {
@@ -693,7 +692,7 @@ export async function computeSimpleEnvInfo(
     knowledgeCutoffMessage,
     process.env.USER_TYPE === 'ant' && isUndercover()
       ? null
-      : `The most recent Claude models are the Claude 5 family and Haiku 4.5. Model IDs — Fable 5.1: '${LATEST_CLAUDE_MODEL_IDS.fable}', Opus 5.5: '${LATEST_CLAUDE_MODEL_IDS.opus}', Sonnet 5.5: '${LATEST_CLAUDE_MODEL_IDS.sonnet}', Haiku 4.5: '${LATEST_CLAUDE_MODEL_IDS.haiku}'. When building AI applications, default to the latest and most capable Claude models.`,
+      : `The most recent Claude models are the Claude 5 family. Model IDs — Fable 5.1: '${LATEST_CLAUDE_MODEL_IDS.fable}', Opus 5.5: '${LATEST_CLAUDE_MODEL_IDS.opus}', Sonnet 5.5: '${LATEST_CLAUDE_MODEL_IDS.sonnet}', Haiku 5.5: '${LATEST_CLAUDE_MODEL_IDS.haiku}'. When building AI applications, default to the latest and most capable Claude models.`,
     process.env.USER_TYPE === 'ant' && isUndercover()
       ? null
       : `Claude Code is available as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains).`,
@@ -717,7 +716,8 @@ function getKnowledgeCutoff(modelId: string): string | null {
   if (
     canonical.includes('claude-fable-5-1') ||
     canonical.includes('claude-opus-5-5') ||
-    canonical.includes('claude-sonnet-5-5')
+    canonical.includes('claude-sonnet-5-5') ||
+    canonical.includes('claude-haiku-5-5')
   ) {
     return 'June 2026'
   } else if (canonical.includes('claude-opus-5')) {

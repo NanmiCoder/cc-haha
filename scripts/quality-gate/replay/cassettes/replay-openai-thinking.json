@@ -1,0 +1,163 @@
+{
+  "schemaVersion": 1,
+  "id": "replay-openai-thinking",
+  "format": "openai_chat",
+  "recordedWith": {
+    "provider": "Custom-DeepSeek-OpenAI",
+    "model": "deepseek-flash",
+    "date": "2026-10-14"
+  },
+  "providerConfig": {
+    "presetId": "custom",
+    "authStrategy": "auth_token",
+    "apiFormat": "openai_chat",
+    "runtimeKind": "anthropic_compatible",
+    "models": {
+      "main": "deepseek-flash",
+      "fable": "deepseek-flash",
+      "haiku": "deepseek-flash",
+      "sonnet": "deepseek-flash",
+      "opus": "deepseek-flash"
+    },
+    "model1mSupport": {
+      "main": true,
+      "fable": true,
+      "haiku": true,
+      "sonnet": true,
+      "opus": true
+    },
+    "modelContextWindows": {
+      "deepseek-flash": 1000000
+    },
+    "toolSearchEnabled": false,
+    "supportsNestedToolResultMedia": true
+  },
+  "interactions": [
+    {
+      "seq": 0,
+      "path": "/v1/chat/completions",
+      "queue": "agent:e3b0c44298fc",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": true,
+        "maxTokens": null,
+        "toolNames": [
+          "Agent",
+          "AskUserQuestion",
+          "Bash",
+          "CreateSession",
+          "Edit",
+          "EnterPlanMode",
+          "EnterWorktree",
+          "ExitPlanMode",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListSessions",
+          "NotebookEdit",
+          "Read",
+          "ReadSession",
+          "SendMessage",
+          "SendSessionMessage",
+          "Skill",
+          "TaskCreate",
+          "TaskGet",
+          "TaskList",
+          "TaskOutput",
+          "TaskStop",
+          "TaskUpdate",
+          "TeamCreate",
+          "TeamDelete",
+          "TeamPlan",
+          "WaitSessions",
+          "WebFetch",
+          "Workflow",
+          "Write"
+        ],
+        "lastRole": "user",
+        "lastUserText": "",
+        "firstUserText": "",
+        "toolResultIds": [],
+        "messageCount": 2,
+        "systemSha": "d0c5a745a773",
+        "toolsSha": "9fac276d7a5f"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "text/event-stream; charset=utf-8",
+        "firstByteMs": 201,
+        "events": [
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":""},"logprobs":null,"finish_reason":null}],"usage":null},"dt":11},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"17"},"logprobs":null,"finish_reason":null}],"usage":null},"dt":1536},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":null,"reasoning_content":" ×"},"logprobs":null,"finish_reason":null}],"usage":null},"dt":117},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":null,"reasoning_content":" "},"logprobs":null,"finish_reason":null}],"usage":null},"dt":25},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"23"},"logprobs":null,"finish_reason":null}],"usage":null},"dt":0},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":null,"reasoning_content":" ="},"logprobs":null,"finish_reason":null}],"usage":null},"dt":0},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":null,"reasoning_content":" "},"logprobs":null,"finish_reason":null}],"usage":null},"dt":0},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"391"},"logprobs":null,"finish_reason":null}],"usage":null},"dt":0},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":null,"reasoning_content":"."},"logprobs":null,"finish_reason":null}],"usage":null},"dt":0},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":"391","reasoning_content":null},"logprobs":null,"finish_reason":null}],"usage":null},"dt":9},
+      {"data":{"id":"a8d7b091-d273-4716-bbfd-e289529779c9","object":"chat.completion.chunk","created":1791961974,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":"","reasoning_content":null},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":30031,"completion_tokens":10,"total_tokens":30041,"prompt_tokens_details":{"cached_tokens":2560},"completion_tokens_details":{"reasoning_tokens":8},"prompt_cache_hit_tokens":2560,"prompt_cache_miss_tokens":27471}},"dt":17},
+      {"data":"[DONE]","dt":0}
+     ]
+      },
+      "toolUseIds": []
+    },
+    {
+      "seq": 1,
+      "path": "/v1/chat/completions",
+      "queue": "plain:562273c24932",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": false,
+        "maxTokens": 2048,
+        "toolNames": [],
+        "lastRole": "user",
+        "lastUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nThink it through step by step before answering: a shelf holds 17 rows of 23 books. How many books is that? Answer with the number only. 391 391\n</conversation>",
+        "firstUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nThink it through step by step before answering: a shelf holds 17 rows of 23 books. How many books is that? Answer with the number only. 391 391\n</conversation>",
+        "toolResultIds": [],
+        "messageCount": 2,
+        "systemSha": "051f49520ce3",
+        "toolsSha": "74234e98afe7"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "firstByteMs": 164,
+        "json": {
+          "id": "5743639c-00a9-403e-80a9-d3aab9e4d26a",
+          "object": "chat.completion",
+          "created": 1791961976,
+          "model": "deepseek-flash",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "{\"title\": \"Calculate total books on shelf\"}",
+                "reasoning_content": "We need answer title. Need generate concise title for coding session? Conversation is just math word problem. Need title 3-7 words sentence case. Something like \"Calculate books on shelf\". We need return JSON only. But instruction says think step by step before answering? We shouldn't reveal? We just need output JSON. Title captures main topic. \"Calculate total books on shelf\" 5 words maybe. Sentence case. Ensure English. Return {\"title\": \"Calculate total books on shelf\"}."
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 321,
+            "completion_tokens": 111,
+            "total_tokens": 432,
+            "prompt_tokens_details": {
+              "cached_tokens": 128
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 100
+            },
+            "prompt_cache_hit_tokens": 128,
+            "prompt_cache_miss_tokens": 193
+          },
+          "system_fingerprint": "aeb56401ca74e127821c4f9126dcb669"
+        }
+      },
+      "toolUseIds": []
+    }
+  ]
+}

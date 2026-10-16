@@ -43,12 +43,13 @@
 | 「用 X 打开」菜单 | `OpenWithMenu` | `composite/OpenWithMenu.tsx` |
 | 品牌标记 cc-haha | `BrandSeal` | `composite/BrandSeal.tsx` |
 
-### 两个 hook
+### 三个 hook
 
 | 需求 | 用这个 |
 |---|---|
 | 点外面 / Esc 关闭浮层 | `hooks/useDismissable.ts` |
 | 浮层贴着触发器定位（含翻转、夹取） | `hooks/useAnchoredPosition.ts` |
+| 向上展开的 `bottom-full` 浮层按上方剩余空间限高 | `hooks/useRoomAbove.ts` |
 
 **不要再手写 `document.addEventListener('mousedown', ...)`。** 触屏上 `mousedown` 不可靠，这是 H5 上「点外面菜单不关」的根因类别。`useDismissable` 默认用 `pointerdown`。
 

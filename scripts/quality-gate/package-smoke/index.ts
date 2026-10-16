@@ -21,6 +21,7 @@ type InspectOptions = {
   arch?: PackageSmokeArch
   artifactsDir?: string
   requireMacosGatekeeper?: boolean
+  maxLinuxGlibc?: string
   packageKind?: PackageKind
   commandRunner?: PackageSmokeCommandRunner
   hostPlatform?: string
@@ -32,6 +33,7 @@ export type PackageSmokeArgs = {
   arch?: PackageSmokeArch
   artifactsDir?: string
   requireMacosGatekeeper?: boolean
+  maxLinuxGlibc?: string
   packageKind?: PackageKind
 }
 
@@ -73,7 +75,7 @@ type PackageSmokeCommandOptions = {
 type PackageSmokeCommandRunner = (command: string, args: string[], options?: PackageSmokeCommandOptions) => PackageSmokeCommandResult
 
 function usage() {
-  return 'Usage: bun run test:package-smoke --platform <macos|windows|linux> [--arch <x64|arm64>] [--package-kind <auto|dir|release>] [--artifacts-dir <path>] [--require-macos-gatekeeper]'
+  return 'Usage: bun run test:package-smoke --platform <macos|windows|linux> [--arch <x64|arm64>] [--package-kind <auto|dir|release>] [--artifacts-dir <path>] [--require-macos-gatekeeper] [--max-linux-glibc <major.minor>]'
 }
 
 function readArgValue(argv: string[], index: number, flag: string) {
@@ -89,6 +91,7 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
   let arch: PackageSmokeArch | undefined
   let artifactsDir: string | undefined
   let requireMacosGatekeeper = false
+  let maxLinuxGlibc: string | undefined
   let packageKind: PackageKind = 'auto'
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -136,6 +139,16 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
       requireMacosGatekeeper = true
       continue
     }
+
+    if (arg === '--max-linux-glibc') {
+      const value = readArgValue(argv, index, arg)
+      if (!/^\d+\.\d+$/.test(value)) {
+        throw new Error(`Unsupported --max-linux-glibc value: ${value}. Expected <major.minor>, for example 2.28.\n${usage()}`)
+      }
+      maxLinuxGlibc = value
+      index += 1
+      continue
+    }
   }
 
   if (!platform) {
@@ -147,6 +160,7 @@ export function parsePackageSmokeArgs(argv: string[]): PackageSmokeArgs {
     arch,
     artifactsDir,
     requireMacosGatekeeper,
+    maxLinuxGlibc,
     packageKind,
   }
 }
@@ -402,6 +416,82 @@ export function parseMachOMinimumMacosVersions(bytes: Uint8Array): string[] {
     versions.add(version)
   }
   return [...versions].sort()
+}
+
+const ELF_MACHINES: Record<number, PackageSmokeArch> = {
+  0x3e: 'x64',
+  0xb7: 'arm64',
+}
+
+function parseElfArchitecture(bytes: Uint8Array): PackageSmokeArch | null {
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (buffer.length < 20 || buffer.readUInt32BE(0) !== 0x7f454c46) return null
+  const machine = buffer[5] === 2 ? buffer.readUInt16BE(18) : buffer.readUInt16LE(18)
+  return ELF_MACHINES[machine] ?? null
+}
+
+const SHT_GNU_VERNEED = 0x6ffffffe
+
+function compareGlibcVersions(left: string, right: string) {
+  const leftParts = left.replace(/^GLIBC_/, '').split('.').map(Number)
+  const rightParts = right.replace(/^GLIBC_/, '').split('.').map(Number)
+  for (let index = 0; index < Math.max(leftParts.length, rightParts.length); index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0)
+    if (difference !== 0) return difference
+  }
+  return 0
+}
+
+// The GLIBC_x.y symbol versions a little-endian ELF64 object requires, read from
+// its version-needs section like `objdump -T`. Returns null when they cannot be read.
+export function parseElfGlibcVersions(bytes: Uint8Array): string[] | null {
+  const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  if (buffer.length < 64 || buffer.readUInt32BE(0) !== 0x7f454c46 || buffer[4] !== 2 || buffer[5] !== 1) return null
+  try {
+    const sectionTableOffset = Number(buffer.readBigUInt64LE(0x28))
+    const sectionHeaderSize = buffer.readUInt16LE(0x3a)
+    const sectionCount = buffer.readUInt16LE(0x3c)
+    const sectionAt = (index: number) => {
+      const header = sectionTableOffset + index * sectionHeaderSize
+      return {
+        type: buffer.readUInt32LE(header + 4),
+        offset: Number(buffer.readBigUInt64LE(header + 24)),
+        link: buffer.readUInt32LE(header + 40),
+      }
+    }
+    const readString = (offset: number) => {
+      const end = buffer.indexOf(0, offset)
+      if (end < 0) throw new RangeError('Unterminated ELF string')
+      return buffer.toString('latin1', offset, end)
+    }
+
+    let foundVersionNeeds = false
+    const versions = new Set<string>()
+    for (let index = 0; index < sectionCount; index += 1) {
+      const section = sectionAt(index)
+      if (section.type !== SHT_GNU_VERNEED) continue
+      foundVersionNeeds = true
+      const stringTableOffset = sectionAt(section.link).offset
+      // Elf64_Verneed { vn_version, vn_cnt, vn_file, vn_aux, vn_next }
+      for (let need = section.offset; ; ) {
+        let aux = need + buffer.readUInt32LE(need + 8)
+        for (let count = buffer.readUInt16LE(need + 2); count > 0; count -= 1) {
+          // Elf64_Vernaux { vna_hash, vna_flags, vna_other, vna_name, vna_next }
+          const name = readString(stringTableOffset + buffer.readUInt32LE(aux + 8))
+          if (/^GLIBC_\d+(?:\.\d+)*$/.test(name)) versions.add(name)
+          const nextAux = buffer.readUInt32LE(aux + 12)
+          if (nextAux === 0) break
+          aux += nextAux
+        }
+        const nextNeed = buffer.readUInt32LE(need + 12)
+        if (nextNeed === 0) break
+        need += nextNeed
+      }
+    }
+    return foundVersionNeeds ? [...versions].sort(compareGlibcVersions) : null
+  } catch {
+    return null
+  }
 }
 
 function addExactMachOArchitectureCheck(
@@ -1196,7 +1286,65 @@ function findWindowsUnpackedDir(artifactsDir: string, arch?: 'x64' | 'arm64'): s
   return unpackedDirs[0]
 }
 
-function inspectLinuxArtifacts(rootDir: string, report: PackageSmokeReport) {
+// Mirrors node-pty's loadNativeModule() search order. node-pty publishes no
+// Linux prebuilds, so a Linux package must carry the module compiled during install.
+function addLinuxNodePtyNativeModuleCheck(
+  report: PackageSmokeReport,
+  rootDir: string,
+  nodePtyDir: string,
+  maxGlibc: string | undefined,
+) {
+  const label = report.arch ? `Linux ${report.arch} node-pty native module` : 'Linux node-pty native module'
+  const acceptedArchs: PackageSmokeArch[] = report.arch ? [report.arch] : ['x64', 'arm64']
+  const candidates = [
+    join(nodePtyDir, 'build', 'Release', 'pty.node'),
+    join(nodePtyDir, 'build', 'Debug', 'pty.node'),
+    ...acceptedArchs.map(arch => join(nodePtyDir, 'prebuilds', `linux-${arch}`, 'pty.node')),
+  ]
+  const rejected: string[] = []
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) continue
+    const arch = parseElfArchitecture(readFileSync(candidate))
+    if (arch && acceptedArchs.includes(arch)) {
+      report.passedChecks.push({ label, path: toRelative(rootDir, candidate) })
+      if (maxGlibc) addLinuxGlibcCeilingCheck(report, rootDir, label, candidate, maxGlibc)
+      return
+    }
+    rejected.push(`${toRelative(rootDir, candidate)} (${arch ? `ELF ${arch}` : 'not ELF'})`)
+  }
+  report.missingChecks.push({ label, path: toRelative(rootDir, candidates[0]) })
+  if (rejected.length > 0) {
+    report.notes.push(`${label} expected ELF ${acceptedArchs.join(' or ')}, found ${rejected.join(', ')}.`)
+  }
+}
+
+// pty.node binds to the build host's glibc symbol versions. A module built on a
+// newer distro loads on the build machine but not on older user systems.
+function addLinuxGlibcCeilingCheck(
+  report: PackageSmokeReport,
+  rootDir: string,
+  moduleLabel: string,
+  modulePath: string,
+  maxGlibc: string,
+) {
+  const label = `${moduleLabel} glibc requirement <= ${maxGlibc}`
+  const check = { label, path: toRelative(rootDir, modulePath) }
+  const versions = parseElfGlibcVersions(readFileSync(modulePath))
+  if (!versions) {
+    report.missingChecks.push(check)
+    report.notes.push(`${label} could not be verified: no readable GLIBC version requirements in ${check.path}.`)
+    return
+  }
+  const tooNew = versions.filter(version => compareGlibcVersions(version, maxGlibc) > 0)
+  if (tooNew.length > 0) {
+    report.missingChecks.push(check)
+    report.notes.push(`${label} failed: ${check.path} requires ${tooNew.join(', ')}.`)
+    return
+  }
+  report.passedChecks.push(check)
+}
+
+function inspectLinuxArtifacts(rootDir: string, report: PackageSmokeReport, options: InspectOptions) {
   const packagedArtifacts = findMatches(
     report.artifactsDir,
     (candidate) => candidate.endsWith('.AppImage')
@@ -1274,13 +1422,7 @@ function inspectLinuxArtifacts(rootDir: string, report: PackageSmokeReport) {
         normalizePath(candidate).endsWith(bundledRipgrepNeedle('linux'))),
       sidecarDir,
     )
-    addMatchCheck(
-      report,
-      rootDir,
-      'Linux node-pty native module',
-      findMatches(nodePtyDir, (candidate) => normalizePath(candidate).endsWith('/pty.node') && (normalizePath(candidate).includes('/linux-') || normalizePath(candidate).includes('/Release/'))),
-      nodePtyDir,
-    )
+    addLinuxNodePtyNativeModuleCheck(report, rootDir, nodePtyDir, options.maxLinuxGlibc)
   } else {
     if (releaseMode) {
       report.missingChecks.push({
@@ -1328,7 +1470,7 @@ export async function inspectPackagedArtifacts(rootDir: string, options: Inspect
   } else if (options.platform === 'windows') {
     inspectWindowsArtifacts(resolvedRootDir, report, options)
   } else {
-    inspectLinuxArtifacts(resolvedRootDir, report)
+    inspectLinuxArtifacts(resolvedRootDir, report, options)
   }
 
   report.passed = report.missingChecks.length === 0

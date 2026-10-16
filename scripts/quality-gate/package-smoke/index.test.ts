@@ -97,6 +97,54 @@ function thinMachO(arch: 'arm64' | 'x64', minimum = '14.4') {
   return bytes
 }
 
+// versionNeeds maps each needed library to the symbol versions it must provide,
+// laid out as .dynstr plus .gnu.version_r the way the linker writes them.
+function linuxElf(arch: 'arm64' | 'x64', versionNeeds?: Record<string, string[]>) {
+  const header = Buffer.alloc(64)
+  header.writeUInt32BE(0x7f454c46, 0)
+  header[4] = 2
+  header[5] = 1
+  header.writeUInt16LE(arch === 'arm64' ? 0xb7 : 0x3e, 18)
+  if (!versionNeeds) return header
+
+  let strings = '\0'
+  const stringOffset = (value: string) => {
+    const offset = strings.length
+    strings += `${value}\0`
+    return offset
+  }
+  const libraries = Object.entries(versionNeeds)
+  const needs = Buffer.concat(libraries.map(([library, versions], libraryIndex) => {
+    const entry = Buffer.alloc(16 + versions.length * 16)
+    entry.writeUInt16LE(1, 0)
+    entry.writeUInt16LE(versions.length, 2)
+    entry.writeUInt32LE(stringOffset(library), 4)
+    entry.writeUInt32LE(16, 8)
+    entry.writeUInt32LE(libraryIndex === libraries.length - 1 ? 0 : entry.length, 12)
+    versions.forEach((version, versionIndex) => {
+      const aux = 16 + versionIndex * 16
+      entry.writeUInt32LE(stringOffset(version), aux + 8)
+      entry.writeUInt32LE(versionIndex === versions.length - 1 ? 0 : 16, aux + 12)
+    })
+    return entry
+  }))
+  const dynstr = Buffer.from(strings, 'latin1')
+  const needsOffset = header.length + dynstr.length
+  const sections = Buffer.alloc(64 * 3)
+  sections.writeUInt32LE(3, 64 + 4) // SHT_STRTAB
+  sections.writeBigUInt64LE(BigInt(header.length), 64 + 24)
+  sections.writeBigUInt64LE(BigInt(dynstr.length), 64 + 32)
+  sections.writeUInt32LE(0x6ffffffe, 128 + 4) // SHT_GNU_verneed
+  sections.writeBigUInt64LE(BigInt(needsOffset), 128 + 24)
+  sections.writeBigUInt64LE(BigInt(needs.length), 128 + 32)
+  sections.writeUInt32LE(1, 128 + 40) // names live in section 1 (.dynstr)
+  sections.writeUInt32LE(libraries.length, 128 + 44)
+  header.writeBigUInt64LE(BigInt(needsOffset + needs.length), 0x28)
+  header.writeUInt16LE(64, 0x3a)
+  header.writeUInt16LE(3, 0x3c)
+  return Buffer.concat([header, dynstr, needs, sections])
+}
+
 function writeWindowsBranding(rootDir: string, unpackedDir: string) {
   // The root-only policy lane mocks the parser process; the desktop parser
   // suite separately verifies real synthetic PE resource tables.
@@ -125,6 +173,8 @@ describe('package smoke args', () => {
     expect(parsePackageSmokeArgs(['--platform', 'macos']).packageKind).toBe('auto')
     expect(parsePackageSmokeArgs(['--platform', 'macos', '--package-kind', 'dir']).packageKind).toBe('dir')
     expect(parsePackageSmokeArgs(['--platform', 'macos', '--require-macos-gatekeeper']).requireMacosGatekeeper).toBe(true)
+    expect(parsePackageSmokeArgs(['--platform', 'linux', '--max-linux-glibc', '2.28']).maxLinuxGlibc).toBe('2.28')
+    expect(() => parsePackageSmokeArgs(['--platform', 'linux', '--max-linux-glibc', 'GLIBC_2.28'])).toThrow('<major.minor>')
   })
 
   test('maps host platforms to current package-smoke platforms', () => {
@@ -828,7 +878,7 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/linux-x64/linux-unpacked/resources/app-update.yml')
     writeFile(rootDir, 'desktop/build-artifacts/linux-x64/linux-unpacked/resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar-x86_64-unknown-linux-gnu')
     writeFile(rootDir, 'desktop/build-artifacts/linux-x64/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
-    writeFile(rootDir, 'desktop/build-artifacts/linux-x64/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-x64/pty.node')
+    writeFile(rootDir, 'desktop/build-artifacts/linux-x64/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-x64/pty.node', linuxElf('x64'))
     writeFile(rootDir, 'desktop/build-artifacts/linux-x64/latest-linux.yml', 'path: Claude-Code-Haha-0.3.1-x64.AppImage\n')
 
     const report = await inspectPackagedArtifacts(rootDir, {
@@ -852,7 +902,7 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/linux-arm64/linux-unpacked/resources/app-update.yml')
     writeFile(rootDir, 'desktop/build-artifacts/linux-arm64/linux-unpacked/resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar-aarch64-unknown-linux-gnu')
     writeFile(rootDir, 'desktop/build-artifacts/linux-arm64/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
-    writeFile(rootDir, 'desktop/build-artifacts/linux-arm64/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-arm64/pty.node')
+    writeFile(rootDir, 'desktop/build-artifacts/linux-arm64/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-arm64/pty.node', linuxElf('arm64'))
     writeFile(rootDir, 'desktop/build-artifacts/linux-arm64/latest-linux-arm64.yml', 'path: Claude-Code-Haha-0.3.1-arm64.AppImage\n')
 
     const report = await inspectPackagedArtifacts(rootDir, {
@@ -877,7 +927,7 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app-update.yml')
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar-x86_64-unknown-linux-gnu')
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
-    writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node')
+    writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/build/Release/pty.node', linuxElf('x64'))
     writeFile(rootDir, 'desktop/build-artifacts/electron/latest-linux.yml', 'path: Claude-Code-Haha-0.3.1-linux-x86_64.AppImage\n')
 
     const report = await inspectPackagedArtifacts(rootDir, {
@@ -902,7 +952,7 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-arm64-unpacked/resources/app-update.yml')
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-arm64-unpacked/resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar-aarch64-unknown-linux-gnu')
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-arm64-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
-    writeFile(rootDir, 'desktop/build-artifacts/electron/linux-arm64-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-arm64/pty.node')
+    writeFile(rootDir, 'desktop/build-artifacts/electron/linux-arm64-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-arm64/pty.node', linuxElf('arm64'))
     writeFile(rootDir, 'desktop/build-artifacts/electron/latest-linux-arm64.yml', 'path: Claude-Code-Haha-0.3.1-linux-arm64.AppImage\n')
 
     const report = await inspectPackagedArtifacts(rootDir, {
@@ -923,7 +973,7 @@ describe('packaged artifact inspection', () => {
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar')
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/src-tauri/binaries/claude-sidecar-x86_64-unknown-linux-gnu')
     writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/package.json')
-    writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-x64/pty.node')
+    writeFile(rootDir, 'desktop/build-artifacts/electron/linux-unpacked/resources/app.asar.unpacked/node_modules/node-pty/prebuilds/linux-x64/pty.node', linuxElf('x64'))
 
     const report = await inspectPackagedArtifacts(rootDir, { platform: 'linux', packageKind: 'dir' })
 
@@ -953,5 +1003,149 @@ describe('packaged artifact inspection', () => {
 
     expect(report.passed).toBe(false)
     expect(report.missingChecks.some((check) => check.label.includes('linux-unpacked'))).toBe(true)
+  })
+
+  function writeLinuxRelease(rootDir: string, nodePtyFiles: Record<string, Uint8Array>) {
+    const resources = 'desktop/build-artifacts/electron/linux-unpacked/resources'
+    writeFile(rootDir, 'desktop/build-artifacts/electron/Claude-Code-Haha-0.3.1-linux-amd64.deb')
+    writeFile(rootDir, 'desktop/build-artifacts/electron/latest-linux.yml', 'path: Claude-Code-Haha-0.3.1-linux-amd64.deb\n')
+    writeFile(rootDir, `${resources}/app.asar`)
+    writeFile(rootDir, `${resources}/app-update.yml`)
+    writeFile(rootDir, `${resources}/app.asar.unpacked/src-tauri/binaries/claude-sidecar-x86_64-unknown-linux-gnu`)
+    writeFile(rootDir, `${resources}/app.asar.unpacked/node_modules/node-pty/package.json`)
+    for (const [relativePath, content] of Object.entries(nodePtyFiles)) {
+      writeFile(rootDir, `${resources}/app.asar.unpacked/node_modules/node-pty/${relativePath}`, content)
+    }
+  }
+
+  test('rejects a Linux package whose node-pty only ships macOS and Windows prebuilds', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    // The v0.7.3 Linux release layout: node-pty publishes no Linux prebuild and
+    // the install script that compiles one never ran.
+    writeLinuxRelease(rootDir, {
+      'prebuilds/darwin-arm64/pty.node': thinMachO('arm64'),
+      'prebuilds/darwin-x64/pty.node': thinMachO('x64'),
+      'prebuilds/win32-x64/pty.node': Buffer.from('MZ'),
+      'prebuilds/win32-arm64/pty.node': Buffer.from('MZ'),
+    })
+
+    for (const arch of ['x64', undefined] as const) {
+      const report = await inspectPackagedArtifacts(rootDir, {
+        platform: 'linux',
+        arch,
+        packageKind: 'release',
+        artifactsDir: 'desktop/build-artifacts/electron',
+      })
+      const label = arch ? `Linux ${arch} node-pty native module` : 'Linux node-pty native module'
+
+      expect(report.passed).toBe(false)
+      expect(report.passedChecks.some((check) => check.label === label)).toBe(false)
+      expect(report.missingChecks.some((check) => check.label === label)).toBe(true)
+    }
+  })
+
+  test('rejects a Linux node-pty module compiled for another architecture', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    writeLinuxRelease(rootDir, { 'build/Release/pty.node': linuxElf('x64') })
+
+    const report = await inspectPackagedArtifacts(rootDir, {
+      platform: 'linux',
+      arch: 'arm64',
+      packageKind: 'release',
+      artifactsDir: 'desktop/build-artifacts/electron',
+    })
+
+    expect(report.passed).toBe(false)
+    expect(report.missingChecks.some((check) => check.label === 'Linux arm64 node-pty native module')).toBe(true)
+    expect(report.notes.join('\n')).toContain('expected ELF arm64')
+    expect(report.notes.join('\n')).toContain('build/Release/pty.node (ELF x64)')
+  })
+
+  test('accepts the node-pty module compiled during a Linux install', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    writeLinuxRelease(rootDir, {
+      'build/Release/pty.node': linuxElf('x64'),
+      'prebuilds/darwin-arm64/pty.node': thinMachO('arm64'),
+    })
+
+    const report = await inspectPackagedArtifacts(rootDir, {
+      platform: 'linux',
+      arch: 'x64',
+      packageKind: 'release',
+      artifactsDir: 'desktop/build-artifacts/electron',
+    })
+
+    expect(report.passed).toBe(true)
+    const nativeCheck = report.passedChecks.find((check) => check.label === 'Linux x64 node-pty native module')
+    expect(nativeCheck?.path.replaceAll('\\', '/')).toEndWith('node-pty/build/Release/pty.node')
+  })
+
+  const glibcLabel = 'Linux x64 node-pty native module glibc requirement <= 2.28'
+
+  test('rejects a Linux node-pty module that needs a newer glibc than the release floor', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    // Compiled on ubuntu-22.04, forkpty and openpty bind to GLIBC_2.34.
+    writeLinuxRelease(rootDir, {
+      'build/Release/pty.node': linuxElf('x64', {
+        'libstdc++.so.6': ['GLIBCXX_3.4'],
+        'libc.so.6': ['GLIBC_2.2.5', 'GLIBC_2.34', 'GLIBC_2.4'],
+      }),
+    })
+
+    const report = await inspectPackagedArtifacts(rootDir, {
+      platform: 'linux',
+      arch: 'x64',
+      packageKind: 'release',
+      artifactsDir: 'desktop/build-artifacts/electron',
+      maxLinuxGlibc: '2.28',
+    })
+
+    expect(report.passed).toBe(false)
+    expect(report.missingChecks.some((check) => check.label === glibcLabel)).toBe(true)
+    expect(report.notes.join('\n')).toContain('build/Release/pty.node requires GLIBC_2.34.')
+  })
+
+  test('accepts a Linux node-pty module built against the release glibc floor', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    writeLinuxRelease(rootDir, {
+      'build/Release/pty.node': linuxElf('x64', {
+        'libutil.so.1': ['GLIBC_2.2.5'],
+        'libc.so.6': ['GLIBC_2.3.4', 'GLIBC_2.14', 'GLIBC_2.28', 'GLIBC_PRIVATE'],
+      }),
+    })
+
+    const report = await inspectPackagedArtifacts(rootDir, {
+      platform: 'linux',
+      arch: 'x64',
+      packageKind: 'release',
+      artifactsDir: 'desktop/build-artifacts/electron',
+      maxLinuxGlibc: '2.28',
+    })
+
+    expect(report.passed).toBe(true)
+    expect(report.passedChecks.some((check) => check.label === glibcLabel)).toBe(true)
+  })
+
+  test('fails the glibc floor when the Linux node-pty version requirements are unreadable', async () => {
+    const rootDir = createRepoRoot()
+    tempDirs.push(rootDir)
+    writeLinuxRelease(rootDir, { 'build/Release/pty.node': linuxElf('x64') })
+
+    const report = await inspectPackagedArtifacts(rootDir, {
+      platform: 'linux',
+      arch: 'x64',
+      packageKind: 'release',
+      artifactsDir: 'desktop/build-artifacts/electron',
+      maxLinuxGlibc: '2.28',
+    })
+
+    expect(report.passed).toBe(false)
+    expect(report.missingChecks.some((check) => check.label === glibcLabel)).toBe(true)
+    expect(report.notes.join('\n')).toContain('could not be verified')
   })
 })

@@ -28,9 +28,11 @@ sdk.onmessage = async event => {
         sdk.close(); setTimeout(() => process.exit(0), 5); continue
       }
       if (content.includes('FIXTURE_SHUTDOWN')) { sdk.close(); setTimeout(() => process.exit(0), 5); continue }
+      // A test can make the lead's model call land late, as it does on a loaded runner.
+      if (arg('--agent-name') === 'leader') await new Promise(resolve => setTimeout(resolve, Number(process.env.FIXTURE_LEAD_MODEL_DELAY_MS ?? 0)))
       const url = new URL(process.env.ANTHROPIC_BASE_URL!)
       if (url.hostname !== '127.0.0.1') throw new Error('Fixture refuses non-loopback upstream')
-      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY ?? '', authorization: process.env.ANTHROPIC_AUTH_TOKEN ?? '' }, body: JSON.stringify({ model: arg('--model'), preset: arg('--agents') ? JSON.parse(arg('--agents')!) : null, presetType: process.env.CC_HAHA_TEAM_WORKER_PRESET_TYPE, presetSource: process.env.CC_HAHA_TEAM_WORKER_PRESET_SOURCE, omitClaudeMd: process.env.CC_HAHA_TEAM_WORKER_OMIT_CLAUDE_MD, subagentOverride: process.env.CLAUDE_CODE_SUBAGENT_MODEL, resumed: arg('--resume') ?? null, prompt: message.message?.content }) })
+      const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY ?? '', authorization: process.env.ANTHROPIC_AUTH_TOKEN ?? '' }, body: JSON.stringify({ model: arg('--model'), preset: arg('--agents') ? JSON.parse(arg('--agents')!) : null, presetType: process.env.CC_HAHA_TEAM_WORKER_PRESET_TYPE, presetSource: process.env.CC_HAHA_TEAM_WORKER_PRESET_SOURCE, omitClaudeMd: process.env.CC_HAHA_TEAM_WORKER_OMIT_CLAUDE_MD, subagentOverride: process.env.CLAUDE_CODE_SUBAGENT_MODEL, resumed: arg('--resume') ?? null, agent: arg('--agent-name') ?? null, prompt: message.message?.content }) })
       const text = await response.text()
       if (!args.includes('--no-session-persistence')) {
         const dir = join(process.env.CLAUDE_CONFIG_DIR!, 'projects', sanitizePath(process.cwd()))

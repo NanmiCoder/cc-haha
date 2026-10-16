@@ -21,7 +21,7 @@ import {
   type FileLinkVerifier,
 } from '@/lib/markdownAutolink'
 import { useFileLinkVerification } from '@/hooks/useFileLinkVerification'
-import { classifyPreviewLink } from '@/lib/previewLinkRouter'
+import { classifyPreviewLink, type PreviewLinkTarget } from '@/lib/previewLinkRouter'
 import { isSafeMarkdownImageSource, normalizeMarkdownImageDestination } from '@/lib/markdownImages'
 import { CodeViewer } from '../chat/CodeViewer'
 import { MermaidRenderer } from '../chat/MermaidRenderer'
@@ -35,7 +35,7 @@ type Props = {
   className?: string
   cache?: boolean
   streaming?: boolean
-  onLinkClick?: (href: string, event: ReactMouseEvent<HTMLDivElement>) => boolean | void
+  onLinkClick?: (href: PreviewLinkTarget, event: ReactMouseEvent<HTMLDivElement>) => boolean | void
   /**
    * Resolve every image source through a policy owned by the calling surface.
    * The workspace preview permits document-relative and remote sources, while

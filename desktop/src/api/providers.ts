@@ -15,14 +15,18 @@ import type {
 } from '../types/provider'
 
 type ProvidersResponse = { providers: SavedProvider[]; activeId: string | null }
-type ProvidersListResponse = ProvidersResponse & { providerOrder?: string[] }
+type ProvidersListResponse = ProvidersResponse & {
+  providerOrder?: string[]
+  /** Saved alias mapping of the built-in DeepSeek account provider. */
+  deepSeekAccountModels?: ModelMapping
+}
 type ProvidersReorderResponse = { providers: SavedProvider[]; providerOrder?: string[] }
 type ProviderResponse = { provider: SavedProvider }
 type TestResultResponse = { result: ProviderTestResult }
 type OfficialProviderModelsResponse = { models: ModelMapping }
 type AuthStatusResponse = {
   hasAuth: boolean
-  source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'original-settings' | 'env' | 'none'
+  source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'deepseek-oauth' | 'original-settings' | 'env' | 'none'
   activeProvider?: string
 }
 

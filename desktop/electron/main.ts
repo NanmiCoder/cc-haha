@@ -84,7 +84,7 @@ import {
   readLocalePreference,
   writeLocalePreference,
 } from './services/localePreference'
-import type { Locale } from '../src/i18n/locale'
+import { resolveSupportedLocale, type Locale } from '../src/i18n/locale'
 import {
   createCustomPetCatalogLoader,
   createCustomPetFromAtlas,
@@ -96,6 +96,7 @@ import {
   readCustomPetSourceImage,
 } from './services/pets'
 import {
+  installFullScreenKey,
   installWindowLifecycle,
   readWindowState,
   refreshWindowsDragHitTest,
@@ -945,7 +946,10 @@ async function createMainWindow() {
     systemPreferences,
   })
   installMainWindowNavigationGuards(mainWindow.webContents, { openExternal: openExternalUrl })
-  await installRendererContextMenu(mainWindow)
+  await installRendererContextMenu(
+    mainWindow,
+    () => readLocalePreference(app) ?? resolveSupportedLocale(app.getPreferredSystemLanguages()),
+  )
   installPreviewCleanupOnRendererNavigation(mainWindow.webContents, () => {
     previewService?.close()
     // A renderer reload discards every workspace tab, so the pages behind them
@@ -958,6 +962,7 @@ async function createMainWindow() {
     window: mainWindow,
     shouldQuit: () => isQuitting,
   })
+  installFullScreenKey(mainWindow, process.platform)
 
   const window = mainWindow
   const diagnosticsFile = electronHostDiagnosticsFile(process.env)

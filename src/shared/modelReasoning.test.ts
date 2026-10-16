@@ -35,6 +35,16 @@ describe('model reasoning capability pass-through', () => {
     }
   })
 
+  test('treats the DeepSeek account route\'s V4.1 Flash id as a DeepSeek V4 model', () => {
+    // The account route names V4.1 Flash `deepseek-flash`; without it the
+    // model loses thinking, effort and reasoning round-tripping.
+    expect(resolveModelReasoningProfile('deepseek-flash', 'anthropic')?.family).toBe('deepseek-v4')
+    expect(resolveModelReasoningProfile('deepseek-flash', 'openai_chat')?.family).toBe('deepseek-v4')
+    expect(getClaudeCodeModelCapabilities('deepseek-flash', 'anthropic')).toBe(
+      getClaudeCodeModelCapabilities('deepseek-v4-flash', 'anthropic'),
+    )
+  })
+
   test('enables the current Claude Code effort capabilities for compatible models', () => {
     expect(getClaudeCodeModelCapabilities('MiniMax-M3', 'anthropic')).toBe(
       'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',

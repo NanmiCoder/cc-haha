@@ -44,7 +44,8 @@ import type {
 // 9: usage cost rates were corrected (Sonnet 5, Sonnet 5.5, Opus 5.5, fast mode); rebuild the
 //    persisted per-model dollars.
 // 10: project the explicit per-session ChatGPT OAuth Fast selection.
-export const SESSION_SUMMARY_PARSER_VERSION = 10
+// 11: Haiku 5.5 gained (prompt-length tiered) pricing; rebuild the persisted per-model dollars.
+export const SESSION_SUMMARY_PARSER_VERSION = 11
 
 export type SessionSourceCandidate = {
   path: string

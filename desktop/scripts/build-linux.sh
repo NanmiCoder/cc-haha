@@ -124,7 +124,7 @@ EOF
 
 if [[ "${SKIP_PACKAGE_SMOKE:-0}" != "1" ]]; then
   echo "[build-linux] Running package smoke..."
-  (cd "${REPO_ROOT}" && bun run test:package-smoke --platform linux --package-kind release --artifacts-dir "desktop/build-artifacts/${CANONICAL_ARCH}")
+  (cd "${REPO_ROOT}" && bun run test:package-smoke --platform linux --arch "${LINUX_ARCH}" --package-kind release --artifacts-dir "desktop/build-artifacts/${CANONICAL_ARCH}")
 fi
 
 echo

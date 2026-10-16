@@ -88,7 +88,25 @@ jobs:
               }
             }
 
-            if (cliCoreFiles.length > 0 && !currentLabels.has('allow-cli-core-change')) {
+            // A CODEOWNER's own PR is already maintainer-approved; owners come from the
+            // base branch so the PR cannot add its author. Mirrors scripts/pr/change-policy.ts.
+            let codeOwners = new Set()
+            try {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path: '.github/CODEOWNERS', ref: context.payload.pull_request.base.ref })
+              const text = Buffer.from(data.content || '', 'base64').toString('utf8')
+              codeOwners = new Set(text.split(/\r?\n/)
+                .map((line) => line.replace(/#.*$/, '').trim())
+                .filter(Boolean)
+                .flatMap((line) => line.split(/\s+/).slice(1))
+                .filter((token) => /^@[A-Za-z0-9-]+$/.test(token))
+                .map((token) => token.slice(1).toLowerCase()))
+            } catch (error) {
+              core.warning(`Could not read base CODEOWNERS: ${error.message}`)
+            }
+            const authorIsCodeOwner = codeOwners.has(String(context.payload.pull_request.user?.login || '').toLowerCase())
+            const cliCoreApproved = currentLabels.has('allow-cli-core-change') || authorIsCodeOwner
+
+            if (cliCoreFiles.length > 0 && !cliCoreApproved) {
               areas.add('needs-maintainer-approval')
             }
 
@@ -221,9 +239,11 @@ jobs:
 
             const marker = '<!-- pr-quality-triage -->'
             const areaText = [...areas].filter((label) => label.startsWith('area:')).sort().join(', ') || 'none'
-            const approvalText = cliCoreFiles.length > 0 && !currentLabels.has('allow-cli-core-change')
+            const approvalText = cliCoreFiles.length > 0 && !cliCoreApproved
               ? 'Blocked by policy until a maintainer applies `allow-cli-core-change` and approves the PR.'
-              : 'No CLI-core policy block detected.'
+              : cliCoreFiles.length > 0 && authorIsCodeOwner && !currentLabels.has('allow-cli-core-change')
+                ? 'CLI-core change authored by a CODEOWNER; no override label needed.'
+                : 'No CLI-core policy block detected.'
             const missingTestText = missingTestSignals.length > 0 && !currentLabels.has('allow-missing-tests')
               ? 'Blocked by policy until a maintainer applies `allow-missing-tests` or matching tests are added.'
               : 'No missing-test policy block detected.'

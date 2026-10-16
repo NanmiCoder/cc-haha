@@ -2,6 +2,7 @@ import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.j
 import { OPENAI_CODEX_API_ENDPOINT } from '../../services/openaiAuth/client.js'
 import { resolveOpenAICodexModel } from '../../services/openaiAuth/models.js'
 import { buildGrokIdentityHeaders, GROK_CLI_API_ENDPOINT } from '../../services/grokAuth/fetch.js'
+import { deepSeekAccountFetchInit } from '../../services/deepseekAuth/client.js'
 import { handleProxyRequest } from '../proxy/handler.js'
 import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
 import type { AnthropicRequest } from '../proxy/transform/types.js'
@@ -16,6 +17,10 @@ import {
 } from './networkSettings.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { isGrokOfficialProviderId } from './grokOfficialProvider.js'
+import {
+  isDeepSeekAccountProviderId,
+  resolveDeepSeekAccountRequestHeaders,
+} from './deepseekAccountProvider.js'
 import { ProviderService } from './providerService.js'
 import {
   getPresetAuthStrategy,
@@ -196,9 +201,16 @@ async function askSmallModel({
     return askThroughProxy(provider.id, sessionId, body, requestSignal)
   }
 
+  const url = `${normalizeAnthropicBaseUrl(provider.baseUrl.replace(/\/+$/, ''))}/v1/messages`
+  if (isDeepSeekAccountProviderId(provider.id)) {
+    // Signed out: leave the question with the user rather than sending an
+    // unauthenticated request.
+    const accountHeaders = await resolveDeepSeekAccountRequestHeaders()
+    if (!accountHeaders) return null
+    return askAnthropic(url, accountHeaders, body, networkSettings, requestSignal)
+  }
   const apiKey = resolveProviderApiKey(provider, getPresetDefaultEnv(provider.presetId))
   if (!apiKey) return null
-  const url = `${normalizeAnthropicBaseUrl(provider.baseUrl.replace(/\/+$/, ''))}/v1/messages`
   const authStrategy = provider.authStrategy ?? getPresetAuthStrategy(provider.presetId)
   return askAnthropic(url, buildAnthropicHeaders(apiKey, authStrategy), body, networkSettings, requestSignal)
 }
@@ -241,6 +253,7 @@ async function askAnthropic(
     body: JSON.stringify(withThinking ? { ...body, thinking: { type: 'disabled' } } : body),
     signal,
     ...getNetworkProxyFetchOptions(networkSettings, url),
+    ...deepSeekAccountFetchInit(headers),
   })
   let response = await send(true)
   if (!signal.aborted && (response.status === 400 || response.status === 422)) {

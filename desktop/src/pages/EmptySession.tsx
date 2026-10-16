@@ -31,6 +31,7 @@ import { ContextUsageIndicator } from '../components/chat/ContextUsageIndicator'
 import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from '@/components/chat/ComposerReferenceMenu'
 import { ComposerReferenceDetail } from '@/components/chat/ComposerReferenceDetail'
 import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
+import { useCapabilityCatalogStore } from '@/stores/capabilityCatalogStore'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from '../components/chat/LocalSlashCommandPanel'
 import {
@@ -39,6 +40,10 @@ import {
 } from '../components/chat/SlashCommandMenu'
 import { useMobileViewport } from '../hooks/useMobileViewport'
 import { GROK_OFFICIAL_PROVIDER_ID } from '../constants/grokOfficialProvider'
+import {
+  DEEPSEEK_ACCOUNT_PROVIDER_ID,
+  buildDeepSeekAccountProvider,
+} from '../constants/deepseekAccountProvider'
 import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import {
@@ -79,6 +84,7 @@ import { MobileComposerSheet, type MobileComposerSetting } from '@/components/ch
 import { useCapabilityMenu } from '@/components/chat/useCapabilityMenu'
 import { AgentTeamChip } from '@/components/chat/AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import type { AttachmentRef } from '../types/chat'
@@ -198,6 +204,7 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
     let active = true
     setReferenceState({ context: referenceContext, items: [], loading: true, error: false })
     void composerReferencesApi.list(workDir || undefined, referenceProviderId).then(data => {
+      useCapabilityCatalogStore.getState().remember([...data.plugins, ...data.skills])
       if (active) setReferenceState({ context: referenceContext, items: [...data.plugins, ...data.skills], loading: false, error: false })
     }).catch(() => {
       if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
@@ -420,8 +427,13 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
           providers,
           currentModel?.id,
         )
+      // The DeepSeek account provider is built in, so it is not in the saved
+      // list, but it resolves effort exactly like a saved DeepSeek provider.
       const activeCustomProvider = defaultActiveProviderSelection
-        ? providers.find((provider) => provider.id === defaultActiveProviderSelection.providerId)
+        ? providers.find((provider) => provider.id === defaultActiveProviderSelection.providerId) ??
+          (defaultActiveProviderSelection.providerId === DEEPSEEK_ACCOUNT_PROVIDER_ID
+            ? buildDeepSeekAccountProvider()
+            : undefined)
         : undefined
       const defaultRuntimeSelection = defaultActiveProviderSelection && activeCustomProvider
         ? normalizeRuntimeSelection(
@@ -1029,6 +1041,7 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
                       />
                     )}
                     <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
+                    <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
                   </div>
 
                   {capabilityMenu.agentTeamArmed ? (

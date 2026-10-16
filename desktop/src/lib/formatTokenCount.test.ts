@@ -28,4 +28,17 @@ describe('formatTokenCount', () => {
     expect(formatTokenCount(2_400_000)).toBe('2.4M')
     expect(formatTokenCount(145_900_000)).toBe('145.9M')
   })
+
+  it('formats billions with a B suffix instead of growing into four-digit M values', () => {
+    expect(formatTokenCount(1_500_000_000)).toBe('1.5B')
+    expect(formatTokenCount(20_000_000_000)).toBe('20B')
+  })
+
+  it('uses one notation for every surface that renders token usage (#1465)', () => {
+    // The activity settings page used to keep a second formatter whose rounding
+    // and casing disagreed with this one for the same input.
+    expect(formatTokenCount(1_200)).toBe('1.2k')
+    expect(formatTokenCount(1_500)).toBe('1.5k')
+    expect(formatTokenCount(2_000_000)).toBe('2M')
+  })
 })

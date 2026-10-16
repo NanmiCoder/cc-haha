@@ -28,6 +28,7 @@ import {
   MODEL_CONTEXT_WINDOW_DEFAULT,
   getContextWindowForModel,
   getModelMaxOutputTokens,
+  hasKnownContextWindow,
   is1mContextDisabled,
 } from '../../utils/context.js'
 import {
@@ -266,6 +267,77 @@ export type SessionMessagesWithEvidence = {
  */
 export type SessionMessagesOptions = {
   includeSubagents?: boolean
+  /**
+   * Parse without tool output bodies, for callers that read only tool identity
+   * and outcome, charging what is read and kept to this budget.
+   */
+  omitToolOutputs?: TranscriptReadBudget
+}
+
+/**
+ * One request's allowance for transcript reads. Pass the same budget to every
+ * read the request keeps in memory together (messages and file-history
+ * snapshots); exceeding either limit throws `overBudgetError`.
+ */
+export type TranscriptReadBudget = {
+  /** Bounds parse time and transient garbage, which grow with the source. */
+  maxSourceBytes: number
+  /** Bounds what stays in memory once outputs are dropped. */
+  maxRetainedBytes: number
+  overBudgetError: ApiError
+  signal?: AbortSignal
+  sourceBytes: number
+  retainedBytes: number
+}
+
+export function createTranscriptReadBudget(
+  limits: Pick<TranscriptReadBudget, 'maxSourceBytes' | 'maxRetainedBytes' | 'overBudgetError' | 'signal'>,
+): TranscriptReadBudget {
+  return { ...limits, sourceBytes: 0, retainedBytes: 0 }
+}
+
+function chargeRetained(budget: TranscriptReadBudget, bytes: number): void {
+  budget.retainedBytes += bytes
+  if (budget.retainedBytes > budget.maxRetainedBytes) throw budget.overBudgetError
+}
+
+/** Workspace status keeps one baseline per tracked path. */
+const MAX_FILE_HISTORY_BASELINE_PATHS = 10_000
+
+/**
+ * Agent results keep their text: it carries the id that links the subagent
+ * transcript. Other outputs, structured results and image data are dropped.
+ * Returns whether the entry changed.
+ */
+function omitEntryToolOutputs(entry: RawEntry, agentToolUseIds: Set<string>): boolean {
+  let changed = false
+  if (entry.toolUseResult !== undefined) {
+    delete entry.toolUseResult
+    changed = true
+  }
+  const content = entry.message?.content
+  if (!Array.isArray(content)) return changed
+  entry.message!.content = content.map((block: unknown) => {
+    if (!block || typeof block !== 'object') return block
+    const record = block as Record<string, unknown>
+    if (record.type === 'tool_use' && typeof record.id === 'string' &&
+      (record.name === 'Agent' || record.name === 'Task')) {
+      agentToolUseIds.add(record.id)
+      return block
+    }
+    if (record.type === 'tool_result' && record.content !== undefined && record.content !== '' &&
+      !(typeof record.tool_use_id === 'string' && agentToolUseIds.has(record.tool_use_id))) {
+      changed = true
+      return { ...record, content: '' }
+    }
+    const source = record.type === 'image' ? record.source as Record<string, unknown> | undefined : undefined
+    if (source && typeof source === 'object' && 'data' in source) {
+      changed = true
+      return { ...record, source: { type: source.type, media_type: source.media_type } }
+    }
+    return block
+  })
+  return changed
 }
 
 type SubagentMessagesResult = {
@@ -1196,24 +1268,51 @@ export class SessionService {
   // JSONL parsing
   // --------------------------------------------------------------------------
 
-  private async readJsonlFileWithDiagnostics(filePath: string): Promise<{
+  private async readJsonlFileWithDiagnostics(
+    filePath: string,
+    options: {
+      /** Drops tool outputs and charges the source and what is kept. */
+      omission?: TranscriptReadBudget
+      /** Lines failing this can never hold a wanted entry and are not parsed. */
+      mayContainEntry?: (line: string) => boolean
+    } = {},
+  ): Promise<{
     entries: RawEntry[]
     exists: boolean
     parseComplete: boolean
   }> {
     const entries: RawEntry[] = []
+    const agentToolUseIds = new Set<string>()
+    const { omission, mayContainEntry } = options
     let parseComplete = true
+    if (omission) {
+      const size = await fs.stat(filePath).then((stat) => stat.size, () => 0)
+      omission.sourceBytes += size
+      if (omission.sourceBytes > omission.maxSourceBytes) throw omission.overBudgetError
+    }
     const stream = createReadStream(filePath, { encoding: 'utf8' })
     const lines = createInterface({ input: stream, crlfDelay: Infinity })
     try {
       for await (const line of lines) {
+        omission?.signal?.throwIfAborted()
         const trimmed = line.trim()
         if (!trimmed) continue
+        if (mayContainEntry && !mayContainEntry(trimmed)) continue
+        let entry: RawEntry
         try {
-          entries.push(JSON.parse(trimmed) as RawEntry)
+          entry = JSON.parse(trimmed) as RawEntry
         } catch {
           parseComplete = false
+          continue
         }
+        if (omission) {
+          // Snapshots are read (and charged) on their own and never become messages.
+          if (entry.type === 'file-history-snapshot') continue
+          chargeRetained(omission, omitEntryToolOutputs(entry, agentToolUseIds)
+            ? JSON.stringify(entry).length
+            : trimmed.length)
+        }
+        entries.push(entry)
       }
       return { entries, exists: true, parseComplete }
     } catch (err: unknown) {
@@ -2437,9 +2536,10 @@ export class SessionService {
     sessionId: string,
     parentToolUseId: string,
     agentId: string,
+    omission?: TranscriptReadBudget,
   ): Promise<SubagentMessagesResult> {
     const filePath = this.subagentTranscriptPath(projectDir, sessionId, agentId)
-    const { entries, exists, parseComplete } = await this.readJsonlFileWithDiagnostics(filePath)
+    const { entries, exists, parseComplete } = await this.readJsonlFileWithDiagnostics(filePath, { omission })
     const namespace = `${parentToolUseId}/${agentId}`
     const messages: MessageEntry[] = []
 
@@ -2475,6 +2575,7 @@ export class SessionService {
     projectDir: string,
     sessionId: string,
     messages: MessageEntry[],
+    omission?: TranscriptReadBudget,
   ): Promise<SubagentMessagesResult> {
     const maxSubagentDepth = 16
     const maxSubagentTranscripts = 128
@@ -2537,6 +2638,7 @@ export class SessionService {
             sessionId,
             link.parentToolUseId,
             link.agentId,
+            omission,
           ),
         })),
       )
@@ -2913,12 +3015,21 @@ export class SessionService {
   ): Promise<number | undefined> {
     const launchInfo = launchInfoOverride ?? await this.getSessionLaunchInfo(sessionId).catch(() => null)
     const providerIds: string[] = []
-    const allowSavedProviderInference = launchInfo?.runtimeProviderId === undefined
+    const recordedProviderId = launchInfo?.runtimeProviderId
+    let activeProviderId: string | null | undefined
 
-    if (typeof launchInfo?.runtimeProviderId === 'string') {
-      providerIds.push(launchInfo.runtimeProviderId)
-    } else if (launchInfo?.runtimeProviderId !== null) {
-      const { activeId } = await this.providerService.listProviders().catch(() => ({ activeId: null }))
+    const getActiveProviderId = async (): Promise<string | null> => {
+      if (activeProviderId === undefined) {
+        const { activeId } = await this.providerService.listProviders().catch(() => ({ activeId: null }))
+        activeProviderId = activeId
+      }
+      return activeProviderId
+    }
+
+    if (typeof recordedProviderId === 'string') {
+      providerIds.push(recordedProviderId)
+    } else if (recordedProviderId !== null) {
+      const activeId = await getActiveProviderId()
       if (activeId) providerIds.push(activeId)
     }
 
@@ -2937,6 +3048,13 @@ export class SessionService {
 
     for (const providerId of providerIds) {
       const env = await this.providerService.getProviderRuntimeEnv(providerId).catch(() => null)
+      if (!env && providerId === recordedProviderId) {
+        // The provider this session recorded no longer exists (deleted or
+        // re-created under a new id). A resumed session is relaunched with the
+        // default provider in that case, so resolve the window the same way.
+        const activeId = await getActiveProviderId()
+        if (activeId && !providerIds.includes(activeId)) providerIds.push(activeId)
+      }
       const rawContextWindows = env?.[MODEL_CONTEXT_WINDOWS_ENV_KEY] ?? null
       // Step 1: Try matching the transcript model name directly (current behavior)
       const contextWindow = getModelContextWindowFromEnvValue(
@@ -2990,7 +3108,17 @@ export class SessionService {
       }
     }
 
-    if (allowSavedProviderInference) {
+    // A session without recorded provider metadata always infers from saved
+    // providers. When a provider was recorded but could not tell us the window
+    // (Claude Official, a stale id, or a provider that never configured this
+    // model), a unique saved-provider match still beats the 200K default — but
+    // only for models whose window is not already known (built-in table,
+    // OpenAI catalog, ...), so an official session is never overridden by a
+    // proxy provider's configuration.
+    if (
+      recordedProviderId === undefined ||
+      !hasKnownContextWindow(model)
+    ) {
       return this.getUniqueSavedProviderContextWindow(model)
     }
 
@@ -4325,7 +4453,8 @@ export class SessionService {
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
 
-    const rootTranscript = await this.readJsonlFileWithDiagnostics(found.filePath)
+    const omission = options?.omitToolOutputs
+    const rootTranscript = await this.readJsonlFileWithDiagnostics(found.filePath, { omission })
     const rootMessages = this.entriesToMessages(rootTranscript.entries)
     const rootEvidenceComplete = rootTranscript.exists && rootTranscript.parseComplete
     if (options?.includeSubagents === false) {
@@ -4335,6 +4464,7 @@ export class SessionService {
       found.projectDir,
       sessionId,
       rootMessages,
+      omission,
     )
     return {
       messages: subagentResult.messages,
@@ -4832,7 +4962,11 @@ export class SessionService {
     const found = await this.findSessionFile(sessionId)
     if (!found) return null
 
-    const entries = await this.readJsonlFile(found.filePath)
+    // The id appears in its JSON-escaped form on the line that records it.
+    const encodedMessageId = JSON.stringify(messageId).slice(1, -1)
+    const { entries } = await this.readJsonlFileWithDiagnostics(found.filePath, {
+      mayContainEntry: (line) => line.includes(encodedMessageId),
+    })
     const entry = entries.find((candidate) => candidate.uuid === messageId)
     return typeof entry?.cwd === 'string' && entry.cwd.trim() ? entry.cwd : null
   }
@@ -5273,9 +5407,112 @@ export class SessionService {
     }
   }
 
+  /**
+   * Bounded readers only need each tracked path's earliest backup, but every
+   * snapshot repeats all files tracked so far. Pass one fixes each message's
+   * order and final record (updates replace a message's snapshot in place);
+   * pass two keeps, per path, the backup from the earliest message whose final
+   * snapshot holds it. Memory follows messages plus paths, not their product.
+   * A rewind replaces the transcript by rename, which would shift the line
+   * numbers pass one recorded; appends only add lines after them. A result
+   * read across a replacement is discarded and read again.
+   */
+  private async reduceFileHistoryBaselines(filePath: string): Promise<RawEntry[]> {
+    const identity = () => fs.stat(filePath).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const before = await identity()
+      if (!before) return []
+      const baselines = await this.reduceFileHistoryBaselinesOnce(filePath)
+      const after = await identity()
+      if (after && after.dev === before.dev && after.ino === before.ino && after.size >= before.size) {
+        return baselines
+      }
+    }
+    throw new Error('Transcript kept changing while reading file history')
+  }
+
+  private async reduceFileHistoryBaselinesOnce(filePath: string): Promise<RawEntry[]> {
+    const snapshotMessageIdOf = (entry: RawEntry) =>
+      entry.type !== 'file-history-snapshot' || !entry.snapshot
+        ? null
+        : typeof entry.snapshot.messageId === 'string'
+          ? entry.snapshot.messageId
+          : typeof entry.messageId === 'string' ? entry.messageId : null
+    const orderByMessageId = new Map<string, number>()
+    const finalLineByMessageId = new Map<string, number>()
+    await this.forEachSnapshotLine(filePath, (entry, lineNumber) => {
+      const messageId = snapshotMessageIdOf(entry)
+      if (!messageId) return
+      if (!orderByMessageId.has(messageId)) orderByMessageId.set(messageId, orderByMessageId.size)
+      finalLineByMessageId.set(messageId, lineNumber)
+    })
+
+    const earliest = new Map<string, { order: number; backup: unknown }>()
+    await this.forEachSnapshotLine(filePath, (entry, lineNumber) => {
+      const messageId = snapshotMessageIdOf(entry)
+      if (!messageId || finalLineByMessageId.get(messageId) !== lineNumber) return
+      const backups = entry.snapshot!.trackedFileBackups
+      if (!backups || typeof backups !== 'object' || Array.isArray(backups)) return
+      const order = orderByMessageId.get(messageId)!
+      for (const [trackingPath, backup] of Object.entries(backups)) {
+        const current = earliest.get(trackingPath)
+        if (!current || order < current.order) earliest.set(trackingPath, { order, backup })
+      }
+      if (earliest.size > MAX_FILE_HISTORY_BASELINE_PATHS) {
+        throw new ApiError(413, 'File history exceeds its viewing budget', 'HISTORY_WORKSPACE_LIMIT')
+      }
+    })
+    const firstMessageId = orderByMessageId.keys().next().value
+    if (earliest.size === 0 || firstMessageId === undefined) return []
+    return [{
+      type: 'file-history-snapshot',
+      snapshot: {
+        messageId: firstMessageId,
+        trackedFileBackups: Object.fromEntries([...earliest].map(([trackingPath, { backup }]) => [trackingPath, backup])),
+      },
+    }]
+  }
+
+  /** Parses only lines that can hold a snapshot, numbering every line from the start. */
+  private async forEachSnapshotLine(
+    filePath: string,
+    onEntry: (entry: RawEntry, lineNumber: number, line: string) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const stream = createReadStream(filePath, { encoding: 'utf8' })
+    const lines = createInterface({ input: stream, crlfDelay: Infinity })
+    let lineNumber = 0
+    try {
+      for await (const line of lines) {
+        signal?.throwIfAborted()
+        lineNumber++
+        if (!line.includes('file-history-snapshot')) continue
+        let entry: RawEntry
+        try {
+          entry = JSON.parse(line) as RawEntry
+        } catch {
+          continue
+        }
+        onEntry(entry, lineNumber, line)
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    } finally {
+      lines.close()
+      stream.destroy()
+    }
+  }
+
   async getSessionFileHistorySnapshots(
     sessionId: string,
-    options: { bounded?: boolean } = {},
+    options: {
+      bounded?: boolean
+      /** Charge every snapshot kept, since each repeats all tracked files. */
+      budget?: TranscriptReadBudget
+    } = {},
   ): Promise<FileHistorySnapshot[]> {
     if (isSideChatId(sessionId)) {
       const side = getSideChat(sessionId)
@@ -5312,26 +5549,26 @@ export class SessionService {
     const key = `${found.filePath}:${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${contextRevision}`
       let request = this.uiFileHistoryReads.get(key)
       if (!request) {
-        request = (async () => {
-          const selected: RawEntry[] = []
-          let bytes = 0
-          await this.streamJsonlFile(found.filePath, entry => {
-            if (entry.type !== 'file-history-snapshot') return
-            bytes += Buffer.byteLength(JSON.stringify(entry))
-            if (bytes > 2 * 1024 * 1024 || selected.length >= 1000) {
-              throw new ApiError(413, 'File history exceeds its viewing budget', 'HISTORY_WORKSPACE_LIMIT')
-            }
-            selected.push(entry)
-          })
-          return selected
-        })()
+        request = withHistoryReadBudget(undefined, () => this.reduceFileHistoryBaselines(found.filePath), 'recovery')
         this.uiFileHistoryReads.set(key, request)
         while (this.uiFileHistoryReads.size > 8) this.uiFileHistoryReads.delete(this.uiFileHistoryReads.keys().next().value!)
       }
       try { entries = await request }
       catch (error) { this.uiFileHistoryReads.delete(key); throw error }
+    } else if (options.budget) {
+      // The index would materialize every snapshot before it could be charged.
+      const budget = options.budget
+      entries = []
+      await this.forEachSnapshotLine(found.filePath, (entry, _lineNumber, line) => {
+        if (entry.type !== 'file-history-snapshot') return
+        chargeRetained(budget, line.length)
+        entries.push(entry)
+      }, budget.signal)
     } else {
-      entries = await this.readTargetedJsonlEntries(found, ['file-history-snapshot']) ?? await this.readJsonlFile(found.filePath)
+      entries = await this.readTargetedJsonlEntries(found, ['file-history-snapshot']) ??
+        (await this.readJsonlFileWithDiagnostics(found.filePath, {
+          mayContainEntry: (line) => line.includes('file-history-snapshot'),
+        })).entries
     }
     const snapshotsByMessageId = new Map<string, FileHistorySnapshot>()
 

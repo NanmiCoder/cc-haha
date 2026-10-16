@@ -362,21 +362,23 @@ describe('withStreamRetry backoff and budgets', () => {
     }
   })
 
-  test('stalls and upstream-reported errors keep their small budget', async () => {
-    const restore = withEnv({ [RETRY_ENV]: undefined, [API_RETRY_ENV]: undefined })
+  test('upstream-reported errors draw on the API retry budget, stalls keep their small one', async () => {
+    const restore = withEnv({ [RETRY_ENV]: undefined, [API_RETRY_ENV]: '3' })
     try {
-      let calls = 0
-      const attempt = () =>
-        // biome-ignore lint/suspicious/noExplicitAny: mock stream messages
-        (async function* (): AsyncGenerator<any, void> {
-          calls++
-          throw retriableError()
-        })()
+      for (const [kind, expectedCalls] of [['transient', 4], ['watchdog', 3]] as const) {
+        let calls = 0
+        const attempt = () =>
+          // biome-ignore lint/suspicious/noExplicitAny: mock stream messages
+          (async function* (): AsyncGenerator<any, void> {
+            calls++
+            throw new RetriableStreamError(retriableError().originalError, [], kind)
+          })()
 
-      const out = await collect(withStreamRetry(attempt, 'test-model', [], { sleep: noSleep }))
+        const out = await collect(withStreamRetry(attempt, 'test-model', [], { sleep: noSleep }))
 
-      expect(calls).toBe(3)
-      expect(out.at(-1)?.isApiErrorMessage).toBe(true)
+        expect(calls).toBe(expectedCalls)
+        expect(out.at(-1)?.isApiErrorMessage).toBe(true)
+      }
     } finally {
       restore()
     }

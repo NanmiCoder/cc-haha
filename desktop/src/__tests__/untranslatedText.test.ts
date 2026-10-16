@@ -40,7 +40,6 @@ const NON_PROSE_ELEMENTS = new Set(['kbd', 'Keycap', 'code', 'pre', 'style', 'sc
  */
 const LANGUAGE_NEUTRAL: Record<string, string[]> = {
   'components/agentTeams/AgentTeamsCanvas.tsx': ['zZ'], // a sleeping agent's glyph
-  'components/agentTeams/AgentTeamsWorkbench.tsx': ['Agent Teams ·'], // product name, kept in every locale
   'components/chat/MermaidRenderer.tsx': ['mermaid'], // the diagram language, as a code block labels it
   'components/chat/ToolCallBlock.tsx': ['bash', 'powershell'], // shell names, as a code block labels them
   'components/layout/H5ConnectionView.tsx': ['https://chat.example.com'], // example URL

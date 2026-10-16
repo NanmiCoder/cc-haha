@@ -12,6 +12,7 @@ import { handleSettingsApi } from '../api/settings.js'
 import { handleModelsApi } from '../api/models.js'
 import { handleStatusApi, resetUsage, addUsage } from '../api/status.js'
 import { ProviderService } from '../services/providerService.js'
+import { clearDeepSeekAccountModelCatalogCache } from '../../services/deepseekAuth/modelCatalog.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import {
@@ -1036,6 +1037,14 @@ describe('Models API', () => {
         supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       },
       {
+        id: 'claude-haiku-5-5',
+        name: 'Haiku 5.5',
+        description: 'Fastest for high-volume, latency-sensitive tasks',
+        context: '1m',
+        defaultReasoningEffort: 'medium',
+        supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+      },
+      {
         id: 'claude-haiku-4-5',
         name: 'Haiku 4.5',
         description: 'Fastest with near-frontier intelligence',
@@ -1280,6 +1289,7 @@ describe('Models API', () => {
       'claude-opus-4-8',
       'claude-sonnet-5-5',
       'claude-sonnet-5',
+      'claude-haiku-5-5',
       'claude-haiku-4-5',
     ])
   })
@@ -1591,6 +1601,115 @@ describe('Models API', () => {
     const get = makeRequest('GET', '/api/models/current')
     const body = await (await handleModelsApi(get.req, get.url, get.segments)).json()
     expect(body.model).toMatchObject({ id: 'grok-4.5', name: 'Grok 4.5' })
+  })
+
+  it('GET /api/models lists the account models, not the API-key preset ids, when DeepSeek Account is active', async () => {
+    const providerSvc = new ProviderService()
+    await providerSvc.activateProvider('deepseek-account')
+
+    const { req, url, segments } = makeRequest('GET', '/api/models')
+    const res = await handleModelsApi(req, url, segments)
+    const body = await res.json() as {
+      models: Array<{ id: string; name: string; description: string; supportedReasoningEfforts?: string[] }>
+      provider: { id: string; name: string }
+    }
+    expect(body.provider).toEqual({ id: 'deepseek-account', name: 'DeepSeek Account' })
+    // Signed out, so the bundled account catalog names the alias rows; the
+    // account listing does not include `deepseek-v4-flash`, and the `[1m]` alias
+    // is the same model as the listed `deepseek-v4-pro`.
+    expect(body.models.map((model) => [model.id, model.name])).toEqual([
+      ['deepseek-v4-pro[1m]', 'DeepSeek-V4-Pro'],
+      ['deepseek-flash', 'DeepSeek-V4.1-Flash'],
+    ])
+    expect(body.models[1]?.description).toBe('Haiku model')
+    expect(body.models[1]?.supportedReasoningEfforts).toEqual(
+      body.models[0]?.supportedReasoningEfforts,
+    )
+  })
+
+  it('persists and reads a DeepSeek Account model from managed settings', async () => {
+    const providerSvc = new ProviderService()
+    await providerSvc.activateProvider('deepseek-account')
+    const put = makeRequest('PUT', '/api/models/current', { modelId: 'deepseek-flash' })
+    expect((await handleModelsApi(put.req, put.url, put.segments)).status).toBe(200)
+
+    const get = makeRequest('GET', '/api/models/current')
+    const body = await (await handleModelsApi(get.req, get.url, get.segments)).json()
+    expect(body.model).toMatchObject({ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' })
+  })
+
+  describe('GET /api/models/catalog', () => {
+    afterEach(() => {
+      clearDeepSeekAccountModelCatalogCache()
+    })
+
+    it('reads the signed-in DeepSeek account listing even while another provider is active', async () => {
+      const providerSvc = new ProviderService()
+      await providerSvc.activateProvider('grok-official')
+      await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+      await fs.writeFile(
+        path.join(tmpDir, 'cc-haha', 'deepseek-oauth.json'),
+        JSON.stringify({ token: 'fake-account-token', issuer: 'https://platform.deepseek.com', deviceId: 'fake-device' }),
+      )
+      await fs.writeFile(
+        path.join(tmpDir, 'settings.json'),
+        JSON.stringify({ network: { proxy: { mode: 'manual', url: 'http://127.0.0.1:7890' } } }),
+      )
+      const seen: Array<{ url: string; token: string | null; proxy?: string }> = []
+      const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation((async (
+        input: RequestInfo | URL,
+        init?: RequestInit,
+      ) => {
+        seen.push({
+          url: String(input),
+          token: new Headers(init?.headers).get('x-dsh-auth-token'),
+          proxy: (init as RequestInit & { proxy?: string } | undefined)?.proxy,
+        })
+        return Response.json({
+          data: [
+            {
+              id: 'deepseek-flash',
+              name: 'DeepSeek-V4.1-Flash',
+              context_window: 1048576,
+              api_capabilities: { anthropic_messages: {} },
+            },
+            { id: 'deepseek-v5-preview', name: 'DeepSeek-V5-Preview', api_capabilities: { anthropic_messages: {} } },
+          ],
+        })
+      }) as typeof fetch)
+
+      try {
+        const { req, url, segments } = makeRequest('GET', '/api/models/catalog?provider=deepseek-account')
+        const res = await handleModelsApi(req, url, segments)
+        expect(res.status).toBe(200)
+        const body = await res.json() as { models: Array<{ id: string; name: string; context: string }> }
+        expect(body.models.map((model) => [model.id, model.name, model.context])).toEqual([
+          ['deepseek-flash', 'DeepSeek-V4.1-Flash', '1048576'],
+          ['deepseek-v5-preview', 'DeepSeek-V5-Preview', ''],
+        ])
+        // Through the manual proxy from Network settings, like the sign-in requests.
+        expect(seen).toEqual([{
+          url: 'https://api.deepseek.com/models',
+          token: 'fake-account-token',
+          proxy: 'http://127.0.0.1:7890',
+        }])
+      } finally {
+        fetchSpy.mockRestore()
+      }
+    })
+
+    it('lists the Claude models for the Claude card and rejects unknown providers', async () => {
+      const claude = makeRequest('GET', '/api/models/catalog?provider=claude-official')
+      const claudeBody = await (await handleModelsApi(claude.req, claude.url, claude.segments)).json() as {
+        models: Array<{ id: string }>
+      }
+      expect(claudeBody.models.map((model) => model.id)).toContain('claude-opus-5-5')
+
+      for (const target of ['/api/models/catalog?provider=saved-provider', '/api/models/catalog']) {
+        const request = makeRequest('GET', target)
+        expect((await handleModelsApi(request.req, request.url, request.segments)).status).toBe(404)
+      }
+    })
   })
 
   it('GET /api/effort should return default effort level', async () => {

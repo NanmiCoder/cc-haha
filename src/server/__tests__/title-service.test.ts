@@ -14,6 +14,7 @@ import {
 import { sessionService } from '../services/sessionService.js'
 import { drainTraceCaptureForTests } from '../services/traceCaptureService.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
+import { hahaDeepSeekOAuthService } from '../services/hahaDeepSeekOAuthService.js'
 import { SYSTEM_PROXY_URL_ENV } from '../services/networkSettings.js'
 
 describe('titleService', () => {
@@ -504,6 +505,39 @@ describe('titleService', () => {
     expect(upstreamCalls[0].headers['chatgpt-account-id']).toBe('acct_title')
     expect(upstreamCalls[0].body.stream).toBe(true)
     expect(upstreamCalls[0].proxy).toBe(systemProxyUrl)
+  })
+
+  test('generates titles with the account token when DeepSeek Account is active', async () => {
+    await new ProviderService().activateProvider('deepseek-account')
+    await hahaDeepSeekOAuthService.saveTokens({
+      token: 'dsh_test_account_token',
+      issuer: 'https://platform.deepseek.com',
+      deviceId: 'device-1',
+    })
+    const calls: Array<{ url: string; headers: Headers }> = []
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), headers: new Headers(init?.headers) })
+      return Response.json({ content: [{ type: 'text', text: '{"title":"Account title"}' }] })
+    }) as typeof fetch
+
+    await expect(generateTitle('please name this session')).resolves.toBe('Account title')
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.url).toBe('https://api.deepseek.com/anthropic/v1/messages')
+    expect(calls[0]!.headers.get('x-dsh-auth-token')).toBe('dsh_test_account_token')
+    expect(calls[0]!.headers.get('x-api-key')).toBeNull()
+    expect(calls[0]!.headers.get('authorization')).toBeNull()
+  })
+
+  test('skips AI titles without a request while DeepSeek Account is signed out', async () => {
+    await new ProviderService().activateProvider('deepseek-account')
+    let called = false
+    globalThis.fetch = (async () => {
+      called = true
+      return Response.json({})
+    }) as typeof fetch
+
+    await expect(generateTitle('please name this session')).resolves.toBeNull()
+    expect(called).toBe(false)
   })
 
   test('honors the configured provider auth strategy for title generation', async () => {

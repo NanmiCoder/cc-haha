@@ -8,6 +8,7 @@ import { sessionsApi } from '../api/sessions'
 import { workspaceOpen } from './workspace/openTarget'
 import { openLocalFileWithSystem, reportOpenFailure, resolveAbsoluteOpenPath } from './systemFileOpen'
 import { isWorkspaceFileMissing } from './workspaceFileStats'
+import type { PreviewLinkTarget } from './previewLinkRouter'
 
 /**
  * Cheap, synchronous guess at whether the workspace preview can reach this document.
@@ -56,7 +57,7 @@ async function documentReachableOnServer(sessionId: string, path: string): Promi
  *
  * Returns true when the link was handled (the caller should preventDefault).
  */
-export function openPreviewLink(href: string, sessionId: string): boolean {
+export function openPreviewLink(href: PreviewLinkTarget, sessionId: string): boolean {
   const currentWorkDir = () => useWorkspaceContentStore.getState().statusBySession[sessionId]?.workDir
   const openSystemFile = (path: string) => {
     const absolutePath = resolveAbsoluteOpenPath(path, currentWorkDir())

@@ -59,7 +59,7 @@ type SessionStore = {
   loadMoreProjectSessions: (projectRoot: string) => Promise<void>
   releaseProjectHistory: (projectRoot: string) => void
   hydrateHistoricalSessions: (sessions: SessionListItem[], runtimeSelections?: Record<string, RuntimeSelection>) => SessionListItem[]
-  openHistoricalSession: (session: SessionListItem) => void
+  openHistoricalSession: (session: SessionListItem, runtimeSelections?: Record<string, RuntimeSelection>) => void
   createSession: (workDir?: string, options?: CreateSessionOptions) => Promise<string>
   branchSession: (
     sourceSessionId: string,
@@ -300,8 +300,8 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     return selected
   },
 
-  openHistoricalSession: (session) => {
-    const [selected] = get().hydrateHistoricalSessions([session])
+  openHistoricalSession: (session, runtimeSelections) => {
+    const [selected] = get().hydrateHistoricalSessions([session], runtimeSelections)
     if (!selected) return
     set({ activeSessionId: selected.id })
     useTabStore.getState().openTab(selected.id, selected.title)
@@ -383,6 +383,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
   deleteSession: async (id: string) => {
     await sessionsApi.delete(id)
     releaseWorkspaceSession(id)
+    useTabStore.getState().markSessionsDeleted([id])
     pendingCreatedSessionIds.delete(id)
     pendingSessionTitles.delete(id)
     invalidateRecentProjectsCache()
@@ -413,6 +414,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       useSessionRuntimeStore.getState().clearSelection(id)
     }
     excludeDeletedProjectSessions(result.successes)
+    useTabStore.getState().markSessionsDeleted(result.successes)
     set((s) => ({
       sessions: s.sessions.filter((session) => !result.successes.includes(session.id)),
       historicalSessionIds: removeIdsFromSet(s.historicalSessionIds, result.successes),

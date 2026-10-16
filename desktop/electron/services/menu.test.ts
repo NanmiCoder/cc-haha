@@ -31,10 +31,12 @@ function getElectronMenuMocks() {
 function rendererContextMenuParams({
   isEditable = false,
   selectionText = '',
+  mediaType = 'none',
   editFlags = {},
 }: {
   isEditable?: boolean
   selectionText?: string
+  mediaType?: string
   editFlags?: Partial<{
     canUndo: boolean
     canRedo: boolean
@@ -47,6 +49,9 @@ function rendererContextMenuParams({
   return {
     isEditable,
     selectionText,
+    mediaType,
+    x: 120,
+    y: 80,
     editFlags: {
       canUndo: false,
       canRedo: false,
@@ -84,6 +89,55 @@ describe('Electron application menu service', () => {
     }))).toEqual([
       { role: 'copy', enabled: true },
     ])
+  })
+
+  it('offers Copy Image for images and copies the image under the pointer', () => {
+    const copyImageAt = vi.fn()
+    const template = buildRendererContextMenuTemplate(
+      rendererContextMenuParams({ mediaType: 'image' }),
+      { locale: 'zh', copyImageAt },
+    )
+
+    expect(template).toHaveLength(1)
+    expect(template[0]?.label).toBe('复制图片')
+    template[0]?.click?.({} as never, {} as never, {} as never)
+    expect(copyImageAt).toHaveBeenCalledWith(120, 80)
+  })
+
+  it('keeps image copy out of editable fields and non-image media', () => {
+    const copyImageAt = vi.fn()
+    expect(buildRendererContextMenuTemplate(
+      rendererContextMenuParams({ mediaType: 'video' }),
+      { copyImageAt },
+    )).toEqual([])
+    expect(buildRendererContextMenuTemplate(
+      rendererContextMenuParams({ isEditable: true, mediaType: 'image' }),
+      { copyImageAt },
+    ).map(item => item.role)).toContain('paste')
+  })
+
+  it('wires Copy Image to the window contents when the menu opens on an image', async () => {
+    const menuMocks = getElectronMenuMocks()
+    let contextMenuHandler: ((event: unknown, params: ReturnType<typeof rendererContextMenuParams>) => void) | undefined
+    const copyImageAt = vi.fn()
+    const window = {
+      isDestroyed: () => false,
+      webContents: {
+        copyImageAt,
+        on: vi.fn((event: string, handler: typeof contextMenuHandler) => {
+          if (event === 'context-menu') contextMenuHandler = handler
+        }),
+      },
+    }
+
+    await installRendererContextMenu(window as never, () => 'en')
+    contextMenuHandler?.({}, rendererContextMenuParams({ mediaType: 'image' }))
+
+    const template = menuMocks.buildFromTemplate.mock.calls[0]?.[0] as MenuItemConstructorOptions[]
+    expect(template[0]?.label).toBe('Copy Image')
+    template[0]?.click?.({} as never, {} as never, {} as never)
+    expect(copyImageAt).toHaveBeenCalledWith(120, 80)
+    expect(menuMocks.popup).toHaveBeenCalledWith({ window })
   })
 
   it('offers native editing actions for editable renderer fields', () => {
@@ -283,7 +337,6 @@ describe('Electron application menu service', () => {
     const onceHandlers = new Map<string, (...args: never[]) => void>()
     const window = {
       isFullScreen: () => true,
-      isSimpleFullScreen: () => false,
       once: vi.fn((event: string, handler: (...args: never[]) => void) => {
         onceHandlers.set(event, handler)
       }),
@@ -315,11 +368,11 @@ describe('Electron application menu service', () => {
     expect(appHide).toHaveBeenCalledTimes(1)
   })
 
-  it('installs fullscreen as simple fullscreen on macOS instead of native Spaces', async () => {
+  it('installs fullscreen as a native macOS fullscreen Space', async () => {
     const window = {
-      isSimpleFullScreen: () => false,
+      isSimpleFullScreen: vi.fn(),
       setSimpleFullScreen: vi.fn(),
-      isFullScreen: vi.fn(),
+      isFullScreen: () => false,
       setFullScreen: vi.fn(),
       webContents: { send: vi.fn() },
     }
@@ -337,8 +390,8 @@ describe('Electron application menu service', () => {
       .find(item => item.label === 'Toggle Full Screen')
 
     fullScreenItem?.click?.({} as never, {} as never, {} as never)
-    expect(window.setSimpleFullScreen).toHaveBeenCalledWith(true)
-    expect(window.setFullScreen).not.toHaveBeenCalled()
+    expect(window.setFullScreen).toHaveBeenCalledWith(true)
+    expect(window.setSimpleFullScreen).not.toHaveBeenCalled()
   })
 })
 

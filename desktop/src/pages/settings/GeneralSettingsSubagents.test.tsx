@@ -40,7 +40,7 @@ describe('General settings ordinary SubAgent concurrency', () => {
     expect(input).toHaveAttribute('inputmode', 'numeric')
     expect(input).toHaveAttribute('placeholder', '不限（默认）')
     expect(screen.getByText(/限制同一会话的普通前台和后台 SubAgent/)).toHaveTextContent('达到上限时拒绝新启动，等已有任务完成后再启动')
-    expect(screen.getByText(/主 Agent、Agent Teams、Workflow 不计入/)).toHaveTextContent('运行中的会话也会生效，无需重启')
+    expect(screen.getByText(/主 Agent、智能体团队、Workflow 不计入/)).toHaveTextContent('运行中的会话也会生效，无需重启')
 
     fireEvent.change(input, { target: { value: '37' } })
     expect(settingsApi.updateUser).not.toHaveBeenCalled()

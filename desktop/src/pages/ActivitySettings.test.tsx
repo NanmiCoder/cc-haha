@@ -243,7 +243,7 @@ describe('ActivitySettings', () => {
     expect(screen.getByTestId('activity-month-labels').lastElementChild).toHaveTextContent('Apr')
 
     const todayCell = screen.getByRole('gridcell', {
-      name: /May 9, 2026: 4 sessions · 128K Tokens/i,
+      name: /May 9, 2026: 4 sessions · 128k Tokens/i,
     })
     expect(todayCell).toBeInTheDocument()
     expect(screen.queryByRole('gridcell', { name: /May 10, 2026/i })).not.toBeInTheDocument()
@@ -255,13 +255,13 @@ describe('ActivitySettings', () => {
     await flushActivityLoad()
 
     const todayCell = screen.getByRole('gridcell', {
-      name: /May 9, 2026: 4 sessions · 128K Tokens/i,
+      name: /May 9, 2026: 4 sessions · 128k Tokens/i,
     })
 
     fireEvent.mouseEnter(todayCell)
     const tooltip = screen.getByRole('tooltip')
     expect(tooltip).toHaveTextContent('May 9, 2026')
-    expect(tooltip).toHaveTextContent('4 sessions · 128K Tokens')
+    expect(tooltip).toHaveTextContent('4 sessions · 128k Tokens')
     expect(tooltip).not.toHaveTextContent(/messages|tools/i)
     expect(tooltip.className).toContain('--color-activity-tooltip-surface')
     expect(tooltip.className).toContain('--color-activity-tooltip-border')
@@ -351,13 +351,13 @@ describe('ActivitySettings', () => {
     const bars = within(chart).getAllByRole('listitem')
     expect(bars).toHaveLength(14)
     expect(bars[0]).toHaveTextContent('Apr 26, 2026: 0 Tokens')
-    expect(bars[11]).toHaveTextContent('May 7, 2026: 64K Tokens')
-    expect(bars[13]).toHaveTextContent('May 9, 2026: 128K Tokens')
+    expect(bars[11]).toHaveTextContent('May 7, 2026: 64k Tokens')
+    expect(bars[13]).toHaveTextContent('May 9, 2026: 128k Tokens')
     expect(within(chart).queryByText(/May 10, 2026/)).not.toBeInTheDocument()
 
     const barFill = (bar: HTMLElement) => bar.firstElementChild as HTMLElement
-    // Heights are relative to the window's own peak, so today's 128K fills the
-    // chart and the 64K day sits at half height.
+    // Heights are relative to the window's own peak, so today's 128k fills the
+    // chart and the 64k day sits at half height.
     expect(barFill(bars[13]!).style.height).toBe('100%')
     expect(barFill(bars[11]!).style.height).toBe('50%')
     expect(barFill(bars[0]!).style.height).toBe('0%')
@@ -401,12 +401,12 @@ describe('ActivitySettings', () => {
     expect(within(rows[1]!).getAllByRole('cell').map((cell) => cell.textContent)).toEqual([
       'claude-sonnet',
       '2.6M',
-      '230K',
+      '230k',
       '$12.50',
     ])
     expect(within(rows[2]!).getAllByRole('cell').map((cell) => cell.textContent)).toEqual([
       'glm-4.6',
-      '42K',
+      '42k',
       '0',
       '—',
     ])

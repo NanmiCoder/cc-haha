@@ -150,6 +150,8 @@ export function describeLiveTarget(target: ResolvedLiveTarget, scenarioCount: nu
 export type LiveContext = {
   baseUrl: string
   workRoot: string
+  /** The sandbox's config dir (CLAUDE_CONFIG_DIR), never the real one. */
+  configDir: string
   artifactDir: string
   target: ResolvedLiveTarget
   stepTimeoutMs: number
@@ -469,6 +471,7 @@ export async function executeAgentFlowAgainstProvider(
     const ctx: LiveContext = {
       baseUrl,
       workRoot,
+      configDir: sandbox.configDir,
       artifactDir,
       target,
       stepTimeoutMs: options.stepTimeoutMs,

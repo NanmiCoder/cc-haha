@@ -1,5 +1,6 @@
 import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { assertWindowsConsoleSubsystem } from './assert-windows-console-subsystem'
 import {
   getBundledRipgrepName,
   stageRipgrepLicenses,
@@ -239,11 +240,12 @@ async function compileExecutable({
       outfile: outfileBase,
       autoloadTsconfig: true,
       autoloadPackageJson: true,
+      // No hideConsole: it makes a GUI-subsystem binary, and the sidecar must
+      // stay a console program (see assert-windows-console-subsystem.ts).
       windows: {
         title: productName,
         publisher: 'Claude Code',
         description: productName,
-        hideConsole: true,
       },
     },
   })
@@ -255,6 +257,11 @@ async function compileExecutable({
 
   const outputPath = result.outputs[0]?.path ?? outfileBase
   console.log(`[build-sidecars] ${productName} -> ${outputPath}`)
+
+  if (bunTarget.startsWith('bun-windows-')) {
+    const header = new Uint8Array(await Bun.file(outputPath).slice(0, 4096).arrayBuffer())
+    assertWindowsConsoleSubsystem(header, productName)
+  }
 
   // macOS Apple System Policy (ASP) requires valid code signatures on all
   // executables. Bun-compiled binaries ship with an invalid/empty signature

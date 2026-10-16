@@ -343,6 +343,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const selectedTabId = useTabStore((s) => s.activeTabId)
   const activeTabId = sessionId ?? selectedTabId
   const activeTabType = useTabStore((s) => s.tabs.find((tab) => tab.sessionId === (sessionId ?? s.activeTabId))?.type ?? null)
+  const activeTabTitle = useTabStore((s) => s.tabs.find((tab) => tab.sessionId === (sessionId ?? s.activeTabId))?.title)
   const sessions = useSessionStore((s) => s.sessions)
   const connectToSession = useChatStore((s) => s.connectToSession)
   const stopBackgroundTask = useChatStore((s) => s.stopBackgroundTask)
@@ -571,7 +572,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       ? sessionState.historyError || t('session.historyLoadFailed')
       : null
   const visibleMessageCount = messages.length > 0 ? messages.length : session?.messageCount ?? 0
-  const headerTitle = session?.title || t('session.untitled')
+  const headerTitle = session?.title || activeTabTitle || t('session.untitled')
   const currentGitInfo = sessionGitInfo?.sessionId === activeTabId ? sessionGitInfo.info : null
   const worktree = currentGitInfo?.worktree?.enabled ? currentGitInfo.worktree : null
   const worktreePath = worktree?.path || worktree?.plannedPath || null

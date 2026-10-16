@@ -45,6 +45,10 @@ import {
 } from '../services/providerRuntimeEnv.js'
 import { isOpenAIOfficialProviderId } from '../services/openaiOfficialProvider.js'
 import { isGrokOfficialProviderId } from '../services/grokOfficialProvider.js'
+import {
+  DEEPSEEK_ACCOUNT_PROVIDER,
+  isDeepSeekAccountProviderId,
+} from '../services/deepseekAccountProvider.js'
 import { getDesktopOpenAICodexModelCatalog } from '../services/openaiModelCatalog.js'
 import {
   OPENAI_DEFAULT_MAIN_MODEL,
@@ -5322,6 +5326,7 @@ function isKnownRuntimeProviderId(
   return (
     isOpenAIOfficialProviderId(providerId) ||
     isGrokOfficialProviderId(providerId) ||
+    isDeepSeekAccountProviderId(providerId) ||
     providers.some((provider) => provider.id === providerId)
   )
 }
@@ -5470,6 +5475,10 @@ async function getDefaultRuntimeSettings(): Promise<RuntimeSettings> {
     } else if (isGrokOfficialProviderId(resolvedActiveId)) {
       model = model || GROK_DEFAULT_MAIN_MODEL
       effort = (await getGrokReasoningEfforts(model)).defaultEffort
+    } else if (isDeepSeekAccountProviderId(resolvedActiveId)) {
+      // Built-in, so absent from the saved list; its models are the preset's.
+      model = model || DEEPSEEK_ACCOUNT_PROVIDER.models.main
+      effort = await normalizeSavedProviderRuntimeEffort(resolvedActiveId, model, effort)
     } else {
       const activeProvider = providers.find((provider) => provider.id === resolvedActiveId)
       effort = await normalizeSavedProviderRuntimeEffort(

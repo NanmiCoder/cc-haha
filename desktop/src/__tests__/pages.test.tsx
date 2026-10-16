@@ -244,8 +244,8 @@ describe('Content-only pages render without errors', () => {
       await Promise.resolve()
     })
     expect(screen.getByText('Add files or photos')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('option', { name: 'More tools' }))
-    expect(screen.getByText('Slash commands')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /Slash commands/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'More tools' })).not.toBeInTheDocument()
   })
 
   it('ActiveSession renders with chat components', () => {

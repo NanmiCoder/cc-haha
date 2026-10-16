@@ -31,8 +31,11 @@ describe('StreamToolInputDurationGuard', () => {
     })
 
     guard.start(1)
+    expect(guard.hasActiveInput()).toBe(true)
     guard.stop(1)
+    expect(guard.hasActiveInput()).toBe(false)
     disabled.start(2)
+    expect(disabled.hasActiveInput()).toBe(false)
     await Bun.sleep(15)
 
     expect(timedOut).toEqual([])

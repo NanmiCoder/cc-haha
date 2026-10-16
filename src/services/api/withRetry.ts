@@ -197,7 +197,8 @@ export class FallbackTriggeredError extends Error {
  *   Nothing ruled on the request, so it gets the stream-creation budget.
  * - watchdog: an idle stall. The attempt already burned its idle budget.
  * - transient: an error the upstream itself reported inside the stream
- *   (api_error/overloaded_error).
+ *   (api_error/overloaded_error). It is the verdict a 500/529 status would
+ *   have carried at stream creation, so it gets that budget too.
  */
 export type StreamRetryKind = 'transport' | 'watchdog' | 'transient'
 
@@ -301,14 +302,25 @@ const PROXY_STREAM_TRANSPORT_ERROR_TYPES: ReadonlySet<string> = new Set([
   'stream_truncated',
 ])
 
-export function isProxyStreamTransportError(error: unknown): boolean {
-  if (isOpenAIPolicyError(error)) return false
+function streamErrorEventType(error: unknown): unknown {
   // The SDK raises an SSE `error` event as a status-less APIError whose
   // `error` is the parsed event: { type: 'error', error: { type, message } }.
-  if (!(error instanceof APIError) || error.status !== undefined) return false
-  const event = error.error as { error?: { type?: unknown } } | undefined
-  const type = event?.error?.type
+  if (!(error instanceof APIError) || error.status !== undefined) return undefined
+  return (error.error as { error?: { type?: unknown } } | undefined)?.error?.type
+}
+
+export function isProxyStreamTransportError(error: unknown): boolean {
+  if (isOpenAIPolicyError(error)) return false
+  const type = streamErrorEventType(error)
   return typeof type === 'string' && PROXY_STREAM_TRANSPORT_ERROR_TYPES.has(type)
+}
+
+/**
+ * The upstream rejected the request inside the stream. Unlike a broken stream,
+ * re-sending it without streaming only gets the same answer.
+ */
+export function isStreamRequestRejection(error: unknown): boolean {
+  return streamErrorEventType(error) === 'invalid_request_error'
 }
 
 /**
@@ -370,27 +382,27 @@ function getStreamTransientRetryOverride(): number | undefined {
 }
 
 /**
- * Max times withStreamRetry() re-establishes a stream after a watchdog stall
- * or an upstream-reported transient error. Small by default — a malformed
- * tool_call or a one-off blip usually clears on the first retry, and a stalled
- * attempt already burned its idle budget. Override with
- * CLAUDE_STREAM_TRANSIENT_RETRY_MAX; values are capped at 5 so a bad
- * environment value cannot make it unbounded.
+ * Max times withStreamRetry() re-establishes a stream after a watchdog stall.
+ * Small by default — a stalled attempt already burned its idle budget.
+ * Override with CLAUDE_STREAM_TRANSIENT_RETRY_MAX; values are capped at 5 so a
+ * bad environment value cannot make it unbounded.
  */
 export function getMaxStreamTransientRetries(): number {
   return getStreamTransientRetryOverride() ?? DEFAULT_MAX_STREAM_TRANSIENT_RETRIES
 }
 
 /**
- * Retry budget for one kind of mid-stream failure. A transport failure is a
- * request that never got an answer, so it gets the same budget as a stream
- * that failed to open (CLAUDE_CODE_MAX_RETRIES, default 10); otherwise an
- * unattended run drops out on the first flaky upstream. An explicit
- * CLAUDE_STREAM_TRANSIENT_RETRY_MAX also caps it, so 0 still disables every
- * mid-stream retry.
+ * Retry budget for one kind of mid-stream failure. A transport failure never
+ * got an answer, and an upstream-reported api_error/overloaded_error is the
+ * answer a 500/529 at stream creation would have given, so both get the budget
+ * of a stream that failed to open (CLAUDE_CODE_MAX_RETRIES, default 10).
+ * Otherwise a relay that reports "overloaded" inside its 200 SSE body ends the
+ * turn within two seconds, while the same error as a status waits minutes. An
+ * explicit CLAUDE_STREAM_TRANSIENT_RETRY_MAX also caps it, so 0 still disables
+ * every mid-stream retry.
  */
 export function getMaxStreamRetries(kind: StreamRetryKind): number {
-  if (kind !== 'transport') return getMaxStreamTransientRetries()
+  if (kind === 'watchdog') return getMaxStreamTransientRetries()
   const configured = getDefaultMaxRetries()
   const apiRetries =
     Number.isFinite(configured) && configured >= 0

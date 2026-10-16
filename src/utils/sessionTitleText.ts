@@ -33,7 +33,31 @@ export function cleanSessionTitleSource(raw: string): string {
   }
 
   const stripped = raw.replace(XML_TAG_BLOCK_PATTERN, ' ')
-  return normalizeTitleWhitespace(stripped)
+  return normalizeTitleWhitespace(replaceCapabilitySentences(stripped))
+}
+
+// The fixed sentences a composer skill/plugin pill sends to the model
+// (`buildCapabilityMentions` in capabilityMentionService.ts). A title shows the
+// capability the user picked, not the instruction behind it.
+const JSON_STRING = '"(?:[^"\\\\]|\\\\.)*"'
+const CAPABILITY_SENTENCE = new RegExp(
+  `Use the Skill tool with skill: (${JSON_STRING}) for this request\\.`
+  + `|Use the enabled plugin (${JSON_STRING}) for this request\\. Available skill identities: \\[.*?\\]\\. `
+  + 'MCP server identities: \\[.*?\\]\\. Invoke skills using the Skill tool and use only tools currently available from these servers\\. '
+  + 'If unavailable or authentication is required, report that; do not install or authenticate automatically\\.',
+  'g',
+)
+
+function replaceCapabilitySentences(text: string): string {
+  return text.replace(CAPABILITY_SENTENCE, (sentence, skillJson?: string, pluginJson?: string) => {
+    try {
+      const id: unknown = JSON.parse(skillJson ?? pluginJson ?? '')
+      if (typeof id !== 'string' || !id) return sentence
+      return skillJson ? `/${id}` : `@${id.split('@')[0] || id}`
+    } catch {
+      return sentence
+    }
+  })
 }
 
 export function hasSessionTitleMarkup(raw: string): boolean {

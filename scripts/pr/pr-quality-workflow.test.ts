@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { parse } from 'yaml'
 
 type WorkflowJob = {
@@ -23,7 +23,7 @@ describe('PR quality workflow', () => {
     const setupBunStepCount = workflow.match(/uses: oven-sh\/setup-bun@v2/g)?.length ?? 0
     const versionFileCount = workflow.match(/bun-version-file: package\.json/g)?.length ?? 0
 
-    expect(packageJson.packageManager).toBe('bun@1.3.14')
+    expect(packageJson.packageManager).toBe('bun@1.4.3')
     expect(setupBunStepCount).toBeGreaterThan(0)
     expect(versionFileCount).toBe(setupBunStepCount)
     expect(workflow).not.toContain('bun-version:')
@@ -97,6 +97,16 @@ describe('PR quality workflow', () => {
       expect(ripgrep).toBeGreaterThanOrEqual(0)
       expect(ripgrep).toBeLessThan(check)
     }
+  })
+
+  test('reads CODEOWNERS for the policy exemption from the base branch, not the PR', () => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const runs = (jobs['scope-plan'].steps ?? []).map(step => step.run ?? '').join('\n')
+
+    expect(runs).toContain(`jq -r '.pull_request.user.login' "$GITHUB_EVENT_PATH" > author.txt`)
+    expect(runs).toContain('git show "origin/${BASE_REF}:.github/CODEOWNERS" > codeowners.txt')
+    expect(runs).toContain('--author-file author.txt --codeowners-file codeowners.txt')
+    expect(runs).not.toMatch(/cat \.github\/CODEOWNERS|--codeowners-file \.github\/CODEOWNERS/)
   })
 
   test('installs adapter dependencies before desktop checks compile the sidecar bundle', () => {
@@ -263,6 +273,30 @@ describe('PR quality workflow', () => {
     expect(steps.some((step) => String(step.run ?? '').includes('secrets'))).toBe(false)
   })
 
+  test('check:policy names only test files that exist, each as its own argument', () => {
+    // Two paths glued together ("a.test.ts./b.test.ts") silently drop both files
+    // from the run instead of failing it.
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }
+    const args = packageJson.scripts['check:policy']!.split(/\s+/).slice(2)
+    expect(args.length).toBeGreaterThan(20)
+    for (const arg of args) {
+      expect(arg, arg).toMatch(/^\.\/[^\s]+\.test\.ts$/)
+      expect(arg.slice(2).includes('./'), arg).toBe(false)
+      expect(existsSync(arg), arg).toBe(true)
+    }
+  })
+
+  test('replays recorded traffic in CI but never records it there', () => {
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8')) as { scripts: Record<string, string> }
+    // check:agent-e2e is what the agent-e2e job runs; it must include the replay lane.
+    expect(packageJson.scripts['check:agent-e2e']).toContain('scripts/quality-gate/replay/index.ts')
+    for (const file of ['.github/workflows/pr-quality.yml', '.github/workflows/nightly-quality.yml']) {
+      const workflow = readFileSync(file, 'utf8')
+      expect(workflow, file).not.toContain('record-cassettes')
+      expect(workflow, file).not.toContain('replay/record.ts')
+    }
+  })
+
   test('routes the deterministic agent flow through the scope plan and keeps its evidence', () => {
     const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
     const jobs = workflowJobs(workflow)
@@ -310,6 +344,22 @@ describe('full quality workflow', () => {
     expect(workflow.match(/persist-credentials: false/g)?.length).toBe(
       workflow.match(/uses: actions\/checkout@v4/g)?.length,
     )
+  })
+
+  test('installs ripgrep before every runtime suite in every workflow', () => {
+    // Agent and skill discovery lists files through ripgrep. A job that runs the
+    // runtime suites without it reports "create agent" as a 500, which kept the
+    // full sweep red on every run while the PR gate, which installs it, stayed green.
+    for (const file of ['.github/workflows/pr-quality.yml', '.github/workflows/nightly-quality.yml']) {
+      for (const [name, job] of Object.entries(workflowJobs(readFileSync(file, 'utf8')))) {
+        const steps = job.steps ?? []
+        const check = steps.findIndex(step => /\bcheck:(server|coverage|native)\b/.test(step.run ?? ''))
+        if (check < 0) continue
+        const ripgrep = steps.findIndex(step => step.run?.includes('apt-get install') && /\bripgrep\b/.test(step.run))
+        expect(ripgrep, `${file} ${name} must install ripgrep`).toBeGreaterThanOrEqual(0)
+        expect(ripgrep, `${file} ${name} must install ripgrep before its runtime suites`).toBeLessThan(check)
+      }
+    }
   })
 
   test('re-proves the dependency graph so PR selection cannot silently degrade', () => {

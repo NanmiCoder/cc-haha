@@ -855,7 +855,11 @@ describe('trace capture service', () => {
         method: 'POST', headers: { 'X-Claude-Code-Session-Id': 'fixture-root' },
         body: JSON.stringify({ model: 'gpt-6-astra', max_tokens: 16, messages: [{ role: 'user', content: 'Audit 中文 '.repeat(1000) }] }),
       })).text()
-      const trace = await waitForTrace('session-zstd-audit', snapshot => Boolean(snapshot.calls[0]?.response))
+      const trace = await waitForTrace(
+        'session-zstd-audit',
+        snapshot => Boolean(snapshot.calls[0]?.response)
+          && snapshot.events.some((event) => event.phase === 'api_call_completed'),
+      )
       expect(trace.calls).toHaveLength(1)
       const call = trace.calls[0]
       expect(call.request.headers['content-encoding']).toBe('zstd')
@@ -1088,13 +1092,17 @@ describe('trace capture service', () => {
       await new Promise((resolve) => setTimeout(resolve, 20))
       abortController.abort()
 
+      // The aborted event is written after the call record; wait for it so the
+      // write does not outlive the test and land in a removed temp dir.
       const trace = await waitForTrace(
         'session-direct-abort-bare',
-        (snapshot) => snapshot.calls[0]?.status === 'error',
+        (snapshot) => snapshot.calls[0]?.status === 'error'
+          && snapshot.events.some((event) => event.phase === 'api_call_aborted'),
       )
       expect(trace.calls[0].status).toBe('error')
       expect(trace.calls[0].error?.name).toBe('AbortError')
       expect(trace.calls[0].metadata).toMatchObject({ phase: 'api_call_aborted', aborted: true })
+      expect(trace.events.map((event) => event.phase)).toEqual(['api_call_started', 'api_call_aborted'])
     } finally {
       globalThis.fetch = originalFetch
       if (originalTraceEnv === undefined) delete process.env.CC_HAHA_TRACE_API_CALLS

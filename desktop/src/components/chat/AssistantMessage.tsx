@@ -25,6 +25,7 @@ import { useTranslation, type TranslationKey } from '../../i18n'
 import { useDiskConfirmedTargets } from '../../hooks/useDiskConfirmedTargets'
 import { useTurnWrittenTargets } from '../../hooks/useTurnWrittenTargets'
 import { createWorkspaceFileLinkVerifier } from '../../lib/workspaceFileStats'
+import type { PreviewLinkTarget } from '@/lib/previewLinkRouter'
 
 type Props = {
   content: string
@@ -64,7 +65,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   const [viewer, setViewer] = useState<{ images: Array<{ src: string; name: string; path?: string }>; index: number } | null>(null)
 
   const handleLinkClick = useCallback(
-    (href: string, event: ReactMouseEvent<HTMLDivElement>): boolean => {
+    (href: PreviewLinkTarget, event: ReactMouseEvent<HTMLDivElement>): boolean => {
       if (!sessionId) return false
       const handled = openPreviewLink(resolveAssistantFileHref(href, content), sessionId)
       if (handled) event.preventDefault()

@@ -43,7 +43,7 @@ describe('remote browser API routing', () => {
       const result = data.provider ?? data.providers[0]
       expect(result.apiKey).toBe('')
       expect(result.hasApiKey).toBe(true)
-      expect(result.imageGeneration).toEqual({ model: 'fixture-image', apiKey: '', hasApiKey: true })
+      expect(result.imageGeneration).toEqual({ protocol: 'openai_images', model: 'fixture-image', apiKey: '', hasApiKey: true })
       expect(result.requestCompatibility).toEqual({ maxOutputTokens: 2048 })
       expect(JSON.stringify(data)).not.toContain('fake-existing-key')
       expect(JSON.stringify(data)).not.toContain('fake-top-level-secret')

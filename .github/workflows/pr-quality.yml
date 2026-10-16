@@ -58,10 +58,17 @@ jobs:
           REPOSITORY: ${{ github.repository }}
           PUSH_BEFORE: ${{ github.event.before }}
           PUSH_AFTER: ${{ github.sha }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
+          : > author.txt
+          : > codeowners.txt
           if [ "$EVENT_NAME" = "pull_request" ]; then
             gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --paginate --jq '.[].filename' > changed-files.txt
             jq -r '.pull_request.labels[].name' "$GITHUB_EVENT_PATH" > labels.txt
+            # A CODEOWNER's own PR needs no maintainer-approval label. Owners come
+            # from the base branch, so a PR cannot add its author to the list.
+            jq -r '.pull_request.user.login' "$GITHUB_EVENT_PATH" > author.txt
+            git show "origin/${BASE_REF}:.github/CODEOWNERS" > codeowners.txt 2>/dev/null || : > codeowners.txt
           else
             # A push to main: scope the run to what the push brought in. A new branch
             # or a force push has no usable "before", so fall back to the last commit.
@@ -75,7 +82,7 @@ jobs:
 
       - name: Build deterministic scope plan
         id: policy
-        run: bun run scripts/pr/change-policy.ts --files changed-files.txt --labels-file labels.txt --plan-only
+        run: bun run scripts/pr/change-policy.ts --files changed-files.txt --labels-file labels.txt --author-file author.txt --codeowners-file codeowners.txt --plan-only
 
   policy-enforcement:
     name: policy-enforcement
@@ -247,7 +254,7 @@ jobs:
           bun-version-file: package.json
       - name: Install root dependencies
         run: bun install --frozen-lockfile
-      - name: Run the agent loop against a mock LLM
+      - name: Run the agent loop against a mock LLM and recorded traffic
         run: bun run check:agent-e2e
       - name: Upload agent e2e artifacts
         if: always()

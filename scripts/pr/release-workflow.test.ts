@@ -132,6 +132,26 @@ describe('release desktop workflow', () => {
     }
   })
 
+  test('Linux desktop builds package node-pty compiled for the glibc floor package-smoke enforces', () => {
+    for (const workflowPath of [
+      '.github/workflows/build-desktop-dev.yml',
+      '.github/workflows/release-desktop.yml',
+    ]) {
+      const workflow = readFileSync(workflowPath, 'utf8')
+      const rebuildStep = extractStep(workflow, 'Rebuild node-pty for the Linux glibc floor')
+
+      expect(rebuildStep, workflowPath).toContain("if: matrix.smoke_platform == 'linux'")
+      expect(rebuildStep, workflowPath).toContain('working-directory: desktop')
+      expect(rebuildStep, workflowPath).toContain('bash ./scripts/rebuild-node-pty-linux.sh')
+      expect(workflow.indexOf('Build renderer and Electron bundles'), workflowPath)
+        .toBeLessThan(workflow.indexOf('Rebuild node-pty for the Linux glibc floor'))
+      expect(workflow.indexOf('Rebuild node-pty for the Linux glibc floor'), workflowPath)
+        .toBeLessThan(workflow.indexOf(electronBuilderCli))
+      expect(extractStep(workflow, 'Verify packaged app structure'), workflowPath)
+        .toContain("${{ matrix.smoke_platform == 'linux' && '--max-linux-glibc 2.28' || '' }}")
+    }
+  })
+
   test('development desktop artifacts exclude unpacked macOS app bundles and updater-only files', () => {
     const workflow = readFileSync('.github/workflows/build-desktop-dev.yml', 'utf8')
     const collectStep = workflow.match(

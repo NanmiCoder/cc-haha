@@ -132,11 +132,28 @@ export function modelSupportsThinking(model: string): boolean {
 }
 
 export function modelRequiresThinking(model: string): boolean {
+  const adaptiveOnly = isAdaptiveOnlyModel(getCanonicalName(model))
   const required3P = get3PModelCapabilityOverride(model, 'required_thinking')
   if (required3P !== undefined) {
-    return required3P
+    // Generic provider capabilities omit required_thinking. An adaptive-only
+    // model keeps the requirement while its route still declares adaptive
+    // thinking; only dropping adaptive_thinking opts out.
+    return required3P || (adaptiveOnly && modelSupportsAdaptiveThinking(model))
   }
-  return isAdaptiveOnlyModel(getCanonicalName(model))
+  return adaptiveOnly
+}
+
+/**
+ * Claude models whose API rejects manual `budget_tokens` thinking with a 400
+ * (platform.claude.com/docs/en/build-with-claude/thinking, per-model table).
+ * Opting out of adaptive thinking cannot fall back to a budget on these.
+ */
+export function modelRejectsManualThinking(model: string): boolean {
+  const canonical = getCanonicalName(model)
+  return (
+    /claude-(opus|sonnet|haiku|fable|mythos)-5(?!\d)/.test(canonical) ||
+    /claude-opus-4-[78](?!\d)/.test(canonical)
+  )
 }
 
 /** Fable 5.1 binds replayed thinking to the preceding system, tools and history. */
@@ -179,6 +196,7 @@ export function modelSupportsAdaptiveThinking(model: string): boolean {
   // Supported by current Claude Code flagship models.
   if (
     canonical.includes('sonnet-5') ||
+    canonical.includes('haiku-5') ||
     canonical.includes('opus-5') ||
     canonical.includes('opus-4-8') ||
     canonical.includes('opus-4-7') ||

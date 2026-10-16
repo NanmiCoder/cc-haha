@@ -1361,7 +1361,25 @@ describe('Settings > General tab', () => {
       await act(async () => { fireEvent.click(toggle) })
       expect(toggle).not.toBeChecked()
       expect(updateUser).toHaveBeenLastCalledWith({ agentTeamsEnabled: false })
-      await act(async () => { fireEvent.click(toggle) })
+      updateUser.mockClear()
+
+      // Turning it back on first explains the cost; nothing is saved until
+      // the user confirms, and cancelling leaves it off.
+      fireEvent.click(toggle)
+      const dialog = screen.getByRole('dialog')
+      expect(dialog).toHaveTextContent('Uses a lot of tokens')
+      expect(dialog).toHaveTextContent('Slower to finish')
+      expect(dialog).toHaveTextContent('Not suited to every task')
+      expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument()
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(toggle).not.toBeChecked()
+      expect(updateUser).not.toHaveBeenCalled()
+
+      fireEvent.click(toggle)
+      await act(async () => {
+        fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Turn on anyway' }))
+      })
       expect(toggle).toBeChecked()
       expect(updateUser).toHaveBeenLastCalledWith({ agentTeamsEnabled: true })
     } finally {
@@ -2325,6 +2343,7 @@ describe('Settings > Providers tab', () => {
       'openai-official-provider',
       'claude-official-provider',
       'grok-official-provider',
+      'deepseek-account-provider',
     ])
   })
 
@@ -2340,6 +2359,7 @@ describe('Settings > Providers tab', () => {
       'claude-official-provider',
       'openai-official-provider',
       'grok-official-provider',
+      'deepseek-account-provider',
     ])
   })
 

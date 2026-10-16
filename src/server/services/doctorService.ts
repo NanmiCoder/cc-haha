@@ -220,6 +220,12 @@ export class DoctorService {
         'user',
         path.join(this.configDir, 'cc-haha', 'grok-oauth.json'),
       ),
+      this.jsonTarget(
+        'deepseek-oauth',
+        'DeepSeek account token',
+        'user',
+        path.join(this.configDir, 'cc-haha', 'deepseek-oauth.json'),
+      ),
     ]
 
     if (this.projectRoot) {

@@ -1,6 +1,7 @@
 import type { MarkedExtension, Tokens } from 'marked'
 import { isBareUrlOnly, matchBareUrl } from './urlBoundary'
 import { parseFilePathRef, splitTextByFilePaths, type FilePathRef } from './filePathBoundary'
+import type { PreviewFileRef } from './previewLinkRouter'
 
 /**
  * Replace marked's built-in GFM `url` tokenizer with a CJK-aware one.
@@ -102,19 +103,19 @@ export function unwrapGuessedFileLinks(container: ParentNode, keep: (path: strin
 }
 
 /**
- * Rebuild the `path:line` reference an anchor stands for.
- *
- * Since the target travels in `data-*`, this is how it gets back to a string —
- * and re-serializing to the reference syntax keeps `classifyPreviewLink` the
- * single parser for both these anchors and hand-written markdown destinations.
+ * Read the already-parsed filesystem reference an anchor stands for. Keep it
+ * structured: turning it back into an href would decode literal `%20` again.
  */
-export function fileRefFromElement(element: HTMLElement | null | undefined): string | null {
+export function fileRefFromElement(element: HTMLElement | null | undefined): PreviewFileRef | null {
   const path = element?.dataset.filePath
   if (!path) return null
-  const line = element?.dataset.fileLine
-  const column = element?.dataset.fileColumn
-  if (!line) return path
-  return column ? `${path}:${line}:${column}` : `${path}:${line}`
+  const line = Number(element?.dataset.fileLine)
+  const column = Number(element?.dataset.fileColumn)
+  return {
+    path,
+    ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}),
+    ...(Number.isSafeInteger(column) && column > 0 ? { column } : {}),
+  }
 }
 
 /**

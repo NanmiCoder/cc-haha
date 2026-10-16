@@ -54,6 +54,8 @@ type CommitJob = {
 }
 
 let commitWorker: Worker | null = null
+let createCommitWorker = () => new Worker(commitWorkerScript(), { eval: true })
+let retiringCommitWorker: { worker: Worker; completion: Promise<void> } | null = null
 let nextCommitJobId = 0
 const commitJobs = new Map<number, CommitJob>()
 
@@ -117,6 +119,11 @@ export function getSearchCommitWorkerForTests(): Worker | null {
   return commitWorker
 }
 
+export function setSearchCommitWorkerFactoryForTests(factory?: () => Worker): void {
+  if (commitWorker || commitJobs.size > 0 || retiringCommitWorker) throw new Error('Cannot replace an active search commit worker')
+  createCommitWorker = factory ?? (() => new Worker(commitWorkerScript(), { eval: true }))
+}
+
 function settleCommitJob(job: CommitJob, error?: unknown): void {
   if (!commitJobs.delete(job.id)) return
   job.signal?.removeEventListener('abort', job.abort)
@@ -134,11 +141,45 @@ function retireCommitWorker(worker: Worker, error: unknown): void {
   }
 }
 
+function terminateCommitWorker(worker: Worker, error: unknown): void {
+  if (retiringCommitWorker?.worker === worker) return
+  if (commitWorker === worker) commitWorker = null
+  // terminate() cannot interrupt Atomics.wait. Cancel and wake every gate,
+  // including a queued job the worker may already have claimed, before asking
+  // the thread to stop. Keep its callers pending until native teardown finishes.
+  for (const job of commitJobs.values()) {
+    if (job.worker !== worker) continue
+    job.cancelled = true
+    job.failure ??= error
+    Atomics.store(job.gate, 0, GATE_CANCEL)
+    Atomics.notify(job.gate, 0)
+  }
+  let resolve!: () => void
+  let reject!: (error: unknown) => void
+  const completion = new Promise<void>((onResolve, onReject) => { resolve = onResolve; reject = onReject })
+  const retirement = { worker, completion }
+  retiringCommitWorker = retirement
+  // A failed termination cannot prove the old SQLite connection is closed.
+  // Fail future commits rather than opening another worker over that teardown.
+  void completion.catch(() => {})
+  const failed = (terminationError: unknown) => { retireCommitWorker(worker, terminationError); reject(terminationError) }
+  try {
+    void worker.terminate().then(() => {
+      retireCommitWorker(worker, error)
+      if (retiringCommitWorker === retirement) retiringCommitWorker = null
+      resolve()
+    }, failed)
+  } catch (terminationError) { failed(terminationError) }
+}
+
 function getCommitWorker(): Worker {
   if (commitWorker) return commitWorker
-  const worker = new Worker(commitWorkerScript(), { eval: true })
+  const worker = createCommitWorker()
   commitWorker = worker
   worker.on('message', (message: { type: string; id: number; message?: string }) => {
+    // A complete/failed message can beat the terminate Promise. DETACH has
+    // finished, but the worker's in-memory SQLite connection is still closing.
+    if (retiringCommitWorker?.worker === worker) return
     const job = commitJobs.get(message.id)
     if (!job || job.worker !== worker) return
     if (message.type === 'complete') settleCommitJob(job, job.failure)
@@ -155,10 +196,11 @@ function getCommitWorker(): Worker {
     }
   })
   worker.on('error', error => {
-    retireCommitWorker(worker, error)
-    void worker.terminate()
+    terminateCommitWorker(worker, error)
   })
-  worker.on('exit', code => retireCommitWorker(worker, new Error(`Search commit worker exited before commit (${code})`)))
+  worker.on('exit', code => {
+    if (retiringCommitWorker?.worker !== worker) retireCommitWorker(worker, new Error(`Search commit worker exited before commit (${code})`))
+  })
   return worker
 }
 
@@ -175,17 +217,10 @@ function cancelCommitJob(job: CommitJob, reason: unknown): void {
     for (const other of [...commitJobs.values()]) {
       if (other.worker !== job.worker || other === job) continue
       const restarted = new Error('Search commit worker restarted')
-      if (Atomics.compareExchange(other.gate, 0, GATE_PENDING, GATE_CANCEL) === GATE_PENDING) {
-        settleCommitJob(other, restarted)
-        continue
-      }
       other.cancelled = true
       other.failure ??= restarted
-      Atomics.store(other.gate, 0, GATE_CANCEL)
-      Atomics.notify(other.gate, 0)
     }
-    if (commitWorker === job.worker) commitWorker = null
-    void job.worker.terminate()
+    terminateCommitWorker(job.worker, reason)
     return
   }
   if (Atomics.compareExchange(job.gate, 0, GATE_PENDING, GATE_CANCEL) === GATE_PENDING) {
@@ -199,7 +234,7 @@ function cancelCommitJob(job: CommitJob, reason: unknown): void {
   Atomics.notify(job.gate, 0)
 }
 
-export function commitSearchContentSpool(options: {
+export async function commitSearchContentSpool(options: {
   databasePath: string
   spoolPath: string
   source: SearchContentSourceWrite
@@ -208,6 +243,10 @@ export function commitSearchContentSpool(options: {
   onStarted?: () => void
 }): Promise<void> {
   if (options.signal?.aborted) return Promise.reject(options.signal.reason ?? new DOMException('Aborted', 'AbortError'))
+  // Replacing a terminated worker while its old SQLite connection is being
+  // destroyed races bun:sqlite's native handle lifecycle across threads.
+  while (retiringCommitWorker) await retiringCommitWorker.completion
+  if (options.signal?.aborted) throw options.signal.reason ?? new DOMException('Aborted', 'AbortError')
   return new Promise<void>((resolve, reject) => {
     const worker = getCommitWorker()
     const gate = new Int32Array(new SharedArrayBuffer(4))

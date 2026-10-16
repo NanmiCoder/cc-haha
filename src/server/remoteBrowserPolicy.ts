@@ -70,6 +70,7 @@ export function projectRemoteProvider(provider: SavedProvider) {
     } : {}),
     ...(provider.imageGeneration ? {
       imageGeneration: {
+        protocol: provider.imageGeneration.protocol ?? 'openai_images',
         model: provider.imageGeneration.model,
         ...(provider.imageGeneration.baseUrl !== undefined ? { baseUrl: provider.imageGeneration.baseUrl } : {}),
         apiKey: '', hasApiKey: !!provider.imageGeneration.apiKey,

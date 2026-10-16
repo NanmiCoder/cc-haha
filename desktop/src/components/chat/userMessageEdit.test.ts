@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { UIAttachment, UIMessage } from '../../types/chat'
+import { withAgentTeamRequest } from '../../lib/agentTeamRequest'
+import { useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
 import { formatWorkspaceReferencePrompt, type WorkspaceChatReference } from '../../stores/workspaceChatContextStore'
 import {
   buildUserMessageResendPayload,
@@ -290,5 +292,52 @@ describe('countLaterUserTurns', () => {
     expect(countLaterUserTurns(messages, 'u1')).toBe(2)
     expect(countLaterUserTurns(messages, 'u3')).toBe(0)
     expect(countLaterUserTurns(messages, 'missing')).toBe(0)
+  })
+})
+
+describe('capability pills in edit and resend', () => {
+  const SKILL = 'Use the Skill tool with skill: "frontend-design" for this request.'
+
+  it('restores the team switch and the skill pill, and sends both again', () => {
+    const modelContent = withAgentTeamRequest(`${SKILL} 做个落地页`)
+    const draft = createUserMessageEditDraft({ content: '@Frontend Design 做个落地页', modelContent })
+
+    expect(draft).toEqual({
+      text: '@frontend-design 做个落地页',
+      attachments: [],
+      sessionReferences: [],
+      agentTeam: true,
+      mentions: [{ label: '@frontend-design', modelText: SKILL }],
+    })
+
+    const payload = buildUserMessageResendPayload({ ...draft, text: '@frontend-design 做个官网' }, labels)
+    expect(payload?.content).toBe(withAgentTeamRequest(`${SKILL} 做个官网`))
+    expect(payload?.options.displayContent).toBe('@frontend-design 做个官网')
+  })
+
+  it('sends neither the team block nor the skill once the user removes them', () => {
+    const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页`, modelContent: withAgentTeamRequest(`${SKILL} 做个落地页`) })
+    const payload = buildUserMessageResendPayload({ ...draft, text: '做个落地页', agentTeam: false }, labels)
+    expect(payload?.content).toBe('做个落地页')
+  })
+
+  it('edits a pill under the name the composer showed and still sends its identity', () => {
+    useCapabilityCatalogStore.getState().remember([
+      { kind: 'skill', id: 'frontend-design', name: 'frontend-design', displayName: 'Frontend Design', description: '', source: 'skills', modelText: SKILL },
+    ])
+    try {
+      const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页` })
+      expect(draft.text).toBe('@Frontend Design 做个落地页')
+      expect(buildUserMessageResendPayload(draft, labels)?.content).toBe(`${SKILL} 做个落地页`)
+    } finally {
+      useCapabilityCatalogStore.setState({ entries: {} })
+    }
+  })
+
+  it('keeps a reloaded skill message editable without the English instruction', () => {
+    const draft = createUserMessageEditDraft({ content: `${SKILL} 做个落地页` })
+    expect(draft.text).toBe('@frontend-design 做个落地页')
+    expect(draft.agentTeam).toBeUndefined()
+    expect(buildUserMessageResendPayload(draft, labels)?.content).toBe(`${SKILL} 做个落地页`)
   })
 })

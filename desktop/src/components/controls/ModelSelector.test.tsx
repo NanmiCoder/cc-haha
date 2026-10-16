@@ -20,6 +20,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useHahaOAuthStore } from '../../stores/hahaOAuthStore'
 import { useHahaOpenAIOAuthStore } from '../../stores/hahaOpenAIOAuthStore'
 import { useHahaGrokOAuthStore } from '../../stores/hahaGrokOAuthStore'
+import { useHahaDeepSeekOAuthStore } from '../../stores/hahaDeepSeekOAuthStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -52,6 +53,7 @@ afterEach(() => {
   useHahaOAuthStore.setState(useHahaOAuthStore.getInitialState(), true)
   useHahaOpenAIOAuthStore.setState(useHahaOpenAIOAuthStore.getInitialState(), true)
   useHahaGrokOAuthStore.setState(useHahaGrokOAuthStore.getInitialState(), true)
+  useHahaDeepSeekOAuthStore.setState(useHahaDeepSeekOAuthStore.getInitialState(), true)
   useTabStore.setState(useTabStore.getInitialState(), true)
   useUIStore.setState(useUIStore.getInitialState(), true)
 })
@@ -60,6 +62,7 @@ beforeEach(() => {
   useHahaOAuthStore.setState({ fetchStatus: async () => {} })
   useHahaOpenAIOAuthStore.setState({ fetchStatus: async () => {} })
   useHahaGrokOAuthStore.setState({ fetchStatus: async () => {} })
+  useHahaDeepSeekOAuthStore.setState({ fetchStatus: async () => {} })
 })
 
 describe('ModelSelector', () => {
@@ -356,9 +359,13 @@ describe('ModelSelector', () => {
     const fetchGrokStatus = vi.fn(async () => {
       useHahaGrokOAuthStore.setState({ status: { loggedIn: false } })
     })
+    const fetchDeepSeekStatus = vi.fn(async () => {
+      useHahaDeepSeekOAuthStore.setState({ status: { loggedIn: false } })
+    })
     useHahaOAuthStore.setState({ fetchStatus: fetchClaudeStatus })
     useHahaOpenAIOAuthStore.setState({ fetchStatus: fetchOpenAIStatus })
     useHahaGrokOAuthStore.setState({ fetchStatus: fetchGrokStatus })
+    useHahaDeepSeekOAuthStore.setState({ fetchStatus: fetchDeepSeekStatus })
     useSettingsStore.setState({
       locale: 'en',
       availableModels: MODELS,
@@ -391,6 +398,7 @@ describe('ModelSelector', () => {
     expect(fetchClaudeStatus).toHaveBeenCalledTimes(1)
     expect(fetchOpenAIStatus).toHaveBeenCalledTimes(1)
     expect(fetchGrokStatus).toHaveBeenCalledTimes(1)
+    expect(fetchDeepSeekStatus).toHaveBeenCalledTimes(1)
     expect(useTabStore.getState().activeTabId).toBe(SETTINGS_TAB_ID)
     expect(screen.queryByTestId('model-selector-dropdown')).not.toBeInTheDocument()
   })
@@ -399,9 +407,11 @@ describe('ModelSelector', () => {
     const fetchClaudeStatus = vi.fn(async () => {})
     const fetchOpenAIStatus = vi.fn(async () => {})
     const fetchGrokStatus = vi.fn(async () => {})
+    const fetchDeepSeekStatus = vi.fn(async () => {})
     useHahaOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: fetchClaudeStatus })
     useHahaOpenAIOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: fetchOpenAIStatus })
     useHahaGrokOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: fetchGrokStatus })
+    useHahaDeepSeekOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: fetchDeepSeekStatus })
     useSettingsStore.setState({
       locale: 'en',
       currentModel: {
@@ -424,6 +434,7 @@ describe('ModelSelector', () => {
     expect(fetchClaudeStatus).not.toHaveBeenCalled()
     expect(fetchOpenAIStatus).not.toHaveBeenCalled()
     expect(fetchGrokStatus).not.toHaveBeenCalled()
+    expect(fetchDeepSeekStatus).not.toHaveBeenCalled()
     expect(useUIStore.getState().pendingSettingsTab).toBe('providers')
     expect(useTabStore.getState().activeTabId).toBe(SETTINGS_TAB_ID)
   })
@@ -1371,6 +1382,223 @@ describe('ModelSelector', () => {
       modelId: 'grok-4.5',
     })
     expect(screen.queryByRole('button', { name: /Effort:/i })).not.toBeInTheDocument()
+  })
+
+  describe('DeepSeek Account', () => {
+    const savedProvider = {
+      id: 'provider-a',
+      presetId: 'custom',
+      name: 'Provider A',
+      apiKey: '***',
+      baseUrl: 'https://api.example.com',
+      apiFormat: 'anthropic' as const,
+      models: { main: 'provider-main', haiku: '', sonnet: '', opus: '' },
+    }
+
+    function useSavedProviderActive() {
+      useSettingsStore.setState({
+        locale: 'en',
+        availableModels: MODELS,
+        currentModel: MODELS[0],
+        activeProviderName: 'Provider A',
+      })
+      useProviderStore.setState({
+        providers: [savedProvider],
+        activeId: 'provider-a',
+        hasLoadedProviders: true,
+        isLoading: false,
+      })
+      useHahaOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+      useHahaOpenAIOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+      useHahaGrokOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+    }
+
+    it('does not offer DeepSeek Account models while signed out', async () => {
+      useSavedProviderActive()
+      useHahaDeepSeekOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+
+      render(<ModelSelector runtimeKey="session-ds-out" />)
+      await clickByRole(/provider-main/i)
+
+      const dropdown = screen.getByTestId('model-selector-dropdown')
+      expect(dropdown.textContent).toContain('Provider A')
+      expect(dropdown.textContent).not.toContain('DeepSeek Account')
+      expect(dropdown.textContent).not.toContain('deepseek-v4')
+    })
+
+    it('lists the account models once signed in and selects one for the session', async () => {
+      useSavedProviderActive()
+      useHahaDeepSeekOAuthStore.setState({
+        status: { loggedIn: true, name: 'Ada', contact: 'a***@example.com' },
+        fetchStatus: async () => {},
+      })
+
+      render(<ModelSelector runtimeKey="session-ds-in" />)
+      await clickByRole(/provider-main/i)
+
+      const dropdown = screen.getByTestId('model-selector-dropdown')
+      expect(dropdown.textContent).toContain('DeepSeek Account')
+      // The account listing names V4.1 Flash `deepseek-flash`, not the
+      // API-key route's `deepseek-v4-flash`, and the `[1m]` alias row stands
+      // for the listed `deepseek-v4-pro` instead of repeating it.
+      expect(dropdown.textContent).not.toContain('deepseek-v4-flash')
+      expect(within(dropdown).getAllByRole('button', { name: /DeepSeek-V4-Pro/ })).toHaveLength(1)
+      await act(async () => {
+        fireEvent.click(within(dropdown).getByRole('button', { name: /DeepSeek-V4\.1-Flash/ }))
+        await Promise.resolve()
+      })
+
+      expect(useSessionRuntimeStore.getState().selections['session-ds-in']).toMatchObject({
+        providerId: 'deepseek-account',
+        modelId: 'deepseek-flash',
+      })
+    })
+
+    it('builds the account alias rows from the mapping saved in Settings', async () => {
+      useSavedProviderActive()
+      useProviderStore.setState({
+        deepSeekAccountModels: {
+          main: 'deepseek-flash',
+          haiku: 'deepseek-flash',
+          sonnet: 'deepseek-v4-pro',
+          opus: 'deepseek-v4-pro',
+        },
+      })
+      useHahaDeepSeekOAuthStore.setState({
+        status: { loggedIn: true, name: null, contact: null },
+        fetchStatus: async () => {},
+      })
+
+      render(<ModelSelector runtimeKey="session-ds-saved" />)
+      await clickByRole(/provider-main/i)
+
+      const dropdown = screen.getByTestId('model-selector-dropdown')
+      const flash = within(dropdown).getByRole('button', { name: /DeepSeek-V4\.1-Flash/ })
+      expect(flash.textContent).toContain('Main Model · Haiku Model')
+      const pro = within(dropdown).getByRole('button', { name: /DeepSeek-V4-Pro/ })
+      expect(pro.textContent).toContain('Sonnet Model · Opus Model')
+      // The default mapping's `[1m]` alias is not what the user saved.
+      expect(dropdown.textContent).not.toContain('deepseek-v4-pro[1m]')
+      await act(async () => {
+        fireEvent.click(pro)
+        await Promise.resolve()
+      })
+      expect(useSessionRuntimeStore.getState().selections['session-ds-saved']).toMatchObject({
+        providerId: 'deepseek-account',
+        modelId: 'deepseek-v4-pro',
+      })
+    })
+
+    it('offers the models of the live account listing while the account is the default provider', async () => {
+      useHahaOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+      useHahaOpenAIOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+      useHahaGrokOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+      useHahaDeepSeekOAuthStore.setState({ status: { loggedIn: true, name: null, contact: null }, fetchStatus: async () => {} })
+      const listed = [
+        { id: 'deepseek-v4-pro[1m]', name: 'DeepSeek-V4-Pro', description: 'Main model', context: '1048576' },
+        { id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash', description: 'Haiku model', context: '1048576' },
+        { id: 'deepseek-v5-preview', name: 'DeepSeek-V5-Preview', description: '', context: '' },
+      ]
+      useSettingsStore.setState({
+        locale: 'en',
+        availableModels: listed,
+        currentModel: listed[0],
+        activeProviderName: 'DeepSeek Account',
+      })
+      useProviderStore.setState({
+        providers: [],
+        activeId: 'deepseek-account',
+        hasLoadedProviders: true,
+        isLoading: false,
+      })
+
+      render(<ModelSelector runtimeKey="session-ds-live" />)
+      await clickByRole(/DeepSeek-V4-Pro/i)
+
+      const dropdown = screen.getByTestId('model-selector-dropdown')
+      await act(async () => {
+        fireEvent.click(within(dropdown).getByRole('button', { name: /DeepSeek-V5-Preview/ }))
+        await Promise.resolve()
+      })
+      expect(useSessionRuntimeStore.getState().selections['session-ds-live']).toMatchObject({
+        providerId: 'deepseek-account',
+        modelId: 'deepseek-v5-preview',
+      })
+    })
+
+    it('keeps a restored DeepSeek Account selection instead of falling back to the saved provider', () => {
+      useSavedProviderActive()
+      useHahaDeepSeekOAuthStore.setState({ status: null, fetchStatus: async () => {} })
+      useSessionRuntimeStore.getState().setSelection('session-ds-restored', {
+        providerId: 'deepseek-account',
+        modelId: 'deepseek-v4-pro[1m]',
+      })
+
+      render(<ModelSelector runtimeKey="session-ds-restored" />)
+
+      expect(screen.getByRole('button', { name: /DeepSeek-V4-Pro, DeepSeek Account/ })).toBeInTheDocument()
+    })
+
+    it('fetches the DeepSeek sign-in status when the selector opens', async () => {
+      useSavedProviderActive()
+      const fetchStatus = vi.fn(async () => {})
+      useHahaDeepSeekOAuthStore.setState({ status: null, fetchStatus })
+
+      render(<ModelSelector runtimeKey="session-ds-lazy" />)
+      expect(fetchStatus).not.toHaveBeenCalled()
+      await clickByRole(/provider-main/i)
+
+      expect(fetchStatus).toHaveBeenCalledTimes(1)
+    })
+
+    it('opens the selector instead of routing to settings when DeepSeek is the only login', async () => {
+      useSettingsStore.setState({ locale: 'en', currentModel: undefined, activeProviderName: null })
+      useProviderStore.setState({ providers: [], activeId: null, hasLoadedProviders: true, isLoading: false })
+      useHahaOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+      useHahaOpenAIOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+      useHahaGrokOAuthStore.setState({ status: { loggedIn: false }, fetchStatus: async () => {} })
+      useHahaDeepSeekOAuthStore.setState({
+        status: { loggedIn: true, name: null, contact: null },
+        fetchStatus: async () => {},
+      })
+
+      render(<ModelSelector runtimeKey="session-ds-only" />)
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button'))
+        await Promise.resolve()
+      })
+
+      expect(useUIStore.getState().pendingSettingsTab).not.toBe('providers')
+      expect(screen.getByTestId('model-selector-dropdown').textContent).toContain('DeepSeek Account')
+    })
+
+    it('opens the selector after the status fetch finds a DeepSeek login nobody had checked yet', async () => {
+      useSettingsStore.setState({ locale: 'en', currentModel: undefined, activeProviderName: null })
+      useProviderStore.setState({ providers: [], activeId: null, hasLoadedProviders: true, isLoading: false })
+      useHahaOAuthStore.setState({ status: null, fetchStatus: async () => {
+        useHahaOAuthStore.setState({ status: { loggedIn: false } })
+      } })
+      useHahaOpenAIOAuthStore.setState({ status: null, fetchStatus: async () => {
+        useHahaOpenAIOAuthStore.setState({ status: { loggedIn: false } })
+      } })
+      useHahaGrokOAuthStore.setState({ status: null, fetchStatus: async () => {
+        useHahaGrokOAuthStore.setState({ status: { loggedIn: false } })
+      } })
+      useHahaDeepSeekOAuthStore.setState({ status: null, fetchStatus: async () => {
+        useHahaDeepSeekOAuthStore.setState({ status: { loggedIn: true, name: null, contact: null } })
+      } })
+
+      render(<ModelSelector runtimeKey="session-ds-late" />)
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button'))
+        await Promise.resolve()
+      })
+
+      await waitFor(() => {
+        expect(screen.getByTestId('model-selector-dropdown').textContent).toContain('DeepSeek Account')
+      })
+      expect(useUIStore.getState().pendingSettingsTab).not.toBe('providers')
+    })
   })
 
   it('replaces a stale Grok runtime model with the current official default', async () => {

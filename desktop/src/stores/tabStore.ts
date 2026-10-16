@@ -4,10 +4,15 @@ import { ApiError } from '../api/client'
 import { dropSession as dropVirtualHeightSession } from '../components/chat/virtualHeightCache'
 import { destroyTerminalRuntime } from '../lib/terminalRuntime'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
+import { t } from '../i18n'
 import { teamMemberSessionId } from '../types/team'
-import type { SessionListItem } from '../types/session'
+import { readTabBehavior } from '../lib/tabBehavior'
 
 const TAB_STORAGE_KEY = 'cc-haha-open-tabs'
+const MAX_CLOSED_SESSION_TABS = 10
+// Session ids are never reused, so a deleted one can be kept out of the closed
+// list for the life of the page. Delete flows close the tab after deleting.
+const deletedSessionIds = new Set<string>()
 
 export const SETTINGS_TAB_ID = '__settings__'
 export const SCHEDULED_TAB_ID = '__scheduled__'
@@ -54,6 +59,11 @@ type PersistedTab = {
   traceSessionId?: string
 }
 
+export type ClosedSessionTab = {
+  sessionId: string
+  title: string
+}
+
 type TabPersistence = {
   openTabs: PersistedTab[]
   activeTabId: string | null
@@ -62,6 +72,8 @@ type TabPersistence = {
 type TabStore = {
   tabs: Tab[]
   activeTabId: string | null
+  /** Chat tabs closed in this run, newest last. Kept in memory only. */
+  closedSessionTabs: ClosedSessionTab[]
 
   openTab: (sessionId: string, title: string, type?: TabType) => void
   openTerminalTab: (cwd?: string, terminalRuntimeId?: string) => string
@@ -89,6 +101,10 @@ type TabStore = {
   updateTabStatus: (sessionId: string, status: Tab['status']) => void
   replaceTabSession: (oldSessionId: string, newSessionId: string) => void
   moveTab: (fromIndex: number, toIndex: number) => void
+  takeClosedSessionTab: () => ClosedSessionTab | null
+  rememberClosedSessionTab: (tab: ClosedSessionTab) => void
+  /** Deleted sessions have nothing left to reopen, now or when their tab closes later. */
+  markSessionsDeleted: (sessionIds: string[]) => void
 
   saveTabs: () => void
   restoreTabs: () => Promise<void>
@@ -147,6 +163,7 @@ function getPersistedSessionId(tab: PersistedTab): string | null {
 export const useTabStore = create<TabStore>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  closedSessionTabs: [],
 
   openTab: (sessionId, title, type) => {
     if (sessionId === CONNECTORS_TAB_ID || type === 'connectors') { sessionId = MARKET_TAB_ID; type = 'market' }
@@ -230,7 +247,7 @@ export const useTabStore = create<TabStore>((set, get) => ({
     get().closeTab(tabId)
   },
 
-  openTeamWorkbenchTab: (leadSessionId, title = 'Agent Teams') => {
+  openTeamWorkbenchTab: (leadSessionId, title = t('agentTeams.name')) => {
     const tabId = `${TEAM_TAB_PREFIX}${leadSessionId}`
     const { tabs } = get()
     const tab: Tab = {
@@ -326,6 +343,9 @@ export const useTabStore = create<TabStore>((set, get) => ({
     set({ tabs: newTabs, activeTabId: newActiveId })
     get().saveTabs()
     const closedTab = tabs[index]
+    if (closedTab?.type === 'session') {
+      get().rememberClosedSessionTab({ sessionId: closedTab.sessionId, title: closedTab.title })
+    }
     if (closedTab?.type === 'terminal') {
       destroyTerminalRuntime(closedTab.terminalRuntimeId ?? closedTab.sessionId)
     }
@@ -370,6 +390,31 @@ export const useTabStore = create<TabStore>((set, get) => ({
     newTabs.splice(toIndex, 0, moved!)
     set({ tabs: newTabs })
     get().saveTabs()
+  },
+
+  takeClosedSessionTab: () => {
+    const { closedSessionTabs } = get()
+    const last = closedSessionTabs[closedSessionTabs.length - 1]
+    if (!last) return null
+    set({ closedSessionTabs: closedSessionTabs.slice(0, -1) })
+    return last
+  },
+
+  rememberClosedSessionTab: (tab) => {
+    if (deletedSessionIds.has(tab.sessionId)) return
+    set((s) => ({
+      closedSessionTabs: [
+        ...s.closedSessionTabs.filter((closed) => closed.sessionId !== tab.sessionId),
+        tab,
+      ].slice(-MAX_CLOSED_SESSION_TABS),
+    }))
+  },
+
+  markSessionsDeleted: (sessionIds) => {
+    for (const sessionId of sessionIds) deletedSessionIds.add(sessionId)
+    const { closedSessionTabs } = get()
+    if (!closedSessionTabs.some((tab) => deletedSessionIds.has(tab.sessionId))) return
+    set({ closedSessionTabs: closedSessionTabs.filter((tab) => !deletedSessionIds.has(tab.sessionId)) })
   },
 
   saveTabs: () => {
@@ -418,6 +463,9 @@ export const useTabStore = create<TabStore>((set, get) => ({
         return current.tabs === restoreStartedWith.tabs &&
           current.activeTabId === restoreStartedWith.activeTabId
       }
+      // Opting out of restore leaves the saved tabs in place, so turning it
+      // back on brings back the tabs of the last run rather than nothing.
+      if (!readTabBehavior().restoreOnLaunch) return
       const raw = localStorage.getItem(TAB_STORAGE_KEY)
       if (!raw) return
 
@@ -440,7 +488,6 @@ export const useTabStore = create<TabStore>((set, get) => ({
       const { sessions } = await sessionsApi.list({ limit: 200 })
       if (!restoreStillCurrent()) return
       const sessionsById = new Map(sessions.map((session) => [session.id, session]))
-      const historicalSessions: SessionListItem[] = []
       const missingIds = new Set<string>()
       // The recent page cannot prove an old saved tab was deleted. Resolve
       // only missing saved ids, sequentially so large tab sets stay bounded.
@@ -451,7 +498,6 @@ export const useTabStore = create<TabStore>((set, get) => ({
           const session = await sessionsApi.getSummary(sessionId)
           if (!restoreStillCurrent()) return
           sessionsById.set(sessionId, session)
-          historicalSessions.push(session)
         } catch (error) {
           if (!restoreStillCurrent()) return
           if (error instanceof ApiError && error.status === 404) {
@@ -469,10 +515,19 @@ export const useTabStore = create<TabStore>((set, get) => ({
       if (!restoreStillCurrent()) return
       const recentSessions = reconcileSessionSnapshots(sessions, useSessionStore.getState().sessions)
       for (const session of recentSessions) sessionsById.set(session.id, session)
-      if (historicalSessions.length > 0) {
-        const hydrated = useSessionStore.getState().hydrateHistoricalSessions(historicalSessions, runtimeSelections)
-        for (const session of hydrated) sessionsById.set(session.id, session)
-      }
+      const restoredSessionIds = new Set(data.openTabs.flatMap((tab) => {
+        const id = getPersistedSessionId(tab)
+        return id ? [id] : []
+      }))
+      // A saved tab can be in this recent page but outside the sidebar's six
+      // rows. Every restored chat needs metadata before activation and must
+      // retain it across sidebar refreshes; unrelated recent rows stay bounded.
+      const restoredSessions = [...restoredSessionIds].flatMap((id) => {
+        const session = sessionsById.get(id)
+        return session ? [session] : []
+      })
+      const hydrated = useSessionStore.getState().hydrateHistoricalSessions(restoredSessions, runtimeSelections)
+      for (const session of hydrated) sessionsById.set(session.id, session)
       useSessionRuntimeStore.getState().syncFromSessions(recentSessions, runtimeSelections)
 
       const validTabs: Tab[] = data.openTabs
@@ -511,3 +566,24 @@ export const useTabStore = create<TabStore>((set, get) => ({
     } catch { /* noop */ }
   },
 }))
+
+// When each open tab was last on screen in this run. Kept beside the store for
+// the life of the page, so anything reading it (the tab limit) can come and go
+// without losing the order, and pruned as tabs close.
+let viewClock = 0
+const lastViewedAt = new Map<string, number>()
+useTabStore.subscribe((state, previous) => {
+  if (state.activeTabId && state.activeTabId !== previous.activeTabId) {
+    lastViewedAt.set(state.activeTabId, ++viewClock)
+  }
+  if (state.tabs === previous.tabs) return
+  const openIds = new Set(state.tabs.map((tab) => tab.sessionId))
+  for (const tabId of lastViewedAt.keys()) {
+    if (!openIds.has(tabId)) lastViewedAt.delete(tabId)
+  }
+})
+
+/** Larger is more recent; 0 for a tab not shown since the page loaded. */
+export function getTabLastViewed(tabId: string): number {
+  return lastViewedAt.get(tabId) ?? 0
+}

@@ -34,7 +34,7 @@ function isShown(sessionId: string, scope: SessionDisplayScope): boolean {
 }
 
 /** The turn is still running, or it is the user's move (a prompt or question). */
-function hasForegroundWork(session: PerSessionState): boolean {
+export function hasForegroundWork(session: PerSessionState): boolean {
   return session.chatState !== 'idle' ||
     session.isPreparingTurn === true ||
     (session.queuedUserMessages?.length ?? 0) > 0 ||
@@ -49,7 +49,7 @@ function hasForegroundWork(session: PerSessionState): boolean {
  * notifications trigger are all done. Before this connection has seen a run
  * state, a background task the session still shows is the best evidence left.
  */
-function isCliStillWorking(session: PerSessionState): boolean {
+export function isCliStillWorking(session: PerSessionState): boolean {
   if (session.cliRunState) return session.cliRunState === 'running'
   return hasRunningBackgroundTasks(session.backgroundAgentTasks)
 }

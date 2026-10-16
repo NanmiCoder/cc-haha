@@ -1,7 +1,7 @@
 {
   "name": "claude-code-desktop",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.4",
   "description": "Desktop coding agent workbench for Claude Code Haha.",
   "homepage": "https://github.com/NanmiCoder/cc-haha",
   "author": {
@@ -175,5 +175,8 @@
     "vite": "^8.0.10",
     "vitest": "^3.0.4",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
-  }
+  },
+  "trustedDependencies": [
+    "node-pty"
+  ]
 }

@@ -1,4 +1,4 @@
-import { classifyPreviewLink } from './previewLinkRouter'
+import { classifyPreviewLink, type PreviewLinkTarget } from './previewLinkRouter'
 import { shouldOfferStaticHtmlPreview } from './htmlPreviewPolicy'
 import { isRootedLocalPath, localFileUrl, previewFsUrl } from './handlePreviewLink'
 import type { OpenWithContext } from './openWithItems'
@@ -39,7 +39,7 @@ export function openWithContextForWorkspaceFile(
 }
 
 export function openWithContextForHref(
-  href: string,
+  href: PreviewLinkTarget,
   opts: { sessionId: string; serverBaseUrl: string; workDir?: string },
 ): OpenWithContext | null {
   const c = classifyPreviewLink(href)

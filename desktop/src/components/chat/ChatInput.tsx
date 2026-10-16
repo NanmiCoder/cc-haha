@@ -46,9 +46,11 @@ import { MobileApprovalDock } from './MobileApprovalDock'
 import { useCapabilityMenu } from './useCapabilityMenu'
 import { AgentTeamChip } from './AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
+import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
+import { useCapabilityCatalogStore } from '@/stores/capabilityCatalogStore'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { LocalSlashCommandPanel, type LocalSlashCommandName } from './LocalSlashCommandPanel'
 import { getSlashCommandOptionId, SlashCommandMenu } from './SlashCommandMenu'
@@ -367,6 +369,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     if (isMemberSession) return
     setReferenceState({ context: referenceContext, items: [], loading: true, error: false })
     void composerReferencesApi.list(referenceCwd || undefined, referenceProviderId).then(data => {
+      useCapabilityCatalogStore.getState().remember([...data.plugins, ...data.skills])
       if (active) setReferenceState({ context: referenceContext, items: [...data.plugins, ...data.skills], loading: false, error: false })
     }).catch(() => {
       if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
@@ -1718,6 +1721,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                       />
                     )}
                     <ComputerUseEnableDialog {...capabilityMenu.computerUseConsent} />
+                    <AgentTeamsCostDialog allowDismiss {...capabilityMenu.agentTeamsNotice} />
                   </div>
 
                   {capabilityMenu.agentTeamArmed && !isMemberSession ? (

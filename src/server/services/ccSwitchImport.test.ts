@@ -1644,6 +1644,7 @@ describe('cc-switch REST routes', () => {
       'claude-official',
       'openai-official',
       'grok-official',
+      'deepseek-account',
     ])
   })
 

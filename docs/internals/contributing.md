@@ -62,13 +62,21 @@ bun run check:impact
 
 ```bash
 bun run check:agent-flow       # 真实 server + 真实 WebSocket + mock CLI
-bun run check:agent-e2e        # 真实 server + 真实 CLI agent 循环 + mock LLM
+bun run check:agent-e2e        # 真实 server + 真实 CLI agent 循环 + mock LLM，再跑一遍录制回放
+bun run check:agent-replay     # 只跑录制回放
 bun run check:desktop-ui-smoke # 真实桌面 UI + 真实权限对话框 + mock CLI
 ```
 
 三条通道都不需要 provider、凭据或公网。
 
 `check:agent-e2e` 只假一个模型：本机回环起一个 Anthropic 兼容端点（`scripts/quality-gate/mock-llm/`），通过桌面端「新增服务商」同一个 API 注册成 provider，真实 CLI 照常跑 agent 循环、真实工具改真实（临时）磁盘。脚本化模型对自然语言提示做出模型式的反应，所以它和 `check:agent-flow:live` 共用同一份场景（`agent-flow/liveScenarios.ts`）：mock 证明管线，live 证明真模型也落到同样结果。另有只有 mock 能确定性断言的场景——工具输出真的回传给了模型（nonce 核对）、拒绝授权以错误结果回到模型、停止生成真的掐断了上游连接、上游报错后会话还能继续。改 agent 循环、工具、权限、provider 接线时，新增行为优先在这里加场景，而不是只写单元测试。
+
+手写的 mock 只能流出作者想象中的模型输出：用量固定、工具参数一次给全、没有 thinking、没有 OpenAI 格式。所以 `check:agent-e2e` 还会跑流量回放（`scripts/quality-gate/replay/`）：维护者用真实的 DeepSeek Flash 把场景跑一遍，把上游流量录制成 `cassettes/*.json` 提交进仓库；CI 用回放服务器把这些录制流量原样喂给真实 server 和真实 CLI，不联网、不需要凭据。录制下来的是真实形态：thinking 和签名、切成很多片的工具参数（Grep/Read/Edit/Bash）、一轮并行调用多个工具、工具失败后模型自行纠正、大段命令输出、子 Agent 自己的工具循环（含两个子 Agent 并行）、项目 MCP 服务器的工具、图片附件（用 DeepSeek Flash 的视觉版录制）、Agent Teams 从队长出方案、批准、两个成员先后干活到汇报和收尾的完整流程、长对话里的自动压缩和手动 `/compact`、用户停止时截断的流、中文对话，以及经过 server 代理转换的 OpenAI Chat 流（含 reasoning 和中断）。
+
+- **匹配规则**：请求按队列依次对应录制流量。每个 agent 循环（主 agent、子 Agent、团队成员）按启动它的第一条用户消息各自成一个队列，严格比对模型、stream、最后一条消息的角色、用户输入文本，以及工具结果是否正好回应上一轮的工具调用（并行工具按完成顺序回传，只比对集合）；对不上就返回 400 `replay_mismatch`，并在 `artifacts/agent-e2e/replay/<format>/<id>.report.json` 写出字段级差异。标题这类不带工具的旁路请求尽量回放，录制流量里没有就给占位回复，不判失败。
+- **运行时差异**：临时工作目录、沙箱配置目录、项目目录名、会话 ID、日期和临时目录在录制流量里存成 `{{WORK_ROOT}}` 这类占位符，回放时换成本次运行的值；路径被切进多个分片也能正确还原。应用按时钟现生成、回复又必须原样引用的值（例如团队成员关停请求的 ID）存成 `{{V1}}` 这类学习位，回放时从第一个带它的请求里学到本次的值，再填进后面的回复。Agent Teams 的消息合并依赖时序，这个场景按录制时的模型延迟和流速回放，其余场景压缩回放节奏。
+- **漂移**：工具列表或 `max_tokens` 变了但流程仍能对上时，只写进 `drift.md` 提醒，不判失败。系统提示词和工具 schema 带操作系统、shell 和日期，录制机器和 CI 本来就不同，不参与比对。
+- **重录**：行为确实变了（例如改了 prompt 导致模型走了不同的工具路径），在本机运行 `bun run quality:record-cassettes -- --allow-live --only <id>`。它从桌面端已保存的 DeepSeek provider 读取 key，只放在录制代理的内存里，沙箱拿到的是假 key；录完会立刻回放一次自检，录制流量里出现 key、真实 home 路径或临时目录路径会直接拒收。录制需要真实额度，永远不进 CI。
 
 `check:agent-flow` 覆盖新建 Session → 选运行时 → 首轮流式 → 工具调用 → 权限批准/拒绝 → 工具失败 → API 错误 → 中断 → 断线重连权限重放 → 会话恢复。`check:desktop-ui-smoke` 在真实浏览器里点真实的 Allow 按钮，需要 `agent-browser` 与已安装的 desktop 依赖，缺失时会打印原因并跳过。
 
@@ -186,7 +194,7 @@ bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:
 
 `.github/workflows/pr-quality.yml` 会在 PR `opened`、`synchronize`、`reopened`、`ready_for_review`、`labeled`、`unlabeled` 时触发，合入 `main` 后还会按这次 push 的改动范围再跑一次（标签类例外只在 PR 上判定，不会在 main 上重新阻塞）。`scope-plan` 不安装依赖，只负责稳定地产生影响面计划；`policy-enforcement` 独立安装锁定依赖并执行 policy，因此 policy 失败也不会吞掉产品测试结果。产品 job 只依赖 `scope-plan`，按路径选择 desktop、server、adapter、native、provider contract、chat contract、persistence、docs 和 coverage lane。最后的 `pr-quality-gate` 会严格核对每个 job：选中的必须 success，未选中的必须 skipped，cancelled 或缺失结果都不能误判为通过。
 
-仓库侧应在 GitHub branch protection / ruleset 中保护 `main`，并把 `pr-quality-gate` 设为 required status check。CODEOWNERS 要求维护者审查 workflow、quality policy 以及 provider/WebSocket 等高风险边界；本机 hook 只做提醒，真正阻止低质量 merge 的是 PR gate。
+`main` 的分支保护把 `pr-quality-gate` 设为 required status check，并且对管理员同样生效：红的 PR 谁都合不进去，所以发版也走 PR（见「发版步骤」）。CODEOWNER 自己提的 PR 不需要 `allow-cli-core-change` 标签，外部贡献者改 CLI 核心路径仍需维护者加标签。本机 hook 只做提醒，真正阻止低质量 merge 的是 PR gate。
 
 ### 门禁红了怎么办
 
@@ -194,7 +202,7 @@ bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:
 
 - **你改了行为，测试红了**：门禁在正常工作。在同一个 PR 里更新测试，说明为什么旧断言不再成立。
 - **红的不是你的改动造成的**：先看 `main` 上最近一次 PR Quality（push）和全量是否也红。是的话单独开 PR 修，修不了就进 `scripts/quality-gate/quarantine.json`（写明负责人和到期日，`check:quarantine` 会在到期后报错），不要绕过门禁合并。
-- **偶发失败（flaky）**：重跑一次确认，然后按上一条处理；不要给测试加长超时或放宽断言来掩盖。
+- **偶发失败（flaky）**：`check:server` 会把失败的文件单独重跑一次，日志里标成 `FLAKY`（单独跑能过）或 `FAILED`（单独跑也挂），但两种情况门禁都是红的。`FLAKY` 说明是竞态，去修竞态本身（常见原因是断言了「最后一个请求」或依赖墙钟时间），不要给测试加长超时或放宽断言来掩盖。
 - **门禁本身要调整**：改 `scripts/pr/change-policy.ts`、workflow 和对应测试（`check:policy`），保持 `pr-quality-gate` 这个汇总检查名不变，分支保护就不用动。
 
 ## 按改动范围补充测试
@@ -349,6 +357,13 @@ bun run check:policy
 ```
 
 正式执行 `bun run scripts/release.ts <version>` 前，先确认对应的 `release-notes/v<version>.md` 已经存在。
+
+### 发版步骤
+
+`main` 受分支保护：`pr-quality-gate` 必须通过，管理员也不例外，所以发版不再直推 `main`，而是分两步：
+
+1. `bun run scripts/release.ts <version>` 在 `release/v<version>` 分支上提交版本号和 release notes，不打 tag。按脚本提示推送分支、开 PR，等 PR Quality 变绿后合并。
+2. 合并后运行 `bun run scripts/release.ts --tag <version>`。脚本会先确认 `origin/main` 上的桌面版本号就是 `<version>`、release notes 已经合入，再给合并后的提交打 tag，最后只推 tag：`git push origin v<version>`。
 
 ### 验证一条真实更新链路
 

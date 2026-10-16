@@ -81,15 +81,10 @@ export class SystemProxyBridge implements SystemProxyBridgeLike {
     this.server = null
     for (const socket of this.clientSockets) socket.destroy()
     for (const socket of this.outboundSockets) socket.destroy()
-    // Bun needs the HTTP connection registry drained before close() will
-    // finish after an upgraded CONNECT socket. Calling this before listen
-    // completes breaks the separate startup/stop race, so guard on listening.
-    if (server?.listening) server.closeAllConnections()
-    const closing = server?.listening
-      ? new Promise<void>(resolve => server.close(() => resolve()))
-      : Promise.resolve()
-    await closing
+    // Bun can report listening before its listen callback runs. Closing then
+    // suppresses that callback, so let startup observe cancellation first.
     await startPromise?.catch(() => {})
+    if (server) await closeServer(server)
   }
 
   private async startOnce(generation: number): Promise<string> {
@@ -456,6 +451,9 @@ class SingleSocketAgent extends http.Agent {
 
 function closeServer(server: http.Server): Promise<void> {
   if (!server.listening) return Promise.resolve()
+  // Drain Bun's HTTP connection registry after an upgraded CONNECT socket.
+  // Callers wait for the listen callback before closing the server.
+  server.closeAllConnections()
   return new Promise(resolve => server.close(() => resolve()))
 }
 

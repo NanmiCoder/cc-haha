@@ -70,6 +70,7 @@ import type { Stream } from 'src/utils/stream.js'
 import { EMPTY_USAGE } from 'src/services/api/logging.js'
 import {
   loadConversationForResume,
+  ResumeMessageNotFoundError,
   type TurnInterruptionState,
 } from 'src/utils/conversationRecovery.js'
 import type {
@@ -4521,6 +4522,7 @@ function runHeadlessStreaming(
 }
 
 export { runHeadlessStreaming as __runHeadlessStreamingForTests }
+export { loadInitialMessages as __loadInitialMessagesForTests }
 
 /**
  * Creates a CanUseToolFn that incorporates a custom permission prompt tool.
@@ -5455,6 +5457,7 @@ async function loadInitialMessages(
       const result = await loadConversationForResume(
         parsedSessionId.sessionId,
         parsedSessionId.jsonlFile || undefined,
+        { resumeSessionAt: options.resumeSessionAt },
       )
 
       // hydrateFromCCRv2InternalEvents writes an empty transcript file for
@@ -5480,23 +5483,6 @@ async function loadInitialMessages(
           gracefulShutdownSync(1)
           return { messages: [] }
         }
-      }
-
-      // Handle resumeSessionAt feature
-      if (options.resumeSessionAt) {
-        const index = result.messages.findIndex(
-          m => m.uuid === options.resumeSessionAt,
-        )
-        if (index < 0) {
-          emitLoadError(
-            `No message found with message.uuid of: ${options.resumeSessionAt}`,
-            options.outputFormat,
-          )
-          gracefulShutdownSync(1)
-          return { messages: [] }
-        }
-
-        result.messages = index >= 0 ? result.messages.slice(0, index + 1) : []
       }
 
       // Match coordinator mode to the resumed session's mode
@@ -5556,6 +5542,11 @@ async function loadInitialMessages(
         agentSetting: result.agentSetting,
       }
     } catch (error) {
+      if (error instanceof ResumeMessageNotFoundError) {
+        emitLoadError(error.message, options.outputFormat)
+        gracefulShutdownSync(1)
+        return { messages: [] }
+      }
       logError(error)
       const errorMessage =
         error instanceof Error

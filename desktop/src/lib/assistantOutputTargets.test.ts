@@ -4,6 +4,16 @@ import { extractAssistantOutputTargets } from './assistantOutputTargets'
 const workDir = '/Users/nanmi/project/demo'
 
 describe('extractAssistantOutputTargets', () => {
+  it('normalizes authored hrefs once and keeps bare filesystem percent names literal', () => {
+    const targets = extractAssistantOutputTargets(
+      '[literal](docs/literal%2520name.md) [space](docs/My%20Notes.md) `docs/bare%20name.md`',
+      { workDir },
+    )
+    expect(targets.map((target) => target.normalizedPath)).toEqual([
+      'docs/literal%20name.md', 'docs/My Notes.md', 'docs/bare%20name.md',
+    ])
+  })
+
   it('extracts markdown links for workspace html, markdown, and images', () => {
     const content = [
       '已完成：',
@@ -314,6 +324,33 @@ describe('extractAssistantOutputTargets', () => {
 })
 
 describe('extractAssistantOutputTargets with changedFiles reconciliation', () => {
+  // Reconciliation must use the parsed file identity. The original authored
+  // href still contains URL escapes, including a second escape for literal %.
+  it.each([
+    ['[open](/work/My%20Notes.md)', '/work/My Notes.md'],
+    ['[open](/work/literal%2520name.md)', '/work/literal%20name.md'],
+    ['[open](/work/literal%2525name.md)', '/work/literal%25name.md'],
+    ['[open](/work/literal%2523name.md)', '/work/literal%23name.md'],
+    ['[open](/work/literal%252Fname.md)', '/work/literal%2Fname.md'],
+    ['[open](C:/QA/My%20Notes.md)', 'C:/QA/My Notes.md'],
+    ['输出目录：`/other/QA%20root`\n[open](My%20Notes.md)', '/other/QA%20root/My Notes.md'],
+  ])('keeps parsed absolute identity for %s with empty or matching checkpoints', (content, path) => {
+    expect(extractAssistantOutputTargets(content, {
+      workDir: '/work', changedFiles: [], includeChangedFileFallback: false,
+    })).toMatchObject([{ href: path, normalizedPath: path, subtitle: path }])
+
+    // A matching checkpoint is sufficient even when the turn made no writes
+    // outside it. A different directory with the same basename is not a match.
+    expect(extractAssistantOutputTargets(content, {
+      workDir: '/work', changedFiles: [path], includeChangedFileFallback: false,
+      outputEvidence: { unlistedWrites: false },
+    })).toMatchObject([{ normalizedPath: path }])
+    expect(extractAssistantOutputTargets(content, {
+      workDir: '/work', changedFiles: [`/wrong/${path.split('/').pop()}`], includeChangedFileFallback: false,
+      outputEvidence: { unlistedWrites: false },
+    })).toEqual([])
+  })
+
   it('surfaces a generated office artifact even when the assistant forgot to name it', () => {
     const targets = extractAssistantOutputTargets('已经生成完成。', {
       workDir: '/work',

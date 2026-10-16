@@ -32,6 +32,31 @@ describe('classifyPreviewLink for a document the workspace can draw', () => {
 })
 
 describe('classifyPreviewLink', () => {
+  it.each(['%20', '%25', '%23', '%2F'])(
+    'keeps a parsed %s filename literal while decoding an href once', (percent) => {
+      const path = `docs/literal${percent}name.md`
+      const expected = { kind: 'file-preview', path, line: 7, column: 3 }
+      expect(classifyPreviewLink({ path, line: 7, column: 3 })).toEqual(expected)
+      expect(classifyPreviewLink(`${path.replace('%', '%25')}:7:3`)).toEqual(expected)
+    },
+  )
+
+  it('keeps encoded filename hashes separate from file URL line suffixes', () => {
+    expect(classifyPreviewLink('file:///work/name%23hash.md#L9')).toEqual({
+      kind: 'file-preview', path: '/work/name#hash.md', line: 9,
+    })
+    expect(classifyPreviewLink('file:///C:/QA/literal%2520name.md:7:3')).toEqual({
+      kind: 'file-preview', path: 'C:/QA/literal%20name.md', line: 7, column: 3,
+    })
+    expect(classifyPreviewLink('file:///work/readme.md#section')).toEqual({
+      kind: 'file-preview', path: '/work/readme.md',
+    })
+  })
+
+  it('ignores unsafe URL schemes even when a data attribute presents one as a path', () => {
+    expect(classifyPreviewLink({ path: 'javascript:unsafe.md' }).kind).toBe('ignored')
+  })
+
   it('classifies loopback urls as browser-localhost', () => {
     expect(classifyPreviewLink('http://localhost:5173/').kind).toBe('browser-localhost')
     expect(classifyPreviewLink('http://127.0.0.1:8080/x').kind).toBe('browser-localhost')
@@ -79,6 +104,27 @@ describe('classifyPreviewLink', () => {
       line: 386,
     })
     expect(classifyPreviewLink('scripts/windows-installer-smoke.ps1:14').kind).toBe('file-preview')
+  })
+  it('routes a path whose folders hold spaces, as Windows output paths often do (#1556)', () => {
+    expect(classifyPreviewLink('D:/cchaha/cchaha d/全局档案重写/全局记忆-2026-10-14.md')).toMatchObject({
+      kind: 'file-preview',
+      path: 'D:/cchaha/cchaha d/全局档案重写/全局记忆-2026-10-14.md',
+    })
+    expect(classifyPreviewLink('D:\\My Docs\\报告 (1).docx')).toMatchObject({ kind: 'file-preview', path: 'D:\\My Docs\\报告 (1).docx' })
+    expect(classifyPreviewLink('/Users/me/My Site/index.html')).toMatchObject({ kind: 'browser-file', path: '/Users/me/My Site/index.html' })
+    expect(classifyPreviewLink('file:///Users/me/My%20Notes/plan.md')).toMatchObject({ kind: 'file-preview', path: '/Users/me/My Notes/plan.md' })
+    expect(classifyPreviewLink('/Users/me/My Repo/src/app.ts:42')).toMatchObject({ path: '/Users/me/My Repo/src/app.ts', line: 42 })
+  })
+  it('decodes a percent-encoded link destination to the file on disk (#1556)', () => {
+    expect(classifyPreviewLink('docs/My%20Notes.md')).toMatchObject({ kind: 'file-preview', path: 'docs/My Notes.md' })
+    expect(classifyPreviewLink('D:/cchaha/cchaha%20d/%E8%AE%B0%E5%BF%86.md:3')).toMatchObject({
+      path: 'D:/cchaha/cchaha d/记忆.md',
+      line: 3,
+    })
+    expect(classifyPreviewLink('site/My%20Page.html')).toMatchObject({ kind: 'browser-file', path: 'site/My Page.html' })
+    // A malformed escape is the name as written; a file URL is decoded once only.
+    expect(classifyPreviewLink('reports/100%.md').path).toBe('reports/100%.md')
+    expect(classifyPreviewLink('file:///Users/me/a%2520b.md').path).toBe('/Users/me/a%20b.md')
   })
   it('still ignores prose that only looks like a path', () => {
     expect(classifyPreviewLink('console.log').kind).toBe('ignored')

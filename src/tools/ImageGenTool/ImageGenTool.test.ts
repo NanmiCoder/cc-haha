@@ -6,6 +6,7 @@ import {
   IMAGE_GENERATION_MODEL_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_ID_ENV_KEY,
   IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
+  IMAGE_GENERATION_PROTOCOL_ENV_KEY,
 } from '../../services/imageGeneration/config.js'
 import { zodToJsonSchema } from '../../utils/zodToJsonSchema.js'
 import {
@@ -19,6 +20,7 @@ const ENV_KEYS = [
   IMAGE_GENERATION_BASE_URL_ENV_KEY,
   IMAGE_GENERATION_API_KEY_ENV_KEY,
   IMAGE_GENERATION_MODEL_ENV_KEY,
+  IMAGE_GENERATION_PROTOCOL_ENV_KEY,
 ] as const
 
 const originalEnv = Object.fromEntries(
@@ -26,6 +28,7 @@ const originalEnv = Object.fromEntries(
 )
 
 function setImageRuntime(kind: 'openai_oauth' | 'grok_oauth' | 'openai_images') {
+  delete process.env[IMAGE_GENERATION_PROTOCOL_ENV_KEY]
   process.env[IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY] = kind
   process.env[IMAGE_GENERATION_PROVIDER_ID_ENV_KEY] = `${kind}-provider`
   process.env[IMAGE_GENERATION_MODEL_ENV_KEY] = `${kind}-image-model`
@@ -47,6 +50,52 @@ afterEach(() => {
 })
 
 describe('ImageGenTool', () => {
+  for (const tool of [ImageGenTool, ImageEditTool]) {
+    test.each(['gemini-3.1-flash-lite-image', 'models/gemini-3.1-flash-lite-image'])(
+      `${tool.name} restricts the known native Lite model %s to 1K after an alias schema was used`,
+      (model) => {
+        const input = { prompt: 'An image', ...(tool === ImageEditTool ? { referenced_image_paths: ['/staged/image.png'] } : {}) }
+        setImageRuntime('openai_images')
+        process.env[IMAGE_GENERATION_PROTOCOL_ENV_KEY] = 'gemini_native'
+        process.env[IMAGE_GENERATION_MODEL_ENV_KEY] = 'relay-lite-alias'
+        expect(tool.inputSchema.safeParse({ ...input, resolution: '2k' }).success).toBe(true)
+
+        process.env[IMAGE_GENERATION_MODEL_ENV_KEY] = model
+        expect(tool.inputSchema.safeParse({ ...input, resolution: '1k' }).success).toBe(true)
+        expect(tool.inputSchema.safeParse(input).success).toBe(true)
+        expect(tool.inputSchema.safeParse({ ...input, resolution: '2k' }).success).toBe(false)
+        expect(zodToJsonSchema(tool.inputSchema).properties?.resolution?.enum).toEqual(['1k'])
+
+        process.env[IMAGE_GENERATION_MODEL_ENV_KEY] = 'gemini-3.1-flash-image'
+        expect(tool.inputSchema.safeParse({ ...input, resolution: '2k' }).success).toBe(true)
+        for (const protocol of ['openai_images', 'xai_images']) {
+          process.env[IMAGE_GENERATION_PROTOCOL_ENV_KEY] = protocol
+          process.env[IMAGE_GENERATION_MODEL_ENV_KEY] = model
+          expect(tool.inputSchema.safeParse({ ...input, resolution: '2k' }).success).toBe(true)
+        }
+      },
+    )
+
+    test(`${tool.name} exposes native Gemini ratios after an OpenAI schema was already used`, () => {
+      const input = { prompt: 'An image', ...(tool === ImageEditTool ? { referenced_image_paths: ['/staged/image.png'] } : {}) }
+      setImageRuntime('openai_images')
+      expect(tool.inputSchema.safeParse({ ...input, aspect_ratio: '2:1' }).success).toBe(true)
+      process.env[IMAGE_GENERATION_PROTOCOL_ENV_KEY] = 'gemini_native'
+      for (const aspect_ratio of ['1:1', '4:5', '5:4', '21:9', '1:4', '4:1', '1:8', '8:1']) {
+        expect(tool.inputSchema.safeParse({ ...input, aspect_ratio }).success).toBe(true)
+      }
+      for (const aspect_ratio of ['2:1', '1:2', '19.5:9', '9:19.5', '20:9', '9:20']) {
+        expect(tool.inputSchema.safeParse({ ...input, aspect_ratio }).success).toBe(false)
+      }
+      const schema = zodToJsonSchema(tool.inputSchema)
+      expect(schema.properties?.aspect_ratio?.enum).toContain('4:5')
+      expect(schema.properties?.aspect_ratio?.enum).not.toContain('2:1')
+      process.env[IMAGE_GENERATION_PROTOCOL_ENV_KEY] = 'xai_images'
+      expect(tool.inputSchema.safeParse({ ...input, aspect_ratio: '2:1' }).success).toBe(true)
+      expect(tool.inputSchema.safeParse({ ...input, aspect_ratio: '4:5' }).success).toBe(false)
+    })
+  }
+
   test('is enabled only when the active provider has a complete image runtime', () => {
     for (const key of ENV_KEYS) delete process.env[key]
     expect(ImageGenTool.isEnabled()).toBe(false)

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { modelsApi } from '@/api/models'
 import { providersApi } from '@/api/providers'
+import { useProviderStore } from '@/stores/providerStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { OfficialProviderModelSettings } from './OfficialProviderModelSettings'
 
@@ -17,17 +18,18 @@ const mapping = {
 describe('OfficialProviderModelSettings', () => {
   beforeEach(() => {
     useSettingsStore.setState({ locale: 'en' })
-    vi.spyOn(modelsApi, 'list').mockResolvedValue({
+    vi.spyOn(modelsApi, 'catalog').mockResolvedValue({
       models: [
         { id: 'gpt-6-astra', name: 'GPT-6 Astra', description: 'Frontier', context: '258400' },
         { id: 'gpt-6-sol', name: 'GPT-6 Sol', description: 'Workhorse', context: '258400' },
         { id: 'gpt-6-luna', name: 'GPT-6 Luna', description: 'Fast', context: '258400' },
       ],
-      provider: { id: 'openai-official', name: 'ChatGPT Official' },
     })
+    vi.spyOn(modelsApi, 'list').mockRejectedValue(new Error('the active provider\'s list must not be used'))
     vi.spyOn(providersApi, 'getOfficialModels').mockResolvedValue({ models: mapping })
     vi.spyOn(providersApi, 'updateOfficialModels').mockImplementation(async (_id, models) => ({ models }))
     vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(useProviderStore.getState(), 'fetchProviders').mockResolvedValue()
   })
 
   afterEach(() => {
@@ -60,10 +62,37 @@ describe('OfficialProviderModelSettings', () => {
     ))
     expect(await screen.findByRole('status')).toHaveTextContent('Model mapping saved')
     expect(useSettingsStore.getState().fetchAll).toHaveBeenCalled()
+    // The model picker reads saved mappings from the provider store.
+    expect(useProviderStore.getState().fetchProviders).toHaveBeenCalled()
+  })
+
+  it('offers the models of the card\'s own provider account, not the active provider\'s', async () => {
+    vi.mocked(modelsApi.catalog).mockImplementation(async (providerId) => ({
+      models: providerId === 'deepseek-account'
+        ? [
+            { id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash', description: '', context: '1048576' },
+            { id: 'deepseek-v4-pro', name: 'DeepSeek-V4-Pro', description: '', context: '1048576' },
+          ]
+        : [{ id: 'grok-4.7', name: 'Grok 4.7', description: '', context: '500000' }],
+    }))
+    vi.mocked(providersApi.getOfficialModels).mockResolvedValue({
+      models: { main: 'deepseek-v4-pro[1m]', haiku: 'deepseek-flash', sonnet: 'deepseek-v4-pro[1m]', opus: 'deepseek-v4-pro[1m]' },
+    })
+    render(<OfficialProviderModelSettings providerId="deepseek-account" />)
+
+    const main = await screen.findByRole('combobox', { name: /Main Model/ })
+    fireEvent.focus(main)
+    fireEvent.change(main, { target: { value: '' } })
+
+    expect(await screen.findByRole('option', { name: 'deepseek-flash' })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: 'deepseek-v4-pro' })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'grok-4.7' })).not.toBeInTheDocument()
+    expect(modelsApi.catalog).toHaveBeenCalledWith('deepseek-account')
+    expect(modelsApi.list).not.toHaveBeenCalled()
   })
 
   it('keeps manual model entry available when the OAuth catalog request fails', async () => {
-    vi.mocked(modelsApi.list).mockRejectedValueOnce(new Error('catalog unavailable'))
+    vi.mocked(modelsApi.catalog).mockRejectedValueOnce(new Error('catalog unavailable'))
     render(<OfficialProviderModelSettings providerId="openai-official" />)
 
     const main = await screen.findByRole('textbox', { name: /Main Model/ })

@@ -1,4 +1,4 @@
-import { classifyPreviewLink } from './previewLinkRouter'
+import { classifyPreviewLink, type PreviewLinkTarget } from './previewLinkRouter'
 import { shouldOfferStaticHtmlPreview } from './htmlPreviewPolicy'
 
 export type PreviewLinkReveal = { line: number; column?: number }
@@ -79,7 +79,7 @@ export function filesystemImageUrl(base: string, filePath: string): string {
 }
 
 /** Returns true if handled (caller should preventDefault). */
-export function handlePreviewLink(href: string, deps: PreviewLinkDeps): boolean {
+export function handlePreviewLink(href: PreviewLinkTarget, deps: PreviewLinkDeps): boolean {
   const cls = classifyPreviewLink(href)
   const reveal: PreviewLinkReveal | undefined = cls.line
     ? { line: cls.line, ...(cls.column ? { column: cls.column } : {}) }

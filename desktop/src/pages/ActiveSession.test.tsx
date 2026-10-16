@@ -195,6 +195,20 @@ describe('ActiveSession trajectory view', () => {
     useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true, messages: [{ id: 'm', type: 'assistant_text', content: 'main', timestamp: 1 }] } } })
   }
 
+  it('retains the known tab title when summary metadata is unavailable', async () => {
+    const id = 'history-with-unavailable-summary'
+    seedSession(id)
+    useTabStore.setState({ tabs: [{ sessionId: id, title: 'Known search result title', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({ sessions: [] })
+    await act(async () => { render(<ActiveSession sessionId={id} />) })
+    expect(screen.getByRole('heading', { name: 'Known search result title' })).toBeInTheDocument()
+    act(() => useSessionStore.setState({ sessions: [{
+      id, title: 'Authoritative loaded title', messageCount: 1, createdAt: '', modifiedAt: '',
+      projectPath: '/repo', workDir: '/repo', workDirExists: true,
+    }] }))
+    expect(screen.getByRole('heading', { name: 'Authoritative loaded title' })).toBeInTheDocument()
+  })
+
   it('swaps the chat body for the trajectory while keeping the chat and composer mounted', async () => {
     const id = 'trajectory-session'
     seedSession(id)

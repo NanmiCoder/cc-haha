@@ -23,6 +23,12 @@ import {
   isOpenAIChatImageRejection,
   rememberOpenAIChatTextOnlyModel,
 } from './openaiChatImageSupport.js'
+import {
+  findOpenAIChatReasoningFieldRejection,
+  getOpenAIChatUnsupportedReasoningFields,
+  rememberOpenAIChatUnsupportedReasoningField,
+  type OpenAIChatReasoningField,
+} from './openaiChatReasoningFieldSupport.js'
 import { anthropicToOpenaiChat, type OpenAIChatImageContentMode } from './transform/anthropicToOpenaiChat.js'
 import { anthropicToOpenaiResponses } from './transform/anthropicToOpenaiResponses.js'
 import { RequestCompatibilityError, resolveRequestCompatibility, type RequestCompatibilityOptions } from './transform/requestCompatibility.js'
@@ -705,15 +711,21 @@ async function handleOpenaiChat(
   requestOptions: RequestCompatibilityOptions = {},
   upstreamHeaders: Record<string, string> = {},
   imageContentModeOverride?: OpenAIChatImageContentMode,
+  rejectedReasoningFields: ReadonlySet<OpenAIChatReasoningField> = new Set(),
 ): Promise<Response> {
   const knownDeepSeekHost = shouldUseDeepSeekReasoningCompat(baseUrl)
   const reasoningProfile = resolveModelReasoningProfile(body.model, 'openai_chat')
   const url = buildOpenaiEndpoint(baseUrl, 'chat/completions')
   const imageContentMode = imageContentModeOverride ?? getOpenAIChatImageContentMode(url, body.model)
+  const unsupportedReasoningFields = new Set([
+    ...getOpenAIChatUnsupportedReasoningFields(url, body.model),
+    ...rejectedReasoningFields,
+  ])
   const transformed = anthropicToOpenaiChat(body, {
     ...requestOptions,
     roundTripReasoningContent: knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4',
-    passThinkingToggle: knownDeepSeekHost,
+    passThinkingToggle: knownDeepSeekHost && !unsupportedReasoningFields.has('thinking'),
+    passReasoningEffort: !unsupportedReasoningFields.has('reasoning_effort'),
     imageContentMode,
   })
   if (traceContext) {
@@ -790,6 +802,7 @@ async function handleOpenaiChat(
       }
       const resent = await handleOpenaiChat(
         body, baseUrl, apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders, 'text_only',
+        unsupportedReasoningFields,
       )
       if (resent.ok) {
         rememberOpenAIChatTextOnlyModel(url, body.model)
@@ -798,6 +811,41 @@ async function handleOpenaiChat(
           severity: 'info',
           summary: `Upstream rejected image input for ${body.model}; images are omitted for this model for 30 minutes`,
           details: { model: body.model, upstreamUrl: url, httpStatus: upstream.status, upstreamError: errText.slice(0, 500) },
+        })
+      }
+      return resent
+    }
+    const rejectedField = findOpenAIChatReasoningFieldRejection(upstream.status, errText, transformed)
+    if (rejectedField && !unsupportedReasoningFields.has(rejectedField)) {
+      // Same contract as the image fallback: the upstream refused the request
+      // before generating anything, and the field is only remembered once the
+      // resend without it succeeds.
+      if (traceContext) {
+        recordProxyTraceInBackground({
+          context: traceContext,
+          callId: traceCallId,
+          model: body.model,
+          upstreamUrl: url,
+          upstreamRequest: transformed,
+          requestHeaders: upstreamRequestHeaders,
+          startedAt,
+          startedAtMs,
+          responseStatus: upstream.status,
+          upstreamResponseBody: errText,
+          responseHeaders: upstream.headers,
+        })
+      }
+      const resent = await handleOpenaiChat(
+        body, baseUrl, apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders,
+        imageContentMode, new Set([...unsupportedReasoningFields, rejectedField]),
+      )
+      if (resent.ok) {
+        rememberOpenAIChatUnsupportedReasoningField(url, body.model, rejectedField)
+        void diagnosticsService.recordEvent({
+          type: 'openai_chat_reasoning_field_disabled',
+          severity: 'info',
+          summary: `Upstream rejected ${rejectedField} for ${body.model}; it is omitted for this model for 30 minutes`,
+          details: { model: body.model, field: rejectedField, upstreamUrl: url, httpStatus: upstream.status, upstreamError: errText.slice(0, 500) },
         })
       }
       return resent

@@ -58,6 +58,14 @@ export const OFFICIAL_MODELS: ModelInfo[] = [
     supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
   },
   {
+    id: 'claude-haiku-5-5',
+    name: 'Haiku 5.5',
+    description: 'Fastest for high-volume, latency-sensitive tasks',
+    context: '1m',
+    defaultReasoningEffort: 'medium',
+    supportedReasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+  },
+  {
     id: 'claude-haiku-4-5',
     name: 'Haiku 4.5',
     description: 'Fastest with near-frontier intelligence',

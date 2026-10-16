@@ -328,7 +328,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2.5 px-[18px] py-2.5">
           <div className="min-w-0 max-w-full">
             <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
-              Agent Teams · {t('agentTeams.sharedTaskList')}
+              {t('agentTeams.name')} · {t('agentTeams.sharedTaskList')}
             </div>
             <div className="mt-0.5 flex min-w-0 items-center gap-2">
               <span

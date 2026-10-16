@@ -127,6 +127,11 @@ jobs:
           bun run build
           bun run build:electron
 
+      - name: Rebuild node-pty for the Linux glibc floor
+        if: matrix.smoke_platform == 'linux'
+        working-directory: desktop
+        run: bash ./scripts/rebuild-node-pty-linux.sh
+
       - name: Build Electron app
         working-directory: desktop
         env:
@@ -140,7 +145,7 @@ jobs:
         run: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-installer-smoke.ps1 -ArtifactsDir ./build-artifacts/electron -Arch x64
 
       - name: Verify packaged app structure
-        run: bun run test:package-smoke --platform ${{ matrix.smoke_platform }} --arch ${{ matrix.arch }} --package-kind release --artifacts-dir desktop/build-artifacts/electron
+        run: bun run test:package-smoke --platform ${{ matrix.smoke_platform }} --arch ${{ matrix.arch }} --package-kind release --artifacts-dir desktop/build-artifacts/electron ${{ matrix.smoke_platform == 'linux' && '--max-linux-glibc 2.28' || '' }}
 
       - name: Collect artifacts
         id: collect

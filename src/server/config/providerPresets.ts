@@ -4,7 +4,7 @@
 import { z } from 'zod'
 
 import providerPresetsJson from './providerPresets.json'
-import { ApiFormatSchema, ProviderAuthStrategySchema } from '../types/provider.js'
+import { ApiFormatSchema, ImageGenerationConfigSchema, ProviderAuthStrategySchema } from '../types/provider.js'
 import type { ModelReasoningProviderKind } from '../../shared/modelReasoning.js'
 
 const ModelMappingSchema = z.object({
@@ -50,7 +50,7 @@ export const ProviderPresetSchema = z.object({
     'zhipu_coding_plan',
   ] satisfies readonly ModelReasoningProviderKind[]).optional(),
   defaultModels: ModelMappingSchema,
-  defaultImageGeneration: z.object({ model: z.string().min(1) }).optional(),
+  defaultImageGeneration: ImageGenerationConfigSchema.pick({ model: true, protocol: true }).optional(),
   needsApiKey: z.boolean(),
   websiteUrl: z.string(),
   apiKeyUrl: z.string().optional(),

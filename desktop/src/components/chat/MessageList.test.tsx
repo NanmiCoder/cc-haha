@@ -33,6 +33,10 @@ import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { initializeChatAppearance, useChatAppearanceStore } from '../../stores/chatAppearanceStore'
 import { CHAT_APPEARANCE_STORAGE_KEY } from '../../lib/chatAppearance'
+import {
+  DEFAULT_SELECTION_MENU_PLACEMENT,
+  useSelectionMenuPlacementStore,
+} from '../../stores/selectionMenuPlacementStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSideChatStore } from '../../stores/sideChatStore'
 import { useTabStore } from '../../stores/tabStore'
@@ -330,6 +334,7 @@ describe('MessageList nested tool calls', () => {
     useSessionStore.setState({ sessions: [], activeSessionId: null, isLoading: false, error: null })
     useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState() } })
     useTeamStore.getState().clearTeam()
+    useSelectionMenuPlacementStore.setState({ placement: DEFAULT_SELECTION_MENU_PLACEMENT })
     useWorkspaceChatContextStore.setState(useWorkspaceChatContextStore.getInitialState(), true)
     // The workspace panel store is a shared singleton; reset it so preview tabs opened by
     // one test (clicking a change-card row) don't dedupe/leak into the next test.
@@ -3830,6 +3835,73 @@ describe('MessageList nested tool calls', () => {
     expect(document.activeElement).not.toBe(copyButton)
   })
 
+  it.each(['user', 'assistant'] as const)('discards a %s selection after non-pointer navigation to an identical message', async (role) => {
+    const destination = 'selection-destination'
+    const content = 'Shared transcript entry with identical message identity.'
+    const messages: UIMessage[] = [{ id: 'shared-message', type: role === 'user' ? 'user_text' : 'assistant_text', content, timestamp: 1 }]
+    useChatStore.setState({ sessions: {
+      [ACTIVE_TAB]: makeSessionState({ messages }),
+      [destination]: makeSessionState({ messages }),
+    } })
+    render(<MessageList />)
+    await selectMessageText(screen.getByText(content), 'Shared transcript entry')
+
+    // Notification/keyboard navigation has no outside pointerdown to dismiss
+    // the old toolbar. Reusing the message id and content used to retain it.
+    act(() => useTabStore.setState({ activeTabId: destination }))
+    const retainedAdd = screen.queryByRole('button', { name: 'Add to chat' })
+    if (retainedAdd) fireEvent.click(retainedAdd)
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[destination] ?? []).toEqual([])
+    expect(retainedAdd).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Ask in side chat' })).toBeNull()
+
+    // A fresh selection in B is still usable and cannot alter A's draft.
+    await selectMessageText(screen.getByText(content), 'identical message identity')
+    fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }))
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[destination]).toMatchObject([
+      { quote: 'identical message identity', sourceRole: role, messageId: 'shared-message' },
+    ])
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB] ?? []).toEqual([])
+  })
+
+  it('does not open a side chat from a selection retained across sessions', async () => {
+    const messages: UIMessage[] = [{ id: 'shared-message', type: 'assistant_text', content: 'Shared side chat selection.', timestamp: 1 }]
+    useChatStore.setState({ sessions: {
+      [ACTIVE_TAB]: makeSessionState({ messages }),
+      destination: makeSessionState({ messages }),
+    } })
+    render(<MessageList />)
+    await selectMessageText(screen.getByText('Shared side chat selection.'), 'side chat selection')
+    vi.mocked(openSideChat).mockClear()
+    act(() => useTabStore.setState({ activeTabId: 'destination' }))
+    const retainedAction = screen.queryByRole('button', { name: 'Ask in side chat' })
+    if (retainedAction) fireEvent.click(retainedAction)
+    expect(openSideChat).not.toHaveBeenCalled()
+    expect(retainedAction).toBeNull()
+  })
+
+  it.each([0, 1])('cancels queued selection updates when switching sessions after %i animation frames', async (frames) => {
+    const content = 'Shared pending selection.'
+    const messages: UIMessage[] = [{ id: 'shared-message', type: 'assistant_text', content, timestamp: 1 }]
+    useChatStore.setState({ sessions: {
+      [ACTIVE_TAB]: makeSessionState({ messages }),
+      destination: makeSessionState({ messages }),
+    } })
+    render(<MessageList />)
+    const element = screen.getByText(content)
+    prepareMessageTextSelection(element, 'pending selection')
+    const pointer = { button: 0, clientX: 180, clientY: 88, pointerId: 1, pointerType: 'mouse' }
+    fireSelectionPointerEvent(element, 'down', pointer)
+    fireSelectionPointerEvent(element, 'up', pointer)
+    if (frames) await waitForProgrammaticScrollReset()
+    act(() => useTabStore.setState({ activeTabId: 'destination' }))
+    fireEvent(document, new Event('selectionchange'))
+    await waitForSelectionMenuUpdate()
+    expect(screen.queryByRole('button', { name: 'Add to chat' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Ask in side chat' })).toBeNull()
+    expect(useWorkspaceChatContextStore.getState().referencesBySession).toEqual({})
+  })
+
   it('opens a side chat with a selected quote without adding it to the main composer', async () => {
     useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [{
       id: 'assistant-side', type: 'assistant_text', content: 'Explain this isolated selection.', timestamp: 1,
@@ -4102,6 +4174,44 @@ describe('MessageList nested tool calls', () => {
     ])
     expect(useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB]?.[0]?.quote).toContain('First line')
     expect(useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB]?.[0]?.quote).toContain('finish the selection')
+  })
+
+  it('floats a multi-line selection above the text when the placement preference asks for it', async () => {
+    useSelectionMenuPlacementStore.setState({ placement: 'above' })
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [{
+            id: 'assistant-1',
+            type: 'assistant_text',
+            content: [
+              'First line can start the selection.',
+              '',
+              'Second paragraph should still belong to the same chat message.',
+              '',
+              '- Third block can finish the selection.',
+            ].join('\n'),
+            timestamp: 1,
+          }],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    await selectAcrossMessageText(
+      screen.getByText('First line can start the selection.'),
+      'First line',
+      screen.getByText('Third block can finish the selection.'),
+      'finish the selection',
+      { left: 160, top: 80, right: 520, bottom: 160, width: 360, height: 80 },
+    )
+    const floatingAddButton = screen.getByRole('button', { name: 'Add to chat' })
+
+    // Above the whole selection (top 80 - 44 - 10) and centred on it, instead of
+    // over the text that follows the selection.
+    expect((floatingAddButton.closest('[role=toolbar]') as HTMLElement).style.left).toBe('160px')
+    expect((floatingAddButton.closest('[role=toolbar]') as HTMLElement).style.top).toBe('26px')
   })
 
   it('shows the selected-message action after browser selectionchange for multi-line replies', async () => {
@@ -8383,6 +8493,34 @@ describe('MessageList nested tool calls', () => {
     // The evidence is what tells a mid-block cut from a dropped message_stop
     // when users send a screenshot; the translation alone would hide it.
     expect(screen.getByText(raw)).toBeTruthy()
+  })
+
+  it('explains why auto-compact stopped instead of showing the English CLI text (#1544)', () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    const raw =
+      'Auto-compact is thrashing: the context refilled to the limit within 3 turns of the previous compaction, 3 times in a row.'
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'error-1',
+              type: 'error',
+              code: 'unknown',
+              businessErrorCode: 'autocompact_thrashing',
+              message: raw,
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(screen.getByText(/自动压缩已停止/)).toBeTruthy()
+    expect(screen.getByText(/精简 CLAUDE.md/)).toBeTruthy()
+    expect(screen.queryByText(raw)).toBeNull()
   })
 
   it.each([

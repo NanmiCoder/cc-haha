@@ -4,11 +4,12 @@ import { hahaOAuthService } from './hahaOAuthService.js'
 
 export const CLAUDE_OFFICIAL_OPUS_MODEL_ID = 'claude-opus-5-5'
 export const CLAUDE_OFFICIAL_SONNET_MODEL_ID = 'claude-sonnet-5-5'
+export const CLAUDE_OFFICIAL_HAIKU_MODEL_ID = 'claude-haiku-5-5'
 
 export const CLAUDE_OFFICIAL_DEFAULT_MODELS: ModelMapping = {
   main: CLAUDE_OFFICIAL_OPUS_MODEL_ID,
   fable: 'claude-fable-5-1',
-  haiku: 'claude-haiku-4-5',
+  haiku: CLAUDE_OFFICIAL_HAIKU_MODEL_ID,
   sonnet: CLAUDE_OFFICIAL_SONNET_MODEL_ID,
   opus: CLAUDE_OFFICIAL_OPUS_MODEL_ID,
 }
@@ -17,10 +18,11 @@ const CURRENT_MODEL_ALIASES = new Map<string, string>([
   ['fable', 'claude-fable-5'],
   ['opus', CLAUDE_OFFICIAL_OPUS_MODEL_ID],
   ['sonnet', CLAUDE_OFFICIAL_SONNET_MODEL_ID],
-  ['haiku', 'claude-haiku-4-5'],
+  ['haiku', CLAUDE_OFFICIAL_HAIKU_MODEL_ID],
   ['claude-fable-5', 'claude-fable-5'],
   [CLAUDE_OFFICIAL_OPUS_MODEL_ID, CLAUDE_OFFICIAL_OPUS_MODEL_ID],
   [CLAUDE_OFFICIAL_SONNET_MODEL_ID, CLAUDE_OFFICIAL_SONNET_MODEL_ID],
+  [CLAUDE_OFFICIAL_HAIKU_MODEL_ID, CLAUDE_OFFICIAL_HAIKU_MODEL_ID],
   ['claude-haiku-4-5', 'claude-haiku-4-5'],
 ])
 

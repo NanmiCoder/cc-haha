@@ -1,4 +1,4 @@
-import type { ApiFormat, ProviderAuthStrategy } from './provider'
+import type { ApiFormat, ImageGenerationConfig, ProviderAuthStrategy } from './provider'
 import type { ModelReasoningProviderKind } from '../../../src/shared/modelReasoning'
 import type { ModelApiFormatRule } from '../../../src/shared/modelApiFormats'
 
@@ -23,7 +23,7 @@ export type ProviderPreset = {
   apiFormat: ApiFormat
   reasoningProviderKind?: ModelReasoningProviderKind
   defaultModels: ModelMapping
-  defaultImageGeneration?: { model: string }
+  defaultImageGeneration?: Pick<ImageGenerationConfig, 'model' | 'protocol'>
   needsApiKey: boolean
   websiteUrl: string
   apiKeyUrl?: string

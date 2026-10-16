@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 
 import { createMockOnlyRunners, MOCK_AGENT_SCENARIOS, toolResultsSentUpstream } from './scenarios'
 import { decideReply, UPSTREAM_ERROR_MESSAGE, UPSTREAM_ERROR_TRIGGER, type MockRequest } from './scriptedModel'
@@ -51,6 +51,44 @@ describe('scripted model', () => {
   test('runs a quoted shell command with Bash', () => {
     const reply = decideReply(agentRequest([{ role: 'user', content: 'Run the shell command `echo nonce-1` and tell me what it printed.' }]))
     expect(reply.kind === 'message' && reply.content[0]).toMatchObject({ type: 'tool_use', name: 'Bash', input: { command: 'echo nonce-1' } })
+  })
+
+  test('loads deferred image tools and then invokes generation or editing after search', () => {
+    const request = agentRequest([{ role: 'user', content: 'MOCK_IMAGE_GENERATE' }])
+    expect(decideReply({ ...request, tools: [...AGENT_TOOLS, { name: 'ToolSearch' }] }))
+      .toMatchObject({ content: [{ type: 'tool_use', name: 'ToolSearch', input: { query: 'select:ImageGen' } }] })
+    expect(decideReply({ ...request, tools: [...AGENT_TOOLS, { name: 'ImageGen' }], messages: [
+      ...request.messages!,
+      { role: 'user', content: [{ type: 'tool_result', content: [{ type: 'tool_reference', tool_name: 'ImageGen' }] }] },
+    ] })).toMatchObject({ content: [{ type: 'tool_use', name: 'ImageGen', input: { prompt: 'A fixture blue square', count: 1 } }] })
+    expect(decideReply({ ...request, tools: [...AGENT_TOOLS, { name: 'ImageEdit' }], messages: [
+      { role: 'user', content: 'MOCK_IMAGE_EDIT "/tmp/fixture.png"' },
+    ] })).toMatchObject({ content: [{ type: 'tool_use', name: 'ImageEdit', input: { referenced_image_paths: ['/tmp/fixture.png'] } }] })
+  })
+
+  test.each(['ImageGen', 'ImageEdit'])('selects the Gemini-only 4:5 ratio from the advertised %s schema', (name) => {
+    const prompt = name === 'ImageEdit' ? 'MOCK_IMAGE_EDIT "/tmp/fixture.png"' : 'MOCK_IMAGE_GENERATE'
+    const request = agentRequest([{ role: 'user', content: prompt }])
+    expect(decideReply({ ...request, tools: [...AGENT_TOOLS, {
+      name, input_schema: { properties: { aspect_ratio: { enum: ['auto', '1:1', '4:5', '16:9'] } } },
+    }] })).toMatchObject({ content: [{ type: 'tool_use', name, input: { aspect_ratio: '4:5' } }] })
+    expect(decideReply({ ...request, tools: [...AGENT_TOOLS, {
+      name, input_schema: { properties: { aspect_ratio: { enum: ['auto', '1:1', '16:9'] } } },
+    }] })).toMatchObject({ content: [{ type: 'tool_use', name, input: { aspect_ratio: '16:9' } }] })
+  })
+
+  test.each(['ImageGen', 'ImageEdit'])('selects a supported resolution from the advertised %s schema', (name) => {
+    const prompt = name === 'ImageEdit' ? 'MOCK_IMAGE_EDIT "/tmp/fixture.png"' : 'MOCK_IMAGE_GENERATE'
+    const request = agentRequest([{ role: 'user', content: prompt }])
+    for (const [resolutions, expected] of [
+      [['1k'], '1k'],
+      [['1k', '2k'], '2k'],
+      [undefined, '2k'],
+    ] as const) {
+      expect(decideReply({ ...request, tools: [...AGENT_TOOLS, {
+        name, input_schema: { properties: { resolution: { enum: resolutions ? [...resolutions] : undefined } } },
+      }] })).toMatchObject({ content: [{ type: 'tool_use', name, input: { resolution: expected } }] })
+    }
   })
 
   test('reports the tool result it was given, and says when the tool failed', () => {
@@ -153,6 +191,91 @@ describe('mock Anthropic endpoint', () => {
     })
   })
 
+  test('serves Images and Gemini fixtures only with the configured image credentials', async () => {
+    server = startMockLlmServer()
+    const imageResponse = await fetch(`${server.url}/v1/images/generations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer mock-image-key' },
+      body: JSON.stringify({ model: 'mock-image', prompt: 'A square' }),
+    })
+    expect(imageResponse.status).toBe(200)
+    expect(await imageResponse.json()).toMatchObject({ data: [{ url: expect.stringContaining('data:image/png;base64,') }] })
+    const nativeResponse = await fetch(`${server.url}/v1beta/models/mock-image:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': 'mock-image-key' },
+      body: JSON.stringify({ contents: [], generationConfig: { imageConfig: { aspectRatio: '4:5' } } }),
+    })
+    expect(nativeResponse.status).toBe(200)
+    expect(await nativeResponse.json()).toMatchObject({ candidates: [{ content: { parts: [
+      { text: 'Fixture image' }, { inlineData: { mimeType: 'image/png', data: expect.any(String) } },
+    ] } }] })
+    const missingCredentials = await fetch(`${server.url}/v1/images/generations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
+    })
+    expect(missingCredentials.status).toBe(401)
+    expect(server.imageRequests).toHaveLength(3)
+    expect(server.requests).toHaveLength(0)
+  })
+
+  test.each([
+    '/v1beta/openai/v1beta/models/mock-image:generateContent',
+    '/v1beta/openai/models/mock-image:generateContent',
+    '/v1beta/models/wrong-image:generateContent',
+  ])('rejects incorrect native Gemini endpoint %s', async (path) => {
+    server = startMockLlmServer()
+    const response = await fetch(`${server.url}${path}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': 'mock-image-key' },
+      body: JSON.stringify({ contents: [], generationConfig: { imageConfig: { aspectRatio: '4:5' } } }),
+    })
+    expect(response.status).toBe(404)
+  })
+
+  test.each(['19.5:9', '20:9', '9:20', 'auto'])('rejects unsupported native Gemini ratio %s', async (aspectRatio) => {
+    server = startMockLlmServer()
+    const response = await fetch(`${server.url}/v1beta/models/mock-image:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': 'mock-image-key' },
+      body: JSON.stringify({ contents: [], generationConfig: { imageConfig: { aspectRatio } } }),
+    })
+    expect(response.status).toBe(400)
+  })
+
+  test.each([
+    ['gemini-3.1-flash-lite-image', '1K'],
+    ['gemini-3.1-flash-lite-image', undefined],
+    ['mock-image', '2K'],
+  ])('serves the native Gemini %s fixture with resolution %s', async (model, imageSize) => {
+    server = startMockLlmServer()
+    const response = await fetch(`${server.url}/v1beta/models/${model}:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': 'mock-image-key' },
+      body: JSON.stringify({ contents: [], generationConfig: { imageConfig: { imageSize, aspectRatio: '4:5' } } }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ candidates: [{ content: { parts: [
+      { text: 'Fixture image' }, { inlineData: { mimeType: 'image/png', data: expect.any(String) } },
+    ] } }] })
+  })
+
+  test.each(['2K', '4K', '512'])('rejects unsupported Lite resolution %s at the native endpoint', async (imageSize) => {
+    server = startMockLlmServer()
+    const response = await fetch(`${server.url}/v1beta/models/gemini-3.1-flash-lite-image:generateContent`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': 'mock-image-key' },
+      body: JSON.stringify({ contents: [], generationConfig: { imageConfig: { imageSize, aspectRatio: '4:5' } } }),
+    })
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: 'Gemini Lite images require 1K resolution' })
+  })
+
+  test('rejects image credentials sent under the other protocol header', async () => {
+    server = startMockLlmServer()
+    for (const [path, header] of [
+      ['/v1beta/models/mock-image:generateContent', { Authorization: 'Bearer mock-image-key' }],
+      ['/v1/images/generations', { 'x-goog-api-key': 'mock-image-key' }],
+    ] as const) {
+      const response = await fetch(`${server.url}${path}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...header }, body: '{}',
+      })
+      expect(response.status).toBe(401)
+    }
+  })
+
   test('returns provider-shaped errors', async () => {
     const response = await post({ ...agentRequest([{ role: 'user', content: UPSTREAM_ERROR_TRIGGER }]), stream: true })
     expect(response.status).toBe(400)
@@ -174,6 +297,33 @@ describe('mock Anthropic endpoint', () => {
 })
 
 describe('mock-LLM scenario catalog', () => {
+  test('restores the provider base URL and image settings when the image scenario fails', async () => {
+    const original = {
+      baseUrl: 'http://upstream.invalid/original',
+      imageGeneration: { protocol: 'xai_images', model: 'previous-image', apiKey: 'previous-fixture-key' },
+    }
+    const updates: unknown[] = []
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(async (_url, init) => {
+      if (init?.method === 'PUT') updates.push(JSON.parse(String(init.body)))
+      return Response.json({ provider: original })
+    })
+    try {
+      await expect(createMockOnlyRunners([])['mock-image-provider-protocols']!({
+        baseUrl: 'http://server.invalid', workRoot: '/fixture', artifactDir: '/fixture/artifacts', stepTimeoutMs: 100,
+        target: { providerId: 'fixture', providerName: 'Fixture', modelId: 'mock-model', host: 'http://upstream.invalid', source: 'fixture' },
+        async createSession() { throw new Error('fixture session failure') },
+        async openSocket() { throw new Error('must not open a socket after session failure') },
+        pinRuntime() {},
+      })).rejects.toThrow('fixture session failure')
+      expect(updates).toEqual([
+        { baseUrl: original.baseUrl, imageGeneration: { protocol: 'openai_images', model: 'mock-image', baseUrl: '', apiKey: 'mock-image-key' } },
+        original,
+      ])
+    } finally {
+      fetchSpy.mockRestore()
+    }
+  })
+
   test('runs every live scenario plus mock-only ones, each with a runner', () => {
     const ids = MOCK_AGENT_SCENARIOS.map((scenario) => scenario.id)
     for (const live of LIVE_AGENT_FLOW_SCENARIOS) expect(ids).toContain(live.id)

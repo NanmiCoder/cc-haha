@@ -17,4 +17,12 @@ describe('sessionTitleText', () => {
       .toBe('Fix login')
   })
 
+  test('shows a composer skill pill by name instead of its model instruction', () => {
+    const raw = '<agent-team-request>\nUse an Agent Team for this request.\n</agent-team-request>\n\n'
+      + 'Use the Skill tool with skill: "frontend-design" for this request. 做个落地页'
+    expect(cleanSessionTitleSource(raw)).toBe('/frontend-design 做个落地页')
+    expect(cleanSessionTitleSource('Use the Skill tool with skill: not-json for this request.'))
+      .toBe('Use the Skill tool with skill: not-json for this request.')
+  })
+
 })

@@ -8,6 +8,7 @@ import { rankComposerSuggestions } from '@/components/chat/composerSuggestionSea
 import { ApiError } from '@/api/client'
 import { filesystemApi } from '@/api/filesystem'
 import { useTranslation } from '@/i18n'
+import { useRoomAbove } from '@/hooks/useRoomAbove'
 import { safeMentionIcon, type NewComposerMention } from '@/lib/composerMentions'
 import { publicAssetPath } from '@/lib/publicAsset'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
@@ -64,6 +65,7 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
   const [result, setResult] = useState<{ key: string, entries: FileEntry[], root: string, current: string, error?: 'denied' | 'failed' } | null>(null)
   const [selection, setSelection] = useState<{ query: string, key: string } | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const [roomRef, roomAbove] = useRoomAbove<HTMLDivElement>()
   const rootRef = useRef({ cwd, path: cwd })
   if (rootRef.current.cwd !== cwd) rootRef.current = { cwd, path: cwd }
   const currentResult = !browseReferences && result?.key === queryKey ? result : null
@@ -161,8 +163,8 @@ export const ComposerReferenceMenu = forwardRef<ComposerReferenceMenuHandle, Pro
 
   let offset = 0
   return (
-    <div className={embedded ? 'min-w-0' : `absolute bottom-full left-0 w-full z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] `} onMouseDown={event => event.preventDefault()}>
-      <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1">
+    <div ref={embedded ? undefined : roomRef} style={embedded ? undefined : { maxHeight: roomAbove }} className={embedded ? 'flex min-h-0 min-w-0 flex-col' : `absolute bottom-full left-0 w-full z-[var(--z-dropdown)] mb-2 flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)] `} onMouseDown={event => event.preventDefault()}>
+      <div ref={listRef} id={id} role="listbox" aria-label={t('chat.references')} aria-busy={loading || referencesLoading || sessionLoading} className="min-h-0 min-w-0 max-h-[min(320px,45vh)] overflow-y-auto p-1">
         {visibleGroups.map(group => {
           const start = offset
           offset += group.rows.length

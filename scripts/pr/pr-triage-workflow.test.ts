@@ -20,6 +20,14 @@ describe('PR triage workflow comment', () => {
     expect(workflow).not.toContain('secrets.')
   })
 
+  test('exempts CODEOWNER-authored CLI core changes using base-branch CODEOWNERS', () => {
+    const workflow = readFileSync('.github/workflows/pr-triage.yml', 'utf8')
+
+    expect(workflow).toContain("path: '.github/CODEOWNERS', ref: context.payload.pull_request.base.ref")
+    expect(workflow).toContain("const cliCoreApproved = currentLabels.has('allow-cli-core-change') || authorIsCodeOwner")
+    expect(workflow).toContain('if (cliCoreFiles.length > 0 && !cliCoreApproved) {')
+  })
+
   test('surfaces missing-test and coverage-baseline policy branches', () => {
     const workflow = readFileSync('.github/workflows/pr-triage.yml', 'utf8')
 

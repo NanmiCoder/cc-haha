@@ -32,6 +32,11 @@ import {
   isGrokOfficialProviderId,
 } from './grokOfficialProvider.js'
 import {
+  DEEPSEEK_ACCOUNT_PROVIDER,
+  isDeepSeekAccountProviderId,
+} from './deepseekAccountProvider.js'
+import { hahaDeepSeekOAuthService } from './hahaDeepSeekOAuthService.js'
+import {
   CLAUDE_OFFICIAL_DEFAULT_MODELS,
 } from './claudeOfficialRuntime.js'
 import { SettingsService } from './settingsService.js'
@@ -80,6 +85,7 @@ import type {
 import {
   BUILT_IN_PROVIDER_IDS,
   CLAUDE_OFFICIAL_PROVIDER_ID,
+  DEEPSEEK_ACCOUNT_PROVIDER_ID,
   GROK_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
   isBuiltInProviderId,
@@ -267,6 +273,12 @@ export class ProviderService {
         models: this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
       }
     }
+    if (isDeepSeekAccountProviderId(id)) {
+      return {
+        ...DEEPSEEK_ACCOUNT_PROVIDER,
+        models: this.resolveOfficialProviderModels(index, DEEPSEEK_ACCOUNT_PROVIDER_ID),
+      }
+    }
 
     const provider = index.providers.find((p) => p.id === id)
     if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
@@ -281,6 +293,7 @@ export class ProviderService {
     if (configured) return normalizeModelMapping(configured)
     if (id === OPENAI_OFFICIAL_PROVIDER_ID) return OPENAI_OFFICIAL_PROVIDER.models
     if (id === GROK_OFFICIAL_PROVIDER_ID) return GROK_OFFICIAL_PROVIDER.models
+    if (id === DEEPSEEK_ACCOUNT_PROVIDER_ID) return DEEPSEEK_ACCOUNT_PROVIDER.models
     return CLAUDE_OFFICIAL_DEFAULT_MODELS
   }
 
@@ -318,7 +331,9 @@ export class ProviderService {
     if (index.activeId === id) {
       const provider = id === OPENAI_OFFICIAL_PROVIDER_ID
         ? { ...OPENAI_OFFICIAL_PROVIDER, models: normalized }
-        : { ...GROK_OFFICIAL_PROVIDER, models: normalized }
+        : id === DEEPSEEK_ACCOUNT_PROVIDER_ID
+          ? { ...DEEPSEEK_ACCOUNT_PROVIDER, models: normalized }
+          : { ...GROK_OFFICIAL_PROVIDER, models: normalized }
       await this.syncToSettings(provider)
       await this.updateManagedSettings({ model: normalized.main, modelContext: undefined })
     }
@@ -368,7 +383,12 @@ export class ProviderService {
 
     const existing = index.providers[idx]
     const imageGeneration = input.imageGeneration
-      ? normalizeImageGeneration(input.imageGeneration)
+      ? normalizeImageGeneration({
+        ...existing.imageGeneration,
+        ...input.imageGeneration,
+        baseUrl: input.imageGeneration.baseUrl,
+        apiKey: input.imageGeneration.apiKey,
+      })
       : input.imageGeneration
     const updated: SavedProvider = {
       ...existing,
@@ -477,13 +497,22 @@ export class ProviderService {
             ...GROK_OFFICIAL_PROVIDER,
             models: this.resolveOfficialProviderModels(index, GROK_OFFICIAL_PROVIDER_ID),
           }
-        : index.providers.find((p) => p.id === id)
+        : isDeepSeekAccountProviderId(id)
+          ? {
+              ...DEEPSEEK_ACCOUNT_PROVIDER,
+              models: this.resolveOfficialProviderModels(index, DEEPSEEK_ACCOUNT_PROVIDER_ID),
+            }
+          : index.providers.find((p) => p.id === id)
     if (!provider) throw ApiError.notFound(`Provider not found: ${id}`)
 
     index.activeId = id
     await this.writeIndex(index)
 
-    if (provider.runtimeKind === 'openai_oauth' || provider.runtimeKind === 'grok_oauth') {
+    if (
+      provider.runtimeKind === 'openai_oauth' ||
+      provider.runtimeKind === 'grok_oauth' ||
+      provider.runtimeKind === 'deepseek_oauth'
+    ) {
       await this.syncToSettings(provider)
       await this.updateManagedSettings({ model: provider.models.main, modelContext: undefined })
     } else if (provider.presetId === 'official') {
@@ -581,7 +610,7 @@ export class ProviderService {
    */
   async checkAuthStatus(): Promise<{
     hasAuth: boolean
-    source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'original-settings' | 'env' | 'none'
+    source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'deepseek-oauth' | 'original-settings' | 'env' | 'none'
     activeProvider?: string
   }> {
     // 1–2. Check the selected provider, including Claude Official (activeId=null).
@@ -615,6 +644,14 @@ export class ProviderService {
           hasAuth: false,
           source: 'none',
           activeProvider: GROK_OFFICIAL_PROVIDER.name,
+        }
+      }
+      if (isDeepSeekAccountProviderId(index.activeId)) {
+        const tokens = await hahaDeepSeekOAuthService.loadTokens()
+        return {
+          hasAuth: !!tokens,
+          source: tokens ? 'deepseek-oauth' : 'none',
+          activeProvider: DEEPSEEK_ACCOUNT_PROVIDER.name,
         }
       }
 
@@ -692,7 +729,11 @@ export class ProviderService {
       }
     }
     if (providerId) {
-      if (isOpenAIOfficialProviderId(providerId) || isGrokOfficialProviderId(providerId)) {
+      if (
+        isOpenAIOfficialProviderId(providerId) ||
+        isGrokOfficialProviderId(providerId) ||
+        isDeepSeekAccountProviderId(providerId)
+      ) {
         return null
       }
       return toProxyConfig(await this.getProvider(providerId))
@@ -700,7 +741,11 @@ export class ProviderService {
 
     const index = await this.readIndex()
     if (!index.activeId) return null
-    if (isOpenAIOfficialProviderId(index.activeId) || isGrokOfficialProviderId(index.activeId)) {
+    if (
+      isOpenAIOfficialProviderId(index.activeId) ||
+      isGrokOfficialProviderId(index.activeId) ||
+      isDeepSeekAccountProviderId(index.activeId)
+    ) {
       return null
     }
     const provider = await this.getProvider(index.activeId).catch(() => null)

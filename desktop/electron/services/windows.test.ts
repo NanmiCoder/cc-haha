@@ -7,6 +7,7 @@ import {
   captureWindowState,
   hideWindowSafely,
   hasMeaningfulIntersection,
+  installFullScreenKey,
   installWindowLifecycle,
   isPersistableWindowState,
   isWindowStateVisibleOnAnyDisplay,
@@ -163,6 +164,60 @@ describe('Electron window service', () => {
     expect(captureWindowState(window as never)).toBeNull()
   })
 
+  it('does not capture fullscreen bounds as the normal window frame', () => {
+    // Entering a macOS fullscreen Space fires one resize whose bounds are the
+    // screen and isFullScreen() is already true; leaving it fires one resize
+    // back at the normal frame with isFullScreen() false.
+    let fullScreen = true
+    let bounds = { x: 0, y: 33, width: 1728, height: 1084 }
+    const window = {
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isFullScreen: () => fullScreen,
+      isMaximized: () => false,
+      getBounds: () => bounds,
+    }
+
+    expect(captureWindowState(window as never)).toBeNull()
+
+    fullScreen = false
+    bounds = { x: 200, y: 200, width: 1280, height: 820 }
+    expect(captureWindowState(window as never)).toEqual({ ...bounds, maximized: false })
+  })
+
+  it('keeps the saved normal frame when the app quits while fullscreen', () => {
+    const tmp = mkdtempSync(path.join(tmpdir(), 'electron-window-fullscreen-quit-'))
+    try {
+      const app = fakeApp(tmp)
+      const normal = { x: 200, y: 200, width: 1280, height: 820, maximized: false }
+      writeWindowState(app as never, normal, {})
+      const handlers = new Map<string, (...args: never[]) => void>()
+      const window = {
+        on: vi.fn((event: string, handler: (...args: never[]) => void) => {
+          handlers.set(event, handler)
+        }),
+        hide: vi.fn(),
+        isDestroyed: () => false,
+        isMinimized: () => false,
+        isFullScreen: () => true,
+        isMaximized: () => false,
+        getBounds: () => ({ x: 0, y: 33, width: 1728, height: 1084 }),
+      }
+
+      installWindowLifecycle({
+        app: app as never,
+        window: window as never,
+        shouldQuit: () => true,
+      })
+      handlers.get('resize')?.()
+      handlers.get('close')?.({ preventDefault: vi.fn() } as never)
+
+      expect(JSON.parse(readFileSync(windowStatePath(app as never, {}), 'utf-8'))).toEqual(normal)
+    } finally {
+      rmSync(tmp, { recursive: true, force: true })
+    }
+  })
+
   it('does not capture destroyed windows', () => {
     const destroyedAccess = () => {
       throw new TypeError('Object has been destroyed')
@@ -198,9 +253,11 @@ describe('Electron window service', () => {
       autoHideMenuBar: true,
       fullscreenable: true,
     })
+    // The green button must enter a native fullscreen Space; with
+    // fullscreenable off, macOS demotes it to a zoom that only fills the desktop.
     expect(windowChromeOptionsForPlatform('darwin')).toEqual({
       titleBarStyle: 'hiddenInset',
-      fullscreenable: false,
+      fullscreenable: true,
     })
     expect(windowChromeOptionsForPlatform('linux')).toEqual({
       titleBarStyle: 'default',
@@ -303,7 +360,6 @@ describe('Electron window service', () => {
           handlers.set(event, handler)
         }),
         hide: vi.fn(),
-        isSimpleFullScreen: () => false,
         isFullScreen: () => false,
         isDestroyed: () => false,
         isMinimized: () => false,
@@ -341,7 +397,6 @@ describe('Electron window service', () => {
         hide: vi.fn(),
         setFullScreen: vi.fn(),
         isDestroyed: () => false,
-        isSimpleFullScreen: () => false,
         isFullScreen: () => true,
         isMinimized: () => false,
         isMaximized: () => false,
@@ -376,7 +431,6 @@ describe('Electron window service', () => {
       hide: vi.fn(),
       setFullScreen: vi.fn(),
       isDestroyed: () => false,
-      isSimpleFullScreen: () => false,
       isFullScreen: () => true,
     }
 
@@ -391,47 +445,92 @@ describe('Electron window service', () => {
     expect(afterHide).toHaveBeenCalledTimes(1)
   })
 
-  it('hides immediately after leaving simple fullscreen because it does not create a macOS Space', () => {
-    const afterHide = vi.fn()
-    const window = {
-      isSimpleFullScreen: () => true,
-      setSimpleFullScreen: vi.fn(),
-      hide: vi.fn(),
-    }
-
-    hideWindowSafely(window as never, afterHide)
-
-    expect(window.setSimpleFullScreen).toHaveBeenCalledWith(false)
-    expect(window.hide).toHaveBeenCalledTimes(1)
-    expect(afterHide).toHaveBeenCalledTimes(1)
-  })
-
-  it('toggles simple fullscreen on macOS instead of native fullscreen Spaces', () => {
-    const window = {
-      isSimpleFullScreen: () => false,
-      setSimpleFullScreen: vi.fn(),
-      isFullScreen: vi.fn(),
-      setFullScreen: vi.fn(),
-    }
-
-    toggleWindowFullScreen(window as never, 'darwin')
-
-    expect(window.setSimpleFullScreen).toHaveBeenCalledWith(true)
-    expect(window.setFullScreen).not.toHaveBeenCalled()
-  })
-
-  it('toggles native fullscreen on non-macOS platforms', () => {
+  it('toggles native fullscreen in and out rather than the Space-less simple fullscreen', () => {
+    let fullScreen = false
     const window = {
       isSimpleFullScreen: vi.fn(),
       setSimpleFullScreen: vi.fn(),
-      isFullScreen: () => false,
-      setFullScreen: vi.fn(),
+      isFullScreen: () => fullScreen,
+      setFullScreen: vi.fn((next: boolean) => {
+        fullScreen = next
+      }),
     }
 
-    toggleWindowFullScreen(window as never, 'linux')
+    toggleWindowFullScreen(window as never)
+    toggleWindowFullScreen(window as never)
 
-    expect(window.setFullScreen).toHaveBeenCalledWith(true)
+    expect(window.setFullScreen.mock.calls).toEqual([[true], [false]])
     expect(window.setSimpleFullScreen).not.toHaveBeenCalled()
+  })
+
+  describe('F11 on Windows', () => {
+    const keyDown = (overrides: Record<string, unknown> = {}) => ({
+      type: 'keyDown',
+      key: 'F11',
+      isAutoRepeat: false,
+      alt: false,
+      control: false,
+      meta: false,
+      shift: false,
+      ...overrides,
+    })
+
+    const installOn = (platform: NodeJS.Platform) => {
+      let fullScreen = false
+      const handlers = new Map<string, (event: { preventDefault(): void }, input: unknown) => void>()
+      const window = {
+        webContents: {
+          on: vi.fn((name: string, handler: (event: { preventDefault(): void }, input: unknown) => void) => {
+            handlers.set(name, handler)
+          }),
+        },
+        isFullScreen: () => fullScreen,
+        setFullScreen: vi.fn((next: boolean) => {
+          fullScreen = next
+        }),
+      }
+      installFullScreenKey(window as never, platform)
+      const press = (input: unknown) => {
+        const event = { preventDefault: vi.fn() }
+        handlers.get('before-input-event')?.(event, input)
+        return event
+      }
+      return { window, handlers, press }
+    }
+
+    it('enters and leaves fullscreen and keeps the key from the page', () => {
+      const { window, press } = installOn('win32')
+
+      expect(press(keyDown()).preventDefault).toHaveBeenCalledTimes(1)
+      expect(press(keyDown()).preventDefault).toHaveBeenCalledTimes(1)
+
+      expect(window.setFullScreen.mock.calls).toEqual([[true], [false]])
+    })
+
+    it('ignores key-up, auto-repeat, modified F11 and other keys', () => {
+      const { window, press } = installOn('win32')
+
+      for (const input of [
+        keyDown({ type: 'keyUp' }),
+        keyDown({ isAutoRepeat: true }),
+        keyDown({ shift: true }),
+        keyDown({ control: true }),
+        keyDown({ alt: true }),
+        keyDown({ meta: true }),
+        keyDown({ key: 'F12' }),
+      ]) {
+        expect(press(input).preventDefault).not.toHaveBeenCalled()
+      }
+      expect(window.setFullScreen).not.toHaveBeenCalled()
+    })
+
+    it('leaves F11 to the View menu accelerator on macOS and Linux', () => {
+      for (const platform of ['darwin', 'linux'] as const) {
+        const { window, handlers } = installOn(platform)
+        expect(handlers.size).toBe(0)
+        expect(window.webContents.on).not.toHaveBeenCalled()
+      }
+    })
   })
 
   it('allows the window to close normally once the app is explicitly quitting', () => {
@@ -446,6 +545,7 @@ describe('Electron window service', () => {
         hide: vi.fn(),
         isDestroyed: () => false,
         isMinimized: () => false,
+        isFullScreen: () => false,
         isMaximized: () => false,
         getBounds: () => ({ x: 0, y: 0, width: 1280, height: 820 }),
       }

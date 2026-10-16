@@ -24,7 +24,7 @@
 
 ## Risk
 
-- [ ] This PR does not touch CLI core paths, or it has maintainer approval for `allow-cli-core-change`.
+- [ ] This PR does not touch CLI core paths, is authored by a CODEOWNER, or has maintainer approval for `allow-cli-core-change`.
 - [ ] Production code changes include matching tests, or have maintainer approval for `allow-missing-tests`.
 - [ ] Coverage baseline/threshold changes have maintainer approval for `allow-coverage-baseline-change`.
 - [ ] Any quarantine-policy change has maintainer approval; deterministic provider/chat contract tests were not quarantined.

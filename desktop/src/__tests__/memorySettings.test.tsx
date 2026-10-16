@@ -7,6 +7,7 @@ import { useMemoryStore } from '../stores/memoryStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
+import type { PreviewLinkTarget } from '@/lib/previewLinkRouter'
 
 const { memoryApiMock } = vi.hoisted(() => ({
   memoryApiMock: {
@@ -21,30 +22,34 @@ vi.mock('../api/memory', () => ({
   memoryApi: memoryApiMock,
 }))
 
-vi.mock('../components/markdown/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content, onLinkClick }: { content: string; onLinkClick?: (href: string) => boolean | void }) => {
-    const match = content.match(/\[([^\]]+)\]\(([^)]+)\)/)
-    const linkText = match?.[1]
-    const linkHref = match?.[2]
-    return (
-      <div data-testid="markdown-preview">
-        {content}
-        {linkText && linkHref ? (
-          <a
-            href={linkHref}
-            onClick={(event) => {
-              if (onLinkClick?.(linkHref)) {
-                event.preventDefault()
-              }
-            }}
-          >
-            {linkText}
-          </a>
-        ) : null}
-      </div>
-    )
-  },
-}))
+vi.mock('../components/markdown/MarkdownRenderer', async () => {
+  const { classifyPreviewLink } = await import('@/lib/previewLinkRouter')
+  return {
+    MarkdownRenderer: ({ content, onLinkClick }: { content: string; onLinkClick?: (href: PreviewLinkTarget) => boolean | void }) => {
+      const match = content.match(/\[([^\]]+)\]\(([^)]+)\)/)
+      const linkText = match?.[1]
+      const linkHref = match?.[2]
+      return (
+        <div data-testid="markdown-preview">
+          {content}
+          {linkText && linkHref ? (
+            <a
+              href={linkHref}
+              onClick={(event) => {
+                const parsed = classifyPreviewLink(linkHref)
+                if (onLinkClick?.(parsed.path ? { path: parsed.path } : linkHref)) {
+                  event.preventDefault()
+                }
+              }}
+            >
+              {linkText}
+            </a>
+          ) : null}
+        </div>
+      )
+    },
+  }
+})
 
 describe('MemorySettings', () => {
   beforeEach(() => {
@@ -487,7 +492,8 @@ describe('MemorySettings', () => {
     expect(screen.queryByLabelText('Editor')).not.toBeInTheDocument()
   })
 
-  it('opens linked memory markdown files from the rendered preview', async () => {
+  it.each(['notes/manual.md', 'notes/literal%20name.md', 'notes/name#hash.md'])(
+    'opens linked memory markdown file %s from the parsed preview', async (targetPath) => {
     memoryApiMock.listFiles.mockResolvedValue({
       files: [
         {
@@ -501,7 +507,7 @@ describe('MemorySettings', () => {
           isIndex: true,
         },
         {
-          path: 'notes/manual.md',
+          path: targetPath,
           name: 'manual.md',
           title: 'Manual',
           bytes: 24,
@@ -514,9 +520,9 @@ describe('MemorySettings', () => {
     memoryApiMock.readFile.mockImplementation((_projectId: string, path: string) => Promise.resolve({
       file: {
         path,
-        content: path === 'notes/manual.md'
+        content: path !== 'MEMORY.md'
           ? '# Manual\n'
-          : '# Project Memory\n\n- [Manual](notes/manual.md)\n',
+          : `# Project Memory\n\n- [Manual](${targetPath.split('/').map(encodeURIComponent).join('/')})\n`,
         updatedAt: '2026-05-01T00:00:00.000Z',
         bytes: 48,
       },
@@ -527,7 +533,7 @@ describe('MemorySettings', () => {
     fireEvent.click(await screen.findByRole('link', { name: 'Manual' }))
 
     await waitFor(() => {
-      expect(memoryApiMock.readFile).toHaveBeenCalledWith('-workspace-demo', 'notes/manual.md')
+      expect(memoryApiMock.readFile).toHaveBeenCalledWith('-workspace-demo', targetPath)
     })
     expect(await screen.findByTestId('markdown-preview')).toHaveTextContent('Manual')
     expect(screen.queryByLabelText('Editor')).not.toBeInTheDocument()

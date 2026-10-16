@@ -534,6 +534,43 @@ describe('Sidebar', () => {
     expect(screen.getByTestId('sidebar-title-region')).toHaveAttribute('data-desktop-drag-region')
   })
 
+  it('answers the Cmd+N request like the New Session item, in the project on screen', async () => {
+    createSession.mockResolvedValue('session-from-shortcut')
+    useSessionStore.setState({
+      sessions: [
+        makeSession('alpha-1', 'Alpha Session', '/workspace/alpha', new Date().toISOString()),
+      ],
+    })
+    useTabStore.setState({
+      tabs: [{ sessionId: 'alpha-1', title: 'Alpha Session', type: 'session', status: 'idle' }],
+      activeTabId: 'alpha-1',
+    })
+
+    render(<Sidebar />)
+    expect(createSession).not.toHaveBeenCalled()
+
+    await act(async () => {
+      useUIStore.getState().requestNewSession()
+    })
+
+    await waitFor(() => {
+      expect(createSession).toHaveBeenCalledTimes(1)
+      expect(createSession).toHaveBeenCalledWith('/workspace/alpha')
+      expect(connectToSession).toHaveBeenCalledWith('session-from-shortcut')
+    })
+    expect(useTabStore.getState().activeTabId).toBe('session-from-shortcut')
+    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toContain('session-from-shortcut')
+  })
+
+  it('does not replay a Cmd+N request made before the sidebar mounted', async () => {
+    useUIStore.getState().requestNewSession()
+
+    render(<Sidebar />)
+    await act(async () => {})
+
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
   // The header used to render both "Claude Code Haha" and "cc-haha" and hide
   // one with a container query, so the app answered to two names depending on
   // how far the sidebar had been dragged. Only the short one ships now — and

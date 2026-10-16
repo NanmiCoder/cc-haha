@@ -234,3 +234,25 @@ describe('provider 1M runtime selection', () => {
     expect(resolveProviderSlotModelId({ ...legacy, model1mSupport: provider.model1mSupport }, 'main')).toBe('old[1m]')
   })
 })
+
+describe('built-in DeepSeek Account runtime selection', () => {
+  const saved: SavedProvider = {
+    id: 'saved', name: 'Saved', presetId: 'custom', apiKey: 'fixture',
+    baseUrl: 'http://127.0.0.1:9999', apiFormat: 'anthropic',
+    models: { main: 'saved-main', haiku: '', sonnet: '', opus: '' },
+  }
+
+  it('keeps a restored DeepSeek Account choice although it is not in the saved provider list', () => {
+    const selection = { providerId: 'deepseek-account', modelId: 'deepseek-v4-flash', effortLevel: 'high' as const }
+    const context = { activeId: saved.id, providers: [saved], hasLoadedProviders: true }
+
+    // Built-ins are never in the saved list; treating this like a deleted
+    // provider would silently move the session to the active saved provider.
+    expect(reconcileRuntimeSelection(selection, context)).toBe(selection)
+  })
+
+  it('falls back to the bundled DeepSeek preset main model when no model is known', () => {
+    expect(resolveDefaultRuntimeSelection('deepseek-account', null, [], undefined))
+      .toEqual({ providerId: 'deepseek-account', modelId: 'deepseek-v4-pro[1m]' })
+  })
+})

@@ -29,6 +29,7 @@ describe('Claude model pricing tables', () => {
     ['claude-sonnet-5-5', 2, 10, 0.2],
     ['claude-sonnet-5', 2, 10, 0.2],
     ['claude-sonnet-4-6', 3, 15, 0.3],
+    ['claude-haiku-5-5', 0.1, 0.5, 0.01],
     ['claude-haiku-4-5', 1, 5, 0.1],
   ])('%s matches the published input/output/cache-read prices', (model, input, output, cacheRead) => {
     for (const costs of [MODEL_COSTS[firstPartyNameToCanonical(model)], resolveModelCosts(model)]) {

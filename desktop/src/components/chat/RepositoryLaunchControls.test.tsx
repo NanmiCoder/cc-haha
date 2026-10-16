@@ -354,6 +354,115 @@ describe('RepositoryLaunchControls', () => {
     })
   })
 
+  it('refreshes repository context when opening the branch list', async () => {
+    const contextWithExternalBranch = {
+      ...okRepositoryContext,
+      branches: [
+        ...okRepositoryContext.branches,
+        {
+          name: 'feature/external',
+          current: false,
+          local: true,
+          remote: false,
+          checkedOut: false,
+          remoteRef: null,
+          worktreePath: null,
+          commit: OTHER_COMMIT,
+        },
+      ],
+    }
+    renderControls()
+    await openPill()
+    apiMocks.getRepositoryContext.mockResolvedValueOnce(contextWithExternalBranch)
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
+
+    expect(await screen.findByRole('option', { name: /feature\/external/ })).toBeInTheDocument()
+    expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps the loaded branch list and the launch target when the refresh fails', async () => {
+    const onBranchChange = vi.fn()
+    const onLaunchReadyChange = vi.fn()
+    renderControls({ onBranchChange, onLaunchReadyChange })
+    await openPill()
+    // The initial load reports not-ready while it runs; only the refresh matters.
+    onLaunchReadyChange.mockClear()
+    apiMocks.getRepositoryContext.mockRejectedValueOnce(new Error('Network down'))
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
+    await waitFor(() => expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(2))
+    await act(async () => { await Promise.resolve() })
+
+    const listbox = await screen.findByRole('listbox', { name: 'Select branch' })
+    expect(within(listbox).getByRole('option', { name: /feature\/h5/ })).toBeInTheDocument()
+    expect(screen.queryByText('No matching branches')).not.toBeInTheDocument()
+    expect(screen.queryByText('Network down')).not.toBeInTheDocument()
+    expect(onBranchChange).not.toHaveBeenCalled()
+    expect(onLaunchReadyChange).not.toHaveBeenCalledWith(false)
+  })
+
+  it('ignores a refresh that reports a repository error instead of dropping the selection', async () => {
+    const onBranchChange = vi.fn()
+    renderControls({ onBranchChange })
+    await openPill()
+    apiMocks.getRepositoryContext.mockResolvedValueOnce({
+      ...okRepositoryContext,
+      state: 'error' as const,
+      currentBranch: null,
+      defaultBranch: null,
+      headCommit: null,
+      branches: [],
+      error: 'git timed out',
+    })
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
+    await waitFor(() => expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(2))
+    await act(async () => { await Promise.resolve() })
+
+    expect(await screen.findByRole('option', { name: /feature\/h5/ })).toBeInTheDocument()
+    expect(onBranchChange).not.toHaveBeenCalled()
+  })
+
+  it('does not let a slow refresh take a just-created branch out of the list', async () => {
+    render(<ControlledHarness initialWorkDir="/repo" />)
+    await openPill()
+    let resolveRefresh: (value: typeof okRepositoryContext) => void = () => {}
+    apiMocks.getRepositoryContext.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRefresh = resolve }),
+    )
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Create branch…' }))
+    fireEvent.change(await screen.findByLabelText('Branch name'), { target: { value: 'feature/new' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+    await screen.findByRole('button', { name: 'Location: cc-haha / feature/new' })
+
+    // The refresh was read before the branch existed and lands afterwards.
+    await act(async () => { resolveRefresh(okRepositoryContext) })
+
+    expect(screen.getByRole('button', { name: 'Location: cc-haha / feature/new' })).toBeInTheDocument()
+  })
+
+  it('does not apply a refresh that lands after the directory changed', async () => {
+    render(<ControlledHarness initialWorkDir="/repo" />)
+    await openPill()
+    let resolveRefresh: (value: typeof okRepositoryContext) => void = () => {}
+    apiMocks.getRepositoryContext.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRefresh = resolve }),
+    )
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Select branch' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Directory/ }))
+    apiMocks.getRepositoryContext.mockResolvedValue(notGitContext('/tmp/plain'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick /tmp/plain' }))
+    await screen.findByRole('button', { name: 'Location: plain' })
+
+    await act(async () => { resolveRefresh(okRepositoryContext) })
+
+    expect(screen.getByRole('button', { name: 'Location: plain' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /cc-haha/ })).not.toBeInTheDocument()
+  })
+
   it('drills into the branch list and back out again', async () => {
     renderControls()
     await openBranchView()
@@ -617,12 +726,15 @@ describe('RepositoryLaunchControls', () => {
       // menu. The returned list is adopted without a second request.
       const pill = await screen.findByRole('button', { name: 'Location: cc-haha / feature/new' })
       expect(screen.queryByRole('menu', { name: 'Location' })).not.toBeInTheDocument()
-      expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(1)
+      // Initial load plus the refresh triggered by entering the branch list;
+      // branch creation adopts its returned context without another read.
+      expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(2)
       expect(uiMocks.addToast).toHaveBeenCalledWith({
         type: 'success',
         message: 'Created and selected “feature/new”. It will be checked out when the session starts.',
       })
 
+      apiMocks.getRepositoryContext.mockResolvedValue(contextWithCreatedBranch)
       fireEvent.click(pill)
       fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
       const listbox = await screen.findByRole('listbox', { name: 'Select branch' })

@@ -175,6 +175,7 @@ vi.mock('../../i18n', () => ({
       'tabs.closeLeft': 'Close Left',
       'tabs.closeRight': 'Close Right',
       'tabs.closeAll': 'Close All',
+      'tabs.reopenClosed': 'Reopen Closed Tab',
       'tabs.closeConfirmTitle': 'Session Running',
       'tabs.closeConfirmMessage': 'Still running',
       'tabs.closeConfirmKeep': 'Keep Running',
@@ -3227,6 +3228,55 @@ describe('TabBar', () => {
       expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['tab-kept'])
       expect(useChatStore.getState().sessions['tab-kept']?.backgroundAgentTasks?.['kept-1']?.status).toBe('running')
     })
+  })
+
+  it('reopens a closed chat tab from the tab menu, and offers it only after one was closed', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useSessionStore } = await import('../../stores/sessionStore')
+    const connectToSession = vi.fn()
+    const disconnectSession = vi.fn()
+
+    useSessionStore.setState({
+      sessions: [
+        { id: 'tab-a', title: 'Session A', createdAt: '2026-10-01T00:00:00.000Z', modifiedAt: '2026-10-01T00:00:00.000Z', messageCount: 3, projectPath: '-repo', workDir: '/repo', workDirExists: true },
+      ],
+    } as never)
+    useTabStore.setState({
+      tabs: [
+        { sessionId: 'tab-a', title: 'Session A', type: 'session', status: 'idle' },
+        { sessionId: 'tab-b', title: 'Session B', type: 'session', status: 'idle' },
+      ],
+      activeTabId: 'tab-b',
+      closedSessionTabs: [],
+    })
+    useChatStore.setState({
+      sessions: { 'tab-a': makeChatSession('idle'), 'tab-b': makeChatSession('idle') },
+      connectToSession,
+      disconnectSession,
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    fireEvent.contextMenu(screen.getByText('Session B'))
+    expect(screen.getByText('Reopen Closed Tab')).toBeDisabled()
+
+    fireEvent.click(screen.getByText('Close Others'))
+    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['tab-b'])
+    expect(disconnectSession).toHaveBeenCalledWith('tab-a')
+
+    fireEvent.contextMenu(screen.getByText('Session B'))
+    await act(async () => {
+      fireEvent.click(screen.getByText('Reopen Closed Tab'))
+    })
+
+    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['tab-b', 'tab-a'])
+    expect(useTabStore.getState().activeTabId).toBe('tab-a')
+    expect(connectToSession).toHaveBeenCalledWith('tab-a')
+    expect(screen.queryByText('Reopen Closed Tab')).not.toBeInTheDocument()
   })
 
   it('shows a running marker on tabs from tab status, live chat state, or background tasks', async () => {

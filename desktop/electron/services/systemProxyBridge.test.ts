@@ -1,5 +1,6 @@
 import http from 'node:http'
 import net from 'node:net'
+import { EventEmitter } from 'node:events'
 import { PassThrough, type Duplex } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
@@ -327,6 +328,60 @@ describe('SystemProxyBridge', () => {
     expect(new URL(restartedUrl).hostname).toBe('127.0.0.1')
   })
 
+  it('waits for the listen callback before closing a pending listener', async () => {
+    const pending = createPendingProxyServer(41001)
+    const createServer = vi.spyOn(http, 'createServer').mockReturnValueOnce(pending.server)
+    const bridge = new SystemProxyBridge(async () => 'DIRECT')
+    bridges.push(bridge)
+    const startup = bridge.start()
+    const startupResult = startup.catch(error => error)
+    const stopping = bridge.stop()
+
+    try {
+      expect(pending.server.listening).toBe(true)
+      expect(pending.server.closeAllConnections).not.toHaveBeenCalled()
+      expect(pending.server.close).not.toHaveBeenCalled()
+      pending.finishListening()
+      await stopping
+      expect(await startupResult).toEqual(new Error('System proxy bridge startup was stopped'))
+      expect(pending.server.close).toHaveBeenCalledTimes(1)
+    } finally {
+      pending.finishListening()
+      await stopping
+      createServer.mockRestore()
+    }
+  })
+
+  it('keeps a newer listener active when an older pending startup is stopped', async () => {
+    const first = createPendingProxyServer(41001)
+    const second = createPendingProxyServer(41002)
+    const createServer = vi.spyOn(http, 'createServer')
+      .mockReturnValueOnce(first.server)
+      .mockReturnValueOnce(second.server)
+    const bridge = new SystemProxyBridge(async () => 'DIRECT')
+    bridges.push(bridge)
+    const firstStartup = bridge.start().catch(error => error)
+    const stopping = bridge.stop()
+    const secondStartup = bridge.start()
+
+    try {
+      second.finishListening()
+      expect(await secondStartup).toBe('http://127.0.0.1:41002')
+      first.finishListening()
+      await stopping
+      expect(await firstStartup).toEqual(new Error('System proxy bridge startup was stopped'))
+      expect(second.server.listening).toBe(true)
+      expect(second.server.closeAllConnections).not.toHaveBeenCalled()
+      expect(second.server.close).not.toHaveBeenCalled()
+      expect(await bridge.start()).toBe('http://127.0.0.1:41002')
+    } finally {
+      first.finishListening()
+      second.finishListening()
+      await stopping
+      createServer.mockRestore()
+    }
+  })
+
   it('closes active CONNECT clients and outbound routes during stop', async () => {
     let acceptTarget!: () => void
     const targetAccepted = new Promise<void>(resolve => { acceptTarget = resolve })
@@ -356,6 +411,33 @@ describe('SystemProxyBridge', () => {
     ])).resolves.toBe('closed')
   })
 })
+
+function createPendingProxyServer(port: number) {
+  const server = new EventEmitter() as http.Server
+  let listening = false
+  let listenCallback: (() => void) | undefined
+  Object.defineProperty(server, 'listening', { get: () => listening })
+  server.listen = vi.fn((...args: unknown[]) => {
+    listening = true
+    listenCallback = args.at(-1) as () => void
+    return server
+  }) as typeof server.listen
+  server.close = vi.fn((callback?: () => void) => {
+    listening = false
+    callback?.()
+    return server
+  }) as typeof server.close
+  server.closeAllConnections = vi.fn()
+  server.address = vi.fn(() => ({ address: '127.0.0.1', family: 'IPv4', port }))
+  return {
+    server,
+    finishListening() {
+      const callback = listenCallback
+      listenCallback = undefined
+      callback?.()
+    },
+  }
+}
 
 async function startBridge(
   resolver: (url: string) => Promise<string>,

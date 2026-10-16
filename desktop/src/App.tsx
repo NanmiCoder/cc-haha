@@ -6,6 +6,7 @@ import { RemoteAccessGate } from './pages/RemoteAccess'
 import { isPublicAccessRuntime } from './lib/publicAccessRuntime'
 import { useChatStore } from './stores/chatStore'
 import { installHiddenSessionRelease } from './stores/hiddenSessionRelease'
+import { installSessionTabLimit } from './stores/sessionTabLimit'
 import { useMobileShellLayout } from './components/mobile/mobileShellLayout'
 import { isDesktopRuntime } from './lib/desktopRuntime'
 
@@ -22,6 +23,11 @@ function ConnectedApp() {
     () => installHiddenSessionRelease(useChatStore, {
       scope: shellLayout === 'desktop' ? 'open-tabs' : 'active-tab',
     }),
+    [shellLayout],
+  )
+  // Phones and tablets keep one page on screen; their tabs are only a way back.
+  useEffect(
+    () => (shellLayout === 'desktop' ? installSessionTabLimit() : undefined),
     [shellLayout],
   )
   useEffect(() => {

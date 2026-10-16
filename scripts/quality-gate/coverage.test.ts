@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import {
   buildRootCoverageCommand,
   collectServerTestFiles,
+  CHANGED_LINE_SCOPES,
   evaluateChangedLineCoverage,
   evaluateThresholds,
   hasUsableCoverageSummary,
@@ -290,6 +291,74 @@ describe('coverage gate helpers', () => {
     expect(result.failures).toEqual([
       'changed-lines: coverage 50% is below minimum 90%',
     ])
+  })
+
+  test('never counts test fixtures in __fixtures__ as production lines', () => {
+    const changedLines = parseChangedLinesFromDiff([
+      'diff --git a/src/server/services/__fixtures__/team-worker-cli.ts b/src/server/services/__fixtures__/team-worker-cli.ts',
+      '--- a/src/server/services/__fixtures__/team-worker-cli.ts',
+      '+++ b/src/server/services/__fixtures__/team-worker-cli.ts',
+      '@@ -10,0 +11,1 @@',
+      '+const delay = 0',
+      'diff --git a/src/services/compact/__fixtures__/transcript.ts b/src/services/compact/__fixtures__/transcript.ts',
+      '--- a/src/services/compact/__fixtures__/transcript.ts',
+      '+++ b/src/services/compact/__fixtures__/transcript.ts',
+      '@@ -1,0 +1,1 @@',
+      '+export const fixture = true',
+    ].join('\n'))
+
+    const result = evaluateChangedLineCoverage(changedLines, new Map(), CHANGED_LINE_SCOPES, 90)
+
+    expect(result.files).toEqual([])
+    expect(result.failures).toEqual([])
+  })
+
+  test('reports changed lines of a failed suite as unmeasured instead of uncovered', () => {
+    const changedLines = parseChangedLinesFromDiff([
+      'diff --git a/desktop/src/main.tsx b/desktop/src/main.tsx',
+      '--- a/desktop/src/main.tsx',
+      '+++ b/desktop/src/main.tsx',
+      '@@ -20,0 +21,2 @@',
+      '+bootstrapDesktopApp()',
+      '+renderRoot()',
+      'diff --git a/src/server/routes.ts b/src/server/routes.ts',
+      '--- a/src/server/routes.ts',
+      '+++ b/src/server/routes.ts',
+      '@@ -10,0 +11,1 @@',
+      '+const covered = true',
+    ].join('\n'))
+
+    const result = evaluateChangedLineCoverage(
+      changedLines,
+      new Map([
+        ['src/server/routes.ts', {
+          suiteId: 'server-api',
+          executableLines: new Set([11]),
+          coveredLines: new Set([11]),
+        }],
+      ]),
+      [
+        { id: 'server-api', title: 'Server/API', includePrefixes: ['src/server/'] },
+        { id: 'desktop', title: 'Desktop', includePrefixes: ['desktop/src/'] },
+      ],
+      90,
+      new Map([['desktop', 'desktop: coverage command exited with 1']]),
+    )
+
+    // The desktop suite failing is its own failure; it must not also read as 0% coverage.
+    expect(result.pct).toBe(100)
+    expect(result.total).toBe(1)
+    expect(result.unmeasured).toBe(2)
+    expect(result.failures).toEqual([])
+    expect(result.files).toContainEqual({
+      file: 'desktop/src/main.tsx',
+      suiteId: 'desktop',
+      covered: 0,
+      total: 2,
+      pct: 0,
+      unmeasured: true,
+      reason: 'not measured: desktop: coverage command exited with 1',
+    })
   })
 
   test('reports minimum threshold failures', () => {

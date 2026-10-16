@@ -3,7 +3,25 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment.js'
-import { remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
+import { projectRemoteProvider, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
+import { SavedProviderSchema, ImageGenerationConfigSchema } from './types/provider.js'
+
+test('remote image settings preserve the protocol while redacting image credentials', () => {
+  const provider = SavedProviderSchema.parse({
+    id: 'fixture', presetId: 'custom', name: 'Fixture',
+    apiKey: 'chat-secret', baseUrl: 'https://chat.example.test',
+    models: { main: 'chat-model', haiku: '', sonnet: '', opus: '' },
+    imageGeneration: {
+      protocol: 'gemini_native', model: 'image-model', apiKey: 'image-secret',
+      baseUrl: 'https://images.example.test', futureField: 'private-extension',
+    },
+  })
+  expect(projectRemoteProvider(provider).imageGeneration).toEqual({
+    protocol: 'gemini_native', model: 'image-model',
+    baseUrl: 'https://images.example.test', apiKey: '', hasApiKey: true,
+  })
+  expect(ImageGenerationConfigSchema.safeParse({ model: 'image-model', protocol: 'unknown' }).success).toBe(false)
+})
 
 test('remote settings boundary permits only intended provider routes and General fields', () => {
   const parts = (pathname: string) => pathname.split('/').filter(Boolean)

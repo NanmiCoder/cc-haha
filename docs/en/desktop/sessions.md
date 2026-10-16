@@ -17,6 +17,8 @@ Each session opens as a tab, and you can run many side by side. A dot on the tab
 
 When a session is stopped on a permission request, a question or a plan review and needs you, the dot on its tab becomes an amber warning triangle, and so does its row in the sidebar. It stays until you have dealt with it, whether or not system notifications are on. When so many tabs are open that some scroll out of view, the scroll arrow on that side gets an amber dot, and the number button on the right of the tab bar shows how many other sessions are waiting; press it to jump to the next one. On a phone there is no tab bar: a dot on the menu button means another session is waiting, and its row in the sidebar carries the triangle.
 
+Closing a tab never deletes the session; it stays in the sidebar. Right-click any tab and choose **Reopen Closed Tab** to bring back the session tabs closed since the app started, most recent first. If tabs keep piling up, set **Session tabs to keep** (5, 8, 12 or 20) under **Settings → General → Tabs**: whenever you open another session, and right when you lower the limit, the tabs over it close on their own, starting with the one you looked at least recently, while tabs that are running, waiting for you, or hold an unsent message are kept. The same section can turn off **Restore tabs on launch** so the app always starts with an empty tab bar. Both keep the old behavior by default.
+
 The small line under the session title is metadata: project path, branch, model. A session is bound to one directory — to work on a different project, start a new session.
 
 ## Reading the conversation

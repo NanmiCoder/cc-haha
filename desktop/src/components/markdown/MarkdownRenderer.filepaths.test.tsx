@@ -2,13 +2,14 @@ import { describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { CODE_LINK_CLASS, FILE_LINK_CLASS } from '@/lib/markdownAutolink'
+import type { PreviewLinkTarget } from '@/lib/previewLinkRouter'
 
 // Most surfaces get a handler; the cases that deliberately have none say so.
 const noop = () => true
 
 function renderMarkdown(
   content: string,
-  props: { streaming?: boolean; onLinkClick?: ((href: string) => boolean) | null } = {},
+  props: { streaming?: boolean; onLinkClick?: ((href: PreviewLinkTarget) => boolean) | null } = {},
 ) {
   const handler = props.onLinkClick === null ? undefined : props.onLinkClick ?? noop
   const { container } = render(
@@ -116,13 +117,16 @@ describe('MarkdownRenderer file references', () => {
     const onLinkClick = vi.fn().mockReturnValue(true)
     const container = renderMarkdown('见 src/app.ts:42:8', { onLinkClick })
     fileLinks(container)[0]!.click()
-    expect(onLinkClick).toHaveBeenCalledWith('src/app.ts:42:8')
+    expect(onLinkClick).toHaveBeenCalledWith({ path: 'src/app.ts', line: 42, column: 8 })
   })
 
   it.each([
-    ['file:///tmp/cc-haha-qa-checklist-v0.6.6.html', '/tmp/cc-haha-qa-checklist-v0.6.6.html'],
-    ['file:///tmp/%E6%B8%85%E5%8D%95.html', '/tmp/清单.html'],
-    ['/tmp/app.ts:42', '/tmp/app.ts:42'],
+    ['file:///tmp/cc-haha-qa-checklist-v0.6.6.html', { path: '/tmp/cc-haha-qa-checklist-v0.6.6.html' }],
+    ['file:///tmp/%E6%B8%85%E5%8D%95.html', { path: '/tmp/清单.html' }],
+    ['/tmp/app.ts:42', { path: '/tmp/app.ts', line: 42 }],
+    // #1556: CommonMark's two spellings of a space reach the opener as the file on disk.
+    ['docs/My%20Notes.md', { path: 'docs/My Notes.md' }],
+    ['<D:/cchaha/cchaha d/记忆.md>', { path: 'D:/cchaha/cchaha d/记忆.md' }],
   ])('preserves explicit local Markdown destination %s through sanitization', (href, expected) => {
     const onLinkClick = vi.fn().mockReturnValue(true)
     const container = renderMarkdown(`[打开文件](${href})`, { onLinkClick })
@@ -160,6 +164,6 @@ describe('MarkdownRenderer file references', () => {
     const onLinkClick = vi.fn().mockReturnValue(true)
     const container = renderMarkdown('见 [构建步骤](.github/workflows/release-desktop.yml:386)', { onLinkClick })
     container.querySelector<HTMLAnchorElement>('a')!.click()
-    expect(onLinkClick).toHaveBeenCalledWith('.github/workflows/release-desktop.yml:386')
+    expect(onLinkClick).toHaveBeenCalledWith({ path: '.github/workflows/release-desktop.yml', line: 386 })
   })
 })

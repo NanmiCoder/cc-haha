@@ -118,6 +118,20 @@ describe('model catalog cache', () => {
     expect(models).toEqual(FALLBACK)
   })
 
+  test('keeps the account\'s last listing when a forced refresh fails', async () => {
+    const cache = makeCache()
+    await cache.resolve({ accountKey: 'a', fetchCatalog: async () => REMOTE, fallback: FALLBACK, forceRefresh: true })
+    const failing = async (): Promise<typeof REMOTE> => {
+      throw new Error('upstream unreachable')
+    }
+
+    expect(await cache.resolve({ accountKey: 'a', fetchCatalog: failing, fallback: FALLBACK, forceRefresh: true }))
+      .toEqual(REMOTE)
+    // Another account never sees it.
+    expect(await cache.resolve({ accountKey: 'b', fetchCatalog: failing, fallback: FALLBACK, forceRefresh: true }))
+      .toEqual(FALLBACK)
+  })
+
   test('prefers a stale entry over the fallback while revalidating', async () => {
     const cache = makeCache({ ttlMs: 20 })
     const fetchCatalog = async () => REMOTE

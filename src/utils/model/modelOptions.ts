@@ -13,6 +13,7 @@ import {
   COST_TIER_2_10,
   COST_HAIKU_35,
   COST_HAIKU_45,
+  COST_HAIKU_55,
   formatModelPricing,
 } from '../modelCost.js'
 import { getSettings_DEPRECATED } from '../settings/settings.js'
@@ -279,6 +280,17 @@ function getHaiku45Option(): ModelOption {
   }
 }
 
+function getHaiku55Option(): ModelOption {
+  const is3P = shouldUseThirdPartyAnthropicOptions()
+  return {
+    value: 'haiku',
+    label: 'Haiku',
+    description: `Haiku 5.5 · Fastest for quick answers${is3P ? '' : ` · ${formatModelPricing(COST_HAIKU_55)}`}`,
+    descriptionForModel:
+      'Haiku 5.5 - fastest for quick answers. Lower cost but less capable than Sonnet 5.5.',
+  }
+}
+
 function getHaiku35Option(): ModelOption {
   const is3P = shouldUseThirdPartyAnthropicOptions()
   return {
@@ -293,6 +305,7 @@ function getHaiku35Option(): ModelOption {
 function getHaikuOption(): ModelOption {
   // Return correct Haiku option based on provider
   const haikuModel = getDefaultHaikuModel()
+  if (haikuModel === getModelStrings().haiku55) return getHaiku55Option()
   return haikuModel === getModelStrings().haiku45
     ? getHaiku45Option()
     : getHaiku35Option()

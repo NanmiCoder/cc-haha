@@ -1,0 +1,148 @@
+{
+  "schemaVersion": 1,
+  "id": "replay-image",
+  "format": "anthropic",
+  "recordedWith": {
+    "provider": "DeepSeek-demo演示",
+    "model": "deepseek-v4-flash-vision-exp",
+    "date": "2026-10-14"
+  },
+  "providerConfig": {
+    "presetId": "deepseek",
+    "authStrategy": "auth_token",
+    "apiFormat": "anthropic",
+    "runtimeKind": "anthropic_compatible",
+    "models": {
+      "main": "deepseek-v4-flash-vision-exp",
+      "haiku": "deepseek-v4-flash-vision-exp",
+      "sonnet": "deepseek-v4-flash-vision-exp",
+      "opus": "deepseek-v4-flash-vision-exp"
+    },
+    "model1mSupport": {
+      "main": true,
+      "fable": false,
+      "haiku": false,
+      "sonnet": true,
+      "opus": true
+    },
+    "modelContextWindows": {
+      "deepseek-v4-flash-vision-exp": 1000000
+    },
+    "toolSearchEnabled": false
+  },
+  "interactions": [
+    {
+      "seq": 0,
+      "path": "/v1/messages",
+      "queue": "agent:f8a1d8b7545f",
+      "request": {
+        "model": "deepseek-v4-flash-vision-exp",
+        "stream": true,
+        "maxTokens": 32000,
+        "toolNames": [
+          "Agent",
+          "AskUserQuestion",
+          "Bash",
+          "CreateSession",
+          "Edit",
+          "EnterPlanMode",
+          "EnterWorktree",
+          "ExitPlanMode",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListSessions",
+          "NotebookEdit",
+          "Read",
+          "ReadSession",
+          "SendMessage",
+          "SendSessionMessage",
+          "Skill",
+          "TaskCreate",
+          "TaskGet",
+          "TaskList",
+          "TaskOutput",
+          "TaskStop",
+          "TaskUpdate",
+          "TeamCreate",
+          "TeamDelete",
+          "TeamPlan",
+          "WaitSessions",
+          "WebFetch",
+          "Workflow",
+          "Write"
+        ],
+        "lastRole": "user",
+        "lastUserText": "Look at the attached image and answer at once, without deliberating: what is its main colour? Reply with one word.\n[Image: source: {{CONFIG_DIR}}/uploads/{{SESSION_ID_1}}/{{UUID}}-swatch.png]",
+        "firstUserText": "Look at the attached image and answer at once, without deliberating: what is its main colour? Reply with one word.\n[Image: source: {{CONFIG_DIR}}/uploads/{{SESSION_ID_1}}/{{UUID}}-swatch.png]",
+        "toolResultIds": [],
+        "messageCount": 1,
+        "systemSha": "3681e4edc4fe",
+        "toolsSha": "8cff1afd4ef9"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "text/event-stream; charset=utf-8",
+        "firstByteMs": 302,
+        "events": [
+      {"event":"message_start","data":{"type":"message_start","message":{"id":"002c40b4-01fc-40b7-af9a-7f92cf22032a","type":"message","role":"assistant","model":"deepseek-v4-flash-vision-exp","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":30318,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}}},"dt":15},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}},"dt":0},
+      {"event":"ping","data":{"type":"ping"},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"002c40b4-01fc-40b7-af9a-7f92cf22032a"}},"dt":1625},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":0},"dt":0},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Red"}},"dt":0},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":1},"dt":5},
+      {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":30318,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":2,"service_tier":"standard"}},"dt":0},
+      {"event":"message_stop","data":{"type":"message_stop"},"dt":0}
+     ]
+      },
+      "toolUseIds": []
+    },
+    {
+      "seq": 1,
+      "path": "/v1/messages",
+      "queue": "plain:562273c24932",
+      "request": {
+        "model": "deepseek-v4-flash-vision-exp",
+        "stream": false,
+        "maxTokens": 2048,
+        "toolNames": [],
+        "lastRole": "user",
+        "lastUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nLook at the attached image and answer at once, without deliberating: what is its main colour? Reply with one word. Red Red\n</conversation>",
+        "firstUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nLook at the attached image and answer at once, without deliberating: what is its main colour? Reply with one word. Red Red\n</conversation>",
+        "toolResultIds": [],
+        "messageCount": 1,
+        "systemSha": "051f49520ce3",
+        "toolsSha": "74234e98afe7"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "firstByteMs": 111,
+        "json": {
+          "id": "89e47a6e-e951-49ba-924a-d0c14081e3b6",
+          "type": "message",
+          "role": "assistant",
+          "model": "deepseek-v4-flash-vision-exp",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"title\": \"Identify main color in image\"}"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 287,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 10,
+            "service_tier": "standard"
+          }
+        }
+      },
+      "toolUseIds": []
+    }
+  ]
+}

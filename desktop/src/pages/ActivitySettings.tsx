@@ -18,6 +18,7 @@ import { cx } from '@/lib/cx'
 import { type Locale, useTranslation } from '../i18n'
 import { useSettingsStore } from '../stores/settingsStore'
 import { publicAssetPath } from '../lib/publicAsset'
+import { formatTokenCount as formatTokens } from '../lib/formatTokenCount'
 
 type HeatmapDay = {
   date: string
@@ -125,13 +126,6 @@ function formatShortDate(dateKey: string, locale: Locale) {
     month: 'numeric',
     day: 'numeric',
   })
-}
-
-function formatTokens(tokens: number) {
-  if (tokens >= 1_000_000_000) return `${(tokens / 1_000_000_000).toFixed(tokens >= 10_000_000_000 ? 0 : 1)}B`
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1)}M`
-  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}K`
-  return `${tokens}`
 }
 
 function formatInteger(value: number, locale: Locale) {

@@ -7,11 +7,16 @@ import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { searchApi } from '../../api/search'
+import { sessionsApi } from '../../api/sessions'
+import { useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import type { SessionListItem } from '../../types/session'
 import type { SessionSearchResult } from '../../api/search'
 
 vi.mock('../../api/search', () => ({
   searchApi: { searchSessions: vi.fn() },
+}))
+vi.mock('../../api/sessions', () => ({
+  sessionsApi: { getSummary: vi.fn() },
 }))
 
 const mockSearch = vi.mocked(searchApi.searchSessions)
@@ -51,6 +56,8 @@ function makeResult(sessionId: string, title: string, overrides?: Partial<Sessio
 beforeEach(() => {
   useSettingsStore.setState({ locale: 'en' })
   useSessionStore.setState({ sessions: [] })
+  useSessionRuntimeStore.setState({ selections: {} })
+  vi.mocked(sessionsApi.getSummary).mockReset().mockRejectedValue(new Error('Summary unavailable'))
   useTabStore.setState({ openTab: vi.fn() } as Partial<ReturnType<typeof useTabStore.getState>>)
   mockSearch.mockResolvedValue({ results: [], total: 0, truncated: false })
 })
@@ -156,7 +163,7 @@ describe('GlobalSearchModal', () => {
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'Enter' })
 
-    expect(openTab).toHaveBeenCalledWith('s2', 'Session Two')
+    await waitFor(() => expect(openTab).toHaveBeenCalledWith('s2', 'Session Two'))
     expect(onClose).toHaveBeenCalled()
   })
 
@@ -170,8 +177,100 @@ describe('GlobalSearchModal', () => {
     fireEvent.change(screen.getByPlaceholderText(/search all chats/i), { target: { value: 'x' } })
     fireEvent.click(await screen.findByText('Clickable'))
 
-    expect(openTab).toHaveBeenCalledWith('s1', 'Clickable')
+    await waitFor(() => expect(openTab).toHaveBeenCalledWith('s1', 'Clickable'))
     expect(onClose).toHaveBeenCalled()
+  })
+
+  it.each([false, true])('hydrates a search hit before opening without overriding a later confirmed runtime choice (%s)', async (switchRuntime) => {
+    const summary = {
+      ...makeSession('old-search-hit', 'Authoritative history title'),
+      runtimeProviderId: 'history-provider',
+      runtimeModelId: 'history-model',
+      permissionMode: 'plan',
+    }
+    let resolveSummary!: (value: SessionListItem) => void
+    const summaryPromise = new Promise<SessionListItem>((resolve) => { resolveSummary = resolve })
+    vi.mocked(sessionsApi.getSummary).mockReturnValueOnce(summaryPromise)
+    const onClose = vi.fn()
+    let observedMetadata: unknown
+    const openTab = vi.fn(() => {
+      observedMetadata = {
+        session: useSessionStore.getState().sessions.find((session) => session.id === summary.id),
+        runtime: useSessionRuntimeStore.getState().selections[summary.id],
+      }
+    })
+    useTabStore.setState({ openTab })
+    mockSearch.mockResolvedValue({ results: [makeResult(summary.id, 'Search projection title')], total: 1, truncated: false })
+    render(<GlobalSearchModal open onClose={onClose} />)
+    fireEvent.change(screen.getByPlaceholderText(/search all chats/i), { target: { value: 'old history' } })
+    fireEvent.click(await screen.findByText('Search projection title'))
+    expect(sessionsApi.getSummary).toHaveBeenCalledWith(summary.id, expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 5000 }))
+    expect(openTab).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+
+    const confirmedRuntime = { providerId: 'confirmed-provider', modelId: 'confirmed-model' }
+    await act(async () => {
+      if (switchRuntime) {
+        useSessionRuntimeStore.getState().setSelection(summary.id, confirmedRuntime)
+        useSessionRuntimeStore.getState().settleSelection(summary.id)
+      }
+      resolveSummary(summary)
+    })
+    expect(openTab).toHaveBeenCalledWith(summary.id, summary.title)
+    expect(observedMetadata).toEqual({
+      session: summary,
+      runtime: switchRuntime ? confirmedRuntime : { providerId: 'history-provider', modelId: 'history-model' },
+    })
+    expect(useSessionStore.getState().historicalSessionIds.has(summary.id)).toBe(true)
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('opens a recent row immediately and retains its metadata without a summary request', () => {
+    const recent = makeSession('recent-opened', 'Recent opened')
+    useSessionStore.setState({ sessions: [recent], historicalSessionIds: new Set() })
+    const onClose = vi.fn()
+    render(<GlobalSearchModal open onClose={onClose} />)
+    fireEvent.click(screen.getByText(recent.title))
+    expect(useTabStore.getState().openTab).toHaveBeenCalledWith(recent.id, recent.title)
+    expect(useSessionStore.getState().historicalSessionIds).toEqual(new Set([recent.id]))
+    expect(sessionsApi.getSummary).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it.each(['close', 'query'] as const)('does not activate or hydrate a pending hit after %s changes', async (change) => {
+    const summary = makeSession('canceled-hit', 'Canceled hit')
+    let resolveSummary!: (value: SessionListItem) => void
+    vi.mocked(sessionsApi.getSummary).mockReturnValueOnce(new Promise((resolve) => { resolveSummary = resolve }))
+    mockSearch.mockResolvedValueOnce({ results: [makeResult(summary.id, summary.title)], total: 1, truncated: false })
+    const onClose = vi.fn()
+    const { rerender } = render(<GlobalSearchModal open onClose={onClose} />)
+    const input = screen.getByPlaceholderText(/search all chats/i)
+    fireEvent.change(input, { target: { value: 'old' } })
+    fireEvent.click(await screen.findByText(summary.title))
+    const signal = vi.mocked(sessionsApi.getSummary).mock.calls[0]?.[1]?.signal
+    if (change === 'close') rerender(<GlobalSearchModal open={false} onClose={onClose} />)
+    else fireEvent.change(input, { target: { value: 'new query' } })
+    expect(signal?.aborted).toBe(true)
+    await act(async () => { resolveSummary(summary) })
+    expect(useTabStore.getState().openTab).not.toHaveBeenCalled()
+    expect(useSessionStore.getState().sessions).toEqual([])
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('does not replace a later recent-row choice when an earlier summary resolves', async () => {
+    const recent = makeSession('latest-row', 'Latest row')
+    const old = makeSession('old-row', 'Old row')
+    useSessionStore.setState({ sessions: [recent] })
+    let resolveSummary!: (value: SessionListItem) => void
+    vi.mocked(sessionsApi.getSummary).mockReturnValueOnce(new Promise((resolve) => { resolveSummary = resolve }))
+    mockSearch.mockResolvedValueOnce({ results: [makeResult(old.id, old.title), makeResult(recent.id, recent.title)], total: 2, truncated: false })
+    render(<GlobalSearchModal open onClose={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText(/search all chats/i), { target: { value: 'rows' } })
+    fireEvent.click(await screen.findByText(old.title))
+    fireEvent.click(screen.getByText(recent.title))
+    await act(async () => { resolveSummary(old) })
+    expect(useTabStore.getState().openTab).toHaveBeenCalledExactlyOnceWith(recent.id, recent.title)
+    expect(useSessionStore.getState().sessions).toEqual([recent])
   })
 
   it('closes on Escape', () => {

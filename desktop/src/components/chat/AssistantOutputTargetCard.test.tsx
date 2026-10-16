@@ -24,11 +24,17 @@ const ensureTargets = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 const openTargetFn = vi.hoisted(() => vi.fn())
 vi.mock('../../stores/openTargetStore', () => ({
   useOpenTargetStore: {
-    getState: () => ({ ensureTargets, targets: [], openTarget: openTargetFn }),
+    getState: () => ({ ensureTargets, targets: [], openTarget: openTargetFn, getTargetsForPath: async () => [] }),
   },
 }))
 
 const openPreviewFn = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
+
+const reportOpenFailure = vi.hoisted(() => vi.fn())
+vi.mock('../../lib/systemFileOpen', async (orig) => ({
+  ...(await orig<Record<string, unknown>>()),
+  reportOpenFailure,
+}))
 
 const shellOpen = vi.hoisted(() => vi.fn().mockResolvedValue(undefined))
 vi.mock('@tauri-apps/plugin-shell', () => ({ open: shellOpen }))
@@ -72,7 +78,21 @@ const documentTarget: AssistantOutputTarget = {
   source: 'changed-file',
 }
 
+// The #1556 card: a file the turn wrote outside the workdir, under a folder
+// whose name holds a space.
+const spacedWindowsTarget: AssistantOutputTarget = {
+  id: 'markdown:D:/cchaha/cchaha d/全局档案重写/全局记忆-2026-10-14.md',
+  kind: 'markdown',
+  title: '全局记忆-2026-10-14.md',
+  subtitle: 'D:/cchaha/cchaha d/全局档案重写/全局记忆-2026-10-14.md',
+  href: 'D:/cchaha/cchaha d/全局档案重写/全局记忆-2026-10-14.md',
+  normalizedPath: 'D:/cchaha/cchaha d/全局档案重写/全局记忆-2026-10-14.md',
+  confidence: 'high',
+  source: 'changed-file',
+}
+
 afterEach(() => {
+  reportOpenFailure.mockReset()
   openBrowser.mockReset()
   ensureTargets.mockReset().mockResolvedValue(undefined)
   openTargetFn.mockReset()
@@ -81,6 +101,15 @@ afterEach(() => {
 })
 
 describe('AssistantOutputTargetCard', () => {
+  it.each(['%20', '%25', '%23', '%2F'])(
+    'opens a written file with a literal %s in its filename', async (percent) => {
+      const path = `docs/literal${percent}name.md`
+      render(<AssistantOutputTargetCard target={{ ...markdownTarget, href: path, normalizedPath: path, source: 'changed-file' }} sessionId="s1" />)
+      fireEvent.click(screen.getByLabelText('assistantOutputs.open'))
+      await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', path, {}))
+    },
+  )
+
   it('renders a markdown target title + Markdown badge', () => {
     render(<AssistantOutputTargetCard target={markdownTarget} sessionId="s1" />)
     expect(screen.getByText('readme.md')).toBeInTheDocument()
@@ -109,6 +138,31 @@ describe('AssistantOutputTargetCard', () => {
     // a card has no line number to reveal, hence undefined. The workspace is
     // asked whether the file is there first, so the tab opens a tick later.
     await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', 'docs/readme.md', {}))
+  })
+
+  it('opens a file whose folder name holds a space instead of ignoring the click (#1556)', async () => {
+    render(<AssistantOutputTargetCard target={spacedWindowsTarget} sessionId="s1" />)
+    fireEvent.click(screen.getByLabelText('assistantOutputs.open'))
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', spacedWindowsTarget.href, {}))
+    expect(reportOpenFailure).not.toHaveBeenCalled()
+  })
+
+  it('offers Open with entries for a file whose folder name holds a space (#1556)', async () => {
+    render(<AssistantOutputTargetCard target={spacedWindowsTarget} sessionId="s1" />)
+    fireEvent.click(screen.getByLabelText('openWith.title'))
+    expect(await screen.findByText('openWith.copyPath')).toBeInTheDocument()
+    expect(screen.getByText('openWith.workspacePreview')).toBeInTheDocument()
+    expect(reportOpenFailure).not.toHaveBeenCalled()
+  })
+
+  it('says it could not open a target the router cannot place, rather than doing nothing', () => {
+    const unroutable = { ...markdownTarget, href: 'notes', normalizedPath: 'notes' }
+    render(<AssistantOutputTargetCard target={unroutable} sessionId="s1" />)
+    fireEvent.click(screen.getByLabelText('assistantOutputs.open'))
+    expect(reportOpenFailure).toHaveBeenCalledTimes(1)
+    expect(reportOpenFailure).toHaveBeenCalledWith('notes')
+    expect(openPreviewFn).not.toHaveBeenCalled()
+    expect(openBrowser).not.toHaveBeenCalled()
   })
 
   it('routes Open to the in-app browser for a localhost target', () => {

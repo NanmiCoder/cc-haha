@@ -8,6 +8,7 @@ import {
   isLinkableFilePath,
   matchFilePath,
   matchGitHubRef,
+  parseFileHref,
   parseFilePathRef,
   splitTextByFilePaths,
 } from './filePathBoundary'
@@ -266,6 +267,14 @@ describe('parseFilePathRef / isFilePathOnly', () => {
 
   it('keeps CJK sentence punctuation out of the path', () => {
     expect(parseFilePathRef('说明.md。')).toBeNull()
+  })
+
+  it('keeps a spaced code span a command, while the same text as an href is a path (#1556)', () => {
+    expect(parseFilePathRef('D:/cchaha/cchaha d/记忆.md')).toBeNull()
+    expect(parseFileHref('D:/cchaha/cchaha d/记忆.md')?.path).toBe('D:/cchaha/cchaha d/记忆.md')
+    expect(parseFileHref('src/My File.ts#L7')).toMatchObject({ path: 'src/My File.ts', line: 7 })
+    expect(parseFileHref('notes about plan')).toBeNull()
+    expect(parseFileHref('a.md?b')).toBeNull()
   })
 })
 

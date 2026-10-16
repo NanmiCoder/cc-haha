@@ -13,25 +13,10 @@ import {
   IMAGE_EDIT_TOOL_NAME,
   IMAGE_GEN_TOOL_NAME,
 } from './constants.js'
+import { DEFAULT_IMAGE_ASPECT_RATIOS, GEMINI_IMAGE_ASPECT_RATIOS } from './aspectRatios.js'
+import { isGeminiFlashLiteImageModel } from './modelCapabilities.js'
 
-const ASPECT_RATIOS = [
-  'auto',
-  '1:1',
-  '16:9',
-  '9:16',
-  '4:3',
-  '3:4',
-  '3:2',
-  '2:3',
-  '2:1',
-  '1:2',
-  '19.5:9',
-  '9:19.5',
-  '20:9',
-  '9:20',
-] as const
-
-function commonInputShape() {
+function commonInputShape(gemini = false, oneKOnly = false) {
   return {
     prompt: z
       .string()
@@ -45,11 +30,11 @@ function commonInputShape() {
       .default(1)
       .describe('Number of variations for this exact prompt, from 1 to 4'),
     aspect_ratio: z
-      .enum(ASPECT_RATIOS)
+      .enum(gemini ? GEMINI_IMAGE_ASPECT_RATIOS : DEFAULT_IMAGE_ASPECT_RATIOS)
       .optional()
       .describe('Requested output aspect ratio'),
     resolution: z
-      .enum(['1k', '2k'])
+      .enum(oneKOnly ? ['1k'] : ['1k', '2k'])
       .optional()
       .describe('Requested image resolution when supported'),
     size: z
@@ -65,11 +50,17 @@ function commonInputShape() {
 const generationInputSchema = lazySchema(() =>
   z.strictObject(commonInputShape()),
 )
+const geminiGenerationInputSchema = lazySchema(() =>
+  z.strictObject(commonInputShape(true)),
+)
+const geminiLiteGenerationInputSchema = lazySchema(() =>
+  z.strictObject(commonInputShape(true, true)),
+)
 type GenerationInputSchema = ReturnType<typeof generationInputSchema>
 
-const editInputSchema = lazySchema(() =>
-  z.strictObject({
-    ...commonInputShape(),
+function buildEditInputSchema(gemini = false, oneKOnly = false) {
+  return z.strictObject({
+    ...commonInputShape(gemini, oneKOnly),
     referenced_image_paths: z
       .array(z
         .string()
@@ -78,8 +69,11 @@ const editInputSchema = lazySchema(() =>
       .min(1)
       .max(3)
       .describe('Ordered source images to edit or use as visual references'),
-  }),
-)
+  })
+}
+const editInputSchema = lazySchema(() => buildEditInputSchema())
+const geminiEditInputSchema = lazySchema(() => buildEditInputSchema(true))
+const geminiLiteEditInputSchema = lazySchema(() => buildEditInputSchema(true, true))
 type EditInputSchema = ReturnType<typeof editInputSchema>
 
 const generatedImageSchema = z.object({
@@ -103,7 +97,7 @@ const outputSchema = lazySchema(() =>
 )
 type OutputSchema = ReturnType<typeof outputSchema>
 
-export const ImageGenTool = buildTool({
+const imageGenToolDefinition = {
   name: IMAGE_GEN_TOOL_NAME,
   searchHint: 'generate images or artwork from a visual prompt',
   maxResultSizeChars: 100_000,
@@ -116,6 +110,12 @@ export const ImageGenTool = buildTool({
     return 'Use this tool only for a brand-new image. It has no source-image argument; never invent or pass a placeholder path. Preserve the full relevant user specification. Provider and image model selection come from the current desktop session and are not tool arguments. One call represents one distinct prompt; use count only for variations of that same prompt. The tool saves finished raster images locally and returns their absolute paths. If a provider call fails, do not retry ImageGen automatically; explain the error and wait for the user to decide.'
   },
   get inputSchema(): GenerationInputSchema {
+    const config = getImageGenerationRuntimeConfig()
+    if (config?.protocol === 'gemini_native') {
+      return isGeminiFlashLiteImageModel(config.model)
+        ? geminiLiteGenerationInputSchema()
+        : geminiGenerationInputSchema()
+    }
     return generationInputSchema()
   },
   get outputSchema(): OutputSchema {
@@ -167,9 +167,14 @@ export const ImageGenTool = buildTool({
       content: JSON.stringify(output),
     }
   },
-} satisfies ToolDef<GenerationInputSchema, ImageGenerationOutput>)
+} satisfies ToolDef<GenerationInputSchema, ImageGenerationOutput>
 
-export const ImageEditTool = buildTool({
+export const ImageGenTool = buildTool(imageGenToolDefinition)
+// buildTool spreads the definition, which snapshots accessors. This schema
+// depends on the current provider, so retain the getter on the completed tool.
+Object.defineProperty(ImageGenTool, 'inputSchema', Object.getOwnPropertyDescriptor(imageGenToolDefinition, 'inputSchema')!)
+
+const imageEditToolDefinition = {
   name: IMAGE_EDIT_TOOL_NAME,
   searchHint: 'edit or transform an attached or previously generated image',
   maxResultSizeChars: 100_000,
@@ -182,6 +187,12 @@ export const ImageEditTool = buildTool({
     return 'Use this tool only when the user wants to edit, combine, or visually reference existing images. referenced_image_paths is required and may contain only images the user supplied in this conversation: a path surfaced by [Image source: ...], a file the user attached with @, or a path returned by a prior ImageGen call. Never invent, search for, or substitute a path, and never open an image off disk yourself to feed it here — if the user means an image you have no path for, ask them to attach it. Preserve the full relevant user specification and repeat preservation constraints in every edit prompt. Provider and image model selection come from the current desktop session and are not tool arguments. One call represents one distinct prompt; use count only for variations of that same edit. If a provider call fails, do not retry ImageEdit automatically; explain the error and wait for the user to decide.'
   },
   get inputSchema(): EditInputSchema {
+    const config = getImageGenerationRuntimeConfig()
+    if (config?.protocol === 'gemini_native') {
+      return isGeminiFlashLiteImageModel(config.model)
+        ? geminiLiteEditInputSchema()
+        : geminiEditInputSchema()
+    }
     return editInputSchema()
   },
   get outputSchema(): OutputSchema {
@@ -233,4 +244,7 @@ export const ImageEditTool = buildTool({
       content: JSON.stringify(output),
     }
   },
-} satisfies ToolDef<EditInputSchema, ImageGenerationOutput>)
+} satisfies ToolDef<EditInputSchema, ImageGenerationOutput>
+
+export const ImageEditTool = buildTool(imageEditToolDefinition)
+Object.defineProperty(ImageEditTool, 'inputSchema', Object.getOwnPropertyDescriptor(imageEditToolDefinition, 'inputSchema')!)

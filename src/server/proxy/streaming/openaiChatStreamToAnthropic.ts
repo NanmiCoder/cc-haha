@@ -21,6 +21,7 @@
  */
 
 import { getOpenAIPolicyError } from '../../../services/openaiAuth/policyError.js'
+import { isUpstreamRequestFailure } from '../transform/openaiResponsesTerminal.js'
 import type { OpenAIChatStreamChunk } from '../transform/types.js'
 import { stringifyOpenAIToolArguments } from '../transform/toolArguments.js'
 import { getChatResponseError, parseCompleteChatToolArguments } from '../transform/openaiChatToAnthropic.js'
@@ -137,7 +138,10 @@ export function openaiChatStreamToAnthropic(
             type: 'error',
             error: policyError
               ? { type: 'permission_error', ...policyError }
-              : { type: 'api_error', message: upstreamError || 'OpenAI Chat upstream reported an error' },
+              : {
+                  type: isUpstreamRequestFailure(chunk.error?.code) ? 'invalid_request_error' : 'api_error',
+                  message: upstreamError || 'OpenAI Chat upstream reported an error',
+                },
           })
           ended = true
           return

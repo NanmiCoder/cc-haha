@@ -108,6 +108,8 @@ const MODEL_REASONING_CAPABILITY_REGISTRY: readonly ModelReasoningCapabilityEntr
     claudeCodeCapabilities: 'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
     matches: modelId => (
       modelId.startsWith('deepseek-v4') ||
+      // V4.1 Flash as the DeepSeek account route names it.
+      modelId === 'deepseek-flash' ||
       modelId === 'deepseek-chat' ||
       modelId === 'deepseek-reasoner'
     ),

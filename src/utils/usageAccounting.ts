@@ -2,6 +2,7 @@ import {
   COST_FABLE_51,
   COST_HAIKU_35,
   COST_HAIKU_45,
+  COST_HAIKU_55,
   COST_OPUS_55,
   COST_OPUS_55_FAST,
   COST_TIER_2_10,
@@ -10,6 +11,7 @@ import {
   COST_TIER_10_50,
   COST_TIER_15_75,
   COST_TIER_30_150,
+  getPromptLengthCosts,
   type ModelCosts,
 } from './modelCost.js'
 
@@ -65,6 +67,7 @@ const MODEL_TIERS: ReadonlyArray<readonly [prefix: string, costs: ModelCosts]> =
   ['claude-sonnet-4', COST_TIER_3_15],
   ['claude-3-7-sonnet', COST_TIER_3_15],
   ['claude-3-5-sonnet', COST_TIER_3_15],
+  ['claude-haiku-5-5', COST_HAIKU_55],
   ['claude-haiku-4-5', COST_HAIKU_45],
   ['claude-3-5-haiku', COST_HAIKU_35],
   ['claude-3-haiku', COST_HAIKU_35],
@@ -217,8 +220,12 @@ export function estimateCostUSD(
   tokens: PricedTokens,
   speed?: string,
 ): number | null {
-  const costs = resolveModelCosts(model, speed)
-  if (!costs) return null
+  const tierCosts = resolveModelCosts(model, speed)
+  if (!tierCosts) return null
+  const costs = getPromptLengthCosts(
+    tierCosts,
+    tokens.inputTokens + tokens.cacheReadInputTokens + tokens.cacheCreationInputTokens,
+  )
   return (
     (tokens.inputTokens / 1_000_000) * costs.inputTokens +
     (tokens.outputTokens / 1_000_000) * costs.outputTokens +

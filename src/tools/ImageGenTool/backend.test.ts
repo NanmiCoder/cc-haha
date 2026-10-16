@@ -9,7 +9,12 @@ import {
   registerUserProvidedImage,
 } from '../../utils/userProvidedImages.js'
 import { OPENAI_CODEX_OAUTH_FILE_ENV_KEY } from '../../services/openaiAuth/storage.js'
-import type { ImageGenerationRuntimeConfig } from '../../services/imageGeneration/config.js'
+import {
+  getImageGenerationRuntimeConfig,
+  type ImageGenerationRuntimeConfig,
+} from '../../services/imageGeneration/config.js'
+import { buildProviderManagedEnv } from '../../server/services/providerRuntimeEnv.js'
+import type { SavedProvider } from '../../server/types/provider.js'
 import {
   buildChatGPTRequestBody,
   buildChatGPTRequestBodies,
@@ -38,13 +43,17 @@ const customConfig: ImageGenerationRuntimeConfig = {
 let outputDir: string | undefined
 let isolatedConfig: string
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
+const originalHome = process.env.HOME
 beforeAll(async () => {
   isolatedConfig = await mkdtemp(join(tmpdir(), 'imagegen-test-config-'))
   process.env.CLAUDE_CONFIG_DIR = isolatedConfig
+  process.env.HOME = isolatedConfig
 })
 afterAll(async () => {
   if (originalConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = originalConfigDir
+  if (originalHome === undefined) delete process.env.HOME
+  else process.env.HOME = originalHome
   await rm(isolatedConfig, { recursive: true, force: true })
 })
 
@@ -465,17 +474,316 @@ describe('ImageGen backend', () => {
     }
   })
 
-  test('rejects relay-provided download URLs instead of turning the desktop into an SSRF client', async () => {
-    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-output-'))
-    const fetchImpl = async () => Response.json({
-      data: [{ url: 'https://untrusted.example.test/generated.png' }],
+  test.each([false, true])('downloads and saves a relay URL for edit=%s', async (edit) => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-url-'))
+    const source = join(outputDir, 'source.png')
+    await writeFile(source, PNG_BYTES)
+    const imageUrl = 'https://cdn.example.test/generated.png?signature=fixture'
+    const downloads: string[] = []
+    const requests: string[] = []
+    const result = await generateImages({
+      prompt: 'A relay image', count: 1,
+      ...(edit ? { referenced_image_paths: [source] } : {}),
+    }, customConfig, {
+      outputDir, inputRootDirs: [outputDir],
+      fetchImpl: async (url) => {
+        requests.push(String(url))
+        return Response.json({ data: [{ b64_json: '', url: imageUrl, revised_prompt: 'relay revision' }] })
+      },
+      downloadImage: async (url, signal) => {
+        signal.throwIfAborted()
+        downloads.push(url)
+        return PNG_BYTES
+      },
+    })
+    expect(requests).toEqual([`https://relay.example.test/v1/images/${edit ? 'edits' : 'generations'}`])
+    expect(downloads).toEqual([imageUrl])
+    expect(result.operation).toBe(edit ? 'edit' : 'generate')
+    expect(result.images[0]).toMatchObject({ mimeType: 'image/png', revisedPrompt: 'relay revision' })
+    expect(await readFile(result.images[0]!.path)).toEqual(PNG_BYTES)
+  })
+
+  for (const field of ['url', 'b64_json']) {
+    test.each([false, true])(`decodes a Data URL in ${field} without downloading, edit=%s`, async (edit) => {
+      outputDir = await mkdtemp(join(tmpdir(), 'imagegen-data-url-'))
+      const source = join(outputDir, 'source.png')
+      await writeFile(source, PNG_BYTES)
+      let downloads = 0
+      const result = await generateImages({
+        prompt: 'A relay image', count: 1,
+        ...(edit ? { referenced_image_paths: [source] } : {}),
+      }, customConfig, {
+        outputDir, inputRootDirs: [outputDir],
+        fetchImpl: async () => Response.json({ data: [{ [field]: `data:image/png;base64,${PNG_BYTES.toString('base64')}` }] }),
+        downloadImage: async () => { downloads++; throw new Error('Data URLs must not be downloaded') },
+      })
+      expect(downloads).toBe(0)
+      expect(await readFile(result.images[0]!.path)).toEqual(PNG_BYTES)
+    })
+  }
+
+  test('prefers returned Base64 over a URL without contacting the CDN', async () => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-base64-priority-'))
+    const result = await generateImages({ prompt: 'A relay image', count: 1 }, customConfig, {
+      outputDir,
+      fetchImpl: async () => Response.json({ data: [{ b64_json: PNG_BYTES.toString('base64'), url: 'https://127.0.0.1/private.png' }] }),
+      downloadImage: async () => { throw new Error('Base64 must take priority') },
+    })
+    expect(await readFile(result.images[0]!.path)).toEqual(PNG_BYTES)
+  })
+
+  test.each([
+    ['https://127.0.0.1/private.png', 'non-public'],
+    ['http://cdn.example.test/image.png', 'HTTPS'],
+    ['file:///tmp/private.png', 'HTTPS'],
+    ['data:text/html;base64,aGVsbG8=', 'image Data URL'],
+    ['data:image/png,not-base64', 'image Data URL'],
+    ['data:image/png;base64,not!base64', 'Base64'],
+  ])('rejects unsafe or malformed image result %s', async (url, error) => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-unsafe-result-'))
+    await expect(generateImages({ prompt: 'A relay image', count: 1 }, customConfig, {
+      outputDir,
+      fetchImpl: async () => Response.json({ data: [{ url }] }),
+    })).rejects.toThrow(error)
+  })
+
+  test('surfaces a failed CDN download without retrying generation', async () => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-download-failure-'))
+    let requests = 0
+    await expect(generateImages({ prompt: 'A relay image', count: 1 }, customConfig, {
+      outputDir,
+      fetchImpl: async () => { requests++; return Response.json({ data: [{ url: 'https://cdn.example.test/expired.png' }] }) },
+      downloadImage: async () => { throw new Error('Image download failed with HTTP 403') },
+    })).rejects.toThrow('HTTP 403')
+    expect(requests).toBe(1)
+  })
+
+  for (const aspectRatio of ['4:5', '21:9']) {
+    test.each([false, true])(`inherits the official Gemini chat base for native ${aspectRatio} images, edit=%s`, async (edit) => {
+      // The image override is deliberately absent: the desktop form inherits
+      // Google's OpenAI-compatible chat URL, which must become a native URL.
+      const provider: SavedProvider = {
+        id: 'gemini-shared-base-fixture', presetId: 'custom', name: 'Gemini fixture',
+        apiKey: 'fake-gemini-key', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/',
+        apiFormat: 'openai_chat', runtimeKind: 'anthropic_compatible',
+        models: { main: 'gemini-chat-fixture', haiku: '', sonnet: '', opus: '' },
+        imageGeneration: { protocol: 'gemini_native', model: 'gemini-image-fixture' },
+      }
+      const config = getImageGenerationRuntimeConfig(buildProviderManagedEnv(provider))
+      expect(config).not.toBeNull()
+      outputDir = await mkdtemp(join(tmpdir(), 'imagegen-gemini-shared-base-'))
+      const source = join(outputDir, 'source.png')
+      await writeFile(source, PNG_BYTES)
+      const requests: string[] = []
+      const expectedUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-image-fixture:generateContent'
+      const result = await generateImages({
+        prompt: 'A native Gemini fixture', count: 1, aspect_ratio: aspectRatio, resolution: '2k',
+        ...(edit ? { referenced_image_paths: [source] } : {}),
+      }, config!, {
+        outputDir, inputRootDirs: [outputDir],
+        fetchImpl: async (url, init) => {
+          requests.push(String(url))
+          if (String(url) !== expectedUrl) return new Response('Unknown fixture route', { status: 404 })
+          expect(init?.method).toBe('POST')
+          const headers = new Headers(init?.headers)
+          expect(headers.get('x-goog-api-key')).toBe('fake-gemini-key')
+          expect(headers.get('authorization')).toBeNull()
+          expect(headers.get('content-type')).toBe('application/json')
+          expect(JSON.parse(String(init?.body))).toEqual({
+            contents: [{
+              role: 'user',
+              parts: [
+                { text: 'A native Gemini fixture' },
+                ...(edit ? [{ inlineData: { mimeType: 'image/png', data: PNG_BYTES.toString('base64') } }] : []),
+              ],
+            }],
+            generationConfig: {
+              responseModalities: ['TEXT', 'IMAGE'],
+              imageConfig: { aspectRatio, imageSize: '2K' },
+            },
+          })
+          return Response.json({ candidates: [{ content: { parts: [
+            { inlineData: { mimeType: 'image/png', data: PNG_BYTES.toString('base64') } },
+          ] } }] })
+        },
+      })
+      expect(requests).toEqual([expectedUrl])
+      expect(result).toMatchObject({
+        providerId: provider.id, model: 'gemini-image-fixture',
+        operation: edit ? 'edit' : 'generate', inputImageCount: edit ? 1 : 0,
+      })
+      expect(result.images).toHaveLength(1)
+      expect(await readFile(result.images[0]!.path)).toEqual(PNG_BYTES)
+    })
+  }
+
+  for (const model of ['gemini-3.1-flash-lite-image', 'models/gemini-3.1-flash-lite-image']) {
+    test.each([false, true])(`rejects unsupported 2K Gemini Lite resolution for ${model} before fetching, edit=%s`, async (edit) => {
+      outputDir = await mkdtemp(join(tmpdir(), 'imagegen-gemini-lite-invalid-resolution-'))
+      const source = join(outputDir, 'source.png')
+      await writeFile(source, PNG_BYTES)
+      let requests = 0
+      await expect(generateImages({
+        prompt: 'A Gemini Lite fixture', count: 1, resolution: '2k',
+        ...(edit ? { referenced_image_paths: [source] } : {}),
+      }, { ...customConfig, protocol: 'gemini_native', model }, {
+        outputDir, inputRootDirs: [outputDir],
+        fetchImpl: async () => {
+          requests++
+          return Response.json({ candidates: [{ content: { parts: [
+            { inlineData: { mimeType: 'image/png', data: PNG_BYTES.toString('base64') } },
+          ] } }] })
+        },
+      })).rejects.toThrow(/gemini-3\.1-flash-lite-image/)
+      expect(requests).toBe(0)
     })
 
-    await expect(generateImages(
-      { prompt: 'A safe image', count: 1 },
-      customConfig,
-      { fetchImpl, outputDir },
-    )).rejects.toThrow('Configure it to return b64_json')
+    for (const resolution of ['1k', undefined] as const) {
+      test.each([false, true])(`saves Gemini Lite ${model} output with ${resolution ?? 'default'} resolution, edit=%s`, async (edit) => {
+        outputDir = await mkdtemp(join(tmpdir(), 'imagegen-gemini-lite-supported-resolution-'))
+        const source = join(outputDir, 'source.png')
+        await writeFile(source, PNG_BYTES)
+        const prompt = 'A Gemini Lite fixture'
+        const requests: string[] = []
+        const expectedUrl = 'https://relay.example.test/v1beta/models/gemini-3.1-flash-lite-image:generateContent'
+        const result = await generateImages({
+          prompt, count: 1, aspect_ratio: '16:9',
+          ...(resolution ? { resolution } : {}),
+          ...(edit ? { referenced_image_paths: [source] } : {}),
+        }, { ...customConfig, protocol: 'gemini_native', model }, {
+          outputDir, inputRootDirs: [outputDir],
+          fetchImpl: async (url, init) => {
+            requests.push(String(url))
+            const body = JSON.parse(String(init?.body))
+            expect(body.contents).toEqual([{
+              role: 'user',
+              parts: [
+                { text: prompt },
+                ...(edit ? [{ inlineData: { mimeType: 'image/png', data: PNG_BYTES.toString('base64') } }] : []),
+              ],
+            }])
+            expect(body.generationConfig).toEqual({
+              responseModalities: ['TEXT', 'IMAGE'],
+              imageConfig: {
+                aspectRatio: '16:9',
+                ...(resolution ? { imageSize: '1K' } : {}),
+              },
+            })
+            return Response.json({ candidates: [{ content: { parts: [
+              { inlineData: { mimeType: 'image/png', data: PNG_BYTES.toString('base64') } },
+            ] } }] })
+          },
+        })
+        expect(requests).toEqual([expectedUrl])
+        expect(result).toMatchObject({
+          model, operation: edit ? 'edit' : 'generate', inputImageCount: edit ? 1 : 0,
+        })
+        expect(result.images).toHaveLength(1)
+        expect(await readFile(result.images[0]!.path)).toEqual(PNG_BYTES)
+      })
+    }
+  }
+
+  test('rejects an unsupported native Gemini aspect ratio before fetching when called without the tool schema', async () => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-gemini-invalid-ratio-'))
+    let requests = 0
+    await expect(generateImages({
+      prompt: 'A native Gemini fixture', count: 1, aspect_ratio: '2:1',
+    }, { ...customConfig, protocol: 'gemini_native' }, {
+      outputDir,
+      fetchImpl: async () => {
+        requests++
+        return Response.json({ candidates: [{ content: { parts: [
+          { inlineData: { mimeType: 'image/png', data: PNG_BYTES.toString('base64') } },
+        ] } }] })
+      },
+    })).rejects.toThrow('aspect ratio')
+    expect(requests).toBe(0)
+  })
+
+  for (const protocol of ['gemini_native', 'xai_images'] as const) {
+    test.each([false, true])(`persists ${protocol} output through its configured generate/edit request, edit=%s`, async (edit) => {
+      outputDir = await mkdtemp(join(tmpdir(), 'imagegen-native-'))
+      const source = join(outputDir, 'source.png')
+      await writeFile(source, PNG_BYTES)
+      const calls: string[] = []
+      const result = await generateImages({
+        prompt: 'A native image', count: 1, aspect_ratio: '16:9', resolution: '2k',
+        ...(edit ? { referenced_image_paths: [source] } : {}),
+      }, { ...customConfig, protocol }, {
+        outputDir, inputRootDirs: [outputDir],
+        fetchImpl: async (url, init) => {
+          calls.push(String(url))
+          const headers = new Headers(init?.headers)
+          expect(headers.get('content-type')).toBe('application/json')
+          expect(init?.body).not.toBeInstanceOf(FormData)
+          const body = JSON.parse(String(init?.body))
+          if (protocol === 'gemini_native') {
+            expect(headers.get('x-goog-api-key')).toBe('relay-secret')
+            expect(headers.get('authorization')).toBeNull()
+            expect(body.generationConfig.imageConfig).toEqual({ aspectRatio: '16:9', imageSize: '2K' })
+            expect(body.contents[0].parts).toHaveLength(edit ? 2 : 1)
+            if (edit) expect(body.contents[0].parts[1].inlineData.data).toBe(PNG_BYTES.toString('base64'))
+            return Response.json({ candidates: [{ content: { parts: [
+              { text: 'Done' },
+              { inline_data: { mime_type: 'image/png', data: PNG_BYTES.toString('base64') } },
+            ] } }] })
+          }
+          expect(headers.get('authorization')).toBe('Bearer relay-secret')
+          expect(body).toMatchObject({ n: 1, aspect_ratio: '16:9', resolution: '2k' })
+          expect(body.size).toBeUndefined()
+          if (edit) expect(body.image).toEqual({ type: 'image_url', url: `data:image/png;base64,${PNG_BYTES.toString('base64')}` })
+          return Response.json({ data: [{ url: `data:image/png;base64,${PNG_BYTES.toString('base64')}` }] })
+        },
+      })
+      expect(calls).toEqual([protocol === 'gemini_native'
+        ? 'https://relay.example.test/v1beta/models/relay-image-model:generateContent'
+        : `https://relay.example.test/v1/images/${edit ? 'edits' : 'generations'}`])
+      expect(result.inputImageCount).toBe(edit ? 1 : 0)
+      expect(result.operation).toBe(edit ? 'edit' : 'generate')
+      expect(await readFile(result.images[0]!.path)).toEqual(PNG_BYTES)
+    })
+  }
+
+  test.each([
+    ['image/jpeg', Buffer.from([0xff, 0xd8, 0xff, 0x00]), '.jpg'],
+    ['image/webp', Buffer.from('RIFF0000WEBP'), '.webp'],
+  ])('saves supported Data URL bytes as %s using the detected format', async (mime, bytes, extension) => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-data-format-'))
+    const result = await generateImages({ prompt: 'A relay image', count: 1 }, customConfig, {
+      outputDir,
+      fetchImpl: async () => Response.json({ data: [{ url: `data:${mime};base64,${bytes.toString('base64')}` }] }),
+    })
+    expect(result.images[0]!.mimeType).toBe(mime)
+    expect(result.images[0]!.path.endsWith(extension)).toBe(true)
+    expect(await readFile(result.images[0]!.path)).toEqual(bytes)
+  })
+
+  test('bounds inline image decoding before allocating an oversized decoded buffer', async () => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-large-inline-'))
+    await expect(generateImages({ prompt: 'A relay image', count: 1 }, customConfig, {
+      outputDir,
+      fetchImpl: async () => Response.json({ data: [{ url: `data:image/png;base64,${'A'.repeat(40 * 1024 * 1024 + 12)}` }] }),
+    })).rejects.toThrow('30 MB')
+  })
+
+  test.each([false, true])('uses official GPT Image Base64 defaults through the real request path, edit=%s', async (edit) => {
+    outputDir = await mkdtemp(join(tmpdir(), 'imagegen-openai-contract-'))
+    const source = join(outputDir, 'source.png')
+    await writeFile(source, PNG_BYTES)
+    const result = await generateImages({
+      prompt: 'An official GPT image', count: 1,
+      ...(edit ? { referenced_image_paths: [source] } : {}),
+    }, { ...customConfig, model: 'gpt-image-2', baseUrl: 'https://api.openai.com/v1' }, {
+      outputDir, inputRootDirs: [outputDir],
+      fetchImpl: async (url, init) => {
+        expect(String(url)).toBe(`https://api.openai.com/v1/images/${edit ? 'edits' : 'generations'}`)
+        if (edit) expect((init?.body as FormData).has('response_format')).toBe(false)
+        else expect(JSON.parse(String(init?.body)).response_format).toBeUndefined()
+        return Response.json({ data: [{ b64_json: PNG_BYTES.toString('base64') }] })
+      },
+    })
+    expect(await readFile(result.images[0]!.path)).toEqual(PNG_BYTES)
   })
 
   test('redacts the configured API key from provider error bodies', async () => {

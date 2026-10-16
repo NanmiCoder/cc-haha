@@ -25,6 +25,7 @@ import { ProviderService } from '../services/providerService.js'
 import { PROVIDER_PRESETS } from '../config/providerPresets.js'
 import {
   CreateProviderSchema,
+  DEEPSEEK_ACCOUNT_PROVIDER_ID,
   ModelMappingSchema,
   UpdateProviderSchema,
   TestProviderSchema,
@@ -135,7 +136,11 @@ export async function handleProvidersApi(
     if (!id) {
       if (req.method === 'GET') {
         const { providers, activeId } = await providerService.listProviders()
-        return Response.json({ providers, activeId })
+        // The built-in DeepSeek account is not a saved provider, but the model
+        // picker shows its alias rows like one, from the mapping the user saved.
+        const deepSeekAccountModels =
+          await providerService.getOfficialProviderModels(DEEPSEEK_ACCOUNT_PROVIDER_ID)
+        return Response.json({ providers, activeId, deepSeekAccountModels })
       }
       if (req.method === 'POST') {
         return await handleCreate(req)

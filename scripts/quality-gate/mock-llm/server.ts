@@ -8,6 +8,7 @@
  */
 
 import { decideReply, type MockContentBlock, type MockRequest } from './scriptedModel'
+import { GEMINI_IMAGE_ASPECT_RATIOS } from '../../../src/tools/ImageGenTool/aspectRatios'
 
 export type RecordedRequest = {
   path: string
@@ -24,9 +25,11 @@ export type RecordedRequest = {
 export type MockLlmServer = {
   url: string
   requests: RecordedRequest[]
+  imageRequests: Array<{ path: string; body: Record<string, unknown>; headers: Headers }>
   stop(): Promise<void>
 }
 
+export const MOCK_IMAGE_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg=='
 const MODEL_FALLBACK = 'mock-model'
 
 function usage(outputTokens: number) {
@@ -151,6 +154,7 @@ function handleMessages(record: RecordedRequest): Response {
 
 export function startMockLlmServer(): MockLlmServer {
   const requests: RecordedRequest[] = []
+  const imageRequests: MockLlmServer['imageRequests'] = []
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -160,6 +164,36 @@ export function startMockLlmServer(): MockLlmServer {
         return Response.json({ data: [{ type: 'model', id: MODEL_FALLBACK, display_name: 'Mock model' }], has_more: false })
       }
       if (req.method !== 'POST') return new Response('not found', { status: 404 })
+
+      const isGeminiLiteImage = path === '/v1beta/models/gemini-3.1-flash-lite-image:generateContent'
+      const isGeminiImage = path === '/v1beta/models/mock-image:generateContent' || isGeminiLiteImage
+      if (path === '/v1/images/generations' || path === '/v1/images/edits' || isGeminiImage) {
+        const contentType = req.headers.get('content-type') ?? ''
+        const body = contentType.startsWith('multipart/form-data')
+          ? Object.fromEntries((await req.formData()).entries())
+          : await req.json() as Record<string, unknown>
+        imageRequests.push({ path, body, headers: req.headers })
+        const credential = isGeminiImage ? req.headers.get('x-goog-api-key') : req.headers.get('authorization')
+        if (credential !== (isGeminiImage ? 'mock-image-key' : 'Bearer mock-image-key')) {
+          return Response.json({ error: 'image credentials were not wired' }, { status: 401 })
+        }
+        if (isGeminiImage) {
+          const { generationConfig } = body as { generationConfig?: { imageConfig?: { aspectRatio?: unknown; imageSize?: unknown } } }
+          const imageSize = generationConfig?.imageConfig?.imageSize
+          if (isGeminiLiteImage && imageSize !== undefined && imageSize !== '1K') {
+            return Response.json({ error: 'Gemini Lite images require 1K resolution' }, { status: 400 })
+          }
+          const ratio = generationConfig?.imageConfig?.aspectRatio
+          if (ratio !== undefined && (ratio === 'auto' || !GEMINI_IMAGE_ASPECT_RATIOS.some(supported => supported === ratio))) {
+            return Response.json({ error: 'unsupported Gemini image aspect ratio' }, { status: 400 })
+          }
+          return Response.json({ candidates: [{ content: { parts: [
+            { text: 'Fixture image' },
+            { inlineData: { mimeType: 'image/png', data: MOCK_IMAGE_PNG_BASE64 } },
+          ] } }] })
+        }
+        return Response.json({ data: [{ url: `data:image/png;base64,${MOCK_IMAGE_PNG_BASE64}`, revised_prompt: 'Fixture image' }] })
+      }
 
       const body = (await req.json().catch(() => ({}))) as MockRequest & { stream?: boolean }
       if (path.endsWith('/v1/messages/count_tokens')) {
@@ -177,6 +211,7 @@ export function startMockLlmServer(): MockLlmServer {
   return {
     url: `http://127.0.0.1:${server.port}`,
     requests,
+    imageRequests,
     async stop() {
       await server.stop(true)
     },

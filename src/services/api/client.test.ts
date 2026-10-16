@@ -235,6 +235,85 @@ describe('getAnthropicClient', () => {
     }
   })
 
+  test('sends DeepSeek account requests with only the account token header', async () => {
+    const { getAnthropicClient } = await import('./client.js')
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepseek-client-test-'))
+    const tokenFile = path.join(tempDir, 'deepseek-oauth.json')
+    await fs.writeFile(tokenFile, JSON.stringify({
+      token: 'dsh_test_account_token',
+      issuer: 'https://platform.deepseek.com',
+      deviceId: 'device-1',
+    }))
+    const keys = [
+      'CC_HAHA_DEEPSEEK_OAUTH_PROVIDER',
+      'DEEPSEEK_OAUTH_FILE',
+      'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_AUTH_TOKEN',
+      'CLAUDE_CONFIG_DIR',
+    ] as const
+    const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]]))
+    process.env.CC_HAHA_DEEPSEEK_OAUTH_PROVIDER = '1'
+    process.env.DEEPSEEK_OAUTH_FILE = tokenFile
+    process.env.ANTHROPIC_BASE_URL = 'https://api.deepseek.com/anthropic'
+    process.env.ANTHROPIC_API_KEY = 'deepseek-oauth-dummy-key'
+    delete process.env.ANTHROPIC_AUTH_TOKEN
+    process.env.CLAUDE_CONFIG_DIR = tempDir
+    try {
+      const received: Array<{ url: string; headers: Headers }> = []
+      const client = await getAnthropicClient({
+        maxRetries: 0,
+        model: 'deepseek-v4-pro',
+        fetchOverride: async (input, init) => {
+          received.push({
+            url: new URL(input instanceof Request ? input.url : String(input)).href,
+            headers: new Headers(init?.headers),
+          })
+          return Response.json({
+            id: 'msg-deepseek-account',
+            type: 'message',
+            role: 'assistant',
+            model: 'deepseek-v4-pro',
+            content: [{ type: 'text', text: 'ok' }],
+            stop_reason: 'end_turn',
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          })
+        },
+      })
+      const request = {
+        model: 'deepseek-v4-pro',
+        max_tokens: 16,
+        messages: [{ role: 'user' as const, content: 'hi' }],
+      }
+
+      await client.messages.create(request)
+      expect(received).toHaveLength(1)
+      expect(received[0]!.url).toBe('https://api.deepseek.com/anthropic/v1/messages')
+      expect(received[0]!.headers.get('x-dsh-auth-token')).toBe('dsh_test_account_token')
+      expect(received[0]!.headers.get('x-api-key')).toBeNull()
+      expect(received[0]!.headers.get('authorization')).toBeNull()
+
+      // Signing out takes effect on the running client: no stale token is
+      // replayed and no request leaves the machine.
+      await fs.rm(tokenFile)
+      let signedOutError: unknown
+      try {
+        await client.messages.create(request)
+      } catch (error) {
+        signedOutError = error
+      }
+      expect(String(signedOutError)).toContain('not signed in')
+      expect(received).toHaveLength(1)
+    } finally {
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key]
+        else process.env[key] = previous[key]
+      }
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('passes bearer-token provider auth without an SDK api key', async () => {
     const { getAnthropicClient } = await import('./client.js')
     const originalAuthToken = process.env.ANTHROPIC_AUTH_TOKEN

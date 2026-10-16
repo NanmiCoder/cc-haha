@@ -1,6 +1,7 @@
-import { Fragment, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { useTranslation } from '@/i18n'
+import { useRoomAbove } from '@/hooks/useRoomAbove'
 import { publicAssetPath } from '@/lib/publicAsset'
 import { Button } from '@/components/ui/Button'
 import { Switch } from '@/components/ui/Switch'
@@ -101,7 +102,12 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
   // Too little room to the right of the popover for a second panel: open
   // categories in place, as the sheet does.
   const [narrow, setNarrow] = useState(false)
-  const containerRef = useRef<HTMLDivElement>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [roomRef, roomAbove] = useRoomAbove<HTMLDivElement>()
+  const setContainerRef = useCallback((node: HTMLDivElement | null) => {
+    containerRef.current = node
+    roomRef(node)
+  }, [roomRef])
   const flyoutRef = useRef<HTMLDivElement>(null)
   const [flyoutTop, setFlyoutTop] = useState(0)
   const referenceRef = useRef<ComposerReferenceMenuHandle>(null)
@@ -285,7 +291,7 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
   }
 
   const renderSubList = (listItems: CapabilityMenuItem[]) => <div id={subListId} role="listbox" aria-label={drillParent?.label}
-    className={sheet ? 'p-2' : 'max-h-[min(360px,50vh)] overflow-y-auto p-1'}>
+    className={sheet ? 'p-2' : 'min-h-0 max-h-[min(360px,50vh)] overflow-y-auto p-1'}>
     {listItems.map((item, index) => {
       const previous = listItems[index - 1]
       const heading = item.group && item.group !== previous?.group
@@ -303,7 +309,7 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
     referencesLoading={referencesLoading} referencesError={referencesError} onSelect={selectMention} onActiveChange={setReferenceOptionId} />
 
   let offset = 0
-  const rootList = <div id={listId} role="listbox" aria-label={t('chat.composerTools')} className={sheet ? 'p-2' : 'max-h-[min(420px,60vh)] overflow-y-auto p-1'}>
+  const rootList = <div id={listId} role="listbox" aria-label={t('chat.composerTools')} className={sheet ? 'p-2' : 'min-h-0 max-h-[min(420px,60vh)] overflow-y-auto p-1'}>
     {sections.map(section => {
       const start = offset
       offset += section.items.length
@@ -314,7 +320,7 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
     })}
   </div>
 
-  const searchRow = <div className={`flex items-center gap-2 border-b border-[var(--color-border)] px-3 ${sheet ? 'h-12' : 'h-10'}`}>
+  const searchRow = <div className={`flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 ${sheet ? 'h-12' : 'h-10'}`}>
     {inPlace && drillParent ? <IconButton icon={<ChevronLeft size={14} strokeWidth={1.75} />} label={t('chat.capabilities.back')} size="xs" tone="muted" onClick={goBack} /> : null}
     <Search aria-hidden="true" size={14} strokeWidth={1.75} className="shrink-0 text-[var(--color-text-tertiary)]" />
     <input autoFocus={!sheet} value={query}
@@ -332,16 +338,16 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
   </div>
 
   if (inPlace) {
-    return <div ref={containerRef} className={sheet
+    return <div ref={sheet ? containerRef : setContainerRef} style={sheet ? undefined : { maxHeight: roomAbove }} className={sheet
       ? 'flex min-w-0 flex-col'
-      : `absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 ${PANEL} ${showReferences ? 'w-[min(480px,calc(100vw-32px))]' : 'w-[min(288px,calc(100vw-32px))]'}`} onMouseDown={sheet ? undefined : event => event.preventDefault()}>
+      : `absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2 flex flex-col ${PANEL} ${showReferences ? 'w-[min(480px,calc(100vw-32px))]' : 'w-[min(288px,calc(100vw-32px))]'}`} onMouseDown={sheet ? undefined : event => event.preventDefault()}>
       {searchRow}
       {showReferences ? referenceMenu : drillParent ? renderSubList(items) : rootList}
     </div>
   }
 
-  return <div ref={containerRef} className="absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2" onMouseDown={event => event.preventDefault()}>
-    <div className={`${PANEL} ${searching ? 'w-[min(480px,calc(100vw-32px))]' : ''}`} style={searching ? undefined : { width: ROOT_WIDTH }}>
+  return <div ref={setContainerRef} className="absolute bottom-full left-0 z-[var(--z-dropdown)] mb-2" onMouseDown={event => event.preventDefault()}>
+    <div className={`flex flex-col ${PANEL} ${searching ? 'w-[min(480px,calc(100vw-32px))]' : ''}`} style={{ maxHeight: roomAbove, width: searching ? undefined : ROOT_WIDTH }}>
       {searchRow}
       {searching ? referenceMenu : rootList}
     </div>

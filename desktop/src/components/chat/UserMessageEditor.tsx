@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/Button'
 import { TextArea } from '@/components/ui/TextArea'
 import { useTranslation } from '../../i18n'
 import { useSettingsStore } from '../../stores/settingsStore'
+import { AgentTeamChip } from './AgentTeamChip'
 import { AttachmentGallery } from './AttachmentGallery'
 import { shouldSubmitOnEnter } from './sendShortcut'
 import type { UserMessageEditDraft } from './userMessageEdit'
@@ -72,6 +73,11 @@ export function UserMessageEditor({
       data-testid="user-message-editor"
       className="flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2.5"
     >
+      {draft.agentTeam ? (
+        <div className="flex">
+          <AgentTeamChip onRemove={submitting ? undefined : () => updateDraft({ ...draft, agentTeam: false })} />
+        </div>
+      ) : null}
       {draft.attachments.length > 0 ? (
         <AttachmentGallery
           attachments={draft.attachments}

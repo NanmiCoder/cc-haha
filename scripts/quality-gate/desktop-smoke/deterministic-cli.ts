@@ -2,28 +2,33 @@
 
 import { join } from 'node:path'
 import { executeDeterministicDesktopSmoke } from './deterministic'
+import { executeReplayDesktopSmoke } from './replay'
 
 const rootDir = process.cwd()
 const artifactDir = process.argv.includes('--artifact-dir')
   ? String(process.argv[process.argv.indexOf('--artifact-dir') + 1])
   : join(rootDir, 'artifacts', 'desktop-ui-smoke')
 
-console.log('[desktop-ui-smoke] real desktop UI against the mock SDK CLI — no provider, no credentials, no network')
+console.log('[desktop-ui-smoke] real desktop UI against the mock SDK CLI, then the real CLI against recorded traffic — no provider, no credentials, no network')
 
-const result = await executeDeterministicDesktopSmoke(
-  rootDir,
-  artifactDir,
-  'desktop-ui-smoke',
-  'Deterministic desktop UI smoke',
-)
+const results = [
+  await executeDeterministicDesktopSmoke(
+    rootDir,
+    artifactDir,
+    'desktop-ui-smoke',
+    'Deterministic desktop UI smoke',
+  ),
+  await executeReplayDesktopSmoke(rootDir, join(artifactDir, 'replay')),
+]
 
-if (result.status === 'skipped') {
-  console.log(`[desktop-ui-smoke] SKIPPED: ${result.skipReason}`)
-  process.exit(0)
+let failed = false
+for (const result of results) {
+  if (result.status === 'skipped') {
+    console.log(`[desktop-ui-smoke] SKIPPED ${result.id}: ${result.skipReason}`)
+    continue
+  }
+  console.log(`[desktop-ui-smoke] ${result.status.toUpperCase()} ${result.id} (${result.durationMs}ms) artifacts=${result.artifactDir}`)
+  if (result.error) console.error(`[desktop-ui-smoke] ${result.error}`)
+  failed ||= result.status !== 'passed'
 }
-
-console.log(`[desktop-ui-smoke] ${result.status.toUpperCase()} (${result.durationMs}ms) artifacts=${result.artifactDir}`)
-if (result.error) {
-  console.error(`[desktop-ui-smoke] ${result.error}`)
-}
-process.exit(result.status === 'passed' ? 0 : 1)
+process.exit(failed ? 1 : 0)

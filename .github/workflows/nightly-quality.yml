@@ -42,6 +42,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+      # Agent and skill discovery lists files through ripgrep; without it the
+      # runtime suites see every created agent as missing (HTTP 500).
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Install root dependencies
         run: bun install --frozen-lockfile
       - name: Install desktop dependencies
@@ -57,7 +61,7 @@ jobs:
         run: bun run check:policy
       - name: Deterministic agent flow
         run: bun run check:agent-flow
-      - name: Agent loop against a mock LLM
+      - name: Agent loop against a mock LLM and recorded traffic
         run: bun run check:agent-e2e
       - name: Root runtime tests
         run: bun run check:server

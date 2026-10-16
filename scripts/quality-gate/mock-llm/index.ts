@@ -61,7 +61,7 @@ async function main() {
       seedProviders: false,
       stepTimeoutMs: STEP_TIMEOUT_MS,
       scenarios,
-      runners: { ...LIVE_SCENARIO_RUNNERS, ...createMockOnlyRunners(upstream.requests) },
+      runners: { ...LIVE_SCENARIO_RUNNERS, ...createMockOnlyRunners(upstream.requests, upstream.imageRequests) },
       // Registered through the same endpoint the desktop "add provider" form uses,
       // so the provider → CLI env wiring is part of what this lane exercises.
       async resolveTarget({ baseUrl }) {

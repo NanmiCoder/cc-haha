@@ -4,6 +4,8 @@ import {
   estimateFallbackFixedContextTokens,
   getAutoCompactThreshold,
   getEffectiveContextWindowSize,
+  getPostCompactPromptTokens,
+  getRapidRefillDecision,
   shouldAutoCompact,
 } from './autoCompact.js'
 import { getContextWindowForModel } from '../../utils/context.js'
@@ -253,5 +255,90 @@ describe('model context window resolution', () => {
       .toBe(false)
     expect(await shouldAutoCompact(messagesAt(320_400), 'gpt-5.6-terra'))
       .toBe(true)
+  })
+})
+
+describe('rapid-refill breaker (#1544)', () => {
+  const THRESHOLD = 67_000
+  const afterCompact = (turnCounter: number, consecutiveRapidRefills: number) => ({
+    compacted: true,
+    turnId: 'turn',
+    turnCounter,
+    consecutiveRapidRefills,
+  })
+  const boundary = { type: 'system', subtype: 'compact_boundary', content: 'compacted' }
+  const assistantWithPrompt = (promptTokens: number) => ({
+    type: 'assistant',
+    message: {
+      model: 'custom-100k',
+      content: [{ type: 'text', text: 'done' }],
+      usage: {
+        input_tokens: promptTokens - 60_000 > 0 ? promptTokens - 60_000 : promptTokens,
+        output_tokens: 500,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: promptTokens - 60_000 > 0 ? 60_000 : 0,
+      },
+    },
+  })
+
+  test('counts a refill only when the compaction left most of the threshold in use', () => {
+    expect(getRapidRefillDecision(undefined, undefined, THRESHOLD))
+      .toEqual({ trip: false, consecutiveRapidRefills: 0 })
+
+    // Compaction freed nothing that matters: 84K of a 67K threshold.
+    expect(getRapidRefillDecision(afterCompact(1, 0), 84_000, THRESHOLD))
+      .toEqual({ trip: false, consecutiveRapidRefills: 1 })
+    expect(getRapidRefillDecision(afterCompact(1, 2), 84_000, THRESHOLD))
+      .toEqual({ trip: true, consecutiveRapidRefills: 3 })
+    // Right at the 75% line still counts; just below it does not.
+    expect(getRapidRefillDecision(afterCompact(1, 0), 50_250, THRESHOLD).consecutiveRapidRefills).toBe(1)
+    expect(getRapidRefillDecision(afterCompact(1, 2), 50_249, THRESHOLD))
+      .toEqual({ trip: false, consecutiveRapidRefills: 0 })
+    // A compaction that held for 3 turns resets the streak.
+    expect(getRapidRefillDecision(afterCompact(3, 2), 84_000, THRESHOLD))
+      .toEqual({ trip: false, consecutiveRapidRefills: 0 })
+    // No usage: keep the loop guard.
+    expect(getRapidRefillDecision(afterCompact(1, 2), undefined, THRESHOLD))
+      .toEqual({ trip: true, consecutiveRapidRefills: 3 })
+  })
+
+  // Schedules recorded from real DeepSeek Flash runs with a 100K compaction
+  // window (threshold 67K). Each entry is how many turns passed before the
+  // next compaction, and the first post-compact prompt size.
+  const replay = (schedule: Array<[turnsSincePrevious: number, postCompactPrompt: number]>) => {
+    let tracking: ReturnType<typeof afterCompact> | undefined
+    const outcomes: string[] = []
+    for (const [turns, postCompactPrompt] of schedule) {
+      if (tracking) tracking.turnCounter = turns
+      const decision = getRapidRefillDecision(tracking, tracking ? postCompactPrompt : undefined, THRESHOLD)
+      outcomes.push(decision.trip ? 'trip' : 'compact')
+      if (decision.trip) break
+      tracking = afterCompact(0, decision.consecutiveRapidRefills)
+    }
+    return outcomes
+  }
+
+  test('keeps compacting a small window that large reads refill, because each compaction frees most of it', () => {
+    // repro-win100k: four 25K-token reads per turn, ~26K left after each compaction.
+    expect(replay([[0, 0], [5, 26_000], [2, 26_000], [2, 26_000], [2, 26_000], [2, 26_000], [2, 26_000]]))
+      .toEqual(['compact', 'compact', 'compact', 'compact', 'compact', 'compact', 'compact'])
+  })
+
+  test('stops when the fixed context alone fills the threshold after every compaction', () => {
+    // repro-heavyprefix: ~57K CLAUDE.md, 84-90K in use right after each compaction.
+    expect(replay([[0, 0], [1, 84_700], [1, 87_300], [1, 89_600], [1, 92_000]]))
+      .toEqual(['compact', 'compact', 'compact', 'trip'])
+  })
+
+  test('reads the prompt size of the first request after the latest compaction', () => {
+    expect(getPostCompactPromptTokens([assistantWithPrompt(90_000)] as never)).toBeUndefined()
+    expect(getPostCompactPromptTokens([
+      assistantWithPrompt(150_000),
+      boundary,
+      { type: 'user', message: { content: 'summary' } },
+      { ...assistantWithPrompt(0), message: { ...assistantWithPrompt(0).message, usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 } } },
+      assistantWithPrompt(84_000),
+      assistantWithPrompt(95_000),
+    ] as never)).toBe(84_000)
   })
 })

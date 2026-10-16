@@ -23,6 +23,10 @@ export class StreamToolInputDurationGuard {
     this.start(index)
   }
 
+  hasActiveInput(): boolean {
+    return this.timers.size > 0
+  }
+
   stop(index: number): void {
     const timer = this.timers.get(index)
     if (timer === undefined) return

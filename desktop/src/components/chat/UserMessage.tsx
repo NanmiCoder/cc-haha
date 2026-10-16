@@ -2,17 +2,23 @@ import { Button } from '@/components/ui/Button'
 import { openSessionSource, sessionSourceTitle } from '@/lib/sessionNavigation'
 import { memo, useCallback, useMemo } from 'react'
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react'
-import { UsersRound } from 'lucide-react'
+import { Box, Puzzle, SquareSlash, UsersRound } from 'lucide-react'
 import type { UIAttachment } from '../../types/chat'
 import { useTranslation } from '../../i18n'
+import { stripAgentTeamRequest } from '../../lib/agentTeamRequest'
 import { openPreviewLink } from '../../lib/openPreviewLink'
 import { splitTextByUrls } from '../../lib/urlBoundary'
+import { hasCapabilitySentence, parseUserMessageSegments } from '../../lib/userMessageCapabilities'
+import { capabilityKey, useCapabilityCatalogStore } from '../../stores/capabilityCatalogStore'
+import { extractRestoredUserDisplay } from '../../stores/chatStore'
+import { AgentTeamChip } from './AgentTeamChip'
 import { AttachmentGallery } from './AttachmentGallery'
 import { MessageActionBar, type MessageBranchAction, type MessageEditAction } from './MessageActionBar'
 import { UserMessageEditor } from './UserMessageEditor'
 import { useMessageActionMenu } from './useMessageActionMenu'
 import type { UserMessageEditDraft } from './userMessageEdit'
 import { MarkdownRenderer } from '../markdown/MarkdownRenderer'
+import type { PreviewLinkTarget } from '@/lib/previewLinkRouter'
 
 /**
  * Edit-and-resend for one prompt. The draft lives with the caller, not in this
@@ -34,6 +40,8 @@ export type UserMessageEditAction = {
 
 type Props = {
   content: string
+  /** What reached the model; the composer's team switch and pills live only here. */
+  modelContent?: string
   sessionReferences?: Array<{ sessionId: string }>
   /** Set when this message was delivered from another collaborating session. */
   collaboration?: { sourceSessionId: string; messageId?: string }
@@ -51,6 +59,7 @@ type Props = {
 
 export const UserMessage = memo(function UserMessage({
   content,
+  modelContent,
   sessionReferences,
   collaboration,
   attachments,
@@ -84,10 +93,18 @@ export const UserMessage = memo(function UserMessage({
   // The operator's prompt is literal text, NOT markdown — `**`, `#` and file
   // paths have to stay exactly as typed. Teammate traffic is rendered separately
   // below because agent-to-agent messages intentionally use Markdown.
-  const segments = useMemo(() => splitTextByUrls(content), [content])
+  const display = useMemo(() => {
+    const agentTeam = modelContent ? stripAgentTeamRequest(modelContent).requested : false
+    // A live bubble shows the composer's `@Label` projection; the model text
+    // carries the capability itself, so read pills from it when it has them.
+    const restored = modelContent ? extractRestoredUserDisplay(modelContent).content.trim() : ''
+    const text = restored && hasCapabilitySentence(restored) ? restored : content
+    return { agentTeam, segments: parseUserMessageSegments(text) }
+  }, [content, modelContent])
+  const catalog = useCapabilityCatalogStore((state) => state.entries)
 
   const handleLinkClick = useCallback(
-    (href: string, event: ReactMouseEvent<HTMLElement>): boolean => {
+    (href: PreviewLinkTarget, event: ReactMouseEvent<HTMLElement>): boolean => {
       if (!sessionId) return false
       const handled = openPreviewLink(href, sessionId)
       if (handled) event.preventDefault()
@@ -96,22 +113,52 @@ export const UserMessage = memo(function UserMessage({
     [sessionId],
   )
 
-  const body: ReactNode = segments.map((segment, index) =>
-    segment.type === 'url' ? (
-      <a
+  const renderText = (text: string, key: number): ReactNode[] =>
+    splitTextByUrls(text).map((segment, index) =>
+      segment.type === 'url' ? (
+        <a
+          key={`${key}-${index}`}
+          href={segment.value}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="text-[var(--color-text-accent)] underline decoration-[1px] underline-offset-[3px] decoration-[var(--color-text-accent)] [overflow-wrap:anywhere] hover:decoration-[2px]"
+          onClick={(event) => handleLinkClick(segment.value, event)}
+        >
+          {segment.value}
+        </a>
+      ) : (
+        segment.value
+      ),
+    )
+
+  const body: ReactNode = display.segments.map((segment, index) => {
+    if (segment.type === 'text') return renderText(segment.text, index)
+    if (segment.type === 'command') {
+      return (
+        <span key={index} data-user-message-pill="command" className="composer-mention composer-mention--command composer-mention--static">
+          <SquareSlash size={14} strokeWidth={1.75} aria-hidden="true" className="composer-mention-icon" />
+          {segment.name}
+        </span>
+      )
+    }
+    // Show the pill the user picked: its display name and brand icon when the
+    // composer listed it, else the name the identity carries.
+    const known = catalog[capabilityKey(segment.type, segment.id)]
+    const Icon = segment.type === 'skill' ? Box : Puzzle
+    return (
+      <span
         key={index}
-        href={segment.value}
-        target="_blank"
-        rel="noreferrer noopener"
-        className="text-[var(--color-text-accent)] underline decoration-[1px] underline-offset-[3px] decoration-[var(--color-text-accent)] [overflow-wrap:anywhere] hover:decoration-[2px]"
-        onClick={(event) => handleLinkClick(segment.value, event)}
+        data-user-message-pill={segment.type}
+        title={segment.id}
+        className={`composer-mention composer-mention--${segment.type} composer-mention--static`}
       >
-        {segment.value}
-      </a>
-    ) : (
-      segment.value
-    ),
-  )
+        {known?.icon
+          ? <img className="composer-mention-brand-icon" src={`${import.meta.env.BASE_URL}${known.icon.slice(1)}`} alt="" draggable={false} />
+          : <Icon size={14} strokeWidth={1.75} aria-hidden="true" className="composer-mention-icon" />}
+        @{known?.label ?? segment.label}
+      </span>
+    )
+  })
 
   // A teammate's instruction is not the user speaking, so it does not take the
   // user's right-aligned bubble. Attributing and left-aligning it is what gives
@@ -223,6 +270,7 @@ export const UserMessage = memo(function UserMessage({
           {sessionReferences?.length ? <div className="flex max-w-full flex-wrap gap-1" aria-label={t('chat.referenceSessions')}>
             {sessionReferences.map(reference => <Button key={reference.sessionId} size="sm" variant="ghost" onClick={() => openSessionSource(reference.sessionId)}>{t('chat.openReferencedSession', { id: sessionSourceTitle(reference.sessionId) })}</Button>)}
           </div> : null}
+          {display.agentTeam ? <AgentTeamChip /> : null}
           {attachments && attachments.length > 0 && (
             <AttachmentGallery attachments={attachments} variant="message" />
           )}

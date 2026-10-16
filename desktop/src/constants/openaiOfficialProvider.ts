@@ -1,5 +1,6 @@
 import type { ModelInfo } from '../types/settings'
 import { GROK_OFFICIAL_PROVIDER_ID } from './grokOfficialProvider'
+import { DEEPSEEK_ACCOUNT_PROVIDER_ID } from './deepseekAccountProvider'
 
 export const CLAUDE_OFFICIAL_PROVIDER_ID = 'claude-official'
 export const OPENAI_OFFICIAL_PROVIDER_ID = 'openai-official'
@@ -7,6 +8,7 @@ export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
   GROK_OFFICIAL_PROVIDER_ID,
+  DEEPSEEK_ACCOUNT_PROVIDER_ID,
 ] as const
 export const OPENAI_OFFICIAL_DEFAULT_MODEL_ID = 'gpt-6-sol'
 export const OPENAI_OFFICIAL_PROVIDER_NAME = 'ChatGPT Official'

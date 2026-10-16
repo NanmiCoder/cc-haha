@@ -1,7 +1,7 @@
 # cc-haha
 
 <p align="center">
-  <img src="docs/images/readme-cover-en.jpg" alt="cc-haha — Open-source desktop for Claude Code" width="960">
+  <img src="docs/images/readme-cover-en.jpg" alt="cc-haha — Source-available desktop for Claude Code" width="960">
 </p>
 
 <div align="center">
@@ -10,7 +10,7 @@
 [![GitHub Forks](https://img.shields.io/github/forks/NanmiCoder/cc-haha?style=social)](https://github.com/NanmiCoder/cc-haha/network/members)
 [![GitHub Issues](https://img.shields.io/github/issues/NanmiCoder/cc-haha)](https://github.com/NanmiCoder/cc-haha/issues)
 [![GitHub Pull Requests](https://img.shields.io/github/issues-pr/NanmiCoder/cc-haha)](https://github.com/NanmiCoder/cc-haha/pulls)
-[![License](https://img.shields.io/badge/License-MIT-blue)](https://github.com/NanmiCoder/cc-haha/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/License-Community_Source-orange)](https://github.com/NanmiCoder/cc-haha/blob/main/LICENSE)
 [![English](https://img.shields.io/badge/🇺🇸_English-Current-blue)](README.en.md)
 [![中文](https://img.shields.io/badge/🇨🇳_简体中文-Available-green)](README.md)
 [![Docs](https://img.shields.io/badge/📖_Documentation-Visit-FF7A00)](https://cchaha.ai)
@@ -20,6 +20,20 @@
 </div>
 
 cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, an Agent Teams workbench, dynamic Workflow orchestration, model trace, Computer Use, skill marketplace, colour themes, desktop pets, H5 remote access, IM integration, and scheduled tasks, all in one app. **On macOS, Computer Use can operate other apps without taking over your physical mouse or keyboard.**
+
+<p align="center"><b>Platinum Sponsor · Modelflare</b></p>
+
+<p align="center">
+  <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">
+    <img src="docs/images/sponsors/modelflare-banner-en.png" width="720" alt="Modelflare: Full strength, stable, nothing watered down. Global SOTA models at a lower cost.">
+  </a>
+</p>
+
+<p><sub>Thanks to <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">Modelflare</a> for sponsoring this project! Modelflare: Full strength, stable, nothing watered down. Global SOTA models at a lower cost. Operated by US-based Havenbyte LLC, Modelflare supports GPT, Claude, Gemini, Grok, and other leading models through common compatible protocols, plus 40+ image and video models.</sub></p>
+
+<p><sub><b>Cache compensation is a highlight:</b> selected OpenAI groups (price-first, stable, and premium) guarantee daily cache hit rates of 65%, 75%, or 85%, and if eligible requests fall short, Modelflare refunds the difference, visible on the usage dashboard after settlement.</sub></p>
+
+<p><sub><b>Special offers:</b> a single top-up of US$20 unlocks the GPT discount group at a 0.015x price multiplier, and a single top-up of US$50 unlocks the Claude discount group at a 0.03x multiplier. Register via <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">this exclusive link</a> to get started.</sub></p>
 
 <p align="center">
   <a href="#desktop-preview">Desktop Preview</a> · <a href="#install-the-desktop-app">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#more-documentation">More Docs</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#user-group">User Group</a>
@@ -66,12 +80,10 @@ This project is maintained in the author's spare time. Corporate or individual s
     </tr>
     <tr>
       <td align="center" valign="middle">
-        <a href="https://www.apismart.ai">
-          <img src="docs/images/sponsors/apismart-logo.png" width="180" alt="ApiSmart">
-        </a>
+        <a href="https://www.zuiquanapi.com/"><b>最全 API<br>Zuiquan API Directory</b></a>
       </td>
       <td valign="middle">
-        Thanks to <a href="https://www.apismart.ai">ApiSmart</a> for sponsoring this project. ApiSmart provides unified access to leading AI models through a single API. Use one API key to connect with LLM, image, and video models through an OpenAI-compatible interface. Easily switch between models, simplify billing, and improve reliability with intelligent routing and automatic failover.
+        Built by a friend, <a href="https://www.zuiquanapi.com/">Zuiquan API Directory</a> brings together AI API relay providers so you can find and compare options by model and price. If you're unsure which provider to choose, it's a useful place to start.
       </td>
     </tr>
   </tbody>
@@ -210,3 +222,9 @@ If this project helps you, please support it with a ⭐ Star so more people can 
 <a href="https://www.repostars.dev/?repos=NanmiCoder%2Fcc-haha&theme=ocean">
   <img alt="Star History Chart" src="https://www.repostars.dev/api/embed?repo=NanmiCoder%2Fcc-haha&theme=ocean" />
 </a>
+
+---
+
+## License
+
+Current terms are the [cc-haha Community Source License 1.0](LICENSE). Noncommercial personal use and internal business operations are allowed; paid client work, commercial deliverables, paid customization or secondary development, commercial distribution, and paid services require prior written commercial permission; redistributions require visible source attribution. Existing MIT grants and third-party licenses remain valid. See the [licensing guide](LICENSING.md). This is source-available, not an OSI-approved open-source license.

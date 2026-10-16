@@ -22,7 +22,12 @@ import {
 import { sessionService } from './sessionService.js'
 import { hahaOpenAIOAuthService } from './hahaOpenAIOAuthService.js'
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
+import {
+  isDeepSeekAccountProviderId,
+  resolveDeepSeekAccountRequestHeaders,
+} from './deepseekAccountProvider.js'
 import { OPENAI_CODEX_API_ENDPOINT } from '../../services/openaiAuth/client.js'
+import { deepSeekAccountFetchInit } from '../../services/deepseekAuth/client.js'
 import { resolveOpenAICodexModel } from '../../services/openaiAuth/models.js'
 import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
 import { openaiResponsesStreamToAnthropicResponse } from '../proxy/streaming/openaiResponsesStreamToAnthropicResponse.js'
@@ -190,7 +195,7 @@ export async function generateTitle(
     if (!resolvedProvider) {
       const { activeId, providers } = await providerService.listProviders()
       resolvedProvider = activeId
-        ? isOpenAIOfficialProviderId(activeId)
+        ? isOpenAIOfficialProviderId(activeId) || isDeepSeekAccountProviderId(activeId)
           ? await providerService.getProvider(activeId)
           : providers.find((provider) => provider.id === activeId) ?? null
         : null
@@ -205,12 +210,18 @@ export async function generateTitle(
       )
     }
 
-    if (!resolvedProvider?.baseUrl || !resolvedProvider?.apiKey) return null
+    // The account route authenticates with its grant, not an API key.
+    const accountHeaders = resolvedProvider && isDeepSeekAccountProviderId(resolvedProvider.id)
+      ? await resolveDeepSeekAccountRequestHeaders()
+      : null
+    if (!resolvedProvider?.baseUrl) return null
+    if (!resolvedProvider.apiKey && !accountHeaders) return null
 
     const model = resolvedProvider.models.haiku || resolvedProvider.models.main
     const url = `${normalizeAnthropicBaseUrl(resolvedProvider.baseUrl.replace(/\/+$/, ''))}/v1/messages`
     const authStrategy = resolvedProvider.authStrategy ?? getPresetAuthStrategy(resolvedProvider.presetId)
-    const requestHeaders = buildAnthropicTitleRequestHeaders(resolvedProvider.apiKey, authStrategy)
+    const requestHeaders = accountHeaders ??
+      buildAnthropicTitleRequestHeaders(resolvedProvider.apiKey, authStrategy)
     const requestBody = {
       model,
       max_tokens: TITLE_MAX_OUTPUT_TOKENS,
@@ -355,6 +366,7 @@ async function fetchAnthropicTitleResponse(
     }),
     signal: AbortSignal.timeout(15_000),
     ...getNetworkProxyFetchOptions(networkSettings, url),
+    ...deepSeekAccountFetchInit(requestHeaders),
   })
 
   if (!response.ok && response.status >= 400 && response.status < 500) {
@@ -364,6 +376,7 @@ async function fetchAnthropicTitleResponse(
       body: JSON.stringify(requestBody),
       signal: AbortSignal.timeout(15_000),
       ...getNetworkProxyFetchOptions(networkSettings, url),
+      ...deepSeekAccountFetchInit(requestHeaders),
     })
   }
 

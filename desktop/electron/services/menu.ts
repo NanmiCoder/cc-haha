@@ -1,11 +1,23 @@
 import type { App, BrowserWindow, MenuItemConstructorOptions } from 'electron'
+import type { Locale } from '../../src/i18n/locale'
 import { ELECTRON_EVENT_CHANNELS } from '../ipc/channels'
 import { hideWindowSafely, toggleWindowFullScreen } from './windows'
 
 export type NativeMenuDestination = 'about' | 'settings'
 
+const COPY_IMAGE_LABEL: Record<Locale, string> = {
+  en: 'Copy Image',
+  zh: '复制图片',
+  'zh-TW': '複製圖片',
+  jp: '画像をコピー',
+  kr: '이미지 복사',
+}
+
 type RendererContextMenuParams = {
   isEditable: boolean
+  mediaType?: string
+  x?: number
+  y?: number
   selectionText: string
   editFlags: {
     canUndo: boolean
@@ -94,6 +106,7 @@ export function buildApplicationMenuTemplate(
 
 export function buildRendererContextMenuTemplate(
   params: RendererContextMenuParams,
+  options: { locale?: Locale; copyImageAt?: (x: number, y: number) => void } = {},
 ): MenuItemConstructorOptions[] {
   if (params.isEditable) {
     return [
@@ -112,13 +125,32 @@ export function buildRendererContextMenuTemplate(
     return [{ role: 'copy', enabled: params.editFlags.canCopy }]
   }
 
+  // Chromium offers no image copy of its own in Electron; `copyImageAt` hit-tests
+  // the point, so it also covers blob:/data: images the lightbox shows.
+  if (params.mediaType === 'image' && options.copyImageAt) {
+    const { x = 0, y = 0 } = params
+    const copyImageAt = options.copyImageAt
+    return [{
+      label: COPY_IMAGE_LABEL[options.locale ?? 'en'],
+      click: () => copyImageAt(x, y),
+    }]
+  }
+
   return []
 }
 
-export async function installRendererContextMenu(window: BrowserWindow) {
+export async function installRendererContextMenu(
+  window: BrowserWindow,
+  getLocale?: () => Locale,
+) {
   const { Menu } = await import('electron')
   window.webContents.on('context-menu', (_event, params) => {
-    const template = buildRendererContextMenuTemplate(params)
+    const template = buildRendererContextMenuTemplate(params, {
+      locale: getLocale?.(),
+      copyImageAt: (x, y) => {
+        if (!window.isDestroyed()) window.webContents.copyImageAt(x, y)
+      },
+    })
     if (template.length === 0 || window.isDestroyed()) return
     Menu.buildFromTemplate(template).popup({ window })
   })
@@ -163,7 +195,7 @@ export async function installApplicationMenu(
     },
     toggleFullScreen: () => {
       const window = getMainWindow()
-      if (window) toggleWindowFullScreen(window, platform)
+      if (window) toggleWindowFullScreen(window)
     },
   })
   Menu.setApplicationMenu(Menu.buildFromTemplate(template))

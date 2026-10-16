@@ -3,6 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import {
+  extractArchive,
+  getArchiveExtractCommands,
   getBundledRipgrepName,
   getRipgrepAsset,
   getRipgrepDownloadUrl,
@@ -82,5 +84,57 @@ describe('prepare-ripgrep target mapping', () => {
       targetTriple: 'aarch64-apple-darwin',
       archivePath,
     })).rejects.toThrow('SHA256 mismatch')
+  })
+})
+
+describe('prepare-ripgrep archive extraction', () => {
+  test('keeps tar for tarballs on every platform', () => {
+    for (const platform of ['darwin', 'linux', 'win32'] as const) {
+      expect(getArchiveExtractCommands('/t/rg.tar.gz', '/t/out', platform)).toEqual([
+        ['tar', '-xf', '/t/rg.tar.gz', '-C', '/t/out'],
+      ])
+    }
+  })
+
+  test('never hands a Windows zip to a PATH-resolved tar', () => {
+    const commands = getArchiveExtractCommands(
+      "C:\\Users\\O'Brien\\rg.zip",
+      'C:\\Temp\\out',
+      'win32',
+      { SystemRoot: 'D:\\Windows' },
+    )
+    expect(commands.map(command => command[0])).toEqual([
+      'D:\\Windows\\System32\\tar.exe',
+      'powershell',
+    ])
+    expect(commands[1]?.at(-1)).toBe(
+      "Expand-Archive -LiteralPath 'C:\\Users\\O''Brien\\rg.zip' -DestinationPath 'C:\\Temp\\out' -Force",
+    )
+  })
+
+  test('tries unzip and then tar for zips off Windows', () => {
+    expect(getArchiveExtractCommands('/t/rg.zip', '/t/out', 'darwin')).toEqual([
+      ['unzip', '-q', '-o', '/t/rg.zip', '-d', '/t/out'],
+      ['tar', '-xf', '/t/rg.zip', '-C', '/t/out'],
+    ])
+  })
+
+  test('falls through when an extractor is missing or fails', async () => {
+    const attempted: string[] = []
+    await extractArchive([['missing'], ['broken'], ['works']], 'rg.zip', async ([command]) => {
+      attempted.push(command!)
+      if (command === 'missing') throw new Error('Executable not found in $PATH')
+      return command === 'broken' ? 1 : 0
+    })
+    expect(attempted).toEqual(['missing', 'broken', 'works'])
+  })
+
+  test('reports every attempt when no extractor succeeds', async () => {
+    await expect(extractArchive([['missing'], ['broken']], 'rg.zip', async ([command]) => {
+      if (command === 'missing') throw new Error('Executable not found in $PATH')
+      return 2
+    })).rejects.toThrow(
+      'Failed to extract rg.zip (missing: Executable not found in $PATH; broken exited 2)',
+    )
   })
 })

@@ -52,6 +52,16 @@ describe('Chat stream protocol boundaries', () => {
     expect(events.some(e => e.type === 'message_stop')).toBe(false)
   })
 
+  test('only a request the upstream rejected is reported as one, so the client re-sends the rest', async () => {
+    const tooLong = await collect('data: {"error":{"code":"context_length_exceeded","message":"Your input exceeds the context window of this model."}}\n\n')
+    expect(tooLong.at(-1).error).toEqual({
+      type: 'invalid_request_error',
+      message: 'Your input exceeds the context window of this model.',
+    })
+    const serverFault = await collect('data: {"error":{"code":"server_error","message":"Fixture backend failed"}}\n\n')
+    expect(serverFault.at(-1).error.type).toBe('api_error')
+  })
+
   for (const broken of [tool(0, { id: '' }), tool(0, { function: { name: '', arguments: '{}' } }), tool(0, { function: { name: 'Read', arguments: '[]' } })]) {
     test(`rejects completed invalid tool ${JSON.stringify(broken)}`, async () => {
       const events = await collect(chunk({ tool_calls: [broken] }) + chunk({}, 'tool_calls'))

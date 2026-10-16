@@ -106,6 +106,79 @@ afterEach(() => {
 })
 
 describe('AssistantMessage file references', () => {
+  it.each([
+    ['[open](/work/My%20Notes.md)', '/work/My Notes.md'],
+    ['[open](/work/literal%2520name.md)', '/work/literal%20name.md'],
+    ['输出目录：`/other/QA%20root`\n[open](My%20Notes.md)', '/other/QA%20root/My Notes.md'],
+  ])('opens the reconciled card and prose at the same parsed file for %s', async (content, path) => {
+    // The server confirms only the actual disk path, so an encoded URI cannot
+    // accidentally get a card just because a permissive mock says it exists.
+    statWorkspaceFiles.mockImplementation(async (_sessionId: string, paths: string[]) => ({
+      files: paths.map((candidate) => ({
+        path: candidate, state: candidate === path ? 'file' : 'missing', mtimeMs: Date.now(),
+      })),
+    }))
+    const view = render(<AssistantMessage
+      sessionId="s1" content={content} turnChangedFiles={[]} turnOutputEvidence={shellTurn}
+    />)
+    fireEvent.click(await screen.findByRole('button', { name: 'assistantOutputs.openAria' }))
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', path, {}))
+    openPreviewFn.mockClear()
+    fireEvent.click(screen.getByRole('link', { name: 'open' }))
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', path, {}))
+    view.unmount()
+    resetWorkspaceFileStatsForTests()
+    resetDiskListingCacheForTests()
+    openPreviewFn.mockClear()
+
+    // The exact changed-file match must keep the card when no unseen writes
+    // can explain an unmatched output.
+    render(<AssistantMessage
+      sessionId="s1" content={content} turnChangedFiles={[path]} turnOutputEvidence={{ unlistedWrites: false }}
+    />)
+    fireEvent.click(await screen.findByRole('button', { name: 'assistantOutputs.openAria' }))
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', path, {}))
+  })
+
+  // Native QA: the renderer had decoded the Markdown destination into data-file-path,
+  // then the click router decoded that filesystem path a second time.
+  it.each([
+    ['[open](docs/literal%2520name.md)', 'docs/literal%20name.md', {}],
+    ['[open](/work/literal%2525name.md:7:3)', '/work/literal%25name.md', { line: 7, column: 3 }],
+    ['[open](C:/QA/literal%2523name.md#L9)', 'C:/QA/literal%23name.md', { line: 9 }],
+    ['[open](file:///work/literal%252Fname.md)', '/work/literal%2Fname.md', {}],
+    ['[open](docs/My%20Notes.md:3)', 'docs/My Notes.md', { line: 3 }],
+    ['[open](file:///work/My%20Notes.md)', '/work/My Notes.md', {}],
+    ['[open](file:///C:/QA/My%20Notes.md#L9)', 'C:/QA/My Notes.md', { line: 9 }],
+    ['[open](docs/name%23hash.md#L2)', 'docs/name#hash.md', { line: 2 }],
+    ['[open](docs/100%.md)', 'docs/100%.md', {}],
+  ])('opens the exact disk path from rendered Markdown %s', async (content, path, reveal) => {
+    render(<AssistantMessage sessionId="s1" content={content} />)
+    fireEvent.click(screen.getByRole('link', { name: 'open' }))
+    await waitFor(() => expect(openPreviewFn).toHaveBeenCalledWith('s1', path, reveal))
+    expect(statWorkspaceFiles).toHaveBeenCalledWith('s1', expect.arrayContaining([path]))
+  })
+
+  it.each(['%20', '%25', '%23', '%2F'])(
+    'opens literal %s names in bare and inline-code references under the declared root', async (percent) => {
+      const path = `docs/literal${percent}name.md`
+      const content = `输出目录：\`/work/QA%20root\`\n\n${path}:7\n\n\`${path}:9:3\``
+      render(<AssistantMessage sessionId="s1" content={content} />)
+      fireEvent.click(await screen.findByRole('link', { name: `${path}:7` }))
+      expect(openPreviewFn).toHaveBeenCalledWith('s1', `/work/QA%20root/${path}`, { line: 7 })
+      fireEvent.click(await screen.findByRole('link', { name: `${path}:9:3` }))
+      expect(openPreviewFn).toHaveBeenCalledWith('s1', `/work/QA%20root/${path}`, { line: 9, column: 3 })
+    },
+  )
+
+  it('uses the same literal percent filename in a Markdown context menu', async () => {
+    render(<AssistantMessage sessionId="s1" content={'[open](docs/literal%2520name.md:7)'} />)
+    fireEvent.contextMenu(screen.getByRole('link', { name: 'open' }))
+    await waitFor(() => expect(getTargetsForPath).toHaveBeenCalledWith('/work/docs/literal%20name.md'))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'openWith.copyPath' }))
+    expect(copyTextToClipboard).toHaveBeenCalledWith('/work/docs/literal%20name.md')
+  })
+
   it('opens the code view at the referenced line', async () => {
     // #1146, and the contract src/constants/prompts.ts already asks the model for.
     render(<AssistantMessage sessionId="s1" content={'越界在 desktop/src/lib/foo.ts:42'} isStreaming={false} />)

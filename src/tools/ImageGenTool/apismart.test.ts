@@ -30,7 +30,7 @@ function runtimeConfig() {
   })
   const config = getImageGenerationRuntimeConfig(env)
   expect(config).toEqual({
-    kind: 'openai_images', providerId: 'saved-apismart', model: 'doubao-seedream-5-0',
+    kind: 'openai_images', protocol: 'openai_images', providerId: 'saved-apismart', model: 'doubao-seedream-5-0',
     baseUrl: 'https://gw.apismart.ai/v1', apiKey: 'fake-apismart-key',
   })
   return config!

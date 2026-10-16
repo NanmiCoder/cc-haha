@@ -13,6 +13,7 @@ import {
 import { settingsApi } from '../../api/settings'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
 import { Input } from '@/components/ui/Input'
 import { Button, type ButtonProps } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -45,6 +46,7 @@ import { MODEL_REASONING_EFFORTS } from '../../../../src/shared/modelReasoning'
 import { AUTO_QUESTION_TIMEOUT_OPTIONS } from '../../../../src/shared/autoQuestionSettings'
 import { ChatAppearanceSettings } from './ChatAppearanceSettings'
 import { DataMigrationSettings } from './DataMigrationSettings'
+import { TabBehaviorSettings } from './TabBehaviorSettings'
 
 /**
  * The General settings panel — the largest of the seven, and the one most often
@@ -153,6 +155,7 @@ export function GeneralSettings() {
   const [autoDreamConfirmOpen, setAutoDreamConfirmOpen] = useState(false)
   const [autoDreamActionRunning, setAutoDreamActionRunning] = useState(false)
   const [agentTeamsSaving, setAgentTeamsSaving] = useState(false)
+  const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
   const [subagentLimitInput, setSubagentLimitInput] = useState(String(maxConcurrentSubagents ?? ''))
   const [subagentLimitSaving, setSubagentLimitSaving] = useState(false)
   const [subagentLimitError, setSubagentLimitError] = useState<string | null>(null)
@@ -955,6 +958,9 @@ export function GeneralSettings() {
 
       {uiZoomSection}
 
+      {/* The phone and tablet shells have no tab strip to manage. */}
+      {!isTouchH5Document() && <TabBehaviorSettings />}
+
       {/* Everything a new session starts from, in one card. */}
       <SettingsSection title={t('h5Settings.agentPreferences')}>
         <SettingsGroup>
@@ -1104,7 +1110,11 @@ export function GeneralSettings() {
               </>
             )}
             checked={agentTeamsEnabled}
-            onChange={(enabled) => void handleAgentTeamsChange(enabled)}
+            onChange={(enabled) => {
+              // Turning it on costs tokens and time: explain before saving.
+              if (enabled) setAgentTeamsNoticeOpen(true)
+              else void handleAgentTeamsChange(false)
+            }}
             disabled={agentTeamsSaving}
           />
           <SettingsRow
@@ -1629,6 +1639,15 @@ export function GeneralSettings() {
           </SettingsGroup>
         </SettingsSection>
       )}
+
+      <AgentTeamsCostDialog
+        open={agentTeamsNoticeOpen}
+        onClose={() => setAgentTeamsNoticeOpen(false)}
+        onConfirm={() => {
+          setAgentTeamsNoticeOpen(false)
+          void handleAgentTeamsChange(true)
+        }}
+      />
 
       {/* Confirm dialog for mode switch */}
       <ConfirmDialog

@@ -205,6 +205,31 @@ test('a proxy stream_error event is re-sent', async () => {
   expect(contentOf(replies)).toBe(JSON.stringify([[{ type: 'text', text: 'recovered' }]]))
 }, 15_000)
 
+test('an upstream overload reported inside the SSE body is re-sent on the API retry budget', async () => {
+  // #1592: a relay answers 200 and reports the overload as an api_error event.
+  const overloaded = anthropicStream([messageStart, errorEvent('api_error', 'Our servers are currently overloaded. Please try again later.')])
+  const { out, replies, errors } = await run([overloaded, overloaded, overloaded, recovered], {
+    CLAUDE_CODE_MAX_RETRIES: '3',
+  })
+
+  expect(requests).toHaveLength(4)
+  expect(errors).toHaveLength(0)
+  expect(replies.map(message => message.message.content)).toEqual([[{ type: 'text', text: 'recovered' }]])
+  const statuses = out.filter(message => message.type === 'system' && message.subtype === 'api_error')
+  expect(statuses.map(message => [message.retryAttempt, message.maxRetries])).toEqual([[1, 3], [2, 3], [3, 3]])
+}, 15_000)
+
+test('a request the upstream rejects inside the stream is surfaced at once, not re-sent', async () => {
+  const { out, replies, errors } = await run([
+    proxiedChatStream([{ error: { code: 'context_length_exceeded', message: 'Your input exceeds the context window of this model.' } }]),
+  ], { CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '0' })
+
+  expect(requests).toHaveLength(1)
+  expect(out.some(message => message.subtype === 'streaming_fallback' || message.subtype === 'api_error')).toBe(false)
+  expect(replies).toHaveLength(0)
+  expect(contentOf(errors)).toContain('Prompt is too long')
+})
+
 test('a clean EOF before message_stop is re-sent without committing the first attempt', async () => {
   const { out, replies, errors } = await run([
     anthropicStream([messageStart, ...textBlock('partial-attempt')]),

@@ -45,6 +45,16 @@ export function resolveStreamMaxDurationMs(
 ): number {
   return Math.max(MIN_STREAM_MAX_DURATION_MS, Number(apiTimeoutMs) || 0)
 }
+// Inactivity budget for one tool call's JSON arguments. The model emits them a
+// complete key/value at a time, so a long `content` string produces no event
+// until it is finished; a fixed 120s killed large file writes (#1536). It
+// follows the user's "请求超时" and never drops below the original 120s.
+export const MIN_STREAM_TOOL_INPUT_DURATION_MS = 120_000
+export function resolveStreamToolInputDurationMs(
+  apiTimeoutMs: string | number | undefined,
+): number {
+  return Math.max(MIN_STREAM_TOOL_INPUT_DURATION_MS, Number(apiTimeoutMs) || 0)
+}
 export const SYSTEM_PROXY_URL_ENV = 'CC_HAHA_SYSTEM_PROXY_URL'
 export const SYSTEM_PROXY_ERROR_ENV = 'CC_HAHA_SYSTEM_PROXY_ERROR'
 

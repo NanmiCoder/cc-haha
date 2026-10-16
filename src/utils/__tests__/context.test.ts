@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { calculateCurrentContextTokenTotal, getContextWindowForModel, getModelMaxOutputTokens, modelSupports1M } from '../context.js'
+import { calculateCurrentContextTokenTotal, getContextWindowForModel, getModelMaxOutputTokens, hasKnownContextWindow, modelSupports1M } from '../context.js'
 
 describe('calculateCurrentContextTokenTotal', () => {
   test('includes assistant output tokens in the current context total', () => {
@@ -93,6 +93,14 @@ describe('calculateCurrentContextTokenTotal', () => {
       canonicalTokens: 221_000,
     })).toBe(30_000)
   })
+})
+
+test('hasKnownContextWindow separates real sources from the generic default', () => {
+  expect(hasKnownContextWindow('claude-sonnet-4-6')).toBe(true)
+  expect(hasKnownContextWindow('deepseek-v4-pro')).toBe(true)
+  expect(hasKnownContextWindow('gpt-5.6-terra')).toBe(true)
+  expect(hasKnownContextWindow('some-model[1m]')).toBe(true)
+  expect(hasKnownContextWindow('deepseek-v4-flash-vision-exp')).toBe(false)
 })
 
 test('Opus 5 uses its native context and output limits', () => {

@@ -112,16 +112,10 @@ function rootItem(input: CapabilityMenuInput, key: string): CapabilityMenuItem {
   return item
 }
 
-function moreItem(input: CapabilityMenuInput, key: string): CapabilityMenuItem {
-  const item = rootItem(input, 'more').children!.find(candidate => candidate.key === key)
-  if (!item) throw new Error(`missing More item ${key}`)
-  return item
-}
-
 const keys = (items: CapabilityMenuItem[]) => items.map(item => item.key)
 
 describe('buildCapabilitySections', () => {
-  it('splits the root into things for this task, how it runs, and More', () => {
+  it('splits the root into things for this task, how it runs, and the other tools', () => {
     const sections = buildCapabilitySections(buildInput())
     expect(sections.map(section => [section.id, section.title, section.showTitle])).toEqual([
       ['use', 'chat.capabilities.sectionUse', true],
@@ -131,7 +125,9 @@ describe('buildCapabilitySections', () => {
     expect(keys(sections[0]!.items)).toEqual(['skills', 'connectors', 'add-files'])
     expect(sections[0]!.items[2]!.action).toEqual({ type: 'attachment' })
     expect(keys(sections[1]!.items)).toEqual(['agent-team', 'computer-use'])
-    expect(keys(sections[2]!.items[0]!.children!)).toEqual(['agents', 'workflows', 'slash-commands'])
+    // Agents, workflows and slash commands sit on the root, not behind a More row.
+    expect(keys(sections[2]!.items)).toEqual(['agents', 'workflows', 'slash-commands'])
+    expect(sections[2]!.items[2]!.action).toEqual({ type: 'slashTrigger' })
   })
 
   it('leads Skills with recent ones, then all skills, market picks and the market', () => {
@@ -282,7 +278,7 @@ describe('buildCapabilitySections', () => {
   })
 
   it('lists active agents as /agent text insertions and skips inactive ones', () => {
-    const agents = moreItem(buildInput(), 'agents')
+    const agents = rootItem(buildInput(), 'agents')
     expect(agents.count).toBe(1)
     expect(agents.children![0]).toMatchObject({ key: 'agent:debugger', action: { type: 'insertSlashText', command: 'agent debugger' } })
     expect(agents.children!.some(child => child.key === 'agent:retired')).toBe(false)
@@ -290,7 +286,7 @@ describe('buildCapabilitySections', () => {
   })
 
   it('lists workflows as /name text insertions with a save footer', () => {
-    const workflows = moreItem(buildInput(), 'workflows')
+    const workflows = rootItem(buildInput(), 'workflows')
     expect(workflows.count).toBe(1)
     expect(workflows.children![0]!.action).toEqual({ type: 'insertSlashText', command: 'nightly-review' })
     expect(workflows.children!.at(-1)!.action).toEqual({ type: 'saveWorkflowPanel' })

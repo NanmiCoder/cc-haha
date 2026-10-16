@@ -62,13 +62,21 @@ The graph only widens *check selection*. Areas, labels, and every blocking rule 
 
 ```bash
 bun run check:agent-flow       # real server + real WebSocket + mock CLI
-bun run check:agent-e2e        # real server + real CLI agent loop + mock LLM
+bun run check:agent-e2e        # real server + real CLI agent loop + mock LLM, then recorded-traffic replay
+bun run check:agent-replay     # recorded-traffic replay only
 bun run check:desktop-ui-smoke # real desktop UI + real permission dialog + mock CLI
 ```
 
 None of them needs a provider, credentials, or the public network.
 
 `check:agent-e2e` fakes only the model: a loopback Anthropic-compatible endpoint (`scripts/quality-gate/mock-llm/`) is registered as a provider through the same API as the desktop "add provider" form, and the real CLI runs its real agent loop with real tools on a real (throwaway) disk. The scripted model reacts to plain-language prompts the way a model would, so it shares one scenario catalog with `check:agent-flow:live` (`agent-flow/liveScenarios.ts`): the mock proves the plumbing, the live lane proves a real model lands on the same outcome. Mock-only scenarios assert what only the upstream side can see — the tool's output really went back to the model (nonce check), a denied permission reaches the model as an error result, stopping really closes the upstream connection, and the session recovers after an upstream error. When you change the agent loop, tools, permissions, or provider wiring, add a scenario here rather than only a unit test.
+
+A hand-written mock can only stream what its author imagined a model sends: fixed usage, tool input in one piece, no thinking, no OpenAI format. So `check:agent-e2e` also runs a replay lane (`scripts/quality-gate/replay/`). A maintainer runs each scenario once against real DeepSeek Flash and commits the recorded upstream traffic as `cassettes/*.json`; CI serves it back to the real server and real CLI with no network and no credentials. What it replays is the real shape: thinking with signatures, tool input split across many fragments (Grep/Read/Edit/Bash), several tools called in one reply, failed tool calls the model recovers from, large command output, a subagent's own tool loop (also two subagents in parallel), a project MCP server's tool, an image attachment (recorded with DeepSeek Flash's vision variant), an agent team from the lead's plan through approval, two members working in turn, their reports, and shutdown, automatic compaction in a long conversation as well as `/compact`, a stream cut short by the user's stop, a Chinese conversation, and OpenAI Chat chunks through the server's proxy (with reasoning and an interrupt).
+
+- **Matching**: requests take recorded interactions in order, per queue. Each agent loop (the main agent, a subagent, a teammate) is its own queue, keyed by the first user message that started it, matched strictly on model, stream mode, the last message's role, the user's text, and whether the tool results answer exactly the previous reply's tool calls (parallel tools return in completion order, so only the set is compared). A mismatch returns a 400 `replay_mismatch` and writes a field-level diff to `artifacts/agent-e2e/replay/<format>/<id>.report.json`. Tool-less side calls such as a session title are replayed when recorded and otherwise get a placeholder reply, without failing.
+- **Run-specific values**: the throwaway work dir, the sandbox config dir, the project's directory name, session ids, the date, and the temp dir are stored as placeholders such as `{{WORK_ROOT}}` and expanded for each run, also when a path was streamed across several fragments. Values the app mints from the clock that a reply must quote back verbatim (a teammate shutdown request id) are stored as learned slots such as `{{V1}}`: a replay learns this run's value from the first request that carries it and fills it into later replies. Message batching in an agent team depends on timing, so that scenario replays the recorded model latency and stream timing; the others replay at a compressed pace.
+- **Drift**: a changed tool list or `max_tokens` that still replays is noted in `drift.md`, not failed. The system prompt and tool schemas carry the OS, shell, and date, which differ between the recording machine and CI, so they are not compared.
+- **Re-recording**: when behaviour really changed (a prompt edit sends the model down a different tool path), run `bun run quality:record-cassettes -- --allow-live --only <id>` locally. It reads the key of the DeepSeek provider saved in the desktop app and keeps it in the recording proxy's memory; the sandbox gets a fake key. Each new cassette is replayed once as a self-check, and a recording containing the key, the real home path, or a temp-dir path is rejected. Recording spends real quota and never runs in CI.
 
  `check:agent-flow` covers session creation, runtime selection, first-turn streaming, tool execution, permission allow/deny, tool failure, API error, interrupt, reconnect permission replay, and session recovery. `check:desktop-ui-smoke` clicks the real Allow button in a real browser; it needs `agent-browser` and installed desktop dependencies and skips with a printed reason when either is missing.
 
@@ -186,7 +194,7 @@ bun run quality:gate --mode baseline --allow-live --provider-model minimax:main:
 
 `.github/workflows/pr-quality.yml` runs for PR `opened`, `synchronize`, `reopened`, `ready_for_review`, `labeled`, and `unlabeled` events, and again after each merge to `main`, scoped to what that push changed (label-based exceptions are judged on the PR only and never re-block `main`). `scope-plan` installs no dependencies and only produces the stable impact plan. `policy-enforcement` installs the frozen dependency graph independently and runs policy, so a policy failure cannot swallow product-test results. Product jobs depend only on `scope-plan` and select desktop, server, adapter, native, provider contract, chat contract, persistence, docs, and coverage lanes by path. The final `pr-quality-gate` validates every result strictly: selected jobs must succeed, unselected jobs must be skipped, and cancelled or missing results cannot be mistaken for success.
 
-Repository settings should protect `main` with GitHub branch protection / rulesets and require the `pr-quality-gate` status check. CODEOWNERS requires maintainer review for workflows, quality policy, and high-risk provider/WebSocket boundaries. The local hook only reminds; the PR gate is what blocks low-quality merges.
+Branch protection on `main` requires the `pr-quality-gate` status check and applies to admins too: nobody can merge a red PR, so releases also go through a PR (see "Release steps"). A PR authored by a CODEOWNER needs no `allow-cli-core-change` label; an external contributor's CLI core change still needs the maintainer's label. The local hook only reminds; the PR gate is what blocks low-quality merges.
 
 ### When the gate is red
 
@@ -194,7 +202,7 @@ The gate is only useful while green means mergeable, so `main` has to stay green
 
 - **You changed behavior and a test went red**: the gate is working. Update the test in the same PR and say why the old assertion no longer holds.
 - **The failure is not from your change**: check whether the latest PR Quality (push) run and the full sweep on `main` are red too. If so, fix it in a separate PR, or quarantine it in `scripts/quality-gate/quarantine.json` with an owner and a review date (`check:quarantine` fails once it expires). Do not merge around the gate.
-- **Intermittent failure (flaky)**: re-run once to confirm, then treat it as above. Do not hide it with longer timeouts or looser assertions.
+- **Intermittent failure (flaky)**: `check:server` re-runs each failed file once, alone, and labels it `FLAKY` (passes alone) or `FAILED` (fails again); the gate is red either way. `FLAKY` means a race: fix the race itself (a common cause is asserting on "the last request" or on wall-clock time). Do not hide it with longer timeouts or looser assertions.
 - **The gate itself needs to change**: edit `scripts/pr/change-policy.ts`, the workflow, and their tests (`check:policy`). Keep the `pr-quality-gate` check name stable so branch protection does not need to change.
 
 ## Area-Specific Checks
@@ -349,6 +357,13 @@ bun run check:policy
 ```
 
 Confirm `release-notes/v<version>.md` exists before running `bun run scripts/release.ts <version>` for real.
+
+### Release steps
+
+`main` is protected: `pr-quality-gate` must pass, for admins too, so a release no longer pushes `main` directly. It takes two steps:
+
+1. `bun run scripts/release.ts <version>` commits the version bump and release notes on a `release/v<version>` branch, without a tag. Push the branch, open the PR as the script prints, and merge it once PR Quality is green.
+2. After the merge, run `bun run scripts/release.ts --tag <version>`. The script checks that `origin/main` carries desktop version `<version>` and its release notes, tags the merged commit, and you push only the tag: `git push origin v<version>`.
 
 ### Verify one real update path
 

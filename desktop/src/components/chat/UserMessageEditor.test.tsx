@@ -145,4 +145,17 @@ describe('UserMessageEditor', () => {
 
     expect(screen.getByText('1 attachment(s) can no longer be read and will be left out when resending.')).toBeTruthy()
   })
+
+  it('lets the user drop the Agent Team switch from the edited message', () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const { onDraftChange, onSubmit } = renderEditor({ initialDraft: { ...DRAFT, agentTeam: true } })
+    expect(screen.getByTestId('agent-team-chip').textContent).toBe('Agent Teams')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove Agent Teams' }))
+    expect(screen.queryByTestId('agent-team-chip')).toBeNull()
+    expect(onDraftChange).toHaveBeenLastCalledWith(expect.objectContaining({ agentTeam: false }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ agentTeam: false }))
+  })
 })

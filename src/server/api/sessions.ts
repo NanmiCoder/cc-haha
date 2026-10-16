@@ -1455,6 +1455,7 @@ async function runGitInfoCommand(workDir: string, args: string[]): Promise<strin
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'ignore',
+      windowsHide: true,
     })
 
     const output = new Response(proc.stdout).text()
@@ -1654,15 +1655,7 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
   }
 }
 
-async function assertCheckpointPreviewBudget(sessionId: string): Promise<void> {
-  const found = await sessionService.findSessionFile(sessionId)
-  if (found && Bun.file(found.filePath).size > 16 * 1024 * 1024) {
-    throw new ApiError(413, 'This transcript exceeds the full checkpoint preview budget. Chat history remains available in pages.', 'HISTORY_CHECKPOINT_PREVIEW_LIMIT')
-  }
-}
-
 async function getTurnCheckpoints(req: Request, sessionId: string): Promise<Response> {
-  await assertCheckpointPreviewBudget(sessionId)
   const checkpoints = await listSessionTurnCheckpoints(sessionId, req.signal, new URL(req.url).searchParams.get('frozen') === 'true')
   // Make this turn's real changed files previewable even when they live outside
   // the session workdir (e.g. the user told the model to write to an absolute
@@ -1676,7 +1669,6 @@ async function getTurnCheckpoints(req: Request, sessionId: string): Promise<Resp
 }
 
 async function getTurnCheckpointDiff(sessionId: string, url: URL): Promise<Response> {
-  await assertCheckpointPreviewBudget(sessionId)
   const targetUserMessageId = url.searchParams.get('targetUserMessageId') || undefined
   const userMessageIndexParam = url.searchParams.get('userMessageIndex')
   const path = url.searchParams.get('path')

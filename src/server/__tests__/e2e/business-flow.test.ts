@@ -279,11 +279,12 @@ describe('Business Flow: Agent Management', () => {
       systemPrompt: 'You are a security expert. Focus on OWASP top 10.',
       color: 'red',
     })
-    expect(status).toBe(201)
+    // Asserting on the pair prints the server's error body when creation fails.
+    expect({ status, data }).toMatchObject({ status: 201 })
   })
 
   it('should create a second agent', async () => {
-    const { status } = await api('POST', '/api/agents', {
+    const { status, data } = await api('POST', '/api/agents', {
       scope: 'user',
       name: 'test-writer',
       description: 'Writes unit tests',
@@ -291,7 +292,7 @@ describe('Business Flow: Agent Management', () => {
       tools: ['Read', 'Write', 'Bash'],
       systemPrompt: 'Write focused unit tests for the requested behavior.',
     })
-    expect(status).toBe(201)
+    expect({ status, data }).toMatchObject({ status: 201 })
   })
 
   it('should list both created agents through the shared loader', async () => {
@@ -374,7 +375,7 @@ describe('Business Flow: Models & Effort', () => {
 
   it('should return available fallback models', async () => {
     const { data } = await api('GET', '/api/models')
-    expect(data.models.length).toBe(8)
+    expect(data.models.length).toBe(9)
     const names = data.models.map((m: any) => m.name)
     expect(names).toContain('Fable 5.1')
     expect(names).toContain('Fable 5')
@@ -383,6 +384,7 @@ describe('Business Flow: Models & Effort', () => {
     expect(names).toContain('Opus 4.8')
     expect(names).toContain('Sonnet 5.5')
     expect(names).toContain('Sonnet 5')
+    expect(names).toContain('Haiku 5.5')
     expect(names).toContain('Haiku 4.5')
   })
 

@@ -13,6 +13,7 @@ import type { OpenTarget } from '../stores/openTargetStore'
 import { workspaceOpen } from './workspace/openTarget'
 import { useOpenTargetStore } from '../stores/openTargetStore'
 import { reportOpenFailure } from './systemFileOpen'
+import type { PreviewLinkTarget } from './previewLinkRouter'
 
 type Translate = (key: string, vars?: Record<string, string>) => string
 
@@ -98,7 +99,7 @@ export function buildOpenWithMenuItems(
  * resolving the open targets first.
  */
 export async function buildOpenWithMenuItemsForHref(
-  href: string,
+  href: PreviewLinkTarget,
   opts: OpenWithMenuOptions & { workDir?: string },
 ): Promise<OpenWithItem[]> {
   const ctx = openWithContextForHref(href, {

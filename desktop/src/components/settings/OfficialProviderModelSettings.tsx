@@ -5,6 +5,7 @@ import { modelsApi } from '@/api/models'
 import { Button } from '@/components/ui/Button'
 import { Spinner } from '@/components/ui/Spinner'
 import { groupProviderModels } from '@/lib/providerModels'
+import { useProviderStore } from '@/stores/providerStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import type { ModelMapping } from '@/types/provider'
 import { useTranslation, type TranslationKey } from '@/i18n'
@@ -42,7 +43,7 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
 
     void Promise.allSettled([
       providersApi.getOfficialModels(providerId),
-      modelsApi.list(),
+      modelsApi.catalog(providerId),
     ]).then(([mappingResult, catalogResult]) => {
       if (cancelled) return
       if (mappingResult.status === 'fulfilled') {
@@ -92,7 +93,11 @@ export function OfficialProviderModelSettings({ providerId }: OfficialProviderMo
     try {
       const result = await providersApi.updateOfficialModels(providerId, normalized)
       setModels(result.models)
-      await useSettingsStore.getState().fetchAll()
+      // The model picker reads saved alias mappings from the provider store.
+      await Promise.all([
+        useSettingsStore.getState().fetchAll(),
+        useProviderStore.getState().fetchProviders(),
+      ])
       setSaved(true)
     } catch {
       setError(t('settings.providers.officialModelsSaveError'))

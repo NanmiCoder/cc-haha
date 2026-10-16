@@ -27,6 +27,14 @@ import { isUserProvidedImage } from '../../utils/userProvidedImages.js'
 import { resolveRelocatedAttachmentPath } from '../../utils/storageRelocations.js'
 import { buildApiSmartImageBodies, isApiSmartImageConfig } from './apiSmart.js'
 import { downloadGeneratedImage } from './imageDownload.js'
+import {
+  applyOpenAIImageRequestContract,
+  buildImagesProtocolUrl,
+  buildProtocolImageRequests,
+  buildXaiEditRequestBody,
+  buildXaiRequestBody,
+  parseGeminiImageResponse,
+} from './providerProtocols.js'
 
 export type ImageGenerationInput = {
   prompt: string
@@ -126,7 +134,7 @@ export async function generateImages(
         config.kind,
         fetchImpl,
         signal,
-        isApiSmartImageConfig(config) ? options.downloadImage ?? downloadGeneratedImage : undefined,
+        config.kind === 'openai_images' ? options.downloadImage ?? downloadGeneratedImage : undefined,
       )
       images.push(
         await persistImage(outputDir, bytes, index, rawImage.revisedPrompt),
@@ -264,6 +272,31 @@ async function requestCompatibleImages(
   if (!config.baseUrl || !config.apiKey) {
     throw new Error('The configured image API is missing a Base URL or API key.')
   }
+  if (config.protocol && config.protocol !== 'openai_images') {
+    const images: RawGeneratedImage[] = []
+    for (const request of buildProtocolImageRequests(input, config, inputImages)) {
+      const response = await performFetch(fetchImpl, request.url, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          ...(request.headers ?? { Authorization: `Bearer ${config.apiKey}` }),
+        },
+        body: JSON.stringify(request.body),
+        signal,
+      })
+      await assertUpstreamSuccess(response, 'Custom image generation', [config.apiKey])
+      const payload: unknown = await response.json()
+      const generated = config.protocol === 'gemini_native'
+        ? parseGeminiImageResponse(payload)
+        : parseCompatibleImageResponse(payload)
+      if (!generated[0]) {
+        throw new Error('Custom image generation completed without returning an image.')
+      }
+      images.push(generated[0])
+    }
+    return images
+  }
 
   const url = inputImages.length > 0
     ? buildImagesEditUrl(config.baseUrl)
@@ -274,7 +307,8 @@ async function requestCompatibleImages(
     : inputImages.length > 0
       ? buildCompatibleEditBodies(input, inputImages)
       : buildCompatibleRequestBodies(input)
-  for (const body of bodies) {
+  for (const rawBody of bodies) {
+    const body = applyOpenAIImageRequestContract(rawBody, config)
     const response = body instanceof FormData
       ? await postMultipartImages(fetchImpl, url, config.apiKey, body, signal)
       : await postImages(fetchImpl, url, config.apiKey, body, signal)
@@ -402,35 +436,14 @@ export function buildChatGPTRequestBodies(
 export function buildGrokRequestBody(
   input: ImageGenerationInput & { model: string },
 ): Record<string, unknown> {
-  return compactObject({
-    model: input.model,
-    prompt: input.prompt,
-    n: input.count,
-    response_format: 'b64_json',
-    aspect_ratio: input.aspect_ratio ?? aspectRatioForSize(input.size),
-    resolution: input.resolution,
-  })
+  return buildXaiRequestBody(input)
 }
 
 export function buildGrokEditRequestBody(
   input: ImageGenerationInput & { model: string },
   inputImages: PreparedInputImage[],
 ): Record<string, unknown> {
-  const sources = inputImages.map((image) => ({
-    type: 'image_url',
-    url: image.dataUrl,
-  }))
-  return compactObject({
-    model: input.model,
-    prompt: input.prompt,
-    n: input.count,
-    response_format: 'b64_json',
-    aspect_ratio: input.aspect_ratio ?? aspectRatioForSize(input.size),
-    resolution: input.resolution,
-    ...(sources.length === 1
-      ? { image: sources[0] }
-      : { images: sources }),
-  })
+  return buildXaiEditRequestBody(input, inputImages)
 }
 
 async function postImages(
@@ -505,31 +518,11 @@ function safeUpstreamError(body: string, secrets: string[]): string {
 }
 
 export function buildImagesGenerationUrl(baseUrl: string): string {
-  return buildImagesApiUrl(baseUrl, 'generations')
+  return buildImagesProtocolUrl(baseUrl, 'generations')
 }
 
 export function buildImagesEditUrl(baseUrl: string): string {
-  return buildImagesApiUrl(baseUrl, 'edits')
-}
-
-function buildImagesApiUrl(
-  baseUrl: string,
-  operation: 'generations' | 'edits',
-): string {
-  const url = new URL(baseUrl)
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new Error('Image API Base URL must use HTTP or HTTPS.')
-  }
-
-  const pathname = url.pathname.replace(/\/+$/, '')
-  if (/\/images\/(?:generations|edits)$/i.test(pathname)) {
-    url.pathname = pathname.replace(/(?:generations|edits)$/i, operation)
-  } else if (/\/v1$/i.test(pathname)) {
-    url.pathname = `${pathname}/images/${operation}`
-  } else {
-    url.pathname = `${pathname}/v1/images/${operation}`
-  }
-  return url.toString()
+  return buildImagesProtocolUrl(baseUrl, 'edits')
 }
 
 export function parseCompatibleImageResponse(value: unknown): RawGeneratedImage[] {
@@ -706,24 +699,17 @@ async function resolveImageBytes(
   downloadImage?: (url: string, signal: AbortSignal) => Promise<Buffer>,
 ): Promise<Buffer> {
   if (image.b64Json) {
-    const normalized = image.b64Json.replace(/\s+/g, '')
-    if (!normalized || normalized.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 8) {
-      throw new Error('The generated image exceeded the 30 MB size limit.')
-    }
-    const bytes = Buffer.from(normalized, 'base64')
-    if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) {
-      throw new Error('The generated image was empty or too large.')
-    }
-    return bytes
+    return decodeGeneratedBase64(image.b64Json)
   }
 
   if (!image.url) {
     throw new Error('The image provider returned an empty image item.')
   }
+  if (/^data:/i.test(image.url)) return decodeGeneratedBase64(image.url)
   if (downloadImage) return downloadImage(image.url, signal)
   if (providerKind !== 'grok_oauth') {
     throw new Error(
-      'The custom image API returned a URL. Configure it to return b64_json so the desktop can save the image safely.',
+      'The image provider returned an unsupported image download URL.',
     )
   }
 
@@ -748,6 +734,34 @@ async function resolveImageBytes(
   return bytes
 }
 
+function decodeGeneratedBase64(value: string): Buffer {
+  let payload = value
+  if (/^data:/i.test(value)) {
+    const comma = value.indexOf(',')
+    if (comma < 0 || !/^data:image\/(?:png|jpeg|webp);base64$/i.test(value.slice(0, comma))) {
+      throw new Error('The provider returned an unsupported image Data URL.')
+    }
+    payload = value.slice(comma + 1)
+  }
+  const normalized = payload.replace(/\s+/g, '')
+  if (normalized.length > Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 8) {
+    throw new Error('The generated image exceeded the 30 MB size limit.')
+  }
+  if (!normalized || !/^[A-Za-z0-9+/]+={0,2}$/.test(normalized) || normalized.length % 4 === 1 ||
+    (normalized.includes('=') && normalized.length % 4 !== 0)) {
+    throw new Error('The provider returned invalid image Base64.')
+  }
+  const bytes = Buffer.from(normalized, 'base64')
+  // Buffer.from tolerates malformed input; require a lossless Base64 roundtrip.
+  if (bytes.toString('base64').replace(/=+$/, '') !== normalized.replace(/=+$/, '')) {
+    throw new Error('The provider returned invalid image Base64.')
+  }
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) {
+    throw new Error('The generated image was empty or too large.')
+  }
+  return bytes
+}
+
 function isOfficialXaiImageHost(hostname: string): boolean {
   const normalized = hostname.toLowerCase()
   return normalized === 'x.ai' || normalized.endsWith('.x.ai')
@@ -759,6 +773,9 @@ async function persistImage(
   index: number,
   revisedPrompt?: string,
 ): Promise<GeneratedImage> {
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_IMAGE_BYTES) {
+    throw new Error('The generated image was empty or too large.')
+  }
   const detected = detectImage(bytes)
   if (!detected) {
     throw new Error('The provider response was not a supported PNG, JPEG, or WebP image.')
@@ -823,13 +840,6 @@ function sizeForAspectRatio(
     return '1024x1536'
   }
   return '1536x1024'
-}
-
-function aspectRatioForSize(size: ImageGenerationInput['size']): string | undefined {
-  if (size === '1024x1024') return '1:1'
-  if (size === '1024x1536') return '2:3'
-  if (size === '1536x1024') return '3:2'
-  return undefined
 }
 
 function compactObject<T extends Record<string, unknown>>(value: T): T {

@@ -95,12 +95,15 @@ type ChangedLineCoverage = {
   covered: number
   total: number
   pct: number
+  /** Changed lines in scopes whose suite failed: not counted, never shown as 0%. */
+  unmeasured?: number
   files: Array<{
     file: string
     suiteId: string
     covered: number
     total: number
     pct: number
+    unmeasured?: true
     reason?: string
   }>
   failures: string[]
@@ -114,21 +117,21 @@ const ROOT_COVERAGE_SCOPES: CoverageScope[] = [
     id: 'server-api',
     title: 'Server/API',
     includePrefixes: ['src/server/'],
-    excludePathFragments: ['/__tests__/', '/fixtures/'],
+    excludePathFragments: ['/__tests__/', '/fixtures/', '/__fixtures__/'],
     excludeSuffixes: ['.test.ts', '.test.tsx'],
   },
   {
     id: 'agent-tools',
     title: 'Agent tools',
     includePrefixes: ['src/tools/'],
-    excludePathFragments: ['/__tests__/', '/fixtures/'],
+    excludePathFragments: ['/__tests__/', '/fixtures/', '/__fixtures__/'],
     excludeSuffixes: ['.test.ts', '.test.tsx'],
   },
   {
     id: 'agent-utils',
     title: 'Agent utils',
     includePrefixes: ['src/utils/'],
-    excludePathFragments: ['/__tests__/', '/fixtures/'],
+    excludePathFragments: ['/__tests__/', '/fixtures/', '/__fixtures__/'],
     excludeSuffixes: ['.test.ts', '.test.tsx'],
   },
 ]
@@ -172,11 +175,11 @@ const ROOT_RUNTIME_CHANGED_SCOPE: CoverageScope = {
   title: 'Root runtime',
   includePrefixes: ['src/'],
   excludePrefixes: ['src/server/', 'src/tools/', 'src/utils/'],
-  excludePathFragments: ['/__tests__/', '/fixtures/'],
+  excludePathFragments: ['/__tests__/', '/fixtures/', '/__fixtures__/'],
   excludeSuffixes: ['.test.ts', '.test.tsx', '.d.ts'],
 }
 
-const CHANGED_LINE_SCOPES = [
+export const CHANGED_LINE_SCOPES = [
   ...ROOT_COVERAGE_SCOPES,
   ROOT_RUNTIME_CHANGED_SCOPE,
   ADAPTERS_SCOPE,
@@ -642,16 +645,33 @@ export function evaluateChangedLineCoverage(
   coverageByFile: Map<string, FileLineCoverage>,
   scopes: CoverageScope[],
   minimumPercent: number,
+  /** Scope id -> why its suite produced no coverage. The suite failure is reported on its own. */
+  unavailableScopes: Map<string, string> = new Map(),
 ): ChangedLineCoverage {
   const files: ChangedLineCoverage['files'] = []
   let total = 0
   let covered = 0
+  let unmeasured = 0
 
   for (const [file, lines] of [...changedLines.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const scope = scopes.find((candidate) => matchesScope(file, candidate))
     if (!scope) continue
 
     const fileCoverage = coverageByFile.get(file)
+    const unavailable = unavailableScopes.get(scope.id)
+    if (!fileCoverage && unavailable) {
+      unmeasured += lines.size
+      files.push({
+        file,
+        suiteId: scope.id,
+        covered: 0,
+        total: lines.size,
+        pct: 0,
+        unmeasured: true,
+        reason: `not measured: ${unavailable}`,
+      })
+      continue
+    }
     if (!fileCoverage) {
       const lineCount = lines.size
       total += lineCount
@@ -690,6 +710,7 @@ export function evaluateChangedLineCoverage(
     covered,
     total,
     pct: coverage,
+    ...(unmeasured > 0 ? { unmeasured } : {}),
     files,
     failures,
   }
@@ -796,8 +817,17 @@ function renderReport(report: CoverageReport) {
   }
 
   lines.push('', '## Changed Lines', '')
+  if (report.changedLines?.unmeasured) {
+    lines.push(`- Not measured: ${report.changedLines.unmeasured} changed lines belong to a suite that failed (see Failures); they are not counted as uncovered.`)
+  }
   if (!report.changedLines) {
     lines.push('- not evaluated')
+  } else if (report.changedLines.total === 0 && report.changedLines.unmeasured) {
+    lines.push(`- No measured changed lines. Minimum: ${report.changedLines.minimumPercent}%`)
+    lines.push('', '| File | Suite | Lines | Reason |', '| --- | --- | ---: | --- |')
+    for (const file of report.changedLines.files) {
+      lines.push(`| ${file.file} | ${file.suiteId} | - (${file.total} lines) | ${file.reason ?? '-'} |`)
+    }
   } else if (report.changedLines.total === 0) {
     lines.push(`- No changed executable production lines matched the coverage scopes. Minimum: ${report.changedLines.minimumPercent}%`)
   } else {
@@ -809,7 +839,8 @@ function renderReport(report: CoverageReport) {
       '| --- | --- | ---: | --- |',
     )
     for (const file of report.changedLines.files) {
-      lines.push(`| ${file.file} | ${file.suiteId} | ${file.pct}% (${file.covered}/${file.total}) | ${file.reason ?? '-'} |`)
+      const measured = file.unmeasured ? `- (${file.total} lines)` : `${file.pct}% (${file.covered}/${file.total})`
+      lines.push(`| ${file.file} | ${file.suiteId} | ${measured} | ${file.reason ?? '-'} |`)
     }
   }
 
@@ -964,12 +995,21 @@ export async function runCoverageGate(options: {
   const thresholds = loadThresholds(options.thresholdsPath ?? join(rootDir, 'scripts', 'quality-gate', 'coverage-thresholds.json'))
   const failures = evaluateThresholds(suites, thresholds, rootDir, baselineRef)
   const changedLineMinimum = thresholds.changedLines?.minimumPercent
+  // A failed suite is already a failure above. Its changed lines were never
+  // measured, so they must not also read as 0% covered.
+  const unavailableScopes = new Map(suites
+    .filter((suite) => suite.status !== 'passed' || !suite.summary)
+    .map((suite) => [suite.id, `${suite.id}: ${suite.error ?? 'coverage suite failed'}`]))
+  if (!rootCoverageAvailable) {
+    unavailableScopes.set(ROOT_RUNTIME_CHANGED_SCOPE.id, `${ROOT_RUNTIME_CHANGED_SCOPE.id}: root coverage run produced no usable LCOV`)
+  }
   const changedLines = typeof changedLineMinimum === 'number'
     ? evaluateChangedLineCoverage(
       collectChangedLines(rootDir, options.changedBaseRef ?? process.env.COVERAGE_BASE_REF),
       coverageByFile,
       CHANGED_LINE_SCOPES,
       changedLineMinimum,
+      unavailableScopes,
     )
     : undefined
   if (changedLines) {

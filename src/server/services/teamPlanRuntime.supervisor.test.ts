@@ -13,6 +13,9 @@ beforeEach(async () => {
   process.env.HOME = home
   process.env.CLAUDE_CONFIG_DIR = home
   process.env.CC_HAHA_DISABLE_TERMINAL_SHELL_ENV = '1'
+  // The lead fixture's own model call lands mid-test, as it does on a loaded CI
+  // runner. Assertions about members must not depend on when the lead speaks.
+  process.env.FIXTURE_LEAD_MODEL_DELAY_MS = '300'
   process.env.CLAUDE_CLI_PATH = join(import.meta.dir, '__fixtures__', 'team-worker-cli.ts')
   resetTerminalShellEnvironmentCacheForTests()
 })
@@ -57,18 +60,31 @@ async function startHarness(memberNames: string[], options: {
   tasks?: Array<{ id: string; subject: string; ownerId: string; dependencies: string[] }>
   /** Members expected to get their instructions at launch (default: all). */
   instructedAtLaunch?: string[]
+  /** Hold the initial member reply while an independently delayed lead speaks. */
+  initialMemberReply?: Promise<void>
 } = {}) {
   const { conversationService: service } = await import('./conversationService.js')
   const { ProviderService } = await import('./providerService.js')
   const { launchTeamPlanRuntime } = await import('./teamPlanRuntime.js')
   const { writeTeamFileAsync, getTeamDir } = await import('../../utils/swarm/teamHelpers.js')
   const { beginTaskListLifecycle, withTaskListLifecycleLock, getCanonicalTeamTaskListId } = await import('../../utils/tasks.js')
-  const requests: Array<{ resumed: string | null; prompt: string }> = []
+  // Only members' model calls are recorded and answered from `replies`. The lead
+  // fixture calls the same upstream (launch tells it the team is running) at a
+  // time of its own choosing; counted together, its late request became the
+  // "last" request or took a reply scripted for a member.
+  const requests: Array<{ agent: string; resumed: string | null; prompt: string }> = []
+  const leadRequests: Array<{ prompt: string }> = []
   const replies: string[] = []
   let held: Promise<void> | undefined
   const upstream = Bun.serve({ hostname: '127.0.0.1', port: 0, async fetch(request) {
-    const body = await request.json() as { resumed?: string | null; prompt?: unknown }
-    requests.push({ resumed: body.resumed ?? null, prompt: JSON.stringify(body.prompt ?? '') })
+    const body = await request.json() as { agent?: string | null; resumed?: string | null; prompt?: unknown }
+    if (!body.agent || !memberNames.includes(body.agent)) {
+      leadRequests.push({ prompt: JSON.stringify(body.prompt ?? '') })
+      return new Response('fixture result')
+    }
+    const initialMemberRequest = !requests.some(item => item.agent === body.agent)
+    requests.push({ agent: body.agent, resumed: body.resumed ?? null, prompt: JSON.stringify(body.prompt ?? '') })
+    if (initialMemberRequest) await options.initialMemberReply
     await held
     return new Response(replies.shift() ?? 'fixture result')
   } })
@@ -108,7 +124,10 @@ async function startHarness(memberNames: string[], options: {
   const instructed = options.instructedAtLaunch ?? memberNames
   await waitFor(() => instructed.every(name => requests.some(request => request.prompt.includes(`Work as ${name}`))), 'initial member turns')
   return {
-    service, teamName, parentId, planId, memberIds, requests, replies, waitFor,
+    service, teamName, parentId, planId, memberIds, requests, leadRequests, replies, waitFor,
+    memberRequests(name: string) {
+      return requests.filter(request => request.agent === name)
+    },
     /** Keeps model replies (and so member turns) pending until released. */
     holdReplies() {
       let release!: () => void
@@ -493,8 +512,18 @@ test('replacing the lead process keeps members working and restores the roster o
 }, 30_000)
 
 test('a team whose owner was lost is rehydrated dormant and its members restart on demand', async () => {
-  const h = await startHarness(['reader'])
+  let releaseInitialMember!: () => void
+  const initialMemberReply = new Promise<void>(resolve => { releaseInitialMember = resolve })
+  const h = await startHarness(['reader'], { initialMemberReply })
   try {
+    await h.waitFor(() => h.leadRequests.length > 0, 'delayed lead model request')
+    expect(h.memberRequests('reader')).toHaveLength(1)
+    releaseInitialMember()
+    // The fixture persists its reply before sending the result that produces
+    // this notice. A provider request alone does not guarantee a resume file.
+    await h.waitFor(async () => (await h.leadNotifications()).some(item =>
+      item.from === 'reader' && item.type === 'idle_notification' && item.idleReason !== 'failed',
+    ), 'initial reader transcript to be written before losing its owner')
     const runtime = await import('./teamPlanRuntime.js')
     // Simulate a server restart: the processes and the in-memory owner are gone.
     await h.service.stopSessionAndWait(h.memberIds.reader!)
@@ -503,18 +532,33 @@ test('a team whose owner was lost is rehydrated dormant and its members restart 
     expect(await runtime.rehydrateTeamPlanRuntimesForSession(h.parentId)).toBe(true)
     expect(runtime.isTeamPlanRuntimeActive(h.planId)).toBe(true)
     await h.waitFor(async () => (await h.teamMember('reader'))?.terminated === true, 'dormant member state')
-    const before = h.requests.length
+    const before = h.memberRequests('reader').length
     await messageMember(h, 'reader', 'team-lead', 'Resume after restart')
-    await h.waitFor(() => h.requests.length > before, 'restarted member turn')
-    expect(h.requests.at(-1)?.resumed).toBe(h.memberIds.reader)
+    const restartedTurn = () => h.memberRequests('reader').slice(before)
+      .find(request => request.prompt.includes('Resume after restart'))
+    await h.waitFor(() => restartedTurn() !== undefined, 'reader restarted after losing its owner')
+    expect(restartedTurn()?.resumed).toBe(h.memberIds.reader)
   } finally {
+    releaseInitialMember()
     await h.cleanup()
   }
 }, 30_000)
 
 test('after a server restart the next lead start re-owns the team and restores its roster', async () => {
-  const h = await startHarness(['reader'])
+  let releaseInitialMember!: () => void
+  const initialMemberReply = new Promise<void>(resolve => { releaseInitialMember = resolve })
+  const h = await startHarness(['reader'], { initialMemberReply })
   try {
+    // Keep the member's initial result pending until the delayed launch notice
+    // has reached the lead's model; its request must not count as a member turn.
+    await h.waitFor(() => h.leadRequests.length > 0, 'delayed lead model request')
+    expect(h.memberRequests('reader')).toHaveLength(1)
+    releaseInitialMember()
+    // Resume requires an existing transcript. A request reaching the provider
+    // does not mean the fixture has written its result or finished the turn.
+    await h.waitFor(async () => (await h.leadNotifications()).some(item =>
+      item.from === 'reader' && item.type === 'idle_notification' && item.idleReason !== 'failed',
+    ), 'initial reader turn to finish')
     const runtime = await import('./teamPlanRuntime.js')
     const { ProviderService } = await import('./providerService.js')
     await h.service.stopSessionAndWait(h.memberIds.reader!)
@@ -526,11 +570,14 @@ test('after a server restart the next lead start re-owns the team and restores i
     await h.waitFor(() => runtime.isTeamPlanRuntimeActive(h.planId), 're-owned team', 20_000)
     await h.waitFor(() => control.mock.calls.some(([sessionId, request]) => sessionId === h.parentId && (request as { subtype?: string }).subtype === 'team_runtime_snapshot'), 'restored roster')
     control.mockRestore()
-    const before = h.requests.length
+    const before = h.memberRequests('reader').length
     await messageMember(h, 'reader', 'team-lead', 'Pick up where you left off')
-    await h.waitFor(() => h.requests.length > before, 'member restarted after server restart')
-    expect(h.requests.at(-1)?.resumed).toBe(h.memberIds.reader)
+    const restartedTurn = () => h.memberRequests('reader').slice(before)
+      .find(request => request.prompt.includes('Pick up where you left off'))
+    await h.waitFor(() => restartedTurn() !== undefined, 'reader restarted after server restart')
+    expect(restartedTurn()?.resumed).toBe(h.memberIds.reader)
   } finally {
+    releaseInitialMember()
     await h.cleanup()
   }
 }, 30_000)
@@ -794,8 +841,8 @@ test('the release-review plan that started its second layer first now runs layer
     // before completing it: the inventory goes to the three analysts.
     expect(briefs('recon')[0]!.prompt).toContain(`\\"handOffTo\\":[\\"perf-analyst\\",\\"sec-analyst\\",\\"ux-analyst\\"]`)
     expect(briefs('recon')[0]!.prompt).toContain('first SendMessage its result to each member listed there, then mark it completed')
-    await h.waitFor(() => h.requests.some(request => request.prompt.includes(`Approved team ${h.teamName} is running`)), 'launch notice to the lead')
-    expect(h.requests.find(request => request.prompt.includes(`Approved team ${h.teamName} is running`))!.prompt)
+    await h.waitFor(() => h.leadRequests.some(request => request.prompt.includes(`Approved team ${h.teamName} is running`)), 'launch notice to the lead')
+    expect(h.leadRequests.find(request => request.prompt.includes(`Approved team ${h.teamName} is running`))!.prompt)
       .toContain('Every task of perf-analyst, sec-analyst, ux-analyst, verifier waits on other tasks')
 
     await complete('Inventory')

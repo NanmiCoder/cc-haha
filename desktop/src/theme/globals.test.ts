@@ -191,6 +191,20 @@ describe('desktop theme tokens', () => {
     expect(css).toMatch(/\.md-table-wrap :is\(td, th\) code \{[^}]*white-space: nowrap;[^}]*word-break: normal;/)
   })
 
+  it('sizes a chat ordered-list gutter in ch so a monospace number stays inside the reply column (#1540)', () => {
+    // Prose's fixed 20px gutter holds "1." in a proportional face; in a monospace
+    // one "10. " is four cells, hung past the column and clipped at the scroll
+    // area's edge in wide / full width.
+    const gutter = (selector: string) => {
+      const match = normalizedCss.match(new RegExp(`${selector.replace(/[.()>*:]/g, '\\$&')} \\{([^}]*)\\}`))
+      return match?.[1] ?? ''
+    }
+    const base = '.markdown-prose.chat-reading-markdown ol'
+    expect(gutter(base)).toMatch(/padding-inline-start: max\(1\.25rem, 3ch\)/)
+    expect(gutter(`${base}:has(> li:nth-child(10))`)).toMatch(/padding-inline-start: max\(1\.25rem, 4ch\)/)
+    expect(gutter(`${base}:has(> li:nth-child(100))`)).toMatch(/padding-inline-start: max\(1\.25rem, 5ch\)/)
+  })
+
   it('lays the activity summary tiles out by container width, not viewport width', () => {
     const activitySummaryCss = getCssBetween('.activity-summary-panel {', '.activity-heat-cell {')
 

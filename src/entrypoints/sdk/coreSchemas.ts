@@ -1384,6 +1384,9 @@ export const SDKAssistantMessageSchema = lazySchema(() =>
     message: APIAssistantMessagePlaceholder(),
     parent_tool_use_id: z.string().nullable(),
     error: SDKAssistantMessageErrorSchema().optional(),
+    // Stable code for synthetic errors (see constants/businessErrors.ts) so
+    // hosts can localize them instead of showing the English CLI text.
+    businessErrorCode: z.string().optional(),
     uuid: UUIDPlaceholder(),
     session_id: z.string(),
   }),

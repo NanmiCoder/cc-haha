@@ -1,4 +1,5 @@
 import { parseFilePathRef } from './filePathBoundary'
+import type { PreviewFileRef, PreviewLinkTarget } from './previewLinkRouter'
 
 /** Only an explicit project/output directory declaration establishes a prose base. */
 function declaredDirectories(content: string): string[] {
@@ -13,10 +14,16 @@ function declaredDirectories(content: string): string[] {
 }
 
 /** A single declared root applies to the whole reply, including prose and cards. */
-export function resolveAssistantFileHref(href: string, content: string): string {
-  if (/^(?:[a-z][a-z0-9+.-]*:|\/|\\\\|~[\\/])/i.test(href) || !parseFilePathRef(href)) return href
+export function resolveAssistantFileHref(href: string, content: string): string
+export function resolveAssistantFileHref(href: PreviewFileRef, content: string): PreviewFileRef
+export function resolveAssistantFileHref(href: PreviewLinkTarget, content: string): PreviewLinkTarget
+export function resolveAssistantFileHref(href: PreviewLinkTarget, content: string): PreviewLinkTarget {
+  const path = typeof href === 'string' ? href : href.path
+  if (/^(?:[a-z][a-z0-9+.-]*:|\/|\\\\|~[\\/])/i.test(path)
+    || (typeof href === 'string' && !parseFilePathRef(path))) return href
   const directories = declaredDirectories(content)
   if (directories.length === 0) return href
   if (new Set(directories).size !== 1) return href
-  return `${directories[0]}/${href.replace(/^\.\//, '')}`
+  const resolvedPath = `${directories[0]}/${path.replace(/^\.\//, '')}`
+  return typeof href === 'string' ? resolvedPath : { ...href, path: resolvedPath }
 }

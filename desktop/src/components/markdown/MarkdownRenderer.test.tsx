@@ -392,7 +392,7 @@ describe('MarkdownRenderer', () => {
     fireEvent.click(screen.getByRole('link', { name: 'Manual' }))
 
     expect(onLinkClick).toHaveBeenCalledWith(
-      'notes/manual.md',
+      { path: 'notes/manual.md' },
       expect.objectContaining({ type: 'click' }),
     )
   })

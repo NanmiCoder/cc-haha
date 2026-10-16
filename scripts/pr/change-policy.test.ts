@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { evaluateChangePolicy } from './change-policy'
+import { codeOwnerLogins, evaluateChangePolicy } from './change-policy'
 
 describe('evaluateChangePolicy', () => {
   test('blocks CLI core changes without an override label', () => {
@@ -28,6 +28,51 @@ describe('evaluateChangePolicy', () => {
     expect(result.blocked).toBe(false)
     expect(result.areas).toEqual(['cli-core'])
     expect(result.checks.server).toBe(true)
+  })
+
+  test('lets a CODEOWNER change CLI core without the override label', () => {
+    const owners = codeOwnerLogins('# maintainers\n/src/utils/ @NanmiCoder\n/docs/ @org/docs-team\n')
+    const result = evaluateChangePolicy(
+      ['src/utils/context.ts', 'src/utils/__tests__/context.test.ts'],
+      [],
+      [],
+      { author: 'nanmicoder', codeOwners: owners },
+    )
+
+    expect(result.blocked).toBe(false)
+    expect(result.cliCoreOverride).toBe('codeowner-author')
+    expect(result.cliCoreFiles).toEqual(['src/utils/context.ts', 'src/utils/__tests__/context.test.ts'].sort())
+  })
+
+  test('still requires the label from an author who is not a CODEOWNER', () => {
+    const result = evaluateChangePolicy(
+      ['src/utils/context.ts', 'src/utils/__tests__/context.test.ts'],
+      [],
+      [],
+      { author: 'drive-by-contributor', codeOwners: ['nanmicoder'] },
+    )
+
+    expect(result.blocked).toBe(true)
+    expect(result.cliCoreOverride).toBeNull()
+    expect(result.blockingReasons[0]).toContain('allow-cli-core-change')
+  })
+
+  test('never treats a team handle as an individual CODEOWNER', () => {
+    expect(codeOwnerLogins('* @NanmiCoder @org/maintainers user@example.com\n# @commented')).toEqual(['nanmicoder'])
+    const result = evaluateChangePolicy(['src/utils/context.ts'], [], [], {
+      author: 'org/maintainers',
+      codeOwners: codeOwnerLogins('* @org/maintainers'),
+    })
+    expect(result.cliCoreOverride).toBeNull()
+  })
+
+  test('requires the label when the PR author is unknown', () => {
+    const result = evaluateChangePolicy(['src/utils/context.ts'], ['allow-missing-tests'], [], { codeOwners: ['nanmicoder'] })
+
+    expect(result.blocked).toBe(true)
+    expect(result.cliCoreOverride).toBeNull()
+    const labelled = evaluateChangePolicy(['src/utils/context.ts'], ['allow-cli-core-change', 'allow-missing-tests'])
+    expect(labelled.cliCoreOverride).toBe('label')
   })
 
   test('keeps docs-only changes on the docs lane', () => {
@@ -298,6 +343,40 @@ describe('evaluateChangePolicy', () => {
   })
 })
 
+describe('change-policy CLI owner exemption', () => {
+  test('publishes the CODEOWNER exemption from the author and base CODEOWNERS files', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'change-policy-owner-'))
+    try {
+      const run = async (author: string) => {
+        const outputPath = join(dir, `github-output-${author}.txt`)
+        writeFileSync(join(dir, 'files.txt'), 'src/utils/context.ts\nsrc/utils/__tests__/context.test.ts\n')
+        writeFileSync(join(dir, 'labels.txt'), '')
+        writeFileSync(join(dir, 'author.txt'), `${author}\n`)
+        writeFileSync(join(dir, 'CODEOWNERS'), '/src/utils/ @NanmiCoder\n')
+        const proc = Bun.spawn([
+          'bun', 'run', 'scripts/pr/change-policy.ts',
+          '--files', join(dir, 'files.txt'),
+          '--labels-file', join(dir, 'labels.txt'),
+          '--author-file', join(dir, 'author.txt'),
+          '--codeowners-file', join(dir, 'CODEOWNERS'),
+          '--plan-only',
+        ], { cwd: process.cwd(), env: { ...process.env, GITHUB_OUTPUT: outputPath }, stdout: 'pipe', stderr: 'pipe' })
+        expect(await proc.exited).toBe(0)
+        return readFileSync(outputPath, 'utf8')
+      }
+
+      const owner = await run('NanmiCoder')
+      expect(owner).toContain('blocked=false')
+      expect(owner).toContain('cli_core_override=codeowner-author')
+      const outsider = await run('someone-else')
+      expect(outsider).toContain('blocked=true')
+      expect(outsider).toContain('cli_core_override=\n')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('evaluateChangePolicy dependent-file widening', () => {
   test('selects the desktop lane when a root change is imported by desktop code', () => {
     const pathOnly = evaluateChangePolicy(['src/shared/modelReasoning.ts'])
@@ -418,6 +497,8 @@ describe('evaluateChangePolicy dependent-file widening', () => {
 
     for (const harness of [
       'scripts/quality-gate/mock-llm/scriptedModel.ts',
+      'scripts/quality-gate/replay/replayServer.ts',
+      'scripts/quality-gate/replay/cassettes/replay-multi-tool.json',
       'scripts/quality-gate/agent-flow/live.ts',
       'scripts/quality-gate/sandbox.ts',
       'bun.lock',

@@ -7,6 +7,20 @@ export function responsesRecord(value: unknown): Record<string, unknown> | null 
     : null
 }
 
+// Codes an upstream sends when the request itself cannot succeed (Codex does
+// not retry them either). Any other failure stays api_error, which the client
+// re-sends like a 500, so these must not be reported as one.
+const REQUEST_FAILURE_CODES = new Set([
+  'context_length_exceeded',
+  'insufficient_quota',
+  'usage_not_included',
+  'invalid_prompt',
+])
+
+export function isUpstreamRequestFailure(code: unknown): boolean {
+  return typeof code === 'string' && REQUEST_FAILURE_CODES.has(code)
+}
+
 /** Only explicit terminal evidence can establish completion or an output limit. */
 export function responsesTerminalStop(
   response: unknown,
@@ -29,7 +43,9 @@ export function responsesTerminalStop(
     const code = typeof embedded?.code === 'string' ? embedded.code : typeof value?.code === 'string' ? value.code : ''
     const upstreamType = typeof embedded?.type === 'string' ? embedded.type : ''
     const overloaded = [code, upstreamType].some(item => /rate_limit|capacity|overload/.test(item))
-    throw Object.assign(new Error(message), { type: overloaded ? 'overloaded_error' : 'api_error' })
+    const type = isUpstreamRequestFailure(code) ? 'invalid_request_error'
+      : overloaded ? 'overloaded_error' : 'api_error'
+    throw Object.assign(new Error(message), { type })
   }
   if (status === 'completed') return 'completed'
   if (status === 'incomplete') {

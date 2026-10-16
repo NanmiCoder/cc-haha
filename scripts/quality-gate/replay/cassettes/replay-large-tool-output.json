@@ -1,0 +1,271 @@
+{
+  "schemaVersion": 1,
+  "id": "replay-large-tool-output",
+  "format": "anthropic",
+  "recordedWith": {
+    "provider": "DeepSeek",
+    "model": "deepseek-flash",
+    "date": "2026-10-14"
+  },
+  "providerConfig": {
+    "presetId": "deepseek",
+    "authStrategy": "auth_token",
+    "apiFormat": "anthropic",
+    "runtimeKind": "anthropic_compatible",
+    "models": {
+      "main": "deepseek-flash",
+      "haiku": "deepseek-flash",
+      "sonnet": "deepseek-flash",
+      "opus": "deepseek-flash"
+    },
+    "model1mSupport": {
+      "main": true,
+      "fable": false,
+      "haiku": true,
+      "sonnet": true,
+      "opus": true
+    },
+    "autoCompactWindow": 1000000,
+    "modelContextWindows": {
+      "deepseek-flash": 1000000
+    },
+    "toolSearchEnabled": false,
+    "supportsNestedToolResultMedia": true
+  },
+  "interactions": [
+    {
+      "seq": 0,
+      "path": "/v1/messages",
+      "queue": "agent:ebce186a2d56",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": true,
+        "maxTokens": 32000,
+        "toolNames": [
+          "Agent",
+          "AskUserQuestion",
+          "Bash",
+          "CreateSession",
+          "Edit",
+          "EnterPlanMode",
+          "EnterWorktree",
+          "ExitPlanMode",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListSessions",
+          "NotebookEdit",
+          "Read",
+          "ReadSession",
+          "SendMessage",
+          "SendSessionMessage",
+          "Skill",
+          "TaskCreate",
+          "TaskGet",
+          "TaskList",
+          "TaskOutput",
+          "TaskStop",
+          "TaskUpdate",
+          "TeamCreate",
+          "TeamDelete",
+          "TeamPlan",
+          "WaitSessions",
+          "WebFetch",
+          "Workflow",
+          "Write"
+        ],
+        "lastRole": "user",
+        "lastUserText": "Use the Bash tool to run exactly: cat src/big.log (no grep, head, tail or other filter). Then tell me the value of ERROR_CODE that appears in the output. Reply with the code only.",
+        "firstUserText": "Use the Bash tool to run exactly: cat src/big.log (no grep, head, tail or other filter). Then tell me the value of ERROR_CODE that appears in the output. Reply with the code only.",
+        "toolResultIds": [],
+        "messageCount": 1,
+        "systemSha": "d0c5a745a773",
+        "toolsSha": "8cff1afd4ef9"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "text/event-stream; charset=utf-8",
+        "firstByteMs": 188,
+        "events": [
+      {"event":"message_start","data":{"type":"message_start","message":{"id":"cac097cf-60cd-41c0-8048-b30d0e475460","type":"message","role":"assistant","model":"deepseek-flash","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":30050,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}}},"dt":10},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}},"dt":0},
+      {"event":"ping","data":{"type":"ping"},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"The"}},"dt":1016},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" user"}},"dt":80},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" wants"}},"dt":18},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" me"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" to"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" run"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" `"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"cat"}},"dt":12},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" src"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"/b"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"ig"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":".log"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"`"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" and"}},"dt":20},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" find"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" ERROR"}},"dt":12},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"_CODE"}},"dt":12},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"."}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" Let"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" me"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" do"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" that"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"."}},"dt":16},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"cac097cf-60cd-41c0-8048-b30d0e475460"}},"dt":31},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":0},"dt":0},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_00_krZTOJE3FvicA1qr7Vsx6833","name":"Bash","input":{}}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{"}},"dt":20},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"command"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":": "}},"dt":14},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"cat"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" src"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"/b"}},"dt":15},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"ig"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":".log"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":", "}},"dt":15},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"description"}},"dt":16},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":": "}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"Cat"}},"dt":25},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" the"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" big"}},"dt":5},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" log"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":" file"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"}"}},"dt":96},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":1},"dt":0},
+      {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":30050,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":85,"service_tier":"standard"}},"dt":0},
+      {"event":"message_stop","data":{"type":"message_stop"},"dt":0}
+     ]
+      },
+      "toolUseIds": [
+        "call_00_krZTOJE3FvicA1qr7Vsx6833"
+      ]
+    },
+    {
+      "seq": 1,
+      "path": "/v1/messages",
+      "queue": "agent:ebce186a2d56",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": true,
+        "maxTokens": 32000,
+        "toolNames": [
+          "Agent",
+          "AskUserQuestion",
+          "Bash",
+          "CreateSession",
+          "Edit",
+          "EnterPlanMode",
+          "EnterWorktree",
+          "ExitPlanMode",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListSessions",
+          "NotebookEdit",
+          "Read",
+          "ReadSession",
+          "SendMessage",
+          "SendSessionMessage",
+          "Skill",
+          "TaskCreate",
+          "TaskGet",
+          "TaskList",
+          "TaskOutput",
+          "TaskStop",
+          "TaskUpdate",
+          "TeamCreate",
+          "TeamDelete",
+          "TeamPlan",
+          "WaitSessions",
+          "WebFetch",
+          "Workflow",
+          "Write"
+        ],
+        "lastRole": "user",
+        "lastUserText": "",
+        "firstUserText": "Use the Bash tool to run exactly: cat src/big.log (no grep, head, tail or other filter). Then tell me the value of ERROR_CODE that appears in the output. Reply with the code only.",
+        "toolResultIds": [
+          "call_00_krZTOJE3FvicA1qr7Vsx6833"
+        ],
+        "messageCount": 3,
+        "systemSha": "d0c5a745a773",
+        "toolsSha": "8cff1afd4ef9"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "text/event-stream; charset=utf-8",
+        "firstByteMs": 206,
+        "events": [
+      {"event":"message_start","data":{"type":"message_start","message":{"id":"78a05ef5-5394-4efa-a037-352fe5fd5c96","type":"message","role":"assistant","model":"deepseek-flash","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":9796,"cache_creation_input_tokens":0,"cache_read_input_tokens":29952,"output_tokens":0,"service_tier":"standard"}}},"dt":54},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}},"dt":0},
+      {"event":"ping","data":{"type":"ping"},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"78a05ef5-5394-4efa-a037-352fe5fd5c96"}},"dt":1537},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":0},"dt":0},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"E"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"421"}},"dt":22},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"7"}},"dt":0},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":1},"dt":0},
+      {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":9796,"cache_creation_input_tokens":0,"cache_read_input_tokens":29952,"output_tokens":4,"service_tier":"standard"}},"dt":0},
+      {"event":"message_stop","data":{"type":"message_stop"},"dt":0}
+     ]
+      },
+      "toolUseIds": []
+    },
+    {
+      "seq": 2,
+      "path": "/v1/messages",
+      "queue": "plain:562273c24932",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": false,
+        "maxTokens": 2048,
+        "toolNames": [],
+        "lastRole": "user",
+        "lastUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nUse the Bash tool to run exactly: cat src/big.log (no grep, head, tail or other filter). Then tell me the value of ERROR_CODE that appears in the output. Reply with the code only. E4217 E4217\n</conversation>",
+        "firstUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nUse the Bash tool to run exactly: cat src/big.log (no grep, head, tail or other filter). Then tell me the value of ERROR_CODE that appears in the output. Reply with the code only. E4217 E4217\n</conversation>",
+        "toolResultIds": [],
+        "messageCount": 1,
+        "systemSha": "051f49520ce3",
+        "toolsSha": "74234e98afe7"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "firstByteMs": 113,
+        "json": {
+          "id": "7ed160c8-cc6f-4c1c-8fb3-2343be0f5c73",
+          "type": "message",
+          "role": "assistant",
+          "model": "deepseek-flash",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"title\": \"Extract ERROR_CODE from big.log\"}"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 182,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 128,
+            "output_tokens": 12,
+            "service_tier": "standard"
+          }
+        }
+      },
+      "toolUseIds": []
+    }
+  ]
+}

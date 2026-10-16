@@ -269,10 +269,10 @@
     "baseUrl": "https://agent.aruhub.com",
     "apiFormat": "anthropic",
     "defaultModels": {
-      "main": "claude-opus-5",
-      "haiku": "claude-sonnet-5",
-      "sonnet": "claude-sonnet-5",
-      "opus": "claude-opus-5"
+      "main": "claude-opus-5-5",
+      "haiku": "claude-sonnet-5-5",
+      "sonnet": "claude-sonnet-5-5",
+      "opus": "claude-opus-5-5"
     },
     "needsApiKey": true,
     "websiteUrl": "https://aruhub.com",
@@ -281,7 +281,36 @@
     "featured": true,
     "isNew": true,
     "authStrategy": "api_key",
-    "defaultEnv": {}
+    "defaultEnv": {},
+    "modelContextWindows": {
+      "claude-opus-5-5": 1000000,
+      "claude-sonnet-5-5": 1000000
+    }
+  },
+  {
+    "id": "modelflare",
+    "name": "Modelflare",
+    "baseUrl": "https://modelflare.dev",
+    "apiFormat": "anthropic",
+    "defaultModels": {
+      "main": "claude-opus-5-5",
+      "haiku": "claude-haiku-5-5",
+      "sonnet": "claude-sonnet-5-5",
+      "opus": "claude-opus-5-5"
+    },
+    "needsApiKey": true,
+    "websiteUrl": "https://modelflare.dev",
+    "apiKeyUrl": "https://modelflare.dev/sign-up?utm_source=github&utm_campaign=cchaha",
+    "promoText": "Modelflare 为 cc-haha 用户提供特惠：单笔充值 US$20 解锁 GPT 0.015 倍分组，US$50 解锁 Claude 0.03 倍分组。通过「获取 API Key」专属链接注册参与。",
+    "featured": true,
+    "isNew": true,
+    "authStrategy": "auth_token",
+    "defaultEnv": {},
+    "modelContextWindows": {
+      "claude-opus-5-5": 1000000,
+      "claude-sonnet-5-5": 1000000,
+      "claude-haiku-5-5": 1000000
+    }
   },
   {
     "id": "atlascloud",
@@ -317,8 +346,7 @@
     },
     "needsApiKey": true,
     "websiteUrl": "https://www.apismart.ai",
-    "apiKeyUrl": "https://www.apismart.ai",
-    "featured": true,
+    "deprecated": true,
     "authStrategy": "api_key",
     "modelContextWindows": {
       "deepseek-v4-pro-0813": 1000000,

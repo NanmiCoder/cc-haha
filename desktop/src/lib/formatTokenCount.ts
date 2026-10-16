@@ -6,11 +6,13 @@
  * ("1k", not "1.0k") to match the CLI's formatTokens.
  *
  * Millions take an uppercase "M": these counts sit next to durations such as
- * "52m 43s", where a lowercase "145.9m" reads as minutes.
+ * "52m 43s", where a lowercase "145.9m" reads as minutes. Billions follow the
+ * same convention with an uppercase "B" rather than growing into "1500M".
  */
 export function formatTokenCount(n?: number): string {
   if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return '--'
   if (n < 1000) return String(Math.round(n))
   if (n < 1_000_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}k`
-  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, '')}B`
 }

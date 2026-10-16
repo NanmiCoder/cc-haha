@@ -169,11 +169,11 @@ describe('Fable model configuration', () => {
 
     for (const model of ['claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-sonnet-5-5']) {
       const info = await computeSimpleEnvInfo(model)
-      expect(info).toContain('The most recent Claude models are the Claude 5 family and Haiku 4.5.')
+      expect(info).toContain('The most recent Claude models are the Claude 5 family.')
       expect(info).toContain("Fable 5.1: 'claude-fable-5-1'")
       expect(info).toContain("Opus 5.5: 'claude-opus-5-5'")
       expect(info).toContain("Sonnet 5.5: 'claude-sonnet-5-5'")
-      expect(info).toContain("Haiku 4.5: 'claude-haiku-4-5-20251001'")
+      expect(info).toContain("Haiku 5.5: 'claude-haiku-5-5'")
       // The fast-mode note no longer names an Opus generation that has since been superseded.
       expect(info).toContain('Fast mode for Claude Code uses Claude Opus with faster output')
       expect(info).not.toContain('same Claude Opus 4.8 model')
@@ -193,6 +193,7 @@ describe('Fable model configuration', () => {
     ['claude-sonnet-5', 'January 2026'],
     ['claude-sonnet-4-6', 'August 2025'],
     ['claude-opus-4-5', 'May 2025'],
+    ['claude-haiku-5-5', 'June 2026'],
     ['claude-haiku-4-5', 'February 2025'],
   ])('tells %s its knowledge cutoff is %s', async (model, cutoff) => {
     expect(await computeSimpleEnvInfo(model)).toContain(`Assistant knowledge cutoff is ${cutoff}.`)

@@ -6,6 +6,7 @@ import { marketApi } from '@/api/market'
 import { workflowsApi } from '@/api/workflows'
 import { useTranslation } from '@/i18n'
 import { COMPUTER_USE_ENABLE_REQUEST, needsComputerUsePermissionCard } from '@/lib/computerUseEnable'
+import { dismissAgentTeamsNotice, isAgentTeamsNoticeDismissed } from '@/lib/agentTeamsNotice'
 import { readRecentSkills } from '@/lib/recentSkills'
 import { useMarketStore } from '@/stores/marketStore'
 import { useSettingsStore } from '@/stores/settingsStore'
@@ -58,6 +59,13 @@ export type ComputerUseConsent = {
   platform: 'darwin' | 'win32'
   onClose(): void
   onConfirm(): Promise<void>
+}
+
+/** Cost notice shown before the composer arms Agent Teams. */
+export type AgentTeamsNotice = {
+  open: boolean
+  onClose(): void
+  onConfirm(options: { dontRemind: boolean }): void
 }
 
 type CapabilityMenuData = {
@@ -117,6 +125,7 @@ export function useCapabilityMenu(options: {
   /** Agent Team is armed for the next message. */
   agentTeamArmed: boolean
   disarmAgentTeam(): void
+  agentTeamsNotice: AgentTeamsNotice
   computerUseConsent: ComputerUseConsent
 } {
   const { open, cwd, references, handlers } = options
@@ -126,6 +135,7 @@ export function useCapabilityMenu(options: {
   const [recentSkillIds, setRecentSkillIds] = useState<string[]>([])
   const [armed, setArmed] = useState(false)
   const [consent, setConsent] = useState<{ open: boolean, loading: boolean }>({ open: false, loading: false })
+  const [agentTeamsNoticeOpen, setAgentTeamsNoticeOpen] = useState(false)
   const agentTeamsEnabled = useSettingsStore(state => state.agentTeamsEnabled)
   const installingSkillIds = useMarketStore(state => state.installingIds)
   const agentTeamArmed = armed && agentTeamsEnabled
@@ -247,6 +257,13 @@ export function useCapabilityMenu(options: {
         void installSkill(action.id, action.name)
         return
       case 'toggleAgentTeam':
+        if (!armed && !isAgentTeamsNoticeDismissed()) {
+          // Arming costs real tokens and time: say so first. Turning it off
+          // never asks.
+          setAgentTeamsNoticeOpen(true)
+          handlers.onClose()
+          return
+        }
         setArmed(previous => !previous)
         return
       case 'toggleComputerUse': {
@@ -270,6 +287,16 @@ export function useCapabilityMenu(options: {
         return
       }
     }
+  }
+
+  const agentTeamsNotice: AgentTeamsNotice = {
+    open: agentTeamsNoticeOpen,
+    onClose: () => setAgentTeamsNoticeOpen(false),
+    onConfirm: ({ dontRemind }) => {
+      if (dontRemind) dismissAgentTeamsNotice()
+      setAgentTeamsNoticeOpen(false)
+      setArmed(true)
+    },
   }
 
   const computerUseConsent: ComputerUseConsent = {
@@ -304,6 +331,7 @@ export function useCapabilityMenu(options: {
     onAction,
     agentTeamArmed,
     disarmAgentTeam: () => setArmed(false),
+    agentTeamsNotice,
     computerUseConsent,
   }
 }

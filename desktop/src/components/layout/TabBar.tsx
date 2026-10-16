@@ -1,25 +1,21 @@
 import { forwardRef, useMemo, useRef, useState, useEffect, useLayoutEffect, useCallback, useId } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import {
-  SCHEDULED_TAB_ID,
-  SETTINGS_TAB_ID,
-  MARKET_TAB_ID,
-  CONNECTORS_TAB_ID,
-  SUBAGENT_TAB_PREFIX,
-  TEAM_MEMBER_TAB_PREFIX,
-  TEAM_TAB_PREFIX,
-  TERMINAL_TAB_PREFIX,
-  WORKBENCH_TAB_PREFIX,
   useTabStore,
   type Tab,
   type TabType,
 } from '../../stores/tabStore'
+import {
+  closeTabsWithPolicy,
+  getRunningSessionIds,
+  isSessionTab,
+  isSessionTabId,
+  reopenClosedSessionTab,
+} from '../../stores/tabClose'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import type { UIMessage } from '../../types/chat'
-import { isPlaceholderSessionTitle } from '../../lib/sessionTitle'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
-import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
 import { useCLITaskStore } from '../../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
 import { StatusDot } from '@/components/ui/Badge'
@@ -28,7 +24,7 @@ import { tabChipClass, tabChipLabelClass } from '@/components/ui/tabChip'
 import { useDismissable } from '@/hooks/useDismissable'
 import { useTranslation } from '../../i18n'
 import { getDesktopHost } from '../../lib/desktopHost'
-import { hasRunningBackgroundTasks, listRunningBackgroundTasks } from '../../lib/backgroundTasks'
+import { hasRunningBackgroundTasks } from '../../lib/backgroundTasks'
 import { collectAttentionIds, nextAttentionSessionId } from '../../lib/sessionAttention'
 import { SessionAttentionMark } from './SessionAttentionMark'
 import { TabAttentionJump } from './TabAttentionJump'
@@ -110,32 +106,11 @@ type PendingCloseRequest = {
   runningSessionIds: string[]
 }
 
-function isSessionTab(tab: Tab | null) {
-  if (!tab) return false
-  const tabType = (tab as Partial<Tab>).type
-  if (tabType === 'session') return true
-  if (tabType) return false
-  return isSessionTabId(tab.sessionId)
-}
-
-function isSessionTabId(tabId: string | null) {
-  if (!tabId) return false
-  return tabId !== SETTINGS_TAB_ID &&
-    tabId !== SCHEDULED_TAB_ID &&
-    tabId !== MARKET_TAB_ID &&
-    tabId !== CONNECTORS_TAB_ID &&
-    !tabId.startsWith(TERMINAL_TAB_PREFIX) &&
-    !tabId.startsWith(WORKBENCH_TAB_PREFIX) &&
-    !tabId.startsWith(SUBAGENT_TAB_PREFIX) &&
-    !tabId.startsWith(TEAM_TAB_PREFIX) &&
-    !tabId.startsWith(TEAM_MEMBER_TAB_PREFIX)
-}
-
 export function TabBar() {
   const tabs = useTabStore((s) => s.tabs)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const setActiveTab = useTabStore((s) => s.setActiveTab)
-  const closeTab = useTabStore((s) => s.closeTab)
+  const canReopenClosedTab = useTabStore((s) => s.closedSessionTabs.length > 0)
   const sessionTabIds = useMemo(
     () => tabs.filter((tab) => isSessionTab(tab)).map((tab) => tab.sessionId),
     [tabs],
@@ -156,7 +131,6 @@ export function TabBar() {
   // The waiting tabs other than the one on screen: the places a jump can take
   // you, and so the number on the button that offers it.
   const otherAttentionCount = attentionList.filter((sessionId) => sessionId !== activeTabId).length
-  const disconnectSession = useChatStore((s) => s.disconnectSession)
   const activeTab = tabs.find((tab) => tab.sessionId === activeTabId) ?? null
   const isActiveSessionTab = isSessionTab(activeTab) || isSessionTabId(activeTabId)
   const activeSession = useSessionStore((state) =>
@@ -426,65 +400,6 @@ export function TabBar() {
     el.scrollBy({ left: direction === 'left' ? -step : step, behavior: 'smooth' })
   }
 
-  const closeTabWithCleanup = useCallback((tab: Tab) => {
-    if (isSessionTab(tab)) {
-      releaseWorkspaceSession(tab.sessionId)
-    }
-    closeTab(tab.sessionId)
-  }, [closeTab])
-
-  const getRunningSessionIds = useCallback((targetTabs: Tab[]) => {
-    const chatSessions = useChatStore.getState().sessions
-    return targetTabs
-      .filter((tab) => isSessionTab(tab))
-      .filter((tab) => {
-        const sessionState = chatSessions[tab.sessionId]
-        return !!sessionState &&
-          (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks))
-      })
-      .map((tab) => tab.sessionId)
-  }, [])
-
-  const closeTabsWithPolicy = useCallback((targetTabs: Tab[], runningSessionIds: string[], stopRunning: boolean) => {
-    const runningSessionSet = new Set(runningSessionIds)
-
-    for (const tab of targetTabs) {
-      if (isSessionTab(tab)) {
-        const isRunning = runningSessionSet.has(tab.sessionId)
-        if (isRunning && stopRunning) {
-          const chat = useChatStore.getState()
-          const runningTasks = listRunningBackgroundTasks(chat.sessions[tab.sessionId]?.backgroundAgentTasks)
-          chat.stopGeneration(tab.sessionId)
-          // The dialog counts background tasks as the session running, but
-          // stopGeneration only reaches the foreground turn and Agent tasks (and
-          // marks the latter as stopping, which stopBackgroundTask skips). A shell
-          // command would outlive "Stop & Close" and keep the reopened session
-          // running. Both must go out before disconnectSession closes the socket.
-          for (const task of runningTasks) {
-            chat.stopBackgroundTask(tab.sessionId, task.taskId)
-          }
-        }
-        if (!isRunning || stopRunning) {
-          // Auto-delete only when both server metadata and the loaded transcript
-          // confirm this is an empty placeholder. Missing state can mean a timed-out
-          // recovery load, so treating it as empty risks deleting a real session.
-          const sessionEntry = useSessionStore.getState().sessions.find((s) => s.id === tab.sessionId)
-          const chatEntry = useChatStore.getState().sessions[tab.sessionId]
-          if (
-            sessionEntry?.messageCount === 0 &&
-            isPlaceholderSessionTitle(sessionEntry.title) &&
-            chatEntry?.historyStatus === 'ready' &&
-            chatEntry.messages.length === 0
-          ) {
-            void useSessionStore.getState().deleteSession(tab.sessionId)
-          }
-          disconnectSession(tab.sessionId)
-        }
-      }
-      closeTabWithCleanup(tab)
-    }
-  }, [closeTabWithCleanup, disconnectSession])
-
   const requestCloseTabs = useCallback((targetTabs: Tab[]) => {
     if (targetTabs.length === 0) return
     const runningSessionIds = getRunningSessionIds(targetTabs)
@@ -495,7 +410,7 @@ export function TabBar() {
     }
 
     closeTabsWithPolicy(targetTabs, [], false)
-  }, [closeTabsWithPolicy, getRunningSessionIds])
+  }, [])
 
   const handleClose = (sessionId: string) => {
     const tab = tabs.find((t) => t.sessionId === sessionId)
@@ -876,6 +791,14 @@ export function TabBar() {
             className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)]"
           >
             {t('tabs.closeAll')}
+          </button>
+          <div className="mx-1 my-1 border-t border-[var(--color-border)]" />
+          <button
+            disabled={!canReopenClosedTab}
+            onClick={() => { setContextMenu(null); void reopenClosedSessionTab() }}
+            className="flex h-8 w-full items-center rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] text-[var(--color-text-primary)] transition-colors hover:bg-[var(--color-surface-hover)] disabled:cursor-default disabled:text-[var(--color-text-tertiary)] disabled:hover:bg-transparent"
+          >
+            {t('tabs.reopenClosed')}
           </button>
         </div>
       )}

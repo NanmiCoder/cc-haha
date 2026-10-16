@@ -1,10 +1,13 @@
 import { Input } from '@/components/ui/Input'
+import { SelectField } from '@/components/ui/SelectField'
 import { SettingsBlock, SettingsGroup, SettingsSwitchRow } from '@/components/settings/SettingsSection'
 import { useTranslation } from '@/i18n'
+import type { ImageGenerationProtocol } from '@/types/provider'
 
 export type ImageGenerationFormValue = {
   enabled: boolean
   model: string
+  protocol: ImageGenerationProtocol
   baseUrl: string
   apiKey: string
 }
@@ -31,6 +34,18 @@ export function ProviderImageGenerationFields({ value, onChange }: Props) {
 
       {value.enabled ? (
         <SettingsBlock className="grid gap-3 sm:grid-cols-2">
+          <SelectField<ImageGenerationProtocol>
+            label={t('settings.providers.imageGenerationProtocol')}
+            value={value.protocol}
+            onChange={(protocol) => update({ protocol })}
+            options={[
+              { value: 'openai_images', label: t('settings.providers.imageGenerationProtocolOpenAI') },
+              { value: 'gemini_native', label: t('settings.providers.imageGenerationProtocolGemini') },
+              { value: 'xai_images', label: t('settings.providers.imageGenerationProtocolXai') },
+            ]}
+            hint={t('settings.providers.imageGenerationProtocolHint')}
+            containerClassName="sm:col-span-2"
+          />
           <Input
             label={t('settings.providers.imageGenerationModel')}
             required

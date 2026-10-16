@@ -60,6 +60,7 @@ function isExecutable(shellPath: string): boolean {
       execFileSync(shellPath, ['--version'], {
         timeout: 1000,
         stdio: 'ignore',
+        windowsHide: true,
       })
       return true
     } catch {

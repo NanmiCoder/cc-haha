@@ -36,6 +36,8 @@ import {
   GROK_OAUTH_DUMMY_KEY,
   shouldUseGrokAuth,
 } from '../grokAuth/fetch.js'
+import { DEEPSEEK_OAUTH_DUMMY_KEY } from '../deepseekAuth/client.js'
+import { buildDeepSeekFetch } from '../deepseekAuth/fetch.js'
 import { isDebugToStdErr, logForDebugging } from '../../utils/debug.js'
 import {
   getAWSRegion,
@@ -253,14 +255,18 @@ export async function getAnthropicClient({
   const isOpenAIModel = model ? isOpenAIResponsesModel(model) : false
   const forceOpenAICodex = isEnvTruthy(process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER)
   const forceGrok = isEnvTruthy(process.env.CC_HAHA_GROK_OAUTH_PROVIDER)
-  const isClaudeSubscriber = forceGrok ? false : isClaudeAISubscriber()
+  // Selected account mode stays selected while signed out: the fetch wrapper
+  // answers with a sign-in-required error instead of this request falling
+  // through to a different credential.
+  const usingDeepSeek = isEnvTruthy(process.env.CC_HAHA_DEEPSEEK_OAUTH_PROVIDER)
+  const isClaudeSubscriber = forceGrok || usingDeepSeek ? false : isClaudeAISubscriber()
   const hasOpenAIAuth = shouldUseOpenAICodexAuth()
   const usingGrok = forceGrok && shouldUseGrokAuth()
   const hasFallbackApiKey = hasOpenAIAuth &&
     !process.env.ANTHROPIC_AUTH_TOKEN &&
     !apiKey &&
     !!getAnthropicApiKey()
-  const usingOpenAICodex = shouldUseOpenAICodexTransport({
+  const usingOpenAICodex = !usingDeepSeek && shouldUseOpenAICodexTransport({
     hasOpenAIAuth,
     isClaudeSubscriber,
     forceOpenAICodex,
@@ -270,11 +276,13 @@ export async function getAnthropicClient({
     hasFallbackApiKey,
   })
 
-  if (!isClaudeSubscriber && !usingOpenAICodex && !usingGrok) {
+  if (!isClaudeSubscriber && !usingOpenAICodex && !usingGrok && !usingDeepSeek) {
     await configureApiKeyHeaders(defaultHeaders, getIsNonInteractiveSession())
   }
 
-  const resolvedFetch = usingGrok
+  const resolvedFetch = usingDeepSeek
+    ? buildDeepSeekFetch(fetchOverride)
+    : usingGrok
     ? buildGrokFetch(fetchOverride, source)
     : usingOpenAICodex
       ? buildOpenAICodexFetch(fetchOverride, source, openAITurnState, agentId)
@@ -451,10 +459,12 @@ export async function getAnthropicClient({
       ? OPENAI_OAUTH_DUMMY_KEY
       : usingGrok
         ? GROK_OAUTH_DUMMY_KEY
+      : usingDeepSeek
+        ? DEEPSEEK_OAUTH_DUMMY_KEY
       : isClaudeSubscriber
         ? null
         : resolveAnthropicClientApiKey({ explicitApiKey: apiKey }),
-    authToken: isClaudeSubscriber && !usingOpenAICodex && !usingGrok
+    authToken: isClaudeSubscriber && !usingOpenAICodex && !usingGrok && !usingDeepSeek
       ? getClaudeAIOAuthTokens()?.accessToken
       : undefined,
     // The SDK appends /v1 to every API path, including messages and token counts.

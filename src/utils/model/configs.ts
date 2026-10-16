@@ -38,6 +38,14 @@ export const CLAUDE_HAIKU_4_5_CONFIG = {
   azureOpenAI: 'claude-haiku-4-5-20251001',
 } as const satisfies ModelConfig
 
+export const CLAUDE_HAIKU_5_5_CONFIG = {
+  firstParty: 'claude-haiku-5-5',
+  bedrock: 'us.anthropic.claude-haiku-5-5',
+  vertex: 'claude-haiku-5-5',
+  foundry: 'claude-haiku-5-5',
+  azureOpenAI: 'claude-haiku-5-5',
+} as const satisfies ModelConfig
+
 export const CLAUDE_FABLE_5_CONFIG = {
   firstParty: 'claude-fable-5',
   bedrock: 'anthropic.claude-fable-5',
@@ -180,6 +188,7 @@ export const ALL_MODEL_CONFIGS = {
   fable51: CLAUDE_FABLE_5_1_CONFIG,
   haiku35: CLAUDE_3_5_HAIKU_CONFIG,
   haiku45: CLAUDE_HAIKU_4_5_CONFIG,
+  haiku55: CLAUDE_HAIKU_5_5_CONFIG,
   sonnet35: CLAUDE_3_5_V2_SONNET_CONFIG,
   sonnet37: CLAUDE_3_7_SONNET_CONFIG,
   sonnet40: CLAUDE_SONNET_4_CONFIG,

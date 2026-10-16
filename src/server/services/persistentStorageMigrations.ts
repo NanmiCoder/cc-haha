@@ -6,12 +6,18 @@ import { normalizeLegacyDeepSeekManagedEnv } from '../../utils/providerManagedEn
 import { isOpenAIOfficialProviderId } from './openaiOfficialProvider.js'
 import { isGrokOfficialProviderId } from './grokOfficialProvider.js'
 import {
+  isDeepSeekAccountProviderId,
+  migrateLegacyDeepSeekAccountModels,
+} from './deepseekAccountProvider.js'
+import {
   BUILT_IN_PROVIDER_IDS,
-  PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION,
+  DEEPSEEK_ACCOUNT_PROVIDER_ID,
+  PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION,
+  PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION,
   PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION,
 } from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION
 
 type MigrationReport = {
   migratedEntries: string[]
@@ -67,13 +73,20 @@ function isSavedProvider(value: unknown): value is JsonObject {
   )
 }
 
-function normalizeOfficialProviderModels(value: unknown): JsonObject {
+function normalizeOfficialProviderModels(value: unknown, sourceSchemaVersion: number): JsonObject {
   if (!isRecord(value)) return {}
   const normalized: JsonObject = { ...value }
   for (const id of BUILT_IN_PROVIDER_IDS) {
     if (!isProviderModels(value[id])) {
       delete normalized[id]
     }
+  }
+  const deepSeekAccountModels = normalized[DEEPSEEK_ACCOUNT_PROVIDER_ID]
+  if (
+    sourceSchemaVersion < PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION &&
+    isRecord(deepSeekAccountModels)
+  ) {
+    normalized[DEEPSEEK_ACCOUNT_PROVIDER_ID] = migrateLegacyDeepSeekAccountModels(deepSeekAccountModels)
   }
   return normalized
 }
@@ -194,6 +207,18 @@ function migrateProvidersIndex(value: unknown): JsonObject {
     .map((provider) => sourceSchemaVersion < PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION
       ? { ...provider, toolSearchEnabled: false }
       : provider)
+    .map((provider) => {
+      const imageGeneration = provider.imageGeneration
+      if (sourceSchemaVersion >= PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION ||
+        !isRecord(imageGeneration) || typeof imageGeneration.model !== 'string' ||
+        !imageGeneration.model.trim() || imageGeneration.protocol !== undefined) {
+        return provider
+      }
+      return {
+        ...provider,
+        imageGeneration: { ...imageGeneration, protocol: 'openai_images' },
+      }
+    })
   const rawActiveId =
     typeof value.activeId === 'string'
       ? value.activeId
@@ -203,7 +228,8 @@ function migrateProvidersIndex(value: unknown): JsonObject {
   const activeId = rawActiveId && (
     providers.some((provider) => provider.id === rawActiveId) ||
     isOpenAIOfficialProviderId(rawActiveId) ||
-    isGrokOfficialProviderId(rawActiveId)
+    isGrokOfficialProviderId(rawActiveId) ||
+    isDeepSeekAccountProviderId(rawActiveId)
   )
     ? rawActiveId
     : null
@@ -214,7 +240,7 @@ function migrateProvidersIndex(value: unknown): JsonObject {
     activeId,
     providers,
     providerOrder: normalizeProviderOrder(rawProviderOrder, providers),
-    officialProviderModels: normalizeOfficialProviderModels(rawOfficialProviderModels),
+    officialProviderModels: normalizeOfficialProviderModels(rawOfficialProviderModels, sourceSchemaVersion),
   }
 }
 

@@ -43,7 +43,10 @@ export type MockRequest = {
   model?: string
   system?: string | Array<{ type?: string; text?: string }>
   messages?: RequestMessage[]
-  tools?: Array<{ name?: string }>
+  tools?: Array<{
+    name?: string
+    input_schema?: { properties?: Record<string, { enum?: unknown[] }> }
+  }>
 }
 
 /** Prompt that makes the scripted model fail the request the way a provider would. */
@@ -157,6 +160,28 @@ export function decideReply(request: MockRequest): MockReply {
 
   // A tool just ran: report what came back, the way a model summarises a result.
   const results = blocksOf(last).filter((block) => block.type === 'tool_result')
+  const imageTool = prompt.startsWith('MOCK_IMAGE_EDIT ') ? 'ImageEdit' : 'ImageGen'
+  if (prompt.startsWith('MOCK_IMAGE_')) {
+    // A deferred tool may first be loaded by ToolSearch. The next request must
+    // invoke the real image tool, rather than treating search as the final result.
+    if (results.length === 0 || results.some(block => toolResultText(block).includes(`"${imageTool}"`) ||
+      (Array.isArray(block.content) && block.content.some(reference => reference?.type === 'tool_reference' && reference.tool_name === imageTool)))) {
+      if (hasTool(request, imageTool)) {
+        const properties = request.tools?.find(tool => tool.name === imageTool)?.input_schema?.properties
+        const aspectRatios = properties?.aspect_ratio?.enum ?? []
+        const resolutions = properties?.resolution?.enum ?? []
+        return toolUse(imageTool, {
+          prompt: 'A fixture blue square', count: 1,
+          aspect_ratio: aspectRatios.includes('4:5') ? '4:5' : '16:9',
+          resolution: resolutions.includes('1k') && !resolutions.includes('2k') ? '1k' : '2k',
+          ...(imageTool === 'ImageEdit'
+            ? { referenced_image_paths: [JSON.parse(prompt.slice('MOCK_IMAGE_EDIT '.length))] }
+            : {}),
+        })
+      }
+      if (hasTool(request, 'ToolSearch')) return toolUse('ToolSearch', { query: `select:${imageTool}` })
+    }
+  }
   if (last?.role === 'user' && results.length > 0) {
     const result = results[results.length - 1]!
     const body = toolResultText(result).trim()

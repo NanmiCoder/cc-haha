@@ -16,6 +16,7 @@ import { IconButton } from '@/components/ui/IconButton'
 import { LoadingState } from '@/components/ui/LoadingState'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { mcpStatusTone } from '@/lib/mcpStatus'
+import { useRoomAbove } from '@/hooks/useRoomAbove'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { useUIStore } from '../../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
@@ -647,9 +648,12 @@ function SessionInspectorShell({
   children: React.ReactNode
   t: Translate
 }) {
+  const [roomRef, roomAbove] = useRoomAbove<HTMLDivElement>()
   return (
     <div
-      className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]"
+      ref={roomRef}
+      style={{ maxHeight: roomAbove }}
+      className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] text-[var(--color-text-primary)] shadow-[var(--shadow-dropdown)]"
     >
       <div className="grid min-h-12 grid-cols-[1fr_auto_1fr] items-center gap-3 border-b border-[var(--color-border)] px-4 py-2">
         <div className="truncate text-sm font-semibold text-[var(--color-text-primary)]">{t('slash.inspector.title')}</div>
@@ -671,7 +675,7 @@ function SessionInspectorShell({
           />
         </div>
       </div>
-      <div className="max-h-[min(540px,58vh)] overflow-y-auto p-4">{children}</div>
+      <div className="min-h-0 max-h-[min(540px,58vh)] overflow-y-auto p-4">{children}</div>
     </div>
   )
 }

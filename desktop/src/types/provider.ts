@@ -9,7 +9,7 @@ export type ProviderAuthStrategy =
   | 'dual_same_token'
   | 'dual_dummy'
 
-export type ProviderRuntimeKind = 'anthropic_compatible' | 'openai_oauth' | 'grok_oauth'
+export type ProviderRuntimeKind = 'anthropic_compatible' | 'openai_oauth' | 'grok_oauth' | 'deepseek_oauth'
 
 export type ModelMapping = {
   main: string
@@ -29,8 +29,11 @@ export type Model1mSupport = {
 
 export type ModelContextWindows = Record<string, number>
 
+export type ImageGenerationProtocol = 'openai_images' | 'gemini_native' | 'xai_images'
+
 export type ImageGenerationConfig = {
   model: string
+  protocol?: ImageGenerationProtocol
   baseUrl?: string
   apiKey?: string
 }

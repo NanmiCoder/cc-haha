@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
 import { useTabStore } from '../stores/tabStore'
 import { useUIStore } from '../stores/uiStore'
@@ -9,10 +8,9 @@ import {
 } from '../lib/appZoom'
 import { useSettingsStore } from '../stores/settingsStore'
 import { hasRunningSubagentTasks } from '../lib/backgroundTasks'
+import { detectPlatform } from '../lib/workspace/shortcuts'
 
 export function useKeyboardShortcuts() {
-  const setActiveSession = useSessionStore((s) => s.setActiveSession)
-  const setActiveView = useUIStore((s) => s.setActiveView)
   const openModal = useUIStore((s) => s.openModal)
   const closeModal = useUIStore((s) => s.closeModal)
   const activeModal = useUIStore((s) => s.activeModal)
@@ -49,12 +47,14 @@ export function useKeyboardShortcuts() {
       }
 
       const meta = e.metaKey || e.ctrlKey
+      // Cmd alone on macOS, Ctrl alone elsewhere.
+      const primaryChord = detectPlatform() === 'mac' ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
 
-      // Cmd+N — New session
-      if (meta && e.key === 'n') {
+      // Cmd+N — what the sidebar's "New session" item does (it shows ⌘N).
+      // Cmd only on macOS: Ctrl+N is "next line" in a macOS text field.
+      if (primaryChord && e.key.toLowerCase() === 'n' && !e.shiftKey && !e.altKey) {
         e.preventDefault()
-        setActiveSession(null)
-        setActiveView('code')
+        useUIStore.getState().requestNewSession()
       }
 
       // Cmd+K — Open global session search
@@ -63,8 +63,10 @@ export function useKeyboardShortcuts() {
         openModal('globalSearch')
       }
 
-      // Ctrl+F — Open find-in-page bar
-      if (meta && e.key === 'f') {
+      // Cmd+F (Ctrl+F off macOS) — Open find-in-page bar. Only the bare chord:
+      // ⌃⌘F is the macOS View menu's fullscreen accelerator, and the menu never
+      // sees a key this handler has already prevented.
+      if (primaryChord && e.key === 'f') {
         e.preventDefault()
         openModal('findInPage')
       }
@@ -87,5 +89,5 @@ export function useKeyboardShortcuts() {
 
     document.addEventListener('keydown', handler)
     return () => document.removeEventListener('keydown', handler)
-  }, [closeModal, openModal, setActiveSession, setActiveView, setUiZoom, stopGeneration])
+  }, [closeModal, openModal, setUiZoom, stopGeneration])
 }

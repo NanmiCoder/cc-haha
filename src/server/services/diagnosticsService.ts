@@ -92,6 +92,17 @@ const RETENTION_SWEEP_INTERVAL_MS = 60 * 1000
 const TRUNCATED_OLDER_CONTENT_MARKER = '[TRUNCATED OLDER CONTENT]\n'
 const SENSITIVE_KEY_RE = /(api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|session[_-]?token|\btoken\b|secret|password|authorization|cookie|oauth)/i
 
+/**
+ * Launch the file manager directly and never with `windowsHide`: on Windows
+ * that flag passes SW_HIDE to Explorer, and a `cmd /c start` wrapper would
+ * flash its own console window instead (#983, #1489).
+ */
+export function getOpenLogDirCommand(platform: NodeJS.Platform, dir: string): string[] {
+  if (platform === 'darwin') return ['open', dir]
+  if (platform === 'win32') return ['explorer.exe', dir]
+  return ['xdg-open', dir]
+}
+
 export class DiagnosticsService {
   private consoleCaptureInstalled = false
   private processCaptureInstalled = false
@@ -412,15 +423,7 @@ export class DiagnosticsService {
   async openLogDir(): Promise<void> {
     await this.ensureLogDir()
     const dir = this.getLogDir()
-    if (process.platform === 'darwin') {
-      Bun.spawn(['open', dir], { stdout: 'ignore', stderr: 'ignore' })
-      return
-    }
-    if (process.platform === 'win32') {
-      Bun.spawn(['cmd', '/c', 'start', '', dir], { stdout: 'ignore', stderr: 'ignore' })
-      return
-    }
-    Bun.spawn(['xdg-open', dir], { stdout: 'ignore', stderr: 'ignore' })
+    Bun.spawn(getOpenLogDirCommand(process.platform, dir), { stdout: 'ignore', stderr: 'ignore' })
   }
 
   async clear(): Promise<void> {

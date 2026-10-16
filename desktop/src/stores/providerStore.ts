@@ -13,10 +13,15 @@ import {
 import {
   GROK_OFFICIAL_PROVIDER_ID,
 } from '../constants/grokOfficialProvider'
+import {
+  DEEPSEEK_ACCOUNT_MODEL_MAPPING,
+  DEEPSEEK_ACCOUNT_PROVIDER_ID,
+} from '../constants/deepseekAccountProvider'
 import { BUNDLED_PROVIDER_PRESETS } from '../config/providerPresets'
 import { resolveProviderRuntimeModelId, resolveProviderSlotModelId } from '../lib/runtimeSelection'
 import type {
   SavedProvider,
+  ModelMapping,
   CreateProviderInput,
   UpdateProviderInput,
   TestProviderConfigInput,
@@ -33,6 +38,8 @@ type ProviderStore = {
   providers: SavedProvider[]
   providerOrder: string[]
   activeId: string | null
+  /** The built-in DeepSeek account's saved alias mapping (defaults until loaded). */
+  deepSeekAccountModels: ModelMapping
   hasLoadedProviders: boolean
   presets: ProviderPreset[]
   isLoading: boolean
@@ -176,6 +183,7 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
   providers: [],
   providerOrder: [...BUILT_IN_PROVIDER_IDS],
   activeId: null,
+  deepSeekAccountModels: DEEPSEEK_ACCOUNT_MODEL_MAPPING,
   hasLoadedProviders: false,
   presets: BUNDLED_PROVIDER_PRESETS,
   isLoading: false,
@@ -185,11 +193,12 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     set({ isLoading: true, error: null })
     try {
       const firstLoad = !get().hasLoadedProviders
-      const { providers, activeId, providerOrder } = await providersApi.list()
+      const { providers, activeId, providerOrder, deepSeekAccountModels } = await providersApi.list()
       set({
         providers,
         providerOrder: normalizeProviderOrder(providerOrder, providers),
         activeId,
+        ...(deepSeekAccountModels && { deepSeekAccountModels }),
         hasLoadedProviders: true,
         isLoading: false,
       })
@@ -273,7 +282,11 @@ export const useProviderStore = create<ProviderStore>((set, get) => ({
     // 更新默认 provider 时，同步刷新默认 model，避免 settings.json 里残留
     // 旧 provider 的 model id 导致默认选择指向不存在的模型。
     const settings = useSettingsStore.getState()
-    if (id === OPENAI_OFFICIAL_PROVIDER_ID || id === GROK_OFFICIAL_PROVIDER_ID) {
+    if (
+      id === OPENAI_OFFICIAL_PROVIDER_ID ||
+      id === GROK_OFFICIAL_PROVIDER_ID ||
+      id === DEEPSEEK_ACCOUNT_PROVIDER_ID
+    ) {
       const { models } = await providersApi.getOfficialModels(id)
       await settings.setModel(models.main)
       await settings.fetchAll()

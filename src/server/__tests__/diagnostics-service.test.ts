@@ -5,7 +5,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { handleDiagnosticsApi } from '../api/diagnostics.js'
-import { DiagnosticsService, diagnosticsService } from '../services/diagnosticsService.js'
+import { DiagnosticsService, diagnosticsService, getOpenLogDirCommand } from '../services/diagnosticsService.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 
 let tmpDir: string
@@ -1105,5 +1105,27 @@ describe('diagnostics API', () => {
     expect(body.report).not.toContain('token=x')
     expect(body.report).not.toContain('PRIVATE_ASSISTANT_REPLY')
     expect(body.report).not.toContain('PRIVATE_SDK_RESULT')
+  })
+})
+
+describe('opening the log directory', () => {
+  test('launches the file manager directly on every platform', () => {
+    expect(getOpenLogDirCommand('win32', 'C:\\logs')).toEqual(['explorer.exe', 'C:\\logs'])
+    expect(getOpenLogDirCommand('darwin', '/logs')).toEqual(['open', '/logs'])
+    expect(getOpenLogDirCommand('linux', '/logs')).toEqual(['xdg-open', '/logs'])
+  })
+
+  test('never hides the launched file manager window', async () => {
+    const spawn = spyOn(Bun, 'spawn').mockImplementation((() => ({})) as unknown as typeof Bun.spawn)
+    try {
+      const service = new DiagnosticsService()
+      await service.openLogDir()
+      expect(spawn).toHaveBeenCalledTimes(1)
+      const [command, options] = spawn.mock.calls[0] as unknown as [string[], Record<string, unknown>]
+      expect(command).toEqual(getOpenLogDirCommand(process.platform, service.getLogDir()))
+      expect(options.windowsHide).toBeUndefined()
+    } finally {
+      spawn.mockRestore()
+    }
   })
 })

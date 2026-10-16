@@ -20,12 +20,15 @@ import { spawn, type ChildProcess, type SpawnOptions } from 'child_process'
 // the command (`pkill sleep`) just polls again. The TERM trap reaps the poll
 // in flight through `$!`, which the shell sets at fork time; `jobs -p` is
 // empty inside a dash/zsh subshell trap and would wait out the whole second.
+// The poll is killed with SIGKILL: between fork and exec the child still runs
+// the shell's own TERM handler, which swallows a TERM and execs `sleep`
+// anyway, so about 1 in 1000 short commands waited out the second on dash.
 const PARENT_PROCESS_GUARD = `
 runtime_pid=$1
 shift
 (
   PATH="/bin:/usr/bin:$PATH"
-  trap '[ -n "$!" ] && kill "$!" 2>/dev/null; wait 2>/dev/null; exit 0' TERM
+  trap '[ -n "$!" ] && kill -KILL "$!" 2>/dev/null; wait 2>/dev/null; exit 0' TERM
   while kill -0 "$runtime_pid" 2>/dev/null && kill -0 "$$" 2>/dev/null; do
     sleep 1 &
     wait "$!"

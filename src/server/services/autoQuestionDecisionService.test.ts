@@ -7,6 +7,7 @@ import { drainTraceCaptureForTests } from './traceCaptureService.js'
 import { hahaOAuthService } from './hahaOAuthService.js'
 import { hahaOpenAIOAuthService } from './hahaOpenAIOAuthService.js'
 import { hahaGrokOAuthService } from './hahaGrokOAuthService.js'
+import { hahaDeepSeekOAuthService } from './hahaDeepSeekOAuthService.js'
 import {
   decideAutoQuestionAnswers,
   type AutoQuestion,
@@ -300,6 +301,43 @@ describe('autoQuestionDecisionService', () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.url).toContain('cli-chat-proxy.grok.com/v1/responses')
     expect(calls[0]!.headers.get('authorization')).toBe('Bearer fake-grok-token')
+  })
+
+  test('answers with the DeepSeek account token header, never an API key', async () => {
+    await hahaDeepSeekOAuthService.saveTokens({
+      token: 'dsh_test_account_token',
+      issuer: 'https://platform.deepseek.com',
+      deviceId: 'device-1',
+    })
+    const calls: Array<{ url: string; headers: Headers }> = []
+    globalThis.fetch = (async (input, init) => {
+      calls.push({ url: String(input), headers: new Headers(init?.headers) })
+      return Response.json({
+        content: [{ type: 'text', text: '{"answers":[{"questionIndex":0,"optionLabels":["JSON"]}]}' }],
+      })
+    }) as typeof fetch
+    expect(await decideAutoQuestionAnswers({
+      questions: [undecided], conversationText: '', providerId: 'deepseek-account',
+      signal: new AbortController().signal,
+    })).toEqual({ 'Which format?': 'JSON' })
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.url).toBe('https://api.deepseek.com/anthropic/v1/messages')
+    expect(calls[0]!.headers.get('x-dsh-auth-token')).toBe('dsh_test_account_token')
+    expect(calls[0]!.headers.get('x-api-key')).toBeNull()
+    expect(calls[0]!.headers.get('authorization')).toBeNull()
+  })
+
+  test('leaves the question with the user while the DeepSeek account is signed out', async () => {
+    let called = false
+    globalThis.fetch = (async () => {
+      called = true
+      return Response.json({})
+    }) as typeof fetch
+    expect(await decideAutoQuestionAnswers({
+      questions: [undecided], conversationText: '', providerId: 'deepseek-account',
+      signal: new AbortController().signal,
+    })).toBeNull()
+    expect(called).toBe(false)
   })
 
   test('accepts a unique nonempty subset for multi-select questions', async () => {

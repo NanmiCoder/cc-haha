@@ -137,7 +137,9 @@ export function captureWindowState(window: BrowserWindow): StoredWindowState | n
   // quitAndInstall/quit can emit late move/resize/close events on an already
   // torn-down native window; touching it then throws "Object has been destroyed".
   if (window.isDestroyed()) return null
-  if (window.isMinimized()) return null
+  // A fullscreen window reports the screen as its bounds; saving them would
+  // reopen the app as a screen-sized window instead of its normal frame.
+  if (window.isMinimized() || window.isFullScreen()) return null
   const bounds = window.getBounds()
   const state = {
     x: bounds.x,
@@ -159,9 +161,12 @@ export function windowChromeOptionsForPlatform(
   platform: NodeJS.Platform = process.platform,
 ): WindowChromeOptions {
   if (platform === 'darwin') {
+    // The green button and ⌃⌘F enter a native fullscreen Space, like any Mac
+    // app. hideWindowSafely leaves that Space before hiding, which is what
+    // keeps a hidden window from stranding a black Space behind.
     return {
       titleBarStyle: 'hiddenInset',
-      fullscreenable: false,
+      fullscreenable: true,
     }
   }
 
@@ -189,13 +194,6 @@ export function saveWindowState(app: App, window: BrowserWindow) {
 }
 
 export function hideWindowSafely(window: BrowserWindow, afterHide?: () => void) {
-  if (window.isSimpleFullScreen()) {
-    window.setSimpleFullScreen(false)
-    window.hide()
-    afterHide?.()
-    return
-  }
-
   if (!window.isFullScreen()) {
     window.hide()
     afterHide?.()
@@ -211,12 +209,25 @@ export function hideWindowSafely(window: BrowserWindow, afterHide?: () => void) 
   window.setFullScreen(false)
 }
 
-export function toggleWindowFullScreen(window: BrowserWindow, platform = process.platform) {
-  if (platform === 'darwin') {
-    window.setSimpleFullScreen(!window.isSimpleFullScreen())
-    return
-  }
+export function toggleWindowFullScreen(window: BrowserWindow) {
   window.setFullScreen(!window.isFullScreen())
+}
+
+/**
+ * Windows runs without an application menu, so F11 has no accelerator to
+ * reach. macOS and Linux keep theirs on the View menu.
+ */
+export function installFullScreenKey(
+  window: BrowserWindow,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (platform !== 'win32') return
+  window.webContents.on('before-input-event', (event, input) => {
+    if (input.type !== 'keyDown' || input.key !== 'F11' || input.isAutoRepeat) return
+    if (input.alt || input.control || input.meta || input.shift) return
+    event.preventDefault()
+    toggleWindowFullScreen(window)
+  })
 }
 
 type MacOsWindowVisibilityApp = {

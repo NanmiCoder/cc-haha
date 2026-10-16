@@ -12,6 +12,7 @@ import { useMemoryStore } from '../stores/memoryStore'
 import { useSessionStore } from '../stores/sessionStore'
 import { useUIStore } from '../stores/uiStore'
 import type { MemoryFile, MemoryProject } from '../types/memory'
+import type { PreviewLinkTarget } from '@/lib/previewLinkRouter'
 
 const DEFAULT_MEMORY_PATH = 'MEMORY.md'
 
@@ -184,7 +185,7 @@ export function MemorySettings() {
     return () => document.removeEventListener('keydown', handleKeyDown)
   })
 
-  const handlePreviewLinkClick = (href: string): boolean => {
+  const handlePreviewLinkClick = (href: PreviewLinkTarget): boolean => {
     if (!selectedProjectId || !selectedFile) return false
     const targetPath = resolveMarkdownMemoryLink(
       href,
@@ -668,12 +669,12 @@ function resolveMemoryFileTarget(projects: MemoryProject[], absolutePath: string
 }
 
 function resolveMarkdownMemoryLink(
-  href: string,
+  href: PreviewLinkTarget,
   currentPath: string,
   projectMemoryDir: string | undefined,
   files: MemoryFile[],
 ): string | null {
-  const rawHref = safeDecodeUriComponent(href.trim())
+  const rawHref = typeof href === 'string' ? safeDecodeUriComponent(href.trim()) : href.path
   if (!rawHref || rawHref.startsWith('#')) return null
 
   let target = rawHref
@@ -685,7 +686,7 @@ function resolveMarkdownMemoryLink(
     if (/^[a-z][a-z\d+.-]*:/i.test(rawHref)) return null
   }
 
-  target = stripMarkdownLinkSuffix(target)
+  if (typeof href === 'string') target = stripMarkdownLinkSuffix(target)
   if (!target || !target.endsWith('.md')) return null
 
   const absoluteTarget = normalizeFsPath(target)

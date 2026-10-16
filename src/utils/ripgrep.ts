@@ -372,6 +372,7 @@ function ripGrepRaw(
       maxBuffer: MAX_BUFFER_SIZE,
       signal: abortSignal,
       timeout,
+      windowsHide: true,
       killSignal: process.platform === 'win32' ? undefined : 'SIGKILL',
     },
     callback,
@@ -737,6 +738,7 @@ const testRipgrepOnFirstUse = memoize(async (): Promise<void> => {
         argv0: config.argv0,
         stderr: 'ignore',
         stdout: 'pipe',
+        windowsHide: true,
       })
 
       // Bun's ReadableStream has .text() at runtime, but TS types don't reflect it

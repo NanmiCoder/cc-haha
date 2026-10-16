@@ -4,6 +4,8 @@ import { MessageSquare, Search } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../../i18n'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
+import { useSessionRuntimeStore } from '@/stores/sessionRuntimeStore'
+import { sessionsApi } from '@/api/sessions'
 import { searchApi, type SessionSearchResult, type SessionMatch, type SessionMatchRole } from '../../api/search'
 import { Badge } from '@/components/ui/Badge'
 import { Spinner } from '@/components/ui/Spinner'
@@ -12,6 +14,7 @@ const DEBOUNCE_MS = 250
 const RECENT_LIMIT = 8
 const SEARCH_LIMIT = 50
 const MATCH_PREVIEW_PER_SESSION = 3
+const OPEN_SUMMARY_TIMEOUT_MS = 5_000
 
 type Props = {
   open: boolean
@@ -67,7 +70,10 @@ export function GlobalSearchModal({ open, onClose }: Props) {
     requestControllerRef.current = null
     requestIdRef.current += 1 // invalidate any in-flight request
     const id = requestAnimationFrame(() => inputRef.current?.focus())
-    return () => cancelAnimationFrame(id)
+    return () => {
+      cancelAnimationFrame(id)
+      requestControllerRef.current?.abort()
+    }
   }, [open])
 
   // Cancel stale work as soon as the visible query changes. Waiting for the
@@ -185,9 +191,41 @@ export function GlobalSearchModal({ open, onClose }: Props) {
       ?.scrollIntoView({ block: 'nearest' })
   }, [activeIndex])
 
-  function openRow(row: Row) {
-    useTabStore.getState().openTab(row.sessionId, row.title)
-    onClose()
+  async function openRow(row: Row) {
+    requestControllerRef.current?.abort()
+    requestControllerRef.current = null
+    const requestId = ++requestIdRef.current
+    const session = useSessionStore.getState().sessions.find((item) => item.id === row.sessionId)
+    if (session) {
+      setLoading(false)
+      useSessionStore.getState().openHistoricalSession(session)
+      onClose()
+      return
+    }
+    // Search hits are not necessarily in the bounded sidebar list. Resolve
+    // their metadata before connecting, just like opening project history.
+    const controller = new AbortController()
+    requestControllerRef.current = controller
+    const runtimeSelections = useSessionRuntimeStore.getState().selections
+    const isCurrent = () => !controller.signal.aborted && requestId === requestIdRef.current
+    setLoading(true)
+    try {
+      const summary = await sessionsApi.getSummary(row.sessionId, { signal: controller.signal, timeout: OPEN_SUMMARY_TIMEOUT_MS })
+      if (!isCurrent()) return
+      useSessionStore.getState().openHistoricalSession(summary, runtimeSelections)
+      onClose()
+    } catch {
+      if (!isCurrent()) return
+      // A transient summary failure must not prevent opening the transcript
+      // or discard the title already supplied by the search result.
+      useTabStore.getState().openTab(row.sessionId, row.title)
+      onClose()
+    } finally {
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null
+        setLoading(false)
+      }
+    }
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {

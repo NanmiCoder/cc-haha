@@ -1232,8 +1232,15 @@ describe('ReviewService git invocation hardening', () => {
       })
       expect(staged.state).toBe('ok')
       // `GIT_INDEX_FILE` would have staged into the decoy's index instead.
-      expect(git(repoDir, 'status', '--porcelain=v1')).toContain('M  tracked.txt')
-      expect(git(decoy, 'status', '--porcelain=v1')).toContain(' M decoy.txt')
+      // Only the oracle gets a clean environment: the service above still ran
+      // with all three retargeting variables pointing at the decoy.
+      const inspectionEnv = { ...process.env }
+      for (const name of Object.keys(saved)) delete inspectionEnv[name]
+      const inspectStatus = (cwd: string) => execFileSync('git', ['status', '--porcelain=v1'], {
+        cwd, encoding: 'utf8', env: inspectionEnv,
+      })
+      expect(inspectStatus(repoDir)).toContain('M  tracked.txt')
+      expect(inspectStatus(decoy)).toContain(' M decoy.txt')
     } finally {
       for (const [name, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[name]

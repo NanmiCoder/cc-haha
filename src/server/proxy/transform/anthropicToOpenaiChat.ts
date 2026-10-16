@@ -28,6 +28,8 @@ type UserTextPart = OpenAIChatContentPart & { synthetic?: boolean }
 export type OpenAIChatTransformOptions = RequestCompatibilityOptions & {
   roundTripReasoningContent?: boolean
   passThinkingToggle?: boolean
+  // Defaults to sending. Turned off for a model whose upstream refused the field.
+  passReasoningEffort?: boolean
   passSamplingParams?: boolean
   imageContentMode?: OpenAIChatImageContentMode
 }
@@ -140,6 +142,7 @@ export function anthropicToOpenaiChat(
   if (compatibility.passReasoning && outputConfigEffort !== undefined) {
     result.reasoning_effort = outputConfigEffort
   }
+  if (options.passReasoningEffort === false) delete result.reasoning_effort
 
   if (compatibility.parallelToolCalls !== undefined && result.tools?.length) {
     result.parallel_tool_calls = compatibility.parallelToolCalls

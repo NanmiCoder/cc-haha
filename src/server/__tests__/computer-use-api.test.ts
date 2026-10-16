@@ -403,6 +403,22 @@ describe('runPipInstallWithFallback', () => {
     expect(getUnsupportedPythonVersionStep('3.9.19')).toBeNull()
   })
 
+  it.skipIf(process.platform === 'win32')('runs pip through the real command runner by default', async () => {
+    const { runPipInstallWithFallback } = await importComputerUseApi()
+    const dir = await mkdtemp(join(tmpdir(), 'cc-haha-cu-pip-'))
+    const fakePython = join(dir, 'python')
+    await writeFile(fakePython, '#!/bin/sh\necho "$@"\n', { mode: 0o755 })
+
+    try {
+      const result = await runPipInstallWithFallback(fakePython, ['-m', 'pip', 'install', 'pyautogui'])
+      expect(result.ok).toBe(true)
+      expect(result.stdout).toContain('-m pip install')
+      expect(result.stdout).toContain('pyautogui')
+    } finally {
+      await rm(dir, { recursive: true, force: true })
+    }
+  })
+
   it('installs setup dependencies by upgrading pip before requirements', async () => {
     const { installSetupDependencies } = await importComputerUseApi()
     const calls: string[] = []

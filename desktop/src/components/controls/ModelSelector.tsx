@@ -21,7 +21,7 @@ import { useChatStore } from '../../stores/chatStore'
 import { useProviderStore } from '../../stores/providerStore'
 import { DRAFT_RUNTIME_SELECTION_KEY, useSessionRuntimeStore } from '../../stores/sessionRuntimeStore'
 import { useSettingsStore } from '../../stores/settingsStore'
-import type { SavedProvider } from '../../types/provider'
+import type { ModelMapping, SavedProvider } from '../../types/provider'
 import type { RuntimeSelection } from '../../types/runtime'
 import type { ModelInfo, ReasoningEffortLevel } from '../../types/settings'
 import { useDismissable } from '@/hooks/useDismissable'
@@ -40,6 +40,12 @@ import {
   GROK_OFFICIAL_MODELS,
   GROK_OFFICIAL_PROVIDER_ID,
 } from '../../constants/grokOfficialProvider'
+import { useHahaDeepSeekOAuthStore } from '../../stores/hahaDeepSeekOAuthStore'
+import {
+  DEEPSEEK_ACCOUNT_CATALOG_MODELS,
+  DEEPSEEK_ACCOUNT_PROVIDER_ID,
+  buildDeepSeekAccountProvider,
+} from '../../constants/deepseekAccountProvider'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { SearchField } from '@/components/ui/SearchField'
 import { ReasoningEffortPopover } from './ReasoningEffortPopover'
@@ -131,6 +137,48 @@ function officialChoices(
   }
 }
 
+function baseModelId(id: string): string {
+  return id.trim().replace(/\[1m\]$/i, '')
+}
+
+/**
+ * The account login keeps the API-key provider's alias rows (slot labels,
+ * reasoning options) for the mapping the user saved in Settings, named the way
+ * the account names its models, followed by
+ * the account models no alias points at. While the account is the active
+ * provider, `availableModels` carries the server's live `/models` listing.
+ */
+function deepSeekAccountChoice(
+  activeId: string | null,
+  providerName: string,
+  labels: Record<ModelSlot, string>,
+  availableModels: ModelInfo[],
+  savedModels: ModelMapping,
+): ProviderChoice {
+  const provider = buildDeepSeekAccountProvider(savedModels)
+  const isActive = activeId === DEEPSEEK_ACCOUNT_PROVIDER_ID
+  const catalog = isActive && availableModels.length > 0
+    ? availableModels
+    : DEEPSEEK_ACCOUNT_CATALOG_MODELS
+  const namesByBaseId = new Map(catalog.map((model) => [baseModelId(model.id), model.name]))
+  const models = buildProviderModels(provider, labels).map((model) => ({
+    ...model,
+    name: namesByBaseId.get(baseModelId(model.id)) ?? model.name,
+  }))
+  const mappedBaseIds = new Set(models.map((model) => baseModelId(model.id)))
+  for (const listed of catalog) {
+    if (mappedBaseIds.has(baseModelId(listed.id))) continue
+    mappedBaseIds.add(baseModelId(listed.id))
+    models.push(buildProviderModelRow(provider, listed.id, listed.name, ''))
+  }
+  return {
+    providerId: DEEPSEEK_ACCOUNT_PROVIDER_ID,
+    providerName,
+    isDefault: isActive,
+    models,
+  }
+}
+
 function mergeOfficialModels(availableModels: ModelInfo[]): ModelInfo[] {
   const merged = [...OFFICIAL_MODELS]
   const knownIds = new Set(merged.map(model => model.id))
@@ -165,24 +213,32 @@ function buildProviderModels(
     byId.set(entry.id, { id: entry.id, labels: [entry.label] })
   }
 
-  return [...byId.values()].map((entry) => {
-    const reasoningProfile = resolveModelReasoningProfile(
-      entry.id,
-      provider.apiFormat,
-      getProviderModelCapabilityOverride(provider, entry.id),
-      getBundledPresetReasoningProviderKind(provider.presetId),
-    )
-    return {
-      id: entry.id,
-      name: entry.id,
-      description: entry.labels.join(' · '),
-      context: '',
-      supportedReasoningEfforts: [...(reasoningProfile?.supportedReasoningEfforts ?? [])],
-      ...(reasoningProfile?.defaultReasoningEffort
-        ? { defaultReasoningEffort: reasoningProfile.defaultReasoningEffort }
-        : {}),
-    }
-  })
+  return [...byId.values()].map((entry) =>
+    buildProviderModelRow(provider, entry.id, entry.id, entry.labels.join(' · ')))
+}
+
+function buildProviderModelRow(
+  provider: SavedProvider,
+  id: string,
+  name: string,
+  description: string,
+): ModelInfo {
+  const reasoningProfile = resolveModelReasoningProfile(
+    id,
+    provider.apiFormat,
+    getProviderModelCapabilityOverride(provider, id),
+    getBundledPresetReasoningProviderKind(provider.presetId),
+  )
+  return {
+    id,
+    name,
+    description,
+    context: '',
+    supportedReasoningEfforts: [...(reasoningProfile?.supportedReasoningEfforts ?? [])],
+    ...(reasoningProfile?.defaultReasoningEffort
+      ? { defaultReasoningEffort: reasoningProfile.defaultReasoningEffort }
+      : {}),
+  }
 }
 
 function buildProviderChoices(
@@ -192,10 +248,13 @@ function buildProviderChoices(
   officialName: string,
   openAIOfficialName: string,
   grokOfficialName: string,
+  deepSeekAccountName: string,
+  deepSeekAccountModels: ModelMapping,
   labels: Record<ModelSlot, string>,
   claudeOfficialLoggedIn: boolean,
   openAIOfficialLoggedIn: boolean,
   grokOfficialLoggedIn: boolean,
+  deepSeekAccountLoggedIn: boolean,
 ): ProviderChoice[] {
   const claudeOfficialModels = activeId === null && availableModels.length > 0
     ? mergeOfficialModels(availableModels)
@@ -227,6 +286,9 @@ function buildProviderChoices(
       activeId === GROK_OFFICIAL_PROVIDER_ID,
       grokOfficialName,
     ))
+  }
+  if (deepSeekAccountLoggedIn) {
+    choices.push(deepSeekAccountChoice(activeId, deepSeekAccountName, labels, availableModels, deepSeekAccountModels))
   }
 
   for (const provider of providers) {
@@ -272,6 +334,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const {
     providers,
     activeId,
+    deepSeekAccountModels,
     hasLoadedProviders,
     isLoading: providersLoading,
     fetchProviders,
@@ -282,6 +345,8 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const fetchOpenAIOAuthStatus = useHahaOpenAIOAuthStore((s) => s.fetchStatus)
   const grokOAuthStatus = useHahaGrokOAuthStore((s) => s.status)
   const fetchGrokOAuthStatus = useHahaGrokOAuthStore((s) => s.fetchStatus)
+  const deepSeekOAuthStatus = useHahaDeepSeekOAuthStore((s) => s.status)
+  const fetchDeepSeekOAuthStatus = useHahaDeepSeekOAuthStore((s) => s.fetchStatus)
   const runtimeSelection = useSessionRuntimeStore((state) =>
     runtimeKey ? state.selections[runtimeKey] : undefined,
   )
@@ -333,7 +398,15 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     void fetchClaudeOAuthStatus()
     void fetchOpenAIOAuthStatus()
     void fetchGrokOAuthStatus()
-  }, [fetchClaudeOAuthStatus, fetchGrokOAuthStatus, fetchOpenAIOAuthStatus, isRuntimeScoped, open])
+    void fetchDeepSeekOAuthStatus()
+  }, [
+    fetchClaudeOAuthStatus,
+    fetchDeepSeekOAuthStatus,
+    fetchGrokOAuthStatus,
+    fetchOpenAIOAuthStatus,
+    isRuntimeScoped,
+    open,
+  ])
 
   const closeSelector = useCallback(() => setOpen(false), [])
 
@@ -418,12 +491,26 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
       t('settings.providers.officialName'),
       t('settings.providers.openaiOfficialName'),
       t('settings.providers.grokOfficialName'),
+      t('settings.providers.deepseekAccountName'),
+      deepSeekAccountModels,
       roleLabels,
       claudeOAuthStatus?.loggedIn === true,
       openAIOAuthStatus?.loggedIn === true,
       grokOAuthStatus?.loggedIn === true,
+      deepSeekOAuthStatus?.loggedIn === true,
     ),
-    [activeId, availableModels, providers, roleLabels, t, claudeOAuthStatus, grokOAuthStatus, openAIOAuthStatus],
+    [
+      activeId,
+      availableModels,
+      providers,
+      deepSeekAccountModels,
+      roleLabels,
+      t,
+      claudeOAuthStatus,
+      grokOAuthStatus,
+      openAIOAuthStatus,
+      deepSeekOAuthStatus,
+    ],
   )
   const normalizedSearchQuery = searchQuery.trim().toLocaleLowerCase()
   const selectableModels = isControlled && models ? models : availableModels
@@ -480,7 +567,9 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           ? officialChoices(OPENAI_OFFICIAL_PROVIDER_ID, activeId === OPENAI_OFFICIAL_PROVIDER_ID && availableModels.length ? availableModels : OPENAI_OFFICIAL_MODELS, activeId === OPENAI_OFFICIAL_PROVIDER_ID, t('settings.providers.openaiOfficialName'))
           : activeRuntimeSelection.providerId === GROK_OFFICIAL_PROVIDER_ID
             ? officialChoices(GROK_OFFICIAL_PROVIDER_ID, activeId === GROK_OFFICIAL_PROVIDER_ID && availableModels.length ? availableModels : GROK_OFFICIAL_MODELS, activeId === GROK_OFFICIAL_PROVIDER_ID, t('settings.providers.grokOfficialName'))
-            : null)
+            : activeRuntimeSelection.providerId === DEEPSEEK_ACCOUNT_PROVIDER_ID
+              ? deepSeekAccountChoice(activeId, t('settings.providers.deepseekAccountName'), roleLabels, availableModels, deepSeekAccountModels)
+              : null)
     : null
 
   const selectedRuntimeModel = activeRuntimeSelection
@@ -542,7 +631,8 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     const claudeStatus = useHahaOAuthStore.getState().status
     const openAIStatus = useHahaOpenAIOAuthStore.getState().status
     const grokStatus = useHahaGrokOAuthStore.getState().status
-    const statuses = [claudeStatus, openAIStatus, grokStatus]
+    const deepSeekStatus = useHahaDeepSeekOAuthStore.getState().status
+    const statuses = [claudeStatus, openAIStatus, grokStatus, deepSeekStatus]
     const providerState = useProviderStore.getState()
     if (providerState.providers.length > 0) {
       setOpen(true)
@@ -572,11 +662,13 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
         fetchClaudeOAuthStatus(),
         fetchOpenAIOAuthStatus(),
         fetchGrokOAuthStatus(),
+        fetchDeepSeekOAuthStatus(),
       ])
       const hasOfficialLogin = [
         useHahaOAuthStore.getState().status,
         useHahaOpenAIOAuthStore.getState().status,
         useHahaGrokOAuthStore.getState().status,
+        useHahaDeepSeekOAuthStore.getState().status,
       ].some((status) => status?.loggedIn === true)
       if (hasOfficialLogin) {
         setOpen(true)
@@ -587,6 +679,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   }, [
     disabled,
     fetchClaudeOAuthStatus,
+    fetchDeepSeekOAuthStatus,
     fetchGrokOAuthStatus,
     fetchOpenAIOAuthStatus,
     isRuntimeScoped,

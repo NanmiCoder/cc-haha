@@ -5,6 +5,7 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useKeyboardShortcuts } from './useKeyboardShortcuts'
 import { useChatStore, type PerSessionState } from '../stores/chatStore'
 import { useTabStore } from '../stores/tabStore'
+import { useUIStore } from '../stores/uiStore'
 
 function ShortcutHost() {
   useKeyboardShortcuts()
@@ -211,5 +212,128 @@ describe('useKeyboardShortcuts generation stop', () => {
 
     expect(event.defaultPrevented).toBe(false)
     expect(stopGeneration).not.toHaveBeenCalled()
+  })
+})
+
+describe('useKeyboardShortcuts new session', () => {
+  const initialUiState = useUIStore.getInitialState()
+
+  beforeEach(() => {
+    useUIStore.setState({ newSessionRequest: 0 })
+  })
+
+  afterEach(() => {
+    cleanup()
+    useUIStore.setState(initialUiState, true)
+  })
+
+  function press(init: KeyboardEventInit) {
+    const event = new KeyboardEvent('keydown', { key: 'n', bubbles: true, cancelable: true, ...init })
+    document.dispatchEvent(event)
+    return event
+  }
+
+  it('asks the sidebar for a new session on Cmd+N on macOS', () => {
+    setNavigatorPlatform('MacIntel')
+    render(<ShortcutHost />)
+
+    const event = press({ metaKey: true })
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(useUIStore.getState().newSessionRequest).toBe(1)
+    press({ metaKey: true })
+    expect(useUIStore.getState().newSessionRequest).toBe(2)
+  })
+
+  it('leaves Ctrl+N to the text field on macOS', () => {
+    setNavigatorPlatform('MacIntel')
+    render(<ShortcutHost />)
+
+    const event = press({ ctrlKey: true })
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(useUIStore.getState().newSessionRequest).toBe(0)
+  })
+
+  it('asks the sidebar for a new session on Ctrl+N on Windows and Linux', () => {
+    setNavigatorPlatform('Win32')
+    render(<ShortcutHost />)
+
+    const event = press({ ctrlKey: true })
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(useUIStore.getState().newSessionRequest).toBe(1)
+  })
+
+  it.each([
+    ['Shift', { shiftKey: true }],
+    ['Alt', { altKey: true }],
+  ] as const)('ignores Ctrl+%s+N', (_label, extra) => {
+    setNavigatorPlatform('Win32')
+    render(<ShortcutHost />)
+
+    const event = press({ ctrlKey: true, ...extra })
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(useUIStore.getState().newSessionRequest).toBe(0)
+  })
+})
+
+describe('useKeyboardShortcuts find in page', () => {
+  const initialUiState = useUIStore.getInitialState()
+
+  beforeEach(() => {
+    useUIStore.setState({ activeModal: null })
+  })
+
+  afterEach(() => {
+    cleanup()
+    useUIStore.setState(initialUiState, true)
+  })
+
+  function press(init: KeyboardEventInit) {
+    const event = new KeyboardEvent('keydown', { key: 'f', bubbles: true, cancelable: true, ...init })
+    document.dispatchEvent(event)
+    return event
+  }
+
+  it('opens find on Cmd+F on macOS', () => {
+    setNavigatorPlatform('MacIntel')
+    render(<ShortcutHost />)
+
+    const event = press({ metaKey: true })
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(useUIStore.getState().activeModal).toBe('findInPage')
+  })
+
+  it('leaves Ctrl+Cmd+F to the View menu fullscreen accelerator on macOS', () => {
+    setNavigatorPlatform('MacIntel')
+    render(<ShortcutHost />)
+
+    const event = press({ metaKey: true, ctrlKey: true })
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(useUIStore.getState().activeModal).toBeNull()
+  })
+
+  it('leaves Ctrl+F to the text field on macOS', () => {
+    setNavigatorPlatform('MacIntel')
+    render(<ShortcutHost />)
+
+    const event = press({ ctrlKey: true })
+
+    expect(event.defaultPrevented).toBe(false)
+    expect(useUIStore.getState().activeModal).toBeNull()
+  })
+
+  it('opens find on Ctrl+F on Windows and Linux', () => {
+    setNavigatorPlatform('Win32')
+    render(<ShortcutHost />)
+
+    const event = press({ ctrlKey: true })
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(useUIStore.getState().activeModal).toBe('findInPage')
   })
 })

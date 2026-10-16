@@ -2,12 +2,18 @@ import { api } from './client'
 import type { ModelInfo, EffortLevel } from '../types/settings'
 
 type ModelsResponse = { models: ModelInfo[]; provider: { id: string; name: string } | null }
+type ModelCatalogResponse = { models: ModelInfo[] }
 type CurrentModelResponse = { model: ModelInfo }
 type EffortResponse = { level: EffortLevel; available: EffortLevel[] }
 
 export const modelsApi = {
   list() {
     return api.get<ModelsResponse>('/api/models')
+  },
+
+  /** Models one built-in OAuth provider's account offers, whether or not it is the active provider. */
+  catalog(providerId: string) {
+    return api.get<ModelCatalogResponse>(`/api/models/catalog?provider=${encodeURIComponent(providerId)}`)
   },
 
   getCurrent() {

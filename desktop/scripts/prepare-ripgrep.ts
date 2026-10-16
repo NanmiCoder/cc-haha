@@ -93,6 +93,67 @@ export async function stageRipgrepLicenses(binariesDir: string): Promise<string>
   return licensesDir
 }
 
+function quotePowerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`
+}
+
+/**
+ * Extraction commands in the order they should be tried. A bare `tar` is GNU
+ * tar under Git Bash and cannot read zip archives, so Windows zips go to the
+ * system bsdtar by absolute path first, then Expand-Archive. Elsewhere zips try
+ * unzip before tar (bsdtar on macOS reads zip as well).
+ */
+export function getArchiveExtractCommands(
+  archive: string,
+  destination: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string[][] {
+  const tar = ['tar', '-xf', archive, '-C', destination]
+  if (!archive.toLowerCase().endsWith('.zip')) return [tar]
+  if (platform === 'win32') {
+    const systemTar = path.win32.join(env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
+    return [
+      [systemTar, '-xf', archive, '-C', destination],
+      [
+        'powershell',
+        '-NoLogo',
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        `Expand-Archive -LiteralPath ${quotePowerShellLiteral(archive)} -DestinationPath ${quotePowerShellLiteral(destination)} -Force`,
+      ],
+    ]
+  }
+  return [['unzip', '-q', '-o', archive, '-d', destination], tar]
+}
+
+async function runInheritedCommand(command: string[]): Promise<number> {
+  return await Bun.spawn(command, { stdout: 'inherit', stderr: 'inherit' }).exited
+}
+
+/**
+ * Runs each candidate until one exits 0. A missing executable makes the spawn
+ * throw instead of returning a non-zero exit, so that also falls through.
+ */
+export async function extractArchive(
+  commands: string[][],
+  archiveName: string,
+  runCommand: (command: string[]) => Promise<number> = runInheritedCommand,
+): Promise<void> {
+  const failures: string[] = []
+  for (const command of commands) {
+    try {
+      const exitCode = await runCommand(command)
+      if (exitCode === 0) return
+      failures.push(`${command[0]} exited ${exitCode}`)
+    } catch (error) {
+      failures.push(`${command[0]}: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+  throw new Error(`[prepare-ripgrep] Failed to extract ${archiveName} (${failures.join('; ')})`)
+}
+
 export async function prepareRipgrep({
   targetTriple,
   archivePath = process.env.CC_HAHA_RIPGREP_ARCHIVE,
@@ -132,14 +193,7 @@ export async function prepareRipgrep({
 
     const extractDir = path.join(temporaryDir, 'extracted')
     await mkdir(extractDir, { recursive: true })
-    const extract = Bun.spawn(['tar', '-xf', downloadedArchive, '-C', extractDir], {
-      stdout: 'inherit',
-      stderr: 'inherit',
-    })
-    const extractExit = await extract.exited
-    if (extractExit !== 0) {
-      throw new Error(`[prepare-ripgrep] Failed to extract ${asset.archiveName} (exit ${extractExit})`)
-    }
+    await extractArchive(getArchiveExtractCommands(downloadedArchive, extractDir), asset.archiveName)
 
     const archiveRoot = path.join(
       extractDir,

@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 
-import { mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative, sep } from 'node:path'
 import { loadQuarantineManifest, quarantinedPathSet } from '../quality-gate/quarantine'
 import { rootBunTestFilter } from './bun-test-filter'
+import { classifyFailedFiles, formatFlakeReport } from './server-test-flakes'
 import { createSandboxedTestEnvironment } from './test-environment'
 
 const root = process.cwd()
@@ -139,4 +140,16 @@ const failedFiles = results.filter((result) => !result.evidenceComplete)
 console.log(
   `[server-tests] summary: files=${results.length} passed-tests=${results.reduce((total, result) => total + result.passedTests, 0)} failed-tests=${results.reduce((total, result) => total + result.failedTests, 0)} failed-files=${failedFiles.length}`,
 )
-process.exit(failedFiles.length === 0 ? 0 : 1)
+// Re-run each failed file once, alone, to tell a race from a regression. The
+// exit code does not depend on the re-run.
+const flakeReport = await classifyFailedFiles(
+  failedFiles.map((result) => result.file).sort(),
+  async (file) => (await runTestFile(file)).evidenceComplete,
+)
+for (const line of formatFlakeReport(flakeReport)) console.log(line)
+if (flakeReport.verdicts.length > 0) {
+  const artifactDir = join(root, 'artifacts', 'server-tests')
+  mkdirSync(artifactDir, { recursive: true })
+  writeFileSync(join(artifactDir, 'flaky.json'), JSON.stringify(flakeReport, null, 2) + '\n')
+}
+process.exit(flakeReport.exitCode)

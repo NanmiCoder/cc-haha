@@ -528,14 +528,15 @@ describe('getMaxStreamRetries', () => {
     }
   }
 
-  test('gives transport failures the API retry budget instead of the transient one', () => {
+  test('gives transport and upstream-reported failures the API retry budget, stalls the small one', () => {
     withEnv({ [TRANSIENT_ENV]: undefined, [API_ENV]: undefined }, () => {
       expect(getMaxStreamRetries('transport')).toBe(10)
+      expect(getMaxStreamRetries('transient')).toBe(10)
       expect(getMaxStreamRetries('watchdog')).toBe(2)
-      expect(getMaxStreamRetries('transient')).toBe(2)
     })
     withEnv({ [TRANSIENT_ENV]: undefined, [API_ENV]: '4' }, () => {
       expect(getMaxStreamRetries('transport')).toBe(4)
+      expect(getMaxStreamRetries('transient')).toBe(4)
     })
     withEnv({ [TRANSIENT_ENV]: undefined, [API_ENV]: 'abc' }, () => {
       expect(getMaxStreamRetries('transport')).toBe(10)
@@ -549,6 +550,7 @@ describe('getMaxStreamRetries', () => {
     })
     withEnv({ [TRANSIENT_ENV]: '3', [API_ENV]: '1' }, () => {
       expect(getMaxStreamRetries('transport')).toBe(1)
+      expect(getMaxStreamRetries('transient')).toBe(1)
       expect(getMaxStreamRetries('watchdog')).toBe(3)
     })
   })

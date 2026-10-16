@@ -111,7 +111,7 @@ const LINKABLE_DOTFILES: ReadonlySet<string> = new Set([
  * way, and in *prose* a CJK filename is far rarer than CJK sitting flush
  * against an ASCII path. Whole-string references use FULLREF_SEGMENT instead.
  */
-const SEGMENT_CHARS = String.raw`\w.\-@+`
+const SEGMENT_CHARS = String.raw`\w.\-@+%`
 const SEGMENT = `[${SEGMENT_CHARS}]+`
 /** A path cannot begin mid-token: `ftp://x.com/a/b.ts` must not yield `x.com/a/b.ts`. */
 const CONTINUES_PATH_RE = new RegExp(`[${SEGMENT_CHARS}/\\\\:]`)
@@ -126,7 +126,7 @@ const PREFIX = String.raw`(?:~${SEPARATOR}|\.{1,2}${SEPARATOR}|${SEPARATOR}|[A-Z
  * `文档/说明.md` are real files a turn really writes, and rejecting them made
  * their output cards and "Open with" menus silently dead.
  */
-const FULLREF_SEGMENT = String.raw`[\p{L}\p{N}_.\-@+]+`
+const FULLREF_SEGMENT = String.raw`[\p{L}\p{N}_.\-@+%]+`
 
 /**
  * `path:42`, `path:42:8`, `path#L42`, `path#L42-L60`, `path:L42`.
@@ -146,6 +146,17 @@ const FULLREF_PATH_SOURCE =
   `(?:${PREFIX})?(?:${FULLREF_SEGMENT}${SEPARATOR})*${FULLREF_SEGMENT}(?:${LINE_SUFFIX})?`
 
 const ANCHORED_FULLREF_PATH_RE = new RegExp(`^${FULLREF_PATH_SOURCE}`, 'u')
+
+/**
+ * Segment characters for a link destination: everything a Windows or POSIX
+ * filename may contain, minus `:` and `#`, which open the line suffix.
+ */
+const HREF_SEGMENT = String.raw`[^\\/:*?"<>|#\p{Cc}]+`
+
+const ANCHORED_HREF_PATH_RE = new RegExp(
+  `^(?:${PREFIX})?(?:${HREF_SEGMENT}${SEPARATOR})*${HREF_SEGMENT}(?:${LINE_SUFFIX})?$`,
+  'u',
+)
 
 export type FilePathRef = {
   /** Exactly what the prose said, line suffix included. Used for "copy path". */
@@ -344,7 +355,7 @@ export function splitTextByFilePaths(text: string): FilePathSegment[] {
 
 const UNICODE_LETTER_RE = /[^\x00-\x7F]/
 const IS_UNICODE_WORD_RE = /[\p{L}\p{N}]/u
-const TOKEN_CHAR_RE = /[\p{L}\p{N}_.\-@+/\\~]/u
+const TOKEN_CHAR_RE = /[\p{L}\p{N}_.\-@+%/\\~]/u
 
 /**
  * The ASCII scan stops at the first CJK letter, so a match flush against one is
@@ -475,6 +486,23 @@ export function parseFilePathRef(value: string): FilePathRef | null {
   if (!trimmed) return null
   const ref = matchPath(trimmed, ANCHORED_FULLREF_PATH_RE)
   return ref && ref.raw === trimmed ? ref : null
+}
+
+/**
+ * A link destination that is a file path — an href already chosen as a whole by
+ * a markdown link, an output card or the address bar.
+ *
+ * Nothing here can bleed into a sentence or a command, so a segment is anything
+ * a filename may hold: `D:/cchaha/cchaha d/记忆.md` and `报告 (1).docx` are real
+ * paths a turn writes, and with FULLREF's set their cards and "Open with" menus
+ * did nothing when clicked (#1556). Code spans keep {@link parseFilePathRef}:
+ * there a space still means `bun test a.test.ts` is a command.
+ */
+export function parseFileHref(value: string): FilePathRef | null {
+  const trimmed = value.trim()
+  if (!trimmed) return null
+  const match = ANCHORED_HREF_PATH_RE.exec(trimmed)
+  return match && match[0] === trimmed ? buildRef(trimmed, match) : null
 }
 
 /** True when `value` is nothing but a single file reference (used for inline code). */

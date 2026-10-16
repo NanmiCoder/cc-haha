@@ -2,6 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { resolveAssistantFileHref } from './assistantFileContext'
 
 describe('resolveAssistantFileHref', () => {
+  it('preserves parsed literal paths and reveal positions under the declared root', () => {
+    expect(resolveAssistantFileHref(
+      { path: 'docs/literal%20name.md', line: 7, column: 3 },
+      '输出目录：`/work/QA%20root`',
+    )).toEqual({ path: '/work/QA%20root/docs/literal%20name.md', line: 7, column: 3 })
+  })
+
   it('resolves only explicit directory declarations including Windows and spaces', () => {
     expect(resolveAssistantFileHref('public/audio/track.wav', '项目根目录是 `/external/my project/`：')).toBe('/external/my project/public/audio/track.wav')
     expect(resolveAssistantFileHref('out/movie.mp4', 'Project root: `D:\\work\\demo\\`')).toBe('D:/work/demo/out/movie.mp4')

@@ -78,7 +78,8 @@ export function createModelCatalogCache<T>(
           return models
         } catch {
           retryAfter = Date.now() + failureBackoffMs
-          return fallback
+          // The last listing this account got still beats the bundled catalog.
+          return cached?.accountKey === accountKey ? cached.models : fallback
         }
       }
 

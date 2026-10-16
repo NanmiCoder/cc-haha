@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 1,
+  "id": "replay-openai-first-turn",
+  "format": "openai_chat",
+  "recordedWith": {
+    "provider": "Custom-DeepSeek-OpenAI",
+    "model": "deepseek-flash",
+    "date": "2026-10-14"
+  },
+  "providerConfig": {
+    "presetId": "custom",
+    "authStrategy": "auth_token",
+    "apiFormat": "openai_chat",
+    "runtimeKind": "anthropic_compatible",
+    "models": {
+      "main": "deepseek-flash",
+      "fable": "deepseek-flash",
+      "haiku": "deepseek-flash",
+      "sonnet": "deepseek-flash",
+      "opus": "deepseek-flash"
+    },
+    "model1mSupport": {
+      "main": true,
+      "fable": true,
+      "haiku": true,
+      "sonnet": true,
+      "opus": true
+    },
+    "modelContextWindows": {
+      "deepseek-flash": 1000000
+    },
+    "toolSearchEnabled": false,
+    "supportsNestedToolResultMedia": true
+  },
+  "interactions": [
+    {
+      "seq": 0,
+      "path": "/v1/chat/completions",
+      "queue": "agent:e3b0c44298fc",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": true,
+        "maxTokens": null,
+        "toolNames": [
+          "Agent",
+          "AskUserQuestion",
+          "Bash",
+          "CreateSession",
+          "Edit",
+          "EnterPlanMode",
+          "EnterWorktree",
+          "ExitPlanMode",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListSessions",
+          "NotebookEdit",
+          "Read",
+          "ReadSession",
+          "SendMessage",
+          "SendSessionMessage",
+          "Skill",
+          "TaskCreate",
+          "TaskGet",
+          "TaskList",
+          "TaskOutput",
+          "TaskStop",
+          "TaskUpdate",
+          "TeamCreate",
+          "TeamDelete",
+          "TeamPlan",
+          "WaitSessions",
+          "WebFetch",
+          "Workflow",
+          "Write"
+        ],
+        "lastRole": "user",
+        "lastUserText": "",
+        "firstUserText": "",
+        "toolResultIds": [],
+        "messageCount": 2,
+        "systemSha": "d0c5a745a773",
+        "toolsSha": "9fac276d7a5f"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "text/event-stream; charset=utf-8",
+        "firstByteMs": 208,
+        "events": [
+      {"data":{"id":"6f8f42b5-e281-4d36-8e03-043aa35719a7","object":"chat.completion.chunk","created":1791961959,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"role":"assistant","content":null,"reasoning_content":""},"logprobs":null,"finish_reason":null}],"usage":null},"dt":12},
+      {"data":{"id":"6f8f42b5-e281-4d36-8e03-043aa35719a7","object":"chat.completion.chunk","created":1791961959,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":"Ready","reasoning_content":null},"logprobs":null,"finish_reason":null}],"usage":null},"dt":1101},
+      {"data":{"id":"6f8f42b5-e281-4d36-8e03-043aa35719a7","object":"chat.completion.chunk","created":1791961959,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":" to","reasoning_content":null},"logprobs":null,"finish_reason":null}],"usage":null},"dt":21},
+      {"data":{"id":"6f8f42b5-e281-4d36-8e03-043aa35719a7","object":"chat.completion.chunk","created":1791961959,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":" help","reasoning_content":null},"logprobs":null,"finish_reason":null}],"usage":null},"dt":26},
+      {"data":{"id":"6f8f42b5-e281-4d36-8e03-043aa35719a7","object":"chat.completion.chunk","created":1791961959,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":".","reasoning_content":null},"logprobs":null,"finish_reason":null}],"usage":null},"dt":0},
+      {"data":{"id":"6f8f42b5-e281-4d36-8e03-043aa35719a7","object":"chat.completion.chunk","created":1791961959,"model":"deepseek-flash","system_fingerprint":"aeb56401ca74e127821c4f9126dcb669","choices":[{"index":0,"delta":{"content":"","reasoning_content":null},"logprobs":null,"finish_reason":"stop"}],"usage":{"prompt_tokens":30012,"completion_tokens":5,"total_tokens":30017,"prompt_tokens_details":{"cached_tokens":2560},"completion_tokens_details":{"reasoning_tokens":0},"prompt_cache_hit_tokens":2560,"prompt_cache_miss_tokens":27452}},"dt":2},
+      {"data":"[DONE]","dt":0}
+     ]
+      },
+      "toolUseIds": []
+    },
+    {
+      "seq": 1,
+      "path": "/v1/chat/completions",
+      "queue": "plain:562273c24932",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": false,
+        "maxTokens": 2048,
+        "toolNames": [],
+        "lastRole": "user",
+        "lastUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nReply with a single short sentence confirming you are ready. Ready to help. Ready to help.\n</conversation>",
+        "firstUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nReply with a single short sentence confirming you are ready. Ready to help. Ready to help.\n</conversation>",
+        "toolResultIds": [],
+        "messageCount": 2,
+        "systemSha": "051f49520ce3",
+        "toolsSha": "74234e98afe7"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "firstByteMs": 265,
+        "json": {
+          "id": "c9544620-9a05-443d-8ad3-4edb20ece2ac",
+          "object": "chat.completion",
+          "created": 1791961960,
+          "model": "deepseek-flash",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "{\"title\": \"Confirm assistant readiness\"}",
+                "reasoning_content": "We need answer with JSON title. Conversation is trivial: user asks \"Reply with a single short sentence confirming you are ready.\" Assistant: \"Ready to help. Ready to help.\" We need title for coding session. This is not coding. But must generate concise title. Maybe \"Confirm readiness to help\" or \"Acknowledge readiness prompt\". We must return JSON only. Need title sentence case 3-7 words. The conversation is just ready confirmation. Title could be \"Confirm readiness for assistance\". But main topic? It's about replying ready. \"Confirm assistant readiness\" 3 words? capitalize first only. \"Confirm assistant readiness\" Good. Or \"Acknowledge readiness request\". Ensure no extra. Let's provide JSON."
+              },
+              "logprobs": null,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 303,
+            "completion_tokens": 158,
+            "total_tokens": 461,
+            "prompt_tokens_details": {
+              "cached_tokens": 128
+            },
+            "completion_tokens_details": {
+              "reasoning_tokens": 149
+            },
+            "prompt_cache_hit_tokens": 128,
+            "prompt_cache_miss_tokens": 175
+          },
+          "system_fingerprint": "aeb56401ca74e127821c4f9126dcb669"
+        }
+      },
+      "toolUseIds": []
+    }
+  ]
+}

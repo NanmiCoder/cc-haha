@@ -1,21 +1,157 @@
-MIT License
+cc-haha Community Source License 1.0
 
 Copyright (c) 2026 cc-haha
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+Project: https://github.com/NanmiCoder/cc-haha
+Commercial licensing: relakkes@gmail.com
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+This is a custom source-available license, not the MIT License, Apache
+License, Business Source License, or an OSI-approved open-source license.
+The English text in this file is the governing license. LICENSING.md is an
+explanatory guide, not an additional grant or restriction.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+1. Scope and existing rights
+
+"Software" means the cc-haha source code and accompanying documentation to
+which the applicable copyright holders apply this license. "Licensor" means
+each copyright holder granting rights under this license, and "you" means
+the individual or legal entity exercising those rights.
+
+This license grants only rights the Licensor is entitled to grant. Third-party
+code, dependencies, and contributions available under a separate license
+remain subject to that license, including their existing notices. See
+THIRD_PARTY_LICENSES.md and any file-level or directory-level license notices.
+This license does not cancel, narrow, or replace rights already granted under
+MIT or another license for previously distributed code. Historical terms
+remain available in the corresponding Git history; they do not grant MIT
+rights to later additions available only under this license.
+
+2. Permitted use
+
+Subject to sections 3 and 4, the Licensor grants you a worldwide,
+non-exclusive, royalty-free copyright license to use, reproduce, study,
+and modify the Software for noncommercial personal use, education,
+research, and the limited internal business use described below. You may
+redistribute the Software and modifications, or provide remote access to
+them, only for noncommercial purposes and subject to section 4.
+
+Internal business use means use within an organization solely for its own
+internal operations, including internal deployments, internal tools, and
+modifications kept for its own internal needs. It does not authorize paid
+client work, developing software or other deliverables for commercial sale
+or licensing, or any other activity reserved under section 3. An employee's
+ordinary salary for otherwise permitted internal work does not by itself
+make that work a prohibited commercial use. Internal deployment or access
+by an employee does not exempt an otherwise prohibited activity.
+
+These terms do not claim ownership of, or require disclosure of, your
+inputs or generated outputs. However, permission to use the Software to
+create outputs remains subject to section 3. Software code copied into an
+output also remains subject to its applicable license.
+
+3. Commercial monetization requires written permission
+
+Except for the limited internal business use expressly permitted in
+section 2, commercial monetization using the Software, its modifications,
+or a substantial portion of it requires a separate written commercial
+license from the applicable rights holders. Without that license, you
+may not:
+
+(a) Sell, license for a fee, rent, or otherwise commercially distribute
+the Software or a product that contains, embeds, or is derived from it.
+
+(b) Provide paid hosting, SaaS, managed services, or remote access to the
+Software or its capabilities to third parties.
+
+(c) Use the Software to perform paid client work or create software or
+other deliverables for commercial sale or licensing, including contracted
+development and commissioned work, whether or not the Software itself is
+included in the delivered work.
+
+(d) Carry out or supply paid customization, secondary development,
+integration, deployment, or maintenance of the Software for third parties,
+or commercially provide the resulting modifications or derivative works.
+
+(e) Monetize a product or service using the Software indirectly through
+advertising, commissions, or bundling with a paid product or service, even
+if access to the Software is described as free.
+
+These restrictions do not depend on whether the product or service competes
+with cc-haha. Keeping attribution, changing names, logos, interfaces, or
+implementation details, or making source code public does not remove them.
+A commercial license is required before carrying out a restricted activity.
+
+Free, noncommercial community forks, redistribution, and remote access
+remain permitted subject to section 4. Voluntary donations solely supporting
+a noncommercial community project's maintenance, without paid access,
+features, or services in return, do not by themselves make it a prohibited
+commercial use.
+
+4. Redistribution and visible attribution
+
+Whenever you distribute the Software or a substantial portion of it, with
+or without modifications, in source or binary form, or provide permitted
+remote access to it, you must:
+
+(a) Include this complete license, the applicable copyright notices, and
+all applicable third-party license notices with the distributed materials.
+For remote access, make them available through a normally accessible legal
+or license page. Do not remove or obscure existing legal or source notices.
+
+(b) Clearly display the following source attribution, with a working link
+where the medium supports links:
+
+    Based on cc-haha: https://github.com/NanmiCoder/cc-haha
+    Copyright (c) 2026 cc-haha
+
+Place it near the beginning of the main README of a source distribution,
+in an ordinarily accessible About or legal page of a graphical application,
+and in the product description or accompanying documentation of a binary
+distribution. For a command-line-only distribution, include it in the normal
+help or license output. For an integrated component, identify the cc-haha
+component in the host product's corresponding notices. It must remain
+legible and must not be hidden behind an additional purchase or login solely
+to view the notice.
+
+(c) If you modify the Software, prominently identify your distribution as
+a modified or unofficial version in its README and corresponding About,
+legal, or CLI notice, and provide a description of your material changes.
+Do not imply that your distribution is an official cc-haha release or is
+endorsed by its maintainers.
+
+(d) Pass these terms to recipients for the covered Software. You may license
+your own additions separately only insofar as doing so does not remove or
+contradict these conditions on the covered Software. This section does not
+require you to publish private modifications or your independently written
+code, and does not grant commercial rights withheld by section 3.
+
+5. Names and marks
+
+No trademark or logo rights are granted except the limited use of the
+cc-haha name needed for truthful source attribution under section 4.
+You may give a modified distribution its own name and branding, but must
+retain the required source attribution and legal notices. This license
+does not require reuse of the cc-haha logo or any minimum amount of code
+modification.
+
+6. Termination
+
+Rights under this license terminate automatically if you violate its
+conditions. If this is your first violation and you fully cure it within
+30 days after receiving written notice from the Licensor, your rights under
+this license are reinstated. Otherwise, reinstatement requires the
+Licensor's written permission. Termination under this license does not
+revoke independently granted rights under MIT or another license.
+
+7. Disclaimer
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED
+"AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR
+PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE LICENSOR OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+All rights not expressly granted under this license are reserved, without
+limiting rights available under a separate license or applicable law.

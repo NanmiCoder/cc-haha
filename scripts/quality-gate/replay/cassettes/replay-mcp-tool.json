@@ -1,0 +1,234 @@
+{
+  "schemaVersion": 1,
+  "id": "replay-mcp-tool",
+  "format": "anthropic",
+  "recordedWith": {
+    "provider": "DeepSeek",
+    "model": "deepseek-flash",
+    "date": "2026-10-14"
+  },
+  "providerConfig": {
+    "presetId": "deepseek",
+    "authStrategy": "auth_token",
+    "apiFormat": "anthropic",
+    "runtimeKind": "anthropic_compatible",
+    "models": {
+      "main": "deepseek-flash",
+      "haiku": "deepseek-flash",
+      "sonnet": "deepseek-flash",
+      "opus": "deepseek-flash"
+    },
+    "model1mSupport": {
+      "main": true,
+      "fable": false,
+      "haiku": true,
+      "sonnet": true,
+      "opus": true
+    },
+    "autoCompactWindow": 1000000,
+    "modelContextWindows": {
+      "deepseek-flash": 1000000
+    },
+    "toolSearchEnabled": false,
+    "supportsNestedToolResultMedia": true
+  },
+  "interactions": [
+    {
+      "seq": 0,
+      "path": "/v1/messages",
+      "queue": "agent:1509a2521b78",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": true,
+        "maxTokens": 32000,
+        "toolNames": [
+          "Agent",
+          "AskUserQuestion",
+          "Bash",
+          "CreateSession",
+          "Edit",
+          "EnterPlanMode",
+          "EnterWorktree",
+          "ExitPlanMode",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListSessions",
+          "NotebookEdit",
+          "Read",
+          "ReadSession",
+          "SendMessage",
+          "SendSessionMessage",
+          "Skill",
+          "TaskCreate",
+          "TaskGet",
+          "TaskList",
+          "TaskOutput",
+          "TaskStop",
+          "TaskUpdate",
+          "TeamCreate",
+          "TeamDelete",
+          "TeamPlan",
+          "WaitSessions",
+          "WebFetch",
+          "Workflow",
+          "Write",
+          "mcp__inventory__lookup_sku"
+        ],
+        "lastRole": "user",
+        "lastUserText": "Use the inventory MCP server's lookup_sku tool to look up SKU K-204, then tell me how many units are in stock. Reply with the number only.",
+        "firstUserText": "Use the inventory MCP server's lookup_sku tool to look up SKU K-204, then tell me how many units are in stock. Reply with the number only.",
+        "toolResultIds": [],
+        "messageCount": 1,
+        "systemSha": "d0c5a745a773",
+        "toolsSha": "99684d194619"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "text/event-stream; charset=utf-8",
+        "firstByteMs": 204,
+        "events": [
+      {"event":"message_start","data":{"type":"message_start","message":{"id":"7235525c-fd06-4a03-8eee-9de8a3508318","type":"message","role":"assistant","model":"deepseek-flash","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":30130,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"service_tier":"standard"}}},"dt":15},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}},"dt":0},
+      {"event":"ping","data":{"type":"ping"},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"7235525c-fd06-4a03-8eee-9de8a3508318"}},"dt":1246},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":0},"dt":0},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"call_00_ET_kgg5kJqx9vMnpxfuywQh1512","name":"mcp__inventory__lookup_sku","input":{}}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{"}},"dt":4},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"sku"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":": "}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":44},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"K"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"-"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"204"}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"}"}},"dt":2},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":1},"dt":0},
+      {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"input_tokens":30130,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":48,"service_tier":"standard"}},"dt":0},
+      {"event":"message_stop","data":{"type":"message_stop"},"dt":0}
+     ]
+      },
+      "toolUseIds": [
+        "call_00_ET_kgg5kJqx9vMnpxfuywQh1512"
+      ]
+    },
+    {
+      "seq": 1,
+      "path": "/v1/messages",
+      "queue": "agent:1509a2521b78",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": true,
+        "maxTokens": 32000,
+        "toolNames": [
+          "Agent",
+          "AskUserQuestion",
+          "Bash",
+          "CreateSession",
+          "Edit",
+          "EnterPlanMode",
+          "EnterWorktree",
+          "ExitPlanMode",
+          "ExitWorktree",
+          "Glob",
+          "Grep",
+          "ListSessions",
+          "NotebookEdit",
+          "Read",
+          "ReadSession",
+          "SendMessage",
+          "SendSessionMessage",
+          "Skill",
+          "TaskCreate",
+          "TaskGet",
+          "TaskList",
+          "TaskOutput",
+          "TaskStop",
+          "TaskUpdate",
+          "TeamCreate",
+          "TeamDelete",
+          "TeamPlan",
+          "WaitSessions",
+          "WebFetch",
+          "Workflow",
+          "Write",
+          "mcp__inventory__lookup_sku"
+        ],
+        "lastRole": "user",
+        "lastUserText": "",
+        "firstUserText": "Use the inventory MCP server's lookup_sku tool to look up SKU K-204, then tell me how many units are in stock. Reply with the number only.",
+        "toolResultIds": [
+          "call_00_ET_kgg5kJqx9vMnpxfuywQh1512"
+        ],
+        "messageCount": 3,
+        "systemSha": "d0c5a745a773",
+        "toolsSha": "99684d194619"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "text/event-stream; charset=utf-8",
+        "firstByteMs": 150,
+        "events": [
+      {"event":"message_start","data":{"type":"message_start","message":{"id":"82feeb89-27e4-49ab-9ceb-bd0d2e806134","type":"message","role":"assistant","model":"deepseek-flash","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":256,"cache_creation_input_tokens":0,"cache_read_input_tokens":29952,"output_tokens":0,"service_tier":"standard"}}},"dt":14},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}},"dt":0},
+      {"event":"ping","data":{"type":"ping"},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"82feeb89-27e4-49ab-9ceb-bd0d2e806134"}},"dt":1030},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":0},"dt":0},
+      {"event":"content_block_start","data":{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}},"dt":0},
+      {"event":"content_block_delta","data":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"17"}},"dt":0},
+      {"event":"content_block_stop","data":{"type":"content_block_stop","index":1},"dt":23},
+      {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"input_tokens":256,"cache_creation_input_tokens":0,"cache_read_input_tokens":29952,"output_tokens":2,"service_tier":"standard"}},"dt":0},
+      {"event":"message_stop","data":{"type":"message_stop"},"dt":0}
+     ]
+      },
+      "toolUseIds": []
+    },
+    {
+      "seq": 2,
+      "path": "/v1/messages",
+      "queue": "plain:562273c24932",
+      "request": {
+        "model": "deepseek-flash",
+        "stream": false,
+        "maxTokens": 2048,
+        "toolNames": [],
+        "lastRole": "user",
+        "lastUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nUse the inventory MCP server's lookup_sku tool to look up SKU K-204, then tell me how many units are in stock. Reply with the number only. 17 17\n</conversation>",
+        "firstUserText": "Generate a title for the following conversation transcript.\nDo not answer, continue, or summarize the conversation itself.\nReturn only JSON with a single \"title\" field.\nReturn the title in English.\nThis language was inferred from the user's first meaningful message; do not translate the title just because the assistant response or examples use another language.\nKeep product names, file names, model names, and code identifiers in their original form.\n\n\n<conversation>\nUse the inventory MCP server's lookup_sku tool to look up SKU K-204, then tell me how many units are in stock. Reply with the number only. 17 17\n</conversation>",
+        "toolResultIds": [],
+        "messageCount": 1,
+        "systemSha": "051f49520ce3",
+        "toolsSha": "74234e98afe7"
+      },
+      "response": {
+        "status": 200,
+        "contentType": "application/json",
+        "firstByteMs": 98,
+        "json": {
+          "id": "c1634fbb-3667-48dc-94f7-5071a4e02baf",
+          "type": "message",
+          "role": "assistant",
+          "model": "deepseek-flash",
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"title\": \"Look up SKU K-204 stock\"}"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 172,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 128,
+            "output_tokens": 13,
+            "service_tier": "standard"
+          }
+        }
+      },
+      "toolUseIds": []
+    }
+  ]
+}

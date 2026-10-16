@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { NormalizedSkill } from '@/types/market'
+import { AGENT_TEAMS_NOTICE_STORAGE_KEY, dismissAgentTeamsNotice, isAgentTeamsNoticeDismissed } from '@/lib/agentTeamsNotice'
 import { useMarketStore } from '@/stores/marketStore'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { MARKET_TAB_ID, useTabStore } from '@/stores/tabStore'
@@ -57,6 +58,7 @@ function skillChildKeys(result: { current: ReturnType<typeof useCapabilityMenu> 
 }
 
 beforeEach(() => {
+  localStorage.removeItem(AGENT_TEAMS_NOTICE_STORAGE_KEY)
   resetPopularSkillsCache()
   mocks.marketList.mockReset().mockResolvedValue({ items: [marketSkill('excalidraw'), marketSkill('pptx')], nextCursor: null, sources: {} })
   mocks.marketInstall.mockReset()
@@ -137,7 +139,44 @@ describe('useCapabilityMenu', () => {
     expect(skillChildKeys(result)).toContain('market-skill:excalidraw')
   })
 
+  it('asks before arming Agent Team, and arms only after the user confirms', () => {
+    const { result, composer } = renderMenu()
+    act(() => result.current.onAction({ type: 'toggleAgentTeam' }))
+    expect(result.current.agentTeamArmed).toBe(false)
+    expect(result.current.agentTeamsNotice.open).toBe(true)
+    expect(composer.onClose).toHaveBeenCalled()
+
+    act(() => result.current.agentTeamsNotice.onClose())
+    expect(result.current.agentTeamsNotice.open).toBe(false)
+    expect(result.current.agentTeamArmed).toBe(false)
+
+    act(() => result.current.onAction({ type: 'toggleAgentTeam' }))
+    act(() => result.current.agentTeamsNotice.onConfirm({ dontRemind: false }))
+    expect(result.current.agentTeamsNotice.open).toBe(false)
+    expect(result.current.agentTeamArmed).toBe(true)
+    expect(isAgentTeamsNoticeDismissed()).toBe(false)
+
+    // Turning it off never asks.
+    act(() => result.current.onAction({ type: 'toggleAgentTeam' }))
+    expect(result.current.agentTeamArmed).toBe(false)
+    expect(result.current.agentTeamsNotice.open).toBe(false)
+  })
+
+  it('stops asking once the user chose not to be reminded', () => {
+    const first = renderMenu()
+    act(() => first.result.current.onAction({ type: 'toggleAgentTeam' }))
+    act(() => first.result.current.agentTeamsNotice.onConfirm({ dontRemind: true }))
+    expect(first.result.current.agentTeamArmed).toBe(true)
+    first.unmount()
+
+    const second = renderMenu()
+    act(() => second.result.current.onAction({ type: 'toggleAgentTeam' }))
+    expect(second.result.current.agentTeamsNotice.open).toBe(false)
+    expect(second.result.current.agentTeamArmed).toBe(true)
+  })
+
   it('arms Agent Team until disarmed, and never while Settings turns it off', () => {
+    dismissAgentTeamsNotice()
     const { result, rerender } = renderMenu()
     act(() => result.current.onAction({ type: 'toggleAgentTeam' }))
     expect(result.current.agentTeamArmed).toBe(true)

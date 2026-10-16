@@ -79,6 +79,7 @@ export function modelSupportsEffort(model: string): boolean {
     m.includes('opus-4-5') ||
     m.includes('sonnet-4-6') ||
     m.includes('sonnet-5') ||
+    m.includes('haiku-5') ||
     m.includes('fable-5') ||
     m.includes('mythos-5') ||
     m.includes('mythos-preview')
@@ -123,6 +124,7 @@ export function modelSupportsXHighEffort(model: string): boolean {
     m.includes('opus-5') ||
     m.includes('opus-4-8') ||
     m.includes('sonnet-5') ||
+    m.includes('haiku-5') ||
     m.includes('fable-5') ||
     m.includes('mythos-5')
   )
@@ -150,6 +152,7 @@ export function modelSupportsMaxEffort(model: string): boolean {
     m.includes('opus-4-8') ||
     m.includes('sonnet-4-6') ||
     m.includes('sonnet-5') ||
+    m.includes('haiku-5') ||
     m.includes('fable-5') ||
     m.includes('mythos-5') ||
     m.includes('mythos-preview')
@@ -435,10 +438,14 @@ export function getDefaultEffortForModel(
   // the model launch DRI and research. Default effort is a sensitive setting
   // that can greatly affect model quality and bashing.
 
-  // Claude Code runs Opus 5.5 and Sonnet 5.5 at medium; the API default for
-  // Sonnet 5.5 is high, so it must be sent explicitly.
+  // Claude Code runs Opus 5.5, Sonnet 5.5 and Haiku 5.5 at medium; the API
+  // default for Sonnet 5.5 is high, so it must be sent explicitly.
   const canonicalModel = getCanonicalName(model)
-  if (canonicalModel === 'claude-opus-5-5' || canonicalModel === 'claude-sonnet-5-5') {
+  if (
+    canonicalModel === 'claude-opus-5-5' ||
+    canonicalModel === 'claude-sonnet-5-5' ||
+    canonicalModel === 'claude-haiku-5-5'
+  ) {
     return 'medium'
   }
 

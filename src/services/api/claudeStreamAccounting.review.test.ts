@@ -110,8 +110,9 @@ test('review: streaming and non-streaming fallback bill their own cumulative usa
   const before = { input: getTotalInputTokens(), output: getTotalOutputTokens() }
   useFallback = true
   try {
+    // A broken stream goes to the fallback; a rejected request would be surfaced instead.
     const messages = await receiveResponse([fixtureEvents()[0], terminal(), {
-      type: 'error', error: { type: 'invalid_request_error', message: 'fixture stream error' },
+      type: 'error', error: { type: 'stream_error', message: 'fixture stream error' },
     }], true)
     expect(JSON.stringify(messages)).toContain('fallback')
     expect(getTotalInputTokens() - before.input).toBe(18)

@@ -20,6 +20,7 @@ const originalEnv = {
   CC_HAHA_IMAGE_PROVIDER_KIND: process.env.CC_HAHA_IMAGE_PROVIDER_KIND,
   CC_HAHA_IMAGE_PROVIDER_ID: process.env.CC_HAHA_IMAGE_PROVIDER_ID,
   CC_HAHA_IMAGE_MODEL: process.env.CC_HAHA_IMAGE_MODEL,
+  CC_HAHA_IMAGE_PROTOCOL: process.env.CC_HAHA_IMAGE_PROTOCOL,
   CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: process.env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS,
 }
 
@@ -53,6 +54,7 @@ describe('managedEnv', () => {
     delete process.env.CC_HAHA_IMAGE_PROVIDER_KIND
     delete process.env.CC_HAHA_IMAGE_PROVIDER_ID
     delete process.env.CC_HAHA_IMAGE_MODEL
+    delete process.env.CC_HAHA_IMAGE_PROTOCOL
     delete process.env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS
   })
 
@@ -74,6 +76,7 @@ describe('managedEnv', () => {
     restoreEnv('CC_HAHA_IMAGE_PROVIDER_KIND')
     restoreEnv('CC_HAHA_IMAGE_PROVIDER_ID')
     restoreEnv('CC_HAHA_IMAGE_MODEL')
+    restoreEnv('CC_HAHA_IMAGE_PROTOCOL')
     restoreEnv('CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS')
   })
 
@@ -138,6 +141,7 @@ describe('managedEnv', () => {
         CC_HAHA_IMAGE_PROVIDER_KIND: 'openai_oauth',
         CC_HAHA_IMAGE_PROVIDER_ID: 'openai-official',
         CC_HAHA_IMAGE_MODEL: 'gpt-image-2',
+        CC_HAHA_IMAGE_PROTOCOL: 'gemini_native',
         CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS: '32000',
       },
     })
@@ -146,6 +150,7 @@ describe('managedEnv', () => {
     process.env.CC_HAHA_IMAGE_PROVIDER_KIND = 'grok_oauth'
     process.env.CC_HAHA_IMAGE_PROVIDER_ID = 'grok-official'
     process.env.CC_HAHA_IMAGE_MODEL = 'grok-imagine-image-quality'
+    process.env.CC_HAHA_IMAGE_PROTOCOL = 'xai_images'
     process.env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS = '96000'
 
     applySafeConfigEnvironmentVariables()
@@ -155,6 +160,9 @@ describe('managedEnv', () => {
     expect(process.env.CC_HAHA_IMAGE_PROVIDER_KIND).toBe('grok_oauth')
     expect(process.env.CC_HAHA_IMAGE_PROVIDER_ID).toBe('grok-official')
     expect(process.env.CC_HAHA_IMAGE_MODEL).toBe('grok-imagine-image-quality')
+    expect(process.env.CC_HAHA_IMAGE_PROTOCOL).toBe('xai_images')
     expect(process.env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS).toBe('96000')
+    applyConfigEnvironmentVariables()
+    expect(process.env.CC_HAHA_IMAGE_PROTOCOL).toBe('xai_images')
   })
 })

@@ -208,6 +208,22 @@ describe('WorkspaceService', () => {
     await expect(snapshots.getStatus('session')).rejects.toBe(failure)
   })
 
+  it('keeps authoritative git status when bounded session evidence exceeds its budget', async () => {
+    const repoDir = await createGitWorkspace()
+    const failure = new ApiError(413, 'History viewing budget exceeded', 'HISTORY_WORKSPACE_LIMIT')
+    const services = [
+      new WorkspaceService(async () => repoDir, async () => { throw failure }),
+      new WorkspaceService(async () => repoDir, async () => [], async () => { throw failure }),
+    ]
+    for (const service of services) {
+      const result = await service.getStatus('session')
+      expect(result.state).toBe('ok')
+      expect(result.changedFiles.map((file) => file.path).sort()).toEqual(
+        ['deleted.txt', 'new.txt', 'tracked.txt', 'untracked.txt'],
+      )
+    }
+  })
+
   it('returns git status for modified, added, deleted, and untracked files', async () => {
     const repoDir = await createGitWorkspace()
     const service = new WorkspaceService(async (sessionId) => sessionId === 'session-1' ? repoDir : null)

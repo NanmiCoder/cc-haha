@@ -10,6 +10,7 @@ import {
   CLAUDE_FABLE_5_CONFIG,
   CLAUDE_FABLE_5_1_CONFIG,
   CLAUDE_HAIKU_4_5_CONFIG,
+  CLAUDE_HAIKU_5_5_CONFIG,
   CLAUDE_OPUS_4_1_CONFIG,
   CLAUDE_OPUS_4_5_CONFIG,
   CLAUDE_OPUS_4_6_CONFIG,
@@ -138,6 +139,36 @@ export const COST_HAIKU_45 = {
   webSearchRequests: 0.01,
 } as const satisfies ModelCosts
 
+// Haiku 5.5 is priced by prompt length: a request whose prompt (input, cache
+// reads and cache writes) is over 100K tokens pays the higher rates throughout.
+export const HAIKU_55_LONG_PROMPT_THRESHOLD = 100_000
+
+export const COST_HAIKU_55 = {
+  inputTokens: 0.1,
+  outputTokens: 0.5,
+  promptCacheWriteTokens: 0.125,
+  promptCacheReadTokens: 0.01,
+  webSearchRequests: 0.01,
+} as const satisfies ModelCosts
+
+export const COST_HAIKU_55_LONG_PROMPT = {
+  inputTokens: 0.5,
+  outputTokens: 2.5,
+  promptCacheWriteTokens: 0.625,
+  promptCacheReadTokens: 0.05,
+  webSearchRequests: 0.01,
+} as const satisfies ModelCosts
+
+/** Rates for one request whose prompt spans `promptTokens`. */
+export function getPromptLengthCosts(
+  costs: ModelCosts,
+  promptTokens: number,
+): ModelCosts {
+  return costs === COST_HAIKU_55 && promptTokens > HAIKU_55_LONG_PROMPT_THRESHOLD
+    ? COST_HAIKU_55_LONG_PROMPT
+    : costs
+}
+
 const DEFAULT_UNKNOWN_MODEL_COST = COST_TIER_5_25
 
 /**
@@ -162,6 +193,8 @@ export const MODEL_COSTS: Record<ModelShortName, ModelCosts> = {
     COST_TIER_10_50,
   [firstPartyNameToCanonical(CLAUDE_3_5_HAIKU_CONFIG.firstParty)]:
     COST_HAIKU_35,
+  [firstPartyNameToCanonical(CLAUDE_HAIKU_5_5_CONFIG.firstParty)]:
+    COST_HAIKU_55,
   [firstPartyNameToCanonical(CLAUDE_HAIKU_4_5_CONFIG.firstParty)]:
     COST_HAIKU_45,
   [firstPartyNameToCanonical(CLAUDE_3_5_V2_SONNET_CONFIG.firstParty)]:
@@ -224,7 +257,12 @@ export function getModelCosts(model: string, usage: Usage): ModelCosts {
       DEFAULT_UNKNOWN_MODEL_COST
     )
   }
-  return costs
+  return getPromptLengthCosts(
+    costs,
+    usage.input_tokens +
+      (usage.cache_read_input_tokens ?? 0) +
+      (usage.cache_creation_input_tokens ?? 0),
+  )
 }
 
 function trackUnknownModelCost(model: string, shortName: ModelShortName): void {

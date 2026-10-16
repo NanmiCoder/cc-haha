@@ -11,6 +11,7 @@ import { readActiveProviderManagedEnv } from '../services/providerRuntimeEnv.js'
 import { handleProvidersApi } from '../api/providers.js'
 import { handleProxyRequest } from '../proxy/handler.js'
 import { resetOpenAIChatImageSupportForTests } from '../proxy/openaiChatImageSupport.js'
+import { resetOpenAIChatReasoningFieldSupportForTests } from '../proxy/openaiChatReasoningFieldSupport.js'
 import { diagnosticsService } from '../services/diagnosticsService.js'
 import {
   clearTraceCaptureStateForTests,
@@ -35,6 +36,7 @@ async function setup() {
   process.env.HOME = tmpDir
   clearTraceCaptureStateForTests()
   resetOpenAIChatImageSupportForTests()
+  resetOpenAIChatReasoningFieldSupportForTests()
 }
 
 async function teardown() {
@@ -237,7 +239,7 @@ describe('ProviderService', () => {
       expect(result).toEqual({
         providers: [],
         activeId: null,
-        providerOrder: ['claude-official', 'openai-official', 'grok-official'],
+        providerOrder: ['claude-official', 'openai-official', 'grok-official', 'deepseek-account'],
       })
     })
 
@@ -252,7 +254,7 @@ describe('ProviderService', () => {
       expect(result).toEqual({
         providers: [],
         activeId: null,
-        providerOrder: ['claude-official', 'openai-official', 'grok-official'],
+        providerOrder: ['claude-official', 'openai-official', 'grok-official', 'deepseek-account'],
       })
       expect(files.some((name) => name.startsWith('providers.json.invalid-'))).toBe(true)
     })
@@ -544,6 +546,7 @@ describe('ProviderService', () => {
       }))
 
       expect(provider.imageGeneration).toEqual({
+        protocol: 'openai_images',
         model: 'image-model',
         baseUrl: 'https://images.example.test/v1',
         apiKey: 'image-secret',
@@ -551,6 +554,30 @@ describe('ProviderService', () => {
       const config = await readProvidersConfig()
       expect((config.providers as Array<{ imageGeneration?: unknown }>)[0]?.imageGeneration)
         .toEqual(provider.imageGeneration)
+    })
+
+    test('persists and updates the image protocol without losing future image settings', async () => {
+      const svc = new ProviderService()
+      const provider = await svc.addProvider(sampleInput({
+        imageGeneration: {
+          protocol: 'gemini_native', model: 'gemini-image-model', futureSetting: { keep: true },
+          baseUrl: 'https://images.example.test', apiKey: 'old-image-secret',
+        },
+      }))
+      expect(provider.imageGeneration?.protocol).toBe('gemini_native')
+      const updated = await svc.updateProvider(provider.id, {
+        imageGeneration: { protocol: 'xai_images', model: 'grok-image-model' },
+      })
+      expect(updated.imageGeneration).toEqual({
+        protocol: 'xai_images', model: 'grok-image-model', futureSetting: { keep: true },
+      })
+      expect((await svc.getProvider(provider.id)).imageGeneration).toEqual(updated.imageGeneration)
+      const modelOnlyUpdate = await svc.updateProvider(provider.id, {
+        imageGeneration: { model: 'another-image-model' },
+      })
+      expect(modelOnlyUpdate.imageGeneration).toEqual({
+        protocol: 'xai_images', model: 'another-image-model', futureSetting: { keep: true },
+      })
     })
   })
 
@@ -823,6 +850,7 @@ describe('ProviderService', () => {
           'claude-official',
           'openai-official',
           'grok-official',
+          'deepseek-account',
         ])
       })
 
@@ -896,6 +924,120 @@ describe('ProviderService', () => {
           source: 'none',
           activeProvider: 'Grok Official',
         })
+      })
+    })
+
+    describe('DeepSeek Account provider', () => {
+      test('is a built-in Anthropic-compatible provider on the deepseek preset models', async () => {
+        const svc = new ProviderService()
+        const provider = await svc.getProvider('deepseek-account')
+
+        expect(provider).toMatchObject({
+          id: 'deepseek-account',
+          presetId: 'deepseek',
+          name: 'DeepSeek Account',
+          apiKey: '',
+          apiFormat: 'anthropic',
+          baseUrl: 'https://api.deepseek.com/anthropic',
+          runtimeKind: 'deepseek_oauth',
+        })
+        expect(provider.models.main).toBe('deepseek-v4-pro[1m]')
+        // The account listing names V4.1 Flash `deepseek-flash`; it does not
+        // list the API-key route's `deepseek-v4-flash`.
+        expect(provider.models.haiku).toBe('deepseek-flash')
+        expect(provider.modelContextWindows?.['deepseek-flash']).toBe(1_000_000)
+      })
+
+      test('a CLI reading an index the startup migration has not rewritten yet gets account model ids', async () => {
+        await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
+        await fs.writeFile(
+          path.join(tmpDir, 'cc-haha', 'providers.json'),
+          JSON.stringify({
+            schemaVersion: 7,
+            activeId: 'deepseek-account',
+            providers: [],
+            officialProviderModels: {
+              'deepseek-account': {
+                main: 'deepseek-v4-pro[1m]',
+                haiku: 'deepseek-v4-flash',
+                sonnet: 'deepseek-v4-pro[1m]',
+                opus: 'deepseek-v4-pro[1m]',
+              },
+            },
+          }),
+          'utf-8',
+        )
+
+        const env = readActiveProviderManagedEnv(tmpDir)
+        expect(env?.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('deepseek-flash')
+        expect(env?.ANTHROPIC_MODEL).toBe('deepseek-v4-pro[1m]')
+        expect(env?.ANTHROPIC_DEFAULT_HAIKU_MODEL_SUPPORTED_CAPABILITIES).toBe(
+          'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
+        )
+      })
+
+      test('activation writes account markers and never an API key or bearer token', async () => {
+        const svc = new ProviderService()
+        await svc.activateProvider('grok-official')
+        await svc.activateProvider('deepseek-account')
+
+        const config = await readProvidersConfig()
+        const env = (await readSettings()).env as Record<string, string>
+        expect(config.activeId).toBe('deepseek-account')
+        expect(env.CC_HAHA_DEEPSEEK_OAUTH_PROVIDER).toBe('1')
+        expect(env.DEEPSEEK_OAUTH_FILE).toBe(
+          path.join(tmpDir, 'cc-haha', 'deepseek-oauth.json'),
+        )
+        expect(env.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic')
+        expect(env.ANTHROPIC_MODEL).toBe('deepseek-v4-pro[1m]')
+        expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
+        expect(env.ANTHROPIC_API_KEY).toBe('deepseek-oauth-dummy-key')
+        // The previously active OAuth provider's markers are cleared.
+        expect(env.CC_HAHA_GROK_OAUTH_PROVIDER).toBeUndefined()
+        expect(env.GROK_OAUTH_FILE).toBeUndefined()
+      })
+
+      test('does not leak into proxy routing and reports auth from its own grant file', async () => {
+        const svc = new ProviderService()
+        await svc.activateProvider('deepseek-account')
+        await expect(svc.getProviderForProxy()).resolves.toBeNull()
+        await expect(svc.getProviderForProxy('deepseek-account')).resolves.toBeNull()
+
+        await expect(svc.checkAuthStatus()).resolves.toMatchObject({
+          hasAuth: false,
+          source: 'none',
+          activeProvider: 'DeepSeek Account',
+        })
+
+        await fs.writeFile(
+          path.join(tmpDir, 'cc-haha', 'deepseek-oauth.json'),
+          JSON.stringify({
+            token: 'dsh_test_account_token',
+            issuer: 'https://platform.deepseek.com',
+            deviceId: 'device-1',
+          }),
+          'utf-8',
+        )
+        await expect(svc.checkAuthStatus()).resolves.toMatchObject({
+          hasAuth: true,
+          source: 'deepseek-oauth',
+          activeProvider: 'DeepSeek Account',
+        })
+      })
+
+      test('keeps the model mapping a user saved for the built-in provider', async () => {
+        const svc = new ProviderService()
+        await svc.updateOfficialProviderModels('deepseek-account', {
+          main: 'deepseek-v4-flash',
+          haiku: 'deepseek-v4-flash',
+          sonnet: 'deepseek-v4-flash',
+          opus: 'deepseek-v4-flash',
+        })
+        await svc.activateProvider('deepseek-account')
+
+        const env = (await readSettings()).env as Record<string, string>
+        expect(env.ANTHROPIC_MODEL).toBe('deepseek-v4-flash')
+        expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('deepseek-v4-flash')
       })
     })
 
@@ -1166,6 +1308,7 @@ describe('ProviderService', () => {
         'claude-official',
         a.id,
         'grok-official',
+        'deepseek-account',
       ])
 
       expect(result.providerOrder).toEqual([
@@ -1174,6 +1317,7 @@ describe('ProviderService', () => {
         'claude-official',
         a.id,
         'grok-official',
+        'deepseek-account',
       ])
       expect(result.providers.map((p) => p.id)).toEqual([b.id, a.id])
 
@@ -1184,6 +1328,7 @@ describe('ProviderService', () => {
         'claude-official',
         a.id,
         'grok-official',
+        'deepseek-account',
       ])
 
       const config = await readProvidersConfig()
@@ -1193,6 +1338,7 @@ describe('ProviderService', () => {
         'claude-official',
         a.id,
         'grok-official',
+        'deepseek-account',
       ])
     })
 
@@ -2411,6 +2557,157 @@ describe('ProviderService', () => {
       }
     })
 
+    describe('reasoning fields the upstream refuses', () => {
+      const thinkingRefusal = {
+        error: {
+          param: 'thinking',
+          type: 'invalid_request_error',
+          message: 'Upstream request failed: [unsupported_parameter] Unrecognized request argument supplied: thinking.',
+        },
+      }
+      const effortRefusal = {
+        error: {
+          param: 'reasoning_effort',
+          type: 'invalid_request_error',
+          message: 'Upstream request failed: [unsupported_parameter] Unrecognized request argument supplied: reasoning_effort.',
+        },
+      }
+      const completion = (model: unknown) => Response.json({
+        id: 'chatcmpl-reasoning',
+        object: 'chat.completion',
+        created: 0,
+        model,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      })
+
+      async function setupOpenCodeGo(model: string, sibling: string) {
+        const svc = new ProviderService()
+        const provider = await svc.addProvider(sampleInput({
+          apiFormat: 'openai_chat',
+          baseUrl: 'https://opencode.ai/zen/go/v1',
+          models: { main: model, haiku: sibling, sonnet: model, opus: model },
+        }))
+        await svc.activateProvider(provider.id)
+        // What Claude Code sends with thinking on: a budget plus an effort level.
+        return (requestModel: string) => {
+          const req = new Request('http://localhost:3456/proxy/v1/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: requestModel,
+              max_tokens: 32000,
+              thinking: { type: 'enabled', budget_tokens: 31999 },
+              output_config: { effort: 'medium' },
+              messages: [{ role: 'user', content: 'hello' }],
+            }),
+          })
+          return handleProxyRequest(req, new URL(req.url))
+        }
+      }
+
+      test('retries without the thinking toggle for a model that rejects it, then stays that way for that model', async () => {
+        const originalFetch = globalThis.fetch
+        const calls: Array<Record<string, unknown>> = []
+        globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+          calls.push(body)
+          if (body.model === 'cat-jam-free' && body.thinking !== undefined) {
+            return Response.json(thinkingRefusal, { status: 400 })
+          }
+          return completion(body.model)
+        }) as typeof fetch
+
+        try {
+          const send = await setupOpenCodeGo('cat-jam-free', 'deepseek-flash')
+
+          const first = await send('cat-jam-free')
+          expect(first.status).toBe(200)
+          expect(await first.json()).toMatchObject({ content: [{ type: 'text', text: 'hi' }] })
+          expect(calls).toHaveLength(2)
+          expect(calls[0]!.thinking).toEqual({ type: 'enabled' })
+          expect(calls[1]!.thinking).toBeUndefined()
+          // Only the refused field is dropped; the effort the user chose survives.
+          expect(calls[1]!.reasoning_effort).toBe('medium')
+
+          await diagnosticsService.drainForMigration()
+          const [learned] = (await diagnosticsService.readRecentEvents(20))
+            .filter(event => event.type === 'openai_chat_reasoning_field_disabled')
+          expect(learned).toMatchObject({ severity: 'info', details: { model: 'cat-jam-free', field: 'thinking', httpStatus: 400 } })
+          expect(JSON.stringify(learned)).not.toContain('sk-test-key-123')
+
+          // Remembered: the next turn skips the failing attempt.
+          expect((await send('cat-jam-free')).status).toBe(200)
+          expect(calls).toHaveLength(3)
+          expect(calls[2]!.thinking).toBeUndefined()
+
+          // The limit belongs to that model; DeepSeek on the same gateway keeps the toggle.
+          expect((await send('deepseek-flash')).status).toBe(200)
+          expect(calls).toHaveLength(4)
+          expect(calls[3]!.model).toBe('deepseek-flash')
+          expect(calls[3]!.thinking).toEqual({ type: 'enabled' })
+        } finally {
+          globalThis.fetch = originalFetch
+        }
+      })
+
+      test('drops each refused field in turn until the request is accepted', async () => {
+        const originalFetch = globalThis.fetch
+        const calls: Array<Record<string, unknown>> = []
+        globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>
+          calls.push(body)
+          if (body.thinking !== undefined) return Response.json(thinkingRefusal, { status: 400 })
+          if (body.reasoning_effort !== undefined) return Response.json(effortRefusal, { status: 400 })
+          return completion(body.model)
+        }) as typeof fetch
+
+        try {
+          const send = await setupOpenCodeGo('cat-jam-free', 'deepseek-flash')
+
+          expect((await send('cat-jam-free')).status).toBe(200)
+          expect(calls).toHaveLength(3)
+          expect(calls[2]!.thinking).toBeUndefined()
+          expect(calls[2]!.reasoning_effort).toBeUndefined()
+
+          expect((await send('cat-jam-free')).status).toBe(200)
+          expect(calls).toHaveLength(4)
+          expect(calls[3]!.thinking).toBeUndefined()
+          expect(calls[3]!.reasoning_effort).toBeUndefined()
+        } finally {
+          globalThis.fetch = originalFetch
+        }
+      })
+
+      test('surfaces the error when the resend without the field fails too, and does not remember the field', async () => {
+        const originalFetch = globalThis.fetch
+        const calls: Array<Record<string, unknown>> = []
+        globalThis.fetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+          calls.push(JSON.parse(String(init?.body)) as Record<string, unknown>)
+          return Response.json({
+            error: { param: 'thinking', type: 'invalid_request_error', message: 'thinking budget_tokens must be smaller than max_tokens' },
+          }, { status: 400 })
+        }) as typeof fetch
+
+        try {
+          const send = await setupOpenCodeGo('cat-jam-free', 'deepseek-flash')
+
+          const first = await send('cat-jam-free')
+          expect(first.status).toBe(400)
+          expect(JSON.stringify(await first.json())).toContain('budget_tokens must be smaller')
+          expect(calls).toHaveLength(2)
+          expect(calls[1]!.thinking).toBeUndefined()
+
+          // Nothing was learned from a resend that also failed.
+          await send('cat-jam-free')
+          expect(calls).toHaveLength(4)
+          expect(calls[2]!.thinking).toEqual({ type: 'enabled' })
+        } finally {
+          globalThis.fetch = originalFetch
+        }
+      })
+    })
+
     test.each([
       { name: 'an oversized image', status: 400, error: 'image exceeds maximum allowed size', withImage: true },
       {
@@ -3345,6 +3642,28 @@ describe('Providers API', () => {
     expect(body.providers[0].apiKey).toBe('sk-test-key-123')
   })
 
+  test('GET /api/providers carries the DeepSeek account mapping the user saved', async () => {
+    const list = async () => {
+      const { req, url, segments } = makeRequest('GET', '/api/providers')
+      return (await (await handleProvidersApi(req, url, segments)).json()) as {
+        deepSeekAccountModels: Record<string, string>
+      }
+    }
+    expect((await list()).deepSeekAccountModels).toMatchObject({
+      main: 'deepseek-v4-pro[1m]',
+      haiku: 'deepseek-flash',
+    })
+
+    const saved = {
+      main: 'deepseek-flash',
+      haiku: 'deepseek-flash',
+      sonnet: 'deepseek-v4-pro',
+      opus: 'deepseek-v4-pro',
+    }
+    await new ProviderService().updateOfficialProviderModels('deepseek-account', saved)
+    expect((await list()).deepSeekAccountModels).toEqual(saved)
+  })
+
   // ─── POST /api/providers ─────────────────────────────────────────────────
 
   test('POST /api/providers should create a provider', async () => {
@@ -3403,6 +3722,7 @@ describe('Providers API', () => {
       'claude-official',
       'openai-official',
       'grok-official',
+      'deepseek-account',
     ])
   })
 

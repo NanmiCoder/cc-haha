@@ -98,8 +98,8 @@ export function lanesForMode(mode: QualityGateMode, baselineTargets: BaselineTar
     },
     {
       id: 'agent-e2e-checks',
-      title: 'Agent loop against a mock LLM',
-      description: 'Run the real server and the real CLI agent loop against a loopback Anthropic-compatible endpoint backed by a scripted model: first turn, tool execution with permission allow/deny, tool results returned upstream, interrupt closing the upstream stream, upstream error recovery, reconnect, and session recovery. No provider, credentials, or network.',
+      title: 'Agent loop against a mock LLM and recorded traffic',
+      description: 'Run the real server and the real CLI agent loop against loopback providers: a scripted model (first turn, tool execution with permission allow/deny, tool results returned upstream, interrupt closing the upstream stream, upstream error recovery, reconnect, and session recovery), then DeepSeek traffic recorded into committed cassettes (thinking, fragmented tool input for Grep/Read/Edit/Bash, compaction, interrupt, and OpenAI Chat through the server proxy). No provider, credentials, or network.',
       kind: 'command',
       command: ['bun', 'run', 'check:agent-e2e'],
       impactRequiredCheck: 'bun run check:agent-e2e',

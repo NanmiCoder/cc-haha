@@ -1,12 +1,12 @@
 // desktop/src/components/settings/OfficialLoginRiskDialog.tsx
 //
-// 官方模型 OAuth 登录前的风险确认。三家官方登录入口共用,只有风险等级和正文不同。
+// 官方模型 OAuth 登录前的风险确认。各官方登录入口共用,只有风险等级和正文不同。
 
 import { Badge, type Tone } from '@/components/ui/Badge'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useTranslation, type TranslationKey } from '../../i18n'
 
-export type OfficialLoginRiskProvider = 'claude' | 'chatgpt' | 'grok'
+export type OfficialLoginRiskProvider = 'claude' | 'chatgpt' | 'grok' | 'deepseek'
 
 type RiskCopy = {
   tone: Tone
@@ -24,6 +24,11 @@ const RISK_COPY: Record<OfficialLoginRiskProvider, RiskCopy> = {
     tone: 'warning',
     level: 'settings.officialLoginRisk.level.medium',
     body: 'settings.officialLoginRisk.grok.body',
+  },
+  deepseek: {
+    tone: 'warning',
+    level: 'settings.officialLoginRisk.level.medium',
+    body: 'settings.officialLoginRisk.deepseek.body',
   },
   chatgpt: {
     tone: 'info',

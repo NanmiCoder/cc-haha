@@ -11,7 +11,7 @@ cc-haha ships without a model. It's the shell that does the work; you have to gi
 
 Click "Settings" at the bottom of the sidebar, then pick the first tab, "Providers". From there you have three routes:
 
-- **You have an official account** — Claude, ChatGPT, and Grok each have a built-in card. One click opens a browser sign-in. No API key to type.
+- **You have an official account** — Claude, ChatGPT, Grok, and DeepSeek each have a built-in card. One click opens a browser sign-in. No API key to type.
 - **You have a third-party API key** — DeepSeek, Kimi, Zhipu GLM and others come as presets. Paste the key and you're done.
 - **You want it free** — run LM Studio or Ollama on your own machine. The model runs on your GPU, costs nothing, and works offline.
 
@@ -19,15 +19,16 @@ You can configure all three and switch between them in the provider list.
 
 ## Sign in with an official account
 
-Three cards sit at the top of Settings → Providers:
+Four cards sit at the top of Settings → Providers:
 
 | Card | What you need |
 |---|---|
 | **Claude Official** | A Claude.ai account (Pro / Max subscription, or an API account with credit) |
 | **ChatGPT Official** | A ChatGPT account, via OpenAI OAuth |
 | **Grok Official** | An xAI account, via official Grok OAuth |
+| **DeepSeek Account** | A DeepSeek platform account, billed to the account balance; no API key |
 
-Click the sign-in button on the card ("Sign in to Claude" / "Sign in with ChatGPT" / "Sign in with Grok"). Your system browser opens the provider's authorization page; complete it with the same account and the browser hands you back to the app, where the card now reads as signed in.
+Click the sign-in button on the card ("Sign in to Claude" / "Sign in with ChatGPT" / "Sign in with Grok" / "Sign in with DeepSeek"). Your system browser opens the provider's authorization page; complete it with the same account and the browser hands you back to the app, where the card now reads as signed in.
 
 Three things to watch for:
 

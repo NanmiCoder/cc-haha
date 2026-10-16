@@ -1,4 +1,5 @@
 import { getSelectionPopoverPosition } from '@/hooks/useSelectionPopoverDismiss'
+import { prefersSelectionMenuAbove } from '@/stores/selectionMenuPlacementStore'
 
 const SELECTION_MENU_OFFSET = 10
 const SELECTION_MENU_WIDTH = 140
@@ -45,6 +46,7 @@ export function getSelectionPosition(
     offset: SELECTION_MENU_OFFSET,
     fallbackPointer: pointer,
     selectionFocus: { node: selection.focusNode, offset: selection.focusOffset },
+    preferAbove: prefersSelectionMenuAbove(),
   })
 }
 

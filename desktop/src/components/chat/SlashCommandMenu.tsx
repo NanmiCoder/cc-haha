@@ -1,4 +1,4 @@
-import { forwardRef, type MutableRefObject } from 'react'
+import { forwardRef, useCallback, type MutableRefObject } from 'react'
 import {
   BookOpen,
   Bot,
@@ -23,6 +23,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useTranslation } from '@/i18n'
+import { useRoomAbove } from '@/hooks/useRoomAbove'
 import type { SlashCommandGroups } from './composerUtils'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import { safeMentionIcon } from '@/lib/composerMentions'
@@ -97,6 +98,12 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
     ref,
   ) {
     const t = useTranslation()
+    const [roomRef, roomAbove] = useRoomAbove<HTMLDivElement>()
+    const setMenuRef = useCallback((node: HTMLDivElement | null) => {
+      roomRef(node)
+      if (typeof ref === 'function') ref(node)
+      else if (ref) ref.current = node
+    }, [ref, roomRef])
 
     const renderSystemCommand = (command: SlashCommandGroups['system'][number], index: number) => {
       const Icon = getSystemSlashCommandIcon(command.name)
@@ -143,9 +150,10 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
 
     return (
       <div
-        ref={ref}
+        ref={setMenuRef}
         onMouseDown={event => event.preventDefault()}
-        className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
+        style={{ maxHeight: roomAbove }}
+        className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
       >
         {isSearching ? <div className={`${COMPOSER_MENU_SECTION} px-3 pt-2.5`}>
           {t('chat.slashSearchResults')}
@@ -154,7 +162,7 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
           id={id}
           role="listbox"
           aria-label={t('chat.slashCommands')}
-          className="max-h-[min(360px,45vh)] overflow-y-auto p-1"
+          className="min-h-0 max-h-[min(360px,45vh)] overflow-y-auto p-1"
         >
           {groups.system.length > 0 ? <div role="group" aria-label={t(isSearching ? 'chat.slashCommands' : 'chat.slashFrequent')}>
             {!isSearching ? <div className={COMPOSER_MENU_SECTION}>{t('chat.slashFrequent')}</div> : null}

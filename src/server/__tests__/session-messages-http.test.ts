@@ -137,16 +137,20 @@ afterEach(async () => {
 })
 
 describe('session messages HTTP surface', () => {
-  it('keeps a transcript above 20 MiB readable when checkpoint previews exceed their budget (#1373)', async () => {
+  it('keeps a transcript readable when checkpoint previews exceed their budget (#1373)', async () => {
     const sessionId = await seedSessionWithSubagent()
     const filePath = path.join(tmpDir, 'projects', '-tmp-http-invariant', `${sessionId}.jsonl`)
     const content = 'x'.repeat(8 * 1024)
     const count = 2700
+    // Unlike tool output, checkpoints retain every other record while parsing.
+    await fs.appendFile(filePath, Array.from({ length: 400 }, () => JSON.stringify({
+      type: 'progress', padding: content,
+    })).join('\n') + '\n')
     await fs.appendFile(filePath, Array.from({ length: count }, (_, n) => JSON.stringify({
       type: 'assistant', uuid: `issue-1373-${n}`, timestamp: '2026-01-02T00:00:00Z',
       message: { role: 'assistant', content },
     })).join('\n') + '\n')
-    expect((await fs.stat(filePath)).size).toBeGreaterThan(20 * 1024 * 1024)
+    expect((await fs.stat(filePath)).size).toBeGreaterThan(24 * 1024 * 1024)
 
     const checkpoint = await api('GET', `/api/sessions/${sessionId}/turn-checkpoints`)
     expect(checkpoint.status).toBe(413)
@@ -193,14 +197,16 @@ describe('session messages HTTP surface', () => {
   it('rejects oversized automatic checkpoint previews before canonical history loading', async () => {
     const sessionId = await seedSessionWithSubagent()
     const filePath = path.join(tmpDir, 'projects', '-tmp-http-invariant', `${sessionId}.jsonl`)
-    await fs.truncate(filePath, 17 * 1024 * 1024)
-    const canonical = spyOn(sessionService, 'getSessionMessagesWithEvidence').mockImplementation(() => { throw new Error('full history must not be hydrated') })
+    // Sparse and newline-free: reading it would build one 256 MiB line.
+    await fs.truncate(filePath, 256 * 1024 * 1024 + 1)
+    const hydrate = spyOn(sessionService as unknown as { entriesToMessages: () => unknown }, 'entriesToMessages')
+      .mockImplementation(() => { throw new Error('full history must not be hydrated') })
     try {
       const response = await api('GET', `/api/sessions/${sessionId}/turn-checkpoints`)
       expect(response.status).toBe(413)
       expect((await response.json() as { error: string }).error).toBe('HISTORY_CHECKPOINT_PREVIEW_LIMIT')
-      expect(canonical).not.toHaveBeenCalled()
-    } finally { canonical.mockRestore() }
+      expect(hydrate).not.toHaveBeenCalled()
+    } finally { hydrate.mockRestore() }
   })
 
   it('returns the whole bounded transcript in one response for mode=full', async () => {

@@ -150,6 +150,7 @@ export function modelSupportsContextManagement(model: string): boolean {
     canonical.includes('claude-sonnet-5') ||
     canonical.includes('claude-opus-4') ||
     canonical.includes('claude-sonnet-4') ||
+    canonical.includes('claude-haiku-5') ||
     canonical.includes('claude-haiku-4')
   )
 }
@@ -175,6 +176,7 @@ export function modelSupportsStructuredOutputs(model: string): boolean {
     canonical.includes('claude-opus-5') ||
     canonical.includes('claude-opus-4-8') ||
     canonical.includes('claude-opus-4-7') ||
+    canonical.includes('claude-haiku-5-5') ||
     canonical.includes('claude-haiku-4-5')
   )
 }

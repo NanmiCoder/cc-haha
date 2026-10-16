@@ -133,6 +133,33 @@ test.skipIf(process.platform === 'win32')('a short command does not wait out the
   }
 })
 
+test.skipIf(process.platform === 'win32')('stops a guardian poll that does not act on TERM', async () => {
+  // A poll that has forked but not yet exec'd still runs the shell's TERM
+  // handler and swallows the signal. A stopped poll ignores TERM the same way,
+  // deterministically: only SIGKILL ends it, so a TERM-only trap hangs here
+  // under dash (Ubuntu CI). bash's `kill` also continues a stopped job, so a
+  // bash /bin/sh (macOS) passes either way.
+  const child = spawnWithParentProcessGuard('/bin/sh', ['-c', 'read line; exit 4'], {
+    detached: true,
+    stdio: ['pipe', 'ignore', 'ignore'],
+  })
+  children.push(child)
+  const pollPid = (): number | undefined => {
+    const listing = spawnSync('ps', ['-A', '-o', 'pid=,pgid=,comm='], { encoding: 'utf8' }).stdout
+    for (const line of listing.split('\n')) {
+      const [pid, pgid, comm] = line.trim().split(/\s+/)
+      if (Number(pgid) === child.pid && comm?.endsWith('sleep')) return Number(pid)
+    }
+    return undefined
+  }
+  await waitUntil(() => pollPid() !== undefined)
+  process.kill(pollPid()!, 'SIGSTOP')
+  const started = performance.now()
+  child.stdin!.end('done\n')
+  expect(await Promise.race([exited(child), wait(3_000).then(() => 'hung')])).toBe(4)
+  expect(performance.now() - started).toBeLessThan(500)
+})
+
 test.skipIf(process.platform === 'win32')('does not spin when the command environment has no sleep on PATH', async () => {
   // The guardian runs with the command's env. Without a fallback PATH,
   // `sleep 1 &` failed instantly and the poll loop forked as fast as it could.

@@ -17,7 +17,7 @@ describe('getAgentModel', () => {
 
     expect(
       getAgentModel('haiku', 'claude-sonnet-4-6', undefined, 'default'),
-    ).toBe('claude-haiku-4-5-20251001')
+    ).toBe('claude-haiku-5-5')
     expect(
       getAgentModel('inherit', 'claude-sonnet-4-6', undefined, 'default'),
     ).toBe('claude-sonnet-4-6')

@@ -298,7 +298,7 @@ export class PublicAccessServer {
         const response = await this.deps.handleApiRequest(request, url, { remoteBrowser: true })
         if (route === 'api/providers/auth-status' && response.ok) {
           const status = await response.json() as Record<string, unknown>
-          const sources = ['cc-haha-provider', 'claude-oauth', 'openai-oauth', 'grok-oauth', 'original-settings', 'env', 'none']
+          const sources = ['cc-haha-provider', 'claude-oauth', 'openai-oauth', 'grok-oauth', 'deepseek-oauth', 'original-settings', 'env', 'none']
           return json({
             hasAuth: status.hasAuth === true,
             source: typeof status.source === 'string' && sources.includes(status.source) ? status.source : 'none',

@@ -257,6 +257,7 @@ export function deserializeMessages(serializedMessages: Message[]): Message[] {
  */
 export function deserializeMessagesWithInterruptDetection(
   serializedMessages: Message[],
+  options: { truncated?: boolean } = {},
 ): DeserializeResult {
   try {
     // Transform legacy attachment types before processing
@@ -294,6 +295,16 @@ export function deserializeMessagesWithInterruptDetection(
     const filteredMessages = filterWhitespaceOnlyAssistantMessages(
       filteredThinking,
     ) as NormalizedMessage[]
+
+    // A caller-chosen rewind point is an exact boundary, not an interrupted
+    // turn: nothing synthetic (continuation prompt, assistant sentinel) may be
+    // appended after it.
+    if (options.truncated) {
+      return {
+        messages: filteredMessages,
+        turnInterruptionState: { kind: 'none' },
+      }
+    }
 
     const internalState = detectTurnInterruption(filteredMessages)
 
@@ -533,6 +544,14 @@ export async function loadMessagesFromJsonlPath(path: string): Promise<{
   }
 }
 
+/** `--resume-session-at` named a uuid that is not in the resumed transcript. */
+export class ResumeMessageNotFoundError extends Error {
+  constructor(readonly messageUuid: string) {
+    super(`No message found with message.uuid of: ${messageUuid}`)
+    this.name = 'ResumeMessageNotFoundError'
+  }
+}
+
 /**
  * Loads a conversation for resume from various sources.
  * This is the centralized function for loading and deserializing conversations.
@@ -545,11 +564,15 @@ export async function loadMessagesFromJsonlPath(path: string): Promise<{
  *   Used when --resume receives a .jsonl path (cli/print.ts routes
  *   on suffix), typically for cross-directory resume where the
  *   transcript lives outside the current project dir.
+ * @param options.resumeSessionAt - Keep the conversation only up to and
+ *   including this message uuid (before resume filtering). Throws
+ *   ResumeMessageNotFoundError when the uuid is not in the transcript.
  * @returns Object containing the deserialized messages and the original log, or null if not found
  */
 export async function loadConversationForResume(
   source: string | LogOption | undefined,
   sourceJsonlFile: string | undefined,
+  options: { resumeSessionAt?: string } = {},
 ): Promise<{
   messages: Message[]
   turnInterruptionState: TurnInterruptionState
@@ -647,6 +670,18 @@ export async function loadConversationForResume(
       checkResumeConsistency(messages)
     }
 
+    // Cut at the requested message on the persisted chain, before resume
+    // filtering. The target may be a tool call that has no result yet (a
+    // running parent turn); filtering first would drop it and make a valid
+    // boundary look missing. Filtering then applies to the kept context only.
+    if (options.resumeSessionAt) {
+      const index = messages!.findIndex(m => m.uuid === options.resumeSessionAt)
+      if (index < 0) {
+        throw new ResumeMessageNotFoundError(options.resumeSessionAt)
+      }
+      messages = messages!.slice(0, index + 1)
+    }
+
     // Filter unsafe persisted payloads before any resume-side effects.
     messages = dropMalformedAttachments(messages!)
 
@@ -655,14 +690,17 @@ export async function loadConversationForResume(
     restoreSkillStateFromMessages(messages)
 
     // Deserialize messages to handle unresolved tool uses and ensure proper format
-    const deserialized = deserializeMessagesWithInterruptDetection(messages)
+    const deserialized = deserializeMessagesWithInterruptDetection(messages, {
+      truncated: Boolean(options.resumeSessionAt),
+    })
     messages = deserialized.messages
 
     // Process session start hooks for resume
     const hookMessages = await processSessionStartHooks('resume', { sessionId })
 
-    // Append hook messages to the conversation
-    messages.push(...hookMessages)
+    // Append hook messages to the conversation. A rewind point is an exact
+    // boundary: the hooks still run, but their context is not added after it.
+    if (!options.resumeSessionAt) messages.push(...hookMessages)
 
     return {
       messages,
@@ -688,7 +726,7 @@ export async function loadConversationForResume(
       fullPath: log?.fullPath,
     }
   } catch (error) {
-    logError(error as Error)
+    if (!(error instanceof ResumeMessageNotFoundError)) logError(error as Error)
     throw error
   }
 }
