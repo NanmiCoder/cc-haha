@@ -8,6 +8,7 @@ import { resetDocumentBlobCacheForTests } from '@/lib/workspace/documentBlobCach
 import { openLocalFileWithSystem } from '@/lib/systemFileOpen'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { useWorkspaceContentStore, workspaceFileKey } from '@/stores/workspaceContentStore'
+import { useWorkspaceChatContextStore, formatWorkspaceReferencePrompt } from '@/stores/workspaceChatContextStore'
 import { DocumentSurface, type DocumentSurfaceProps } from './DocumentSurface'
 import type { DocumentViewerProps, DocumentViewers } from './documentViewers'
 
@@ -64,6 +65,7 @@ beforeEach(() => {
   useSettingsStore.setState({ locale: 'en' })
   useWorkspaceContentStore.setState({ fileViewByKey: {} })
   resetDocumentBlobCacheForTests()
+  useWorkspaceChatContextStore.setState({ referencesBySession: {} })
   pending = []
   viewerProps = []
   vi.mocked(openLocalFileWithSystem).mockReset().mockResolvedValue(undefined)
@@ -360,4 +362,54 @@ describe('DocumentSurface', () => {
     expect(screen.queryByTestId('viewer')).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('Loading document...')
   })
+})
+
+
+describe('document comments', () => {
+  it('adds the original file, document location, quote and note to the owning chat', async () => {
+    renderSurface()
+    await deliver(0)
+    act(() => viewerProps.at(-1)!.onAnnotate?.({ text: 'Quarterly revenue', location: 'Page 2' }))
+    expect(screen.getByRole('button', { name: 'Add comment' })).toBeDisabled()
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Correct this total' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }))
+    const refs = useWorkspaceChatContextStore.getState().referencesBySession.s1!
+    expect(refs).toHaveLength(1)
+    expect(refs[0]).toMatchObject({ path: 'out/thesis.pdf', absolutePath: '/work/out/thesis.pdf', quote: 'Quarterly revenue', note: 'Page 2\nCorrect this total' })
+    expect(refs[0]!.lineStart).toBeUndefined()
+    expect(formatWorkspaceReferencePrompt(refs)).toContain('Page 2\nCorrect this total')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(useWorkspaceChatContextStore.getState().referencesBySession.other).toBeUndefined()
+  })
+
+  it('cancels without adding a reference and discards comments after document refresh', async () => {
+    const view = renderSurface()
+    await deliver(0)
+    act(() => viewerProps.at(-1)!.onAnnotate?.({ text: 'Old text', location: 'Page 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(useWorkspaceChatContextStore.getState().referencesBySession.s1).toBeUndefined()
+    act(() => viewerProps.at(-1)!.onAnnotate?.({ text: 'Old text', location: 'Page 1' }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Stale note' } })
+    view.rerender(<DocumentSurface {...baseProps} version="v2" />)
+    await deliver(1, new Blob(['new bytes']))
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(useWorkspaceChatContextStore.getState().referencesBySession.s1).toBeUndefined()
+  })
+})
+
+
+it('keeps same-note comments on different selections independently removable', async () => {
+  renderSurface()
+  await deliver(0)
+  for (const text of ['First paragraph', 'Second paragraph']) {
+    act(() => viewerProps.at(-1)!.onAnnotate?.({ text, location: 'Page 1' }))
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Rewrite' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }))
+  }
+  const store = useWorkspaceChatContextStore.getState()
+  const refs = store.referencesBySession.s1!
+  expect(refs).toHaveLength(2)
+  expect(refs[0]!.id).not.toBe(refs[1]!.id)
+  act(() => store.removeReference('s1', refs[0]!.id))
+  expect(useWorkspaceChatContextStore.getState().referencesBySession.s1).toEqual([refs[1]])
 })

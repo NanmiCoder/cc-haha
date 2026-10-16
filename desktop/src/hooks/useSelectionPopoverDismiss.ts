@@ -218,10 +218,13 @@ export function useSelectionPopoverDismiss({
   active,
   popoverRef,
   onDismiss,
+  onScroll,
 }: {
   active: boolean
   popoverRef: ElementRef
   onDismiss: () => void
+  /** Override scroll handling for selections that should survive viewport movement. */
+  onScroll?: () => void
 }) {
   useEffect(() => {
     if (!active) return
@@ -251,7 +254,8 @@ export function useSelectionPopoverDismiss({
     }
 
     const handleScroll = () => {
-      dismiss()
+      if (onScroll) onScroll()
+      else dismiss()
     }
 
     document.addEventListener('pointerdown', handlePointerDown, true)
@@ -262,5 +266,5 @@ export function useSelectionPopoverDismiss({
       document.removeEventListener('contextmenu', handleContextMenu, true)
       document.removeEventListener('scroll', handleScroll, true)
     }
-  }, [active, onDismiss, popoverRef])
+  }, [active, onDismiss, onScroll, popoverRef])
 }

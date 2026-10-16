@@ -1,3 +1,6 @@
+import type { DocumentAnnotationSelection } from '@/components/workspace/surfaces/document/DocumentAnnotation'
+import { FloatingSelectionMenu } from '@/components/workspace/surfaces/FloatingSelectionMenu'
+import { usePageAnnotation } from '@/components/workspace/surfaces/document/usePageAnnotation'
 import {
   useCallback,
   useEffect,
@@ -60,6 +63,8 @@ function fileNameOf(path: string): string {
 
 export type PdfViewerProps = {
   doc: PdfDocumentHandle
+  onAnnotate?: (selection: DocumentAnnotationSelection) => void
+  selectionIdentity?: unknown
   sizes: readonly PageSize[]
   path: string
   absolutePath: string
@@ -90,8 +95,10 @@ export function PdfViewer({
   absolutePath,
   zoom,
   onZoomChange,
+  onAnnotate,
   initialView,
   refreshError,
+  selectionIdentity,
 }: PdfViewerProps) {
   const t = useTranslation()
   const [sizeRef, viewport] = useElementSize<HTMLDivElement>()
@@ -100,6 +107,8 @@ export function PdfViewer({
     scrollRef.current = node
     sizeRef(node)
   }, [sizeRef])
+
+  const annotation = usePageAnnotation({ rootRef: scrollRef, identity: doc, revision: selectionIdentity, path, onAnnotate })
 
   const widest = useMemo(() => sizes.reduce((max, size) => Math.max(max, size.width), 0), [sizes])
   // `null` until the panel has a size: nothing is laid out, and so nothing drawn, for a hidden panel.
@@ -261,6 +270,7 @@ export function PdfViewer({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      <FloatingSelectionMenu selection={annotation.selection} popoverRef={annotation.popoverRef} onAdd={annotation.add} />
       <DocumentToolbar
         absolutePath={absolutePath}
         zoom={zoomState}

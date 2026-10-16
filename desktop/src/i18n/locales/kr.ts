@@ -969,6 +969,8 @@ export const kr: Record<TranslationKey, string> = {
   'workspace.showAllLoadedLines': '불러온 줄 모두 표시',
   'workspace.collapsePreview': '미리 보기 접기',
   'workspace.addSelectionToChat': '채팅에 추가',
+  'workspace.annotation.add': '주석 추가',
+  'workspace.annotation.selectCells': '셀을 선택하거나 Shift 키를 누른 채 클릭하여 범위 선택',
   'workspace.localComment': '로컬 댓글',
   'workspace.commentLine': '{line}번째 줄에 댓글',
   'workspace.commentLineTarget': '{line}번째 줄',

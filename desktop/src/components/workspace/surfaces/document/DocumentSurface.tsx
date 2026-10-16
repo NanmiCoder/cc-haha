@@ -1,5 +1,5 @@
 import { FileQuestion } from 'lucide-react'
-import { Suspense } from 'react'
+import { Suspense, useCallback, useEffect, useState } from 'react'
 import type { WorkspaceDocumentPreviewType } from '@/api/sessions'
 import { useWorkspaceDocumentBlob } from '@/hooks/useWorkspaceDocumentBlob'
 import { useTranslation } from '@/i18n'
@@ -11,6 +11,8 @@ import {
 } from '@/stores/workspaceContentStore'
 import { OpenInSystemButton } from '../OpenInSystemButton'
 import { PanelMessage } from '../PanelMessage'
+import { useWorkspaceChatContextStore } from '@/stores/workspaceChatContextStore'
+import { DocumentAnnotation, type DocumentAnnotationSelection } from './DocumentAnnotation'
 import { DocumentFailure } from './DocumentFailure'
 import { DocumentViewerBoundary } from './DocumentViewerBoundary'
 import { documentViewers, type DocumentSourceActions, type DocumentViewers } from './documentViewers'
@@ -61,6 +63,7 @@ export function DocumentSurface({
   viewers = documentViewers,
   reloadPage = reloadWindow,
 }: DocumentSurfaceProps) {
+  const [annotation, setAnnotation] = useState<(DocumentAnnotationSelection & { blob: Blob; sessionId: string; path: string }) | null>(null)
   const t = useTranslation()
   const Viewer = viewers[previewType]
   // No viewer for this kind: nothing to fetch bytes for.
@@ -69,8 +72,12 @@ export function DocumentSurface({
     path,
     Viewer ? version : undefined,
   )
+  const annotate = useCallback((selection: DocumentAnnotationSelection) => {
+    if (blob) setAnnotation({ ...selection, blob, sessionId, path })
+  }, [blob, sessionId, path])
   const zoom = useWorkspaceContentStore((state) => state.fileViewByKey[workspaceFileKey(sessionId, path)]?.zoom)
   const sheet = useWorkspaceContentStore((state) => state.fileViewByKey[workspaceFileKey(sessionId, path)]?.sheet)
+  useEffect(() => setAnnotation(null), [blob, sessionId, path])
   const canOpenInSystem = isRootedLocalPath(absolutePath)
 
   if (!Viewer) {
@@ -122,9 +129,29 @@ export function DocumentSurface({
             onSheetChange={(next) => useWorkspaceContentStore.getState().setFileSheet(sessionId, path, next)}
             initialView={initialView}
             source={source}
+            onAnnotate={annotate}
           />
         </Suspense>
       </DocumentViewerBoundary>
+      {annotation && annotation.blob === blob && annotation.sessionId === sessionId && annotation.path === path ? (
+        <DocumentAnnotation
+          key={`${sessionId}:${path}:${annotation.location}:${annotation.text}`}
+          selection={annotation}
+          onClose={() => setAnnotation(null)}
+          onAdd={(note) => {
+            useWorkspaceChatContextStore.getState().addReference(sessionId, {
+              id: crypto.randomUUID(),
+              kind: 'code-comment',
+              path,
+              absolutePath,
+              name: path.split(/[\\/]/).pop() ?? path,
+              note: `${annotation.location}\n${note}`,
+              quote: annotation.text,
+            })
+            setAnnotation(null)
+          }}
+        />
+      ) : null}
       {error ? (
         <p role="status" className="shrink-0 border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-text-tertiary)]">
           {/* The server's own words are its response body, JSON and English; a refusal has a status to word. */}

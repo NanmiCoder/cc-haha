@@ -355,6 +355,7 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
             : ''
           const quotePreview = attachment.quote?.trim().replace(/\s+/g, ' ')
           const hasQuotePreview = !!quotePreview
+          const note = attachment.note?.trim()
           const typeInfo = describeFileType(attachment.path || attachment.name)
           const fileIcon = attachment.isDirectory ? 'folder' : typeInfo.icon
           const typeLabel = attachment.referenceKind === 'chat-selection' ? t('chat.selectedText') : attachment.isDirectory
@@ -385,6 +386,11 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                 <span className="block truncate text-[11px] leading-4 text-[var(--color-text-tertiary)]">
                   {typeLabel}
                 </span>
+                {note && (
+                  <span className="mt-0.5 block max-w-[320px] whitespace-pre-wrap break-words text-[13px] leading-5 text-[var(--color-text-primary)]">
+                    {note}
+                  </span>
+                )}
                 {hasQuotePreview && (
                   <span className="mt-0.5 block max-w-[320px] truncate font-mono text-[11px] leading-4 text-[var(--color-text-tertiary)]">
                     {quotePreview}

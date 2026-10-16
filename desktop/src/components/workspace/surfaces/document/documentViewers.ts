@@ -1,3 +1,4 @@
+import type { DocumentAnnotationSelection } from './DocumentAnnotation'
 import { lazy, type ComponentType, type LazyExoticComponent } from 'react'
 import type { WorkspaceDocumentPreviewType } from '@/api/sessions'
 import type { WorkspaceReveal } from '@/lib/workspace/types'
@@ -21,6 +22,7 @@ export type DocumentSourceActions = {
  * turn a `Blob` into pixels and report the zoom the reader chose.
  */
 export type DocumentViewerProps = {
+  onAnnotate?: (selection: DocumentAnnotationSelection) => void
   /** The path as the workspace knows it (relative to the workdir when it is inside). */
   path: string
   /** Where the file lives on disk, for handing it to the operating system. */

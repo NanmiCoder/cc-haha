@@ -8,6 +8,7 @@ import { blobWithBytes } from '@/test/blobs'
 import { createFakeSpreadsheetEngine, gridOf, type FakeSheet } from '@/test/fakeSpreadsheetEngine'
 import { SpreadsheetError, type SpreadsheetEngine } from './spreadsheetEngine'
 import SpreadsheetSurface from './SpreadsheetSurface'
+import type { DocumentAnnotationSelection } from './DocumentAnnotation'
 
 vi.mock('@/lib/systemFileOpen', () => ({
   openLocalFileWithSystem: vi.fn().mockResolvedValue(undefined),
@@ -81,16 +82,18 @@ type SurfaceProps = {
   blob?: Blob
   sheet?: string
   onSheetChange?: (sheet: string) => void
+  onAnnotate?: (selection: DocumentAnnotationSelection) => void
   initialView?: WorkspaceFileView
   absolutePath?: string
 }
 
 /** Holds the worksheet the way the workspace store does: chosen here, handed back down. */
-function Surface({ engine, blob = xlsxBlob, sheet: initialSheet, onSheetChange, initialView, absolutePath = '/work/data/budget.xlsx' }: SurfaceProps) {
+function Surface({ engine, blob = xlsxBlob, sheet: initialSheet, onSheetChange, onAnnotate, initialView, absolutePath = '/work/data/budget.xlsx' }: SurfaceProps) {
   const [sheet, setSheet] = useState(initialSheet)
   return (
     <SpreadsheetSurface
       engine={engine}
+      onAnnotate={onAnnotate}
       blob={blob}
       path="data/budget.xlsx"
       absolutePath={absolutePath}
@@ -695,5 +698,30 @@ describe('SpreadsheetSurface with a delimited text file', () => {
     await screen.findByRole('cell', { name: 'Rent' })
 
     expect(screen.queryByRole('radio', { name: 'Source' })).not.toBeInTheDocument()
+  })
+})
+
+describe('spreadsheet annotation integration', () => {
+  it('routes worksheet selection and clears it when switching away and back', async () => {
+    const onAnnotate = vi.fn()
+    await shown({ onAnnotate })
+    fireEvent.click(await screen.findByRole('gridcell', { name: 'A2: Rent' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }))
+    expect(onAnnotate).toHaveBeenCalledWith({ text: 'Rent', location: 'Budget!A2' })
+    fireEvent.click(tab('Notes'))
+    await screen.findByRole('gridcell', { name: 'A2: the milk' })
+    expect(screen.getByRole('button', { name: 'Add comment' })).toBeDisabled()
+    fireEvent.click(tab('Budget'))
+    await screen.findByRole('gridcell', { name: 'A2: Rent' })
+    expect(screen.getByRole('button', { name: 'Add comment' })).toBeDisabled()
+  })
+
+  it.each(['csv', 'tsv'])('routes %s table annotations through the document callback', async (extension) => {
+    const fake = createFakeSpreadsheetEngine({ sheets: [BUDGET], autoFinish: true })
+    const onAnnotate = vi.fn()
+    render(<SpreadsheetSurface engine={fake.engine} blob={blobWithBytes(new TextEncoder().encode('Rent,1200'))} path={`budget.${extension}`} absolutePath={`/work/budget.${extension}`} version="1" refreshing={false} zoom={undefined} onZoomChange={() => undefined} initialView={undefined} onAnnotate={onAnnotate} />)
+    fireEvent.click(await screen.findByRole('gridcell', { name: 'B2: 1200' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add comment' }))
+    expect(onAnnotate).toHaveBeenCalledWith({ text: '1200', location: 'Budget!B2' })
   })
 })

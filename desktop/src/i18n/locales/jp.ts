@@ -967,6 +967,8 @@ export const jp: Record<TranslationKey, string> = {
   'workspace.showAllLoadedLines': '読み込まれた行をすべて表示',
   'workspace.collapsePreview': 'プレビューを折りたたむ',
   'workspace.addSelectionToChat': 'チャットに追加',
+  'workspace.annotation.add': 'コメントを追加',
+  'workspace.annotation.selectCells': 'セルを選択、または Shift を押しながらクリックして範囲を選択',
   'workspace.localComment': 'ローカルコメント',
   'workspace.commentLine': '{line} 行目にコメント',
   'workspace.commentLineTarget': '{line} 行目',

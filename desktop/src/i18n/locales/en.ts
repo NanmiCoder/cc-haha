@@ -966,6 +966,8 @@ export const en = {
   'workspace.showAllLoadedLines': 'Show all loaded lines',
   'workspace.collapsePreview': 'Collapse preview',
   'workspace.addSelectionToChat': 'Add to chat',
+  'workspace.annotation.add': 'Add comment',
+  'workspace.annotation.selectCells': 'Select a cell or Shift-click to select a range',
   'workspace.localComment': 'Local comment',
   'workspace.commentLine': 'Comment line {line}',
   'workspace.commentLineTarget': 'Line {line}',

@@ -24,6 +24,7 @@ export default function PdfSurface({
   absolutePath,
   zoom,
   onZoomChange,
+  onAnnotate,
   initialView,
   engine = defaultPdfEngine,
 }: PdfSurfaceProps) {
@@ -34,6 +35,8 @@ export default function PdfSurface({
     return (
       <PdfViewer
         doc={current.doc}
+        onAnnotate={onAnnotate}
+        selectionIdentity={blob}
         sizes={current.sizes}
         path={path}
         absolutePath={absolutePath}

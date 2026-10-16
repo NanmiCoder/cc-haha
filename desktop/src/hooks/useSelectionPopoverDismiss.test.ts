@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
-import { getSelectionPopoverPosition } from './useSelectionPopoverDismiss'
+import { act, renderHook } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { getSelectionPopoverPosition, useSelectionPopoverDismiss } from './useSelectionPopoverDismiss'
 
 // Workspace surfaces size the menu 140x32 and float it 10px off the selection;
 // the chat toolbar uses its own numbers (see components/workspace/surfaces/textSelection.ts
@@ -103,4 +104,25 @@ describe('getSelectionPopoverPosition', () => {
     expect(positionFor(root, range)).toEqual({ x: 110, y: 58 })
     expect(positionFor(root, range, true)).toEqual({ x: 110, y: 58 })
   })
+})
+
+
+it.each([false, true])('supports preserving native selections on scroll: %s', (preserve) => {
+  const root = document.createElement('p')
+  root.textContent = 'selected text'
+  document.body.append(root)
+  const range = document.createRange()
+  range.selectNodeContents(root)
+  document.getSelection()!.removeAllRanges()
+  document.getSelection()!.addRange(range)
+  const onDismiss = vi.fn()
+  const onScroll = preserve ? vi.fn() : undefined
+  const { unmount } = renderHook(() => useSelectionPopoverDismiss({ active: true, popoverRef: { current: null }, onDismiss, onScroll }))
+  act(() => document.dispatchEvent(new Event('scroll')))
+  expect(document.getSelection()?.toString()).toBe(preserve ? 'selected text' : '')
+  expect(onDismiss).toHaveBeenCalledTimes(preserve ? 0 : 1)
+  if (onScroll) expect(onScroll).toHaveBeenCalledOnce()
+  unmount()
+  document.getSelection()?.removeAllRanges()
+  root.remove()
 })

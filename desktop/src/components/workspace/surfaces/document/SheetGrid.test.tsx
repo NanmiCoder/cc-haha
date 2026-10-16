@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore } from '@/stores/settingsStore'
 import { gridOf } from '@/test/fakeSpreadsheetEngine'
 import { SheetGrid, columnLabel, mergeCoverage } from './SheetGrid'
@@ -309,5 +309,105 @@ describe('mergeCoverage', () => {
 
     expect(origins.size).toBe(1)
     expect(covered.size).toBe(5000 * 100 - 1)
+  })
+})
+
+describe('sheet annotations', () => {
+  const add = () => screen.getByRole('button', { name: 'Add comment' })
+
+  it('quotes a shift-click range with sheet and coordinates, including blank cells', () => {
+    const onAnnotate = vi.fn()
+    render(<SheetGrid grid={gridOf([['Name', 'Value'], ['Rent', undefined]])} label="Budget" onAnnotate={onAnnotate} />)
+    expect(add()).toBeDisabled()
+    fireEvent.click(screen.getByRole('gridcell', { name: 'B2' }))
+    fireEvent.click(add())
+    expect(onAnnotate).toHaveBeenLastCalledWith({ text: '', location: 'Budget!B2' })
+    fireEvent.click(screen.getByRole('gridcell', { name: 'A1: Name' }), { shiftKey: true })
+    expect(screen.getAllByRole('gridcell').every((cell) => cell.getAttribute('aria-selected') === 'true')).toBe(true)
+    fireEvent.click(add())
+    expect(onAnnotate).toHaveBeenLastCalledWith({ text: 'Name\tValue\nRent\t', location: 'Budget!A1:B2' })
+  })
+
+  it('supports keyboard selection and range extension, skips hidden cells and clears with Escape', () => {
+    const onAnnotate = vi.fn()
+    render(<SheetGrid grid={gridOf([['a', 'hidden', 'c']], { columnWidths: [72, 0, 72] })} label="Sheet" onAnnotate={onAnnotate} />)
+    const first = screen.getByRole('gridcell', { name: 'A1: a' })
+    expect(screen.getAllByRole('gridcell').filter((cell) => cell.tabIndex === 0)).toEqual([first])
+    fireEvent.keyDown(first, { key: 'ArrowRight', shiftKey: true })
+    expect(screen.getByRole('gridcell', { name: 'C1: c' })).toHaveFocus()
+    fireEvent.click(add())
+    expect(onAnnotate).toHaveBeenCalledWith({ text: 'a\thidden\tc', location: 'Sheet!A1:C1' })
+    fireEvent.keyDown(screen.getByRole('gridcell', { name: 'C1: c' }), { key: 'Escape' })
+    expect(add()).toBeDisabled()
+    fireEvent.keyDown(first, { key: 'Enter' })
+    fireEvent.click(add())
+    expect(onAnnotate).toHaveBeenLastCalledWith({ text: 'a', location: 'Sheet!A1' })
+  })
+
+  it('uses the full rendered merged address and quotes the origin once', () => {
+    const onAnnotate = vi.fn()
+    render(<SheetGrid grid={gridOf([['Title', 'covered'], ['covered', 'covered']], { merges: [{ row: 0, column: 0, rowSpan: 2, columnSpan: 2 }] })} label="Merged" onAnnotate={onAnnotate} />)
+    fireEvent.click(screen.getByRole('gridcell', { name: 'A1: Title' }))
+    fireEvent.click(add())
+    expect(onAnnotate).toHaveBeenCalledWith({ text: 'Title\t\n\t', location: 'Merged!A1:B2' })
+  })
+
+  it('includes a merged origin crossed by the middle of a range', () => {
+    const onAnnotate = vi.fn()
+    render(<SheetGrid grid={gridOf([['a', 'start', 'c'], ['title', 'covered', 'covered'], ['d', 'end', 'f']], {
+      merges: [{ row: 1, column: 0, rowSpan: 1, columnSpan: 3 }],
+    })} label="Crossed" onAnnotate={onAnnotate} />)
+    fireEvent.click(screen.getByRole('gridcell', { name: 'B1: start' }))
+    fireEvent.click(screen.getByRole('gridcell', { name: 'B3: end' }), { shiftKey: true })
+    fireEvent.click(add())
+    expect(onAnnotate).toHaveBeenCalledWith({ text: 'a\tstart\tc\ntitle\t\t\nd\tend\tf', location: 'Crossed!A1:C3' })
+    expect(screen.getAllByRole('gridcell').every((cell) => cell.getAttribute('aria-selected') === 'true')).toBe(true)
+  })
+
+  it('closes cascading merge intersections regardless of merge order', () => {
+    const onAnnotate = vi.fn()
+    const grid = gridOf(Array.from({ length: 5 }, (_, row) => Array.from({ length: 5 }, (_, column) => `${columnLabel(column)}${row + 1}`)), {
+      merges: [
+        { row: 3, column: 1, rowSpan: 1, columnSpan: 4 },
+        { row: 2, column: 0, rowSpan: 3, columnSpan: 1 },
+        { row: 1, column: 0, rowSpan: 1, columnSpan: 3 },
+      ],
+    })
+    render(<SheetGrid grid={grid} label="Cascade" onAnnotate={onAnnotate} />)
+    fireEvent.click(screen.getByRole('gridcell', { name: 'B1: B1' }))
+    fireEvent.click(screen.getByRole('gridcell', { name: 'B3: B3' }), { shiftKey: true })
+    fireEvent.click(add())
+    expect(onAnnotate).toHaveBeenCalledWith({ location: 'Cascade!A1:E5', text: 'A1\tB1\tC1\tD1\tE1\nA2\t\t\tD2\tE2\nA3\tB3\tC3\tD3\tE3\n\tB4\t\t\t\n\tB5\tC5\tD5\tE5' })
+    expect(screen.getAllByRole('gridcell').every((cell) => cell.getAttribute('aria-selected') === 'true')).toBe(true)
+  })
+
+  it('clips crossed merges to rendered rows and ignores merges below the draw budget', () => {
+    const onAnnotate = vi.fn()
+    const grid = gridOf(Array.from({ length: 6 }, (_, row) => [`a${row}`, `b${row}`, `c${row}`]), {
+      merges: [
+        { row: 0, column: 1, rowSpan: 6, columnSpan: 1 },
+        { row: 4, column: 0, rowSpan: 2, columnSpan: 1 },
+      ],
+    })
+    render(<SheetGrid grid={grid} label="Clipped" cellBudget={9} onAnnotate={onAnnotate} />)
+    fireEvent.click(screen.getByRole('gridcell', { name: 'A1: a0' }))
+    fireEvent.click(screen.getByRole('gridcell', { name: 'C1: c0' }), { shiftKey: true })
+    fireEvent.click(add())
+    expect(onAnnotate).toHaveBeenCalledWith({ location: 'Clipped!A1:C3', text: 'a0\tb0\tc0\na1\t\tc1\na2\t\tc2' })
+  })
+
+  it('invalidates a selection immediately when bytes or parsed grid changes', () => {
+    const onAnnotate = vi.fn()
+    const grid = gridOf([['old']])
+    const props = { grid, label: 'Sheet', onAnnotate }
+    const { rerender } = render(<SheetGrid {...props} selectionResetKey="old bytes" />)
+    fireEvent.click(screen.getByRole('gridcell'))
+    expect(add()).toBeEnabled()
+    rerender(<SheetGrid {...props} selectionResetKey="new bytes" />)
+    expect(add()).toBeDisabled()
+    fireEvent.click(screen.getByRole('gridcell'))
+    rerender(<SheetGrid {...props} grid={gridOf([['new']])} selectionResetKey="new bytes" />)
+    expect(add()).toBeDisabled()
+    expect(onAnnotate).not.toHaveBeenCalled()
   })
 })

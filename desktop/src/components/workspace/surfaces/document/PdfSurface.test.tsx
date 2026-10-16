@@ -84,6 +84,7 @@ const pdfBlob = blobWithBytes([37, 80, 68, 70], 'application/pdf')
 
 type SurfaceProps = {
   engine: PdfEngine
+  onAnnotate?: (selection: { text: string; location: string }) => void
   blob?: Blob
   zoom?: number
   onZoomChange?: (zoom: number | undefined) => void
@@ -92,11 +93,12 @@ type SurfaceProps = {
 }
 
 /** Holds the zoom the way the workspace store does: chosen here, handed back down. */
-function Surface({ engine, blob = pdfBlob, zoom: initialZoom, onZoomChange, initialView, absolutePath = '/work/docs/thesis.pdf' }: SurfaceProps) {
+function Surface({ onAnnotate, engine, blob = pdfBlob, zoom: initialZoom, onZoomChange, initialView, absolutePath = '/work/docs/thesis.pdf' }: SurfaceProps) {
   const [zoom, setZoom] = useState(initialZoom)
   return (
     <PdfSurface
       engine={engine}
+      onAnnotate={onAnnotate}
       blob={blob}
       path="docs/thesis.pdf"
       absolutePath={absolutePath}
@@ -142,6 +144,27 @@ function scrollTo(top: number, left = 0) {
 const flush = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 
 describe('PdfSurface', () => {
+  it('offers a page annotation for keyboard selections and clears it on Escape', async () => {
+    const onAnnotate = vi.fn()
+    await show({ onAnnotate })
+    const root = scroller()
+    await waitFor(() => expect(root.querySelector('.textLayer span')).not.toBeNull())
+    const page = root.querySelector('.textLayer span')!
+    const range = root.ownerDocument.createRange()
+    range.selectNodeContents(page)
+    const selection = root.ownerDocument.getSelection()!
+    selection.removeAllRanges()
+    selection.addRange(range)
+    fireEvent.keyUp(page, { key: 'ArrowRight', shiftKey: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Add to chat' }))
+    expect(onAnnotate).toHaveBeenCalledWith({ text: page.textContent!.trim(), location: 'Page 1' })
+    selection.addRange(range)
+    fireEvent.keyUp(page, { key: 'ArrowRight', shiftKey: true })
+    fireEvent.keyDown(page, { key: 'Escape' })
+    fireEvent.keyUp(page, { key: 'Escape' })
+    expect(screen.queryByRole('button', { name: 'Add to chat' })).not.toBeInTheDocument()
+  })
+
   describe('opening', () => {
     it('says it is loading until the document is open', () => {
       render(<Surface engine={{ open: () => new Promise(() => undefined) }} />)

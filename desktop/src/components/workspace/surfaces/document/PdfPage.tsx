@@ -135,6 +135,7 @@ export function PdfPage({ doc, pageNumber, total, scale, drawScale }: PdfPagePro
   return (
     <div
       role="group"
+      data-document-page={pageNumber}
       aria-label={t('workspace.pdf.pageOfTotal', { page: pageNumber, total })}
       className="cc-pdf-page h-full w-full shadow-[var(--shadow-card)]"
       style={{ ['--scale-factor' as string]: scale * PDF_CSS_UNITS }}

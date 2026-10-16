@@ -967,6 +967,8 @@ export const zh: Record<TranslationKey, string> = {
   'workspace.showAllLoadedLines': '顯示全部已載入行',
   'workspace.collapsePreview': '收起預覽',
   'workspace.addSelectionToChat': '新增到對話',
+  'workspace.annotation.add': '新增批註',
+  'workspace.annotation.selectCells': '選取儲存格，或按住 Shift 點擊選取範圍',
   'workspace.localComment': '本地評論',
   'workspace.commentLine': '評論第 {line} 行',
   'workspace.commentLineTarget': '第 {line} 行',

@@ -56,6 +56,7 @@ export default function SpreadsheetSurface({
   absolutePath,
   sheet,
   onSheetChange,
+  onAnnotate,
   initialView,
   source,
   engine = defaultSpreadsheetEngine,
@@ -209,7 +210,7 @@ export default function SpreadsheetSurface({
           }}
           className="absolute inset-0 overflow-auto bg-[var(--color-surface)] outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--color-border-focus)]"
         >
-          {grid && gridName !== null ? <SheetGrid key={gridName} grid={grid} label={gridName} /> : null}
+          {grid && gridName !== null ? <SheetGrid key={gridName} grid={grid} label={gridName} selectionResetKey={blob} onAnnotate={onScreen ? onAnnotate : undefined} /> : null}
         </div>
         {cover ? <div className="absolute inset-0 bg-[var(--color-surface)]">{cover}</div> : null}
       </div>

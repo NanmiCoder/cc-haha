@@ -1,7 +1,9 @@
 import { Fragment, useMemo, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { useTranslation } from '@/i18n'
+import type { DocumentAnnotationSelection } from '@/components/workspace/surfaces/document/DocumentAnnotation'
 import type { Grid, GridCell } from './spreadsheetEngine'
+import { expandSheetSelection, indexSheetMerges } from '@/components/workspace/surfaces/document/sheetSelection'
 
 /** How many cells are put on the page at once. A sheet has room for far more than a page can hold. */
 export const MAX_RENDERED_CELLS = 30_000
@@ -68,6 +70,10 @@ const ALIGN_CLASS: Record<GridCell['align'], string> = {
   center: 'text-center',
 }
 
+const KEY_DIRECTION: Record<string, [number, number]> = {
+  ArrowRight: [0, 1], ArrowLeft: [0, -1], ArrowDown: [1, 0], ArrowUp: [-1, 0],
+}
+
 const HEADER_CELL =
   'flex items-center justify-center border-b border-r border-[var(--color-border)] bg-[var(--color-surface-container)] text-[11px] text-[var(--color-text-tertiary)] select-none'
 
@@ -84,12 +90,16 @@ export function SheetGrid({
   grid,
   label,
   cellBudget = MAX_RENDERED_CELLS,
+  onAnnotate,
+  selectionResetKey,
 }: {
   grid: Grid
   /** The sheet's name. */
   label: string
   /** Cells drawn at first, and added by each "show more rows". A parameter so a test need not draw thirty thousand. */
   cellBudget?: number
+  onAnnotate?: (selection: DocumentAnnotationSelection) => void
+  selectionResetKey?: unknown
 }) {
   const t = useTranslation()
   const chunk = Math.max(1, Math.floor(cellBudget / Math.max(grid.columns, 1)))
@@ -102,6 +112,44 @@ export function SheetGrid({
     [grid.merges, grid.columns, rows],
   )
 
+  type Position = { row: number; column: number }
+  const [selection, setSelection] = useState<{
+    anchor: Position; end: Position; grid: Grid; resetKey: unknown
+  } | null>(null)
+  const active = selection?.grid === grid && selection.resetKey === selectionResetKey ? selection : null
+  const selectCell = (row: number, column: number, extend: boolean, keyboardAnchor?: Position) => {
+    const end = { row, column }
+    setSelection({ anchor: extend ? active?.anchor ?? keyboardAnchor ?? end : end, end, grid, resetKey: selectionResetKey })
+  }
+  const annotationEnabled = onAnnotate !== undefined
+  const mergeIndex = useMemo(
+    () => annotationEnabled ? indexSheetMerges(origins, grid, rows) : null,
+    [annotationEnabled, origins, grid, rows],
+  )
+  const bounds = active && mergeIndex ? expandSheetSelection({
+    firstRow: Math.min(active.anchor.row, active.end.row),
+    firstColumn: Math.min(active.anchor.column, active.end.column),
+    lastRow: Math.max(active.anchor.row, active.end.row),
+    lastColumn: Math.max(active.anchor.column, active.end.column),
+  }, mergeIndex) : null
+  const address = bounds ? (() => {
+    const first = `${columnLabel(bounds.firstColumn)}${bounds.firstRow + 1}`
+    const last = `${columnLabel(bounds.lastColumn)}${bounds.lastRow + 1}`
+    return first === last ? first : `${first}:${last}`
+  })() : ''
+  const annotate = () => {
+    if (!bounds || !onAnnotate) return
+    const lines: string[] = []
+    for (let row = bounds.firstRow; row <= bounds.lastRow; row += 1) {
+      const values: string[] = []
+      for (let column = bounds.firstColumn; column <= bounds.lastColumn; column += 1) {
+        values.push(covered.has(row * grid.columns + column) ? '' : grid.cells[row]?.[column]?.text ?? '')
+      }
+      lines.push(values.join('\t'))
+    }
+    onAnnotate({ text: lines.join('\n'), location: `${label}!${address}` })
+  }
+
   const templateColumns = `${ROW_HEADER_WIDTH}px ${grid.columnWidths.map((width) => `${width}px`).join(' ')}`
   const templateRows = [
     `${HEADER_HEIGHT}px`,
@@ -109,6 +157,7 @@ export function SheetGrid({
   ].join(' ')
 
   const cells = []
+  let firstVisibleCell = true
   for (let row = 0; row < rows; row += 1) {
     if (grid.rowHeights[row] === 0) continue
     cells.push(
@@ -125,12 +174,46 @@ export function SheetGrid({
           const cell = grid.cells[row]?.[column]
           const merge = origins.get(row * grid.columns + column)
           const rowSpan = merge ? Math.min(merge.rowSpan, rows - row) : 1
+          const tabStop = active ? active.end.row === row && active.end.column === column : firstVisibleCell
+          firstVisibleCell = false
           return (
             <div
               key={column}
-              role="cell"
+              role={onAnnotate ? 'gridcell' : 'cell'}
+              data-sheet-row={row}
+              data-sheet-column={column}
+              aria-label={onAnnotate ? `${columnLabel(column)}${row + 1}${cell?.text ? `: ${cell.text}` : ''}` : undefined}
+              aria-selected={onAnnotate ? Boolean(bounds && row <= bounds.lastRow && row + rowSpan - 1 >= bounds.firstRow && column <= bounds.lastColumn && column + (merge?.columnSpan ?? 1) - 1 >= bounds.firstColumn) : undefined}
+              tabIndex={onAnnotate ? (tabStop ? 0 : -1) : undefined}
+              onClick={onAnnotate ? (event) => selectCell(row, column, event.shiftKey) : undefined}
+              onKeyDown={onAnnotate ? (event) => {
+                if (event.key === 'Escape') {
+                  setSelection(null)
+                  return
+                }
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  selectCell(row, column, event.shiftKey)
+                  return
+                }
+                const direction = KEY_DIRECTION[event.key]
+                if (!direction) return
+                event.preventDefault()
+                let nextRow = row + direction[0]
+                let nextColumn = column + direction[1]
+                while (nextRow >= 0 && nextRow < rows && nextColumn >= 0 && nextColumn < grid.columns) {
+                  const next = event.currentTarget.closest('[role="grid"]')?.querySelector<HTMLElement>(`[data-sheet-row="${nextRow}"][data-sheet-column="${nextColumn}"]`)
+                  if (next) {
+                    selectCell(nextRow, nextColumn, event.shiftKey, { row, column })
+                    next.focus()
+                    break
+                  }
+                  nextRow += direction[0]
+                  nextColumn += direction[1]
+                }
+              } : undefined}
               title={cell && cell.text.length > 24 ? cell.text : undefined}
-              className={`min-w-0 overflow-hidden text-ellipsis whitespace-nowrap border-b border-r border-[var(--color-border)] px-2 py-0.5 text-xs leading-[18px] text-[var(--color-text-primary)] ${ALIGN_CLASS[cell?.align ?? 'left']}`}
+              className={`aria-selected:bg-[var(--color-brand-soft)] aria-selected:ring-1 aria-selected:ring-inset aria-selected:ring-[var(--color-brand)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] min-w-0 overflow-hidden text-ellipsis whitespace-nowrap border-b border-r border-[var(--color-border)] px-2 py-0.5 text-xs leading-[18px] text-[var(--color-text-primary)] ${ALIGN_CLASS[cell?.align ?? 'left']}`}
               style={{
                 gridRow: merge ? `${row + 2} / span ${rowSpan}` : row + 2,
                 gridColumn: merge ? `${column + 2} / span ${merge.columnSpan}` : column + 2,
@@ -146,8 +229,16 @@ export function SheetGrid({
 
   return (
     <Fragment>
+      {onAnnotate ? (
+        <div className="sticky left-0 top-0 z-[var(--z-sticky)] flex h-10 items-center gap-2 bg-[var(--color-surface)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]">
+          <span className="min-w-0 flex-1 truncate">{address || t('workspace.annotation.selectCells')}</span>
+          <Button variant="secondary" size="sm" disabled={!bounds} onClick={annotate}>
+            {t('workspace.annotation.add')}
+          </Button>
+        </div>
+      ) : null}
       <div
-        role="table"
+        role={onAnnotate ? 'grid' : 'table'}
         aria-label={label}
         aria-rowcount={grid.rows}
         aria-colcount={grid.columns}
@@ -158,13 +249,13 @@ export function SheetGrid({
           role="row"
           className="contents"
         >
-          <div className={`${HEADER_CELL} sticky left-0 top-0 z-[2]`} style={{ gridRow: 1, gridColumn: 1 }} />
+          <div className={`${HEADER_CELL} sticky left-0 ${onAnnotate ? 'top-10' : 'top-0'} z-[2]`} style={{ gridRow: 1, gridColumn: 1 }} />
           {Array.from({ length: grid.columns }, (_, column) => (
             grid.columnWidths[column] === 0 ? null : (
               <div
                 key={column}
                 role="columnheader"
-                className={`${HEADER_CELL} sticky top-0 z-[1]`}
+                className={`${HEADER_CELL} sticky ${onAnnotate ? 'top-10' : 'top-0'} z-[1]`}
                 style={{ gridRow: 1, gridColumn: column + 2 }}
               >
                 {columnLabel(column)}

@@ -93,6 +93,38 @@ describe('AttachmentGallery', () => {
     expect(document.body.textContent).toContain('const value = calculate(input) return value')
   })
 
+  it.each(['composer', 'message'] as const)('shows Office annotation locations and requests in %s while retaining file actions', async (variant) => {
+    const onRemove = vi.fn()
+    const path = '/tmp/office-annotations/budget.xlsx'
+    const view = render(
+      <AttachmentGallery
+        variant={variant}
+        onRemove={variant === 'composer' ? onRemove : undefined}
+        attachments={[{
+          id: 'office-comment-1',
+          type: 'file',
+          name: 'budget.xlsx',
+          path,
+          note: 'Budget!B3\nChange the quantity to 5; keep the unit price unchanged.',
+          quote: '3',
+        }]}
+      />,
+    )
+
+    // Office comments have no diffSide: their location and request used to disappear.
+    expect(view.getByText(/Budget!B3/)).toHaveTextContent('Change the quantity to 5; keep the unit price unchanged.')
+    expect(view.getByText('3')).toBeVisible()
+    expect(view.queryByTestId('diff-comment-card')).not.toBeInTheDocument()
+    if (variant === 'composer') {
+      fireEvent.click(view.getByRole('button', { name: 'Remove budget.xlsx' }))
+      expect(onRemove).toHaveBeenCalledWith('office-comment-1')
+    } else {
+      fireEvent.click(view.getByRole('button', { name: 'Open budget.xlsx' }))
+      await waitFor(() => expect(openPath).toHaveBeenCalledWith(path))
+      expect(view.getByRole('button', { name: 'Open with' })).toBeInTheDocument()
+    }
+  })
+
   it('keeps plain file chips on the one-line treatment', () => {
     render(
       <AttachmentGallery
