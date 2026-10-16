@@ -31,6 +31,15 @@ cd adapters
 bun install
 ```
 
+要在本地把桌面应用整个跑起来（`bun run electron:dev`），还差一步：`bun install` 不会执行 Electron 的 postinstall，`desktop/node_modules/electron/dist` 是空的，直接跑会报 `Electron executable not found`。
+
+```bash
+cd desktop
+node node_modules/electron/install.js
+```
+
+这一步要单独做的原因是 `desktop/package.json` 的 `trustedDependencies` 只列了 `node-pty`，Electron 不在其中——它会把一个上百 MB 的二进制装进 `node_modules`，不值得让每次 `bun install` 都摊上。只跑 lint、测试和 `check:*` 门禁的话不需要它。
+
 不要提交本地运行产物，例如 `artifacts/quality-runs/`、`node_modules/`、`desktop/node_modules/`。
 
 ## 四层门禁分工
