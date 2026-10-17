@@ -124,7 +124,10 @@ export function ChatAnnotationMarks({ annotations, onActivate }: ChatAnnotationM
             <span
               key={index}
               aria-hidden="true"
-              className="absolute rounded-t-[var(--radius-xs)] bg-[var(--color-brand-soft)]"
+              // The tint paints over the message, so it must stay translucent —
+              // an opaque `--color-brand-soft` swallowed the annotated text
+              // whole, which read as if the selection had been deleted.
+              className="absolute rounded-t-[var(--radius-xs)] bg-[var(--color-brand-soft)] opacity-30"
               style={{
                 left: rect.left,
                 top: rect.top,
