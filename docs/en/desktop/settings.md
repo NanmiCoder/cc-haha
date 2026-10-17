@@ -123,9 +123,11 @@ Let Claude read the screen, click, and type. Enable it, confirm the global conse
 
 A usage dashboard computed from the Claude Code session records on this machine. Everything is calculated locally and nothing is uploaded.
 
-- Across the top: total tokens, peak tokens, longest task, current and longest streak.
-- In the middle: a heatmap with daily, weekly, and cumulative views. Click a day for that day's sessions, tokens, messages, and tool calls.
-- Below: activity insights — active rate, most-used model, skills used, fresh versus cache-hit token split, and estimated cost. Estimated cost excludes models with no known price, and the UI says how many were skipped.
+- At the top: your avatar, name and project link, with the lifetime token total beside them. English counts in k / M / B, Chinese in 万 and 亿; hover a number for the exact value and the other notation (24.1B = 241 亿).
+- Below: the last 90 days as a stream split by model, with the peak day labelled, then the longest task, current and longest streak, and cache hit rate.
+- A heatmap with daily, weekly, and cumulative views. Hover a day for its sessions and tokens.
+- Model details list each model's share, tokens, and estimated cost. Estimated cost excludes models with no known price, and the UI says how many were skipped. The most-used skills and connectors come last.
+- **Share image** at the top right turns this into a PNG in portrait, square, or wide. The image follows the current theme unless you pick another, and the avatar and name, model details, and project link can each be switched off. Estimated cost stays off the image unless you turn it on. The image is drawn on this machine; copy it to the clipboard or save it.
 
 ## Diagnostics
 
