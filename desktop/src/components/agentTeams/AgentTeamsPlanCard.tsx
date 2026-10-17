@@ -154,7 +154,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
           </div>
         </div>
       )}>
-        <div className="team-plan-editor">
+        <div className="team-plan-editor break-words">
           <div className="flex flex-wrap items-start justify-between gap-4 pb-6">
             <div className="min-w-0">
               <p className="text-sm text-[var(--color-text-secondary)]">{t('teamPlan.reviewHint')}</p>
