@@ -272,7 +272,7 @@ function ChatSelectionMenu({
   selection: ChatSelectionState | null
   onAnnotate: () => void
   onAdd: () => void
-  onSideChat: () => void
+  onSideChat?: () => void
   popoverRef: { current: HTMLDivElement | null }
 }) {
   const t = useTranslation()
@@ -284,7 +284,7 @@ function ChatSelectionMenu({
       style={{ left: selection.x, top: selection.y }}>
       <Button variant="ghost" onClick={onAnnotate}>{t('chat.annotateSelection')}</Button>
       <Button variant="ghost" onClick={onAdd}>{t('chat.addSelectionToChat')}</Button>
-      <Button variant="ghost" onClick={onSideChat}>{t('chat.askSelectionInSideChat')}</Button>
+      {onSideChat && <Button variant="ghost" onClick={onSideChat}>{t('chat.askSelectionInSideChat')}</Button>}
     </div>, document.body,
   )
 }
@@ -587,6 +587,7 @@ function SelectableChatMessage({
   content: string
   children: ReactNode
 }) {
+  const isLean = useSessionStore(state => state.sessions.some(session => session.id === sessionId && session.agentProfile === 'lean'))
   const rootRef = useRef<HTMLDivElement>(null)
   const selectionMenuRef = useRef<HTMLDivElement>(null)
   const lastSelectionPointerRef = useRef<SelectionPointer | null>(null)
@@ -855,7 +856,7 @@ function SelectableChatMessage({
         selection={currentSelectionMenu}
         onAnnotate={startAnnotation}
         onAdd={addCurrentSelectionToChat}
-        onSideChat={askSelectionInSideChat}
+        onSideChat={isLean ? undefined : askSelectionInSideChat}
         popoverRef={selectionMenuRef}
       />
       {annotationEditor && (
@@ -2650,7 +2651,8 @@ export function MessageList({
     Boolean(activeThinkingId) ||
     Boolean(sessionState?.activeToolUseId) ||
     Boolean(sessionState?.activeToolName)
-  const branchActionsDisabled = isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
+  const isLean = useSessionStore(state => state.sessions.some(session => session.id === resolvedSessionId && session.agentProfile === 'lean'))
+  const branchActionsDisabled = isLean || isDirectAgentSession || turnInProgress || hasRunningBackgroundTasks
   const hasCompactingDivider = messages.some((message) =>
     message.type === 'compact_summary' && message.phase === 'compacting')
 

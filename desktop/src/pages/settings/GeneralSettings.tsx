@@ -47,6 +47,7 @@ import { AUTO_QUESTION_TIMEOUT_OPTIONS } from '../../../../src/shared/autoQuesti
 import { ChatAppearanceSettings } from './ChatAppearanceSettings'
 import { DataMigrationSettings } from './DataMigrationSettings'
 import { TabBehaviorSettings } from './TabBehaviorSettings'
+import { LeanModeSettings } from './LeanModeSettings'
 
 /**
  * The General settings panel — the largest of the seven, and the one most often
@@ -1095,6 +1096,7 @@ export function GeneralSettings() {
               />
             </SettingsRow>
           )}
+          <LeanModeSettings />
           <SettingsSwitchRow
             title={t('settings.general.workflowKeywordEnabled')}
             description={t('settings.general.workflowKeywordDescription')}

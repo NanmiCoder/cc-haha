@@ -15,10 +15,11 @@ export function mentionProviderId(selection: RuntimeSelection | undefined): stri
 }
 
 export const composerReferencesApi = {
-  list(cwd?: string, providerId?: string) {
+  list(cwd?: string, providerId?: string, agentProfile?: 'lean') {
     const params = [
       cwd ? `cwd=${encodeURIComponent(cwd)}` : '',
       providerId ? `providerId=${encodeURIComponent(providerId)}` : '',
+      agentProfile ? `agentProfile=${agentProfile}` : '',
     ].filter(Boolean)
     const query = params.length ? `?${params.join('&')}` : ''
     return api.get<{ skills: ComposerReferenceCandidate[], plugins: ComposerReferenceCandidate[] }>(`/api/skills/mentions${query}`)

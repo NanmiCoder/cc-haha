@@ -1,3 +1,4 @@
+import { isAgentProfileCommandSupported } from '../utils/agentProfile.js'
 import type { Command } from '../types/command.js'
 
 export function supportsHeadlessSlashCommand(command: Command): boolean {
@@ -7,5 +8,5 @@ export function supportsHeadlessSlashCommand(command: Command): boolean {
 }
 
 export function filterCommandsForHeadlessMode(commands: Command[]): Command[] {
-  return commands.filter(supportsHeadlessSlashCommand)
+  return commands.filter(command => supportsHeadlessSlashCommand(command) && isAgentProfileCommandSupported(command))
 }

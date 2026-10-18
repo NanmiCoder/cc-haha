@@ -1,5 +1,7 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { type as osType, version as osVersion, release as osRelease } from 'os'
+import { getAgentProfile } from '../utils/agentProfile.js'
+import { buildLeanSystemPrompt } from './leanPrompt.js'
 import { env } from '../utils/env.js'
 import { getIsGit } from '../utils/git.js'
 import { getCwd } from '../utils/cwd.js'
@@ -446,6 +448,21 @@ export async function getSystemPrompt(
   additionalWorkingDirectories?: string[],
   mcpClients?: MCPServerConnection[],
 ): Promise<string[]> {
+  if (getAgentProfile() === 'lean') {
+    const [memory, uname] = await Promise.all([loadMemoryPrompt(), getUnameSR()])
+    return buildLeanSystemPrompt({
+      toolNames: tools.map(tool => tool.name),
+      cwd: getCwd(),
+      additionalWorkingDirectories,
+      platform: env.platform,
+      osVersion: uname,
+      shell: getShellInfoLine(),
+      date: getSessionStartDate(),
+      language: getInitialSettings().language,
+      memory,
+    })
+  }
+
   if (isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)) {
     return [
       `You are Claude Code, Anthropic's official CLI for Claude.\n\nCWD: ${getCwd()}\nDate: ${getSessionStartDate()}`,

@@ -291,7 +291,7 @@ describe('EmptySession', () => {
     mocks.isTauriRuntime = false
     mocks.voiceSupported.mockReturnValue(false)
     useVoiceInputStore.setState({ catalog: null, loading: false, error: null })
-    useSettingsStore.setState({ locale: 'en', activeProviderName: null, permissionMode: 'default' })
+    useSettingsStore.setState({ locale: 'en', activeProviderName: null, permissionMode: 'default', leanModeEnabled: false })
     useSessionStore.setState(initialSessionState, true)
     useChatStore.setState(initialChatState, true)
     useTabStore.setState(initialTabState, true)
@@ -686,7 +686,7 @@ describe('EmptySession', () => {
     setComposerText('/a', 2)
 
     const listbox = await screen.findByRole('listbox', { name: 'Slash commands' })
-    const combobox = screen.getByRole('combobox')
+    const combobox = screen.getByRole('combobox', { name: '' })
     const systemCommand = screen.getByText('/status')
     const skillsHeading = screen.getByText('Skills')
     const projectSkill = screen.getByText('project-audit')
@@ -1371,6 +1371,171 @@ describe('EmptySession', () => {
     expect(panel).not.toHaveClass('overflow-hidden')
   })
 
+  it('keeps the submitting draft model when auth completes after a newer selection', async () => {
+    let completeAuth!: (value: { hasAuth: boolean }) => void
+    mocks.getProviderAuthStatus.mockImplementationOnce(() => new Promise(resolve => { completeAuth = resolve }))
+    const first = { providerId: 'first-provider', modelId: 'first-model' }
+    const second = { providerId: 'second-provider', modelId: 'second-model' }
+    useSessionRuntimeStore.getState().setSelection('__draft__', first)
+    useUIStore.getState().startNewSessionDraft('/tmp/first')
+    const view = render(<EmptySession />)
+    setComposerText('first task', 10)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.getProviderAuthStatus).toHaveBeenCalled())
+    act(() => {
+      useUIStore.getState().startNewSessionDraft('/tmp/second')
+      useSessionRuntimeStore.getState().setSelection('__draft__', second)
+    })
+    view.unmount()
+    await act(async () => completeAuth({ hasAuth: true }))
+    expect(useSessionRuntimeStore.getState().selections['draft-session']).toEqual(first)
+    expect(useSessionRuntimeStore.getState().selections.__draft__).toEqual(second)
+  })
+
+  it('does not clear or activate a newer draft when an older creation finishes', async () => {
+    let complete!: (value: { sessionId: string }) => void
+    mocks.createSession.mockImplementationOnce(() => new Promise(resolve => { complete = resolve }))
+    useUIStore.getState().startNewSessionDraft('/tmp/first')
+    const view = render(<EmptySession />)
+    setComposerText('first task', 10)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+    act(() => {
+      useUIStore.getState().startNewSessionDraft('/tmp/second')
+      useTabStore.getState().setActiveTab(null)
+    })
+    const newerDraft = useUIStore.getState().newSessionDraft
+    view.unmount()
+    await act(async () => complete({ sessionId: 'first-session' }))
+    expect(useUIStore.getState().newSessionDraft).toEqual(newerDraft)
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(useSessionStore.getState().activeSessionId).toBeNull()
+  })
+
+  it('hides the mode selector by default and creates a standard conversation', async () => {
+    render(<EmptySession />)
+    expect(screen.queryByRole('button', { name: /^Agent mode:/ })).not.toBeInTheDocument()
+    setComposerText('edit a file', 11)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalled())
+    expect(mocks.createSession.mock.calls[0]![0]).not.toHaveProperty('agentProfile')
+  })
+
+  it('clears a hidden lean selection when the setting is disabled, without losing draft text', async () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    const { rerender } = render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    setComposerText('keep these edits', 16)
+    rerender(<EmptySession visible={false} />)
+    act(() => useSettingsStore.setState({ leanModeEnabled: false }))
+    rerender(<EmptySession visible />)
+    expect(screen.queryByRole('button', { name: /^Agent mode:/ })).not.toBeInTheDocument()
+    expect(getComposerText()).toBe('keep these edits')
+    act(() => useSettingsStore.setState({ leanModeEnabled: true }))
+    expect(screen.getByRole('button', { name: /^Agent mode:/ })).toHaveTextContent('Standard')
+    act(() => useSettingsStore.setState({ leanModeEnabled: false }))
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalled())
+    expect(mocks.createSession.mock.calls[0]![0]).not.toHaveProperty('agentProfile')
+  })
+
+  it.each(['file', 'skill'] as const)('preserves %s reference metadata through mode selection and submission', async (kind) => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    const modelText = 'Use the Skill tool with skill: "code-review" for this request.'
+    mocks.listReferences.mockResolvedValue({ plugins: [], skills: [{
+      kind: 'skill', id: 'code-review', name: 'code-review', displayName: 'Code review',
+      description: 'Review code', source: 'user', modelText,
+    }] })
+    mocks.search.mockResolvedValue({
+      currentPath: '/workspace/project', parentPath: null, query: 'README',
+      entries: [{ name: 'README.md', path: '/workspace/project/README.md', relativePath: 'README.md', isDirectory: false }],
+    })
+    render(<EmptySession />)
+    await pickProject()
+    if (kind === 'file') {
+      fireEvent.click(screen.getByLabelText('Open composer tools'))
+      fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'README' } })
+      fireEvent.click(await screen.findByRole('option', { name: 'README.md' }))
+    } else {
+      setComposerText('@code', 5)
+      fireEvent.click(await screen.findByRole('option', { name: 'Code review' }))
+    }
+    await waitFor(() => expect(document.querySelector('.composer-mention')).toBeInTheDocument())
+    // Both reselecting the current mode and switching modes must keep the live document metadata.
+    for (const mode of [/Standard/, /Lean · experimental/, /Standard/, /Lean · experimental/]) {
+      fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+      fireEvent.click(screen.getByRole('option', { name: mode }))
+      expect(document.querySelector('.composer-mention')).toBeInTheDocument()
+    }
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.wsSend).toHaveBeenCalledWith('draft-session', {
+      type: 'user_message', content: kind === 'file' ? '@"/workspace/project/README.md"' : modelText, attachments: [],
+    }))
+  })
+
+  it('resets plan to asking permission when the draft switches to lean', () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    useSettingsStore.setState({ permissionMode: 'plan' })
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    expect(useUIStore.getState().toasts.some(toast => toast.message.includes('Ask permissions'))).toBe(true)
+    expect(screen.getByRole('button', { name: 'Permission mode: default' })).toBeInTheDocument()
+  })
+
+  it('keeps an unsupported command editable and explains how to use it', () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    setComposerText('/agent review this', 18)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(getComposerText()).toBe('/agent review this')
+    expect(useUIStore.getState().toasts.some(toast => toast.message === 'This command is unavailable in lean mode. Switch this draft to Standard and try again.')).toBe(true)
+  })
+
+  it('allows an absolute path prompt in lean mode', async () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    setComposerText('/tmp/cart.js fix this file', 26)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentProfile: 'lean' })))
+  })
+
+  it('retains the lean mode and unsent text while the draft is hidden', () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    const { rerender } = render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    setComposerText('keep these edits', 16)
+    rerender(<EmptySession visible={false} />)
+    rerender(<EmptySession visible />)
+    expect(screen.getByRole('button', { name: /^Agent mode:/ })).toHaveTextContent('Lean · experimental')
+    expect(getComposerText()).toBe('keep these edits')
+  })
+
+  it('creates a lean conversation and leaves its draft editable when creation fails', async () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    mocks.createSession.mockRejectedValueOnce(new Error('create failed'))
+    render(<EmptySession />)
+    const mode = screen.getByRole('button', { name: /^Agent mode:/ })
+    expect(mode).toHaveTextContent('Standard')
+    fireEvent.click(mode)
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    expect(screen.getByRole('button', { name: 'About lean mode' })).toBeInTheDocument()
+    setComposerText('edit a file', 11)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentProfile: 'lean' })))
+    await waitFor(() => expect(mode).not.toBeDisabled())
+    fireEvent.click(mode)
+    fireEvent.click(screen.getByRole('option', { name: /Standard/ }))
+    expect(mode).toHaveTextContent('Standard')
+  })
+
   it('starts in a selected non-Git project without showing a repository warning', async () => {
     mocks.getRepositoryContext.mockResolvedValueOnce(notGitRepositoryContext())
 
@@ -1491,6 +1656,9 @@ describe('EmptySession', () => {
 
     await waitFor(() => {
       expect(screen.getByText('main')).toBeInTheDocument()
+      // Branch text can render before the request's finally clears loading
+      // and the launch-readiness effect enables sending. Wait for the action, too.
+      expect(screen.getByRole('button', { name: /Run/i })).not.toBeDisabled()
     })
 
     expect(screen.queryByText('worktree-desktop-feature-a-12345678')).not.toBeInTheDocument()

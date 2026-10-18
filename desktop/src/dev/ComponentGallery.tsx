@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Check, Ellipsis, Filter, Folder, RefreshCw, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react'
 
+import { AgentProfileControl } from '@/components/chat/AgentProfileControl'
+import type { AgentProfile } from '@/types/session'
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
 import { installTeamPlanGalleryFixture, TEAM_PLAN_GALLERY_SESSION } from './teamPlanGalleryFixture'
 import { AgentTeamsWorkbench } from '@/components/agentTeams/AgentTeamsWorkbench'
@@ -432,6 +434,7 @@ function SessionSurfacePreview({ kind }: { kind: 'main' | 'agent' }) {
 }
 
 export function ComponentGallery() {
+  const [agentProfile, setAgentProfile] = useState<AgentProfile>('standard')
   const [planFixture, setPlanFixture] = useState<ReturnType<typeof installTeamPlanGalleryFixture> | null>(null)
   useEffect(() => {
     const fixture = installTeamPlanGalleryFixture()
@@ -506,6 +509,13 @@ export function ComponentGallery() {
           />
         </div>
       </header>
+
+      <Section title="Agent mode" note="Draft selection and the immutable lean conversation badge. Experimental core coding tools only.">
+        <div className="flex flex-wrap items-center gap-2">
+          <AgentProfileControl value={agentProfile} onChange={setAgentProfile} />
+          <AgentProfileControl value="lean" />
+        </div>
+      </Section>
 
       <Section title="Team plan review" note="In-memory providers and plan API only. No credentials, model calls or real team launches.">
         <div id="team-plan-review" className="flex flex-wrap gap-2">

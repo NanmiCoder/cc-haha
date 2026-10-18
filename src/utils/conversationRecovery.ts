@@ -1,3 +1,4 @@
+import { assertSessionAgentProfile, validateAgentProfileOptions } from './agentProfile.js'
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
 import { relative } from 'path'
@@ -647,11 +648,17 @@ export async function loadConversationForResume(
       return null
     }
 
+    const profilePath = sourceJsonlFile ?? log?.fullPath
+    if (profilePath) await assertSessionAgentProfile(profilePath)
+
     if (log) {
       // Load full messages for lite logs
       if (isLiteLog(log)) {
         log = await loadFullLog(log)
       }
+
+      const profileError = validateAgentProfileOptions({ print: true, agent: log.agentSetting })
+      if (profileError) throw new Error(profileError)
 
       // Determine sessionId first so we can pass it to copy functions
       if (!sessionId) {

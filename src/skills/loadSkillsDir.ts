@@ -1,3 +1,4 @@
+import { getAgentProfile } from '../utils/agentProfile.js'
 import { realpath } from 'fs/promises'
 import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
@@ -400,7 +401,7 @@ export function createSkillCommand({
                   ...appState.toolPermissionContext,
                   alwaysAllowRules: {
                     ...appState.toolPermissionContext.alwaysAllowRules,
-                    command: allowedTools,
+                    command: getAgentProfile() === 'lean' ? appState.toolPermissionContext.alwaysAllowRules.command : allowedTools,
                   },
                 },
               }

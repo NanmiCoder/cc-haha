@@ -104,6 +104,7 @@ async function handleUserSettings(req: Request): Promise<Response> {
     const userSettings = await settingsService.getUserSettings()
     return Response.json({
       ...userSettings,
+      leanModeEnabled: await settingsService.getLeanModeEnabled(userSettings),
       autoUpdateEnabled: await settingsService.getAutoUpdateEnabled(userSettings),
       agentTeamsEnabled: await settingsService.getAgentTeamsEnabled(),
       maxConcurrentSubagents: await settingsService.getMaxConcurrentSubagents(userSettings),

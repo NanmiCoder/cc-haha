@@ -1,3 +1,5 @@
+import { getAgentProfile, isLeanCompatibleSkill } from '../../utils/agentProfile.js'
+import { isExplicitSkillRequest } from './explicitSkillRequest.js'
 import { feature } from 'bun:bundle'
 import type { ToolResultBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
 import uniqBy from 'lodash-es/uniqBy.js'
@@ -79,6 +81,7 @@ import {
  * SkillTool needs this because getCommands() only returns local/bundled skills.
  */
 async function getAllCommands(context: ToolUseContext): Promise<Command[]> {
+  if (getAgentProfile() === 'lean') return (await getCommands(getProjectRoot())).filter(isLeanCompatibleSkill)
   // Only include MCP skills (loadedFrom === 'mcp'), not plain MCP prompts.
   // Before this filter, the model could invoke MCP prompts via SkillTool
   // if it guessed the mcp__server__prompt name — they weren't discoverable
@@ -341,7 +344,9 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
 
   description: async ({ skill }) => `Execute skill: ${skill}`,
 
-  prompt: async () => getPrompt(getProjectRoot()),
+  prompt: async () => getAgentProfile() === 'lean'
+    ? 'Load a local skill explicitly selected by the user with /name, $name, or the skill picker. Use its exact name. Never discover or invoke unrequested skills. Skills add instructions only, not tools, permissions, hooks, models or subagents.'
+    : getPrompt(getProjectRoot()),
 
   // Only one skill/command should run at a time, since the tool expands the
   // command into a full prompt that Claude must process before continuing.
@@ -371,10 +376,15 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
       ? trimmed.substring(1)
       : trimmed
 
+    if (getAgentProfile() === 'lean' && !isExplicitSkillRequest(context.messages ?? [], normalizedCommandName)) {
+      return { result: false, message: 'Lean mode requires an explicit user skill selection for this request.', errorCode: 7 }
+    }
+
     // Remote canonical skill handling (ant-only experimental). Intercept
     // `_canonical_<slug>` names before local command lookup since remote
     // skills are not in the local command registry.
     if (
+      getAgentProfile() !== 'lean' &&
       feature('EXPERIMENTAL_SKILL_SEARCH') &&
       process.env.USER_TYPE === 'ant'
     ) {
@@ -490,6 +500,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
     // deny rule is honored (same pattern as safe-properties auto-allow below).
     // The skill content itself is canonical/curated, not user-authored.
     if (
+      getAgentProfile() !== 'lean' &&
       feature('EXPERIMENTAL_SKILL_SEARCH') &&
       process.env.USER_TYPE === 'ant'
     ) {
@@ -597,12 +608,17 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
     // Remove leading slash if present (for compatibility)
     const commandName = trimmed.startsWith('/') ? trimmed.substring(1) : trimmed
 
+    if (getAgentProfile() === 'lean' && !isExplicitSkillRequest(context.messages ?? [], commandName)) {
+      throw new Error('Lean mode requires an explicit user skill selection for this request.')
+    }
+
     // Remote canonical skill execution (ant-only experimental). Intercepts
     // `_canonical_<slug>` before local command lookup — loads SKILL.md from
     // AKI/GCS (with local cache), injects content directly as a user message.
     // Remote skills are declarative markdown so no slash-command expansion
     // (no !command substitution, no $ARGUMENTS interpolation) is needed.
     if (
+      getAgentProfile() !== 'lean' &&
       feature('EXPERIMENTAL_SKILL_SEARCH') &&
       process.env.USER_TYPE === 'ant'
     ) {
@@ -614,6 +630,10 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
 
     const commands = await getAllCommands(context)
     const command = findCommand(commandName, commands)
+
+    if (getAgentProfile() === 'lean' && (!command || !isLeanCompatibleSkill(command))) {
+      throw new Error('This skill requires a standard-profile session.')
+    }
 
     // Track skill usage for ranking
     recordSkillUsage(commandName)
@@ -649,7 +669,7 @@ export const SkillTool: Tool<InputSchema, Output, Progress> = buildTool({
     // Extract metadata from the command
     const allowedTools = processedCommand.allowedTools || []
     const model = processedCommand.model
-    const effort = command?.type === 'prompt' ? command.effort : undefined
+    const effort = getAgentProfile() !== 'lean' && command?.type === 'prompt' ? command.effort : undefined
 
     const isBuiltIn = builtInCommandNames().has(commandName)
     const isBundled = command?.type === 'prompt' && command.source === 'bundled'

@@ -80,6 +80,7 @@ describe('desktop theme tokens', () => {
     '--cc-diff-del', '--cc-diff-del-gutter', '--cc-diff-del-word',
     '--cc-diff-mark', '--cc-diff-mark-gutter', '--cc-code',
     '--cc-heat-0', '--cc-heat-1', '--cc-heat-2', '--cc-heat-3', '--cc-heat-4',
+    '--cc-series-1', '--cc-series-2', '--cc-series-3', '--cc-series-4', '--cc-series-5',
     '--cc-shadow-card', '--cc-shadow-composer', '--cc-shadow-overlay',
     '--cc-bg-rgb', '--cc-s1-rgb', '--cc-t1-rgb', '--cc-t2-rgb',
     '--cc-bd2-rgb', '--cc-ac-rgb', '--cc-er-rgb', '--cc-scrim-rgb',
@@ -92,6 +93,11 @@ describe('desktop theme tokens', () => {
     '--color-activity-heat-2',
     '--color-activity-heat-3',
     '--color-activity-heat-4',
+    '--color-series-1',
+    '--color-series-2',
+    '--color-series-3',
+    '--color-series-4',
+    '--color-series-5',
     '--color-activity-cell-border',
     '--color-activity-cell-border-hover',
     '--color-activity-cell-border-active',
@@ -205,19 +211,20 @@ describe('desktop theme tokens', () => {
     expect(gutter(`${base}:has(> li:nth-child(100))`)).toMatch(/padding-inline-start: max\(1\.25rem, 5ch\)/)
   })
 
-  it('lays the activity summary tiles out by container width, not viewport width', () => {
-    const activitySummaryCss = getCssBetween('.activity-summary-panel {', '.activity-heat-cell {')
+  it('sizes the usage page display numerals from the pane, not the window', () => {
+    const usageCss = getCssBetween('.token-usage-root {', '.activity-heat-swatch {')
 
-    expect(activitySummaryCss).toContain('container-type: inline-size;')
-    // One column when cramped; on the 700px settings page the five tiles read
-    // 2+1 / 1+1+1 — the headline total spans two of three columns, so the second
-    // row is full instead of ending in a hole.
-    expect(activitySummaryCss).toContain('grid-template-columns: minmax(0, 1fr);')
-    expect(activitySummaryCss).toContain('@container (min-width: 360px)')
-    expect(activitySummaryCss).toContain('@container (min-width: 520px)')
-    expect(activitySummaryCss).toContain('grid-template-columns: repeat(3, minmax(0, 1fr));')
-    expect(activitySummaryCss).toContain('grid-column: span 2;')
-    expect(activitySummaryCss).not.toContain('repeat(5, minmax(0, 1fr))')
+    expect(usageCss).toContain('container-type: inline-size;')
+    // cqw ties the figure to the settings pane the user actually has; the
+    // clamp keeps it legible on a narrow pane and from outgrowing a wide one.
+    expect(usageCss).toMatch(/\.token-hero-number \{[^}]*font-size: clamp\(\d+px, \d+cqw, \d+px\);/)
+    // Safari 15 drops a declaration whose value it cannot parse, so each cqw size is preceded by a
+    // plain one for it to fall back to; without that the numeral renders at body size.
+    expect(usageCss).toMatch(/\.token-hero-number \{[^}]*font-size: \d+px;[^}]*font-size: clamp\(\d+px, \d+cqw, \d+px\);/)
+    expect(usageCss).toMatch(/\.token-hero-unit \{[^}]*font-size: \d+px;[^}]*font-size: clamp\(\d+px, \d+cqw, \d+px\);/)
+    // Geist ships only at 500: a heavier request would be synthesized.
+    expect(usageCss).toContain("font-family: 'Geist'")
+    expect(usageCss).toContain('font-synthesis: none;')
   })
 
   it('avoids color-mix in the startup-critical UI zoom shell chrome for Safari 15 WebView support', () => {

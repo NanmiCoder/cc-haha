@@ -2013,6 +2013,10 @@ async function handleSetPermissionMode(
     })
     return
   }
+  if (message.mode === 'plan' && (await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean') {
+    sendMessage(ws, { type: 'error', message: 'Plan mode is unavailable in lean sessions. Choose another permission mode.', code: 'LEAN_CAPABILITY_UNAVAILABLE' })
+    return
+  }
   const pendingStartup = sessionStartupPromises.get(sessionId)
 
   if (pendingStartup) {

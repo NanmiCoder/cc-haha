@@ -1,3 +1,4 @@
+import { filterAgentProfileTools, getAgentProfile } from './utils/agentProfile.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { toolMatchesName, type Tool, type Tools } from './Tool.js'
 import { sessionCollaborationTools } from './tools/SessionCollaborationTool/SessionCollaborationTool.js'
@@ -209,7 +210,7 @@ export function getAllBaseTools(): Tools {
     // Ant-native builds have bfs/ugrep embedded in the bun binary (same ARGV0
     // trick as ripgrep). When available, find/grep in Claude's shell are aliased
     // to these fast tools, so the dedicated Glob/Grep tools are unnecessary.
-    ...(hasEmbeddedSearchTools() ? [] : [GlobTool, GrepTool]),
+    ...(hasEmbeddedSearchTools() && getAgentProfile() !== 'lean' ? [] : [GlobTool, GrepTool]),
     ExitPlanModeV2Tool,
     FileReadTool,
     FileEditTool,
@@ -330,7 +331,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
 
   // When REPL mode is enabled, hide primitive tools from direct use.
   // They're still accessible inside REPL via the VM context.
-  if (isReplModeEnabled()) {
+  if (getAgentProfile() !== 'lean' && isReplModeEnabled()) {
     const replEnabled = allowedTools.some(tool =>
       toolMatchesName(tool, REPL_TOOL_NAME),
     )
@@ -342,7 +343,7 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
   }
 
   const isEnabled = allowedTools.map(_ => _.isEnabled())
-  return allowedTools.filter((_, i) => isEnabled[i])
+  return filterAgentProfileTools(allowedTools.filter((_, i) => isEnabled[i]))
 }
 
 /**
@@ -379,10 +380,10 @@ export function assembleToolPool(
   // Avoid Array.toSorted (Node 20+) — we support Node 18. builtInTools is
   // readonly so copy-then-sort; allowedMcpTools is a fresh .filter() result.
   const byName = (a: Tool, b: Tool) => a.name.localeCompare(b.name)
-  return uniqBy(
+  return filterAgentProfileTools(uniqBy(
     [...builtInTools].sort(byName).concat(allowedMcpTools.sort(byName)),
     'name',
-  )
+  ))
 }
 
 /**
@@ -404,5 +405,5 @@ export function getMergedTools(
   mcpTools: Tools,
 ): Tools {
   const builtInTools = getTools(permissionContext)
-  return [...builtInTools, ...mcpTools]
+  return filterAgentProfileTools([...builtInTools, ...mcpTools])
 }

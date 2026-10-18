@@ -1,3 +1,4 @@
+import { getAgentProfile } from './agentProfile.js'
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
 import type { Dirent } from 'fs'
@@ -914,6 +915,15 @@ class Project {
     // One sync tail read to refresh SDK-mutable fields. Same
     // LITE_READ_BUF_SIZE window readLiteMetadata uses. Empty string on
     // failure → extract returns null → cache is the only source of truth.
+    // Standard remains the legacy default. Only the experimental profile needs
+    // an explicit record, preserving the ordinary transcript shape.
+    if (getAgentProfile() === 'lean') {
+      appendEntryToFile(this.sessionFile, {
+        type: 'session-meta', isMeta: true, sessionId,
+        agentProfile: 'lean', timestamp: new Date().toISOString(),
+      }, allowCreate)
+    }
+
     const tail = readFileTailSync(this.sessionFile)
 
     // Absorb any fresher SDK-written title/tag into our cache. If the SDK

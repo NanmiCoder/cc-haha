@@ -7,7 +7,7 @@
  * came back to the model in the next request, which no UI frame can prove.
  */
 
-import { decideReply, type MockContentBlock, type MockRequest } from './scriptedModel'
+import { decideReply, type MockContentBlock, type MockRequest, type MockReply } from './scriptedModel'
 import { GEMINI_IMAGE_ASPECT_RATIOS } from '../../../src/tools/ImageGenTool/aspectRatios'
 
 export type RecordedRequest = {
@@ -124,9 +124,9 @@ function streamReply(
   })
 }
 
-function handleMessages(record: RecordedRequest): Response {
+function handleMessages(record: RecordedRequest, replyFor: (request: MockRequest) => MockReply): Response {
   const request = record.body
-  const reply = decideReply(request)
+  const reply = replyFor(request)
   if (reply.kind === 'error') {
     record.outcome = 'error'
     return Response.json(
@@ -152,7 +152,7 @@ function handleMessages(record: RecordedRequest): Response {
   })
 }
 
-export function startMockLlmServer(): MockLlmServer {
+export function startMockLlmServer(replyFor = decideReply): MockLlmServer {
   const requests: RecordedRequest[] = []
   const imageRequests: MockLlmServer['imageRequests'] = []
   const server = Bun.serve({
@@ -202,7 +202,7 @@ export function startMockLlmServer(): MockLlmServer {
       if (path.endsWith('/v1/messages')) {
         const record: RecordedRequest = { path, stream: body.stream === true, body, receivedAt: Date.now(), outcome: 'pending' }
         requests.push(record)
-        return handleMessages(record)
+        return handleMessages(record, replyFor)
       }
       return new Response('not found', { status: 404 })
     },

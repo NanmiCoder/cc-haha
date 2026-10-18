@@ -1,3 +1,4 @@
+import { isLeanCompatibleSkill } from '../../utils/agentProfile.js'
 /**
  * Skills REST API
  *
@@ -38,6 +39,7 @@ type SkillMeta = {
    * cross-client `.agents/skills`. Absent for plugin skills.
    */
   rootFlavor?: SkillRootFlavor
+  context?: string
   userInvocable: boolean
   version?: string
   contentLength: number
@@ -125,6 +127,7 @@ async function loadSkillMeta(
       description,
       source,
       rootFlavor,
+      context: typeof frontmatter.context === 'string' ? frontmatter.context : undefined,
       userInvocable: frontmatter['user-invocable'] !== false,
       version: frontmatter.version != null ? String(frontmatter.version) : undefined,
       contentLength: raw.length,
@@ -302,10 +305,11 @@ export type SkillSlashCommand = {
   source?: SkillSource
 }
 
-async function collectLegacySlashCommands(cwd: string): Promise<SkillSlashCommand[]> {
+async function collectLegacySlashCommands(cwd: string, lean = false): Promise<SkillSlashCommand[]> {
   const commands = await getSkillDirCommands(cwd)
   return commands
     .filter((command) =>
+      (!lean || isLeanCompatibleSkill(command)) &&
       command.type === 'prompt' &&
       command.loadedFrom === 'commands_DEPRECATED' &&
       command.userInvocable !== false &&
@@ -480,12 +484,13 @@ export async function listSkillSlashCommands(
      * be topped up with guesses.
      */
     includeCompiledIn?: boolean
+    agentProfile?: 'lean'
   } = {},
 ): Promise<SkillSlashCommand[]> {
   const requestedCwd = cwd || getCwd()
   const [skills, legacyCommands, compiledInCommands] = await Promise.all([
     collectAllSkills(requestedCwd),
-    collectLegacySlashCommands(requestedCwd),
+    collectLegacySlashCommands(requestedCwd, options.agentProfile === 'lean'),
     options.includeCompiledIn === false
       ? Promise.resolve([])
       : collectCompiledInSlashCommands(),
@@ -495,7 +500,7 @@ export async function listSkillSlashCommands(
   // command it runs always come from one file. See outranksClaimedSkill.
   const byName = new Map<
     string,
-    { command: SkillSlashCommand; flavor: SkillRootFlavor | undefined }
+    { command: SkillSlashCommand; flavor: SkillRootFlavor | undefined; leanCompatible?: boolean }
   >()
 
   for (const skill of skills) {
@@ -515,6 +520,7 @@ export async function listSkillSlashCommands(
         source: skill.source,
       },
       flavor: skill.rootFlavor,
+      leanCompatible: isLeanCompatibleSkill({ type: 'prompt', context: skill.context, source: skill.source }),
     })
   }
 
@@ -533,6 +539,7 @@ export async function listSkillSlashCommands(
   }
 
   return [...byName.values()]
+    .filter(claim => options.agentProfile !== 'lean' || claim.leanCompatible !== false)
     .map(claim => claim.command)
     .sort((a, b) => a.name.localeCompare(b.name))
 }
@@ -558,6 +565,7 @@ export async function handleSkillsApi(
         const { listCapabilityMentions } = await import('../services/capabilityMentionService.js')
         return Response.json(await listCapabilityMentions(url.searchParams.get('cwd') || getCwd(), {
           providerId: url.searchParams.get('providerId') || undefined,
+          agentProfile: url.searchParams.get('agentProfile') === 'lean' ? 'lean' : undefined,
         }))
       }
       case 'detail':

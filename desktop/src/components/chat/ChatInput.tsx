@@ -1,3 +1,5 @@
+import { AgentProfileControl } from '@/components/chat/AgentProfileControl'
+import { isLeanSlashCommand, isUnsupportedLeanSlashInput } from '@/lib/agentProfile'
 import { useSideChatStore } from '@/stores/sideChatStore'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { parseSideQuestionCommand } from './composerUtils'
@@ -279,6 +281,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const sideChat = useSideChatStore(state => activeTabId ? state.entries[activeTabId] : undefined)
   const listedSession = useSessionStore((state) => activeTabId ? state.sessions.find((session) => session.id === activeTabId) ?? null : null)
   const activeSession = listedSession ?? (sideChat ? { ...sideChat, id: sideChat.sessionId, workDirExists: true, workspaceState: 'available' as const, messageCount: 1, projectRoot: sideChat.workDir } : null)
+  const isLean = listedSession?.agentProfile === 'lean'
   const loadedMessageCount = sessionState?.messages?.length ?? 0
   const messageCount = Math.max(loadedMessageCount, activeSession?.messageCount ?? 0)
   const memberInfo = useTeamStore((s) => activeTabId ? s.getMemberBySessionId(activeTabId) : null)
@@ -353,7 +356,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const isHeroComposer = variant === 'hero' && !isMemberSession && !compact
   const resolvedWorkDir = activeSession?.workDir || gitInfo?.workDir || undefined
   const showLaunchControls = !isMemberSession && !sideChat && messageCount === 0
-  const sideChatAvailable = Boolean(sideChat) || messageCount > 0
+  const sideChatAvailable = !isLean && (Boolean(sideChat) || messageCount > 0)
   // `useCompactControls` is about room, so it asks the column how wide it is —
   // never "is a side panel open". Until a measurement lands (jsdom, first
   // paint) it defers to the caller's `compact`, which keeps the
@@ -364,21 +367,21 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const activeLaunchWorkDir = showLaunchControls ? (launchWorkDir || resolvedWorkDir || '') : (resolvedWorkDir || '')
   const referenceCwd = activeLaunchWorkDir || resolvedWorkDir || ''
   const referenceProviderId = mentionProviderId(runtimeSelection)
-  const referenceContext = `${activeTabId ?? ''}\0${referenceCwd}\0${referenceProviderId ?? ''}`
+  const referenceContext = `${activeTabId ?? ''}\0${referenceCwd}\0${referenceProviderId ?? ''}\0${isLean ? 'lean' : 'standard'}`
   const referenceCurrent = referenceState?.context === referenceContext ? referenceState : null
-  const composerReferences = useMemo(() => (referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES).filter(isComposerReferenceVisible), [referenceCurrent?.items])
+  const composerReferences = useMemo(() => (referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES).filter(reference => isComposerReferenceVisible(reference) && (!isLean || reference.kind === 'skill')), [referenceCurrent?.items, isLean])
   useEffect(() => {
     let active = true
     if (isMemberSession) return
     setReferenceState({ context: referenceContext, items: [], loading: true, error: false })
-    void composerReferencesApi.list(referenceCwd || undefined, referenceProviderId).then(data => {
+    void composerReferencesApi.list(referenceCwd || undefined, referenceProviderId, isLean ? 'lean' : undefined).then(data => {
       useCapabilityCatalogStore.getState().remember([...data.plugins, ...data.skills])
       if (active) setReferenceState({ context: referenceContext, items: [...data.plugins, ...data.skills], loading: false, error: false })
     }).catch(() => {
       if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
     })
     return () => { active = false }
-  }, [referenceContext, referenceCwd, referenceProviderId, isMemberSession, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
+  }, [referenceContext, referenceCwd, referenceProviderId, isLean, isMemberSession, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
   useEffect(() => {
     setReferenceDetail(null)
     setReferenceOptionId(undefined)
@@ -697,8 +700,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
     // `/btw` forks the conversation so far; a blank session has none to fork.
-    return commands.filter(command => isComposerSlashCommandVisible(command) && (sideChatAvailable || command.name !== 'btw'))
-  }, [agentSlashCommands, slashCommands, composerReferences, sideChatAvailable, t])
+    return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command)) && (sideChatAvailable || command.name !== 'btw'))
+  }, [agentSlashCommands, slashCommands, composerReferences, sideChatAvailable, isLean, t])
 
   const filteredCommandGroups = useMemo(() => {
     return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))
@@ -838,7 +841,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       : undefined
     const newId = await createSession(
       workDir || undefined,
-      createOptions,
+      isLean ? { ...createOptions, agentProfile: 'lean' } : createOptions,
     )
     if (inputRef.current.length > 0 || attachmentsRef.current.length > 0) {
       setComposerDraft(newId, {
@@ -855,7 +858,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     connectToSession(newId)
     deleteSession(oldId).catch(() => {})
     return newId
-  }, [activeTabId])
+  }, [activeTabId, isLean])
 
   const handleLaunchWorkDirChange = useCallback(async (newWorkDir: string) => {
     updateRepositoryLaunchDraft(() => ({
@@ -884,6 +887,14 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     // slash-Enter, programmatic) funnels through here.
     if (questionPending) return
     const text = input.trim()
+    if (isLean && resolvedPermissionMode === 'plan') {
+      useUIStore.getState().addToast({ type: 'info', message: t('agentProfile.planUnavailable') })
+      return
+    }
+    if (isLean && isUnsupportedLeanSlashInput(text, slashCommands.concat(allSlashCommands))) {
+      useUIStore.getState().addToast({ type: 'info', message: t('agentProfile.commandUnavailable') })
+      return
+    }
     if ((!text && ((!attachments.length && !hasWorkspaceReferences) || isMemberSession)) || isWorkspaceMissing) return
 
     // Immediate local command: never enter the main turn, launch flow or queue.
@@ -1306,6 +1317,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     open: plusMenuOpen && !isMemberSession,
     cwd: referenceCwd,
     references: composerReferences,
+    lean: isLean,
     handlers: {
       onInsertMention: (reference) => {
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
@@ -1770,6 +1782,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
 
                   <div className="shrink-0">
                     <PermissionModeSelector
+                      lean={isLean}
                       ref={permissionSelectorRef}
                       sessionId={activeTabId ?? undefined}
                       workDir={resolvedWorkDir}
@@ -1832,6 +1845,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   }
                 />
               )}
+              <AgentProfileControl value={isLean ? 'lean' : 'standard'} />
               {!isMemberSession && activeTabId && (
                 <ModelSelector
                   ref={modelSelectorRef}

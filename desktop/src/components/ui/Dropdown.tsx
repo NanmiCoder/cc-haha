@@ -11,6 +11,9 @@ import {
   type ReactNode,
 } from 'react'
 
+import { createPortal } from 'react-dom'
+import { useAnchoredPosition } from '@/hooks/useAnchoredPosition'
+
 import { Check } from 'lucide-react'
 
 import { useDismissable } from '@/hooks/useDismissable'
@@ -40,6 +43,8 @@ type DropdownProps<T extends string> = {
   align?: 'left' | 'right'
   placement?: 'bottom' | 'top'
   className?: string
+  /** Keep the menu inside the viewport and outside clipping containers. */
+  portal?: boolean
 }
 
 /**
@@ -72,6 +77,7 @@ export function Dropdown<T extends string>({
   align = 'left',
   placement = 'bottom',
   className = '',
+  portal = false,
 }: DropdownProps<T>) {
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(-1)
@@ -79,6 +85,13 @@ export function Dropdown<T extends string>({
   const triggerRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const listId = useId()
+  const anchored = useAnchoredPosition({
+    open: open && portal,
+    anchorRef: triggerRef,
+    floatingRef: listRef,
+    placement: `${placement}-${align === 'right' ? 'end' : 'start'}`,
+    clampHeight: true,
+  })
 
   const close = useCallback(() => {
     setOpen(false)
@@ -91,7 +104,8 @@ export function Dropdown<T extends string>({
 
   useDismissable({
     open,
-    refs: [containerRef],
+    refs: [containerRef, listRef],
+    closeOnViewportChange: portal,
     onDismiss: close,
     // Dropdowns routinely open inside a Modal. Without this, one Escape closes
     // the dropdown and the dialog behind it.
@@ -140,6 +154,7 @@ export function Dropdown<T extends string>({
   }
 
   const handleTriggerKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === 'Tab' && portal && open) close()
     if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
       event.preventDefault()
       setOpen(true)
@@ -153,6 +168,10 @@ export function Dropdown<T extends string>({
 
   const handleListKeyDown = (event: React.KeyboardEvent) => {
     switch (event.key) {
+      case 'Tab':
+        // Continue the browser tab order from the trigger, not the body portal.
+        if (portal) close()
+        break
       case 'ArrowDown':
         event.preventDefault()
         step(1)
@@ -218,68 +237,79 @@ export function Dropdown<T extends string>({
       </div>
     )
 
+  const menuStyle: CSSProperties = portal
+    ? {
+      ...anchored.style,
+      width,
+      maxHeight: maxHeight == null ? anchored.style.maxHeight
+        : anchored.style.maxHeight == null ? maxHeight
+        : `min(${typeof maxHeight === 'number' ? `${maxHeight}px` : maxHeight}, ${anchored.style.maxHeight}px)`,
+    }
+    : { width, maxHeight }
+  const menu = open ? (
+    <div
+      ref={listRef}
+      id={listId}
+      role="listbox"
+      aria-label={label}
+      aria-activedescendant={activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
+      tabIndex={-1}
+      onKeyDown={handleListKeyDown}
+      className={cx(
+        // Menus are cards (12px) with padded rows; one value here settles
+        // the corner for every Dropdown menu in the app.
+        'z-[var(--z-dropdown)] rounded-[var(--radius-lg)] p-1',
+        'bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)]',
+        'shadow-[var(--shadow-dropdown)] focus:outline-none',
+        portal || maxHeight ? 'overflow-y-auto' : 'overflow-hidden',
+        !portal && (align === 'right' ? 'right-0' : 'left-0'),
+        portal ? 'animate-overlay-in' : 'absolute',
+        !portal && (placement === 'top' ? 'bottom-full mb-1 animate-overlay-in-bottom' : 'top-full mt-1 animate-overlay-in-top'),
+      )}
+      style={menuStyle}
+    >
+      {items.map((item, index) => (
+        <div
+          key={item.value}
+          id={`${listId}-${index}`}
+          role="option"
+          aria-selected={item.value === value}
+          aria-disabled={item.disabled || undefined}
+          onClick={() => {
+            if (item.disabled) return
+            onChange(item.value)
+            close()
+          }}
+          onMouseEnter={() => setActiveIndex(index)}
+          className={cx(
+            'flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-2 text-left transition-colors',
+            item.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
+            (index === activeIndex || item.value === value) && !item.disabled && 'bg-[var(--color-surface-hover)]',
+          )}
+        >
+          {item.icon && (
+            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center text-[var(--color-text-secondary)]">
+              {item.icon}
+            </span>
+          )}
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-medium text-[var(--color-text-primary)]">{item.label}</div>
+            {item.description && (
+              <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{item.description}</div>
+            )}
+          </div>
+          {item.value === value && (
+            <Check size={15} strokeWidth={2} aria-hidden="true" className="flex-shrink-0 text-[var(--color-brand)]" />
+          )}
+        </div>
+      ))}
+    </div>
+  ) : null
+
   return (
     <div ref={containerRef} className={cx('relative', className || 'inline-block')}>
       {triggerNode}
-
-      {open && (
-        <div
-          ref={listRef}
-          id={listId}
-          role="listbox"
-          aria-label={label}
-          aria-activedescendant={activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
-          tabIndex={-1}
-          onKeyDown={handleListKeyDown}
-          className={cx(
-            // Menus are cards (12px) with padded rows; one value here settles
-            // the corner for every Dropdown menu in the app.
-            'absolute z-[var(--z-dropdown)] rounded-[var(--radius-lg)] p-1',
-            'bg-[var(--color-surface-container-lowest)] border border-[var(--color-border)]',
-            'shadow-[var(--shadow-dropdown)] focus:outline-none',
-            maxHeight ? 'overflow-y-auto' : 'overflow-hidden',
-            align === 'right' ? 'right-0' : 'left-0',
-            placement === 'top' ? 'bottom-full mb-1 animate-overlay-in-bottom' : 'top-full mt-1 animate-overlay-in-top',
-          )}
-          style={{ width, maxHeight }}
-        >
-          {items.map((item, index) => (
-            <div
-              key={item.value}
-              id={`${listId}-${index}`}
-              role="option"
-              aria-selected={item.value === value}
-              aria-disabled={item.disabled || undefined}
-              onClick={() => {
-                if (item.disabled) return
-                onChange(item.value)
-                close()
-              }}
-              onMouseEnter={() => setActiveIndex(index)}
-              className={cx(
-                'flex w-full items-center gap-2.5 rounded-[var(--radius-sm)] px-2.5 py-2 text-left transition-colors',
-                item.disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer',
-                (index === activeIndex || item.value === value) && !item.disabled && 'bg-[var(--color-surface-hover)]',
-              )}
-            >
-              {item.icon && (
-                <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center text-[var(--color-text-secondary)]">
-                  {item.icon}
-                </span>
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-medium text-[var(--color-text-primary)]">{item.label}</div>
-                {item.description && (
-                  <div className="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{item.description}</div>
-                )}
-              </div>
-              {item.value === value && (
-                <Check size={15} strokeWidth={2} aria-hidden="true" className="flex-shrink-0 text-[var(--color-brand)]" />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      {portal && menu ? createPortal(menu, document.body) : menu}
     </div>
   )
 }

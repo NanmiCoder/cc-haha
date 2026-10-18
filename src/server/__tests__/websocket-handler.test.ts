@@ -563,6 +563,22 @@ describe('WebSocket handler session isolation', () => {
     })
   })
 
+  it('rejects plan mode for lean sessions before inactive persistence or active transition', async () => {
+    const sessionId = `lean-plan-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({ agentProfile: 'lean' } as any)
+    const persist = spyOn(sessionService, 'appendSessionMetadata').mockResolvedValue(undefined)
+    const setMode = spyOn(conversationService, 'setPermissionMode').mockResolvedValue(true)
+    for (const active of [false, true]) {
+      spyOn(conversationService, 'hasSession').mockReturnValue(active)
+      await handleWebSocket.message(ws, JSON.stringify({ type: 'set_permission_mode', mode: 'plan' }))
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    expect(ws.sent.map(payload => JSON.parse(payload)).filter(message => message.code === 'LEAN_CAPABILITY_UNAVAILABLE')).toHaveLength(2)
+    expect(persist).not.toHaveBeenCalled()
+    expect(setMode).not.toHaveBeenCalled()
+  })
+
   it('gives pet clients only sanitized state and denies privileged client messages', () => {
     const sessionId = `pet-capability-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId, 'pet')

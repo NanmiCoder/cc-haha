@@ -908,9 +908,9 @@ function isReviewPathRejection(error: unknown): error is Error {
 }
 
 async function createSession(req: Request): Promise<Response> {
-  let body: { workDir?: string; repository?: CreateSessionRepositoryOptions; permissionMode?: string }
+  let body: { workDir?: string; repository?: CreateSessionRepositoryOptions; permissionMode?: string; agentProfile?: 'standard' | 'lean' }
   try {
-    body = (await req.json()) as { workDir?: string; repository?: CreateSessionRepositoryOptions; permissionMode?: string }
+    body = (await req.json()) as { workDir?: string; repository?: CreateSessionRepositoryOptions; permissionMode?: string; agentProfile?: 'standard' | 'lean' }
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
@@ -938,7 +938,9 @@ async function createSession(req: Request): Promise<Response> {
     }
   }
 
-  const result = await sessionService.createSession(body.workDir, body.repository, body.permissionMode)
+  if (body.agentProfile !== undefined && body.agentProfile !== 'standard' && body.agentProfile !== 'lean') throw ApiError.badRequest('agentProfile must be standard or lean')
+  if (body.agentProfile === 'lean' && body.permissionMode === 'plan') throw ApiError.badRequest('Plan mode is unavailable in lean sessions. Choose another permission mode.')
+  const result = await sessionService.createSession(body.workDir, body.repository, body.permissionMode, body.agentProfile)
   recentProjectsCache = null
   return Response.json(result, { status: 201 })
 }
@@ -1210,9 +1212,11 @@ async function getSessionSlashCommands(sessionId: string): Promise<Response> {
     throw ApiError.notFound(`Session not found: ${sessionId}`)
   }
 
-  const hasCliList = cachedCommands.length > 0
+  const lean = (await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean'
+  const hasCliList = !lean && cachedCommands.length > 0
   const skillCommands = await listSkillSlashCommands(workDir, {
-    includeCompiledIn: !hasCliList,
+    includeCompiledIn: !lean && !hasCliList,
+    agentProfile: lean ? 'lean' : undefined,
   })
   const slashCommands = hasCliList
     ? mergeSessionSlashCommands(cachedCommands, skillCommands)
@@ -1604,6 +1608,7 @@ async function rewindSession(req: Request, sessionId: string): Promise<Response>
 }
 
 async function branchSession(req: Request, sessionId: string): Promise<Response> {
+  if ((await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean') throw ApiError.conflict('Forking is unavailable in lean sessions')
   let body: { targetMessageId?: unknown; title?: unknown }
   try {
     body = (await req.json()) as { targetMessageId?: unknown; title?: unknown }
@@ -1700,13 +1705,14 @@ async function getTurnCheckpointDiff(sessionId: string, url: URL): Promise<Respo
 }
 
 async function patchSession(req: Request, sessionId: string): Promise<Response> {
-  let body: { title?: string }
+  let body: { title?: string; agentProfile?: unknown }
   try {
-    body = (await req.json()) as { title?: string }
+    body = (await req.json()) as { title?: string; agentProfile?: unknown }
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
 
+  if ('agentProfile' in body) throw ApiError.conflict('Agent profile is locked for this conversation. Create a new conversation to change it.')
   if (!body.title || typeof body.title !== 'string') {
     throw ApiError.badRequest('title (string) is required in request body')
   }

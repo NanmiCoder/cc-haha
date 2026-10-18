@@ -67,6 +67,7 @@ type SettingsStore = {
   effortLevel: EffortLevel
   thinkingEnabled: boolean
   workflowKeywordTriggerEnabled: boolean
+  leanModeEnabled: boolean
   agentTeamsEnabled: boolean
   maxConcurrentSubagents: number | null
   autoDreamEnabled: boolean
@@ -115,6 +116,7 @@ type SettingsStore = {
   setEffort: (level: EffortLevel) => Promise<void>
   setThinkingEnabled: (enabled: boolean) => Promise<void>
   setWorkflowKeywordTriggerEnabled: (enabled: boolean) => Promise<void>
+  setLeanModeEnabled: (enabled: boolean) => Promise<void>
   setAgentTeamsEnabled: (enabled: boolean) => Promise<void>
   setMaxConcurrentSubagents: (value: number | null) => Promise<void>
   setAutoDreamEnabled: (enabled: boolean) => Promise<void>
@@ -208,6 +210,9 @@ const DEFAULT_TRACE_CAPTURE_SETTINGS: TraceCaptureSettings = {
 
 const initialLocale = getInitialLocale()
 applyDocumentLocale(initialLocale)
+let leanModeSaveVersion = 0
+let leanModePendingSaves = 0
+let leanModeSaveQueue: Promise<void> = Promise.resolve()
 let autoQuestionUpdateQueue: Promise<unknown> = Promise.resolve()
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -216,6 +221,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   effortLevel: 'low',
   thinkingEnabled: true,
   workflowKeywordTriggerEnabled: true,
+  leanModeEnabled: false,
   agentTeamsEnabled: true,
   maxConcurrentSubagents: null,
   autoDreamEnabled: false,
@@ -263,6 +269,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   fetchAll: async () => {
+    const leanModeVersionAtStart = leanModeSaveVersion
+    const leanModePendingAtStart = leanModePendingSaves > 0
     const autoUpdateVersionAtStart = autoUpdateSaveVersion
     const autoUpdateSavePendingAtStart = autoUpdatePendingSaves > 0
     set({ isLoading: true, error: null })
@@ -304,6 +312,9 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         effortLevel: level,
         thinkingEnabled: userSettings.alwaysThinkingEnabled !== false,
         workflowKeywordTriggerEnabled: userSettings.workflowKeywordTriggerEnabled !== false,
+        // Forward read migration: older settings leave the experiment disabled.
+        leanModeEnabled: !leanModePendingAtStart && leanModePendingSaves === 0 && leanModeVersionAtStart === leanModeSaveVersion
+          ? userSettings.leanModeEnabled === true : get().leanModeEnabled,
         agentTeamsEnabled: userSettings.agentTeamsEnabled !== false,
         // 读取时升级：旧设置或非法值归一为不限，不改写用户 JSON。
         maxConcurrentSubagents: isMaxConcurrentSubagents(userSettings.maxConcurrentSubagents)
@@ -392,6 +403,21 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     } catch (error) {
       set({ workflowKeywordTriggerEnabled: prev })
       throw error
+    }
+  },
+
+  setLeanModeEnabled: async (enabled) => {
+    leanModeSaveVersion += 1
+    leanModePendingSaves += 1
+    const save = leanModeSaveQueue.then(async () => {
+      await settingsApi.updateUser({ leanModeEnabled: enabled })
+      set({ leanModeEnabled: enabled })
+    })
+    leanModeSaveQueue = save.catch(() => {})
+    try {
+      await save
+    } finally {
+      leanModePendingSaves -= 1
     }
   },
 

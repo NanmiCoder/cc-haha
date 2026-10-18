@@ -62,6 +62,7 @@ export type PermissionModeSelectorHandle = {
 }
 
 type Props = {
+  lean?: boolean
   sessionId?: string
   workDir?: string
   compact?: boolean
@@ -85,7 +86,7 @@ type Props = {
 }
 
 export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, Props>(function PermissionModeSelector(
-  { sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', menuAlign = 'left', value, onChange }: Props = {},
+  { lean = false, sessionId, workDir: workDirProp, compact = false, trigger = 'chip', menuPlacement = 'top', menuAlign = 'left', value, onChange }: Props = {},
   handleRef,
 ) {
   const t = useTranslation()
@@ -230,7 +231,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
 
   const permissionItems = (
     <>
-      {PERMISSION_ITEMS.map((item) => (
+      {PERMISSION_ITEMS.filter(item => !((lean || activeSession?.agentProfile === 'lean') && item.value === 'plan')).map((item) => (
         <button
           key={item.value}
           role="menuitem"

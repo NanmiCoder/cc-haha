@@ -498,29 +498,30 @@ export function Sidebar({
     clearProjectDragState()
   }, [clearProjectDragState, draggingProjectKey, hiddenProjectKeys, orderedProjectGroups, persistSidebarProjectPreferences, pinnedProjectKeys, projectDropTarget, projectOrganization, projectSortBy])
 
-  const createSessionForWorkDir = useCallback(async (workDir?: string) => {
-    try {
-      const sessionId = await useSessionStore.getState().createSession(workDir)
-      restoreHiddenProjectForWorkDir(workDir)
-      useTabStore.getState().openTab(sessionId, t('sidebar.newSession'))
-      useChatStore.getState().connectToSession(sessionId)
-    } catch (error) {
-      addToast({
-        type: 'error',
-        message: error instanceof Error ? error.message : t('sidebar.sessionListFailed'),
-      })
+  const openDraftForWorkDir = useCallback((workDir?: string) => {
+    // Do not allocate a standard server session before the user can choose
+    // the immutable agent profile in the new-chat composer.
+    const existingDraft = useUIStore.getState().newSessionDraft
+    restoreHiddenProjectForWorkDir(existingDraft?.workDir ?? workDir)
+    useUIStore.getState().startNewSessionDraft(workDir)
+    if (existingDraft && workDir !== undefined && existingDraft.workDir !== workDir) {
+      addToast({ type: 'info', message: t('sidebar.draftResumed') })
     }
+    useSessionStore.getState().setActiveSession(null)
+    useTabStore.getState().setActiveTab(null)
   }, [addToast, restoreHiddenProjectForWorkDir, t])
 
   // "New session" and its Cmd+N shortcut: a session in the project of the
-  // chat on screen.
+  // chat on screen, with profile selection before its first send.
   const createSessionInCurrentProject = useCallback(() => {
     const currentTabId = useTabStore.getState().activeTabId
     const currentSession = currentTabId
       ? useSessionStore.getState().sessions.find((s) => s.id === currentTabId)
       : null
-    void createSessionForWorkDir(getSessionSeedWorkDir(currentSession))
-  }, [createSessionForWorkDir])
+    const workDir = getSessionSeedWorkDir(currentSession)
+      ?? (!currentTabId ? useUIStore.getState().newSessionDraft?.workDir : undefined)
+    void openDraftForWorkDir(workDir)
+  }, [openDraftForWorkDir])
   const newSessionRequest = useUIStore((s) => s.newSessionRequest)
   const handledNewSessionRequest = useRef(newSessionRequest)
   useEffect(() => {
@@ -1332,7 +1333,7 @@ export function Sidebar({
                               label={t('sidebar.newSessionInProject', { project: project.title })}
                               onClick={(event) => {
                                 event.stopPropagation()
-                                void createSessionForWorkDir(project.workDir)
+                                void openDraftForWorkDir(project.workDir)
                               }}
                               size="sm"
                               tone="muted"
@@ -1575,7 +1576,7 @@ export function Sidebar({
           onOpenSubmenu={openProjectHeaderSubmenu}
           onSetOrganization={updateProjectOrganization}
           onSetSortBy={updateProjectSortBy}
-          onCreateBlank={() => void createSessionForWorkDir()}
+          onCreateBlank={() => void openDraftForWorkDir()}
           onUseExistingFolder={openProjectCreator}
           onRestoreHiddenProjects={restoreAllHiddenProjects}
           hiddenProjectCount={hiddenProjectKeys.size}
@@ -1594,7 +1595,7 @@ export function Sidebar({
           onOpenSubmenu={openProjectHeaderSubmenu}
           onSetOrganization={updateProjectOrganization}
           onSetSortBy={updateProjectSortBy}
-          onCreateBlank={() => void createSessionForWorkDir()}
+          onCreateBlank={() => void openDraftForWorkDir()}
           onUseExistingFolder={openProjectCreator}
           onRestoreHiddenProjects={restoreAllHiddenProjects}
           hiddenProjectCount={hiddenProjectKeys.size}

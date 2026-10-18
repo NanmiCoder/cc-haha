@@ -1,3 +1,4 @@
+import { getAgentProfile } from './utils/agentProfile.js'
 import { isPendingSessionMessage } from './utils/sessionMessageInbox.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { OpenAICodexTurnState } from './services/openaiAuth/turnState.js'
@@ -339,7 +340,7 @@ async function* queryLoop(
     // nothing in prod). Turn-0 user-input discovery still blocks in
     // userInputAttachments — that's the one signal where there's no prior
     // work to hide under.
-    const pendingSkillPrefetch = skillPrefetch?.startSkillDiscoveryPrefetch(
+    const pendingSkillPrefetch = getAgentProfile() === 'lean' ? undefined : skillPrefetch?.startSkillDiscoveryPrefetch(
       null,
       messages,
       toolUseContext,

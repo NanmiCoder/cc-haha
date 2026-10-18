@@ -1,3 +1,4 @@
+import { getAgentProfile } from '../agentProfile.js'
 import type { LoadedPlugin } from '../../types/plugin.js'
 import memoize from 'lodash-es/memoize.js'
 import { basename, dirname, join } from 'path'
@@ -397,7 +398,7 @@ function createPluginCommand(
                   ...appState.toolPermissionContext,
                   alwaysAllowRules: {
                     ...appState.toolPermissionContext.alwaysAllowRules,
-                    command: allowedTools,
+                    command: getAgentProfile() === 'lean' ? appState.toolPermissionContext.alwaysAllowRules.command : allowedTools,
                   },
                 },
               }

@@ -37,6 +37,7 @@ async function readBody(req: Request): Promise<unknown> {
 }
 
 export async function handleSideQuestionRoute(req: Request, url: URL, sessionId: string, questionId?: string): Promise<Response> {
+  if ((await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean') throw ApiError.conflict('Side questions are unavailable in lean sessions')
   // Same persisted-session lookup as the surrounding session API. New empty
   // sessions cannot be prewarmed by /btw to accidentally begin a main turn.
   if (!conversationService.hasSession(sessionId)) {

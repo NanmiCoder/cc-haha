@@ -2,6 +2,8 @@
 
 import type { ReasoningEffortLevel } from './settings'
 
+export type AgentProfile = 'standard' | 'lean'
+
 export type LocalIndexMode = 'off' | 'shadow' | 'on'
 export type LocalIndexState = 'off' | 'building' | 'ready' | 'degraded'
 
@@ -18,6 +20,8 @@ export type LocalIndexStatus = {
 }
 
 export type SessionListItem = {
+  /** Server-owned, immutable after creation; absent legacy values mean standard. */
+  agentProfile?: AgentProfile
   id: string
   title: string
   createdAt: string

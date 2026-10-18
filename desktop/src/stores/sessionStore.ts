@@ -11,7 +11,7 @@ import { ApiError } from '../api/client'
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabStore } from './tabStore'
-import type { LocalIndexStatus, SessionListItem } from '../types/session'
+import type { AgentProfile, LocalIndexStatus, SessionListItem } from '../types/session'
 import type { PermissionMode } from '../types/settings'
 import type { RuntimeSelection } from '../types/runtime'
 import { isPlaceholderSessionTitle } from '../lib/sessionTitle'
@@ -34,6 +34,7 @@ export type ProjectHistoryState = {
 type RecentProjectBoundary = { beforeModifiedAt: string; beforeId: string }
 
 type CreateSessionOptions = {
+  agentProfile?: AgentProfile
   repository?: CreateSessionRepositoryOptions
   permissionMode?: PermissionMode
 }
@@ -311,6 +312,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const requestedPermissionMode = options?.permissionMode ?? getDefaultSessionPermissionMode()
     const { sessionId: id, workDir: resolvedWorkDir } = await sessionsApi.create({
       ...(workDir ? { workDir } : {}),
+      ...(options?.agentProfile ? { agentProfile: options.agentProfile } : {}),
       ...(options?.repository ? { repository: options.repository } : {}),
       ...(requestedPermissionMode ? { permissionMode: requestedPermissionMode } : {}),
     })
@@ -327,6 +329,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       projectRoot: resolvedWorkDir ?? workDir ?? null,
       workDirExists: true,
       permissionMode: requestedPermissionMode,
+      agentProfile: options?.agentProfile ?? 'standard',
     }
 
     pendingCreatedSessionIds.add(id)

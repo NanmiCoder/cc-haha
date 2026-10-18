@@ -190,3 +190,31 @@ describe('useCapabilityMenu', () => {
     expect(result.current.sections[1]!.items[0]!.action).toEqual({ type: 'settings', tab: 'general' })
   })
 })
+
+it('lean exposes only file attachment and local commands, including after a standard menu', async () => {
+  const composer = handlers()
+  const { result, rerender } = renderHook(({ lean }) => useCapabilityMenu({ open: true, lean, cwd: '/repo', references: [], handlers: composer }), { initialProps: { lean: false } })
+  await waitFor(() => expect(mocks.marketList).toHaveBeenCalled())
+  rerender({ lean: true })
+  const actions = result.current.sections.flatMap(section => section.items.map(item => item.action?.type))
+  expect(actions).toEqual(['attachment', 'slashTrigger'])
+  expect(result.current.sections.flatMap(section => section.searchOnly ?? [])).toEqual([])
+  act(() => result.current.onAction({ type: 'toggleAgentTeam' }))
+  expect(result.current.agentTeamArmed).toBe(false)
+  act(() => result.current.onAction({ type: 'insertSlashText', command: 'agent forbidden' }))
+  expect(composer.onInsertSlashText).not.toHaveBeenCalled()
+})
+
+it('keeps explicit installed skills in lean while blocking plugin mentions', () => {
+  const composer = handlers()
+  const skill = { id: 'review', name: 'review', displayName: 'Review', source: 'user', modelText: '/review', description: 'Review code', kind: 'skill' as const }
+  const plugin = { id: 'browser', name: 'browser', displayName: 'Browser', source: 'plugin', modelText: '/browser', description: 'Browser', kind: 'plugin' as const }
+  const { result } = renderHook(() => useCapabilityMenu({ open: true, lean: true, cwd: '/repo', references: [skill, plugin], handlers: composer }))
+  expect(result.current.sections.flatMap(section => section.items).find(item => item.key === 'skills')?.children?.find(item => item.key === 'skills:all')?.children).toEqual([
+    expect.objectContaining({ action: { type: 'insertMention', reference: skill } }),
+  ])
+  act(() => result.current.onAction({ type: 'insertMention', reference: skill }))
+  expect(composer.onInsertMention).toHaveBeenCalledWith(skill)
+  act(() => result.current.onAction({ type: 'insertMention', reference: plugin }))
+  expect(composer.onInsertMention).toHaveBeenCalledTimes(1)
+})

@@ -1,3 +1,6 @@
+import type { AgentProfile } from '@/types/session'
+import { AgentProfileControl } from '@/components/chat/AgentProfileControl'
+import { isLeanSlashCommand, isUnsupportedLeanSlashInput } from '@/lib/agentProfile'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
@@ -139,10 +142,23 @@ const EMPTY_COMPOSER_REFERENCES: ComposerReferenceCandidate[] = []
 type EmptySessionProps = {
   /** The folder the task starts in; the phone's new-task sheet suggests one. */
   initialWorkDir?: string
+  visible?: boolean
 }
 
-export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
+export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessionProps = {}) {
   const t = useTranslation()
+  const leanModeEnabled = useSettingsStore((state) => state.leanModeEnabled)
+  const [selectedAgentProfile, setAgentProfile] = useState<AgentProfile>('standard')
+  const agentProfile = leanModeEnabled ? selectedAgentProfile : 'standard'
+  useEffect(() => {
+    if (!leanModeEnabled) setAgentProfile('standard')
+  }, [leanModeEnabled])
+  const isLean = agentProfile === 'lean'
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => { mounted.current = false }
+  }, [])
   const [input, setInput] = useState('')
   const [mentions, setMentions] = useState<ComposerMention[]>([])
   const [referenceDetail, setReferenceDetail] = useState<ComposerMention | null>(null)
@@ -197,20 +213,20 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
   const lastPluginReloadSummary = usePluginStore((state) => state.lastReloadSummary)
   const draftRuntimeSelection = useSessionRuntimeStore((state) => state.selections[DRAFT_RUNTIME_SELECTION_KEY])
   const referenceProviderId = mentionProviderId(draftRuntimeSelection)
-  const referenceContext = `${workDir}\0${referenceProviderId ?? ''}`
+  const referenceContext = `${workDir}\0${referenceProviderId ?? ''}\0${agentProfile}`
   const referenceCurrent = referenceState?.context === referenceContext ? referenceState : null
-  const composerReferences = useMemo(() => (referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES).filter(isComposerReferenceVisible), [referenceCurrent?.items])
+  const composerReferences = useMemo(() => (referenceCurrent?.items ?? EMPTY_COMPOSER_REFERENCES).filter(reference => isComposerReferenceVisible(reference) && (!isLean || reference.kind === 'skill')), [referenceCurrent?.items, isLean])
   useEffect(() => {
     let active = true
     setReferenceState({ context: referenceContext, items: [], loading: true, error: false })
-    void composerReferencesApi.list(workDir || undefined, referenceProviderId).then(data => {
+    void composerReferencesApi.list(workDir || undefined, referenceProviderId, isLean ? 'lean' : undefined).then(data => {
       useCapabilityCatalogStore.getState().remember([...data.plugins, ...data.skills])
       if (active) setReferenceState({ context: referenceContext, items: [...data.plugins, ...data.skills], loading: false, error: false })
     }).catch(() => {
       if (active) setReferenceState({ context: referenceContext, items: [], loading: false, error: true })
     })
     return () => { active = false }
-  }, [referenceContext, workDir, referenceProviderId, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
+  }, [referenceContext, workDir, referenceProviderId, isLean, lastPluginReloadSummary, slashMenuOpen, fileSearchOpen, plusMenuOpen, referencesVersion])
   useEffect(() => {
     setReferenceDetail(null)
     setReferenceOptionId(undefined)
@@ -226,8 +242,8 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
   const dictation = useComposerDictation({
     composerRef,
     draft: input,
-    blocked: isSubmitting,
-    contextKey: 'empty-session',
+    blocked: isSubmitting || !visible,
+    contextKey: visible ? 'empty-session' : null,
     // Called from an effect, after this render has declared `handleSubmit`.
     onSubmit: () => { void handleSubmit() },
   })
@@ -236,9 +252,15 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
   const dictationLive = dictation.phase !== 'idle'
 
   useEffect(() => {
-    composerRef.current?.focus()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+    if (visible) composerRef.current?.focus()
+    else {
+      setPlusMenuOpen(false)
+      setSlashMenuOpen(false)
+      setFileSearchOpen(false)
+      setReferenceDetail(null)
+      setLocalSlashPanel(null)
+    }
+  }, [visible])
 
   useDismissable({
     // On a phone the + opens a sheet that closes itself; see ChatInput.
@@ -334,11 +356,15 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
       names.add(name.toLowerCase())
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
-    return commands.filter(isComposerSlashCommandVisible)
-  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, t])
+    return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command)))
+  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, isLean, t])
 
   const handleWorkDirChange = (newWorkDir: string) => {
     setWorkDir(newWorkDir)
+    // Keep the seed current for another Cmd+N while no server tab is active.
+    useUIStore.setState(state => state.newSessionDraft
+      ? { newSessionDraft: { ...state.newSessionDraft, workDir: newWorkDir } }
+      : {})
     setSelectedBranch(null)
     setUseWorktree(false)
     setRepositoryLaunchReady(!newWorkDir)
@@ -374,7 +400,16 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
 
   const handleSubmit = async () => {
     const text = input.trim()
-    if (!canSubmit) return
+    if (!canSubmit || !visible) return
+    if (isLean && isUnsupportedLeanSlashInput(text, [...allSlashCommands, ...slashCommands, ...getLocalizedFallbackCommands(t)])) {
+      addToast({ type: 'info', message: t('agentProfile.draftCommandUnavailable') })
+      return
+    }
+
+    if (isLean && draftPermissionMode === 'plan') {
+      addToast({ type: 'info', message: t('agentProfile.planUnavailable') })
+      return
+    }
 
     const slashUiAction = text.startsWith('/') ? resolveSlashUiAction(text.slice(1)) : null
     if (slashUiAction?.type === 'panel') {
@@ -408,6 +443,12 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
       return
     }
 
+    const runtimeStore = useSessionRuntimeStore.getState()
+    const explicitDraftSelection = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
+    const submittedDraft = useUIStore.getState().newSessionDraft
+    const submittedTabId = useTabStore.getState().activeTabId
+    const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
+    const ownsDraft = () => mounted.current && useUIStore.getState().newSessionDraft?.revision === submittedDraft?.revision
     setIsSubmitting(true)
     try {
       const authStatus = await providersApi.authStatus()
@@ -417,8 +458,6 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
         return
       }
 
-      const runtimeStore = useSessionRuntimeStore.getState()
-      const explicitDraftSelection = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
       const defaultActiveProviderSelection = explicitDraftSelection
         ? null
         : resolveActiveProviderRuntimeSelection(
@@ -470,16 +509,25 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
             ? { repository: { branch: selectedBranch, worktree: useWorktree } }
             : {}),
           permissionMode: draftPermissionMode,
+          ...(isLean ? { agentProfile } : {}),
         },
       )
       if (runtimeSelection) {
         runtimeStore.setSelection(sessionId, runtimeSelection)
-        if (explicitDraftSelection) {
+        if (explicitDraftSelection && ownsDraft() && useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY] === explicitDraftSelection) {
           runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
         }
       }
-      setActiveView('code')
-      useTabStore.getState().openTab(sessionId, 'New Session')
+      if (ownsDraft()) {
+        if (useTabStore.getState().activeTabId === submittedTabId) {
+          setActiveView('code')
+          useTabStore.getState().openTab(sessionId, 'New Session')
+        }
+        useUIStore.setState({ newSessionDraft: null })
+      } else {
+        const activeTab = useTabStore.getState().tabs.find(tab => tab.sessionId === useTabStore.getState().activeTabId)
+        useSessionStore.getState().setActiveSession(activeTab?.type === 'session' ? activeTab.sessionId : null)
+      }
       connectToSession(sessionId)
       const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
         type: attachment.type,
@@ -490,7 +538,6 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
       }))
       // Inline @-mentions go out as the `@"absolute path"` text the CLI parses,
       // serialized from the live document; the bubble keeps the pill text.
-      const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
       // Agent Team armed in the + menu: the model gets the team instruction,
       // the bubble keeps what the user typed.
       const sendAsTeam = capabilityMenu.agentTeamArmed
@@ -654,6 +701,7 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
   }, [])
 
   const { isDragActive, dragHandlers } = useComposerFileDrop({
+    disabled: !visible,
     panelRef,
     onAttachments: appendAttachments,
     onError: (error) => {
@@ -777,6 +825,7 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
     open: plusMenuOpen,
     cwd: workDir,
     references: composerReferences,
+    lean: isLean,
     handlers: {
       onInsertMention: (reference) => {
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
@@ -1053,6 +1102,7 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
                     workDir={workDir}
                     compact={isMobileComposer}
                     trigger={isMobileComposer ? 'elevatedOnly' : 'chip'}
+                    lean={isLean}
                     value={draftPermissionMode}
                     onChange={setDraftPermissionMode}
                   />
@@ -1088,6 +1138,14 @@ export function EmptySession({ initialWorkDir = '' }: EmptySessionProps = {}) {
                       compact={isMobileComposer}
                     />
                   )}
+                  {leanModeEnabled && <AgentProfileControl value={agentProfile} onChange={(profile) => {
+                    if (profile === agentProfile) return
+                    setAgentProfile(profile)
+                    if (profile === 'lean' && draftPermissionMode === 'plan') {
+                      setDraftPermissionMode('default')
+                      addToast({ type: 'info', message: t('agentProfile.planReset') })
+                    }
+                  }} disabled={isSubmitting} />}
                   <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
                   <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
                   {/* Kept identical to ChatInput's send button — same

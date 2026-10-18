@@ -282,6 +282,8 @@ type UIStore = {
    * shortcut it advertises does exactly what clicking it does.
    */
   newSessionRequest: number
+  /** Ephemeral composer seed. No server session exists until the first send. */
+  newSessionDraft: { workDir: string; revision: number } | null
   activeModal: string | null
   toasts: Toast[]
 
@@ -297,6 +299,7 @@ type UIStore = {
   setPendingMemoryPath: (path: string | null) => void
   setPendingMarketTarget: (target: MarketTarget | null) => void
   requestNewSession: () => void
+  startNewSessionDraft: (workDir?: string) => void
   openModal: (id: string) => void
   closeModal: () => void
   addToast: (toast: Omit<Toast, 'id'>) => void
@@ -318,6 +321,7 @@ export const useUIStore = create<UIStore>((set) => ({
   pendingMemoryPath: null,
   pendingMarketTarget: null,
   newSessionRequest: 0,
+  newSessionDraft: null,
   activeModal: null,
   toasts: [],
 
@@ -392,6 +396,12 @@ export const useUIStore = create<UIStore>((set) => ({
   setPendingSettingsTab: (tab) => set({ pendingSettingsTab: tab }),
   setPendingMemoryPath: (path) => set({ pendingMemoryPath: path }),
   setPendingMarketTarget: (target) => set({ pendingMarketTarget: target }),
+  startNewSessionDraft: (workDir = '') => set(state => ({
+    activeView: 'code',
+    // New-chat navigation also returns to the retained composer. Replacing its
+    // revision would unmount it and silently discard unsent input and attachments.
+    newSessionDraft: state.newSessionDraft ?? { workDir, revision: 1 },
+  })),
   requestNewSession: () => set((state) => ({ newSessionRequest: state.newSessionRequest + 1 })),
   openModal: (id) => set({ activeModal: id }),
   closeModal: () => set({ activeModal: null }),

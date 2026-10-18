@@ -237,6 +237,92 @@ describe('settingsStore Auto mode consent', () => {
   })
 })
 
+describe('settingsStore lean mode preference', () => {
+  function installSettingsFixture(user: Record<string, unknown> = {}, updateUser = vi.fn().mockResolvedValue({ ok: true })) {
+    vi.doMock('../api/settings', () => ({
+      settingsApi: {
+        getUser: vi.fn(async () => ({ ...user })),
+        updateUser,
+        getPermissionMode: vi.fn().mockResolvedValue({ mode: 'default' }),
+      },
+    }))
+    vi.doMock('../api/models', () => ({
+      modelsApi: {
+        list: vi.fn().mockResolvedValue({ models: [] }),
+        getCurrent: vi.fn().mockResolvedValue({ model: null }),
+        getEffort: vi.fn().mockResolvedValue({ level: 'medium' }),
+      },
+    }))
+    vi.doMock('../api/h5Access', () => ({
+      h5AccessApi: { get: vi.fn().mockResolvedValue({ settings: { enabled: false } }) },
+    }))
+    return updateUser
+  }
+
+  beforeEach(() => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    window.localStorage.clear()
+  })
+
+  it('migrates an old fixture to off and restores an explicitly saved choice after restart', async () => {
+    const user: Record<string, unknown> = { unknownFuturePreference: { keep: true } }
+    const updateUser = vi.fn(async (patch: Record<string, unknown>) => {
+      Object.assign(user, patch)
+      return { ok: true }
+    })
+    installSettingsFixture(user, updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().fetchAll()
+    expect(useSettingsStore.getState().leanModeEnabled).toBe(false)
+    expect(updateUser).not.toHaveBeenCalled()
+    await useSettingsStore.getState().setLeanModeEnabled(true)
+    vi.resetModules()
+    const restarted = await import('./settingsStore')
+    await restarted.useSettingsStore.getState().fetchAll()
+    expect(restarted.useSettingsStore.getState().leanModeEnabled).toBe(true)
+    expect(user).toEqual({ unknownFuturePreference: { keep: true }, leanModeEnabled: true })
+    await restarted.useSettingsStore.getState().setLeanModeEnabled(false)
+    expect(updateUser).toHaveBeenLastCalledWith({ leanModeEnabled: false })
+  })
+  it('does not change availability when a save fails', async () => {
+    installSettingsFixture({ leanModeEnabled: true }, vi.fn().mockRejectedValue(new Error('fixture failure')))
+    const { useSettingsStore } = await import('./settingsStore')
+    await useSettingsStore.getState().fetchAll()
+    await expect(useSettingsStore.getState().setLeanModeEnabled(false)).rejects.toThrow('fixture failure')
+    expect(useSettingsStore.getState().leanModeEnabled).toBe(true)
+  })
+  it('does not let an earlier settings fetch overwrite a completed save', async () => {
+    installSettingsFixture({ leanModeEnabled: false })
+    const { settingsApi } = await import('../api/settings')
+    let finishRead!: (value: Record<string, unknown>) => void
+    vi.mocked(settingsApi.getUser).mockImplementationOnce(() => new Promise(resolve => { finishRead = resolve }))
+    const { useSettingsStore } = await import('./settingsStore')
+    const fetch = useSettingsStore.getState().fetchAll()
+    await useSettingsStore.getState().setLeanModeEnabled(true)
+    finishRead({ leanModeEnabled: false })
+    await fetch
+    expect(useSettingsStore.getState().leanModeEnabled).toBe(true)
+  })
+  it('serializes overlapping saves and publishes only persisted choices', async () => {
+    let finishFirst!: () => void
+    const updateUser = vi.fn()
+      .mockImplementationOnce(() => new Promise<void>(resolve => { finishFirst = resolve }))
+      .mockResolvedValue({ ok: true })
+    installSettingsFixture({}, updateUser)
+    const { useSettingsStore } = await import('./settingsStore')
+    const first = useSettingsStore.getState().setLeanModeEnabled(true)
+    const second = useSettingsStore.getState().setLeanModeEnabled(false)
+    await Promise.resolve()
+    expect(updateUser).toHaveBeenCalledTimes(1)
+    expect(useSettingsStore.getState().leanModeEnabled).toBe(false)
+    finishFirst()
+    await Promise.all([first, second])
+    expect(updateUser.mock.calls).toEqual([[{ leanModeEnabled: true }], [{ leanModeEnabled: false }]])
+    expect(useSettingsStore.getState().leanModeEnabled).toBe(false)
+  })
+})
+
 describe('settingsStore automatic update preference', () => {
   function installSettingsFixture(user: Record<string, unknown> = {}, updateUser = vi.fn().mockResolvedValue({ ok: true })) {
     vi.doMock('../api/settings', () => ({

@@ -18,3 +18,8 @@ it('names the provider the session runs with so provider-backed skills match it'
   composerReferencesApi.list(undefined, undefined)
   expect(api.get).toHaveBeenLastCalledWith('/api/skills/mentions')
 })
+
+it('requests the lean-compatible catalog without changing the default request', () => {
+  composerReferencesApi.list('/repo', 'deepseek', 'lean')
+  expect(api.get).toHaveBeenLastCalledWith('/api/skills/mentions?cwd=%2Frepo&providerId=deepseek&agentProfile=lean')
+})

@@ -1,6 +1,6 @@
 import type { Database } from 'bun:sqlite'
 
-export const LOCAL_INDEX_SCHEMA_VERSION = 7
+export const LOCAL_INDEX_SCHEMA_VERSION = 8
 export const LOCAL_INDEX_SCHEMA_UNSUPPORTED =
   'LOCAL_INDEX_SCHEMA_UNSUPPORTED' as const
 
@@ -199,6 +199,10 @@ const SCHEMA_V7 = `
 ALTER TABLE sessions ADD COLUMN openai_fast_mode INTEGER CHECK (openai_fast_mode IN (0, 1));
 `
 
+const SCHEMA_V8 = `
+ALTER TABLE sessions ADD COLUMN agent_profile TEXT NOT NULL DEFAULT 'standard' CHECK (agent_profile IN ('standard', 'lean'));
+`
+
 const MIGRATIONS = [
   { version: 1, sql: SCHEMA_V1 },
   { version: 2, sql: SCHEMA_V2 },
@@ -207,6 +211,7 @@ const MIGRATIONS = [
   { version: 5, sql: SCHEMA_V5 },
   { version: 6, sql: SCHEMA_V6 },
   { version: 7, sql: SCHEMA_V7 },
+  { version: 8, sql: SCHEMA_V8 },
 ] as const
 
 export class UnsupportedLocalIndexSchemaError extends Error {

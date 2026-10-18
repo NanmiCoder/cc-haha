@@ -1,3 +1,4 @@
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { feature } from 'bun:bundle'
 import { prependBullets } from '../../constants/prompts.js'
 import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
@@ -53,7 +54,7 @@ function getCommitAndPRInstructions(): string {
 
   // For ant users, use the short version pointing to skills
   if (process.env.USER_TYPE === 'ant') {
-    const skillsSection = !isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)
+    const skillsSection = getAgentProfile() !== 'lean' && !isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)
       ? `For git commits and pull requests, use the \`/commit\` and \`/commit-push-pr\` skills:
 - \`/commit\` - Create a git commit with staged changes
 - \`/commit-push-pr\` - Commit, push, and create a pull request

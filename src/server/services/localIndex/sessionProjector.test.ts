@@ -1336,3 +1336,28 @@ it('excludes desktop team workers from sidebar pages while retaining indexed tra
     expect(index.getSession?.('worker-session')?.id).toBe('worker-session')
   } finally { database.close() }
 })
+
+it('persists lean profile through index reopen and incremental metadata, and rebuilds legacy projections', async () => {
+  const root = await createTempDir('agent-profile-index')
+  const databasePath = join(root, 'index.sqlite')
+  let database = openLocalIndexDatabase({ path: databasePath })
+  const candidate = await createCandidate({ root, projectPath: '-repo', sessionId: 'lean-session', content:
+    line({ type: 'session-meta', agentProfile: 'lean', futureExtension: true }) + line(user('lean task', '2026-01-01T00:00:00Z')) })
+  try {
+    let index = createSessionIndex(database)
+    await createSessionProjector({ database, index, scope: root, parserVersion: 11 }).projectSource(candidate)
+    database.close()
+    database = openLocalIndexDatabase({ path: databasePath })
+    index = createSessionIndex(database)
+    const projector = createSessionProjector({ database, index, scope: root })
+    expect(await projector.projectSource(candidate)).toMatchObject({ kind: 'indexed', action: 'rebuild' })
+    await appendFile(candidate.path, line({ type: 'session-meta', permissionMode: 'default' }))
+    await projector.projectSource(candidate)
+    expect(index.getSession?.('lean-session')?.agentProfile).toBe('lean')
+    expect(index.listSessions().sessions[0]?.agentProfile).toBe('lean')
+    expect(index.listSessions({ project: '-repo' }).sessions[0]?.agentProfile).toBe('lean')
+    const legacy = await createCandidate({ root, projectPath: '-repo', sessionId: 'old-session', content: line(user('old task', '2026-01-02T00:00:00Z')) })
+    await projector.projectSource(legacy)
+    expect(index.getSession?.('old-session')?.agentProfile).toBe('standard')
+  } finally { database.close() }
+})

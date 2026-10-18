@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { useUIStore } from '@/stores/uiStore'
 import { useTabStore } from '../../stores/tabStore'
 import { EmptySession } from '../../pages/EmptySession'
 import { ActiveSession } from '../../pages/ActiveSession'
@@ -19,6 +20,7 @@ type ContentRouterProps = {
 }
 
 export function ContentRouter({ homePage }: ContentRouterProps = {}) {
+  const newSessionDraft = useUIStore(s => s.newSessionDraft)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
   const activeTabType = tabs.find((t) => t.sessionId === activeTabId)?.type
@@ -47,9 +49,16 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
     store.closeTab(legacy.sessionId)
   }, [activeTabId, activeTabType, tabs])
 
+  const draftVisible = !activeTabId || !activeTabType
+  useEffect(() => {
+    // The initial desktop composer needs the same retained draft as Cmd+N.
+    if (draftVisible && !homePage && !newSessionDraft) {
+      useUIStore.getState().startNewSessionDraft()
+    }
+  }, [draftVisible, homePage, newSessionDraft])
   let page: ReactNode = null
   if (!activeTabId || !activeTabType) {
-    page = homePage ?? <EmptySession />
+    page = newSessionDraft ? null : homePage ?? <EmptySession />
   } else if (activeTabType === 'settings') {
     page = <Settings />
   } else if (activeTabType === 'scheduled') {
@@ -113,6 +122,13 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
         ) : null}
         <WorkspaceBrowserGuestLayer />
       </div>
+      {newSessionDraft && (
+        <div hidden={!draftVisible} aria-hidden={!draftVisible} {...(draftVisible ? {} : { inert: '' })}
+          data-testid="new-session-draft-panel"
+          className={draftVisible ? 'absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden' : 'hidden'}>
+          <EmptySession key={newSessionDraft.revision} initialWorkDir={newSessionDraft.workDir} visible={draftVisible} />
+        </div>
+      )}
       {page && (
         <div className="absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden">
           {page}

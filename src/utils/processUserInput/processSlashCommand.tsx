@@ -1,3 +1,4 @@
+import { getAgentProfile, isAgentProfileCommandSupported } from '../agentProfile.js'
 import { feature } from 'bun:bundle';
 import type { ContentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources';
 import { randomUUID } from 'crypto';
@@ -525,8 +526,21 @@ export async function processSlashCommand(inputString: string, precedingInputBlo
     submitNextInput
   };
 }
+function getLeanCommandRejection(command: Command): SlashCommandResult | undefined {
+  if (isAgentProfileCommandSupported(command)) return
+  const resultText = `This command is unavailable with --agent-profile lean. Start a new --agent-profile standard session to use /${command.name}.`
+  return {
+    messages: [createCommandInputMessage(`<local-command-stderr>${resultText}</local-command-stderr>`)],
+    shouldQuery: false,
+    resultText,
+    command,
+  }
+}
+
 async function getMessagesForSlashCommand(commandName: string, args: string, setToolJSX: SetToolJSXFn, context: ProcessUserInputContext, precedingInputBlocks: ContentBlockParam[], imageContentBlocks: ContentBlockParam[], _isAlreadyProcessing?: boolean, canUseTool?: CanUseToolFn, uuid?: string): Promise<SlashCommandResult> {
   const command = getCommand(commandName, context.options.commands);
+  const profileRejection = getLeanCommandRejection(command)
+  if (profileRejection) return profileRejection
 
   // Track skill usage for ranking (only for prompt commands that are user-invocable)
   if (command.type === 'prompt' && command.userInvocable !== false) {
@@ -837,6 +851,8 @@ export async function processPromptSlashCommand(commandName: string, args: strin
   if (command.type !== 'prompt') {
     throw new Error(`Unexpected ${command.type} command. Expected 'prompt' command. Use /${commandName} directly in the main conversation.`);
   }
+  const profileRejection = getLeanCommandRejection(command)
+  if (profileRejection) return profileRejection
   return getMessagesForPromptSlashCommand(command, args, context, [], imageContentBlocks);
 }
 async function getMessagesForPromptSlashCommand(command: CommandBase & PromptCommand, args: string, context: ToolUseContext, precedingInputBlocks: ContentBlockParam[] = [], imageContentBlocks: ContentBlockParam[] = [], uuid?: string): Promise<SlashCommandResult> {
@@ -882,6 +898,19 @@ async function getMessagesForPromptSlashCommand(command: CommandBase & PromptCom
     };
   }
   const result = await command.getPromptForCommand(args, context);
+  if (getAgentProfile() === 'lean') {
+    // Explicit invocation supplies content only. Never install hooks, widen
+    // permissions, change models/effort, or execute a fork from skill metadata.
+    const skillContent = result.filter((b): b is TextBlockParam => b.type === 'text').map(b => b.text).join('\n\n')
+    addInvokedSkill(command.name, command.source ? `${command.source}:${command.name}` : command.name, skillContent, getAgentContext()?.agentId ?? null)
+    return {
+      messages: [createUserMessage({ content: formatCommandLoadingMetadata(command, args), uuid }),
+        createUserMessage({ content: [...imageContentBlocks, ...precedingInputBlocks, ...result], isMeta: true })],
+      shouldQuery: true,
+      command,
+    }
+  }
+
 
   // Register skill hooks if defined. Under ["hooks"]-only (skills not locked),
   // user skills still load and reach this point — block hook REGISTRATION here

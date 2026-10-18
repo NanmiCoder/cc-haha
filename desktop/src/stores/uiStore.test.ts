@@ -421,3 +421,22 @@ describe('uiStore settings tab persistence', () => {
     expect(useUIStore.getState().activeSettingsTab).toBe('general')
   })
 })
+
+describe('uiStore new-session draft navigation', () => {
+  it('resumes the existing draft until first send clears it, then seeds the next project', async () => {
+    vi.resetModules()
+    const { useUIStore } = await import('./uiStore')
+    useUIStore.getState().startNewSessionDraft('/workspace/first')
+    const draft = useUIStore.getState().newSessionDraft
+    useUIStore.getState().startNewSessionDraft('/workspace/other')
+    expect(useUIStore.getState().newSessionDraft).toBe(draft)
+    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/first')
+
+    // Successful first send consumes this draft. The next request is a new chat.
+    useUIStore.setState({ newSessionDraft: null })
+    useUIStore.getState().startNewSessionDraft('/workspace/next')
+    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/next')
+    expect(useUIStore.getState().newSessionDraft).not.toBe(draft)
+    useUIStore.setState({ newSessionDraft: null })
+  })
+})

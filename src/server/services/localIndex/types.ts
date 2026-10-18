@@ -43,6 +43,7 @@ export type SessionListSummary = {
   modifiedAt: string
   messageCount: number
   workDir: string | null
+  agentProfile?: 'standard' | 'lean'
   permissionMode?: string
   runtimeProviderId?: string | null
   runtimeModelId?: string

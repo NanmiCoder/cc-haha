@@ -1,3 +1,12 @@
+import { ContentRouter } from './ContentRouter'
+vi.mock('../../pages/ActiveSession', () => ({ ActiveSession: () => null }))
+vi.mock('../../pages/Settings', () => ({ Settings: () => null }))
+vi.mock('../../pages/ScheduledTasks', () => ({ ScheduledTasks: () => null }))
+vi.mock('../../pages/ExtensionMarket', () => ({ ExtensionMarket: () => null }))
+vi.mock('../../pages/TerminalSettings', () => ({ TerminalSettings: () => null }))
+vi.mock('../../pages/EmptySession', () => ({
+  EmptySession: () => <input aria-label="Draft text" />,
+}))
 import { Profiler, useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -231,7 +240,6 @@ vi.mock('./ProjectEditorModal', () => ({
 }))
 
 import { Sidebar } from './Sidebar'
-import { ChatInput } from '../chat/ChatInput'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
@@ -249,8 +257,6 @@ const PROJECT_HIDDEN_STORAGE_KEY = 'cc-haha-sidebar-hidden-projects'
 const PROJECT_COLLAPSED_STORAGE_KEY = 'cc-haha-sidebar-collapsed-projects'
 const PROJECT_ORGANIZATION_STORAGE_KEY = 'cc-haha-sidebar-project-organization'
 const PROJECT_SORT_STORAGE_KEY = 'cc-haha-sidebar-project-sort'
-const realCreateSession = useSessionStore.getInitialState().createSession
-const realFetchSessions = useSessionStore.getInitialState().fetchSessions
 
 function makeSession(
   id: string,
@@ -469,6 +475,7 @@ describe('Sidebar', () => {
     window.localStorage.removeItem(PROJECT_SORT_STORAGE_KEY)
 
     useTabStore.setState({ tabs: [], activeTabId: null })
+    useUIStore.setState({ newSessionDraft: null })
     useSessionStore.setState({
       sessions: [],
       projectHistory: {},
@@ -504,6 +511,7 @@ describe('Sidebar', () => {
       hydrateProjectDisplayNames({}, Number.MAX_SAFE_INTEGER)
     })
     useTabStore.setState({ tabs: [], activeTabId: null })
+    useUIStore.setState({ newSessionDraft: null })
     window.localStorage.removeItem(PROJECT_ORDER_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_PINNED_STORAGE_KEY)
     window.localStorage.removeItem(PROJECT_HIDDEN_STORAGE_KEY)
@@ -512,7 +520,7 @@ describe('Sidebar', () => {
     window.localStorage.removeItem(PROJECT_SORT_STORAGE_KEY)
   })
 
-  it('opens a new tab when creating a session from the sidebar', async () => {
+  it('opens an editable draft without allocating a session from the sidebar', async () => {
     createSession.mockResolvedValue('session-new-1')
 
     render(<Sidebar />)
@@ -522,14 +530,13 @@ describe('Sidebar', () => {
     })
 
     await waitFor(() => {
-      expect(createSession).toHaveBeenCalled()
-      expect(connectToSession).toHaveBeenCalledWith('session-new-1')
+      expect(useUIStore.getState().newSessionDraft?.workDir).toBe('')
+      expect(createSession).not.toHaveBeenCalled()
+      expect(connectToSession).not.toHaveBeenCalled()
     })
 
-    expect(useTabStore.getState().tabs).toEqual([
-      { sessionId: 'session-new-1', title: 'New Session', type: 'session', status: 'idle' },
-    ])
-    expect(useTabStore.getState().activeTabId).toBe('session-new-1')
+    expect(useTabStore.getState().tabs).toEqual([])
+    expect(useTabStore.getState().activeTabId).toBeNull()
     expect(screen.getByRole('complementary')).not.toHaveAttribute('data-desktop-drag-region')
     expect(screen.getByTestId('sidebar-title-region')).toHaveAttribute('data-desktop-drag-region')
   })
@@ -554,12 +561,51 @@ describe('Sidebar', () => {
     })
 
     await waitFor(() => {
-      expect(createSession).toHaveBeenCalledTimes(1)
-      expect(createSession).toHaveBeenCalledWith('/workspace/alpha')
-      expect(connectToSession).toHaveBeenCalledWith('session-from-shortcut')
+      expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/alpha')
+      expect(createSession).not.toHaveBeenCalled()
+      expect(connectToSession).not.toHaveBeenCalled()
     })
-    expect(useTabStore.getState().activeTabId).toBe('session-from-shortcut')
-    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toContain('session-from-shortcut')
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toEqual(['alpha-1'])
+  })
+
+  it('retains the effective draft project on another Cmd+N before the first send', () => {
+    useUIStore.getState().startNewSessionDraft('/workspace/changed-draft')
+    useTabStore.setState({ activeTabId: null })
+    render(<Sidebar />)
+    const revision = useUIStore.getState().newSessionDraft!.revision
+    act(() => useUIStore.getState().requestNewSession())
+    expect(useUIStore.getState().newSessionDraft).toEqual({ workDir: '/workspace/changed-draft', revision })
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  it('returns to the same unsent composer through real sidebar navigation after closing settings', () => {
+    useSessionStore.setState({ sessions: [makeSession('old', 'Old', '/workspace/old', new Date().toISOString())] })
+    useTabStore.setState({ tabs: [{ sessionId: 'old', title: 'Old', type: 'session', status: 'idle' }], activeTabId: 'old' })
+    render(<><Sidebar /><ContentRouter /></>)
+    fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
+    const composer = screen.getByLabelText('Draft text')
+    fireEvent.change(composer, { target: { value: 'Keep these unsent edits' } })
+    const draft = useUIStore.getState().newSessionDraft
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    act(() => useTabStore.getState().closeTab(useTabStore.getState().activeTabId!))
+    expect(useTabStore.getState().activeTabId).toBe('old')
+    fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
+    expect(screen.getByLabelText('Draft text')).toBe(composer)
+    expect(composer).toHaveValue('Keep these unsent edits')
+    expect(useUIStore.getState().newSessionDraft).toBe(draft)
+    expect(screen.getByTestId('new-session-draft-panel')).not.toHaveAttribute('inert')
+  })
+
+  it('preserves an unsent draft when another project requests a new chat and explains the return', () => {
+    useSessionStore.setState({ sessions: [makeSession('alpha', 'Alpha', '/workspace/alpha', new Date().toISOString())] })
+    useUIStore.getState().startNewSessionDraft('/workspace/unsent')
+    const draft = useUIStore.getState().newSessionDraft
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: 'New session in alpha' }))
+    expect(useUIStore.getState().newSessionDraft).toBe(draft)
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(addToast).toHaveBeenCalledWith({ type: 'info', message: 'sidebar.draftResumed' })
   })
 
   it('does not replay a Cmd+N request made before the sidebar mounted', async () => {
@@ -1060,48 +1106,20 @@ describe('Sidebar', () => {
     })
 
     await waitFor(() => {
-      expect(createSession).toHaveBeenCalledWith('/workspace/alpha')
-      expect(connectToSession).toHaveBeenCalledWith('session-alpha-new')
+      expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/alpha')
+      expect(createSession).not.toHaveBeenCalled()
     })
   })
 
-  it('keeps the project cwd in the composer when the post-create session refresh is stale', async () => {
-    const existingSession = makeSession(
-      'tmp-existing',
-      'Existing tmp session',
-      '/private/tmp',
-      new Date().toISOString(),
-    )
-    sessionsApiMock.create.mockResolvedValue({
-      sessionId: 'tmp-project-new',
-      workDir: '/private/tmp',
-    })
-    sessionsApiMock.list.mockResolvedValue({
-      sessions: [existingSession],
-      total: 1,
-    })
-    sessionsApiMock.getGitInfo.mockImplementation(() => new Promise(() => {}))
-    useSessionStore.setState({
-      sessions: [existingSession],
-      createSession: realCreateSession,
-      fetchSessions: realFetchSessions,
-    })
-
-    render(
-      <>
-        <Sidebar />
-        <ChatInput variant="hero" />
-      </>,
-    )
-
+  it('keeps the selected project in the draft without a post-create metadata race', () => {
+    const existing = makeSession('tmp-existing', 'Existing tmp session', '/private/tmp', new Date().toISOString())
+    useSessionStore.setState({ sessions: [existing] })
+    render(<Sidebar />)
     fireEvent.click(screen.getByRole('button', { name: 'New session in tmp' }))
-
-    expect(await screen.findByRole('button', { name: 'repoLaunch.launchLocation: tmp' }))
-      .toBeInTheDocument()
-    expect(sessionsApiMock.create).toHaveBeenCalledWith({ workDir: '/private/tmp' })
-    expect(useSessionStore.getState().sessions).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'tmp-project-new', workDir: '/private/tmp' }),
-    ]))
+    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/private/tmp')
+    expect(sessionsApiMock.create).not.toHaveBeenCalled()
+    expect(createSession).not.toHaveBeenCalled()
+    expect(useSessionStore.getState().sessions).toEqual([existing])
   })
 
   it('shows project header menus and starts a blank project session', async () => {
@@ -1123,8 +1141,8 @@ describe('Sidebar', () => {
     })
 
     await waitFor(() => {
-      expect(createSession).toHaveBeenCalledWith(undefined)
-      expect(connectToSession).toHaveBeenCalledWith('session-blank-project')
+      expect(useUIStore.getState().newSessionDraft?.workDir).toBe('')
+      expect(createSession).not.toHaveBeenCalled()
     })
   })
 
@@ -1156,7 +1174,7 @@ describe('Sidebar', () => {
     expect(header).toHaveAttribute('title', '/workspace/alpha')
 
     fireEvent.click(screen.getByRole('button', { name: 'New session in Custom alpha' }))
-    await waitFor(() => expect(createSession).toHaveBeenCalledWith('/workspace/alpha'))
+    await waitFor(() => expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/alpha'))
   })
 
   it('creates a named project at its resolved root while launching the selected source folder', async () => {
@@ -1816,7 +1834,7 @@ describe('Sidebar', () => {
     })
 
     await waitFor(() => {
-      expect(createSession).toHaveBeenCalledWith('/workspace/beta')
+      expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/beta')
       expect(screen.getByText('beta')).toBeInTheDocument()
     })
     expect(JSON.parse(window.localStorage.getItem(PROJECT_HIDDEN_STORAGE_KEY) ?? '[]')).toEqual([])
@@ -2028,7 +2046,7 @@ describe('Sidebar', () => {
     })
 
     await waitFor(() => {
-      expect(createSession).toHaveBeenCalledWith('D:\\workspace\\code\\cc-haha')
+      expect(useUIStore.getState().newSessionDraft?.workDir).toBe('D:\\workspace\\code\\cc-haha')
     })
     expect(JSON.parse(window.localStorage.getItem(PROJECT_HIDDEN_STORAGE_KEY) ?? '[]')).toEqual(['D:\\'])
     expect(desktopUiPreferencesApiMock.updateSidebarPreferences).not.toHaveBeenCalled()
@@ -2055,7 +2073,7 @@ describe('Sidebar', () => {
     })
 
     await waitFor(() => {
-      expect(createSession).toHaveBeenCalledWith('/workspace/repo')
+      expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/repo')
     })
   })
 
@@ -2117,22 +2135,13 @@ describe('Sidebar', () => {
     expect(idleMeta).not.toHaveClass('min-w-[78px]')
   })
 
-  it('shows a toast when session creation fails', async () => {
+  it('opens a draft even when server session creation is unavailable', () => {
     createSession.mockRejectedValue(new Error('boom'))
-
     render(<Sidebar />)
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
-    })
-
-    await waitFor(() => {
-      expect(addToast).toHaveBeenCalledWith({
-        type: 'error',
-        message: 'boom',
-      })
-    })
-
+    fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
+    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('')
+    expect(createSession).not.toHaveBeenCalled()
+    expect(addToast).not.toHaveBeenCalled()
     expect(useTabStore.getState().tabs).toEqual([])
   })
 

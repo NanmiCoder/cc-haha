@@ -51,6 +51,19 @@ describe('tabStore', () => {
     vi.mocked(sessionsApi.getSummary).mockReset().mockRejectedValue(new ApiError(404, 'Session not found'))
   })
 
+  it.each([undefined, 'lean'] as const)('restores legacy tabs with server-owned profile %s before activation', async (agentProfile) => {
+    const session = { ...historicalSummary(), ...(agentProfile ? { agentProfile } : {}) }
+    // Old tab fixtures contain no profile; the server is authoritative after a restart.
+    localStorage.setItem('cc-haha-open-tabs', JSON.stringify({ openTabs: [{ sessionId: session.id, title: session.title }], activeTabId: session.id }))
+    vi.mocked(sessionsApi.getSummary).mockResolvedValue(session)
+    await useTabStore.getState().restoreTabs()
+    const restored = useSessionStore.getState().sessions.find(item => item.id === session.id)
+    expect(restored?.agentProfile ?? 'standard').toBe(agentProfile ?? 'standard')
+    expect(useTabStore.getState().activeTabId).toBe(session.id)
+    useTabStore.getState().saveTabs()
+    expect(JSON.parse(localStorage.getItem('cc-haha-open-tabs')!).openTabs[0]).not.toHaveProperty('agentProfile')
+  })
+
   it.each([false, true])('preserves a confirmed model switch during tab restoration (historical=%s)', async (historical) => {
     const summary = historicalSummary()
     localStorage.setItem('cc-haha-open-tabs', JSON.stringify({

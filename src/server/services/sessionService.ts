@@ -104,6 +104,7 @@ export type SessionListItem = {
   workDir: string | null
   workDirExists: boolean
   workspaceState: SessionWorkspaceState
+  agentProfile?: 'standard' | 'lean'
   permissionMode?: string
   runtimeProviderId?: string | null
   runtimeModelId?: string
@@ -194,6 +195,7 @@ export type SessionLaunchInfo = {
   worktreeSession?: PersistedWorktreeSession | null
   transcriptMessageCount: number
   customTitle: string | null
+  agentProfile?: 'standard' | 'lean'
   permissionMode?: string
   runtimeProviderId?: string | null
   runtimeModelId?: string
@@ -473,6 +475,7 @@ type RawEntry = {
     timestamp?: string
   }
   customTitle?: string
+  agentProfile?: 'standard' | 'lean'
   permissionMode?: string
   worktreeSession?: PersistedWorktreeSession | null
   title?: string
@@ -1474,6 +1477,7 @@ export class SessionService {
         workDir: undefined as string | undefined, cwd: undefined as string | undefined,
         repository: undefined as PreparedSessionWorkspace['repository'] | undefined,
         worktreeSession: undefined as PersistedWorktreeSession | null | undefined,
+        agentProfile: 'standard' as 'standard' | 'lean',
         permissionMode: undefined as string | undefined,
         runtimeProviderId: undefined as string | null | undefined,
         runtimeModelId: undefined as string | undefined, effortLevel: undefined as string | undefined,
@@ -1496,6 +1500,7 @@ export class SessionService {
         const record = entry as Record<string, unknown>
         if (record.entrypoint === 'claude-desktop-team-worker') state.isTeamWorker = true
         if (entry.type === 'session-meta') {
+          if (entry.agentProfile === 'standard' || entry.agentProfile === 'lean') state.agentProfile = entry.agentProfile
           if (typeof record.workDir === 'string') state.workDir = normalizeDriveRootPathForPlatform(record.workDir)
           state.permissionMode = this.resolvePermissionModeFromEntries([entry]) ?? state.permissionMode
           if (record.runtimeProviderId === null || typeof record.runtimeProviderId === 'string') state.runtimeProviderId = record.runtimeProviderId as string | null
@@ -1522,6 +1527,7 @@ export class SessionService {
         if (completeLine) apply(summary, entry as RawEntry)
       })
       const shared = (state: typeof summary) => ({
+        agentProfile: state.agentProfile,
         ...(state.permissionMode ? { permissionMode: state.permissionMode } : {}),
         ...(state.runtimeProviderId !== undefined ? { runtimeProviderId: state.runtimeProviderId } : {}),
         ...(state.runtimeModelId ? { runtimeModelId: state.runtimeModelId } : {}),
@@ -3371,6 +3377,7 @@ export class SessionService {
     let latestCwd: string | null = null
     let repository: PreparedSessionWorkspace['repository'] | undefined
     let worktreeSession: PersistedWorktreeSession | null | undefined
+    let agentProfile: 'standard' | 'lean' = 'standard'
     let permissionMode: string | undefined
     let runtimeProviderId: string | null | undefined
     let runtimeModelId: string | undefined
@@ -3408,6 +3415,7 @@ export class SessionService {
       }
 
       if (entry.type === 'session-meta') {
+        if (entry.agentProfile === 'standard' || entry.agentProfile === 'lean') agentProfile = entry.agentProfile
         const record = entry as Record<string, unknown>
         if (typeof record.workDir === 'string') {
           latestWorkDir = normalizeDriveRootPathForPlatform(record.workDir)
@@ -3554,6 +3562,7 @@ export class SessionService {
       worktreeSession,
       transcriptMessageCount,
       customTitle,
+      agentProfile,
       permissionMode,
       ...(runtimeProviderId !== undefined ? { runtimeProviderId } : {}),
       ...(runtimeModelId ? { runtimeModelId } : {}),
@@ -4009,6 +4018,7 @@ export class SessionService {
       workDir,
       workDirExists,
       workspaceState,
+      agentProfile: row.agentProfile ?? 'standard',
       permissionMode: row.permissionMode,
       ...(row.runtimeProviderId !== undefined
         ? { runtimeProviderId: row.runtimeProviderId }
@@ -4035,6 +4045,7 @@ export class SessionService {
       'workDir',
       'workDirExists',
       'workspaceState',
+      'agentProfile',
       'permissionMode',
       'runtimeProviderId',
       'runtimeModelId',
@@ -4183,6 +4194,7 @@ export class SessionService {
           workDir,
           workDirExists,
           workspaceState,
+          agentProfile: summary.agentProfile ?? 'standard',
           permissionMode: summary.permissionMode,
           ...(summary.runtimeProviderId !== undefined
             ? { runtimeProviderId: summary.runtimeProviderId }
@@ -4259,6 +4271,7 @@ export class SessionService {
       : (await this.appendSubagentToolMessages(projectDir, sessionId, rootMessages)).messages
     const title = this.extractTitle(entries)
     const workDir = this.resolveWorkDirFromEntries(entries, projectDir)
+    const agentProfile = entries.filter(e => e.type === 'session-meta' && (e.agentProfile === 'standard' || e.agentProfile === 'lean')).at(-1)?.agentProfile ?? 'standard'
     const permissionMode = this.resolvePermissionModeFromEntries(entries)
     const projectRoot = await this.resolveProjectRootFromEntries(entries, workDir, projectDir)
     const worktreeSession = this.resolveWorktreeSessionFromEntries(entries)
@@ -4289,6 +4302,7 @@ export class SessionService {
       workDir,
       workDirExists,
       workspaceState,
+      agentProfile,
       permissionMode,
       messages,
     }
@@ -4752,7 +4766,9 @@ export class SessionService {
     workDir?: string,
     repositoryOptions?: CreateSessionRepositoryOptions,
     permissionMode?: string,
-  ): Promise<{ sessionId: string; workDir: string }> {
+    agentProfile: 'standard' | 'lean' = 'standard',
+  ): Promise<{ sessionId: string; workDir: string; agentProfile: 'standard' | 'lean' }> {
+    if (agentProfile === 'lean' && permissionMode === 'plan') throw new Error('Plan mode is unavailable in lean sessions. Choose another permission mode.')
     // Default to user home directory when no workDir specified
     const persist = this.shouldPersistSession()
     const resolvedWorkDir = workDir || os.homedir()
@@ -4803,6 +4819,7 @@ export class SessionService {
       type: 'session-meta',
       isMeta: true,
       workDir: absWorkDir,
+      agentProfile,
       repository: preparedWorkspace.repository,
       ...(permissionMode && VALID_SESSION_PERMISSION_MODES.has(permissionMode)
         ? { permissionMode }
@@ -4814,6 +4831,7 @@ export class SessionService {
       filePath, projectDir: sanitized, workDir: absWorkDir,
       repository: preparedWorkspace.repository, transcriptMessageCount: 0,
       customTitle: null,
+      agentProfile,
       ...(permissionMode && VALID_SESSION_PERMISSION_MODES.has(permissionMode)
         ? { permissionMode } : {}),
     })
@@ -4823,7 +4841,7 @@ export class SessionService {
     this.knownSessionKeys.add(this.memorySessionKey(sessionId))
     this.invalidateSessionListCache()
 
-    return { sessionId, workDir: absWorkDir }
+    return { sessionId, workDir: absWorkDir, agentProfile }
   }
 
   /**
@@ -5051,10 +5069,14 @@ export class SessionService {
       // record at a time so a large session is not parsed into one array.
       const preserved = { workDir: undefined as string | undefined, cwd: undefined as string | undefined,
         repository: undefined as PreparedSessionWorkspace['repository'] | undefined,
+        agentProfile: 'standard' as 'standard' | 'lean',
+        extra: {} as Record<string, unknown>,
         permissionMode: undefined as string | undefined }
       await streamBoundedHistory(found.filePath, entry => {
         const record = entry as RawEntry
         if (record.type === 'session-meta') {
+          Object.assign(preserved.extra, record)
+          if (record.agentProfile === 'standard' || record.agentProfile === 'lean') preserved.agentProfile = record.agentProfile
           if (typeof (record as Record<string, unknown>).workDir === 'string') preserved.workDir = (record as Record<string, unknown>).workDir as string
           if (typeof record.permissionMode === 'string' && VALID_SESSION_PERMISSION_MODES.has(record.permissionMode)) preserved.permissionMode = record.permissionMode
         }
@@ -5088,6 +5110,8 @@ export class SessionService {
       }
 
       const metaEntry = {
+        ...preserved.extra,
+        agentProfile: preserved.agentProfile,
         type: 'session-meta',
         isMeta: true,
         workDir,
@@ -5160,6 +5184,7 @@ export class SessionService {
     }
     const persist = this.shouldPersistSession()
     const storedInfo = await this.getSessionLaunchInfo(sessionId)
+    if (storedInfo?.agentProfile === 'lean' && metadata.permissionMode === 'plan') throw new Error('Plan mode is unavailable in lean sessions. Choose another permission mode.')
     if (storedInfo) this.knownSessionKeys.add(this.memorySessionKey(sessionId))
     const workDir = normalizeDriveRootPathForPlatform(metadata.workDir)
     const projectDir = this.sanitizePath(workDir)
@@ -5256,6 +5281,7 @@ export class SessionService {
       type: 'session-meta',
       isMeta: true,
       workDir: normalizedWorkDir,
+      agentProfile: storedInfo?.agentProfile ?? 'standard',
       repository,
       ...(metadata.permissionMode && VALID_SESSION_PERMISSION_MODES.has(metadata.permissionMode)
         ? { permissionMode: metadata.permissionMode }

@@ -33,6 +33,7 @@ export async function handleSideChatsRoute(req: Request, parentSessionId: string
     return response(existing)
   }
   const info = await sessionService.getSessionLaunchInfo(parentSessionId)
+  if (info?.agentProfile === 'lean') throw ApiError.conflict('Side chats are unavailable in lean sessions')
   if (!info) throw ApiError.notFound('Parent session not found')
   // Capture a stable transcript boundary. The CLI truncates at this UUID even
   // if the parent appends more messages before the child starts.

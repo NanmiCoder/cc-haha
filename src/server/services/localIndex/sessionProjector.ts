@@ -45,7 +45,8 @@ import type {
 //    persisted per-model dollars.
 // 10: project the explicit per-session ChatGPT OAuth Fast selection.
 // 11: Haiku 5.5 gained (prompt-length tiered) pricing; rebuild the persisted per-model dollars.
-export const SESSION_SUMMARY_PARSER_VERSION = 11
+// 12: project the immutable conversation agent profile; legacy sessions use standard.
+export const SESSION_SUMMARY_PARSER_VERSION = 12
 
 export type SessionSourceCandidate = {
   path: string
@@ -164,7 +165,7 @@ const UNPARSEABLE_RECORD_TEXT = '{'
 // are skipped while the parser still validates them.
 const SKELETON_ROOT_SCALARS = new Set([
   'type', 'subtype', 'content', 'isMeta', 'isSidechain', 'entrypoint', 'timestamp',
-  'cwd', 'workDir', 'permissionMode', 'runtimeProviderId', 'runtimeModelId',
+  'cwd', 'workDir', 'permissionMode', 'agentProfile', 'runtimeProviderId', 'runtimeModelId',
   'effortLevel', 'openAIFastMode', 'customTitle', 'aiTitle', 'uuid', 'parentUuid', 'messageId',
   'parent_tool_use_id', 'requestId', 'version', 'sessionId', 'timeSavedMs',
 ])
@@ -845,8 +846,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
           transcript_path, session_id, project_path, title, created_at,
           modified_at, modified_at_ms, message_count, work_dir, repository_json,
           worktree_session_json, permission_mode, runtime_provider_id,
-          runtime_provider_present, runtime_model_id, effort_level, is_team_worker, openai_fast_mode
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          runtime_provider_present, runtime_model_id, effort_level, is_team_worker, openai_fast_mode, agent_profile
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(transcript_path) DO UPDATE SET
           session_id = excluded.session_id,
           project_path = excluded.project_path,
@@ -864,7 +865,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
           runtime_model_id = excluded.runtime_model_id,
           effort_level = excluded.effort_level,
           is_team_worker = excluded.is_team_worker,
-          openai_fast_mode = excluded.openai_fast_mode
+          openai_fast_mode = excluded.openai_fast_mode,
+          agent_profile = excluded.agent_profile
       `,
       bundle.candidate.path,
       bundle.candidate.sessionId,
@@ -885,7 +887,8 @@ export function createSessionProjector(options: SessionProjectorOptions): Sessio
       summary.runtimeModelId ?? null,
       summary.effortLevel ?? null,
       summary.isTeamWorker ? 1 : 0,
-      summary.openAIFastMode === undefined ? null : Number(summary.openAIFastMode))
+      summary.openAIFastMode === undefined ? null : Number(summary.openAIFastMode),
+      summary.agentProfile ?? 'standard')
 
       writeBackfillState(
         writer,

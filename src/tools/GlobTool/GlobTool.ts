@@ -14,7 +14,7 @@ import { expandPath, toRelativePath } from '../../utils/path.js'
 import { checkReadPermissionForTool } from '../../utils/permissions/filesystem.js'
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
-import { DESCRIPTION, GLOB_TOOL_NAME } from './prompt.js'
+import { getDescription, GLOB_TOOL_NAME } from './prompt.js'
 import {
   getToolUseSummary,
   renderToolResultMessage,
@@ -59,7 +59,7 @@ export const GlobTool = buildTool({
   searchHint: 'find files by name pattern or wildcard',
   maxResultSizeChars: 100_000,
   async description() {
-    return DESCRIPTION
+    return getDescription()
   },
   userFacingName,
   getToolUseSummary,
@@ -141,7 +141,7 @@ export const GlobTool = buildTool({
     )
   },
   async prompt() {
-    return DESCRIPTION
+    return getDescription()
   },
   renderToolUseMessage,
   renderToolUseErrorMessage,

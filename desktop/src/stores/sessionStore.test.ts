@@ -906,6 +906,18 @@ describe('sessionStore', () => {
     expect(useSessionStore.getState().indexStatus).toMatchObject({ mode: 'shadow', state: 'building' })
   })
 
+  it('sends lean at creation and retains the server profile after refresh', async () => {
+    createMock.mockResolvedValue({ sessionId: 'lean-session' })
+    listMock.mockImplementation(() => new Promise(() => {}))
+    await useSessionStore.getState().createSession('/workspace/repo', { agentProfile: 'lean' })
+    expect(createMock).toHaveBeenCalledWith({ workDir: '/workspace/repo', agentProfile: 'lean' })
+    const created = useSessionStore.getState().sessions.find(s => s.id === 'lean-session')!
+    expect(created.agentProfile).toBe('lean')
+    listMock.mockResolvedValue({ sessions: [created], total: 1 })
+    await useSessionStore.getState().fetchSessions()
+    expect(useSessionStore.getState().sessions[0]?.agentProfile).toBe('lean')
+  })
+
   it('forwards direct branch switch repository options when creating a session', async () => {
     createMock.mockResolvedValue({ sessionId: 'session-branch-switch', workDir: '/workspace/repo' })
     listMock.mockImplementation(() => new Promise(() => {}))

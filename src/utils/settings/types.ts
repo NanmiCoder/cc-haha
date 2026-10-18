@@ -470,6 +470,10 @@ export const SettingsSchema = lazySchema(() =>
         .nullable()
         .optional()
         .describe('Maximum concurrent ordinary subagents in one CLI process. Missing or null means unlimited.'),
+      leanModeEnabled: z
+        .boolean()
+        .optional()
+        .describe('Show the Standard / Lean selector for new desktop chats. Default: false. Existing sessions keep their profile.'),
       agentTeamsEnabled: z
         .boolean()
         .optional()

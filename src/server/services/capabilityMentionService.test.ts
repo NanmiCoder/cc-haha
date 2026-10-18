@@ -112,3 +112,14 @@ describe('capability mention model text readers', () => {
     expect(deriveTitle(`${skillText} 写周报`)).toBe('/quoted"name 写周报')
   })
 })
+
+
+test('lean discovery hides known fork, MCP and plugin containers while preserving inline skills', () => {
+  const owner = plugin('fixture', { mcpServers: { remote: { type: 'http', url: 'https://example.invalid' } } })
+  const result = buildCapabilityMentions({ agentProfile: 'lean', enabledPlugins: [owner], commands: [
+    skill('inline'), skill('forked', { context: 'fork' }), skill('remote', { source: 'mcp' }),
+    pluginSkill('fixture:inline', owner),
+  ] })
+  expect(result.skills.map(item => item.name).sort()).toEqual(['fixture:inline', 'inline'])
+  expect(result.plugins).toEqual([])
+})

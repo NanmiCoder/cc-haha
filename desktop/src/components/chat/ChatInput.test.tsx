@@ -1,3 +1,4 @@
+import { useUIStore } from '@/stores/uiStore'
 import { getComposerViewForTesting } from './MentionComposer'
 import { useTeamPlanStore } from '@/stores/teamPlanStore'
 import { useTeamStore } from '@/stores/teamStore'
@@ -646,7 +647,7 @@ describe('ChatInput file mentions', () => {
     expect(getComposerText()).toBe('keep this draft')
   })
 
-  it('keeps the unsent draft when switching project on an empty active session', async () => {
+  it.each(['standard', 'lean'] as const)('keeps the unsent draft and %s profile when switching project on an empty active session', async (agentProfile) => {
     installElectronFileHost()
     mocks.dialogOpen.mockResolvedValueOnce('/other')
     mocks.create.mockResolvedValueOnce({ sessionId: 'session-project-switch', workDir: '/other' })
@@ -659,6 +660,7 @@ describe('ChatInput file mentions', () => {
     useSessionStore.setState({
       sessions: [{
         id: sessionId,
+        agentProfile,
         title: 'Project',
         createdAt: '2026-05-01T00:00:00.000Z',
         modifiedAt: '2026-05-01T00:00:00.000Z',
@@ -704,7 +706,7 @@ describe('ChatInput file mentions', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Choose a different folder/ }))
 
     await waitFor(() => {
-      expect(mocks.create).toHaveBeenCalledWith({ workDir: '/other' })
+      expect(mocks.create).toHaveBeenCalledWith({ workDir: '/other', ...(agentProfile === 'lean' ? { agentProfile } : {}) })
     })
     await waitFor(() => {
       expect(useTabStore.getState().activeTabId).toBe('session-project-switch')
@@ -853,7 +855,7 @@ describe('ChatInput file mentions', () => {
     expect(parentEditor.textContent).toBe('parent draft')
     expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
     expect(container.querySelector('[data-session-id="side-scoped"]')).toBeInTheDocument()
-    expect(mocks.listReferences).toHaveBeenCalledWith('/child', undefined)
+    expect(mocks.listReferences).toHaveBeenCalledWith('/child', undefined, undefined)
   })
 
   it('accepts asynchronous image paste in an explicit child while the global tab stays on its parent', async () => {
@@ -866,6 +868,40 @@ describe('ChatInput file mentions', () => {
     fireEvent.paste(editor, { clipboardData: { files: [], getData: () => '', items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] } })
     await waitFor(() => expect(within(shells[1] as HTMLElement).getByRole('img')).toBeInTheDocument())
     expect(within(shells[0] as HTMLElement).queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('requires a permission change before sending a restored lean plan session', () => {
+    useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const, permissionMode: 'plan' })) }))
+    render(<ChatInput compact />)
+    setComposerText('Fix the calculation', 19)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
+    expect(getComposerText()).toBe('Fix the calculation')
+    expect(useUIStore.getState().toasts.at(-1)?.message).toContain('Choose another permission mode')
+    expect(useSessionStore.getState().sessions[0]?.permissionMode).toBe('plan')
+  })
+
+  it('sends an absolute file path as ordinary input in lean mode', async () => {
+    useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const })) }))
+    render(<ChatInput compact />)
+    setComposerText('/tmp/cart.js fix the total', 26)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    await waitFor(() => expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' })))
+  })
+
+  it('restores the immutable lean badge with lean creation disabled and rejects the typed side-chat shortcut', () => {
+    useSettingsStore.setState({ leanModeEnabled: false })
+    useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const })) }))
+    render(<ChatInput compact />)
+    expect(screen.getByText('Lean · experimental')).toBeInTheDocument()
+    expect(mocks.listReferences).toHaveBeenCalledWith('/repo', undefined, 'lean')
+    expect(screen.queryByRole('button', { name: /^Agent mode:/ })).not.toBeInTheDocument()
+    setComposerText('/btw Why this change?', 21)
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.sideOpen).not.toHaveBeenCalled()
+    expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
+    expect(getComposerText()).toBe('/btw Why this change?')
+    expect(useUIStore.getState().toasts.some(toast => toast.message === 'This command is unavailable in lean mode. Start a standard chat to use it.')).toBe(true)
   })
 
   it.each(['idle', 'streaming'] as const)('routes /btw immediately while %s without main send or queue', async (chatState) => {
@@ -2185,9 +2221,9 @@ describe('ChatInput file mentions', () => {
     act(() => useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: null, modelId: 'opus' }))
     try {
       render(<ChatInput compact />)
-      await waitFor(() => expect(mocks.listReferences).toHaveBeenLastCalledWith(expect.anything(), 'claude-official'))
+      await waitFor(() => expect(mocks.listReferences).toHaveBeenLastCalledWith(expect.anything(), 'claude-official', undefined))
       act(() => useSessionRuntimeStore.getState().setSelection(sessionId, { providerId: 'grok-official', modelId: 'grok-4.7' }))
-      await waitFor(() => expect(mocks.listReferences).toHaveBeenLastCalledWith(expect.anything(), 'grok-official'))
+      await waitFor(() => expect(mocks.listReferences).toHaveBeenLastCalledWith(expect.anything(), 'grok-official', undefined))
       setComposerText('@imagegen', 9)
       fireEvent.click(await screen.findByRole('option', { name: /imagegen/i }))
       await waitFor(() => expect(document.querySelector('[data-mention-kind="skill"]')).toBeInTheDocument())

@@ -101,6 +101,13 @@ describe('PermissionModeSelector', () => {
     useUIStore.setState({ toasts: [] })
   })
 
+  it('hides plan for lean drafts while preserving other permission options', () => {
+    render(<PermissionModeSelector lean value="default" onChange={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    expect(screen.queryByRole('menuitem', { name: /Plan mode/ })).not.toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Auto accept edits/ })).toBeInTheDocument()
+  })
+
   it('explicit child scope ignores a busy selected parent and updates only the child', () => {
     const update = vi.fn()
     useTabStore.setState({ activeTabId: 'parent' })

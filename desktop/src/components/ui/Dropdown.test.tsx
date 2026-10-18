@@ -181,3 +181,53 @@ describe('Dropdown', () => {
     expect(screen.getByRole('listbox').className).toContain('z-[var(--z-dropdown)]')
   })
 })
+
+it('portals a viewport-clamped menu while preserving selection and outside dismissal', () => {
+  const originalWidth = window.innerWidth
+  const rect = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    return (this.getAttribute('role') === 'listbox'
+      ? { width: 300, height: 120, top: 0, bottom: 120, left: 0, right: 300 }
+      : { width: 60, height: 28, top: 400, bottom: 428, left: 80, right: 140 }) as DOMRect
+  })
+  Object.defineProperty(window, 'innerWidth', { configurable: true, value: 375 })
+  try {
+    const change = vi.fn()
+    const { container, unmount } = render(<Dropdown portal placement="top" align="right" width={300}
+      items={ITEMS} value="sonnet" onChange={change} label="Model" trigger={<Button>Model</Button>} />)
+    open()
+    const menu = screen.getByRole('listbox')
+    expect(container).not.toContainElement(menu)
+    expect(menu).toHaveStyle({ position: 'fixed', left: '8px', visibility: 'visible' })
+    fireEvent.pointerDown(screen.getByRole('option', { name: /Opus/ }))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('option', { name: /Opus/ }))
+    expect(change).toHaveBeenCalledWith('opus')
+    expect(screen.getByRole('button', { name: 'Model' })).toHaveFocus()
+    open()
+    fireEvent.pointerDown(document.body)
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    open()
+    fireEvent.scroll(screen.getByRole('listbox'))
+    expect(screen.getByRole('listbox')).toBeInTheDocument()
+    fireEvent.scroll(window)
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    open()
+    fireEvent(window, new Event('resize'))
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+    unmount()
+  } finally {
+    rect.mockRestore()
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: originalWidth })
+  }
+})
+
+it.each([
+  [false, 'listbox'], [true, 'listbox'], [false, 'button'], [true, 'button'],
+] as const)('closes a portal on Tab (shift=%s, target=%s) without preventing native focus navigation', (shiftKey, target) => {
+  render(<Dropdown portal items={ITEMS} value="sonnet" onChange={() => {}} label="Model" trigger={<Button>Model</Button>} />)
+  open()
+  const allowed = fireEvent.keyDown(screen.getByRole(target), { key: 'Tab', shiftKey })
+  expect(allowed).toBe(true)
+  expect(screen.queryByRole('listbox')).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Model' })).toHaveFocus()
+ })

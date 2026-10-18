@@ -6408,6 +6408,16 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByRole('button', { name: 'Rewind to here' })).toBeNull()
   })
 
+  it('does not offer transcript branching for a restored lean conversation', () => {
+    useSessionStore.setState({ sessions: [{ id: ACTIVE_TAB, agentProfile: 'lean', title: 'Lean', createdAt: '', modifiedAt: '', messageCount: 2, projectPath: '/tmp/project', workDir: '/tmp/project', workDirExists: true }] })
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [
+      { id: 'lean-u', transcriptMessageId: 'tu', type: 'user_text', content: 'Question', timestamp: 1 },
+      { id: 'lean-a', transcriptMessageId: 'ta', type: 'assistant_text', content: 'Answer', timestamp: 2 },
+    ] }) } })
+    render(<MessageList />)
+    expect(screen.queryByRole('button', { name: 'Fork a new conversation' })).toBeNull()
+  })
+
   it('branches from completed transcript-backed chat messages using the original transcript id', async () => {
     const branchSession = vi.fn().mockResolvedValue({
       sessionId: 'branched-session-1',

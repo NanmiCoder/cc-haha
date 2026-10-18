@@ -1,3 +1,4 @@
+import { sessionService } from './sessionService.js'
 import { z } from 'zod/v4'
 import { teamPlanRuntimeSchema, type TeamPlanAction, type TeamPlanIdentity, type TeamPlanRecord } from '../../shared/teamPlan.js'
 import { approveTeamPlan, findTeamPlanForSession, mutateTeamPlan, readTeamPlan, replaceTeamPlan, TeamPlanError } from '../../utils/swarm/teamPlanStore.js'
@@ -52,6 +53,7 @@ export class TeamPlanService {
   async update(teamName: string, identity: TeamPlanIdentity, patch: { members?: Array<{ id: string; agentType?: string; runtime?: TeamPlanRecord['leaderRuntime'] }>; tasks?: Array<{ id: string; ownerId: string }> }): Promise<TeamPlanRecord> {
     const current = await readTeamPlan(teamName)
     if (!current) throw new TeamPlanError('Plan not found', 404)
+    if ((await sessionService.getSessionLaunchInfo(current.sessionId))?.agentProfile === 'lean') throw new TeamPlanError('Agent teams are unavailable in lean sessions', 400)
     for (const member of patch.members ?? []) if (!current.members.some(item => item.id === member.id)) throw new TeamPlanError('Unknown member', 400)
     for (const task of patch.tasks ?? []) if (!current.tasks.some(item => item.id === task.id)) throw new TeamPlanError('Unknown task', 400)
     const members = current.members.map(member => {
@@ -89,6 +91,7 @@ export class TeamPlanService {
   async approve(teamName: string, action: TeamPlanAction, options: { startLeader?: (sessionId: string) => Promise<void> } = {}): Promise<TeamPlanRecord> {
     const current = await readTeamPlan(teamName)
     if (!current) throw new TeamPlanError('Plan not found', 404)
+    if ((await sessionService.getSessionLaunchInfo(current.sessionId))?.agentProfile === 'lean') throw new TeamPlanError('Agent teams are unavailable in lean sessions', 400)
     // Idempotent replay still goes through store identity/incarnation checks.
     let validated = current
     if (current.approvedSnapshot?.requestId !== action.requestId) {

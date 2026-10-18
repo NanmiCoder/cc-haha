@@ -346,6 +346,15 @@ describe('ActiveSession task polling', () => {
     expect(openSideChat).toHaveBeenCalledWith(id)
   })
 
+  it('does not offer side chats for restored lean sessions', () => {
+    const id = 'lean-parent'
+    useTabStore.setState({ activeTabId: id, tabs: [{ sessionId: id, title: 'Main', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({ sessions: [{ id, agentProfile: 'lean', title: 'Main', messageCount: 1, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }] })
+    useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true } } })
+    render(<ActiveSession sessionId={id} />)
+    expect(screen.queryByRole('button', { name: 'Side chat' })).not.toBeInTheDocument()
+  })
+
   it('can hide a mobile side chat without destroying its temporary tab', () => {
     viewportMocks.isMobile = true
     const id = 'mobile-side-parent'

@@ -577,6 +577,7 @@ export class ConversationService {
     shouldResume: boolean,
     options?: SessionStartOptions,
     repository?: PreparedSessionWorkspace['repository'],
+    agentProfile: 'standard' | 'lean' = 'standard',
   ): string[] {
     const side = getSideChat(sessionId)
     const dangerousMode = process.env.CLAUDE_DANGEROUS_MODE === '1'
@@ -592,6 +593,7 @@ export class ConversationService {
 
     return this.resolveCliArgs([
       '--print',
+      '--agent-profile', agentProfile,
       '--verbose',
       '--sdk-url',
       sdkUrl,
@@ -647,7 +649,13 @@ export class ConversationService {
     if (isSideChatId(sessionId) && (!side || side.closed || side.started)) {
       throw new ConversationStartupError('This temporary side chat has expired. Open a new side chat.', 'SESSION_DELETED')
     }
+    if (options?.teamWorker && (await sessionService.getSessionLaunchInfo(options.teamWorker.parentSessionId))?.agentProfile === 'lean') {
+      throw new ConversationStartupError('Agent teams are unavailable in lean sessions', 'LEAN_CAPABILITY_UNAVAILABLE')
+    }
     const launchInfo = options?.teamWorker ? null : await sessionService.getSessionLaunchInfo(sessionId)
+    if (launchInfo?.agentProfile === 'lean' && (options?.permissionMode ?? launchInfo.permissionMode) === 'plan') {
+      throw new ConversationStartupError('Plan mode is unavailable in lean sessions. Choose another permission mode before continuing.', 'LEAN_CAPABILITY_UNAVAILABLE')
+    }
     const shouldResume = options?.teamWorker
       ? options.teamWorker.resume === true && !!await sessionService.findSessionFile(sessionId)
       : !!launchInfo && launchInfo.transcriptMessageCount > 0
@@ -733,6 +741,7 @@ export class ConversationService {
       shouldResume,
       options,
       launchRepository,
+      launchInfo?.agentProfile ?? 'standard',
     )
 
     console.log(
@@ -1150,6 +1159,7 @@ export class ConversationService {
   }
 
   async setPermissionMode(sessionId: string, mode: string, timeoutMs = 10_000): Promise<boolean> {
+    if (mode === 'plan' && (await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean') throw new Error('Plan mode is unavailable in lean sessions. Choose another permission mode.')
     if (!this.sessions.has(sessionId)) return false
     this.trackPendingPermissionModeChange(sessionId, mode, 1)
 

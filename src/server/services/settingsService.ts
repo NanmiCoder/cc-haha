@@ -112,6 +112,12 @@ export class SettingsService {
     return user.autoUpdateEnabled !== false
   }
 
+  /** Forward read migration: the desktop experiment is opt-in for legacy files. */
+  async getLeanModeEnabled(settings?: Record<string, unknown>): Promise<boolean> {
+    const user = settings ?? await this.getUserSettings()
+    return user.leanModeEnabled === true
+  }
+
   /** 旧设置缺少并发上限时按不限读取，不自动改写用户文件。 */
   async getMaxConcurrentSubagents(settings?: Record<string, unknown>): Promise<number | null> {
     const user = settings ?? await this.getUserSettings()
@@ -204,6 +210,9 @@ export class SettingsService {
 
   /** 更新用户级设置（顶层浅合并，并保留桌面终端的未知子字段） */
   async updateUserSettings(settings: Record<string, unknown>): Promise<void> {
+    if (Object.hasOwn(settings, 'leanModeEnabled') && typeof settings.leanModeEnabled !== 'boolean') {
+      throw ApiError.badRequest('leanModeEnabled must be a boolean')
+    }
     if (Object.hasOwn(settings, 'autoUpdateEnabled') && typeof settings.autoUpdateEnabled !== 'boolean') {
       throw ApiError.badRequest('autoUpdateEnabled must be a boolean')
     }

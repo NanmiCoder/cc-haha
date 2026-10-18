@@ -46,6 +46,7 @@ import { dirname, parse, relative, resolve } from 'path'
 import { getCwd } from 'src/utils/cwd.js'
 import { getViewedTeammateTask } from '../state/selectors.js'
 import { logError } from './log.js'
+import { getAgentProfile } from './agentProfile.js'
 import { logAntError } from './debug.js'
 import { isENOENT, toError } from './errors.js'
 import type { DiagnosticFile } from '../services/diagnosticTracking.js'
@@ -1030,7 +1031,34 @@ export async function getAttachments(
   ].filter(a => a !== undefined && a !== null)
 }
 
+// These producers advertise or access capabilities absent from the lean tool
+// pool. Skip before invoking loaders: filtering results afterwards can still
+// connect to MCP, discover skills, or consume teammate messages.
+const peripheralAttachmentProducers = new Set([
+  'plan_mode',
+  'plan_mode_exit',
+  'mcp_resources',
+  'agent_mentions',
+  'skill_discovery',
+  'deferred_tools_delta',
+  'agent_listing_delta',
+  'mcp_instructions_delta',
+  'companion_intro',
+  'workflow_keyword_request',
+  'ultra_effort_enter',
+  'workflow_size_guideline_change',
+  'dynamic_skill',
+  'skill_listing',
+  'todo_reminders',
+  'teammate_mailbox',
+  'team_context',
+  'agent_pending_messages',
+])
+
 async function maybe<A>(label: string, f: () => Promise<A[]>): Promise<A[]> {
+  if (getAgentProfile() === 'lean' && peripheralAttachmentProducers.has(label)) {
+    return []
+  }
   const startTime = Date.now()
   try {
     const result = await f()
@@ -1549,13 +1577,14 @@ function getWorkflowSizeGuidelineAttachment(
 }
 
 /**
- * Test seam for the two workflow attachment producers.
+ * Test seams for attachment producers and their profile-aware dispatcher.
  *
- * Both are pure given their inputs, but they sit behind `getAttachments()`,
+ * These sit behind `getAttachments()`,
  * which needs a full ToolUseContext and a live session. Exposing them keeps
  * the tests on the real functions instead of a re-implementation.
  */
 export const getAttachmentsForTesting = {
+  produce: maybe,
   atMentionedFiles: (input: string, toolUseContext: ToolUseContext) =>
     processAtMentionedFiles(input, toolUseContext),
   workflowKeyword: (input: string | null, opts: { suppressed: boolean }) =>
