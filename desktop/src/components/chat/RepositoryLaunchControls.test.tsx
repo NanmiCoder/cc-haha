@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { act, useState, type ComponentProps } from 'react'
+import { act, createRef, useState, type ComponentProps, type Ref, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { create } from 'zustand'
@@ -73,6 +73,7 @@ vi.mock('../../i18n', () => ({
     'repoLaunch.checkedOutWarning': 'Branch is checked out elsewhere',
     'repoLaunch.checkedOutWarningCompact': 'Branch already checked out',
     'repoLaunch.currentBranch': 'Current branch',
+    'repoLaunch.detachedHead': 'Detached HEAD',
     'repoLaunch.dirtyWarning': 'Dirty worktree',
     'repoLaunch.dirtyWarningCompact': 'Uncommitted changes',
     'repoLaunch.launchLocation': 'Location',
@@ -97,6 +98,8 @@ vi.mock('../../i18n', () => ({
     'repoLaunch.selectBranch': 'Select branch',
     'repoLaunch.selectWorktree': 'Select worktree mode',
     'repoLaunch.worktreeBadge': 'Isolated',
+    'repoLaunch.worktreeCurrentDesc': 'Changes land on {branch}',
+    'repoLaunch.worktreeIsolatedDesc': 'Based on {branch}',
     'repoLaunch.worktreeCurrent': 'Current worktree',
     'repoLaunch.worktreeCurrentHint': 'Work in this folder',
     'repoLaunch.worktreeIsolated': 'Isolated worktree',
@@ -109,7 +112,7 @@ vi.mock('../../i18n', () => ({
   },
 }))
 
-import { RepositoryLaunchControls } from './RepositoryLaunchControls'
+import { RepositoryLaunchControls, type RepositoryLaunchControlsHandle } from './RepositoryLaunchControls'
 import {
   captureProjectDisplayNameHydrationRevision,
   hydrateProjectDisplayNames,
@@ -169,6 +172,19 @@ const contextWithCreatedBranch = {
     },
   ],
 }
+
+/** The same repository after `git switch feature/h5` in a terminal. */
+const movedToFeatureContext = {
+  ...okRepositoryContext,
+  currentBranch: 'feature/h5',
+  headCommit: OTHER_COMMIT,
+  branches: okRepositoryContext.branches.map((candidate) => ({
+    ...candidate,
+    current: candidate.name === 'feature/h5',
+  })),
+}
+
+const noop = () => {}
 
 /** Rejection shaped like the API client's `ApiError`, which carries the body. */
 function apiError(code: string, message = 'boom') {
@@ -693,6 +709,277 @@ describe('RepositoryLaunchControls', () => {
     // lone directory row — the menu opens on the directory list instead.
     expect(await screen.findByTestId('recent-projects-panel')).toBeInTheDocument()
     expect(screen.queryByRole('menu', { name: 'Location' })).not.toBeInTheDocument()
+  })
+
+  /**
+   * The new-session draft now stays mounted for hours. A branch chosen for the
+   * user when it was first read used to be launched later as if they had asked
+   * for it, and the server switches the checkout to a launch branch that is
+   * not the current one — silently putting the repository back where it was.
+   */
+  describe('a launch branch that may have gone stale', () => {
+    function RetainedHarness({
+      visible = true,
+      handleRef,
+      useWorktree = false,
+      onBranchAutomaticChange,
+    }: {
+      visible?: boolean
+      handleRef?: Ref<RepositoryLaunchControlsHandle>
+      useWorktree?: boolean
+      onBranchAutomaticChange?: (automatic: boolean) => void
+    }) {
+      const [branch, setBranch] = useState<string | null>(null)
+      return (
+        <RepositoryLaunchControls
+          ref={handleRef}
+          workDir="/repo"
+          onWorkDirChange={noop}
+          branch={branch}
+          onBranchChange={setBranch}
+          useWorktree={useWorktree}
+          onUseWorktreeChange={noop}
+          visible={visible}
+          onBranchAutomaticChange={onBranchAutomaticChange}
+          placement="outside"
+        />
+      )
+    }
+
+    /** A checkout standing on a commit, not on a branch (`git checkout <sha>`, a tag, a PR review). */
+    const detachedContext = {
+      ...okRepositoryContext,
+      currentBranch: null,
+      branches: okRepositoryContext.branches.map((candidate) => ({ ...candidate, current: false })),
+    }
+
+    async function pickBranch(name: RegExp, pillName = 'Location: cc-haha / main') {
+      fireEvent.click(await screen.findByRole('button', { name: pillName }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
+      fireEvent.click(await screen.findByRole('option', { name }))
+      fireEvent.keyDown(document, { key: 'Escape' })
+      await waitFor(() => expect(screen.queryByRole('menu', { name: 'Location' })).not.toBeInTheDocument())
+    }
+
+    async function resolveWith(handle: RefObject<RepositoryLaunchControlsHandle | null>) {
+      let resolved: string | null | undefined
+      await act(async () => { resolved = await handle.current!.resolveLaunchBranch() })
+      return resolved
+    }
+
+    it('follows the checkout when it comes back on screen with a branch it chose itself', async () => {
+      const { rerender } = render(<RetainedHarness />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+
+      rerender(<RetainedHarness visible={false} />)
+      apiMocks.getRepositoryContext.mockResolvedValue(movedToFeatureContext)
+      rerender(<RetainedHarness visible />)
+
+      expect(await screen.findByRole('button', { name: 'Location: cc-haha / feature/h5' })).toBeInTheDocument()
+      expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(2)
+    })
+
+    it('keeps a picked branch when it comes back, warning against the fresh checkout', async () => {
+      const { rerender } = render(<RetainedHarness />)
+      await pickBranch(/feature\/h5/)
+      await screen.findByRole('button', { name: 'Location: cc-haha / feature/h5' })
+      expect(screen.queryByRole('status', { name: 'Dirty worktree' })).not.toBeInTheDocument()
+
+      rerender(<RetainedHarness visible={false} />)
+      // Meanwhile uncommitted work was left on main.
+      apiMocks.getRepositoryContext.mockResolvedValue({ ...okRepositoryContext, dirty: true })
+      rerender(<RetainedHarness visible />)
+
+      expect(await screen.findByRole('status', { name: 'Dirty worktree' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Location: cc-haha / feature/h5' })).toBeInTheDocument()
+    })
+
+    it('answers the checkout as it is at send time for a branch it chose itself', async () => {
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      render(<RetainedHarness handleRef={handle} />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      apiMocks.getRepositoryContext.mockResolvedValue(movedToFeatureContext)
+
+      expect(await resolveWith(handle)).toBe('feature/h5')
+      expect(screen.getByRole('button', { name: 'Location: cc-haha / feature/h5' })).toBeInTheDocument()
+    })
+
+    it('sends a branch the user picked as it is, even the one that was current', async () => {
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      render(<RetainedHarness handleRef={handle} />)
+      await pickBranch(/^main/)
+      const reads = apiMocks.getRepositoryContext.mock.calls.length
+      apiMocks.getRepositoryContext.mockResolvedValue(movedToFeatureContext)
+
+      // An explicit pick is a switch the user asked for, not a stale guess.
+      expect(await resolveWith(handle)).toBe('main')
+      expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(reads)
+    })
+
+    // `git switch` in a terminal is how the checkout usually moves under a draft
+    // that never left the screen: no tab change, so nothing else would re-read.
+    it('follows the checkout when the window comes back to the front', async () => {
+      render(<RetainedHarness />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      apiMocks.getRepositoryContext.mockResolvedValue(movedToFeatureContext)
+
+      act(() => { window.dispatchEvent(new Event('focus')) })
+
+      expect(await screen.findByRole('button', { name: 'Location: cc-haha / feature/h5' })).toBeInTheDocument()
+    })
+
+    it('reads once, not twice, when focus and visibility both announce the return', async () => {
+      render(<RetainedHarness />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      const reads = apiMocks.getRepositoryContext.mock.calls.length
+
+      act(() => {
+        window.dispatchEvent(new Event('focus'))
+        document.dispatchEvent(new Event('visibilitychange'))
+      })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+
+      expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(reads + 1)
+    })
+
+    it('follows the checkout when the page becomes visible again in its window', async () => {
+      render(<RetainedHarness />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      apiMocks.getRepositoryContext.mockResolvedValue(movedToFeatureContext)
+
+      act(() => { document.dispatchEvent(new Event('visibilitychange')) })
+
+      expect(await screen.findByRole('button', { name: 'Location: cc-haha / feature/h5' })).toBeInTheDocument()
+    })
+
+    it('does not re-read for a page that is not on screen', async () => {
+      const { rerender } = render(<RetainedHarness />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      rerender(<RetainedHarness visible={false} />)
+      const reads = apiMocks.getRepositoryContext.mock.calls.length
+
+      act(() => { window.dispatchEvent(new Event('focus')) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)) })
+
+      expect(apiMocks.getRepositoryContext).toHaveBeenCalledTimes(reads)
+    })
+
+    it('does not move a detached HEAD onto the default branch', async () => {
+      // `git switch main` is what launching "on" it would run, taking the user
+      // off the commit they are standing on.
+      apiMocks.getRepositoryContext.mockResolvedValue(detachedContext)
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      render(<RetainedHarness handleRef={handle} />)
+
+      const pill = await screen.findByRole('button', { name: 'Location: cc-haha / HEAD aaaaaaa' })
+      expect(pill).toHaveAttribute('title', expect.stringContaining('Detached HEAD: aaaaaaa'))
+      expect(await resolveWith(handle)).toBeNull()
+    })
+
+    it('names the commit, and the default branch an isolated worktree starts from, on a detached HEAD', async () => {
+      apiMocks.getRepositoryContext.mockResolvedValue(detachedContext)
+      render(<RetainedHarness />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Location: cc-haha / HEAD aaaaaaa' }))
+
+      const menu = await screen.findByRole('menu', { name: 'Location' })
+      // Working in place lands on the commit; the worktree would start from main.
+      expect(within(menu).getByText('Changes land on HEAD aaaaaaa')).toBeInTheDocument()
+      expect(within(menu).getByText('Based on main')).toBeInTheDocument()
+      expect(within(menu).getByText('aaaaaaa · Detached HEAD')).toBeInTheDocument()
+    })
+
+    it('names the first branch as the base when a detached repository has no default branch to point at', async () => {
+      // What the server really answers for a fresh clone-less repo checked out at a commit.
+      apiMocks.getRepositoryContext.mockResolvedValue({ ...detachedContext, defaultBranch: null })
+      render(<RetainedHarness />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Location: cc-haha / HEAD aaaaaaa' }))
+
+      const menu = await screen.findByRole('menu', { name: 'Location' })
+      expect(within(menu).getByText('Based on main')).toBeInTheDocument()
+    })
+
+    it('is ready to launch on a detached HEAD without any branch being chosen', async () => {
+      // Readiness used to wait for a selected branch, which would have held
+      // Send forever now that none is chosen for a detached HEAD.
+      apiMocks.getRepositoryContext.mockResolvedValue(detachedContext)
+      const onLaunchReadyChange = vi.fn()
+      renderControls({ branch: null, onLaunchReadyChange })
+
+      await screen.findByRole('button', { name: 'Location: cc-haha / HEAD aaaaaaa' })
+      expect(onLaunchReadyChange).toHaveBeenLastCalledWith(true)
+    })
+
+    it('still takes the default branch as the base of an isolated worktree on a detached HEAD', async () => {
+      apiMocks.getRepositoryContext.mockResolvedValue(detachedContext)
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      render(<RetainedHarness handleRef={handle} useWorktree />)
+
+      expect(await screen.findByRole('button', { name: 'Location: cc-haha / main' })).toBeInTheDocument()
+      expect(await resolveWith(handle)).toBe('main')
+    })
+
+    it('launches a branch picked while detached, as asked', async () => {
+      apiMocks.getRepositoryContext.mockResolvedValue(detachedContext)
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      render(<RetainedHarness handleRef={handle} />)
+      await pickBranch(/^main/, 'Location: cc-haha / HEAD aaaaaaa')
+
+      expect(await screen.findByRole('button', { name: 'Location: cc-haha / main' })).toBeInTheDocument()
+      expect(await resolveWith(handle)).toBe('main')
+    })
+
+    // ChatInput keeps its launch target in a store and mounts these controls
+    // again when the user returns to an empty chat; without the flag the branch
+    // it holds would read as a pick and be launched as it was.
+    it('keeps following a branch its parent says was chosen for the user, after a remount', async () => {
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      renderControls({ ref: handle, branch: 'main', branchAutomatic: true })
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      apiMocks.getRepositoryContext.mockResolvedValue(movedToFeatureContext)
+
+      expect(await resolveWith(handle)).toBe('feature/h5')
+    })
+
+    it('tells its parent when a branch is chosen for the user and when the user picks one', async () => {
+      const onBranchAutomaticChange = vi.fn()
+      render(<RetainedHarness onBranchAutomaticChange={onBranchAutomaticChange} />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      expect(onBranchAutomaticChange).toHaveBeenLastCalledWith(true)
+
+      await pickBranch(/feature\/h5/)
+      expect(onBranchAutomaticChange).toHaveBeenLastCalledWith(false)
+    })
+
+    it('keeps a branch it was handed instead of one it chose', async () => {
+      // A parent such as ChatInput restores its launch target from a store
+      // after a remount; that pick is not ours to replace.
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      renderControls({ ref: handle, branch: 'main' })
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      apiMocks.getRepositoryContext.mockResolvedValue(movedToFeatureContext)
+
+      expect(await resolveWith(handle)).toBe('main')
+    })
+
+    it('stays on the checkout as it is when the repository cannot be read at send time', async () => {
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      render(<RetainedHarness handleRef={handle} />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      apiMocks.getRepositoryContext.mockRejectedValue(new Error('git timed out'))
+
+      expect(await resolveWith(handle)).toBeNull()
+    })
+
+    it('keeps the base branch of an isolated worktree when the repository cannot be read', async () => {
+      const handle = createRef<RepositoryLaunchControlsHandle>()
+      render(<RetainedHarness handleRef={handle} useWorktree />)
+      await screen.findByRole('button', { name: 'Location: cc-haha / main' })
+      apiMocks.getRepositoryContext.mockRejectedValue(new Error('git timed out'))
+
+      // A worktree never moves this checkout, and dropping the branch would
+      // drop the worktree the user asked for.
+      expect(await resolveWith(handle)).toBe('main')
+    })
   })
 
   /**
@@ -1236,6 +1523,31 @@ describe('RepositoryLaunchControls', () => {
       const menu = await screen.findByRole('menu', { name: 'Location' })
       expect(await within(menu).findByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
       expect(within(menu).getAllByRole('menuitemradio')).toHaveLength(2)
+    })
+
+    // A parent that resets its launch state on every pick (the draft holds Send
+    // until the controls report ready) would wait for a report that never comes
+    // when the directory did not change, and Send stayed disabled for good.
+    it('does not tell its parent when the directory picked is the one already in use', async () => {
+      const onWorkDirChange = vi.fn()
+      renderControls({ onWorkDirChange })
+      await openPill()
+      fireEvent.click(await screen.findByRole('menuitem', { name: /Directory/ }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Pick /repo' }))
+
+      expect(onWorkDirChange).not.toHaveBeenCalled()
+      // The menu goes back to the root view, where the branch row still is.
+      expect(await screen.findByRole('menuitem', { name: /Branch/ })).toBeInTheDocument()
+    })
+
+    it('still tells its parent about a different directory', async () => {
+      const onWorkDirChange = vi.fn()
+      renderControls({ onWorkDirChange })
+      await openPill()
+      fireEvent.click(await screen.findByRole('menuitem', { name: /Directory/ }))
+      fireEvent.click(await screen.findByRole('button', { name: 'Pick /tmp/plain' }))
+
+      expect(onWorkDirChange).toHaveBeenCalledWith('/tmp/plain')
     })
 
     it('closes the menu when the picked directory turns out not to be a repo', async () => {

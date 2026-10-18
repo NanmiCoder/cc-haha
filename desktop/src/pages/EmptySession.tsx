@@ -1,10 +1,10 @@
 import type { AgentProfile } from '@/types/session'
-import { AgentProfileControl } from '@/components/chat/AgentProfileControl'
+import { AgentProfileControl, type AgentProfileControlHandle } from '@/components/chat/AgentProfileControl'
 import { isLeanSlashCommand, isUnsupportedLeanSlashInput } from '@/lib/agentProfile'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useDismissable } from '@/hooks/useDismissable'
-import { ArrowUp, Cpu, Plus, ShieldCheck } from 'lucide-react'
+import { ArrowUp, Cpu, Feather, Plus, ShieldCheck } from 'lucide-react'
 import { BrandSeal } from '@/components/composite/BrandSeal'
 import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
 import { projectTitle } from '@/components/layout/sidebarTaskGroups'
@@ -24,7 +24,7 @@ import { useSessionRuntimeStore, DRAFT_RUNTIME_SELECTION_KEY } from '../stores/s
 import { useSettingsStore } from '../stores/settingsStore'
 import { useUIStore } from '../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../stores/tabStore'
-import { RepositoryLaunchControls } from '@/components/chat/RepositoryLaunchControls'
+import { RepositoryLaunchControls, type RepositoryLaunchControlsHandle } from '@/components/chat/RepositoryLaunchControls'
 import { PermissionModeSelector, type PermissionModeSelectorHandle } from '../components/controls/PermissionModeSelector'
 import { PERMISSION_MODE_LABEL_KEYS } from '../components/controls/permissionModeState'
 import { ModelSelector, type ModelSelectorHandle } from '../components/controls/ModelSelector'
@@ -47,7 +47,7 @@ import {
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
   buildDeepSeekAccountProvider,
 } from '../constants/deepseekAccountProvider'
-import { OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
+import { CLAUDE_OFFICIAL_PROVIDER_ID, OPENAI_OFFICIAL_PROVIDER_ID } from '../constants/openaiOfficialProvider'
 import { isDesktopRuntime } from '../lib/desktopRuntime'
 import {
   normalizeRuntimeSelection,
@@ -91,6 +91,7 @@ import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDial
 import { withAgentTeamRequest } from '@/lib/agentTeamRequest'
 import { recordRecentSkills } from '@/lib/recentSkills'
 import type { AttachmentRef } from '../types/chat'
+import type { SavedProvider } from '../types/provider'
 import type { PermissionMode } from '../types/settings'
 import type { SlashCommandOption } from '../components/chat/composerUtils'
 import { useComposerDictation } from '@/features/voiceInput/useComposerDictation'
@@ -137,15 +138,38 @@ function resolveCreateSessionErrorMessage(error: unknown, t: Translate): string 
   }
 }
 
+/** The provider name the model picker shows; `null` is Claude Official. */
+function resolveProviderName(providerId: string | null, providers: SavedProvider[], t: Translate): string {
+  switch (providerId) {
+    case null:
+    case CLAUDE_OFFICIAL_PROVIDER_ID:
+      return t('settings.providers.officialName')
+    case OPENAI_OFFICIAL_PROVIDER_ID:
+      return t('settings.providers.openaiOfficialName')
+    case GROK_OFFICIAL_PROVIDER_ID:
+      return t('settings.providers.grokOfficialName')
+    case DEEPSEEK_ACCOUNT_PROVIDER_ID:
+      return t('settings.providers.deepseekAccountName')
+    default:
+      return providers.find((provider) => provider.id === providerId)?.name ?? providerId
+  }
+}
+
 const EMPTY_COMPOSER_REFERENCES: ComposerReferenceCandidate[] = []
 
 type EmptySessionProps = {
   /** The folder the task starts in; the phone's new-task sheet suggests one. */
   initialWorkDir?: string
   visible?: boolean
+  /**
+   * Set when this composer is the desktop's retained new-session draft. It
+   * then reports whether it holds unsent content, keeps the draft's project
+   * current, and follows `initialWorkDir` when an empty draft is moved.
+   */
+  draftRevision?: number
 }
 
-export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessionProps = {}) {
+export function EmptySession({ initialWorkDir = '', visible = true, draftRevision }: EmptySessionProps = {}) {
   const t = useTranslation()
   const leanModeEnabled = useSettingsStore((state) => state.leanModeEnabled)
   const [selectedAgentProfile, setAgentProfile] = useState<AgentProfile>('standard')
@@ -170,6 +194,20 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
   const [useWorktree, setUseWorktree] = useState(false)
   // Same rule as picking a folder: hold Send until its repository is read.
   const [repositoryLaunchReady, setRepositoryLaunchReady] = useState(!initialWorkDir)
+  const applyWorkDir = (nextWorkDir: string) => {
+    setWorkDir(nextWorkDir)
+    setSelectedBranch(null)
+    setUseWorktree(false)
+    setRepositoryLaunchReady(!nextWorkDir)
+  }
+  // "New session" moves an empty retained draft to another project by changing
+  // its seed. Follow it in place: a remount would drop the mode and permission
+  // picked here. Our own folder picks write the same value back, a no-op.
+  const [followedWorkDir, setFollowedWorkDir] = useState(initialWorkDir)
+  if (draftRevision !== undefined && followedWorkDir !== initialWorkDir) {
+    setFollowedWorkDir(initialWorkDir)
+    if (initialWorkDir !== workDir) applyWorkDir(initialWorkDir)
+  }
   const [attachments, setAttachments] = useState<Attachment[]>([])
   const [plusMenuOpen, setPlusMenuOpen] = useState(false)
   // Bumped when the + menu installs a skill, so the mention list reloads.
@@ -190,6 +228,8 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
   const fileInputRef = useRef<HTMLInputElement>(null)
   const modelSelectorRef = useRef<ModelSelectorHandle>(null)
   const permissionSelectorRef = useRef<PermissionModeSelectorHandle>(null)
+  const agentProfileRef = useRef<AgentProfileControlHandle>(null)
+  const repositoryLaunchRef = useRef<RepositoryLaunchControlsHandle>(null)
   const plusMenuRef = useRef<HTMLDivElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const fileSearchRef = useRef<ComposerReferenceMenuHandle>(null)
@@ -209,7 +249,11 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
   const defaultPermissionMode = useSettingsStore((state) => state.permissionMode)
   const providers = useProviderStore((state) => state.providers)
   const activeProviderId = useProviderStore((state) => state.activeId)
-  const [draftPermissionMode, setDraftPermissionMode] = useState<PermissionMode>(defaultPermissionMode)
+  // The draft follows the default from Settings until a mode is picked in this
+  // draft. It stays mounted while Settings is open, so a copy taken at mount
+  // would launch the next session in a mode the user had already turned off.
+  const [pickedPermissionMode, setDraftPermissionMode] = useState<PermissionMode | null>(null)
+  const draftPermissionMode = pickedPermissionMode ?? defaultPermissionMode
   const lastPluginReloadSummary = usePluginStore((state) => state.lastReloadSummary)
   const draftRuntimeSelection = useSessionRuntimeStore((state) => state.selections[DRAFT_RUNTIME_SELECTION_KEY])
   const referenceProviderId = mentionProviderId(draftRuntimeSelection)
@@ -239,6 +283,8 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
     : undefined
   const draftModelLabel = draftRuntimeSelection?.modelId ?? currentModel?.name ?? currentModel?.id
   const isMobileComposer = useMobileViewport() && !isDesktopRuntime()
+  // The mode control only takes room on the toolbar row on desktop; a phone keeps it in the "+" sheet.
+  const leanControlOnRow = leanModeEnabled && !isMobileComposer
   const dictation = useComposerDictation({
     composerRef,
     draft: input,
@@ -313,6 +359,8 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
               ...(skill.source === 'user' || skill.source === 'project' || skill.source === 'plugin'
                 ? { source: skill.source }
                 : {}),
+              // Kept on the row so the lean/standard choice, made later, can filter without a refetch.
+              ...(skill.leanCompatible === false ? { leanCompatible: false } : {}),
             })),
         )
       })
@@ -347,6 +395,25 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
     }
   }, [workDir, lastPluginReloadSummary])
 
+  // A lean draft's skills and mention list come from the server already filtered
+  // for lean, `.claude/commands/*.md` among them (as skills). A name on them is
+  // available even when a desktop built-in row shares it, which is what ChatInput
+  // trusts in a lean session: `/review` runs the project's own command there.
+  // The mention list is fetched again whenever a menu opens or closes and is empty
+  // while that runs; a send or a menu filter landing in it must not forget what
+  // the server just listed. A new project, provider or mode drops the names.
+  const referenceNamesRef = useRef<string[]>([])
+  const referenceNames = useMemo(() => {
+    const names = composerReferences.map(reference => (reference.kind === 'plugin' ? reference.id : reference.name))
+    if (names.length === 0 && referenceCurrent?.loading) return referenceNamesRef.current
+    referenceNamesRef.current = names
+    return names
+  }, [composerReferences, referenceCurrent?.loading])
+  const listedLeanNames = useMemo(() => new Set([
+    ...(slashCommandsCwd === workDir ? slashCommands : []).filter(command => command.leanCompatible !== false).map(command => command.name),
+    ...referenceNames,
+  ]), [slashCommands, slashCommandsCwd, workDir, referenceNames])
+
   const allSlashCommands = useMemo(() => {
     const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommandsCwd === workDir ? slashCommands : [], getLocalizedFallbackCommands(t)), agentSlashCommands)
     const names = new Set(commands.map(command => command.name.toLowerCase()))
@@ -356,19 +423,29 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
       names.add(name.toLowerCase())
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
-    return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command)))
-  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, isLean, t])
+    return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command, listedLeanNames)))
+  }, [agentSlashCommands, slashCommands, slashCommandsCwd, workDir, composerReferences, listedLeanNames, isLean, t])
 
   const handleWorkDirChange = (newWorkDir: string) => {
-    setWorkDir(newWorkDir)
+    applyWorkDir(newWorkDir)
     // Keep the seed current for another Cmd+N while no server tab is active.
-    useUIStore.setState(state => state.newSessionDraft
-      ? { newSessionDraft: { ...state.newSessionDraft, workDir: newWorkDir } }
-      : {})
-    setSelectedBranch(null)
-    setUseWorktree(false)
-    setRepositoryLaunchReady(!newWorkDir)
+    // Only the draft's own composer may move it.
+    if (draftRevision !== undefined) {
+      useUIStore.setState(state => state.newSessionDraft?.revision === draftRevision
+        ? { newSessionDraft: { ...state.newSessionDraft, workDir: newWorkDir } }
+        : state)
+    }
   }
+
+  // Whitespace alone is not worth keeping a project for; mentions live in the
+  // text. A project, model or mode choice is not content either. A draft that is
+  // being sent is not empty: Run is enabled with only a project chosen, and moving
+  // that project mid-send would point the launch at another repository.
+  const hasUnsentContent = input.trim().length > 0 || attachments.length > 0 || isSubmitting
+  useEffect(() => {
+    if (draftRevision === undefined) return
+    useUIStore.getState().setNewSessionDraftContent(draftRevision, hasUnsentContent)
+  }, [draftRevision, hasUnsentContent])
 
   const filteredCommandGroups = useMemo(() => {
     return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))
@@ -401,7 +478,7 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
   const handleSubmit = async () => {
     const text = input.trim()
     if (!canSubmit || !visible) return
-    if (isLean && isUnsupportedLeanSlashInput(text, [...allSlashCommands, ...slashCommands, ...getLocalizedFallbackCommands(t)])) {
+    if (isLean && isUnsupportedLeanSlashInput(text, [...allSlashCommands, ...slashCommands, ...getLocalizedFallbackCommands(t)], listedLeanNames)) {
       addToast({ type: 'info', message: t('agentProfile.draftCommandUnavailable') })
       return
     }
@@ -451,8 +528,25 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
     const ownsDraft = () => mounted.current && useUIStore.getState().newSessionDraft?.revision === submittedDraft?.revision
     setIsSubmitting(true)
     try {
-      const authStatus = await providersApi.authStatus()
+      // A model picked in this draft runs on its own provider, whatever the
+      // global default is, so that provider's credentials are the ones to check.
+      // Without a pick the server keeps judging the global default.
+      const authStatus = explicitDraftSelection
+        ? await providersApi.authStatus(explicitDraftSelection.providerId ?? CLAUDE_OFFICIAL_PROVIDER_ID)
+        : await providersApi.authStatus()
       if (!authStatus.hasAuth) {
+        const providerName = resolveProviderName(
+          explicitDraftSelection ? explicitDraftSelection.providerId : activeProviderId,
+          providers,
+          t,
+        )
+        const modelName = explicitDraftSelection?.modelId ?? currentModel?.name ?? currentModel?.id
+        addToast({
+          type: 'warning',
+          message: modelName
+            ? t('empty.noCredentials', { model: modelName, provider: providerName })
+            : t('empty.noCredentialsProvider', { provider: providerName }),
+        })
         useUIStore.getState().setPendingSettingsTab('providers')
         useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
         return
@@ -502,11 +596,17 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
       const runtimeSelection = explicitDraftSelection
         ?? defaultRuntimeSelection
         ?? claudeOAuthRuntimeSelection
+      // The draft may have waited for hours. A branch chosen for the user is
+      // decided again now, against the checkout as it is: the server switches
+      // to any launch branch that is not the current one.
+      const launchBranch = selectedBranch && repositoryLaunchRef.current
+        ? await repositoryLaunchRef.current.resolveLaunchBranch()
+        : selectedBranch
       const sessionId = await createSession(
         workDir || undefined,
         {
-          ...(selectedBranch
-            ? { repository: { branch: selectedBranch, worktree: useWorktree } }
+          ...(launchBranch
+            ? { repository: { branch: launchBranch, worktree: useWorktree } }
             : {}),
           permissionMode: draftPermissionMode,
           ...(isLean ? { agentProfile } : {}),
@@ -815,6 +915,15 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
         disabled: isSubmitting,
         onSelect: () => openFromComposerSheet(() => modelSelectorRef.current?.open()),
       },
+      // The mode has no chip on a phone's toolbar: it covered the "+".
+      ...(leanModeEnabled ? [{
+        key: 'agentProfile',
+        icon: <Feather size={16} strokeWidth={1.75} aria-hidden="true" />,
+        label: t('agentProfile.label'),
+        value: t(isLean ? 'agentProfile.lean' : 'agentProfile.standard'),
+        disabled: isSubmitting,
+        onSelect: () => openFromComposerSheet(() => agentProfileRef.current?.open()),
+      }] : []),
     ]
     : []
 
@@ -876,6 +985,7 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
       {isMobileComposer && (
         <div data-testid="empty-session-mobile-launch" className="flex shrink-0 justify-center px-4 pt-1">
             <RepositoryLaunchControls
+              ref={repositoryLaunchRef}
               workDir={workDir}
               onWorkDirChange={handleWorkDirChange}
               branch={selectedBranch}
@@ -884,6 +994,7 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
               onUseWorktreeChange={setUseWorktree}
               onLaunchReadyChange={setRepositoryLaunchReady}
               disabled={isSubmitting}
+              visible={visible}
             />
         </div>
       )}
@@ -1042,11 +1153,24 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
 
               {/* No divider: the editor's bottom inset and this row's top inset
                   separate the two, exactly as in ChatInput. */}
-              <div className={`flex min-w-0 items-center justify-between pt-1.5 ${
-                isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
-              }`}>
+              {/* The row has to hold the project, branch and model next to the
+                  fixed controls, and the three had one budget: everything else
+                  was `shrink-0`, so the project and branch paid for every
+                  control that was added ("claude-cod…" / "…in"). With the lean
+                  control on the row (desktop; a phone keeps it in the "+" sheet),
+                  the trailing group takes what the leading
+                  one leaves and gives up only the model's name, down to a floor;
+                  when even that does not fit, it wraps to its own line instead
+                  of squeezing the location. Without the control the row is the
+                  one it always was. */}
+              <div
+                data-testid="empty-session-toolbar"
+                className={`flex min-w-0 items-center justify-between pt-1.5 ${
+                  leanControlOnRow ? 'flex-wrap gap-x-2 gap-y-1' : isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
+                }`}
+              >
                 {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
-                <div hidden={dictationLive} className="flex min-w-0 shrink items-center gap-1">
+                <div data-testid="empty-session-toolbar-leading" hidden={dictationLive} className="flex min-w-0 shrink items-center gap-1">
                   <div ref={plusMenuRef} className="relative shrink-0">
                     {/* Hand-rolled like ChatInput's: a quiet 28px square on
                         desktop, the 44px touch minimum on a phone. */}
@@ -1109,6 +1233,7 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
 
                   {!isMobileComposer && (
                     <RepositoryLaunchControls
+                      ref={repositoryLaunchRef}
                       workDir={workDir}
                       onWorkDirChange={handleWorkDirChange}
                       branch={selectedBranch}
@@ -1117,14 +1242,18 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
                       onUseWorktreeChange={setUseWorktree}
                       onLaunchReadyChange={setRepositoryLaunchReady}
                       disabled={isSubmitting}
+                      visible={visible}
                       placement="toolbar"
                     />
                   )}
                 </div>
 
                 <div
+                  data-testid="empty-session-toolbar-trailing"
                   hidden={dictationLive}
-                  className={`${isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}`}
+                  className={leanControlOnRow
+                    ? 'flex min-w-max flex-1 items-center justify-end gap-1'
+                    : isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}
                 >
                   {/* A draft has used none of its context; on a phone that is not
                       worth one of the toolbar's few touch targets. */}
@@ -1138,15 +1267,31 @@ export function EmptySession({ initialWorkDir = '', visible = true }: EmptySessi
                       compact={isMobileComposer}
                     />
                   )}
-                  {leanModeEnabled && <AgentProfileControl value={agentProfile} onChange={(profile) => {
-                    if (profile === agentProfile) return
-                    setAgentProfile(profile)
-                    if (profile === 'lean' && draftPermissionMode === 'plan') {
-                      setDraftPermissionMode('default')
-                      addToast({ type: 'info', message: t('agentProfile.planReset') })
-                    }
-                  }} disabled={isSubmitting} />}
-                  <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
+                  {leanModeEnabled && <AgentProfileControl
+                    ref={agentProfileRef}
+                    value={agentProfile}
+                    presentation={isMobileComposer ? 'sheet' : 'toolbar'}
+                    onChange={(profile) => {
+                      if (profile === agentProfile) return
+                      setAgentProfile(profile)
+                      if (profile === 'lean' && draftPermissionMode === 'plan') {
+                        setDraftPermissionMode('default')
+                        addToast({ type: 'info', message: t('agentProfile.planReset') })
+                      }
+                    }}
+                    disabled={isSubmitting}
+                  />}
+                  {/* With the lean control on the row, the model's name is what
+                      gives way when the row is full: `w-0` + `min-w-[128px]`
+                      make 128px its smallest share (about eight letters and the
+                      effort), `max-w-max` stops it growing past its own width. */}
+                  {leanControlOnRow ? (
+                    <div className="flex w-0 min-w-[128px] max-w-max grow">
+                      <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} fluid />
+                    </div>
+                  ) : (
+                    <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
+                  )}
                   <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
                   {/* Kept identical to ChatInput's send button — same
                       component, shape, size and icon. See the note there for

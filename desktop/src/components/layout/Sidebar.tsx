@@ -501,10 +501,12 @@ export function Sidebar({
   const openDraftForWorkDir = useCallback((workDir?: string) => {
     // Do not allocate a standard server session before the user can choose
     // the immutable agent profile in the new-chat composer.
-    const existingDraft = useUIStore.getState().newSessionDraft
-    restoreHiddenProjectForWorkDir(existingDraft?.workDir ?? workDir)
     useUIStore.getState().startNewSessionDraft(workDir)
-    if (existingDraft && workDir !== undefined && existingDraft.workDir !== workDir) {
+    const draft = useUIStore.getState().newSessionDraft
+    restoreHiddenProjectForWorkDir(draft?.workDir ?? workDir)
+    // An empty draft has just moved to the requested project. Only one holding
+    // unsent content stays where it was, and that is worth saying.
+    if (draft && workDir !== undefined && draft.workDir !== workDir) {
       addToast({ type: 'info', message: t('sidebar.draftResumed') })
     }
     useSessionStore.getState().setActiveSession(null)
@@ -1576,7 +1578,7 @@ export function Sidebar({
           onOpenSubmenu={openProjectHeaderSubmenu}
           onSetOrganization={updateProjectOrganization}
           onSetSortBy={updateProjectSortBy}
-          onCreateBlank={() => void openDraftForWorkDir()}
+          onCreateBlank={() => void openDraftForWorkDir('')}
           onUseExistingFolder={openProjectCreator}
           onRestoreHiddenProjects={restoreAllHiddenProjects}
           hiddenProjectCount={hiddenProjectKeys.size}
@@ -1595,7 +1597,7 @@ export function Sidebar({
           onOpenSubmenu={openProjectHeaderSubmenu}
           onSetOrganization={updateProjectOrganization}
           onSetSortBy={updateProjectSortBy}
-          onCreateBlank={() => void openDraftForWorkDir()}
+          onCreateBlank={() => void openDraftForWorkDir('')}
           onUseExistingFolder={openProjectCreator}
           onRestoreHiddenProjects={restoreAllHiddenProjects}
           hiddenProjectCount={hiddenProjectKeys.size}

@@ -18,7 +18,7 @@ import { ensureKeychainPrefetchCompleted, startKeychainPrefetch } from './utils/
 
 // eslint-disable-next-line custom-rules/no-top-level-side-effects
 startKeychainPrefetch();
-import { initializeSessionAgentProfile, assertAgentProfileSettingCompatible, getAgentProfile } from './utils/agentProfile.js'
+import { initializeSessionAgentProfile, assertAgentProfileSettingCompatible, getAgentProfile, isAgentProfileMcpEnabled } from './utils/agentProfile.js'
 import { feature } from 'bun:bundle';
 import { Command as CommanderCommand, InvalidArgumentError, Option } from '@commander-js/extra-typings';
 import chalk from 'chalk';
@@ -419,7 +419,7 @@ export function startDeferredPrefetches(): void {
 
   // Analytics and feature flag initialization
   void initializeAnalyticsGates();
-  void prefetchOfficialMcpUrls();
+  if (isAgentProfileMcpEnabled()) void prefetchOfficialMcpUrls()
   void refreshModelCapabilities();
 
   // File change detectors deferred from init() to unblock first render
@@ -1428,6 +1428,11 @@ async function run(): Promise<CommanderCommand> {
       }
     }
 
+    // Lean has no MCP runtime: skip every source below (local/plugin configs,
+    // claude.ai connectors, Computer Use) so nothing is spawned, fetched or
+    // awaited before the first request. --mcp-config is rejected at startup.
+    const agentProfileMcp = isAgentProfileMcpEnabled()
+
     // Parse the MCP config files/strings if provided
     let dynamicMcpConfig: Record<string, ScopedMcpServerConfig> = {};
     if (mcpConfig && mcpConfig.length > 0) {
@@ -1623,7 +1628,7 @@ async function run(): Promise<CommanderCommand> {
     // `type: 'stdio'`. An enterprise-config ant with the GB gate on would
     // otherwise process.exit(1). Chrome has the same latent issue but has
     // shipped without incident; chicago places itself correctly.
-    if (process.platform === 'darwin' || process.platform === 'win32') {
+    if (agentProfileMcp && (process.platform === 'darwin' || process.platform === 'win32')) {
       try {
         const {
           getChicagoEnabled
@@ -1810,7 +1815,7 @@ async function run(): Promise<CommanderCommand> {
     // two-phase loading). Kicked off here to overlap with setup(); awaited
     // before runHeadless so single-turn -p sees connectors. Skipped under
     // enterprise/strict MCP to preserve policy boundaries.
-    const claudeaiConfigPromise: Promise<Record<string, ScopedMcpServerConfig>> = isNonInteractiveSession && !strictMcpConfig && !doesEnterpriseMcpConfigExist() &&
+    const claudeaiConfigPromise: Promise<Record<string, ScopedMcpServerConfig>> = agentProfileMcp && isNonInteractiveSession && !strictMcpConfig && !doesEnterpriseMcpConfigExist() &&
     // --bare / SIMPLE: skip claude.ai proxy servers (datadog, Gmail,
     // Slack, BigQuery, PubMed — 6-14s each to connect). Scripted calls
     // that need MCP pass --mcp-config explicitly.
@@ -1835,7 +1840,7 @@ async function run(): Promise<CommanderCommand> {
     // --bare skips auto-discovered MCP (.mcp.json, user settings, plugins) —
     // only explicit --mcp-config works. dynamicMcpConfig is spread onto
     // allMcpConfigs downstream so it survives this skip.
-    const mcpConfigPromise = (strictMcpConfig || isBareMode() ? Promise.resolve({
+    const mcpConfigPromise = (!agentProfileMcp || strictMcpConfig || isBareMode() ? Promise.resolve({
       servers: {} as Record<string, ScopedMcpServerConfig>
     }) : getClaudeCodeMcpConfigs(dynamicMcpConfig)).then(result => {
       mcpConfigResolvedMs = Date.now() - mcpConfigStart;

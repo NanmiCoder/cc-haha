@@ -14,6 +14,7 @@ import { normalizePathForConfigKey } from '../../utils/path.js'
 import * as mcpHostPreflight from '../services/mcpHostPreflight.js'
 import { handleMcpApi } from '../api/mcp.js'
 import { conversationService } from '../services/conversationService.js'
+import { sessionService } from '../services/sessionService.js'
 
 let tmpDir: string
 let projectRoot: string
@@ -1000,6 +1001,60 @@ describe('MCP API', () => {
       server: { enabled: true, status: 'failed' },
       sessionSync: { applied: false, reason: 'not_running' },
     })
+  })
+
+  it('does not send MCP toggles to lean sessions and reports them as not applicable', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'lean-sync', scope: 'local',
+      config: { type: 'stdio', command: 'mock', args: [], env: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    conversationService.getActiveSessions = () => ['lean-1', 'standard-1']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = () => projectRoot
+    const requestControl = mock(async () => ({}))
+    conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    const launchInfoSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation((async (id: string) => (
+      { agentProfile: id === 'lean-1' ? 'lean' : 'standard' }
+    )) as unknown as typeof sessionService.getSessionLaunchInfo)
+    try {
+      const leanToggle = makeRequest('POST', '/api/mcp/lean-sync/toggle', { cwd: projectRoot, sessionId: 'lean-1' })
+      const leanBody = await (await handleMcpApi(leanToggle.req, leanToggle.url, leanToggle.segments)).json()
+      expect(leanBody.sessionSync).toEqual({ applied: false, reason: 'lean_profile' })
+      // The persisted toggle still happened and the standard session in the same project was synced.
+      expect(leanBody.server.enabled).toBe(false)
+      expect(requestControl.mock.calls.map(call => call[0])).toEqual(['standard-1'])
+
+      requestControl.mockClear()
+      const standardToggle = makeRequest('POST', '/api/mcp/lean-sync/toggle', { cwd: projectRoot, sessionId: 'standard-1' })
+      const standardBody = await (await handleMcpApi(standardToggle.req, standardToggle.url, standardToggle.segments)).json()
+      expect(standardBody.sessionSync).toEqual({ applied: true })
+      expect(requestControl.mock.calls.map(call => call[0])).toEqual(['standard-1'])
+    } finally {
+      launchInfoSpy.mockRestore()
+    }
+  })
+
+  it('syncs a session whose launch info cannot be read as the standard one it may be', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'unreadable-launch-info', scope: 'local',
+      config: { type: 'stdio', command: 'mock', args: [], env: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    conversationService.getActiveSessions = () => ['unreadable-1']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = () => projectRoot
+    const requestControl = mock(async () => ({}))
+    conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    const launchInfoSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockRejectedValue(new Error('transcript unreadable'))
+    try {
+      const toggle = makeRequest('POST', '/api/mcp/unreadable-launch-info/toggle', { cwd: projectRoot, sessionId: 'unreadable-1' })
+      const body = await (await handleMcpApi(toggle.req, toggle.url, toggle.segments)).json()
+      expect(body.sessionSync).toEqual({ applied: true })
+      expect(requestControl.mock.calls.map(call => call[0])).toEqual(['unreadable-1'])
+    } finally {
+      launchInfoSpy.mockRestore()
+    }
   })
 
   it('does not sync a project-specific toggle into a session from another project', async () => {

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Ellipsis, Filter, Folder, RefreshCw, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react'
 
-import { AgentProfileControl } from '@/components/chat/AgentProfileControl'
+import { AgentProfileControl, type AgentProfileControlHandle } from '@/components/chat/AgentProfileControl'
 import type { AgentProfile } from '@/types/session'
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
 import { installTeamPlanGalleryFixture, TEAM_PLAN_GALLERY_SESSION } from './teamPlanGalleryFixture'
@@ -435,6 +435,7 @@ function SessionSurfacePreview({ kind }: { kind: 'main' | 'agent' }) {
 
 export function ComponentGallery() {
   const [agentProfile, setAgentProfile] = useState<AgentProfile>('standard')
+  const agentProfileSheet = useRef<AgentProfileControlHandle>(null)
   const [planFixture, setPlanFixture] = useState<ReturnType<typeof installTeamPlanGalleryFixture> | null>(null)
   useEffect(() => {
     const fixture = installTeamPlanGalleryFixture()
@@ -510,10 +511,12 @@ export function ComponentGallery() {
         </div>
       </header>
 
-      <Section title="Agent mode" note="Draft selection and the immutable lean conversation badge. Experimental core coding tools only.">
+      <Section title="Agent mode" note="Draft selection, the immutable lean conversation badge, and the sheet the phone's + sheet opens instead. Experimental core coding tools only.">
         <div className="flex flex-wrap items-center gap-2">
           <AgentProfileControl value={agentProfile} onChange={setAgentProfile} />
           <AgentProfileControl value="lean" />
+          <Button variant="secondary" size="sm" onClick={() => agentProfileSheet.current?.open()}>Open phone sheet</Button>
+          <AgentProfileControl ref={agentProfileSheet} value={agentProfile} onChange={setAgentProfile} presentation="sheet" />
         </div>
       </Section>
 

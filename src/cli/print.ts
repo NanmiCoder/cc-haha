@@ -2326,6 +2326,9 @@ function runHeadlessStreaming(
               prompt: input,
               promptUuid: cmd.uuid,
               isMeta: cmd.isMeta,
+              // Same derivation as handlePromptSubmit: a task notification that
+              // starts its own turn is not the user's input.
+              origin: cmd.origin ?? (cmd.mode === 'task-notification' ? ({ kind: 'task-notification' } as const) : undefined),
               cwd: cwd(),
               tools: allTools,
               verbose: options.verbose,
@@ -3281,6 +3284,11 @@ function runHeadlessStreaming(
           }
           sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'mcp_set_servers') {
+          const profileError = validateAgentProfileControlRequest(message.request.subtype, message.request)
+          if (profileError) {
+            sendControlResponseError(message, profileError)
+            continue
+          }
           const { response, sdkServersChanged } = await applyMcpServerChanges(
             message.request.servers,
           )

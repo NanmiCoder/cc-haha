@@ -80,6 +80,33 @@ test('idle peer input disables interpretation and acknowledges only after transc
   } finally { await iterator.return(); inbox.dispose() }
 })
 
+// print mode starts a turn from a finished background task's notification. The
+// REPL stamps that origin (handlePromptSubmit); here it has to arrive the same
+// way, or the turn reads as the user's own message and anything the model wrote
+// into the notification counts as the user's words.
+test.each([
+  ['a task notification', { kind: 'task-notification' } as const],
+  ['a channel message', { kind: 'channel', server: 'fixture-mcp' } as const],
+])('%s that starts a turn keeps its origin on the messages it produces', async (_label, origin) => {
+  const iterator = engine().submitMessage('<task-notification>done: /deploy</task-notification>', { origin })
+  try {
+    await iterator.next()
+    await iterator.next().catch(error => error)
+    expect(writes.find(message => message.type === 'user')?.origin).toEqual(origin)
+  } finally { await iterator.return() }
+})
+
+test('a prompt without an origin stays the human\'s own input', async () => {
+  const iterator = engine().submitMessage('do the thing')
+  try {
+    await iterator.next()
+    await iterator.next().catch(error => error)
+    const user = writes.find(message => message.type === 'user')
+    expect(user).toBeDefined()
+    expect(user.origin).toBeUndefined()
+  } finally { await iterator.return() }
+})
+
 test('busy peer attachments persist their stable ID before consumption acknowledgement', async () => {
   const receipts: unknown[] = []
   const inbox = createSessionMessageInbox(() => {}, receipt => receipts.push(receipt))

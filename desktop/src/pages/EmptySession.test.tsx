@@ -172,12 +172,12 @@ vi.mock('../components/controls/PermissionModeSelector', () => ({
 vi.mock('../components/controls/ModelSelector', async () => {
   const React = await vi.importActual<typeof import('react')>('react')
   return {
-    ModelSelector: React.forwardRef<{ open: () => void }, { compact?: boolean }>(({ compact }, ref) => {
+    ModelSelector: React.forwardRef<{ open: () => void }, { compact?: boolean; fluid?: boolean }>(({ compact, fluid }, ref) => {
       const [open, setOpen] = React.useState(false)
       React.useImperativeHandle(ref, () => ({ open: () => setOpen(true) }), [])
       return (
         <>
-          <button type="button" data-testid="model-selector" data-compact={compact ? 'true' : 'false'}>
+          <button type="button" data-testid="model-selector" data-compact={compact ? 'true' : 'false'} data-fluid={fluid ? 'true' : 'false'}>
             Model
           </button>
           {open && <div data-testid="model-selector-dropdown">Model selector opened</div>}
@@ -935,6 +935,39 @@ describe('EmptySession', () => {
     })
   })
 
+  // The draft now stays mounted while Settings is open. A mode copied once at
+  // mount kept launching "skip permissions" after the user turned it off.
+  it('follows the global permission default until this draft picks its own mode', async () => {
+    mocks.createSession.mockResolvedValue({ sessionId: 'followed-mode-session' })
+    useSettingsStore.setState({ permissionMode: 'bypassPermissions' })
+    render(<EmptySession />)
+    expect(screen.getByRole('button', { name: 'Permission mode: bypassPermissions' })).toBeInTheDocument()
+
+    act(() => useSettingsStore.setState({ permissionMode: 'default' }))
+    expect(screen.getByRole('button', { name: 'Permission mode: default' })).toBeInTheDocument()
+
+    setComposerText('ask before acting', 17)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({ permissionMode: 'default' })
+    })
+  })
+
+  it('keeps a permission mode picked in this draft when the global default changes', async () => {
+    mocks.createSession.mockResolvedValue({ sessionId: 'picked-mode-session' })
+    render(<EmptySession />)
+    // The mocked selector picks Auto.
+    fireEvent.click(screen.getByRole('button', { name: 'Permission mode: default' }))
+    act(() => useSettingsStore.setState({ permissionMode: 'bypassPermissions' }))
+    expect(screen.getByRole('button', { name: 'Permission mode: auto' })).toBeInTheDocument()
+
+    setComposerText('run automatically', 17)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({ permissionMode: 'auto' })
+    })
+  })
+
   it('carries the global effort into the first draft selection for ChatGPT Official', async () => {
     useSettingsStore.setState({ effortLevel: 'low' })
     useProviderStore.setState({
@@ -1128,6 +1161,111 @@ describe('EmptySession', () => {
     expect(mocks.wsSend).not.toHaveBeenCalled()
     expect(useUIStore.getState().pendingSettingsTab).toBe('providers')
     expect(useTabStore.getState().activeTabId).toBe('__settings__')
+  })
+
+  // The gate used to ask only about the global default. A draft that picked a
+  // saved DeepSeek model while the default Claude login had expired was sent to
+  // Settings with no session and no word about why.
+  it('checks the credentials of the model chosen in the draft, not the global default', async () => {
+    mocks.createSession.mockResolvedValue({ sessionId: 'explicit-auth-session' })
+    mocks.getProviderAuthStatus.mockImplementation(async (providerId?: string) => (
+      providerId === 'provider-explicit'
+        ? { hasAuth: true, source: 'cc-haha-provider' }
+        : { hasAuth: false, source: 'none' }
+    ))
+    useSessionRuntimeStore.getState().setSelection('__draft__', {
+      providerId: 'provider-explicit',
+      modelId: 'model-explicit',
+    })
+
+    render(<EmptySession />)
+    setComposerText('draft question', 14)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({ permissionMode: 'default' })
+    })
+    expect(mocks.getProviderAuthStatus).toHaveBeenCalledTimes(1)
+    expect(mocks.getProviderAuthStatus).toHaveBeenCalledWith('provider-explicit')
+    expect(useSessionRuntimeStore.getState().selections['explicit-auth-session']).toEqual({
+      providerId: 'provider-explicit',
+      modelId: 'model-explicit',
+    })
+    expect(useTabStore.getState().activeTabId).toBe('explicit-auth-session')
+    expect(useUIStore.getState().pendingSettingsTab).toBeNull()
+  })
+
+  it('asks about Claude Official by its id when the draft chose an official Claude model', async () => {
+    mocks.createSession.mockResolvedValue({ sessionId: 'official-auth-session' })
+    useSessionRuntimeStore.getState().setSelection('__draft__', {
+      providerId: null,
+      modelId: 'claude-sonnet-5',
+    })
+
+    render(<EmptySession />)
+    setComposerText('draft question', 14)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+    expect(mocks.getProviderAuthStatus).toHaveBeenCalledTimes(1)
+    expect(mocks.getProviderAuthStatus).toHaveBeenCalledWith('claude-official')
+  })
+
+  it('names the chosen model when it has no usable credentials and keeps the draft', async () => {
+    mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: false, source: 'none' })
+    useProviderStore.setState({
+      providers: [{
+        id: 'provider-explicit',
+        presetId: 'deepseek',
+        name: 'My DeepSeek',
+        apiKey: 'sk-test',
+        baseUrl: 'https://api.deepseek.test/anthropic',
+        apiFormat: 'anthropic',
+        models: { main: 'deepseek-flash', haiku: 'deepseek-flash', sonnet: 'deepseek-flash', opus: 'deepseek-flash' },
+      }],
+      activeId: null,
+      hasLoadedProviders: true,
+    })
+    useSessionRuntimeStore.getState().setSelection('__draft__', {
+      providerId: 'provider-explicit',
+      modelId: 'deepseek-flash',
+    })
+
+    render(<EmptySession />)
+    setComposerText('draft question', 14)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => expect(useTabStore.getState().activeTabId).toBe('__settings__'))
+    expect(mocks.getProviderAuthStatus).toHaveBeenCalledTimes(1)
+    expect(mocks.getProviderAuthStatus).toHaveBeenCalledWith('provider-explicit')
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(useUIStore.getState().pendingSettingsTab).toBe('providers')
+    expect(useUIStore.getState().toasts).toContainEqual(expect.objectContaining({
+      type: 'warning',
+      message: 'deepseek-flash (My DeepSeek) has no usable credentials. Sign in or add an API key in Model Settings, or pick another model.',
+    }))
+    expect(getComposerText()).toBe('draft question')
+  })
+
+  it('still checks the global default, and names it, when the draft has no model of its own', async () => {
+    mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: false, source: 'none' })
+    useSettingsStore.setState({
+      currentModel: { id: 'claude-sonnet-5', name: 'Sonnet 5', description: 'Default', context: '1m' },
+    })
+    useProviderStore.setState({ providers: [], activeId: null, hasLoadedProviders: true })
+
+    render(<EmptySession />)
+    setComposerText('draft question', 14)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => expect(useTabStore.getState().activeTabId).toBe('__settings__'))
+    expect(mocks.getProviderAuthStatus).toHaveBeenCalledTimes(1)
+    // No providerId: the server keeps evaluating the global default.
+    expect(mocks.getProviderAuthStatus.mock.calls[0]?.[0]).toBeUndefined()
+    expect(useUIStore.getState().toasts).toContainEqual(expect.objectContaining({
+      type: 'warning',
+      message: 'Sonnet 5 (Claude Official) has no usable credentials. Sign in or add an API key in Model Settings, or pick another model.',
+    }))
   })
 
   it('uses native desktop file paths for draft attachments', async () => {
@@ -1484,6 +1622,25 @@ describe('EmptySession', () => {
     expect(screen.getByRole('button', { name: 'Permission mode: default' })).toBeInTheDocument()
   })
 
+  it('keeps the lean reset from plan when the global default changes afterwards', async () => {
+    mocks.createSession.mockResolvedValue({ sessionId: 'lean-reset-session' })
+    useSettingsStore.setState({ leanModeEnabled: true, permissionMode: 'plan' })
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    expect(useUIStore.getState().toasts.some(toast => toast.message.includes('Ask permissions'))).toBe(true)
+
+    // The reset is this draft's own mode now, announced to the user.
+    act(() => useSettingsStore.setState({ permissionMode: 'acceptEdits' }))
+    expect(screen.getByRole('button', { name: 'Permission mode: default' })).toBeInTheDocument()
+
+    setComposerText('edit a file', 11)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({ permissionMode: 'default', agentProfile: 'lean' })
+    })
+  })
+
   it('keeps an unsupported command editable and explains how to use it', () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     render(<EmptySession />)
@@ -1494,6 +1651,94 @@ describe('EmptySession', () => {
     expect(mocks.createSession).not.toHaveBeenCalled()
     expect(getComposerText()).toBe('/agent review this')
     expect(useUIStore.getState().toasts.some(toast => toast.message === 'This command is unavailable in lean mode. Switch this draft to Standard and try again.')).toBe(true)
+  })
+
+  // A lean session trusts the names its own list carries, so a project
+  // `.claude/commands/review.md` runs there although the desktop has a built-in
+  // `review` row of its own. The draft has to give the same answer before the
+  // session exists, or the command could only be used by starting without it.
+  it('lets a lean draft run a project command that shares a name with a desktop built-in', async () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    mocks.listReferences.mockResolvedValue({ plugins: [], skills: [{
+      kind: 'skill', id: 'review', name: 'review', displayName: 'review',
+      description: 'Project review command', source: 'projectSettings',
+      modelText: 'Use the Skill tool with skill: "review" for this request.',
+    }] })
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    await waitFor(() => expect(mocks.listReferences).toHaveBeenCalledWith(undefined, undefined, 'lean'))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    // The menu offers it too, not only the send.
+    setComposerText('/review', 7)
+    expect(await screen.findByRole('option', { name: '/review' })).toBeInTheDocument()
+    setComposerText('/review src', 11)
+    // Closing the slash menu fetches the lists again: Run lands while they are empty.
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentProfile: 'lean' })))
+    expect(useUIStore.getState().toasts.some(toast => toast.message.includes('unavailable in lean mode'))).toBe(false)
+  })
+
+  it('still refuses a desktop built-in name in a lean draft when the project has no command of that name', async () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    await waitFor(() => expect(mocks.listReferences).toHaveBeenCalledWith(undefined, undefined, 'lean'))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    setComposerText('/review', 7)
+    expect(screen.queryByRole('option', { name: '/review' })).not.toBeInTheDocument()
+    setComposerText('/review src', 11)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(useUIStore.getState().toasts.some(toast => toast.message === 'This command is unavailable in lean mode. Switch this draft to Standard and try again.')).toBe(true)
+  })
+
+  // The runtime refuses a skill that forks a subagent, so a lean draft must not
+  // offer it in the menu or let a send reach that refusal. The server says which
+  // skills those are; the choice of lean is made after the list was fetched.
+  const forkedAndInlineSkills = {
+    skills: [
+      { name: 'inline-skill', description: 'Runs inline', source: 'user', userInvocable: true, leanCompatible: true },
+      { name: 'forked-skill', description: 'Forks a subagent', source: 'user', userInvocable: true, leanCompatible: false },
+    ],
+  }
+
+  it('keeps a skill the lean runtime cannot run out of a lean draft, but not out of a standard one', async () => {
+    mocks.listSkills.mockResolvedValue(forkedAndInlineSkills)
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    await waitFor(() => expect(mocks.listSkills).toHaveBeenCalled())
+
+    setComposerText('/forked', 7)
+    expect(await screen.findByRole('option', { name: /forked-skill/ })).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    setComposerText('/forke', 6)
+    setComposerText('/forked', 7)
+    await waitFor(() => expect(screen.queryByRole('option', { name: /forked-skill/ })).not.toBeInTheDocument())
+    setComposerText('/inline', 7)
+    expect(await screen.findByRole('option', { name: /inline-skill/ })).toBeInTheDocument()
+  })
+
+  it('refuses to send a skill the lean runtime cannot run, and sends one it can', async () => {
+    mocks.listSkills.mockResolvedValue(forkedAndInlineSkills)
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    await waitFor(() => expect(mocks.listSkills).toHaveBeenCalled())
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    setComposerText('/forked-skill go', 16)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    expect(mocks.createSession).not.toHaveBeenCalled()
+    expect(useUIStore.getState().toasts.some(toast => toast.message === 'This command is unavailable in lean mode. Switch this draft to Standard and try again.')).toBe(true)
+
+    setComposerText('/inline-skill go', 16)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentProfile: 'lean' })))
   })
 
   it('allows an absolute path prompt in lean mode', async () => {
@@ -1514,7 +1759,8 @@ describe('EmptySession', () => {
     setComposerText('keep these edits', 16)
     rerender(<EmptySession visible={false} />)
     rerender(<EmptySession visible />)
-    expect(screen.getByRole('button', { name: /^Agent mode:/ })).toHaveTextContent('Lean · experimental')
+    // The chip is short; the accessible name still says which mode it is.
+    expect(screen.getByRole('button', { name: /^Agent mode:/ })).toHaveAccessibleName('Agent mode: Lean · experimental')
     expect(getComposerText()).toBe('keep these edits')
   })
 
@@ -1534,6 +1780,139 @@ describe('EmptySession', () => {
     fireEvent.click(mode)
     fireEvent.click(screen.getByRole('option', { name: /Standard/ }))
     expect(mode).toHaveTextContent('Standard')
+  })
+
+  // The toolbar row is shared with the project, branch and model. The mode
+  // control sat in it at its full "Lean · experimental" width, which cut the
+  // project down to "claude-cod…" and the branch to "…in" on desktop and
+  // covered the "+" on a phone. Real widths are measured in a browser; these
+  // pin the structure that keeps that from coming back.
+  it('shows the short mode name on the desktop chip, naming the full mode for assistive tech', () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    const chip = screen.getByRole('button', { name: /^Agent mode:/ })
+    expect(chip).toHaveTextContent(/^Standard$/)
+    fireEvent.click(chip)
+    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    expect(chip).toHaveTextContent(/^Lean$/)
+    expect(chip).toHaveAccessibleName('Agent mode: Lean · experimental')
+  })
+
+  // jsdom lays nothing out, so this pins the pieces a real-browser measurement
+  // showed to matter: before, every control but the project and branch was
+  // `shrink-0`, and the two names paid for each control that was added.
+  it('lets the model give way and the trailing controls wrap, never squeezing the location', () => {
+    mocks.isMobile = false
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    const toolbar = screen.getByTestId('empty-session-toolbar')
+    const trailing = screen.getByTestId('empty-session-toolbar-trailing')
+    const modelSlot = screen.getByTestId('model-selector').parentElement!
+    // A row that cannot fit moves its trailing group to a second line.
+    expect(toolbar).toHaveClass('flex-wrap')
+    // The trailing group takes what the leading one leaves and is never narrower
+    // than its own smallest content, which is what makes it wrap rather than
+    // overflow onto the controls beside it.
+    expect(trailing).toHaveClass('flex-1', 'min-w-max')
+    expect(trailing).not.toHaveClass('shrink-0')
+    // The model's name is the part that gives way, down to a floor, and it
+    // cannot grow past its own width.
+    expect(modelSlot).toHaveClass('min-w-[128px]', 'max-w-max', 'grow')
+    expect(trailing).toContainElement(modelSlot)
+    expect(screen.getByTestId('model-selector')).toHaveAttribute('data-fluid', 'true')
+    expect(trailing).toContainElement(screen.getByTestId('agent-profile-control'))
+  })
+
+  // The lean control is the reason the row has to give way, and it only takes
+  // room on the row on desktop (a phone keeps it in the "+" sheet). Everywhere
+  // else the row is the one every other user has always had, so it must not
+  // start wrapping or letting the model shrink just because lean exists.
+  it.each([
+    { leanModeEnabled: false, phone: false },
+    { leanModeEnabled: false, phone: true },
+    { leanModeEnabled: true, phone: true },
+  ])('leaves the toolbar as it always was when the lean control is not on the row (%j)', ({ leanModeEnabled, phone }) => {
+    mocks.isMobile = phone
+    useSettingsStore.setState({ leanModeEnabled })
+    render(<EmptySession />)
+    const toolbar = screen.getByTestId('empty-session-toolbar')
+    const trailing = screen.getByTestId('empty-session-toolbar-trailing')
+    const model = screen.getByTestId('model-selector')
+    if (phone) {
+      expect(toolbar).toHaveClass('flex-wrap', 'gap-1')
+      expect(trailing).toHaveClass('min-w-0', 'flex-1')
+    } else {
+      expect(toolbar).not.toHaveClass('flex-wrap')
+      expect(toolbar).toHaveClass('gap-2')
+      expect(trailing).toHaveClass('shrink-0')
+    }
+    expect(trailing).not.toHaveClass('min-w-max')
+    expect(model).toHaveAttribute('data-fluid', 'false')
+    // No slot around the picker: it is a direct child of the trailing group.
+    expect(model.parentElement).toBe(trailing)
+    expect(screen.queryByTestId('agent-profile-control')).not.toBeInTheDocument()
+  })
+
+  it('keeps the mode off the phone toolbar and in the + sheet, beside permissions and model', async () => {
+    mocks.isMobile = true
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    // The chip, its info button and the badge covered the "+" on a 390px phone.
+    expect(screen.queryByRole('button', { name: /^Agent mode:/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'About lean mode' })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('agent-profile-control')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    const row = within(screen.getByTestId('mobile-composer-sheet')).getByRole('button', { name: /^Agent mode/ })
+    expect(row).toHaveTextContent('Standard')
+    fireEvent.click(row)
+
+    // One sheet at a time: the + sheet closes before the mode sheet opens.
+    const modeSheet = await screen.findByTestId('agent-profile-sheet')
+    expect(screen.queryByTestId('mobile-composer-sheet')).not.toBeInTheDocument()
+    fireEvent.click(within(modeSheet).getByRole('radio', { name: /Lean · experimental/ }))
+    expect(screen.queryByTestId('agent-profile-sheet')).not.toBeInTheDocument()
+
+    // The choice is the draft's mode: the row reads it back, and Run creates a lean session.
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    expect(within(screen.getByTestId('mobile-composer-sheet')).getByRole('button', { name: /^Agent mode/ })).toHaveTextContent('Lean · experimental')
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('mobile-composer-sheet')).not.toBeInTheDocument()
+    setComposerText('edit a file', 11)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentProfile: 'lean' })))
+  })
+
+  it('resets plan to asking permission when the phone sheet switches the draft to lean, as the desktop chip does', async () => {
+    mocks.isMobile = true
+    useSettingsStore.setState({ leanModeEnabled: true, permissionMode: 'plan' })
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    fireEvent.click(within(screen.getByTestId('mobile-composer-sheet')).getByRole('button', { name: /^Agent mode/ }))
+    fireEvent.click(within(await screen.findByTestId('agent-profile-sheet')).getByRole('radio', { name: /Lean · experimental/ }))
+    expect(useUIStore.getState().toasts.some(toast => toast.message.includes('Ask permissions'))).toBe(true)
+    expect(screen.getByRole('button', { name: 'Permission mode: default' })).toBeInTheDocument()
+  })
+
+  it('offers no mode row on the phone while lean mode is switched off in Settings', () => {
+    mocks.isMobile = true
+    render(<EmptySession />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    const sheet = screen.getByTestId('mobile-composer-sheet')
+    expect(within(sheet).getByRole('button', { name: /Execution Permissions/ })).toBeInTheDocument()
+    expect(within(sheet).queryByRole('button', { name: /^Agent mode/ })).not.toBeInTheDocument()
+  })
+
+  it('holds the phone mode row while the conversation is being created', async () => {
+    mocks.isMobile = true
+    useSettingsStore.setState({ leanModeEnabled: true })
+    mocks.createSession.mockReturnValue(new Promise(() => {}))
+    render(<EmptySession />)
+    setComposerText('edit a file', 11)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalled())
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    expect(within(screen.getByTestId('mobile-composer-sheet')).getByRole('button', { name: /^Agent mode/ })).toBeDisabled()
   })
 
   it('starts in a selected non-Git project without showing a repository warning', async () => {
@@ -1712,54 +2091,124 @@ describe('EmptySession', () => {
     expect(branchWrap).not.toBeNull()
   })
 
-  it('keeps current worktree selectable when the fallback branch is checked out elsewhere', async () => {
-    mocks.getRepositoryContext.mockResolvedValueOnce(okRepositoryContext({
-      currentBranch: null,
-      defaultBranch: 'main',
-      branches: [
-        {
-          name: 'main',
-          current: false,
-          local: true,
-          remote: false,
-          checkedOut: true,
-          worktreePath: '/workspace/project',
-        },
-        {
-          name: 'feature/a',
-          current: false,
-          local: true,
-          remote: false,
-          checkedOut: false,
-        },
-      ],
-      worktrees: [{
-        path: '/workspace/project/.codex/worktrees/detached/project',
-        branch: null,
-        current: true,
-      }],
-    }))
+  // A worktree on a detached HEAD (a Codex-managed one, a checked-out tag or PR)
+  // has no branch to follow. Launching "on" the default branch would switch the
+  // user off their commit, or be refused outright when that branch is checked
+  // out in the main worktree, so nothing is chosen for it and it launches as it is.
+  const detachedWorktreeContext = () => okRepositoryContext({
+    currentBranch: null,
+    defaultBranch: 'main',
+    branches: [
+      {
+        name: 'main',
+        current: false,
+        local: true,
+        remote: false,
+        checkedOut: true,
+        worktreePath: '/workspace/project',
+      },
+      {
+        name: 'feature/a',
+        current: false,
+        local: true,
+        remote: false,
+        checkedOut: false,
+      },
+    ],
+    worktrees: [{
+      path: '/workspace/project/.codex/worktrees/detached/project',
+      branch: null,
+      current: true,
+    }],
+  })
+
+  it('launches a detached worktree as it is instead of switching it onto a default branch checked out elsewhere', async () => {
+    mocks.getRepositoryContext.mockResolvedValueOnce(detachedWorktreeContext())
 
     render(<EmptySession />)
 
     setComposerText('draft question', 14)
     await pickProject()
 
+    // No branch is chosen for it, so there is nothing to warn about.
+    expect(await screen.findByRole('button', { name: 'Location: project' })).toBeInTheDocument()
+    expect(screen.queryByRole('status', { name: /already checked out/ })).not.toBeInTheDocument()
+
+    // Staying on the current worktree is the live, selected choice.
+    await openLaunchMenu()
+    const currentWorktree = await screen.findByRole('menuitemradio', { name: /Current worktree/ })
+    expect(currentWorktree).not.toBeDisabled()
+    expect(currentWorktree).toHaveAttribute('aria-checked', 'true')
+    fireEvent.keyDown(document, { key: 'Escape' })
     await waitFor(() => {
-      expect(screen.getByText('main')).toBeInTheDocument()
+      expect(screen.queryByRole('menu', { name: 'Location' })).not.toBeInTheDocument()
     })
 
-    const warning = screen.getByRole('status', {
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+
+    await waitFor(() => {
+      expect(mocks.createSession).toHaveBeenCalledWith({
+        workDir: '/workspace/project',
+        permissionMode: 'default',
+      })
+    })
+  })
+
+  // Picking a project resets the draft's launch state and holds Send until the
+  // controls report ready. Picking the one already in use changes nothing, so
+  // nothing is reported again: Send used to stay disabled for good there.
+  it.each([
+    { label: 'a detached worktree', context: () => detachedWorktreeContext() },
+    { label: 'a plain folder', context: () => notGitRepositoryContext() },
+  ])('keeps Send enabled after the current project is picked again in $label', async ({ context }) => {
+    mocks.getRepositoryContext.mockResolvedValue(context())
+    mocks.createSession.mockResolvedValue({ sessionId: 'repicked-session' })
+
+    render(<EmptySession />)
+    setComposerText('draft question', 14)
+    await pickProject()
+    await waitFor(() => expect(screen.getByRole('button', { name: /Run/i })).not.toBeDisabled())
+
+    await openLaunchMenu()
+    // A repo opens on the root view; a plain folder has nothing but the directory list.
+    const directoryRow = screen.queryByRole('menuitem', { name: /Directory/ })
+    if (directoryRow) fireEvent.click(directoryRow)
+    fireEvent.click(await screen.findByRole('button', { name: 'Pick project' }))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByRole('menu', { name: 'Location' })).not.toBeInTheDocument()
+    })
+
+    const run = screen.getByRole('button', { name: /Run/i })
+    await waitFor(() => expect(run).not.toBeDisabled())
+    fireEvent.click(run)
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ permissionMode: 'default' })))
+  })
+
+  it('keeps current worktree selectable, with its warning, when the user picks a branch checked out elsewhere', async () => {
+    mocks.getRepositoryContext.mockResolvedValue(detachedWorktreeContext())
+
+    render(<EmptySession />)
+
+    setComposerText('draft question', 14)
+    await pickProject()
+    await screen.findByRole('button', { name: 'Location: project' })
+
+    await openLaunchMenu()
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
+    fireEvent.click(await screen.findByRole('option', { name: /^main/ }))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => {
+      expect(screen.queryByRole('menu', { name: 'Location' })).not.toBeInTheDocument()
+    })
+
+    const warning = await screen.findByRole('status', {
       name: 'Selected branch is already checked out in another worktree. Direct launch may be blocked by Git; use "Isolated worktree" to avoid changing directories.',
     })
     expect(warning).toHaveTextContent('Branch already checked out')
-    expect(warning).toHaveAttribute(
-      'title',
-      'Selected branch is already checked out in another worktree. Direct launch may be blocked by Git; use "Isolated worktree" to avoid changing directories.',
-    )
 
     // Staying on the current worktree has to remain a live choice even when the
-    // fallback branch is checked out elsewhere — it must not render disabled.
+    // branch picked is checked out elsewhere — it must not render disabled.
     await openLaunchMenu()
     const currentWorktree = await screen.findByRole('menuitemradio', { name: /Current worktree/ })
     expect(currentWorktree).not.toBeDisabled()
@@ -1776,6 +2225,223 @@ describe('EmptySession', () => {
         workDir: '/workspace/project',
         repository: { branch: 'main', worktree: false },
         permissionMode: 'default',
+      })
+    })
+  })
+
+  // The retained new-session draft: "New session" may move it to another
+  // project only while nothing unsent is in it, so it has to say when it holds
+  // something.
+  describe('as the retained new-session draft', () => {
+    it('tells the draft whether it holds unsent text', () => {
+      useUIStore.getState().startNewSessionDraft('')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} />)
+      const hasContent = () => useUIStore.getState().newSessionDraft?.hasContent
+      expect(hasContent()).toBe(false)
+
+      setComposerText('   ', 3)
+      expect(hasContent()).toBe(false)
+      setComposerText('keep me', 7)
+      expect(hasContent()).toBe(true)
+      setComposerText('', 0)
+      expect(hasContent()).toBe(false)
+    })
+
+    it('counts an attachment as unsent content', async () => {
+      mocks.isTauriRuntime = true
+      const file = new File(['notes'], 'ignored-name.md', { type: 'text/markdown' })
+      Object.defineProperty(file, 'path', { configurable: true, value: '/Users/nanmi/drop/notes.md' })
+      useUIStore.getState().startNewSessionDraft('')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} />)
+
+      fireEvent.drop(screen.getByTestId('empty-session-composer-panel'), {
+        dataTransfer: { types: ['Files'], files: [file], dropEffect: '' },
+      })
+      expect(await screen.findByText('notes.md')).toBeInTheDocument()
+      expect(useUIStore.getState().newSessionDraft?.hasContent).toBe(true)
+    })
+
+    it('does not report into a draft it does not belong to', () => {
+      useUIStore.getState().startNewSessionDraft('')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision + 1} />)
+      setComposerText('typed elsewhere', 15)
+      expect(useUIStore.getState().newSessionDraft).toBe(draft)
+    })
+
+    // Run is enabled with only a project chosen, so a draft without a word in
+    // it can be on its way while "New session" is clicked for another project.
+    // Moving it then would aim the launch at the wrong repository: the send
+    // keeps the project it started with, the controls would answer for the new one.
+    it('is not empty while it is being sent, so "New session" cannot move it to another project mid-send', async () => {
+      let resolveAuth!: (status: { hasAuth: boolean; source: string }) => void
+      mocks.getProviderAuthStatus.mockImplementationOnce(() => new Promise((resolve) => { resolveAuth = resolve }))
+      mocks.createSession.mockResolvedValue({ sessionId: 'sending-draft-session' })
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      const runButton = screen.getByRole('button', { name: /Run/i })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      expect(useUIStore.getState().newSessionDraft?.hasContent).toBe(false)
+
+      fireEvent.click(runButton)
+      await waitFor(() => expect(useUIStore.getState().newSessionDraft?.hasContent).toBe(true))
+      // "New session" for another project while the send waits for its credentials check.
+      act(() => { useUIStore.getState().startNewSessionDraft('/workspace/other') })
+      expect(useUIStore.getState().newSessionDraft).toMatchObject({ revision: draft.revision, workDir: '/workspace/project' })
+
+      resolveAuth({ hasAuth: true, source: 'env' })
+      await waitFor(() => {
+        expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ workDir: '/workspace/project' }))
+      })
+      expect(mocks.createSession).toHaveBeenCalledTimes(1)
+    })
+
+    it('moves to the project it is sent to in place, keeping its mode, permission and model', async () => {
+      mocks.createSession.mockResolvedValue({ sessionId: 'moved-draft-session' })
+      useSettingsStore.setState({ leanModeEnabled: true })
+      useSessionRuntimeStore.getState().setSelection('__draft__', { providerId: 'provider-explicit', modelId: 'model-explicit' })
+      useUIStore.getState().startNewSessionDraft('')
+      const draft = useUIStore.getState().newSessionDraft!
+      const { rerender } = render(<EmptySession draftRevision={draft.revision} initialWorkDir="" visible={false} />)
+      fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
+      fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+      // The mocked selector picks Auto.
+      fireEvent.click(screen.getByRole('button', { name: 'Permission mode: default' }))
+      const composer = getComposerElement()
+
+      // What ContentRouter renders once "New session" moved the empty draft.
+      rerender(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" visible />)
+
+      expect(getComposerElement()).toBe(composer)
+      expect(await screen.findByRole('button', { name: 'Location: project / main' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: /^Agent mode:/ })).toHaveAccessibleName('Agent mode: Lean · experimental')
+      expect(screen.getByRole('button', { name: 'Permission mode: auto' })).toBeInTheDocument()
+
+      setComposerText('work here', 9)
+      const runButton = screen.getByRole('button', { name: /Run/i })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+      await waitFor(() => {
+        expect(mocks.createSession).toHaveBeenCalledWith({
+          workDir: '/workspace/project',
+          repository: { branch: 'main', worktree: false },
+          permissionMode: 'auto',
+          agentProfile: 'lean',
+        })
+      })
+      expect(useSessionRuntimeStore.getState().selections['moved-draft-session']).toEqual({
+        providerId: 'provider-explicit',
+        modelId: 'model-explicit',
+      })
+    })
+
+    it('keeps its own project in the draft seed when the user picks one', async () => {
+      useUIStore.getState().startNewSessionDraft('')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} />)
+      await pickProject()
+      expect(useUIStore.getState().newSessionDraft).toMatchObject({ revision: draft.revision, workDir: '/workspace/project' })
+    })
+
+    it('leaves the draft seed alone when it is not the draft', async () => {
+      useUIStore.getState().startNewSessionDraft('/workspace/draft')
+      const draft = useUIStore.getState().newSessionDraft
+      render(<EmptySession />)
+      await pickProject()
+      expect(useUIStore.getState().newSessionDraft).toBe(draft)
+    })
+  })
+
+  // A draft can wait for hours now. The server switches the checkout to any
+  // launch branch that is not the current one, so a branch chosen for the user
+  // when the draft was first read must not be sent as if they had asked for it.
+  describe('launch branch freshness', () => {
+    function twoBranchContext(currentBranch: 'main' | 'feature-x'): RepositoryContextResult {
+      return okRepositoryContext({
+        currentBranch,
+        branches: (['main', 'feature-x'] as const).map((name) => ({
+          name,
+          current: name === currentBranch,
+          local: true,
+          remote: false,
+          checkedOut: name === currentBranch,
+          worktreePath: name === currentBranch ? '/workspace/project' : undefined,
+        })),
+      })
+    }
+
+    async function sendFrom(text: string) {
+      setComposerText(text, text.length)
+      const runButton = screen.getByRole('button', { name: /Run/i })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+    }
+
+    it('follows the checkout when the draft comes back after the repository moved', async () => {
+      mocks.createSession.mockResolvedValue({ sessionId: 'moved-checkout-session' })
+      mocks.getRepositoryContext.mockResolvedValue(twoBranchContext('main'))
+      const { rerender } = render(<EmptySession initialWorkDir="/workspace/project" />)
+      expect(await screen.findByRole('button', { name: 'Location: project / main' })).toBeInTheDocument()
+
+      rerender(<EmptySession initialWorkDir="/workspace/project" visible={false} />)
+      mocks.getRepositoryContext.mockResolvedValue(twoBranchContext('feature-x'))
+      rerender(<EmptySession initialWorkDir="/workspace/project" visible />)
+      expect(await screen.findByRole('button', { name: 'Location: project / feature-x' })).toBeInTheDocument()
+
+      await sendFrom('continue here')
+      await waitFor(() => {
+        expect(mocks.createSession).toHaveBeenCalledWith({
+          workDir: '/workspace/project',
+          repository: { branch: 'feature-x', worktree: false },
+          permissionMode: 'default',
+        })
+      })
+    })
+
+    it('reads the checkout again at send time for a branch chosen automatically', async () => {
+      mocks.createSession.mockResolvedValue({ sessionId: 'send-time-checkout-session' })
+      mocks.getRepositoryContext.mockResolvedValue(twoBranchContext('main'))
+      render(<EmptySession initialWorkDir="/workspace/project" />)
+      expect(await screen.findByRole('button', { name: 'Location: project / main' })).toBeInTheDocument()
+
+      // Switched in a terminal while the page stayed open.
+      mocks.getRepositoryContext.mockResolvedValue(twoBranchContext('feature-x'))
+      await sendFrom('continue here')
+      await waitFor(() => {
+        expect(mocks.createSession).toHaveBeenCalledWith({
+          workDir: '/workspace/project',
+          repository: { branch: 'feature-x', worktree: false },
+          permissionMode: 'default',
+        })
+      })
+    })
+
+    it('keeps a branch the user picked while the draft was hidden, and sends it', async () => {
+      mocks.createSession.mockResolvedValue({ sessionId: 'picked-branch-session' })
+      mocks.getRepositoryContext.mockResolvedValue(twoBranchContext('main'))
+      const { rerender } = render(<EmptySession initialWorkDir="/workspace/project" />)
+      fireEvent.click(await screen.findByRole('button', { name: 'Location: project / main' }))
+      fireEvent.click(await screen.findByRole('menuitem', { name: /Branch/ }))
+      fireEvent.click(await screen.findByRole('option', { name: /feature-x/ }))
+      fireEvent.keyDown(document, { key: 'Escape' })
+      expect(await screen.findByRole('button', { name: 'Location: project / feature-x' })).toBeInTheDocument()
+
+      rerender(<EmptySession initialWorkDir="/workspace/project" visible={false} />)
+      const reads = mocks.getRepositoryContext.mock.calls.length
+      rerender(<EmptySession initialWorkDir="/workspace/project" visible />)
+      await waitFor(() => expect(mocks.getRepositoryContext.mock.calls.length).toBeGreaterThan(reads))
+      expect(screen.getByRole('button', { name: 'Location: project / feature-x' })).toBeInTheDocument()
+
+      await sendFrom('work on the feature')
+      await waitFor(() => {
+        expect(mocks.createSession).toHaveBeenCalledWith({
+          workDir: '/workspace/project',
+          repository: { branch: 'feature-x', worktree: false },
+          permissionMode: 'default',
+        })
       })
     })
   })
@@ -1826,6 +2492,19 @@ describe('EmptySession', () => {
       render(<EmptySession />)
 
       const model = screen.getByTestId('model-selector')
+      const voice = screen.getByTestId('voice-input')
+      const run = screen.getByRole('button', { name: 'Run' })
+      expect(model.nextElementSibling).toBe(voice)
+      expect(voice.nextElementSibling).toBe(run)
+    })
+
+    it('keeps the microphone right after the model slot when the lean control is on the row', () => {
+      useSettingsStore.setState({ leanModeEnabled: true })
+      render(<EmptySession />)
+
+      // The picker sits in its own slot of the row (the one that gives way
+      // when the row is full), so the slot is what precedes the microphone.
+      const model = screen.getByTestId('model-selector').parentElement!
       const voice = screen.getByTestId('voice-input')
       const run = screen.getByRole('button', { name: 'Run' })
       expect(model.nextElementSibling).toBe(voice)

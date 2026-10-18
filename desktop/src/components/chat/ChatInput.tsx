@@ -1,4 +1,4 @@
-import { AgentProfileControl } from '@/components/chat/AgentProfileControl'
+import { AgentProfileControl, type AgentProfileControlHandle } from '@/components/chat/AgentProfileControl'
 import { isLeanSlashCommand, isUnsupportedLeanSlashInput } from '@/lib/agentProfile'
 import { useSideChatStore } from '@/stores/sideChatStore'
 import { openSideChat } from '@/lib/workspace/openSideChat'
@@ -8,7 +8,7 @@ import { normalizeSessionReferences } from '@/lib/sessionReferences'
 import { isComposerReferenceVisible, isComposerSlashCommandVisible } from '@/lib/composerCapabilityVisibility'
 import { useState, useRef, useEffect, useCallback, useMemo, useId } from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { ArrowUp, CornerDownRight, Cpu, Gauge, Pencil, Plus, ShieldCheck, Square, Trash2 } from 'lucide-react'
+import { ArrowUp, CornerDownRight, Cpu, Feather, Gauge, Pencil, Plus, ShieldCheck, Square, Trash2 } from 'lucide-react'
 import { useDismissable } from '@/hooks/useDismissable'
 import { Button } from '@/components/ui/Button'
 import { IconButton } from '@/components/ui/IconButton'
@@ -39,7 +39,7 @@ import type { AttachmentRef } from '../../types/chat'
 import { AttachmentGallery } from './AttachmentGallery'
 import { ComposerDropOverlay } from './ComposerDropOverlay'
 import { ProjectContextChip } from '@/components/chat/ProjectContextChip'
-import { RepositoryLaunchControls } from '@/components/chat/RepositoryLaunchControls'
+import { RepositoryLaunchControls, type RepositoryLaunchControlsHandle } from '@/components/chat/RepositoryLaunchControls'
 import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from './ComposerReferenceMenu'
 import { ComposerReferenceDetail } from './ComposerReferenceDetail'
 import { ComposerCapabilityMenu } from './ComposerCapabilityMenu'
@@ -195,8 +195,10 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const panelRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const modelSelectorRef = useRef<ModelSelectorHandle>(null)
+  const launchControlsRef = useRef<RepositoryLaunchControlsHandle>(null)
   const permissionSelectorRef = useRef<PermissionModeSelectorHandle>(null)
   const contextUsageRef = useRef<ContextUsageIndicatorHandle>(null)
+  const agentProfileRef = useRef<AgentProfileControlHandle>(null)
   const plusMenuRef = useRef<HTMLDivElement>(null)
   const slashMenuRef = useRef<HTMLDivElement>(null)
   const fileSearchRef = useRef<ComposerReferenceMenuHandle>(null)
@@ -205,6 +207,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const referenceMenuId = useId()
   const capabilityMenuId = useId()
   const previousActiveTabIdRef = useRef<string | null>(null)
+  // The chat on screen right now, for work that outlasts the click that began it.
+  const currentChatRef = useRef<string | null>(null)
   const inputRef = useRef(input)
   const mentionsRef = useRef(mentions)
   const attachmentsRef = useRef(attachments)
@@ -247,6 +251,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   })))
   const selectedTabId = useTabStore((s) => s.activeTabId)
   const activeTabId = sessionId ?? selectedTabId
+  currentChatRef.current = activeTabId
   const activeTabType = useTabStore((s) =>
     s.tabs.find((tab) => tab.sessionId === (sessionId ?? s.activeTabId))?.type,
   )
@@ -254,6 +259,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const repositoryLaunchDraft = sessionState?.repositoryLaunchDraft
   const launchWorkDir = repositoryLaunchDraft?.workDir ?? ''
   const launchBranch = repositoryLaunchDraft?.branch ?? null
+  const launchBranchAutomatic = repositoryLaunchDraft?.branchAutomatic ?? false
   const launchUseWorktree = repositoryLaunchDraft?.useWorktree ?? false
   const chatState = sessionState?.chatState ?? 'idle'
   // While a question is waiting, the card is the only way to reach the model: it
@@ -305,6 +311,14 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   const setLaunchBranch = useCallback((branch: string | null) => {
     updateRepositoryLaunchDraft((current) => ({ ...current, branch }))
   }, [updateRepositoryLaunchDraft])
+  // The controls are mounted again whenever the user comes back to this chat;
+  // keeping whether they chose the branch lets them keep following the checkout.
+  const setLaunchBranchAutomatic = useCallback((branchAutomatic: boolean) => {
+    if (!activeTabId) return
+    const current = useChatStore.getState().sessions[activeTabId]?.repositoryLaunchDraft
+    if ((current?.branchAutomatic ?? false) === branchAutomatic) return
+    updateRepositoryLaunchDraft((draft) => ({ ...draft, branchAutomatic }))
+  }, [activeTabId, updateRepositoryLaunchDraft])
   const setLaunchUseWorktree = useCallback((useWorktree: boolean) => {
     updateRepositoryLaunchDraft((current) => ({ ...current, useWorktree }))
   }, [updateRepositoryLaunchDraft])
@@ -400,6 +414,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // workspace panel open", so opening the panel dropped the location to a
   // second line on columns with hundreds of pixels to spare.
   const showLocationInToolbar = !useCompactControls && !isMemberSession
+  // The lean badge and info button take room on the toolbar row only on desktop; a phone keeps them in the "+" sheet.
+  const leanControlOnRow = isLean && !isMobileComposer
   const embedLaunchControlsInToolbar = showLocationInToolbar && showLaunchControls
   const pendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
     ? resolveSlashUiAction(input.trim().slice(1))
@@ -677,6 +693,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     },
   })
 
+  // A lean session's own list already passed the lean runtime rule.
+  const listedSlashCommandNames = useMemo(() => new Set(slashCommands.map(command => command.name)), [slashCommands])
   const allSlashCommands = useMemo(() => {
     const commands = appendAgentSlashCommands(mergeSlashCommands(slashCommands, getLocalizedFallbackCommands(t)), agentSlashCommands)
     const names = new Set(commands.map(command => command.name.toLowerCase()))
@@ -687,8 +705,8 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       commands.push({ name, description: reference.description, kind: reference.kind })
     }
     // `/btw` forks the conversation so far; a blank session has none to fork.
-    return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command)) && (sideChatAvailable || command.name !== 'btw'))
-  }, [agentSlashCommands, slashCommands, composerReferences, sideChatAvailable, isLean, t])
+    return commands.filter(command => isComposerSlashCommandVisible(command) && (!isLean || isLeanSlashCommand(command, listedSlashCommandNames)) && (sideChatAvailable || command.name !== 'btw'))
+  }, [agentSlashCommands, slashCommands, listedSlashCommandNames, composerReferences, sideChatAvailable, isLean, t])
 
   const filteredCommandGroups = useMemo(() => {
     return groupSlashCommands(filterSlashCommands(allSlashCommands, slashFilter))
@@ -878,7 +896,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
       useUIStore.getState().addToast({ type: 'info', message: t('agentProfile.planUnavailable') })
       return
     }
-    if (isLean && isUnsupportedLeanSlashInput(text, slashCommands.concat(allSlashCommands))) {
+    // `/btw` becomes a side chat here, before any runtime sees it, and lean
+    // offers none — so no listed command of that name can make it available.
+    if (isLean && (parseSideQuestionCommand(text) !== null || isUnsupportedLeanSlashInput(text, slashCommands.concat(allSlashCommands), listedSlashCommandNames))) {
       useUIStore.getState().addToast({ type: 'info', message: t('agentProfile.commandUnavailable') })
       return
     }
@@ -984,17 +1004,30 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     ]
 
     let targetSessionId = activeTabId!
-    if (showLaunchControls && activeLaunchWorkDir && launchBranch) {
+    // A chat can wait a long time for its first message, and the server switches
+    // the checkout to any launch branch that is not the current one. A branch the
+    // controls chose on their own is decided again now, against the checkout as it
+    // is, so a stale choice cannot put the repository back where it was.
+    let resolvedLaunchBranch = launchBranch
+    if (showLaunchControls && activeLaunchWorkDir && launchBranch && launchControlsRef.current) {
+      setLaunchTransitioning(true)
+      try {
+        resolvedLaunchBranch = await launchControlsRef.current.resolveLaunchBranch()
+      } finally {
+        setLaunchTransitioning(false)
+      }
+    }
+    if (showLaunchControls && activeLaunchWorkDir && resolvedLaunchBranch) {
       const shouldReplaceForRepositoryLaunch =
         launchUseWorktree ||
-        (gitInfo?.branch ? launchBranch !== gitInfo.branch : true)
+        (gitInfo?.branch ? resolvedLaunchBranch !== gitInfo.branch : true)
       if (shouldReplaceForRepositoryLaunch) {
         setLaunchTransitioning(true)
         const placeholderSessionId = targetSessionId
         setPreparingTurn(placeholderSessionId, true)
         try {
           const newSessionId = await replaceEmptySession(activeLaunchWorkDir, {
-            branch: launchBranch,
+            branch: resolvedLaunchBranch,
             worktree: launchUseWorktree,
           })
           if (!newSessionId) {
@@ -1034,11 +1067,16 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
         displayAttachments: visibleAttachmentPayload,
       })
     }
-    invalidatePendingPastes()
     recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
     if (sendAsTeam) capabilityMenu.disarmAgentTeam()
-    setComposerInput('', [])
-    setComposerAttachments([])
+    // The send can wait for the launch branch to be read again. If the user moved
+    // to another chat meanwhile, the editor holds that chat's draft now, not what
+    // was just sent: leave it alone. (The sent chat's saved draft is cleared below.)
+    if (currentChatRef.current === activeTabId || currentChatRef.current === targetSessionId) {
+      invalidatePendingPastes()
+      setComposerInput('', [])
+      setComposerAttachments([])
+    }
     const chatStore = useChatStore.getState()
     chatStore.clearComposerDraft(activeTabId!)
     chatStore.clearRepositoryLaunchDraft(activeTabId!)
@@ -1297,6 +1335,16 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
           onSelect: () => openFromComposerSheet(() => contextUsageRef.current?.open()),
         },
       ] : []),
+      // A lean session's badge and info button left the toolbar: beside the
+      // model they squeezed its name to one letter. The mode is locked, so
+      // this row only opens what it includes.
+      ...(isLean ? [{
+        key: 'agentProfile',
+        icon: <Feather size={16} strokeWidth={1.75} aria-hidden="true" />,
+        label: t('agentProfile.label'),
+        value: t('agentProfile.lean'),
+        onSelect: () => openFromComposerSheet(() => agentProfileRef.current?.open()),
+      }] : []),
     ]
     : []
 
@@ -1671,9 +1719,18 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             row's top inset separate the two — so the narrow layouts no longer
             need a band of their own either.
           */}
+          {/*
+            A lean session's badge and info button sit on this row on desktop,
+            and the model's name was the one thing that gave way for them: at the
+            narrowest windows it read as a letter or nothing. There the row lets
+            its trailing group wrap instead, with the model keeping a floor of
+            128px. Every other row is the one it always was.
+          */}
           <div
             data-testid="chat-input-toolbar"
-            className={`flex min-w-0 items-center justify-between pt-1.5 ${isMobileComposer ? 'gap-1' : 'gap-2'}`}
+            className={`flex min-w-0 items-center justify-between pt-1.5 ${
+              leanControlOnRow ? 'flex-wrap gap-x-2 gap-y-1' : isMobileComposer ? 'gap-1' : 'gap-2'
+            }`}
           >
             {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
             <div
@@ -1755,10 +1812,18 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                     <div data-testid="chat-input-toolbar-location" className="min-w-0 flex-1">
                       {embedLaunchControlsInToolbar ? (
                         <RepositoryLaunchControls
+                          // One instance per chat: what it holds (which branch it chose
+                          // itself, the context it read) belongs to this chat, and
+                          // ChatInput is reused as the user moves between empty chats.
+                          key={activeTabId}
+                          ref={launchControlsRef}
+                          visible={visible}
                           workDir={activeLaunchWorkDir}
                           onWorkDirChange={handleLaunchWorkDirChange}
                           branch={launchBranch}
                           onBranchChange={setLaunchBranch}
+                          branchAutomatic={launchBranchAutomatic}
+                          onBranchAutomaticChange={setLaunchBranchAutomatic}
                           useWorktree={launchUseWorktree}
                           onUseWorktreeChange={setLaunchUseWorktree}
                           onLaunchReadyChange={setLaunchReady}
@@ -1787,7 +1852,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             <div
               data-testid="chat-input-toolbar-trailing"
               hidden={dictationLive}
-              className="flex min-w-0 flex-1 items-center justify-end gap-1"
+              className={leanControlOnRow
+                ? 'flex min-w-max flex-1 items-center justify-end gap-1'
+                : 'flex min-w-0 flex-1 items-center justify-end gap-1'}
             >
               {!isMemberSession && activeTabId && (
                 <ContextUsageIndicator
@@ -1805,17 +1872,26 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   }
                 />
               )}
-              <AgentProfileControl value={isLean ? 'lean' : 'standard'} />
-              {!isMemberSession && activeTabId && (
-                <ModelSelector
-                  ref={modelSelectorRef}
-                  runtimeKey={activeTabId}
-                  lockedProviderId={sideChat ? runtimeSelection?.providerId ?? null : undefined}
-                  disabled={isActive}
-                  compact={useCompactControls}
-                  fluid
-                />
-              )}
+              <AgentProfileControl
+                ref={agentProfileRef}
+                value={isLean ? 'lean' : 'standard'}
+                presentation={isMobileComposer ? 'sheet' : 'toolbar'}
+              />
+              {!isMemberSession && activeTabId && (() => {
+                const modelSelector = (
+                  <ModelSelector
+                    ref={modelSelectorRef}
+                    runtimeKey={activeTabId}
+                    lockedProviderId={sideChat ? runtimeSelection?.providerId ?? null : undefined}
+                    disabled={isActive}
+                    compact={useCompactControls}
+                    fluid
+                  />
+                )
+                return leanControlOnRow
+                  ? <div className="flex w-0 min-w-[128px] max-w-max grow">{modelSelector}</div>
+                  : modelSelector
+              })()}
               <VoiceInputButton dictation={dictation} blocked={composerDisabled} mobile={isMobileComposer} />
               {stopOffer === 'background' ? (
                 // Stopping background work while the composer can still send:
@@ -1894,10 +1970,15 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
               />
             ) : (
               <RepositoryLaunchControls
+                key={activeTabId}
+                ref={launchControlsRef}
+                visible={visible}
                 workDir={activeLaunchWorkDir}
                 onWorkDirChange={handleLaunchWorkDirChange}
                 branch={launchBranch}
                 onBranchChange={setLaunchBranch}
+                branchAutomatic={launchBranchAutomatic}
+                onBranchAutomaticChange={setLaunchBranchAutomatic}
                 useWorktree={launchUseWorktree}
                 onUseWorktreeChange={setLaunchUseWorktree}
                 onLaunchReadyChange={setLaunchReady}

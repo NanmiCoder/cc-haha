@@ -1062,15 +1062,12 @@ async function handleUserMessage(
     // Track and emit the first placeholder title before CLI startup/streaming.
     let titleState = sessionTitleState.get(sessionId)
     if (!titleState) {
-      const hasCustomTitle = !!(await sessionService.getCustomTitle(sessionId))
-      const launchInfo = hasCustomTitle
-        ? null
-        : await sessionService.getSessionLaunchInfo(sessionId)
+      const { hasCustomTitle, hasExistingTranscript } = await readTitleStateMetadata(sessionId)
       if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return
       titleState = {
         userMessageCount: 0,
         hasCustomTitle,
-        hasExistingTranscript: (launchInfo?.transcriptMessageCount ?? 0) > 0,
+        hasExistingTranscript,
         persistTitleSource,
         firstUserMessage: '',
         completedTurns: [],
@@ -3265,6 +3262,42 @@ function closeStoppedAgentsAfterRuntimeExit(sessionId: string, cliMsg: any): voi
 // ============================================================================
 
 type TitleGenerationPhase = 'user-message' | 'turn-complete'
+
+const TITLE_STATE_HISTORY_RETRY_DELAYS_MS = [10, 40]
+
+/**
+ * Title bookkeeping only needs to know whether the session already has a custom
+ * title or transcript messages. Startup's placeholder replacement and /clear
+ * rewrite the transcript, so a strict metadata read running concurrently can
+ * report HISTORY_CHANGED; that optional lookup must not fail the user's turn.
+ * Retry briefly, then continue as a fresh session: saveAiTitle re-checks for a
+ * custom title before it writes, so this never replaces one. Any other error
+ * still fails the turn.
+ */
+async function readTitleStateMetadata(
+  sessionId: string,
+): Promise<{ hasCustomTitle: boolean; hasExistingTranscript: boolean }> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const hasCustomTitle = !!(await sessionService.getCustomTitle(sessionId))
+      const launchInfo = hasCustomTitle
+        ? null
+        : await sessionService.getSessionLaunchInfo(sessionId)
+      return {
+        hasCustomTitle,
+        hasExistingTranscript: (launchInfo?.transcriptMessageCount ?? 0) > 0,
+      }
+    } catch (error) {
+      if (!(error instanceof ApiError && error.code === 'HISTORY_CHANGED')) throw error
+      const delayMs = TITLE_STATE_HISTORY_RETRY_DELAYS_MS[attempt]
+      if (delayMs === undefined) {
+        console.info(`[Title] ${sessionId} transcript kept changing; continuing without title metadata`)
+        return { hasCustomTitle: false, hasExistingTranscript: false }
+      }
+      await new Promise(resolve => setTimeout(resolve, delayMs))
+    }
+  }
+}
 
 function triggerTitleGeneration(
   ws: SessionConnection,

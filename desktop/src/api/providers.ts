@@ -35,8 +35,14 @@ export const providersApi = {
     return api.get<ProvidersListResponse>('/api/providers')
   },
 
-  authStatus() {
-    return api.get<AuthStatusResponse>('/api/providers/auth-status')
+  /**
+   * Without `providerId` the server judges the global default provider; with
+   * one (a saved provider id or a built-in id such as `claude-official`) it
+   * judges only that provider's credentials.
+   */
+  authStatus(providerId?: string) {
+    const query = providerId ? `?providerId=${encodeURIComponent(providerId)}` : ''
+    return api.get<AuthStatusResponse>(`/api/providers/auth-status${query}`)
   },
 
   getSettings() {

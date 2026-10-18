@@ -3,12 +3,15 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import {
   buildPostCompactMessages,
   createCompactApiAttemptBudget,
+  createPostCompactDeltaAttachments,
   getCompactForkMaxOutputTokens,
   streamCompactSummary,
   stripImagesFromMessages,
   truncateHeadForPTLRetry,
   type CompactionResult,
 } from './compact.js'
+import { setAgentProfile } from '../../utils/agentProfile.js'
+import * as attachments from '../../utils/attachments.js'
 import * as forkedAgent from '../../utils/forkedAgent.js'
 import { COMPACT_MAX_OUTPUT_TOKENS } from '../../utils/context.js'
 import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
@@ -339,5 +342,71 @@ describe('compaction fork output allowance near the context window', () => {
       await summarize(967_000)
       expect(captured?.maxOutputTokens).toBe(COMPACT_MAX_OUTPUT_TOKENS)
     })
+  })
+})
+
+describe('post-compact delta re-announcement', () => {
+  const savedDelta = process.env.CLAUDE_CODE_MCP_INSTR_DELTA
+  // A connected server whose handshake carried instructions, as print mode tracks it.
+  const instructedServer = {
+    type: 'connected', name: 'fixture-mcp', instructions: 'FIXTURE_MCP_INSTRUCTIONS',
+    capabilities: {}, client: {}, cleanup: async () => {},
+    config: { type: 'stdio', command: 'fixture', args: [], scope: 'user' },
+  }
+  const context = () => ({
+    options: { tools: [], mainLoopModel: 'mock-model', mcpClients: [instructedServer], agentDefinitions: { activeAgents: [], allAgents: [] } },
+  }) as never
+
+  beforeEach(() => {
+    process.env.CLAUDE_CODE_MCP_INSTR_DELTA = '1'
+  })
+  afterEach(() => {
+    if (savedDelta === undefined) delete process.env.CLAUDE_CODE_MCP_INSTR_DELTA
+    else process.env.CLAUDE_CODE_MCP_INSTR_DELTA = savedDelta
+    setAgentProfile('standard')
+  })
+
+  test('standard re-announces connected MCP instructions after full and partial compaction', () => {
+    const full = createPostCompactDeltaAttachments(context(), [], 'compact_full')
+    expect(full.map(message => message.attachment)).toEqual([expect.objectContaining({
+      type: 'mcp_instructions_delta', addedNames: ['fixture-mcp'],
+    })])
+    expect(createPostCompactDeltaAttachments(context(), [makePreservedUser()], 'compact_partial')).toHaveLength(1)
+  })
+
+  test('lean never gains MCP instructions through compaction, even with the delta gate on', () => {
+    setAgentProfile('lean')
+    expect(createPostCompactDeltaAttachments(context(), [], 'compact_full')).toEqual([])
+    expect(createPostCompactDeltaAttachments(context(), [makePreservedUser()], 'compact_partial')).toEqual([])
+  })
+
+  test('standard keeps the previous producer order and arguments', () => {
+    const kept = [makePreservedUser()]
+    const calls: unknown[] = []
+    const spies = [
+      spyOn(attachments, 'getDeferredToolsDeltaAttachment').mockImplementation((_tools, model, messages, scan) => {
+        calls.push(['deferred', model, messages === kept, scan?.callSite])
+        return [{ type: 'deferred_tools_delta', addedNames: ['Deferred'], addedLines: ['Deferred'], removedNames: [] }] as never
+      }),
+      spyOn(attachments, 'getAgentListingDeltaAttachment').mockImplementation((_context, messages) => {
+        calls.push(['agents', messages === kept])
+        return [{ type: 'agent_listing_delta', addedTypes: ['fixture'], addedLines: ['fixture'], removedTypes: [], isInitial: true, showConcurrencyNote: false }] as never
+      }),
+      spyOn(attachments, 'getMcpInstructionsDeltaAttachment').mockImplementation((clients, _tools, model, messages) => {
+        calls.push(['mcp', clients.length, model, messages === kept])
+        return [{ type: 'mcp_instructions_delta', addedNames: ['fixture-mcp'], addedBlocks: ['block'], removedNames: [] }] as never
+      }),
+    ]
+    try {
+      const result = createPostCompactDeltaAttachments(context(), kept, 'compact_partial')
+      expect(result.map(message => message.attachment.type)).toEqual(['deferred_tools_delta', 'agent_listing_delta', 'mcp_instructions_delta'])
+      expect(calls).toEqual([
+        ['deferred', 'mock-model', true, 'compact_partial'],
+        ['agents', true],
+        ['mcp', 1, 'mock-model', true],
+      ])
+    } finally {
+      for (const spy of spies) spy.mockRestore()
+    }
   })
 })

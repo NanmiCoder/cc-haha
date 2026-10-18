@@ -50,15 +50,21 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
   }, [activeTabId, activeTabType, tabs])
 
   const draftVisible = !activeTabId || !activeTabType
+  // The retained draft is the desktop's new-session page. A shell with a home
+  // of its own (the phone's session list, the tablet's new-task page) starts
+  // tasks its own way, and a desktop draft left over from a wider window must
+  // not cover that home.
+  const retainsDraft = !homePage
+  const draft = retainsDraft ? newSessionDraft : null
   useEffect(() => {
     // The initial desktop composer needs the same retained draft as Cmd+N.
-    if (draftVisible && !homePage && !newSessionDraft) {
+    if (draftVisible && retainsDraft && !newSessionDraft) {
       useUIStore.getState().startNewSessionDraft()
     }
-  }, [draftVisible, homePage, newSessionDraft])
+  }, [draftVisible, retainsDraft, newSessionDraft])
   let page: ReactNode = null
   if (!activeTabId || !activeTabType) {
-    page = newSessionDraft ? null : homePage ?? <EmptySession />
+    page = draft ? null : homePage ?? <EmptySession />
   } else if (activeTabType === 'settings') {
     page = <Settings />
   } else if (activeTabType === 'scheduled') {
@@ -122,11 +128,13 @@ export function ContentRouter({ homePage }: ContentRouterProps = {}) {
         ) : null}
         <WorkspaceBrowserGuestLayer />
       </div>
-      {newSessionDraft && (
+      {draft && (
         <div hidden={!draftVisible} aria-hidden={!draftVisible} {...(draftVisible ? {} : { inert: '' })}
           data-testid="new-session-draft-panel"
           className={draftVisible ? 'absolute inset-0 z-10 flex min-h-0 flex-col overflow-hidden' : 'hidden'}>
-          <EmptySession key={newSessionDraft.revision} initialWorkDir={newSessionDraft.workDir} visible={draftVisible} />
+          {/* Keyed by revision only: moving an empty draft to another project
+              changes `initialWorkDir` and the composer follows it in place. */}
+          <EmptySession key={draft.revision} draftRevision={draft.revision} initialWorkDir={draft.workDir} visible={draftVisible} />
         </div>
       )}
       {page && (

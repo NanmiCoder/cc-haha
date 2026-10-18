@@ -575,8 +575,54 @@ describe('Sidebar', () => {
     render(<Sidebar />)
     const revision = useUIStore.getState().newSessionDraft!.revision
     act(() => useUIStore.getState().requestNewSession())
-    expect(useUIStore.getState().newSessionDraft).toEqual({ workDir: '/workspace/changed-draft', revision })
+    expect(useUIStore.getState().newSessionDraft).toEqual({ workDir: '/workspace/changed-draft', revision, hasContent: false })
     expect(createSession).not.toHaveBeenCalled()
+  })
+
+  // Production order: the first paint has no active tab, so ContentRouter
+  // makes the desktop draft before the saved tabs are restored. That empty
+  // draft used to swallow every later "New session" into a project-less
+  // composer and announce a draft that did not exist.
+  it('lands New Session in the restored chat project although a draft was made before the tabs came back', () => {
+    useSessionStore.setState({ sessions: [makeSession('alpha-1', 'Alpha', '/workspace/alpha', new Date().toISOString())] })
+    render(<><Sidebar /><ContentRouter /></>)
+    const startupDraft = useUIStore.getState().newSessionDraft
+    expect(startupDraft?.workDir).toBe('')
+
+    act(() => useTabStore.setState({
+      tabs: [{ sessionId: 'alpha-1', title: 'Alpha', type: 'session', status: 'idle' }],
+      activeTabId: 'alpha-1',
+    }))
+    fireEvent.click(screen.getByRole('button', { name: 'New Session' }))
+
+    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/alpha')
+    expect(addToast).not.toHaveBeenCalled()
+    // Moved, not replaced: the same composer, so nothing in it is lost.
+    expect(useUIStore.getState().newSessionDraft).toEqual({ ...startupDraft, workDir: '/workspace/alpha' })
+    expect(useTabStore.getState().activeTabId).toBeNull()
+    expect(screen.getByTestId('new-session-draft-panel')).not.toHaveAttribute('inert')
+    expect(createSession).not.toHaveBeenCalled()
+  })
+
+  it('moves an empty draft to the project whose + was pressed, without a toast', () => {
+    useSessionStore.setState({ sessions: [makeSession('alpha', 'Alpha', '/workspace/alpha', new Date().toISOString())] })
+    useUIStore.getState().startNewSessionDraft('/workspace/previous')
+    const { revision } = useUIStore.getState().newSessionDraft!
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: 'New session in alpha' }))
+    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/alpha')
+    expect(addToast).not.toHaveBeenCalled()
+    expect(useUIStore.getState().newSessionDraft).toEqual({ workDir: '/workspace/alpha', revision, hasContent: false })
+    expect(useTabStore.getState().activeTabId).toBeNull()
+  })
+
+  it('starts a blank session from an empty draft that had a project', () => {
+    useUIStore.getState().startNewSessionDraft('/workspace/previous')
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: 'New project' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New blank session' }))
+    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('')
+    expect(addToast).not.toHaveBeenCalled()
   })
 
   it('returns to the same unsent composer through real sidebar navigation after closing settings', () => {
@@ -600,12 +646,25 @@ describe('Sidebar', () => {
   it('preserves an unsent draft when another project requests a new chat and explains the return', () => {
     useSessionStore.setState({ sessions: [makeSession('alpha', 'Alpha', '/workspace/alpha', new Date().toISOString())] })
     useUIStore.getState().startNewSessionDraft('/workspace/unsent')
+    // What the composer reports once something is typed or attached.
+    useUIStore.getState().setNewSessionDraftContent(useUIStore.getState().newSessionDraft!.revision, true)
     const draft = useUIStore.getState().newSessionDraft
     render(<Sidebar />)
     fireEvent.click(screen.getByRole('button', { name: 'New session in alpha' }))
     expect(useUIStore.getState().newSessionDraft).toBe(draft)
     expect(useTabStore.getState().activeTabId).toBeNull()
     expect(addToast).toHaveBeenCalledWith({ type: 'info', message: 'sidebar.draftResumed' })
+  })
+
+  it('returns to an unsent draft in the same project without a toast', () => {
+    useSessionStore.setState({ sessions: [makeSession('alpha', 'Alpha', '/workspace/alpha', new Date().toISOString())] })
+    useUIStore.getState().startNewSessionDraft('/workspace/alpha')
+    useUIStore.getState().setNewSessionDraftContent(useUIStore.getState().newSessionDraft!.revision, true)
+    const draft = useUIStore.getState().newSessionDraft
+    render(<Sidebar />)
+    fireEvent.click(screen.getByRole('button', { name: 'New session in alpha' }))
+    expect(useUIStore.getState().newSessionDraft).toBe(draft)
+    expect(addToast).not.toHaveBeenCalled()
   })
 
   it('does not replay a Cmd+N request made before the sidebar mounted', async () => {

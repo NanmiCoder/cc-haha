@@ -36,6 +36,7 @@ import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
 import { normalizePathForConfigKey } from '../../utils/path.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { conversationService } from '../services/conversationService.js'
+import { sessionService } from '../services/sessionService.js'
 
 type McpEditableConfigDto =
   | {
@@ -86,7 +87,7 @@ type McpMutationBody = {
 
 type McpSessionSyncDto = {
   applied: boolean
-  reason?: 'not_running' | 'different_project' | 'failed' | 'no_session'
+  reason?: 'not_running' | 'different_project' | 'failed' | 'no_session' | 'lean_profile'
   error?: string
 }
 
@@ -148,6 +149,11 @@ async function syncMcpToggleToSession(
       return { applied: false, reason: 'different_project' }
     }
   }
+
+  // A lean CLI has no MCP runtime to toggle; asking it would only come back as an
+  // error that the desktop reports as a failed chat sync.
+  const launchInfo = await sessionService.getSessionLaunchInfo(sessionId).catch(() => null)
+  if (launchInfo?.agentProfile === 'lean') return { applied: false, reason: 'lean_profile' }
 
   try {
     await conversationService.requestControl(

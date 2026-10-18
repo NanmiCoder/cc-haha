@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Command } from '../../commands.js'
@@ -129,6 +129,38 @@ test('lean rejects the real /plan command from a refreshed command list before c
   expect(result.resultText).toContain('unavailable with --agent-profile lean')
   expect(state.toolPermissionContext.mode).toBe('default')
   clearCommandsCache()
+})
+
+test('lean explains commands the headless list hid for the profile instead of reporting an unknown skill', async () => {
+  const { getCommands, clearCommandsCache } = await import('../../commands.js')
+  const { filterCommandsForHeadlessMode } = await import('../../commands/headless.js')
+  const { getProjectRoot, setProjectRoot } = await import('../../bootstrap/state.js')
+  const forkDir = join(root, '.claude', 'skills', 'fork-fixture')
+  await mkdir(forkDir, { recursive: true })
+  await writeFile(join(forkDir, 'SKILL.md'), '---\nname: fork-fixture\ndescription: fixture\ncontext: fork\n---\nFORK_BODY')
+  const savedRoot = getProjectRoot()
+  setProjectRoot(root)
+  clearCommandsCache()
+  try {
+    // The real print-mode path dispatches against the advertised (filtered) list.
+    const advertised = filterCommandsForHeadlessMode(await getCommands(root))
+    expect(advertised.map(command => command.name)).not.toContain('init')
+    expect(advertised.map(command => command.name)).not.toContain('fork-fixture')
+    for (const name of ['init', 'fork-fixture']) {
+      const result = await processSlashCommand(`/${name} arguments`, [], [], [], context(advertised), () => {})
+      expect(result.shouldQuery).toBe(false)
+      expect(result.resultText).toBe(`This command is unavailable with --agent-profile lean. Start a new --agent-profile standard session to use /${name}.`)
+      expect(JSON.stringify(result.messages)).not.toContain('FORK_BODY')
+    }
+    // UI-only commands are absent from every headless session, and unknown names stay unknown.
+    for (const name of ['plan', 'no-such-skill']) {
+      const result = await processSlashCommand(`/${name}`, [], [], [], context(advertised), () => {})
+      expect(result.resultText).toBe(`Unknown skill: ${name}`)
+    }
+  } finally {
+    setProjectRoot(savedRoot)
+    clearCommandsCache()
+  }
 })
 
 test('lean rejects local capability commands before loading their implementation', async () => {

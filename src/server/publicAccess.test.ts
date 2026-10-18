@@ -7,7 +7,10 @@ import { PublicAccessServer, isPublicBusinessPathAllowed, migratePublicAccessSto
 const cleanups: Array<() => void> = []
 afterEach(() => { while (cleanups.length) cleanups.pop()!() })
 
-function fixture() {
+function fixture(
+  handleApiRequest: (request: Request, url: URL) => Promise<Response> =
+    async () => Response.json({ ok: true, env: { API_KEY: 'fake-provider-secret' }, language: 'en' }),
+) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'remote-access-test-'))
   const oldToken = process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
   process.env.CC_HAHA_LOCAL_ACCESS_TOKEN = 'fixture-process-credential'
@@ -16,7 +19,7 @@ function fixture() {
   const storePath = path.join(dir, 'devices.json')
   const service = new PublicAccessServer({
     storePath, now: () => clock, serverPort: () => 3456,
-    handleApiRequest: async () => Response.json({ ok: true, env: { API_KEY: 'fake-provider-secret' }, language: 'en' }),
+    handleApiRequest,
     handleStatic: async () => new Response('<html>fixture</html>'),
     websocket: { message: (_ws, payload) => { messages.push(payload) } },
   })
@@ -72,6 +75,24 @@ describe('public transport boundary', () => {
     expect((await f.remote('/api/settings/user', undefined, cookie)).status).toBe(200)
     expect(await (await f.remote('/api/settings/user', undefined, cookie)).json()).toEqual({ language: 'en' })
     expect(await (await f.remote('/api/providers/auth-status', undefined, cookie)).json()).toEqual({ hasAuth: false, source: 'none' })
+  })
+
+  test('a provider-scoped auth-status passes the policy with its query and returns only status fields', async () => {
+    const requested: string[] = []
+    const f = fixture(async (_request, url) => {
+      requested.push(`${url.pathname}${url.search}`)
+      return Response.json({
+        hasAuth: true, source: 'cc-haha-provider', activeProvider: 'Fixture provider',
+        apiKey: 'fake-provider-secret', env: { ANTHROPIC_API_KEY: 'fake-provider-secret' },
+      })
+    })
+    const { cookie } = await f.pair()
+    const response = await f.remote('/api/providers/auth-status?providerId=fixture-provider', undefined, cookie)
+    expect(response.status).toBe(200)
+    const text = await response.text()
+    expect(JSON.parse(text)).toEqual({ hasAuth: true, source: 'cc-haha-provider', activeProvider: 'Fixture provider' })
+    expect(text).not.toContain('fake-provider-secret')
+    expect(requested).toEqual(['/api/providers/auth-status?providerId=fixture-provider'])
   })
 
   test('expired and rejected pairings cannot become a device', async () => {

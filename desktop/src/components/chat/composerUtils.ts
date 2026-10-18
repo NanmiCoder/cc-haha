@@ -300,6 +300,7 @@ export function mergeSlashCommands(
       ...(command.source || localized?.source
         ? { source: command.source ?? localized?.source }
         : {}),
+      ...(command.leanCompatible === false ? { leanCompatible: false } : {}),
     })
   }
 

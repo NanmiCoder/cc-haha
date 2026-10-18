@@ -2874,6 +2874,63 @@ describe('SessionService', () => {
     expect((await service.getSessionLaunchInfo(sessionId))?.permissionMode).toBe('auto')
   })
 
+  it('keeps exactly the effective runtime selection across clear, so effort reset to auto stays auto', async () => {
+    type RuntimeMetadata = Parameters<SessionService['appendSessionMetadata']>[1]
+    const histories: Array<{ name: string, appends: Array<Omit<RuntimeMetadata, 'workDir'>> }> = [
+      // Choosing auto writes a complete selection without an effort override.
+      { name: 'high then auto', appends: [
+        { runtimeProviderId: 'provider-a', runtimeModelId: 'model-a', effortLevel: 'high', openAIFastMode: false },
+        { runtimeProviderId: 'provider-a', runtimeModelId: 'model-a', openAIFastMode: false },
+      ] },
+      { name: 'auto then max', appends: [
+        { runtimeProviderId: 'provider-a', runtimeModelId: 'model-a', openAIFastMode: false },
+        { runtimeProviderId: 'provider-a', runtimeModelId: 'model-a', effortLevel: 'max', openAIFastMode: false },
+      ] },
+      { name: 'Fast on, then another provider', appends: [
+        { runtimeProviderId: 'openai-official', runtimeModelId: 'gpt-fixture', effortLevel: 'xhigh', openAIFastMode: true },
+        { runtimeProviderId: null, runtimeModelId: 'claude-fixture', openAIFastMode: false },
+      ] },
+      { name: 'partial patches keep earlier values', appends: [
+        { runtimeProviderId: 'provider-a', runtimeModelId: 'model-a', effortLevel: 'low', openAIFastMode: false },
+        { permissionMode: 'acceptEdits' },
+        { runtimeModelId: 'model-b' },
+      ] },
+    ]
+    const runtimeOf = (info: Awaited<ReturnType<SessionService['getSessionLaunchInfo']>> | SessionListSummary | null | undefined) => ({
+      runtimeProviderId: info?.runtimeProviderId,
+      runtimeModelId: info?.runtimeModelId,
+      effortLevel: info?.effortLevel,
+      openAIFastMode: info?.openAIFastMode,
+    })
+
+    for (const history of histories) {
+      const requestedWorkDir = path.join(tmpDir, `clear-runtime-${history.name.replace(/\W+/g, '-')}`)
+      await fs.mkdir(requestedWorkDir, { recursive: true })
+      const { sessionId, workDir } = await service.createSession(requestedWorkDir, undefined, 'default')
+      for (const metadata of history.appends) await service.appendSessionMetadata(sessionId, { workDir, ...metadata })
+      const info = await service.getSessionLaunchInfo(sessionId)
+      await fs.appendFile(info!.filePath, JSON.stringify({ type: 'session-meta', futureExtension: { keep: history.name } }) + '\n')
+      const before = runtimeOf(await new SessionService().getSessionLaunchInfo(sessionId))
+
+      await service.clearSessionTranscript(sessionId, workDir, 'default')
+
+      const after = await new SessionService().getSessionLaunchInfo(sessionId)
+      expect({ history: history.name, runtime: runtimeOf(after) }).toEqual({ history: history.name, runtime: before })
+      const lines = (await fs.readFile(after!.filePath, 'utf8')).trim().split('\n')
+      const metas = lines.map(line => JSON.parse(line)).filter(entry => entry.type === 'session-meta')
+      expect(metas).toHaveLength(1)
+      expect(metas[0]).toMatchObject({ agentProfile: 'standard', futureExtension: { keep: history.name } })
+      // The local index reducer behind the session list reads the same selection.
+      let byteStart = 0
+      const reduced = reduceTranscript(lines.map((line) => {
+        const chunk = { text: `${line}\n`, byteStart, completeLine: true }
+        byteStart += Buffer.byteLength(chunk.text)
+        return chunk
+      }))
+      expect({ history: history.name, runtime: runtimeOf(reduced.summary) }).toEqual({ history: history.name, runtime: before })
+    }
+  })
+
   it('should expose the latest runtime selection in the session list', async () => {
     const workDir = '/tmp/runtime-list-metadata'
     const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'

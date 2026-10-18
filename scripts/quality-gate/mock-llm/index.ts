@@ -18,7 +18,7 @@ import { join, resolve } from 'node:path'
 
 import { executeAgentFlowAgainstProvider, LIVE_SCENARIO_RUNNERS } from '../agent-flow/live'
 import { startMockLlmServer } from './server'
-import { runLeanProfileScenario } from './leanProfile'
+import { runLeanNotificationProvenanceScenario, runLeanProfileScenario } from './leanProfile'
 import { createMockOnlyRunners, describeRequests, MOCK_AGENT_SCENARIOS } from './scenarios'
 
 const MOCK_MODEL = 'mock-model'
@@ -52,6 +52,7 @@ async function main() {
   mkdirSync(artifactDir, { recursive: true })
   if (runLean) {
     await runLeanProfileScenario(rootDir, artifactDir)
+    await runLeanNotificationProvenanceScenario(rootDir, artifactDir)
     console.log(`[agent-e2e] PASS ${LEAN_SCENARIO}`)
   }
   if (scenarios.length === 0) return
