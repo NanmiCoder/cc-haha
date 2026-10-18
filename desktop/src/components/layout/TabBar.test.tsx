@@ -3323,6 +3323,49 @@ describe('TabBar', () => {
     expect(screen.getByText('Idle').closest('[data-dragging]')?.querySelector('[aria-label="Session running"]')).toBeNull()
   })
 
+  it('shows a running marker while an Agent Team member is still running', async () => {
+    const { TabBar } = await import('./TabBar')
+    const { useTabStore } = await import('../../stores/tabStore')
+    const { useChatStore } = await import('../../stores/chatStore')
+    const { useTeamStore } = await import('../../stores/teamStore')
+    const runningSessionId = 'team-running-session'
+    const completedSessionId = 'team-completed-session'
+    const completedTeam = teamWorkbenchTimeline(completedSessionId)
+    const completedSnapshot = completedTeam.snapshots[0]
+    if (!completedSnapshot) throw new Error('Expected the completed team fixture to contain a snapshot')
+    for (const member of completedSnapshot.team.members) {
+      member.status = 'completed'
+    }
+
+    useTabStore.setState({
+      tabs: [
+        { sessionId: runningSessionId, title: 'Team Running', type: 'session', status: 'idle' },
+        { sessionId: completedSessionId, title: 'Team Completed', type: 'session', status: 'idle' },
+      ],
+      activeTabId: runningSessionId,
+    })
+    useChatStore.setState({
+      sessions: {
+        [runningSessionId]: makeChatSession('idle'),
+        [completedSessionId]: makeChatSession('idle'),
+      },
+      disconnectSession: vi.fn(),
+    } as Partial<ReturnType<typeof useChatStore.getState>>)
+    useTeamStore.setState({
+      workbenchesBySession: {
+        [runningSessionId]: teamWorkbenchTimeline(runningSessionId),
+        [completedSessionId]: completedTeam,
+      },
+    } as Partial<ReturnType<typeof useTeamStore.getState>>)
+
+    await act(async () => {
+      render(<TabBar />)
+    })
+
+    expect(screen.getByText('Team Running').closest('[data-dragging]')?.querySelector('[aria-label="Session running"]')).not.toBeNull()
+    expect(screen.getByText('Team Completed').closest('[data-dragging]')?.querySelector('[aria-label="Session running"]')).toBeNull()
+  })
+
   describe('a session waiting on the user', () => {
     // A tool approval, an AskUserQuestion card and an ExitPlanMode review all
     // arrive as `permission_request`; only the tool name differs.

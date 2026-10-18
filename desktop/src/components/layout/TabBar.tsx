@@ -122,6 +122,13 @@ export function TabBar() {
         (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks))
     })
   ))
+  const runningTeamSessionIds = useTeamStore(useShallow((s) =>
+    sessionTabIds.filter((sessionId) => {
+      const snapshot = s.workbenchesBySession[sessionId]?.snapshots.at(-1)
+      return !!snapshot && !snapshot.deletedAt &&
+        snapshot.team.members.some((member) => member.status === 'running')
+    })
+  ))
   // Tabs that are stopped on a decision only the user can make. Read from the
   // outstanding requests rather than from `chatState` (see
   // `sessionNeedsAttention`), and `useShallow` for the same reason as above: a
@@ -258,8 +265,11 @@ export function TabBar() {
     for (const sessionId of activeChatSessionIds) {
       ids.add(sessionId)
     }
+    for (const sessionId of runningTeamSessionIds) {
+      ids.add(sessionId)
+    }
     return ids
-  }, [activeChatSessionIds, tabs])
+  }, [activeChatSessionIds, runningTeamSessionIds, tabs])
 
   const updateScrollState = useCallback(() => {
     const el = scrollRef.current
