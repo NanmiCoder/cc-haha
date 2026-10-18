@@ -90,6 +90,24 @@ describe('AgentTeamsPlanCard', () => {
     expect(draft.members.map(member => member.runtime.modelId)).toEqual(['small', 'large'])
   })
 
+  it('wraps long generated plan text so it cannot widen the review dialog', async () => {
+    const plan = fixture()
+    const longReason = `Generated reason ${'A'.repeat(120)}`
+    const longPrompt = `Generated prompt ${'B'.repeat(120)}`
+    const longSubject = `Generated task ${'C'.repeat(120)}`
+    const longDescription = `Generated details ${'D'.repeat(120)}`
+    plan.members[0]!.reason = longReason
+    plan.members[0]!.prompt = longPrompt
+    plan.tasks[0]!.subject = longSubject
+    plan.tasks[0]!.description = longDescription
+    vi.mocked(teamPlansApi.get).mockResolvedValue({ plan })
+    await open()
+
+    for (const text of [longReason, longPrompt, longSubject, longDescription]) {
+      expect(screen.getByText(text).closest('.team-plan-editor')).toHaveClass('break-words')
+    }
+  })
+
   it.each([undefined, 'removed-member'])('shows an unassigned task accurately and blocks approval until assigned (%s)', async ownerId => {
     const plan = fixture()
     plan.tasks[0]!.ownerId = ownerId
