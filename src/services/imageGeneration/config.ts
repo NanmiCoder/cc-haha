@@ -23,6 +23,7 @@ export type ImageGenerationProtocol =
   | 'openai_images'
   | 'gemini_native'
   | 'xai_images'
+  | 'minimax_image'
 
 export type ImageGenerationRuntimeConfig = {
   kind: ImageGenerationProviderKind
@@ -59,7 +60,8 @@ export function getImageGenerationRuntimeConfig(
   if (kind === 'openai_images') {
     const configuredProtocol = env[IMAGE_GENERATION_PROTOCOL_ENV_KEY]?.trim() ?? 'openai_images'
     if (configuredProtocol !== 'openai_images' &&
-      configuredProtocol !== 'gemini_native' && configuredProtocol !== 'xai_images') {
+      configuredProtocol !== 'gemini_native' && configuredProtocol !== 'xai_images' &&
+      configuredProtocol !== 'minimax_image') {
       return null
     }
     protocol = configuredProtocol

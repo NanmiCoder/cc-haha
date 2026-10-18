@@ -34,6 +34,7 @@ import {
   buildXaiEditRequestBody,
   buildXaiRequestBody,
   parseGeminiImageResponse,
+  parseMiniMaxImageResponse,
 } from './providerProtocols.js'
 
 export type ImageGenerationInput = {
@@ -289,7 +290,9 @@ async function requestCompatibleImages(
       const payload: unknown = await response.json()
       const generated = config.protocol === 'gemini_native'
         ? parseGeminiImageResponse(payload)
-        : parseCompatibleImageResponse(payload)
+        : config.protocol === 'minimax_image'
+          ? parseMiniMaxImageResponse(payload)
+          : parseCompatibleImageResponse(payload)
       if (!generated[0]) {
         throw new Error('Custom image generation completed without returning an image.')
       }
