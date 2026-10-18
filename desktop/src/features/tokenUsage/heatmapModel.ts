@@ -59,6 +59,15 @@ export function formatDateLabel(dateKey: string, locale: Locale) {
   })
 }
 
+/** "10月3日周五" / "Fri, October 3": the day, named the way the locale says it. */
+export function formatDayHeading(dateKey: string, locale: Locale) {
+  return parseLocalDate(dateKey).toLocaleDateString(DATE_LOCALES[locale], {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+  })
+}
+
 export function formatShortDate(dateKey: string, locale: Locale) {
   return parseLocalDate(dateKey).toLocaleDateString(DATE_LOCALES[locale], {
     month: 'numeric',

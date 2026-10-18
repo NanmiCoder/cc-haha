@@ -1,5 +1,6 @@
-import type { ActivityStatsResponse } from '../../api/activityStats'
-import { addDays, localDateKey } from './heatmapModel'
+import type { ActivityStatsResponse, DailyActivity } from '../../api/activityStats'
+import type { Locale } from '../../i18n'
+import { DATE_LOCALES, addDays, localDateKey } from './heatmapModel'
 
 /** How many categorical colors the themes define for models (`--color-series-1..5`). */
 export const SERIES_COUNT = 5
@@ -161,11 +162,89 @@ export function buildDailyModelSeries(
   })
 }
 
+/** A share of a whole as a locale percentage: one decimal below 10%, where a whole number would round it to nothing. */
+export function formatShare(part: number, whole: number, locale: Locale) {
+  if (whole <= 0) return '0%'
+  return new Intl.NumberFormat(DATE_LOCALES[locale], {
+    maximumFractionDigits: part / whole < 0.1 ? 1 : 0,
+    style: 'percent',
+  }).format(part / whole)
+}
+
+export type DayActivity = Pick<DailyActivity, 'sessionCount' | 'messageCount' | 'toolCallCount'>
+
+export type DayModelShare = {
+  id: string
+  label: string
+  series: number
+  tokens: number
+  /** 0..1 of that day's total. */
+  share: number
+}
+
+/** What a click on one day of the stream shows: where it sits against the rest of the window, and what it was made of. */
+export type DaySummary = {
+  date: string
+  total: number
+  /** The busiest day in the window, the same one the stream labels. */
+  peak: number
+  /** `total / peak`, 0..1. */
+  ofPeak: number
+  /** Mean over the days that had any usage; idle days would drag it toward zero. */
+  average: number
+  /** 1 is the busiest day; ties share a rank. */
+  rank: number
+  activeDays: number
+  /** Models that ran that day, biggest first. */
+  models: DayModelShare[]
+  sessionCount: number
+  messageCount: number
+  toolCallCount: number
+}
+
+/** `null` for a day with no usage (nothing to open) or an index outside the window. */
+export function summarizeDay(
+  days: DailyModelSeries[],
+  index: number,
+  models: RankedModel[],
+  activity: ReadonlyMap<string, DayActivity>,
+): DaySummary | null {
+  const day = days[index]
+  if (!day || day.total <= 0) return null
+
+  const active = days.filter((candidate) => candidate.total > 0)
+  const peak = Math.max(...active.map((candidate) => candidate.total))
+  const counts = activity.get(day.date)
+
+  return {
+    date: day.date,
+    total: day.total,
+    peak,
+    ofPeak: day.total / peak,
+    average: active.reduce((sum, candidate) => sum + candidate.total, 0) / active.length,
+    rank: 1 + active.filter((candidate) => candidate.total > day.total).length,
+    activeDays: active.length,
+    models: day.byModel
+      .flatMap((tokens, modelIndex) => {
+        const model = models[modelIndex]
+        return model && tokens > 0
+          ? [{ id: model.id, label: model.label, series: model.series, tokens, share: tokens / day.total }]
+          : []
+      })
+      .sort((a, b) => b.tokens - a.tokens),
+    sessionCount: counts?.sessionCount ?? 0,
+    messageCount: counts?.messageCount ?? 0,
+    toolCallCount: counts?.toolCallCount ?? 0,
+  }
+}
+
 export type StreamGeometry = {
   width: number
   height: number
   /** One closed path per model, bottom to top. */
   layers: Array<{ modelIndex: number; d: string }>
+  /** Where each day's stack starts (its top edge, in px), for anchoring a marker to that day. */
+  dayTops: number[]
   peak: { index: number; x: number; y: number; total: number; date: string } | null
   /** First-of-month positions as a fraction of the width, for the axis row. */
   monthTicks: Array<{ fraction: number; date: string }>
@@ -211,7 +290,7 @@ export function buildStreamGeometry(days: DailyModelSeries[], width: number, hei
   const modelCount = days[0]?.byModel.length ?? 0
   const maxTotal = Math.max(...days.map((day) => day.total), 0)
   if (days.length < 2 || modelCount === 0 || maxTotal <= 0) {
-    return { width, height, layers: [], peak: null, monthTicks: [] }
+    return { width, height, layers: [], dayTops: [], peak: null, monthTicks: [] }
   }
 
   const smoothTotals = smoothed(days.map((day) => day.total))
@@ -252,5 +331,5 @@ export function buildStreamGeometry(days: DailyModelSeries[], width: number, hei
     day.date.endsWith('-01') ? [{ fraction: index / (days.length - 1), date: day.date }] : []
   ))
 
-  return { width, height, layers, peak, monthTicks }
+  return { width, height, layers, dayTops: stacks.map((stack) => stack[0]![0]), peak, monthTicks }
 }

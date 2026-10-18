@@ -2,7 +2,7 @@ import { SettingsSection } from '@/components/settings/SettingsSection'
 import { useTranslation, type Locale } from '../../i18n'
 import { DATE_LOCALES } from './heatmapModel'
 import { TokenAmount } from './TokenAmount'
-import { seriesColor, type RankedModel } from './usageModel'
+import { formatShare, seriesColor, type RankedModel } from './usageModel'
 
 function formatCostUSD(cost: number, locale: Locale) {
   return new Intl.NumberFormat(DATE_LOCALES[locale], {
@@ -10,14 +10,6 @@ function formatCostUSD(cost: number, locale: Locale) {
     currency: 'USD',
     maximumFractionDigits: cost >= 100 ? 0 : 2,
   }).format(cost)
-}
-
-function formatShare(part: number, whole: number, locale: Locale) {
-  if (whole <= 0) return '0%'
-  return new Intl.NumberFormat(DATE_LOCALES[locale], {
-    maximumFractionDigits: part / whole < 0.1 ? 1 : 0,
-    style: 'percent',
-  }).format(part / whole)
 }
 
 const ROW = 'grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_72px_84px] items-center gap-5'
