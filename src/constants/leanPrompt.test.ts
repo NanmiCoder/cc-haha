@@ -28,12 +28,23 @@ describe('lean system prompt', () => {
     expect(text).not.toContain('available_skills')
   })
 
+  test('names the tool pool separately from explicitly selected skills', () => {
+    const text = buildLeanSystemPrompt(context).join('\n')
+    expect(text).toContain('Available tools: Read, Edit, Bash.')
+    expect(text).not.toMatch(/skills: (?:Read|Bash|\(none\))/)
+    expect(text).toContain('only when the user explicitly selects it (/name, $name or the skill picker)')
+    expect(text).toContain('A skill supplies instructions, not extra tools or permission.')
+    // Unavailable capabilities are named once, as unavailable, never as something to use.
+    expect(text).toContain('Web, browser, connector, task-management, plan-mode and subagent tools are not available')
+    expect(text).not.toMatch(/dedicated plan mode|\/skill or \$skill/)
+  })
+
   test('describes the effective tool pool, including when permission filtering removes all tools', () => {
     const text = buildLeanSystemPrompt({
       ...context, toolNames: [], memory: null, language: undefined,
       additionalWorkingDirectories: [],
     }).join('\n')
-    expect(text).toContain('skills: (none)')
+    expect(text).toContain('Available tools: (none).')
     expect(text).not.toContain('Read, Edit, Bash')
     expect(text).not.toContain('Additional working directories')
     expect(text).not.toContain('Respond in')

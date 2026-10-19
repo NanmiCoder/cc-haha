@@ -1,4 +1,5 @@
 import { conversationService } from './conversationService.js'
+import { sessionService } from './sessionService.js'
 import { updateSessionSlashCommands } from '../ws/handler.js'
 
 export type SessionComponentReloadSummary = {
@@ -26,6 +27,13 @@ export async function reloadSessionComponents(
     return emptySummary('not_running')
   }
 
+  // A lean CLI has no MCP runtime, so it cannot be required to have loaded a
+  // connector's server. Its plugin and skill are still required: lean runs skills.
+  const mcpServerToVerify = requiredMcpServer &&
+    (await sessionService.getSessionLaunchInfo(sessionId).catch(() => null))?.agentProfile !== 'lean'
+    ? requiredMcpServer
+    : undefined
+
   try {
     const response = await conversationService.requestControl(
       sessionId,
@@ -45,16 +53,16 @@ export async function reloadSessionComponents(
       throw new Error('Connector plugin and skill are not available in the active task')
     }
 
-    if (requiredMcpServer && !hasServerTools(mcpServers, requiredMcpServer)) {
+    if (mcpServerToVerify && !hasServerTools(mcpServers, mcpServerToVerify)) {
       // OAuth can finish in the desktop server while this CLI still holds a
       // needs-auth connection and cached credentials. Reconnect in that process
       // so it reads fresh credentials and replaces its actual query tools.
       await conversationService.requestControl(sessionId, {
-        subtype: 'mcp_reconnect', serverName: requiredMcpServer,
+        subtype: 'mcp_reconnect', serverName: mcpServerToVerify,
       }, 120_000)
       const status = await conversationService.requestControl(sessionId, { subtype: 'mcp_status' }, 30_000)
       mcpServers = status.mcpServers
-      if (!hasServerTools(mcpServers, requiredMcpServer)) {
+      if (!hasServerTools(mcpServers, mcpServerToVerify)) {
         throw new Error('Connector tools are not available in the active task')
       }
     }

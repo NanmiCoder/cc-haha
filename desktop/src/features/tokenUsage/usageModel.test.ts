@@ -2,14 +2,19 @@ import { describe, expect, it } from 'vitest'
 
 import type { ActivityStatsResponse } from '../../api/activityStats'
 import {
+  COLORED_MODEL_SLOTS,
+  COLUMN_TOP_PAD,
   OTHER_MODELS_ID,
   formatModelName,
   SERIES_COUNT,
   buildDailyModelSeries,
-  buildStreamGeometry,
+  buildColumnGeometry,
+  formatShare,
   getFreshTokenTotal,
   getModelTokenTotal,
   rankModels,
+  stackOrder,
+  summarizeDay,
 } from './usageModel'
 
 function statsWith(overrides: Partial<ActivityStatsResponse>): ActivityStatsResponse {
@@ -60,23 +65,63 @@ describe('formatModelName', () => {
 })
 
 describe('rankModels', () => {
-  it('orders models by total tokens and hands out series colors in that order', () => {
+  it('lists models by total tokens, each with a color slot of its own', () => {
     const ranked = rankModels(statsWith({
       modelUsage: { 'small-model': usage(10), 'big-model': usage(900), 'idle-model': usage(0) },
     }), 'Other')
 
-    expect(ranked.map((model) => [model.id, model.series])).toEqual([['big-model', 1], ['small-model', 2]])
+    expect(ranked.map((model) => model.id)).toEqual(['big-model', 'small-model'])
+    expect(new Set(ranked.map((model) => model.series)).size).toBe(2)
   })
 
-  it('folds everything past the fourth model into one "other" row so no color is shared', () => {
+  it('hands the hues out in the order the models first appeared, not in the order of their totals', () => {
+    const stats = statsWith({
+      modelUsage: { late: usage(900), early: usage(50), middle: usage(300) },
+      dailyModelTokens: [
+        { date: '2026-08-01', tokensByModel: { early: 20 } },
+        { date: '2026-09-01', tokensByModel: { middle: 10, early: 30 } },
+        { date: '2026-10-01', tokensByModel: { late: 900 } },
+      ],
+    })
+    const slots = Object.fromEntries(rankModels(stats, 'Other').map((model) => [model.id, model.series]))
+    expect(slots).toEqual({ early: 1, middle: 2, late: 3 })
+  })
+
+  it('keeps a model\'s color when another model overtakes it', () => {
+    const daily: Array<{ date: string; tokensByModel: Record<string, number> }> = [
+      { date: '2026-08-01', tokensByModel: { a: 10 } },
+      { date: '2026-09-01', tokensByModel: { b: 10 } },
+    ]
+    const before = rankModels(statsWith({ modelUsage: { a: usage(900), b: usage(100) }, dailyModelTokens: daily }), 'Other')
+    // b has since been used far more than a. By rank each would trade colors; by model neither does.
+    const after = rankModels(statsWith({ modelUsage: { a: usage(900), b: usage(5000) }, dailyModelTokens: daily }), 'Other')
+
+    expect(after.map((model) => model.id)).toEqual(['b', 'a'])
+    const slotOf = (ranked: typeof before, id: string) => ranked.find((model) => model.id === id)!.series
+    expect(slotOf(after, 'a')).toBe(slotOf(before, 'a'))
+    expect(slotOf(after, 'b')).toBe(slotOf(before, 'b'))
+  })
+
+  it('does not repaint the four colored models when a smaller fifth one appears', () => {
+    const base = Object.fromEntries(['m1', 'm2', 'm3', 'm4'].map((id, index) => [id, usage(1000 - index * 100)]))
+    const daily = ['m1', 'm2', 'm3', 'm4', 'm5'].map((id, index) => ({ date: `2026-0${index + 1}-01`, tokensByModel: { [id]: 1 } }))
+    const four = rankModels(statsWith({ modelUsage: base, dailyModelTokens: daily }), 'Other')
+    const five = rankModels(statsWith({ modelUsage: { ...base, m5: usage(10) }, dailyModelTokens: daily }), 'Other')
+
+    for (const model of four) expect(five.find((other) => other.id === model.id)!.series).toBe(model.series)
+    expect(five.at(-1)).toMatchObject({ id: OTHER_MODELS_ID, series: SERIES_COUNT, total: 10 })
+  })
+
+  it('folds everything past the fourth biggest model into one gray "other" row so no hue is shared', () => {
     const modelUsage = Object.fromEntries(
       Array.from({ length: 7 }, (_, index) => [`model-${index}`, { ...usage(1000 - index * 100), costUSD: 1 }]),
     )
     const ranked = rankModels(statsWith({ modelUsage, unpricedModels: ['model-6'] }), 'Other models')
 
-    expect(ranked).toHaveLength(SERIES_COUNT)
-    expect(ranked.map((model) => model.series)).toEqual([1, 2, 3, 4, 5])
-    const other = ranked[SERIES_COUNT - 1]!
+    expect(ranked).toHaveLength(COLORED_MODEL_SLOTS + 1)
+    expect(ranked.slice(0, COLORED_MODEL_SLOTS).map((model) => model.id)).toEqual(['model-0', 'model-1', 'model-2', 'model-3'])
+    expect(ranked.map((model) => model.series).sort()).toEqual([1, 2, 3, 4, SERIES_COUNT])
+    const other = ranked[COLORED_MODEL_SLOTS]!
     expect(other.id).toBe(OTHER_MODELS_ID)
     expect(other.label).toBe('Other models')
     expect(other.total).toBe(600 + 500 + 400)
@@ -87,6 +132,12 @@ describe('rankModels', () => {
 
   it('returns nothing for a profile with no usage', () => {
     expect(rankModels(null, 'Other')).toEqual([])
+  })
+})
+
+describe('stackOrder', () => {
+  it('follows the color slots, so the stack keeps its shape and the gray "other" ends on top', () => {
+    expect(stackOrder([{ series: 3 }, { series: 1 }, { series: SERIES_COUNT }, { series: 2 }])).toEqual([1, 3, 0, 2])
   })
 })
 
@@ -115,40 +166,141 @@ describe('buildDailyModelSeries', () => {
   })
 })
 
-describe('buildStreamGeometry', () => {
+describe('buildColumnGeometry', () => {
   const day = (date: string, ...byModel: number[]) => ({ date, total: byModel.reduce((a, b) => a + b, 0), byModel })
+  const model = (id: string, series: number) => ({ id, label: id, series, total: 1, fresh: 0, cached: 0, costUSD: 0, unpriced: false })
+  const two = [model('a', 1), model('b', 2)]
+  /** [x, top, bottom] of every segment in one layer's path. */
+  const segments = (d: string) => [...d.matchAll(/M([\d.]+) ([\d.]+)h[\d.]+V([\d.]+)/g)].map((m) => [Number(m[1]), Number(m[2]), Number(m[3])] as const)
 
-  it('draws one closed layer per model, centred and inside the box', () => {
-    const days = [day('2026-09-29', 10, 5), day('2026-09-30', 20, 10), day('2026-10-01', 60, 30), day('2026-10-02', 20, 10)]
-    const geometry = buildStreamGeometry(days, 400, 200)
+  it('draws one path per model with usage, bottom to top in color-slot order', () => {
+    const swapped = [model('a', 2), model('b', 1)]
+    const geometry = buildColumnGeometry([day('2026-10-01', 10, 20), day('2026-10-02', 5, 0)], swapped, 400, 200)
 
-    expect(geometry.layers).toHaveLength(2)
-    for (const layer of geometry.layers) {
-      expect(layer.d.startsWith('M')).toBe(true)
-      expect(layer.d.endsWith('Z')).toBe(true)
-      const ys = [...layer.d.matchAll(/-?\d+(?:\.\d+)?/g)].map((match) => Number(match[0]))
-      expect(Math.min(...ys)).toBeGreaterThanOrEqual(0)
-      expect(Math.max(...ys)).toBeLessThanOrEqual(400)
-    }
+    // b holds slot 1, so it is the bottom layer even though a is listed first.
+    expect(geometry.layers.map((layer) => layer.modelIndex)).toEqual([1, 0])
+    expect(buildColumnGeometry([day('2026-10-01', 10, 0)], two, 400, 200).layers.map((layer) => layer.modelIndex)).toEqual([0])
   })
 
-  it('marks the real peak day, not the smoothed one, with its own total', () => {
-    const days = [day('2026-09-29', 10), day('2026-09-30', 10), day('2026-10-01', 100), day('2026-10-02', 10), day('2026-10-03', 10)]
-    const { peak } = buildStreamGeometry(days, 400, 200)
+  it('puts every column on one zero baseline and one scale, so heights compare', () => {
+    const geometry = buildColumnGeometry([day('2026-10-01', 10, 10), day('2026-10-02', 5, 5), day('2026-10-03', 0, 0)], two, 300, 200)
+    const [big, small, idle] = geometry.dayTops
+    // 20 against 10: exactly twice the height above the bottom edge.
+    expect((200 - big!) / (200 - small!)).toBeCloseTo(2, 5)
+    expect(idle).toBe(200)
 
-    expect(peak).toMatchObject({ index: 2, total: 100, date: '2026-10-01', x: 200 })
-    expect(peak!.y).toBeGreaterThan(0)
+    // The lowest segment of the tallest column ends at the baseline, give or take its gap.
+    const bottoms = segments(geometry.layers[0]!.d).map(([, , bottom]) => bottom)
+    expect(Math.max(...bottoms)).toBeGreaterThan(198)
+    expect(Math.max(...bottoms)).toBeLessThanOrEqual(200)
+  })
+
+  it('leaves an idle day empty instead of bridging it', () => {
+    const geometry = buildColumnGeometry([day('2026-10-01', 10), day('2026-10-02', 0), day('2026-10-03', 10)], [model('a', 1)], 300, 200)
+    const xs = segments(geometry.layers[0]!.d).map(([x]) => x)
+    expect(xs).toHaveLength(2)
+    // Slots are 100 wide; the middle one (100 to 200) holds nothing.
+    expect(xs.every((x) => x < 100 || x >= 200)).toBe(true)
+  })
+
+  it('separates stacked segments with a gap of surface', () => {
+    const geometry = buildColumnGeometry([day('2026-10-01', 50, 50)], two, 100, 200)
+    const [lower] = segments(geometry.layers[0]!.d)
+    const [upper] = segments(geometry.layers[1]!.d)
+    // The upper segment's bottom edge stops short of the lower one's top edge.
+    expect(lower![1] - upper![2]).toBeGreaterThanOrEqual(1.4)
+  })
+
+  it('marks the busiest day with its own total, centred on its column, clear of the label room', () => {
+    const days = [day('2026-09-29', 10), day('2026-09-30', 10), day('2026-10-01', 100), day('2026-10-02', 10), day('2026-10-03', 10)]
+    const { peak } = buildColumnGeometry(days, [model('a', 1)], 500, 200)
+
+    expect(peak).toMatchObject({ index: 2, total: 100, date: '2026-10-01', x: 250 })
+    expect(peak!.y).toBeGreaterThan(COLUMN_TOP_PAD)
     expect(peak!.y).toBeLessThan(100)
   })
 
-  it('places month ticks on the first of each month', () => {
-    const days = [day('2026-09-30', 1), day('2026-10-01', 1), day('2026-10-02', 1)]
-    expect(buildStreamGeometry(days, 100, 50).monthTicks).toEqual([{ fraction: 0.5, date: '2026-10-01' }])
+  it('draws grid lines at round values, rising up the chart', () => {
+    const geometry = buildColumnGeometry([day('2026-10-01', 4_000_000), day('2026-10-02', 1_000_000)], [model('a', 1)], 300, 200)
+    expect(geometry.grid.map((line) => line.value)).toEqual([1_000_000, 2_000_000, 3_000_000, 4_000_000])
+    const ys = geometry.grid.map((line) => line.y)
+    expect([...ys].sort((a, b) => b - a)).toEqual(ys)
+  })
+
+  it('places month ticks on the first of each month, over that day\'s column', () => {
+    const days = [day('2026-09-30', 1), day('2026-10-01', 1), day('2026-10-02', 1), day('2026-10-03', 1)]
+    expect(buildColumnGeometry(days, [model('a', 1)], 100, 50).monthTicks).toEqual([{ fraction: 0.375, date: '2026-10-01' }])
+  })
+
+  it('records where each day\'s column ends, so a marker can sit on the day it belongs to', () => {
+    const days = [day('2026-09-29', 10), day('2026-09-30', 10), day('2026-10-01', 100)]
+    const geometry = buildColumnGeometry(days, [model('a', 1)], 400, 200)
+    expect(geometry.dayTops).toHaveLength(days.length)
+    expect(geometry.dayTops[2]).toBe(geometry.peak!.y)
   })
 
   it('has nothing to draw when there is no usage in the window', () => {
-    const geometry = buildStreamGeometry([day('2026-10-01', 0), day('2026-10-02', 0)], 100, 50)
-    expect(geometry.layers).toEqual([])
-    expect(geometry.peak).toBeNull()
+    const geometry = buildColumnGeometry([day('2026-10-01', 0), day('2026-10-02', 0)], two, 100, 50)
+    expect(geometry).toMatchObject({ layers: [], grid: [], dayTops: [], peak: null, monthTicks: [] })
+  })
+})
+
+describe('summarizeDay', () => {
+  const models = rankModels(statsWith({ modelUsage: { a: usage(900), b: usage(100) } }), 'Other')
+  const day = (date: string, ...byModel: number[]) => ({ date, total: byModel.reduce((a, b) => a + b, 0), byModel })
+  const days = [
+    day('2026-10-14', 0, 0),
+    day('2026-10-15', 60, 20),
+    day('2026-10-16', 100, 100),
+    day('2026-10-17', 10, 0),
+  ]
+  const activity = new Map([['2026-10-16', { sessionCount: 4, messageCount: 50, toolCallCount: 120 }]])
+
+  it('places a day against the busiest day and the average active day', () => {
+    const peakDay = summarizeDay(days, 2, models, activity)!
+    expect(peakDay).toMatchObject({ date: '2026-10-16', total: 200, peak: 200, ofPeak: 1, rank: 1, activeDays: 3 })
+    // The idle day is not counted: (80 + 200 + 10) / 3, not / 4.
+    expect(peakDay.average).toBeCloseTo(96.667, 2)
+
+    expect(summarizeDay(days, 1, models, activity)).toMatchObject({ total: 80, ofPeak: 0.4, rank: 2 })
+    expect(summarizeDay(days, 3, models, activity)).toMatchObject({ total: 10, rank: 3 })
+  })
+
+  it('gives tied days the same rank', () => {
+    const tied = [day('2026-10-15', 50, 0), day('2026-10-16', 50, 0), day('2026-10-17', 5, 0)]
+    expect(summarizeDay(tied, 0, models, activity)!.rank).toBe(1)
+    expect(summarizeDay(tied, 1, models, activity)!.rank).toBe(1)
+    expect(summarizeDay(tied, 2, models, activity)!.rank).toBe(3)
+  })
+
+  it('lists the models that ran that day, biggest first, with their share of it', () => {
+    const summary = summarizeDay(days, 1, models, activity)!
+    expect(summary.models.map((model) => [model.id, model.series, model.tokens, model.share])).toEqual([
+      ['a', 1, 60, 0.75],
+      ['b', 2, 20, 0.25],
+    ])
+    // A model that did not run is left out rather than listed at 0%.
+    expect(summarizeDay(days, 3, models, activity)!.models.map((model) => model.id)).toEqual(['a'])
+    const reversed = summarizeDay([day('2026-10-17', 5, 30)], 0, models, activity)!
+    expect(reversed.models.map((model) => model.id)).toEqual(['b', 'a'])
+  })
+
+  it('carries that date\'s activity, and zeros where the stats have none', () => {
+    expect(summarizeDay(days, 2, models, activity)).toMatchObject({ sessionCount: 4, messageCount: 50, toolCallCount: 120 })
+    expect(summarizeDay(days, 1, models, activity)).toMatchObject({ sessionCount: 0, messageCount: 0, toolCallCount: 0 })
+  })
+
+  it('has nothing to open for an idle day or an index outside the window', () => {
+    expect(summarizeDay(days, 0, models, activity)).toBeNull()
+    expect(summarizeDay(days, -1, models, activity)).toBeNull()
+    expect(summarizeDay(days, 4, models, activity)).toBeNull()
+  })
+})
+
+describe('formatShare', () => {
+  it('keeps a decimal only where a whole number would round a small share away', () => {
+    expect(formatShare(1, 2, 'en')).toBe('50%')
+    expect(formatShare(34, 1000, 'en')).toBe('3.4%')
+    expect(formatShare(5, 0, 'en')).toBe('0%')
   })
 })

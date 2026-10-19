@@ -55,6 +55,7 @@ import { type MCPProgress, MCPTool } from '../../tools/MCPTool/MCPTool.js'
 import { createMcpAuthTool } from '../../tools/McpAuthTool/McpAuthTool.js'
 import { ReadMcpResourceTool } from '../../tools/ReadMcpResourceTool/ReadMcpResourceTool.js'
 import { createAbortController } from '../../utils/abortController.js'
+import { isAgentProfileMcpEnabled, LEAN_MCP_UNAVAILABLE } from '../../utils/agentProfile.js'
 import { count } from '../../utils/array.js'
 import {
   checkAndRefreshOAuthTokenIfNeeded,
@@ -1822,6 +1823,10 @@ const connectToServerMemoized = memoize(
 export const connectToServer = Object.assign(
   async (...args: Parameters<typeof connectToServerMemoized>): Promise<MCPServerConnection> => {
     const [name, config] = args
+    // Startup loads no MCP config for lean; this also covers later SDK/desktop
+    // controls (mcp_set_servers, toggle, reconnect, plugin reload): nothing is
+    // spawned, contacted or cached for a profile without an MCP runtime.
+    if (!isAgentProfileMcpEnabled()) return { name, config, type: 'failed', error: LEAN_MCP_UNAVAILABLE }
     if (isMcpServerDisabledForExecution(name)) return { name, config, type: 'disabled' }
     const pending = connectToServerMemoized(...args)
     let result = await pending
@@ -3668,6 +3673,12 @@ export async function setupSdkMcpClients(
 }> {
   const clients: MCPServerConnection[] = []
   const tools: Tool[] = []
+  if (!isAgentProfileMcpEnabled()) {
+    for (const [name, config] of Object.entries(sdkMcpConfigs)) {
+      clients.push({ type: 'failed', name, config: { ...config, scope: 'dynamic' }, error: LEAN_MCP_UNAVAILABLE })
+    }
+    return { clients, tools }
+  }
 
   // Connect to all servers in parallel
   const results = await Promise.allSettled(

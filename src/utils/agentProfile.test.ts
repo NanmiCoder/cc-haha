@@ -5,6 +5,8 @@ import {
   assertAgentProfileSettingCompatible,
   filterAgentProfileTools,
   getAgentProfile,
+  isAgentProfileMcpEnabled,
+  LEAN_MCP_UNAVAILABLE,
   setAgentProfile,
   validateAgentProfileInitialize,
   validateAgentProfileControlRequest,
@@ -42,7 +44,7 @@ describe('experimental agent profile', () => {
     expect(validateAgentProfileOptions({ print: true, sessionId: 'new-id', appendSystemPrompt: 'instructions' }, 'lean')).toBeUndefined()
   })
 
-  for (const key of ['continue', 'forkSession', 'fromPr', 'resumeSessionAt', 'rewindFiles', 'teleport', 'remote', 'bare', 'agent', 'agents', 'agentId', 'agentName', 'teamName', 'agentType', 'systemPrompt', 'systemPromptFile', 'jsonSchema', 'advisor', 'chrome']) {
+  for (const key of ['continue', 'forkSession', 'fromPr', 'resumeSessionAt', 'rewindFiles', 'teleport', 'remote', 'bare', 'agent', 'agents', 'agentId', 'agentName', 'teamName', 'agentType', 'systemPrompt', 'systemPromptFile', 'jsonSchema', 'advisor', 'chrome', 'mcpConfig']) {
     test(`lean rejects ${key} before running the session`, () => {
       expect(validateAgentProfileOptions({ print: true, [key]: 'value' }, 'lean')).toContain('cannot be combined')
     })
@@ -65,6 +67,21 @@ describe('experimental agent profile', () => {
     expect(validateAgentProfileControlRequest('send_agent_message')).toContain('resuming subagents')
     expect(validateAgentProfileControlRequest('stop_task')).toBeUndefined()
     expect(validateAgentProfileControlRequest('interrupt')).toBeUndefined()
+  })
+
+  test('only lean drops the MCP runtime, and every explicit MCP source fails closed', () => {
+    expect(isAgentProfileMcpEnabled()).toBe(true)
+    expect(validateAgentProfileOptions({ print: true, mcpConfig: ['{"mcpServers":{}}'] })).toBeUndefined()
+    expect(validateAgentProfileInitialize({ sdkMcpServers: ['host'] })).toBeUndefined()
+    expect(validateAgentProfileControlRequest('mcp_set_servers', { servers: { host: { type: 'sdk' } } })).toBeUndefined()
+    setAgentProfile('lean')
+    expect(isAgentProfileMcpEnabled()).toBe(false)
+    expect(validateAgentProfileOptions({ print: true, mcpConfig: ['{"mcpServers":{}}'] })).toContain('--mcp-config')
+    expect(validateAgentProfileInitialize({ sdkMcpServers: ['host'] })).toBe(LEAN_MCP_UNAVAILABLE)
+    expect(validateAgentProfileControlRequest('mcp_set_servers', { servers: { host: { type: 'sdk' } } })).toBe(LEAN_MCP_UNAVAILABLE)
+    // Nothing to start: an empty server list adds no capability.
+    expect(validateAgentProfileInitialize({ sdkMcpServers: [] })).toBeUndefined()
+    expect(validateAgentProfileControlRequest('mcp_set_servers', { servers: {} })).toBeUndefined()
   })
 
   test('profile selection does not change SIMPLE or environment settings', () => {

@@ -39,6 +39,7 @@ import {
   getDeferredToolsDeltaAttachment,
   getMcpInstructionsDeltaAttachment,
 } from '../../utils/attachments.js'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { getMemoryPath } from '../../utils/config.js'
 import {
   COMPACT_MAX_OUTPUT_TOKENS,
@@ -620,25 +621,9 @@ export async function compactConversation(
     // state so the model has tool/instruction context on the first
     // post-compact turn. Empty message history → diff against nothing →
     // announces the full set.
-    for (const att of getDeferredToolsDeltaAttachment(
-      context.options.tools,
-      context.options.mainLoopModel,
-      [],
-      { callSite: 'compact_full' },
-    )) {
-      postCompactFileAttachments.push(createAttachmentMessage(att))
-    }
-    for (const att of getAgentListingDeltaAttachment(context, [])) {
-      postCompactFileAttachments.push(createAttachmentMessage(att))
-    }
-    for (const att of getMcpInstructionsDeltaAttachment(
-      context.options.mcpClients,
-      context.options.tools,
-      context.options.mainLoopModel,
-      [],
-    )) {
-      postCompactFileAttachments.push(createAttachmentMessage(att))
-    }
+    postCompactFileAttachments.push(
+      ...createPostCompactDeltaAttachments(context, [], 'compact_full'),
+    )
 
     context.onCompactProgress?.({
       type: 'hooks_start',
@@ -1012,25 +997,9 @@ export async function partialCompactConversation(
 
     // Re-announce only what was in the summarized portion — messagesToKeep
     // is scanned, so anything already announced there is skipped.
-    for (const att of getDeferredToolsDeltaAttachment(
-      context.options.tools,
-      context.options.mainLoopModel,
-      messagesToKeep,
-      { callSite: 'compact_partial' },
-    )) {
-      postCompactFileAttachments.push(createAttachmentMessage(att))
-    }
-    for (const att of getAgentListingDeltaAttachment(context, messagesToKeep)) {
-      postCompactFileAttachments.push(createAttachmentMessage(att))
-    }
-    for (const att of getMcpInstructionsDeltaAttachment(
-      context.options.mcpClients,
-      context.options.tools,
-      context.options.mainLoopModel,
-      messagesToKeep,
-    )) {
-      postCompactFileAttachments.push(createAttachmentMessage(att))
-    }
+    postCompactFileAttachments.push(
+      ...createPostCompactDeltaAttachments(context, messagesToKeep, 'compact_partial'),
+    )
 
     context.onCompactProgress?.({
       type: 'hooks_start',
@@ -1510,6 +1479,34 @@ export async function streamCompactSummary({
   } finally {
     clearInterval(activityInterval)
   }
+}
+
+/**
+ * Re-announce deferred tools, agent listings and MCP instructions after
+ * compaction. These are the same producers the per-turn attachment pipeline
+ * skips for lean, so a lean session never gains them through compaction.
+ */
+export function createPostCompactDeltaAttachments(
+  context: ToolUseContext,
+  messagesToKeep: Message[],
+  callSite: 'compact_full' | 'compact_partial',
+): AttachmentMessage[] {
+  if (getAgentProfile() === 'lean') return []
+  return [
+    ...getDeferredToolsDeltaAttachment(
+      context.options.tools,
+      context.options.mainLoopModel,
+      messagesToKeep,
+      { callSite },
+    ),
+    ...getAgentListingDeltaAttachment(context, messagesToKeep),
+    ...getMcpInstructionsDeltaAttachment(
+      context.options.mcpClients,
+      context.options.tools,
+      context.options.mainLoopModel,
+      messagesToKeep,
+    ),
+  ].map(attachment => createAttachmentMessage(attachment))
 }
 
 /**

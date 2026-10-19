@@ -3,11 +3,12 @@ import { feature } from 'bun:bundle';
 import type { ContentBlockParam, TextBlockParam } from '@anthropic-ai/sdk/resources';
 import { randomUUID } from 'crypto';
 import { setPromptId } from 'src/bootstrap/state.js';
-import { builtInCommandNames, type Command, type CommandBase, findCommand, getCommand, getCommandName, hasCommand, type PromptCommand } from 'src/commands.js';
+import { builtInCommandNames, type Command, type CommandBase, findCommand, getCommand, getCommandName, getCommands, hasCommand, type PromptCommand } from 'src/commands.js';
+import { isHeadlessCommandHiddenByAgentProfile } from 'src/commands/headless.js';
 import { NO_CONTENT_MESSAGE } from 'src/constants/messages.js';
 import type { SetToolJSXFn, ToolUseContext } from 'src/Tool.js';
 import type { AssistantMessage, AttachmentMessage, Message, NormalizedUserMessage, ProgressMessage, UserMessage } from 'src/types/message.js';
-import { addInvokedSkill, getSessionId } from '../../bootstrap/state.js';
+import { addInvokedSkill, getProjectRoot, getSessionId } from '../../bootstrap/state.js';
 import { COMMAND_MESSAGE_TAG, COMMAND_NAME_TAG } from '../../constants/xml.js';
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, type AnalyticsMetadata_I_VERIFIED_THIS_IS_PII_TAGGED, logEvent } from '../../services/analytics/index.js';
@@ -335,6 +336,8 @@ export async function processSlashCommand(inputString: string, precedingInputBlo
 
   // Check if it's a real command before processing
   if (!hasCommand(commandName, context.options.commands)) {
+    const profileRejection = await getProfileHiddenCommandRejection(commandName)
+    if (profileRejection) return profileRejection
     // Check if this looks like a command name vs a file path or other input
     // Also check if it's an actual file path that exists
     let isFilePath = false;
@@ -535,6 +538,15 @@ function getLeanCommandRejection(command: Command): SlashCommandResult | undefin
     resultText,
     command,
   }
+}
+
+// Lean print sessions list and dispatch only lean-compatible commands. A
+// command missing only because of the profile is still looked up in the
+// registry so the user learns why, instead of reading "Unknown skill".
+async function getProfileHiddenCommandRejection(commandName: string): Promise<SlashCommandResult | undefined> {
+  if (getAgentProfile() !== 'lean') return
+  const command = findCommand(commandName, await getCommands(getProjectRoot()))
+  return command && isHeadlessCommandHiddenByAgentProfile(command) ? getLeanCommandRejection(command) : undefined
 }
 
 async function getMessagesForSlashCommand(commandName: string, args: string, setToolJSX: SetToolJSXFn, context: ProcessUserInputContext, precedingInputBlocks: ContentBlockParam[], imageContentBlocks: ContentBlockParam[], _isAlreadyProcessing?: boolean, canUseTool?: CanUseToolFn, uuid?: string): Promise<SlashCommandResult> {
@@ -903,9 +915,19 @@ async function getMessagesForPromptSlashCommand(command: CommandBase & PromptCom
     // permissions, change models/effort, or execute a fork from skill metadata.
     const skillContent = result.filter((b): b is TextBlockParam => b.type === 'text').map(b => b.text).join('\n\n')
     addInvokedSkill(command.name, command.source ? `${command.source}:${command.name}` : command.name, skillContent, getAgentContext()?.agentId ?? null)
+    // `@file` mentions in the skill text (the arguments the user typed and the
+    // skill file's own body, as for standard) still attach their files. Attachment
+    // producers for capabilities lean omits (MCP resources, agent mentions, skill
+    // discovery, ...) are skipped inside getAttachmentMessages.
+    const leanAttachmentMessages = await toArray(getAttachmentMessages(result.filter((block): block is TextBlockParam => block.type === 'text').map(block => block.text).join(' '), context, null, [],
+    // queuedCommands - handled by query.ts for mid-turn attachments
+    context.messages, 'repl_main_thread', {
+      skipSkillDiscovery: true
+    }))
     return {
       messages: [createUserMessage({ content: formatCommandLoadingMetadata(command, args), uuid }),
-        createUserMessage({ content: [...imageContentBlocks, ...precedingInputBlocks, ...result], isMeta: true })],
+        createUserMessage({ content: [...imageContentBlocks, ...precedingInputBlocks, ...result], isMeta: true }),
+        ...leanAttachmentMessages],
       shouldQuery: true,
       command,
     }

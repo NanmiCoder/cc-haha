@@ -5,7 +5,11 @@ import '@testing-library/jest-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../pages/EmptySession', () => ({
-  EmptySession: ({ initialWorkDir }: { initialWorkDir?: string }) => <div data-testid="empty-session" data-workdir={initialWorkDir ?? ''}><input aria-label="Draft text" /></div>,
+  EmptySession: ({ initialWorkDir, draftRevision }: { initialWorkDir?: string; draftRevision?: number }) => (
+    <div data-testid="empty-session" data-workdir={initialWorkDir ?? ''} data-draft-revision={draftRevision ?? ''}>
+      <input aria-label="Draft text" />
+    </div>
+  ),
 }))
 
 vi.mock('../../pages/ActiveSession', () => ({
@@ -55,10 +59,41 @@ describe('ContentRouter tab surfaces', () => {
   it('renders a new-chat draft with its project seed while retaining existing session tabs', () => {
     useTabStore.setState({ tabs: [{ sessionId: 'existing', title: 'Existing', type: 'session', status: 'idle' }], activeTabId: null })
     useUIStore.getState().startNewSessionDraft('/workspace/project')
-    render(<ContentRouter homePage={<div data-testid="mobile-home" />} />)
+    render(<ContentRouter />)
+    const draft = useUIStore.getState().newSessionDraft!
     expect(screen.getByTestId('empty-session')).toHaveAttribute('data-workdir', '/workspace/project')
-    expect(screen.queryByTestId('mobile-home')).not.toBeInTheDocument()
+    expect(screen.getByTestId('empty-session')).toHaveAttribute('data-draft-revision', String(draft.revision))
     expect(useTabStore.getState().tabs[0]?.sessionId).toBe('existing')
+  })
+
+  // A desktop browser narrowed below 768px swaps in the phone shell, whose home
+  // is the session list. The desktop draft used to cover it, with no Back.
+  it('keeps the phone home on screen when a desktop draft exists', () => {
+    useUIStore.getState().startNewSessionDraft('/workspace/project')
+    render(<ContentRouter homePage={<div data-testid="mobile-home" />} />)
+    expect(screen.getByTestId('mobile-home')).toBeInTheDocument()
+    expect(screen.queryByTestId('new-session-draft-panel')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('empty-session')).not.toBeInTheDocument()
+  })
+
+  it('does not start a desktop draft under a shell that has its own home', () => {
+    render(<ContentRouter homePage={<div data-testid="mobile-home" />} />)
+    expect(useUIStore.getState().newSessionDraft).toBeNull()
+  })
+
+  it('moves an empty draft to a requested project without remounting it', () => {
+    useTabStore.setState({ tabs: [{ sessionId: 'existing', title: 'Existing', type: 'session', status: 'idle' }], activeTabId: 'existing' })
+    render(<ContentRouter />)
+    act(() => {
+      useUIStore.getState().startNewSessionDraft('')
+      useTabStore.getState().setActiveTab(null)
+    })
+    const composer = screen.getByTestId('empty-session')
+    act(() => {
+      useUIStore.getState().startNewSessionDraft('/workspace/target')
+    })
+    expect(screen.getByTestId('empty-session')).toBe(composer)
+    expect(composer).toHaveAttribute('data-workdir', '/workspace/target')
   })
 
   it('retains the initial desktop draft when visiting settings before creating any session', () => {

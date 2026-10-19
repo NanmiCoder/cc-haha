@@ -4,6 +4,7 @@
  * GET    /api/providers                  — list all saved providers + activeId
  * GET    /api/providers/presets           — list available presets
  * GET    /api/providers/auth-status       — check whether any usable auth exists
+ *                                           (?providerId=<id>: only that provider's own auth)
  * GET    /api/providers/settings          — read cc-haha managed settings.json
  * GET    /api/providers/cc-switch/scan    — scan a local cc-switch install
  * POST   /api/providers                  — add a provider
@@ -64,7 +65,7 @@ const OfficialProviderModelsUpdateSchema = z.object({
 
 export async function handleProvidersApi(
   req: Request,
-  _url: URL,
+  url: URL,
   segments: string[],
 ): Promise<Response> {
   try {
@@ -101,9 +102,9 @@ export async function handleProvidersApi(
       return Response.json({ presets: PROVIDER_PRESETS })
     }
 
-    // GET /api/providers/auth-status
+    // GET /api/providers/auth-status[?providerId=<id>]
     if (id === 'auth-status' && req.method === 'GET') {
-      const status = await providerService.checkAuthStatus()
+      const status = await providerService.checkAuthStatus(readAuthStatusProviderId(url))
       return Response.json(status)
     }
 
@@ -336,6 +337,17 @@ async function handleTestUnsaved(req: Request): Promise<Response> {
     if (err instanceof z.ZodError) throw ApiError.badRequest(err.issues.map((i) => i.message).join('; '))
     throw err
   }
+}
+
+/**
+ * `providerId` scopes the auth check to one provider: a saved provider id or a
+ * built-in id (`claude-official`, `openai-official`, ...). Absent or blank keeps
+ * the global-default check. The value is only compared with known ids; it is
+ * never used as a path, logged, or echoed back.
+ */
+function readAuthStatusProviderId(url: URL): string | undefined {
+  const providerId = url.searchParams.get('providerId')?.trim()
+  return providerId ? providerId : undefined
 }
 
 async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {

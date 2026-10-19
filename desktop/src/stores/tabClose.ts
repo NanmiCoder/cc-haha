@@ -2,9 +2,12 @@ import { ApiError } from '../api/client'
 import { sessionsApi } from '../api/sessions'
 import { hasRunningBackgroundTasks, listRunningBackgroundTasks } from '../lib/backgroundTasks'
 import { isPlaceholderSessionTitle } from '../lib/sessionTitle'
+import { isTeamRunning } from '../lib/teamRunning'
 import { releaseWorkspaceSession } from '../lib/workspace/releaseSession'
 import { useChatStore } from './chatStore'
 import { useSessionStore } from './sessionStore'
+import { useTeamPlanStore } from './teamPlanStore'
+import { useTeamStore } from './teamStore'
 import {
   CONNECTORS_TAB_ID,
   MARKET_TAB_ID,
@@ -40,15 +43,21 @@ export function isSessionTab(tab: Tab | null | undefined) {
   return isSessionTabId(tab.sessionId)
 }
 
-/** Chat tabs whose turn or background tasks are still going. */
+/** Chat tabs whose turn, background tasks or Agent Team are still going. */
 export function getRunningSessionIds(targetTabs: Tab[]): string[] {
   const chatSessions = useChatStore.getState().sessions
+  const teamPlans = useTeamPlanStore.getState().bySession
+  const teamWorkbenches = useTeamStore.getState().workbenchesBySession
   return targetTabs
     .filter((tab) => isSessionTab(tab))
     .filter((tab) => {
       const sessionState = chatSessions[tab.sessionId]
-      return !!sessionState &&
-        (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks))
+      if (sessionState &&
+        (sessionState.chatState !== 'idle' || hasRunningBackgroundTasks(sessionState.backgroundAgentTasks))) {
+        return true
+      }
+      // The lead can be idle while its teammates are mid-turn (#1524).
+      return isTeamRunning(teamPlans[tab.sessionId]?.plan, teamWorkbenches[tab.sessionId]?.snapshots.at(-1))
     })
     .map((tab) => tab.sessionId)
 }

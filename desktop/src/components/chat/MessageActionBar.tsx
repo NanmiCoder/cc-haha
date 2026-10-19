@@ -50,10 +50,18 @@ type Props = {
    */
   alwaysVisible?: boolean
   /**
-   * `overlay` hangs the bar just under its message, absolutely positioned, so a
-   * hover-only bar never holds the transcript open by its own height. The
-   * caller's shell must be `relative`; the space it lands in is the turn gap
-   * that `.chat-turn-rail--none` already reserves, not something the bar adds.
+   * `overlay` hangs the bar just under its message with zero layout height, so
+   * a hover-only bar never holds the transcript open by its own height; the
+   * space it lands in is the turn gap that `.chat-turn-rail--none` already
+   * reserves, not something the bar adds.
+   *
+   * The bar stays in flow (a zero-height box whose row overflows downward)
+   * rather than being absolutely positioned on purpose: the caller's hover
+   * shell is shrink-to-fit, and an out-of-flow bar adds nothing to its width.
+   * With a short message ("hi") the bar then hung out past the shell's left
+   * edge, so the pointer left the shell on its way to the edit button and the
+   * bar faded out under it (#1616). In flow, the shell is at least as wide as
+   * its bar, and the shell box is the whole path from bubble to every button.
    */
   placement?: 'inline' | 'overlay'
 }
@@ -87,10 +95,8 @@ export function MessageActionBar({
       data-align={align}
       data-placement={placement}
       className={[
-        'flex h-6 transition-opacity duration-150',
-        placement === 'overlay'
-          ? `absolute top-full ${align === 'end' ? 'right-0' : 'left-0'}`
-          : 'mt-1.5 w-full',
+        'flex transition-opacity duration-150',
+        placement === 'overlay' ? 'h-0' : 'mt-1.5 h-6 w-full',
         alwaysVisible
           ? ''
           : 'pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100',

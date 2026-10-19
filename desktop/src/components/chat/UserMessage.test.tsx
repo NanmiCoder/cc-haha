@@ -53,10 +53,13 @@ describe('UserMessage', () => {
     expect(actions?.className).toContain('opacity-0')
     expect(actions?.className).toContain('group-hover:opacity-100')
     expect(actions?.className).toContain('group-focus-within:opacity-100')
-    // Hung under the bubble, out of flow: revealing it never shifts the transcript.
+    // Hung under the bubble with no layout height, so revealing it never shifts
+    // the transcript. It must stay in flow inside the hover shell (see
+    // MessageActionBar.overlay.test.tsx for why, #1616).
     expect(actions?.getAttribute('data-placement')).toBe('overlay')
-    expect(actions?.className).toContain('absolute')
-    expect(actions?.parentElement?.className).toContain('relative')
+    expect(actions?.className).toContain('h-0')
+    expect(actions?.className).not.toMatch(/(^|\s)(absolute|fixed)(\s|$)/)
+    expect(actions?.parentElement?.getAttribute('data-message-shell')).toBe('user')
     expect(container.querySelectorAll('[data-message-actions]')).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Fork' }).closest('[data-message-actions]')).toBe(actions)
     expect(button.textContent).toBe('')

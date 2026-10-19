@@ -247,12 +247,33 @@ describe('ActivitySettings', () => {
     const chart = screen.getByRole('img', { name: 'Daily tokens by model, last 90 days' })
     expect(chart.querySelectorAll('path')).toHaveLength(1)
     expect(chart.querySelector('path')).toHaveAttribute('fill', 'var(--color-series-1)')
-    // One hover target per day, each naming its date and exact amount.
-    const titles = Array.from(chart.querySelectorAll('rect > title')).map((node) => node.textContent)
-    expect(titles).toHaveLength(90)
-    expect(titles[titles.length - 1]).toBe('May 9, 2026 · 128k Tokens (128,000)')
+    // One target per day, each naming its date and exact amount.
+    const dayLabels = screen
+      .getAllByRole('button', { name: / · \S+ Tokens \(/ })
+      .map((button) => button.getAttribute('aria-label'))
+    expect(dayLabels).toHaveLength(90)
+    expect(dayLabels[dayLabels.length - 1]).toBe('May 9, 2026 · 128k Tokens (128,000)')
     expect(screen.getByTestId('stream-peak')).toHaveTextContent('Peak 2.7M · 4/20')
+    // Columns stand on a zero baseline against round grid values: the peak is 2.67M, so 1M and 2M.
+    expect(screen.getAllByTestId('stream-grid-label').map((label) => label.textContent)).toEqual(['1M', '2M'])
     expect(screen.getByText('Sonnet', { selector: 'li span' })).toBeInTheDocument()
+  })
+
+  it('opens the clicked day of the stream with that day\'s own sessions, messages and tool calls', async () => {
+    render(<ActivitySettings />)
+
+    await flushActivityLoad()
+
+    fireEvent.click(screen.getByRole('button', { name: /^Apr 20, 2026 · / }))
+
+    const card = screen.getByTestId('stream-day-card')
+    expect(within(card).getByText('Mon, April 20')).toBeInTheDocument()
+    expect(within(card).getByTestId('stream-day-total')).toHaveTextContent('2.7')
+    // Its figures come from that date's activity, not the lifetime totals the page opens with.
+    expect(within(card).getByText('Sessions').nextElementSibling).toHaveTextContent('38')
+    expect(within(card).getByText('Messages').nextElementSibling).toHaveTextContent('420')
+    expect(within(card).getByText('Tool calls').nextElementSibling).toHaveTextContent('160')
+    expect(card).toHaveTextContent('No. 1 · 100% of peak')
   })
 
   it('shows the mix per model, marking unpriced models instead of showing $0', async () => {

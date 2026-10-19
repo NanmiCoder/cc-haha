@@ -49,7 +49,7 @@ import {
 } from './Tool.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
-import type { Message } from './types/message.js'
+import type { Message, MessageOrigin } from './types/message.js'
 import type { OrphanedPermission } from './types/textInputTypes.js'
 import { createAbortController } from './utils/abortController.js'
 import type { AttributionState } from './utils/commitAttribution.js'
@@ -232,7 +232,7 @@ export class QueryEngine {
 
   async *submitMessage(
     prompt: string | ContentBlockParam[],
-    options?: { uuid?: string; isMeta?: boolean },
+    options?: { uuid?: string; isMeta?: boolean; origin?: MessageOrigin },
   ): AsyncGenerator<SDKMessage, void, unknown> {
     const {
       cwd,
@@ -501,9 +501,17 @@ export class QueryEngine {
     })
 
     const isSessionMessage = isPendingSessionMessage(options?.uuid)
-    if (isSessionMessage) {
+    // A prompt that is not the human's own input (a task notification starting
+    // its own turn, a channel message) keeps its origin on the messages it
+    // produces, as handlePromptSubmit does for the REPL. Without it the turn
+    // reads as the user's: a lean session would take a `/skill` the model wrote
+    // into a notification for the user's explicit selection.
+    const origin: MessageOrigin | undefined = isSessionMessage
+      ? { kind: 'channel', server: 'session-collaboration' }
+      : options?.origin
+    if (origin) {
       for (const message of messagesFromUserInput) {
-        if (message.type === 'user') message.origin = { kind: 'channel', server: 'session-collaboration' }
+        if (message.type === 'user') message.origin = origin
       }
     }
 
@@ -1390,6 +1398,7 @@ export async function* ask({
   prompt,
   promptUuid,
   isMeta,
+  origin,
   cwd,
   tools,
   mcpClients,
@@ -1421,6 +1430,7 @@ export async function* ask({
   prompt: string | Array<ContentBlockParam>
   promptUuid?: string
   isMeta?: boolean
+  origin?: MessageOrigin
   cwd: string
   tools: Tools
   verbose?: boolean
@@ -1490,6 +1500,7 @@ export async function* ask({
     yield* engine.submitMessage(prompt, {
       uuid: promptUuid,
       isMeta,
+      origin,
     })
   } finally {
     setReadFileCache(engine.getReadFileState())

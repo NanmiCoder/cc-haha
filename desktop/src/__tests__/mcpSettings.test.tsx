@@ -632,6 +632,7 @@ describe('McpSettings', () => {
     [{ applied: false, reason: 'not_running' }, 'warning', 'chat is not running'],
     [{ applied: false, reason: 'different_project' }, 'warning', 'different project'],
     [{ applied: false, reason: 'no_session' }, 'warning', 'No chat was selected'],
+    [{ applied: false, reason: 'lean_profile' }, 'warning', 'Lean mode, which does not use MCP servers'],
     [undefined, 'warning', 'not confirmed'],
     [{ applied: true }, 'success', 'Disabled MCP server'],
   ] as const)('reports the runtime receipt after a saved toggle: %j', async (sessionSync, type, message) => {

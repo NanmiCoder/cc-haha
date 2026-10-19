@@ -423,20 +423,60 @@ describe('uiStore settings tab persistence', () => {
 })
 
 describe('uiStore new-session draft navigation', () => {
-  it('resumes the existing draft until first send clears it, then seeds the next project', async () => {
+  // An empty draft is only a seed: "New session" in another project has to
+  // land there. It used to keep the first project, which was usually the
+  // project-less draft made at launch before the tabs were restored.
+  it('moves an empty draft to the requested project in place', async () => {
     vi.resetModules()
     const { useUIStore } = await import('./uiStore')
     useUIStore.getState().startNewSessionDraft('/workspace/first')
+    const draft = useUIStore.getState().newSessionDraft!
+    expect(draft).toMatchObject({ workDir: '/workspace/first', hasContent: false })
+
+    useUIStore.getState().startNewSessionDraft('/workspace/other')
+    // Same revision: the composer is moved, not remounted, so its mode and
+    // permission picks survive.
+    expect(useUIStore.getState().newSessionDraft).toEqual({ ...draft, workDir: '/workspace/other' })
+
+    // No target (a page with no chat of its own) returns to the draft as it is.
+    useUIStore.getState().startNewSessionDraft()
+    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/other')
+    useUIStore.setState({ newSessionDraft: null })
+  })
+
+  it('keeps the project of a draft holding unsent content', async () => {
+    vi.resetModules()
+    const { useUIStore } = await import('./uiStore')
+    useUIStore.getState().startNewSessionDraft('/workspace/first')
+    const { revision } = useUIStore.getState().newSessionDraft!
+    useUIStore.getState().setNewSessionDraftContent(revision, true)
     const draft = useUIStore.getState().newSessionDraft
+    expect(draft).toMatchObject({ workDir: '/workspace/first', hasContent: true })
+
     useUIStore.getState().startNewSessionDraft('/workspace/other')
     expect(useUIStore.getState().newSessionDraft).toBe(draft)
-    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/first')
 
+    // Emptied again, it follows the next request.
+    useUIStore.getState().setNewSessionDraftContent(revision, false)
+    useUIStore.getState().startNewSessionDraft('/workspace/other')
+    expect(useUIStore.getState().newSessionDraft).toMatchObject({ workDir: '/workspace/other', revision })
+    useUIStore.setState({ newSessionDraft: null })
+  })
+
+  it('ignores a content report from a composer of an older draft', async () => {
+    vi.resetModules()
+    const { useUIStore } = await import('./uiStore')
+    useUIStore.getState().startNewSessionDraft('/workspace/first')
+    const first = useUIStore.getState().newSessionDraft!
     // Successful first send consumes this draft. The next request is a new chat.
     useUIStore.setState({ newSessionDraft: null })
     useUIStore.getState().startNewSessionDraft('/workspace/next')
-    expect(useUIStore.getState().newSessionDraft?.workDir).toBe('/workspace/next')
-    expect(useUIStore.getState().newSessionDraft).not.toBe(draft)
+    const next = useUIStore.getState().newSessionDraft!
+    expect(next.workDir).toBe('/workspace/next')
+    expect(next.revision).not.toBe(first.revision)
+
+    useUIStore.getState().setNewSessionDraftContent(first.revision, true)
+    expect(useUIStore.getState().newSessionDraft).toBe(next)
     useUIStore.setState({ newSessionDraft: null })
   })
 })

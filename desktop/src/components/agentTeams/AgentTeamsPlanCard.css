@@ -12,6 +12,13 @@
   border-top: 1px solid var(--color-border-separator);
 }
 
+.team-plan-editor {
+  /* Plan text is model-written: a long identifier, path or URL has no break
+     opportunity and would otherwise widen the dialog scroller (#1523).
+     `anywhere` also lowers min-content, so grid/flex items can shrink. */
+  overflow-wrap: anywhere;
+}
+
 .team-plan-member {
   transition: background-color 180ms ease-out;
 }

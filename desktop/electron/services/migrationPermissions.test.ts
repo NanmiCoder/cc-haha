@@ -1,11 +1,14 @@
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync, type SpawnOptions } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import * as fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createWindowsMigrationPermissionsRunner, preserveWindowsMigrationPermissions, restrictWindowsMigrationStaging, type MigrationPermissionsRunner } from './migrationPermissions'
+import { createWindowsMigrationPermissionsRunner, preflightWindowsMigrationPermissions, preserveWindowsMigrationPermissions, restrictWindowsMigrationStaging, type MigrationPermissionsRunner } from './migrationPermissions'
+
+// Non-Windows hosts can exercise script control flow without emulating NTFS.
+const canRunPowerShell = process.platform === 'win32' || spawnSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { stdio: 'ignore', timeout: 5_000 }).status === 0
 
 const roots: string[] = []
 async function fixture() {
@@ -50,10 +53,10 @@ describe('Windows migration permissions', () => {
     expect(script).not.toContain(f.sourceFile)
     expect(script).not.toContain(f.targetDir)
     expect(script).toContain('$acl.SetAccessRuleProtection($true, $true)')
-    expect(script).toContain('Get-Acl -LiteralPath $entry.source')
-    expect(script).toContain('Set-Acl -LiteralPath $entry.target')
+    expect(script).toContain('Get-Acl -LiteralPath $sourcePath')
+    expect(script).toContain('Set-Acl -LiteralPath $targetPath')
     expect(script).not.toContain('Set-Acl -LiteralPath $entry.source')
-    expect(JSON.parse(input)).toEqual({ entries: [{ source: f.sourceFile, target: f.targetFile }, { source: f.sourceDir, target: f.targetDir }] })
+    expect(JSON.parse(input)).toEqual({ entries: [{ source: f.sourceFile, target: f.targetFile, index: 1 }, { source: f.sourceDir, target: f.targetDir, index: 0 }] })
   })
 
   it('restricts staging to the current owner with protected inheritable FullControl', async () => {
@@ -99,7 +102,7 @@ describe('Windows migration permissions', () => {
 
   it.each(['process error', 'stdin error', 'abort'])('waits for child close after %s before allowing rollback', async event => {
     const stdin = new PassThrough()
-    const child = Object.assign(new EventEmitter(), { stdin, kill: vi.fn(() => true) })
+    const child = Object.assign(new EventEmitter(), { stdin, stdout: new PassThrough(), kill: vi.fn(() => true) })
     const spawnProcess = vi.fn<(...args: Parameters<typeof spawn>) => typeof child>(() => child)
     const runner = createWindowsMigrationPermissionsRunner(spawnProcess as unknown as typeof spawn, 'win32')
     const abort = new AbortController()
@@ -114,9 +117,143 @@ describe('Windows migration permissions', () => {
     await new Promise(resolve => setImmediate(resolve))
     expect(child.kill).toHaveBeenCalled()
     expect(settled).toBe(false)
-    expect(spawnProcess.mock.calls[0]?.[2]).toMatchObject({ windowsHide: true, shell: false, stdio: ['pipe', 'ignore', 'ignore'], timeout: 60_000, signal: abort.signal })
+    expect(spawnProcess.mock.calls[0]?.[2]).toMatchObject({ windowsHide: true, shell: false, stdio: ['pipe', 'pipe', 'ignore'], timeout: 60_000, signal: abort.signal })
     child.emit('close', null)
     await expect(operation).rejects.toThrow('migration was stopped')
+  })
+
+  it('reports only bounded structured ACL diagnostics after the writer closes', async () => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const child = Object.assign(new EventEmitter(), { stdin, stdout, kill: vi.fn(() => true) })
+    const runner = createWindowsMigrationPermissionsRunner((() => child) as unknown as typeof spawn, 'win32')
+    const operation = runner('fixture', '{}')
+    let settled = false
+    void operation.catch(() => { settled = true })
+    stdout.write(JSON.stringify({ version: 1, ok: false, phase: 'preserve', operation: 'write-acl', entry: 128, kind: 'directory', type: 'UnauthorizedAccessException', hresult: '0x80070005' }))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(settled).toBe(false)
+    child.emit('close', 1)
+    await expect(operation).rejects.toThrow('phase=preserve operation=write-acl entry=128 kind=directory type=UnauthorizedAccessException hresult=0x80070005 exit=1')
+  })
+
+  it.each([['private text', 'raw private path C:\\Users\\secret'], ['success on failure', '{"version":1,"ok":true}'], ['oversized', 'x'.repeat(4097)]])('fails closed without reflecting invalid failure output: %s', async (_label, output) => {
+    const stdin = new PassThrough()
+    const stdout = new PassThrough()
+    const child = Object.assign(new EventEmitter(), { stdin, stdout, kill: vi.fn(() => true) })
+    const runner = createWindowsMigrationPermissionsRunner((() => child) as unknown as typeof spawn, 'win32')
+    const operation = runner('fixture', '{}')
+    stdout.write(output)
+    child.emit('close', 1)
+    await expect(operation).rejects.toThrow('migration was stopped')
+    await expect(operation).rejects.not.toThrow(output)
+  })
+
+  it.each([
+    ['', 0, false],
+    ['{"version":1,"ok":true}', 0, true],
+    ['{"version":1,"ok":true}', null, false],
+    ['{"version":1,"ok":true,"private":"secret"}', 0, false],
+    ['{"version":1,"ok":false,"phase":"preserve","operation":"write-acl","entry":0,"kind":"file","type":"Other","hresult":"0x80070005"}', 0, false],
+  ])('requires a successful protocol and exit status (%#)', async (output, code, success) => {
+    const stdout = new PassThrough()
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout, kill: vi.fn(() => true) })
+    const runner = createWindowsMigrationPermissionsRunner((() => child) as unknown as typeof spawn, 'win32')
+    const operation = runner('fixture', '{}')
+    stdout.write(output as string)
+    child.emit('close', code)
+    if (success) await expect(operation).resolves.toBeUndefined()
+    else await expect(operation).rejects.toThrow('migration was stopped')
+  })
+
+  it.each(['phase', 'operation', 'kind', 'type', 'hresult', 'entry', 'extra'])('does not leak untrusted diagnostic field %s', async field => {
+    const stdout = new PassThrough()
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout, kill: vi.fn(() => true) })
+    const runner = createWindowsMigrationPermissionsRunner((() => child) as unknown as typeof spawn, 'win32')
+    const operation = runner('fixture', '{}')
+    stdout.write(JSON.stringify({ version: 1, ok: false, phase: 'preflight', operation: 'read-acl', entry: 0, kind: 'file', type: 'Other', hresult: '0x80070005', [field]: 'private account path SID' }))
+    child.emit('close', 1)
+    await expect(operation).rejects.toThrow('process-failed')
+    await expect(operation).rejects.not.toThrow('private')
+  })
+
+  it('kills oversized output but does not settle until close, even with exit zero', async () => {
+    const stdout = new PassThrough()
+    const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout, kill: vi.fn(() => true) })
+    const runner = createWindowsMigrationPermissionsRunner((() => child) as unknown as typeof spawn, 'win32')
+    const operation = runner('fixture', '{}')
+    let settled = false
+    void operation.catch(() => { settled = true })
+    stdout.write(Buffer.alloc(4097, 120))
+    await new Promise(resolve => setImmediate(resolve))
+    expect(child.kill).toHaveBeenCalledOnce()
+    expect(settled).toBe(false)
+    child.emit('close', 0)
+    await expect(operation).rejects.toThrow('output-limit')
+  })
+
+  it('fails closed on timeout termination and on abort with a late success reply', async () => {
+    for (const aborting of [false, true]) {
+      const stdout = new PassThrough()
+      const child = Object.assign(new EventEmitter(), { stdin: new PassThrough(), stdout, kill: vi.fn(() => true) })
+      const abort = new AbortController()
+      const runner = createWindowsMigrationPermissionsRunner((() => child) as unknown as typeof spawn, 'win32')
+      const operation = runner('fixture', '{}', abort.signal)
+      if (aborting) { abort.abort(); stdout.write('{"version":1,"ok":true}') }
+      child.emit('close', aborting ? 0 : null, aborting ? null : 'SIGTERM')
+      await expect(operation).rejects.toThrow(aborting ? 'cancelled' : 'process-failed')
+    }
+  })
+
+  it('preflights empty file and directory probes in bounded batches with stable indices', async () => {
+    const f = await fixture()
+    const stage = path.join(f.targetDir, 'private-stage')
+    await fs.mkdir(stage)
+    const sources = [f.sourceDir, ...Array.from({ length: 128 }, () => f.sourceFile)]
+    const runner = vi.fn<MigrationPermissionsRunner>(async () => {})
+    await preflightWindowsMigrationPermissions(sources, stage, undefined, runner)
+    expect(runner.mock.calls.map(call => JSON.parse(call[1]).entries.length)).toEqual([128, 1])
+    expect(JSON.parse(runner.mock.calls[1]![1]).entries).toEqual([{ source: f.sourceFile, index: 128 }])
+    const script = runner.mock.calls[0]![0]
+    expect(script).toContain('Write-Permissions $acl $probe')
+    expect(script).toContain('FileMode]::CreateNew')
+    expect(script).toContain('Remove-Item -LiteralPath $probe')
+    expect(script).toContain('$expected.GetOwner($sidType).Value -ne $actual.GetOwner($sidType).Value')
+    expect(script).not.toContain(f.sourceFile)
+    expect(await fs.readFile(f.sourceFile, 'utf8')).toBe('source fixture bytes')
+    expect(await fs.readdir(stage)).toEqual([])
+  })
+
+  it('rejects source/staging overlap, linked paths and leftover probes', async () => {
+    const f = await fixture()
+    const runner = vi.fn<MigrationPermissionsRunner>(async () => {})
+    await expect(preflightWindowsMigrationPermissions([f.sourceFile], f.targetDir, undefined, runner)).rejects.toThrow('empty private staging')
+    const stage = path.join(f.targetDir, 'private-stage')
+    await fs.mkdir(stage)
+    await expect(preflightWindowsMigrationPermissions([stage], stage, undefined, runner)).rejects.toThrow('independent')
+    await expect(preflightWindowsMigrationPermissions([f.targetDir], stage, undefined, runner)).rejects.toThrow('independent')
+    const link = path.join(f.root, 'linked-stage')
+    await fs.symlink(stage, link, 'junction')
+    await expect(preflightWindowsMigrationPermissions([f.sourceFile], link, undefined, runner)).rejects.toThrow('links')
+    expect(runner).not.toHaveBeenCalled()
+    await expect(preflightWindowsMigrationPermissions([f.sourceFile], stage, undefined, async () => {
+      await fs.writeFile(path.join(stage, 'leftover-empty-probe'), '')
+    })).rejects.toThrow('clean up')
+  })
+
+  it('stops permission preflight batches on failure or cancellation', async () => {
+    const f = await fixture()
+    const stage = path.join(f.targetDir, 'private-stage')
+    await fs.mkdir(stage)
+    const sources = Array.from({ length: 129 }, () => f.sourceFile)
+    const failing = vi.fn<MigrationPermissionsRunner>(async () => { throw new Error('preflight denied') })
+    await expect(preflightWindowsMigrationPermissions(sources, stage, undefined, failing)).rejects.toThrow('preflight denied')
+    expect(failing).toHaveBeenCalledOnce()
+    const abort = new AbortController()
+    const cancelling = vi.fn<MigrationPermissionsRunner>(async () => { abort.abort(new Error('cancel preflight')) })
+    await expect(preflightWindowsMigrationPermissions(sources, stage, abort.signal, cancelling)).rejects.toThrow('cancel preflight')
+    expect(cancelling).toHaveBeenCalledOnce()
+    expect(await fs.readdir(stage)).toEqual([])
   })
 
   it('stops on an ACL failure and bounds entries in each process', async () => {
@@ -141,6 +278,67 @@ describe('Windows migration permissions', () => {
     const during = new AbortController()
     await expect(preserveWindowsMigrationPermissions([{ source: f.sourceFile, target: f.targetFile }], during.signal, async () => { during.abort(new Error('cancel during ACL')) })).rejects.toThrow('cancel during ACL')
   })
+
+  it.skipIf(!canRunPowerShell).each(['file', 'directory'])('leaves no probe when reading a %s ACL fails in the actual script', async kind => {
+    const f = await fixture()
+    const stage = path.join(f.targetDir, 'private-stage')
+    await fs.mkdir(stage)
+    const spawnProcess = ((executable: string, args: readonly string[], options: SpawnOptions) =>
+      spawn(process.platform === 'win32' ? executable : 'pwsh', args, options)) as unknown as typeof spawn
+    const runner = createWindowsMigrationPermissionsRunner(spawnProcess, 'win32')
+    const rejectingRead: MigrationPermissionsRunner = (script, input, signal) => runner(
+      script.replace("$phase = 'preflight'", "function Get-Acl { throw [System.UnauthorizedAccessException]::new('fixture read denied') }\n$phase = 'preflight'"),
+      input, signal,
+    )
+    await expect(preflightWindowsMigrationPermissions([kind === 'file' ? f.sourceFile : f.sourceDir], stage, undefined, rejectingRead))
+      .rejects.toThrow(`phase=preflight operation=read-acl entry=0 kind=${kind} type=UnauthorizedAccessException hresult=0x80070005 exit=1`)
+    expect(await fs.readdir(stage)).toEqual([])
+    expect(await fs.readFile(f.sourceFile, 'utf8')).toBe('source fixture bytes')
+  }, 30_000)
+
+  it.skipIf(process.platform !== 'win32')('preflights real current-user file and directory ACLs without changing source or stage ACLs', async () => {
+    const f = await fixture()
+    const stage = path.join(f.targetDir, 'private-stage')
+    await fs.mkdir(stage)
+    await restrictWindowsMigrationStaging(stage)
+    await restrictWindowsMigrationStaging(f.sourceParent)
+    const payload = { paths: [f.sourceDir, f.sourceFile, stage] }
+    const snapshot = `
+      $before = @($payload.paths | ForEach-Object { (Get-Acl -LiteralPath $_).Sddl }) -join '|'
+      $hash = [System.Security.Cryptography.SHA256]::Create()
+      [Convert]::ToBase64String($hash.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($before)))
+    `
+    const before = await powershell(snapshot, payload)
+    await preflightWindowsMigrationPermissions([f.sourceFile, f.sourceDir], stage)
+    expect(await powershell(snapshot, payload)).toBe(before)
+    expect(await fs.readdir(stage)).toEqual([])
+    expect(await fs.readFile(f.sourceFile, 'utf8')).toBe('source fixture bytes')
+  }, 30_000)
+
+  it.skipIf(process.platform !== 'win32')('reports a real read-ACL denial before creating a probe', async () => {
+    const f = await fixture()
+    const stage = path.join(f.targetDir, 'private-stage')
+    await fs.mkdir(stage)
+    await restrictWindowsMigrationStaging(stage)
+    // OWNER RIGHTS replaces the owner's implicit READ_CONTROL/WRITE_DAC.
+    // Retain ChangePermissions so finally can restore this disposable ACL.
+    await powershell(`
+      $acl = Get-Acl -LiteralPath $payload.sourceDir
+      $ownerRights = [System.Security.Principal.SecurityIdentifier]::new('S-1-3-4')
+      $deny = [System.Security.AccessControl.FileSystemAccessRule]::new($ownerRights, [System.Security.AccessControl.FileSystemRights]::ReadPermissions, [System.Security.AccessControl.AccessControlType]::Deny)
+      $allow = [System.Security.AccessControl.FileSystemAccessRule]::new($ownerRights, [System.Security.AccessControl.FileSystemRights]::ChangePermissions, [System.Security.AccessControl.AccessControlType]::Allow)
+      $acl.AddAccessRule($deny)
+      $acl.AddAccessRule($allow)
+      Set-Acl -LiteralPath $payload.sourceDir -AclObject $acl
+    `, f)
+    try {
+      await expect(preflightWindowsMigrationPermissions([f.sourceDir], stage)).rejects.toThrow('phase=preflight operation=read-acl entry=0 kind=directory')
+      expect(await fs.readdir(stage)).toEqual([])
+      expect(await fs.readFile(f.sourceFile, 'utf8')).toBe('source fixture bytes')
+    } finally {
+      await restrictWindowsMigrationStaging(f.sourceDir)
+    }
+  }, 30_000)
 
   it.skipIf(process.platform !== 'win32')('removes wider inherited target grants and leaves actual source ACLs unchanged', async () => {
     const f = await fixture()

@@ -39,6 +39,23 @@ function getBackgroundUsageNote(): string | null {
   return "You can use the `run_in_background` parameter to run the command in the background. Only use this if you don't need the result immediately and are OK being notified when the command completes later. You do not need to check the output right away - you'll be notified when it finishes. You do not need to use '&' at the end of the command when using this parameter."
 }
 
+// Lean keeps the safety rules of the external commit/PR manual without its
+// step-by-step workflow, which also points at tools lean does not have. The
+// hook and amend rules live in the shared "For git commands" instructions.
+const LEAN_GIT_INSTRUCTIONS = `# Committing changes with git
+Only commit, push, or open pull requests (\`gh pr create\`) when the user explicitly asks. When committing:
+- First review \`git status\` (never with -uall) and \`git diff\`. Stage specific files by name instead of \`git add -A\` or \`git add .\`, and never commit likely secrets (.env, credentials).
+- NEVER update git config, force-push, or run other destructive git commands unless the user explicitly asks.
+- If a pre-commit hook fails, the commit did not happen: fix the issue, re-stage, and create a NEW commit.
+- Never use interactive flags such as \`git rebase -i\` or \`git add -i\`.
+- Pass the commit message via a HEREDOC:
+<example>
+git commit -m "$(cat <<'EOF'
+   Commit message here.
+   EOF
+   )"
+</example>`
+
 function getCommitAndPRInstructions(): string {
   // Defense-in-depth: undercover instructions must survive even if the user
   // has disabled git instructions entirely. Attribution stripping and model-ID
@@ -74,6 +91,8 @@ Use the gh command via the Bash tool for other GitHub-related tasks including wo
 # Other common operations
 - View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments`
   }
+
+  if (getAgentProfile() === 'lean') return LEAN_GIT_INSTRUCTIONS
 
   // For external users, include full inline instructions
   return `# Committing changes with git
@@ -308,9 +327,12 @@ export function getSimplePrompt(): string {
   const sleepSubitems = [
     'Do not sleep between commands that can run immediately — just run them.',
     ...(feature('MONITOR_TOOL')
-      ? [
-          'Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot "wait until done," use Bash with run_in_background instead.',
-        ]
+      ? // The lean profile has no Monitor tool.
+        getAgentProfile() === 'lean'
+        ? []
+        : [
+            'Use the Monitor tool to stream events from a background process (each stdout line is a notification). For one-shot "wait until done," use Bash with run_in_background instead.',
+          ]
       : []),
     'If your command is long running and you would like to be notified when it finishes — use `run_in_background`. No sleep needed.',
     'Do not retry failing commands in a sleep loop — diagnose the root cause.',

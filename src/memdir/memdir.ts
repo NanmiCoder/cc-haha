@@ -25,6 +25,7 @@ import { getProjectDir } from '../utils/sessionStorage.js'
 import { getInitialSettings } from '../utils/settings/settings.js'
 import {
   MEMORY_FRONTMATTER_EXAMPLE,
+  MEMORY_TYPES,
   TRUSTING_RECALL_SECTION,
   TYPES_SECTION_INDIVIDUAL,
   WHAT_NOT_TO_SAVE_SECTION,
@@ -37,6 +38,8 @@ export const MAX_ENTRYPOINT_LINES = 200
 // slip past the line cap (p100 observed: 197KB under 200 lines).
 export const MAX_ENTRYPOINT_BYTES = 25_000
 const AUTO_MEM_DISPLAY_NAME = 'auto memory'
+// One MEMORY.md index entry; shared by the standard and compact save instructions.
+const MEMORY_INDEX_ENTRY_EXAMPLE = '- [Title](file.md) — one-line hook'
 
 export type EntrypointTruncation = {
   content: string
@@ -224,7 +227,7 @@ export function buildMemoryLines(
         '',
         ...MEMORY_FRONTMATTER_EXAMPLE,
         '',
-        `**Step 2** — add a pointer to that file in \`${ENTRYPOINT_NAME}\`. \`${ENTRYPOINT_NAME}\` is an index, not a memory — each entry should be one line, under ~150 characters: \`- [Title](file.md) — one-line hook\`. It has no frontmatter. Never write memory content directly into \`${ENTRYPOINT_NAME}\`.`,
+        `**Step 2** — add a pointer to that file in \`${ENTRYPOINT_NAME}\`. \`${ENTRYPOINT_NAME}\` is an index, not a memory — each entry should be one line, under ~150 characters: \`${MEMORY_INDEX_ENTRY_EXAMPLE}\`. It has no frontmatter. Never write memory content directly into \`${ENTRYPOINT_NAME}\`.`,
         '',
         `- \`${ENTRYPOINT_NAME}\` is always loaded into your conversation context — lines after ${MAX_ENTRYPOINT_LINES} will be truncated, so keep the index concise`,
         '- Keep the name, description, and type fields in memory files up-to-date with the content',
@@ -263,6 +266,29 @@ export function buildMemoryLines(
   lines.push(...buildSearchingPastContextSection(memoryDir))
 
   return lines
+}
+
+/**
+ * Compact auto-memory instructions for the lean agent profile. Same directory,
+ * frontmatter, index and truncation conventions as buildMemoryLines, but memory
+ * is written only on an explicit request, so the type taxonomy, examples, recall
+ * caveats and the plan/task persistence guidance (lean has neither) are omitted.
+ */
+export function buildCompactMemoryLines(
+  memoryDir: string,
+  extraGuidelines?: string[],
+  skipIndex = false,
+): string[] {
+  const indexStep = skipIndex
+    ? ''
+    : `, then add \`${MEMORY_INDEX_ENTRY_EXAMPLE}\` to \`${ENTRYPOINT_NAME}\` (index only, no frontmatter; lines after ${MAX_ENTRYPOINT_LINES} are truncated)`
+  return [
+    `# ${AUTO_MEM_DISPLAY_NAME}`,
+    `Directory: \`${memoryDir}\`. ${DIR_EXISTS_GUIDANCE}`,
+    `Its index \`${ENTRYPOINT_NAME}\` is in your context when non-empty; read topic files only when relevant and verify them against current files before relying on them.`,
+    `Save memory only when the user explicitly asks you to remember something: write \`<topic>.md\` with frontmatter \`name\`, \`description\` (one specific line) and \`type\` (one of ${MEMORY_TYPES.join(', ')})${indexStep}. To forget something, delete its file${skipIndex ? '' : ' and index line'}.`,
+    ...(extraGuidelines ?? []),
+  ]
 }
 
 /**
@@ -414,9 +440,14 @@ export function buildSearchingPastContextSection(autoMemDir: string): string[] {
  * Team memory requires auto memory (enforced by isTeamMemoryEnabled), so
  * there is no team-only branch.
  *
+ * `compact` (lean agent profile) swaps the single-directory guide for
+ * buildCompactMemoryLines; the daily-log and team modes are unchanged.
+ *
  * Returns null when auto memory is disabled.
  */
-export async function loadMemoryPrompt(): Promise<string | null> {
+export async function loadMemoryPrompt(
+  options: { compact?: boolean } = {},
+): Promise<string | null> {
   const autoEnabled = isAutoMemoryEnabled()
 
   const skipIndex = getFeatureValue_CACHED_MAY_BE_STALE(
@@ -481,6 +512,11 @@ export async function loadMemoryPrompt(): Promise<string | null> {
       memory_type:
         'auto' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
     })
+    if (options.compact) {
+      return buildCompactMemoryLines(autoDir, extraGuidelines, skipIndex).join(
+        '\n',
+      )
+    }
     return buildMemoryLines(
       'auto memory',
       autoDir,

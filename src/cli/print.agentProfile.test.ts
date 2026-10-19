@@ -51,6 +51,14 @@ test('lean rejects SDK subagent resume at the streaming control boundary', async
     })
     expect(state.tasks).toEqual({})
     expect(await request('plan', { subtype: 'set_permission_mode', mode: 'plan' })).toMatchObject({ subtype: 'error', request_id: 'plan' })
+    // Lean has no MCP runtime: adding servers over the control channel is refused,
+    // while clearing the dynamic set stays harmless.
+    expect(await request('mcp-add', {
+      subtype: 'mcp_set_servers', servers: { fixture: { type: 'stdio', command: 'unused', args: [] } },
+    })).toMatchObject({
+      subtype: 'error', request_id: 'mcp-add', error: '--agent-profile lean does not use MCP servers.',
+    })
+    expect((await request('mcp-clear', { subtype: 'mcp_set_servers', servers: {} })).subtype).toBe('success')
     // Invalid overrides are rejected before initialize state changes; a later
     // control request can still be processed on the same stream.
     expect(await request('override', {

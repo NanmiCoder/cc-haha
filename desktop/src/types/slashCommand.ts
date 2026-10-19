@@ -8,4 +8,6 @@ export type SlashCommandOption = {
   argumentHint?: string
   kind?: SlashCommandKind
   source?: SlashCommandSource
+  /** `false` when a lean session cannot run this skill. Absent means it can. */
+  leanCompatible?: boolean
 }

@@ -41,6 +41,8 @@ type SkillMeta = {
   rootFlavor?: SkillRootFlavor
   context?: string
   userInvocable: boolean
+  /** Whether a lean session can run it (`isLeanCompatibleSkill`): a skill that forks a subagent cannot. */
+  leanCompatible?: boolean
   version?: string
   contentLength: number
   hasDirectory: boolean
@@ -121,14 +123,16 @@ async function loadSkillMeta(
         ?.trim() ||
       'No description'
 
+    const context = typeof frontmatter.context === 'string' ? frontmatter.context : undefined
     return {
       name: skillName,
       displayName: (frontmatter.name as string) || undefined,
       description,
       source,
       rootFlavor,
-      context: typeof frontmatter.context === 'string' ? frontmatter.context : undefined,
+      context,
       userInvocable: frontmatter['user-invocable'] !== false,
+      leanCompatible: isLeanCompatibleSkill({ type: 'prompt', context, source }),
       version: frontmatter.version != null ? String(frontmatter.version) : undefined,
       contentLength: raw.length,
       hasDirectory: true,
@@ -439,7 +443,7 @@ export async function collectUserSkillNames(): Promise<Set<string>> {
  * graph costs a few hundred milliseconds, and a server that never serves a
  * slash-command request should not pay it.
  */
-async function collectCompiledInSlashCommands(): Promise<SkillSlashCommand[]> {
+async function collectCompiledInSlashCommands(lean: boolean): Promise<SkillSlashCommand[]> {
   try {
     const [{ getCompiledInCommands }, { supportsHeadlessSlashCommand }] =
       await Promise.all([
@@ -452,7 +456,12 @@ async function collectCompiledInSlashCommands(): Promise<SkillSlashCommand[]> {
           command.userInvocable !== false &&
           // The session this list stands in for runs the CLI headlessly, so a
           // command it could not execute must not be offered.
-          supportsHeadlessSlashCommand(command),
+          supportsHeadlessSlashCommand(command) &&
+          // The desktop runs whatever a lean list offers. This process cannot
+          // apply the runtime's local-command table to another session's
+          // profile, so lean keeps compatible skills only; the desktop offers
+          // the local built-ins lean keeps from its mirror of that table.
+          (!lean || isLeanCompatibleSkill(command)),
       )
       .map(command => ({
         name: command.name,
@@ -493,7 +502,7 @@ export async function listSkillSlashCommands(
     collectLegacySlashCommands(requestedCwd, options.agentProfile === 'lean'),
     options.includeCompiledIn === false
       ? Promise.resolve([])
-      : collectCompiledInSlashCommands(),
+      : collectCompiledInSlashCommands(options.agentProfile === 'lean'),
   ])
 
   // Same precedence the CLI loader applies, so the composer menu and the

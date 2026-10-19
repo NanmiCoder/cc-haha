@@ -9,7 +9,7 @@ import { DataMigration, MIGRATION_JOURNAL_FILE, type DataMigrationHooks } from '
 import type { AppModeAppLike } from './appMode'
 import { resolveRelocatedAttachmentPath } from '../../../src/utils/storageRelocations'
 import { assertMigrationManifest, migrationManifest, validateMigrationManifest } from './dataMigrationFiles'
-import { preserveWindowsMigrationPermissions, restrictWindowsMigrationStaging } from './migrationPermissions'
+import { preflightWindowsMigrationPermissions, preserveWindowsMigrationPermissions, restrictWindowsMigrationStaging } from './migrationPermissions'
 
 const roots: string[] = []
 async function fixture() {
@@ -24,7 +24,7 @@ async function fixture() {
   await fs.mkdir(source, { recursive: true })
   await fs.mkdir(path.join(root, 'install'), { recursive: true })
   const app: AppModeAppLike = { getPath(name) { return name === 'home' ? home : name === 'userData' ? userData : path.join(root, 'install', 'haha.exe') } }
-  const hooks: DataMigrationHooks = { preview: vi.fn(async () => ({ activeTasks: 2, externalProcesses: 0 })), quiesce: vi.fn(async () => {}), resume: vi.fn(async () => {}), restart: vi.fn(), progress: vi.fn(), platform: 'win32', permissions: { restrictStaging: vi.fn(async () => {}), preserve: vi.fn(async () => {}) } }
+  const hooks: DataMigrationHooks = { preview: vi.fn(async () => ({ activeTasks: 2, externalProcesses: 0 })), quiesce: vi.fn(async () => {}), resume: vi.fn(async () => {}), restart: vi.fn(), progress: vi.fn(), platform: 'win32', permissions: { restrictStaging: vi.fn(async () => {}), preflight: vi.fn(async () => {}), preserve: vi.fn(async () => {}) } }
   const put = async (relative: string, value: string) => {
     const file = path.join(source, relative)
     await fs.mkdir(path.dirname(file), { recursive: true })
@@ -92,7 +92,7 @@ describe('data directory migration', () => {
   it.skipIf(process.platform !== 'win32')('publishes verified data after a real Windows sharing lock releases', async () => {
     const f = await fixture()
     await f.put('cc-haha/tasks/pending.json', '{"task":"preserved"}')
-    f.hooks.permissions = { restrictStaging: restrictWindowsMigrationStaging, preserve: preserveWindowsMigrationPermissions }
+    f.hooks.permissions = { restrictStaging: restrictWindowsMigrationStaging, preflight: preflightWindowsMigrationPermissions, preserve: preserveWindowsMigrationPermissions }
     const rename = fs.rename
     let release: (() => Promise<void>) | undefined
     const failures: NodeJS.ErrnoException[] = []
@@ -134,7 +134,7 @@ describe('data directory migration', () => {
     await fs.mkdir(f.userData)
     const oldMode = '{"mode":"default","portable_dir":null,"unknown":42}'
     await fs.writeFile(path.join(f.userData, 'app-mode.json'), oldMode)
-    f.hooks.permissions = { restrictStaging: restrictWindowsMigrationStaging, preserve: preserveWindowsMigrationPermissions }
+    f.hooks.permissions = { restrictStaging: restrictWindowsMigrationStaging, preflight: preflightWindowsMigrationPermissions, preserve: preserveWindowsMigrationPermissions }
     const rename = fs.rename
     let release: (() => Promise<void>) | undefined
     let attempts = 0
@@ -426,6 +426,147 @@ describe('data directory migration', () => {
     expect(await fs.readdir(f.target)).toEqual([])
     expect(f.hooks.restart).not.toHaveBeenCalled()
     expect(f.hooks.resume).toHaveBeenCalledOnce()
+  })
+
+  it('rejects Windows permission preflight before copying and retains a recoverable empty receipt', async () => {
+    const f = await fixture()
+    await fs.mkdir(f.userData)
+    const oldMode = '{"mode":"default","portable_dir":null,"unknown":{"retain":42}}'
+    await fs.writeFile(path.join(f.userData, 'app-mode.json'), oldMode)
+    const original = await fs.readFile(path.join(f.source, 'settings.json'))
+    f.hooks.permissions!.preflight = vi.fn(async (_sources, staging) => {
+      expect(f.hooks.permissions!.restrictStaging).toHaveBeenCalledOnce()
+      expect(await fs.readdir(staging)).toEqual([])
+      throw new Error('Windows permission preflight failed: owner cannot be preserved')
+    })
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(f.migration.status).toMatchObject({ stage: 'failed', files: 0, bytes: 0, error: expect.stringContaining('preflight failed') })
+    expect(f.hooks.permissions!.preserve).not.toHaveBeenCalled()
+    expect(f.hooks.resume).toHaveBeenCalledOnce()
+    expect(f.hooks.restart).not.toHaveBeenCalled()
+    expect(await fs.readFile(path.join(f.source, 'settings.json'))).toEqual(original)
+    expect(await fs.readFile(path.join(f.userData, 'app-mode.json'), 'utf8')).toBe(oldMode)
+    expect(await fs.readdir(f.target)).toEqual([])
+    const receipt = JSON.parse(await fs.readFile(path.join(f.userData, MIGRATION_JOURNAL_FILE), 'utf8'))
+    expect(receipt).toMatchObject({ oldMode, manifest: [], createdCredentials: [], credentials: [], status: { stage: 'failed', files: 0, bytes: 0 } })
+    const recovered = new DataMigration(f.app, f.hooks, {})
+    expect(await recovered.recover()).toBe('normal')
+    expect(recovered.status?.stage).toBe('failed')
+    expect(await fs.readFile(path.join(f.userData, 'app-mode.json'), 'utf8')).toBe(oldMode)
+  })
+
+  it('persists staging identity before Windows permission preflight can be interrupted', async () => {
+    const f = await fixture()
+    let receipt: Record<string, unknown> | undefined
+    f.hooks.permissions!.preflight = vi.fn(async (_sources, staging) => {
+      receipt = JSON.parse(await fs.readFile(path.join(f.userData, MIGRATION_JOURNAL_FILE), 'utf8'))
+      expect(receipt).toMatchObject({ stagingDir: staging })
+      throw new Error('Stop at preflight boundary')
+    })
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(receipt).toMatchObject({
+      stagingIdentity: { canonical: path.join(f.target, `.cc-haha-migration-${preview.id}`), dev: expect.any(String), ino: expect.any(String) },
+      manifest: [],
+      status: { stage: 'quiescing', files: 0, bytes: 0 },
+    })
+    expect(f.migration.status).toMatchObject({ stage: 'failed', error: 'Stop at preflight boundary' })
+  })
+
+  it('refuses to remove replaced staging when recovering an interrupted Windows permission preflight', async () => {
+    const f = await fixture()
+    let recoveryError: unknown
+    f.hooks.permissions!.preflight = vi.fn(async (_sources, staging) => {
+      await fs.rename(staging, `${staging}-original`)
+      await fs.mkdir(staging)
+      await fs.writeFile(path.join(staging, 'keep'), 'independent replacement data')
+      // A separate instance reads only the receipt persisted before preflight,
+      // just as the next process would after an interruption at this boundary.
+      const recovered = new DataMigration(f.app, f.hooks, {})
+      try { await recovered.recover() } catch (error) { recoveryError = error }
+      throw new Error('Stop at preflight boundary')
+    })
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(recoveryError).toBeInstanceOf(Error)
+    expect((recoveryError as Error).message).toContain('replaced')
+    expect(await fs.readFile(path.join(f.target, `.cc-haha-migration-${preview.id}`, 'keep'), 'utf8')).toBe('independent replacement data')
+    expect(await fs.readFile(path.join(f.source, 'settings.json'), 'utf8')).toContain('preserve')
+    expect(f.hooks.restart).not.toHaveBeenCalled()
+    expect(f.hooks.resume).toHaveBeenCalledOnce()
+  })
+
+  it('cancels Windows permission preflight without copying or deleting independent target files', async () => {
+    const f = await fixture()
+    f.hooks.permissions!.preflight = vi.fn(async () => {
+      await fs.writeFile(path.join(f.target, 'independent.txt'), 'retain independent target data')
+      f.migration.cancelActive()
+    })
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(f.migration.status).toMatchObject({ stage: 'cancelled', files: 0, bytes: 0 })
+    expect(f.hooks.permissions!.preserve).not.toHaveBeenCalled()
+    expect(f.hooks.resume).toHaveBeenCalledOnce()
+    expect(f.hooks.restart).not.toHaveBeenCalled()
+    expect(await fs.readdir(f.target)).toEqual(['independent.txt'])
+    expect(await fs.readFile(path.join(f.target, 'independent.txt'), 'utf8')).toBe('retain independent target data')
+    expect(await fs.readFile(path.join(f.source, 'settings.json'), 'utf8')).toContain('preserve')
+    await expect(fs.stat(path.join(f.userData, 'app-mode.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it.each(['source', 'target', 'staging'])('rejects a replaced %s directory after Windows permission preflight', async directory => {
+    const f = await fixture()
+    let replacement = ''
+    f.hooks.permissions!.preflight = vi.fn(async (_sources, staging) => {
+      replacement = directory === 'source' ? f.source : directory === 'target' ? f.target : staging
+      await fs.rename(replacement, `${replacement}-original`)
+      await fs.mkdir(replacement)
+      await fs.writeFile(path.join(replacement, 'keep'), 'replacement data')
+    })
+    const preview = await f.migration.prepare(f.target)
+    await f.migration.start(preview.id)
+    await f.migration.wait()
+    expect(f.migration.status).toMatchObject({ stage: 'failed', files: 0, bytes: 0, error: expect.stringContaining('replaced') })
+    expect(f.hooks.permissions!.preserve).not.toHaveBeenCalled()
+    expect(f.hooks.resume).toHaveBeenCalledOnce()
+    expect(f.hooks.restart).not.toHaveBeenCalled()
+    expect(await fs.readFile(path.join(replacement, 'keep'), 'utf8')).toBe('replacement data')
+    expect(await fs.readFile(path.join(directory === 'source' ? `${f.source}-original` : f.source, 'settings.json'), 'utf8')).toContain('preserve')
+  })
+
+  it('preflights canonical Windows sources without links and still preserves final permissions', async () => {
+    const f = await fixture()
+    const alias = path.join(f.root, 'source-alias')
+    await fs.symlink(f.source, alias, 'junction')
+    await fs.symlink(path.join(f.source, 'uploads'), path.join(f.source, 'internal-link'), 'junction')
+    const migration = new DataMigration(f.app, f.hooks, { CLAUDE_CONFIG_DIR: alias, CC_HAHA_APP_PORTABLE_DIR: '1' })
+    const preserve = vi.fn(f.hooks.permissions!.preserve)
+    f.hooks.permissions!.preserve = preserve
+    let preflightSources: string[] = []
+    f.hooks.permissions!.preflight = vi.fn(async (sources, staging) => {
+      preflightSources = sources
+      expect(f.hooks.permissions!.restrictStaging).toHaveBeenCalledOnce()
+      expect(await fs.readdir(staging)).toEqual([])
+      expect(migration.status).toMatchObject({ stage: 'quiescing', files: 0, bytes: 0 })
+    })
+    const preview = await migration.prepare(f.target)
+    await migration.start(preview.id)
+    await migration.wait()
+    expect(migration.status?.stage).toBe('restarting')
+    expect(preflightSources).toContain(f.source)
+    expect(preflightSources).toContain(path.join(f.source, 'settings.json'))
+    expect(preflightSources).not.toContain(path.join(f.source, 'internal-link'))
+    expect(preflightSources.every(source => !source.startsWith(alias))).toBe(true)
+    expect(f.hooks.permissions!.preserve).toHaveBeenCalledOnce()
+    const finalSources = preserve.mock.calls[0]![0].map(entry => entry.source)
+    expect(preflightSources).toEqual(finalSources)
+    expect(await fs.readFile(path.join(f.target, 'settings.json'), 'utf8')).toContain('preserve')
+    expect(f.hooks.restart).toHaveBeenCalledOnce()
   })
 
   it('does not copy before Windows staging is protected or commit after an ACL failure', async () => {

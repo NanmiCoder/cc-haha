@@ -1,8 +1,15 @@
-import type { ActivityStatsResponse } from '../../api/activityStats'
-import { addDays, localDateKey } from './heatmapModel'
+import type { ActivityStatsResponse, DailyActivity } from '../../api/activityStats'
+import type { Locale } from '../../i18n'
+import { DATE_LOCALES, addDays, localDateKey } from './heatmapModel'
 
-/** How many categorical colors the themes define for models (`--color-series-1..5`). */
+/** How many colors the themes define for models (`--color-series-1..5`). */
 export const SERIES_COUNT = 5
+
+/**
+ * Models that get a hue of their own: slots 1-4. Slot 5 is the neutral gray every other model shares.
+ * Four is what a reader can keep apart in a stack, and what the palette was validated for.
+ */
+export const COLORED_MODEL_SLOTS = SERIES_COUNT - 1
 
 export const OTHER_MODELS_ID = '__other__'
 
@@ -89,10 +96,27 @@ export function formatModelName(model: string) {
     .join(' ')
 }
 
+/** The first day each model has usage, from the daily series. Models never seen sort last. */
+function firstSeenByModel(stats: ActivityStatsResponse | null) {
+  const first = new Map<string, string>()
+  for (const day of stats?.dailyModelTokens ?? []) {
+    for (const [id, tokens] of Object.entries(day.tokensByModel)) {
+      if (tokens <= 0) continue
+      const seen = first.get(id)
+      if (seen === undefined || day.date < seen) first.set(id, day.date)
+    }
+  }
+  return first
+}
+
 /**
- * Models by total tokens, each assigned one of the five series colors. A sixth
- * model has no color of its own, so everything past the fourth folds into one
- * "other" row rather than reusing a color two models would then share.
+ * Models by total tokens, with the colors that tell them apart.
+ *
+ * A color belongs to a model, not to a rank: the four biggest models take the four hues in the
+ * order they first appeared, so two models swapping places does not repaint either of them (a
+ * reader who learned "teal is Opus" would otherwise be misled). A color only changes hands when
+ * who is among the biggest four changes. Everything past the fourth folds into one gray "other"
+ * row rather than reusing a hue two models would then share.
  */
 export function rankModels(stats: ActivityStatsResponse | null, otherLabel: string): RankedModel[] {
   const unpriced = new Set(stats?.unpricedModels ?? [])
@@ -109,15 +133,18 @@ export function rankModels(stats: ActivityStatsResponse | null, otherLabel: stri
     .filter((row) => row.total > 0)
     .sort((a, b) => b.total - a.total || a.id.localeCompare(b.id))
 
-  if (rows.length <= SERIES_COUNT) {
-    return rows.map((row, index) => ({ ...row, series: index + 1 }))
-  }
+  const colored = rows.length <= COLORED_MODEL_SLOTS ? rows : rows.slice(0, COLORED_MODEL_SLOTS)
+  const firstSeen = firstSeenByModel(stats)
+  const slotById = new Map(
+    [...colored]
+      .sort((a, b) => (firstSeen.get(a.id) ?? '9999').localeCompare(firstSeen.get(b.id) ?? '9999') || a.id.localeCompare(b.id))
+      .map((row, index) => [row.id, index + 1] as const),
+  )
+  const ranked: RankedModel[] = colored.map((row) => ({ ...row, series: slotById.get(row.id)! }))
 
-  const head = rows.slice(0, SERIES_COUNT - 1).map((row, index) => ({ ...row, series: index + 1 }))
-  const tail = rows.slice(SERIES_COUNT - 1)
-  return [
-    ...head,
-    {
+  const tail = rows.slice(colored.length)
+  if (tail.length > 0) {
+    ranked.push({
       id: OTHER_MODELS_ID,
       label: otherLabel,
       series: SERIES_COUNT,
@@ -126,8 +153,17 @@ export function rankModels(stats: ActivityStatsResponse | null, otherLabel: stri
       cached: tail.reduce((sum, row) => sum + row.cached, 0),
       costUSD: tail.reduce((sum, row) => sum + row.costUSD, 0),
       unpriced: tail.some((row) => row.unpriced),
-    },
-  ]
+    })
+  }
+  return ranked
+}
+
+/**
+ * Indices of `models` in the order columns stack and the legend reads: by color slot, so the stack
+ * is the same shape whoever is ahead, with the gray "other" on top.
+ */
+export function stackOrder(models: ReadonlyArray<{ series: number }>): number[] {
+  return models.map((_, index) => index).sort((a, b) => models[a]!.series - models[b]!.series || a - b)
 }
 
 export type DailyModelSeries = {
@@ -161,96 +197,165 @@ export function buildDailyModelSeries(
   })
 }
 
-export type StreamGeometry = {
+/** A share of a whole as a locale percentage: one decimal below 10%, where a whole number would round it to nothing. */
+export function formatShare(part: number, whole: number, locale: Locale) {
+  if (whole <= 0) return '0%'
+  return new Intl.NumberFormat(DATE_LOCALES[locale], {
+    maximumFractionDigits: part / whole < 0.1 ? 1 : 0,
+    style: 'percent',
+  }).format(part / whole)
+}
+
+export type DayActivity = Pick<DailyActivity, 'sessionCount' | 'messageCount' | 'toolCallCount'>
+
+export type DayModelShare = {
+  id: string
+  label: string
+  series: number
+  tokens: number
+  /** 0..1 of that day's total. */
+  share: number
+}
+
+/** What a click on one day of the stream shows: where it sits against the rest of the window, and what it was made of. */
+export type DaySummary = {
+  date: string
+  total: number
+  /** The busiest day in the window, the same one the stream labels. */
+  peak: number
+  /** `total / peak`, 0..1. */
+  ofPeak: number
+  /** Mean over the days that had any usage; idle days would drag it toward zero. */
+  average: number
+  /** 1 is the busiest day; ties share a rank. */
+  rank: number
+  activeDays: number
+  /** Models that ran that day, biggest first. */
+  models: DayModelShare[]
+  sessionCount: number
+  messageCount: number
+  toolCallCount: number
+}
+
+/** `null` for a day with no usage (nothing to open) or an index outside the window. */
+export function summarizeDay(
+  days: DailyModelSeries[],
+  index: number,
+  models: RankedModel[],
+  activity: ReadonlyMap<string, DayActivity>,
+): DaySummary | null {
+  const day = days[index]
+  if (!day || day.total <= 0) return null
+
+  const active = days.filter((candidate) => candidate.total > 0)
+  const peak = Math.max(...active.map((candidate) => candidate.total))
+  const counts = activity.get(day.date)
+
+  return {
+    date: day.date,
+    total: day.total,
+    peak,
+    ofPeak: day.total / peak,
+    average: active.reduce((sum, candidate) => sum + candidate.total, 0) / active.length,
+    rank: 1 + active.filter((candidate) => candidate.total > day.total).length,
+    activeDays: active.length,
+    models: day.byModel
+      .flatMap((tokens, modelIndex) => {
+        const model = models[modelIndex]
+        return model && tokens > 0
+          ? [{ id: model.id, label: model.label, series: model.series, tokens, share: tokens / day.total }]
+          : []
+      })
+      .sort((a, b) => b.tokens - a.tokens),
+    sessionCount: counts?.sessionCount ?? 0,
+    messageCount: counts?.messageCount ?? 0,
+    toolCallCount: counts?.toolCallCount ?? 0,
+  }
+}
+
+/** A step of 1, 2 or 5 × 10^k that gives at most four grid lines for `max`. */
+export function niceStep(max: number): number {
+  if (max <= 0) return 1
+  const base = 10 ** Math.floor(Math.log10(max / 4))
+  for (const multiple of [1, 2, 5, 10]) {
+    if (max / (base * multiple) <= 4) return base * multiple
+  }
+  return base * 10
+}
+
+/** Room kept above the tallest column for the peak label. */
+export const COLUMN_TOP_PAD = 44
+/** Surface-colored gap between segments of one stacked column, in px. */
+const SEGMENT_GAP = 1.5
+
+export type ColumnGeometry = {
   width: number
   height: number
-  /** One closed path per model, bottom to top. */
+  /** One path per model with usage, bottom to top in `stackOrder`. Every day's segment of that model is in it. */
   layers: Array<{ modelIndex: number; d: string }>
+  /** Grid lines at round values, for the axis labels. */
+  grid: Array<{ value: number; y: number }>
+  /** Where each day's column ends (px from the top); the baseline for a day with no usage. */
+  dayTops: number[]
   peak: { index: number; x: number; y: number; total: number; date: string } | null
-  /** First-of-month positions as a fraction of the width, for the axis row. */
+  /** First-of-month positions as a fraction of the width, centred on that day's column, for the axis row. */
   monthTicks: Array<{ fraction: number; date: string }>
 }
 
-const SMOOTH_RADIUS = 2
-
-function smoothed(values: number[]) {
-  return values.map((_, index) => {
-    let sum = 0
-    let count = 0
-    for (let offset = -SMOOTH_RADIUS; offset <= SMOOTH_RADIUS; offset += 1) {
-      const value = values[index + offset]
-      if (value === undefined) continue
-      sum += value
-      count += 1
-    }
-    return sum / count
-  })
-}
-
-/** Cubic path through points with the control handles at each segment's midpoint in x. */
-function curveThrough(points: Array<[number, number]>) {
-  const first = points[0]
-  if (!first) return ''
-  let path = `M${first[0].toFixed(1)} ${first[1].toFixed(1)}`
-  for (let index = 1; index < points.length; index += 1) {
-    const previous = points[index - 1]!
-    const current = points[index]!
-    const midX = (previous[0] + current[0]) / 2
-    path += ` C${midX.toFixed(1)} ${previous[1].toFixed(1)} ${midX.toFixed(1)} ${current[1].toFixed(1)} ${current[0].toFixed(1)} ${current[1].toFixed(1)}`
-  }
-  return path
-}
-
 /**
- * A centred stream: every day's stack is as thick as that day's (smoothed)
- * total, split by model share, and the stack sits on the vertical midline. The
- * shape carries rhythm and mix, not a readable scale, so the peak is labelled
- * with its real number instead.
+ * One column per day on a zero baseline, stacked by model. The value is the height, on one scale
+ * from zero, so a day, a stretch or a model can be compared by eye; nothing is smoothed, so an idle
+ * day is an empty slot rather than a dip that joins its neighbours.
  */
-export function buildStreamGeometry(days: DailyModelSeries[], width: number, height: number): StreamGeometry {
-  const modelCount = days[0]?.byModel.length ?? 0
-  const maxTotal = Math.max(...days.map((day) => day.total), 0)
-  if (days.length < 2 || modelCount === 0 || maxTotal <= 0) {
-    return { width, height, layers: [], peak: null, monthTicks: [] }
+export function buildColumnGeometry(
+  days: DailyModelSeries[],
+  models: RankedModel[],
+  width: number,
+  height: number,
+): ColumnGeometry {
+  const peakValue = Math.max(...days.map((day) => day.total), 0)
+  if (days.length === 0 || models.length === 0 || peakValue <= 0) {
+    return { width, height, layers: [], grid: [], dayTops: [], peak: null, monthTicks: [] }
   }
 
-  const smoothTotals = smoothed(days.map((day) => day.total))
-  const scale = (height * 0.92) / Math.max(...smoothTotals)
-  const mid = height / 2
-  const xAt = (index: number) => (index / (days.length - 1)) * width
+  const step = niceStep(peakValue)
+  const chartMax = Math.max(peakValue * 1.1, step)
+  const yFor = (value: number) => height - (value / chartMax) * (height - COLUMN_TOP_PAD)
+  const slot = width / days.length
+  const barWidth = Math.max(slot * 0.78, 1.5)
+  const order = stackOrder(models)
 
-  // Per day, per model: [top, bottom] in px.
-  const stacks = days.map((day, index) => {
-    const thickness = smoothTotals[index]! * scale
-    let y = mid - thickness / 2
-    return day.byModel.map((tokens) => {
-      const share = day.total > 0 ? tokens / day.total : 0
-      const top = y
-      y += thickness * share
-      return [top, y] as const
-    })
+  const paths = models.map(() => '')
+  days.forEach((day, index) => {
+    const x = index * slot + (slot - barWidth) / 2
+    let stacked = 0
+    for (const modelIndex of order) {
+      const tokens = day.byModel[modelIndex] ?? 0
+      if (tokens <= 0) continue
+      const top = yFor(stacked + tokens)
+      const bottom = yFor(stacked)
+      stacked += tokens
+      const segment = bottom - top
+      if (segment < 0.3) continue
+      const gap = segment > 2.5 ? SEGMENT_GAP / 2 : 0
+      paths[modelIndex] += `M${x.toFixed(2)} ${(top + gap).toFixed(2)}h${barWidth.toFixed(2)}V${(bottom - gap).toFixed(2)}h${(-barWidth).toFixed(2)}Z`
+    }
   })
 
-  const layers = Array.from({ length: modelCount }, (_, modelIndex) => {
-    const upper = stacks.map((stack, index) => [xAt(index), stack[modelIndex]![0]] as [number, number])
-    const lower = stacks.map((stack, index) => [xAt(index), stack[modelIndex]![1]] as [number, number]).reverse()
-    const lowerPath = curveThrough(lower).replace(/^M/, 'L')
-    return { modelIndex, d: `${curveThrough(upper)} ${lowerPath} Z` }
-  })
+  const grid: ColumnGeometry['grid'] = []
+  for (let value = step; value <= chartMax; value += step) grid.push({ value, y: yFor(value) })
 
-  const peakIndex = days.reduce((best, day, index) => (day.total > days[best]!.total ? index : best), 0)
-  const peakDay = days[peakIndex]!
-  const peak = {
-    index: peakIndex,
-    x: xAt(peakIndex),
-    y: stacks[peakIndex]![0]![0],
-    total: peakDay.total,
-    date: peakDay.date,
+  const peakIndex = days.findIndex((day) => day.total === peakValue)
+  const centre = (index: number) => (index + 0.5) * slot
+  return {
+    width,
+    height,
+    layers: order.filter((modelIndex) => paths[modelIndex] !== '').map((modelIndex) => ({ modelIndex, d: paths[modelIndex]! })),
+    grid,
+    dayTops: days.map((day) => yFor(day.total)),
+    peak: { index: peakIndex, x: centre(peakIndex), y: yFor(peakValue), total: peakValue, date: days[peakIndex]!.date },
+    monthTicks: days.flatMap((day, index) => (
+      day.date.endsWith('-01') ? [{ fraction: (index + 0.5) / days.length, date: day.date }] : []
+    )),
   }
-
-  const monthTicks = days.flatMap((day, index) => (
-    day.date.endsWith('-01') ? [{ fraction: index / (days.length - 1), date: day.date }] : []
-  ))
-
-  return { width, height, layers, peak, monthTicks }
 }

@@ -3,6 +3,7 @@ import { mkdir, writeFile, readFile, appendFile } from 'node:fs/promises'
 import path from 'node:path'
 import { startServer, stopServerRuntimeForShutdown } from '../index.js'
 import { conversationService } from '../services/conversationService.js'
+import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
 
 const origin = 'https://fixture.ngrok-free.app'
@@ -16,6 +17,10 @@ globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
 await mkdir(process.env.CLAUDE_CONFIG_DIR!, { recursive: true })
 await writeFile(path.join(process.env.CLAUDE_CONFIG_DIR!, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_API_KEY: 'fake-never-expose' }, language: 'en', alwaysThinkingEnabled: true }))
 process.env.CLAUDE_CLI_PATH = path.join(import.meta.dir, '../__tests__/fixtures/mock-sdk-cli.ts')
+// Saved providers a new session can be pinned to; the global default stays Claude Official.
+const fixtureModels = { main: 'fixture-model', haiku: 'fixture-model', sonnet: 'fixture-model', opus: 'fixture-model' }
+const keyedProvider = await new ProviderService().addProvider({ presetId: 'custom', name: 'Keyed fixture', baseUrl: 'http://127.0.0.1:9/anthropic', apiKey: 'fake-remote-provider-key', apiFormat: 'anthropic', models: fixtureModels })
+const keylessProvider = await new ProviderService().addProvider({ presetId: 'custom', name: 'Keyless fixture', baseUrl: 'http://127.0.0.1:9/anthropic', apiKey: '', apiFormat: 'anthropic', models: fixtureModels })
 const server = startServer(0, '127.0.0.1')
 const base = `http://127.0.0.1:${server.port}`
 const control = (route: string, body?: unknown) => fetch(`${base}/api/public-access${route}`, {
@@ -42,6 +47,18 @@ try {
   }
   const authStatus = await (await fetch(`${remote}/api/providers/auth-status`, { headers: { Origin: origin, Cookie: cookie } })).json()
   if (!authStatus.hasAuth || authStatus.source !== 'original-settings') throw new Error('Remote new-session auth check failed')
+  const scopedAuthStatus = async (providerId: string) => {
+    const response = await fetch(`${remote}/api/providers/auth-status?providerId=${encodeURIComponent(providerId)}`, { headers: { Origin: origin, Cookie: cookie } })
+    const body = await response.text()
+    if (!response.ok) throw new Error(`Provider-scoped auth-status returned ${response.status}: ${body}`)
+    if (body.includes('fake-never-expose') || body.includes('fake-remote-provider-key')) throw new Error('Secret leaked from provider-scoped auth-status')
+    return JSON.parse(body) as Record<string, unknown>
+  }
+  // A session pinned to a saved provider runs with that provider's own key only.
+  const keylessStatus = await scopedAuthStatus(keylessProvider.id)
+  if (JSON.stringify(keylessStatus) !== JSON.stringify({ hasAuth: false, source: 'none', activeProvider: 'Keyless fixture' })) throw new Error(`Provider-scoped auth-status borrowed ambient credentials: ${JSON.stringify(keylessStatus)}`)
+  const keyedStatus = await scopedAuthStatus(keyedProvider.id)
+  if (JSON.stringify(keyedStatus) !== JSON.stringify({ hasAuth: true, source: 'cc-haha-provider', activeProvider: 'Keyed fixture' })) throw new Error(`Provider-scoped auth-status missed the provider key: ${JSON.stringify(keyedStatus)}`)
   const createdResponse = await fetch(`${remote}/api/sessions`, {
     method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
     body: JSON.stringify({ workDir: process.env.HOME, permissionMode: 'default' }),

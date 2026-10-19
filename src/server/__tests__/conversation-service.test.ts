@@ -1381,6 +1381,36 @@ describe('ConversationService', () => {
     }
   })
 
+  test('replacing the empty placeholder keeps an effort reset to auto as one runtime record', async () => {
+    const service = new ConversationService() as any
+    const requestedWorkDir = path.join(tmpDir, 'placeholder-effort-auto')
+    await fs.mkdir(requestedWorkDir, { recursive: true })
+    const { sessionId, workDir } = await sessionService.createSession(requestedWorkDir, undefined, 'acceptEdits', 'lean')
+    const selection = { runtimeProviderId: 'provider-a', runtimeModelId: 'model-a' }
+    await sessionService.appendSessionMetadata(sessionId, { workDir, ...selection, effortLevel: 'high', openAIFastMode: false })
+    // Choosing auto again writes a complete selection without an effort override.
+    await sessionService.appendSessionMetadata(sessionId, { workDir, ...selection, openAIFastMode: false })
+    const before = await sessionService.getSessionLaunchInfo(sessionId)
+    expect(before).toMatchObject({ ...selection, openAIFastMode: false, permissionMode: 'acceptEdits', transcriptMessageCount: 0 })
+    expect(before?.effortLevel).toBeUndefined()
+    const args = spyOn(service, 'buildSessionCliArgs').mockImplementation(() => { throw new Error('Fixture stops before spawning') })
+    try {
+      await expect(service.startSession(sessionId, workDir, 'ws://127.0.0.1/sdk/fixture', {
+        providerId: null, model: 'model-a',
+      })).rejects.toThrow('Fixture stops before spawning')
+    } finally {
+      args.mockRestore()
+    }
+
+    const after = await sessionService.getSessionLaunchInfo(sessionId)
+    expect(after).toMatchObject({ ...selection, openAIFastMode: false, agentProfile: 'lean', permissionMode: 'acceptEdits' })
+    expect(after?.effortLevel).toBeUndefined()
+    const metas = (await fs.readFile(after!.filePath, 'utf8')).trim().split('\n')
+      .map(line => JSON.parse(line)).filter(entry => entry.type === 'session-meta')
+    expect(metas).toHaveLength(1)
+    expect(metas[0]).not.toHaveProperty('effortLevel')
+  })
+
   test('Fast mode is isolated to explicit ChatGPT OAuth launches and cannot leak from parent env', async () => {
     const original = process.env.CC_HAHA_OPENAI_FAST_MODE
     process.env.CC_HAHA_OPENAI_FAST_MODE = '1'

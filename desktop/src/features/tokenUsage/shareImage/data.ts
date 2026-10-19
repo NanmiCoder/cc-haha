@@ -2,20 +2,12 @@ import type { ActivityStatsResponse } from '../../../api/activityStats'
 import type { Locale, TranslationKey } from '../../../i18n'
 import { DATE_LOCALES, formatMonthName, parseLocalDate } from '../heatmapModel'
 import { describeTokenAmount, formatTokenAmount } from '../formatTokenUnits'
-import type { DailyModelSeries, RankedModel } from '../usageModel'
+import { niceStep, type DailyModelSeries, type RankedModel } from '../usageModel'
 import type { ShareImageData } from './layout'
 
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string
 
-/** A step of 1, 2 or 5 × 10^k that gives at most four grid lines for `max`. */
-export function niceStep(max: number): number {
-  if (max <= 0) return 1
-  const base = 10 ** Math.floor(Math.log10(max / 4))
-  for (const multiple of [1, 2, 5, 10]) {
-    if (max / (base * multiple) <= 4) return base * multiple
-  }
-  return base * 10
-}
+export { niceStep }
 
 function percentOf(part: number, whole: number, locale: Locale) {
   if (whole <= 0) return '0%'

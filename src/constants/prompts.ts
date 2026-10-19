@@ -449,7 +449,10 @@ export async function getSystemPrompt(
   mcpClients?: MCPServerConnection[],
 ): Promise<string[]> {
   if (getAgentProfile() === 'lean') {
-    const [memory, uname] = await Promise.all([loadMemoryPrompt(), getUnameSR()])
+    const [memory, uname] = await Promise.all([
+      loadMemoryPrompt({ compact: true }),
+      getUnameSR(),
+    ])
     return buildLeanSystemPrompt({
       toolNames: tools.map(tool => tool.name),
       cwd: getCwd(),

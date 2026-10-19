@@ -5071,11 +5071,20 @@ export class SessionService {
         repository: undefined as PreparedSessionWorkspace['repository'] | undefined,
         agentProfile: 'standard' as 'standard' | 'lean',
         extra: {} as Record<string, unknown>,
-        permissionMode: undefined as string | undefined }
+        permissionMode: undefined as string | undefined,
+        runtime: {} as { runtimeProviderId?: string | null, runtimeModelId?: string, effortLevel?: string, openAIFastMode?: boolean } }
       await streamBoundedHistory(found.filePath, entry => {
         const record = entry as RawEntry
         if (record.type === 'session-meta') {
-          Object.assign(preserved.extra, record)
+          // Unknown extension fields merge as patches. The runtime selection does
+          // not: a complete selection without effortLevel means auto, so it is
+          // reduced exactly like the launch metadata projection instead.
+          const { runtimeProviderId, runtimeModelId, effortLevel: _effortLevel, openAIFastMode, ...extension } = entry
+          Object.assign(preserved.extra, extension)
+          if (runtimeProviderId === null || typeof runtimeProviderId === 'string') preserved.runtime.runtimeProviderId = runtimeProviderId
+          if (typeof runtimeModelId === 'string') preserved.runtime.runtimeModelId = runtimeModelId
+          preserved.runtime.effortLevel = resolveSessionEffortLevel(entry, preserved.runtime.effortLevel)
+          if (typeof openAIFastMode === 'boolean') preserved.runtime.openAIFastMode = openAIFastMode
           if (record.agentProfile === 'standard' || record.agentProfile === 'lean') preserved.agentProfile = record.agentProfile
           if (typeof (record as Record<string, unknown>).workDir === 'string') preserved.workDir = (record as Record<string, unknown>).workDir as string
           if (typeof record.permissionMode === 'string' && VALID_SESSION_PERMISSION_MODES.has(record.permissionMode)) preserved.permissionMode = record.permissionMode
@@ -5096,6 +5105,7 @@ export class SessionService {
       )
         ? preservedPermissionMode
         : preserved.permissionMode
+      const { runtime } = preserved
       const now = new Date().toISOString()
 
       const initialEntry = {
@@ -5117,6 +5127,10 @@ export class SessionService {
         workDir,
         repository,
         ...(permissionMode ? { permissionMode } : {}),
+        ...(runtime.runtimeProviderId !== undefined ? { runtimeProviderId: runtime.runtimeProviderId } : {}),
+        ...(runtime.runtimeModelId ? { runtimeModelId: runtime.runtimeModelId } : {}),
+        ...(runtime.effortLevel ? { effortLevel: runtime.effortLevel } : {}),
+        ...(runtime.openAIFastMode !== undefined ? { openAIFastMode: runtime.openAIFastMode } : {}),
         timestamp: now,
       }
 

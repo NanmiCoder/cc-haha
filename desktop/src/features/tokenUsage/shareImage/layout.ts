@@ -8,6 +8,8 @@
  * injected (the painter hands in `ctx.measureText`).
  */
 
+import { stackOrder } from '../usageModel'
+
 export type ShareSize = 'portrait' | 'square' | 'wide'
 
 export const SHARE_SIZES: Record<ShareSize, { width: number; height: number }> = {
@@ -229,18 +231,23 @@ function chart(
     ops.push({ kind: 'text', x, y: y - 6, text: line.label, size: labelSize, weight: 400, family: 'mono', fill: theme.t3 })
   }
 
+  // Stacked in color-slot order, the same as on the page, so the shape does not depend on who is ahead.
+  const order = stackOrder(data.models)
   data.daily.forEach((byModel, index) => {
     let accumulated = 0
-    byModel.forEach((tokens, modelIndex) => {
-      if (tokens <= 0) return
+    for (const modelIndex of order) {
+      const tokens = byModel[modelIndex] ?? 0
+      if (tokens <= 0) continue
       const barHeight = (tokens / data.chartMax) * height
       const series = data.models[modelIndex]?.series ?? 1
       const fill = options.showModels ? theme.series[(series - 1) % theme.series.length]! : theme.series[0]!
+      // A surface-colored gap separates the segments of one column, as on the page.
+      const gap = barHeight > 6 ? 1.5 : 0
       if (barHeight >= 0.4) {
-        ops.push({ kind: 'rect', x: x + index * slot + 0.6, y: yFor(accumulated + tokens), w: slot - 1.2, h: barHeight, fill })
+        ops.push({ kind: 'rect', x: x + index * slot + 0.6, y: yFor(accumulated + tokens) + gap / 2, w: slot - 1.2, h: barHeight - gap, fill })
       }
       accumulated += tokens
-    })
+    }
   })
 
   ops.push({ kind: 'line', x1: x, y1: top + height, x2: x + width, y2: top + height, stroke: theme.t3, lineWidth: 1 })

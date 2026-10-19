@@ -5,6 +5,7 @@ import { dirname, join, parse } from 'path'
 import { getPlatform } from 'src/utils/platform.js'
 import type { PluginError } from '../../types/plugin.js'
 import { getPluginErrorMessage } from '../../types/plugin.js'
+import { isAgentProfileMcpEnabled } from '../../utils/agentProfile.js'
 import { isClaudeInChromeMCPServer } from '../../utils/claudeInChrome/common.js'
 import {
   getCurrentProjectConfig,
@@ -1415,6 +1416,10 @@ export async function getAllMcpConfigs(): Promise<{
   servers: Record<string, ScopedMcpServerConfig>
   errors: PluginError[]
 }> {
+  // Runtime refreshes (plugin reload/install) obey the same profile boundary as
+  // startup: lean resolves no servers and never fetches claude.ai connectors.
+  if (!isAgentProfileMcpEnabled()) return { servers: {}, errors: [] }
+
   // In enterprise mode, don't load claude.ai servers (enterprise has exclusive control)
   if (doesEnterpriseMcpConfigExist()) {
     return getClaudeCodeMcpConfigs()

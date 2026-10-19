@@ -912,11 +912,10 @@ class Project {
     const sessionId = getSessionId() as UUID
     if (!sessionId) return
 
-    // One sync tail read to refresh SDK-mutable fields. Same
-    // LITE_READ_BUF_SIZE window readLiteMetadata uses. Empty string on
-    // failure → extract returns null → cache is the only source of truth.
     // Standard remains the legacy default. Only the experimental profile needs
-    // an explicit record, preserving the ordinary transcript shape.
+    // an explicit record, preserving the ordinary transcript shape. Written
+    // first: when this call creates the file it is the head record, otherwise
+    // it lands at EOF — readSessionAgentProfile only reads those two windows.
     if (getAgentProfile() === 'lean') {
       appendEntryToFile(this.sessionFile, {
         type: 'session-meta', isMeta: true, sessionId,
@@ -924,6 +923,9 @@ class Project {
       }, allowCreate)
     }
 
+    // One sync tail read to refresh SDK-mutable fields. Same
+    // LITE_READ_BUF_SIZE window readLiteMetadata uses. Empty string on
+    // failure → extract returns null → cache is the only source of truth.
     const tail = readFileTailSync(this.sessionFile)
 
     // Absorb any fresher SDK-written title/tag into our cache. If the SDK

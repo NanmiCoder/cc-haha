@@ -32,9 +32,11 @@ export function buildCapabilityMentions(snapshot: CapabilityMentionSnapshot): Ca
     if (command.source === 'plugin' && (!pluginId || !enabled.has(pluginId))) continue
     // Match SkillTool discovery, including described plugin prompt commands.
     if (!['bundled', 'skills', 'commands_DEPRECATED'].includes(command.loadedFrom ?? '') && !command.hasUserSpecifiedDescription && !command.whenToUse) continue
+    // Lean SkillTool drops incompatible commands before resolving a name, so
+    // one must not claim the name of a compatible command listed after it.
+    if (snapshot.agentProfile === 'lean' && !isLeanCompatibleSkill(command)) continue
     if (!command.name || names.has(command.name)) continue
     names.add(command.name)
-    if (snapshot.agentProfile === 'lean' && !isLeanCompatibleSkill(command)) continue
     const source = pluginId ?? command.source
     const owner = pluginId ? enabled.get(pluginId) : undefined
     const preferredName = command.userFacingName?.() || command.name

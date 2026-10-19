@@ -1,5 +1,5 @@
-import { getMemberWorkState, resolveTeamMemberIdentity } from '../components/agentTeams/agentTeamsModel'
 import { hasRunningSubagentTasks } from '../lib/backgroundTasks'
+import { areTeamMembersAllStopped, isTeamPlanActive } from '../lib/teamRunning'
 import { useChatStore } from '../stores/chatStore'
 import { useTabStore } from '../stores/tabStore'
 import { useTeamPlanStore } from '../stores/teamPlanStore'
@@ -26,21 +26,12 @@ export function useSessionStopOffer(sessionId: string | null | undefined): Sessi
   )
   // Approved team processes are tracked by their plan, not background-agent
   // notifications. Keep Stop available after the review card is dismissed.
-  const teamPlanRunning = useTeamPlanStore((state) => {
-    const plan = sessionId ? state.bySession[sessionId]?.plan : undefined
-    return plan?.state === 'launching' || plan?.state === 'running'
-  })
+  const teamPlanRunning = useTeamPlanStore((state) =>
+    isTeamPlanActive(sessionId ? state.bySession[sessionId]?.plan : undefined))
   // Stop pauses a running team without ending its plan, so the plan alone
   // would keep offering Stop after every member is already stopped.
-  const teamMembersAllStopped = useTeamStore((state) => {
-    const team = sessionId ? state.workbenchesBySession[sessionId]?.snapshots.at(-1)?.team : undefined
-    if (!team) return false
-    const members = team.members.filter((member) => !resolveTeamMemberIdentity(team, member.agentId).isLead)
-    return members.length > 0 && members.every((member) => {
-      const work = getMemberWorkState(member)
-      return work === 'stopped' || work === 'exited'
-    })
-  })
+  const teamMembersAllStopped = useTeamStore((state) =>
+    areTeamMembersAllStopped(sessionId ? state.workbenchesBySession[sessionId]?.snapshots.at(-1)?.team : undefined))
   if (!sessionId || isMemberSession || isSubagentTab) return null
   if (turnRunning) return 'turn'
   if (hasRunningSubagents || (teamPlanRunning && !teamMembersAllStopped)) return 'background'

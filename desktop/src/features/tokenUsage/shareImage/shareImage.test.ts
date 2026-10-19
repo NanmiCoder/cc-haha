@@ -92,6 +92,20 @@ describe('buildShareLayout', () => {
     expect(texts(ops)).toContain('100 / 日')
   })
 
+  it('stacks the columns in color-slot order, whoever is ahead, with a gap between segments', () => {
+    // The first model listed holds slot 2 and the second holds slot 1, as when the bigger model arrived later.
+    const swapped: ShareImageData = { ...DATA, models: [{ ...models[0]!, series: 2 }, { ...models[1]!, series: 1 }] }
+    const { ops } = buildShareLayout(swapped, THEME, OPTIONS, measure)
+    const rects = ops.filter((op): op is Extract<DrawOp, { kind: 'rect' }> => op.kind === 'rect')
+    const lower = rects.find((op) => op.fill === THEME.series[0] && op.h > 6)!
+    const upper = rects.find((op) => op.fill === THEME.series[1] && op.x === lower.x)!
+
+    // Slot 1 sits on the baseline and slot 2 is stacked above it, even though model 0 is listed first.
+    expect(lower.y).toBeGreaterThan(upper.y)
+    // A surface-colored gap, not touching segments.
+    expect(lower.y - (upper.y + upper.h)).toBeGreaterThanOrEqual(1.4)
+  })
+
   it('leaves out what the user turned off', () => {
     const bare = buildShareLayout(DATA, THEME, { ...OPTIONS, showIdentity: false, showModels: false, showLink: false }, measure)
     const out = texts(bare.ops)

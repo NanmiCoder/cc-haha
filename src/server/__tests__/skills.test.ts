@@ -8,9 +8,11 @@ import { invalidateComputerUseSkillGate } from '../../utils/computerUse/skillGat
 import { clearInstalledPluginsCache } from '../../utils/plugins/installedPluginsManager.js'
 import { clearPluginCache } from '../../utils/plugins/pluginLoader.js'
 import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
+import { getAgentProfile, isAgentProfileCommandSupported, setAgentProfile } from '../../utils/agentProfile.js'
+import type { Command } from '../../types/command.js'
 import { handlePluginsApi } from '../api/plugins.js'
 import { handleComputerUseApi } from '../api/computer-use.js'
-import { handleSkillsApi, listSkillSlashCommands } from '../api/skills.js'
+import { handleSkillsApi, listSkillSlashCommands, type SkillSlashCommand } from '../api/skills.js'
 
 let tmpHome: string
 let originalHome: string | undefined
@@ -957,6 +959,108 @@ describe('Skills API', () => {
 
       expect(matches).toHaveLength(1)
       expect(matches[0]!.description).toBe('Mine, not the bundled one')
+    })
+  })
+
+  /**
+   * The desktop runs whatever a lean session's list offers and judges only the
+   * built-ins it adds itself (desktop/src/lib/agentProfile.ts). So every entry
+   * here must be one the lean runtime would run, however the list is asked for,
+   * and the desktop's copy of the runtime's local-command table must not drift.
+   */
+  describe('lean slash commands', () => {
+    async function leanRepo(): Promise<string> {
+      const repo = path.join(tmpHome, 'lean-workspace')
+      const commandsDir = path.join(repo, '.claude', 'commands')
+      await fs.mkdir(path.join(repo, '.git'), { recursive: true })
+      await fs.mkdir(commandsDir, { recursive: true })
+      await fs.writeFile(path.join(commandsDir, 'foo.md'), ['---', 'description: Project legacy command', 'argument-hint: <topic>', '---', '', 'Run foo.'].join('\n'))
+      await fs.writeFile(path.join(commandsDir, 'forked.md'), ['---', 'description: Forked legacy command', 'context: fork', '---', '', 'Run forked.'].join('\n'))
+      await writeSkill(path.join(repo, '.claude', 'skills'), 'inline-skill', ['---', 'description: Inline skill', '---', '', '# Inline'].join('\n'))
+      await writeSkill(path.join(repo, '.claude', 'skills'), 'forked-skill', ['---', 'description: Forked skill', 'context: fork', '---', '', '# Forked'].join('\n'))
+      return repo
+    }
+
+    function underLeanRuntime<T>(run: () => T): T {
+      const previous = getAgentProfile()
+      setAgentProfile('lean')
+      try {
+        return run()
+      } finally {
+        setAgentProfile(previous)
+      }
+    }
+
+    async function withBuiltInTable<T>(run: (builtIns: Map<string, Command>) => Promise<T>): Promise<T> {
+      // Assembling the built-in table reads auth state; a fake key stands in.
+      const originalKey = process.env.ANTHROPIC_API_KEY
+      process.env.ANTHROPIC_API_KEY = 'sk-ant-test-not-a-real-key'
+      try {
+        const { getCompiledInCommands } = await import('../../commands.js')
+        return await run(new Map(getCompiledInCommands().map(command => [command.name, command])))
+      } finally {
+        if (originalKey === undefined) delete process.env.ANTHROPIC_API_KEY
+        else process.env.ANTHROPIC_API_KEY = originalKey
+      }
+    }
+
+    it('lists legacy custom commands as sourceless command rows, without forked ones', async () => {
+      const repo = await leanRepo()
+      // Asked the way a lean session asks (getSessionSlashCommands).
+      const lean = await listSkillSlashCommands(repo, { includeCompiledIn: false, agentProfile: 'lean' })
+
+      expect(lean).toContainEqual({ name: 'foo', description: 'Project legacy command', argumentHint: '<topic>', kind: 'command' })
+      expect(lean).toContainEqual({ name: 'inline-skill', description: 'Inline skill', kind: 'skill', source: 'project' })
+      expect(lean.map(command => command.name)).not.toContain('forked')
+      expect(lean.map(command => command.name)).not.toContain('forked-skill')
+      const standard = (await listSkillSlashCommands(repo, { includeCompiledIn: false })).map(command => command.name)
+      expect(standard).toEqual(expect.arrayContaining(['foo', 'forked', 'inline-skill', 'forked-skill']))
+    })
+
+    it('tells the skills list which skills a lean session cannot run', async () => {
+      // A new-session draft has no session list yet: it fetches the skills and
+      // lets the user choose lean afterwards, so each skill carries the answer.
+      const repo = await leanRepo()
+      const { req, url, segments } = makeRequest(`/api/skills?cwd=${encodeURIComponent(repo)}`)
+      const body = await (await handleSkillsApi(req, url, segments)).json() as {
+        skills: Array<{ name: string; context?: string; leanCompatible?: boolean }>
+      }
+
+      expect(body.skills).toContainEqual(expect.objectContaining({ name: 'inline-skill', leanCompatible: true }))
+      expect(body.skills).toContainEqual(expect.objectContaining({ name: 'forked-skill', context: 'fork', leanCompatible: false }))
+    })
+
+    it('offers no compiled-in command the lean runtime would refuse', async () => {
+      const repo = await leanRepo()
+      await withBuiltInTable(async (builtIns) => {
+        const refused = (entries: SkillSlashCommand[]) => underLeanRuntime(() => entries
+          .filter(entry => {
+            const builtIn = builtIns.get(entry.name)
+            return builtIn !== undefined && !isAgentProfileCommandSupported(builtIn)
+          })
+          .map(entry => entry.name))
+
+        // Not vacuous: a standard list carries built-ins lean refuses.
+        expect(refused(await listSkillSlashCommands(repo))).not.toEqual([])
+        const lean = await listSkillSlashCommands(repo, { agentProfile: 'lean' })
+        expect(refused(lean)).toEqual([])
+        expect(lean.map(command => command.name)).toContain('foo')
+      })
+    })
+
+    it('keeps the desktop copy of the lean local-command table in step with the runtime', async () => {
+      const { LEAN_LOCAL_COMMAND_NAMES } = await import('../../../desktop/src/lib/agentProfile.js')
+      await withBuiltInTable(async (builtIns) => {
+        const locals = [...builtIns.values()].filter(command => command.type !== 'prompt')
+        underLeanRuntime(() => {
+          // Every built-in the desktop keeps in lean is one the runtime runs...
+          expect([...LEAN_LOCAL_COMMAND_NAMES].filter(name => !isAgentProfileCommandSupported({ name, type: 'local' }))).toEqual([])
+          // ...and every local built-in the runtime keeps, the desktop keeps.
+          expect(locals
+            .filter(command => isAgentProfileCommandSupported(command) !== LEAN_LOCAL_COMMAND_NAMES.has(command.name))
+            .map(command => command.name)).toEqual([])
+        })
+      })
     })
   })
 })

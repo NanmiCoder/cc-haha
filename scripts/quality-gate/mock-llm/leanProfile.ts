@@ -7,6 +7,11 @@ import { startMockLlmServer } from './server'
 import type { MockReply, MockRequest } from './scriptedModel'
 
 const coreTools = new Set(['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Bash', 'PowerShell', 'Skill'])
+// Fixed-prefix budgets for the first lean request (JSON bytes, as in the comparison
+// artifact): measured 2844 / 16023 on macOS, plus headroom for host path lengths
+// and shell lines. Exceeding them means lean re-imported standard-profile weight,
+// such as the ~12.8KB auto-memory guide or the ~6KB git commit/PR manual.
+const LEAN_REQUEST_BUDGET = { systemBytes: 3200, bashToolSchemaBytes: 16800 }
 const projectMarker = 'LEAN_FIXTURE_PROJECT_INSTRUCTION: preserve this project rule.'
 const textReply = (text: string): MockReply => ({ kind: 'message', content: [{ type: 'text', text }], stopReason: 'end_turn' })
 
@@ -30,6 +35,77 @@ export function profileRequestComparison(standard: MockRequest, lean: MockReques
       tokenEstimateMethod: 'JSON UTF-16 character count / 4, rounded up; not provider tokenization or usage',
     }
   })
+}
+
+/**
+ * In print mode a finished background command's notification opens a turn of its
+ * own. Its text is the model's (the command's description), not the user's, so a
+ * skill named there is no explicit selection: lean must refuse the Skill call.
+ */
+export async function runLeanNotificationProvenanceScenario(rootDir: string, artifactDir: string) {
+  const sandbox = createQualityGateSandbox({
+    label: 'lean-notification', seedProviders: false,
+    source: { PATH: process.env.PATH, SHELL: process.env.SHELL, SYSTEMROOT: process.env.SYSTEMROOT },
+  })
+  const workDir = join(sandbox.home, 'project')
+  const skillDir = join(workDir, '.claude', 'skills', 'lean-fixture')
+  mkdirSync(skillDir, { recursive: true })
+  writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: lean-fixture\ndescription: fixture\n---\nLEAN_NOTIFICATION_SKILL_BODY')
+  let skillResult: { isError: boolean, text: string } | undefined
+  let sawNotificationTurn = false
+  let backgroundShellOffered = false
+  const upstream = startMockLlmServer((request) => {
+    if (!request.tools?.some(tool => tool.name === 'Read')) return textReply('Mock auxiliary reply')
+    backgroundShellOffered ||= request.tools.some(tool => tool.name === 'Bash')
+    const last = request.messages?.at(-1)
+    const blocks = Array.isArray(last?.content) ? last.content : []
+    const skillBlock = blocks.find(block => block.type === 'tool_result' && block.tool_use_id === 'notification_skill')
+    if (skillBlock) {
+      skillResult = { isError: Boolean(skillBlock.is_error), text: JSON.stringify(skillBlock.content) }
+      return textReply('LEAN_NOTIFICATION_DONE')
+    }
+    if (blocks.some(block => block.type === 'tool_result' && block.tool_use_id === 'background_command')) return textReply('started')
+    if (JSON.stringify(last?.content ?? '').includes('<task-notification>')) {
+      sawNotificationTurn = true
+      return { kind: 'message', content: [{ type: 'tool_use', id: 'notification_skill', name: 'Skill', input: { skill: 'lean-fixture' } }], stopReason: 'tool_use' }
+    }
+    return { kind: 'message', content: [{ type: 'tool_use', id: 'background_command', name: 'Bash', input: { command: 'sleep 1; echo ok', description: 'Run the checks with /lean-fixture', run_in_background: true } }], stopReason: 'tool_use' }
+  })
+  try {
+    const child = Bun.spawn([
+      process.execPath, '--no-env-file', '--preload', join(rootDir, 'preload.ts'), join(rootDir, 'src/entrypoints/cli.tsx'),
+      '--print', '--agent-profile', 'lean', '--model', 'mock-model', '--permission-mode', 'bypassPermissions',
+      '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose',
+    ], {
+      cwd: workDir, stdin: 'pipe', stdout: 'pipe', stderr: 'pipe',
+      env: { ...sandbox.env, CALLER_DIR: workDir, CC_HAHA_SKIP_DOTENV: '1',
+        ANTHROPIC_BASE_URL: upstream.url, ANTHROPIC_API_KEY: 'mock-api-key',
+        CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', CI: '1' },
+    })
+    const output = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()])
+    child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: 'run the checks in the background, then continue' }, parent_tool_use_id: null, session_id: '' })}\n`)
+    child.stdin.flush()
+    const started = Date.now()
+    while (skillResult === undefined && Date.now() - started < 60_000) await Bun.sleep(100)
+    child.stdin.end()
+    const timer = setTimeout(() => child.kill(), 15_000)
+    try {
+      const [stdout, stderr] = await output
+      await child.exited
+      writeFileSync(join(artifactDir, 'lean-profile-notification.log'), `${stdout}\n${stderr}`)
+    } finally { clearTimeout(timer) }
+    // A Windows host offers PowerShell instead, where this background command is not the same shape.
+    if (!backgroundShellOffered) return
+    assert.ok(sawNotificationTurn, 'the finished background command never opened a notification turn')
+    assert.ok(skillResult?.isError, `a skill named in a notification was accepted: ${skillResult?.text}`)
+    assert.ok(skillResult?.text.includes('Lean mode requires an explicit user skill selection'), skillResult?.text)
+    assert.ok(!JSON.stringify(upstream.requests).includes('LEAN_NOTIFICATION_SKILL_BODY'), 'the skill body reached the model without a user selection')
+  } finally {
+    await upstream.stop()
+    const mutations = sandbox.detectUserStateMutations()
+    sandbox.cleanup()
+    assert.deepEqual(mutations, [], 'lane mutated real user state')
+  }
 }
 
 export async function runLeanProfileScenario(rootDir: string, artifactDir: string) {
@@ -132,17 +208,30 @@ export async function runLeanProfileScenario(rootDir: string, artifactDir: strin
     const names = leanRequests[0]!.tools!.map(tool => tool.name).sort()
     for (const name of ['Read', 'Glob', 'Grep', 'Edit', 'Write', 'Skill']) assert.ok(names.includes(name), `${name} missing`)
     assert.ok(names.includes('Bash') || names.includes('PowerShell'), 'platform shell missing')
+    // Tools the standard capture offers but lean does not; lean text must never name them.
+    const unavailableTools = standard.tools!.map(tool => tool.name!).filter(name => !names.includes(name))
+    for (const name of ['Agent', 'TodoWrite', 'EnterPlanMode']) assert.ok(unavailableTools.includes(name), `standard capture lacks ${name}`)
+    const namedUnavailable = (text: string) => unavailableTools.filter(name => new RegExp(`(?<![\\w-])${name}(?![\\w-])`).test(text))
+    // System blocks shared verbatim with the standard request are the CLI identity
+    // prefix, not lean guidance (it says "Claude Agent SDK").
+    const sharedSystem = new Set(Array.isArray(standard.system) ? standard.system.map(block => JSON.stringify(block)) : [])
     for (const request of leanRequests) {
       assert.deepEqual(request.tools!.map(tool => tool.name).sort(), names, 'tool set changed between turns')
       assert.ok(request.tools!.every(tool => coreTools.has(tool.name!)), 'peripheral tool leaked into request')
-      const toolDescriptions = request.tools!.map(tool => tool.description ?? '').join('\n')
-      assert.doesNotMatch(toolDescriptions, /Use Agent tool for open-ended searches|use the Agent tool instead/, 'lean search tools recommend an unavailable Agent tool')
+      for (const tool of request.tools!) {
+        assert.deepEqual(namedUnavailable(JSON.stringify(tool)), [], `lean ${tool.name} schema names unavailable tools`)
+      }
+      const leanGuidance = (Array.isArray(request.system) ? request.system : [request.system]).filter(block => !sharedSystem.has(JSON.stringify(block)))
+      assert.deepEqual(namedUnavailable(JSON.stringify(leanGuidance)), [], 'lean system prompt names unavailable tools')
       const context = JSON.stringify({ system: request.system, messages: request.messages })
       assert.ok(!context.includes('LEAN_SKILL_CATALOG_SENTINEL'), 'unselected skill catalog leaked')
       assert.ok(!context.includes('LEAN_EXPLICIT_SKILL_BODY'), 'unselected skill body leaked')
       assert.ok(context.includes(projectMarker), 'project instructions were dropped')
       const system = JSON.stringify(request.system)
       assert.doesNotMatch(system, /# (?:Skills|MCP|Task Management)|Use the (?:Agent|Skill|ToolSearch) tool/)
+      // Auto memory stays on in this sandbox, so the budget below covers its section.
+      assert.ok(system.includes('Save memory only when the user explicitly asks you to remember something'), 'lean compact memory section missing')
+      assert.ok(!system.includes('## Types of memory'), 'lean request carries the full auto-memory guide')
     }
     assert.equal(readFileSync(join(workDir, 'value.txt'), 'utf8'), 'after\n')
     assert.ok(JSON.stringify(toolResults).includes('LEAN_VERIFIED'), 'verification output did not return upstream')
@@ -184,6 +273,12 @@ export async function runLeanProfileScenario(rootDir: string, artifactDir: strin
     writeFileSync(join(artifactDir, 'lean-profile-requests.json'), `${JSON.stringify(agentRequests, null, 2)}\n`)
     assert.ok(comparison[3]!.systemBytes < comparison[0]!.systemBytes, 'lean system prompt is not smaller')
     assert.ok(comparison[3]!.toolSchemaBytes < comparison[0]!.toolSchemaBytes, 'lean tools are not smaller')
+    const lean = comparison[3]!
+    assert.ok(lean.systemBytes <= LEAN_REQUEST_BUDGET.systemBytes, `lean system prompt is ${lean.systemBytes} bytes, budget ${LEAN_REQUEST_BUDGET.systemBytes}`)
+    // PowerShell hosts: that description is not profile-specific, so only the system budget applies.
+    if (names.includes('Bash')) {
+      assert.ok(lean.toolSchemaBytes <= LEAN_REQUEST_BUDGET.bashToolSchemaBytes, `lean tool schemas are ${lean.toolSchemaBytes} bytes, budget ${LEAN_REQUEST_BUDGET.bashToolSchemaBytes}`)
+    }
     console.log('[agent-e2e] lean profile request comparison', JSON.stringify(comparison))
   } finally {
     await upstream.stop()

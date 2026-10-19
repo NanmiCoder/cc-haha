@@ -91,6 +91,12 @@ import {
   isBuiltInProviderId,
 } from '../types/provider.js'
 
+type ProviderAuthStatus = {
+  hasAuth: boolean
+  source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'deepseek-oauth' | 'original-settings' | 'env' | 'none'
+  activeProvider?: string
+}
+
 const DEFAULT_INDEX: ProvidersIndex = {
   schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION,
   activeId: null,
@@ -601,73 +607,38 @@ export class ProviderService {
   // --- Auth status ---
 
   /**
-   * Check whether any usable auth exists:
-   *  1. The active cc-haha provider or built-in OAuth provider has auth
-   *  2. Claude Official has a desktop-managed OAuth token
-   *  3. process.env already has ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN
-   *  4. Original ~/.claude/settings.json contains one of those auth variables
-   *  5. None of the above → needs setup
+   * Check whether a provider can authenticate.
+   *
+   * Without `providerId` this evaluates the global default (`activeId`, where
+   * null is Claude Official) and keeps its historical fallbacks: a default
+   * without a credential of its own still counts ANTHROPIC_API_KEY /
+   * ANTHROPIC_AUTH_TOKEN from process.env or the original
+   * ~/.claude/settings.json. (Desktop sessions on that default also start the
+   * CLI without the inherited variables; the env fallback is left as it was.)
+   *
+   * With `providerId` (a saved provider id or a built-in id) only a
+   * credential the CLI started for that provider receives counts, so a saved
+   * provider or built-in account never borrows ambient credentials. For
+   * Claude Official that is its desktop OAuth, then the original
+   * ~/.claude/settings.json, whose env the CLI applies itself. process.env
+   * does not count: conversationService strips the inherited ANTHROPIC_*
+   * variables from every CLI started with an explicit runtime provider
+   * (Claude Official's is null), so a credential found only there leaves
+   * that CLI at "Not logged in". An unknown id has no auth.
    */
-  async checkAuthStatus(): Promise<{
-    hasAuth: boolean
-    source: 'cc-haha-provider' | 'claude-oauth' | 'openai-oauth' | 'grok-oauth' | 'deepseek-oauth' | 'original-settings' | 'env' | 'none'
-    activeProvider?: string
-  }> {
-    // 1–2. Check the selected provider, including Claude Official (activeId=null).
+  async checkAuthStatus(providerId?: string): Promise<ProviderAuthStatus> {
     const index = await this.readIndex()
-    if (index.activeId) {
-      if (isOpenAIOfficialProviderId(index.activeId)) {
-        const tokens = await hahaOpenAIOAuthService.ensureFreshTokens()
-        if (tokens?.accessToken && tokens.refreshToken) {
-          return {
-            hasAuth: true,
-            source: 'openai-oauth',
-            activeProvider: OPENAI_OFFICIAL_PROVIDER.name,
-          }
-        }
-        return {
-          hasAuth: false,
-          source: 'none',
-          activeProvider: OPENAI_OFFICIAL_PROVIDER.name,
-        }
-      }
-      if (isGrokOfficialProviderId(index.activeId)) {
-        const tokens = await hahaGrokOAuthService.ensureFreshTokens()
-        if (tokens?.accessToken && tokens.refreshToken) {
-          return {
-            hasAuth: true,
-            source: 'grok-oauth',
-            activeProvider: GROK_OFFICIAL_PROVIDER.name,
-          }
-        }
-        return {
-          hasAuth: false,
-          source: 'none',
-          activeProvider: GROK_OFFICIAL_PROVIDER.name,
-        }
-      }
-      if (isDeepSeekAccountProviderId(index.activeId)) {
-        const tokens = await hahaDeepSeekOAuthService.loadTokens()
-        return {
-          hasAuth: !!tokens,
-          source: tokens ? 'deepseek-oauth' : 'none',
-          activeProvider: DEEPSEEK_ACCOUNT_PROVIDER.name,
-        }
-      }
+    return providerId === undefined
+      ? this.evaluateProviderAuth(index, index.activeId ?? CLAUDE_OFFICIAL_PROVIDER_ID, true)
+      : this.evaluateProviderAuth(index, providerId, false)
+  }
 
-      const provider = index.providers.find(p => p.id === index.activeId)
-      if (provider) {
-        const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
-        const needsProxy = providerNeedsProxy(
-          provider.apiFormat ?? 'anthropic',
-          provider.supportsNestedToolResultMedia,
-        )
-        const authEnv = buildProviderAuthEnv(provider, presetDefaultEnv, needsProxy)
-        if (Object.values(authEnv).some(value => value.length > 0)) {
-          return { hasAuth: true, source: 'cc-haha-provider', activeProvider: provider.name }
-        }
-      }
-    } else {
+  private async evaluateProviderAuth(
+    index: ProvidersIndex,
+    id: string,
+    globalDefault: boolean,
+  ): Promise<ProviderAuthStatus> {
+    if (id === CLAUDE_OFFICIAL_PROVIDER_ID) {
       const tokens = await hahaOAuthService.ensureFreshTokens()
       if (tokens?.accessToken) {
         return {
@@ -676,14 +647,65 @@ export class ProviderService {
           activeProvider: 'Claude Official',
         }
       }
+      return globalDefault ? this.checkAmbientAuth() : this.checkOriginalSettingsAuth()
+    }
+    if (isOpenAIOfficialProviderId(id)) {
+      const tokens = await hahaOpenAIOAuthService.ensureFreshTokens()
+      const hasAuth = !!(tokens?.accessToken && tokens.refreshToken)
+      return {
+        hasAuth,
+        source: hasAuth ? 'openai-oauth' : 'none',
+        activeProvider: OPENAI_OFFICIAL_PROVIDER.name,
+      }
+    }
+    if (isGrokOfficialProviderId(id)) {
+      const tokens = await hahaGrokOAuthService.ensureFreshTokens()
+      const hasAuth = !!(tokens?.accessToken && tokens.refreshToken)
+      return {
+        hasAuth,
+        source: hasAuth ? 'grok-oauth' : 'none',
+        activeProvider: GROK_OFFICIAL_PROVIDER.name,
+      }
+    }
+    if (isDeepSeekAccountProviderId(id)) {
+      const tokens = await hahaDeepSeekOAuthService.loadTokens()
+      return {
+        hasAuth: !!tokens,
+        source: tokens ? 'deepseek-oauth' : 'none',
+        activeProvider: DEEPSEEK_ACCOUNT_PROVIDER.name,
+      }
     }
 
-    // 3. Check process.env (covers .env file + inherited env)
+    const provider = index.providers.find(p => p.id === id)
+    if (provider) {
+      const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
+      const needsProxy = providerNeedsProxy(
+        provider.apiFormat ?? 'anthropic',
+        provider.supportsNestedToolResultMedia,
+      )
+      const authEnv = buildProviderAuthEnv(provider, presetDefaultEnv, needsProxy)
+      if (Object.values(authEnv).some(value => value.length > 0)) {
+        return { hasAuth: true, source: 'cc-haha-provider', activeProvider: provider.name }
+      }
+    }
+    if (globalDefault) return this.checkAmbientAuth()
+    return provider
+      ? { hasAuth: false, source: 'none', activeProvider: provider.name }
+      : { hasAuth: false, source: 'none' }
+  }
+
+  /** The global default's fallbacks: process.env, then the original settings file. */
+  private async checkAmbientAuth(): Promise<ProviderAuthStatus> {
+    // process.env covers .env files and the inherited environment.
     if (process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN) {
       return { hasAuth: true, source: 'env' }
     }
 
-    // 4. Check original ~/.claude/settings.json
+    return this.checkOriginalSettingsAuth()
+  }
+
+  /** The original ~/.claude/settings.json, whose env the CLI applies at startup. */
+  private async checkOriginalSettingsAuth(): Promise<ProviderAuthStatus> {
     try {
       const originalPath = path.join(this.getConfigDir(), 'settings.json')
       const raw = await fs.readFile(originalPath, 'utf-8')

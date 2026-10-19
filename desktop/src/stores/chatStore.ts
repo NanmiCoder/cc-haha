@@ -89,6 +89,13 @@ export type RepositoryLaunchDraftState = {
   workDir: string
   branch: string | null
   useWorktree: boolean
+  /**
+   * `branch` is one the launch controls chose on their own, not the user's pick.
+   * The controls are mounted again whenever the user returns to the chat, so
+   * this is what lets them keep following the checkout instead of launching a
+   * branch that has gone stale. Memory only, like the rest of the draft.
+   */
+  branchAutomatic?: boolean
 }
 
 export type QueuedUserMessage = {

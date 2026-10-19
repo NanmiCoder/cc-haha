@@ -815,12 +815,14 @@
   --cc-heat-2: #D1ADA2;
   --cc-heat-3: #B8806F;
   --cc-heat-4: #9C4F38;
-  /* Model series: the five categorical hues usage charts draw models with. */
-  --cc-series-1: #3B7068;
-  --cc-series-2: #A24A2E;
-  --cc-series-3: #C9A56B;
-  --cc-series-4: #7C8AA8;
-  --cc-series-5: #B3AFA6;
+  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
+     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
+     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
+  --cc-series-1: #058D85;
+  --cc-series-2: #86412C;
+  --cc-series-3: #5066A3;
+  --cc-series-4: #99732B;
+  --cc-series-5: #A8A49C;
 
   --cc-shadow-card: 0 1px 2px rgba(28, 25, 23, 0.05), 0 6px 20px rgba(28, 25, 23, 0.06);
   --cc-shadow-composer: 0 1px 2px rgba(28, 25, 23, 0.04), 0 8px 28px rgba(28, 25, 23, 0.07);
@@ -897,12 +899,14 @@
   --cc-heat-2: #CFA99C;
   --cc-heat-3: #B67E6B;
   --cc-heat-4: #9C4F37;
-  /* Model series: the five categorical hues usage charts draw models with. */
-  --cc-series-1: #3B7068;
-  --cc-series-2: #96442B;
-  --cc-series-3: #C9A56B;
-  --cc-series-4: #7C8AA8;
-  --cc-series-5: #B8B09C;
+  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
+     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
+     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
+  --cc-series-1: #058D85;
+  --cc-series-2: #86412C;
+  --cc-series-3: #5066A3;
+  --cc-series-4: #99732B;
+  --cc-series-5: #A8A49C;
 
   --cc-shadow-card: 0 1px 3px rgba(64, 49, 26, 0.05), 0 6px 24px rgba(64, 49, 26, 0.07);
   --cc-shadow-composer: 0 1px 2px rgba(64, 49, 26, 0.06), 0 14px 44px rgba(64, 49, 26, 0.10);
@@ -979,12 +983,14 @@
   --cc-heat-2: #CCA491;
   --cc-heat-3: #B57B65;
   --cc-heat-4: #9C4E36;
-  /* Model series: the five categorical hues usage charts draw models with. */
-  --cc-series-1: #3E6B58;
-  --cc-series-2: #96442B;
-  --cc-series-3: #C2A064;
-  --cc-series-4: #7C8AA8;
-  --cc-series-5: #B3A98C;
+  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
+     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
+     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
+  --cc-series-1: #058D85;
+  --cc-series-2: #86412C;
+  --cc-series-3: #5066A3;
+  --cc-series-4: #99732B;
+  --cc-series-5: #A8A49C;
 
   --cc-shadow-card: 0 1px 3px rgba(64, 49, 26, 0.05), 0 6px 24px rgba(64, 49, 26, 0.07);
   --cc-shadow-composer: 0 1px 2px rgba(64, 49, 26, 0.06), 0 14px 44px rgba(64, 49, 26, 0.10);
@@ -1061,12 +1067,14 @@
   --cc-heat-2: #CBA99C;
   --cc-heat-3: #B47E6C;
   --cc-heat-4: #9C4F37;
-  /* Model series: the five categorical hues usage charts draw models with. */
-  --cc-series-1: #2F6E63;
-  --cc-series-2: #96442B;
-  --cc-series-3: #C9A56B;
-  --cc-series-4: #7C8AA8;
-  --cc-series-5: #AEB9B0;
+  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
+     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
+     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
+  --cc-series-1: #058D85;
+  --cc-series-2: #86412C;
+  --cc-series-3: #5066A3;
+  --cc-series-4: #99732B;
+  --cc-series-5: #A8A49C;
 
   --cc-shadow-card: 0 1px 3px rgba(28, 42, 32, 0.05), 0 6px 24px rgba(28, 42, 32, 0.06);
   --cc-shadow-composer: 0 1px 2px rgba(28, 42, 32, 0.05), 0 14px 44px rgba(28, 42, 32, 0.08);
@@ -1145,12 +1153,14 @@
   --cc-heat-2: #6D4631;
   --cc-heat-3: #985D3F;
   --cc-heat-4: #C5754E;
-  /* Model series: the five categorical hues usage charts draw models with. */
-  --cc-series-1: #5FAEA2;
-  --cc-series-2: #D07B52;
-  --cc-series-3: #D9B98A;
-  --cc-series-4: #8E9BB8;
-  --cc-series-5: #6B6455;
+  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
+     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
+     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
+  --cc-series-1: #35A69D;
+  --cc-series-2: #AD644E;
+  --cc-series-3: #6177B6;
+  --cc-series-4: #99732B;
+  --cc-series-5: #B4B0A6;
 
   --cc-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 24px rgba(0, 0, 0, 0.35);
   --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 44px rgba(0, 0, 0, 0.50);
@@ -1229,12 +1239,14 @@
   --cc-heat-2: #6A4638;
   --cc-heat-3: #965D43;
   --cc-heat-4: #C5754F;
-  /* Model series: the five categorical hues usage charts draw models with. */
-  --cc-series-1: #5FAEA2;
-  --cc-series-2: #D07B52;
-  --cc-series-3: #D9B98A;
-  --cc-series-4: #8E9BB8;
-  --cc-series-5: #5E6577;
+  /* Model series: four hues for the four biggest models, then a neutral gray every other model shares.
+     Validated per theme surface (lightness band, chroma, color-blind and normal-vision separation of
+     neighbours, contrast); the gray is the one slot below 3:1, so the legend and day card name it. */
+  --cc-series-1: #35A69D;
+  --cc-series-2: #AD644E;
+  --cc-series-3: #6177B6;
+  --cc-series-4: #99732B;
+  --cc-series-5: #B4B0A6;
 
   --cc-shadow-card: 0 1px 3px rgba(0, 0, 0, 0.35), 0 6px 24px rgba(0, 0, 0, 0.35);
   --cc-shadow-composer: 0 1px 2px rgba(0, 0, 0, 0.45), 0 14px 44px rgba(0, 0, 0, 0.50);
@@ -2536,8 +2548,9 @@ body.sidebar-resizing * {
    see, so its offsets would run short by one gap per turn. */
 .chat-turn-rail--none {
   padding-top: 24px;
-  /* The prompt's hover actions hang below the bubble (absolutely positioned,
-     24px tall) and must land inside this box: `--cv` rows paint-contain, so
+  /* The prompt's hover actions hang below the bubble (a zero-height row whose
+     24px of buttons overflow downward) and must land inside this box: `--cv`
+     rows paint-contain, so
      anything past the padding edge is clipped. The bar does not add height;
      it borrows the gap that separates the prompt from its reply. */
   padding-bottom: 24px;

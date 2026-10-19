@@ -14,6 +14,8 @@ export type SkillMeta = {
   source: SkillSource
   rootFlavor?: SkillRootFlavor
   userInvocable: boolean
+  /** A lean session can run it. Absent for servers predating the field, which counts as yes. */
+  leanCompatible?: boolean
   version?: string
   contentLength: number
   hasDirectory: boolean

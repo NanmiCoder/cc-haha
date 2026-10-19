@@ -15,9 +15,29 @@ function validTokenCount(value: unknown): number | undefined {
 /**
  * Map an OpenAI-compatible usage object to Anthropic usage.
  *
- * Direct Anthropic-style cache fields use exclusive input semantics. OpenAI
- * nested cache details are included in input/prompt, so only nested cache
- * counts are subtracted to preserve the upstream total.
+ * Direct Anthropic-style cache fields normally use exclusive input semantics.
+ * OpenAI nested cache details are included in input/prompt, so only nested
+ * cache counts are subtracted to preserve the upstream total.
+ *
+ * Exception (#1516): some openai_chat relays return OpenAI-shaped usage
+ * (`prompt_tokens` already includes cache hits) and also copy the hit count into
+ * a top-level `cache_read_input_tokens`. Treating that field as proof of
+ * exclusive semantics counts the hit twice (input and cache_read) and pins the
+ * cache hit rate near 50%. Such a payload is read as inclusive when ALL of:
+ *   - there is no `input_tokens` (an Anthropic-named input is exclusive),
+ *   - `prompt_tokens` is present and `cache_read_input_tokens <= prompt_tokens`
+ *     (a larger hit count cannot be contained in the prompt),
+ *   - `total_tokens`, when present, does not already include the cache count on
+ *     top of prompt + completion (that would be exclusive accounting).
+ * Then input_tokens = prompt_tokens - cache_read_input_tokens and cache_read is
+ * kept as reported. `cache_creation_input_tokens` is NOT deducted from the
+ * prompt: there is no evidence about whether relays include it, so it keeps the
+ * previous behavior.
+ *
+ * Limitation: this cannot be proven from the numbers alone. A relay that really
+ * reports a `prompt_tokens` excluding cache hits, with a total that also omits
+ * them, would have its input_tokens underestimated. No such relay is known, and
+ * the effect is limited to usage/cache-hit statistics display.
  */
 export function openaiUsageToAnthropic(usage: OpenAICompatibleUsage | undefined): AnthropicResponse['usage'] {
   if (!usage) return { input_tokens: 0, output_tokens: 0 }
@@ -63,18 +83,35 @@ export function openaiUsageToAnthropic(usage: OpenAICompatibleUsage | undefined)
     usage.input_tokens_details?.cached_tokens,
   ) ?? validTokenCount(usage.prompt_tokens_details?.cached_tokens) ?? 0
 
-  // Positive direct cache_* fields use Anthropic's exclusive-input semantics.
-  // Some Chat gateways include zero placeholders alongside real nested counts;
-  // those placeholders must not suppress the nested cache hit accounting. Nested
-  // OpenAI details are inclusive in input/prompt and must be subtracted. Cap
-  // malformed nested cache counts at the reported input to preserve totals.
+  // OpenAI-shaped prompt_tokens with a redundant direct cache_read (#1516):
+  // see the function comment. Only the cache_read count is deducted.
+  const promptTokens = validTokenCount(usage.prompt_tokens)
+  const directCacheReadIsInclusive =
+    validTokenCount(usage.input_tokens) === undefined &&
+    promptTokens !== undefined &&
+    (directCacheRead ?? 0) > 0 &&
+    directCacheRead! <= promptTokens &&
+    !(
+      total !== undefined &&
+      (total === promptTokens + output + directCacheRead! ||
+        total ===
+          promptTokens + output + directCacheRead! + (directCacheCreation ?? 0))
+    )
+
+  // Positive direct cache_* fields otherwise use Anthropic's exclusive-input
+  // semantics. Some Chat gateways include zero placeholders alongside real
+  // nested counts; those placeholders must not suppress the nested cache hit
+  // accounting. Nested OpenAI details are inclusive in input/prompt and must be
+  // subtracted. Cap malformed nested cache counts at the reported input to
+  // preserve totals.
   const cacheRead = hasDirectCacheUsage
     ? (directCacheRead ?? 0)
     : Math.min(nestedCacheRead, input)
   const cacheCreation = directCacheCreation ?? 0
-  const nonCacheInput = hasDirectCacheUsage
-    ? input
-    : Math.max(0, input - cacheRead)
+  const nonCacheInput =
+    directCacheReadIsInclusive || !hasDirectCacheUsage
+      ? Math.max(0, input - cacheRead)
+      : input
 
   const result: AnthropicResponse['usage'] = {
     input_tokens: nonCacheInput,

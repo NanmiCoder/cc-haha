@@ -6,7 +6,7 @@ import { relocateManagedData } from '../../../src/utils/storageMigrationMetadata
 import { normalizedCustomDir, setAppMode, systemClaudeConfigDir, type AppModeAppLike } from './appMode'
 import { assertMigrationDirectory, assertMigrationManifest, assertUnlinkedDirectoryPath, canonicalPath, copyMigrationFiles, isWithin, migrationDirectoryIdentity, migrationManifest, restoreMigrationPermissions, scanMigrationFiles, validateMigrationManifest, verifyMigrationSource, type MigrationDirectoryIdentity, type VerifiedMigrationFile } from './dataMigrationFiles'
 import { copyMigrationCredentials, removeMigrationCredentials, systemMigrationCredentialStore, verifyMigrationCredentials, type MigrationCredentialReceipt, type MigrationCredentialStore } from './migrationCredentials'
-import { preserveWindowsMigrationPermissions, restrictWindowsMigrationStaging } from './migrationPermissions'
+import { preflightWindowsMigrationPermissions, preserveWindowsMigrationPermissions, restrictWindowsMigrationStaging } from './migrationPermissions'
 
 export const MIGRATION_JOURNAL_FILE = 'data-migration-v1.json'
 type Journal = {
@@ -68,6 +68,7 @@ export type DataMigrationHooks = {
   credentialStore?: MigrationCredentialStore
   permissions?: {
     restrictStaging(directory: string, signal: AbortSignal): Promise<void>
+    preflight(sources: string[], stagingDir: string, signal: AbortSignal): Promise<void>
     preserve(entries: { source: string; target: string }[], signal: AbortSignal): Promise<void>
   }
   platform?: NodeJS.Platform
@@ -269,8 +270,25 @@ export class DataMigration {
       await fs.mkdir(stagingDir, { mode: 0o700 })
       const stagingIdentity = await migrationDirectoryIdentity(stagingDir)
       this.journal.stagingIdentity = stagingIdentity
+      const permissionEntries = [
+        ...files.filter(file => file.kind !== 'link').map(file => ({
+          source: isWithin(preview.sourceDir, file.source) ? path.join(directories.source.canonical, path.relative(preview.sourceDir, file.source)) : file.source,
+          target: path.join(stagingIdentity.canonical, file.relative),
+        })),
+        { source: directories.source.canonical, target: directories.target.canonical },
+      ]
       if ((this.hooks.platform ?? process.platform) === 'win32') {
         await (this.hooks.permissions?.restrictStaging ?? restrictWindowsMigrationStaging)(stagingIdentity.canonical, signal)
+        await this.assertDirectories(directories, preview.sourceDir, preview.targetDir)
+        await assertMigrationDirectory(stagingDir, stagingIdentity)
+        // Preflight may be interrupted before copying. Recovery must already
+        // know this directory's identity before it can remove private staging.
+        await this.save()
+        signal.throwIfAborted()
+        await (this.hooks.permissions?.preflight ?? preflightWindowsMigrationPermissions)(permissionEntries.map(entry => entry.source), stagingIdentity.canonical, signal)
+        await this.assertDirectories(directories, preview.sourceDir, preview.targetDir)
+        await assertMigrationDirectory(stagingDir, stagingIdentity)
+        signal.throwIfAborted()
       }
       await this.stage('copying')
       await this.assertDirectories(directories, preview.sourceDir, preview.targetDir)
@@ -298,13 +316,7 @@ export class DataMigration {
       if ((this.hooks.platform ?? process.platform) === 'win32') {
         await this.assertDirectories(directories, preview.sourceDir, preview.targetDir)
         await assertMigrationDirectory(stagingDir, this.journal.stagingIdentity)
-        await (this.hooks.permissions?.preserve ?? preserveWindowsMigrationPermissions)([
-          ...files.filter(file => file.kind !== 'link').map(file => ({
-            source: isWithin(preview.sourceDir, file.source) ? path.join(directories.source.canonical, path.relative(preview.sourceDir, file.source)) : file.source,
-            target: path.join(stagingIdentity.canonical, file.relative),
-          })),
-          { source: directories.source.canonical, target: directories.target.canonical },
-        ], signal)
+        await (this.hooks.permissions?.preserve ?? preserveWindowsMigrationPermissions)(permissionEntries, signal)
       }
       this.journal.manifest = await migrationManifest(stagingDir, signal)
       // Keychain prompts and target rewrites may take time. Validate the source

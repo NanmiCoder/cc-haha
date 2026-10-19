@@ -110,6 +110,7 @@ export function ActivitySettings() {
   const otherLabel = t('settings.activity.otherModels')
   const models = useMemo(() => rankModels(stats, otherLabel), [stats, otherLabel])
   const daily = useMemo(() => buildDailyModelSeries(stats, models, STREAM_DAYS, new Date()), [stats, models])
+  const dayActivity = useMemo(() => new Map((stats?.dailyActivity ?? []).map((day) => [day.date, day])), [stats])
   const totalTokens = useMemo(
     () => [...getDailyTokenMap(stats).values()].reduce((sum, tokens) => sum + tokens, 0),
     [stats],
@@ -183,7 +184,7 @@ export function ActivitySettings() {
 
           {hasUsage ? (
             <>
-              <TokenStreamChart days={daily} models={models} locale={locale} className="mt-14" />
+              <TokenStreamChart days={daily} models={models} activity={dayActivity} locale={locale} className="mt-14" />
               <StatsRow tiles={tiles} />
               <div className="mt-14">
                 <TokenHeatmap stats={stats} locale={locale} />

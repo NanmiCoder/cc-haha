@@ -10,7 +10,7 @@ const FALLBACK_THEME: ShareTheme = {
   t2: '#55524D',
   t3: '#6F6B65',
   ac: '#A24A2E',
-  series: ['#3B7068', '#A24A2E', '#C9A56B', '#7C8AA8', '#B3AFA6'],
+  series: ['#058D85', '#86412C', '#5066A3', '#99732B', '#A8A49C'],
 }
 
 export type ShareThemeChoice = ThemeMode | 'current'

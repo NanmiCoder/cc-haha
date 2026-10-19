@@ -6182,15 +6182,14 @@ describe('MessageList nested tool calls', () => {
     expect(assistantShell?.className).not.toContain('ml-10')
     expect(userActions?.getAttribute('data-align')).toBe('end')
     expect(assistantActions?.getAttribute('data-align')).toBe('start')
-    // The prompt's bar hangs under the bubble out of flow: hovering never moves
-    // the transcript, and the bar holds no height of its own when hidden.
-    expect(userShell?.className).toContain('relative')
+    // The prompt's bar hangs under the bubble as a zero-height row: hovering
+    // never moves the transcript, the bar holds no height of its own whether
+    // hidden or shown (a constant h-0, not a hover-driven height change), and
+    // it stays in flow so the hover shell is never narrower than its bar (#1616).
     expect(userActions?.getAttribute('data-placement')).toBe('overlay')
-    expect(userActions?.className).toContain('absolute')
-    expect(userActions?.className).toContain('top-full')
-    expect(userActions?.className).toContain('right-0')
+    expect(userActions?.className).not.toMatch(/(^|\s)(absolute|fixed)(\s|$)/)
+    expect(userActions?.className).toContain('h-0')
     expect(userActions?.className).not.toContain('mt-2')
-    expect(userActions?.className).not.toContain('h-0')
     expect(userActions?.className).not.toContain('group-hover:h-')
     expect(userActions?.className).not.toContain('invisible')
     // The closing reply's bar stays in flow: it is always shown.
