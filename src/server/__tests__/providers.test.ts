@@ -2461,6 +2461,76 @@ describe('ProviderService', () => {
       }
     })
 
+    for (const [baseUrl, model] of [
+      ['https://api.minimax.io/v1', 'MiniMax-M3.1-Flash'],
+      ['https://api.minimaxi.com/v1', 'MiniMax-M3.1-Flash'],
+      ['https://api.minimax.io/v1', 'MiniMax-M3'],
+      ['https://openrouter.ai/api/v1', 'minimax/minimax-m3.1-flash:free'],
+      ['https://opencode.ai/zen/v1', 'minimax-m3.1-flash-free'],
+      ['https://opencode.ai/zen/go/v1', 'minimax-m3.1-flash-free'],
+    ]) {
+      test(`preserves MiniMax reasoning and tool continuation at the HTTP boundary: ${baseUrl}/${model}`, async () => {
+        const originalFetch = globalThis.fetch
+        const calls: Array<Record<string, any>> = []
+        globalThis.fetch = mock(async (url: string | URL | Request, init?: RequestInit) => {
+          expect(String(url)).toBe(`${baseUrl}/chat/completions`)
+          expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer test-key')
+          calls.push(JSON.parse(String(init?.body)))
+          return Response.json({
+            id: 'minimax-turn', object: 'chat.completion', created: 0, model,
+            choices: [{ index: 0, finish_reason: calls.length === 1 ? 'tool_calls' : 'stop', message: calls.length === 1
+              ? { role: 'assistant', content: null, reasoning_content: 'Inspect the file.', tool_calls: [{ id: 'call_mm', type: 'function', function: { name: 'read_file', arguments: '{"path":"README.md"}' } }] }
+              : { role: 'assistant', content: 'Done.' } }],
+            usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+          })
+        }) as typeof fetch
+        try {
+          const svc = new ProviderService()
+          const provider = await svc.addProvider(sampleInput({ apiFormat: 'openai_chat', baseUrl, apiKey: 'test-key' }))
+          await svc.activateProvider(provider.id)
+          const messages: Array<Record<string, unknown>> = [{ role: 'user', content: [
+            { type: 'text', text: 'Read the file' },
+            { type: 'image', source: { type: 'url', url: 'https://example.test/image.png' } },
+          ] }]
+          const send = async () => {
+            const req = new Request('http://localhost:3456/proxy/v1/messages', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model, max_tokens: 4096, thinking: { type: 'disabled' }, output_config: { effort: 'none' }, messages,
+                tools: [{ name: 'read_file', input_schema: { type: 'object', properties: { path: { type: 'string' } } } }],
+              }),
+            })
+            const response = await handleProxyRequest(req, new URL(req.url))
+            expect(response.status).toBe(200)
+            return response.json()
+          }
+          const first = await send()
+          expect(first.content).toContainEqual({ type: 'thinking', thinking: 'Inspect the file.' })
+          expect(first.stop_reason).toBe('tool_use')
+          messages.push({ role: 'assistant', content: first.content }, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'call_mm', content: 'File contents' }] })
+          expect((await send()).content).toEqual([{ type: 'text', text: 'Done.' }])
+          expect(calls).toHaveLength(2)
+          expect(calls[1].messages[1]).toMatchObject({ role: 'assistant', reasoning_content: 'Inspect the file.', tool_calls: [{ id: 'call_mm' }] })
+          expect(calls[1].messages[2]).toMatchObject({ role: 'tool', tool_call_id: 'call_mm', content: 'File contents' })
+          for (const body of calls) {
+            expect(body.model).toBe(model)
+            expect(body.messages[0].content).toContainEqual({ type: 'image_url', image_url: { url: 'https://example.test/image.png' } })
+            expect(body.service_tier).toBeUndefined()
+            if (baseUrl.includes('api.minimax')) {
+              expect(body.reasoning_split).toBe(true)
+              expect(body.thinking).toEqual({ type: model === 'MiniMax-M3' ? 'disabled' : 'adaptive' })
+            } else {
+              expect(body.reasoning_split).toBeUndefined()
+            }
+            if (model.includes('flash') || model.includes('Flash')) {
+              expect(baseUrl.includes('openrouter') ? body.reasoning?.effort : body.reasoning_effort).toBe('max')
+            }
+          }
+        } finally {
+          globalThis.fetch = originalFetch
+        }
+      })
+    }
+
     test('round-trips DeepSeek reasoning by model on generic OpenAI Chat hosts', async () => {
       const originalFetch = globalThis.fetch
       const calls: Array<Record<string, unknown>> = []

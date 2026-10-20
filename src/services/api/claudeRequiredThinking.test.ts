@@ -10,6 +10,7 @@ import { CLAUDE_CODE_COMPAT_VERSION } from '../../constants/claudeCodeCompatibil
 import { enableConfigs } from '../../utils/config.js'
 import { get3PModelCapabilityOverride } from '../../utils/model/modelSupportOverrides.js'
 import { buildProviderManagedEnv } from '../../server/services/providerRuntimeEnv.js'
+import { PROVIDER_PRESETS } from '../../server/config/providerPresets.js'
 import type { SavedProvider } from '../../server/types/provider.js'
 import { queryModelWithStreaming, queryWithModel } from './claude.js'
 import { createUserMessage } from '../../utils/messages.js'
@@ -495,6 +496,32 @@ test('does not replay a policy-blocked stream through non-streaming fallback', a
   expect(result.requests).toHaveLength(1)
   expect(JSON.stringify(result.content)).toContain('Request blocked by safety policy')
 })
+
+for (const effort of ['low', 'medium', 'high', 'xhigh', 'max'] as const) {
+  test(`MiniMax Flash sends adaptive thinking and ${effort} through the real SDK despite disable flags`, async () => {
+    const preset = PROVIDER_PRESETS.find(p => p.id === 'minimax')!
+    const { content, requests } = await captureQueryRequest({
+      model: preset.defaultModels.main,
+      provider: {
+        id: 'minimax-default', name: preset.name, presetId: preset.id,
+        baseUrl: preset.baseUrl, apiKey: 'fake-key', authStrategy: preset.authStrategy,
+        apiFormat: preset.apiFormat, models: preset.defaultModels,
+      },
+      globalThinkingEnabled: false,
+      continuationSystemPrompts: [],
+      effortValue: effort,
+      env: { CLAUDE_CODE_DISABLE_THINKING: '1', CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING: '1' },
+    })
+    expect(content).toEqual([{ type: 'text', text: 'OK' }])
+    expect(requests).toHaveLength(1)
+    expect(requests[0]).toMatchObject({
+      model: 'MiniMax-M3.1-Flash', thinking: { type: 'adaptive' }, output_config: { effort },
+    })
+    expect(requests[0]?.service_tier).toBeUndefined()
+    expect(requests[0]?.reasoning_split).toBeUndefined()
+    expect(requests[0]?.thinking).not.toHaveProperty('budget_tokens')
+  }, 10_000)
+}
 
 test('keeps required-thinking models enabled when the caller requests disabled thinking', async () => {
   const { content, requests } = await captureQueryRequest({
