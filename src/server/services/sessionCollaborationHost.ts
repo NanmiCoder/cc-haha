@@ -3,14 +3,25 @@ import { homedir } from 'node:os'
 import { listLeadTeamMemberIdentities } from '../../utils/swarm/teamHelpers.js'
 import { sessionService } from './sessionService.js'
 import { SearchService } from './searchService.js'
+import { SettingsService } from './settingsService.js'
 import { conversationService } from './conversationService.js'
 import { getRepositoryContext } from './repositoryLaunchService.js'
 import { SessionCollaborationService } from './sessionCollaborationService.js'
 import { registerSessionTurnAdmissionGuard, observeSessionTurns, type SessionTurnEvent } from './sessionTurnEvents.js'
-import { getRuntimeSettings, getSessionTurnState, isSessionTurnStopped, stopSessionTurn, submitSessionTurn, sendToSession } from '../ws/handler.js'
+import { getSessionTurnState, isSessionTurnStopped, stopSessionTurn, submitSessionTurn, sendToSession } from '../ws/handler.js'
+import { listSessionModels, resolveSessionRuntime, validateSessionRuntime, type SessionRuntimeInput } from './sessionModelCatalog.js'
+import { matchesDelegationUserInstruction } from './sessionDelegationEvidence.js'
+import { applyCollaborationRuntime, stopCollaborationRuntime, getCollaborationRuntime } from '../ws/handler.js'
 import { ApiError } from '../middleware/errorHandler.js'
 
+/** Explicit choices do not depend on a parent provider that may have been removed. */
+export async function resolveCollaborationRuntime(callerSessionId: string, input: SessionRuntimeInput) {
+  const inherited = !input.runtime && input.model === undefined && input.providerId === undefined
+  return resolveSessionRuntime(input, inherited ? await getCollaborationRuntime(callerSessionId) : { providerId: null, modelId: '' })
+}
+
 const searchService = new SearchService()
+const settingsService = new SettingsService()
 
 let endpoint = { serverHost: '127.0.0.1', serverPort: 0 }
 let current: { path: string; service: SessionCollaborationService; ready: Promise<void> } | undefined
@@ -40,7 +51,17 @@ export async function getSessionCollaborationService(): Promise<SessionCollabora
   if (!current || current.path !== path) {
     const service = new SessionCollaborationService({
       statePath: path,
+      models: {
+        list: listSessionModels,
+        parentRuntime: getCollaborationRuntime,
+        resolve: resolveCollaborationRuntime,
+        validate: validateSessionRuntime,
+      },
       sessions: {
+        async verifyUserInstruction(sessionId, evidence) {
+          const page = await sessionService.getSessionHistoryPage(sessionId, { limit: 100, projectContext: false })
+          return matchesDelegationUserInstruction(page.messages, evidence)
+        },
         async list({ query, limit, offset, signal }) {
           const needle = query?.trim() ?? ''
           // Metadata ranking and the body lookup are both synchronous SQLite.
@@ -98,21 +119,30 @@ export async function getSessionCollaborationService(): Promise<SessionCollabora
         async create(callerSessionId, input) {
           const workDir = input.workDir ?? await sessionService.getSessionWorkDir(callerSessionId)
           if (!workDir) throw new ApiError(409, 'The source session working directory is unavailable', 'SESSION_WORKSPACE_UNAVAILABLE')
-          const [repository, runtime] = await Promise.all([getRepositoryContext(workDir), getRuntimeSettings(callerSessionId)])
+          // Inherit permissions independently of model selection: a removed parent
+          // provider must not block a valid replacement chosen for this child.
+          const [repository, source] = await Promise.all([getRepositoryContext(workDir), sessionService.getSessionLaunchInfo(callerSessionId)])
+          const permissionMode = source?.permissionMode ?? await settingsService.getPermissionMode()
           if (repository.state !== 'ok' && repository.state !== 'not_git_repo') throw new ApiError(400, `Cannot resolve the target repository (${repository.state}); no session was created`, 'SESSION_REPOSITORY_UNAVAILABLE')
-          const created = await sessionService.createSession(workDir, repository.state === 'ok' ? { worktree: true } : undefined, runtime.permissionMode)
+          const selection = input.runtime
+            ? await validateSessionRuntime(input.runtime)
+            : await resolveCollaborationRuntime(callerSessionId, input)
+          const created = await sessionService.createSession(workDir, repository.state === 'ok' ? { worktree: true } : undefined, permissionMode)
           await sessionService.appendSessionMetadata(created.sessionId, {
             workDir: created.workDir, customTitle: input.title ?? input.prompt.slice(0, 80),
-            permissionMode: runtime.permissionMode, runtimeProviderId: input.providerId !== undefined ? input.providerId : runtime.providerId,
-            runtimeModelId: input.model ?? runtime.model, effortLevel: runtime.effort,
+            permissionMode, runtimeProviderId: selection.providerId,
+            runtimeModelId: selection.modelId, effortLevel: selection.effortLevel, openAIFastMode: selection.openAIFastMode ?? false,
           })
           return created
         },
       },
       runtime: {
+        apply: applyCollaborationRuntime,
+        stopAndWait: stopCollaborationRuntime,
         getState: getSessionTurnState,
         async start(sessionId, message) {
           if (!endpoint.serverPort) throw new Error('Desktop session host is not running')
+          await getCollaborationRuntime(sessionId)
           const ack = await submitSessionTurn(sessionId, message.content, { ...endpoint, messageId: message.id, sourceSessionId: message.sourceSessionId, canSend: () => service.canDeliver(message.id) })
           if (ack.status === 'consumed') {
             await service.onMessageConsumed(message.id, sessionId)

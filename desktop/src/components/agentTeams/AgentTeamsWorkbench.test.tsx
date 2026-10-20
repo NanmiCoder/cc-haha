@@ -126,6 +126,10 @@ describe('AgentTeamsWorkbench', () => {
     // a fixed-width header that scrolls sideways and squeezes button labels.
     const headerRow = screen.getByTestId('agent-teams-live-controls').parentElement!
     expect(headerRow.className).toContain('flex-wrap')
+    const counters = headerRow.children[1] as HTMLElement
+    expect(counters.className).toContain('flex-wrap')
+    expect(counters.className).toContain('min-w-0')
+    expect(headerRow.closest('section')!.className).toContain('min-w-0')
     expect(headerRow.className).not.toMatch(/\bmin-w-\[\d+px\]/)
     expect(headerRow.parentElement!.className).not.toContain('overflow-x-auto')
 

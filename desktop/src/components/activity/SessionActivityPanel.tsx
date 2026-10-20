@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronRight, Circle, FileText, LoaderCircle, Square, Terminal, Users, X, Zap } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { Check, ChevronRight, Circle, Clock, FileText, LoaderCircle, MessageSquare, Square, Terminal, Users, X, Zap } from 'lucide-react'
 import { Badge, StatusDot, type Tone } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
@@ -11,6 +11,7 @@ import { getVisibleActivitySections, type ActivityRow, type ActivitySectionId, t
 import { useTranslation } from '../../i18n'
 import type { BackgroundAgentTask } from '../../types/chat'
 import type { TeamMember } from '../../types/team'
+import { delegatedSessionStatusLabel, delegatedSessionStatusTone, pendingSwitchLabel } from '../sessionDelegation/delegationLabels'
 import { formatTokenCount } from '../../lib/formatTokenCount'
 
 export type OpenSubagentPayload = {
@@ -86,6 +87,8 @@ function getSectionTitle(sectionId: ActivitySectionId, t: TranslationFn): string
       return t('session.activity.section.backgroundTasks')
     case 'subagents':
       return t('session.activity.section.subagents')
+    case 'sessions':
+      return t('session.activity.section.sessions')
     case 'sources':
       return t('session.activity.section.sources')
     case 'output':
@@ -107,6 +110,8 @@ function getSectionRowsClassName(sectionId: ActivitySectionId, rowCount: number)
     case 'backgroundTasks':
       return base
     case 'subagents':
+      return base
+    case 'sessions':
       return base
     case 'sources':
       return base
@@ -219,6 +224,8 @@ function getRowIcon(row: ActivityRow) {
       return Terminal
     case 'subagents':
       return Users
+    case 'sessions':
+      return MessageSquare
     case 'sources':
     case 'output':
       return FileText
@@ -301,10 +308,12 @@ function ActivityStatusIndicator({
   status,
   label,
   animated = true,
+  tone = getStatusTone(status),
 }: {
   status: ActivityRow['status']
   label: string
   animated?: boolean
+  tone?: Tone
 }) {
   const isRunning = animated && (status === 'running' || status === 'in_progress')
 
@@ -313,7 +322,7 @@ function ActivityStatusIndicator({
       {/* `StatusDot`'s breathing dot rather than the expanding ping this used to
           draw: the design language has one live-status motion (1.6s pulse) and
           fifteen other dots in the app already run it. */}
-      <StatusDot tone={getStatusTone(status)} pulse={isRunning} />
+      <StatusDot tone={tone} pulse={isRunning} />
       {label}
     </span>
   )
@@ -391,6 +400,7 @@ function ActivityRowView({
   sessionId,
   onOpenSubagent,
   onOpenMember,
+  onOpenDelegatedSession,
   onOpenBackgroundTask,
   onStopBackgroundTask,
   stoppingBackgroundTask,
@@ -400,6 +410,7 @@ function ActivityRowView({
   sessionId: string
   onOpenSubagent: (payload: OpenSubagentPayload) => void
   onOpenMember?: (member: TeamMember) => void
+  onOpenDelegatedSession?: (sessionId: string, title: string) => void
   onOpenBackgroundTask?: (row: ActivityRow) => void
   onStopBackgroundTask?: (taskId: string) => void
   stoppingBackgroundTask?: boolean
@@ -422,11 +433,14 @@ function ActivityRowView({
   const isTask = row.section === 'tasks'
   const isStoppingSubagent = row.section === 'subagents' && row.status === 'running' && stoppingBackgroundTask
   const displayStatus: ActivityRow['status'] = isStoppingSubagent ? 'pending' : row.status
+  const delegated = row.delegatedSession
   const statusLabel = isStoppingSubagent
     ? t('session.activity.status.stopping')
     : row.cached
       ? t('workflows.agent.cached')
-      : getActivityStatusLabel(row.status, t)
+      : delegated
+        ? delegatedSessionStatusLabel(delegated.status, t)
+        : getActivityStatusLabel(row.status, t)
   const label = row.taskHistory
     ? t('session.activity.tasks.earlier')
     : row.label
@@ -444,7 +458,10 @@ function ActivityRowView({
       ? row.description
       : isTask && row.summary && row.summary !== row.label
         ? row.summary
-        : undefined
+        // A delegated session's second line is the model it runs: which model
+        // does which job is the reason these sessions exist.
+        : delegated?.modelLabel
+  const pendingSwitch = delegated?.pendingSwitch ? pendingSwitchLabel(delegated.pendingSwitch, t) : undefined
   const content = (
     <>
       {isTask ? (
@@ -467,12 +484,23 @@ function ActivityRowView({
             {detail}
           </span>
         ) : null}
+        {pendingSwitch ? (
+          <span
+            data-testid="delegated-session-pending-switch"
+            className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] leading-4 text-[var(--color-text-secondary)]"
+            title={pendingSwitch}
+          >
+            <Clock size={12} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
+            <span className="truncate">{pendingSwitch}</span>
+          </span>
+        ) : null}
       </span>
       {isTask ? null : (
         <ActivityStatusIndicator
           status={displayStatus}
           label={statusLabel}
           animated={row.section !== 'subagents'}
+          {...(delegated ? { tone: delegatedSessionStatusTone(delegated.status) } : {})}
         />
       )}
       {!isTask && row.openable ? (
@@ -489,6 +517,20 @@ function ActivityRowView({
       onStop={onStopBackgroundTask}
     />
   ) : null
+
+  if (row.section === 'sessions' && delegated?.sessionId && onOpenDelegatedSession) {
+    return (
+      <button
+        type="button"
+        // The label replaces the row's text for screen readers, so it carries the model and any pending switch too.
+        aria-label={[t('delegation.openNamed', { name: row.label }), statusLabel, delegated.modelLabel, pendingSwitch].filter(Boolean).join(' · ')}
+        onClick={() => onOpenDelegatedSession(delegated.sessionId!, row.label)}
+        className={`${interactiveRowClassName} w-full`}
+      >
+        {content}
+      </button>
+    )
+  }
 
   if (row.section === 'team' && row.member && onOpenMember) {
     return (
@@ -634,6 +676,8 @@ export function SessionActivityPanel({
   onClearFinishedBackgroundTasks,
   onOpenMember,
   onStopBackgroundTask,
+  onOpenDelegatedSession,
+  sectionAccessories,
   stoppingBackgroundTaskIds,
   placement = 'overlay',
 }: {
@@ -644,6 +688,9 @@ export function SessionActivityPanel({
   onClearFinishedBackgroundTasks?: (taskKeys: string[]) => void
   onOpenMember?: (member: TeamMember) => void
   onStopBackgroundTask?: (taskId: string) => void
+  onOpenDelegatedSession?: (sessionId: string, title: string) => void
+  /** Owner-supplied controls for a section: a header action and a note under its rows. */
+  sectionAccessories?: Partial<Record<ActivitySectionId, { action?: ReactNode; footer?: ReactNode }>>
   stoppingBackgroundTaskIds?: Record<string, boolean>
   placement?: SessionActivityPanelPlacement
 }) {
@@ -731,6 +778,7 @@ export function SessionActivityPanel({
               {t('session.activity.clearFinished')}
             </Button>
           ) : null}
+          {sectionAccessories?.[section.id]?.action}
         </div>
         <div className={getSectionRowsClassName(section.id, section.rows.length)}>
           {section.rows.map((row) => (
@@ -740,6 +788,7 @@ export function SessionActivityPanel({
                 sessionId={model.sessionId}
                 onOpenSubagent={onOpenSubagent}
                 onOpenMember={onOpenMember}
+                onOpenDelegatedSession={onOpenDelegatedSession}
                 onStopBackgroundTask={onStopBackgroundTask}
                 stoppingBackgroundTask={Boolean(row.taskId && stoppingBackgroundTaskIds?.[row.taskId])}
                 onOpenBackgroundTask={(backgroundRow) => {
@@ -755,6 +804,7 @@ export function SessionActivityPanel({
             </div>
           ))}
         </div>
+        {sectionAccessories?.[section.id]?.footer}
       </section>
     )
   })

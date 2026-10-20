@@ -4,7 +4,7 @@
 import { z } from 'zod'
 
 import providerPresetsJson from './providerPresets.json'
-import { ApiFormatSchema, ImageGenerationConfigSchema, ProviderAuthStrategySchema } from '../types/provider.js'
+import { ApiFormatSchema, ImageGenerationConfigSchema, ModelApiFormatSchema, ProviderAuthStrategySchema } from '../types/provider.js'
 import type { ModelReasoningProviderKind } from '../../shared/modelReasoning.js'
 
 const ModelMappingSchema = z.object({
@@ -35,7 +35,8 @@ const UPSTREAM_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/
  */
 const ModelApiFormatRuleSchema = z.object({
   prefixes: z.array(z.string().min(1)).min(1),
-  apiFormat: ApiFormatSchema,
+  apiFormat: ModelApiFormatSchema,
+  baseUrl: z.string().min(1).optional(),
 })
 
 /** Exported so a preset edit can be validated against the rules the bundle loads under. */

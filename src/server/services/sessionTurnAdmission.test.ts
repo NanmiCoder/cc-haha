@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { conversationService } from './conversationService.js'
 import { sessionService } from './sessionService.js'
 import { observeSessionTurns } from './sessionTurnEvents.js'
@@ -151,6 +154,52 @@ describe('background session turn admission', () => {
     await expect(submitSessionTurn('worker', 'Inspect', { serverHost: '127.0.0.1', serverPort: 1234, messageId: 'gone', sourceSessionId: 'root', canSend: () => false })).rejects.toThrow('cancelled')
     expect(control).not.toHaveBeenCalled()
     expect(getSessionTurnState('worker')).toBe('idle')
+  })
+
+  it('moves a delegated title into the worktree transcript when no renderer is attached', async () => {
+    const configDir = await mkdtemp(join(tmpdir(), 'session-turn-title-'))
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = configDir
+    const sessionId = '0b5e1c4a-2f6d-4c8e-9a1b-3d7f5e9c2a10'
+    const title = 'Review the auth boundary'
+    // Creation names the launch directory; the CLI then writes the
+    // conversation into its worktree and reports that cwd in system/init.
+    const placeholder = join(configDir, 'projects', '-tmp-collab-source', `${sessionId}.jsonl`)
+    const transcript = join(configDir, 'projects', '-tmp-collab-worktree', `${sessionId}.jsonl`)
+    const jsonl = (entries: unknown[]) => entries.map(entry => JSON.stringify(entry)).join('\n') + '\n'
+    try {
+      await mkdir(join(placeholder, '..'), { recursive: true })
+      await mkdir(join(transcript, '..'), { recursive: true })
+      await writeFile(placeholder, jsonl([
+        { type: 'session-meta', isMeta: true, workDir: '/tmp/collab-source', timestamp: '2026-01-01T00:00:00.000Z' },
+        { type: 'custom-title', customTitle: title, timestamp: '2026-01-01T00:00:00.000Z' },
+      ]))
+      await writeFile(transcript, jsonl([{
+        type: 'user', uuid: 'assignment-user', parentUuid: null, sessionId, cwd: '/tmp/collab-worktree',
+        timestamp: '2026-01-01T00:00:01.000Z', message: { role: 'user', content: 'Message from another session' },
+      }]))
+      const callbacks = new Set<(message: any) => void>()
+      spyOn(conversationService, 'hasSession').mockReturnValue(true)
+      spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+      spyOn(conversationService, 'onOutput').mockImplementation((_id, cb) => { callbacks.add(cb) })
+      spyOn(conversationService, 'removeOutputCallback').mockImplementation((_id, cb) => { callbacks.delete(cb) })
+      spyOn(conversationService, 'requestControl').mockResolvedValue({ status: 'queued' })
+
+      await submitSessionTurn(sessionId, title, { serverHost: '127.0.0.1', serverPort: 1234, messageId: 'assignment', sourceSessionId: 'root' })
+      for (const cb of [...callbacks]) cb({ type: 'system', subtype: 'init', cwd: '/tmp/collab-worktree', model: 'mock-opus', session_id: sessionId })
+
+      const deadline = Date.now() + 5_000
+      while (await access(placeholder).then(() => true, () => false)) {
+        if (Date.now() > deadline) throw new Error('placeholder transcript was never retired')
+        await Bun.sleep(10)
+      }
+      expect(await readFile(transcript, 'utf8')).toContain(`"customTitle":"${title}"`)
+      expect((await sessionService.listSessions()).sessions.find(session => session.id === sessionId)?.title).toBe(title)
+    } finally {
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      await rm(configDir, { recursive: true, force: true })
+    }
   })
 
   it('returns explicit historical-consumption acknowledgments without inventing a fresh turn', async () => {

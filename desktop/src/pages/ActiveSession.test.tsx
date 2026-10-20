@@ -133,6 +133,8 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { useTabStore } from '../stores/tabStore'
 import { useTeamStore } from '../stores/teamStore'
 import { useActivityPanelStore } from '../stores/activityPanelStore'
+import { useSessionDelegationStore } from '../stores/sessionDelegationStore'
+import { sessionCollaborationApi, type SessionDelegationSnapshot } from '../api/sessionCollaboration'
 import { useTrajectoryViewStore } from '../stores/trajectoryViewStore'
 import {
   WORKSPACE_BOTTOM_DEFAULT_HEIGHT,
@@ -215,6 +217,9 @@ describe('ActiveSession trajectory view', () => {
     render(<ActiveSession sessionId={id} />)
     const list = screen.getByTestId('message-list')
     const input = screen.getByTestId('chat-input')
+    const decisions = screen.getByTestId('session-decision-dock')
+    expect(decisions).toHaveClass('px-6')
+    expect(decisions.firstElementChild).toHaveClass('max-w-[var(--chat-content-max-width)]')
     // Never mounted (so never fetched) until the user opens it.
     expect(screen.queryByTestId('trajectory-view')).not.toBeInTheDocument()
 
@@ -229,6 +234,8 @@ describe('ActiveSession trajectory view', () => {
     expect(screen.getByTestId('chat-input')).toBe(input)
     expect(input).toHaveAttribute('data-visible', 'false')
     expect(screen.getByTestId('session-composer-slot')).toHaveClass('hidden')
+    expect(screen.getByTestId('session-decision-dock')).toBe(decisions)
+    expect(decisions).toHaveClass('hidden')
 
     fireEvent.click(screen.getByRole('tab', { name: 'Chat' }))
     expect(screen.getByTestId('trajectory-view')).toBe(trajectory)
@@ -238,6 +245,7 @@ describe('ActiveSession trajectory view', () => {
     expect(screen.getByTestId('chat-input')).toBe(input)
     expect(input).toHaveAttribute('data-visible', 'true')
     expect(screen.getByTestId('session-composer-slot')).not.toHaveClass('hidden')
+    expect(decisions).not.toHaveClass('hidden')
   })
 
   it('marks 对话 while a card waits there and the trajectory hides it', async () => {
@@ -3114,5 +3122,45 @@ describe('ActiveSession activity panel auto-close grace', () => {
     })
 
     expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(true)
+  })
+})
+
+describe('ActiveSession delegated sessions', () => {
+  const sessionId = 'delegating-session'
+  const delegation: SessionDelegationSnapshot = {
+    batches: [{ id: 'batch', requestId: 'r', callerSessionId: sessionId, revision: 1, state: 'launched', sessions: [
+      { id: 'sec', title: 'Security review', prompt: 'Review security', runtime: { providerId: 'p', modelId: 'm' }, sessionId: 'child-sec', launched: true },
+    ] }],
+    models: [{ providerId: 'p', providerName: 'Provider', modelId: 'm', modelName: 'Model', supportedEfforts: [], isDefault: true }],
+    sessions: [{ sessionId: 'child-sec', runtime: { providerId: 'p', modelId: 'm' }, state: 'running', paused: false }],
+    changes: [],
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    useSessionDelegationStore.setState({ bySession: {} })
+  })
+
+  // On a phone the activity sheet is stacked above dialogs, so the model
+  // dialog opened from it rendered underneath, behind the sheet's scrim.
+  it.each([
+    { phone: true, panelStaysOpen: false },
+    { phone: false, panelStaysOpen: true },
+  ])('opens the model dialog from the activity panel above it (phone: $phone)', async ({ phone, panelStaysOpen }) => {
+    viewportMocks.isMobile = phone
+    vi.spyOn(sessionCollaborationApi, 'get').mockResolvedValue(delegation)
+    useSettingsStore.setState({ locale: 'en' })
+    useTabStore.setState({ activeTabId: sessionId, tabs: [{ sessionId, title: 'Main', type: 'session', status: 'idle' }] })
+    useSessionStore.setState({ sessions: [{ id: sessionId, title: 'Main', messageCount: 1, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }] })
+    useChatStore.setState({ sessions: { [sessionId]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true, messages: [{ id: 'm', type: 'assistant_text', content: 'delegated', timestamp: 1 }] } } })
+
+    render(<ActiveSession />)
+    await waitFor(() => expect(useSessionDelegationStore.getState().bySession[sessionId]?.rows).toHaveLength(1))
+    act(() => useActivityPanelStore.getState().open(sessionId))
+    const panel = await screen.findByTestId(phone ? 'session-activity-sheet' : 'session-activity-panel')
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Change models' }))
+    expect(await screen.findByRole('dialog', { name: 'Session assignments' })).toBeInTheDocument()
+    expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(panelStaysOpen)
   })
 })

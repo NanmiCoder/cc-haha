@@ -625,6 +625,7 @@ describe('OpenCode Go provider', () => {
         { id: 'glm-5.3', ownedBy: 'opencode' },
         { id: 'minimax-m3', ownedBy: 'opencode' },
         { id: 'grok-4.6', ownedBy: 'opencode' },
+        { id: 'gemini-4-argon-contributor', ownedBy: 'opencode' },
       ],
     })
     render(<ProviderSettings />)
@@ -639,7 +640,7 @@ describe('OpenCode Go provider', () => {
 
     // The endpoint is the only thing that distinguishes these models, so it is what
     // the picker groups by — this is how the routing stays visible while choosing.
-    for (const endpoint of ['/chat/completions', '/messages', '/responses']) {
+    for (const endpoint of ['/chat/completions', '/messages', '/responses', ':generateContent']) {
       expect(await screen.findByText(endpoint)).toBeInTheDocument()
     }
   })

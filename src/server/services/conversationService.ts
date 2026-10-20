@@ -13,6 +13,7 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
 import { SettingsService } from './settingsService.js'
+import type { SessionRuntimeSelection } from '../../shared/sessionDelegation.js'
 import {
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
   OPENAI_OAUTH_PROVIDER_ENV_KEY,
@@ -277,6 +278,7 @@ function networkRoutingFingerprint(
 }
 
 type SessionProcess = {
+  runtimeSelection?: SessionRuntimeSelection
   proc: ReturnType<typeof Bun.spawn>
   outputCallbacks: SessionOutputCallback[]
   workDir: string
@@ -849,6 +851,11 @@ export class ConversationService {
       workDir: launchWorkDir,
       permissionMode: options?.permissionMode || 'default',
       providerId: options?.providerId,
+      runtimeSelection: options?.model ? {
+        providerId: options.providerId ?? null, modelId: options.model,
+        ...(options.effort ? { effortLevel: options.effort } : {}),
+        ...(options.openAIFastMode !== undefined ? { openAIFastMode: options.openAIFastMode } : {}),
+      } : undefined,
       providerConfigFingerprint: providerCapture.fingerprint,
       networkRoutingFingerprint: networkRoutingFingerprint(networkSettings, childEnv),
       networkDerivedFirstTokenTimeout: networkRuntimeMetadata.firstTokenTimeoutDerived,
@@ -1242,12 +1249,24 @@ export class ConversationService {
    * race-free (unlike sending it after the allow response).
    */
   async setModel(sessionId: string, model: string, timeoutMs = 10_000): Promise<boolean> {
-    if (!this.sessions.has(sessionId)) return false
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
     await this.requestControl(sessionId, {
       subtype: 'set_model',
       model,
     }, timeoutMs)
-    return this.sessions.has(sessionId)
+    if (this.sessions.get(sessionId) !== session) return false
+    session.runtimeSelection = { ...session.runtimeSelection, providerId: session.providerId ?? null, modelId: model }
+    return true
+  }
+
+  /** The process's acknowledged runtime, unaffected by a queued next-turn selection. */
+  getSessionRuntimeSelection(sessionId: string): SessionRuntimeSelection | undefined {
+    const session = this.sessions.get(sessionId)
+    if (!session) return undefined
+    const modelId = session.runtimeSelection?.modelId ?? session.initMessage?.model
+    if (typeof modelId !== 'string' || !modelId) return undefined
+    return { ...session.runtimeSelection, providerId: session.providerId ?? null, modelId }
   }
 
   setMaxThinkingTokens(sessionId: string, maxThinkingTokens: number | null): boolean {
@@ -1797,11 +1816,11 @@ export class ConversationService {
   async stopSessionAndWait(
     sessionId: string,
     timeoutMs = DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
-    options?: { keepTeamWorkers?: boolean },
+    options?: { keepTeamWorkers?: boolean; requireExit?: boolean },
   ): Promise<void> {
     if (!options?.keepTeamWorkers) {
       for (const [childId, child] of this.sessions) {
-        if (child.teamWorker?.parentSessionId === sessionId) await this.stopSessionAndWait(childId, timeoutMs)
+        if (child.teamWorker?.parentSessionId === sessionId) await this.stopSessionAndWait(childId, timeoutMs, options)
       }
     }
     const session = this.sessions.get(sessionId)
@@ -1809,8 +1828,9 @@ export class ConversationService {
 
     this.cancelPendingControlRequests(session)
     this.clearSessionAutoAnswerWaits(session)
-    this.sessions.delete(sessionId)
-    await this.stopProcessAndWait(sessionId, session, timeoutMs)
+    if (!options?.requireExit) this.sessions.delete(sessionId)
+    await this.stopProcessAndWait(sessionId, session, timeoutMs, options?.requireExit)
+    if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
   }
 
   stopAllSessions(): void {
@@ -1840,19 +1860,21 @@ export class ConversationService {
     sessionId: string,
     session: SessionProcess,
     timeoutMs: number,
+    requireExit = false,
   ): Promise<void> {
     this.killProcess(sessionId, session, 'SIGTERM')
 
     const exited = await Promise.race([
-      session.proc.exited.then(() => true, () => true),
+      session.proc.exited.then(() => true, () => !requireExit),
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
     ])
     if (!exited) {
       this.killProcess(sessionId, session, 'SIGKILL')
-      await Promise.race([
-        session.proc.exited.catch(() => undefined),
-        new Promise<void>((resolve) => setTimeout(resolve, 500)),
+      const killed = await Promise.race([
+        session.proc.exited.then(() => true, () => !requireExit),
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 500)),
       ])
+      if (requireExit && !killed) throw new Error(`CLI process did not confirm exit for session: ${sessionId}`)
     }
     await this.waitForProcessOutputDrain(session, timeoutMs)
   }

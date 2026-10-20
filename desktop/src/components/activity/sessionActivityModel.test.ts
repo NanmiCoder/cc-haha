@@ -2900,10 +2900,49 @@ describe('getMainSessionActivityModel', () => {
     }],
     ['the CLI tasks', { tasks: [task({ status: 'in_progress' })] }],
     ['the dismissal of finished tasks', { completedAndDismissed: true }],
+    ['the delegated sessions', { delegatedSessions: [{ key: 'batch:a', sessionId: 'child-a', title: 'Review', status: 'running' as const }] }],
   ])('rebuilds when %s changes', (_label, change) => {
     const first = getMainSessionActivityModel(input())
     const next = getMainSessionActivityModel(input(change))
     expect(next).not.toBe(first)
     expect(next).toEqual(buildMainSessionActivityModel(input(change)))
+  })
+})
+
+describe('delegated sessions', () => {
+  const base = {
+    sessionId: 'parent',
+    messages: [],
+    tasks: [],
+    completedAndDismissed: false,
+    backgroundTasks: [],
+    agentNotifications: [],
+  }
+
+  it('lists them after SubAgents and lets running or waiting ones open the rail', () => {
+    const model = buildMainSessionActivityModel({
+      ...base,
+      delegatedSessions: [
+        { key: 'b:sec', sessionId: 'child-sec', title: 'Security review', status: 'running', modelLabel: 'MiniMax · M3.1' },
+        { key: 'b:ux', sessionId: 'child-ux', title: 'UX review', status: 'queued' },
+        { key: 'b:perf', sessionId: 'child-perf', title: 'Performance review', status: 'completed' },
+        { key: 'b:new', title: 'Not started yet', status: 'review' },
+      ],
+    })
+    expect(hasVisibleSessionActivity(model)).toBe(true)
+    expect(getVisibleActivitySections(model).map(section => section.id)).toEqual(['sessions'])
+    expect(model.sections.sessions.rows.map(row => [row.label, row.status, row.openable])).toEqual([
+      ['Security review', 'running', true],
+      ['UX review', 'pending', true],
+      ['Performance review', 'completed', true],
+      ['Not started yet', 'pending', false],
+    ])
+    expect(model.badgeCount).toBe(3)
+  })
+
+  it('adds nothing for a session that never delegated', () => {
+    const model = buildMainSessionActivityModel({ ...base, delegatedSessions: [] })
+    expect(hasVisibleSessionActivity(model)).toBe(false)
+    expect(model.badgeCount).toBe(0)
   })
 })

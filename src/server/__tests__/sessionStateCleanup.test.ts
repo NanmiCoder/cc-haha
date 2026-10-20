@@ -62,6 +62,7 @@ const CONTAINERS: Record<string, Classification> = {
   runtimeExitStoppedSessions: { kind: 'cleared' },
   runtimeExitFailedSessions: { kind: 'cleared' },
   runtimeOverrides: { kind: 'cleared' },
+  strictCollaborationRuntimeSessions: { kind: 'cleared' },
   runtimeTransitionPromises: { kind: 'cleared' },
   sessionDisconnectWatchers: { kind: 'cleared' },
   sessionSlashCommands: { kind: 'cleared' },

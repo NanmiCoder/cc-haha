@@ -30,8 +30,8 @@ const models: RankedModel[] = [
   { id: 'a', label: 'Alpha', series: 1, total: 900, fresh: 100, cached: 800, costUSD: 1, unpriced: false },
 ]
 const daily: DailyModelSeries[] = [
-  { date: '2026-10-16', total: 400, byModel: [400] },
-  { date: '2026-10-17', total: 500, byModel: [500] },
+  { date: '2026-10-16', total: 400, byModel: [400], otherModels: [] },
+  { date: '2026-10-17', total: 500, byModel: [500], otherModels: [] },
 ]
 
 const fakeCanvas = () => ({

@@ -111,6 +111,9 @@ async function shown(props: Partial<Omit<SurfaceProps, 'engine'>> & { engine?: D
   const { engine = createFakeDocxEngine({ autoFinish: true }).engine, ...surfaceProps } = props
   const view = render(<Surface {...surfaceProps} engine={engine} />)
   await screen.findByRole('button', { name: 'Zoom in' })
+  // The toolbar commit can be observed before the iframe's passive annotation
+  // listeners attach. Flush that work before dispatching keyboard/pointer input.
+  await act(async () => {})
   return { ...view, engine }
 }
 

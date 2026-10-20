@@ -149,9 +149,9 @@ describe('buildShareImageData', () => {
     stats,
     models: ranked,
     daily: [
-      { date: '2026-09-30', total: 0, byModel: [0, 0] },
-      { date: '2026-10-01', total: 500, byModel: [400, 100] },
-      { date: '2026-10-02', total: 200, byModel: [200, 0] },
+      { date: '2026-09-30', total: 0, byModel: [0, 0], otherModels: [] },
+      { date: '2026-10-01', total: 500, byModel: [400, 100], otherModels: [] },
+      { date: '2026-10-02', total: 200, byModel: [200, 0], otherModels: [] },
     ],
     totalTokens: 24_100_000_000,
     locale,

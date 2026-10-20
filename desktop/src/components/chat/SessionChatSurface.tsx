@@ -8,6 +8,7 @@ export type SessionHeaderMetaItem = {
 export function SessionChatHeader({
   title,
   compact = false,
+  mobileLayout = false,
   leading,
   titleAddon,
   actions,
@@ -16,6 +17,7 @@ export function SessionChatHeader({
 }: {
   title: string
   compact?: boolean
+  mobileLayout?: boolean
   leading?: ReactNode
   titleAddon?: ReactNode
   actions?: ReactNode
@@ -27,7 +29,7 @@ export function SessionChatHeader({
       data-testid="session-header"
       className={[
         'w-full border-b border-[var(--color-border)]',
-        compact ? 'px-4 py-2.5' : 'px-7 py-3.5',
+        mobileLayout ? 'px-3 py-2.5' : compact ? 'px-4 py-2.5' : 'px-6 py-3.5',
       ].join(' ')}
     >
       <div className="mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)]">

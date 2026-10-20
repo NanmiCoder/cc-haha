@@ -14,6 +14,8 @@ import { parseSessionCollaborationEnvelope } from '../../utils/sessionCollaborat
 import { isShutdownTeamPrompt } from '../../utils/swarm/teamShutdownPrompt.js'
 import { admitSessionUserTurn, emitSessionTurnEvent } from '../services/sessionTurnEvents.js'
 import { ApiError } from '../middleware/errorHandler.js'
+import type { SessionRuntimeSelection } from '../../shared/sessionDelegation.js'
+import { validateSessionRuntime, resolveSessionRuntime } from '../services/sessionModelCatalog.js'
 import { resolveSessionReferenceContext, splitSessionReferenceContext } from '../services/sessionReferenceContext.js'
 
 export type SessionConnection = Pick<ServerWebSocket<WebSocketData>, 'data' | 'send' | 'close'>
@@ -233,6 +235,7 @@ type RuntimeOverride = {
   openAIFastMode?: boolean
   requestedConfig?: { providerId: string | null; modelId: string; effortLevel?: string; openAIFastMode?: boolean }
 }
+const strictCollaborationRuntimeSessions = new Set<string>()
 
 type ActiveUserTurnState = {
   admissionPending?: boolean
@@ -1292,6 +1295,71 @@ export function stopSessionTurn(sessionId: string): void {
   handleStopGeneration(sessionTurnConnection(sessionId, { serverHost: '127.0.0.1', serverPort: 0 }))
 }
 
+/** Read the applied process snapshot; never substitute the global provider for a stale explicit choice. */
+export async function getCollaborationRuntime(sessionId: string): Promise<SessionRuntimeSelection> {
+  strictCollaborationRuntimeSessions.add(sessionId)
+  const live = conversationService.getSessionRuntimeSelection(sessionId)
+  if (live) return resolveSessionRuntime({}, live)
+  const selected = runtimeOverrides.get(sessionId)
+  if (selected && !deferredRuntimeRestarts.has(sessionId)) return resolveSessionRuntime({}, {
+    providerId: selected.providerId, modelId: selected.modelId,
+    ...(selected.effort ? { effortLevel: selected.effort } : {}),
+    ...(selected.openAIFastMode !== undefined ? { openAIFastMode: selected.openAIFastMode } : {}),
+  })
+  const saved = await sessionService.getSessionLaunchInfo(sessionId)
+  if (saved?.runtimeModelId) return resolveSessionRuntime({}, {
+    providerId: saved.runtimeProviderId ?? null, modelId: saved.runtimeModelId,
+    ...(saved.effortLevel ? { effortLevel: saved.effortLevel } : {}),
+    ...(saved.openAIFastMode !== undefined ? { openAIFastMode: saved.openAIFastMode } : {}),
+  })
+  const { activeId } = await providerService.listProviders()
+  return resolveSessionRuntime({ providerId: activeId }, { providerId: activeId, modelId: 'default' })
+}
+
+/** Programmatic user Stop: revoke admissions and wait for process shutdown, not a UI idle frame. */
+export async function stopCollaborationRuntime(sessionId: string): Promise<void> {
+  await enqueueRuntimeTransition(sessionId, async () => {
+    const pendingStartup = sessionStartupPromises.get(sessionId)
+    handleStopGeneration(sessionTurnConnection(sessionId, { serverHost: '127.0.0.1', serverPort: 0 }), { reapBackgroundTasks: true })
+    await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+    if (pendingStartup) {
+      await pendingStartup.catch(() => undefined)
+      await conversationService.stopSessionAndWait(sessionId, undefined, { requireExit: true })
+    }
+    const activeTurn = activeUserTurns.get(sessionId)
+    if (activeTurn?.cancelled) releaseUserTurnWithoutResult(sessionId, activeTurn)
+    endReplacedCliRun(sessionId)
+    await emitAuthoritativeStoppedForActiveAgents(sessionId)
+    await emitStoppedForNonAgentTasksAfterRuntimeExit(sessionId)
+  })
+}
+
+/** Apply an idle worker's complete runtime without a renderer or a speculative CLI launch. */
+export async function applyCollaborationRuntime(sessionId: string, selection: SessionRuntimeSelection): Promise<void> {
+  strictCollaborationRuntimeSessions.add(sessionId)
+  await enqueueRuntimeTransition(sessionId, async () => {
+    if (getSessionTurnState(sessionId) !== 'idle') throw ApiError.conflict('Wait for the session to stop before changing its model')
+    const runtime = await validateSessionRuntime(selection)
+    if (getSessionTurnState(sessionId) !== 'idle') throw ApiError.conflict('Session started while validating its model')
+    // Resolve the durable destination before stopping anything; a missing session
+    // must not look like a successfully acknowledged selection.
+    await resolveRuntimeRestartWorkDir(sessionId)
+    await conversationService.stopSessionAndWait(sessionId, undefined, { keepTeamWorkers: true, requireExit: true })
+    endReplacedCliRun(sessionId)
+    const override: RuntimeOverride = {
+      providerId: runtime.providerId, modelId: runtime.modelId,
+      ...(runtime.effortLevel ? { effort: runtime.effortLevel } : {}),
+      ...(runtime.openAIFastMode !== undefined ? { openAIFastMode: runtime.openAIFastMode } : {}),
+    }
+    await persistSessionRuntimeConfig(sessionId, override)
+    runtimeOverrides.set(sessionId, override)
+    runtimeOverrideVersions.set(sessionId, (runtimeOverrideVersions.get(sessionId) ?? 0) + 1)
+    deferredRuntimeRestarts.delete(sessionId)
+    rejectedRuntimeConfigs.delete(sessionId)
+    broadcastAppliedRuntimeConfig(sessionId)
+  })
+}
+
 export function revokeSessionAdmissionsForMigration(): void {
   for (const turn of activeUserTurns.values()) turn.cancelled = true
   for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)
@@ -1338,6 +1406,10 @@ function bindSessionTurnObserver(sessionId: string): void {
       stopLateNonAgentTaskIfRequested(sessionId, taskLifecycle)
       closeLateNonAgentTaskAfterRuntimeExit(sessionId, taskLifecycle)
       closeStoppedAgentsAfterRuntimeExit(sessionId, message)
+      // Renderer output reaches this through translateCliMessage. A delegated
+      // worker starts with no page open, and its init is the only signal that
+      // moves its title from the launch placeholder into the worktree transcript.
+      cacheSessionInitMetadata(sessionId, message)
       if (!sessionStartupPromises.has(sessionId)) {
         refreshBackgroundTaskDisconnectCeiling(sessionId)
         // Control-only sessions never had a renderer disconnect. Observe their
@@ -2165,6 +2237,15 @@ async function handleSetRuntimeConfig(
     // A missing provider may fall back to the active default for durable chats,
     // but that must not disguise a forbidden provider change on a live side chat.
     if (rejectStartedSideChatProviderChange(ws, message.providerId)) return
+    if (strictCollaborationRuntimeSessions.has(sessionId)) {
+      try { await validateSessionRuntime(message) }
+      catch (error) {
+        const detail = error instanceof Error ? error.message : 'Runtime selection is unavailable'
+        rejectedRuntimeConfigs.set(sessionId, detail)
+        sendMessage(ws, { type: 'error', message: detail, code: 'RUNTIME_CONFIG_INVALID' })
+        return
+      }
+    }
     const normalized = await normalizeRuntimeOverrideInput(message)
     if (!normalized.ok) {
       const message = normalized.reason === 'model'
@@ -3636,6 +3717,7 @@ function cleanupSessionRuntimeState(
   sessionSlashCommands.delete(sessionId)
   sessionTitleState.delete(sessionId)
   runtimeOverrides.delete(sessionId)
+  strictCollaborationRuntimeSessions.delete(sessionId)
   rejectedRuntimeConfigs.delete(sessionId)
   activeUserTurns.delete(sessionId)
   activeCliRuns.delete(sessionId)
@@ -5388,10 +5470,17 @@ export async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSet
     ? runtimeOverrides.get(sessionId) ?? persistedRuntimeOverride
     : undefined
   if (runtimeOverride) {
+    if (sessionId && strictCollaborationRuntimeSessions.has(sessionId)) {
+      await resolveSessionRuntime({}, { providerId: runtimeOverride.providerId, modelId: runtimeOverride.modelId,
+        ...(runtimeOverride.effort ? { effortLevel: runtimeOverride.effort } : {}),
+        ...(runtimeOverride.openAIFastMode !== undefined ? { openAIFastMode: runtimeOverride.openAIFastMode } : {}),
+      })
+    }
     if (typeof runtimeOverride.providerId === 'string') {
       const { providers } = await providerService.listProviders()
       const providerExists = isKnownRuntimeProviderId(runtimeOverride.providerId, providers)
       if (!providerExists) {
+        if (sessionId && strictCollaborationRuntimeSessions.has(sessionId)) throw ApiError.conflict('The selected collaboration provider is unavailable; choose another model')
         console.warn(
           `[WS] Ignoring stale runtime provider id for ${sessionId}: ${runtimeOverride.providerId}`,
         )
@@ -5422,6 +5511,7 @@ export async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSet
         : model?.defaultReasoningEffort ?? 'medium'
     } else if (isGrokOfficialProviderId(runtimeOverride.providerId)) {
       const grokEffort = await getGrokReasoningEfforts(runtimeOverride.modelId)
+      if (sessionId && strictCollaborationRuntimeSessions.has(sessionId) && grokEffort.modelId !== runtimeOverride.modelId) throw ApiError.conflict('The selected collaboration model is unavailable; choose another model')
       runtimeOverride.modelId = grokEffort.modelId
       effort = effort && grokEffort.supportedEfforts.includes(effort)
         ? effort
@@ -5448,6 +5538,10 @@ export async function getRuntimeSettings(sessionId?: string): Promise<RuntimeSet
     }
   }
 
+  if (sessionId && strictCollaborationRuntimeSessions.has(sessionId)) {
+    const { activeId } = await providerService.listProviders()
+    await resolveSessionRuntime({ providerId: activeId }, { providerId: activeId, modelId: 'default' })
+  }
   const defaults = await getDefaultRuntimeSettings()
   return {
     ...defaults,
@@ -5758,6 +5852,7 @@ export function getActiveSessionIds(): string[] {
 }
 
 export function __resetWebSocketHandlerStateForTests(): void {
+  strictCollaborationRuntimeSessions.clear()
   for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
   for (const timer of backgroundTaskCleanupTimers.values()) clearTimeout(timer)
   for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)

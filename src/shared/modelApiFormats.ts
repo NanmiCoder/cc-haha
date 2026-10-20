@@ -18,12 +18,19 @@ export type ModelApiFormatRule<TFormat extends string = string> = {
   /** Case-insensitive prefixes; the first matching rule wins. */
   prefixes: readonly string[]
   apiFormat: TFormat
+  /**
+   * Where this family is served when it is not under the provider's base URL —
+   * OpenCode Go only serves Gemini at `/inference/go/google/v1beta`. Resolved as a
+   * URL reference against the provider's base URL, so an origin-relative path
+   * follows a host the user pointed the provider at.
+   */
+  baseUrl?: string
 }
 
-export function resolveModelApiFormat<TFormat extends string>(
+export function resolveModelApiRule<TFormat extends string>(
   rules: readonly ModelApiFormatRule<TFormat>[] | undefined,
   modelId: string | null | undefined,
-): TFormat | undefined {
+): ModelApiFormatRule<TFormat> | undefined {
   if (!rules || rules.length === 0) return undefined
   const model = modelId?.trim().toLowerCase()
   if (!model) return undefined
@@ -31,8 +38,25 @@ export function resolveModelApiFormat<TFormat extends string>(
   for (const rule of rules) {
     for (const prefix of rule.prefixes) {
       const needle = prefix.trim().toLowerCase()
-      if (needle && model.startsWith(needle)) return rule.apiFormat
+      if (needle && model.startsWith(needle)) return rule
     }
   }
   return undefined
+}
+
+export function resolveModelApiFormat<TFormat extends string>(
+  rules: readonly ModelApiFormatRule<TFormat>[] | undefined,
+  modelId: string | null | undefined,
+): TFormat | undefined {
+  return resolveModelApiRule(rules, modelId)?.apiFormat
+}
+
+/** The base URL a request for this rule goes to; the provider's own without an override. */
+export function resolveModelApiBaseUrl(
+  providerBaseUrl: string,
+  rule: Pick<ModelApiFormatRule, 'baseUrl'> | undefined,
+): string {
+  const base = providerBaseUrl.replace(/\/+$/, '')
+  if (!rule?.baseUrl) return base
+  return new URL(rule.baseUrl, `${base}/`).toString().replace(/\/+$/, '')
 }

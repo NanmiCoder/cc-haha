@@ -4,6 +4,16 @@ import { describe, expect, it } from 'vitest'
 import { SessionChatHeader, SessionChatSurface } from './SessionChatSurface'
 
 describe('SessionChatSurface', () => {
+  it.each([
+    { compact: false, mobileLayout: false, gutter: 'px-6' },
+    { compact: true, mobileLayout: false, gutter: 'px-4' },
+    { compact: false, mobileLayout: true, gutter: 'px-3' },
+    { compact: true, mobileLayout: true, gutter: 'px-3' },
+  ])('aligns the header with the composer at $gutter', ({ compact, mobileLayout, gutter }) => {
+    render(<SessionChatHeader title="Conversation" compact={compact} mobileLayout={mobileLayout} />)
+    expect(screen.getByTestId('session-header')).toHaveClass(gutter)
+  })
+
   it('keeps every conversation on the main session column measure', () => {
     render(
       <SessionChatSurface

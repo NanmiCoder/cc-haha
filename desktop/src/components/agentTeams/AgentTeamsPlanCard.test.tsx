@@ -48,6 +48,32 @@ async function open() {
 }
 
 describe('AgentTeamsPlanCard', () => {
+  it('keeps a long team name inside the inherited conversation width', async () => {
+    const plan = fixture()
+    plan.teamName = 'repository-validation-'.repeat(20)
+    vi.mocked(teamPlansApi.get).mockResolvedValue({ plan })
+    render(<AgentTeamsPlanCard sessionId="session" />)
+    const name = await screen.findByRole('heading', { name: plan.teamName })
+    expect(name).toHaveClass('truncate')
+    expect(name).toHaveAttribute('title', plan.teamName)
+    expect(name.closest('section')).toHaveClass('min-w-0', 'max-w-full')
+    expect(screen.getByTestId('team-plan-open').parentElement).toHaveClass('flex-wrap')
+  })
+
+  it('uses the modal content width for its roster and detail columns', async () => {
+    await open()
+    const editor = screen.getByRole('dialog').querySelector('.team-plan-editor')!
+    expect(editor).toHaveClass('@container')
+    const roster = screen.getByRole('navigation')
+    const layout = roster.closest('aside')!.parentElement!
+    expect(layout).toHaveClass('@min-[760px]:grid-cols-[244px_minmax(0,1fr)]')
+    // Detail fields must respond to the remaining column, not the modal width.
+    expect(layout.lastElementChild).toHaveClass('@container')
+    expect(editor.innerHTML).not.toMatch(/(?:sm|md):grid-cols/)
+    const model = screen.getByRole('button', { name: 'Builder · Provider and model' })
+    expect(model.parentElement!.parentElement).toHaveClass('@min-[560px]:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]')
+  })
+
   it('focuses one member at a time and preserves edits when navigating the roster', async () => {
     await open()
     fireEvent.click(screen.getByRole('button', { name: 'Builder · Provider and model' }))

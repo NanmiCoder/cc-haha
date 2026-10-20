@@ -90,6 +90,7 @@ describe('AgentTeamsWorkbenchTab', () => {
     installTimeline()
 
     render(<AgentTeamsWorkbenchTab tabId="__team__lead-session" leadSessionId="lead-session" />)
+    expect(screen.getByRole('button', { name: /Back to session/ }).parentElement!.parentElement!.className).toContain('min-w-0')
 
     expect(screen.getByTestId('agent-teams-canvas')).toBeTruthy()
     expect(screen.queryByTestId('agent-teams-communication')).toBeNull()

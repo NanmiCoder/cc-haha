@@ -43,3 +43,35 @@ test('UI Stop uses the group boundary', async () => {
   expect(response.status).toBe(200)
   expect(stopped).toBe('root')
 })
+
+test('single and batch tool calls propose work instead of creating before review', async () => {
+  const calls: unknown[][] = []
+  const service = { propose: async (...args: unknown[]) => { calls.push(args); return { id: 'batch', state: 'review', sessions: [] } } } as unknown as SessionCollaborationService
+  const single = await handleSessionCollaborationApi(request({ prompt: 'review', requestId: 'r', runtime: { providerId: 'a', modelId: 'shared' } }), 'create', 'caller', service)
+  expect(single.status).toBe(200)
+  expect(await single.json()).toMatchObject({ requiresReview: true })
+  expect(calls[0]).toEqual(['caller', { requestId: 'r', sessions: [{ prompt: 'review', requestId: undefined, runtime: { providerId: 'a', modelId: 'shared' } }] }])
+  const batch = await handleSessionCollaborationApi(request({ requestId: 'r2', sessions: [{ prompt: 'work' }] }), 'create-batch', 'caller', service)
+  expect(batch.status).toBe(200)
+  expect(calls).toHaveLength(2)
+  const invalid = await handleSessionCollaborationApi(request({ requestId: 'r3', sessions: [{ prompt: 'work', model: 'old', runtime: { providerId: 'a', modelId: 'shared' } }] }), 'create-batch', 'caller', service)
+  expect(invalid.status).toBe(400)
+  expect(calls).toHaveLength(2)
+})
+
+test('UI model changes validate input and bind the route session', async () => {
+  const calls: unknown[][] = []
+  const service = { changeModels: async (...args: unknown[]) => { calls.push(args); return { id: 'change' } } } as unknown as SessionCollaborationService
+  const url = new URL('http://localhost/api/session-collaboration/parent/model-changes')
+  const input = { requestId: 'change', mode: 'after_turn', selections: [{ sessionId: 'child', runtime: { providerId: 'b', modelId: 'shared' } }] }
+  const response = await handleSessionCollaborationUiApi(new Request(url, { method: 'POST', body: JSON.stringify(input) }), url, service)
+  expect(response.status).toBe(200)
+  expect(calls).toEqual([['parent', input, { wait: false }]])
+  const invalid = await handleSessionCollaborationUiApi(new Request(url, { method: 'POST', body: '{' }), url, service)
+  expect(invalid.status).toBe(400)
+})
+
+test('tool credentials cannot approve or alter pending model selections', async () => {
+  const response = await handleSessionCollaborationApi(request({ expectedRevision: 1 }), 'confirm', 'caller', {} as SessionCollaborationService)
+  expect(response.status).toBe(404)
+})

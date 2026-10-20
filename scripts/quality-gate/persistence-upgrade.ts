@@ -35,7 +35,7 @@ const checks: Check[] = [
   },
   {
     title: 'Session collaboration state migration and recovery',
-    command: ['bun', 'test', './src/server/services/sessionCollaborationService.test.ts', '--test-name-pattern', 'migrat|recover'],
+    command: ['bun', 'test', './src/server/services/sessionCollaborationService.test.ts', './src/server/services/sessionCollaborationService.delegation.test.ts', '--test-name-pattern', 'migrat|recover'],
   },
   {
     title: 'Connector installation state migrations',

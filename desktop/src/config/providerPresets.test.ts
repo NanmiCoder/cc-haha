@@ -213,6 +213,7 @@ describe('bundled provider presets', () => {
     expect(preset?.modelApiFormats).toEqual([
       { prefixes: ['grok-', 'gpt-', 'muse-spark-'], apiFormat: 'openai_responses' },
       { prefixes: ['minimax-', 'qwen', 'union-alpha'], apiFormat: 'anthropic' },
+      { prefixes: ['gemini-'], apiFormat: 'gemini', baseUrl: '/inference/go/google/v1beta' },
     ])
     expect(preset?.upstreamHeaders).toEqual({
       'User-Agent': 'cc-haha/$VERSION',

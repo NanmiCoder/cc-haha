@@ -112,7 +112,9 @@ export function usePageAnnotation({ rootRef, frame, identity, revision, path, on
       doc.removeEventListener('pointerup', pointerup, true)
       doc.removeEventListener('keyup', update)
       doc.removeEventListener('keydown', keydown)
-      const active = doc.getSelection()
+      // React may already have removed the iframe before passive cleanup. Do
+      // not schedule a selectionchange event on its closed document.
+      const active = !frame || frame.isConnected ? doc.getSelection() : null
       if (active?.anchorNode && root.contains(active.anchorNode)) active.removeAllRanges()
     }
   }, [rootRef, frame, identity, revision, path, onAnnotate, dismiss])

@@ -770,6 +770,7 @@ function AgentSessionView({
       ) : null}
     >
       <SessionChatHeader
+        mobileLayout={isMobileLayout}
         title={title}
         compact={isMobileLayout}
         // On a phone the shell's top bar already carries Back (and the system

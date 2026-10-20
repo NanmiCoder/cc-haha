@@ -1,8 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 
-import { resolveModelApiFormat, type ModelApiFormatRule } from './modelApiFormats.js'
+import {
+  resolveModelApiBaseUrl,
+  resolveModelApiFormat,
+  resolveModelApiRule,
+  type ModelApiFormatRule,
+} from './modelApiFormats.js'
 
-type Format = 'anthropic' | 'openai_chat' | 'openai_responses'
+type Format = 'anthropic' | 'openai_chat' | 'openai_responses' | 'gemini'
 
 /**
  * The rules the OpenCode Go preset ships. Kept in sync with
@@ -12,6 +17,7 @@ type Format = 'anthropic' | 'openai_chat' | 'openai_responses'
 const OPENCODE_GO_RULES: ModelApiFormatRule<Format>[] = [
   { prefixes: ['grok-', 'gpt-', 'muse-spark-'], apiFormat: 'openai_responses' },
   { prefixes: ['minimax-', 'qwen', 'union-alpha'], apiFormat: 'anthropic' },
+  { prefixes: ['gemini-'], apiFormat: 'gemini', baseUrl: '/inference/go/google/v1beta' },
 ]
 
 describe('resolveModelApiFormat', () => {
@@ -88,6 +94,9 @@ describe('resolveModelApiFormat', () => {
       'grok-4.5', 'grok-4.6', 'gpt-5.6-luna',
       'muse-spark-1.2-contributor', 'muse-spark-1.3-contributor',
     ]
+    // Served only over Google generateContent; every other path answers
+    // `ModelProtocolUnsupported`.
+    const gemini = ['gemini-4-argon-contributor']
 
     for (const model of chat) {
       expect(resolveModelApiFormat(OPENCODE_GO_RULES, model), model).toBeUndefined()
@@ -98,11 +107,37 @@ describe('resolveModelApiFormat', () => {
     for (const model of responses) {
       expect(resolveModelApiFormat(OPENCODE_GO_RULES, model), model).toBe('openai_responses')
     }
+    for (const model of gemini) {
+      expect(resolveModelApiFormat(OPENCODE_GO_RULES, model), model).toBe('gemini')
+    }
   })
 
   test('still resolves when the model carries a context-suffix marker', () => {
     // The capability env is computed before `[1m]` is stripped, so rules must
     // survive the suffix rather than depending on the bare id.
     expect(resolveModelApiFormat(OPENCODE_GO_RULES, 'minimax-m3[1m]')).toBe('anthropic')
+  })
+})
+
+describe('resolveModelApiBaseUrl', () => {
+  const geminiRule = resolveModelApiRule(OPENCODE_GO_RULES, 'gemini-4-argon-contributor')
+
+  test('keeps the provider base URL for a family served under it', () => {
+    expect(resolveModelApiBaseUrl('https://opencode.ai/zen/go/v1/', undefined)).toBe('https://opencode.ai/zen/go/v1')
+    expect(resolveModelApiBaseUrl('https://opencode.ai/zen/go/v1', resolveModelApiRule(OPENCODE_GO_RULES, 'minimax-m3')))
+      .toBe('https://opencode.ai/zen/go/v1')
+  })
+
+  test('moves a family served elsewhere to that path on the provider host', () => {
+    expect(resolveModelApiBaseUrl('https://opencode.ai/zen/go/v1', geminiRule))
+      .toBe('https://opencode.ai/inference/go/google/v1beta')
+    // A provider pointed at a local relay keeps every family on that relay.
+    expect(resolveModelApiBaseUrl('http://127.0.0.1:8787/zen/go/v1', geminiRule))
+      .toBe('http://127.0.0.1:8787/inference/go/google/v1beta')
+  })
+
+  test('accepts an absolute override', () => {
+    expect(resolveModelApiBaseUrl('https://opencode.ai/zen/go/v1', { baseUrl: 'https://example.test/v1beta/' }))
+      .toBe('https://example.test/v1beta')
   })
 })

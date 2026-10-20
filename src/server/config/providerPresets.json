@@ -386,6 +386,13 @@
           "union-alpha"
         ],
         "apiFormat": "anthropic"
+      },
+      {
+        "prefixes": [
+          "gemini-"
+        ],
+        "apiFormat": "gemini",
+        "baseUrl": "/inference/go/google/v1beta"
       }
     ],
     "upstreamHeaders": {
@@ -397,6 +404,7 @@
       "deepseek-v4-flash-vision-exp": 1000000,
       "deepseek-v4-pro": 1000000,
       "deepseek-v4.1-flash": 1000000,
+      "gemini-4-argon-contributor": 1048576,
       "glm-5": 202752,
       "glm-5.1": 202752,
       "glm-5.2": 1000000,

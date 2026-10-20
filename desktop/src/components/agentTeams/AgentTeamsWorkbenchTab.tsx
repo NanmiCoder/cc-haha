@@ -32,7 +32,7 @@ export function AgentTeamsWorkbenchTab({
   }, [fetchTeamForSession, hasTimeline, leadSessionId])
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col bg-[var(--color-surface)]">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-[var(--color-surface)]">
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--color-border)] px-3 py-1.5">
         <Button
           variant="ghost"

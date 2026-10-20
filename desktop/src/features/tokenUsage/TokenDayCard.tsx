@@ -91,7 +91,9 @@ export function TokenDayCard({ day, locale, onClose, style }: Props) {
         {day.models.map((model) => (
           <li key={model.id} className="flex items-center gap-2 text-xs leading-4">
             <span aria-hidden="true" className="h-2 w-2 shrink-0 rounded-full" style={{ background: seriesColor(model.series) }} />
-            <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">{model.label}</span>
+            <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
+              {model.foldedCount ? t('settings.activity.moreModels', { count: model.foldedCount }) : model.label}
+            </span>
             <span className="font-medium tabular-nums text-[var(--color-text-primary)]">{formatTokenAmount(model.tokens, locale).text}</span>
             <span className="w-9 text-right font-mono text-[11px] text-[var(--color-text-tertiary)]">{formatShare(model.tokens, day.total, locale)}</span>
           </li>

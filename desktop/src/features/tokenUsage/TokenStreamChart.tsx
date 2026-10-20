@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 
 import { cx } from '@/lib/cx'
 import type { Locale } from '../../i18n'
@@ -8,6 +8,7 @@ import { formatDateLabel, formatMonthName, formatShortDate, parseLocalDate } fro
 import { TokenDayCard } from './TokenDayCard'
 import {
   buildColumnGeometry,
+  dayModelShares,
   seriesColor,
   stackOrder,
   summarizeDay,
@@ -19,8 +20,8 @@ import {
 const WIDTH = 928
 const HEIGHT = 300
 const CARD_WIDTH = 296
-/** Space between the chosen day's column and the card beside it. */
-const CARD_GAP = 14
+/** Space between a day's column and the card or preview beside it. */
+const BESIDE_GAP = 14
 
 type Props = {
   days: DailyModelSeries[]
@@ -33,9 +34,9 @@ type Props = {
 
 /**
  * The last 90 days, one column per day, stacked by model on a zero baseline. Height is the value,
- * read against the grid lines and the labelled peak; color is the model. Pointing at a day marks it
- * with its figure; clicking pins a card with that day's detail, and clicking it again (or Esc)
- * puts it away.
+ * read against the grid lines and the labelled peak; color is the model. Pointing at a day previews
+ * its total and what each model spent; clicking pins a card with that day's detail, and clicking it
+ * again (or Esc) puts it away.
  */
 export function TokenStreamChart({ days, models, activity, locale, className }: Props) {
   const t = useTranslation()
@@ -45,13 +46,15 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
   const [frameWidth, setFrameWidth] = useState(WIDTH)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
+  const previewRef = useRef<HTMLDivElement | null>(null)
+  const [previewSize, setPreviewSize] = useState({ width: 0, height: 0 })
 
   const first = days[0]
   const last = days[days.length - 1]
   const peak = geometry.peak
   const hasChart = peak !== null
 
-  // The card is placed in pixels so it can stay inside a narrow pane.
+  // The card and the preview are placed in pixels so they stay inside a narrow pane.
   useEffect(() => {
     const element = frameRef.current
     if (!element) return
@@ -67,6 +70,16 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
     window.addEventListener('resize', update)
     return () => window.removeEventListener('resize', update)
   }, [hasChart])
+
+  // The preview is placed by its own size, which changes with the day, the data and the locale, so it
+  // is measured after every render; an unchanged size leaves the state alone.
+  useLayoutEffect(() => {
+    const element = previewRef.current
+    if (!element) return
+    const width = element.offsetWidth
+    const height = element.offsetHeight
+    setPreviewSize((current) => (current.width === width && current.height === height ? current : { width, height }))
+  })
 
   const selectedIndex = selectedDate === null ? -1 : days.findIndex((day) => day.date === selectedDate)
   const summary = useMemo(
@@ -87,7 +100,6 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
 
   const slot = WIDTH / days.length
   const centreX = (index: number) => (index + 0.5) * slot
-  const percentX = (index: number) => `${((index + 0.5) / days.length) * 100}%`
   const hovered = hoveredIndex === null ? undefined : days[hoveredIndex]
   const showHover = hoveredIndex !== null && hovered !== undefined && hovered.total > 0 && hovered.date !== summary?.date
 
@@ -108,12 +120,25 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
     if (event.key === 'Escape' && summary) closeCard()
   }
 
+  // Beside the day, on whichever side has room, and never off the chart.
+  const besideDay = (index: number, boxWidth: number) => {
+    const anchorX = ((index + 0.5) / days.length) * frameWidth
+    const fitsRight = anchorX + BESIDE_GAP + boxWidth <= frameWidth
+    return Math.max(0, Math.min(frameWidth - boxWidth, fitsRight ? anchorX + BESIDE_GAP : anchorX - BESIDE_GAP - boxWidth))
+  }
   const cardWidth = Math.min(CARD_WIDTH, frameWidth)
-  const anchorX = selectedIndex >= 0 ? ((selectedIndex + 0.5) / days.length) * frameWidth : 0
-  const fitsRight = anchorX + CARD_GAP + cardWidth <= frameWidth
-  const cardLeft = Math.max(0, Math.min(frameWidth - cardWidth, fitsRight ? anchorX + CARD_GAP : anchorX - CARD_GAP - cardWidth))
+  const cardLeft = selectedIndex >= 0 ? besideDay(selectedIndex, cardWidth) : 0
+  // The preview starts level with the top of the column and slides up when it would run past the baseline.
+  const frameHeight = (frameWidth * HEIGHT) / WIDTH
+  const preview = showHover
+    ? {
+        models: dayModelShares(hovered, models),
+        left: besideDay(hoveredIndex, previewSize.width),
+        top: Math.max(0, Math.min(frameHeight - previewSize.height, (geometry.dayTops[hoveredIndex]! / HEIGHT) * frameHeight)),
+      }
+    : null
   const legend = stackOrder(models).map((index) => models[index]!)
-  // Pointing at the peak day replaces its label with the same figure on the pointer's chip.
+  // Pointing at the peak day hides its label: the preview already carries the same figure.
   const peakLabelHidden = showHover && hoveredIndex === peak.index
 
   return (
@@ -186,17 +211,6 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
           })}
         </span>
 
-        {showHover ? (
-          <span
-            data-testid="stream-hover-chip"
-            aria-hidden="true"
-            className="pointer-events-none absolute z-[var(--z-raised)] -translate-x-1/2 -translate-y-full whitespace-nowrap rounded-[var(--radius-sm)] bg-[var(--color-text-primary)] px-2 py-[3px] font-mono text-[11px] text-[var(--color-surface)]"
-            style={{ left: percentX(hoveredIndex), top: `calc(${(geometry.dayTops[hoveredIndex]! / HEIGHT) * 100}% - 8px)` }}
-          >
-            {formatShortDate(hovered.date, locale)} · {formatTokenAmount(hovered.total, locale).text}
-          </span>
-        ) : null}
-
         {/* One target per day, exactly over that day's slot. A day with no usage has nothing to open,
             but still answers the pointer so a stale marker can't linger. */}
         <div className="absolute inset-0 flex" onMouseLeave={() => setHoveredIndex(null)}>
@@ -228,6 +242,35 @@ export function TokenStreamChart({ days, models, activity, locale, className }: 
         </div>
 
         {summary ? <TokenDayCard day={summary} locale={locale} onClose={closeCard} style={{ left: cardLeft, width: cardWidth }} /> : null}
+
+        {/* After the card, so a preview of another day reads on top of it. */}
+        {preview && hovered ? (
+          <div
+            ref={previewRef}
+            data-testid="stream-day-preview"
+            aria-hidden="true"
+            className="pointer-events-none absolute z-[var(--z-raised)] w-max min-w-[148px] max-w-[240px] rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface)] px-3 py-2 shadow-[var(--shadow-dropdown)]"
+            style={{ left: preview.left, top: preview.top }}
+          >
+            <div className="flex items-baseline justify-between gap-3 whitespace-nowrap">
+              <span className="font-mono text-[11px] text-[var(--color-text-tertiary)]">{formatShortDate(hovered.date, locale)}</span>
+              <span data-testid="stream-day-preview-total" className="text-[13px] font-medium tabular-nums text-[var(--color-text-primary)]">
+                {formatTokenAmount(hovered.total, locale).text}
+              </span>
+            </div>
+            <ul className="mt-1.5 grid gap-1">
+              {preview.models.map((model) => (
+                <li key={model.id} className="flex items-center gap-2 text-xs leading-4">
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: seriesColor(model.series) }} />
+                  <span className="min-w-0 flex-1 truncate text-[var(--color-text-secondary)]">
+                    {model.foldedCount ? t('settings.activity.moreModels', { count: model.foldedCount }) : model.label}
+                  </span>
+                  <span className="tabular-nums text-[var(--color-text-primary)]">{formatTokenAmount(model.tokens, locale).text}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
 
       <div aria-hidden="true" className="relative h-5 font-mono text-[11px] text-[var(--color-text-tertiary)]">

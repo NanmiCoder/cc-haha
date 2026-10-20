@@ -3261,21 +3261,25 @@ export function MessageList({
     !mobileLayout &&
     !isTouchH5Document() &&
     conversationNavigationItems.length >= CONVERSATION_NAVIGATION_MIN_ITEMS
-  const chatScrollPaddingClass = compact
-    ? showConversationNavigator && conversationNavigationMode === 'full'
-      ? 'pb-5 px-20 py-3'
-      : showConversationNavigator && conversationNavigationMode === 'compact'
-        ? 'pb-5 px-12 py-3'
-        : showConversationNavigator && conversationNavigationMode === 'edge'
-          ? 'pb-5 px-7 py-3'
-          : 'px-3 py-3 pb-5'
-    : showConversationNavigator && conversationNavigationMode === 'full'
-      ? 'px-20 py-4'
-      : showConversationNavigator && conversationNavigationMode === 'compact'
-        ? 'px-12 py-4'
-        : showConversationNavigator && conversationNavigationMode === 'edge'
-          ? 'px-7 py-4'
-          : 'px-4 py-4'
+  // Match the composer/header gutters when no navigation rail is present.
+  // The navigator deliberately reserves extra room outside the reading column.
+  const chatScrollPaddingClass = mobileLayout
+    ? 'px-3 py-4'
+    : compact
+      ? showConversationNavigator && conversationNavigationMode === 'full'
+        ? 'pb-5 px-20 py-3'
+        : showConversationNavigator && conversationNavigationMode === 'compact'
+          ? 'pb-5 px-12 py-3'
+          : showConversationNavigator && conversationNavigationMode === 'edge'
+            ? 'pb-5 px-7 py-3'
+            : 'px-4 py-3 pb-5'
+      : showConversationNavigator && conversationNavigationMode === 'full'
+        ? 'px-20 py-4'
+        : showConversationNavigator && conversationNavigationMode === 'compact'
+          ? 'px-12 py-4'
+          : showConversationNavigator && conversationNavigationMode === 'edge'
+            ? 'px-7 py-4'
+            : 'px-6 py-4'
   const confirmTurnCard = useMemo(
     () => visibleTurnChangeCards.find((card) => card.target.messageId === turnUndoConfirmTargetId) ?? null,
     [turnUndoConfirmTargetId, visibleTurnChangeCards],

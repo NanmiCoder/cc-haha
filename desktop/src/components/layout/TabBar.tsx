@@ -36,6 +36,7 @@ import { WorkspaceLayoutControls } from './WorkspaceLayoutControls'
 import { useWorkspaceHeaderHost } from './WorkspaceHeaderContext'
 import { ActionDialog } from '@/components/ui/ActionDialog'
 import { getMainSessionActivityModel, hasVisibleSessionActivity } from '../activity/sessionActivityModel'
+import { EMPTY_DELEGATED_SESSION_ROWS, useSessionDelegationStore } from '../../stores/sessionDelegationStore'
 import { SessionActivityButton } from '../activity/SessionActivityButton'
 import { useActivityPanelStore } from '../../stores/activityPanelStore'
 import { getSessionBrowsablePath } from '../../lib/sessionWorkspace'
@@ -191,6 +192,8 @@ export function TabBar() {
     activitySessionId ? state.sessions[activitySessionId]?.backgroundAgentTasks : undefined)
   const activityNotificationRecord = useChatStore((state) =>
     activitySessionId ? state.sessions[activitySessionId]?.agentTaskNotifications : undefined)
+  const activityDelegatedSessions = useSessionDelegationStore((state) =>
+    activitySessionId ? state.bySession[activitySessionId]?.rows ?? EMPTY_DELEGATED_SESSION_ROWS : EMPTY_DELEGATED_SESSION_ROWS)
   const hasVisibleActivity = useMemo(() => {
     if (!activitySessionId) return false
     const includeCliTasks = cliTasksSessionId === activitySessionId
@@ -205,10 +208,12 @@ export function TabBar() {
       dismissedBackgroundTaskKeys,
       agentNotifications: Object.values(activityNotificationRecord ?? {}),
       workflowRuns,
+      delegatedSessions: activityDelegatedSessions,
     }))
   }, [
     activeTeamStartedAt,
     activityBackgroundTaskRecord,
+    activityDelegatedSessions,
     activityMessages,
     activityNotificationRecord,
     activitySessionId,

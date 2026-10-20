@@ -9,9 +9,11 @@ import {
   SERIES_COUNT,
   buildDailyModelSeries,
   buildColumnGeometry,
+  dayModelShares,
   formatShare,
   getFreshTokenTotal,
   getModelTokenTotal,
+  NAMED_OTHER_MODELS,
   rankModels,
   stackOrder,
   summarizeDay,
@@ -155,19 +157,96 @@ describe('buildDailyModelSeries', () => {
     const series = buildDailyModelSeries(stats, models, 4, new Date('2026-10-17T12:00:00'))
 
     expect(series.map((day) => day.date)).toEqual(['2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17'])
-    expect(series[0]).toEqual({ date: '2026-10-14', total: 0, byModel: [0, 0] })
-    expect(series[2]).toEqual({ date: '2026-10-16', total: 40, byModel: [30, 10] })
+    expect(series[0]).toEqual({ date: '2026-10-14', total: 0, byModel: [0, 0], otherModels: [] })
+    expect(series[2]).toEqual({ date: '2026-10-16', total: 40, byModel: [30, 10], otherModels: [] })
   })
 
   it('drops models that are not ranked when no "other" row exists to receive them', () => {
     const models = rankModels(stats, 'Other')
     const series = buildDailyModelSeries(stats, models, 1, new Date('2026-10-17T12:00:00'))
-    expect(series[0]).toEqual({ date: '2026-10-17', total: 5, byModel: [5, 0] })
+    expect(series[0]).toEqual({ date: '2026-10-17', total: 5, byModel: [5, 0], otherModels: [] })
+  })
+
+  it('keeps the names behind each day\'s "other" tokens, biggest first', () => {
+    const tail = statsWith({
+      modelUsage: { m1: usage(900), m2: usage(800), m3: usage(700), m4: usage(600), small: usage(5), tiny: usage(3) },
+      dailyModelTokens: [{ date: '2026-10-17', tokensByModel: { m1: 10, tiny: 3, small: 5, idle: 0 } }],
+    })
+    const models = rankModels(tail, 'Other')
+    const [day] = buildDailyModelSeries(tail, models, 1, new Date('2026-10-17T12:00:00'))
+
+    expect(day!.otherModels).toEqual([{ id: 'small', tokens: 5 }, { id: 'tiny', tokens: 3 }])
+    expect(day!.byModel[models.findIndex((model) => model.id === OTHER_MODELS_ID)]).toBe(8)
+    expect(day!.total).toBe(18)
+  })
+})
+
+describe('dayModelShares', () => {
+  const model = (id: string, series: number) => ({
+    id,
+    label: id === OTHER_MODELS_ID ? 'Other' : id.toUpperCase(),
+    series,
+    total: 1,
+    fresh: 0,
+    cached: 0,
+    costUSD: 0,
+    unpriced: false,
+  })
+  const models = [model('a', 1), model('b', 2), model(OTHER_MODELS_ID, SERIES_COUNT)]
+  const day = (byModel: number[], otherModels: Array<{ id: string; tokens: number }>) => ({
+    date: '2026-10-17',
+    total: byModel.reduce((sum, tokens) => sum + tokens, 0),
+    byModel,
+    otherModels,
+  })
+  const tail = (...tokens: number[]) => tokens.map((amount, index) => ({ id: `m${index + 1}`, tokens: amount }))
+  const sum = (rows: Array<{ tokens: number }>) => rows.reduce((total, row) => total + row.tokens, 0)
+
+  it('names each model behind the gray "other" slot, in gray, ranked by size among the rest', () => {
+    const rows = dayModelShares(day([25, 0, 75], [{ id: 'glm-4.6', tokens: 45 }, { id: 'kimi-k2', tokens: 30 }]), models)
+    expect(rows.map((row) => [row.id, row.label, row.series, row.tokens, row.share])).toEqual([
+      ['glm-4.6', 'GLM 4.6', SERIES_COUNT, 45, 0.45],
+      ['kimi-k2', 'Kimi K2', SERIES_COUNT, 30, 0.3],
+      ['a', 'A', 1, 25, 0.25],
+    ])
+  })
+
+  it('sums the smallest "other" models into one last row past the named few, and still adds up to the day', () => {
+    const busy = day([5, 0, 100], tail(40, 30, 20, 6, 4))
+    const rows = dayModelShares(busy, models)
+
+    expect(rows.map((row) => [row.label, row.tokens, row.foldedCount])).toEqual([
+      ['M1', 40, undefined],
+      ['M2', 30, undefined],
+      ['M3', 20, undefined],
+      ['A', 5, undefined],
+      // Bigger than A, but it stands for the leftovers, so it closes the list.
+      ['Other', 10, 2],
+    ])
+    expect(rows.filter((row) => row.id.startsWith('m'))).toHaveLength(NAMED_OTHER_MODELS)
+    expect(sum(rows)).toBe(busy.total)
+  })
+
+  it('names one more model rather than fold a single one away', () => {
+    const rows = dayModelShares(day([0, 0, 100], tail(40, 30, 20, 10)), models)
+    expect(rows.map((row) => row.label)).toEqual(['M1', 'M2', 'M3', 'M4'])
+    expect(rows.some((row) => row.foldedCount)).toBe(false)
+  })
+
+  it('keeps a single "other" row when the day carries no names for it', () => {
+    expect(dayModelShares(day([60, 0, 40], []), models).map((row) => [row.label, row.tokens])).toEqual([
+      ['A', 60],
+      ['Other', 40],
+    ])
+  })
+
+  it('has no rows for an idle day', () => {
+    expect(dayModelShares(day([0, 0, 0], []), models)).toEqual([])
   })
 })
 
 describe('buildColumnGeometry', () => {
-  const day = (date: string, ...byModel: number[]) => ({ date, total: byModel.reduce((a, b) => a + b, 0), byModel })
+  const day = (date: string, ...byModel: number[]) => ({ date, total: byModel.reduce((a, b) => a + b, 0), byModel, otherModels: [] })
   const model = (id: string, series: number) => ({ id, label: id, series, total: 1, fresh: 0, cached: 0, costUSD: 0, unpriced: false })
   const two = [model('a', 1), model('b', 2)]
   /** [x, top, bottom] of every segment in one layer's path. */
@@ -247,7 +326,7 @@ describe('buildColumnGeometry', () => {
 
 describe('summarizeDay', () => {
   const models = rankModels(statsWith({ modelUsage: { a: usage(900), b: usage(100) } }), 'Other')
-  const day = (date: string, ...byModel: number[]) => ({ date, total: byModel.reduce((a, b) => a + b, 0), byModel })
+  const day = (date: string, ...byModel: number[]) => ({ date, total: byModel.reduce((a, b) => a + b, 0), byModel, otherModels: [] })
   const days = [
     day('2026-10-14', 0, 0),
     day('2026-10-15', 60, 20),

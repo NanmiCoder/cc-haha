@@ -106,7 +106,7 @@ describe('a window with no usage', () => {
         streaks: { currentStreak: 0, longestStreak: 0, currentStreakStart: null, longestStreakStart: null, longestStreakEnd: null },
       } as ActivityStatsResponse,
       models: [{ id: 'a', label: 'A', series: 1, total: 10, fresh: 10, cached: 0, costUSD: 0, unpriced: true }],
-      daily: [{ date: '2026-10-16', total: 0, byModel: [0] }, { date: '2026-10-17', total: 0, byModel: [0] }],
+      daily: [{ date: '2026-10-16', total: 0, byModel: [0], otherModels: [] }, { date: '2026-10-17', total: 0, byModel: [0], otherModels: [] }],
       totalTokens: 10,
       locale: 'en',
       t: (key, params) => translate('en', key, params),

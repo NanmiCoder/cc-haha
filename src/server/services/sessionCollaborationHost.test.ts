@@ -199,3 +199,65 @@ test('content suggestions fill metadata pages without duplicate metadata hits or
     else process.env.CLAUDE_CONFIG_DIR = previous
   }
 })
+
+test('an explicit replacement provider can resolve even when the parent runtime is unavailable', async () => {
+  const catalog = await import('./sessionModelCatalog.js')
+  const handler = await import('../ws/handler.js')
+  const { resolveCollaborationRuntime } = await import('./sessionCollaborationHost.js')
+  const parent = spyOn(handler, 'getCollaborationRuntime').mockRejectedValue(new Error('parent removed'))
+  const selected = { providerId: 'replacement', modelId: 'same-name' }
+  spyOn(catalog, 'resolveSessionRuntime').mockImplementation(async (input, inherited) => input.runtime ?? inherited)
+  try {
+    expect(await resolveCollaborationRuntime('parent', { runtime: selected })).toEqual(selected)
+    expect(parent).not.toHaveBeenCalled()
+    await expect(resolveCollaborationRuntime('parent', {})).rejects.toThrow('parent removed')
+  } finally { mock.restore() }
+})
+
+for (const savedMode of ['plan', undefined]) {
+  test(`explicit creation survives a deleted parent provider and inherits ${savedMode ?? 'default'} permissions`, async () => {
+    const previous = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = directory
+    const handler = await import('../ws/handler.js')
+    const catalog = await import('./sessionModelCatalog.js')
+    const { conversationService } = await import('./conversationService.js')
+    const { SettingsService } = await import('./settingsService.js')
+    const repository = await import('./repositoryLaunchService.js')
+    const dispose = configureSessionCollaborationHost('127.0.0.1', 1234)
+    const replacement = { providerId: 'replacement', modelId: 'shared-model' }
+    let removed = false
+    spyOn(catalog, 'resolveSessionRuntime').mockImplementation(async (input, parent) => {
+      const selection = input.runtime ?? parent
+      if (removed && selection.providerId === 'removed') throw new Error('parent provider removed')
+      return selection
+    })
+    spyOn(catalog, 'validateSessionRuntime').mockImplementation(async selection => selection)
+    spyOn(conversationService, 'getSessionRuntimeSelection').mockImplementation(id => id === 'source'
+      ? { providerId: 'removed', modelId: 'shared-model' } : replacement)
+    spyOn(sessionService, 'getSessionSummary').mockResolvedValue({ id: 'source' } as never)
+    spyOn(sessionService, 'getSessionWorkDir').mockResolvedValue(directory)
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
+      runtimeProviderId: 'removed', runtimeModelId: 'shared-model', permissionMode: savedMode,
+    } as never)
+    spyOn(SettingsService.prototype, 'getPermissionMode').mockResolvedValue('default')
+    spyOn(repository, 'getRepositoryContext').mockResolvedValue({ state: 'not_git_repo' } as never)
+    const create = spyOn(sessionService, 'createSession').mockResolvedValue({ sessionId: 'child', workDir: directory } as never)
+    const metadata = spyOn(sessionService, 'appendSessionMetadata').mockResolvedValue(undefined)
+    spyOn(handler, 'submitSessionTurn').mockResolvedValue({ status: 'queued' } as never)
+    try {
+      await handler.getCollaborationRuntime('source')
+      removed = true
+      const service = await getSessionCollaborationService()
+      const result = await service.create('source', { prompt: 'Review task', requestId: 'replacement', runtime: replacement })
+      expect(result.sessionId).toBe('child')
+      expect(create).toHaveBeenCalledWith(directory, undefined, savedMode ?? 'default')
+      expect(metadata).toHaveBeenCalledWith('child', expect.objectContaining({
+        permissionMode: savedMode ?? 'default', runtimeProviderId: 'replacement', runtimeModelId: 'shared-model',
+      }))
+    } finally {
+      dispose(); handler.__resetWebSocketHandlerStateForTests(); mock.restore()
+      if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previous
+    }
+  })
+}

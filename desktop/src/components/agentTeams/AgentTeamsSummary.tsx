@@ -93,7 +93,7 @@ export function AgentTeamsStrip({
       onClick={onOpen}
       title={snapshot.team.name}
       className={[
-        'mt-2 flex w-full max-w-full items-center gap-2 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2.5 py-1.5 text-left transition-colors',
+        'mt-2 flex min-w-0 w-full max-w-full flex-wrap items-center gap-x-2 gap-y-1.5 rounded-[var(--radius-md)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-2.5 py-1.5 text-left transition-colors',
         'hover:border-[var(--color-outline)]',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]',
         compact ? 'text-[11px]' : 'text-xs',
@@ -148,13 +148,13 @@ export function AgentTeamsInlineCard({
   const canOpen = Boolean(snapshot && onOpen)
 
   return (
-    <div className="mb-5 px-1">
+    <div className="@container mb-5 min-w-0 max-w-full">
       <button
         type="button"
         data-testid="agent-teams-inline-card"
         onClick={onOpen}
         disabled={!canOpen}
-        className="flex w-full items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2.5 text-left transition-colors enabled:hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+        className="flex min-w-0 w-full max-w-full flex-wrap items-center gap-3 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] px-3 py-2.5 text-left transition-colors enabled:hover:border-[var(--color-outline)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
       >
         {members.length > 0 ? (
           <AvatarStack members={members} leadAgentId={snapshot?.team.leadAgentId} size={30} />
@@ -163,8 +163,8 @@ export function AgentTeamsInlineCard({
             <UsersRound size={16} strokeWidth={1.75} aria-hidden="true" />
           </span>
         )}
-        <span className="min-w-0 flex-1">
-          <span className="flex min-w-0 items-center gap-1.5">
+        <span className="min-w-0 flex-1 basis-36">
+          <span className="flex min-w-0 flex-wrap items-center gap-1.5">
             <span className="min-w-0 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
               {teamName}
             </span>
@@ -173,7 +173,7 @@ export function AgentTeamsInlineCard({
             </Badge>
           </span>
           {snapshot ? (
-            <span className="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]">
+            <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-[var(--color-text-tertiary)]">
               <span>{t('agentTeams.inline.created', { count: members.length })}</span>
               {progress.total > 0 ? (
                 <>

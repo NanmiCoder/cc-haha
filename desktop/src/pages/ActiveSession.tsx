@@ -1,3 +1,8 @@
+import { SessionDelegationReviewBar } from '@/components/sessionDelegation/SessionDelegationReviewBar'
+import { SessionDelegationDialog } from '@/components/sessionDelegation/SessionDelegationDialog'
+import { DelegatedSessionsManageButton, DelegationChangeStatusList, DelegationSyncNotice } from '@/components/sessionDelegation/DelegationActivityExtras'
+import { EMPTY_DELEGATED_SESSION_ROWS, useSessionDelegationStore, useSessionDelegationSync } from '@/stores/sessionDelegationStore'
+import { openSessionSource } from '@/lib/sessionNavigation'
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RefObject } from 'react'
@@ -592,6 +597,26 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     )
   }, [activeTabId, backgroundTasks, pruneDismissedBackgroundTaskKeys])
 
+  useSessionDelegationSync(active ? activeTabId : null)
+  const delegatedSessions = useSessionDelegationStore((state) =>
+    activeTabId ? state.bySession[activeTabId]?.rows ?? EMPTY_DELEGATED_SESSION_ROWS : EMPTY_DELEGATED_SESSION_ROWS)
+  const delegationAccessories = useMemo(() => activeTabId
+    ? {
+        sessions: {
+          // On a phone the activity sheet sits above dialogs: put it away
+          // first, or the model dialog opens underneath it.
+          action: <DelegatedSessionsManageButton sessionId={activeTabId} onOpen={isMobileLayout ? () => closeActivityPanel(activeTabId) : undefined} />,
+          footer: <>
+            <DelegationSyncNotice sessionId={activeTabId} />
+            <DelegationChangeStatusList sessionId={activeTabId} />
+          </>,
+        },
+      }
+    : undefined, [activeTabId, closeActivityPanel, isMobileLayout])
+  const handleOpenDelegatedSession = useCallback((sessionId: string, title: string) => {
+    openSessionSource(sessionId, title)
+  }, [])
+
   const activityModel = useMemo(() => {
     if (!activeTabId) return null
     const includeCliTasks = trackedTaskSessionId === activeTabId
@@ -612,6 +637,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       dismissedBackgroundTaskKeys,
       agentNotifications: Object.values(agentTaskNotifications),
       workflowRuns,
+      delegatedSessions,
     })
   }, [
     activeTabId,
@@ -622,6 +648,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     cliTasks,
     cliTasksCompletedAndDismissed,
     chatState,
+    delegatedSessions,
     dismissedBackgroundTaskKeys,
     messages,
     trackedTaskSessionId,
@@ -867,6 +894,8 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
           onClearFinishedBackgroundTasks={handleClearFinishedBackgroundTasks}
           onOpenMember={handleOpenTeamMember}
           onStopBackgroundTask={handleStopBackgroundTask}
+          onOpenDelegatedSession={handleOpenDelegatedSession}
+          sectionAccessories={delegationAccessories}
           stoppingBackgroundTaskIds={stoppingBackgroundTaskIds}
           placement="rail"
         />
@@ -948,6 +977,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
             <>
               {!isMobileLayout && (
                 <SessionChatHeader
+                  mobileLayout={isMobileLayout}
                   title={headerTitle}
                   compact={showRightPanel}
                   metadata={headerMetadata}
@@ -1031,14 +1061,25 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
               onClearFinishedBackgroundTasks={handleClearFinishedBackgroundTasks}
               onOpenMember={handleOpenTeamMember}
               onStopBackgroundTask={handleStopBackgroundTask}
+              onOpenDelegatedSession={handleOpenDelegatedSession}
+              sectionAccessories={delegationAccessories}
               stoppingBackgroundTaskIds={stoppingBackgroundTaskIds}
               placement="sheet"
             />
           ) : null}
 
-          {active && activeTabId && <div className="mx-auto w-full max-w-[900px] shrink-0 px-4">
-            <AgentTeamsPlanCard key={activeTabId} sessionId={activeTabId} />
-          </div>}
+          {active && activeTabId && (
+            <div
+              data-testid="session-decision-dock"
+              className={`${showTrajectory ? 'hidden' : ''} min-h-0 shrink-0 ${isMobileLayout ? 'px-3' : showRightPanel ? 'px-4' : 'px-6'}`}
+            >
+              <div className="mx-auto w-full min-w-0 max-w-[var(--chat-content-max-width)] max-h-[min(45dvh,440px)] space-y-2 overflow-y-auto overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <AgentTeamsPlanCard key={activeTabId} sessionId={activeTabId} />
+                <SessionDelegationReviewBar key={`delegation:${activeTabId}`} sessionId={activeTabId} />
+              </div>
+              <SessionDelegationDialog key={`delegation-dialog:${activeTabId}`} sessionId={activeTabId} />
+            </div>
+          )}
 
           {/*
             轨迹 is for reading: a reply sent from it would land in the hidden

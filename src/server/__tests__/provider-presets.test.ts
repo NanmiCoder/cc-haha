@@ -490,6 +490,8 @@ describe('provider presets API', () => {
       expect(opencodeGo.modelApiFormats).toEqual([
         { prefixes: ['grok-', 'gpt-', 'muse-spark-'], apiFormat: 'openai_responses' },
         { prefixes: ['minimax-', 'qwen', 'union-alpha'], apiFormat: 'anthropic' },
+        // OpenCode Go serves Gemini only over Google generateContent, outside /zen/go/v1.
+        { prefixes: ['gemini-'], apiFormat: 'gemini', baseUrl: '/inference/go/google/v1beta' },
       ])
       // Everything else must fall through to the provider format rather than being
       // pinned by a rule, so the default only advertises what was verified.

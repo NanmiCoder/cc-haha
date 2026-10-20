@@ -34,6 +34,14 @@ export const ApiFormatSchema = z.enum([
 ])
 export type ApiFormat = z.infer<typeof ApiFormatSchema>
 
+/**
+ * Protocols a preset can route one model family to. Wider than ApiFormat: a
+ * gateway may serve a family only over a protocol no provider record is saved
+ * with (OpenCode Go serves Gemini only over Google `generateContent`).
+ */
+export const ModelApiFormatSchema = z.enum([...ApiFormatSchema.options, 'gemini'])
+export type ModelApiFormat = z.infer<typeof ModelApiFormatSchema>
+
 export const ProviderAuthStrategySchema = z.enum([
   'api_key',
   'auth_token',

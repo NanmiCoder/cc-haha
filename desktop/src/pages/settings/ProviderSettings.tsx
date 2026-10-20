@@ -46,7 +46,7 @@ import { Spinner } from '@/components/ui/Spinner'
 import { SettingsPageHeader, SettingsPill } from '@/components/settings/SettingsSection'
 import { Dropdown } from '@/components/ui/Dropdown'
 import { Tooltip } from '@/components/ui/Tooltip'
-import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode } from '../../types/provider'
+import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ModelApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode } from '../../types/provider'
 import { groupProviderModels, providerModelsErrorKey } from '../../lib/providerModels'
 import { resolveModelApiFormat } from '../../../../src/shared/modelApiFormats'
 import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCompactWindowErrorKey, getModelContextWindowErrorKey, MODEL_SLOTS, parseAutoCompactWindowInput, parseModelContextWindowsInput, type ModelContextInputs, type ModelSlot } from '../../lib/providerModelContext'
@@ -1714,10 +1714,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
     const models = fetchedModels ?? []
     const rules = selectedPreset.modelApiFormats
     if (!rules?.length) return groupProviderModels(models, fallbackGroup)
-    const endpointByFormat: Record<ApiFormat, string> = {
+    const endpointByFormat: Record<ModelApiFormat, string> = {
       anthropic: '/messages',
       openai_chat: '/chat/completions',
       openai_responses: '/responses',
+      gemini: ':generateContent',
     }
     return groupProviderModels(
       models.map((model) => ({

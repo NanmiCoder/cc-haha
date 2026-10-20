@@ -25,6 +25,23 @@ function pages(frame?: HTMLIFrameElement) {
 }
 
 describe('page annotations', () => {
+  it('unmounts safely after a selected Word frame has been removed', async () => {
+    const frame = document.createElement('iframe')
+    document.body.append(frame)
+    mounted.push(frame)
+    const { root } = pages(frame)
+    const rootRef = { current: frame }
+    const onAnnotate = vi.fn()
+    const { result, unmount } = renderHook(() => usePageAnnotation({ rootRef, frame, identity: 1, path: 'report.docx', onAnnotate }))
+    act(() => root.ownerDocument.dispatchEvent(new Event('selectionchange')))
+    expect(result.current.selection?.text).toBe('firstsecond')
+    // React removes the iframe before passive effect cleanup. The closed frame
+    // must not receive a new selectionchange task from that cleanup.
+    frame.remove()
+    unmount()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
   it('includes both page endpoints and rejects ranges outside the viewer', () => {
     const { root, range } = pages()
     expect(readPageSelection(root)).toMatchObject({ text: 'firstsecond', location: 'Pages 2–3' })

@@ -16,6 +16,8 @@ import { readRecoverableJsonFile } from './recoverableJsonFile.js'
 import { ManagedSettingsService } from './managedSettingsService.js'
 import { anthropicToOpenaiChat } from '../proxy/transform/anthropicToOpenaiChat.js'
 import { anthropicToOpenaiResponses } from '../proxy/transform/anthropicToOpenaiResponses.js'
+import { anthropicToGemini, type GeminiRequest } from '../proxy/transform/anthropicToGemini.js'
+import { geminiResponseToAnthropic } from '../proxy/streaming/geminiStreamToAnthropic.js'
 import { resolveRequestCompatibility } from '../proxy/transform/requestCompatibility.js'
 import { hoistToolResultMediaForCompatibility, shouldHoistNestedToolResultMedia } from '../proxy/transform/anthropicMediaHoist.js'
 import { openaiChatToAnthropic } from '../proxy/transform/openaiChatToAnthropic.js'
@@ -58,10 +60,9 @@ import {
   normalizeProvidersIndex,
   providerNeedsProxy,
   resolveProviderApiFormat,
-  resolveProviderModelApiFormat,
   resolveProviderApiKey,
 } from './providerRuntimeEnv.js'
-import { resolveModelApiFormat, type ModelApiFormatRule } from '../../shared/modelApiFormats.js'
+import { resolveModelApiBaseUrl, resolveModelApiRule, type ModelApiFormatRule } from '../../shared/modelApiFormats.js'
 import { applyUpstreamHeaders, resolveUpstreamHeaders } from '../proxy/upstreamHeaders.js'
 import {
   getNetworkProxyFetchOptions,
@@ -78,6 +79,7 @@ import type {
   ProviderTestResult,
   ProviderTestStepResult,
   ApiFormat,
+  ModelApiFormat,
   ModelMapping,
   ProviderAuthStrategy,
   RequestCompatibility,
@@ -731,7 +733,7 @@ export class ProviderService {
     apiFormat: ApiFormat
     supportsNestedToolResultMedia: boolean
     authStrategy: ProviderAuthStrategy
-    modelApiFormats: ModelApiFormatRule<ApiFormat>[]
+    modelApiFormats: ModelApiFormatRule<ModelApiFormat>[]
     upstreamHeaders: Record<string, string>
     requestCompatibility?: RequestCompatibility
   } | null> {
@@ -780,7 +782,7 @@ export class ProviderService {
     apiFormat: ApiFormat
     supportsNestedToolResultMedia: boolean
     authStrategy: ProviderAuthStrategy
-    modelApiFormats: ModelApiFormatRule<ApiFormat>[]
+    modelApiFormats: ModelApiFormatRule<ModelApiFormat>[]
     upstreamHeaders: Record<string, string>
     requestCompatibility?: RequestCompatibility
   } | null> {
@@ -796,7 +798,8 @@ export class ProviderService {
     const provider = await this.getProvider(id)
     const baseUrl = provider.baseUrl
     const modelId = overrides?.modelId || provider.models.main
-    const apiFormat = resolveProviderModelApiFormat(provider, modelId)
+    // The per-model rule is resolved by testProviderConfig, same as the proxy.
+    const apiFormat = resolveProviderApiFormat(provider)
     const authStrategy = provider.authStrategy ?? getPresetAuthStrategy(provider.presetId)
     const presetDefaultEnv = getPresetDefaultEnv(provider.presetId)
     const apiKey = resolveProviderApiKey(provider, presetDefaultEnv)
@@ -836,11 +839,13 @@ export class ProviderService {
     // would. Whether the *provider* needs local request handling is independent of
     // the protocol this particular model routes to.
     const providerFormat = resolveProviderApiFormat({ presetId, apiFormat: input.apiFormat })
-    const format: ApiFormat = resolveModelApiFormat(modelApiFormats, modelId) ?? providerFormat
+    const modelApiRule = resolveModelApiRule(modelApiFormats, modelId)
+    const format: ModelApiFormat = modelApiRule?.apiFormat ?? providerFormat
+    const routeBase = resolveModelApiBaseUrl(base, modelApiRule)
 
     // ── Step 1: Basic connectivity ───────────────────────────
     // Directly call the upstream API to verify URL, key, and model.
-    const step1 = await this.testConnectivity(base, input.apiKey, modelId, format, authStrategy, networkSettings, input.requestCompatibility, upstreamHeaders)
+    const step1 = await this.testConnectivity(routeBase, input.apiKey, modelId, format, authStrategy, networkSettings, input.requestCompatibility, upstreamHeaders)
 
     // If connectivity failed, no point running step 2
     if (!step1.success) {
@@ -854,7 +859,7 @@ export class ProviderService {
     // ── Step 2: Full proxy pipeline ──────────────────────────
     // Anthropic request → transform → upstream → transform back → validate
     const step2 = await this.testProxyPipeline(
-      base,
+      routeBase,
       input.apiKey,
       modelId,
       format,
@@ -877,7 +882,7 @@ export class ProviderService {
     base: string,
     apiKey: string,
     modelId: string,
-    format: ApiFormat,
+    format: ModelApiFormat,
     authStrategy: ProviderAuthStrategy,
     networkSettings: NetworkSettings,
     requestCompatibility?: RequestCompatibility,
@@ -927,7 +932,7 @@ export class ProviderService {
     base: string,
     apiKey: string,
     modelId: string,
-    format: ApiFormat,
+    format: ModelApiFormat,
     authStrategy: ProviderAuthStrategy,
     networkSettings: NetworkSettings,
     requestCompatibility?: RequestCompatibility,
@@ -960,6 +965,13 @@ export class ProviderService {
         applyUpstreamHeaders(headers, upstreamHeaders)
         headers['Content-Type'] = 'application/json'
         headers.Authorization = `Bearer ${apiKey}`
+      } else if (format === 'gemini') {
+        transformedBody = anthropicToGemini(anthropicReq, { requestCompatibility, budgetSource: 'explicit' })
+        upstreamUrl = buildGeminiEndpoint(base, modelId)
+        headers = {}
+        applyUpstreamHeaders(headers, upstreamHeaders)
+        headers['Content-Type'] = 'application/json'
+        headers['x-goog-api-key'] = apiKey
       } else {
         transformedBody = hoistNestedMedia ? hoistToolResultMediaForCompatibility(anthropicReq) : anthropicReq
         upstreamUrl = `${normalizeAnthropicBaseUrl(base)}/v1/messages`
@@ -973,13 +985,14 @@ export class ProviderService {
       const proxyOptions = getNetworkProxyFetchOptions(networkSettings, upstreamUrl)
 
       // Call upstream with transformed request
-      const response = await fetch(upstreamUrl, {
+      const post = (payload: unknown) => fetch(upstreamUrl, {
         method: 'POST',
         headers,
-        body: JSON.stringify(transformedBody),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(networkSettings.aiRequestTimeoutMs),
         ...proxyOptions,
       })
+      const response = await post(transformedBody)
 
       if (!response.ok) {
         const latencyMs = Date.now() - start
@@ -994,7 +1007,13 @@ export class ProviderService {
         ? openaiChatToAnthropic(responseBody, modelId)
         : format === 'openai_responses'
           ? openaiResponsesToAnthropic(responseBody, modelId)
-          : responseBody
+          : format === 'gemini'
+            ? await geminiResponseToAnthropic(responseBody, modelId, async (continuationToken) => {
+                const continued = await post({ ...(transformedBody as GeminiRequest), continuationToken })
+                if (!continued.ok) throw new Error(`Upstream HTTP ${continued.status} on continuation`)
+                return continued.json()
+              })
+            : responseBody
 
       const latencyMs = Date.now() - start
 
@@ -1031,7 +1050,7 @@ function buildDirectTestRequest(
   base: string,
   apiKey: string,
   modelId: string,
-  format: ApiFormat,
+  format: ModelApiFormat,
   authStrategy: ProviderAuthStrategy,
   requestCompatibility?: RequestCompatibility,
   upstreamHeaders: Record<string, string> = {},
@@ -1039,7 +1058,8 @@ function buildDirectTestRequest(
   const prompt = 'Say "ok" and nothing else.'
   const outputBudget = format !== 'anthropic'
     ? resolveRequestCompatibility({ model: modelId, max_tokens: 16, messages: [] }, {
-        protocol: format,
+        // Gemini has one budget field and the same policy as OpenAI Chat.
+        protocol: format === 'gemini' ? 'openai_chat' : format,
         requestCompatibility,
         budgetSource: 'explicit',
       }).outputBudget
@@ -1065,6 +1085,18 @@ function buildDirectTestRequest(
       url: buildOpenaiEndpoint(base, 'responses'),
       headers: { ...baseHeaders, Authorization: `Bearer ${apiKey}` },
       body: { model: modelId, ...budgetParams, input: [{ type: 'message', role: 'user', content: prompt }] },
+    }
+  }
+  if (format === 'gemini') {
+    return {
+      url: buildGeminiEndpoint(base, modelId),
+      headers: { ...baseHeaders, 'x-goog-api-key': apiKey },
+      body: {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        ...(outputBudget?.effective !== undefined && outputBudget.field !== 'omit'
+          ? { generationConfig: { maxOutputTokens: outputBudget.effective } }
+          : {}),
+      },
     }
   }
   // anthropic
@@ -1093,9 +1125,14 @@ function buildAnthropicAuthHeaders(apiKey: string, authStrategy: ProviderAuthStr
   }
 }
 
+/** Non-stream `generateContent` for a Gemini route's base URL. */
+function buildGeminiEndpoint(base: string, modelId: string): string {
+  return `${base.replace(/\/+$/, '')}/models/${encodeURIComponent(modelId)}:generateContent`
+}
+
 function validateResponseBody(
   body: Record<string, unknown> | null,
-  format: ApiFormat,
+  format: ModelApiFormat,
 ): { ok: true; model?: string } | { ok: false; error: string } {
   if (!body) return { ok: false, error: 'Empty response — not a valid API endpoint' }
   if (body.error && typeof body.error === 'object') {
@@ -1113,6 +1150,12 @@ function validateResponseBody(
       return { ok: false, error: 'Response missing output — not a valid Responses API endpoint' }
     }
     return { ok: true, model: (body.model as string) || undefined }
+  }
+  if (format === 'gemini') {
+    if (!Array.isArray(body.candidates)) {
+      return { ok: false, error: 'Response missing candidates — not a valid Gemini generateContent endpoint' }
+    }
+    return { ok: true, model: (body.modelVersion as string) || undefined }
   }
   // anthropic
   if (body.type !== 'message' || !Array.isArray(body.content)) {

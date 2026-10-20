@@ -1743,3 +1743,22 @@ describe('ModelSelector', () => {
     expect(dropdown.style.width).toBe('360px')
   })
 })
+
+describe('delegation catalog', () => {
+  it('uses server provider identity without reconciling it against stale global providers', async () => {
+    useSettingsStore.setState({ locale: 'en' })
+    const fetchProviders = vi.fn()
+    useProviderStore.setState({ hasLoadedProviders: true, providers: [], fetchProviders })
+    const onRuntimeSelectionChange = vi.fn()
+    render(<ModelSelector ariaLabel="Delegated model" runtimeSelection={{ providerId: 'server-one', modelId: 'same' }} onRuntimeSelectionChange={onRuntimeSelectionChange} runtimeChoices={[
+      { providerId: 'server-one', providerName: 'Channel one', isDefault: false, models: [{ id: 'same', name: 'Same', description: '', context: '', supportedReasoningEfforts: [] }] },
+      { providerId: 'server-two', providerName: 'Channel two', isDefault: false, models: [{ id: 'same', name: 'Same', description: '', context: '', supportedReasoningEfforts: [] }] },
+    ]} />)
+    expect(screen.getByRole('button', { name: 'Delegated model' })).toHaveTextContent('Channel one')
+    await clickByRole('Delegated model')
+    const matches = screen.getAllByRole('button', { name: 'Same' })
+    fireEvent.click(matches[1]!)
+    expect(onRuntimeSelectionChange).toHaveBeenCalledWith(expect.objectContaining({ providerId: 'server-two', modelId: 'same' }))
+    expect(fetchProviders).not.toHaveBeenCalled()
+  })
+})

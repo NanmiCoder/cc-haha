@@ -1006,6 +1006,21 @@ describe('MessageList nested tool calls', () => {
     expect(screen.getByText('latest assistant reply')).toBeTruthy()
   })
 
+  it.each([
+    { compact: false, mobileLayout: false, gutter: 'px-6' },
+    { compact: true, mobileLayout: false, gutter: 'px-4' },
+    { compact: false, mobileLayout: true, gutter: 'px-3' },
+    { compact: true, mobileLayout: true, gutter: 'px-3' },
+  ])('aligns a transcript without navigation with the composer at $gutter', ({ compact, mobileLayout, gutter }) => {
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({
+      messages: [{ id: 'single-message', type: 'user_text', content: 'Review this change', timestamp: 1 }],
+    }) } })
+    render(<MessageList compact={compact} mobileLayout={mobileLayout} />)
+    expect(screen.queryByTestId('conversation-navigator')).toBeNull()
+    const scroller = screen.getByTestId('message-list').querySelector('.chat-scroll-area') as HTMLElement
+    expect(scroller.className.split(/\s+/)).toContain(gutter)
+  })
+
   it('keeps the conversation navigator available in compact desktop transcripts', () => {
     useChatStore.setState({
       sessions: {

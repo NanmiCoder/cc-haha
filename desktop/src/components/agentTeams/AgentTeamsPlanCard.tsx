@@ -118,17 +118,15 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
   const stateTone = STATE_TONE[plan.state]
 
   return (
-    <section aria-label={t('teamPlan.title')} className="my-4 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
-      <div className="flex h-[42px] items-center gap-2 border-b border-[var(--color-border)] px-3.5">
-        <UsersRound size={15} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
-        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[var(--color-text-primary)]">{t('teamPlan.title')}</span>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 px-3.5 py-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-medium text-[var(--color-text-primary)]">{plan.teamName}</h3>
-          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-tertiary)]" role="status">
+    <section aria-label={t('teamPlan.title')} className="@container min-w-0 max-w-full rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)]">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+        <UsersRound size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
+        <div className="min-w-0 flex-1 basis-40">
+          <p className="text-[11px] text-[var(--color-text-tertiary)]">{t('teamPlan.title')}</p>
+          <h3 className="mt-0.5 truncate text-[13px] font-medium text-[var(--color-text-primary)]" title={plan.teamName}>{plan.teamName}</h3>
+          <p className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-[var(--color-text-secondary)]" role="status">
             <StatusDot tone={stateTone} pulse={stateTone === 'warning'} />
-            <span className="truncate">{stateLabel} · {t('teamPlan.memberCount', { count: members.length })}</span>
+            <span className="min-w-0 [overflow-wrap:anywhere]">{stateLabel} · {t('teamPlan.memberCount', { count: members.length })}</span>
           </p>
         </div>
         <Button data-testid="team-plan-open" size="base" variant={plan.state === 'review_pending' ? 'primary' : 'secondary'} onClick={openEditor}>{t('teamPlan.open')}</Button>
@@ -154,7 +152,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
           </div>
         </div>
       )}>
-        <div className="team-plan-editor">
+        <div className="team-plan-editor @container min-w-0 [overflow-wrap:anywhere]">
           <div className="flex flex-wrap items-start justify-between gap-4 pb-6">
             <div className="min-w-0">
               <p className="text-sm text-[var(--color-text-secondary)]">{t('teamPlan.reviewHint')}</p>
@@ -172,8 +170,8 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
               {draft?.planId === plan.planId && plan.state === 'review_pending' && <Button data-testid="team-plan-reapply" variant="secondary" onClick={() => reapply(sessionId)}>{t('teamPlan.reapply')}</Button>}
             </div>
           </div>}
-          <div className="grid min-w-0 gap-6 md:grid-cols-[244px_minmax(0,1fr)] md:gap-8">
-            <aside className="min-w-0 md:border-r md:border-[var(--color-border-separator)] md:pr-6">
+          <div className="grid min-w-0 gap-6 @min-[760px]:grid-cols-[244px_minmax(0,1fr)] @min-[760px]:gap-8">
+            <aside className="min-w-0 @min-[760px]:border-r @min-[760px]:border-[var(--color-border-separator)] @min-[760px]:pr-6">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <h4 className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.roster')} <span className="ml-1 font-mono text-[var(--color-text-tertiary)]">{members.length}</span></h4>
                 {plan.state === 'review_pending' && <Checkbox size="sm" label={t('teamPlan.selectAll')} labelHidden checked={members.length > 0 && members.every(member => selected.includes(member.id))} indeterminate={selected.length > 0 && !members.every(member => selected.includes(member.id))} disabled={!editable} onChange={event => setSelected(event.target.checked ? members.map(member => member.id) : [])} />}
@@ -202,7 +200,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                 <Button block size="base" variant="ghost" disabled={!editable} onClick={() => edit(sessionId, { members: members.map(member => ({ ...member, runtime: member.suggestedRuntime ?? member.runtime })) })}>{t('teamPlan.restore')}</Button>
               </div>}
             </aside>
-            <div className="min-w-0">
+            <div className="@container min-w-0">
               {activeMember && <section key={activeMember.id} className="team-plan-detail" aria-label={t('teamPlan.configureMember', { name: activeMember.name })}>
                 <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -211,7 +209,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                   </div>
                   <Badge size="sm">{t('teamPlan.difficulty')}: {difficultyLabel(activeMember)}</Badge>
                 </div>
-                <div className="grid gap-5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+                <div className="grid gap-5 @min-[560px]:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
                   <div className="min-w-0 space-y-2">
                     <p className="text-xs font-medium text-[var(--color-text-secondary)]">{t('teamPlan.agent')}</p>
                     <Dropdown className="w-full" width="100%" maxHeight={280} label={`${activeMember.name} · ${t('teamPlan.agent')}`} value={activeMember.agentType} items={[
@@ -240,7 +238,7 @@ export function AgentTeamsPlanCard({ sessionId }: { sessionId: string }) {
                 <div className="divide-y divide-[var(--color-border-separator)]">
                   {tasks.map((task, index) => {
                     const owner = members.find(member => member.id === task.ownerId)
-                    return <div key={task.id} className="grid min-w-0 gap-3 py-4 sm:grid-cols-[minmax(0,1fr)_160px]">
+                    return <div key={task.id} className="grid min-w-0 gap-3 py-4 @min-[560px]:grid-cols-[minmax(0,1fr)_160px]">
                       <div className="flex min-w-0 gap-3">
                         <span className="mt-0.5 shrink-0 font-mono text-[11px] text-[var(--color-text-tertiary)]">{String(index + 1).padStart(2, '0')}</span>
                         <div className="min-w-0"><p className="text-sm font-medium leading-relaxed text-[var(--color-text-primary)]">{task.subject}</p>

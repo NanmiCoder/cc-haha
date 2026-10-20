@@ -2,6 +2,9 @@
 
 export type ApiFormat = 'anthropic' | 'openai_chat' | 'openai_responses'
 
+/** Protocols a preset can route one model family to; a saved record only carries an ApiFormat. */
+export type ModelApiFormat = ApiFormat | 'gemini'
+
 export type ProviderAuthStrategy =
   | 'api_key'
   | 'auth_token'

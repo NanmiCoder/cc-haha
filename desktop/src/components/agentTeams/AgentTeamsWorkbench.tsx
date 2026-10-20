@@ -319,7 +319,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
   return (
     <section
       aria-label={t('agentTeams.title')}
-      className="relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[var(--color-surface)] text-[var(--color-text-primary)]"
+      className="relative flex h-full min-h-0 min-w-0 w-full flex-col overflow-hidden bg-[var(--color-surface)] text-[var(--color-text-primary)]"
     >
       {/* A narrow pane wraps the controls onto a row of their own instead of
           scrolling the header sideways; the team block and counters stay on
@@ -330,9 +330,9 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
             <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
               {t('agentTeams.name')} · {t('agentTeams.sharedTaskList')}
             </div>
-            <div className="mt-0.5 flex min-w-0 items-center gap-2">
+            <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-2">
               <span
-                className="max-w-[300px] truncate text-[15px] font-semibold"
+                className="min-w-0 max-w-full truncate text-[15px] font-semibold"
                 title={snapshot.team.name}
               >
                 {snapshot.team.name}
@@ -343,7 +343,7 @@ export function AgentTeamsWorkbench({ sessionId }: { sessionId: string }) {
             </div>
           </div>
 
-          <div className="flex shrink-0 items-center gap-[18px] border-l border-[var(--color-border)] pl-[18px]">
+          <div className="flex min-w-0 max-w-full flex-wrap items-center gap-x-[18px] gap-y-2 border-l border-[var(--color-border)] pl-[18px]">
             <div className="min-w-[74px]">
               <div className="text-[11px] font-semibold text-[var(--color-text-tertiary)]">
                 {t('agentTeams.stats.phase')}

@@ -171,6 +171,8 @@ export type DailyModelSeries = {
   total: number
   /** Tokens per ranked model, same order as `rankModels`. */
   byModel: number[]
+  /** The models behind that day's gray "other" tokens, biggest first, so the day can still name them. */
+  otherModels: Array<{ id: string; tokens: number }>
 }
 
 /** The trailing `dayCount` days ending `today`, zero-filled, split by ranked model. */
@@ -189,11 +191,16 @@ export function buildDailyModelSeries(
   return Array.from({ length: dayCount }, (_, offset) => {
     const date = localDateKey(addDays(end, offset - (dayCount - 1)))
     const byModel = models.map(() => 0)
+    const otherModels: DailyModelSeries['otherModels'] = []
     for (const [id, tokens] of Object.entries(tokensByDate.get(date) ?? {})) {
-      const index = indexById.get(id) ?? otherIndex
-      if (index >= 0) byModel[index] = (byModel[index] ?? 0) + tokens
+      const ranked = indexById.get(id)
+      const index = ranked ?? otherIndex
+      if (index < 0) continue
+      byModel[index] = (byModel[index] ?? 0) + tokens
+      if (ranked === undefined && tokens > 0) otherModels.push({ id, tokens })
     }
-    return { date, total: byModel.reduce((sum, tokens) => sum + tokens, 0), byModel }
+    otherModels.sort((a, b) => b.tokens - a.tokens || a.id.localeCompare(b.id))
+    return { date, total: byModel.reduce((sum, tokens) => sum + tokens, 0), byModel, otherModels }
   })
 }
 
@@ -215,6 +222,43 @@ export type DayModelShare = {
   tokens: number
   /** 0..1 of that day's total. */
   share: number
+  /** Set on the row that sums a busy day's smallest "other" models: how many it stands for. */
+  foldedCount?: number
+}
+
+/** How many of a day's "other" models are named before the rest are summed into one row. */
+export const NAMED_OTHER_MODELS = 3
+
+/**
+ * Which models carried one day, biggest first. The models in the gray "other" slot are named one
+ * by one, since one gray can't say which they were; past `NAMED_OTHER_MODELS` the smallest are
+ * summed into a last row so the list stays short.
+ */
+export function dayModelShares(day: DailyModelSeries, models: RankedModel[]): DayModelShare[] {
+  if (day.total <= 0) return []
+  const rows: DayModelShare[] = []
+  let folded: DayModelShare | null = null
+  for (const [modelIndex, tokens] of day.byModel.entries()) {
+    const model = models[modelIndex]
+    if (!model || tokens <= 0) continue
+    if (model.id !== OTHER_MODELS_ID || day.otherModels.length === 0) {
+      rows.push({ id: model.id, label: model.label, series: model.series, tokens, share: tokens / day.total })
+      continue
+    }
+    // Folding a single model would only hide its name, so a day folds two or more or none.
+    const named = day.otherModels.length > NAMED_OTHER_MODELS + 1 ? day.otherModels.slice(0, NAMED_OTHER_MODELS) : day.otherModels
+    for (const other of named) {
+      rows.push({ id: other.id, label: formatModelName(other.id), series: model.series, tokens: other.tokens, share: other.tokens / day.total })
+    }
+    const foldedCount = day.otherModels.length - named.length
+    if (foldedCount > 0) {
+      // The slot's own total minus what was named, so the rows always add up to the day.
+      const rest = tokens - named.reduce((sum, other) => sum + other.tokens, 0)
+      folded = { id: model.id, label: model.label, series: model.series, tokens: rest, share: rest / day.total, foldedCount }
+    }
+  }
+  rows.sort((a, b) => b.tokens - a.tokens)
+  return folded ? [...rows, folded] : rows
 }
 
 /** What a click on one day of the stream shows: where it sits against the rest of the window, and what it was made of. */
@@ -230,7 +274,7 @@ export type DaySummary = {
   /** 1 is the busiest day; ties share a rank. */
   rank: number
   activeDays: number
-  /** Models that ran that day, biggest first. */
+  /** Models that ran that day, as `dayModelShares` lists them. */
   models: DayModelShare[]
   sessionCount: number
   messageCount: number
@@ -259,14 +303,7 @@ export function summarizeDay(
     average: active.reduce((sum, candidate) => sum + candidate.total, 0) / active.length,
     rank: 1 + active.filter((candidate) => candidate.total > day.total).length,
     activeDays: active.length,
-    models: day.byModel
-      .flatMap((tokens, modelIndex) => {
-        const model = models[modelIndex]
-        return model && tokens > 0
-          ? [{ id: model.id, label: model.label, series: model.series, tokens, share: tokens / day.total }]
-          : []
-      })
-      .sort((a, b) => b.tokens - a.tokens),
+    models: dayModelShares(day, models),
     sessionCount: counts?.sessionCount ?? 0,
     messageCount: counts?.messageCount ?? 0,
     toolCallCount: counts?.toolCallCount ?? 0,

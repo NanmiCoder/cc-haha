@@ -39,6 +39,8 @@ import { openaiChatToAnthropic } from './transform/openaiChatToAnthropic.js'
 import { openaiResponsesToAnthropic } from './transform/openaiResponsesToAnthropic.js'
 import { openaiChatStreamToAnthropic } from './streaming/openaiChatStreamToAnthropic.js'
 import { openaiResponsesStreamToAnthropic } from './streaming/openaiResponsesStreamToAnthropic.js'
+import { anthropicToGemini, type GeminiRequest } from './transform/anthropicToGemini.js'
+import { GeminiUpstreamError, geminiErrorMessage, geminiResponseToAnthropic, geminiStreamToAnthropic } from './streaming/geminiStreamToAnthropic.js'
 import type { AnthropicRequest } from './transform/types.js'
 import { getProxyFetchOptions } from '../../utils/proxy.js'
 import {
@@ -56,7 +58,7 @@ import {
   type TraceProviderInfo,
 } from '../services/traceCaptureService.js'
 import { resolveModelReasoningProfile } from '../../shared/modelReasoning.js'
-import { resolveModelApiFormat } from '../../shared/modelApiFormats.js'
+import { resolveModelApiBaseUrl, resolveModelApiRule } from '../../shared/modelApiFormats.js'
 import { applyUpstreamHeaders, resolveUpstreamHeaders } from './upstreamHeaders.js'
 
 const providerService = new ProviderService()
@@ -256,8 +258,10 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
   // Gateways that bind the wire format to the URL path announce their exceptions
   // on the preset; a model matching no rule keeps the provider's own format.
   // Resolved per request because one provider record can serve several formats.
-  const modelApiFormat = resolveModelApiFormat(config.modelApiFormats, body.model)
+  const modelApiRule = resolveModelApiRule(config.modelApiFormats, body.model)
+  const modelApiFormat = modelApiRule?.apiFormat
   const apiFormat = modelApiFormat ?? config.apiFormat
+  const upstreamBaseUrl = resolveModelApiBaseUrl(baseUrl, modelApiRule)
   const upstreamHeaders = resolveUpstreamHeaders(config.upstreamHeaders, { sessionId: inboundSessionId })
 
   try {
@@ -291,18 +295,21 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
         resolvedApiFormat: apiFormat,
         supportsNestedToolResultMedia: config.supportsNestedToolResultMedia,
       })
-      return await handleAnthropicCompatible(body, baseUrl, config.apiKey, config.authStrategy, req.headers, isStream, networkSettings, traceContext, upstreamHeaders, hoistNestedMedia)
+      return await handleAnthropicCompatible(body, upstreamBaseUrl, config.apiKey, config.authStrategy, req.headers, isStream, networkSettings, traceContext, upstreamHeaders, hoistNestedMedia)
+    }
+    if (apiFormat === 'gemini') {
+      return await handleGemini(body, upstreamBaseUrl, config.apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders)
     }
     if (apiFormat === 'openai_chat') {
-      return await handleOpenaiChat(body, baseUrl, config.apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders)
+      return await handleOpenaiChat(body, upstreamBaseUrl, config.apiKey, isStream, networkSettings, traceContext, requestOptions, upstreamHeaders)
     }
-    return await handleOpenaiResponses(body, baseUrl, config.apiKey, isStream, networkSettings, traceContext, promptCacheKey, requestOptions, upstreamHeaders)
+    return await handleOpenaiResponses(body, upstreamBaseUrl, config.apiKey, isStream, networkSettings, traceContext, promptCacheKey, requestOptions, upstreamHeaders)
   } catch (err) {
     if (traceContext && !wasTraceErrorRecorded(err) && !recordedTraceErrorContexts.has(traceContext)) {
       void recordProxyTrace({
         context: traceContext,
         model: body.model,
-        upstreamUrl: baseUrl,
+        upstreamUrl: upstreamBaseUrl,
         upstreamRequest: null,
         startedAt: new Date().toISOString(),
         startedAtMs: Date.now(),
@@ -1146,6 +1153,173 @@ async function handleOpenaiResponses(
     })
   }
   return Response.json(anthropicResponse, { status: policyError ? 403 : 200 })
+}
+
+/**
+ * Google `generateContent`, as OpenCode Go serves its Gemini models. A response
+ * Gemini splits across requests is followed here by resending the same body
+ * with the continuation token, so the client still receives one message.
+ */
+async function handleGemini(
+  body: AnthropicRequest,
+  baseUrl: string,
+  apiKey: string,
+  isStream: boolean,
+  networkSettings: NetworkSettings,
+  traceContext: ProxyTraceContext | null,
+  requestOptions: RequestCompatibilityOptions = {},
+  upstreamHeaders: Record<string, string> = {},
+): Promise<Response> {
+  const transformed = anthropicToGemini(body, requestOptions)
+  const model = encodeURIComponent(body.model)
+  const url = isStream
+    ? `${baseUrl}/models/${model}:streamGenerateContent?alt=sse`
+    : `${baseUrl}/models/${model}:generateContent`
+  // Preset-declared headers first, so the credential always wins over them.
+  const upstreamRequestHeaders: Record<string, string> = {}
+  applyUpstreamHeaders(upstreamRequestHeaders, upstreamHeaders)
+  upstreamRequestHeaders['Content-Type'] = 'application/json'
+  upstreamRequestHeaders['x-goog-api-key'] = apiKey
+  const proxyOptions = getNetworkProxyFetchOptions(networkSettings, url)
+  const send = (request: GeminiRequest) => fetchUpstreamWithTimeout(url, {
+    method: 'POST',
+    headers: upstreamRequestHeaders,
+    body: JSON.stringify(request),
+    ...proxyOptions,
+  }, networkSettings.aiRequestTimeoutMs, isStream)
+  const startedAtMs = Date.now()
+  const startedAt = new Date(startedAtMs).toISOString()
+  const traceCallId = traceContext
+    ? startProxyTraceCall({
+        context: traceContext,
+        model: body.model,
+        upstreamUrl: url,
+        upstreamRequest: transformed,
+        requestHeaders: upstreamRequestHeaders,
+        startedAt,
+      })
+    : undefined
+  const trace = (fields: Partial<RecordProxyTraceInput>) => {
+    if (!traceContext) return
+    recordProxyTraceInBackground({
+      callId: traceCallId,
+      context: traceContext,
+      model: body.model,
+      upstreamUrl: url,
+      upstreamRequest: transformed,
+      requestHeaders: upstreamRequestHeaders,
+      startedAt,
+      startedAtMs,
+      ...fields,
+    })
+  }
+
+  let upstream: Response
+  try {
+    upstream = await send(transformed)
+  } catch (err) {
+    trace({ error: err })
+    if (traceContext) markTraceErrorRecorded(err)
+    throw err
+  }
+
+  if (!upstream.ok) {
+    const errText = await upstream.text().catch(() => '')
+    const errorBody = {
+      type: 'error',
+      error: { type: 'api_error', message: `Upstream returned HTTP ${upstream.status}: ${errText.slice(0, 500)}` },
+    }
+    trace({
+      responseStatus: upstream.status,
+      upstreamResponseBody: errText,
+      anthropicResponseBody: errorBody,
+      responseHeaders: upstream.headers,
+    })
+    return Response.json(errorBody, { status: upstream.status })
+  }
+
+  // Only the first request is traced; continuations carry the same body plus a token.
+  const resend = async (continuationToken: string): Promise<Response> => {
+    const response = await send({ ...transformed, continuationToken })
+    if (response.ok) return response
+    const errText = await response.text().catch(() => '')
+    let message: string | undefined
+    try {
+      message = geminiErrorMessage(JSON.parse(errText))
+    } catch {
+      // An unstructured failure keeps its raw text below.
+    }
+    throw new GeminiUpstreamError(
+      `Gemini continuation returned HTTP ${response.status}: ${(message ?? errText).slice(0, 500)}`,
+      response.status,
+    )
+  }
+
+  if (isStream) {
+    if (!upstream.body) {
+      trace({ error: new Error('Upstream returned no body for stream') })
+      return Response.json(
+        { type: 'error', error: { type: 'api_error', message: 'Upstream returned no body for stream' } },
+        { status: 502 },
+      )
+    }
+    const idle = (stream: ReadableStream<Uint8Array>) => withStreamIdleTimeout(stream, networkSettings.aiRequestTimeoutMs)
+    const anthropicStream = geminiStreamToAnthropic(idle(upstream.body), body.model, async (token) => {
+      const response = await resend(token)
+      if (!response.body) throw new GeminiUpstreamError('Gemini continuation returned no body for stream')
+      return idle(response.body)
+    })
+    const tracedStream = traceContext
+      ? captureTraceStream(anthropicStream, async (bodySnapshot, error, protocolTraceEnd) => {
+          await recordProxyTrace({
+            callId: traceCallId,
+            context: traceContext,
+            model: body.model,
+            upstreamUrl: url,
+            upstreamRequest: transformed,
+            requestHeaders: upstreamRequestHeaders,
+            startedAt,
+            startedAtMs,
+            responseStatus: 200,
+            responseBodySnapshot: bodySnapshot,
+            protocolTraceEnd,
+            responseHeaders: upstream.headers,
+            ...(error ? { error } : {}),
+          })
+        })
+      : anthropicStream
+    return new Response(tracedStream, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        Connection: 'keep-alive',
+      },
+    })
+  }
+
+  // Non-streaming
+  const responseBody = await upstream.json()
+  let anthropicResponse: unknown
+  let status = 200
+  try {
+    anthropicResponse = await geminiResponseToAnthropic(
+      responseBody,
+      body.model,
+      async token => (await resend(token)).json(),
+    )
+  } catch (err) {
+    if (!(err instanceof GeminiUpstreamError)) throw err
+    status = err.status ?? 502
+    anthropicResponse = { type: 'error', error: { type: 'api_error', message: err.message } }
+  }
+  trace({
+    responseStatus: status,
+    upstreamResponseBody: responseBody,
+    anthropicResponseBody: anthropicResponse,
+    responseHeaders: upstream.headers,
+  })
+  return Response.json(anthropicResponse, { status })
 }
 
 function buildProxyTraceContext(

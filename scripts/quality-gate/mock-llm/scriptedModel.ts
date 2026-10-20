@@ -195,6 +195,14 @@ export function decideReply(request: MockRequest): MockReply {
     }] })
   }
 
+  if (prompt.startsWith('MOCK_SESSION_EXPLICIT ') && hasTool(request, 'CreateSessions')) {
+    const runtime = JSON.parse(prompt.slice('MOCK_SESSION_EXPLICIT '.length))
+    return toolUse('CreateSessions', { requestId: 'mock-explicit', sessions: [{ title: 'Explicit review', prompt: 'Reply with Ready when you are.', runtime, userInstruction: { quote: prompt } }] })
+  }
+  if (prompt === 'MOCK_SESSION_DELEGATION' && hasTool(request, 'CreateSessions')) {
+    return toolUse('CreateSessions', { requestId: 'mock-delegation', sessions: [{ title: 'Independent review', prompt: 'Reply with Ready when you are.' }] })
+  }
+
   const cwd = workingDirectoryOf(request)
   const write = /Create a file called (\S+?)\.?\s[\s\S]*?(?:single word|containing the word) (\w+)/i.exec(prompt)
   if (write && cwd && hasTool(request, 'Write')) {
