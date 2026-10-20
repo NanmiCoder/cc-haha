@@ -2522,7 +2522,7 @@ describe('ProviderService', () => {
               expect(body.reasoning_split).toBeUndefined()
             }
             if (model.includes('flash') || model.includes('Flash')) {
-              expect(baseUrl.includes('openrouter') ? body.reasoning?.effort : body.reasoning_effort).toBe('max')
+              expect(baseUrl.includes('openrouter') ? body.reasoning?.effort : body.reasoning_effort).toBe(baseUrl.includes('openrouter') ? 'xhigh' : 'max')
             }
           }
         } finally {

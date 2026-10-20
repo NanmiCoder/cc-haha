@@ -752,7 +752,8 @@ async function handleOpenaiChat(
       transformed.reasoning_split = true
       transformed.thinking = { type: !flash && body.thinking?.type === 'disabled' ? 'disabled' : 'adaptive' }
     } else if (host === 'openrouter.ai' && transformed.reasoning_effort) {
-      transformed.reasoning = { effort: transformed.reasoning_effort }
+      // OpenRouter's normalized envelope tops out at xhigh, not native max.
+      transformed.reasoning = { effort: transformed.reasoning_effort === 'max' ? 'xhigh' : transformed.reasoning_effort }
       delete transformed.reasoning_effort
     }
   }
