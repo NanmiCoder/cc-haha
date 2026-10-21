@@ -127,6 +127,32 @@ describe('coverage gate helpers', () => {
     expect(parseBunTestFileCount('process terminated before summary')).toBeNull()
   })
 
+  test('recovers discovery from Bun CI file groups when a failed run has no summary', () => {
+    const output = [
+      '::group::src/server/a.test.ts:',
+      '(pass) first test',
+      '::endgroup::',
+      '::group::src\\server\\a.test.ts:',
+      '::endgroup::',
+      '::group::src/utils/b.test.tsx:',
+      '(fail) second test',
+      '::group::Coverage report:',
+      '::group::src/not-a-test.ts:',
+    ].join('\r\n')
+
+    expect(parseBunTestFileCount(output)).toBe(2)
+    expect(parseBunTestFileCount(`${output}\nRan 10 tests across 3 files.`)).toBe(3)
+  })
+
+  test('keeps missing and partial CI discovery fail-closed', () => {
+    expect(parseBunTestFileCount('::group::Coverage report:\n::endgroup::')).toBeNull()
+    expect(parseBunTestFileCount('diagnostic ::group::src/a.test.ts:\n')).toBeNull()
+    const output = '::group::src/a.test.ts:\n::endgroup::\n'
+    expect(parseBunTestFileCount(output)).toBe(1)
+    expect(parseBunTestFileCount(output)).not.toBe(2)
+    expect(hasUsableLcov('')).toBe(false)
+  })
+
   test('rejects empty aggregate coverage summaries', () => {
     expect(hasUsableCoverageSummary({
       lines: { total: 0, covered: 0, pct: 100 },

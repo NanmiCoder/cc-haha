@@ -160,6 +160,12 @@ export function decideReply(request: MockRequest): MockReply {
 
   // A tool just ran: report what came back, the way a model summarises a result.
   const results = blocksOf(last).filter((block) => block.type === 'tool_result')
+  if (prompt === 'MOCK_LATE_MCP' && !results.some(block => toolResultText(block).includes('LATE_MCP_AVAILABLE'))) {
+    const toolName = 'mcp__late_start__echo'
+    if (hasTool(request, toolName)) return toolUse(toolName, {})
+    if (hasTool(request, 'ToolSearch') && !results.some(block => block.is_error)) return toolUse('ToolSearch', { query: `select:${toolName}` })
+    return text('Late MCP tool is unavailable')
+  }
   const imageTool = prompt.startsWith('MOCK_IMAGE_EDIT ') ? 'ImageEdit' : 'ImageGen'
   if (prompt.startsWith('MOCK_IMAGE_')) {
     // A deferred tool may first be loaded by ToolSearch. The next request must

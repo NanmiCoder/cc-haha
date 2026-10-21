@@ -96,6 +96,66 @@ describe('Responses tool finalization and snapshots', () => {
   })
 })
 
+describe('Responses empty text deltas (#1451)', () => {
+  const heartbeat = event('response.output_text.delta', {
+    item_id: 'SSE-Keep-Alive', output_index: 0, content_index: 0,
+    delta: '', 'SSE-Keep-Alive': true,
+  })
+  const summary = event('response.output_text.delta', { output_index: 1, content_index: 0, delta: 'valid summary' })
+    + event('response.output_text.done', { output_index: 1, content_index: 0, text: 'valid summary' })
+
+  test('an independent heartbeat never allocates a trailing empty text block', async () => {
+    const events = await collect(heartbeat + summary + completed([]))
+    expect(events.filter(item => item.type === 'content_block_start')).toHaveLength(1)
+    expect(events.filter(item => item.type === 'content_block_stop')).toHaveLength(1)
+    expect(events.filter(item => item.delta?.type === 'text_delta').map(item => item.delta.text).join('')).toBe('valid summary')
+  })
+
+  test('empty deltas do not consume an index, including refusal deltas', async () => {
+    for (const type of ['response.output_text.delta', 'response.refusal.delta']) {
+      const events = await collect(event(type, { output_index: 0, delta: '' }) + summary + completed([]))
+      expect(events.find(item => item.type === 'content_block_start')?.index).toBe(0)
+      expect(events.filter(item => item.type === 'content_block_start')).toHaveLength(1)
+    }
+  })
+
+  test('done-only text and refusal still supply their content after an empty delta', async () => {
+    for (const [type, field] of [['output_text', 'text'], ['refusal', 'refusal']]) {
+      const input = event(`response.${type}.delta`, { output_index: 0, delta: '' })
+        + event(`response.${type}.done`, { output_index: 0, [field!]: 'done-only content' }) + completed([])
+      const result = await openaiResponsesStreamToAnthropicResponse(stream(input), 'fixture')
+      expect(result.content).toEqual([{ type: 'text', text: 'done-only content' }])
+    }
+  })
+
+  test('an empty trailing delta preserves the completed text and usage', async () => {
+    const input = summary + event('response.output_text.delta', { output_index: 0, delta: '' })
+      + event('response.completed', { response: { status: 'completed', output: [], usage: { input_tokens: 5, output_tokens: 3 } } })
+    const result = await openaiResponsesStreamToAnthropicResponse(stream(input), 'fixture')
+    expect(result.content).toEqual([{ type: 'text', text: 'valid summary' }])
+    expect(result.usage).toEqual({ input_tokens: 5, output_tokens: 3 })
+  })
+
+  test('empty deltas can share a live text or refusal index without losing content', async () => {
+    for (const [type, field] of [['output_text', 'text'], ['refusal', 'refusal']]) {
+      const input = event(`response.${type}.delta`, { output_index: 0, delta: '' })
+        + event(`response.${type}.delta`, { output_index: 0, delta: 'kept ' })
+        + event(`response.${type}.delta`, { output_index: 0, delta: '' })
+        + event(`response.${type}.delta`, { output_index: 0, delta: 'content' })
+        + event(`response.${type}.done`, { output_index: 0, [field!]: 'kept content' }) + completed([])
+      const result = await openaiResponsesStreamToAnthropicResponse(stream(input), 'fixture')
+      expect(result.content).toEqual([{ type: 'text', text: 'kept content' }])
+    }
+  })
+
+  test('a heartbeat does not suppress tool completion or upstream errors', async () => {
+    const toolResult = await openaiResponsesStreamToAnthropicResponse(stream(heartbeat + startTool + completed([tool])), 'fixture')
+    expect(toolResult.content).toEqual([{ type: 'tool_use', id: 'call_1', name: 'Write', input: { path: 'fixture', text: '你好' } }])
+    expect(toolResult.stop_reason).toBe('tool_use')
+    await expect(openaiResponsesStreamToAnthropicResponse(stream(heartbeat + event('response.failed', { response: { error: { message: 'heartbeat failure' } } })), 'fixture')).rejects.toThrow('heartbeat failure')
+  })
+})
+
 describe('Responses non-streaming terminal validation', () => {
   test('failure, cancellation and unknown incomplete never become successful output', () => {
     for (const status of ['failed', 'cancelled', 'incomplete', 'in_progress']) {

@@ -3815,6 +3815,54 @@ describe('Providers API', () => {
     expect(body.providers[0].apiKey).toBe('sk-test-key-123')
   })
 
+  test('GET /api/providers preserves a drag across built-in rows after reopening settings', async () => {
+    const svc = new ProviderService()
+    const a = await svc.addProvider(sampleInput({ name: 'A' }))
+    const b = await svc.addProvider(sampleInput({ name: 'B' }))
+    await svc.activateProvider(a.id)
+    const draggedOrder = ['grok-official', b.id, 'claude-official', 'openai-official', a.id, 'deepseek-account']
+
+    const reorder = makeRequest('PUT', '/api/providers/reorder', { orderedIds: draggedOrder })
+    const reorderRes = await handleProvidersApi(reorder.req, reorder.url, reorder.segments)
+    expect(reorderRes.status).toBe(200)
+    expect(((await reorderRes.json()) as { providerOrder: string[] }).providerOrder).toEqual(draggedOrder)
+    expect((await readProvidersConfig()).providerOrder).toEqual(draggedOrder)
+    expect((await new ProviderService().listProviders()).providerOrder).toEqual(draggedOrder)
+
+    // Reopening Settings refetches this route, rather than the reorder response.
+    const { req, url, segments } = makeRequest('GET', '/api/providers')
+    const res = await handleProvidersApi(req, url, segments)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      providers: { id: string }[]
+      providerOrder: string[]
+      activeId: string | null
+    }
+    expect(body.providerOrder).toEqual(draggedOrder)
+    expect(body.providers.map((provider) => provider.id)).toEqual([b.id, a.id])
+    expect(body.activeId).toBe(a.id)
+  })
+
+  test('GET /api/providers preserves built-in positions after a legacy saved-only reorder', async () => {
+    const svc = new ProviderService()
+    const a = await svc.addProvider(sampleInput({ name: 'A' }))
+    const b = await svc.addProvider(sampleInput({ name: 'B' }))
+    await svc.reorderProviders(['grok-official', b.id, 'claude-official', 'openai-official', a.id, 'deepseek-account'])
+
+    const reorder = makeRequest('PUT', '/api/providers/reorder', { orderedIds: [a.id, b.id] })
+    const reorderRes = await handleProvidersApi(reorder.req, reorder.url, reorder.segments)
+    expect(reorderRes.status).toBe(200)
+
+    const { req, url, segments } = makeRequest('GET', '/api/providers')
+    const res = await handleProvidersApi(req, url, segments)
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { providers: { id: string }[]; providerOrder: string[] }
+    expect(body.providerOrder).toEqual([
+      'grok-official', a.id, 'claude-official', 'openai-official', b.id, 'deepseek-account',
+    ])
+    expect(body.providers.map((provider) => provider.id)).toEqual([a.id, b.id])
+  })
+
   test('GET /api/providers carries the DeepSeek account mapping the user saved', async () => {
     const list = async () => {
       const { req, url, segments } = makeRequest('GET', '/api/providers')

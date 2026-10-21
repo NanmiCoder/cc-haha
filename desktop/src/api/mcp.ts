@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { McpServerRecord, McpToggleResult, McpUpsertPayload } from '../types/mcp'
+import type { McpServerRecord, McpReconnectResult, McpToggleResult, McpUpsertPayload } from '../types/mcp'
 
 export const mcpApi = {
   list: (cwd?: string) => {
@@ -48,7 +48,10 @@ export const mcpApi = {
     )
   },
 
-  reconnect: (name: string, cwd?: string) => {
-    return api.post<{ server: McpServerRecord }>(`/api/mcp/${encodeURIComponent(name)}/reconnect`, cwd ? { cwd } : {})
+  reconnect: (name: string, cwd?: string, sessionId?: string) => {
+    return api.post<McpReconnectResult>(`/api/mcp/${encodeURIComponent(name)}/reconnect`, {
+      ...(cwd ? { cwd } : {}),
+      ...(sessionId ? { sessionId } : {}),
+    })
   },
 }

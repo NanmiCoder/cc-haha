@@ -53,6 +53,18 @@ describe('scripted model', () => {
     expect(reply.kind === 'message' && reply.content[0]).toMatchObject({ type: 'tool_use', name: 'Bash', input: { command: 'echo nonce-1' } })
   })
 
+  test('discovers a late MCP tool, executes it, and reports its actual result', () => {
+    const request = agentRequest([{ role: 'user', content: 'MOCK_LATE_MCP' }])
+    expect(decideReply({ ...request, tools: [...AGENT_TOOLS, { name: 'ToolSearch' }] }))
+      .toMatchObject({ content: [{ type: 'tool_use', name: 'ToolSearch', input: { query: 'select:mcp__late_start__echo' } }] })
+    expect(decideReply({ ...request, tools: [...AGENT_TOOLS, { name: 'mcp__late_start__echo' }] }))
+      .toMatchObject({ content: [{ type: 'tool_use', name: 'mcp__late_start__echo', input: {} }] })
+    expect(decideReply({ ...request, messages: [
+      ...request.messages!,
+      { role: 'user', content: [{ type: 'tool_result', content: 'LATE_MCP_AVAILABLE' }] },
+    ] })).toMatchObject({ content: [{ type: 'text', text: 'Tool result: LATE_MCP_AVAILABLE' }] })
+  })
+
   test('loads deferred image tools and then invokes generation or editing after search', () => {
     const request = agentRequest([{ role: 'user', content: 'MOCK_IMAGE_GENERATE' }])
     expect(decideReply({ ...request, tools: [...AGENT_TOOLS, { name: 'ToolSearch' }] }))

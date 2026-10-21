@@ -7,7 +7,7 @@ import {
   isSameMcpServer,
   mcpProjectPathKey,
 } from '../lib/mcpIdentity'
-import type { McpServerRecord, McpToggleResult, McpUpsertPayload } from '../types/mcp'
+import type { McpServerRecord, McpReconnectResult, McpToggleResult, McpUpsertPayload } from '../types/mcp'
 
 type McpStore = {
   servers: McpServerRecord[]
@@ -20,7 +20,7 @@ type McpStore = {
   updateServer: (server: McpServerRecord, payload: McpUpsertPayload, cwd?: string) => Promise<McpServerRecord>
   deleteServer: (server: McpServerRecord, cwd?: string) => Promise<void>
   toggleServer: (server: McpServerRecord, cwd?: string, sessionId?: string) => Promise<McpToggleResult>
-  reconnectServer: (server: McpServerRecord, cwd?: string) => Promise<McpServerRecord>
+  reconnectServer: (server: McpServerRecord, cwd?: string, sessionId?: string) => Promise<McpReconnectResult>
   refreshServerStatus: (server: McpServerRecord, cwd?: string) => Promise<McpServerRecord>
   selectServer: (server: McpServerRecord | null) => void
 }
@@ -217,8 +217,8 @@ export const useMcpStore = create<McpStore>((set, get) => ({
     return { ...response, server: updated }
   },
 
-  reconnectServer: async (server, cwd) => {
-    const response = await mcpApi.reconnect(server.name, cwd)
+  reconnectServer: async (server, cwd, sessionId) => {
+    const response = await mcpApi.reconnect(server.name, cwd, sessionId)
     const updated = preserveCurrentContextActivity(
       attachProjectPath(response.server, cwd ?? server.projectPath),
       server,
@@ -228,7 +228,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       selectedServer: state.selectedServer && isSameMcpServer(state.selectedServer, server) ? updated : state.selectedServer,
       error: null,
     }))
-    return updated
+    return { ...response, server: updated }
   },
 
   refreshServerStatus: async (server, cwd) => {

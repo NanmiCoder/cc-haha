@@ -177,7 +177,20 @@ export function makeWebSearchUnavailableOutput(
 
 function canUseAnthropicNativeWebSearch(model: string | undefined): boolean {
   const key = normalizeModelKey(model)
-  return isLikelyClaudeModel(model) && (!key || !unsupportedNativeModels.has(key))
+  // DeepSeek's Anthropic endpoint supports the same server-side search tool.
+  const supportsNativeSearch = isLikelyClaudeModel(model) || (
+    !!key?.startsWith('deepseek-') && isDeepSeekNativeSearchEndpoint()
+  )
+  return supportsNativeSearch && (!key || !unsupportedNativeModels.has(key))
+}
+
+function isDeepSeekNativeSearchEndpoint(): boolean {
+  try {
+    const endpoint = new URL(process.env.ANTHROPIC_BASE_URL ?? '')
+    return endpoint.hostname === 'api.deepseek.com' && /^\/anthropic(?:\/v1)?\/?$/.test(endpoint.pathname)
+  } catch {
+    return false
+  }
 }
 
 function normalizeModelKey(model: string | undefined): string | null {

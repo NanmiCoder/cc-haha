@@ -355,9 +355,13 @@ function processEvent(
 
     case 'response.output_text.delta':
     case 'response.refusal.delta': {
+      const delta = typeof data.delta === 'string' ? data.delta : ''
+      // Some relays send empty deltas as heartbeats under a separate text
+      // index. Allocating that block would leave an empty assistant after the
+      // real text when the terminal event closes the remaining blocks (#1451).
+      if (!delta) break
       const index = ensureTextBlock(data, state, controller, encoder)
       if (!state.openIndices.has(index)) throw new Error('OpenAI Responses text delta arrived after block completion')
-      const delta = typeof data.delta === 'string' ? data.delta : ''
       reconcileText(index, (state.textByIndex.get(index) ?? '') + delta, state, controller, encoder)
       break
     }

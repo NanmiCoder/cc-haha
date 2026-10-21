@@ -286,6 +286,7 @@ type SessionProcess = {
   teamWorker?: TeamWorkerStart
   providerId?: string | null
   providerConfigFingerprint?: string
+  providerAuth?: { baseUrl: string; apiKey: string; authToken: string }
   networkRoutingFingerprint: string
   networkDerivedFirstTokenTimeout: boolean
   networkDerivedStreamMaxDuration: boolean
@@ -857,6 +858,13 @@ export class ConversationService {
         ...(options.openAIFastMode !== undefined ? { openAIFastMode: options.openAIFastMode } : {}),
       } : undefined,
       providerConfigFingerprint: providerCapture.fingerprint,
+      ...(typeof options?.providerId === 'string' && {
+        providerAuth: {
+          baseUrl: childEnv.ANTHROPIC_BASE_URL ?? '',
+          apiKey: childEnv.ANTHROPIC_API_KEY ?? '',
+          authToken: childEnv.ANTHROPIC_AUTH_TOKEN ?? '',
+        },
+      }),
       networkRoutingFingerprint: networkRoutingFingerprint(networkSettings, childEnv),
       networkDerivedFirstTokenTimeout: networkRuntimeMetadata.firstTokenTimeoutDerived,
       networkDerivedStreamMaxDuration: networkRuntimeMetadata.streamMaxDurationDerived,
@@ -1029,10 +1037,14 @@ export class ConversationService {
       return false
     }
     session = this.sessions.get(sessionId)
+    if (session && !await this.refreshProviderCredentialsBeforeTurn(sessionId, session)) {
+      return false
+    }
+    session = this.sessions.get(sessionId)
     if (session) {
       await this.refreshOfficialOAuthTokenBeforeTurn(sessionId, session)
     }
-    // Building attachments, refreshing network settings, and refreshing OAuth
+    // Building attachments and refreshing network settings or credentials
     // can all suspend this call. Stop may revoke the owning desktop turn while
     // one of those awaits is pending, so check ownership at the last possible
     // point before writing the user message to the SDK socket.
@@ -1048,6 +1060,32 @@ export class ConversationService {
       session_id: '',
     })
     if (sent) options?.onCommitted?.()
+    return sent
+  }
+
+  private async refreshProviderCredentialsBeforeTurn(
+    sessionId: string,
+    session: SessionProcess,
+  ): Promise<boolean> {
+    if (!session.providerId || !session.providerAuth) return true
+    let env: Record<string, string>
+    try {
+      env = await this.providerService.getProviderRuntimeEnv(session.providerId)
+    } catch {
+      // A removed provider must not silently switch this session to another one.
+      return this.sessions.get(sessionId) === session
+    }
+    if (this.sessions.get(sessionId) !== session) return false
+    // A credential saved for a new address must never reach the old endpoint.
+    if ((env.ANTHROPIC_BASE_URL ?? '') !== session.providerAuth.baseUrl) return true
+    const apiKey = env.ANTHROPIC_API_KEY ?? ''
+    const authToken = env.ANTHROPIC_AUTH_TOKEN ?? ''
+    if (apiKey === session.providerAuth.apiKey && authToken === session.providerAuth.authToken) return true
+    const sent = this.sendSdkMessage(sessionId, {
+      type: 'update_environment_variables',
+      variables: { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: authToken },
+    })
+    if (sent) session.providerAuth = { ...session.providerAuth, apiKey, authToken }
     return sent
   }
 

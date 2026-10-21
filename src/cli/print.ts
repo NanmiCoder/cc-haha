@@ -268,6 +268,7 @@ import {
 } from 'src/services/mcp/utils.js'
 import { setupVscodeSdkMcp } from 'src/services/mcp/vscodeSdkMcp.js'
 import { getAllMcpConfigs } from 'src/services/mcp/config.js'
+import { refreshGlobalConfigFromDisk } from 'src/utils/config.js'
 import {
   isQualifiedForGrove,
   checkGroveForNonInteractive,
@@ -3367,6 +3368,7 @@ function runHeadlessStreaming(
             sendControlResponseError(message, errorMessage(error))
           }
         } else if (message.request.subtype === 'mcp_reconnect') {
+          refreshGlobalConfigFromDisk()
           const currentAppState = getAppState()
           const { serverName } = message.request
           elicitationRegistered.delete(serverName)

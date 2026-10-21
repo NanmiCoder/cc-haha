@@ -359,7 +359,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const cliTasksCompletedAndDismissed = useCLITaskStore((s) => s.completedAndDismissed)
   const hasIncompleteTasks = cliTasks.some((task) => task.status !== 'completed')
   const isActivityPanelOpen = useActivityPanelStore((state) => activeTabId ? state.isOpen(activeTabId) : false)
-  const openActivityPanel = useActivityPanelStore((state) => state.open)
   const closeActivityPanel = useActivityPanelStore((state) => state.close)
   const dismissBackgroundTaskKeys = useActivityPanelStore((state) => state.dismissBackgroundTaskKeys)
   const pruneDismissedBackgroundTaskKeys = useActivityPanelStore((state) => state.pruneDismissedBackgroundTaskKeys)
@@ -434,7 +433,6 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
   const workspaceIsGitRepo = useWorkspaceContentStore((state) =>
     activeTabId ? state.statusBySession[activeTabId]?.isGitRepo : undefined,
   )
-  const activityVisibilityBySessionRef = useRef<Record<string, { hadAutoOpenActivity: boolean }>>({})
 
   useEffect(() => {
     if (activeTabId) {
@@ -663,42 +661,13 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
     if (!isMobileLayout || !active || !activeTabId) return
     useActivityPanelStore.getState().setMobileSummary(activeTabId, { visible: hasVisibleActivity, count: activityBadgeCount })
   }, [active, activeTabId, activityBadgeCount, hasVisibleActivity, isMobileLayout])
-  const hasAutoOpenActivity = activityModel ? activityModel.badgeCount > 0 : false
-
-  useEffect(() => {
-    if (!activeTabId || !isSessionTabState(activeTabId, activeTabType)) return
-
-    const state = activityVisibilityBySessionRef.current[activeTabId]
-    if (!state) {
-      activityVisibilityBySessionRef.current[activeTabId] = {
-        hadAutoOpenActivity: hasAutoOpenActivity,
-      }
-      return
-    }
-
-    // Not on a phone: there the panel is a sheet over the conversation, and
-    // the top bar's activity pill already says work started, without covering
-    // what the agent is writing.
-    if (!state.hadAutoOpenActivity && hasAutoOpenActivity && !isActivityPanelOpen && !isMobileLayout) {
-      openActivityPanel(activeTabId)
-    }
-    state.hadAutoOpenActivity = hasAutoOpenActivity
-  }, [
-    activeTabId,
-    activeTabType,
-    hasAutoOpenActivity,
-    isActivityPanelOpen,
-    isMobileLayout,
-    openActivityPanel,
-  ])
 
   useEffect(() => {
     if (!activeTabId || !isActivityPanelOpen || hasVisibleActivity) return
     // Activity rows derive from volatile caches that are briefly empty during
     // history loads, cli-task refetches and reconnect reloads. Closing the
-    // panel on the first empty beat made that flicker permanent (auto-open
-    // does not re-fire after a remount), so only close once the empty state
-    // survives a full history-ready grace period.
+    // panel on the first empty beat loses the user's explicit open choice,
+    // so only close once the empty state survives a full history-ready grace period.
     if (sessionState?.historyStatus === 'loading') return
     const timer = setTimeout(() => {
       const current = useChatStore.getState().sessions[activeTabId]

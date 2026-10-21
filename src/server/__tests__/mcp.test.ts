@@ -1138,6 +1138,58 @@ describe('MCP API', () => {
     expect(body.server.scope).toBe('dynamic')
   })
 
+  it('reconnects a late-starting MCP server in every matching running session', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'late-server', scope: 'local',
+      config: { type: 'http', url: 'http://127.0.0.1:1/mcp', headers: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    conversationService.getActiveSessions = () => ['current', 'history', 'other-project', 'lean']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = id => id === 'other-project' ? tmpDir : projectRoot
+    const requestControl = mock(async () => ({}))
+    conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    const launchInfoSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation((async (id: string) => (
+      { agentProfile: id === 'lean' ? 'lean' : 'standard' }
+    )) as unknown as typeof sessionService.getSessionLaunchInfo)
+    reconnectSpy = spyOn(mcpClient, 'reconnectMcpServerImpl').mockImplementation(async (name, config) => ({
+      client: { name, config, type: 'connected', client: {} as never, capabilities: {}, cleanup: async () => {} },
+      tools: [], commands: [],
+    }))
+    try {
+      const reconnect = makeRequest('POST', '/api/mcp/late-server/reconnect', { cwd: projectRoot, sessionId: 'current' })
+      const response = await handleMcpApi(reconnect.req, reconnect.url, reconnect.segments)
+      expect(response.status).toBe(200)
+      expect((await response.json()).sessionSync).toEqual({ applied: true })
+      expect(requestControl.mock.calls.map(call => call[0])).toEqual(['current', 'history'])
+      expect(requestControl).toHaveBeenCalledWith('current', { subtype: 'mcp_reconnect', serverName: 'late-server' }, 120_000)
+    } finally {
+      launchInfoSpy.mockRestore()
+    }
+  })
+
+  it('reports a session reconnect failure even when the settings probe connects', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'stale-session', scope: 'local',
+      config: { type: 'http', url: 'http://127.0.0.1:1/mcp', headers: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    conversationService.getActiveSessions = () => ['current']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = () => projectRoot
+    conversationService.requestControl = (async () => { throw new Error('session MCP reconnect failed') }) as typeof conversationService.requestControl
+    reconnectSpy = spyOn(mcpClient, 'reconnectMcpServerImpl').mockImplementation(async (name, config) => ({
+      client: { name, config, type: 'connected', client: {} as never, capabilities: {}, cleanup: async () => {} },
+      tools: [], commands: [],
+    }))
+    const reconnect = makeRequest('POST', '/api/mcp/stale-session/reconnect', { cwd: projectRoot, sessionId: 'current' })
+    const response = await handleMcpApi(reconnect.req, reconnect.url, reconnect.segments)
+    expect(await response.json()).toMatchObject({
+      server: { status: 'connected' },
+      sessionSync: { applied: false, reason: 'failed', error: 'session MCP reconnect failed' },
+    })
+  })
+
   it('returns a failed server state when reconnect preflight fails on the host machine', async () => {
     const pluginServerName = 'plugin:telegram:telegram'
     const pluginServerConfig = {

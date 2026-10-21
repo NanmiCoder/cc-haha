@@ -6610,6 +6610,8 @@ describe('MessageList nested tool calls', () => {
     expect(fallback.closest('[data-chat-render-item-key]')).toBeNull()
     expect(within(fallback).getByText(/too long for turn previews or file undo/)).toBeTruthy()
     expect(within(fallback).getByText(/current workspace changes/)).toBeTruthy()
+    expect(within(fallback).queryByRole('button', { name: 'Open current content of qa-status.txt' })).toBeNull()
+    fireEvent.click(within(fallback).getByRole('button', { name: 'Show 1 changed files' }))
     fireEvent.click(within(fallback).getByRole('button', { name: 'Open current content of qa-status.txt' }))
     expect(openFile).toHaveBeenCalledWith(ACTIVE_TAB, 'qa-status.txt')
     expect(openReview).not.toHaveBeenCalled()

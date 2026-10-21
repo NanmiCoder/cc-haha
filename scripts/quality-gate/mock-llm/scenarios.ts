@@ -6,7 +6,7 @@
  * the failure paths a real provider cannot be made to produce on demand.
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { LiveScenarioRunner } from '../agent-flow/live'
@@ -17,6 +17,7 @@ import { UPSTREAM_ERROR_TRIGGER } from './scriptedModel'
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-mcp-late-reconnect', title: 'Reconnect a late-starting MCP service into an already running CLI session' },
   { id: 'mock-session-delegation-review', title: 'Real CLI yields for model allocation and starts a child only after UI confirmation' },
   {
     id: 'mock-image-provider-protocols',
@@ -83,6 +84,89 @@ export function createMockOnlyRunners(
   imageRequests: MockLlmServer['imageRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    async 'mock-mcp-late-reconnect'(ctx) {
+      const cwd = realpathSync(ctx.workRoot)
+      let ready = false
+      let calls = 0
+      let unavailableAttempts = 0
+      const mcp = Bun.serve({
+        hostname: '127.0.0.1', port: 0,
+        async fetch(req) {
+          if (!ready) {
+            unavailableAttempts += 1
+            return new Response('MCP application has not started', { status: 503 })
+          }
+          if (req.method !== 'POST') return new Response(null, { status: 405 })
+          const request = await req.json() as { id?: number | string; method: string }
+          if (request.id === undefined) return new Response(null, { status: 202 })
+          let result: unknown
+          if (request.method === 'initialize') {
+            result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'late-fixture', version: '1' } }
+          } else if (request.method === 'tools/list') {
+            result = { tools: [{ name: 'echo', description: 'Return the late MCP fixture marker', inputSchema: { type: 'object', properties: {} } }] }
+          } else if (request.method === 'tools/call') {
+            calls += 1
+            result = { content: [{ type: 'text', text: 'LATE_MCP_AVAILABLE' }] }
+          } else {
+            return Response.json({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } })
+          }
+          return Response.json({ jsonrpc: '2.0', id: request.id, result })
+        },
+      })
+      const name = 'late_start'
+      let socket: Awaited<ReturnType<typeof ctx.openSocket>> | undefined
+      let oldSocket: Awaited<ReturnType<typeof ctx.openSocket>> | undefined
+      try {
+        // Keep a CLI whose cached config predates this MCP alongside the CLI
+        // that starts with the configured but unavailable service.
+        oldSocket = await ctx.openSocket(await ctx.createSession())
+        ctx.pinRuntime(oldSocket)
+        oldSocket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+        await oldSocket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'turn before adding MCP config')
+        const created = await fetch(`${ctx.baseUrl}/api/mcp`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd, name, scope: 'local', config: { type: 'http', url: `http://127.0.0.1:${mcp.port}/mcp` } }),
+        })
+        if (!created.ok) throw new Error(`creating the fixture MCP config failed: ${created.status}`)
+        const sessionId = await ctx.createSession()
+        socket = await ctx.openSocket(sessionId)
+        ctx.pinRuntime(socket)
+        socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'initial turn without MCP')
+        if (unavailableAttempts === 0) throw new Error('The CLI must attempt the configured MCP before the application starts')
+        if (calls !== 0) throw new Error('The unavailable MCP must not execute a tool')
+        ready = true
+        const reconnected = await fetch(`${ctx.baseUrl}/api/mcp/${name}/reconnect`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd, sessionId }),
+        })
+        const receipt = await reconnected.json() as { sessionSync?: { applied: boolean }; server?: { status: string } }
+        if (!reconnected.ok || receipt.server?.status !== 'connected' || !receipt.sessionSync?.applied) {
+          throw new Error(`reconnect did not update the running conversation: ${JSON.stringify(receipt)}`)
+        }
+        for (const active of [oldSocket, socket]) {
+          const since = requests.length
+          const start = active.messages.length
+          active.send({ type: 'user_message', content: 'MOCK_LATE_MCP' })
+          const settled = await active.waitFor(message => message.type === 'permission_request' || message.type === 'message_complete', ctx.stepTimeoutMs, 'late MCP permission or completion', start)
+          if (settled.type === 'permission_request') {
+            active.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
+          }
+          await active.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'late MCP tool call', start)
+          const roundtrip = toolResultsSentUpstream(requests, since).some(result => contentText(result.content).includes('LATE_MCP_AVAILABLE') && !result.is_error)
+          if (!roundtrip) throw new Error('Each reconnected CLI must return the actual MCP tool result to the model')
+        }
+        if (calls !== 2) throw new Error('Both reconnected CLIs must execute the MCP tool exactly once')
+      } finally {
+        socket?.close()
+        oldSocket?.close()
+        try {
+          await fetch(`${ctx.baseUrl}/api/mcp/${name}?scope=local&cwd=${encodeURIComponent(cwd)}`, { method: 'DELETE' })
+        } finally {
+          mcp.stop(true)
+        }
+      }
+    },
     async 'mock-session-delegation-review'(ctx) {
       const sessionId = await ctx.createSession()
       const socket = await ctx.openSocket(sessionId)

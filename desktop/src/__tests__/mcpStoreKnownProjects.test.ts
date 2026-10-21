@@ -241,7 +241,7 @@ describe('fetchServersForKnownProjects', () => {
       scope: 'project',
       config: inactive.config,
     }, inactive.projectPath)
-    const reconnected = await useMcpStore.getState().reconnectServer(updated, inactive.projectPath)
+    const { server: reconnected } = await useMcpStore.getState().reconnectServer(updated, inactive.projectPath)
     const refreshed = await useMcpStore.getState().refreshServerStatus(reconnected, inactive.projectPath)
 
     expect(updated.activeInCurrentContext).toBe(false)
@@ -249,4 +249,18 @@ describe('fetchServersForKnownProjects', () => {
     expect(refreshed.activeInCurrentContext).toBe(false)
     expect(useMcpStore.getState().selectedServer?.activeInCurrentContext).toBe(false)
   })
+  it('preserves a failed runtime reconnect receipt while recording the connected settings probe', async () => {
+    const server = record('late-server', 'project', { projectPath: '/tmp/project' })
+    const connected = { ...server, status: 'connected' as const }
+    const sessionSync = { applied: false, reason: 'failed' as const, error: 'CLI reconnect failed' }
+    vi.mocked(mcpApi.reconnect).mockResolvedValue({ server: connected, sessionSync })
+    useMcpStore.setState({ servers: [server], selectedServer: server })
+
+    const result = await useMcpStore.getState().reconnectServer(server, server.projectPath, 'chat-1')
+
+    expect(result).toEqual({ server: connected, sessionSync })
+    expect(mcpApi.reconnect).toHaveBeenCalledWith('late-server', server.projectPath, 'chat-1')
+    expect(useMcpStore.getState().selectedServer).toEqual(connected)
+  })
+
 })

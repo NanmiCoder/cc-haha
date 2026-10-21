@@ -1,7 +1,7 @@
 /**
  * Providers REST API
  *
- * GET    /api/providers                  — list all saved providers + activeId
+ * GET    /api/providers                  — list all saved providers + activeId + providerOrder
  * GET    /api/providers/presets           — list available presets
  * GET    /api/providers/auth-status       — check whether any usable auth exists
  *                                           (?providerId=<id>: only that provider's own auth)
@@ -136,12 +136,12 @@ export async function handleProvidersApi(
     // /api/providers (no ID)
     if (!id) {
       if (req.method === 'GET') {
-        const { providers, activeId } = await providerService.listProviders()
+        const { providers, activeId, providerOrder } = await providerService.listProviders()
         // The built-in DeepSeek account is not a saved provider, but the model
         // picker shows its alias rows like one, from the mapping the user saved.
         const deepSeekAccountModels =
           await providerService.getOfficialProviderModels(DEEPSEEK_ACCOUNT_PROVIDER_ID)
-        return Response.json({ providers, activeId, deepSeekAccountModels })
+        return Response.json({ providers, activeId, providerOrder, deepSeekAccountModels })
       }
       if (req.method === 'POST') {
         return await handleCreate(req)
