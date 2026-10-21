@@ -6,9 +6,18 @@ import { registerBundledSkill } from '../bundledSkills.js'
 /**
  * Generate JSON Schema from the settings Zod schema.
  * This keeps the skill prompt in sync with the actual types.
+ *
+ * `unrepresentable: 'any'` is required: the schema contains nodes zod cannot
+ * express — the bare `z.undefined()` member of the `enabledPlugins` union —
+ * and zod's default 'throw' policy would otherwise abort every invocation of
+ * this skill with "Undefined cannot be represented in JSON Schema". Those
+ * nodes render as `{}` instead.
  */
 function generateSettingsSchema(): string {
-  const jsonSchema = toJSONSchema(SettingsSchema(), { io: 'input' })
+  const jsonSchema = toJSONSchema(SettingsSchema(), {
+    io: 'input',
+    unrepresentable: 'any',
+  })
   return jsonStringify(jsonSchema, null, 2)
 }
 
