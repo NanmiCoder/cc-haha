@@ -539,3 +539,68 @@ it.each(['composer', 'message'] as const)('labels a selected-text reference as t
   expect(view.getByText('Selected text')).toBeInTheDocument()
   expect(view.queryByText('File')).not.toBeInTheDocument()
 })
+
+describe('AttachmentGallery annotation chips', () => {
+  const annotatedChip = {
+    id: 'annotation-1',
+    type: 'file' as const,
+    name: 'Assistant message',
+    referenceKind: 'chat-selection' as const,
+    quote: 'the ordering',
+    note: 'Move this clause to the front',
+  }
+  const annotationNumbers = new Map([['annotation-1', 1]])
+
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+  })
+
+  it('shows the annotation number and its note on the composer chip', () => {
+    const view = render(
+      <AttachmentGallery
+        variant="composer"
+        attachments={[annotatedChip]}
+        onRemove={vi.fn()}
+        annotationNumbers={annotationNumbers}
+      />,
+    )
+
+    expect(view.getByText('1')).toBeInTheDocument()
+    expect(view.getByText('Move this clause to the front')).toBeInTheDocument()
+    expect(view.getByText('the ordering')).toBeInTheDocument()
+  })
+
+  it('reports the chip so the annotation can be edited', () => {
+    const onActivate = vi.fn()
+    const view = render(
+      <AttachmentGallery
+        variant="composer"
+        attachments={[annotatedChip]}
+        onRemove={vi.fn()}
+        annotationNumbers={annotationNumbers}
+        onActivate={onActivate}
+      />,
+    )
+
+    fireEvent.click(view.getByRole('button', { name: 'Edit annotation 1' }))
+
+    expect(onActivate).toHaveBeenCalledTimes(1)
+    expect(onActivate.mock.calls[0]![0]).toBe('annotation-1')
+    expect(onActivate.mock.calls[0]![1]).toMatchObject({ width: expect.any(Number) })
+  })
+
+  it('leaves a selected-text chip without a note inert', () => {
+    const onActivate = vi.fn()
+    const view = render(
+      <AttachmentGallery
+        variant="composer"
+        attachments={[{ id: 'plain-quote', type: 'file', name: 'AI reply', quote: 'just a quote', referenceKind: 'chat-selection' }]}
+        annotationNumbers={new Map([['plain-quote', 1]])}
+        onActivate={onActivate}
+      />,
+    )
+
+    // Only an annotation is editable; a plain quote has no note to edit.
+    expect(view.queryByRole('button', { name: /^Edit annotation/ })).not.toBeInTheDocument()
+  })
+})

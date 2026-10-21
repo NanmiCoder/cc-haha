@@ -468,6 +468,56 @@ describe('ChatInput file mentions', () => {
     expect(screen.queryByTestId('diff-comment-card')).not.toBeInTheDocument()
   })
 
+  it('edits an annotation note from its composer chip', () => {
+    act(() => {
+      useWorkspaceChatContextStore.getState().addReference(sessionId, {
+        kind: 'chat-selection',
+        path: 'chat://assistant/a',
+        name: 'Assistant message',
+        messageId: 'a',
+        sourceRole: 'assistant',
+        quote: 'the ordering',
+        note: 'Move it',
+      })
+    })
+
+    render(<ChatInput compact />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit annotation 1' }))
+    const field = screen.getByPlaceholderText('What should change here?') as HTMLTextAreaElement
+    expect(field.value).toBe('Move it')
+
+    fireEvent.change(field, { target: { value: 'Move it to the front' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const references = useWorkspaceChatContextStore.getState().referencesBySession[sessionId] ?? []
+    expect(references).toHaveLength(1)
+    expect(references[0]!.note).toBe('Move it to the front')
+    // Same annotation, edited in place: the chip and its badge must not be rebuilt.
+    expect(references[0]!.id).toBe('chat-selection:chat://assistant/a:the ordering')
+  })
+
+  it('deletes an annotation from its composer chip', () => {
+    act(() => {
+      useWorkspaceChatContextStore.getState().addReference(sessionId, {
+        kind: 'chat-selection',
+        path: 'chat://assistant/a',
+        name: 'Assistant message',
+        messageId: 'a',
+        sourceRole: 'assistant',
+        quote: 'the ordering',
+        note: 'Move it',
+      })
+    })
+
+    render(<ChatInput compact />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit annotation 1' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Delete annotation' }))
+
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[sessionId] ?? []).toEqual([])
+  })
+
   it('keeps unsent composer drafts isolated when switching between session tabs', async () => {
     const historySessionId = 'history-session'
     useTabStore.setState({

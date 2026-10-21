@@ -17,6 +17,11 @@ export type WorkspaceChatReference = {
   quote?: string
   sourceRole?: 'user' | 'assistant'
   messageId?: string
+  // Character offsets of `quote` inside the source message's concatenated text.
+  // They let the transcript paint the annotation back onto the exact span the
+  // user selected instead of searching for the text again.
+  startOffset?: number
+  endOffset?: number
 }
 
 type WorkspaceChatContextStore = {
@@ -25,12 +30,33 @@ type WorkspaceChatContextStore = {
     sessionId: string,
     reference: Omit<WorkspaceChatReference, 'id'> & { id?: string },
   ) => void
+  updateReference: (
+    sessionId: string,
+    referenceId: string,
+    patch: Partial<Omit<WorkspaceChatReference, 'id'>>,
+  ) => void
   removeReference: (sessionId: string, referenceId: string) => void
   clearReferences: (sessionId: string) => void
   clearSession: (sessionId: string) => void
 }
 
+/**
+ * A chat selection is identified by the span it covers, not by its note: the
+ * user edits one annotation in place, and re-annotating the same span replaces
+ * it instead of stacking a duplicate. Offsets are exact; the quote is the
+ * fallback for selections captured before offsets were recorded.
+ */
+function getChatSelectionAnchor(reference: Omit<WorkspaceChatReference, 'id'>) {
+  if (reference.startOffset !== undefined && reference.endOffset !== undefined) {
+    return `${reference.startOffset}-${reference.endOffset}`
+  }
+  return reference.quote?.trim() ?? ''
+}
+
 function makeReferenceId(reference: Omit<WorkspaceChatReference, 'id'>) {
+  if (reference.kind === 'chat-selection') {
+    return `chat-selection:${reference.path}:${getChatSelectionAnchor(reference)}`
+  }
   const linePart = reference.lineStart
     ? `${reference.lineStart}-${reference.lineEnd ?? reference.lineStart}`
     : reference.messageId ?? 'file'
@@ -43,6 +69,9 @@ function makeReferenceId(reference: Omit<WorkspaceChatReference, 'id'>) {
 
 function getReferenceDedupKey(reference: WorkspaceChatReference) {
   if (reference.kind === 'file') return `${reference.kind}:${reference.path}`
+  if (reference.kind === 'chat-selection') {
+    return `${reference.kind}:${reference.path}:${getChatSelectionAnchor(reference)}`
+  }
   return [
     reference.kind,
     reference.path,
@@ -94,8 +123,28 @@ function getLanguageHint(reference: WorkspaceChatReference) {
   return aliases[extension] ?? extension
 }
 
-export function formatWorkspaceReferencePrompt(references: WorkspaceChatReference[]) {
-  const workspaceReferencesWithContext = references.filter((reference) =>
+/**
+ * 1-based numbers for the annotated chat selections, in the order they are sent.
+ *
+ * The transcript badges, the composer chips and the request's `[Annotation N]`
+ * blocks are the same list, so the number has to come from one place — a second
+ * implementation would drift the moment either side changed.
+ */
+export function getAnnotationNumbers(
+  references: WorkspaceChatReference[] | undefined,
+): Map<string, number> {
+  const numbers = new Map<string, number>()
+  let next = 1
+  for (const reference of references ?? []) {
+    if (reference.kind === 'chat-selection' && reference.note?.trim()) {
+      numbers.set(reference.id, next)
+      next += 1
+    }
+  }
+  return numbers
+}
+
+export function formatWorkspaceReferencePrompt(references: WorkspaceChatReference[]) {  const workspaceReferencesWithContext = references.filter((reference) =>
     reference.kind === 'code-comment' ||
     reference.kind === 'code-selection' ||
     !!reference.lineStart ||
@@ -103,9 +152,20 @@ export function formatWorkspaceReferencePrompt(references: WorkspaceChatReferenc
     !!reference.quote?.trim(),
   ).filter((reference) => reference.kind !== 'chat-selection')
   const chatReferencesWithContext = references.filter((reference) =>
-    reference.kind === 'chat-selection' && !!reference.quote?.trim(),
+    reference.kind === 'chat-selection' && !!reference.quote?.trim() && !reference.note?.trim(),
   )
-  if (workspaceReferencesWithContext.length === 0 && chatReferencesWithContext.length === 0) return ''
+  // A chat selection carrying a note is an annotation: it gets its own numbered
+  // section so the numbering the user sees on the transcript badges maps onto
+  // the request. Keeping it separate is also what leaves the plain chat-context
+  // block above byte-for-byte identical to what it was before annotations.
+  const annotatedReferences = references.filter((reference) =>
+    reference.kind === 'chat-selection' && !!reference.note?.trim(),
+  )
+  if (
+    workspaceReferencesWithContext.length === 0 &&
+    chatReferencesWithContext.length === 0 &&
+    annotatedReferences.length === 0
+  ) return ''
 
   const workspaceLines = workspaceReferencesWithContext.length > 0
     ? [
@@ -141,7 +201,25 @@ export function formatWorkspaceReferencePrompt(references: WorkspaceChatReferenc
       ]
     : []
 
-  return [...workspaceLines, ...chatLines].join('\n')
+  const annotationLines = annotatedReferences.length > 0
+    ? [
+        'Annotated chat context:',
+        ...annotatedReferences.flatMap((reference, index) => {
+          const number = index + 1
+          const lines = [`[Annotation ${number}]`]
+          lines.push(`${formatWorkspaceReferenceLocation(reference)}:`)
+          if (reference.quote?.trim()) {
+            const fence = getFenceForQuote(reference.quote)
+            lines.push(fence, reference.quote.trim(), fence)
+          }
+          lines.push(`Comment: ${reference.note!.trim()}`)
+          lines.push(`[Annotation ${number} end]`)
+          return lines
+        }),
+      ]
+    : []
+
+  return [...workspaceLines, ...chatLines, ...annotationLines].join('\n')
 }
 
 export const useWorkspaceChatContextStore = create<WorkspaceChatContextStore>((set) => ({
@@ -161,6 +239,20 @@ export const useWorkspaceChatContextStore = create<WorkspaceChatContextStore>((s
         referencesBySession: {
           ...state.referencesBySession,
           [sessionId]: [...withoutDuplicate, reference],
+        },
+      }
+    }),
+
+  updateReference: (sessionId, referenceId, patch) =>
+    set((state) => {
+      const existing = state.referencesBySession[sessionId]
+      if (!existing?.some((reference) => reference.id === referenceId)) return state
+      return {
+        referencesBySession: {
+          ...state.referencesBySession,
+          [sessionId]: existing.map((reference) =>
+            reference.id === referenceId ? { ...reference, ...patch } : reference,
+          ),
         },
       }
     }),

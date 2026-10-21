@@ -50,6 +50,7 @@ import type { PerSessionState } from '../../stores/chatStore'
 import { FindInPageModal } from '../search/FindInPageModal'
 import { getConversationFindController } from '../search/conversationFindBridge'
 import { workspaceOpen } from '@/lib/workspace/openTarget'
+import { getRangeForAnnotation } from './annotations/annotationAnchors'
 
 vi.mock('@/lib/workspace/openSideChat', () => ({ openSideChat: vi.fn(async () => 'tab-side') }))
 
@@ -111,6 +112,39 @@ function findTextNodeContaining(container: Element, text: string) {
     current = walker.nextNode()
   }
   throw new Error(`Unable to find text node containing ${text}`)
+}
+
+/** jsdom implements no layout, so annotation marks need ranges that report an area. */
+async function withMeasurableRanges(run: () => Promise<void>) {
+  Object.defineProperty(Range.prototype, 'getClientRects', {
+    configurable: true,
+    value: () => [{ left: 10, top: 20, width: 30, height: 12 }],
+  })
+  try {
+    await run()
+  } finally {
+    delete (Range.prototype as { getClientRects?: unknown }).getClientRects
+  }
+}
+
+const ANNOTATED_MESSAGE = 'Please rewrite the paragraph so the ordering reads naturally.'
+
+/** An annotation already in the store, as if captured from the transcript above. */
+function seedTranscriptAnnotation() {
+  useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [{
+    id: 'assistant-annotate', type: 'assistant_text', content: ANNOTATED_MESSAGE, timestamp: 1,
+  }] }) } })
+  useWorkspaceChatContextStore.getState().addReference(ACTIVE_TAB, {
+    kind: 'chat-selection',
+    path: 'chat://assistant/assistant-annotate',
+    name: 'Assistant message',
+    messageId: 'assistant-annotate',
+    sourceRole: 'assistant',
+    quote: 'the ordering',
+    note: 'Move it',
+    startOffset: 0,
+    endOffset: 12,
+  })
 }
 
 async function waitForSelectionMenuUpdate() {
@@ -3968,6 +4002,90 @@ describe('MessageList nested tool calls', () => {
       },
     ])
     expect(window.getSelection()?.toString()).toBe('')
+  })
+
+  it('annotates a selected passage with a note anchored to the exact span', async () => {
+    const content = 'Please rewrite the paragraph so the ordering reads naturally.'
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [{
+      id: 'assistant-annotate', type: 'assistant_text', content, timestamp: 1,
+    }] }) } })
+
+    render(<MessageList />)
+
+    await selectMessageText(screen.getByText(content), 'the ordering')
+    fireEvent.click(screen.getByRole('button', { name: 'Annotate' }))
+    fireEvent.change(screen.getByPlaceholderText('What should change here?'), {
+      target: { value: 'Move this clause to the front' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+    const references = useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB] ?? []
+    expect(references).toHaveLength(1)
+    expect(references[0]).toMatchObject({
+      kind: 'chat-selection',
+      path: 'chat://assistant/assistant-annotate',
+      messageId: 'assistant-annotate',
+      sourceRole: 'assistant',
+      quote: 'the ordering',
+      note: 'Move this clause to the front',
+    })
+
+    // The stored offsets have to resolve back to the span the user selected —
+    // that is what lets the transcript paint the annotation onto the message.
+    const wrapper = document.querySelector('[data-chat-selectable-message="assistant"]') as HTMLElement
+    const annotation = references[0]!
+    expect(getRangeForAnnotation(wrapper, {
+      quote: annotation.quote ?? '',
+      startOffset: annotation.startOffset,
+      endOffset: annotation.endOffset,
+    })?.toString()).toBe('the ordering')
+    expect(window.getSelection()?.toString()).toBe('')
+  })
+
+  it('adds nothing when the annotation editor is dismissed without saving', async () => {
+    const content = 'Please rewrite the paragraph so the ordering reads naturally.'
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [{
+      id: 'assistant-annotate', type: 'assistant_text', content, timestamp: 1,
+    }] }) } })
+
+    render(<MessageList />)
+
+    await selectMessageText(screen.getByText(content), 'the ordering')
+    fireEvent.click(screen.getByRole('button', { name: 'Annotate' }))
+    fireEvent.keyDown(screen.getByPlaceholderText('What should change here?'), { key: 'Escape' })
+
+    expect(screen.queryByRole('dialog', { name: 'Annotation' })).toBeNull()
+    expect(useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB] ?? []).toEqual([])
+  })
+
+  it('deletes an annotation from its transcript badge', async () => {
+    await withMeasurableRanges(async () => {
+      seedTranscriptAnnotation()
+      render(<MessageList />)
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit annotation 1' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Delete annotation' }))
+
+      expect(useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB] ?? []).toEqual([])
+    })
+  })
+
+  it('edits an annotation note from its transcript badge without churning its identity', async () => {
+    await withMeasurableRanges(async () => {
+      seedTranscriptAnnotation()
+      render(<MessageList />)
+
+      fireEvent.click(await screen.findByRole('button', { name: 'Edit annotation 1' }))
+      const field = screen.getByPlaceholderText('What should change here?') as HTMLTextAreaElement
+      expect(field.value).toBe('Move it')
+      fireEvent.change(field, { target: { value: 'Move it to the front' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+
+      const references = useWorkspaceChatContextStore.getState().referencesBySession[ACTIVE_TAB] ?? []
+      expect(references).toHaveLength(1)
+      expect(references[0]!.note).toBe('Move it to the front')
+      expect(references[0]!.id).toBe('chat-selection:chat://assistant/assistant-annotate:0-12')
+    })
   })
 
   it('cancels a pending Add to chat update when the native context menu opens', async () => {

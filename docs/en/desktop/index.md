@@ -23,6 +23,7 @@ To learn by doing, choose a task from the [practical guides](../cases/index.md).
 
 - [Sessions, permissions, and review](./sessions.md) — starting a session, reading tool cards, answering permission prompts, undoing a turn that went wrong.
 - [Workspace](./workspace.md) — the right-hand panel: changed files, diff review, line comments, isolated worktrees, built-in browser.
+- [Annotating and quoting text](./annotations.md) — select a passage, write a line about it, send several together.
 - [Settings reference](./settings.md) — all 16 tabs, one paragraph each: themes, languages, proxy, terminal, MCP, token usage.
 
 ## Getting more work out of it
