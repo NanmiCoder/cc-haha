@@ -25,6 +25,7 @@ export const connectorIconSources: Record<string, number> = {
   "intercom": require('../../assets/connectors/intercom.png'),
   "jinshuju": require('../../assets/connectors/jinshuju.png'),
   "jufa": require('../../assets/connectors/jufa.png'),
+  "keenable": require('../../assets/connectors/keenable.png'),
   "kuaicha": require('../../assets/connectors/kuaicha.png'),
   "linear": require('../../assets/connectors/linear.png'),
   "listinggood": require('../../assets/connectors/listinggood.png'),

@@ -28,6 +28,7 @@ const officialEndpoints: Record<string, string> = {
   atlassian: 'https://mcp.atlassian.com/v2/mcp',
   webflow: 'https://mcp.webflow.com/mcp',
   todoist: 'https://ai.todoist.net/mcp',
+  keenable: 'https://api.keenable.ai/mcp-public?keenable_title=cc-haha',
   'tencent-docs': 'https://docs.qq.com/openapi/mcp',
   jinshuju: 'https://jinshuju.net/mcp',
   pkulaw: 'https://apim-gateway.pkulaw.com/mcp-law-search-service',
@@ -45,12 +46,12 @@ const officialEndpoints: Record<string, string> = {
   figma: 'https://mcp.figma.com/mcp', stripe: 'https://mcp.stripe.com',
 }
 
-test('all 55 services and tool packages have unique plugin identities and packaged icons', () => {
+test('all 56 services and tool packages have unique plugin identities and packaged icons', () => {
   expect(CONNECTORS).toHaveLength(3)
-  expect(REMOTE_CONNECTORS).toHaveLength(43)
-  expect(ALL_CONNECTORS).toHaveLength(55)
-  expect(new Set(ALL_CONNECTORS.map(item => item.id)).size).toBe(55)
-  expect(new Set(ALL_CONNECTORS.map(item => item.pluginId)).size).toBe(55)
+  expect(REMOTE_CONNECTORS).toHaveLength(44)
+  expect(ALL_CONNECTORS).toHaveLength(56)
+  expect(new Set(ALL_CONNECTORS.map(item => item.id)).size).toBe(56)
+  expect(new Set(ALL_CONNECTORS.map(item => item.pluginId)).size).toBe(56)
   for (const def of ALL_CONNECTORS) {
     expect(getConnectorDefinition(def.id)).toEqual(def)
     expect(def.pluginId).toBe(`office-${def.id}@haha-connectors`)
@@ -88,4 +89,5 @@ test('remote recipes preserve official endpoints and generate only credential pl
   }
   expect(REMOTE_RECIPES.find(item => item.id === 'tencent-docs')?.auth).toEqual({ type: 'api-key', in: 'header', name: 'Authorization' })
   expect(REMOTE_RECIPES.find(item => item.id === 'github')?.auth).toMatchObject({ type: 'api-key', prefix: 'Bearer ' })
+  expect(REMOTE_RECIPES.find(item => item.id === 'keenable')?.auth).toEqual({ type: 'none' })
 })

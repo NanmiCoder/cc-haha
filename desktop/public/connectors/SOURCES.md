@@ -54,3 +54,6 @@ Firecrawl exception: official favicon https://www.firecrawl.dev/favicon.png (not
 - obsidian: https://registry.npmjs.org/simple-icons/-/simple-icons-16.31.0.tgz (icons/obsidian.svg; CC0 silhouette, purple presentation fill).
 - frontend-design, canvas-design, algorithmic-art, webapp-testing, mcp-builder: original neutral tool glyphs created for this application. These are category illustrations, not Anthropic brand marks.
 - remotion: official Remotion composer icon, https://github.com/remotion-dev/codex-plugin/blob/0e97f3ec3f52692460f3a57d0e3babcfc86f64d5/assets/composer-icon.svg (MIT). Removed its OS dark-mode override so the blue mark stays visible in the application's independently selected themes.
+
+2026-10-21 global service mark:
+- keenable: official Keenable symbol, https://api.keenable.ai/favicon.svg (same drawing as the brand kit file symbol-color-primary.svg). It paints its own eye whites, so it stays legible on light and dark themes without a backplate.
