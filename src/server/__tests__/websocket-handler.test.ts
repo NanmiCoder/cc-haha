@@ -937,6 +937,56 @@ describe('WebSocket handler session isolation', () => {
     await flushMicrotasks(30)
   })
 
+  it('delivers every user message of a burst in order instead of keeping only the last one', async () => {
+    const sessionId = `burst-user-messages-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const sentContents: string[] = []
+    const resolvers: Array<(sent: boolean) => void> = []
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Existing title')
+    spyOn(conversationService, 'sendMessage').mockImplementation(
+      (_sid, content) => new Promise<boolean>((resolve) => {
+        sentContents.push(content)
+        resolvers.push(resolve)
+      }),
+    )
+    const waitForSent = async (count: number) => {
+      const deadline = Date.now() + 2_000
+      while (sentContents.length < count && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 5))
+      }
+    }
+
+    handleWebSocket.open(ws)
+    ws.sent.length = 0
+    // After a result the renderer flushes its whole queue in one burst, so every
+    // message reaches the server before the first one has been committed.
+    for (const content of ['first queued', 'second queued', 'third queued']) {
+      handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content }))
+    }
+    await waitForSent(1)
+    await flushMicrotasks(30)
+
+    // Later messages wait until the earlier one is committed to the CLI.
+    expect(sentContents).toEqual(['first queued'])
+
+    resolvers.shift()!(true)
+    await waitForSent(2)
+    expect(sentContents).toEqual(['first queued', 'second queued'])
+
+    resolvers.shift()!(true)
+    await waitForSent(3)
+    expect(sentContents).toEqual(['first queued', 'second queued', 'third queued'])
+
+    resolvers.shift()!(true)
+    await flushMicrotasks(30)
+    const messages = ws.sent.map((payload) => JSON.parse(payload))
+    expect(messages).not.toContainEqual(expect.objectContaining({ type: 'error' }))
+  })
+
   it('lets directed Agent terminals through the stop fence after suppressing late content', () => {
     const sessionId = `agent-run-terminal-after-stop-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
@@ -5471,10 +5521,15 @@ describe('WebSocket handler session isolation', () => {
       content: 'newer turn',
     }))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(customTitleCalls).toBe(2)
+    // The newer message waits for the older turn to settle instead of taking
+    // over a turn that has not reached the CLI yet.
+    expect(customTitleCalls).toBe(1)
 
     rejectFirst(new Error('older metadata request failed'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (let i = 0; i < 50 && customTitleCalls < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    expect(customTitleCalls).toBe(2)
 
     ws.sent.length = 0
     handleWebSocket.message(ws, JSON.stringify({ type: 'sync_state' }))

@@ -247,6 +247,15 @@ type ActiveUserTurnState = {
   expectedReplayUuid?: string
   expectedLocalCommand?: NonNullable<ReturnType<typeof parseSlashCommand>>
   cancelled?: boolean
+  /**
+   * Resolves once this turn's handler returned or the turn was cancelled. A
+   * later user_message for the same session waits on it (see the user_message
+   * case in handleWebSocket.message) instead of taking over a turn that has
+   * not reached the CLI yet.
+   */
+  settled?: Promise<void>
+  isSettled?: boolean
+  markSettled?: () => void
 }
 
 
@@ -257,6 +266,15 @@ const runtimeOverrides = new Map<string, RuntimeOverride>()
 // previous process. Keep the rejection until a valid selection or cleanup.
 const rejectedRuntimeConfigs = new Map<string, string>()
 const activeUserTurns = new Map<string, ActiveUserTurnState>()
+// Newest user_message turn per session, started or still waiting for an earlier
+// one to settle; see the user_message case in handleWebSocket.message.
+const pendingUserTurns = new Map<string, ActiveUserTurnState>()
+
+/** Revoke a turn's admission; a later message waiting behind it may proceed. */
+function cancelActiveTurn(turn: ActiveUserTurnState): void {
+  turn.cancelled = true
+  turn.markSettled?.()
+}
 const activeCliRuns = new Set<string>()
 /**
  * CLI runs that delivered their root foreground `result` and are now only
@@ -819,9 +837,27 @@ export const handleWebSocket = {
 
       switch (message.type) {
         case 'user_message': {
+          const sessionId = ws.data.sessionId
           const activeTurn: ActiveUserTurnState = { messageSent: false }
-          migrationMaintenance.track(handleUserMessage(ws, message, activeTurn)).catch((err) => {
-            const sessionId = ws.data.sessionId
+          activeTurn.settled = new Promise<void>((resolve) => {
+            activeTurn.markSettled = () => {
+              activeTurn.isSettled = true
+              resolve()
+            }
+          })
+          // handleUserMessage suspends several times before a turn reaches the
+          // CLI. A second user_message arriving during one of those awaits used
+          // to take over the active-turn token, so the first one bailed out
+          // silently and was never delivered: the renderer flushes its whole
+          // queue in one burst after a result, so only the last queued message
+          // survived. A new message now waits until the previous turn settled
+          // (handler returned, or cancelled by Stop or /clear). A committed turn
+          // is already settled, so steering it is unchanged, and /clear does not
+          // wait because it cancels the pending turn itself.
+          const isClearCommand = getDesktopSlashCommand(message.content)?.commandName === 'clear'
+          const previous = isClearCommand ? undefined : pendingUserTurns.get(sessionId)
+          const run = () => handleUserMessage(ws, message, activeTurn)
+          const handled = (previous && !previous.isSettled ? previous.settled!.then(run) : run()).catch((err) => {
             void diagnosticsService.recordEvent({
               type: 'ws_user_message_failed',
               severity: 'error',
@@ -851,6 +887,12 @@ export const handleWebSocket = {
               sendMessage(ws, { type: 'status', state: 'idle' })
             }
           })
+          void handled.finally(() => {
+            activeTurn.markSettled?.()
+            if (pendingUserTurns.get(sessionId) === activeTurn) pendingUserTurns.delete(sessionId)
+          })
+          if (!isClearCommand) pendingUserTurns.set(sessionId, activeTurn)
+          migrationMaintenance.track(handled)
           break
         }
 
@@ -1361,7 +1403,7 @@ export async function applyCollaborationRuntime(sessionId: string, selection: Se
 }
 
 export function revokeSessionAdmissionsForMigration(): void {
-  for (const turn of activeUserTurns.values()) turn.cancelled = true
+  for (const turn of activeUserTurns.values()) cancelActiveTurn(turn)
   for (const timer of prewarmIdleTimers.values()) clearTimeout(timer)
   for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
   prewarmIdleTimers.clear()
@@ -1669,7 +1711,7 @@ async function handleDesktopClearCommand(
   ws: SessionConnection,
 ) {
   const turnToCancel = activeUserTurns.get(ws.data.sessionId)
-  if (turnToCancel) turnToCancel.cancelled = true
+  if (turnToCancel) cancelActiveTurn(turnToCancel)
   await enqueueRuntimeTransition(ws.data.sessionId, () =>
     performDesktopClearCommand(ws, turnToCancel),
   )
@@ -2571,11 +2613,11 @@ function handleStopGeneration(
   // suspended handler cannot resume after Stop and enqueue work (or clear the
   // Agent stop latch) behind the user's explicit cancellation.
   if (stoppedTurn && !stoppedTurn.messageSent) {
-    stoppedTurn.cancelled = true
+    cancelActiveTurn(stoppedTurn)
     stoppedTurn.replacementAfterStop = false
     releaseUserTurnWithoutResult(sessionId, stoppedTurn)
   } else if (stoppedTurn) {
-    stoppedTurn.cancelled = true
+    cancelActiveTurn(stoppedTurn)
     stoppedTurn.replacementAfterStop = false
   }
 
@@ -3720,6 +3762,7 @@ function cleanupSessionRuntimeState(
   strictCollaborationRuntimeSessions.delete(sessionId)
   rejectedRuntimeConfigs.delete(sessionId)
   activeUserTurns.delete(sessionId)
+  pendingUserTurns.delete(sessionId)
   activeCliRuns.delete(sessionId)
   cliRunsAwaitingBackgroundTasks.delete(sessionId)
   sessionStopRequested.delete(sessionId)
@@ -4703,7 +4746,7 @@ function finishDisconnectCleanup(
   if (permissionBoundExpired) {
     const turn = activeUserTurns.get(sessionId)
     if (turn) {
-      turn.cancelled = true
+      cancelActiveTurn(turn)
       turn.replacementAfterStop = false
     }
     forceStopSharedRuntimeForAgentCancellation(sessionId)
@@ -5873,6 +5916,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   prewarmedSessions.clear()
   prewarmIdleTimers.clear()
   activeUserTurns.clear()
+  pendingUserTurns.clear()
   activeCliRuns.clear()
   cliRunsAwaitingBackgroundTasks.clear()
   activeBackgroundTaskIds.clear()
