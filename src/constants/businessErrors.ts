@@ -4,6 +4,7 @@ export const BUSINESS_ERROR_CODES = {
   PDF_INVALID: 'pdf_invalid',
   IMAGE_TOO_LARGE: 'image_too_large',
   IMAGE_UNSUPPORTED: 'image_unsupported',
+  IMAGE_INVALID: 'image_invalid',
   REQUEST_TOO_LARGE: 'request_too_large',
   PROMPT_TOO_LONG: 'prompt_too_long',
   AUTO_MODE_UNAVAILABLE: 'auto_mode_unavailable',
@@ -25,6 +26,7 @@ export const BUSINESS_ERROR_MEDIA_BLOCK_TYPES: Partial<
   [BUSINESS_ERROR_CODES.PDF_INVALID]: ['document'],
   [BUSINESS_ERROR_CODES.IMAGE_TOO_LARGE]: ['image'],
   [BUSINESS_ERROR_CODES.IMAGE_UNSUPPORTED]: ['image'],
+  [BUSINESS_ERROR_CODES.IMAGE_INVALID]: ['image'],
 }
 
 /**

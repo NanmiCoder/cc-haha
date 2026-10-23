@@ -8573,6 +8573,37 @@ describe('MessageList nested tool calls', () => {
     expect(screen.queryByText(/This model does not support images/)).toBeNull()
   })
 
+  it('explains an undecodable image as a bad file, not as a model limitation', () => {
+    useSettingsStore.setState({ locale: 'zh' })
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({
+          messages: [
+            {
+              id: 'error-1',
+              type: 'error',
+              code: 'invalid_request',
+              businessErrorCode: 'image_invalid',
+              message:
+                'An image in the request could not be decoded (corrupted, truncated, or not an image file). It is left out of later turns; check the file and send a valid image.',
+              timestamp: 1,
+            },
+          ],
+        }),
+      },
+    })
+
+    render(<MessageList />)
+
+    expect(
+      screen.getByText(
+        '会话中有一张图片无法解码（文件损坏、下载不完整，或根本不是图片文件）。它已从后续请求中移除；请检查文件后重新发送有效的图片。',
+      ),
+    ).toBeTruthy()
+    expect(screen.queryByText(/不支持图片/)).toBeNull()
+    expect(screen.queryByText(/could not be decoded/)).toBeNull()
+  })
+
   it('blames the upstream provider for an interrupted stream and keeps the stream evidence', () => {
     useSettingsStore.setState({ locale: 'zh' })
     const raw =

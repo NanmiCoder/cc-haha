@@ -89,6 +89,37 @@ test('uses the shared image processor for the final image compression fallback',
   }
 })
 
+test('refuses a file with an image extension whose bytes are not an image', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-haha-read-image-not-image-'))
+  temporaryDirectories.push(root)
+  const filePath = join(root, 'diagram.png')
+  // A login-redirect page saved by a download script under the image name.
+  await writeFile(
+    filePath,
+    '<html><head><title>302 Found</title></head><body>Redirecting to /login</body></html>\n',
+  )
+
+  const read = readImageWithTokenBudget(filePath, 1000)
+  await expect(read).rejects.toBeInstanceOf(imageResizer.ImageResizeError)
+  await expect(read).rejects.toThrow(/not a valid image/)
+  await expect(read).rejects.toThrow(/<html><head><title>302 Found/)
+  await expect(read).rejects.toThrow(/Read it as text/)
+})
+
+test('still reads a real image whose bytes carry a known signature', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cc-haha-read-image-valid-'))
+  temporaryDirectories.push(root)
+  const filePath = join(root, 'pixel.png')
+  const creator = await getImageCreator()
+  await writeFile(filePath, await creator({ create: {
+    width: 2, height: 2, channels: 3, background: { r: 1, g: 2, b: 3 },
+  } }).png().toBuffer())
+
+  const result = await readImageWithTokenBudget(filePath, 1000)
+  expect(result.type).toBe('image')
+  expect(result.file.type).toBe('image/png')
+})
+
 afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map(path =>

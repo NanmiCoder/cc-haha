@@ -5,8 +5,10 @@ import { BUSINESS_ERROR_CODES } from '../../constants/businessErrors.js'
 import {
   getAssistantMessageFromError,
   getPromptTooLongTokenGap,
+  getImageInvalidErrorMessage,
   getImageUnsupportedErrorMessage,
   isContextOverflowErrorText,
+  isInvalidImageDataErrorMessage,
   isUnsupportedImageInputErrorMessage,
   measureRequestPayload,
   PROMPT_TOO_LONG_ERROR_MESSAGE,
@@ -142,6 +144,82 @@ describe('image unsupported API errors', () => {
     })
 
     expect(msg.businessErrorCode).toBeUndefined()
+  })
+})
+
+describe('invalid image data API errors', () => {
+  const imageRequest = [
+    {
+      type: 'user' as const,
+      message: {
+        role: 'user' as const,
+        content: [
+          { type: 'text', text: 'look at this' },
+          {
+            type: 'image',
+            source: { type: 'base64', media_type: 'image/png', data: 'AAA' },
+          },
+        ],
+      },
+    },
+  ]
+
+  function invalidRequestError(message: string): APIError {
+    return new APIError(
+      400,
+      { type: 'error', error: { type: 'invalid_request_error', message } },
+      message,
+      undefined,
+    )
+  }
+
+  test('tells undecodable image bytes apart from text-only model refusals and size limits', () => {
+    for (const message of [
+      'Could not process image',
+      'messages.0.content.1.image.source.base64.data: image could not be decoded',
+      'Image does not match the provided media type image/png',
+      'invalid base64 data in image source',
+    ]) {
+      expect(isInvalidImageDataErrorMessage(message)).toBe(true)
+      expect(isUnsupportedImageInputErrorMessage(message)).toBe(false)
+    }
+    for (const message of [
+      'image exceeds 5 MB maximum: 5316852 bytes > 5242880 bytes',
+      'image dimensions exceed 2000 pixels for many-image requests',
+      'This model does not support image blocks',
+      'Could not process document',
+    ]) {
+      expect(isInvalidImageDataErrorMessage(message)).toBe(false)
+    }
+  })
+
+  test('maps a decode failure to image_invalid instead of "model does not support images"', () => {
+    const msg = getAssistantMessageFromError(
+      invalidRequestError('Could not process image'),
+      'claude-sonnet-4-5',
+      { messagesForAPI: imageRequest as never },
+    )
+
+    expect(msg.isApiErrorMessage).toBe(true)
+    expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.IMAGE_INVALID)
+    // The SDK prefixes APIError messages with the status and body.
+    expect(msg.errorDetails).toContain('Could not process image')
+    // The file is bad for every model, so the strip must survive a model switch.
+    expect(msg.sourceModel).toBeUndefined()
+    expect(msg.message.content[0]).toMatchObject({
+      type: 'text',
+      text: getImageInvalidErrorMessage(),
+    })
+    expect(getImageInvalidErrorMessage()).not.toContain('does not support images')
+  })
+
+  test('keeps size rejections on their own classifiers', () => {
+    const msg = getAssistantMessageFromError(
+      invalidRequestError('image exceeds 5 MB maximum: 5316852 bytes > 5242880 bytes'),
+      'claude-sonnet-4-5',
+      { messagesForAPI: imageRequest as never },
+    )
+    expect(msg.businessErrorCode).toBe(BUSINESS_ERROR_CODES.IMAGE_TOO_LARGE)
   })
 })
 
