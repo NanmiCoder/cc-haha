@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   memberSessionId,
+  memberReplySettlement,
   mergeMemberTranscriptDelta,
   mergeMemberTranscriptMessages,
   useTeamStore,
@@ -139,6 +140,103 @@ describe('teamStore incremental transcript polling', () => {
     const merged = mergeMemberTranscriptMessages([], transcript)
 
     expect(merged.map(message => message.id)).toEqual(['server-1', 'server-2'])
+  })
+
+  it('reconciles a steered send with its mailbox echo persisted minutes later', () => {
+    // A steer sent mid-turn persists only when the member consumes its mailbox,
+    // so the durable user echo can carry a timestamp minutes after the send.
+    const existing = [
+      userMessage('durable-1', 'queued output', 900),
+      userMessage('pending-1', '改为 portal 渲染', 1_000, true),
+    ]
+    const delta = [
+      { ...userMessage('server-echo', '改为 portal 渲染', 400_000), teammateFrom: 'user' },
+    ]
+
+    const merged = mergeMemberTranscriptDelta(existing, delta)
+
+    expect(merged.map(message => message.id)).toEqual(['durable-1', 'server-echo'])
+  })
+
+  it('does not let an older identical user echo consume a newer pending send', () => {
+    const existing = [
+      userMessage('server-echo', '继续', 1_000),
+      userMessage('pending-1', '继续', 400_000, true),
+    ]
+
+    const merged = mergeMemberTranscriptDelta(existing, [])
+
+    expect(merged.map(message => message.id)).toEqual(['server-echo', 'pending-1'])
+  })
+
+  it('keeps a pending send unmatched by teammate-to-teammate rows', () => {
+    const existing = [
+      userMessage('pending-1', '重新跑一遍测试', 1_000, true),
+    ]
+    const delta = [
+      { ...userMessage('server-1', '重新跑一遍测试', 1_100), teammateFrom: 'team-lead' },
+    ]
+
+    const merged = mergeMemberTranscriptDelta(existing, delta)
+
+    expect(merged.map(message => message.id)).toEqual(['server-1', 'pending-1'])
+  })
+
+  describe('memberReplySettlement', () => {
+    function assistantText(id: string, content: string, timestamp: number): UIMessage {
+      return { id, type: 'assistant_text', content, timestamp }
+    }
+
+    function teammateUserEcho(id: string, content: string, timestamp: number): UIMessage {
+      return { id, type: 'user_text', content, timestamp, teammateFrom: 'user' }
+    }
+
+    it('settles a steered turn whose prompt persisted late as a user echo', () => {
+      const messages: UIMessage[] = [
+        teammateUserEcho('echo-1', '补一下边界钳制', 400_000),
+        assistantText('a1', '已补齐', 401_000),
+      ]
+
+      const settlement = memberReplySettlement(messages, {
+        content: '补一下边界钳制',
+        sentAt: 1_000,
+        baselineMessageKeys: new Set(),
+      })
+
+      expect(settlement.settled).toBe(true)
+      expect(settlement.promptKey).toContain('echo-1')
+    })
+
+    it('does not settle on a prompt row that predates the send', () => {
+      const messages: UIMessage[] = [
+        teammateUserEcho('echo-0', '继续', 1_000),
+        assistantText('a0', '好的', 2_000),
+      ]
+
+      const settlement = memberReplySettlement(messages, {
+        content: '继续',
+        sentAt: 400_000,
+        baselineMessageKeys: new Set(),
+      })
+
+      expect(settlement.settled).toBe(false)
+    })
+
+    it('bounds the settled turn at the next steered prompt', () => {
+      const messages: UIMessage[] = [
+        teammateUserEcho('echo-1', '第一步', 400_000),
+        teammateUserEcho('echo-2', '第二步', 500_000),
+        assistantText('a2', '完成第二步', 501_000),
+      ]
+
+      const settlement = memberReplySettlement(messages, {
+        content: '第一步',
+        sentAt: 1_000,
+        baselineMessageKeys: new Set(),
+      })
+
+      expect(settlement.settled).toBe(false)
+    })
   })
 
   it('starts the first transcript read on member selection and shares it with the mounted page', async () => {
