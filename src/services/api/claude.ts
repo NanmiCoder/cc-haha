@@ -209,6 +209,7 @@ import {
   isToolSearchEnabled,
 } from "src/utils/toolSearch.js";
 import { API_MAX_MEDIA_PER_REQUEST } from "../../constants/apiLimits.js";
+import { prepareRequestImages } from "./requestImages.js";
 import { ADVISOR_BETA_HEADER } from "../../constants/betas.js";
 import {
   formatDeferredToolLine,
@@ -1484,6 +1485,11 @@ async function* queryModel(
     messagesForAPI,
     API_MAX_MEDIA_PER_REQUEST,
   );
+
+  // Replace image bytes that cannot be an image and, above the many-image
+  // threshold, downscale every image to the per-image limit the API enforces
+  // there; otherwise one oversized image in history fails every later turn.
+  messagesForAPI = await prepareRequestImages(messagesForAPI);
 
   // Instrumentation: Track message count after normalization
   logEvent("tengu_api_after_normalize", {

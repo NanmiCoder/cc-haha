@@ -19,7 +19,7 @@ import { errorMessage } from './errors.js'
 import { formatFileSize } from './format.js'
 import { logError } from './log.js'
 
-type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'
+export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'
 
 // Error type constants for analytics (numeric to comply with logEvent restrictions)
 const ERROR_TYPE_MODULE_LOAD = 1
@@ -986,8 +986,16 @@ async function createUltraCompressedJPEG(
  * @param buffer Buffer containing image data
  * @returns Media type string (e.g., 'image/png', 'image/jpeg') or 'image/png' as default
  */
-export function detectImageFormatFromBuffer(buffer: Buffer): ImageMediaType {
-  if (buffer.length < 4) return 'image/png' // default
+/**
+ * Detect image format from magic bytes, or null when the data starts with no
+ * PNG, JPEG, GIF or WebP signature (an HTML page saved as .png, a truncated
+ * download). Callers that must send something fall back to PNG through
+ * detectImageFormatFromBuffer; callers that validate input use null to refuse.
+ */
+export function detectImageFormatFromBufferOrNull(
+  buffer: Buffer,
+): ImageMediaType | null {
+  if (buffer.length < 4) return null
 
   // Check PNG signature
   if (
@@ -1027,8 +1035,28 @@ export function detectImageFormatFromBuffer(buffer: Buffer): ImageMediaType {
     }
   }
 
-  // Default to PNG if unknown
-  return 'image/png'
+  return null
+}
+
+export function detectImageFormatFromBuffer(buffer: Buffer): ImageMediaType {
+  return detectImageFormatFromBufferOrNull(buffer) ?? 'image/png'
+}
+
+/**
+ * Printable preview of the first bytes of data that is not an image, for
+ * error messages: control and non-ASCII bytes become '.', whitespace collapses.
+ */
+export function describeNonImageBytes(buffer: Buffer, maxChars = 80): string {
+  let text = ''
+  for (const byte of buffer.subarray(0, maxChars * 2)) {
+    if (byte >= 0x20 && byte <= 0x7e) text += String.fromCharCode(byte)
+    else if (byte === 0x09 || byte === 0x0a || byte === 0x0d) text += ' '
+    else text += '.'
+  }
+  const collapsed = text.replace(/\s+/g, ' ').trim()
+  return collapsed.length > maxChars
+    ? `${collapsed.slice(0, maxChars)}…`
+    : collapsed
 }
 
 /**

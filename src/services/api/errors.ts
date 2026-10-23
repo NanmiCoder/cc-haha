@@ -279,6 +279,31 @@ export function getImageUnsupportedErrorMessage(): string {
     ? 'This model does not support images. Continue with text, or switch to a vision-capable model and send the image again.'
     : 'This model does not support images. Double press esc to go back, switch to a vision-capable model, or continue with text.'
 }
+export function getImageInvalidErrorMessage(): string {
+  return getIsNonInteractiveSession()
+    ? 'An image in the request could not be decoded (corrupted, truncated, or not an image file). It is left out of later turns; check the file and send a valid image.'
+    : 'An image in the request could not be decoded (corrupted, truncated, or not an image file). Double press esc to go back and send a valid image.'
+}
+
+/**
+ * Provider wording for image bytes that cannot be decoded, as opposed to a
+ * text-only model refusing image input. Size and dimension rejections are
+ * excluded; they have their own classifiers.
+ */
+export function isInvalidImageDataErrorMessage(message: string): boolean {
+  const raw = message.toLowerCase()
+  if (!raw.includes('image') || raw.includes('exceed')) return false
+  return (
+    raw.includes('could not process image') ||
+    raw.includes('could not be decoded') ||
+    raw.includes('could not decode') ||
+    raw.includes('invalid image') ||
+    raw.includes('image data is invalid') ||
+    raw.includes('does not match the provided media type') ||
+    raw.includes('invalid base64') ||
+    raw.includes('corrupt')
+  )
+}
 // A 413 body can be a whole HTML page; keep enough to identify the server
 // (e.g. "nginx/1.18.0") without bloating the transcript.
 const REQUEST_TOO_LARGE_DETAIL_CHARS = 500
@@ -650,6 +675,25 @@ export function getAssistantMessageFromError(
     return createAssistantAPIErrorMessage({
       content: getImageTooLargeErrorMessage(),
       businessErrorCode: BUSINESS_ERROR_CODES.IMAGE_TOO_LARGE,
+    })
+  }
+
+  // Image bytes the provider could not decode (an HTML page saved as .png, a
+  // truncated download). Without this classifier the image fallback below
+  // reported it as "this model does not support images", which sent users
+  // switching models instead of fixing the file. No sourceModel: the file is
+  // bad for every model, so the strip in normalizeMessagesForAPI must survive
+  // a model switch.
+  if (
+    error instanceof Error &&
+    isInvalidImageDataErrorMessage(error.message) &&
+    (!(error instanceof APIError) || error.status === 400 || error.status === 422)
+  ) {
+    return createAssistantAPIErrorMessage({
+      content: getImageInvalidErrorMessage(),
+      error: 'invalid_request',
+      errorDetails: error.message,
+      businessErrorCode: BUSINESS_ERROR_CODES.IMAGE_INVALID,
     })
   }
 
