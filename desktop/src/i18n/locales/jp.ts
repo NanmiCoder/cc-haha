@@ -3850,6 +3850,7 @@ export const jp: Record<TranslationKey, string> = {
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'ローカルサーバーの起動に失敗しました',
   'app.serverFailedHint': '問題を報告する際は、この診断パネルのスクリーンショットを添付してください。',
+  'app.startupCrashHint': 'ランタイムプロセスが起動前にクラッシュしました（Windows 終了コード {code}）。多くの場合、実行中にファイルが置き換えられたことが原因です（例：中断されたアップデート）。GitHub Releases から完全版インストーラーをダウンロードして上書きインストールしてください。セッションと設定は ~/.claude に保存されており失われません。',
   'app.startupError': '起動エラー',
   'app.serverLogs': 'サーバーログ',
   'app.copyDiagnostics': '診断情報をコピー',

@@ -740,7 +740,23 @@ function registerIpcHandlers() {
     mainWindow?.webContents.send(ELECTRON_EVENT_CHANNELS.updateDownloadEvent, event)
   }))
   registerHandler(ELECTRON_IPC_CHANNELS.updateInstall, () => getUpdaterService().stageDownloadedUpdate())
-  registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall, async () => { await publicAccessManager?.stop(); getServerRuntime().stopAll() })
+  registerHandler(ELECTRON_IPC_CHANNELS.updatePrepareInstall, async () => {
+    await publicAccessManager?.stop()
+    // quitAndInstall spawns the NSIS installer right away, and the installer
+    // replaces the sidecar binaries in place. Wait here, before the renderer
+    // asks for the relaunch, until the runtime and its CLI children have
+    // exited: a kill-and-overwrite race left a half-written sidecar that
+    // crashed on the next start (exit 0xC0000005). If they do not exit, fail
+    // the install instead of handing the installer live processes to fight.
+    try {
+      await getServerRuntime().stopAllAndWait()
+    } catch (error) {
+      throw new Error(
+        'The local runtime is still shutting down, so the update was not installed. Wait a moment and try again. ' +
+          `(${error instanceof Error ? error.message : String(error)})`,
+      )
+    }
+  })
   registerHandler(ELECTRON_IPC_CHANNELS.updateCancelInstall, () => getUpdaterService().cancelInstall())
   registerHandler(ELECTRON_IPC_CHANNELS.updateRelaunch, () => {
     if (getUpdaterService().hasStagedUpdate()) {

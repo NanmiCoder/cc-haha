@@ -3848,6 +3848,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   // ─── App Shell ──────────────────────────────────────
   'app.serverFailed': 'Local server failed to start',
   'app.serverFailedHint': 'Please include a screenshot of this diagnostic panel when reporting the issue.',
+  'app.startupCrashHint': 'The runtime process crashed before it could start (Windows exit code {code}). This usually means its files were replaced while it was still running, for example by an interrupted update. Reinstall the app with the full installer from GitHub Releases; your sessions and settings stay in ~/.claude.',
   'app.startupError': 'Startup error',
   'app.serverLogs': 'Server logs',
   'app.copyDiagnostics': 'Copy diagnostics',
