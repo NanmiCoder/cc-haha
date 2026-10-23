@@ -4535,6 +4535,129 @@ describe('MessageList nested tool calls', () => {
     ])
   })
 
+  it('keeps the tail in view when a transcript reload hands the same rows back under new ids (#1652)', async () => {
+    const sessionId = 'reload-renames-rows'
+    // Many short lines inflate the estimate (22px a line) far above the 40px the
+    // rows were measured at, the shape of a collapsed tool-heavy transcript.
+    const content = (index: number) => `reloaded transcript line ${index}\n${'filler\n'.repeat(60)}`
+    const liveMessages: UIMessage[] = Array.from({ length: 220 }, (_, index) => ({
+      id: `live-${index}`,
+      type: 'assistant_text',
+      content: content(index),
+      timestamp: index,
+    }))
+    const heights = getHeightsForSession(sessionId)
+    heights.clear()
+    for (const message of liveMessages) heights.set(message.id, 40)
+    useChatStore.setState({
+      sessions: { [sessionId]: makeSessionState({ messages: liveMessages }) },
+    })
+
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector('.chat-scroll-area') as HTMLElement
+    const clientHeight = 500
+    const scrollHeight = 220 * 40
+    let scrollTop = scrollHeight - clientHeight
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: clientHeight })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = Math.min(value, scrollHeight - clientHeight)
+      },
+    })
+    await waitForProgrammaticScrollReset()
+    await act(async () => {
+      fireEvent.scroll(scroller)
+    })
+    expect(screen.getByText(/reloaded transcript line 219/)).toBeTruthy()
+
+    // The post-reply history reload: same messages, new ids.
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...state.sessions[sessionId]!,
+            messages: liveMessages.map((message, index) => ({ ...message, id: `restored-${index}` })),
+          },
+        },
+      }))
+    })
+    await waitForProgrammaticScrollReset()
+    await waitForProgrammaticScrollReset()
+
+    expect(heights.get('restored-219')).toBe(40)
+    expect(screen.getByText(/reloaded transcript line 219/)).toBeTruthy()
+    expect(scrollTop).toBe(scrollHeight - clientHeight)
+  })
+
+  it('re-pins to the bottom when an idle transcript rewrite changes the row heights (#1662)', async () => {
+    const sessionId = 'idle-rewrite-repins'
+    const liveMessages: UIMessage[] = Array.from({ length: 220 }, (_, index) => ({
+      id: `live-${index}`,
+      type: 'assistant_text',
+      content: `idle transcript line ${index}`,
+      timestamp: index,
+    }))
+    const heights = getHeightsForSession(sessionId)
+    heights.clear()
+    for (const message of liveMessages) heights.set(message.id, 40)
+    useChatStore.setState({
+      sessions: { [sessionId]: makeSessionState({ messages: liveMessages }) },
+    })
+
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector('.chat-scroll-area') as HTMLElement
+    const clientHeight = 500
+    let scrollHeight = 220 * 40
+    let scrollTop = scrollHeight - clientHeight
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: clientHeight })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = Math.min(value, scrollHeight - clientHeight)
+      },
+    })
+    await waitForProgrammaticScrollReset()
+    await act(async () => {
+      fireEvent.scroll(scroller)
+    })
+    expect(screen.getByText('idle transcript line 219')).toBeTruthy()
+
+    // The reload rewrites every row with different content (and ids), so no
+    // measured height applies and the transcript grows under the reader to the
+    // estimated height of the new rows.
+    const restoredMessages: UIMessage[] = liveMessages.map((message, index) => ({
+      ...message,
+      id: `restored-${index}`,
+      content: `restored transcript line ${index}\n${'filler\n'.repeat(60)}`,
+    }))
+    scrollHeight = restoredMessages.reduce(
+      (total, message) => total + estimateRenderItemHeight({ kind: 'message', message } as Parameters<typeof estimateRenderItemHeight>[0]),
+      0,
+    )
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...state.sessions[sessionId]!,
+            messages: restoredMessages,
+          },
+        },
+      }))
+    })
+    await waitForProgrammaticScrollReset()
+    await waitForProgrammaticScrollReset()
+
+    expect(scrollTop).toBe(scrollHeight - clientHeight)
+    expect(screen.getByText(/restored transcript line 219/)).toBeTruthy()
+  })
+
   it('does not force-scroll to the bottom while the user is reading history', async () => {
     const scrollIntoView = vi.fn()
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {

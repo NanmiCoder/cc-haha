@@ -2100,6 +2100,58 @@ function getMessageMetricSignature(message: UIMessage): string {
   }
 }
 
+/**
+ * Move measured heights from rows that disappeared to rows that appeared with
+ * the same metric signature, in order. Rows that kept their key are untouched.
+ *
+ * A transcript reload after a reply, or a checkpoint refresh, can hand the same
+ * messages back under new ids. Heights are keyed by id, so those rows would
+ * fall back to estimates, and in a tool-heavy session the estimates run far
+ * above the collapsed rows that were measured: the same scrollTop then lands
+ * many turns above the tail (#1652, #1662).
+ */
+export function carryMeasuredHeightsToRenamedItems(
+  heights: Map<string, number>,
+  previousKeys: string[],
+  previousSignatures: string[],
+  nextKeys: string[],
+  nextSignatures: string[],
+): number {
+  if (previousKeys.length === 0 || previousKeys === nextKeys) return 0
+  const nextKeySet = new Set(nextKeys)
+  const orphanedHeightsBySignature = new Map<string, number[]>()
+  previousKeys.forEach((key, index) => {
+    if (nextKeySet.has(key)) return
+    const height = heights.get(key)
+    const signature = previousSignatures[index]
+    if (height === undefined || signature === undefined) return
+    const queue = orphanedHeightsBySignature.get(signature)
+    if (queue) queue.push(height)
+    else orphanedHeightsBySignature.set(signature, [height])
+  })
+  if (orphanedHeightsBySignature.size === 0) return 0
+
+  const previousKeySet = new Set(previousKeys)
+  let carried = 0
+  nextKeys.forEach((key, index) => {
+    if (previousKeySet.has(key) || heights.has(key)) return
+    const height = orphanedHeightsBySignature.get(nextSignatures[index] ?? '')?.shift()
+    if (height === undefined) return
+    heights.set(key, height)
+    carried += 1
+  })
+  return carried
+}
+
+function haveSameRenderItemKeys(previous: string[], next: string[]): boolean {
+  if (previous === next) return true
+  if (previous.length !== next.length) return false
+  for (let index = 0; index < next.length; index += 1) {
+    if (previous[index] !== next[index]) return false
+  }
+  return true
+}
+
 function getRenderItemMetricSignature(item: RenderItem): string {
   if (item.kind === 'message') return getMessageMetricSignature(item.message)
   if (item.kind === 'team_card') {
@@ -2651,7 +2703,12 @@ export function MessageList({
     ) return
 
     virtualItemHeightsRef.current.set(itemKey, measuredHeight)
-    if (hasPendingPermissionCard && shouldAutoScrollRef.current) {
+    // A row changing height while the reader follows the tail moves the bottom.
+    // Re-pin whatever caused it (a permission card, a reloaded transcript
+    // measuring in after the reply, a tool result settling), not only live
+    // output: the content-resize follow below is off once the chat is idle.
+    // Growth the reader just asked for by opening a block stays theirs (#1177).
+    if (shouldAutoScrollRef.current && performance.now() >= disclosureLayoutUntilRef.current) {
       requestLiveFollow()
     }
 
@@ -2659,7 +2716,7 @@ export function MessageList({
     // offsets and restore the reading anchor in the same frame as the new height.
     if (initial) flushMeasuredHeightVersion()
     else flushSync(flushMeasuredHeightVersion)
-  }, [flushMeasuredHeightVersion, hasPendingPermissionCard, requestLiveFollow])
+  }, [flushMeasuredHeightVersion, requestLiveFollow])
 
   const updateAutoScrollState = useCallback(() => {
     // Ignore scroll events triggered by our own programmatic scrolling to
@@ -3038,6 +3095,46 @@ export function MessageList({
     }),
     [renderItemKeys, renderItems],
   )
+  // Rows renamed by a transcript reload keep their measured heights (see
+  // carryMeasuredHeightsToRenamedItems). This mutates the shared per-session
+  // height cache during render, like the metric cache above, so the offsets
+  // computed below in the same render already see the carried heights.
+  const previousRenderItemsRef = useRef<{
+    sessionId: string | null | undefined
+    keys: string[]
+    signatures: string[]
+  }>({ sessionId: resolvedSessionId, keys: [], signatures: [] })
+  useMemo(() => {
+    const previous = previousRenderItemsRef.current
+    const signatures = renderItemMetrics.map((metric) => metric.signature)
+    if (previous.sessionId === resolvedSessionId) {
+      carryMeasuredHeightsToRenamedItems(
+        virtualItemHeightsRef.current,
+        previous.keys,
+        previous.signatures,
+        renderItemKeys,
+        signatures,
+      )
+    }
+    previousRenderItemsRef.current = { sessionId: resolvedSessionId, keys: renderItemKeys, signatures }
+  }, [renderItemKeys, renderItemMetrics, resolvedSessionId])
+  // A history reload or checkpoint refresh after a reply rewrites the rows while
+  // the chat is idle, where neither the streaming follow nor the message-count
+  // follow runs. A reader who was at the bottom stays there.
+  const lastFollowedRenderItemKeysRef = useRef<{
+    sessionId: string | null | undefined
+    keys: string[]
+  }>({ sessionId: resolvedSessionId, keys: renderItemKeys })
+  useEffect(() => {
+    const previous = lastFollowedRenderItemKeysRef.current
+    lastFollowedRenderItemKeysRef.current = { sessionId: resolvedSessionId, keys: renderItemKeys }
+    // Same rows under the same keys (a streaming delta, a status tick) are
+    // followed by the live paths above; only rows added, removed or renamed
+    // need this one.
+    if (previous.sessionId !== resolvedSessionId || haveSameRenderItemKeys(previous.keys, renderItemKeys)) return
+    if (!shouldAutoScrollRef.current) return
+    requestLiveFollow()
+  }, [renderItemKeys, requestLiveFollow, resolvedSessionId])
   const conversationNavigationItems = useMemo(() => {
     const sources = renderItems.flatMap((item, renderIndex) => item.kind === 'message'
       ? [{
