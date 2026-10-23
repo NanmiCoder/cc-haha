@@ -21,12 +21,14 @@ import { startMockLlmServer } from './server'
 import { searchTransportBunOptions } from './searchTransportOptions'
 import { runLeanNotificationProvenanceScenario, runLeanProfileScenario } from './leanProfile'
 import { runAgentModelRoutingScenario } from './agentModelRouting'
+import { runProviderMediaScenario } from './providerMedia'
 import { createMockOnlyRunners, describeRequests, MOCK_AGENT_SCENARIOS } from './scenarios'
 
 const MOCK_MODEL = 'mock-model'
 const STEP_TIMEOUT_MS = 60_000
 const LEAN_SCENARIO = 'mock-lean-profile'
 const MODEL_ROUTING_SCENARIO = 'mock-agent-model-routing'
+const PROVIDER_MEDIA_SCENARIO = 'mock-provider-media'
 
 function listArg(argv: string[], name: string) {
   const index = argv.indexOf(name)
@@ -40,6 +42,7 @@ async function main() {
   if (argv.includes('--list')) {
     console.log(`  ${LEAN_SCENARIO.padEnd(32)} Lean CLI tools, recovery, project instructions and request comparison`)
     console.log(`  ${MODEL_ROUTING_SCENARIO.padEnd(32)} Flash inheritance, saved Claude presets and explicit Agent model selection`)
+    console.log(`  ${PROVIDER_MEDIA_SCENARIO.padEnd(32)} DeepSeek request size, image upload, tool pairing and cached file reuse`)
     for (const scenario of MOCK_AGENT_SCENARIOS) console.log(`  ${scenario.id.padEnd(32)} ${scenario.title}`)
     return
   }
@@ -50,11 +53,16 @@ async function main() {
     : MOCK_AGENT_SCENARIOS
   const runLean = only.length === 0 || only.includes(LEAN_SCENARIO)
   const runModelRouting = only.length === 0 || only.includes(MODEL_ROUTING_SCENARIO)
-  if (scenarios.length === 0 && !runLean && !runModelRouting) throw new Error(`--only ${only.join(',')} matches no scenario. Use --list.`)
+  const runProviderMedia = only.length === 0 || only.includes(PROVIDER_MEDIA_SCENARIO)
+  if (scenarios.length === 0 && !runLean && !runModelRouting && !runProviderMedia) throw new Error(`--only ${only.join(',')} matches no scenario. Use --list.`)
 
   const rootDir = resolve(import.meta.dir, '../../..')
   const artifactDir = join(rootDir, 'artifacts', 'agent-e2e')
   mkdirSync(artifactDir, { recursive: true })
+  if (runProviderMedia) {
+    await runProviderMediaScenario(rootDir, join(artifactDir, 'provider-media'))
+    console.log(`[agent-e2e] PASS ${PROVIDER_MEDIA_SCENARIO}`)
+  }
   if (runModelRouting) {
     await runAgentModelRoutingScenario(rootDir, join(artifactDir, 'model-routing'))
     console.log(`[agent-e2e] PASS ${MODEL_ROUTING_SCENARIO}`)
