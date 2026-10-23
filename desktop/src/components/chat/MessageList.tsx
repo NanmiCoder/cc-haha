@@ -28,6 +28,8 @@ import {
 import type { ActivityStep } from './activityGroupModel'
 import { ToolResultBlock } from './ToolResultBlock'
 import { PermissionDialog } from './PermissionDialog'
+import { AgentSdkImportDialog } from '@/components/chat/AgentSdkImportDialog'
+import type { MessageBranchAction } from '@/components/chat/MessageActionBar'
 import { AskUserQuestion } from './AskUserQuestion'
 import { RenderItemBoundary } from './RenderItemBoundary'
 import { StreamingIndicator } from './StreamingIndicator'
@@ -2478,6 +2480,8 @@ export function MessageList({
   const [turnActionErrors, setTurnActionErrors] = useState<Record<string, string>>({})
   const [isLoadingTurnChangeCards, setIsLoadingTurnChangeCards] = useState(false)
   const [branchingMessageId, setBranchingMessageId] = useState<string | null>(null)
+  const [sdkImportTarget, setSdkImportTarget] = useState<BranchableMessageTarget | null>(null)
+  useEffect(() => { setSdkImportTarget(null) }, [resolvedSessionId])
   const [rewindingTurnId, setRewindingTurnId] = useState<string | null>(null)
   const [turnUndoConfirmTargetId, setTurnUndoConfirmTargetId] = useState<string | null>(null)
   const [isAwayFromLatest, setIsAwayFromLatest] = useState(false)
@@ -3287,7 +3291,9 @@ export function MessageList({
         expectedContent: target.expectedContent,
       }, mode)
 
-      await reloadHistory(resolvedSessionId)
+      // The user explicitly removed this turn. Ordinary refreshes preserve
+      // locally recovered input; this authoritative reload must remove it too.
+      await reloadHistory(resolvedSessionId, undefined, { requireApplied: true })
       queueComposerPrefill(resolvedSessionId, {
         text: target.content,
         attachments: target.attachments,
@@ -3342,12 +3348,15 @@ export function MessageList({
       : []),
   ]
 
-  const handleBranchMessage = useCallback(async (target: BranchableMessageTarget) => {
+  const handleBranchMessage = useCallback(async (target: BranchableMessageTarget, agentSdk?: { providerId: string; modelId: string }) => {
     if (!resolvedSessionId || branchingMessageId) return
 
     setBranchingMessageId(target.uiMessageId)
     try {
-      const result = await branchSession(resolvedSessionId, target.transcriptMessageId)
+      const result = agentSdk
+        ? await branchSession(resolvedSessionId, target.transcriptMessageId, { agentSdk })
+        : await branchSession(resolvedSessionId, target.transcriptMessageId)
+      setSdkImportTarget(null)
       const title = result.title.trim() || t('sidebar.newSession')
       useTabStore.getState().openTab(result.sessionId, title)
       useChatStore.getState().connectToSession(result.sessionId)
@@ -3369,15 +3378,16 @@ export function MessageList({
   // memo barrier is not broken by inline object literals on every render.
   const branchActionByMessageId = useMemo(() => {
     if (branchableMessageTargets.size === 0) {
-      return new Map<string, { label: string; loading: boolean; onBranch: () => void }>()
+      return new Map<string, MessageBranchAction>()
     }
-    const result = new Map<string, { label: string; loading: boolean; onBranch: () => void }>()
+    const result = new Map<string, MessageBranchAction>()
     const label = t('chat.branchFromHere')
     for (const [uiMessageId, target] of branchableMessageTargets) {
       result.set(uiMessageId, {
         label,
         loading: branchingMessageId === target.uiMessageId,
         onBranch: () => { void handleBranchMessage(target) },
+        sdkImport: { label: t('chat.agentSdkImport'), onImport: () => setSdkImportTarget(target) },
       })
     }
     return result
@@ -4041,6 +4051,8 @@ export function MessageList({
         width={520}
         loading={editResendDialog.loading}
       />
+      {sdkImportTarget ? <AgentSdkImportDialog loading={Boolean(branchingMessageId)} onClose={() => setSdkImportTarget(null)}
+        onImport={selection => handleBranchMessage(sdkImportTarget, selection)} /> : null}
     </div>
   )
 }
@@ -4068,11 +4080,7 @@ export const MessageBlock = memo(function MessageBlock({
   activeThinkingId: string | null
   agentTaskNotifications: Record<string, AgentTaskNotification>
   toolResult?: { content: unknown; isError: boolean } | null
-  branchAction?: {
-    label: string
-    loading?: boolean
-    onBranch: () => void
-  }
+  branchAction?: MessageBranchAction
   editAction?: UserMessageEditAction
   turnChangedFiles?: string[]
   turnOutputEvidence?: TurnOutputEvidence

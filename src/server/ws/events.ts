@@ -62,7 +62,8 @@ export type AttachmentRef = {
 
 export const RUNTIME_CONFIG_APPLIED_EVENT = 'runtime_config_applied' as const
 
-export type ServerMessage =
+export type ServerMessage = ServerMessageContent & { nativeMessageIds?: string[] }
+type ServerMessageContent =
   | { type: 'connected'; sessionId: string }
   | {
       type: 'session_state'

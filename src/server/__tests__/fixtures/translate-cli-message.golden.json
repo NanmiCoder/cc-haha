@@ -605,6 +605,82 @@
       ]
     }
   ],
+  "official-sdk-notifications": [
+    {
+      "in": "system/commands_changed",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "commands_changed",
+          "data": {
+            "type": "system",
+            "subtype": "commands_changed",
+            "cc_haha_agent_sdk": true,
+            "commands": [],
+            "official_agent_sdk": true
+          }
+        }
+      ]
+    },
+    {
+      "in": "system/model_refusal_fallback",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "model_refusal_fallback",
+          "data": {
+            "type": "system",
+            "subtype": "model_refusal_fallback",
+            "cc_haha_agent_sdk": true,
+            "original_model": "primary",
+            "fallback_model": "fallback",
+            "scope": "session",
+            "retracted_message_uuids": [
+              "partial"
+            ],
+            "official_agent_sdk": true
+          }
+        }
+      ]
+    },
+    {
+      "in": "system/model_consent_fallback",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "model_consent_fallback",
+          "data": {
+            "type": "system",
+            "subtype": "model_consent_fallback",
+            "cc_haha_agent_sdk": true,
+            "original_model": "primary",
+            "fallback_model": "default",
+            "choice": "switch_default",
+            "official_agent_sdk": true
+          }
+        }
+      ]
+    },
+    {
+      "in": "system/official_sdk_messages_retracted",
+      "out": [
+        {
+          "type": "system_notification",
+          "subtype": "official_sdk_messages_retracted",
+          "data": {
+            "ids": [
+              "partial",
+              "block"
+            ],
+            "edit": {
+              "uuid": "human",
+              "text": "Original prompt"
+            }
+          }
+        }
+      ]
+    }
+  ],
   "hook-frames": [
     {
       "in": "system/hook_started",

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm, writeFile, appendFile } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile, appendFile, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readTeamTranscriptProjection } from './teamTranscriptProjection.js'
@@ -35,6 +35,20 @@ describe('bounded Team transcript projection', () => {
     const projection = await readTeamTranscriptProjection(file)
     expect(projection.messages).toHaveLength(4)
     expect(projection.messages[2]?.toolUseResult).toEqual({ task: { id: '1' }, taskListMutationRevision: 2 })
+  })
+
+  test('projects only owned native MCP team calls without rewriting the native transcript', async () => {
+    const file = join(dir, 'native-sdk.jsonl')
+    const raw = tool('create', 'mcp__cc_haha__TeamCreate', { team_name: 'sdk-team' }) +
+      tool('plan', 'mcp__cc_haha__TeamPlan', { team_name: 'sdk-team', operation: 'read' }) +
+      tool('update', 'mcp__cc_haha__TaskUpdate', { taskId: '1', status: 'completed' }) +
+      tool('foreign', 'mcp__another_server__TeamCreate', { team_name: 'foreign-team' })
+    await writeFile(file, raw)
+    const projection = await readTeamTranscriptProjection(file)
+    expect(projection.complete).toBe(true)
+    expect(projection.messages.map(message => (message.content as { name: string }[])[0]!.name))
+      .toEqual(['TeamCreate', 'TeamPlan', 'TaskUpdate'])
+    expect(await readFile(file, 'utf8')).toBe(raw)
   })
 
   test('rebuilds after truncation and retries a partial tail after completion', async () => {

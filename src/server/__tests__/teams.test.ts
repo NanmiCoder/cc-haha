@@ -3314,6 +3314,28 @@ describe('TeamService', () => {
     })
   })
 
+  it('reconstructs native SDK team tasks and mailbox messages using exact owned MCP names', () => {
+    const messages: MessageEntry[] = [
+      transcriptToolUse('team-create', 'mcp__cc_haha__TeamCreate', { team_name: 'sdk-team' }, '2026-08-08T00:00:00.000Z'),
+      transcriptToolResult('team-create', { team_name: 'sdk-team', lead_agent_id: 'team-lead@sdk-team' }, '2026-08-08T00:00:00.100Z'),
+      transcriptToolUse('task-create', 'mcp__cc_haha__TaskCreate', { subject: 'Native task' }, '2026-08-08T00:00:01.000Z'),
+      transcriptToolResult('task-create', { task: { id: '1', subject: 'Native task' } }, '2026-08-08T00:00:01.100Z'),
+      transcriptToolUse('task-update', 'mcp__cc_haha__TaskUpdate', { taskId: '1', status: 'completed' }, '2026-08-08T00:00:02.000Z'),
+      transcriptToolResult('task-update', { success: true }, '2026-08-08T00:00:02.100Z'),
+      transcriptToolUse('message', 'mcp__cc_haha__SendMessage', { to: 'reviewer', message: 'Native mailbox message' }, '2026-08-08T00:00:03.000Z'),
+      transcriptToolUse('foreign', 'mcp__other__TeamCreate', { team_name: 'foreign-team' }, '2026-08-08T00:00:04.000Z'),
+    ]
+    const raw = JSON.stringify(messages)
+    const snapshots = projectTeamWorkbenchesFromTranscript('sdk-session', messages)
+    expect(snapshots).toHaveLength(1)
+    expect(snapshots[0]).toMatchObject({
+      team: { name: 'sdk-team', leadSessionId: 'sdk-session' },
+      tasks: [{ id: '1', subject: 'Native task', status: 'completed' }],
+      messages: [{ id: 'message', to: 'reviewer', text: 'Native mailbox message' }],
+    })
+    expect(JSON.stringify(messages)).toBe(raw)
+  })
+
   it('projects successful and failed task updates by tool-use identity instead of result text', () => {
     const messages: MessageEntry[] = [
       transcriptToolUse('team-create', 'TeamCreate', {
@@ -4479,6 +4501,31 @@ describe('TeamService', () => {
     expect(service.deleteTeam('active-lead-team')).rejects.toThrow(
       'lead is active',
     )
+  })
+
+  it('SDK lead cleanup verifies caller identity and permits its own active lead-only team', async () => {
+    const config = makeTeamConfig({ name: 'sdk-lead-team', leadSessionId: 'sdk-lead' })
+    config.members = config.members.filter(member => member.agentId === config.leadAgentId)
+    await writeTeamConfig(config.name, config)
+    await expect(service.deleteTeam(config.name, 'unrelated-caller')).rejects.toThrow('Only this team')
+    expect(JSON.parse(await fs.readFile(path.join(tmpDir, 'teams', config.name, 'config.json'), 'utf8')).leadSessionId).toBe('sdk-lead')
+    await service.deleteTeam(config.name, 'sdk-lead')
+    await expect(fs.access(path.join(tmpDir, 'teams', config.name))).rejects.toThrow()
+    const reopened = await service.getWorkbenchForSession('sdk-lead')
+    expect(reopened?.snapshots.at(-1)?.deletedAt).toEqual(expect.any(String))
+  })
+
+  it('SDK lead cleanup retains idle teammates until shutdown and allows terminated process workers', async () => {
+    const config = makeTeamConfig({ name: 'sdk-workers-team', leadSessionId: 'sdk-lead' })
+    for (const member of config.members) member.isActive = false
+    await writeTeamConfig(config.name, config)
+    await expect(service.deleteTeam(config.name, 'sdk-lead')).rejects.toThrow('teammates remain registered')
+    config.members = config.members.map(member => member.agentId === config.leadAgentId
+      ? { ...member, isActive: true }
+      : { ...member, backendType: 'process', terminated: true })
+    await writeTeamConfig(config.name, config)
+    await service.deleteTeam(config.name, 'sdk-lead')
+    await expect(fs.access(path.join(tmpDir, 'teams', config.name))).rejects.toThrow()
   })
 
   it('should throw 404 when deleting non-existent team', async () => {

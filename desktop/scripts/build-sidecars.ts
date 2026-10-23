@@ -1,5 +1,6 @@
 import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { stageAgentSdkRuntime } from './prepare-agent-sdk'
 import { assertWindowsConsoleSubsystem } from './assert-windows-console-subsystem'
 import {
   getBundledRipgrepName,
@@ -52,6 +53,8 @@ if (scanExit !== 0) {
 await mkdir(binariesDir, { recursive: true })
 await stageRipgrepLicenses(binariesDir)
 await stageHostRipgrepForOfflineBuild()
+const sdkExecutable = await stageAgentSdkRuntime({ repoRoot, binariesDir, targetTriple })
+console.log(`[build-sidecars] staged official Agent SDK runtime: ${sdkExecutable}`)
 
 // 单一合并 sidecar：server / cli 共享一份 bun runtime + 共享依赖代码。
 // 调用方（Electron sidecar manager / legacy Tauri host / conversationService）
@@ -240,6 +243,11 @@ async function compileExecutable({
       outfile: outfileBase,
       autoloadTsconfig: true,
       autoloadPackageJson: true,
+      // Every sidecar mode receives its environment from the launcher. A user
+      // project's .env or bunfig preload must not run before that boundary.
+      // Legacy modes still import preload.ts explicitly in claude-sidecar.ts.
+      autoloadDotenv: false,
+      autoloadBunfig: false,
       // No hideConsole: it makes a GUI-subsystem binary, and the sidecar must
       // stay a console program (see assert-windows-console-subsystem.ts).
       windows: {

@@ -1,5 +1,8 @@
 // desktop/src/types/provider.ts
 
+import type { ProviderRuntime } from '../../../src/shared/providerRuntime'
+export type { ProviderRuntime } from '../../../src/shared/providerRuntime'
+
 export type ApiFormat = 'anthropic' | 'openai_chat' | 'openai_responses'
 
 /** Protocols a preset can route one model family to; a saved record only carries an ApiFormat. */
@@ -61,6 +64,7 @@ export type SavedProvider = {
   baseUrl: string
   apiFormat: ApiFormat
   runtimeKind?: ProviderRuntimeKind
+  runtime?: ProviderRuntime
   models: ModelMapping
   model1mSupport?: Model1mSupport
   autoCompactWindow?: number
@@ -81,6 +85,7 @@ export type CreateProviderInput = {
   baseUrl: string
   apiFormat?: ApiFormat
   runtimeKind?: ProviderRuntimeKind
+  runtime?: ProviderRuntime
   models: ModelMapping
   model1mSupport?: Model1mSupport
   autoCompactWindow?: number
@@ -100,6 +105,7 @@ export type UpdateProviderInput = {
   baseUrl?: string
   apiFormat?: ApiFormat
   runtimeKind?: ProviderRuntimeKind
+  runtime?: ProviderRuntime
   models?: ModelMapping
   model1mSupport?: Model1mSupport | null
   autoCompactWindow?: number | null

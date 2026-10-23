@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react'
+import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import { useDismissable } from '@/hooks/useDismissable'
@@ -18,6 +18,7 @@ type Props = {
   onFastModeChange?: (enabled: boolean) => void
   onClose: () => void
   ariaLabel?: string
+  sessionControls?: ReactNode
 }
 
 type PopoverPosition = {
@@ -41,6 +42,7 @@ export function ReasoningEffortPopover({
   onFastModeChange,
   onClose,
   ariaLabel,
+  sessionControls,
 }: Props) {
   const t = useTranslation()
   // The default used to be a hardcoded Chinese literal, so a caller that left
@@ -204,6 +206,7 @@ export function ReasoningEffortPopover({
           )
         })}
       </div>
+      {sessionControls}
       {onFastModeChange && (
         <div className="mt-1 border-t border-[var(--color-border)] px-2 py-2">
           <Switch

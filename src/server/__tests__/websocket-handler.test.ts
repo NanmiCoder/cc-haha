@@ -32,7 +32,7 @@ import * as titleService from '../services/titleService.js'
 import { SettingsService } from '../services/settingsService.js'
 import { ProviderService } from '../services/providerService.js'
 import * as sideChatRegistry from '../services/sideChatRegistry.js'
-import { activeBackgroundTaskIds } from '../ws/agentTaskState.js'
+import { activeBackgroundTaskIds, authoritativeStoppedTaskIds, markTaskAuthoritativelyStopped } from '../ws/agentTaskState.js'
 import * as teleportApi from '../../utils/teleport/api.js'
 import { resetSettingsCache, setSessionSettingsCache } from '../../utils/settings/settingsCache.js'
 
@@ -205,7 +205,7 @@ describe('WebSocket handler session title lifecycle', () => {
     spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
     spyOn(conversationService, 'onOutput').mockImplementation(() => {})
     spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
-    spyOn(conversationService, 'sendMessage').mockResolvedValue(true)
+    const sendUser = spyOn(conversationService, 'sendMessage').mockResolvedValue(true)
     spyOn(sessionService, 'getCustomTitle').mockResolvedValue(null)
     spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue({
       filePath: '/tmp/resumed-session.jsonl',
@@ -224,6 +224,7 @@ describe('WebSocket handler session title lifecycle', () => {
     }))
     await flushMicrotasks(30)
 
+    expect(sendUser).toHaveBeenCalledWith(sessionId, 'Continue the existing investigation', undefined, expect.objectContaining({ humanInput: true, humanText: 'Continue the existing investigation' }))
     expect(appendAiTitle).not.toHaveBeenCalled()
     expect(ws.sent.map((payload) => JSON.parse(payload))).not.toContainEqual(
       expect.objectContaining({ type: 'session_title_updated' }),
@@ -3436,6 +3437,82 @@ describe('WebSocket handler session isolation', () => {
     })
   })
 
+  it.each(['stream_event', 'assistant'] as const)('attributes an SDK replacement from its %s user UUID without replaying the user message', async (frameType) => {
+    const sessionId = `stop-sdk-replacement-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const outputCallbacks = new Set<(cliMsg: any) => void>()
+    const sentUuids: string[] = []
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, callback) => {
+      outputCallbacks.add(callback)
+    })
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation((_sid, callback) => {
+      outputCallbacks.delete(callback)
+    })
+    spyOn(conversationService, 'sendInterrupt').mockReturnValue(true)
+    spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Existing title')
+    spyOn(conversationService, 'sendMessage').mockImplementation(
+      async (_sid, _content, _attachments, options) => {
+        sentUuids.push(options?.messageUuid ?? '')
+        options?.onCommitted?.()
+        return true
+      },
+    )
+    const emit = (event: any) => {
+      for (const callback of [...outputCallbacks]) callback(event)
+    }
+    const reply = (userUuid: string, parentToolUseId: string | null = null) => ({
+      type: frameType,
+      user_message_uuid: userUuid,
+      parent_tool_use_id: parentToolUseId,
+      ...(frameType === 'stream_event'
+        ? { event: { type: 'message_start', message: { id: `reply-${userUuid}` } } }
+        : { message: { id: `reply-${userUuid}`, content: [{ type: 'text', text: 'I am writing the HTML.' }] } }),
+    })
+
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Start the document' }))
+    await flushMicrotasks(30)
+    handleWebSocket.message(ws, JSON.stringify({ type: 'stop_generation' }))
+    handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Write HTML instead' }))
+    await flushMicrotasks(30)
+    expect(sentUuids).toHaveLength(2)
+    ws.sent.length = 0
+
+    emit({ type: 'result', is_error: true, result: 'Interrupted' })
+    emit(reply(sentUuids[0]))
+    emit(reply(sentUuids[1], 'old-subagent'))
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'Unattributed late output' }] } })
+    expect(ws.sent.map(payload => JSON.parse(payload))).not.toContainEqual(
+      expect.objectContaining({ type: 'content_delta' }),
+    )
+    expect(getSessionTurnState(sessionId)).toBe('running')
+
+    emit(reply(sentUuids[1]))
+    if (frameType === 'stream_event') {
+      emit({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } })
+      emit({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'I am writing the HTML.' } } })
+      emit({ type: 'stream_event', event: { type: 'content_block_stop', index: 0 } })
+    }
+    emit({
+      type: 'assistant',
+      message: { id: 'html-write', content: [{ type: 'tool_use', id: 'write-html', name: 'Write', input: { file_path: '/tmp/test.html', content: '<h1>Hello</h1>' } }] },
+    })
+    emit({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'write-html', content: 'File created successfully' }] } })
+    emit({ type: 'assistant', message: { id: 'html-done', content: [{ type: 'text', text: 'HTML is ready.' }] } })
+    emit({ type: 'result', is_error: false, usage: { input_tokens: 1, output_tokens: 2 } })
+    await flushMicrotasks()
+
+    const messages = ws.sent.map(payload => JSON.parse(payload))
+    expect(messages).toContainEqual({ type: 'content_delta', text: 'I am writing the HTML.' })
+    expect(messages).toContainEqual(expect.objectContaining({ type: 'tool_use_complete', toolName: 'Write', toolUseId: 'write-html' }))
+    expect(messages).toContainEqual(expect.objectContaining({ type: 'tool_result', toolUseId: 'write-html' }))
+    expect(messages).toContainEqual({ type: 'content_delta', text: 'HTML is ready.' })
+    expect(messages).toContainEqual({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 2 } })
+    expect(getSessionTurnState(sessionId)).toBe('idle')
+  })
+
   it('keeps consecutive Stop results ordered before a third replacement turn', async () => {
     const sessionId = `stop-replacement-consecutive-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId)
@@ -4051,6 +4128,60 @@ describe('WebSocket handler session isolation', () => {
       subtype: 'stop_task',
       task_id: 'bash-task-1',
     })
+  })
+
+  it('tracks native resumed generations, terminal patches and level snapshots before reconnect reconciliation', () => {
+    const sessionId = `native-generations-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+    let callback: ((message: any) => void) | undefined
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, handler) => { callback = handler })
+    handleWebSocket.open(ws)
+    const send = (subtype: string, data: Record<string, unknown>) =>
+      callback?.({ type: 'system', cc_haha_agent_sdk: true, subtype, ...data })
+    send('task_started', { task_id: 'agent', run_id: '1', task_type: 'local_agent', tool_use_id: 'tool', is_backgrounded: true })
+    expect(activeBackgroundTaskIds.get(sessionId)?.has('agent')).toBe(true)
+    markTaskAuthoritativelyStopped(sessionId, 'agent')
+    send('task_started', { task_id: 'agent', run_id: '2', task_type: 'local_agent', tool_use_id: 'tool', is_backgrounded: true })
+    expect(authoritativeStoppedTaskIds.get(sessionId)?.has('agent')).toBe(false)
+    expect(activeBackgroundTaskIds.get(sessionId)?.has('agent')).toBe(true)
+    const beforeLate = ws.sent.length
+    send('task_notification', { task_id: 'agent', run_id: '1', status: 'failed' })
+    expect(ws.sent.length).toBe(beforeLate)
+    expect(activeBackgroundTaskIds.get(sessionId)?.has('agent')).toBe(true)
+    send('task_updated', { task_id: 'agent', run_id: '2', patch: { status: 'killed' } })
+    expect(activeBackgroundTaskIds.get(sessionId)?.has('agent')).not.toBe(true)
+    send('background_tasks_changed', { tasks: [{ task_id: 'agent', run_id: '3', task_type: 'local_agent' }] })
+    expect(activeBackgroundTaskIds.get(sessionId)?.has('agent')).toBe(true)
+    send('task_started', { task_id: 'foreground', run_id: '1', task_type: 'local_agent', is_backgrounded: false })
+    expect(activeBackgroundTaskIds.get(sessionId)?.has('foreground')).not.toBe(true)
+    send('background_tasks_changed', { tasks: [] })
+    handleWebSocket.message(ws, JSON.stringify({ type: 'sync_state' }))
+    expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual({
+      type: 'session_state', turnState: 'idle', activeBackgroundTaskIds: [],
+    })
+  })
+
+  it('keeps native run identity on synthetic Agent and shell stopped bookends', async () => {
+    const sessionId = `native-stop-bookends-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(conversationService, 'hasSession').mockReturnValue(true)
+    spyOn(conversationService, 'requestControl').mockResolvedValue({})
+    spyOn(sessionService, 'appendSessionTaskNotification').mockResolvedValue()
+    let callback: ((message: any) => void) | undefined
+    spyOn(conversationService, 'onOutput').mockImplementation((_sid, handler) => { callback = handler })
+    handleWebSocket.open(ws)
+    for (const taskType of ['local_agent', 'local_bash']) {
+      callback?.({ type: 'system', cc_haha_agent_sdk: true, subtype: 'task_started',
+        task_id: taskType, run_id: 'native-run', task_type: taskType, tool_use_id: `tool-${taskType}`, is_backgrounded: true })
+      handleWebSocket.message(ws, JSON.stringify({ type: 'stop_background_task', taskId: taskType }))
+      await flushMicrotasks(30)
+      expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({
+        type: 'system_notification', subtype: 'task_notification',
+        data: expect.objectContaining({ official_agent_sdk: true, run_id: 'native-run', task_id: taskType, status: 'stopped' }),
+      }))
+    }
   })
 
   it('reports a task-scoped failure when the CLI rejects a background stop', async () => {

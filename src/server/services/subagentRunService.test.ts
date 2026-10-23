@@ -12,6 +12,7 @@ import {
   truncateSubagentMessages,
 } from './subagentRunService.js'
 import { sessionService, type MessageEntry } from './sessionService.js'
+import { markAgentSdkSession } from './officialAgentSdkRuntime.js'
 
 let tmpDir: string | null = null
 
@@ -1266,6 +1267,10 @@ describe('getSubagentRunByTool', () => {
       'First teammate turn',
       'Resumed teammate turn',
     ])
+    // SDK teammates use the dedicated team-member mailbox panel, not the
+    // fork-only send_agent_message control behind the by-tool composer.
+    markAgentSdkSession(tmpDir!, sessionId)
+    expect((await getSubagentRunByTool(sessionId, toolUseId))?.canSendMessage).toBe(false)
   })
 
   it('keeps the owning resumed fragment in each nested Agent activity route', async () => {
@@ -1519,6 +1524,12 @@ describe('getSubagentRunByTool', () => {
       source: 'live-task',
       // An in-flight background agent has a live inbox: a follow-up queues.
       canSendMessage: true,
+    })
+    // Same live run under the native SDK cannot advertise an unsupported
+    // direct-message control, while transcript/activity inspection still works.
+    markAgentSdkSession(tmpDir!, sessionId)
+    expect(await getSubagentRunByTool(sessionId, toolUseId, agentId)).toMatchObject({
+      agentId, taskId: agentId, status: 'running', source: 'live-task', canSendMessage: false,
     })
   })
 

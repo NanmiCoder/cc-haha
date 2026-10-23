@@ -5,6 +5,17 @@ import type { AgentProfile, LocalIndexStatus, SessionListItem, MessageEntry } fr
 import type { PermissionMode } from '../types/settings'
 import type { TraceCallRecord, TraceSession } from '../types/trace'
 
+export type SessionUltracodeState = {
+  enabled: boolean
+  active: boolean
+  available: boolean
+  running?: boolean
+  reason?: 'workflows-disabled' | 'model' | 'session'
+  model?: string
+  effort?: string
+  envOverride?: string
+}
+
 export type SessionsResponse = {
   sessions: SessionListItem[]
   total: number
@@ -96,6 +107,7 @@ export type CreateSessionRequest = {
 export type BranchSessionRequest = {
   targetMessageId: string
   title?: string
+  agentSdk?: { providerId: string; modelId?: string }
 }
 export type BranchSessionResponse = {
   sessionId: string
@@ -103,6 +115,8 @@ export type BranchSessionResponse = {
   workDir: string | null
   sourceSessionId: string
   targetMessageId: string
+  runtimeProviderId?: string
+  runtimeModelId?: string
 }
 export type RepositoryBranchInfo = {
   name: string
@@ -595,6 +609,14 @@ export const sessionsApi = {
   },
 
   getGitInfo: getSessionGitInfo,
+
+  getUltracode(sessionId: string, signal?: AbortSignal) {
+    return api.get<SessionUltracodeState>(`/api/sessions/${sessionId}/ultracode`, { signal })
+  },
+
+  setUltracode(sessionId: string, enabled: boolean) {
+    return api.put<SessionUltracodeState>(`/api/sessions/${sessionId}/ultracode`, { enabled })
+  },
 
   getSlashCommands(sessionId: string) {
     return api.get<{ commands: SlashCommandOption[] }>(`/api/sessions/${sessionId}/slash-commands`)

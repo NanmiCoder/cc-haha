@@ -12,6 +12,7 @@ import {
 import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { hasRunningBackgroundTasks } from '../lib/backgroundTasks'
 import { registerSideChatSession, unregisterSideChatSession } from '../lib/sideChatSessions'
+import { PENDING_INPUT_RECOVERY_KEY, readPendingInputRecovery, savePendingInputRecovery } from './pendingInputRecovery'
 
 const {
   refreshTeamPlanMock,
@@ -503,6 +504,133 @@ describe('chatStore background agent activity interleaving', () => {
       'Before the tool.',
       'After the tool.',
     ])
+  })
+})
+
+describe('official SDK native event integration', () => {
+  const id = 'native-event-fixture'
+  beforeEach(() => {
+    useChatStore.setState({ ...initialState, sessions: {
+      [id]: { ...useChatStore.getState().getSession(id), historyBootstrapDisabled: true, messages: [] },
+    } })
+  })
+  afterEach(() => {
+    const timer = useChatStore.getState().sessions[id]?.elapsedTimer
+    if (timer) clearInterval(timer)
+    useChatStore.getState().clearMessages(id)
+    useChatStore.setState({ ...initialState, sessions: {} })
+  })
+  it('retracts only refused stream blocks, clears pending deltas, and prefills without resending', () => {
+    const send = (message: ServerMessage) => useChatStore.getState().handleServerMessage(id, message)
+    send({ type: 'content_start', blockType: 'text', nativeMessageIds: ['kept'] })
+    send({ type: 'content_delta', text: 'Keep this.', nativeMessageIds: ['kept'] })
+    send({ type: 'content_start', blockType: 'text', nativeMessageIds: ['withdrawn'] })
+    send({ type: 'content_delta', text: 'Remove this.', nativeMessageIds: ['withdrawn'] })
+    const beforeSend = sendMock.mock.calls.length
+    send({ type: 'system_notification', subtype: 'official_sdk_messages_retracted',
+      data: { ids: ['withdrawn'], edit: { text: 'Original prompt', uuid: 'human' } } })
+    const state = useChatStore.getState().sessions[id]!
+    expect(state.messages.filter(message => message.type === 'assistant_text').map(message => message.content)).toEqual(['Keep this.'])
+    expect(state.streamingText).toBe('')
+    expect(state.composerPrefill?.text).toBe('Original prompt')
+    expect(sendMock.mock.calls.length).toBe(beforeSend)
+    send({ type: 'content_start', blockType: 'text', nativeMessageIds: ['replacement'] })
+    send({ type: 'content_delta', text: 'Corrected answer.', nativeMessageIds: ['replacement'] })
+    send({ type: 'system_notification', subtype: 'official_sdk_messages_retracted', data: { ids: ['withdrawn'] } })
+    send({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    expect(useChatStore.getState().sessions[id]!.messages.filter(message => message.type === 'assistant_text').map(message => message.content)).toEqual(['Keep this.', 'Corrected answer.'])
+  })
+  it('replaces command lists and observes native task patches without reviving an ended run', () => {
+    const send = (subtype: string, data: Record<string, unknown>) =>
+      useChatStore.getState().handleServerMessage(id, { type: 'system_notification', subtype, data: { ...data, official_agent_sdk: true } })
+    send('commands_changed', { commands: [{ name: 'fixture', description: 'fixture' }] })
+    expect(useChatStore.getState().sessions[id]!.slashCommands).toHaveLength(1)
+    send('commands_changed', { commands: [] })
+    expect(useChatStore.getState().sessions[id]!.slashCommands).toEqual([])
+    send('task_started', { task_id: 'agent', run_id: '2', task_type: 'local_agent', is_backgrounded: true })
+    send('task_updated', { task_id: 'agent', run_id: '2', patch: { status: 'paused' } })
+    expect(hasRunningBackgroundTasks(useChatStore.getState().sessions[id]!.backgroundAgentTasks)).toBe(false)
+    send('task_notification', { task_id: 'agent', run_id: '2', status: 'completed' })
+    send('task_started', { task_id: 'agent', run_id: '1' })
+    expect(useChatStore.getState().sessions[id]!.backgroundAgentTasks?.agent?.status).toBe('completed')
+  })
+  it('preserves attachments and conversation references when editing a replayed human message', () => {
+    const attachments = [{ type: 'image' as const, name: 'fixture.png', path: '/fixture/fixture.png', mimeType: 'image/png' }]
+    const sessionReferences = [{ sessionId: 'referenced-fixture' }]
+    useChatStore.setState(state => ({ sessions: { ...state.sessions, [id]: { ...state.sessions[id]!,
+      messages: [{ id: 'optimistic-human', type: 'user_text', content: 'Review this', attachments, sessionReferences, awaitingReplay: true, timestamp: 1 }],
+    } } }))
+    useChatStore.getState().handleServerMessage(id, { type: 'user_message_replay', content: 'Review this',
+      sessionReferences, nativeMessageIds: ['native-human'] })
+    useChatStore.getState().handleServerMessage(id, { type: 'system_notification', subtype: 'official_sdk_messages_retracted',
+      data: { ids: ['native-human'], edit: { text: 'Review this', uuid: 'native-human' } } })
+    expect(useChatStore.getState().sessions[id]!.messages).toHaveLength(1)
+    expect(useChatStore.getState().sessions[id]!.composerPrefill).toMatchObject({ text: 'Review this', attachments, sessionReferences })
+  })
+  it('shows native fallback reasons once and only updates the main model for session-scoped changes', () => {
+    useSessionRuntimeStore.getState().setSelection(id, { providerId: 'fixture', modelId: 'primary' })
+    const event = (scope: string, uuid: string): ServerMessage => ({
+      type: 'system_notification', subtype: 'model_refusal_fallback', message: 'Native model fallback reason',
+      data: { official_agent_sdk: true, uuid, original_model: 'primary', fallback_model: 'fallback', scope },
+    })
+    useChatStore.getState().handleServerMessage(id, event('local', 'local-notice'))
+    expect(useSessionRuntimeStore.getState().selections[id]?.modelId).toBe('primary')
+    useChatStore.getState().handleServerMessage(id, event('session', 'main-notice'))
+    useChatStore.getState().handleServerMessage(id, event('session', 'main-notice'))
+    expect(useSessionRuntimeStore.getState().selections[id]?.modelId).toBe('fallback')
+    expect(useChatStore.getState().sessions[id]!.messages.filter(message => message.id === 'main-notice')).toHaveLength(1)
+  })
+  it('retires hydrated terminal notifications on resume and publishes native terminal details and stop cleanup', () => {
+    useChatStore.setState(state => ({ sessions: { ...state.sessions, [id]: {
+      ...state.sessions[id]!,
+      backgroundAgentTasks: { agent: { taskId: 'agent', toolUseId: 'tool', taskType: 'local_agent',
+        status: 'completed', startedAt: 1, updatedAt: 2, nativeTask: true, runId: '1' } },
+      agentTaskNotifications: { tool: { taskId: 'agent', toolUseId: 'tool', status: 'completed', summary: 'Old answer' } },
+      stoppingBackgroundTaskIds: { agent: true },
+      pendingBackgroundTaskStopFailures: { agent: 'Old failure' },
+    } } }))
+    const send = (subtype: string, data: Record<string, unknown>) =>
+      useChatStore.getState().handleServerMessage(id, { type: 'system_notification', subtype, data: { ...data, official_agent_sdk: true } })
+    send('task_started', { task_id: 'agent', tool_use_id: 'tool', task_type: 'local_agent', run_id: '2', is_backgrounded: true })
+    const running = useChatStore.getState().sessions[id]!
+    expect(running.agentTaskNotifications.tool).toBeUndefined()
+    expect(running.stoppingBackgroundTaskIds?.agent).toBeUndefined()
+    expect(running.pendingBackgroundTaskStopFailures?.agent).toBeUndefined()
+    useChatStore.setState(state => ({ sessions: { ...state.sessions, [id]: {
+      ...state.sessions[id]!, stoppingBackgroundTaskIds: { agent: true },
+    } } }))
+    const beforeStale = useChatStore.getState().sessions[id]!
+    send('task_notification', { task_id: 'agent', tool_use_id: 'tool', run_id: '1', status: 'failed', summary: 'Late old failure' })
+    expect(useChatStore.getState().sessions[id]).toBe(beforeStale)
+    send('task_notification', { task_id: 'agent', tool_use_id: 'tool', run_id: '2',
+      status: 'failed', summary: 'New error', output_file: '/fixture/result',
+      usage: { total_tokens: 12, tool_uses: 3, duration_ms: 25 } })
+    const stopped = useChatStore.getState().sessions[id]!
+    expect(stopped.agentTaskNotifications.tool).toMatchObject({
+      taskId: 'agent', toolUseId: 'tool', status: 'failed', summary: 'New error', outputFile: '/fixture/result',
+      usage: { totalTokens: 12, toolUses: 3, durationMs: 25 },
+    })
+    expect(stopped.stoppingBackgroundTaskIds?.agent).toBeUndefined()
+    expect(stopped.historyMutationEpoch).toBe((beforeStale.historyMutationEpoch ?? 0) + 1)
+  })
+  it('settles native Stop flags from patches and snapshots and hides skip-transcript tasks', () => {
+    const send = (subtype: string, data: Record<string, unknown>) =>
+      useChatStore.getState().handleServerMessage(id, { type: 'system_notification', subtype, data: { ...data, official_agent_sdk: true } })
+    send('task_started', { task_id: 'agent', tool_use_id: 'tool', task_type: 'local_agent', run_id: '1', is_backgrounded: true })
+    useChatStore.setState(state => ({ sessions: { ...state.sessions, [id]: {
+      ...state.sessions[id]!, stoppingBackgroundTaskIds: { agent: true },
+    } } }))
+    send('task_updated', { task_id: 'agent', run_id: '1', patch: { status: 'killed', error: 'Worker stopped' } })
+    expect(useChatStore.getState().sessions[id]!.agentTaskNotifications.tool).toMatchObject({ status: 'stopped', summary: 'Worker stopped' })
+    expect(useChatStore.getState().sessions[id]!.stoppingBackgroundTaskIds?.agent).toBeUndefined()
+    send('task_started', { task_id: 'agent', tool_use_id: 'tool', task_type: 'local_agent', run_id: '2', is_backgrounded: true })
+    send('background_tasks_changed', { tasks: [] })
+    expect(useChatStore.getState().sessions[id]!.agentTaskNotifications.tool?.status).toBe('completed')
+    send('task_started', { task_id: 'maintenance', run_id: '1', task_type: 'local_bash', skip_transcript: true, is_backgrounded: true })
+    const state = useChatStore.getState().sessions[id]!
+    expect(state.backgroundAgentTasks?.maintenance?.status).toBe('running')
+    expect(state.messages.some(message => message.type === 'background_task' && message.task.taskId === 'maintenance')).toBe(false)
+    expect(hasRunningBackgroundTasks(state.backgroundAgentTasks)).toBe(false)
   })
 })
 
@@ -3555,7 +3683,12 @@ describe('chatStore history mapping', () => {
     })
 
     const completeTurn = async (expectedHistoryLoads: number) => {
-      useChatStore.getState().sendMessage(TEST_SESSION_ID, '你好')
+      // Recovery confirmation requires the durable turn to be no older than
+      // this send, so align the client clock with this transcript fixture.
+      const clock = vi.spyOn(Date, 'now').mockReturnValue(
+        Date.parse('2026-08-06T00:00:00.000Z') + (expectedHistoryLoads - 1) * 2000,
+      )
+      try { useChatStore.getState().sendMessage(TEST_SESSION_ID, '你好') } finally { clock.mockRestore() }
       useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
         type: 'content_delta',
         text: '你好！有什么可以帮你的吗？',
@@ -12039,6 +12172,10 @@ describe('chatStore history mapping', () => {
         }),
       },
     })
+    savePendingInputRecovery(TEST_SESSION_ID, {
+      id: 'unconfirmed-before-clear', type: 'user_text', content: 'Do not restore after explicit clear', timestamp: 1,
+    })
+    expect(readPendingInputRecovery(TEST_SESSION_ID, 'pending')).toHaveLength(2)
 
     const historyLoad = useChatStore.getState().loadHistory(TEST_SESSION_ID)
     expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.historyStatus).toBe('loading')
@@ -12078,6 +12215,10 @@ describe('chatStore history mapping', () => {
     expect(session?.backgroundAgentTasks).toEqual({})
     expect(session?.agentTaskNotifications).toEqual({})
     expect(session?.historyStatus).toBe('ready')
+    expect(readPendingInputRecovery(TEST_SESSION_ID, 'pending')).toEqual([])
+    useChatStore.getState().disconnectSession(TEST_SESSION_ID)
+    useChatStore.getState().connectToSession(TEST_SESSION_ID, { minimalBootstrap: true })
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.messages).toEqual([])
   })
 
   it('settles history state when clearMessages invalidates an in-flight load', async () => {
@@ -16118,6 +16259,230 @@ describe('chatStore activity state survival across reload paths', () => {
       ...initialState,
       sessions: {},
     })
+  })
+
+  it.each(['reload', 'terminal-reconnect'] as const)(
+    'keeps a failed first prompt and copyable error through repeated %s history refreshes',
+    async (mode) => {
+      const sessionId = `failed-input-${mode}`
+      const prompt = `第一行保留空格  \n\n${'这是我写了很久的完整提示词。'.repeat(1000)}\n最后一行`
+      useChatStore.setState({ sessions: { [sessionId]: makeSession({
+        chatState: 'idle', historyHydrated: true, historyStatus: 'ready',
+      }) } })
+      useChatStore.getState().sendMessage(sessionId, prompt, [{
+        type: 'file', name: 'requirements.txt', path: '/fixture/requirements.txt',
+      }], { sessionReferences: [{ sessionId: 'reference-session' }] })
+      useChatStore.getState().handleServerMessage(sessionId, {
+        type: 'error', code: 'INTERNAL_ERROR', message: 'ENOENT: session metadata is not ready',
+      })
+      const sentRows = useChatStore.getState().sessions[sessionId]!.messages
+      expect(sentRows).toHaveLength(2)
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (mode === 'reload') {
+          await useChatStore.getState().reloadHistory(sessionId)
+        } else {
+          await useChatStore.getState().loadHistory(sessionId, { mode: 'terminal-reconnect' })
+        }
+        expect(useChatStore.getState().sessions[sessionId]!.messages).toEqual(sentRows)
+      }
+      const [user, error] = useChatStore.getState().sessions[sessionId]!.messages
+      expect(user).toMatchObject({
+        type: 'user_text', content: prompt,
+        attachments: [{ type: 'file', name: 'requirements.txt', path: '/fixture/requirements.txt' }],
+        sessionReferences: [{ sessionId: 'reference-session' }],
+      })
+      expect(error).toMatchObject({
+        type: 'error', code: 'INTERNAL_ERROR', message: 'ENOENT: session metadata is not ready',
+      })
+    },
+  )
+
+  it('retains an acknowledged but unwritten prompt when reconnecting or reopening its tab', async () => {
+    const sessionId = 'failed-input-ack-before-write'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'idle' }) } })
+    useChatStore.getState().sendMessage(sessionId, 'Keep this full prompt')
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'user_message_replay', content: 'Keep this full prompt',
+    })
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'error', code: 'CLI_ERROR', message: 'CLI exited before writing the transcript',
+    })
+    const rows = useChatStore.getState().sessions[sessionId]!.messages
+    expect(rows[0]).not.toHaveProperty('awaitingReplay')
+    await useChatStore.getState().reloadHistory(sessionId)
+    useChatStore.getState().disconnectSession(sessionId, { keepTranscript: true })
+    useChatStore.getState().connectToSession(sessionId)
+    await useChatStore.getState().loadHistory(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]!.messages).toEqual(rows)
+    await useChatStore.getState().loadHistory(sessionId, { mode: 'terminal-reconnect' })
+    expect(useChatStore.getState().sessions[sessionId]!.messages).toEqual(rows)
+  })
+
+  it('keeps an earlier failed input before a later durable turn without duplicating the accepted turn', async () => {
+    const sessionId = 'failed-input-later-accepted-turn'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'idle' }) } })
+    useChatStore.getState().sendMessage(sessionId, 'Long failed prompt')
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'error', code: 'INTERNAL_ERROR', message: 'First request failed',
+    })
+    useChatStore.getState().sendMessage(sessionId, 'Hello')
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'user_message_replay', content: 'Hello',
+    })
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 },
+    })
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({
+      messages: [
+        { id: 'accepted-user', type: 'user', content: 'Hello', timestamp: new Date().toISOString() },
+        { id: 'accepted-answer', type: 'assistant', content: 'Hi', timestamp: new Date().toISOString() },
+      ],
+    })
+    await useChatStore.getState().reloadHistory(sessionId)
+    await useChatStore.getState().reloadHistory(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]!.messages).toMatchObject([
+      { type: 'user_text', content: 'Long failed prompt' },
+      { type: 'error', message: 'First request failed' },
+      { type: 'user_text', content: 'Hello', transcriptMessageId: 'accepted-user' },
+      { type: 'assistant_text', content: 'Hi', transcriptMessageId: 'accepted-answer' },
+    ])
+  })
+
+  it('allows an explicit successful rewind to remove local recovery rows', async () => {
+    const sessionId = 'failed-input-explicit-rewind'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'idle' }) } })
+    useChatStore.getState().sendMessage(sessionId, 'Prompt the user chose to remove')
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'error', code: 'CLI_ERROR', message: 'Copyable error',
+    })
+    await useChatStore.getState().reloadHistory(sessionId, undefined, { requireApplied: true })
+    expect(useChatStore.getState().sessions[sessionId]!.messages).toEqual([])
+  })
+
+  it('keeps a dispatched queued prompt and its context after a failed refresh', async () => {
+    const sessionId = 'failed-input-queued'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'thinking' }) } })
+    const queuedId = useChatStore.getState().queueUserMessage(sessionId, {
+      content: 'Referenced context\n\nMy queued follow-up',
+      displayContent: 'My queued follow-up',
+      displayAttachments: [{ type: 'file', name: 'plan.txt', path: '/fixture/plan.txt' }],
+    })
+    useChatStore.getState().sendQueuedUserMessage(sessionId, queuedId)
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'error', code: 'CLI_ERROR', message: 'Queue dispatch failed',
+    })
+    await useChatStore.getState().reloadHistory(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]!.queuedUserMessages).toEqual([])
+    expect(useChatStore.getState().sessions[sessionId]!.messages).toMatchObject([
+      {
+        type: 'user_text', content: 'My queued follow-up',
+        modelContent: 'Referenced context\n\nMy queued follow-up',
+        attachments: [{ type: 'file', name: 'plan.txt', path: '/fixture/plan.txt' }],
+      },
+      { type: 'error', message: 'Queue dispatch failed' },
+    ])
+  })
+
+  it.each(['missing', 'disconnected', 'connected'] as const)('restores failed input after restart with %s precreated session state', async (connection) => {
+    const sessionId = `failed-input-renderer-restart-${connection}`
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'idle' }) } })
+    useChatStore.getState().sendMessage(sessionId, 'Important\nmultiline prompt', [{ type: 'file', name: 'notes.txt', path: '/fixture/notes.txt' }])
+    useChatStore.getState().handleServerMessage(sessionId, {
+      type: 'error', code: 'INTERNAL_ERROR', message: 'The original copyable startup error',
+    })
+    useChatStore.getState().disconnectSession(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]).toBeUndefined()
+    if (connection !== 'missing') {
+      useChatStore.setState({ sessions: { [sessionId]: makeSession({
+        chatState: 'idle', connectionState: connection, messages: [], historyStatus: 'ready', historyHydrated: true,
+      }) } })
+    }
+    useChatStore.getState().connectToSession(sessionId)
+    await useChatStore.getState().loadHistory(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]!.messages).toMatchObject([
+      { type: 'user_text', content: 'Important\nmultiline prompt', attachments: [{ name: 'notes.txt', path: '/fixture/notes.txt' }] },
+      { type: 'error', code: 'INTERNAL_ERROR', message: 'The original copyable startup error' },
+    ])
+    expect(sendMock.mock.calls.filter(([, message]) => message.type === 'user_message')).toHaveLength(1)
+  })
+
+  it('keeps recovery until transcript acceptance instead of clearing it on a user replay', async () => {
+    const sessionId = 'failed-input-confirmation'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'idle' }) } })
+    useChatStore.getState().sendMessage(sessionId, 'Confirm only from disk')
+    useChatStore.getState().handleServerMessage(sessionId, { type: 'user_message_replay', content: 'Confirm only from disk' })
+    expect(readPendingInputRecovery(sessionId, 'pending')).toHaveLength(2)
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [
+      { id: 'confirmed-input', type: 'user', content: 'Confirm only from disk', timestamp: new Date().toISOString() },
+    ] })
+    useChatStore.getState().disconnectSession(sessionId)
+    useChatStore.getState().connectToSession(sessionId)
+    await useChatStore.getState().loadHistory(sessionId)
+    expect(readPendingInputRecovery(sessionId, 'pending')).toEqual([])
+    expect(useChatStore.getState().sessions[sessionId]!.messages).toMatchObject([
+      { type: 'user_text', content: 'Confirm only from disk', transcriptMessageId: 'confirmed-input' },
+    ])
+  })
+
+  it('does not dispatch or remove the composer draft when durable recovery cannot be written', () => {
+    const sessionId = 'failed-input-storage-quota'
+    const draft = { input: 'Do not clear my only copy', attachments: [] }
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'idle', composerDraft: draft }) } })
+    const original = Storage.prototype.setItem
+    const quota = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === PENDING_INPUT_RECOVERY_KEY) throw new Error('QuotaExceededError')
+      return original.call(this, key, value)
+    })
+    try {
+      expect(useChatStore.getState().sendMessage(sessionId, draft.input)).toBe(false)
+      expect(useChatStore.getState().queueUserMessage(sessionId, { content: draft.input, displayContent: draft.input })).toBe('')
+      expect(useChatStore.getState().sessions[sessionId]!.composerDraft).toEqual(draft)
+      expect(useChatStore.getState().sessions[sessionId]!.messages).toEqual([])
+      expect(sendMock).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
+    } finally { quota.mockRestore() }
+  })
+
+  it('does not mistake an older identical prompt for acceptance after renderer restart', async () => {
+    const sessionId = 'failed-input-identical-old-turn'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'idle' }) } })
+    useChatStore.getState().sendMessage(sessionId, 'Try again')
+    useChatStore.getState().handleServerMessage(sessionId, { type: 'error', code: 'INTERNAL_ERROR', message: 'Failed before dispatch' })
+    useChatStore.getState().disconnectSession(sessionId)
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [
+      { id: 'old-turn', type: 'user', content: 'Try again', timestamp: new Date(1000).toISOString() },
+      { id: 'old-answer', type: 'assistant', content: 'An older response', timestamp: new Date(2000).toISOString() },
+    ] })
+    useChatStore.getState().connectToSession(sessionId)
+    await useChatStore.getState().loadHistory(sessionId)
+    expect(readPendingInputRecovery(sessionId, 'pending')[0]).toMatchObject({ content: 'Try again' })
+    expect(useChatStore.getState().sessions[sessionId]!.messages.filter((message) => message.type === 'user_text')).toHaveLength(2)
+  })
+
+  it('confirms the new successful retry without deleting the older identical failed prompt', async () => {
+    const sessionId = 'failed-input-identical-retry'
+    useChatStore.setState({ sessions: { [sessionId]: makeSession({ chatState: 'idle' }) } })
+    const clock = vi.spyOn(Date, 'now')
+    try {
+      clock.mockReturnValue(1000)
+      useChatStore.getState().sendMessage(sessionId, 'Retry this full prompt')
+      useChatStore.getState().handleServerMessage(sessionId, { type: 'error', code: 'INTERNAL_ERROR', message: 'First attempt failed' })
+      clock.mockReturnValue(3000)
+      useChatStore.getState().sendMessage(sessionId, 'Retry this full prompt')
+    } finally { clock.mockRestore() }
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValue({ messages: [
+      { id: 'successful-retry', type: 'user', content: 'Retry this full prompt', timestamp: new Date(3001).toISOString() },
+    ] })
+    await useChatStore.getState().reloadHistory(sessionId)
+    expect(useChatStore.getState().sessions[sessionId]!.messages).toMatchObject([
+      { type: 'user_text', content: 'Retry this full prompt', timestamp: 1000 },
+      { type: 'error', message: 'First attempt failed' },
+      { type: 'user_text', content: 'Retry this full prompt', transcriptMessageId: 'successful-retry' },
+    ])
+    expect(readPendingInputRecovery(sessionId, 'pending')).toMatchObject([
+      { type: 'user_text', timestamp: 1000 },
+      { type: 'error', message: 'First attempt failed' },
+    ])
   })
 
   it('reloadHistory keeps running background tasks that are not in the transcript yet', async () => {

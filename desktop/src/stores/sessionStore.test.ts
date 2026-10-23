@@ -31,6 +31,7 @@ import { useSessionRuntimeStore } from './sessionRuntimeStore'
 import { useSettingsStore } from './settingsStore'
 import { useTabStore } from './tabStore'
 import { ApiError } from '../api/client'
+import { readPendingInputRecovery, savePendingInputRecovery } from './pendingInputRecovery'
 
 const initialState = useSessionStore.getState()
 
@@ -987,6 +988,7 @@ describe('sessionStore', () => {
       sessions: [makeSession('session-delete-1', '2026-05-07T00:00:00.000Z')],
       activeSessionId: 'session-delete-1',
     })
+    savePendingInputRecovery('session-delete-1', { id: 'input', type: 'user_text', content: 'Pending text', timestamp: 1 })
 
     await useSessionStore.getState().deleteSession('session-delete-1')
 
@@ -994,6 +996,7 @@ describe('sessionStore', () => {
     expect(invalidateRecentProjectsCacheMock).toHaveBeenCalledOnce()
     expect(useSessionStore.getState().sessions).toEqual([])
     expect(useSessionStore.getState().activeSessionId).toBeNull()
+    expect(readPendingInputRecovery('session-delete-1', 'pending')).toEqual([])
   })
 
   it('invalidates cached recent projects after successful batch deletion', async () => {
@@ -1009,6 +1012,9 @@ describe('sessionStore', () => {
       ],
       activeSessionId: 'session-delete-b',
     })
+    for (const id of ['session-delete-a', 'session-delete-b']) {
+      savePendingInputRecovery(id, { id: 'input', type: 'user_text', content: 'Pending text', timestamp: 1 })
+    }
 
     const result = await useSessionStore.getState().deleteSessions([
       'session-delete-a',
@@ -1021,6 +1027,8 @@ describe('sessionStore', () => {
     expect(invalidateRecentProjectsCacheMock).toHaveBeenCalledOnce()
     expect(useSessionStore.getState().sessions.map((session) => session.id)).toEqual(['session-delete-b'])
     expect(useSessionStore.getState().activeSessionId).toBe('session-delete-b')
+    expect(readPendingInputRecovery('session-delete-a', 'pending')).toEqual([])
+    expect(readPendingInputRecovery('session-delete-b', 'pending')[0]).toMatchObject({ content: 'Pending text' })
   })
 
   it('keeps cached recent projects when batch deletion has no successes', async () => {
@@ -1135,5 +1143,15 @@ describe('sessionStore', () => {
       projectRoot: '/workspace/repo',
       workDir: '/workspace/repo/branches/session-branch-existing',
     })
+  })
+
+  it('pins the server-selected SDK runtime before connecting an imported branch', async () => {
+    branchMock.mockResolvedValue({ sessionId: 'sdk-copy', title: 'Old chat (Agent SDK)', workDir: '/fixture',
+      sourceSessionId: 'old', targetMessageId: 'done', runtimeProviderId: 'sdk-provider', runtimeModelId: 'claude-haiku-5-5' })
+    listMock.mockImplementation(() => new Promise(() => {}))
+    await useSessionStore.getState().branchSession('old', 'done', { agentSdk: { providerId: 'sdk-provider', modelId: 'claude-haiku-5-5' } })
+    expect(branchMock).toHaveBeenCalledWith('old', { targetMessageId: 'done', agentSdk: { providerId: 'sdk-provider', modelId: 'claude-haiku-5-5' } })
+    expect(useSessionRuntimeStore.getState().selections['sdk-copy']).toMatchObject({ providerId: 'sdk-provider', modelId: 'claude-haiku-5-5' })
+    expect(useSessionStore.getState().sessions[0]).toMatchObject({ id: 'sdk-copy', runtimeProviderId: 'sdk-provider', runtimeModelId: 'claude-haiku-5-5' })
   })
 })

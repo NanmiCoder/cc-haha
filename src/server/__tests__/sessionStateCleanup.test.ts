@@ -48,6 +48,7 @@ const CONTAINERS: Record<string, Classification> = {
   agentStopRequestedSessions: { kind: 'cleared' },
   nonAgentStopRequestedSessions: { kind: 'cleared' },
   authoritativeStoppedTaskIds: { kind: 'cleared' },
+  officialSdkTaskStates: { kind: 'cleared' },
   backgroundTaskCleanupTimers: { kind: 'cleared' },
   deferredPermissionModes: { kind: 'cleared' },
   deferredRuntimeRestarts: { kind: 'cleared' },

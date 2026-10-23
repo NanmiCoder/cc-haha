@@ -13,11 +13,12 @@ import {
   BUILT_IN_PROVIDER_IDS,
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
   PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION,
+  PROVIDER_AGENT_SDK_RUNTIME_SCHEMA_VERSION,
   PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION,
   PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION,
 } from '../types/provider.js'
 
-export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION
+export const CURRENT_PROVIDER_INDEX_SCHEMA_VERSION = PROVIDER_AGENT_SDK_RUNTIME_SCHEMA_VERSION
 
 type MigrationReport = {
   migratedEntries: string[]
@@ -204,6 +205,11 @@ function migrateProvidersIndex(value: unknown): JsonObject {
   // from old Claude defaults. Spreading providers also preserves future fields.
   const providers = value.providers
     .filter(isSavedProvider)
+    // v9 makes runtime selection explicit. Existing providers keep their original
+    // Claude Code backend; preserve any explicitly saved or future runtime value.
+    .map((provider) => sourceSchemaVersion < PROVIDER_AGENT_SDK_RUNTIME_SCHEMA_VERSION && provider.runtime === undefined
+      ? { ...provider, runtime: 'claude-code' }
+      : provider)
     .map((provider) => sourceSchemaVersion < PROVIDER_TOOL_SEARCH_OPT_IN_SCHEMA_VERSION
       ? { ...provider, toolSearchEnabled: false }
       : provider)

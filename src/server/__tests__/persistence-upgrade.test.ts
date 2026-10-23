@@ -35,6 +35,35 @@ describe('persistent storage upgrade migrations', () => {
     await fs.rm(tempDir, { recursive: true, force: true })
   })
 
+  test('upgrades v8 providers without changing the backend or losing future fields', async () => {
+    const dir = path.join(tempDir, 'cc-haha')
+    const file = path.join(dir, 'providers.json')
+    await fs.mkdir(dir, { recursive: true })
+    const provider = {
+      id: 'old-provider', presetId: 'custom', name: 'Existing provider',
+      apiKey: 'fixture-key', baseUrl: 'https://provider.example.test',
+      apiFormat: 'anthropic', authStrategy: 'auth_token', runtimeKind: 'anthropic_compatible',
+      toolSearchEnabled: false, models: { main: 'fixture', haiku: 'fixture', sonnet: 'fixture', opus: 'fixture' },
+      futureProvider: { preserve: true },
+    }
+    const legacy = {
+      schemaVersion: 8, activeId: provider.id, providers: [provider], futureRoot: 'preserve',
+      providerOrder: [provider.id, 'claude-official', 'openai-official', 'grok-official', 'deepseek-account'],
+      officialProviderModels: {},
+    }
+    await fs.writeFile(file, JSON.stringify(legacy))
+    expect((await ensurePersistentStorageUpgraded()).failures).toEqual([])
+    const migrated = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(migrated).toEqual({ ...legacy, schemaVersion: CURRENT_PROVIDER_INDEX_SCHEMA_VERSION, providers: [{ ...provider, runtime: 'claude-code' }] })
+    const service = new ProviderService()
+    await service.updateProvider(provider.id, { notes: 'Updated after migration' })
+    const saved = JSON.parse(await fs.readFile(file, 'utf8'))
+    expect(saved.futureRoot).toBe('preserve')
+    expect(saved.providers[0]).toMatchObject({ runtime: 'claude-code', futureProvider: { preserve: true }, notes: 'Updated after migration' })
+    resetPersistentStorageMigrationsForTests()
+    expect((await ensurePersistentStorageUpgraded()).migratedEntries).toEqual([])
+  })
+
   test('upgrades v6 image settings to an explicit protocol and preserves unknown fields on later edits', async () => {
     const dir = path.join(tempDir, 'cc-haha')
     const file = path.join(dir, 'providers.json')

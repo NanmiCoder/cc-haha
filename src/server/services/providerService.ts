@@ -70,6 +70,7 @@ import {
   type NetworkSettings,
 } from './networkSettings.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
+import { getAgentSdkProviderError } from '../../shared/providerRuntime.js'
 import type {
   SavedProvider,
   ProvidersIndex,
@@ -146,6 +147,8 @@ function mergeSavedOrderIntoDisplayOrder(providerOrder: string[], savedOrder: st
 }
 
 function buildSavedProvider(input: CreateProviderInput): SavedProvider {
+  const runtimeError = getAgentSdkProviderError(input)
+  if (runtimeError) throw ApiError.badRequest(runtimeError)
   const imageGeneration = normalizeImageGeneration(input.imageGeneration)
   return {
     id: crypto.randomUUID(),
@@ -156,6 +159,7 @@ function buildSavedProvider(input: CreateProviderInput): SavedProvider {
     baseUrl: input.baseUrl,
     apiFormat: input.apiFormat ?? 'anthropic',
     runtimeKind: input.runtimeKind ?? 'anthropic_compatible',
+    runtime: input.runtime ?? 'claude-code',
     models: normalizeModelMapping(input.models),
     ...(input.model1mSupport !== undefined && { model1mSupport: input.model1mSupport }),
     ...(input.autoCompactWindow !== undefined && { autoCompactWindow: input.autoCompactWindow }),
@@ -406,6 +410,7 @@ export class ProviderService {
       ...(input.baseUrl !== undefined && { baseUrl: input.baseUrl }),
       ...(input.apiFormat !== undefined && { apiFormat: input.apiFormat }),
       ...(input.runtimeKind !== undefined && { runtimeKind: input.runtimeKind }),
+      ...(input.runtime !== undefined && { runtime: input.runtime }),
       ...(input.models !== undefined && { models: normalizeModelMapping(input.models) }),
       ...(input.model1mSupport !== undefined && input.model1mSupport !== null && { model1mSupport: input.model1mSupport }),
       ...(typeof input.autoCompactWindow === 'number' && { autoCompactWindow: input.autoCompactWindow }),
@@ -436,6 +441,8 @@ export class ProviderService {
       delete updated.imageGeneration
     }
 
+    const runtimeError = getAgentSdkProviderError(updated)
+    if (runtimeError) throw ApiError.badRequest(runtimeError)
     index.providers[idx] = updated
     await this.writeIndex(index)
 

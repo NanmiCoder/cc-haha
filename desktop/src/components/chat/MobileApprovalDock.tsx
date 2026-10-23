@@ -8,10 +8,12 @@ import { AskUserQuestion } from './AskUserQuestion'
 import { PermissionDialog } from './PermissionDialog'
 import { isExitPlanModeTool } from './PlanModePreview'
 import { PERMISSION_TOOL_ICONS, extractToolDetails, getPermissionTitle } from './permissionPresentation'
+import { OFFICIAL_SDK_DIALOG_TOOL, isOfficialSdkDialog } from '../../../../src/shared/officialAgentSdkDialogs'
 
-type DecisionKind = 'tool' | 'plan' | 'question'
+type DecisionKind = 'tool' | 'plan' | 'question' | 'dialog'
 
 function kindOf(request: PendingPermission): DecisionKind {
+  if (request.toolName === OFFICIAL_SDK_DIALOG_TOOL) return 'dialog'
   if (request.toolName === 'AskUserQuestion') return 'question'
   if (isExitPlanModeTool(request.toolName)) return 'plan'
   return 'tool'
@@ -62,7 +64,10 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
   let Icon = PERMISSION_TOOL_ICONS[current.toolName] ?? Shield
   let title: string
   let detail = ''
-  if (kind === 'question') {
+  if (kind === 'dialog') {
+    title = isOfficialSdkDialog(current.input) ? current.input.title : t('sdkDialog.title')
+    detail = isOfficialSdkDialog(current.input) ? current.input.message : ''
+  } else if (kind === 'question') {
     Icon = MessageCircleQuestion
     title = t('mobile.approval.questionTitle')
     detail = firstQuestionText(current.input)
@@ -179,7 +184,7 @@ export function MobileApprovalDock({ sessionId }: { sessionId: string }) {
         </>
       ) : (
         <Button variant="primary" size="lg" block onClick={() => setDetailOpen(true)}>
-          {kind === 'question' ? t('mobile.approval.answer') : t('mobile.approval.reviewPlan')}
+          {kind === 'dialog' ? t('mobile.approval.viewDetails') : kind === 'question' ? t('mobile.approval.answer') : t('mobile.approval.reviewPlan')}
         </Button>
       )}
 
