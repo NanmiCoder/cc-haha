@@ -3762,6 +3762,7 @@ function cleanupSessionRuntimeState(
   strictCollaborationRuntimeSessions.delete(sessionId)
   rejectedRuntimeConfigs.delete(sessionId)
   activeUserTurns.delete(sessionId)
+  pendingUserTurns.delete(sessionId)
   activeCliRuns.delete(sessionId)
   cliRunsAwaitingBackgroundTasks.delete(sessionId)
   sessionStopRequested.delete(sessionId)
