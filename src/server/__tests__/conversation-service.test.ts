@@ -837,7 +837,7 @@ describe('ConversationService', () => {
       }))
       service.handleSdkPayload('recovered-retry', JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Recovered' }))
       expect(capture).toHaveBeenCalledTimes(1)
-      expect(capture).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'recovered-retry', phase: 'api_retry', severity: 'warn',
+      expect(capture).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'recovered-retry', phase: 'api_retry', severity: 'warning',
         message: 'ECONNRESET: socket hang up', metadata: expect.objectContaining({ requestId: 'req-fixture', messageUuid: 'retry-uuid' }),
       }))
     } finally { capture.mockRestore() }

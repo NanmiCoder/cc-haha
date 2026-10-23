@@ -1637,7 +1637,7 @@ export class ConversationService {
             void traceCaptureService.recordEvent({
               sessionId,
               phase: 'api_retry',
-              severity: 'warn',
+              severity: 'warning',
               title: 'API request retry',
               message: sdkError.summary,
               metadata: sdkError.details,
