@@ -53,7 +53,7 @@ import {
   type OverageDisabledReason,
 } from '../claudeAiLimits.js'
 import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mock-limits command
-import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
+import { extractConnectionErrorDetails, formatAPIError, sanitizeRetryDiagnosticText } from './errorUtils.js'
 import {
   formatStreamEndedEarlyMessage,
   StreamEndedEarlyError,
@@ -1438,9 +1438,34 @@ export function classifyAPIError(error: unknown): string {
   return 'unknown'
 }
 
+export function getRetryableAPIErrorDiagnostics(error: APIError): {
+  error_message?: string
+  request_id?: string
+} {
+  const details = [getAPIErrorDetail(error)]
+  let cause: unknown = error.cause
+  const seen = new Set<unknown>([error])
+  for (let depth = 0; cause instanceof Error && depth < 5 && !seen.has(cause); depth++) {
+    seen.add(cause)
+    const code = 'code' in cause && typeof cause.code === 'string' ? cause.code : ''
+    const detail = [code, cause.message].filter(Boolean).join(': ')
+    if (detail && !details.includes(detail)) details.push(detail)
+    cause = cause.cause
+  }
+  // Keep an unterminated quoted value from consuming the next cause's delimiter.
+  const message = details.filter(Boolean).map(sanitizeRetryDiagnosticText).join(' · ').slice(0, 2000)
+  const requestId = error.requestID
+  return {
+    ...(message ? { error_message: message } : {}),
+    ...(typeof requestId === 'string' && /^[a-zA-Z0-9_.:-]{1,200}$/.test(requestId)
+      ? { request_id: sanitizeRetryDiagnosticText(requestId) } : {}),
+  }
+}
+
 export function categorizeRetryableAPIError(
   error: APIError,
 ): SDKAssistantMessageError {
+  if (error instanceof APIConnectionError) return 'connection_error'
   if (
     error.status === 529 ||
     error.message?.includes('"type":"overloaded_error"')

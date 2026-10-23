@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { APIError } from '@anthropic-ai/sdk'
+import { APIConnectionError, APIConnectionTimeoutError, APIError } from '@anthropic-ai/sdk'
 import { getIsInteractive, setIsInteractive } from '../../bootstrap/state.js'
 import { BUSINESS_ERROR_CODES } from '../../constants/businessErrors.js'
 import {
   getAssistantMessageFromError,
+  categorizeRetryableAPIError,
+  getRetryableAPIErrorDiagnostics,
   getPromptTooLongTokenGap,
   getImageUnsupportedErrorMessage,
   isContextOverflowErrorText,
@@ -404,5 +406,54 @@ describe('request too large (HTTP 413)', () => {
         textOf(getAssistantMessageFromError(relayRejection, MODEL, { messagesForAPI })),
       ).toContain('The size limit is set by that endpoint')
     })
+  })
+})
+
+
+describe('retry diagnostics', () => {
+  test('classifies transport failures without calling every unknown fault a connection error', () => {
+    expect(categorizeRetryableAPIError(new APIConnectionError({}))).toBe('connection_error')
+    expect(categorizeRetryableAPIError(new APIConnectionTimeoutError())).toBe('connection_error')
+    expect(categorizeRetryableAPIError(new APIError(undefined, undefined, 'unrecognized fault', undefined))).toBe('unknown')
+  })
+
+  test('keeps provider detail, request id, and transport cause with bounded redacted text', () => {
+    const error = new APIError(503, { error: { message: 'No available channel' } }, '503 response', new Headers({ 'request-id': 'req-fixture' }))
+    expect(getRetryableAPIErrorDiagnostics(error)).toEqual({ error_message: 'No available channel', request_id: 'req-fixture' })
+    const connection = new APIConnectionError({ message: 'Connection error.', cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }) })
+    expect(getRetryableAPIErrorDiagnostics(connection).error_message).toContain('ECONNRESET: socket hang up')
+    const sensitive = new APIConnectionError({ message: 'Bearer fixture-secret api_key=fixture-key https://user:pass@proxy.test/?token=private ' + 'x'.repeat(3000) })
+    const detail = getRetryableAPIErrorDiagnostics(sensitive).error_message!
+    expect(detail.length).toBeLessThanOrEqual(2000)
+    for (const secret of ['fixture-secret', 'fixture-key', 'user:pass', 'token=private']) expect(detail).not.toContain(secret)
+  })
+})
+
+
+test('retry detail redacts provider key and auth query parameters', () => {
+  const error = new APIConnectionError({ message: 'Request failed https://provider.test/v1?key=fixture-provider-key&auth=fixture-auth' })
+  const detail = getRetryableAPIErrorDiagnostics(error).error_message!
+  expect(detail).not.toContain('fixture-provider-key')
+  expect(detail).not.toContain('fixture-auth')
+  expect(detail).toContain('https://provider.test/v1?key=[REDACTED]&auth=[REDACTED]')
+})
+
+describe('quoted retry credentials', () => {
+  test.each([
+    ['password="correct horse battery staple"', 'password="[REDACTED]"'],
+    ["api_key='fixture,key;with&delimiters'", "api_key='[REDACTED]'"],
+    ['{"api_key":"fixture,key,with,commas"}', '{"api_key":"[REDACTED]"}'],
+    ['{"api_key":"fixture\\"quoted, key suffix"}', '{"api_key":"[REDACTED]"}'],
+    ["password='fixture\\'quoted secret suffix'", "password='[REDACTED]'"],
+    ['password="unfinished secret suffix', 'password="[REDACTED]"'],
+    ['password=fixture-secret', 'password=[REDACTED]'],
+  ])('redacts the complete credential in %s', (credential, redacted) => {
+    const error = new APIConnectionError({
+      message: `Proxy rejected ${credential}`,
+      cause: new Error(`Upstream rejected ${credential}`),
+    })
+    expect(getRetryableAPIErrorDiagnostics(error).error_message).toBe(
+      `Proxy rejected ${redacted} · Upstream rejected ${redacted}`,
+    )
   })
 })

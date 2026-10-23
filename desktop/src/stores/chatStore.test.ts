@@ -14123,6 +14123,8 @@ describe('chatStore history mapping', () => {
       retryDelayMs: 2500,
       errorStatus: 503,
       errorType: 'server_error',
+      errorMessage: 'Upstream service unavailable',
+      requestId: 'req-retry-123',
     })
 
     const retryingSession = useChatStore.getState().sessions[TEST_SESSION_ID]
@@ -14134,6 +14136,8 @@ describe('chatStore history mapping', () => {
       retryDelayMs: 2500,
       errorStatus: 503,
       errorType: 'server_error',
+      errorMessage: 'Upstream service unavailable',
+      requestId: 'req-retry-123',
     })
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
 

@@ -5190,6 +5190,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             errorStatus: msg.errorStatus ?? null,
             errorType: msg.errorType,
             errorMessage: msg.errorMessage,
+            requestId: msg.requestId,
             receivedAt: Date.now(),
           },
           chatState: session.chatState === 'idle' ? 'thinking' : session.chatState,
