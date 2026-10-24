@@ -46,7 +46,39 @@ export function buildProtocolImageRequests(
         : buildXaiRequestBody({ ...input, count: 1 }),
     }))
   }
+  if (protocol === 'minimax_image') {
+    const url = buildMiniMaxImageUrl(baseUrl)
+    return Array.from({ length: input.count }, () => ({
+      url,
+      body: buildMiniMaxImageRequestBody({ ...input, count: 1 }, inputImages),
+    }))
+  }
   throw new Error(`Unsupported image request protocol: ${protocol ?? 'openai_images'}`)
+}
+
+export function buildMiniMaxImageRequestBody(
+  input: ProtocolImageInput,
+  inputImages: PreparedInputImage[] = [],
+): Record<string, unknown> {
+  if (inputImages.length > 0) {
+    throw new Error('MiniMax image generation does not support image editing inputs.')
+  }
+  return compactObject({
+    model: input.model,
+    prompt: input.prompt,
+    aspect_ratio: input.aspect_ratio ?? aspectRatioForSize(input.size),
+    response_format: 'url',
+    n: input.count,
+  })
+}
+
+export function buildMiniMaxImageUrl(baseUrl: string): string {
+  const url = imageBaseUrl(baseUrl)
+  const pathname = url.pathname.replace(/\/+$/, '')
+  if (/\/image_generation$/i.test(pathname)) return url.toString()
+  if (/\/v1$/i.test(pathname)) url.pathname = `${pathname}/image_generation`
+  else url.pathname = `${pathname}/v1/image_generation`
+  return url.toString()
 }
 
 export function buildGeminiImageRequestBody(
@@ -202,6 +234,13 @@ export function parseGeminiImageResponse(value: unknown): ProtocolImage[] {
       return b64Json ? [{ b64Json, mimeType }] : []
     })
   })
+}
+
+export function parseMiniMaxImageResponse(value: unknown): ProtocolImage[] {
+  if (!isRecord(value) || !isRecord(value.data) || !Array.isArray(value.data.image_urls)) return []
+  return value.data.image_urls.flatMap((image): ProtocolImage[] =>
+    typeof image === 'string' && image.trim() ? [{ url: image.trim() }] : [],
+  )
 }
 
 function imageBaseUrl(baseUrl: string): URL {

@@ -111,7 +111,7 @@ export const RequestCompatibilitySchema = z.object({
 export type RequestCompatibility = z.infer<typeof RequestCompatibilitySchema>
 
 export const ImageGenerationConfigSchema = z.object({
-  protocol: z.enum(['openai_images', 'gemini_native', 'xai_images']).optional(),
+  protocol: z.enum(['openai_images', 'gemini_native', 'xai_images', 'minimax_image']).optional(),
   model: z.string().trim().min(1),
   baseUrl: z.string().trim().optional(),
   apiKey: z.string().trim().optional(),
