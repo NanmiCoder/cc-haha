@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -109,6 +109,108 @@ SectionEnd
     }
   }, 90_000)
 
+  test('resets the PowerShell module path before deciding whether PowerShell is usable', () => {
+    const installerHook = readFileSync('desktop/build/installer.nsh', 'utf8').replace(/\r\n/g, '\n')
+    const macro = installerHook.match(
+      /!macro CcHahaUseDefaultPowerShellModulePath\n([\s\S]*?)!macroend/,
+    )?.[1]
+    expect(macro).toContain('System::Call \'kernel32::SetEnvironmentVariable(w "PSModulePath", p 0)\'')
+
+    const checkStart = installerHook.indexOf('!macro customCheckAppRunning')
+    const reset = installerHook.indexOf('!insertmacro CcHahaUseDefaultPowerShellModulePath', checkStart)
+    const availability = installerHook.indexOf('!insertmacro IS_POWERSHELL_AVAILABLE', checkStart)
+    expect(checkStart).toBeGreaterThan(-1)
+    expect(reset).toBeGreaterThan(checkStart)
+    expect(availability).toBeGreaterThan(reset)
+  })
+
+  test.skipIf(process.platform !== 'win32')('keeps PowerShell usable when setup inherits a foreign PSModulePath in native NSIS', () => {
+    const compiler = process.env.CC_HAHA_TEST_MAKENSIS ?? path.join(
+      process.env.LOCALAPPDATA ?? '', 'electron-builder', 'Cache', 'nsis',
+      'nsis-3.0.4.1-nsis-3.0.4.1', 'Bin', 'makensis.exe',
+    )
+    const templates = process.env.CC_HAHA_TEST_NSIS_TEMPLATES
+      ?? path.resolve('desktop/node_modules/app-builder-lib/templates/nsis')
+    if (!existsSync(compiler) || !existsSync(path.join(templates, 'include/allowOnlyOneInstallerInstance.nsh'))) {
+      throw new Error('Native NSIS regression requires electron-builder dependencies and its cached compiler, or CC_HAHA_TEST_MAKENSIS/CC_HAHA_TEST_NSIS_TEMPLATES')
+    }
+    const root = mkdtempSync(path.join(tmpdir(), 'cc-haha-nsis-psmodulepath-'))
+    // Stands in for PowerShell 7's Microsoft.PowerShell.Security: listed ahead
+    // of the Windows PowerShell modules, it shadows Get-ExecutionPolicy and
+    // fails to load in 5.1, as the real PowerShell 7 module does.
+    const foreignModules = path.join(root, 'foreign-modules')
+    const security = path.join(foreignModules, 'Microsoft.PowerShell.Security')
+    mkdirSync(security, { recursive: true })
+    writeFileSync(path.join(security, 'Microsoft.PowerShell.Security.psd1'), [
+      '@{',
+      "  ModuleVersion = '99.0.0'",
+      "  RootModule = 'Broken.psm1'",
+      "  FunctionsToExport = @('Get-ExecutionPolicy')",
+      '  CmdletsToExport = @()',
+      '}',
+      '',
+    ].join('\r\n'))
+    writeFileSync(path.join(security, 'Broken.psm1'), "throw 'Simulated PowerShell 7 module loaded by Windows PowerShell'\r\n")
+    const systemRoot = process.env.SystemRoot ?? 'C:\\Windows'
+    const baseEnv = Object.fromEntries(
+      Object.entries(createSandboxedTestEnvironment(path.join(root, 'home')))
+        .filter(([key]) => key.toLowerCase() !== 'psmodulepath'),
+    )
+    const env = {
+      ...baseEnv,
+      PSModulePath: `${foreignModules};${systemRoot}\\system32\\WindowsPowerShell\\v1.0\\Modules`,
+    }
+    try {
+      for (const fixture of [
+        { name: 'inherited-module-path', reset: false, powershell: 1 },
+        { name: 'reset-module-path', reset: true, powershell: 0 },
+      ]) {
+        const executable = path.join(root, `${fixture.name}.exe`)
+        const journal = path.join(root, `${fixture.name}.log`)
+        const script = String.raw`
+Unicode true
+RequestExecutionLevel user
+SilentInstall silent
+Name "Isolated PowerShell module path regression"
+OutFile "${executable}"
+!addincludedir "${templates}\include"
+!define APP_GUID "cc-haha-nsis-test-no-user-state"
+!define UNINSTALL_APP_KEY "cc-haha-nsis-test-no-user-state"
+!define APP_FILENAME "isolated-test"
+!define PRODUCT_FILENAME "isolated-test"
+!define BUILD_RESOURCES_DIR "${path.resolve('desktop/build')}"
+!include "${path.resolve('desktop/build/installer.nsh')}"
+!include "allowOnlyOneInstallerInstance.nsh"
+LoadLanguageFile "${'${NSISDIR}'}\Contrib\Language files\English.nlf"
+LangString uninstallFailed 1033 "Uninstall failed"
+Var PowerShellPath
+Var journalHandle
+Section
+  StrCpy $PowerShellPath "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe"
+  ${fixture.reset ? '!insertmacro CcHahaUseDefaultPowerShellModulePath' : ''}
+  !insertmacro IS_POWERSHELL_AVAILABLE
+  FileOpen $journalHandle "${journal}" w
+  FileWrite $journalHandle "powershell=$IsPowerShellAvailable$\n"
+  FileClose $journalHandle
+SectionEnd
+`
+        const source = path.join(root, `${fixture.name}.nsi`)
+        writeFileSync(source, script)
+        const compile = spawnSync(compiler, ['/V2', source], { env, encoding: 'utf8', timeout: 15_000 })
+        expect(compile.error, compile.stderr || compile.stdout).toBeUndefined()
+        expect(compile.status, compile.stderr || compile.stdout).toBe(0)
+        const run = spawnSync(executable, ['/S'], { env, timeout: 30_000, windowsHide: true })
+        expect(run.error).toBeUndefined()
+        expect(run.status, fixture.name).toBe(0)
+        // Without the reset the foreign module breaks the availability check,
+        // proving the fixture reproduces the failure the reset fixes.
+        expect(readFileSync(journal, 'utf8'), fixture.name).toContain(`powershell=${fixture.powershell}`)
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }, 90_000)
+
   test('uses a directory-boundary-aware process helper', () => {
     const installerHook = readFileSync('desktop/build/installer.nsh', 'utf8')
     const processHelper = readFileSync(
@@ -122,7 +224,13 @@ SectionEnd
     expect(installerHook).toContain('!macro CcHahaKillInstallProcess')
     expect(installerHook).toContain('-InstallerPid "$pid"')
     expect(installerHook).toContain('-InstallerParentPid "$1"')
-    expect(installerHook).toContain('tasklist /FI "USERNAME eq %USERNAME%" /FO CSV /NH >')
+    // The USERNAME filter makes tasklist look up every process owner, which can
+    // block forever and froze setup and the silent uninstaller.
+    expect(installerHook).not.toContain('USERNAME eq')
+    expect(installerHook).toContain(
+      'nsExec::Exec /TIMEOUT=30000 \'"$CmdPath" /D /C tasklist /FO CSV /NH > "$PLUGINSDIR\\cc-haha-processes.csv"\'',
+    )
+    expect(installerHook).toContain('nsExec::Exec /TIMEOUT=30000 \'"$SYSDIR\\findstr.exe" /I /L')
     expect(installerHook).toContain('tasklist process enumeration failed')
     expect(installerHook).toContain('fallback process filtering failed')
     expect(installerHook).toMatch(
