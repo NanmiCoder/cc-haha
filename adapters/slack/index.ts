@@ -29,6 +29,7 @@ import {
   type OutboundImage,
   type ResponseStream,
 } from '../common/chat-runtime.js'
+import { t } from '../common/i18n.js'
 import { SlackApiClient } from './api.js'
 import { SlackSocketMode } from './socket-mode.js'
 import { extractSlackPayload, type SlackFile } from './extract-payload.js'
@@ -235,7 +236,9 @@ async function collectAttachments(chatId: string, files: SlackFile[]): Promise<A
   if (failures > 0) {
     await port.sendNotice(
       chatId,
-      failures === files.length ? '附件下载失败，请稍后重试。' : `${failures} 个附件下载失败，已跳过。`,
+      failures === files.length
+        ? t('slack.attachment.failed')
+        : t('slack.attachment.partial', { failures }),
     )
   }
   return refs

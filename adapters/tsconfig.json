@@ -11,7 +11,8 @@
     "rootDir": ".",
     "paths": {
       "@server/*": ["../src/server/*"]
-    }
+    },
+    "resolveJsonModule": true
   },
   "include": ["**/*.ts"],
   "exclude": ["node_modules", "dist"]

@@ -1,6 +1,7 @@
 import * as fs from 'node:fs'
 import * as path from 'node:path'
 import type { AdapterHttpClient, RecentProject, SessionListItem } from './http-client.js'
+import { t } from './i18n.js'
 import type { SessionStore } from './session-store.js'
 import type { ServerMessage, WsBridge } from './ws-bridge.js'
 
@@ -27,16 +28,16 @@ export async function restoreSelectedSession(
   session: Pick<SessionListItem, 'id' | 'workDir' | 'title'>,
 ): Promise<{ ok: boolean; message: string }> {
   const busy = () => deps.isBusy?.(chatId) ?? false
-  if (busy()) return { ok: false, message: '当前会话正在运行或等待审批，请先处理审批或发送 /stop，等停止后再切换。' }
+  if (busy()) return { ok: false, message: t('session.busy.permission') }
   try {
     if (!session.workDir || !await deps.httpClient.sessionExists(session.id)) {
-      return { ok: false, message: '该会话已不存在、目录不可用或不允许通过 IM 访问。请发送 /sessions 刷新列表。' }
+      return { ok: false, message: t('session.unavailable') }
     }
   } catch (err) {
-    return { ok: false, message: `无法检查会话，当前绑定未改变：${err instanceof Error ? err.message : String(err)}。请重试。` }
+    return { ok: false, message: t('session.checkFailed', { error: err instanceof Error ? err.message : String(err) }) }
   }
   // A server event may have started a turn while the preflight was in flight.
-  if (busy()) return { ok: false, message: '当前会话正在运行，请先发送 /stop，等停止后再切换。' }
+  if (busy()) return { ok: false, message: t('session.busy') }
 
   const previous = deps.sessionStore.get(chatId)
   const buffered: ServerMessage[] = []
@@ -44,7 +45,7 @@ export async function restoreSelectedSession(
   try {
     deps.bridge.connectSession(chatId, session.id)
     deps.bridge.onServerMessage(chatId, (message) => { buffered.push(message) })
-    if (!await deps.bridge.waitForOpen(chatId)) throw new Error('连接服务器超时')
+    if (!await deps.bridge.waitForOpen(chatId)) throw new Error(t('session.connectTimeout'))
     deps.sessionStore.set(chatId, session.id, session.workDir)
   } catch (err) {
     deps.bridge.resetSession(chatId)
@@ -56,7 +57,7 @@ export async function restoreSelectedSession(
         // The persisted binding is still intact; normal message recovery retries.
       }
     }
-    return { ok: false, message: `恢复失败，已保留原会话绑定：${err instanceof Error ? err.message : String(err)}。请重试。` }
+    return { ok: false, message: t('session.resumeFailed', { error: err instanceof Error ? err.message : String(err) }) }
   }
   deps.clearTransientState(chatId)
   deps.bridge.onServerMessage(chatId, (message) => deps.onServerMessage(chatId, message))
@@ -67,7 +68,14 @@ export async function restoreSelectedSession(
       console.warn('[SessionSelection] Failed to present restored state:', err)
     }
   }
-  return { ok: true, message: `已恢复会话：${oneLine(session.title || '未命名会话', 80)}\n${session.workDir}\n会话 ID：${session.id}\n可以继续发送消息。` }
+  return {
+    ok: true,
+    message: t('session.resumed', {
+      title: oneLine(session.title || t('session.untitled'), 80),
+      workDir: session.workDir,
+      id: session.id,
+    }),
+  }
 }
 
 const PAGE_SIZE = 8
@@ -152,7 +160,7 @@ export class SessionSelectionController {
       if (cancel) {
         this.clear(chatId)
         this.deps.clearProjectSelection(chatId)
-        await this.deps.sendNotice(chatId, '已取消选择，当前会话未改变。')
+        await this.deps.sendNotice(chatId, t('session.canceled'))
       } else if (list && ['next', 'prev'].includes(list[1] ?? '')) {
         const active = await this.requirePicker(chatId, picker)
         if (!active) return true
@@ -170,7 +178,7 @@ export class SessionSelectionController {
         await this.select(chatId, active, resume?.[1] ?? text)
       }
     } catch (err) {
-      await this.deps.sendNotice(chatId, `无法恢复会话：${err instanceof Error ? err.message : String(err)}。请重试 /sessions。`)
+      await this.deps.sendNotice(chatId, t('session.resumeError', { error: err instanceof Error ? err.message : String(err) }))
     }
     return true
   }
@@ -178,7 +186,7 @@ export class SessionSelectionController {
   private async requirePicker(chatId: string, picker: Picker | undefined): Promise<Picker | null> {
     if (picker && picker.expiresAt > this.now()) return picker
     this.clear(chatId)
-    await this.deps.sendNotice(chatId, '选择列表不存在或已过期，请发送 /sessions 重新选择。')
+    await this.deps.sendNotice(chatId, t('session.pickerExpired'))
     return null
   }
 
@@ -188,7 +196,7 @@ export class SessionSelectionController {
       const { project, ambiguous } = await this.deps.httpClient.matchProject(query)
       if (project) return this.openProject(chatId, project.realPath)
       if (ambiguous?.length) return this.openProjects(chatId, ambiguous)
-      await this.deps.sendNotice(chatId, `未找到项目“${oneLine(query)}”。发送 /sessions projects 选择项目，或 /sessions <绝对路径>。`)
+      await this.deps.sendNotice(chatId, t('session.projectNotFound', { query: oneLine(query) }))
       return
     }
     const current = this.deps.sessionStore.get(chatId)
@@ -204,7 +212,7 @@ export class SessionSelectionController {
 
   private async openProjects(chatId: string, projects: RecentProject[]): Promise<void> {
     if (!projects.length) {
-      await this.deps.sendNotice(chatId, '没有可访问的历史项目。发送 /new 新建会话，或 /sessions <项目绝对路径> 查找旧会话。')
+      await this.deps.sendNotice(chatId, t('session.noHistory'))
       return
     }
     const picker: Picker = { kind: 'projects', projects, page: 0, expiresAt: this.now() + SESSION_SELECTION_TTL_MS }
@@ -216,7 +224,7 @@ export class SessionSelectionController {
     const sessions = await listProjectSessionHistory(this.deps.httpClient, project, all)
     if (!sessions.length) {
       this.clear(chatId)
-      await this.deps.sendNotice(chatId, `该项目没有可恢复会话：${project}\n发送 /sessions projects 选择其他项目，或 /new <项目> 新建会话。`)
+      await this.deps.sendNotice(chatId, t('session.projectEmpty', { project }))
       return
     }
     const picker: Picker = { kind: 'sessions', project, sessions, page: 0, expiresAt: this.now() + SESSION_SELECTION_TTL_MS }
@@ -240,7 +248,7 @@ export class SessionSelectionController {
         return
       }
     }
-    await this.deps.sendNotice(chatId, '编号无效，请使用当前页显示的编号，或发送 /sessions 刷新列表。')
+    await this.deps.sendNotice(chatId, t('session.invalidChoice'))
   }
 
   private async show(chatId: string, picker: Picker): Promise<void> {
@@ -249,14 +257,26 @@ export class SessionSelectionController {
     const items = picker.kind === 'projects' ? picker.projects : picker.sessions
     const lines = picker.kind === 'projects'
       ? picker.projects.slice(start, start + PAGE_SIZE).map((project, i) => `${start + i + 1}. ${oneLine(project.projectName, 60)}\n${oneLine(project.realPath, 180)}`)
-      : picker.sessions.slice(start, start + PAGE_SIZE).map((session, i) => `${start + i + 1}. ${oneLine(session.title || '未命名会话', 60)}${session.id === currentId ? '（当前）' : ''}\n${session.modifiedAt.slice(0, 16).replace('T', ' ')} · ${session.messageCount} 条消息 · ${session.id.slice(0, 8)}`)
+      : picker.sessions.slice(start, start + PAGE_SIZE).map((session, i) => t('session.row', {
+        n: start + i + 1,
+        title: oneLine(session.title || t('session.untitled'), 60),
+        current: session.id === currentId ? t('session.currentMark') : '',
+        time: session.modifiedAt.slice(0, 16).replace('T', ' '),
+        messages: t('session.messageCount', { count: session.messageCount }),
+        id: session.id.slice(0, 8),
+      }))
     await this.deps.sendNotice(chatId, [
-      picker.kind === 'projects' ? '选择历史会话所在的项目：' : `历史会话：${picker.project}`,
-      `第 ${picker.page + 1}/${Math.ceil(items.length / PAGE_SIZE)} 页`,
+      picker.kind === 'projects'
+        ? t('session.chooseProject')
+        : t('session.historyFor', { project: picker.project }),
+      t('session.page', {
+        page: picker.page + 1,
+        total: Math.ceil(items.length / PAGE_SIZE),
+      }),
       '', ...lines, '',
-      picker.kind === 'projects' ? '回复编号查看会话。' : '回复编号或 /resume <编号> 继续旧会话。',
-      '翻页：/sessions next、/sessions prev',
-      '/cancel 取消；列表 15 分钟内有效。',
+      picker.kind === 'projects' ? t('session.replyToView') : t('session.replyToResume'),
+      t('session.pagingHint'),
+      t('session.cancelHint'),
     ].join('\n'))
   }
 }

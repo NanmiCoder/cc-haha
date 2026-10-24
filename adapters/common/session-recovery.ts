@@ -1,4 +1,5 @@
 import type { AdapterHttpClient } from './http-client.js'
+import { t } from './i18n.js'
 import type { SessionEntry, SessionStore } from './session-store.js'
 import type { ServerMessage, WsBridge } from './ws-bridge.js'
 
@@ -7,7 +8,9 @@ export type SessionRestoreResult =
   | { status: 'missing' }
   | { status: 'unavailable'; session: SessionEntry }
 
-export const SESSION_RECONNECT_NOTICE = '暂时无法连接原会话，已保留会话和工作目录，请稍后重试。'
+export function sessionReconnectNotice(): string {
+  return t('session.reconnect')
+}
 
 type BridgeSessionOps = Pick<
   WsBridge,
