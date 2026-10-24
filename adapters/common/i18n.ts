@@ -11,10 +11,13 @@
  */
 
 import { saveAdapterLanguage } from './config.js'
+import { zhTW } from './i18n/locales/zh-TW.js'
+import { ja } from './i18n/locales/ja.js'
+import { ko } from './i18n/locales/ko.js'
 
-export type AdapterLocale = 'vi' | 'zh' | 'en'
+export type AdapterLocale = 'vi' | 'en' | 'zh' | 'zh-TW' | 'ja' | 'ko'
 
-export const ADAPTER_LOCALES: readonly AdapterLocale[] = ['vi', 'zh', 'en']
+export const ADAPTER_LOCALES: readonly AdapterLocale[] = ['vi', 'en', 'zh', 'zh-TW', 'ja', 'ko']
 export const DEFAULT_ADAPTER_LOCALE: AdapterLocale = 'vi'
 
 const LOCALE_ALIASES: Record<string, AdapterLocale> = {
@@ -23,15 +26,31 @@ const LOCALE_ALIASES: Record<string, AdapterLocale> = {
   'vi-vn': 'vi',
   vietnamese: 'vi',
   'tiếng việt': 'vi',
+  en: 'en',
+  'en-us': 'en',
+  'en-gb': 'en',
+  english: 'en',
   zh: 'zh',
   cn: 'zh',
   chinese: 'zh',
   'zh-cn': 'zh',
   'zh-hans': 'zh',
-  en: 'en',
-  'en-us': 'en',
-  'en-gb': 'en',
-  english: 'en',
+  tw: 'zh-TW',
+  'zh-tw': 'zh-TW',
+  'zh-hant': 'zh-TW',
+  'zh-hk': 'zh-TW',
+  '繁體中文': 'zh-TW',
+  '繁体中文': 'zh-TW',
+  ja: 'ja',
+  jp: 'ja',
+  japanese: 'ja',
+  'ja-jp': 'ja',
+  '日本語': 'ja',
+  ko: 'ko',
+  kr: 'ko',
+  korean: 'ko',
+  'ko-kr': 'ko',
+  '한국어': 'ko',
 }
 
 const vi = {
@@ -43,6 +62,9 @@ const vi = {
   'language.name.vi': 'Tiếng Việt (vi)',
   'language.name.zh': '中文 (zh)',
   'language.name.en': 'English (en)',
+  'language.name.zh-TW': '繁體中文 (zh-TW)',
+  'language.name.ja': '日本語 (ja)',
+  'language.name.ko': '한국어 (ko)',
 
   // ---------- pairing / runtime ----------
   'runtime.failed': 'Xử lý tin nhắn thất bại: {detail}',
@@ -319,6 +341,9 @@ const zh: Record<MessageKey, string> = {
   'language.name.vi': 'Tiếng Việt (vi)',
   'language.name.zh': '中文 (zh)',
   'language.name.en': 'English (en)',
+  'language.name.zh-TW': '繁體中文 (zh-TW)',
+  'language.name.ja': '日本語 (ja)',
+  'language.name.ko': '한국어 (ko)',
 
   'runtime.failed': '处理消息失败：{detail}',
   'pair.success': '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话，发送 /help 查看可用命令。',
@@ -575,6 +600,9 @@ const en: Record<MessageKey, string> = {
   'language.name.vi': 'Tiếng Việt (vi)',
   'language.name.zh': '中文 (zh)',
   'language.name.en': 'English (en)',
+  'language.name.zh-TW': '繁體中文 (zh-TW)',
+  'language.name.ja': '日本語 (ja)',
+  'language.name.ko': '한국어 (ko)',
 
   'runtime.failed': 'Failed to handle message: {detail}',
   'pair.success': 'Paired successfully! You can start chatting now.\n\nSend a message to talk to Claude, or /help to see available commands.',
@@ -823,7 +851,14 @@ const en: Record<MessageKey, string> = {
   'dingtalk.permissionSent': '{requestText}\n\nA DingTalk permission card was sent; if it is not visible, you can also {instructions}',
 }
 
-const catalogs: Record<AdapterLocale, Record<MessageKey, string>> = { vi, zh, en }
+const catalogs: Record<AdapterLocale, Record<MessageKey, string>> = {
+  vi,
+  en,
+  zh,
+  'zh-TW': zhTW,
+  ja,
+  ko,
+}
 
 let currentLocale: AdapterLocale = normalizeAdapterLocale(process.env.ADAPTER_LANGUAGE) ?? DEFAULT_ADAPTER_LOCALE
 
@@ -857,10 +892,16 @@ export function adapterLocaleTag(locale: AdapterLocale = currentLocale): string 
   switch (locale) {
     case 'vi':
       return 'vi-VN'
-    case 'zh':
-      return 'zh-CN'
     case 'en':
       return 'en-US'
+    case 'zh':
+      return 'zh-CN'
+    case 'zh-TW':
+      return 'zh-TW'
+    case 'ja':
+      return 'ja-JP'
+    case 'ko':
+      return 'ko-KR'
   }
 }
 

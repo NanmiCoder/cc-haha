@@ -34,7 +34,7 @@ afterEach(() => {
 describe('adapter locale resolution', () => {
   it('defaults to Vietnamese', () => {
     expect(DEFAULT_ADAPTER_LOCALE).toBe('vi')
-    expect(ADAPTER_LOCALES).toEqual(['vi', 'zh', 'en'])
+    expect(ADAPTER_LOCALES).toEqual(['vi', 'en', 'zh', 'zh-TW', 'ja', 'ko'])
   })
 
   it('normalizes aliases and rejects unknown values', () => {
@@ -42,6 +42,12 @@ describe('adapter locale resolution', () => {
     expect(normalizeAdapterLocale('vi-VN')).toBe('vi')
     expect(normalizeAdapterLocale('vn')).toBe('vi')
     expect(normalizeAdapterLocale('zh-CN')).toBe('zh')
+    expect(normalizeAdapterLocale('zh-TW')).toBe('zh-TW')
+    expect(normalizeAdapterLocale('zh-Hant')).toBe('zh-TW')
+    expect(normalizeAdapterLocale('jp')).toBe('ja')
+    expect(normalizeAdapterLocale('ja-JP')).toBe('ja')
+    expect(normalizeAdapterLocale('kr')).toBe('ko')
+    expect(normalizeAdapterLocale('ko-KR')).toBe('ko')
     expect(normalizeAdapterLocale('en-US')).toBe('en')
     expect(normalizeAdapterLocale('fr')).toBeNull()
     expect(normalizeAdapterLocale(undefined)).toBeNull()
@@ -49,8 +55,11 @@ describe('adapter locale resolution', () => {
 
   it('exposes a BCP 47 tag for locale-aware date formatting', () => {
     expect(adapterLocaleTag('vi')).toBe('vi-VN')
-    expect(adapterLocaleTag('zh')).toBe('zh-CN')
     expect(adapterLocaleTag('en')).toBe('en-US')
+    expect(adapterLocaleTag('zh')).toBe('zh-CN')
+    expect(adapterLocaleTag('zh-TW')).toBe('zh-TW')
+    expect(adapterLocaleTag('ja')).toBe('ja-JP')
+    expect(adapterLocaleTag('ko')).toBe('ko-KR')
   })
 })
 
@@ -64,7 +73,16 @@ describe('translations', () => {
 
     setAdapterLocale('en')
     expect(t('runtime.stopSent')).toBe('Stop signal sent.')
-    expect(getAdapterLocale()).toBe('en')
+
+    setAdapterLocale('zh-TW')
+    expect(t('runtime.stopSent')).toBe('已傳送停止訊號。')
+
+    setAdapterLocale('ja')
+    expect(t('runtime.stopSent')).toBe('停止シグナルを送信しました。')
+
+    setAdapterLocale('ko')
+    expect(t('runtime.stopSent')).toBe('중지 신호를 보냈습니다.')
+    expect(getAdapterLocale()).toBe('ko')
   })
 
   it('interpolates every occurrence of a parameter', () => {
@@ -80,7 +98,7 @@ describe('translations', () => {
       setAdapterLocale(locale)
       for (const key of MESSAGE_KEYS) {
         // The language picker intentionally shows each language in its own script.
-        if (key === 'language.name.zh') continue
+        if (key.startsWith('language.name.')) continue
         expect(cjk.test(t(key)), `${locale}:${key} still contains Chinese`).toBe(false)
       }
     }
@@ -101,6 +119,9 @@ describe('language command', () => {
     expect(reply).toContain('Tiếng Việt (vi)')
     expect(reply).toContain('中文 (zh)')
     expect(reply).toContain('English (en)')
+    expect(reply).toContain('繁體中文 (zh-TW)')
+    expect(reply).toContain('日本語 (ja)')
+    expect(reply).toContain('한국어 (ko)')
     expect(reply).toContain('/language')
   })
 

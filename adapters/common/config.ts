@@ -107,7 +107,7 @@ export type SlackConfig = {
 export type AdapterConfig = {
   serverUrl: string
   defaultProjectDir: string
-  /** Bot reply language: `vi` (default), `zh`, or `en`. */
+  /** Bot reply language: `vi` (default), `en`, `zh`, `zh-TW`, `ja`, or `ko`. */
   language: string
   pairing: PairingState
   allowedProjectRoots: string[]

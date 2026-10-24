@@ -114,9 +114,9 @@ Entry points differ slightly per platform — Feishu can expose commands as a bo
 - `/cancel` — exit selection and keep the current session
 - `/clear` — clear context, keep the project binding
 - `/stop` — stop the current generation
-- `/language [vi|zh|en]` — switch the bot reply language; with no argument it shows the current language
+- `/language [vi|en|zh|zh-TW|ja|ko]` — switch the bot reply language; with no argument it shows the current language
 
-Bots reply in Vietnamese by default. The `/language` choice is written to the `language` field of `~/.claude/adapters.json` and applies to every adapter; the `ADAPTER_LANGUAGE` environment variable overrides it.
+Bots reply in Vietnamese by default and support Vietnamese, English, Simplified Chinese, Traditional Chinese, Japanese, and Korean. The `/language` choice is written to the `language` field of `~/.claude/adapters.json` and applies to every adapter; the `ADAPTER_LANGUAGE` environment variable overrides it.
 
 Feishu, WeChat, DingTalk, WeCom, QQ, and Slack also accept Chinese aliases such as `帮助`, `状态`, `项目列表`, `新会话`, `清空`, and `停止`.
 
