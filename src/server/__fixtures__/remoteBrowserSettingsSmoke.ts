@@ -82,6 +82,8 @@ try {
     check(deleted.ok, `Delete failed: ${deleted.status} ${await deleted.text()}`)
     check(!(await providerService.listProviders()).providers.some(p => p.id === id), 'Provider survived delete')
   }
+  // Persist the success marker before explicit exit: Bun can lose captured stdout.
+  await writeFile(path.join(process.env.CLAUDE_CONFIG_DIR!, 'REMOTE_SETTINGS_INTEGRATION_PASSED'), 'passed')
   console.log('REMOTE_SETTINGS_INTEGRATION_PASSED')
 } finally {
   await stopServerRuntimeForShutdown()

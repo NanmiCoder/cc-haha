@@ -61,6 +61,7 @@ import {
   PET_SESSION_LIMIT,
 } from './petAccessPolicy.js'
 import { PublicAccessServer, isPublicAccessControlPath } from './publicAccess.js'
+import { getMobilePushService, stopMobilePushServices } from './services/mobilePushRuntime.js'
 import { settleResponseOnRequestAbort } from './requestLifecycle.js'
 
 function readArgValue(flag: string): string | undefined {
@@ -275,6 +276,7 @@ export function startServer(port = PORT, host = HOST) {
     serverPort: () => serverPort,
   })
   publicAccessServers.add(publicAccess)
+  if (!migrationMaintenance.isActive) getMobilePushService().start(id => [...publicAccessServers].some(remote => remote.isDeviceActive(id)))
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 
   // Open SQLite before the first REST request. Discovery still runs in the
@@ -723,6 +725,7 @@ export function quiesceServerRuntimeForMigration(ignoreExternalProcesses = false
     const inventory = await migrationRuntimePreview()
     if (!ignoreExternalProcesses && inventory.externalProcesses > 0) throw new Error('Close external CLI sessions before migrating data')
     for (const remote of publicAccessServers) remote.disable()
+    await stopMobilePushServices()
     await quiesceTeamPlanRuntimesForMigration()
     await Promise.all([teamWatcher.stopAndWait(), cronScheduler.stopAndWait(), conversationService.stopForMigration()])
     await migrationMaintenance.drain()
@@ -754,6 +757,7 @@ export async function quiesceServerRuntimeForRecovery(): Promise<void> {
 export async function stopServerRuntimeForShutdown(
   options: { waitForCli?: boolean } = {},
 ): Promise<void> {
+  await stopMobilePushServices()
   for (const remote of publicAccessServers) remote.disable()
   publicAccessServers.clear()
   teamWatcher.stop()

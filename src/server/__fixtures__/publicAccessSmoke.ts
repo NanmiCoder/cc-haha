@@ -34,21 +34,29 @@ try {
   let remote = `http://127.0.0.1:${enabled.port}`
   const code = await (await control('/pairing', {})).json()
   const post = (route: string, body: unknown) => fetch(`${remote}/api/public-access/${route}`, { method: 'POST', headers: { Origin: origin }, body: JSON.stringify(body) })
-  const pending = await (await post('pair', { secret: code.secret, name: 'Smoke phone' })).json()
+  const nativeClient = process.env.CC_HAHA_PUBLIC_ACCESS_TEST_CLIENT === 'native'
+  const pending = await (await post('pair', { secret: code.secret, name: 'Smoke phone', ...(nativeClient ? { clientType: 'native' } : {}) })).json()
   await control('/approve', { id: pending.id })
   const claim = await post('claim', pending)
-  const cookie = claim.headers.get('set-cookie')!.split(';')[0]!
+  let authHeaders: Record<string, string>
+  if (nativeClient) {
+    const credential = await claim.json()
+    if (claim.headers.has('set-cookie') || credential.tokenType !== 'Bearer' || !/^native_[A-Za-z0-9_-]{43}$/.test(credential.token)) throw new Error('Native pairing did not issue an isolated bearer credential')
+    authHeaders = { Authorization: `Bearer ${credential.token}` }
+  } else {
+    authHeaders = { Cookie: claim.headers.get('set-cookie')!.split(';')[0]! }
+  }
   for (const route of ['/health', '/api/models', '/api/models/current', '/api/effort', '/api/permissions/mode', '/api/settings/user', '/api/providers/auth-status', '/api/sessions']) {
-    const response = await fetch(`${remote}${route}`, { headers: { Origin: origin, Cookie: cookie } })
+    const response = await fetch(`${remote}${route}`, { headers: { Origin: origin, ...authHeaders } })
     const body = await response.text()
     if (!response.ok) throw new Error(`${route} returned ${response.status}: ${body}`)
     JSON.parse(body)
     if (body.includes('fake-never-expose') || body.includes('ANTHROPIC_API_KEY')) throw new Error(`Secret leaked from ${route}`)
   }
-  const authStatus = await (await fetch(`${remote}/api/providers/auth-status`, { headers: { Origin: origin, Cookie: cookie } })).json()
+  const authStatus = await (await fetch(`${remote}/api/providers/auth-status`, { headers: { Origin: origin, ...authHeaders } })).json()
   if (!authStatus.hasAuth || authStatus.source !== 'original-settings') throw new Error('Remote new-session auth check failed')
   const scopedAuthStatus = async (providerId: string) => {
-    const response = await fetch(`${remote}/api/providers/auth-status?providerId=${encodeURIComponent(providerId)}`, { headers: { Origin: origin, Cookie: cookie } })
+    const response = await fetch(`${remote}/api/providers/auth-status?providerId=${encodeURIComponent(providerId)}`, { headers: { Origin: origin, ...authHeaders } })
     const body = await response.text()
     if (!response.ok) throw new Error(`Provider-scoped auth-status returned ${response.status}: ${body}`)
     if (body.includes('fake-never-expose') || body.includes('fake-remote-provider-key')) throw new Error('Secret leaked from provider-scoped auth-status')
@@ -60,7 +68,7 @@ try {
   const keyedStatus = await scopedAuthStatus(keyedProvider.id)
   if (JSON.stringify(keyedStatus) !== JSON.stringify({ hasAuth: true, source: 'cc-haha-provider', activeProvider: 'Keyed fixture' })) throw new Error(`Provider-scoped auth-status missed the provider key: ${JSON.stringify(keyedStatus)}`)
   const createdResponse = await fetch(`${remote}/api/sessions`, {
-    method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+    method: 'POST', headers: { Origin: origin, ...authHeaders, 'Content-Type': 'application/json' },
     body: JSON.stringify({ workDir: process.env.HOME, permissionMode: 'default' }),
   })
   const created = await createdResponse.json()
@@ -81,7 +89,7 @@ try {
   }
   async function connect() {
     const messages: Array<Record<string, any>> = []
-    const ws = new WebSocket(`${remote.replace('http:', 'ws:')}/ws/${created.sessionId}`, { headers: { Origin: origin, Cookie: cookie } })
+    const ws = new WebSocket(`${remote.replace('http:', 'ws:')}/ws/${created.sessionId}`, { headers: { Origin: origin, ...authHeaders } })
     socket = ws
     ws.onmessage = event => messages.push(JSON.parse(String(event.data)))
     await waitFor(() => messages.find(m => m.type === 'permission_requests_snapshot'), 'websocket snapshot')
@@ -111,7 +119,7 @@ try {
   third.ws.send(JSON.stringify({ type: 'permission_response', requestId: approval.requestId, allowed: true }))
   await waitFor(() => third.messages.find(m => m.type === 'message_complete'), 'approved tool completion')
   if (await readFile(writePath, 'utf8') !== 'remote-success') throw new Error('Approved mock tool did not finish')
-  const history = await fetch(`${remote}/api/sessions/${created.sessionId}/messages`, { headers: { Origin: origin, Cookie: cookie } })
+  const history = await fetch(`${remote}/api/sessions/${created.sessionId}/messages`, { headers: { Origin: origin, ...authHeaders } })
   const historyText = await history.text()
   if (!history.ok || !historyText.includes('remote-history-fixture')) throw new Error(`History missing prior turn after reconnect: ${historyText}`)
   const thirdClosed = new Promise<void>(resolve => { third.ws.onclose = () => resolve() })
@@ -124,9 +132,11 @@ try {
   const revoked = new Promise<void>(resolve => { ws.onclose = () => resolve() })
   await control('/revoke', { id: pending.id })
   await revoked
-  if ((await fetch(`${remote}/api/sessions`, { headers: { Cookie: cookie } })).status !== 401) throw new Error('Revoked device retained API access')
+  if ((await fetch(`${remote}/api/sessions`, { headers: { Origin: origin, ...authHeaders } })).status !== 401) throw new Error('Revoked device retained API access')
   await control('/disable', {})
   if ((await (await control('')).json()).enabled !== false) throw new Error('Disable did not clear status')
+  // Persist the success marker before explicit exit: Bun can lose captured stdout.
+  await writeFile(path.join(process.env.CLAUDE_CONFIG_DIR!, 'REMOTE_INTEGRATION_PASSED'), 'passed')
   console.log('REMOTE_INTEGRATION_PASSED')
 } finally {
   socket?.close()

@@ -6396,9 +6396,9 @@ describe('Sessions API', () => {
     ])
   })
 
-  it('POST /api/sessions/:id/rewind should restore a single edited file', async () => {
-    const sessionId = 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee'
-    const workDir = path.join(tmpDir, 'single-file-fixture')
+  it.each(['both', 'code'] as const)('POST /api/sessions/:id/rewind restores a single file in %s mode', async (mode) => {
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, `single-file-fixture-${mode}`)
     const targetFile = path.join(workDir, 'src', 'app.js')
     const userId = crypto.randomUUID()
     const assistantId = crypto.randomUUID()
@@ -6451,7 +6451,7 @@ describe('Sessions API', () => {
     const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userMessageIndex: 0 }),
+      body: JSON.stringify({ userMessageIndex: 0, mode }),
     })
     expect(executeRes.status).toBe(200)
     expect(await fs.readFile(targetFile, 'utf-8')).toBe(
@@ -6459,7 +6459,10 @@ describe('Sessions API', () => {
     )
 
     const remainingMessages = await service.getSessionMessages(sessionId)
-    expect(remainingMessages).toHaveLength(0)
+    expect(remainingMessages.map(message => message.id)).toEqual(mode === 'code' ? [userId, assistantId] : [])
+    const result = await executeRes.json() as { conversation: { messagesRemoved: number }; mode: string }
+    expect(result.mode).toBe(mode)
+    expect(result.conversation.messagesRemoved).toBe(mode === 'code' ? 0 : 2)
   })
 
   it('POST /api/sessions/:id/rewind should reject unsafe tracked paths before any partial restore', async () => {
@@ -9418,7 +9421,7 @@ describe('Sessions API', () => {
 
     const badRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetUserMessageId: userId, mode: 'code' }),
+      body: JSON.stringify({ targetUserMessageId: userId, mode: 'unknown' }),
     })
     expect(badRes.status).toBe(400)
 

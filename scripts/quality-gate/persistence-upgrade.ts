@@ -51,6 +51,10 @@ const checks: Check[] = [
     command: ['bun', 'test', './src/server/services/connectorsPersistence.test.ts'],
   },
   {
+    title: 'Mobile push registration encryption and schema migration',
+    command: ['bun', 'test', './src/server/services/mobilePushService.test.ts', '--test-name-pattern', 'migration|extensions|encrypted'],
+  },
+  {
     title: 'Public browser device store migration',
     command: ['bun', 'test', './src/server/publicAccess.test.ts', '--test-name-pattern', 'old store migration'],
   },

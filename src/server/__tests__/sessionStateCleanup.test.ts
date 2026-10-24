@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url'
 const SOURCE_PATHS = [
   fileURLToPath(new URL('../ws/handler.ts', import.meta.url)),
   fileURLToPath(new URL('../ws/agentTaskState.ts', import.meta.url)),
+  fileURLToPath(new URL('../ws/mobileActivityClock.ts', import.meta.url)),
 ]
 const CLEANUP_ENTRY = 'cleanupSessionRuntimeState'
 
@@ -54,6 +55,7 @@ const CONTAINERS: Record<string, Classification> = {
   interruptedSessionChats: { kind: 'cleared' },
   lastResolvedStartupWorkDirs: { kind: 'cleared' },
   legacyQueuedSessionChats: { kind: 'cleared' },
+  mobileActivityClock: { kind: 'cleared' },
   pendingInterruptedTurnResults: { kind: 'cleared' },
   prewarmIdleTimers: { kind: 'cleared' },
   prewarmPendingSessions: { kind: 'cleared' },
@@ -124,7 +126,8 @@ const source = sources.join('\n')
 function declaredContainers(): string[] {
   return sources
     .flatMap((text) => [
-      ...text.matchAll(/^(?:export )?const ([a-zA-Z][a-zA-Z0-9]*) = new (?:Map|Set|WeakMap|WeakSet)\b/gm),
+      // The clock owns a private map behind the same delete/clear lifecycle.
+      ...text.matchAll(/^(?:export )?const ([a-zA-Z][a-zA-Z0-9]*) = new (?:Map|Set|WeakMap|WeakSet|MobileActivityClock)\b/gm),
     ])
     .map((match) => match[1])
     .sort()

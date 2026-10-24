@@ -1,3 +1,4 @@
+import { getMobileActivityTiming, mobileActivityClock } from './mobileActivityClock.js'
 import { getSideChat, isSideChatId } from '../services/sideChatRegistry.js'
 import { migrationMaintenance } from '../migrationMaintenance.js'
 /**
@@ -290,12 +291,14 @@ const legacyQueuedSessionChats = new Set<string>()
 const interruptedSessionChats = new Set<string>()
 
 function beginSessionChatActivity(sessionId: string): void {
+  mobileActivityClock.start(sessionId)
   terminalSessionChatStates.delete(sessionId)
   legacyQueuedSessionChats.delete(sessionId)
   interruptedSessionChats.delete(sessionId)
 }
 
 function failSessionChatActivity(sessionId: string): void {
+  mobileActivityClock.finish(sessionId)
   legacyQueuedSessionChats.delete(sessionId)
   interruptedSessionChats.delete(sessionId)
   terminalSessionChatStates.set(sessionId, 'failed')
@@ -303,6 +306,7 @@ function failSessionChatActivity(sessionId: string): void {
 
 function settleSessionChatActivity(sessionId: string, cliMsg: any): void {
   if (cliMsg?.type !== 'result') return
+  mobileActivityClock.finish(sessionId)
 
   legacyQueuedSessionChats.delete(sessionId)
   if (interruptedSessionChats.has(sessionId)) {
@@ -583,6 +587,35 @@ export function listLiveSessionActivity(): LiveSessionActivity[] {
     }
   }
   return live
+}
+
+export function listMobileSessionActivity() {
+  const ids = new Set([
+    ...conversationService.getActiveSessions(), ...activeUserTurns.keys(),
+    ...activeCliRuns, ...legacyQueuedSessionChats, ...terminalSessionChatStates.keys(),
+    ...activeAgentTasks.keys(), ...activeNonAgentTasks.keys(),
+  ])
+  return [...ids].filter(id => !conversationService.isTeamWorkerSession(id)).map(id => {
+    const activityState = getSessionChatActivityState(id)
+    const request = activityState === 'waiting' ? conversationService.getPendingPermissionRequests(id)[0] : undefined
+    const computerUse = activityState === 'waiting' ? computerUseApprovalService.getPendingRequests(id)[0] : undefined
+    const timing = getMobileActivityTiming(id)
+    const questions = request?.toolName === 'AskUserQuestion' ? request.input.questions : undefined
+    const firstQuestion = Array.isArray(questions) ? questions[0] : undefined
+    const text = request?.toolName === 'Bash' ? request.input.command : firstQuestion && typeof firstQuestion === 'object' ? firstQuestion.question : undefined
+    // Project only the visible decision text; never serialize arbitrary tool input.
+    const preview = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim().slice(0, 200) : ''
+    return {
+      id, activityState, ...timing,
+      ...(timing ? { stalled: activityState === 'running' && Date.now() - timing.lastProgressAt >= 300000 } : {}),
+      ...(request ? {
+        requestId: request.requestId,
+        toolName: request.toolName,
+        preview: preview || (request.toolName === 'AskUserQuestion' ? '等待你回答问题' : request.toolName === 'ExitPlanMode' ? '计划等待确认' : '等待工具权限确认'),
+        ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
+      } : computerUse ? { requestId: computerUse.requestId, toolName: 'ComputerUse', preview: '等待电脑操作权限确认' } : {}),
+    }
+  })
 }
 
 /** Compatibility fallback for the legacy REST enqueue endpoint. */
@@ -1603,6 +1636,7 @@ function bindActiveUserTurnCompletion(
 
     acknowledgeActiveTurnReplay(sessionId, cliMsg)
     if (activeTurn.replacementAfterStop || interruptedResult) return
+    mobileActivityClock.progress(sessionId)
     if (
       cliMsg?.type !== 'result' ||
       (!activeTurn.messageSent && !cliMsg.is_error)
@@ -3706,6 +3740,7 @@ function cleanupSessionRuntimeState(
   sessionId: string,
   options?: { preserveRetryableAgentStops?: boolean },
 ) {
+  mobileActivityClock.delete(sessionId)
   cancelSessionDisconnectWatcher(sessionId)
   startupDeferredDisconnectCleanups.delete(sessionId)
   clearBackgroundTaskDisconnectCeiling(sessionId)
@@ -4283,6 +4318,8 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
               : undefined,
           input: cliMsg.request.input || {},
           description: cliMsg.request.description,
+          ...(cliMsg.request.auto_answer_deadline === null || (typeof cliMsg.request.auto_answer_deadline === 'number' && Number.isFinite(cliMsg.request.auto_answer_deadline))
+            ? { autoAnswerDeadline: cliMsg.request.auto_answer_deadline } : {}),
           ...(typeof cliMsg.request.display_name === 'string' &&
           cliMsg.request.display_name.trim()
             ? { displayName: cliMsg.request.display_name.trim() }
@@ -4916,6 +4953,7 @@ function replayPendingPermissionRequests(
       input: request.input,
       ...(request.description ? { description: request.description } : {}),
       ...(request.displayName ? { displayName: request.displayName } : {}),
+      ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     })
   }
   return requests.map((request) => request.requestId)
@@ -5852,6 +5890,7 @@ export function getActiveSessionIds(): string[] {
 }
 
 export function __resetWebSocketHandlerStateForTests(): void {
+  mobileActivityClock.clear()
   strictCollaborationRuntimeSessions.clear()
   for (const timer of sessionCleanupTimers.values()) clearTimeout(timer)
   for (const timer of backgroundTaskCleanupTimers.values()) clearTimeout(timer)

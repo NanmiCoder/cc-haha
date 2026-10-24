@@ -1,9 +1,48 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { createMockOnlyRunners, MOCK_AGENT_SCENARIOS, toolResultsSentUpstream } from './scenarios'
 import { decideReply, UPSTREAM_ERROR_MESSAGE, UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER, type MockRequest } from './scriptedModel'
 import { startMockLlmServer, type MockLlmServer, type RecordedRequest } from './server'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
+import { isExpectedRoutingExit } from './agentModelRoutingExit'
+
+describe('model-routing fixture shutdown', () => {
+  test.skipIf(process.platform === 'win32')('accepts a caught SIGTERM only after the fixture deliberately stopped a completed teammate', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'routing-exit-'))
+    const child = Bun.spawn([process.execPath, '--no-env-file', '-e', `
+      const { writeFileSync } = require('node:fs')
+      process.on('SIGTERM', () => process.exit(143))
+      writeFileSync('ready', 'ready')
+      setInterval(() => {}, 1000)
+    `], { cwd: directory, env: { PATH: process.env.PATH, HOME: directory }, stdout: 'ignore', stderr: 'pipe' })
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10000)
+    try {
+      const started = Date.now()
+      while (!existsSync(join(directory, 'ready')) && child.exitCode === null && Date.now() - started < 5000) await Bun.sleep(10)
+      expect(existsSync(join(directory, 'ready'))).toBe(true)
+      child.kill('SIGTERM')
+      const code = await child.exited
+      expect({ code, signal: child.signalCode }).toEqual({ code: 143, signal: null })
+      expect(isExpectedRoutingExit(code, child.signalCode, true)).toBe(true)
+      expect(isExpectedRoutingExit(code, child.signalCode, false)).toBe(false)
+    } finally {
+      clearTimeout(timer)
+      if (child.exitCode === null) { child.kill('SIGKILL'); await child.exited }
+      rmSync(directory, { recursive: true, force: true })
+    }
+  }, 15000)
+  test('still rejects unsolicited signals, timeout kills and nonzero failures', () => {
+    expect(isExpectedRoutingExit(0, null, false)).toBe(true)
+    expect(isExpectedRoutingExit(null, 'SIGTERM', true)).toBe(true)
+    expect(isExpectedRoutingExit(null, 'SIGTERM', false)).toBe(false)
+    expect(isExpectedRoutingExit(143, null, false)).toBe(false)
+    expect(isExpectedRoutingExit(137, 'SIGKILL', true)).toBe(false)
+    expect(isExpectedRoutingExit(1, null, true)).toBe(false)
+  })
+})
 
 const AGENT_TOOLS = [{ name: 'Bash' }, { name: 'Write' }, { name: 'Read' }]
 const SYSTEM = [{ type: 'text', text: 'You are an agent.\n - Primary working directory: /tmp/work/project\n' }]

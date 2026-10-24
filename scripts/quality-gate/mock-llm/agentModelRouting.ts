@@ -5,6 +5,7 @@ import { buildProviderManagedEnv } from '../../../src/server/services/providerRu
 import { createQualityGateSandbox } from '../sandbox'
 import { startMockLlmServer } from './server'
 import type { MockReply, MockRequest } from './scriptedModel'
+import { isExpectedRoutingExit } from './agentModelRoutingExit'
 
 const FLASH = 'deepseek-v4-flash'
 const PRO = 'deepseek-v4-pro'
@@ -206,7 +207,7 @@ export async function runAgentModelRoutingScenario(rootDir: string, artifactDir:
         const [exitCode, [stdout, stderr]] = await Promise.all([child.exited, output])
         writeFileSync(join(artifactDir, `agent-model-routing-${testCase.id}.log`), `${stdout}\n${stderr}`)
         assert.ok(!timedOut, `${testCase.id}: CLI exceeded ${STEP_TIMEOUT_MS}ms`)
-        assert.ok(exitCode === 0 || (stoppedTeammate && child.signalCode === 'SIGTERM'),
+        assert.ok(isExpectedRoutingExit(exitCode, child.signalCode, stoppedTeammate),
           `${testCase.id}: CLI failed (${exitCode}, ${child.signalCode}): ${stderr}\n${stdout}`)
         assert.ok(rootModels.length >= 2, `${testCase.id}: Agent result did not return to the root model`)
         assert.ok(rootModels.every(model => model === parentModel), `${testCase.id}: parent left ${parentModel}: ${rootModels}`)

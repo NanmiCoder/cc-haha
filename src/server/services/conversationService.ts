@@ -206,6 +206,7 @@ type TrackedPermissionRequest = {
   autoAnswerAbortController?: AbortController
   autoAnswerCancelled?: boolean
   autoAnswerCreatedAt?: number
+  autoAnswerDeadline?: number | null
   autoAnswerGeneration?: number
 }
 
@@ -325,6 +326,7 @@ export type PendingPermissionRequest = {
   input: Record<string, unknown>
   description?: string
   displayName?: string
+  autoAnswerDeadline?: number | null
 }
 
 export type TeamWorkerStart = {
@@ -417,14 +419,33 @@ export class ConversationService {
   }
 
   cancelAutoQuestionAnswer(sessionId: string, requestId: string): void {
-    const request = this.sessions.get(sessionId)?.pendingPermissionRequests.get(requestId)
-    if (request?.toolName !== 'AskUserQuestion') return
+    const session = this.sessions.get(sessionId)
+    const request = session?.pendingPermissionRequests.get(requestId)
+    if (request?.toolName !== 'AskUserQuestion' || request.autoAnswerCancelled) return
     this.clearAutoAnswerWait(request)
     request.autoAnswerTimer = undefined
     request.autoAnswerAbortController = undefined
     console.info(`[ConversationService] Automatic answer cancelled by user activity: session=${sessionId} request=${requestId}`)
     request.autoAnswerCancelled = true
     request.autoAnswerGeneration = (request.autoAnswerGeneration ?? 0) + 1
+    request.autoAnswerDeadline = null
+    if (session) this.publishAutoQuestionDeadline(sessionId, session, requestId, request)
+  }
+
+  private publishAutoQuestionDeadline(sessionId: string, session: SessionProcess, requestId: string, request: TrackedPermissionRequest): void {
+    const message = {
+      type: 'control_request', request_id: requestId,
+      request: {
+        subtype: 'can_use_tool', tool_name: request.toolName, tool_use_id: request.toolUseId,
+        input: request.input, description: request.description, display_name: request.displayName,
+        auto_answer_deadline: request.autoAnswerDeadline ?? null,
+      },
+    }
+    this.notifyOutputCallbacks(sessionId, session.outputCallbacks, message)
+    if (session.teamWorker) {
+      const parent = this.sessions.get(session.teamWorker.parentSessionId)
+      if (parent) this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, message)
+    }
   }
 
   /** Apply setting changes to questions that are already waiting. */
@@ -453,12 +474,16 @@ export class ConversationService {
       const settings = normalizeAutoQuestionSettings(
         (await new SettingsService().getUserSettings()).autoQuestion,
       )
-      if (!settings.enabled || request.autoAnswerCancelled ||
+      if (request.autoAnswerCancelled ||
         (request.autoAnswerGeneration ?? 0) !== generation || this.sessions.get(sessionId) !== session ||
         session.pendingPermissionRequests.get(requestId) !== request) return
-
-      const remainingMs = Math.max(0, (request.autoAnswerCreatedAt ?? Date.now()) +
-        settings.timeoutMinutes * 60_000 - Date.now())
+      request.autoAnswerCreatedAt ??= Date.now()
+      request.autoAnswerDeadline = settings.enabled
+        ? request.autoAnswerCreatedAt + settings.timeoutMinutes * 60_000
+        : null
+      this.publishAutoQuestionDeadline(sessionId, session, requestId, request)
+      if (request.autoAnswerDeadline === null) return
+      const remainingMs = Math.max(0, request.autoAnswerDeadline - Date.now())
       console.info(`[ConversationService] Automatic answer scheduled: session=${sessionId} request=${requestId} remainingMs=${remainingMs}`)
       request.autoAnswerTimer = setTimeout(() => {
         request.autoAnswerTimer = undefined
@@ -1517,6 +1542,7 @@ export class ConversationService {
       input: request.input,
       ...(request.description ? { description: request.description } : {}),
       ...(request.displayName ? { displayName: request.displayName } : {}),
+      ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     }))
   }
 

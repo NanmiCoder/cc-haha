@@ -5,17 +5,18 @@ import path from 'node:path'
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun'
 import { isLocalAccessAuthorized } from './localAccessAuth.js'
 import { setResponseHeaders } from './middleware/responseHeaders.js'
-import { remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
+import { projectRemoteSettings, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import type { WebSocketData } from './ws/handler.js'
 
 const PREFIX = '/api/public-access'
 const COOKIE = '__Host-haha-remote'
+const NATIVE_TOKEN_PREFIX = 'native_'
 const PAIR_TTL = 5 * 60_000
 const SESSION_TTL = 30 * 24 * 60 * 60_000
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const secret = () => randomBytes(32).toString('base64url')
 type Device = { id: string, name: string, createdAt: number, expiresAt: number, tokenHash: string }
-type Pending = { id: string, name: string, expiresAt: number, claimHash: string, status: 'pending' | 'approved' | 'rejected' }
+type Pending = { id: string, name: string, expiresAt: number, claimHash: string, status: 'pending' | 'approved' | 'rejected', clientType: 'browser' | 'native' }
 type Stored = Record<string, unknown> & { version: number, devices: Device[] }
 type RemoteData = WebSocketData & { remoteDeviceId: string }
 
@@ -37,8 +38,15 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   const parts = url.pathname.split('/').filter(Boolean)
   if (parts[0] === 'ws') return parts.length === 2 && /^[\w-]{1,64}$/.test(parts[1]!)
   if (parts[0] !== 'api') return false
+  if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && method === 'DELETE'
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
+  if (parts[1] === 'scheduled-tasks') {
+    if (parts.length === 2) return method === 'GET' || method === 'POST'
+    if (parts[2] === 'runs') return method === 'GET' && (parts.length === 3 || parts.length === 4)
+    if (parts.length === 3) return method === 'PUT' || method === 'DELETE'
+    return parts.length === 4 && ((parts[3] === 'run' && method === 'POST') || (parts[3] === 'runs' && method === 'GET'))
+  }
   if (method === 'PUT' && ['/api/models/current', '/api/effort'].includes('/' + parts.join('/'))) return true
   if (method === 'GET' && ['/api/settings/user', '/api/permissions/mode', '/api/providers/auth-status'].includes('/' + parts.join('/'))) return true
   if (['sessions', 'conversations'].includes(parts[1] ?? '')) return true
@@ -124,8 +132,17 @@ export class PublicAccessServer {
     return this.server !== null && this.stored.devices.some(d => d.id === id && d.expiresAt > this.now())
   }
 
+  isDeviceActive(id: string) { return this.authorizedDevice(id) }
+
   private deviceFor(request: Request): Device | undefined {
-    const token = request.headers.get('Cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1)
+    const authorization = request.headers.get('Authorization')
+    // Native credentials are explicitly issued at pairing, never inferred from
+    // a LAN/local bearer or a browser cookie. An invalid explicit credential
+    // must not silently fall back to an ambient cookie belonging to another device.
+    const token = authorization !== null
+      ? /^Bearer (native_[A-Za-z0-9_-]{43})$/i.exec(authorization)?.[1]
+      : request.headers.get('Cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1)
+    if (authorization === null && /^native_[A-Za-z0-9_-]{43}$/.test(token ?? '')) return undefined
     if (!token || token.length > 128 || !this.server) return undefined
     return this.stored.devices.find(d => d.tokenHash === hash(token) && d.expiresAt > this.now())
   }
@@ -257,30 +274,38 @@ export class PublicAccessServer {
       const route = url.pathname.split('/').filter(Boolean).join('/')
       if (route.startsWith('api/public-access/')) {
         if (!this.rate('pairing-global', 180)) return json({ error: 'Too many requests' }, 429)
-        if (route === 'api/public-access/session' && request.method === 'GET') return json({ authenticated: !!this.deviceFor(request) })
+        if (route === 'api/public-access/session' && request.method === 'GET') {
+          const device = this.deviceFor(request)
+          return json(device ? { authenticated: true, expiresAt: device.expiresAt } : { authenticated: false })
+        }
         const input = await this.readInput(request)
         this.prune()
         if (route === 'api/public-access/pair' && request.method === 'POST') {
           if (!this.rate('pair-attempts', 20)) return json({ error: 'Too many attempts' }, 429)
+          if (input.clientType !== undefined && input.clientType !== 'browser' && input.clientType !== 'native') return json({ error: 'Unsupported pairing client type' }, 400)
           if (!this.pairing || this.pairing.expiresAt <= this.now() || typeof input.secret !== 'string' || hash(input.secret) !== this.pairing.hash) return json({ error: 'Pairing code expired or invalid' }, 401)
           if (this.stored.devices.length >= 32 || this.pending.size >= 8) return json({ error: 'Device limit reached' }, 429)
           const expiresAt = this.pairing.expiresAt
           this.pairing = null
           const id = secret()
           const claimSecret = secret()
-          const name = typeof input.name === 'string' ? input.name.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80) : 'Mobile browser'
-          this.pending.set(id, { id, name, claimHash: hash(claimSecret), status: 'pending', expiresAt })
+          const clientType = input.clientType === 'native' ? 'native' : 'browser'
+          const name = typeof input.name === 'string' ? input.name.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80) : clientType === 'native' ? 'Mobile app' : 'Mobile browser'
+          this.pending.set(id, { id, name, claimHash: hash(claimSecret), status: 'pending', expiresAt, clientType })
           return json({ id, claimSecret })
         }
         if (route === 'api/public-access/claim' && request.method === 'POST') {
           const p = typeof input.id === 'string' ? this.pending.get(input.id) : undefined
           if (!p || typeof input.claimSecret !== 'string' || hash(input.claimSecret) !== p.claimHash) return json({ error: 'Pairing request expired or invalid' }, 401)
           if (p.status !== 'approved') return json({ status: p.status })
-          const token = secret()
+          // The delivery mechanism is bound before desktop approval. Keep the
+          // durable store hash-only and compatible with existing browser devices.
+          const token = `${p.clientType === 'native' ? NATIVE_TOKEN_PREFIX : ''}${secret()}`
           const device = { id: p.id, name: p.name, createdAt: this.now(), expiresAt: this.now() + SESSION_TTL, tokenHash: hash(token) }
           this.stored.devices.push(device)
           try { this.persist() } catch (error) { this.stored.devices.pop(); throw error }
           this.pending.delete(p.id)
+          if (p.clientType === 'native') return json({ status: 'approved', token, tokenType: 'Bearer', deviceId: device.id, expiresAt: device.expiresAt })
           return secure(Response.json({ status: 'approved' }, { headers: { 'Set-Cookie': `${COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL / 1000}` } }))
         }
         return json({ error: 'Not found' }, 404)
@@ -295,7 +320,7 @@ export class PublicAccessServer {
           const upgraded = server.upgrade(request, { data: { sessionId: url.pathname.split('/').pop()!, connectedAt: this.now(), channel: 'client', clientKind: 'full', sdkToken: null, serverPort: this.deps.serverPort(), serverHost: '127.0.0.1', remoteDeviceId: device.id } })
           return upgraded ? undefined : json({ error: 'Upgrade failed' }, 400)
         }
-        const response = await this.deps.handleApiRequest(request, url, { remoteBrowser: true })
+        const response = await this.deps.handleApiRequest(request, url, { remoteBrowser: true, remoteDeviceId: device.id, remoteDeviceExpiresAt: device.expiresAt })
         if (route === 'api/providers/auth-status' && response.ok) {
           const status = await response.json() as Record<string, unknown>
           const sources = ['cc-haha-provider', 'claude-oauth', 'openai-oauth', 'grok-oauth', 'deepseek-oauth', 'original-settings', 'env', 'none']
@@ -307,8 +332,7 @@ export class PublicAccessServer {
         }
         if (route === 'api/settings/user' && request.method === 'GET' && response.ok) {
           const settings = await response.json() as Record<string, unknown>
-          const allowed = ['alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language']
-          return json(Object.fromEntries(allowed.filter(key => ['string', 'boolean', 'number'].includes(typeof settings[key])).map(key => [key, settings[key]])))
+          return json(projectRemoteSettings(settings))
         }
         return secure(response)
       }

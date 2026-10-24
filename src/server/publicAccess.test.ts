@@ -44,7 +44,18 @@ function fixture(
     const response = await remote('/api/public-access/claim', pending)
     return { cookie: response.headers.get('set-cookie')!.split(';')[0]!, response, pending, code }
   }
-  return { service, storePath, base, control, remote, pair, messages, advance: (ms: number) => { clock += ms } }
+  const pairNative = async () => {
+    const code = await (await control('pairing')).json() as { secret: string }
+    const pending = await (await remote('/api/public-access/pair', { secret: code.secret, name: 'Fixture native phone', clientType: 'native' })).json() as { id: string, claimSecret: string }
+    await control('approve', { id: pending.id })
+    const response = await remote('/api/public-access/claim', pending)
+    const claim = await response.json() as { status: string, token: string, tokenType: string, deviceId: string, expiresAt: number }
+    return { claim, response, pending, code }
+  }
+  const native = (route: string, token: string, init: RequestInit = {}) => fetch(`${base}${route}`, {
+    ...init, headers: { Origin: 'https://fixture.ngrok-free.app', Authorization: `Bearer ${token}`, ...init.headers }, redirect: 'manual',
+  })
+  return { service, storePath, base, control, remote, pair, pairNative, native, messages, advance: (ms: number) => { clock += ms } }
 }
 
 describe('public transport boundary', () => {
@@ -153,7 +164,7 @@ describe('public transport boundary', () => {
     expect(f.service.status().enabled).toBe(false)
     f.service.enable('https://fixture.ngrok-free.app')
     const restored = await fetch(`http://127.0.0.1:${f.service.status().port}/api/public-access/session`, { headers: { Cookie: cookie } })
-    expect(await restored.json()).toEqual({ authenticated: true })
+    expect(await restored.json()).toEqual({ authenticated: true, expiresAt: 1000 + 30 * 24 * 60 * 60_000 })
     f.advance(30 * 24 * 60 * 60_000 + 1)
     expect(f.service.status().devices).toHaveLength(0)
   })
@@ -163,6 +174,131 @@ describe('public transport boundary', () => {
     let status = 0
     for (let i = 0; i < 21; i++) status = (await f.remote('/api/public-access/pair', { secret: 'invalid' })).status
     expect(status).toBe(429)
+  })
+
+  test('native pairing requires approval and issues a one-time bearer claim without a browser cookie', async () => {
+    const f = fixture()
+    const code = await (await f.control('pairing')).json()
+    const pending = await (await f.remote('/api/public-access/pair', { secret: code.secret, name: 'Native phone', clientType: 'native' })).json()
+    expect((await f.remote('/api/public-access/pair', { secret: code.secret, clientType: 'native' })).status).toBe(401)
+    expect(await (await f.remote('/api/public-access/claim', pending)).json()).toEqual({ status: 'pending' })
+    expect((await f.remote('/api/public-access/claim', { ...pending, claimSecret: 'incorrect' })).status).toBe(401)
+    await f.control('approve', { id: pending.id })
+    const response = await f.remote('/api/public-access/claim', pending)
+    const claim = await response.json()
+    expect(response.status).toBe(200)
+    expect(response.headers.get('set-cookie')).toBeNull()
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    expect(claim).toEqual({ status: 'approved', token: expect.stringMatching(/^native_[A-Za-z0-9_-]{43}$/), tokenType: 'Bearer', deviceId: pending.id, expiresAt: 1000 + 30 * 24 * 60 * 60_000 })
+    expect(readFileSync(f.storePath, 'utf8')).not.toContain(claim.token)
+    expect(JSON.stringify(f.service.status())).not.toContain(claim.token)
+    expect((await f.remote('/api/public-access/claim', pending)).status).toBe(401)
+    expect(await (await f.native('/api/public-access/session', claim.token)).json()).toEqual({ authenticated: true, expiresAt: 1000 + 30 * 24 * 60 * 60_000 })
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(200)
+    expect((await f.native('/api/sessions', claim.token, { method: 'POST', body: '{}' })).status).toBe(200)
+    expect(await (await f.native('/api/settings/user', claim.token)).json()).toEqual({ language: 'en' })
+  })
+
+  test('pairing fixes the credential kind and rejects unsupported kinds without consuming the pairing secret', async () => {
+    const f = fixture()
+    const code = await (await f.control('pairing')).json()
+    expect((await f.remote('/api/public-access/pair', { secret: code.secret, clientType: 'unknown' })).status).toBe(400)
+    const pending = await (await f.remote('/api/public-access/pair', { secret: code.secret })).json()
+    await f.control('approve', { id: pending.id })
+    const response = await f.remote('/api/public-access/claim', { ...pending, clientType: 'native' })
+    expect(response.headers.get('set-cookie')).toContain('Secure; HttpOnly; SameSite=Strict')
+    expect(await response.json()).toEqual({ status: 'approved' })
+  })
+
+  test('native and cookie credentials do not substitute for each other or for local credentials', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    const { cookie } = await f.pair()
+    const cookieToken = cookie.slice(cookie.indexOf('=') + 1)
+    for (const token of [cookieToken, 'fixture-process-credential', 'fake-lan-token', 'native_wrong', claim.token + 'extra']) {
+      expect((await f.native('/api/sessions', token)).status).toBe(401)
+      const socketResponse = await f.service.fetch(new Request(`${f.base}/ws/fixture`, { headers: { Origin: 'https://fixture.ngrok-free.app', Authorization: `Bearer ${token}` } }), { upgrade: () => { throw new Error('Must not upgrade') } } as never)
+      expect(socketResponse?.status).toBe(401)
+    }
+    expect((await f.remote('/api/sessions', undefined, `__Host-haha-remote=${claim.token}`)).status).toBe(401)
+    expect((await f.remote(`/api/sessions?token=${encodeURIComponent(claim.token)}`)).status).toBe(401)
+    expect((await f.native('/api/sessions', 'invalid', { headers: { Cookie: cookie } })).status).toBe(401)
+    expect((await f.remote('/api/sessions', undefined, cookie)).status).toBe(200)
+  })
+
+  test('native bearer preserves origin checks and the remote business allowlist', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    expect((await f.native('/api/sessions', claim.token, { headers: { Origin: 'https://attacker.example' } })).status).toBe(403)
+    expect((await f.native('/api/sessions', claim.token, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status).toBe(403)
+    expect((await f.native('/api/sessions', claim.token, { headers: { 'Sec-Fetch-Site': 'same-site' } })).status).toBe(403)
+    expect((await f.native('/api/sessions', claim.token, { method: 'POST', headers: { Origin: '' }, body: '{}' })).status).toBe(403)
+    for (const route of ['/sdk/session', '/proxy/v1/messages', '/api/providers/settings', '/api/settings', '/api/diagnostics', '/api/h5-access', '/local-file/private', '/preview-fs/private']) {
+      expect((await f.native(route, claim.token)).status).toBe(403)
+    }
+    expect((await f.native('/api/permissions/mode', claim.token, { method: 'PUT', body: '{}' })).status).toBe(403)
+    expect((await f.native('/api/public-access/approve', claim.token, { method: 'POST', body: '{}' })).status).toBe(404)
+    // A valid token must not reach the upgrade function without a valid origin.
+    for (const origin of ['', 'https://attacker.example']) {
+      const response = await f.service.fetch(new Request(`${f.base}/ws/fixture`, { headers: { Origin: origin, Authorization: `Bearer ${claim.token}` } }), { upgrade: () => { throw new Error('Must not upgrade') } } as never)
+      expect(response?.status).toBe(403)
+    }
+  })
+
+  test('rejected or expired native pairings never issue a bearer token', async () => {
+    const f = fixture()
+    const code = await (await f.control('pairing')).json()
+    const pending = await (await f.remote('/api/public-access/pair', { secret: code.secret, clientType: 'native' })).json()
+    await f.control('reject', { id: pending.id })
+    expect(await (await f.remote('/api/public-access/claim', pending)).json()).toEqual({ status: 'rejected' })
+    const nextCode = await (await f.control('pairing')).json()
+    const next = await (await f.remote('/api/public-access/pair', { secret: nextCode.secret, clientType: 'native' })).json()
+    await f.control('approve', { id: next.id })
+    f.advance(300_001)
+    expect((await f.remote('/api/public-access/claim', next)).status).toBe(401)
+    expect(f.service.status().devices).toHaveLength(0)
+  })
+
+  test.each(['revoke', 'expire', 'disable'] as const)('native WebSocket authentication and %s stop access', async (action) => {
+    const f = fixture()
+    const { claim, pending } = await f.pairNative()
+    const ws = new WebSocket(f.base.replace('http:', 'ws:') + '/ws/fixture', { headers: { Origin: 'https://fixture.ngrok-free.app', Authorization: `Bearer ${claim.token}` } })
+    cleanups.push(() => ws.close())
+    await new Promise<void>((resolve, reject) => { ws.onopen = () => resolve(); ws.onerror = reject })
+    ws.send('native-message')
+    await Bun.sleep(10)
+    expect(f.messages).toEqual(['native-message'])
+    const closed = new Promise<number>(resolve => { ws.onclose = event => resolve(event.code) })
+    if (action === 'revoke') await f.control('revoke', { id: pending.id })
+    if (action === 'expire') {
+      f.advance(30 * 24 * 60 * 60_000 + 1)
+      ws.send('must-not-reach-agent')
+    }
+    if (action === 'disable') f.service.disable()
+    await closed
+    expect(f.messages).toEqual(['native-message'])
+    const response = await f.service.fetch(new Request(`${f.base}/api/sessions`, { headers: { Origin: 'https://fixture.ngrok-free.app', Authorization: `Bearer ${claim.token}` } }), {} as never)
+    expect(response?.status).toBe(action === 'disable' ? 503 : 401)
+  })
+
+  test('native credentials reload from the existing hash-only device store and expire normally', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    f.service.disable()
+    let clock = 1000
+    const restored = new PublicAccessServer({
+      storePath: f.storePath, now: () => clock, serverPort: () => 3456,
+      handleApiRequest: async () => Response.json({ ok: true }), handleStatic: async () => null, websocket: { message() {} },
+    })
+    cleanups.push(() => restored.disable())
+    restored.enable('https://fixture.ngrok-free.app')
+    const request = () => restored.fetch(new Request('https://fixture.ngrok-free.app/api/sessions', { headers: { Origin: 'https://fixture.ngrok-free.app', Authorization: `Bearer ${claim.token}` } }), {} as never)
+    expect((await request())?.status).toBe(200)
+    clock = claim.expiresAt
+    expect((await request())?.status).toBe(401)
+    const stored = JSON.parse(readFileSync(f.storePath, 'utf8'))
+    expect(stored.version).toBe(1)
+    expect(Object.keys(stored.devices[0]).sort()).toEqual(['createdAt', 'expiresAt', 'id', 'name', 'tokenHash'])
   })
 
   test('old store migration preserves unknown fields and never upgrades LAN token to remote access', () => {
@@ -185,4 +321,36 @@ describe('public transport boundary', () => {
     expect(isPublicBusinessPathAllowed(new URL('https://example.test/api/models/current'), 'PUT')).toBe(true)
     expect(isPublicBusinessPathAllowed(new URL('https://example.test/api/effort'), 'PUT')).toBe(true)
   })
+})
+
+
+test('remote scheduled task routes stay restricted to the scheduler contract', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  for (const [path, method] of [['/api/scheduled-tasks', 'GET'], ['/api/scheduled-tasks', 'POST'], ['/api/scheduled-tasks/id', 'PUT'], ['/api/scheduled-tasks/id', 'DELETE'], ['/api/scheduled-tasks/id/run', 'POST'], ['/api/scheduled-tasks/id/runs', 'GET'], ['/api/scheduled-tasks/runs', 'GET'], ['/api/scheduled-tasks/runs/run-id', 'GET']]) expect(allowed(path!, method!)).toBe(true)
+  for (const [path, method] of [['/api/scheduled-tasks', 'DELETE'], ['/api/scheduled-tasks/runs', 'POST'], ['/api/scheduled-tasks/id/run', 'PUT'], ['/api/scheduled-tasks/id/runs/extra', 'GET'], ['/api/scheduled-tasks/id/unknown', 'POST']]) expect(allowed(path!, method!)).toBe(false)
+})
+
+test('session status exposes only the authenticated device expiry', async () => {
+  const f = fixture()
+  const { claim } = await f.pairNative()
+  expect(await (await f.remote('/api/public-access/session')).json()).toEqual({ authenticated: false })
+  expect(await (await f.native('/api/public-access/session', claim.token)).json()).toEqual({ authenticated: true, expiresAt: claim.expiresAt })
+  f.advance(30 * 24 * 60 * 60_000 + 1)
+  expect(await (await f.native('/api/public-access/session', claim.token)).json()).toEqual({ authenticated: false })
+})
+
+test('remote settings retain normalized auto-question settings through the second projection', async () => {
+  const f = fixture(async () => Response.json({ autoQuestion: { enabled: true, timeoutMinutes: 5, secret: 'never' }, env: { SECRET: 'never' } }))
+  const { claim } = await f.pairNative()
+  expect(await (await f.native('/api/settings/user', claim.token)).json()).toEqual({ autoQuestion: { enabled: true, timeoutMinutes: 5 } })
+})
+
+test('push route allowlist refuses extra segments and unsupported methods', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed('/api/sessions/mobile-push', 'GET')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push', 'PUT')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push/id', 'DELETE')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push/id', 'GET')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/id/extra', 'DELETE')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push', 'POST')).toBe(false)
 })

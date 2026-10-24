@@ -89,6 +89,8 @@ export type ServerMessage =
       input: unknown
       description?: string
       displayName?: string
+      /** Server epoch milliseconds; null cancels a previously announced automatic-answer timer. */
+      autoAnswerDeadline?: number | null
     }
   | {
       type: 'computer_use_permission_request'
