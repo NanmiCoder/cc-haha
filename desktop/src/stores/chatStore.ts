@@ -226,6 +226,7 @@ export type PerSessionState = {
   composerPrefill?: {
     text: string
     attachments?: UIAttachment[]
+    mentions?: ComposerMention[]
     sessionReferences?: Array<{ sessionId: string }>
     mode?: ComposerPrefillMode
     nonce: number
@@ -473,6 +474,7 @@ type ChatStore = {
     prefill: {
       text: string
       attachments?: UIAttachment[]
+      mentions?: ComposerMention[]
       sessionReferences?: Array<{ sessionId: string }>
       mode?: ComposerPrefillMode
     },
@@ -4536,6 +4538,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             composerPrefill: {
               text: prefill.text,
               attachments: prefill.attachments,
+              ...(prefill.mentions ? { mentions: prefill.mentions } : {}),
               ...(prefill.sessionReferences ? { sessionReferences: prefill.sessionReferences } : {}),
               mode: prefill.mode,
               nonce: Date.now(),
