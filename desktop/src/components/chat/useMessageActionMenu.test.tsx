@@ -100,6 +100,14 @@ describe('message actions on a phone', () => {
     expect(screen.queryByTestId('message-action-sheet')).not.toBeInTheDocument()
   })
 
+  it('keeps the explicit SDK import action reachable on mobile', () => {
+    const onImport = vi.fn()
+    const { shell } = renderPrompt({ branchAction: { label: 'Branch', onBranch: vi.fn(), sdkImport: { label: 'Copy to Agent SDK', onImport } } })
+    hold(shell)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Copy to Agent SDK' }))
+    expect(onImport).toHaveBeenCalledOnce()
+  })
+
   it('opens the text where the browser can select it, since holding no longer does', () => {
     const { shell } = renderPrompt()
     hold(shell)

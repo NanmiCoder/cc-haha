@@ -1,4 +1,4 @@
-import { Check, Copy, GitFork, Pencil } from 'lucide-react'
+import { Check, Copy, GitFork, Import, Pencil } from 'lucide-react'
 import { useId, type ReactNode } from 'react'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
@@ -9,6 +9,7 @@ export type MessageBranchAction = {
   label: string
   loading?: boolean
   onBranch: () => void
+  sdkImport?: { label: string; onImport: () => void }
 }
 
 export type MessageEditAction = {
@@ -113,6 +114,10 @@ export function MessageActionBar({
             onPointerUp={(event) => event.currentTarget.blur()}
             className={ACTION_CHIP_CLASS}
           />
+        ) : null}
+        {branchAction?.sdkImport ? (
+          <IconButton size="xs" tone="muted" label={branchAction.sdkImport.label} disabled={branchAction.loading}
+            onClick={branchAction.sdkImport.onImport} icon={<Import size={ICON_SIZE} strokeWidth={ICON_STROKE} aria-hidden="true" />} />
         ) : null}
         {branchAction ? (
           <IconButton

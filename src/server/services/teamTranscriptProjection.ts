@@ -2,12 +2,13 @@ import { open, stat } from 'node:fs/promises'
 import { createHash } from 'node:crypto'
 import { withHistoryReadBudget } from './boundedSessionHistory.js'
 import type { MessageEntry } from './sessionService.js'
+import { normalizeOfficialAgentSdkToolContent } from '../../shared/officialAgentSdkToolNames.js'
 
 const MAX_RECORD_BYTES = 1024 * 1024
 const MAX_PROJECTION_BYTES = 3 * 1024 * 1024
 const MAX_PROJECTION_ENTRIES = 10_000
 const WINDOW_BYTES = 4096
-const TEAM_TOOLS = new Set(['TeamCreate', 'TeamDelete', 'Agent', 'TaskCreate', 'TaskUpdate', 'TaskList', 'SendMessage'])
+const TEAM_TOOLS = new Set(['TeamCreate', 'TeamPlan', 'TeamDelete', 'Agent', 'TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'SendMessage'])
 type Projection = {
   messages: MessageEntry[]
   complete: boolean
@@ -127,7 +128,7 @@ function collectTeamEvidence(entry: Record<string, unknown>, state: CachedProjec
   if (state.bytes >= MAX_PROJECTION_BYTES || state.messages.length >= MAX_PROJECTION_ENTRIES) { state.complete = false; return }
   const raw = entry.message as { role?: string; content?: unknown } | undefined
   if (!raw || typeof raw !== 'object') return
-  const blocks = Array.isArray(raw.content) ? raw.content : []
+  const blocks = normalizeOfficialAgentSdkToolContent(Array.isArray(raw.content) ? raw.content : [])
   if (blocks.some(block => block?.type === 'tool_use' && block.name === 'TeamCreate')) state.teamSeen = true
   const tools = blocks.filter((block): block is Record<string, unknown> => Boolean(block && typeof block === 'object' && block.type === 'tool_use' && state.teamSeen && TEAM_TOOLS.has(block.name)))
   for (const block of tools) if (typeof block.id === 'string') state.toolIds.add(block.id)

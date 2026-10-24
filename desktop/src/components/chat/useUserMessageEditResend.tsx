@@ -187,6 +187,7 @@ export function useUserMessageEditResend({
     if (isCurrentContext(requestContext)) setConfirm(null)
     const chatStore = useChatStore.getState()
     let sent = false
+    let recoveryUnavailable = false
     try {
       const session = chatStore.sessions[targetSessionId]
       await chatStore.reloadHistory(targetSessionId, {
@@ -194,8 +195,8 @@ export function useUserMessageEditResend({
         backgroundAgentTasks: session?.backgroundAgentTasks,
       }, { requireApplied: true })
       if (useChatStore.getState().sessions[targetSessionId]?.chatState === 'idle') {
-        useChatStore.getState().sendMessage(targetSessionId, payload.content, payload.attachments, payload.options)
-        sent = true
+        sent = useChatStore.getState().sendMessage(targetSessionId, payload.content, payload.attachments, payload.options)
+        recoveryUnavailable = !sent
       }
     } catch {
       sent = false
@@ -206,7 +207,9 @@ export function useUserMessageEditResend({
         attachments: draft.attachments.filter((attachment) => attachment.sendable),
         ...(draft.sessionReferences.length > 0 ? { sessionReferences: draft.sessionReferences } : {}),
       }, { restoreMissingSession: true })
-      addToast({ type: 'warning', message: t('chat.editResendPrefilled') })
+      addToast(recoveryUnavailable
+        ? { type: 'error', message: t('chat.inputRecoveryUnavailable') }
+        : { type: 'warning', message: t('chat.editResendPrefilled') })
     } else if (mode === 'both') {
       addToast(describeRewindResult(result, mode, t))
     }

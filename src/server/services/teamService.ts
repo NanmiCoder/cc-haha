@@ -14,6 +14,7 @@ import * as path from 'path'
 import * as os from 'os'
 import * as crypto from 'node:crypto'
 import { ApiError } from '../middleware/errorHandler.js'
+import { normalizeOfficialAgentSdkToolName } from '../../shared/officialAgentSdkToolNames.js'
 import { readTeamTranscriptProjection } from './teamTranscriptProjection.js'
 import { readMemberFailure } from '../../utils/swarm/turnFailure.js'
 import { unescapeXmlAttr } from '../../utils/xml.js'
@@ -543,7 +544,7 @@ function taskAnchorsFromMessage(message: TranscriptMessage): TeamTaskAnchor[] {
   const anchors: TeamTaskAnchor[] = []
   for (const block of message.content) {
     const tool = objectValue(block)
-    if (tool?.type !== 'tool_use' || stringValue(tool.name) !== 'TaskUpdate') continue
+    if (tool?.type !== 'tool_use' || normalizeOfficialAgentSdkToolName(stringValue(tool.name) ?? '') !== 'TaskUpdate') continue
     const input = objectValue(tool.input)
     const taskId = stringValue(input?.taskId)
     const status = taskStatus(input?.status)
@@ -802,7 +803,7 @@ function transcriptTeamCreations(
     if (message?.type !== 'tool_use' || !Array.isArray(message.content)) continue
     for (const block of message.content) {
       const tool = objectValue(block)
-      if (tool?.type !== 'tool_use' || stringValue(tool.name) !== 'TeamCreate') continue
+      if (tool?.type !== 'tool_use' || normalizeOfficialAgentSdkToolName(stringValue(tool.name) ?? '') !== 'TeamCreate') continue
       const toolUseId = stringValue(tool.id)
       if (!toolUseId) continue
       const result = results.get(toolUseId)
@@ -845,7 +846,7 @@ function transcriptTeamLifecycleEnd(
     if (message?.type !== 'tool_use' || !Array.isArray(message.content)) continue
     for (const block of message.content) {
       const tool = objectValue(block)
-      if (tool?.type !== 'tool_use' || stringValue(tool.name) !== 'TeamDelete') continue
+      if (tool?.type !== 'tool_use' || normalizeOfficialAgentSdkToolName(stringValue(tool.name) ?? '') !== 'TeamDelete') continue
       const toolUseId = stringValue(tool.id)
       if (!toolUseId) continue
       const result = results.get(toolUseId)
@@ -985,7 +986,7 @@ function reconcileArchivedTasksFromTranscript(
       const tool = objectValue(block)
       if (tool?.type !== 'tool_use') continue
       const toolUseId = stringValue(tool.id)
-      const name = stringValue(tool.name)
+      const name = normalizeOfficialAgentSdkToolName(stringValue(tool.name) ?? '')
       const input = objectValue(tool.input) ?? {}
       if (!toolUseId || !name) continue
       const result = results.get(toolUseId)
@@ -1178,7 +1179,7 @@ export function projectTeamWorkbenchesFromTranscript(
       const tool = objectValue(block)
       if (tool?.type !== 'tool_use') continue
       const toolUseId = stringValue(tool.id)
-      const name = stringValue(tool.name)
+      const name = normalizeOfficialAgentSdkToolName(stringValue(tool.name) ?? '')
       const input = objectValue(tool.input) ?? {}
       if (!toolUseId || !name) continue
       const toolResult = results.get(toolUseId)
@@ -2362,19 +2363,27 @@ export class TeamService {
 
   // ── Delete team ─────────────────────────────────────────────────────────
 
-  async deleteTeam(name: string): Promise<void> {
+  async deleteTeam(name: string, callerSessionId?: string): Promise<void> {
     return withTaskListLifecycleLock(
       getCanonicalTeamTaskListId(name),
       async () => {
       const config = await this.loadTeamConfig(name)
 
+      // The authenticated lead may clean up its completed team while its own
+      // conversation remains open. Recheck ownership under the lifecycle lock
+      // so a same-name recreation cannot redirect a stale deletion request.
+      if (callerSessionId && config.leadSessionId !== callerSessionId) {
+        throw new ApiError(403, 'Only this team’s lead conversation may delete it', 'FORBIDDEN')
+      }
+
       const remainingTeammates = config.members.filter(
-        member => member.agentId !== config.leadAgentId,
+        member => member.agentId !== config.leadAgentId &&
+          !(callerSessionId && member.backendType === 'process' && member.terminated === true),
       )
       const lead = config.members.find(
         member => member.agentId === config.leadAgentId,
       )
-      if (lead?.isActive !== false || remainingTeammates.length > 0) {
+      if ((!callerSessionId && lead?.isActive !== false) || remainingTeammates.length > 0) {
         throw ApiError.conflict(
           `Cannot delete team "${name}": lead is active or teammates remain registered`,
         )

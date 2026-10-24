@@ -57,7 +57,8 @@
         "/Contents/Frameworks/.+\\.(?:pak|bin|dat|nib)$",
         "/Contents/Resources/.+\\.(?:asar|pak|bin|dat|icns|png|jpg|jpeg|gif|svg|ttf|woff|woff2)$",
         "cc-haha-computer-use\\.app",
-        "claude-sidecar-[^/]+$"
+        "claude-sidecar-[^/]+$",
+        "/official-agent-sdk/claude$"
       ],
       "notarize": true
     },

@@ -6,6 +6,15 @@ import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environmen
 import { projectRemoteProvider, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
 import { SavedProviderSchema, ImageGenerationConfigSchema } from './types/provider.js'
 
+test('remote provider projection retains runtime selection while hiding the API key', () => {
+  const provider = SavedProviderSchema.parse({
+    id: 'sdk-fixture', presetId: 'custom', name: 'Official SDK',
+    apiKey: 'fixture-secret', baseUrl: 'https://api.anthropic.com', runtime: 'agent-sdk',
+    models: { main: 'fixture-model', haiku: '', sonnet: '', opus: '' },
+  })
+  expect(projectRemoteProvider(provider)).toMatchObject({ runtime: 'agent-sdk', apiKey: '', hasApiKey: true })
+})
+
 test('remote image settings preserve the protocol while redacting image credentials', () => {
   const provider = SavedProviderSchema.parse({
     id: 'fixture', presetId: 'custom', name: 'Fixture',

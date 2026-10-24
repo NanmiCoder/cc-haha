@@ -932,6 +932,64 @@ describe('EmptySession', () => {
     ])
   })
 
+  it('keeps the complete new-session draft and model selection when the recovery copy prevents sending', async () => {
+    mocks.isTauriRuntime = true
+    useUIStore.getState().startNewSessionDraft('')
+    const draft = useUIStore.getState().newSessionDraft!
+    const selection = { providerId: 'provider-explicit', modelId: 'model-explicit' }
+    useSessionRuntimeStore.getState().setSelection('__draft__', selection)
+    const send = vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(false)
+    try {
+      render(<EmptySession draftRevision={draft.revision} />)
+      const prompt = 'Keep every line of this prompt.\n'.repeat(40) + 'The final line.'
+      setComposerText(prompt, prompt.length)
+      const file = new File(['notes'], 'notes.md', { type: 'text/markdown' })
+      Object.defineProperty(file, 'path', { configurable: true, value: '/Users/nanmi/drop/notes.md' })
+      fireEvent.drop(screen.getByTestId('empty-session-composer-panel'), {
+        dataTransfer: { types: ['Files'], files: [file], dropEffect: '' },
+      })
+      expect(await screen.findByText('notes.md')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+      await waitFor(() => expect(send).toHaveBeenCalledTimes(1))
+      expect(getComposerText()).toBe(prompt)
+      expect(screen.getByText('notes.md')).toBeInTheDocument()
+      expect(useUIStore.getState().newSessionDraft).toMatchObject({ revision: draft.revision, hasContent: true })
+      expect(useSessionRuntimeStore.getState().selections.__draft__).toEqual(selection)
+      expect(useTabStore.getState().activeTabId).toBeNull()
+      expect(useSessionStore.getState().activeSessionId).toBeNull()
+      expect(useUIStore.getState().toasts).toContainEqual(expect.objectContaining({
+        type: 'error', message: expect.stringContaining('Could not save a recovery copy'),
+      }))
+      expect(screen.getByRole('button', { name: /Run/i })).not.toBeDisabled()
+    } finally {
+      send.mockRestore()
+    }
+  })
+
+  it('keeps a failed initial send with its created session when a newer draft has replaced the original editor', async () => {
+    let complete!: (value: { sessionId: string }) => void
+    mocks.createSession.mockImplementationOnce(() => new Promise(resolve => { complete = resolve }))
+    const send = vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(false)
+    try {
+      useUIStore.getState().startNewSessionDraft('')
+      const view = render(<EmptySession />)
+      setComposerText('Keep the older prompt too', 25)
+      fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useUIStore.getState().startNewSessionDraft('/tmp/newer'))
+      const newerDraft = useUIStore.getState().newSessionDraft
+      view.unmount()
+      await act(async () => complete({ sessionId: 'older-session' }))
+      expect(useUIStore.getState().newSessionDraft).toEqual(newerDraft)
+      expect(useChatStore.getState().sessions['older-session']?.composerPrefill).toMatchObject({
+        text: 'Keep the older prompt too', attachments: [],
+      })
+      expect(useTabStore.getState().activeTabId).toBeNull()
+    } finally {
+      send.mockRestore()
+    }
+  })
+
   it('creates a new session with the draft Auto permission mode', async () => {
     render(<EmptySession />)
 

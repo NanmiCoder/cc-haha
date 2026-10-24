@@ -1,4 +1,5 @@
-const actions = new Set(['list', 'read', 'create', 'create-batch', 'models', 'send', 'wait'])
+const actions = new Set(['list', 'read', 'create', 'create-batch', 'models', 'send', 'wait',
+  'cron-create', 'cron-list', 'cron-update', 'cron-delete', 'team-delete'])
 
 export function collaborationToolAction(pathname: string): string | null {
   const match = /^\/api\/session-collaboration\/([^/]+)$/.exec(pathname)

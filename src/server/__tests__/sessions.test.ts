@@ -14,6 +14,7 @@ import {
   prepareSessionWorkspace,
 } from '../services/repositoryLaunchService.js'
 import { conversationService } from '../services/conversationService.js'
+import { markAgentSdkSession } from '../services/officialAgentSdkRuntime.js'
 import * as boundedSessionHistory from '../services/boundedSessionHistory.js'
 import { clearCommandsCache } from '../../commands.js'
 import { parseJSONL } from '../../utils/json.js'
@@ -4777,6 +4778,40 @@ describe('Sessions API', () => {
       startSession.mockRestore()
       hasSession.mockRestore()
       requestControl.mockRestore()
+    }
+  })
+
+  it('official SDK subagent message controls are rejected before starting a process or sending a prompt', async () => {
+    const sessionId = 'adedaded-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const agentId = 'native-background-agent'
+    await writeSessionFile('-tmp-api-sdk-subagent-message', sessionId, [
+      makeSnapshotEntry(),
+      makeAssistantToolUseEntry([{
+        id: 'tool-native', name: 'Agent',
+        input: { description: 'Inspect the module', prompt: 'Review it', run_in_background: true },
+      }]),
+      makeToolResultUserEntry('tool-native', `Async agent launched successfully.\nagentId: ${agentId}\nThe agent is working in the background.`),
+    ])
+    markAgentSdkSession(tmpDir, sessionId)
+    const hasSession = spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    const startSession = spyOn(conversationService, 'startSession').mockResolvedValue()
+    const requestControl = spyOn(conversationService, 'requestControl').mockResolvedValue({})
+    try {
+      const detail = await fetch(`${baseUrl}/api/sessions/${sessionId}/subagents/by-tool/tool-native?taskId=${agentId}`)
+      expect(detail.status).toBe(200)
+      expect(await detail.json()).toMatchObject({ canSendMessage: false, agentId, status: 'running' })
+      const response = await fetch(`${baseUrl}/api/sessions/${sessionId}/subagents/by-tool/tool-native/messages`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ content: 'Review the next change.' }),
+      })
+      expect(response.status).toBe(409)
+      expect((await response.json() as { message: string }).message).toContain('main conversation')
+      expect(startSession).not.toHaveBeenCalled()
+      expect(requestControl).not.toHaveBeenCalled()
+    } finally {
+      requestControl.mockRestore()
+      startSession.mockRestore()
+      hasSession.mockRestore()
     }
   })
 

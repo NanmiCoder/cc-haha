@@ -18,6 +18,8 @@ import { CronService, type CronTask } from './cronService.js'
 import { SessionService } from './sessionService.js'
 import { sendTaskNotification } from './notificationService.js'
 import { ProviderService } from './providerService.js'
+import type { SavedProvider } from '../types/provider.js'
+import { buildOfficialAgentSdkEnvironment, buildOfficialAgentSdkLaunchArgs, markAgentSdkSession, resolveOfficialAgentSdkModel } from './officialAgentSdkRuntime.js'
 import { SettingsService } from './settingsService.js'
 import { stripBOM } from '../../utils/jsonRead.js'
 import { isProviderManagedEnvVar } from '../../utils/managedEnvConstants.js'
@@ -696,6 +698,12 @@ export class CronScheduler {
       workDir = os.homedir()
     }
     workDir = this.resolveCanonicalWorkDir(workDir)
+    // Pin the provider at run creation. A later global selection must not send
+    // an SDK job through the legacy CLI or change its billing account.
+    const { providers, activeId } = await this.providerService.listProviders()
+    if (task.providerId === undefined && activeId) task = { ...task, providerId: activeId }
+    const selectedProvider = providers.find(provider => provider.id === task.providerId)
+    const sdkProvider = selectedProvider?.runtime === 'agent-sdk' ? selectedProvider : null
 
     // Only create a session when explicitly requested (manual "Run Now"),
     // not for automatic cron runs — avoids flooding the sidebar.
@@ -743,7 +751,13 @@ export class CronScheduler {
       session_id: sessionId || '',
     }) + '\n'
 
-    const cliArgs = buildCronCliArgs([
+    const sdkSessionId = sessionId ?? crypto.randomUUID()
+    const cliArgs = sdkProvider ? buildOfficialAgentSdkLaunchArgs([
+      '--stdio', '--session-id', sdkSessionId,
+      ...(!sessionId ? ['--no-session-persistence'] : []),
+      '--model', resolveOfficialAgentSdkModel(sdkProvider, task.model),
+      '--permission-mode', 'bypassPermissions', '--dangerously-skip-permissions',
+    ], { appRoot: process.env.CLAUDE_APP_ROOT }) : buildCronCliArgs([
       '--print',
       '--verbose',
       '--input-format',
@@ -754,7 +768,8 @@ export class CronScheduler {
       ...this.getRuntimeArgs(task),
     ])
 
-    const childEnv = await this.buildTaskChildEnv(workDir, task)
+    const childEnv = await this.buildTaskChildEnv(workDir, task, sdkProvider)
+    if (sdkProvider && sessionId) markAgentSdkSession(this.getConfigDir(), sessionId)
     const taskTimeoutMs = resolveCronTaskTimeoutMs()
     migrationMaintenance.assertAvailable()
     const proc = Bun.spawn(
@@ -857,7 +872,7 @@ export class CronScheduler {
         }
       }
 
-      await this.persistScheduledSessionPermission(sessionId, workDir)
+      await this.persistScheduledSessionPermission(sessionId, workDir, task, sdkProvider)
       await updateRun(completedRun, runLogTarget)
 
       // Send IM notification if configured
@@ -889,7 +904,7 @@ export class CronScheduler {
           new Date(completedAt).getTime() - new Date(startedAt).getTime(),
       }
 
-      await this.persistScheduledSessionPermission(sessionId, workDir)
+      await this.persistScheduledSessionPermission(sessionId, workDir, task, sdkProvider)
       await updateRun(failedRun, runLogTarget)
 
       return failedRun
@@ -899,11 +914,17 @@ export class CronScheduler {
   private async persistScheduledSessionPermission(
     sessionId: string | undefined,
     workDir: string,
+    task?: CronTask,
+    sdkProvider?: SavedProvider | null,
   ): Promise<void> {
     if (!sessionId) return
     await this.sessionService.appendSessionMetadata(sessionId, {
       workDir,
       permissionMode: 'bypassPermissions',
+      ...(sdkProvider ? {
+        runtimeProviderId: sdkProvider.id,
+        runtimeModelId: resolveOfficialAgentSdkModel(sdkProvider, task?.model),
+      } : {}),
     }).catch(() => {
       // The task result is still valid even if session metadata refresh fails.
     })
@@ -930,8 +951,27 @@ export class CronScheduler {
   private async buildTaskChildEnv(
     workDir: string,
     task: CronTask,
+    selectedSdkProvider?: SavedProvider | null,
   ): Promise<Record<string, string | undefined>> {
+    let sdkProvider = selectedSdkProvider
+    if (sdkProvider === undefined) {
+      const { providers, activeId } = await this.providerService.listProviders()
+      const providerId = task.providerId === undefined ? activeId : task.providerId
+      const selected = providers.find(provider => provider.id === providerId)
+      sdkProvider = selected?.runtime === 'agent-sdk' ? selected : null
+    }
     const cleanEnv = await getProcessEnvWithTerminalShellEnvironment()
+    if (sdkProvider) {
+      const network = buildNetworkEnvironment(await loadNetworkSettings(), cleanEnv)
+      return {
+        ...buildOfficialAgentSdkEnvironment({ ...cleanEnv, ...network }, sdkProvider, this.getConfigDir()),
+        ANTHROPIC_MODEL: resolveOfficialAgentSdkModel(sdkProvider, task.model),
+        PWD: workDir, CALLER_DIR: workDir,
+        CC_HAHA_DESKTOP_PROVIDER_ID: sdkProvider.id,
+        CC_HAHA_AGENT_TEAMS_ENABLED: '0',
+        CC_HAHA_COMPUTER_USE_HOST_BUNDLE_ID: 'com.claude-code-haha.desktop',
+      }
+    }
     delete cleanEnv.CLAUDE_CODE_OAUTH_TOKEN
     delete cleanEnv.CLAUDE_CODE_ACCOUNT_UUID
     delete cleanEnv.CC_HAHA_AGENT_TEAMS_ENABLED

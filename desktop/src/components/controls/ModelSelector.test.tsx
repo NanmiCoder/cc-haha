@@ -1762,3 +1762,35 @@ describe('delegation catalog', () => {
     expect(fetchProviders).not.toHaveBeenCalled()
   })
 })
+
+it('wires a live SDK Ultracode toggle without restarting or changing the chosen Haiku effort', async () => {
+  const { sessionsApi } = await import('@/api/sessions')
+  const off = { enabled: false, active: false, available: true, running: true, model: 'claude-haiku-5-5', effort: 'low' }
+  const get = vi.spyOn(sessionsApi, 'getUltracode').mockResolvedValue(off)
+  const set = vi.spyOn(sessionsApi, 'setUltracode').mockImplementation(async () => {
+    const on = { ...off, enabled: true, active: true }
+    get.mockResolvedValue(on)
+    return on
+  })
+  const restart = vi.fn()
+  useSettingsStore.setState({ locale: 'en', availableModels: [], currentModel: null, effortLevel: 'low' })
+  useProviderStore.setState({
+    activeId: 'sdk-provider', hasLoadedProviders: true, isLoading: false,
+    providers: [{ id: 'sdk-provider', name: 'Official SDK', presetId: 'custom', runtime: 'agent-sdk', apiFormat: 'anthropic', apiKey: 'fixture', baseUrl: 'https://api.anthropic.com', models: { main: 'claude-haiku-5-5', haiku: 'claude-haiku-5-5', sonnet: 'claude-haiku-5-5', opus: 'claude-haiku-5-5' } }],
+  })
+  useSessionRuntimeStore.getState().setSelection('sdk-session', { providerId: 'sdk-provider', modelId: 'claude-haiku-5-5', effortLevel: 'low' })
+  useChatStore.setState({ setSessionRuntime: restart } as Partial<ReturnType<typeof useChatStore.getState>>)
+  try {
+    render(<ModelSelector runtimeKey="sdk-session" />)
+    await waitFor(() => expect(get).toHaveBeenCalled())
+    await clickByRole('Effort: Low')
+    const toggle = await screen.findByRole('switch', { name: 'Ultracode' })
+    await waitFor(() => expect(toggle).toBeEnabled())
+    fireEvent.click(toggle)
+    await waitFor(() => expect(set).toHaveBeenCalledWith('sdk-session', true))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Effort: Ultracode on' })).toBeInTheDocument())
+    expect(restart).not.toHaveBeenCalled()
+    expect(useSessionRuntimeStore.getState().selections['sdk-session']).toMatchObject({ modelId: 'claude-haiku-5-5', effortLevel: 'low' })
+    expect(screen.getByRole('slider', { name: 'Effort' })).toHaveAttribute('aria-valuetext', 'Low')
+  } finally { get.mockRestore(); set.mockRestore() }
+})

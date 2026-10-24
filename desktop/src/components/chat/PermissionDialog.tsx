@@ -23,6 +23,8 @@ import type { PermissionUpdate } from '../../types/chat'
 import { DiffViewer } from './DiffViewer'
 import { PERMISSION_TOOL_ICONS, extractToolDetails, getPermissionTitle } from './permissionPresentation'
 import { PendingDecisionMarker } from './PendingDecisionMarker'
+import { OfficialSdkDialog } from '@/components/chat/OfficialSdkDialog'
+import { isOfficialSdkDialog, OFFICIAL_SDK_DIALOG_TOOL } from '../../../../src/shared/officialAgentSdkDialogs'
 import {
   PlanPreviewCard,
   buildPlanApprovalPermissionUpdates,
@@ -93,6 +95,10 @@ export function PermissionDialog({ sessionId, requestId, toolName, input, descri
   const t = useTranslation()
   const isPending = Boolean(pendingPermission)
   const [showRaw, setShowRaw] = useState(false)
+
+  if (toolName === OFFICIAL_SDK_DIALOG_TOOL && isOfficialSdkDialog(input)) {
+    return <OfficialSdkDialog key={requestId} sessionId={targetSessionId} requestId={requestId} dialog={input} isPending={isPending} markerWhenPending={markerWhenPending} />
+  }
 
   if (isExitPlanModeTool(toolName)) {
     return (

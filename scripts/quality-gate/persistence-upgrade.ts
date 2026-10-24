@@ -18,6 +18,10 @@ const checks: Check[] = [
     command: ['bun', 'test', './src/tools/WebSearchTool/deepseekSearch.test.ts'],
   },
   {
+    title: 'Official Agent SDK session runtime association and legacy transcript compatibility',
+    command: ['bun', 'test', './src/server/services/officialAgentSdkRuntime.test.ts'],
+  },
+  {
     title: 'Data directory relocation metadata and legacy attachment aliases',
     command: ['bun', 'test', './src/utils/storageMigrationMetadata.test.ts', './src/utils/storageRelocations.test.ts'],
   },
@@ -87,6 +91,11 @@ const checks: Check[] = [
   {
     title: 'Desktop localStorage migrations',
     command: ['bun', 'run', 'test', '--', '--run', 'src/lib/persistenceMigrations.test.ts'],
+    cwd: 'desktop',
+  },
+  {
+    title: 'Pending input recovery upgrades and lossless storage failure handling',
+    command: ['bun', 'run', 'test', '--', '--run', 'src/stores/pendingInputRecovery.test.ts'],
     cwd: 'desktop',
   },
 ]

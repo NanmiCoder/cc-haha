@@ -715,11 +715,14 @@ describe('release desktop workflow', () => {
     //
     // The sidecar is excluded for a different reason — see the dedicated test
     // below, which states the causal chain this literal list cannot express.
+    // The SDK's native executable retains its vendor signature; no other SDK
+    // or application executable is covered by that narrowly scoped exclusion.
     expect(desktopPackage.build.mac?.signIgnore).toEqual([
       '/Contents/Frameworks/.+\\.(?:pak|bin|dat|nib)$',
       '/Contents/Resources/.+\\.(?:asar|pak|bin|dat|icns|png|jpg|jpeg|gif|svg|ttf|woff|woff2)$',
       'cc-haha-computer-use\\.app',
       'claude-sidecar-[^/]+$',
+      '/official-agent-sdk/claude$',
     ])
   })
 
@@ -765,6 +768,23 @@ describe('release desktop workflow', () => {
     expect(
       readFileSync('native/cu-helper/Sources/cu-helper/ClientAttestation.swift', 'utf8'),
     ).toContain('sidecarIdentifier = "com.claude-code-haha.desktop.sidecar"')
+  })
+
+  test('macOS preserves the official SDK vendor binary without excluding unrelated executables', () => {
+    const desktopPackage = JSON.parse(readFileSync('desktop/package.json', 'utf8')) as {
+      build: { mac?: { signIgnore?: string[] } }
+    }
+    const patterns = (desktopPackage.build.mac?.signIgnore ?? []).map(pattern => new RegExp(pattern))
+    const binaries = '/Contents/Resources/app.asar.unpacked/src-tauri/binaries'
+    expect(patterns.some(pattern => pattern.test(`${binaries}/official-agent-sdk/claude`))).toBe(true)
+    for (const executable of [
+      '/Contents/MacOS/Claude Code Haha',
+      `${binaries}/official-agent-sdk/other-helper`,
+      `${binaries}/official-agent-sdk/claude-extra`,
+      `${binaries}/not-official-agent-sdk/claude`,
+    ]) {
+      expect(patterns.some(pattern => pattern.test(executable))).toBe(false)
+    }
   })
 
   test('Windows NSIS installer lets users choose the install directory', () => {

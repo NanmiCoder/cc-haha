@@ -3,6 +3,18 @@ import { describe, expect, it } from 'vitest'
 import { parseLauncherArgs, resolveSidecarInvocation } from './launcherRouting'
 
 describe('resolveSidecarInvocation', () => {
+  it('routes official SDK sessions without treating their flags as CLI mode', () => {
+    expect(resolveSidecarInvocation(
+      ['agent-sdk', '--app-root', '/tmp/app', '--sdk-url', 'ws://127.0.0.1/session'],
+      '/tmp/claude-sidecar',
+      null,
+    )).toEqual({
+      mode: 'agent-sdk',
+      restArgs: ['--app-root', '/tmp/app', '--sdk-url', 'ws://127.0.0.1/session'],
+      defaultAppRoot: null,
+    })
+  })
+
   it('keeps explicit sidecar modes unchanged', () => {
     expect(
       resolveSidecarInvocation(

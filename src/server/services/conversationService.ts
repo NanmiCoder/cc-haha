@@ -14,6 +14,17 @@ import * as os from 'node:os'
 import * as path from 'node:path'
 import { ProviderService } from './providerService.js'
 import { SettingsService } from './settingsService.js'
+import {
+  assertConversationRuntime,
+  buildOfficialAgentSdkEnvironment,
+  buildOfficialAgentSdkLaunchArgs,
+  markAgentSdkSession,
+  readConversationRuntime,
+  resolveOfficialAgentSdkModel,
+  type ConversationRuntime,
+} from './officialAgentSdkRuntime.js'
+import { prepareOfficialAgentSdkPlaceholder } from './officialAgentSdkPlaceholder.js'
+import type { OfficialAgentSdkLaunchOptions } from './officialAgentSdkConfiguration.js'
 import type { SessionRuntimeSelection } from '../../shared/sessionDelegation.js'
 import {
   OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
@@ -181,6 +192,9 @@ type SendMessageOptions = {
   canSend?: () => boolean
   messageUuid?: string
   onCommitted?: () => void
+  /** Set only at authenticated desktop user-message ingress, never for host automation. */
+  humanInput?: boolean
+  humanText?: string
 }
 
 type HandleSdkPayloadOptions = {
@@ -279,6 +293,7 @@ function networkRoutingFingerprint(
 }
 
 type SessionProcess = {
+  runtime?: ConversationRuntime
   runtimeSelection?: SessionRuntimeSelection
   proc: ReturnType<typeof Bun.spawn>
   outputCallbacks: SessionOutputCallback[]
@@ -375,7 +390,9 @@ export class ConversationStartupError extends Error {
       | 'CLI_SESSION_CONFLICT'
       | 'CLI_START_FAILED'
       | 'CLI_SPAWN_FAILED'
-      | 'SESSION_DELETED',
+      | 'SESSION_DELETED'
+      | 'RUNTIME_UNAVAILABLE'
+      | 'LEAN_CAPABILITY_UNAVAILABLE',
     readonly retryable = false,
   ) {
     super(message)
@@ -395,6 +412,7 @@ export type ConversationServiceProcessDeps = {
 
 export class ConversationService {
   private sessions = new Map<string, SessionProcess>()
+  private agentSdkStarts = new Map<string, Promise<void>>()
   private teamStopOperations = new Map<string, Promise<void>>()
   private teamRuntimeListeners = new Set<TeamRuntimeListener>()
   private deletedSessions = new Set<string>()
@@ -634,6 +652,55 @@ export class ConversationService {
     ])
   }
 
+  private buildSessionAgentSdkArgs(
+    sessionId: string,
+    sdkUrl: string,
+    resume: boolean,
+    options?: SessionStartOptions,
+    agentProfile: 'standard' | 'lean' = 'standard',
+  ): string[] {
+    const side = getSideChat(sessionId)
+    const worker = options?.teamWorker
+    const launchOptions: OfficialAgentSdkLaunchOptions = { agentProfile }
+    if (side) launchOptions.appendSystemPrompt = SIDE_CHAT_BOUNDARY
+    if (worker) {
+      const snapshot = worker.agentDefinition ?? {}
+      if (snapshot.hooks) launchOptions.agentHooks = snapshot.hooks as OfficialAgentSdkLaunchOptions['agentHooks']
+      const supported = ['disallowedTools', 'skills', 'maxTurns', 'memory', 'effort', 'permissionMode', 'omitClaudeMd', 'mcpServers']
+      const definition = Object.fromEntries(supported.filter(key => snapshot[key] !== undefined).map(key => [key, snapshot[key]]))
+      const teamTools = ['SendMessage', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate']
+      const workerTools = worker.tools && !worker.tools.includes('*')
+        // SDK aliases redirect calls after discovery; the real MCP target must
+        // also survive the selected agent's tool whitelist.
+        ? [...new Set([...worker.tools, ...teamTools, ...teamTools.map(name => `mcp__cc_haha__${name}`)])]
+        : undefined
+      launchOptions.agent = worker.name
+      launchOptions.agents = { [worker.name]: {
+        ...definition, description: 'Approved team member', prompt: worker.systemPrompt,
+        ...(options?.model ? { model: options.model } : {}),
+        ...(workerTools ? { tools: workerTools } : {}),
+      } }
+      if (Array.isArray(snapshot.disallowedTools)) launchOptions.disallowedTools = snapshot.disallowedTools as string[]
+      if (typeof snapshot.maxTurns === 'number') launchOptions.maxTurns = snapshot.maxTurns
+      if (workerTools) launchOptions.tools = workerTools
+    }
+    return buildOfficialAgentSdkLaunchArgs([
+      '--sdk-url', sdkUrl,
+      ...(side ? [
+        '--host-session-id', sessionId, '--session-id', side.cliSessionId,
+        '--resume', side.resumePath, '--resume-session-at', side.resumeAt, '--fork-session',
+      ] : [resume ? '--resume' : '--session-id', sessionId]),
+      '--launch-options', JSON.stringify(launchOptions),
+      '--allow-dangerously-skip-permissions',
+      '--permission-mode', options?.permissionMode ?? 'default',
+      ...(options?.permissionMode === 'bypassPermissions' ? ['--dangerously-skip-permissions'] : []),
+      ...(side || !sessionService.shouldPersistSession() ? ['--no-session-persistence'] : []),
+      ...(options?.model ? ['--model', options.model] : []),
+      ...(options?.effort ? ['--effort', options.effort] : []),
+      ...(options?.thinking ? ['--thinking', options.thinking] : []),
+    ], { appRoot: process.env.CLAUDE_APP_ROOT })
+  }
+
   async startSession(
     sessionId: string,
     workDir: string,
@@ -647,6 +714,8 @@ export class ConversationService {
         'SESSION_DELETED',
       )
     }
+    const pendingSdkStart = this.agentSdkStarts.get(sessionId)
+    if (pendingSdkStart) return pendingSdkStart
     if (this.sessions.has(sessionId)) return
 
     const side = getSideChat(sessionId)
@@ -663,6 +732,37 @@ export class ConversationService {
     const shouldResume = options?.teamWorker
       ? options.teamWorker.resume === true && !!await sessionService.findSessionFile(sessionId)
       : !!launchInfo && launchInfo.transcriptMessageCount > 0
+    // Pin the engine to the session. Editing a provider must never reinterpret
+    // an existing transcript, or launch an unsupported extension through CLI.
+    if (options?.providerId === undefined) {
+      const { activeId, providers } = await this.providerService.listProviders()
+      if (providers.find(provider => provider.id === activeId)?.runtime === 'agent-sdk') {
+        options = { ...options, providerId: activeId }
+      }
+    }
+    const selectedProvider = typeof options?.providerId === 'string'
+      ? await this.providerService.getProvider(options.providerId) : null
+    const runtime: ConversationRuntime = selectedProvider?.runtime === 'agent-sdk' ? 'agent-sdk' : 'claude-code'
+    const configDir = getClaudeConfigHomeDir()
+    try {
+      assertConversationRuntime({
+        requested: runtime,
+        recorded: readConversationRuntime(configDir, sessionId),
+        hasMessages: shouldResume,
+        sideChat: !!side,
+        teamWorker: !!options?.teamWorker,
+        lean: launchInfo?.agentProfile === 'lean',
+      })
+      if (side && readConversationRuntime(configDir, side.parentSessionId) !== runtime) {
+        throw new Error('A side chat must use the same conversation runtime as its parent.')
+      }
+      if (runtime === 'agent-sdk') buildOfficialAgentSdkEnvironment({}, selectedProvider!, configDir)
+    } catch (error) {
+      throw new ConversationStartupError(error instanceof Error ? error.message : String(error), 'RUNTIME_UNAVAILABLE')
+    }
+    if (runtime === 'agent-sdk') {
+      options = { ...options, model: resolveOfficialAgentSdkModel(selectedProvider!, options?.model) }
+    }
     const shouldReplacePlaceholder =
       !side && !!launchInfo && launchInfo.transcriptMessageCount === 0
     const shouldCreateWorktree =
@@ -684,7 +784,7 @@ export class ConversationService {
       )
     }
 
-    if (shouldReplacePlaceholder) {
+    if (shouldReplacePlaceholder && runtime !== 'agent-sdk') {
       // A collaboration session is named before its first turn starts. Replacing
       // that empty launch placeholder must not erase the only title copy before
       // the CLI creates the real worktree transcript. User-initiated /clear does
@@ -710,7 +810,14 @@ export class ConversationService {
 
     let launchWorkDir = workDir
     let launchRepository = launchInfo?.repository
-    if (shouldCreateWorktree && launchRepository?.worktree) {
+    if (runtime === 'agent-sdk' && shouldCreateWorktree && launchRepository?.worktree) {
+      const preparedWorkspace = await prepareSessionWorkspace(workDir, {
+        branch: launchRepository.branch,
+        worktree: true,
+      }, sessionId)
+      launchWorkDir = preparedWorkspace.workDir
+      launchRepository = preparedWorkspace.repository
+    } else if (shouldCreateWorktree && launchRepository?.worktree) {
       launchWorkDir = launchRepository.requestedWorkDir || launchRepository.repoRoot || workDir
     } else if (!shouldResume && launchRepository && !hasMaterializedWorktree) {
       const preparedWorkspace = await prepareSessionWorkspace(
@@ -739,7 +846,9 @@ export class ConversationService {
       )
     }
 
-    const args = this.buildSessionCliArgs(
+    const args = runtime === 'agent-sdk'
+      ? this.buildSessionAgentSdkArgs(sessionId, sdkUrl, shouldResume, options, launchInfo?.agentProfile ?? 'standard')
+      : this.buildSessionCliArgs(
       sessionId,
       sdkUrl,
       shouldResume,
@@ -767,6 +876,7 @@ export class ConversationService {
       firstTokenTimeoutDerived: false,
       streamMaxDurationDerived: false,
       toolInputDurationDerived: false,
+      routingFingerprint: '',
     }
     const providerCapture: { fingerprint?: string } = {}
     const childEnv = await this.buildChildEnv(
@@ -777,7 +887,11 @@ export class ConversationService {
       networkRuntimeMetadata,
       providerCapture,
     )
-    if (options?.teamWorker) {
+    if (providerCapture.fingerprint &&
+      (JSON.parse(providerCapture.fingerprint).runtime === 'agent-sdk') !== (runtime === 'agent-sdk')) {
+      throw new ConversationStartupError('Provider runtime changed during startup. Please retry.', 'RUNTIME_UNAVAILABLE')
+    }
+    if (options?.teamWorker && runtime !== 'agent-sdk') {
       delete childEnv.CLAUDE_CODE_SUBAGENT_MODEL
       delete childEnv.CLAUDE_CODE_EFFORT_LEVEL
       delete childEnv.CLAUDE_CODE_RESUME_INTERRUPTED_TURN
@@ -802,193 +916,251 @@ export class ConversationService {
         'SESSION_DELETED',
       )
     }
-    const usesOfficialOAuth = this.shouldMarkManagedOAuth(options?.providerId)
+    const usesOfficialOAuth = runtime !== 'agent-sdk' && this.shouldMarkManagedOAuth(options?.providerId)
 
-    let proc: ReturnType<typeof Bun.spawn>
-    migrationMaintenance.assertAvailable()
-    // Another start registered a CLI for this session while this one was
-    // awaiting. Overwriting the entry would leave that process running with
-    // no owner, so retire it the way a runtime restart does (approved team
-    // members keep running) and continue with this newer start.
-    const registered = this.sessions.get(sessionId)
-    if (registered) {
-      console.warn(
-        `[ConversationService] Replacing CLI pid ${registered.proc.pid} for ${sessionId}: a newer start reached spawn`,
-      )
-      this.stopSession(sessionId, { keepTeamWorkers: true })
+    let resolveSdkStart: (() => void) | undefined
+    let rejectSdkStart: ((error: unknown) => void) | undefined
+    let sdkStart: Promise<void> | undefined
+    if (runtime === 'agent-sdk') {
+      const pending = this.agentSdkStarts.get(sessionId)
+      if (pending) return pending
+      if (this.sessions.has(sessionId)) return
+      sdkStart = new Promise<void>((resolve, reject) => {
+        resolveSdkStart = resolve
+        rejectSdkStart = reject
+      })
+      void sdkStart.catch(() => undefined)
+      this.agentSdkStarts.set(sessionId, sdkStart)
     }
     try {
-      proc = Bun.spawn(args, buildConversationCliSpawnOptions(launchWorkDir, childEnv))
-      if (side) side.started = true
-    } catch (spawnErr) {
-      void diagnosticsService.recordEvent({
-        type: 'cli_spawn_failed',
-        severity: 'error',
-        sessionId,
-        summary: spawnErr instanceof Error ? spawnErr.message : String(spawnErr),
-        details: {
-          workDir,
-          permissionMode: options?.permissionMode || 'default',
-          providerId: options?.providerId ?? null,
-          model: options?.model ?? null,
-          error: spawnErr,
-        },
-      })
-      throw new ConversationStartupError(
-        `Failed to spawn CLI in ${launchWorkDir}: ${
-          spawnErr instanceof Error ? spawnErr.message : String(spawnErr)
-        }`,
-        'CLI_SPAWN_FAILED',
-      )
-    }
-
-    let resolveSdkAttached: (() => void) | null = null
-    const sdkAttached = new Promise<void>((resolve) => {
-      resolveSdkAttached = resolve
-    })
-    const session: SessionProcess = {
-      proc,
-      teamWorker: options?.teamWorker,
-      outputCallbacks: [],
-      workDir: launchWorkDir,
-      permissionMode: options?.permissionMode || 'default',
-      providerId: options?.providerId,
-      runtimeSelection: options?.model ? {
-        providerId: options.providerId ?? null, modelId: options.model,
-        ...(options.effort ? { effortLevel: options.effort } : {}),
-        ...(options.openAIFastMode !== undefined ? { openAIFastMode: options.openAIFastMode } : {}),
-      } : undefined,
-      providerConfigFingerprint: providerCapture.fingerprint,
-      ...(typeof options?.providerId === 'string' && {
-        providerAuth: {
-          baseUrl: childEnv.ANTHROPIC_BASE_URL ?? '',
-          apiKey: childEnv.ANTHROPIC_API_KEY ?? '',
-          authToken: childEnv.ANTHROPIC_AUTH_TOKEN ?? '',
-        },
-      }),
-      networkRoutingFingerprint: networkRoutingFingerprint(networkSettings, childEnv),
-      networkDerivedFirstTokenTimeout: networkRuntimeMetadata.firstTokenTimeoutDerived,
-      networkDerivedStreamMaxDuration: networkRuntimeMetadata.streamMaxDurationDerived,
-      networkDerivedToolInputDuration: networkRuntimeMetadata.toolInputDurationDerived,
-      sdkToken: this.getSdkTokenFromUrl(sdkUrl),
-      sdkSocket: null,
-      seenSdkMessageUuids: new Set<string>(),
-      sdkAttached,
-      resolveSdkAttached,
-      pendingOutbound: [],
-      startupPending: true,
-      startupExitCode: null,
-      stdoutLines: [],
-      stderrLines: [],
-      outputDrain: Promise.resolve(),
-      sdkMessages: [],
-      sdkMessageBytes: 0,
-      initMessage: null,
-      usesOfficialOAuth,
-      officialOAuthToken: childEnv.CLAUDE_CODE_OAUTH_TOKEN ?? null,
-      pendingPermissionRequests: new Map(),
-      autoResolvedRequestIds: new Set(),
-      pendingControlRequests: new Map(),
-    }
-    this.sessions.set(sessionId, session)
-
-    session.outputDrain = Promise.all([
-      this.readProcessOutputStream(sessionId, proc.stdout, 'stdout'),
-      this.readProcessOutputStream(sessionId, proc.stderr, 'stderr'),
-    ]).then(() => undefined)
-
-    proc.exited.then((code) => {
-      void this.handleProcessExit(sessionId, proc, code)
-    })
-
-    const STARTUP_GRACE_MS = 3000
-    let startupGraceTimer: ReturnType<typeof setTimeout> | undefined
-    const earlyExitCode = await Promise.race([
-      proc.exited,
-      session.sdkAttached.then(() => null),
-      new Promise<null>((resolve) =>
-        startupGraceTimer = setTimeout(() => resolve(null), STARTUP_GRACE_MS),
-      ),
-    ])
-    if (startupGraceTimer) clearTimeout(startupGraceTimer)
-
-    const currentSession = this.sessions.get(sessionId)
-    if (currentSession && currentSession !== session) {
-      // A newer start retired this process while it was still starting and
-      // now owns the session. Its exit is not a startup failure: tearing down,
-      // retrying or writing metadata here would act on the newer CLI.
-      console.log(`[ConversationService] CLI startup for ${sessionId} was superseded by a newer start`)
-      return
-    }
-
-    const startupExitCode = earlyExitCode ?? session.startupExitCode
-    if (startupExitCode !== null) {
-      await this.waitForProcessOutputDrain(session)
-      const startupError = this.buildStartupError(sessionId, startupExitCode)
-      this.clearSessionAutoAnswerWaits(session)
-      this.sessions.delete(sessionId)
-
-      if (this.clearStaleLock(sessionId)) {
-        console.log(
-          `[ConversationService] Removed stale lock for ${sessionId}, retrying...`,
+      let proc: ReturnType<typeof Bun.spawn>
+      migrationMaintenance.assertAvailable()
+      // Another start registered a CLI for this session while this one was
+      // awaiting. Overwriting the entry would leave that process running with
+      // no owner, so retire it the way a runtime restart does (approved team
+      // members keep running) and continue with this newer start.
+      const registered = this.sessions.get(sessionId)
+      if (registered) {
+        console.warn(
+          `[ConversationService] Replacing CLI pid ${registered.proc.pid} for ${sessionId}: a newer start reached spawn`,
         )
-        return this.startSession(sessionId, workDir, sdkUrl, options)
+        this.stopSession(sessionId, { keepTeamWorkers: true })
       }
-
-      console.error(
-        `[ConversationService] CLI exited with code ${startupExitCode} for ${sessionId}: ${startupError.message}`,
-      )
-      void diagnosticsService.recordEvent({
-        type: 'cli_start_failed',
-        severity: 'error',
-        sessionId,
-        summary: startupError.message,
-        details: {
-          code: startupError.code,
-          exitCode: startupExitCode,
-          retryable: startupError.retryable,
-          workDir: launchWorkDir,
-          permissionMode: options?.permissionMode || 'default',
-          providerId: options?.providerId ?? null,
-          model: options?.model ?? null,
-          capturedOutput: this.buildCapturedProcessOutputDetail(session),
-          sdkMessages: this.summarizeSdkMessages(session.sdkMessages),
-        },
-      })
-      throw startupError
-    }
-
-    session.startupPending = false
-
-    const shouldPersistRuntimeMetadata =
-      options?.providerId !== undefined ||
-      !!options?.model ||
-      !!options?.effort
-    if (!options?.teamWorker && (shouldReplacePlaceholder || !launchInfo || shouldPersistRuntimeMetadata)) {
-      // system/init can move a newly-created session into its worktree while
-      // startup is still awaiting the SDK. Once that authoritative cwd is
-      // known, never recreate a late metadata placeholder in launchWorkDir.
-      const metadataWorkDir = this.getSessionWorkDir(sessionId) || launchWorkDir
-      await sessionService.appendSessionMetadata(sessionId, {
-        workDir: metadataWorkDir,
-        customTitle: launchInfo?.customTitle ?? null,
-        repository: launchRepository,
-        permissionMode: options?.permissionMode || launchInfo?.permissionMode,
-        ...(options?.providerId !== undefined
-          ? { runtimeProviderId: options.providerId }
-          : {}),
-        ...(options?.model ? { runtimeModelId: options.model } : {}),
-        ...(options?.effort ? { effortLevel: options.effort } : {}),
-      })
-    }
-
-    console.log(`[ConversationService] CLI started successfully for ${sessionId}`)
-    for (const listener of this.teamRuntimeListeners) {
+      let restoreSdkPlaceholder = async (): Promise<void> => {}
       try {
-        listener.sessionStarted?.(sessionId, { isTeamWorker: Boolean(options?.teamWorker) })
-      } catch (error) {
-        console.error('[ConversationService] Team runtime start hook failed', error)
+        // Persist before spawning: an abrupt shutdown must not lose the engine
+        // association while the SDK has already written its transcript.
+        if (runtime === 'agent-sdk' && !side) {
+          markAgentSdkSession(configDir, sessionId)
+          if (!shouldResume && sessionService.shouldPersistSession()) {
+            restoreSdkPlaceholder = await prepareOfficialAgentSdkPlaceholder({
+              configDir, sessionId, workDir: launchWorkDir, filePath: launchInfo?.filePath,
+            })
+          }
+        }
+        if (this.deletedSessions.has(sessionId)) {
+          throw new ConversationStartupError(`Session was deleted before startup completed: ${sessionId}`, 'SESSION_DELETED')
+        }
+        proc = Bun.spawn(args, buildConversationCliSpawnOptions(launchWorkDir, childEnv))
+        if (side) side.started = true
+      } catch (spawnErr) {
+        await restoreSdkPlaceholder()
+        void diagnosticsService.recordEvent({
+          type: 'cli_spawn_failed',
+          severity: 'error',
+          sessionId,
+          summary: spawnErr instanceof Error ? spawnErr.message : String(spawnErr),
+          details: {
+            workDir,
+            permissionMode: options?.permissionMode || 'default',
+            providerId: options?.providerId ?? null,
+            model: options?.model ?? null,
+            error: spawnErr,
+          },
+        })
+        throw new ConversationStartupError(
+          `Failed to spawn CLI in ${launchWorkDir}: ${
+            spawnErr instanceof Error ? spawnErr.message : String(spawnErr)
+          }`,
+          'CLI_SPAWN_FAILED',
+        )
       }
+
+      let resolveSdkAttached: (() => void) | null = null
+      const sdkAttached = new Promise<void>((resolve) => {
+        resolveSdkAttached = resolve
+      })
+      const session: SessionProcess = {
+        runtime,
+        proc,
+        teamWorker: options?.teamWorker,
+        outputCallbacks: [],
+        workDir: launchWorkDir,
+        permissionMode: options?.permissionMode || 'default',
+        providerId: options?.providerId,
+        runtimeSelection: options?.model ? {
+          providerId: options.providerId ?? null, modelId: options.model,
+          ...(options.effort ? { effortLevel: options.effort } : {}),
+          ...(options.openAIFastMode !== undefined ? { openAIFastMode: options.openAIFastMode } : {}),
+        } : undefined,
+        providerConfigFingerprint: providerCapture.fingerprint,
+        ...(typeof options?.providerId === 'string' && {
+          providerAuth: {
+            baseUrl: childEnv.ANTHROPIC_BASE_URL ?? '',
+            apiKey: childEnv.ANTHROPIC_API_KEY ?? '',
+            authToken: childEnv.ANTHROPIC_AUTH_TOKEN ?? '',
+          },
+        }),
+        networkRoutingFingerprint: networkRuntimeMetadata.routingFingerprint || networkRoutingFingerprint(networkSettings, childEnv),
+        networkDerivedFirstTokenTimeout: networkRuntimeMetadata.firstTokenTimeoutDerived,
+        networkDerivedStreamMaxDuration: networkRuntimeMetadata.streamMaxDurationDerived,
+        networkDerivedToolInputDuration: networkRuntimeMetadata.toolInputDurationDerived,
+        sdkToken: this.getSdkTokenFromUrl(sdkUrl),
+        sdkSocket: null,
+        seenSdkMessageUuids: new Set<string>(),
+        sdkAttached,
+        resolveSdkAttached,
+        pendingOutbound: [],
+        startupPending: true,
+        startupExitCode: null,
+        stdoutLines: [],
+        stderrLines: [],
+        outputDrain: Promise.resolve(),
+        sdkMessages: [],
+        sdkMessageBytes: 0,
+        initMessage: null,
+        usesOfficialOAuth,
+        officialOAuthToken: childEnv.CLAUDE_CODE_OAUTH_TOKEN ?? null,
+        pendingPermissionRequests: new Map(),
+        autoResolvedRequestIds: new Set(),
+        pendingControlRequests: new Map(),
+      }
+      this.sessions.set(sessionId, session)
+
+      session.outputDrain = Promise.all([
+        this.readProcessOutputStream(sessionId, proc.stdout, 'stdout'),
+        this.readProcessOutputStream(sessionId, proc.stderr, 'stderr'),
+      ]).then(() => undefined)
+
+      proc.exited.then((code) => {
+        void this.handleProcessExit(sessionId, proc, code)
+      })
+
+      const STARTUP_GRACE_MS = runtime === 'agent-sdk' ? 30_000 : 3000
+      let startupGraceTimer: ReturnType<typeof setTimeout> | undefined
+      let earlyExitCode: number | null
+      try {
+        earlyExitCode = await Promise.race([
+          proc.exited,
+          session.sdkAttached.then(() => null),
+          new Promise<null>((resolve) =>
+            startupGraceTimer = setTimeout(() => resolve(null), STARTUP_GRACE_MS),
+          ),
+        ])
+        // The SDK bridge connects only after native initialization. Restoring a
+        // placeholder (or sending the first turn) before then races its strict
+        // session-ID existence check. A slow startup is not a successful start.
+        if (runtime === 'agent-sdk' && earlyExitCode === null && !session.sdkSocket) {
+          await this.stopSessionAndWait(sessionId, 5_000)
+          throw new ConversationStartupError('Official Agent SDK initialization timed out. Please retry.', 'CLI_START_FAILED', true)
+        }
+      } finally {
+        if (startupGraceTimer) clearTimeout(startupGraceTimer)
+        try {
+          await restoreSdkPlaceholder()
+        } catch (error) {
+          // A failed metadata handoff must not leave an initialized SDK orphaned.
+          // Retire only this process, never a newer owner of the same session ID.
+          await this.stopProcessAndWait(sessionId, session, 5_000)
+          if (this.sessions.get(sessionId) === session) this.sessions.delete(sessionId)
+          throw error
+        }
+      }
+
+      const currentSession = this.sessions.get(sessionId)
+      if (currentSession && currentSession !== session) {
+        // A newer start retired this process while it was still starting and
+        // now owns the session. Its exit is not a startup failure: tearing down,
+        // retrying or writing metadata here would act on the newer CLI.
+        console.log(`[ConversationService] CLI startup for ${sessionId} was superseded by a newer start`)
+        return
+      }
+
+      const startupExitCode = earlyExitCode ?? session.startupExitCode
+      if (startupExitCode !== null) {
+        await this.waitForProcessOutputDrain(session)
+        const startupError = this.buildStartupError(sessionId, startupExitCode)
+        this.clearSessionAutoAnswerWaits(session)
+        this.sessions.delete(sessionId)
+
+        if (runtime !== 'agent-sdk' && this.clearStaleLock(sessionId)) {
+          console.log(
+            `[ConversationService] Removed stale lock for ${sessionId}, retrying...`,
+          )
+          return this.startSession(sessionId, workDir, sdkUrl, options)
+        }
+
+        console.error(
+          `[ConversationService] CLI exited with code ${startupExitCode} for ${sessionId}: ${startupError.message}`,
+        )
+        void diagnosticsService.recordEvent({
+          type: 'cli_start_failed',
+          severity: 'error',
+          sessionId,
+          summary: startupError.message,
+          details: {
+            code: startupError.code,
+            exitCode: startupExitCode,
+            retryable: startupError.retryable,
+            workDir: launchWorkDir,
+            permissionMode: options?.permissionMode || 'default',
+            providerId: options?.providerId ?? null,
+            model: options?.model ?? null,
+            capturedOutput: this.buildCapturedProcessOutputDetail(session),
+            sdkMessages: this.summarizeSdkMessages(session.sdkMessages),
+          },
+        })
+        throw startupError
+      }
+
+      session.startupPending = false
+
+      const shouldPersistRuntimeMetadata =
+        options?.providerId !== undefined ||
+        !!options?.model ||
+        !!options?.effort
+      if (!options?.teamWorker && (shouldReplacePlaceholder || !launchInfo || shouldPersistRuntimeMetadata)) {
+        // system/init can move a newly-created session into its worktree while
+        // startup is still awaiting the SDK. Once that authoritative cwd is
+        // known, never recreate a late metadata placeholder in launchWorkDir.
+        const metadataWorkDir = this.getSessionWorkDir(sessionId) || launchWorkDir
+        await sessionService.appendSessionMetadata(sessionId, {
+          workDir: metadataWorkDir,
+          customTitle: launchInfo?.customTitle ?? null,
+          repository: launchRepository,
+          permissionMode: options?.permissionMode || launchInfo?.permissionMode,
+          ...(options?.providerId !== undefined
+            ? { runtimeProviderId: options.providerId }
+            : {}),
+          ...(options?.model ? { runtimeModelId: options.model } : {}),
+          ...(options?.effort ? { effortLevel: options.effort } : {}),
+        })
+      }
+
+      console.log(`[ConversationService] CLI started successfully for ${sessionId}`)
+      for (const listener of this.teamRuntimeListeners) {
+        try {
+          listener.sessionStarted?.(sessionId, { isTeamWorker: Boolean(options?.teamWorker) })
+        } catch (error) {
+          console.error('[ConversationService] Team runtime start hook failed', error)
+        }
+      }
+    } catch (error) {
+      rejectSdkStart?.(error)
+      throw error
+    } finally {
+      resolveSdkStart?.()
+      if (sdkStart && this.agentSdkStarts.get(sessionId) === sdkStart) this.agentSdkStarts.delete(sessionId)
     }
   }
 
@@ -1052,6 +1224,10 @@ export class ConversationService {
     if (migrationMaintenance.isActive || (options?.canSend && !options.canSend())) return false
     const sent = this.sendSdkMessage(sessionId, {
       type: 'user',
+      ...(session?.runtime === 'agent-sdk' ? {
+        cc_haha_human_input: options?.humanInput === true,
+        ...(options?.humanInput === true ? { cc_haha_human_text: options.humanText ?? content } : {}),
+      } : {}),
       ...(options?.messageUuid ? { uuid: options.messageUuid } : {}),
       message: {
         role: 'user',
@@ -1071,7 +1247,13 @@ export class ConversationService {
     if (!session.providerId || !session.providerAuth) return true
     let env: Record<string, string>
     try {
-      env = await this.providerService.getProviderRuntimeEnv(session.providerId)
+      if (session.runtime === 'agent-sdk') {
+        const provider = await this.providerService.getProvider(session.providerId)
+        if (provider.runtime !== 'agent-sdk') return this.sessions.get(sessionId) === session
+        env = buildOfficialAgentSdkEnvironment({}, provider, getClaudeConfigHomeDir())
+      } else {
+        env = await this.providerService.getProviderRuntimeEnv(session.providerId)
+      }
     } catch {
       // A removed provider must not silently switch this session to another one.
       return this.sessions.get(sessionId) === session
@@ -1082,6 +1264,14 @@ export class ConversationService {
     const apiKey = env.ANTHROPIC_API_KEY ?? ''
     const authToken = env.ANTHROPIC_AUTH_TOKEN ?? ''
     if (apiKey === session.providerAuth.apiKey && authToken === session.providerAuth.authToken) return true
+    if (session.runtime === 'agent-sdk') {
+      // The official SDK cannot consume legacy environment frames. Its native
+      // settings acknowledgement must precede the prompt and auth snapshot.
+      await this.requestControl(sessionId, { subtype: 'update_provider_credentials', apiKey }, 10_000)
+      if (this.sessions.get(sessionId) !== session) return false
+      session.providerAuth = { ...session.providerAuth, apiKey, authToken }
+      return true
+    }
     const sent = this.sendSdkMessage(sessionId, {
       type: 'update_environment_variables',
       variables: { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: authToken },
@@ -1133,6 +1323,17 @@ export class ConversationService {
       )
     }
 
+    if (session.runtime === 'agent-sdk') {
+      // The native SDK applies flag settings and rebuilds its API transport.
+      // Wait for its acknowledgement before sending the next user turn; a
+      // rejected update must not send a prompt through the previous route.
+      await this.requestControl(sessionId, {
+        subtype: 'update_network_environment', variables,
+      }, 10_000)
+      if (this.sessions.get(sessionId) !== session) return false
+      session.networkRoutingFingerprint = fingerprint
+      return true
+    }
     const sent = this.sendSdkMessage(sessionId, {
       type: 'update_environment_variables',
       variables,
@@ -2188,6 +2389,7 @@ export class ConversationService {
       firstTokenTimeoutDerived: boolean
       streamMaxDurationDerived: boolean
       toolInputDurationDerived: boolean
+      routingFingerprint?: string
     },
     providerCapture?: { fingerprint?: string },
   ): Promise<Record<string, string>> {
@@ -2276,6 +2478,36 @@ export class ConversationService {
         : null
     if (explicitProvider && providerCapture) {
       providerCapture.fingerprint = JSON.stringify(explicitProvider)
+    }
+    if (explicitProvider?.runtime === 'agent-sdk') {
+      const settings = networkSettingsOverride ?? await loadNetworkSettings()
+      const networkEnv = buildNetworkEnvironment(settings, cleanEnv)
+      if (networkRuntimeMetadata) {
+        networkRuntimeMetadata.routingFingerprint = networkRoutingFingerprint(settings, { ...cleanEnv, ...networkEnv })
+      }
+      const env = buildOfficialAgentSdkEnvironment({ ...cleanEnv, ...networkEnv }, explicitProvider, getClaudeConfigHomeDir())
+      env.PWD = workDir
+      env.CALLER_DIR = workDir
+      if (options?.model?.trim()) env.ANTHROPIC_MODEL = options.model.trim()
+      env.CC_HAHA_DESKTOP_PROVIDER_ID = explicitProvider.id
+      if (options?.effort) env.CC_HAHA_DESKTOP_EFFORT_LEVEL = options.effort
+      env.CC_HAHA_AGENT_TEAMS_ENABLED = await new SettingsService().getAgentTeamsEnabled() ? '1' : '0'
+      env.CC_HAHA_TEAM_REVIEW_REQUIRED = '1'
+      env.CC_HAHA_TEAM_LEADER_RUNTIME = JSON.stringify({
+        providerId: explicitProvider.id, modelId: env.ANTHROPIC_MODEL,
+        ...(options?.effort ? { effortLevel: options.effort } : {}),
+      })
+      env.CC_HAHA_COMPUTER_USE_HOST_BUNDLE_ID = 'com.claude-code-haha.desktop'
+      if (cleanEnv.CLAUDE_COMPUTER_USE_ENABLED !== undefined) env.CLAUDE_COMPUTER_USE_ENABLED = cleanEnv.CLAUDE_COMPUTER_USE_ENABLED
+      if (cleanEnv.CC_HAHA_CU_HELPER_PATH) env.CC_HAHA_CU_HELPER_PATH = cleanEnv.CC_HAHA_CU_HELPER_PATH
+      if (options?.teamWorker) env.CC_HAHA_TEAM_WORKER = JSON.stringify(options.teamWorker)
+      if (desktopServerUrl && sdkUrl) {
+        const url = new URL(sdkUrl)
+        env.CC_HAHA_DESKTOP_SERVER_URL = desktopServerUrl
+        env.CC_HAHA_SESSION_COLLABORATION_TOKEN = url.searchParams.get('token') ?? ''
+        env.CC_HAHA_SESSION_ID = url.pathname.split('/').pop() ?? ''
+      }
+      return env
     }
     const explicitProviderEnv = explicitProvider
       ? await this.providerService.getProviderRuntimeEnv(explicitProvider.id)

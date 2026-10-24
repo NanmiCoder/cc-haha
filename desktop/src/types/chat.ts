@@ -87,7 +87,8 @@ export type UIAttachment = {
 
 // ─── Server → Client ──────────────────────────────────────────────
 
-export type ServerMessage =
+export type ServerMessage = ServerMessageContent & { nativeMessageIds?: string[] }
+type ServerMessageContent =
   | { type: 'connected'; sessionId: string }
   | {
       type: 'session_state'
@@ -318,6 +319,19 @@ export type BackgroundAgentTaskUsage = {
 }
 
 export type BackgroundAgentTask = {
+  nativeTask?: boolean
+  runId?: string
+  nativeStatus?: 'pending' | 'running' | 'completed' | 'failed' | 'killed' | 'paused' | 'stopped'
+  isBackgrounded?: boolean
+  ambient?: boolean
+  skipTranscript?: boolean
+  parentTaskId?: string
+  subagentType?: string
+  spawnDepth?: number
+  endedAt?: number
+  totalPausedMs?: number
+  error?: string
+  completionInferred?: boolean
   taskId: string
   toolUseId?: string
   status: 'running' | 'completed' | 'failed' | 'stopped'
@@ -363,7 +377,12 @@ export type TaskSummaryItem = {
   activeForm?: string
 }
 
-export type UIMessage =
+export type UIMessage = UIMessageContent & {
+  nativeMessageIds?: string[]
+  /** Renderer-only rows that an empty/stale transcript cannot delete. */
+  localHistoryRecovery?: 'input' | 'error'
+}
+type UIMessageContent =
   /**
    * `teammateFrom` marks a turn that arrived from another agent rather than
    * from the person at the keyboard. Without it a teammate's instruction and

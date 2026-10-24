@@ -129,6 +129,8 @@ import { installFakeBrowserGuests, isBrowserPageShown } from '../test/fakeBrowse
 import { createDefaultSessionState, useChatStore } from '../stores/chatStore'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { useSessionStore } from '../stores/sessionStore'
+import { PENDING_INPUT_RECOVERY_KEY, savePendingInputError, savePendingInputRecovery } from '../stores/pendingInputRecovery'
+import { sessionsApi } from '../api/sessions'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useTabStore } from '../stores/tabStore'
 import { useTeamStore } from '../stores/teamStore'
@@ -145,6 +147,7 @@ import {
 } from '../stores/workspaceStore'
 
 beforeEach(() => {
+  localStorage.removeItem(PENDING_INPUT_RECOVERY_KEY)
   vi.mocked(openSideChat).mockClear()
   sessionApiMocks.getGitInfo.mockReset()
   sessionApiMocks.getGitInfo.mockResolvedValue({
@@ -585,6 +588,38 @@ describe('ActiveSession task polling', () => {
 
     expect(screen.getByTestId('message-list')).toBeInTheDocument()
     expect(screen.getByTestId('chat-input')).toHaveAttribute('data-variant', 'default')
+  })
+
+  it('shows restored failed first input instead of the empty hero when server message count is zero', async () => {
+    const sessionId = 'failed-first-input-reload'
+    useTabStore.setState({
+      activeTabId: sessionId,
+      tabs: [{ sessionId, type: 'session', title: 'My failed prompt', status: 'idle' }],
+    })
+    useSessionStore.setState({ sessions: [{
+      id: sessionId, title: 'My failed prompt', messageCount: 0,
+      createdAt: '', modifiedAt: '', projectPath: '/fixture', workDir: '/fixture', workDirExists: true,
+    }] })
+    useChatStore.setState({ sessions: { [sessionId]: {
+      ...createDefaultSessionState(), connectionState: 'connected',
+      historyHydrated: true, historyStatus: 'ready', messages: [],
+    } } })
+    savePendingInputRecovery(sessionId, {
+      id: 'failed-human', type: 'user_text', content: 'A long recovered first prompt\nSecond paragraph', timestamp: 1,
+    })
+    savePendingInputError(sessionId, {
+      id: 'failed-error', code: 'CLI_ERROR', message: 'Process exited before transcript creation', timestamp: 2,
+    }, 'failed-human')
+    const history = vi.spyOn(sessionsApi, 'getFullHistory').mockResolvedValue({ messages: [] })
+    try {
+      await act(async () => { render(<ActiveSession sessionId={sessionId} />) })
+      expect(screen.queryByTestId('empty-session-hero')).not.toBeInTheDocument()
+      expect(screen.getByTestId('message-list')).toBeInTheDocument()
+      expect(useChatStore.getState().sessions[sessionId]?.messages).toMatchObject([
+        { type: 'user_text', content: 'A long recovered first prompt\nSecond paragraph' },
+        { type: 'error', message: 'Process exited before transcript creation' },
+      ])
+    } finally { history.mockRestore() }
   })
 
   it('replaces the empty hero with the transcript as soon as first-turn preparation begins', () => {

@@ -28,6 +28,7 @@ import { teamsApi } from '../../api/teams'
 import { resetAgentRunActivityCache } from './useAgentRunActivity'
 import { resetWorkspaceFileStatsForTests } from '../../lib/workspaceFileStats'
 import { useChatStore } from '../../stores/chatStore'
+import { readPendingInputRecovery } from '@/stores/pendingInputRecovery'
 import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspaceStore } from '../../stores/workspaceStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -38,6 +39,8 @@ import {
   useSelectionMenuPlacementStore,
 } from '../../stores/selectionMenuPlacementStore'
 import { useSessionStore } from '../../stores/sessionStore'
+import { useProviderStore } from '@/stores/providerStore'
+import type { SavedProvider } from '@/types/provider'
 import { useSideChatStore } from '../../stores/sideChatStore'
 import { useTabStore } from '../../stores/tabStore'
 import { useTrajectoryViewStore } from '../../stores/trajectoryViewStore'
@@ -6473,6 +6476,34 @@ describe('MessageList nested tool calls', () => {
     })
   })
 
+  it('copies a completed legacy reply through the explicit SDK dialog and opens the new conversation', async () => {
+    const previousProviders = useProviderStore.getState()
+    const branchSession = vi.fn().mockResolvedValue({ sessionId: 'sdk-imported', title: 'Source (Agent SDK)', workDir: '/tmp/fixture' })
+    const connectToSession = vi.fn()
+    useProviderStore.setState({ activeId: 'sdk-provider', providers: [{ id: 'sdk-provider', name: 'Official API', runtime: 'agent-sdk', models: { main: 'claude-opus-5-5', haiku: 'claude-haiku-5-5' } } as SavedProvider] })
+    useSessionStore.setState({ branchSession: branchSession as never })
+    useChatStore.setState({ connectToSession: connectToSession as never, sessions: {
+      [ACTIVE_TAB]: makeSessionState({ messages: [
+        { id: 'legacy-u', transcriptMessageId: 'legacy-user', type: 'user_text', content: 'Old question', timestamp: 1 },
+        { id: 'legacy-a', transcriptMessageId: 'legacy-assistant', type: 'assistant_text', content: 'Old answer', timestamp: 2 },
+      ] }),
+    } })
+    try {
+      render(<MessageList />)
+      fireEvent.click(screen.getAllByRole('button', { name: 'Copy to Agent SDK' })[1]!)
+      expect(branchSession).not.toHaveBeenCalled()
+      fireEvent.change(screen.getByRole('combobox', { name: 'Model' }), { target: { value: 'claude-haiku-5-5' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Create copy' }))
+      await waitFor(() => expect(branchSession).toHaveBeenCalledWith(ACTIVE_TAB, 'legacy-assistant', {
+        agentSdk: { providerId: 'sdk-provider', modelId: 'claude-haiku-5-5' },
+      }))
+      expect(connectToSession).toHaveBeenCalledWith('sdk-imported')
+      expect(useTabStore.getState().activeTabId).toBe('sdk-imported')
+    } finally {
+      useProviderStore.setState(previousProviders)
+    }
+  })
+
   it('hides branch actions while the current session is still running', () => {
     useChatStore.setState({
       sessions: {
@@ -7766,7 +7797,7 @@ describe('MessageList nested tool calls', () => {
         mode: 'both',
       })
     })
-    expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB)
+    expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB, undefined, { requireApplied: true })
     expect(useWorkspaceStore.getState().getTab(ACTIVE_TAB, reviewTabId)).toBeNull()
     expect(queueComposerPrefill).toHaveBeenCalledWith(ACTIVE_TAB, {
       text: prompt,
@@ -7846,7 +7877,7 @@ describe('MessageList nested tool calls', () => {
         mode: 'conversation',
       })
     })
-    expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB)
+    expect(reloadHistory).toHaveBeenCalledWith(ACTIVE_TAB, undefined, { requireApplied: true })
   })
 
   it('hides the file-change card after a Bash-only turn completes without checkpointed files', async () => {
@@ -8017,6 +8048,9 @@ describe('MessageList nested tool calls', () => {
     expect(await screen.findByText('kept.ts')).toBeTruthy()
     const conversationUndo = await screen.findByRole('button', { name: 'Roll back conversation' })
     expect(screen.getByText('Provider request failed')).toBeTruthy()
+    expect(readPendingInputRecovery(ACTIVE_TAB, 'unconfirmed')).toContainEqual(expect.objectContaining({
+      type: 'user_text', content: 'continue',
+    }))
     fireEvent.click(conversationUndo)
 
     const dialog = await screen.findByRole('dialog', { name: 'Undo current turn?' })
@@ -8046,6 +8080,7 @@ describe('MessageList nested tool calls', () => {
       expect(messages.some((message) => message.type === 'user_text' && message.content === 'continue')).toBe(false)
       expect(messages.some((message) => message.type === 'error')).toBe(false)
     })
+    expect(readPendingInputRecovery(ACTIVE_TAB, 'unconfirmed')).toEqual([])
     expect(screen.getByRole('link', { name: 'src/kept.ts' }).getAttribute('data-file-path')).toBe('src/kept.ts')
     expect(screen.queryByText('kept.ts')).toBeNull()
     await act(async () => {
@@ -10093,7 +10128,7 @@ describe('MessageList edit and resend', () => {
   function setup(messages: UIMessage[], checkpoints: Checkpoint[], sessionOverrides: Partial<PerSessionState> = {}) {
     vi.spyOn(sessionsApi, 'getTurnCheckpoints').mockResolvedValue({ checkpoints })
     const reloadHistory = vi.fn().mockResolvedValue(undefined)
-    const sendMessage = vi.fn()
+    const sendMessage = vi.fn().mockReturnValue(true)
     const queueComposerPrefill = vi.fn()
     const stopGeneration = vi.fn()
     useChatStore.setState({

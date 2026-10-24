@@ -8,6 +8,7 @@
  *
  *   claude-sidecar server   --app-root <path> --host 127.0.0.1 --port 12345
  *   claude-sidecar cli      --app-root <path> [其它 CLI 参数...]
+ *   claude-sidecar agent-sdk --app-root <path> [SDK 会话参数...]
  *   claude-sidecar adapters --app-root <path> [--feishu] [--telegram] [--wechat]
  *                           [--dingtalk] [--whatsapp] [--wecom] [--qq] [--slack]
  *
@@ -19,6 +20,7 @@
  */
 
 import { parseLauncherArgs, resolveSidecarInvocation } from './launcherRouting'
+import { resolveBundledAgentSdkExecutable } from './officialAgentSdkRuntime'
 
 // The compiled Computer Use runtime relaunches this executable directly. Its
 // isolated worker has no app-root and must not load preload, CLI configuration,
@@ -128,7 +130,7 @@ const ADAPTERS: ReadonlyArray<{
 const rawArgs = process.argv.slice(2)
 const invocation = resolveSidecarInvocation(rawArgs)
 if (!invocation.mode) {
-  console.error('claude-sidecar: missing mode argument (expected "server", "cli" or "adapters")')
+  console.error('claude-sidecar: missing mode argument (expected "server", "cli", "agent-sdk" or "adapters")')
   process.exit(2)
 }
 const mode = invocation.mode
@@ -143,16 +145,21 @@ if (mode === 'adapters') {
   process.env.CALLER_DIR ||= process.cwd()
   process.argv = [process.argv[0]!, process.argv[1]!, ...args]
 
-  await import('../../preload.ts')
-
-  if (mode === 'server') {
+  if (mode === 'agent-sdk') {
+    const sdkExecutable = resolveBundledAgentSdkExecutable()
+    if (sdkExecutable) process.env.CC_HAHA_AGENT_SDK_EXECUTABLE = sdkExecutable
+    const { runOfficialAgentSdk } = await import('../../src/entrypoints/officialAgentSdk')
+    await runOfficialAgentSdk(args)
+  } else if (mode === 'server') {
+    await import('../../preload.ts')
     console.log(`[claude-sidecar] starting server mode (${process.platform}/${process.arch})`)
     const { startServer } = await import('../../src/server/index.ts')
     startServer()
   } else if (mode === 'cli') {
+    await import('../../preload.ts')
     await import('../../src/entrypoints/cli.tsx')
   } else {
-    console.error(`claude-sidecar: unknown mode "${mode}" (expected "server", "cli" or "adapters")`)
+    console.error(`claude-sidecar: unknown mode "${mode}" (expected "server", "cli", "agent-sdk" or "adapters")`)
     process.exit(2)
   }
 }

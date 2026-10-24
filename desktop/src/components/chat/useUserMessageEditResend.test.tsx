@@ -65,7 +65,7 @@ describe('useUserMessageEditResend session and recovery boundaries', () => {
     useChatStore.setState({ ...useChatStore.getInitialState(), sessions: { 'session-a': makeSession(), 'session-b': makeSession() } }, true)
     useUIStore.setState({ toasts: [] })
     vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(preview)
-    vi.spyOn(useChatStore.getState(), 'sendMessage').mockImplementation(() => {})
+    vi.spyOn(useChatStore.getState(), 'sendMessage').mockReturnValue(true)
   })
 
   afterEach(() => { vi.restoreAllMocks() })
@@ -178,6 +178,25 @@ describe('useUserMessageEditResend session and recovery boundaries', () => {
       text: draft.text, attachments: withContext.attachments, sessionReferences: withContext.sessionReferences,
     })
     expect(useUIStore.getState().toasts).toContainEqual(expect.objectContaining({ type: 'warning' }))
+  })
+
+  it('recovers the complete edit when the send is rejected because its recovery copy cannot be saved', async () => {
+    vi.spyOn(useChatStore.getState(), 'reloadHistory').mockResolvedValue(undefined)
+    vi.mocked(useChatStore.getState().sendMessage).mockReturnValue(false)
+    const withContext: UserMessageEditDraft = {
+      ...draft,
+      attachments: [{ id: 'file', type: 'file', name: 'app.ts', path: '/repo/app.ts', lineStart: 3, lineEnd: 5, quote: 'for (;;) {}', sendable: true }],
+      sessionReferences: [{ sessionId: 'referenced-session' }],
+    }
+    const { result } = setup()
+    await act(async () => result.current.editActionByMessageId.get('shared-user')!.onSubmit(withContext))
+    expect(useChatStore.getState().sendMessage).toHaveBeenCalledTimes(1)
+    expect(useChatStore.getState().sessions['session-a']!.composerPrefill).toMatchObject({
+      text: draft.text, attachments: withContext.attachments, sessionReferences: withContext.sessionReferences,
+    })
+    expect(useUIStore.getState().toasts).toContainEqual(expect.objectContaining({
+      type: 'error', message: 'chat.inputRecoveryUnavailable',
+    }))
   })
 
   it('ignores a failed preview after the editor unmounts', async () => {

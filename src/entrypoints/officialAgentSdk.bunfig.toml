@@ -1,0 +1,2 @@
+# SDK execution must not inherit a project's or global Bun preload hooks.
+preload = []

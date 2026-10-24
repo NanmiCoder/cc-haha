@@ -1,4 +1,5 @@
 import { getSideChat, isSideChatId } from '../services/sideChatRegistry.js'
+import { toOfficialSdkServerNotification } from './officialAgentSdkEvents.js'
 import { migrationMaintenance } from '../migrationMaintenance.js'
 /**
  * WebSocket connection handler
@@ -94,6 +95,8 @@ import {
   runtimeExitStoppedSessions,
   runtimeExitFailedSessions,
   getCliBackgroundTaskLifecycle,
+  getOfficialSdkTaskLifecycles,
+  officialSdkTaskStates,
   isAgentTaskType,
   untrackCliBackgroundTask,
   clearAgentRuntimeState,
@@ -329,6 +332,33 @@ function trackCliBackgroundTaskLifecycle(
   sessionId: string,
   cliMsg: any,
 ): CliBackgroundTaskLifecycle | null {
+  const native = getOfficialSdkTaskLifecycles(sessionId, cliMsg)
+  if (native) {
+    if (native.stale) return { taskId: cliMsg.task_id, running: false, suppressForward: true }
+    let representative: CliBackgroundTaskLifecycle | null = null
+    for (const lifecycle of native.lifecycles) {
+      if (lifecycle.newRun) {
+        authoritativeStoppedTaskIds.get(sessionId)?.delete(lifecycle.taskId)
+        untrackCliBackgroundTask(sessionId, lifecycle.taskId)
+      }
+      if (lifecycle.running && lifecycle.backgrounded === false) {
+        // A foreground task is owned by its blocking tool call. A later
+        // task_updated.is_backgrounded starts background tracking.
+        untrackCliBackgroundTask(sessionId, lifecycle.taskId)
+        continue
+      }
+      const tracked = trackBackgroundTaskLifecycle(sessionId, lifecycle)
+      if (native.snapshot) {
+        // One level snapshot may introduce multiple tasks after a reconnect.
+        stopLateAgentTaskIfRequested(sessionId, tracked)
+        stopLateNonAgentTaskIfRequested(sessionId, tracked)
+        closeLateNonAgentTaskAfterRuntimeExit(sessionId, tracked)
+      }
+      if (!representative?.running || tracked.running) representative = tracked
+    }
+    // A stale entry inside a snapshot must not hide unrelated live entries.
+    return native.snapshot && representative ? { ...representative, suppressForward: false } : representative
+  }
   const rawTaskId = cliMsg?.type === 'system' && typeof cliMsg.task_id === 'string'
     ? cliMsg.task_id.trim()
     : ''
@@ -346,7 +376,16 @@ function trackCliBackgroundTaskLifecycle(
 
   const lifecycle = getCliBackgroundTaskLifecycle(cliMsg)
   if (!lifecycle) return null
+  return trackBackgroundTaskLifecycle(sessionId, lifecycle)
+}
 
+function trackBackgroundTaskLifecycle(
+  sessionId: string,
+  lifecycle: CliBackgroundTaskLifecycle,
+): CliBackgroundTaskLifecycle {
+  if (authoritativeStoppedTaskIds.get(sessionId)?.has(lifecycle.taskId)) {
+    return { ...lifecycle, running: false, status: 'stopped', suppressForward: true }
+  }
   const existingNonAgentTask = activeNonAgentTasks.get(sessionId)?.get(lifecycle.taskId)
   if (existingNonAgentTask?.localStopConfirmed) {
     void emitAuthoritativeNonAgentStopped(sessionId, existingNonAgentTask)
@@ -820,7 +859,7 @@ export const handleWebSocket = {
       switch (message.type) {
         case 'user_message': {
           const activeTurn: ActiveUserTurnState = { messageSent: false }
-          migrationMaintenance.track(handleUserMessage(ws, message, activeTurn)).catch((err) => {
+          migrationMaintenance.track(handleUserMessage(ws, message, activeTurn, undefined, true)).catch((err) => {
             const sessionId = ws.data.sessionId
             void diagnosticsService.recordEvent({
               type: 'ws_user_message_failed',
@@ -984,6 +1023,7 @@ async function handleUserMessage(
   message: Extract<ClientMessage, { type: 'user_message' }>,
   activeTurn: ActiveUserTurnState,
   collaboration?: { messageId: string; sourceSessionId: string; canSend?: () => boolean },
+  humanInput = false,
 ) {
   const persistTitleSource = sessionService.shouldPersistSession()
   const { sessionId } = ws.data
@@ -1198,6 +1238,8 @@ async function handleUserMessage(
         canSend: () =>
           activeUserTurns.get(sessionId) === activeTurn && !activeTurn.cancelled,
         messageUuid: activeTurn.expectedReplayUuid,
+        humanInput,
+        humanText: message.content,
         onCommitted: () => {
           activeTurn.messageSent = true
         },
@@ -1462,6 +1504,13 @@ function releaseUserTurnWithoutResult(sessionId: string, activeTurn: ActiveUserT
 function matchesActiveTurnReplay(activeTurn: ActiveUserTurnState, cliMsg: any): boolean {
   if (cliMsg?.type === 'system' && cliMsg.subtype === 'session_message_receipt' &&
     cliMsg.status === 'consumed' && cliMsg.source_uuid === activeTurn.expectedReplayUuid) return true
+  // The official SDK does not require a user-message replay. Its first root
+  // stream/assistant frame echoes the submitted UUID and establishes the same
+  // boundary without letting a stale reply or subagent release the Stop fence.
+  if ((cliMsg?.type === 'assistant' || cliMsg?.type === 'stream_event') &&
+    cliParentToolUseId(cliMsg) === undefined &&
+    typeof cliMsg.user_message_uuid === 'string' &&
+    cliMsg.user_message_uuid === activeTurn.expectedReplayUuid) return true
   return cliMsg?.type === 'user' &&
     cliMsg.isReplay === true &&
     typeof cliMsg.uuid === 'string' &&
@@ -1547,10 +1596,9 @@ function acknowledgeActiveTurnReplay(sessionId: string, cliMsg: any): boolean {
     return false
   }
 
-  // The SDK preserves the outbound user-message UUID on normal replays. Pure
-  // local slash commands instead expose their parsed command marker after the
-  // interrupted result boundary. Either signal proves output now belongs to
-  // this replacement turn.
+  // A user replay or a root reply can echo the outbound user-message UUID.
+  // Pure local slash commands instead expose their parsed command marker after
+  // the interrupted result boundary. Each signal attributes this replacement.
   activeTurn.replacementAfterStop = false
   activeTurn.messageSent = true
   pendingInterruptedTurnResults.delete(sessionId)
@@ -3097,6 +3145,9 @@ function emitAuthoritativeAgentStopped(
       type: 'system',
       subtype: 'task_notification',
       task_id: current.taskId,
+      ...(officialSdkTaskStates.get(sessionId)?.has(current.taskId) ? {
+        cc_haha_agent_sdk: true, run_id: officialSdkTaskStates.get(sessionId)!.get(current.taskId)!.runId,
+      } : {}),
       tool_use_id: current.toolUseId,
       task_type: current.taskType,
       ...(current.description ? { description: current.description } : {}),
@@ -3217,6 +3268,9 @@ function emitAuthoritativeNonAgentStopped(
     type: 'system',
     subtype: 'task_notification',
     task_id: task.taskId,
+    ...(officialSdkTaskStates.get(sessionId)?.has(task.taskId) ? {
+      cc_haha_agent_sdk: true, run_id: officialSdkTaskStates.get(sessionId)!.get(task.taskId)!.runId,
+    } : {}),
     tool_use_id: task.toolUseId,
     ...(task.taskType ? { task_type: task.taskType } : {}),
     ...(task.description ? { description: task.description } : {}),
@@ -3944,6 +3998,37 @@ export async function ensureCliSessionStartedForControl(
 }
 
 export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessage[] {
+  if (cliMsg.type === 'system' && cliMsg.subtype === 'official_sdk_messages_retracted') {
+    return [{ type: 'system_notification', subtype: cliMsg.subtype,
+      data: { ids: Array.isArray(cliMsg.ids) ? cliMsg.ids.filter((id: unknown) => typeof id === 'string') : [],
+        ...(cliMsg.edit && typeof cliMsg.edit.text === 'string' && typeof cliMsg.edit.uuid === 'string' ? { edit: cliMsg.edit } : {}) } }]
+  }
+  const nativeNotification = cliMsg.cc_haha_agent_sdk === true ? toOfficialSdkServerNotification(cliMsg) : null
+  if (nativeNotification) {
+    if (nativeNotification.subtype === 'commands_changed') {
+      updateSessionSlashCommands(sessionId, cliMsg.commands, { notifyClient: false })
+    }
+    if ((nativeNotification.subtype === 'model_refusal_fallback' && cliMsg.scope !== 'local') ||
+      nativeNotification.subtype === 'model_consent_fallback') {
+      if (typeof cliMsg.fallback_model === 'string') {
+        const current = runtimeOverrides.get(sessionId)
+        // Preserve a later explicit user selection queued while the dialog was open.
+        if (current && !deferredRuntimeRestarts.has(sessionId)) {
+          const changed = { ...current, modelId: cliMsg.fallback_model }
+          runtimeOverrides.set(sessionId, changed)
+          void persistSessionRuntimeConfig(sessionId, changed).catch(() => undefined)
+        }
+      }
+    }
+    return [nativeNotification]
+  }
+  const translated = translateCliMessageContent(cliMsg, sessionId)
+  const ids = Array.isArray(cliMsg.cc_haha_message_ids)
+    ? cliMsg.cc_haha_message_ids.filter((id: unknown): id is string => typeof id === 'string') : []
+  return ids.length ? translated.map(message => ({ ...message, nativeMessageIds: ids })) : translated
+}
+
+function translateCliMessageContent(cliMsg: any, sessionId: string): ServerMessage[] {
   if (isAgentRunMessageFrame(cliMsg)) {
     return translateAgentRunMessage(cliMsg, sessionId)
   }
@@ -5879,6 +5964,7 @@ export function __resetWebSocketHandlerStateForTests(): void {
   activeAgentTasks.clear()
   activeNonAgentTasks.clear()
   authoritativeStoppedTaskIds.clear()
+  officialSdkTaskStates.clear()
   agentStopRequestedSessions.clear()
   nonAgentStopRequestedSessions.clear()
   runtimeExitStoppedSessions.clear()

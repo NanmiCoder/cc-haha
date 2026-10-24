@@ -619,19 +619,6 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       )
       if (runtimeSelection) {
         runtimeStore.setSelection(sessionId, runtimeSelection)
-        if (explicitDraftSelection && ownsDraft() && useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY] === explicitDraftSelection) {
-          runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
-        }
-      }
-      if (ownsDraft()) {
-        if (useTabStore.getState().activeTabId === submittedTabId) {
-          setActiveView('code')
-          useTabStore.getState().openTab(sessionId, 'New Session')
-        }
-        useUIStore.setState({ newSessionDraft: null })
-      } else {
-        const activeTab = useTabStore.getState().tabs.find(tab => tab.sessionId === useTabStore.getState().activeTabId)
-        useSessionStore.getState().setActiveSession(activeTab?.type === 'session' ? activeTab.sessionId : null)
       }
       connectToSession(sessionId)
       const attachmentPayload: AttachmentRef[] = attachments.map((attachment) => ({
@@ -647,7 +634,35 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
       // the bubble keeps what the user typed.
       const sendAsTeam = capabilityMenu.agentTeamArmed
       if (serializedText || attachmentPayload.length > 0) {
-        sendMessage(sessionId, sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText, attachmentPayload, { displayContent: text })
+        const sent = sendMessage(sessionId, sendAsTeam ? withAgentTeamRequest(serializedText) : serializedText, attachmentPayload, { displayContent: text })
+        if (!sent) {
+          // Do not navigate away from the only remaining copy of the draft.
+          // If its editor has already gone, keep that copy with the new session.
+          if (!ownsDraft()) {
+            useChatStore.getState().queueComposerPrefill(sessionId, {
+              text: serializedText,
+              attachments,
+            }, { restoreMissingSession: true })
+          }
+          const activeTab = useTabStore.getState().tabs.find(tab => tab.sessionId === useTabStore.getState().activeTabId)
+          useSessionStore.getState().setActiveSession(activeTab?.type === 'session' ? activeTab.sessionId : null)
+          addToast({ type: 'error', message: t('chat.inputRecoveryUnavailable') })
+          return
+        }
+      }
+      if (explicitDraftSelection && ownsDraft() && useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY] === explicitDraftSelection) {
+        runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
+      }
+      if (ownsDraft()) {
+        if (useTabStore.getState().activeTabId === submittedTabId) {
+          setActiveView('code')
+          const title = useSessionStore.getState().sessions.find(session => session.id === sessionId)?.title ?? 'New Session'
+          useTabStore.getState().openTab(sessionId, title)
+        }
+        useUIStore.setState({ newSessionDraft: null })
+      } else {
+        const activeTab = useTabStore.getState().tabs.find(tab => tab.sessionId === useTabStore.getState().activeTabId)
+        useSessionStore.getState().setActiveSession(activeTab?.type === 'session' ? activeTab.sessionId : null)
       }
       recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
       if (sendAsTeam) capabilityMenu.disarmAgentTeam()

@@ -106,6 +106,12 @@ export function useMessageActionMenu({ copyText, branchAction, editAction, times
               {branchAction.label}
             </ActionRow>
           ) : null}
+          {branchAction?.sdkImport ? (
+            <ActionRow icon={<GitFork size={18} strokeWidth={1.75} aria-hidden="true" />} disabled={branchAction.loading}
+              onClick={() => { close(); branchAction.sdkImport?.onImport() }}>
+              {branchAction.sdkImport.label}
+            </ActionRow>
+          ) : null}
         </div>
       </MobileBottomSheet>
       <MobileBottomSheet
