@@ -114,6 +114,9 @@ Telegram 还保留 `/resume` 的项目、会话按钮菜单；各平台都支持
 - `/cancel` — 退出选择，保留当前会话
 - `/clear` — 清空上下文，保留项目绑定
 - `/stop` — 停止本轮生成
+- `/language [vi|en|zh|zh-TW|ja|ko]` — 切换机器人回复语言；不带参数时显示当前语言
+
+机器人默认使用越南语回复，支持越南语、英语、简体中文、繁体中文、日语和韩语。`/language` 的选择会写入 `~/.claude/adapters.json` 的 `language` 字段，对所有 Adapter 生效；也可以用环境变量 `ADAPTER_LANGUAGE` 覆盖。
 
 飞书、微信、钉钉、企业微信、QQ 和 Slack 还支持中文别名，例如 `帮助`、`状态`、`项目列表`、`新会话`、`清空`、`停止`。
 

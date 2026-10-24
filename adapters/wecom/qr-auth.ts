@@ -12,6 +12,7 @@
  */
 
 import * as crypto from 'node:crypto'
+import { t } from '../common/i18n.js'
 
 const GENERATE_URL = 'https://work.weixin.qq.com/ai/qc/generate'
 const POLL_URL = 'https://work.weixin.qq.com/ai/qc/query_result'
@@ -109,7 +110,7 @@ export async function startWecomQrLogin(
       verificationUrl: existing.verificationUrl,
       expiresAt: existing.startedAt + QR_TTL_MS,
       pollIntervalMs: WECOM_POLL_INTERVAL_MS,
-      message: '二维码已就绪，请使用企业微信扫描。',
+      message: t('wecom.qrReady'),
     }
   }
 
@@ -132,7 +133,7 @@ export async function startWecomQrLogin(
     verificationUrl,
     expiresAt: startedAt + QR_TTL_MS,
     pollIntervalMs: WECOM_POLL_INTERVAL_MS,
-    message: '使用企业微信扫描二维码，创建并授权智能机器人。',
+    message: t('wecom.qrInstruction'),
   }
 }
 
@@ -146,7 +147,7 @@ export async function pollWecomQrLogin(
     return {
       connected: false,
       status: 'not_started',
-      message: '当前没有进行中的企业微信绑定，请重新生成二维码。',
+      message: t('wecom.noBinding'),
     }
   }
 
@@ -163,7 +164,7 @@ export async function pollWecomQrLogin(
       return {
         connected: false,
         status: 'failed',
-        message: '企业微信返回的机器人凭据不完整，请重新扫码。',
+        message: t('wecom.incomplete'),
       }
     }
     activeLogins.delete(opts.sessionKey)
@@ -172,15 +173,15 @@ export async function pollWecomQrLogin(
 
   if (status === 'expired' || status === 'timeout') {
     activeLogins.delete(opts.sessionKey)
-    return { connected: false, status: 'expired', message: '二维码已过期，请重新生成。' }
+    return { connected: false, status: 'expired', message: t('wecom.expired') }
   }
 
   if (status === 'fail' || status === 'failed' || status === 'error') {
     activeLogins.delete(opts.sessionKey)
-    return { connected: false, status: 'failed', message: '企业微信授权失败，请重新扫码。' }
+    return { connected: false, status: 'failed', message: t('wecom.failed') }
   }
 
-  return { connected: false, status: 'waiting', message: '等待企业微信扫码确认...' }
+  return { connected: false, status: 'waiting', message: t('wecom.waiting') }
 }
 
 /** Drop an in-flight attempt (user cancelled or rebound). */

@@ -6,6 +6,8 @@
  * own image size bounds.
  */
 
+import { t } from '../i18n.js'
+
 export const IMAGE_MAX_BYTES = 10 * 1024 * 1024 // 10 MB
 export const FILE_MAX_BYTES = 30 * 1024 * 1024  // 30 MB
 
@@ -34,14 +36,14 @@ export function checkAttachmentLimit(
       return {
         ok: false,
         reason: 'too_large',
-        hint: `📎 图片过大(${formatMb(size)} MB),请控制在 10 MB 以内`,
+        hint: t('attachment.tooLargeImage', { size: formatMb(size), limit: 10 }),
       }
     }
     if (mime && !IMAGE_MIME_WHITELIST.includes(mime as (typeof IMAGE_MIME_WHITELIST)[number])) {
       return {
         ok: false,
         reason: 'unsupported_mime',
-        hint: `📎 暂不支持此图片格式(${mime})`,
+        hint: t('attachment.unsupportedImage', { mime }),
       }
     }
     return { ok: true }
@@ -51,7 +53,7 @@ export function checkAttachmentLimit(
     return {
       ok: false,
       reason: 'too_large',
-      hint: `📎 文件过大(${formatMb(size)} MB),请控制在 30 MB 以内`,
+      hint: t('attachment.fileTooLarge', { size: formatMb(size), limit: 30 }),
     }
   }
   return { ok: true }

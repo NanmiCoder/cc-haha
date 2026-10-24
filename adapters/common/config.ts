@@ -107,6 +107,8 @@ export type SlackConfig = {
 export type AdapterConfig = {
   serverUrl: string
   defaultProjectDir: string
+  /** Bot reply language: `vi` (default), `en`, `zh`, `zh-TW`, `ja`, or `ko`. */
+  language: string
   pairing: PairingState
   allowedProjectRoots: string[]
   telegram: TelegramConfig
@@ -164,6 +166,7 @@ export function loadConfig(): AdapterConfig {
   return {
     serverUrl: process.env.ADAPTER_SERVER_URL || file.serverUrl || 'ws://127.0.0.1:3456',
     defaultProjectDir: file.defaultProjectDir || '',
+    language: process.env.ADAPTER_LANGUAGE || file.language || 'vi',
     pairing: {
       code: pairing.code ?? null,
       expiresAt: pairing.expiresAt ?? null,
@@ -244,6 +247,30 @@ export function loadConfig(): AdapterConfig {
       allowedProjectRoots: readProjectRoots(slack.allowedProjectRoots),
     },
   }
+}
+
+/**
+ * Persist the bot reply language, preserving every other field the user (or
+ * the desktop app) wrote. The `/language` command calls this so all adapter
+ * processes — current and future — read the same setting.
+ */
+export function saveAdapterLanguage(language: string): void {
+  const filePath = getConfigPath()
+  let file: Record<string, any> = {}
+  try {
+    file = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+  } catch (err: any) {
+    if (err?.code !== 'ENOENT') {
+      console.warn(`[Config] Failed to parse ${filePath}, rewriting only the language field`)
+    }
+  }
+  file.language = language
+
+  const dir = path.dirname(filePath)
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
+  const tmp = `${filePath}.tmp.${process.pid}.${Date.now()}`
+  fs.writeFileSync(tmp, JSON.stringify(file, null, 2) + '\n', { encoding: 'utf-8', mode: 0o600 })
+  fs.renameSync(tmp, filePath)
 }
 
 export function getConfiguredWorkDir(config: AdapterConfig, platformConfig: AdapterPlatformConfig): string {

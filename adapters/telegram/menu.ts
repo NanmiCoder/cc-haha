@@ -1,3 +1,5 @@
+import { t } from '../common/i18n.js'
+
 export type TelegramBotCommand = {
   command: string
   description: string
@@ -42,27 +44,34 @@ type TelegramCommandApi = {
 const TELEGRAM_SELECTION_PAGE_SIZE = 8
 const TELEGRAM_BUTTON_LABEL_LIMIT = 32
 
-export const TELEGRAM_BOT_COMMANDS: TelegramBotCommand[] = [
-  { command: 'start', description: '开始使用' },
-  { command: 'help', description: '查看帮助' },
-  { command: 'new', description: '新建会话或切换项目' },
-  { command: 'projects', description: '查看最近项目' },
-  { command: 'sessions', description: '查看项目历史会话' },
-  { command: 'resume', description: '恢复历史会话' },
-  { command: 'status', description: '查看当前状态' },
-  { command: 'clear', description: '清空当前上下文' },
-  { command: 'stop', description: '停止当前生成' },
-  { command: 'provider', description: '切换 Provider' },
-  { command: 'model', description: '切换模型' },
-  { command: 'skills', description: '查看并调用 Skills' },
-  { command: 'allow', description: '允许权限请求' },
-  { command: 'always', description: '本会话永久允许' },
-  { command: 'deny', description: '拒绝权限请求' },
-]
+/**
+ * Built lazily: the descriptions must follow the language that is active when
+ * the menu is synced, not the process default at import time.
+ */
+export function telegramBotCommands(): TelegramBotCommand[] {
+  return [
+    { command: 'start', description: t('telegram.cmd.start') },
+    { command: 'help', description: t('telegram.cmd.help') },
+    { command: 'new', description: t('telegram.cmd.new') },
+    { command: 'projects', description: t('telegram.cmd.projects') },
+    { command: 'sessions', description: t('telegram.cmd.sessions') },
+    { command: 'resume', description: t('telegram.cmd.resume') },
+    { command: 'status', description: t('telegram.cmd.status') },
+    { command: 'clear', description: t('telegram.cmd.clear') },
+    { command: 'stop', description: t('telegram.cmd.stop') },
+    { command: 'provider', description: t('telegram.cmd.provider') },
+    { command: 'model', description: t('telegram.cmd.model') },
+    { command: 'skills', description: t('telegram.cmd.skills') },
+    { command: 'allow', description: t('telegram.cmd.allow') },
+    { command: 'always', description: t('telegram.cmd.always') },
+    { command: 'deny', description: t('telegram.cmd.deny') },
+    { command: 'language', description: t('telegram.cmd.language') },
+  ]
+}
 
 export async function syncTelegramBotCommands(
   api: TelegramCommandApi,
-  commands: TelegramBotCommand[] = TELEGRAM_BOT_COMMANDS,
+  commands: TelegramBotCommand[] = telegramBotCommands(),
 ): Promise<void> {
   if (api.deleteMyCommands) {
     await api.deleteMyCommands()
@@ -95,7 +104,7 @@ export function buildTelegramSelectionPage(params: {
     const nav: TelegramSelectionButton[] = []
     if (page > 0) {
       nav.push({
-        text: 'Prev',
+        text: t('telegram.prev'),
         callbackData: `tgsel:${params.kind}:page:${page - 1}`,
       })
     }
@@ -105,7 +114,7 @@ export function buildTelegramSelectionPage(params: {
     })
     if (page < totalPages - 1) {
       nav.push({
-        text: 'Next',
+        text: t('telegram.next'),
         callbackData: `tgsel:${params.kind}:page:${page + 1}`,
       })
     }
@@ -149,7 +158,7 @@ function clampPage(page: number, totalPages: number): number {
 }
 
 function truncateButtonLabel(label: string): string {
-  const chars = Array.from(label.trim() || '选择')
+  const chars = Array.from(label.trim() || t('common.choose'))
   if (chars.length <= TELEGRAM_BUTTON_LABEL_LIMIT) return chars.join('')
   return `${chars.slice(0, TELEGRAM_BUTTON_LABEL_LIMIT - 1).join('')}…`
 }

@@ -15,6 +15,7 @@ import { WSClient } from '@wecom/aibot-node-sdk'
 import { WsBridge, type AttachmentRef } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
 import { loadConfig } from '../common/config.js'
+import { setAdapterLocale, t } from '../common/i18n.js'
 import { splitMessageByBytes, utf8Length } from '../common/format.js'
 import { SessionStore } from '../common/session-store.js'
 import { createAdapterClient } from '../common/adapter-client.js'
@@ -35,6 +36,7 @@ const WECOM_STREAM_BYTE_LIMIT = 19_000
 const WECOM_TEXT_BYTE_LIMIT = 4_000
 
 const config = loadConfig()
+setAdapterLocale(config.language)
 if (!config.wecom.botId || !config.wecom.secret) {
   console.error('[WeCom] Missing WECOM_BOT_ID / WECOM_BOT_SECRET. Bind 企业微信 in Desktop Settings > IM.')
   process.exit(1)
@@ -222,7 +224,7 @@ async function collectAttachments(
   if (failures > 0) {
     await port.sendNotice(
       chatId,
-      failures === candidates.length ? '附件下载失败，请稍后重试。' : `${failures} 个附件下载失败，已跳过。`,
+      failures === candidates.length ? t('attachment.downloadFailed') : t('attachment.downloadPartial', { count: failures }),
     )
   }
   return attachments

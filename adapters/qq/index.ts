@@ -14,6 +14,7 @@ import { MediaFileType, QQBot, type ReplyTarget, type StreamSession } from '@ten
 import { WsBridge, type AttachmentRef } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
 import { loadConfig } from '../common/config.js'
+import { setAdapterLocale, t } from '../common/i18n.js'
 import { splitMessage } from '../common/format.js'
 import { SessionStore } from '../common/session-store.js'
 import { createAdapterClient } from '../common/adapter-client.js'
@@ -34,6 +35,7 @@ const QQ_STREAM_THROTTLE_MS = 600
 const TYPING_SECONDS = 30
 
 const config = loadConfig()
+setAdapterLocale(config.language)
 if (!config.qq.appId || !config.qq.appSecret) {
   console.error('[QQ] Missing QQ_APP_ID / QQ_APP_SECRET. Bind QQ in Desktop Settings > IM.')
   process.exit(1)
@@ -222,7 +224,7 @@ async function collectAttachments(
   if (failures > 0) {
     await port.sendNotice(
       chatId,
-      failures === attachments.length ? '附件下载失败，请稍后重试。' : `${failures} 个附件下载失败，已跳过。`,
+      failures === attachments.length ? t('attachment.downloadFailed') : t('attachment.downloadPartial', { count: failures }),
     )
   }
   return refs

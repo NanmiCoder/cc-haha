@@ -12,6 +12,7 @@ import { WsBridge, type ServerMessage } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
 import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
+import { handleLanguageCommand, setAdapterLocale, t } from '../common/i18n.js'
 import {
   formatImStatus,
   formatPermissionRequest,
@@ -29,7 +30,7 @@ import {
 } from '../common/permission.js'
 import { SessionStore } from '../common/session-store.js'
 import { createAdapterClient } from '../common/adapter-client.js'
-import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
+import { restoreStoredSessionBinding, sessionReconnectNotice, type SessionRestoreResult } from '../common/session-recovery.js'
 import { SessionSelectionController } from '../common/session-selection.js'
 import { syncImPermissionState } from '../common/permission-sync.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
@@ -46,6 +47,7 @@ import { createTelegramRuntimeCommandController, registerAuthorizedTelegramComma
 // ---------- init ----------
 
 const config = loadConfig()
+setAdapterLocale(config.language)
 if (!config.telegram.botToken) {
   console.error('[Telegram] Missing TELEGRAM_BOT_TOKEN. Set env or ~/.claude/adapters.json')
   process.exit(1)
@@ -136,7 +138,7 @@ function clearTransientChatState(chatId: string): void {
 async function handlePermissionDecision(chatId: string, decision: PermissionDecision): Promise<void> {
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(decision.requestId)) {
-    await bot.api.sendMessage(Number(chatId), `未找到待确认的权限请求：${decision.requestId}`)
+    await bot.api.sendMessage(Number(chatId), t('permission.requestMissing', { requestId: decision.requestId }))
     return
   }
 
@@ -148,7 +150,7 @@ async function handlePermissionDecision(chatId: string, decision: PermissionDeci
   }
   await bot.api.sendMessage(
     Number(chatId),
-    sent ? `${formatPermissionDecisionStatus(decision)}。` : '权限响应发送失败，请检查会话状态。',
+    sent ? formatPermissionDecisionStatus(decision) : t('permission.responseFailed'),
   )
 }
 
@@ -166,7 +168,7 @@ async function ensureExistingSession(chatId: string): Promise<SessionRestoreResu
 
 async function buildStatusText(chatId: string): Promise<string> {
   const result = await ensureExistingSession(chatId)
-  if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+  if (result.status === 'unavailable') return sessionReconnectNotice()
   if (result.status === 'missing') return formatImStatus(null)
   const stored = result.session
 
@@ -223,7 +225,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
   const result = await ensureExistingSession(chatId)
   if (result.status === 'restored') return true
   if (result.status === 'unavailable') {
-    await bot.api.sendMessage(Number(chatId), SESSION_RECONNECT_NOTICE)
+    await bot.api.sendMessage(Number(chatId), sessionReconnectNotice())
     return false
   }
 
@@ -250,13 +252,13 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await bot.api.sendMessage(numericChatId, '⚠️ 连接服务器超时，请重试。')
+      await bot.api.sendMessage(numericChatId, '⚠️ ' + t('server.connectTimeout'))
       return false
     }
     return true
   } catch (err) {
     await bot.api.sendMessage(numericChatId,
-      `❌ 无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+      '❌ ' + t('session.createFailed', { error: err instanceof Error ? err.message : String(err) }))
     return false
   }
 }
@@ -270,7 +272,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
     const projects = await httpClient.listRecentProjects()
     if (projects.length === 0) {
       await bot.api.sendMessage(numericChatId,
-        `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`)
+        t('project.noneRecent', { workDir: defaultWorkDir }))
       return
     }
 
@@ -279,10 +281,10 @@ async function showProjectPicker(chatId: string): Promise<void> {
     )
     pendingProjectSelection.set(chatId, true)
     await bot.api.sendMessage(numericChatId,
-      `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n💡 下次可直接 /new <编号、名称或绝对路径> 快速新建会话`)
+      '💡 ' + t('project.pickerTitle', { list: lines.join('\n\n') }))
   } catch (err) {
     await bot.api.sendMessage(numericChatId,
-      `❌ 无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+      '❌ ' + t('project.listFailed', { error: err instanceof Error ? err.message : String(err) }))
   }
 }
 
@@ -319,7 +321,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       runtime.state = msg.state
       runtime.verb = typeof msg.verb === 'string' ? msg.verb : undefined
       if (msg.state === 'thinking' && !streamDelivery.hasState(chatId)) {
-        await streamDelivery.ensurePlaceholder(chatId, '💭 思考中...')
+        await streamDelivery.ensurePlaceholder(chatId, '💭 ' + t('thinking.indicator'))
         accumulatedThinkingText.set(chatId, '')
       }
       break
@@ -380,10 +382,10 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       pendingPermissions.set(chatId, pending)
       const text = `${formatPermissionRequest(msg.toolName, msg.input, msg.requestId)}\n\n${formatPermissionInstructions(msg.requestId)}`
       const keyboard = new InlineKeyboard()
-        .text('✅ 允许', `permit:${msg.requestId}:yes`)
-        .text('♾️ 永久允许', `permit:${msg.requestId}:always`)
+        .text(t('permission.button.allow'), `permit:${msg.requestId}:yes`)
+        .text(t('permission.button.always'), `permit:${msg.requestId}:always`)
         .row()
-        .text('❌ 拒绝', `permit:${msg.requestId}:no`)
+        .text(t('permission.button.deny'), `permit:${msg.requestId}:no`)
       await bot.api.sendMessage(numericChatId, text, { reply_markup: keyboard })
       break
     }
@@ -405,18 +407,18 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
         const stored = sessionStore.get(chatId)
         const workDir = stored?.workDir || defaultWorkDir
         if (workDir) {
-          await bot.api.sendMessage(numericChatId, '⚠️ 会话上下文已失效，正在自动重建...')
+          await bot.api.sendMessage(numericChatId, '⚠️ ' + t('session.invalidReconnecting'))
           clearTransientChatState(chatId)
           bridge.resetSession(chatId)
           sessionStore.delete(chatId)
           const ok = await createSessionForChat(chatId, workDir)
           if (ok) {
-            await bot.api.sendMessage(numericChatId, '✅ 已重建会话，请重新发送消息。')
+            await bot.api.sendMessage(numericChatId, '✅ ' + t('session.rebuilt'))
           } else {
-            await bot.api.sendMessage(numericChatId, '❌ 重建会话失败，请发送 /new 手动新建。')
+            await bot.api.sendMessage(numericChatId, '❌ ' + t('session.rebuildFailed'))
           }
         } else {
-          await bot.api.sendMessage(numericChatId, '⚠️ 会话上下文已失效，请发送 /new 新建会话。')
+          await bot.api.sendMessage(numericChatId, '⚠️ ' + t('session.invalid'))
         }
       } else {
         await bot.api.sendMessage(numericChatId, `❌ ${msg.message}`)
@@ -462,16 +464,16 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
         const ok = await createSessionForChat(chatId, project.realPath)
         if (ok) {
           await bot.api.sendMessage(numericChatId,
-            `✅ 已新建会话：${project.projectName}${project.branch ? ` (${project.branch})` : ''}`)
+            t('session.createdNamed', { name: project.projectName, branch: project.branch ? ` (${project.branch})` : '' }))
         }
         return
       }
       if (ambiguous) {
         const list = ambiguous.map((p, i) => `${i + 1}. ${p.projectName} — ${p.realPath}`).join('\n')
-        await bot.api.sendMessage(numericChatId, `匹配到多个项目，请更精确：\n\n${list}`)
+        await bot.api.sendMessage(numericChatId, t('project.ambiguous', { list }))
         return
       }
-      await bot.api.sendMessage(numericChatId, `未找到匹配 "${query}" 的项目。发送 /projects 查看完整列表。`)
+      await bot.api.sendMessage(numericChatId, t('project.notFound', { query }))
     } catch (err) {
       await bot.api.sendMessage(numericChatId,
         `❌ ${err instanceof Error ? err.message : String(err)}`)
@@ -481,7 +483,7 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
     if (workDir) {
       const ok = await createSessionForChat(chatId, workDir)
       if (ok) {
-        await bot.api.sendMessage(numericChatId, '✅ 已新建会话，可以开始对话了。')
+        await bot.api.sendMessage(numericChatId, t('project.createdReady'))
       }
     } else {
       await showProjectPicker(chatId)
@@ -491,16 +493,24 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
 
 const isAuthorizedTelegramUser = (userId: number) => isAllowedUser('telegram', userId)
 
+registerAuthorizedTelegramCommand(bot, 'language', isAuthorizedTelegramUser, async (ctx) => {
+  const arg = typeof ctx.match === 'string' ? ctx.match.trim() : ''
+  const reply = handleLanguageCommand(arg ? `/language ${arg}` : '/language')
+  if (reply) await ctx.reply(reply)
+  // The command menu descriptions are localized too; refresh them after a switch.
+  void syncTelegramBotCommands(bot.api).catch(() => {})
+})
+
 registerAuthorizedTelegramCommand(bot, 'stop', isAuthorizedTelegramUser, (ctx) => {
   const chatId = String(ctx.chat!.id)
   void adapterMigrationLifecycle.track((async () => {
     const result = await ensureExistingSession(chatId)
     if (result.status !== 'restored') {
-      await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+      await ctx.reply(result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
       return
     }
     bridge.sendStopGeneration(chatId)
-    await ctx.reply('⏹ 已发送停止信号。')
+    await ctx.reply('⏹ ' + t('runtime.stopSent'))
   })())
 })
 
@@ -514,17 +524,17 @@ registerAuthorizedTelegramCommand(bot, 'clear', isAuthorizedTelegramUser, (ctx) 
   void adapterMigrationLifecycle.track((async () => {
     const result = await ensureExistingSession(chatId)
     if (result.status !== 'restored') {
-      await ctx.reply(result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+      await ctx.reply(result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
       return
     }
     clearTransientChatState(chatId)
     const sent = bridge.sendUserMessage(chatId, '/clear')
     if (!sent) {
-      await ctx.reply('⚠️ 无法发送 /clear，请先发送 /new 重新连接会话。')
+      await ctx.reply('⚠️ ' + t('runtime.clearFailed'))
       return
     }
     getRuntimeState(chatId).state = 'thinking'
-    await ctx.reply('🧹 已清空当前会话上下文。')
+    await ctx.reply('🧹 ' + t('runtime.cleared'))
   })())
 })
 
@@ -552,9 +562,9 @@ async function routeUserMessage(
     const displayName = [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(' ')
     const success = tryPair(text.trim(), { userId, displayName }, 'telegram')
     if (success) {
-      await ctx.reply('✅ 配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。')
+      await ctx.reply(t('pair.success.short'))
     } else {
-      await ctx.reply('🔒 未授权。请在 Claude Code 桌面端生成配对码后发送给我。')
+      await ctx.reply('🔒 ' + t('pair.denied'))
     }
     return
   }
@@ -586,11 +596,11 @@ async function routeUserMessage(
     const ready = await ensureSession(chatId)
     if (!ready) return
     const effective =
-      text || (attachments.length > 0 ? '(用户发送了附件)' : '')
+      text || (attachments.length > 0 ? t('runtime.attachmentsOnly') : '')
     if (!effective && attachments.length === 0) return
     const sent = bridge.sendUserMessage(chatId, effective, attachments.length ? attachments : undefined)
     if (!sent) {
-      await bot.api.sendMessage(Number(chatId), '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await bot.api.sendMessage(Number(chatId), '⚠️ ' + t('runtime.sendFailed'))
     } else {
       getRuntimeState(chatId).state = 'thinking'
     }
@@ -638,7 +648,7 @@ async function collectAttachmentsFromCtx(
       }
     } catch (err) {
       console.error('[Telegram] downloadFile failed:', err)
-      rejections.push('📎 附件下载失败,请稍后重试')
+      rejections.push(t('attachment.downloadFailed'))
     }
   }
 
