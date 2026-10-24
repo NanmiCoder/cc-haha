@@ -6,6 +6,24 @@ const fetchMock = vi.fn()
 afterEach(() => vi.unstubAllGlobals())
 
 describe('MCP toggle transport receipt', () => {
+  it.each(['create', 'update'] as const)('sends save context and preserves the %s reload receipt', async (operation) => {
+    const response = {
+      server: { name: 'saved-server', enabled: true, status: 'checking' },
+      sessionSync: { applied: false, reason: 'failed', error: 'reload timed out' },
+    }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const payload = { scope: 'local' as const, config: { type: 'http', url: 'http://127.0.0.1:1/mcp', headers: {} } }
+    const result = operation === 'create'
+      ? await mcpApi.create('saved-server', payload, '/tmp/project', 'chat-1')
+      : await mcpApi.update('saved-server', payload, '/tmp/project', '/tmp/previous', 'chat-1')
+    expect(result).toEqual(response)
+    expect(JSON.parse(fetchMock.mock.lastCall![1].body)).toEqual({
+      ...payload, cwd: '/tmp/project', sessionId: 'chat-1',
+      ...(operation === 'create' ? { name: 'saved-server' } : { previousCwd: '/tmp/previous' }),
+    })
+  })
+
   it('sends the selected project/session and preserves a failed runtime receipt', async () => {
     const response = {
       server: { name: 'project/echo', enabled: false, status: 'disabled' },

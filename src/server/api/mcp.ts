@@ -128,6 +128,7 @@ async function syncMcpActionToSession(
   sessionId: string | undefined,
   server: McpServerIdentity,
   action: McpSessionAction,
+  timeoutMs: number,
 ): Promise<McpSessionSyncDto> {
   if (!sessionId) return { applied: false, reason: 'no_session' }
   if (!conversationService.hasSession(sessionId)) {
@@ -163,7 +164,7 @@ async function syncMcpActionToSession(
     await conversationService.requestControl(
       sessionId,
       action,
-      120_000,
+      timeoutMs,
     )
     return { applied: true }
   } catch (error) {
@@ -601,7 +602,8 @@ async function createServer(body: Record<string, unknown>): Promise<Response> {
     throw ApiError.internal(`Created MCP server "${name}" could not be reloaded`)
   }
 
-  return Response.json({ server: serializeServerSnapshot(name, created) }, { status: 201 })
+  const sessionSync = await syncSavedServer(name, { ...config, scope }, optionalString(body.sessionId))
+  return Response.json({ server: serializeServerSnapshot(name, created), sessionSync }, { status: 201 })
 }
 
 async function updateServer(name: string, body: Record<string, unknown>): Promise<Response> {
@@ -648,7 +650,23 @@ async function updateServer(name: string, body: Record<string, unknown>): Promis
     throw ApiError.internal(`Updated MCP server "${name}" could not be reloaded`)
   }
 
-  return Response.json({ server: serializeServerSnapshot(name, updated) })
+  await clearServerCache(name, existing).catch(() => {})
+  const sessionSync = await syncSavedServer(name, { ...nextConfig, scope: nextScope }, optionalString(body.sessionId))
+  return Response.json({ server: serializeServerSnapshot(name, updated), sessionSync })
+}
+
+async function syncSavedServer(
+  name: string,
+  config: ScopedMcpServerConfig,
+  sessionId?: string,
+): Promise<McpSessionSyncDto | undefined> {
+  // Saving disabled configuration must not start its command or transport.
+  // The next explicit enable will load it through the normal runtime path.
+  if (isMcpServerDisabledForExecution(name)) return undefined
+
+  return syncMcpActionToSessions(sessionId, getServerIdentity(name, config), {
+    subtype: 'mcp_reconnect', serverName: name,
+  }, 60_000)
 }
 
 async function deleteServer(name: string, url: URL): Promise<Response> {
@@ -684,12 +702,13 @@ async function syncMcpActionToSessions(
   sessionId: string | undefined,
   server: McpServerIdentity,
   action: McpSessionAction,
+  timeoutMs = 120_000,
 ): Promise<McpSessionSyncDto> {
   const sessionIds = [...new Set([
     ...(sessionId ? [sessionId] : []),
     ...conversationService.getActiveSessions(),
   ])]
-  const results = await Promise.all(sessionIds.map(id => syncMcpActionToSession(id, server, action)))
+  const results = await Promise.all(sessionIds.map(id => syncMcpActionToSession(id, server, action, timeoutMs)))
   const failure = results.find(result => result.reason === 'failed')
   return failure ?? (sessionId ? results[sessionIds.indexOf(sessionId)]! : { applied: false, reason: 'no_session' })
 }
