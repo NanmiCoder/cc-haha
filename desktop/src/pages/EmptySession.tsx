@@ -10,7 +10,7 @@ import { NewSessionStarter } from '@/components/layout/NewSessionStarter'
 import { projectTitle } from '@/components/layout/sidebarTaskGroups'
 import { resolveProjectDisplayName } from '../stores/projectDisplayNameStore'
 import { Button } from '@/components/ui/Button'
-import { ApiError } from '../api/client'
+import { ApiError, rawRecordDiagnosticEvent } from '../api/client'
 import { agentsApi } from '../api/agents'
 import { providersApi } from '../api/providers'
 import { getBundledPresetReasoningProviderKind } from '../config/providerPresets'
@@ -177,6 +177,14 @@ function resolveProviderName(providerId: string | null, providers: SavedProvider
 
 const EMPTY_COMPOSER_REFERENCES: ComposerReferenceCandidate[] = []
 
+function reportDraftWorkspaceStaleRequest() {
+  void rawRecordDiagnosticEvent({
+    type: 'draft_workspace_request_stale',
+    severity: 'warn',
+    summary: 'A draft workspace request became stale before it could be consumed.',
+  })
+}
+
 type EmptySessionProps = {
   /** The folder the task starts in; the phone's new-task sheet suggests one. */
   initialWorkDir?: string
@@ -243,7 +251,15 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   const [slashCommandsCwd, setSlashCommandsCwd] = useState<string | null>(null)
   const [agentSlashCommands, setAgentSlashCommands] = useState<SlashCommandOption[]>([])
   const composerRef = useRef<MentionComposerHandle>(null)
-  const materializingRef = useRef(false)
+  const materializingRef = useRef<{
+    revision: number | undefined
+    promise: Promise<{ sessionId: string, ownedDraft: boolean } | null>
+  } | null>(null)
+  const workspaceRequestInFlightRef = useRef(new Set<number>())
+  const isSubmittingRef = useRef(isSubmitting)
+  isSubmittingRef.current = isSubmitting
+  const workspaceRequestAttemptRef = useRef(new Map<number, number>())
+  const [materializationAttempt, setMaterializationAttempt] = useState(0)
   const composerContainerRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -511,9 +527,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
    * only when this call still owns it, so a late response cannot discard a
    * newer draft.
    */
-  const materializeDraftSession = useCallback(async (): Promise<{ sessionId: string, ownedDraft: boolean } | null> => {
-    if (materializingRef.current) return null
-    materializingRef.current = true
+  const createDraftSession = useCallback(async (): Promise<{ sessionId: string, ownedDraft: boolean } | null> => {
     const runtimeStore = useSessionRuntimeStore.getState()
     const explicitDraftSelection = runtimeStore.selections[DRAFT_RUNTIME_SELECTION_KEY]
     const submittedDraft = useUIStore.getState().newSessionDraft
@@ -612,7 +626,9 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         if (explicitDraftSelection && useSessionRuntimeStore.getState().selections[DRAFT_RUNTIME_SELECTION_KEY] === explicitDraftSelection) {
           runtimeStore.clearSelection(DRAFT_RUNTIME_SELECTION_KEY)
         }
-        useUIStore.setState({ newSessionDraft: null, draftWorkspaceRequest: null })
+        if (!useUIStore.getState().draftWorkspaceRequest) {
+          useUIStore.setState({ newSessionDraft: null })
+        }
       }
       return { sessionId, ownedDraft }
     } catch (error) {
@@ -621,8 +637,6 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         message: resolveCreateSessionErrorMessage(error, t),
       })
       return null
-    } finally {
-      materializingRef.current = false
     }
   }, [
     activeProviderId,
@@ -641,6 +655,26 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     useWorktree,
     workDir,
   ])
+
+  const materializeDraftSession = useCallback(() => {
+    const revision = draftRevision ?? useUIStore.getState().newSessionDraft?.revision
+    const cached = materializingRef.current
+    if (cached && cached.revision === revision) return cached.promise
+
+    const promise = createDraftSession()
+    const materialization = { revision, promise }
+    materializingRef.current = materialization
+    void promise.then((result) => {
+      if (materializingRef.current !== materialization) return
+      const pendingRequest = useUIStore.getState().draftWorkspaceRequest
+      const draftStillOwnsRequest =
+        result !== null &&
+        pendingRequest?.revision === revision &&
+        useUIStore.getState().newSessionDraft?.revision === revision
+      if (!draftStillOwnsRequest) materializingRef.current = null
+    })
+    return promise
+  }, [createDraftSession, draftRevision])
 
   const handleSubmit = async () => {
     const text = input.trim()
@@ -690,6 +724,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     const submittedTabId = useTabStore.getState().activeTabId
     const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
     setIsSubmitting(true)
+    setMaterializationAttempt((attempt) => attempt + 1)
     try {
       const materialized = await materializeDraftSession()
       if (!materialized) return
@@ -734,30 +769,46 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     }
   }
 
-  // A workspace control used on the draft cannot act on a session id yet. The
-  // request waits here until the draft still owns its content, then assigns the
-  // session, carries the unsent composer over, and performs the pending action.
+  // A workspace action belongs to its draft even if session creation is also
+  // being driven by Run. Keep it queued until one shared creation has completed.
   useEffect(() => {
     const request = draftWorkspaceRequest
     if (!request || !visible || draftRevision === undefined || request.revision !== draftRevision) return
-    if (materializingRef.current || isSubmitting) return
+    if (workspaceRequestInFlightRef.current.has(request.nonce)) return
+    if (workspaceRequestAttemptRef.current.get(request.nonce) === materializationAttempt) return
+    workspaceRequestAttemptRef.current.set(request.nonce, materializationAttempt)
+    workspaceRequestInFlightRef.current.add(request.nonce)
 
-    // Capture before awaiting: assigning the session unmounts this draft.
     const draftText = input
     const draftAttachments = attachments
     const draftMentions = mentions
     const draftWorkDir = workDir
+    const runAlreadySubmitting = isSubmittingRef.current
     setIsSubmitting(true)
     void (async () => {
+      let consumed = false
       try {
         const materialized = await materializeDraftSession()
-        if (!materialized) return
-        const { sessionId } = materialized
+        const currentRequest = useUIStore.getState().draftWorkspaceRequest
+        if (
+          !materialized ||
+          !materialized.ownedDraft ||
+          currentRequest?.nonce !== request.nonce ||
+          currentRequest.revision !== request.revision
+        ) {
+          if (materialized && !materialized.ownedDraft) reportDraftWorkspaceStaleRequest()
+          return
+        }
 
-        setActiveView('code')
+        const { sessionId } = materialized
+        const activeTabId = useTabStore.getState().activeTabId
+        if (activeTabId === request.originatingTabId && useUIStore.getState().activeView === request.originatingView) {
+          setActiveView('code')
+        }
         useTabStore.getState().openTab(sessionId, t('sidebar.newSession'))
+        if (activeTabId !== request.originatingTabId && activeTabId !== sessionId) useTabStore.getState().setActiveTab(activeTabId)
         connectToSession(sessionId)
-        if (draftText || draftAttachments.length > 0 || draftMentions.length > 0) {
+        if (!runAlreadySubmitting && (draftText || draftAttachments.length > 0 || draftMentions.length > 0)) {
           useChatStore.getState().queueComposerPrefill(sessionId, {
             text: draftText,
             attachments: draftAttachments.map(toUIAttachment),
@@ -777,9 +828,19 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
           workspace.toggleWorkspace(sessionId)
           workspace.toggleFullscreen(sessionId)
         }
+        consumed = true
       } finally {
         if (mounted.current) setIsSubmitting(false)
-        useUIStore.getState().clearDraftWorkspaceRequest(request.nonce)
+        if (consumed) {
+          useUIStore.getState().clearDraftWorkspaceRequest(request.nonce)
+          if (useUIStore.getState().newSessionDraft?.revision === request.revision) {
+            useUIStore.setState({ newSessionDraft: null })
+          }
+          if (materializingRef.current?.revision === request.revision) {
+            materializingRef.current = null
+          }
+        }
+        workspaceRequestInFlightRef.current.delete(request.nonce)
       }
     })()
   }, [
@@ -787,11 +848,11 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     connectToSession,
     draftRevision,
     draftWorkspaceRequest,
+    setActiveView,
     input,
-    isSubmitting,
+    materializationAttempt,
     materializeDraftSession,
     mentions,
-    setActiveView,
     t,
     visible,
     workDir,

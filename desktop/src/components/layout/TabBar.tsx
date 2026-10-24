@@ -143,6 +143,7 @@ export function TabBar() {
   // session exists until the first send (see `startNewSessionDraft`).
   const isDraftHome = !activeTabId && !!newSessionDraft
   const requestDraftWorkspace = useUIStore((state) => state.requestDraftWorkspace)
+  const activeView = useUIStore((state) => state.activeView)
   const activeSession = useSessionStore((state) =>
     activeTabId ? state.sessions.find((session) => session.id === activeTabId) : undefined,
   )
@@ -756,9 +757,9 @@ export function TabBar() {
           <WorkspaceLayoutControls
             layout="hidden"
             bottomOpen={false}
-            onToggleFullscreen={() => requestDraftWorkspace('toggle-fullscreen')}
-            onToggleBottom={() => requestDraftWorkspace('toggle-bottom')}
-            onToggleWorkspace={() => requestDraftWorkspace('toggle-side')}
+            onToggleFullscreen={() => requestDraftWorkspace('toggle-fullscreen', activeTabId, activeView)}
+            onToggleBottom={() => requestDraftWorkspace('toggle-bottom', activeTabId, activeView)}
+            onToggleWorkspace={() => requestDraftWorkspace('toggle-side', activeTabId, activeView)}
           />
         ) : (
           <IconButton

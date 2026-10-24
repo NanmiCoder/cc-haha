@@ -280,6 +280,8 @@ export type DraftWorkspaceRequest = {
   /** Only the draft revision that asked for it may consume the request. */
   revision: number
   nonce: number
+  originatingTabId: string | null
+  originatingView: ActiveView
 }
 
 type UIStore = {
@@ -331,7 +333,7 @@ type UIStore = {
   startNewSessionDraft: (workDir?: string) => void
   /** The composer of draft `revision` reports whether it holds unsent content. */
   setNewSessionDraftContent: (revision: number, hasContent: boolean) => void
-  requestDraftWorkspace: (action: DraftWorkspaceAction) => void
+  requestDraftWorkspace: (action: DraftWorkspaceAction, originatingTabId?: string | null, originatingView?: ActiveView) => void
   clearDraftWorkspaceRequest: (nonce: number) => void
   openModal: (id: string) => void
   closeModal: () => void
@@ -453,12 +455,14 @@ export const useUIStore = create<UIStore>((set) => ({
       ? { newSessionDraft: { ...state.newSessionDraft, hasContent } }
       : state
   )),
-  requestDraftWorkspace: (action) => set(state => state.newSessionDraft
+  requestDraftWorkspace: (action, originatingTabId = null, originatingView = 'code') => set(state => state.newSessionDraft
     ? {
         draftWorkspaceRequest: {
           action,
           revision: state.newSessionDraft.revision,
           nonce: ++draftWorkspaceRequestNonce,
+          originatingTabId,
+          originatingView,
         },
       }
     : state),
