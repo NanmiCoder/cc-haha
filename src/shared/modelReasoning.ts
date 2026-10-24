@@ -165,6 +165,13 @@ const MODEL_REASONING_CAPABILITY_REGISTRY: readonly ModelReasoningCapabilityEntr
   {
     family: 'minimax',
     apiFormats: ['anthropic', 'openai_chat'],
+    defaultReasoningEffort: 'max',
+    claudeCodeCapabilities: 'thinking,required_thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
+    matches: modelId => /^minimax-m3\.1-flash(?::free|-free)?$/.test(modelId),
+  },
+  {
+    family: 'minimax',
+    apiFormats: ['anthropic', 'openai_chat'],
     claudeCodeCapabilities: 'thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
     matches: modelId => (
       modelId.startsWith('minimax-m2.7') ||
