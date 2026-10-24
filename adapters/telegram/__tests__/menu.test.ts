@@ -1,6 +1,7 @@
 import { describe, it, expect, mock } from 'bun:test'
+import { t } from '../../common/i18n.js'
 import {
-  TELEGRAM_BOT_COMMANDS,
+  telegramBotCommands,
   buildTelegramSelectionPage,
   parseTelegramSelectionCallback,
   syncTelegramBotCommands,
@@ -8,8 +9,9 @@ import {
 
 describe('Telegram menu helpers', () => {
   it('keeps bot commands valid for Telegram setMyCommands', () => {
-    expect(TELEGRAM_BOT_COMMANDS.length).toBeGreaterThan(0)
-    for (const command of TELEGRAM_BOT_COMMANDS) {
+    const commands = telegramBotCommands()
+    expect(commands.length).toBeGreaterThan(0)
+    for (const command of commands) {
       expect(command.command).toMatch(/^[a-z0-9_]{1,32}$/)
       expect(command.description.trim().length).toBeGreaterThan(0)
       expect(command.description.length).toBeLessThanOrEqual(256)
@@ -30,7 +32,7 @@ describe('Telegram menu helpers', () => {
     await syncTelegramBotCommands(api)
 
     expect(calls).toEqual(['delete', 'set'])
-    expect(api.setMyCommands).toHaveBeenCalledWith(TELEGRAM_BOT_COMMANDS)
+    expect(api.setMyCommands).toHaveBeenCalledWith(telegramBotCommands())
   })
 
   it('builds paginated selection callbacks after eight options', () => {
@@ -47,7 +49,7 @@ describe('Telegram menu helpers', () => {
     expect(page.visibleItems).toHaveLength(8)
     expect(page.rows.at(-1)).toEqual([
       { text: '1/2', callbackData: 'tgsel:model:noop:0' },
-      { text: 'Next', callbackData: 'tgsel:model:page:1' },
+      { text: t('telegram.next'), callbackData: 'tgsel:model:page:1' },
     ])
   })
 

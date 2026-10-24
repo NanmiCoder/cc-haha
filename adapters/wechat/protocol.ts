@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { t } from '../common/i18n.js'
 
 export const WECHAT_DEFAULT_BASE_URL = 'https://ilinkai.weixin.qq.com'
 export const WECHAT_DEFAULT_BOT_TYPE = '3'
@@ -130,7 +131,7 @@ export function extractWechatText(itemList?: WechatMessageItem[]): string {
         const refBody = extractWechatText([ref.message_item])
         if (refBody) parts.push(refBody)
       }
-      return parts.length ? `[引用: ${parts.join(' | ')}]\n${text}` : text
+      return parts.length ? `${t('wechat.quote', { parts: parts.join(' | ') })}\n${text}` : text
     }
     if (item.type === 3 && item.voice_item?.text) {
       return item.voice_item.text
@@ -151,7 +152,7 @@ export async function startWechatLoginWithQr(opts: {
   if (!opts.force && existing && isLoginFresh(existing)) {
     return {
       qrcodeUrl: existing.qrcodeUrl,
-      message: '二维码已就绪，请使用微信扫描。',
+      message: t('wechat.qrReady'),
       sessionKey,
     }
   }
@@ -177,7 +178,7 @@ export async function startWechatLoginWithQr(opts: {
 
   return {
     qrcodeUrl: qr.qrcode_img_content,
-    message: '使用微信扫描二维码完成绑定。',
+    message: t('wechat.qrInstruction'),
     sessionKey,
   }
 }
@@ -192,33 +193,33 @@ export async function pollWechatLoginWithQr(opts: {
     return {
       connected: false,
       status: 'not_started',
-      message: '当前没有进行中的微信绑定，请重新生成二维码。',
+      message: t('wechat.noBinding'),
     }
   }
 
   const status = await pollQrStatus(login.currentApiBaseUrl, login.qrcode)
   switch (status.status) {
     case 'wait':
-      return { connected: false, status: 'wait', message: '等待扫码。' }
+      return { connected: false, status: 'wait', message: t('wechat.waiting') }
     case 'scaned':
-      return { connected: false, status: 'scaned', message: '已扫码，请在微信中确认。' }
+      return { connected: false, status: 'scaned', message: t('wechat.scanned') }
     case 'scaned_but_redirect':
       if (status.redirect_host) {
         login.currentApiBaseUrl = `https://${status.redirect_host}`
       }
-      return { connected: false, status: 'scaned_but_redirect', message: '已扫码，正在切换微信网关。' }
+      return { connected: false, status: 'scaned_but_redirect', message: t('wechat.scannedRedirect') }
     case 'expired':
       activeLogins.delete(opts.sessionKey)
-      return { connected: false, status: 'expired', message: '二维码已过期，请重新生成。' }
+      return { connected: false, status: 'expired', message: t('wechat.expired') }
     case 'confirmed':
       activeLogins.delete(opts.sessionKey)
       if (!status.bot_token || !status.ilink_bot_id) {
-        return { connected: false, status: 'confirmed', message: '微信已确认，但服务端未返回完整凭据。' }
+        return { connected: false, status: 'confirmed', message: t('wechat.incomplete') }
       }
       return {
         connected: true,
         status: 'confirmed',
-        message: '微信绑定成功。',
+        message: t('wechat.bound'),
         botToken: status.bot_token,
         accountId: status.ilink_bot_id,
         baseUrl: status.baseurl || login.currentApiBaseUrl || WECHAT_DEFAULT_BASE_URL,

@@ -19,6 +19,7 @@
 
 import * as crypto from 'node:crypto'
 import { gzipSync } from 'node:zlib'
+import { t } from '../common/i18n.js'
 
 const FEISHU_ACCOUNTS_DOMAIN = 'accounts.feishu.cn'
 const LARK_ACCOUNTS_DOMAIN = 'accounts.larksuite.com'
@@ -247,7 +248,7 @@ export async function beginFeishuRegistration(
     verificationUri: verificationUrl.toString(),
     expiresInSeconds,
     intervalSeconds,
-    message: '使用飞书扫描二维码，确认后会自动创建机器人。',
+    message: t('feishu.qrInstruction'),
   }
 }
 
@@ -261,7 +262,7 @@ export async function pollFeishuRegistration(options: {
   if (!session) {
     return {
       status: 'not_started',
-      message: '当前没有进行中的飞书扫码，请重新生成二维码。',
+      message: t('feishu.noBinding'),
     }
   }
 
@@ -303,7 +304,7 @@ export async function pollFeishuRegistration(options: {
       return {
         status: 'waiting',
         intervalSeconds: session.intervalSeconds,
-        message: '等待飞书扫码确认...',
+        message: t('feishu.waiting'),
       }
     case 'slow_down':
       // The server asks for a longer gap; honour it for the rest of this run.
@@ -311,19 +312,19 @@ export async function pollFeishuRegistration(options: {
       return {
         status: 'waiting',
         intervalSeconds: session.intervalSeconds,
-        message: '等待飞书扫码确认...',
+        message: t('feishu.waiting'),
       }
     case 'expired_token':
       sessions.delete(options.sessionKey)
-      return { status: 'expired', message: '二维码已过期，请重新生成。' }
+      return { status: 'expired', message: t('feishu.expired') }
     case 'access_denied':
       sessions.delete(options.sessionKey)
-      return { status: 'denied', message: '飞书授权被拒绝。' }
+      return { status: 'denied', message: t('feishu.denied') }
     default:
       sessions.delete(options.sessionKey)
       // The description can echo server-side detail; keep it out of the API
       // surface and log nothing that could carry a credential.
-      return { status: 'failed', message: '飞书扫码授权失败，请重试。' }
+      return { status: 'failed', message: t('feishu.failed') }
   }
 }
 

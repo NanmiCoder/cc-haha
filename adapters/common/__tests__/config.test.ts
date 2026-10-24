@@ -9,6 +9,7 @@ describe('adapter config defaults', () => {
   const originalAdapterDefaultWorkDir = process.env.CLAUDE_ADAPTER_DEFAULT_WORK_DIR
   const originalAdapterDefaultProjectDir = process.env.ADAPTER_DEFAULT_PROJECT_DIR
   const originalDingtalkPermissionCardTemplateId = process.env.DINGTALK_PERMISSION_CARD_TEMPLATE_ID
+  const originalAdapterLanguage = process.env.ADAPTER_LANGUAGE
   const originalPwd = process.env.PWD
 
   afterEach(() => {
@@ -16,7 +17,28 @@ describe('adapter config defaults', () => {
     restoreEnv('CLAUDE_ADAPTER_DEFAULT_WORK_DIR', originalAdapterDefaultWorkDir)
     restoreEnv('ADAPTER_DEFAULT_PROJECT_DIR', originalAdapterDefaultProjectDir)
     restoreEnv('DINGTALK_PERMISSION_CARD_TEMPLATE_ID', originalDingtalkPermissionCardTemplateId)
+    restoreEnv('ADAPTER_LANGUAGE', originalAdapterLanguage)
     restoreEnv('PWD', originalPwd)
+  })
+
+  it('resolves the bot language as env > file > Vietnamese default', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'adapter-config-'))
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      delete process.env.ADAPTER_LANGUAGE
+      expect(loadConfig().language).toBe('vi')
+
+      fs.writeFileSync(
+        path.join(configDir, 'adapters.json'),
+        JSON.stringify({ language: 'en' }),
+      )
+      expect(loadConfig().language).toBe('en')
+
+      process.env.ADAPTER_LANGUAGE = 'zh'
+      expect(loadConfig().language).toBe('zh')
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true })
+    }
   })
 
   it('uses the user shell working directory when no default project is configured', () => {

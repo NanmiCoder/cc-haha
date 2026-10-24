@@ -1,4 +1,5 @@
 import { truncateInput } from '../common/format.js'
+import { t } from '../common/i18n.js'
 import { parsePermitCallbackData, type PermissionDecision } from '../common/permission.js'
 
 export const DINGTALK_PERMISSION_CARD_CALLBACK_ROUTE = 'permission'
@@ -18,20 +19,20 @@ export function buildDingTalkPermissionCardParams(
   const denyValue = { action: 'permit', requestId, allowed: false }
 
   return {
-    title: 'Claude Code 需要权限确认',
+    title: t('dingtalk.permissionCardTitle'),
     toolName,
     requestId,
     inputPreview: truncateInput(input, 600),
-    allowText: '允许一次',
-    alwaysText: '永久允许',
-    denyText: '拒绝',
+    allowText: t('permission.button.allowPlain'),
+    alwaysText: t('permission.button.alwaysPlain'),
+    denyText: t('permission.button.denyPlain'),
     allowValue: JSON.stringify(allowValue),
     alwaysValue: JSON.stringify(alwaysValue),
     denyValue: JSON.stringify(denyValue),
     permissionActions: JSON.stringify([
-      { text: '允许一次', value: allowValue },
-      { text: '永久允许', value: alwaysValue },
-      { text: '拒绝', value: denyValue },
+      { text: t('permission.button.allowPlain'), value: allowValue },
+      { text: t('permission.button.alwaysPlain'), value: alwaysValue },
+      { text: t('permission.button.denyPlain'), value: denyValue },
     ]),
     sys_full_json_obj: JSON.stringify({
       order: ['title', 'toolName', 'inputPreview'],

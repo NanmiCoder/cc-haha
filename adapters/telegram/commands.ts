@@ -1,6 +1,7 @@
 import { formatImHelp } from '../common/format.js'
+import { adapterLocaleTag, t } from '../common/i18n.js'
 import { listProjectSessionHistory, restoreSelectedSession } from '../common/session-selection.js'
-import { SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
+import { sessionReconnectNotice, type SessionRestoreResult } from '../common/session-recovery.js'
 import type { SessionEntry } from '../common/session-store.js'
 import type { ServerMessage } from '../common/ws-bridge.js'
 import {
@@ -125,7 +126,7 @@ export async function ensureAuthorizedTelegramPrivateChat(
 ): Promise<boolean> {
   if (!ctx.from || ctx.chat?.type !== 'private') return false
   if (isAllowedUser(ctx.from.id)) return true
-  await ctx.reply('🔒 未授权。请在 Claude Code 桌面端生成配对码后发送给我。')
+  await ctx.reply('🔒 ' + t('pair.denied'))
   return false
 }
 
@@ -186,7 +187,7 @@ async function handleTelegramPermissionCallback(
   const callbackChatId = ctx.callbackQuery?.message?.chat.id
   const callbackUserId = ctx.from?.id
   if (callbackChatId === undefined || callbackUserId === undefined) {
-    await ctx.answerCallbackQuery('未授权').catch(() => {})
+    await ctx.answerCallbackQuery(t('runtime.unauthorizedCallback')).catch(() => {})
     return 'unauthorized'
   }
 
@@ -201,10 +202,10 @@ async function handleTelegramPermissionCallback(
   })
   if (result !== 'sent') {
     const message = result === 'unauthorized'
-      ? '未授权'
+      ? t('runtime.unauthorizedCallback')
       : result === 'not_pending'
-        ? '权限请求已失效'
-        : '权限响应发送失败'
+        ? t('telegram.permissionExpired')
+        : t('telegram.permissionSendFailed')
     await ctx.answerCallbackQuery(message).catch(() => {})
     return result
   }
@@ -386,12 +387,12 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
       const { providers, activeId } = await deps.httpClient.listProviders()
       await sendSelection(chatId, {
         kind: 'provider',
-        title: '选择 Provider：',
+        title: t('telegram.selectProvider'),
         items: buildProviderSelectionItems(providers, activeId),
         page: 0,
       })
     } catch (err) {
-      await sendError(deps.api, chatId, '无法获取 Provider 列表', err)
+      await sendError(deps.api, chatId, t('telegram.providerListFailed'), err)
     }
   }
 
@@ -404,7 +405,7 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
       await deps.httpClient.activateOfficialProvider()
       await deps.httpClient.setCurrentModel(OFFICIAL_DEFAULT_MODEL_ID)
       deps.setRuntimeModel(chatId, OFFICIAL_DEFAULT_MODEL_ID)
-      return { label: 'Claude 官方', defaultModel: OFFICIAL_DEFAULT_MODEL_ID }
+      return { label: t('telegram.officialProvider'), defaultModel: OFFICIAL_DEFAULT_MODEL_ID }
     }
 
     const isOpenAiOfficial = providerValue === OPENAI_OFFICIAL_PROVIDER_ID || providerValue === 'openai'
@@ -438,9 +439,9 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
 
     try {
       const result = await applyProviderByValue(chatId, query)
-      await ctx.reply(formatProviderChangedMessage(result.label, result.defaultModel, '发送 /new 后新配置会用于新会话。'))
+      await ctx.reply(formatProviderChangedMessage(result.label, result.defaultModel, t('telegram.newConfigHint')))
     } catch (err) {
-      await ctx.reply(`❌ Provider 切换失败：${toErrorMessage(err)}`)
+      await ctx.reply(t('telegram.providerSwitchFailed', { error: toErrorMessage(err) }))
     }
   }
 
@@ -456,10 +457,10 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
       await ctx.editMessageText(formatProviderChangedMessage(
         result.label,
         result.defaultModel,
-        '当前已运行的会话可能仍使用旧 runtime；发送 /new 后会按新配置启动。',
+        t('telegram.runtimeHint'),
       ))
     } catch (err) {
-      await ctx.editMessageText(`❌ Provider 切换失败：${toErrorMessage(err)}`)
+      await ctx.editMessageText(t('telegram.providerSwitchFailed', { error: toErrorMessage(err) }))
     }
   }
 
@@ -470,18 +471,18 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
         deps.httpClient.getCurrentModel().catch(() => null),
       ])
       if (modelsResult.models.length === 0) {
-        await deps.api.sendMessage(Number(chatId), '没有可用模型。请先在桌面端配置 Provider。')
+        await deps.api.sendMessage(Number(chatId), t('telegram.noModels'))
         return
       }
 
       await sendSelection(chatId, {
         kind: 'model',
-        title: `选择模型（${modelsResult.provider?.name ?? 'Claude 官方'}）：`,
+        title: t('telegram.selectModel', { provider: modelsResult.provider?.name ?? t('telegram.officialProvider') }),
         items: buildModelSelectionItems(modelsResult.models, currentResult?.model.id),
         page: 0,
       })
     } catch (err) {
-      await sendError(deps.api, chatId, '无法获取模型列表', err)
+      await sendError(deps.api, chatId, t('telegram.modelListFailed'), err)
     }
   }
 
@@ -491,7 +492,7 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
       deps.setRuntimeModel(chatId, modelId)
       await deps.api.sendMessage(Number(chatId), formatModelChangedMessage(modelId))
     } catch (err) {
-      await deps.api.sendMessage(Number(chatId), `❌ 模型切换失败：${toErrorMessage(err)}`)
+      await deps.api.sendMessage(Number(chatId), t('telegram.modelSwitchFailed', { error: toErrorMessage(err) }))
     }
   }
 
@@ -517,25 +518,25 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
       deps.setRuntimeModel(chatId, item.value)
       pendingSelections.delete(chatId)
       await ctx.editMessageText([
-        `✅ 已切换模型：${stripSelectedPrefix(item.label)}`,
+        t('telegram.modelChanged', { model: stripSelectedPrefix(item.label) }),
         item.value,
         '',
-        '当前已运行的会话可能仍使用旧 runtime；发送 /new 后会按新模型启动。',
+        t('telegram.runtimeHint'),
       ].join('\n'))
     } catch (err) {
-      await ctx.editMessageText(`❌ 模型切换失败：${toErrorMessage(err)}`)
+      await ctx.editMessageText(t('telegram.modelSwitchFailed', { error: toErrorMessage(err) }))
     }
   }
 
   const showSkills = async (chatId: string): Promise<void> => {
     const restored = await deps.ensureExistingSession(chatId)
     if (restored.status === 'unavailable') {
-      await deps.api.sendMessage(Number(chatId), SESSION_RECONNECT_NOTICE)
+      await deps.api.sendMessage(Number(chatId), sessionReconnectNotice())
       return
     }
     const cwd = restored.status === 'restored' ? restored.session.workDir : deps.defaultWorkDir
     if (!cwd) {
-      await deps.api.sendMessage(Number(chatId), '请先发送 /new 选择项目，再查看 Skills。')
+      await deps.api.sendMessage(Number(chatId), t('telegram.chooseProjectFirst'))
       return
     }
 
@@ -543,18 +544,18 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
       const { skills } = await deps.httpClient.listSkills(cwd)
       const visibleSkills = skills.filter((skill) => skill.userInvocable)
       if (visibleSkills.length === 0) {
-        await deps.api.sendMessage(Number(chatId), `当前项目没有可用 Skills：${cwd}`)
+        await deps.api.sendMessage(Number(chatId), t('telegram.noSkills', { cwd }))
         return
       }
 
       await sendSelection(chatId, {
         kind: 'skill',
-        title: `当前项目可用 Skills：\n${cwd}`,
+        title: t('telegram.skillsTitle', { cwd }),
         items: visibleSkills.map(skillToSelectionItem),
         page: 0,
       })
     } catch (err) {
-      await sendError(deps.api, chatId, '无法获取 Skills', err)
+      await sendError(deps.api, chatId, t('telegram.skillsListFailed'), err)
     }
   }
 
@@ -572,28 +573,28 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
 
     const restored = await deps.ensureExistingSession(chatId)
     if (restored.status === 'unavailable') {
-      await deps.api.sendMessage(Number(chatId), SESSION_RECONNECT_NOTICE)
+      await deps.api.sendMessage(Number(chatId), sessionReconnectNotice())
       return
     }
     if (restored.status === 'missing') {
       pendingSelections.delete(chatId)
-      await ctx.editMessageText('⚠️ 会话已失效，请发送 /new 重新选择项目后再调用 Skill。')
+      await ctx.editMessageText(t('telegram.sessionGoneSkills'))
       return
     }
 
     const invocation = `/${item.value}`
     if (!deps.sendUserMessage(chatId, invocation)) {
-      await ctx.editMessageText(`⚠️ Skill 发送失败。${SESSION_RECONNECT_NOTICE}`)
+      await ctx.editMessageText(t('telegram.skillSendFailed', { notice: sessionReconnectNotice() }))
       return
     }
 
     pendingSelections.delete(chatId)
     await ctx.editMessageText([
-      `✅ 已调用 Skill：${item.label}`,
+      t('telegram.skillInvoked', { label: item.label }),
       invocation,
       item.description,
       '',
-      '任务已发送给当前 Agent，会继续使用这条会话的上下文、工具和权限设置。',
+      t('telegram.skillSent'),
     ].filter(Boolean).join('\n'))
   }
 
@@ -603,22 +604,22 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
     try {
       const projects = await deps.httpClient.listRecentProjects()
       if (projects.length === 0) {
-        await deps.api.sendMessage(Number(chatId), '没有找到最近项目。请先发送 /new 创建会话。')
+        await deps.api.sendMessage(Number(chatId), t('telegram.resumeNoProjects'))
         return
       }
 
       await sendSelection(chatId, {
         kind: 'resume_project',
-        title: '选择要恢复的项目：',
+        title: t('telegram.resumeProjectTitle'),
         items: projects.map((project) => ({
           label: `${project.projectName}${project.branch ? ` (${project.branch})` : ''}`,
           value: project.realPath,
-          description: `${project.realPath} · ${project.sessionCount} 个会话`,
+          description: t('telegram.projectSessionCount', { path: project.realPath, count: project.sessionCount }),
         })),
         page: 0,
       })
     } catch (err) {
-      await sendError(deps.api, chatId, '无法获取项目列表', err)
+      await sendError(deps.api, chatId, t('telegram.projectListFailed'), err)
     }
   }
 
@@ -637,18 +638,18 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
       const resumableSessions = await listProjectSessionHistory(deps.httpClient, project.value)
       if (resumableSessions.length === 0) {
         pendingSelections.delete(chatId)
-        await ctx.editMessageText(`没有可恢复会话：${project.label}`)
+        await ctx.editMessageText(t('telegram.noSessionsToRestore', { project: project.label }))
         return
       }
 
       await editSelection(ctx, {
         kind: 'resume_session',
-        title: `选择要恢复的会话：\n${project.label}`,
+        title: t('telegram.resumeSessionTitle', { project: project.label }),
         items: resumableSessions.map(sessionToSelectionItem),
         page: 0,
       })
     } catch (err) {
-      await ctx.editMessageText(`❌ 无法获取会话列表：${toErrorMessage(err)}`)
+      await ctx.editMessageText(t('telegram.sessionListFailed', { error: toErrorMessage(err) }))
     }
   }
 
@@ -660,7 +661,7 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
     if (!chatId) return
     const workDir = item.meta?.workDir
     if (!workDir) {
-      await ctx.editMessageText('❌ 这个会话缺少工作目录，无法恢复。')
+      await ctx.editMessageText(t('telegram.sessionMissingWorkDir'))
       return
     }
 
@@ -691,13 +692,13 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
   ): Promise<boolean> => {
     const chatId = getCallbackChatId(ctx)
     if (!chatId || !ctx.from || !deps.isAllowedUser(ctx.from.id)) {
-      await ctx.answerCallbackQuery('未授权').catch(() => {})
+      await ctx.answerCallbackQuery(t('runtime.unauthorizedCallback')).catch(() => {})
       return true
     }
 
     const selection = getPendingSelection(pendingSelections, chatId, callback.kind)
     if (!selection) {
-      await ctx.answerCallbackQuery('选择已过期，请重新发送命令').catch(() => {})
+      await ctx.answerCallbackQuery(t('runtime.selectionExpiredCallback')).catch(() => {})
       return true
     }
 
@@ -717,11 +718,11 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
 
     const item = selection.items[callback.index]
     if (!item) {
-      await ctx.answerCallbackQuery('选项不存在，请重新发送命令').catch(() => {})
+      await ctx.answerCallbackQuery(t('runtime.selectionMissingCallback')).catch(() => {})
       return true
     }
 
-    await ctx.answerCallbackQuery('处理中...').catch(() => {})
+    await ctx.answerCallbackQuery(t('runtime.processingCallback')).catch(() => {})
     switch (callback.kind) {
       case 'provider':
         await applyProviderSelection(ctx, item)
@@ -760,15 +761,15 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
 
 export function buildTelegramHelpText(): string {
   return [
-    '👋 Claude Code Bot 已就绪。',
+    t('telegram.ready'),
     '',
     formatImHelp(),
     '',
-    'Telegram 扩展命令：',
-    '/resume — 按钮选择项目与历史会话',
-    '/provider — 切换 Provider',
-    '/model [model] — 查看或切换模型',
-    '/skills — 查看当前项目可用 Skills',
+    t('telegram.extendedCommands'),
+    t('telegram.resumeHint'),
+    t('telegram.providerHint'),
+    t('telegram.modelHint'),
+    t('telegram.skillsHint'),
   ].join('\n')
 }
 
@@ -778,15 +779,15 @@ export function buildProviderSelectionItems(
 ): TelegramSelectionItem[] {
   return [
     {
-      label: `${activeId === null ? '✓ ' : ''}Claude 官方`,
+      label: `${activeId === null ? '✓ ' : ''}${t('telegram.officialProvider')}`,
       value: OFFICIAL_PROVIDER_VALUE,
-      description: '使用 Claude 官方或环境变量配置',
+      description: t('telegram.officialProviderDesc'),
       meta: { defaultModel: OFFICIAL_DEFAULT_MODEL_ID },
     },
     {
       label: `${activeId === OPENAI_OFFICIAL_PROVIDER_ID ? '✓ ' : ''}ChatGPT Official`,
       value: OPENAI_OFFICIAL_PROVIDER_ID,
-      description: '使用 ChatGPT 登录的 Codex 模型',
+      description: t('telegram.openaiProviderDesc'),
       meta: { defaultModel: OPENAI_OFFICIAL_DEFAULT_MODEL_ID },
     },
     ...providers.map((provider) => providerToSelectionItem(provider, activeId)),
@@ -801,7 +802,7 @@ export function providerToSelectionItem(
   return {
     label: `${activeId === provider.id ? '✓ ' : ''}${provider.name}`,
     value: provider.id,
-    description: mainModel ? `默认模型：${mainModel}` : provider.id,
+    description: mainModel ? t('telegram.defaultModel', { model: mainModel }) : provider.id,
     ...(mainModel ? { meta: { defaultModel: mainModel } } : {}),
   }
 }
@@ -827,11 +828,11 @@ export function skillToSelectionItem(skill: SkillSummary): TelegramSelectionItem
 }
 
 export function sessionToSelectionItem(session: SessionListItem): TelegramSelectionItem {
-  const title = session.title || `会话 ${compactId(session.id)}`
+  const title = session.title || t('telegram.sessionLabel', { id: compactId(session.id) })
   return {
     label: title,
     value: session.id,
-    description: `${formatDateTime(session.modifiedAt)} · ${session.messageCount} 条消息 · ${session.workDir}`,
+    description: `${formatDateTime(session.modifiedAt)} · ${t('selection.messageCount', { count: session.messageCount })} · ${session.workDir}`,
     ...(session.workDir ? { meta: { workDir: session.workDir } } : {}),
   }
 }
@@ -851,7 +852,7 @@ export function renderSelectionView(selection: PendingTelegramSelection): {
       ? `${number}. ${item.label}\n   ${item.description}`
       : `${number}. ${item.label}`
   })
-  const pageSuffix = page.totalPages > 1 ? `\n\n第 ${page.page + 1}/${page.totalPages} 页` : ''
+  const pageSuffix = page.totalPages > 1 ? `\n\n${t('telegram.selectionPage', { page: page.page + 1, total: page.totalPages })}` : ''
   return {
     text: `${selection.title}\n\n${lines.join('\n\n')}${pageSuffix}`,
     replyMarkup: {
@@ -866,7 +867,7 @@ export function renderSelectionView(selection: PendingTelegramSelection): {
 export function formatDateTime(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
+  return date.toLocaleString(adapterLocaleTag(), {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -917,8 +918,8 @@ function getCommandMatchText(ctx: TelegramCommandContext): string | undefined {
 
 function formatProviderChangedMessage(label: string, defaultModel: string | undefined, suffix: string): string {
   return [
-    `✅ 已切换 Provider：${stripSelectedPrefix(label)}`,
-    defaultModel ? `默认模型：${defaultModel}` : undefined,
+    t('telegram.providerChanged', { label: stripSelectedPrefix(label) }),
+    defaultModel ? t('telegram.defaultModel', { model: defaultModel }) : undefined,
     '',
     suffix,
   ].filter(Boolean).join('\n')
@@ -926,9 +927,9 @@ function formatProviderChangedMessage(label: string, defaultModel: string | unde
 
 function formatModelChangedMessage(modelId: string): string {
   return [
-    `✅ 已切换模型：${modelId}`,
+    t('telegram.modelChanged', { model: modelId }),
     '',
-    '当前已运行的会话可能仍使用旧 runtime；发送 /new 后会按新模型启动。',
+    t('telegram.runtimeHint'),
   ].join('\n')
 }
 

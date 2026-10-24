@@ -5,6 +5,7 @@ import { MessageDedup } from '../common/message-dedup.js'
 import { MessageBuffer } from '../common/message-buffer.js'
 import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
+import { handleLanguageCommand, setAdapterLocale, t } from '../common/i18n.js'
 import {
   formatImHelp,
   formatImStatus,
@@ -20,7 +21,7 @@ import { SessionStore } from '../common/session-store.js'
 import { syncImPermissionState } from '../common/permission-sync.js'
 import { SessionSelectionController } from '../common/session-selection.js'
 import { createAdapterClient } from '../common/adapter-client.js'
-import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
+import { restoreStoredSessionBinding, sessionReconnectNotice, type SessionRestoreResult } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
 import { checkAttachmentLimit } from '../common/attachment/attachment-limits.js'
@@ -40,6 +41,7 @@ const WECHAT_TEXT_LIMIT = 3500
 const GET_UPDATES_TIMEOUT_MS = 35_000
 
 const config = loadConfig()
+setAdapterLocale(config.language)
 if (!config.wechat.botToken || !config.wechat.accountId) {
   console.error('[WeChat] Missing QR-bound account. Bind WeChat in Desktop Settings > IM.')
   process.exit(1)
@@ -212,7 +214,7 @@ function enqueueWechat(chatId: string, task: () => Promise<void>): void {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[WeChat] Failed to handle message for ${redactChatId(chatId)}:`, err)
       try {
-        await sendText(chatId, `处理消息失败：${message}`)
+        await sendText(chatId, t('runtime.failed', { detail: message }))
       } catch (sendErr) {
         console.error(`[WeChat] Failed to report message handling error for ${redactChatId(chatId)}:`, sendErr)
       }
@@ -234,7 +236,7 @@ async function ensureExistingSession(chatId: string): Promise<SessionRestoreResu
 
 async function buildStatusText(chatId: string): Promise<string> {
   const result = await ensureExistingSession(chatId)
-  if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+  if (result.status === 'unavailable') return sessionReconnectNotice()
   if (result.status === 'missing') return formatImStatus(null)
   const stored = result.session
 
@@ -289,7 +291,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
   const result = await ensureExistingSession(chatId)
   if (result.status === 'restored') return true
   if (result.status === 'unavailable') {
-    await sendText(chatId, SESSION_RECONNECT_NOTICE)
+    await sendText(chatId, sessionReconnectNotice())
     return false
   }
 
@@ -311,12 +313,12 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await sendText(chatId, '连接服务器超时，请重试。')
+      await sendText(chatId, t('server.connectTimeout'))
       return false
     }
     return true
   } catch (err) {
-    await sendText(chatId, `无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, t('session.createFailed', { error: err instanceof Error ? err.message : String(err) }))
     return false
   }
 }
@@ -326,7 +328,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
   try {
     const projects = await httpClient.listRecentProjects()
     if (projects.length === 0) {
-      await sendText(chatId, `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`)
+      await sendText(chatId, t('project.noneRecent', { workDir: defaultWorkDir }))
       return
     }
 
@@ -334,9 +336,9 @@ async function showProjectPicker(chatId: string): Promise<void> {
       `${i + 1}. ${p.projectName}${p.branch ? ` (${p.branch})` : ''}\n   ${p.realPath}`
     )
     pendingProjectSelection.set(chatId, true)
-    await sendText(chatId, `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n下次可直接 /new <编号、名称或绝对路径> 快速新建会话`)
+    await sendText(chatId, t('project.pickerTitle', { list: lines.join('\n\n') }))
   } catch (err) {
-    await sendText(chatId, `无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, t('project.listFailed', { error: err instanceof Error ? err.message : String(err) }))
   }
 }
 
@@ -352,15 +354,15 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
       const { project, ambiguous } = await httpClient.matchProject(query)
       if (project) {
         const ok = await createSessionForChat(chatId, project.realPath)
-        if (ok) await sendText(chatId, `已新建会话：${project.projectName}${project.branch ? ` (${project.branch})` : ''}`)
+        if (ok) await sendText(chatId, t('session.createdNamed', { name: project.projectName, branch: project.branch ? ` (${project.branch})` : '' }))
         return
       }
       if (ambiguous) {
         const list = ambiguous.map((p, i) => `${i + 1}. ${p.projectName} - ${p.realPath}`).join('\n')
-        await sendText(chatId, `匹配到多个项目，请更精确：\n\n${list}`)
+        await sendText(chatId, t('project.ambiguous', { list }))
         return
       }
-      await sendText(chatId, `未找到匹配 "${query}" 的项目。发送 /projects 查看完整列表。`)
+      await sendText(chatId, t('project.notFound', { query }))
     } catch (err) {
       await sendText(chatId, err instanceof Error ? err.message : String(err))
     }
@@ -370,7 +372,7 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
   const workDir = defaultWorkDir
   if (workDir) {
     const ok = await createSessionForChat(chatId, workDir)
-    if (ok) await sendText(chatId, '已新建会话，可以开始对话了。')
+    if (ok) await sendText(chatId, t('project.createdReady'))
   } else {
     await showProjectPicker(chatId)
   }
@@ -447,7 +449,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       typingController.stop(chatId)
       blockBuffers.get(chatId)?.reset()
       blockBuffers.delete(chatId)
-      await sendText(chatId, `错误: ${msg.message}`)
+      await sendText(chatId, t('runtime.error', { message: msg.message }))
       break
     case 'system_notification':
       if (msg.subtype === 'init' && msg.data && typeof msg.data === 'object') {
@@ -477,51 +479,58 @@ async function routeUserMessage(message: WechatMessage): Promise<void> {
     await sendText(
       chatId,
       success
-        ? '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。发送 /help 查看可用命令。'
-        : '未授权。请先在 Claude Code 桌面端完成微信扫码绑定，再生成 IM 配对码后发送给我。',
+        ? t('pair.success')
+        : t('pair.denied.wechat'),
     )
     return
   }
 
   enqueueWechat(chatId, async () => {
     const hasAttachments = mediaCandidates.length > 0
-    if (!hasAttachments && (text === '/help' || text === '帮助')) {
+    if (!hasAttachments) {
+      const languageReply = handleLanguageCommand(text)
+      if (languageReply) {
+        await sendText(chatId, languageReply)
+        return
+      }
+    }
+    if (!hasAttachments && (text === '/help' || text === '帮助' || text === 'trợ giúp')) {
       await sendText(chatId, formatImHelp())
       return
     }
-    if (!hasAttachments && (text === '/status' || text === '状态')) {
+    if (!hasAttachments && (text === '/status' || text === '状态' || text === 'trạng thái')) {
       await sendText(chatId, await buildStatusText(chatId))
       return
     }
-    if (!hasAttachments && (text === '/projects' || text === '项目列表')) {
+    if (!hasAttachments && (text === '/projects' || text === '项目列表' || text === 'danh sách dự án')) {
       await showProjectPicker(chatId)
       return
     }
-    if (!hasAttachments && (text === '/new' || text === '新会话' || text.startsWith('/new '))) {
+    if (!hasAttachments && (text === '/new' || text === '新会话' || text === 'tạo phiên' || text.startsWith('/new '))) {
       const arg = text.startsWith('/new ') ? text.slice(5).trim() : ''
       await startNewSession(chatId, arg || undefined)
       return
     }
-    if (!hasAttachments && (text === '/stop' || text === '停止')) {
+    if (!hasAttachments && (text === '/stop' || text === '停止' || text === 'dừng')) {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       bridge.sendStopGeneration(chatId)
-      await sendText(chatId, '已发送停止信号。')
+      await sendText(chatId, t('runtime.stopSent'))
       return
     }
-    if (!hasAttachments && (text === '/clear' || text === '清空')) {
+    if (!hasAttachments && (text === '/clear' || text === '清空' || text === 'xóa')) {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       clearTransientChatState(chatId)
       const sent = bridge.sendUserMessage(chatId, '/clear')
       if (sent) getRuntimeState(chatId).state = 'thinking'
-      await sendText(chatId, sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。')
+      await sendText(chatId, sent ? t('runtime.cleared') : t('runtime.clearFailed'))
       return
     }
     const permissionDecision = !hasAttachments ? parsePermissionCommand(text, pendingPermissions.get(chatId)) : null
@@ -529,7 +538,7 @@ async function routeUserMessage(message: WechatMessage): Promise<void> {
       const { requestId, allowed, rule } = permissionDecision
       const pending = pendingPermissions.get(chatId)
       if (!pending?.has(requestId)) {
-        await sendText(chatId, `未找到待确认的权限请求：${requestId}`)
+        await sendText(chatId, t('permission.requestMissing', { requestId }))
         return
       }
       const sent = bridge.sendPermissionResponse(chatId, requestId, allowed, rule)
@@ -538,7 +547,7 @@ async function routeUserMessage(message: WechatMessage): Promise<void> {
         runtime.pendingPermissionCount = Math.max(0, runtime.pendingPermissionCount - 1)
         pending.delete(requestId)
       }
-      await sendText(chatId, sent ? `${formatPermissionDecisionStatus(permissionDecision)}。` : '权限响应发送失败，请检查会话状态。')
+      await sendText(chatId, sent ? formatPermissionDecisionStatus(permissionDecision) : t('permission.responseFailed'))
       return
     }
     if (!hasAttachments && await sessionSelectionController.handleInput(chatId, text)) return
@@ -551,12 +560,12 @@ async function routeUserMessage(message: WechatMessage): Promise<void> {
     const ready = await ensureSession(chatId)
     if (!ready) return
     const attachments = await collectAttachments(chatId, mediaCandidates)
-    const effectiveText = text || (attachments.length > 0 ? '(用户发送了附件)' : '')
+    const effectiveText = text || (attachments.length > 0 ? t('runtime.attachmentsOnly') : '')
     if (!effectiveText && attachments.length === 0) return
     typingController.start(chatId)
     const sent = bridge.sendUserMessage(chatId, effectiveText, attachments.length ? attachments : undefined)
     if (sent) getRuntimeState(chatId).state = 'thinking'
-    if (!sent) await sendText(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+    if (!sent) await sendText(chatId, t('runtime.sendFailed'))
   })
 }
 
@@ -601,7 +610,7 @@ async function collectAttachments(
   if (failures > 0) {
     await sendText(
       chatId,
-      failures === candidates.length ? '附件下载失败，请稍后重试。' : `${failures} 个附件下载失败，已跳过。`,
+      failures === candidates.length ? t('attachment.downloadFailed') : t('attachment.downloadPartial', { count: failures }),
     )
   }
   return attachments

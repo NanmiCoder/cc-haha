@@ -1,3 +1,5 @@
+import { t } from './i18n.js'
+
 export type PermissionDecision = {
   requestId: string
   allowed: boolean
@@ -28,13 +30,15 @@ export function parsePermissionCommand(
   if (!requestId) return null
 
   const shortcut = trimmed.toLowerCase()
-  if (['1', '/1', 'allow', '/allow', 'y', 'yes', '允许', '允许一次', '同意', '批准'].includes(shortcut)) {
+  // Keep the Chinese aliases: existing conversations and muscle memory should
+  // not break when the bot's reply language changes.
+  if (['1', '/1', 'allow', '/allow', 'y', 'yes', '允许', '允许一次', '同意', '批准', 'cho phép', 'cho phép một lần', 'đồng ý'].includes(shortcut)) {
     return { requestId, allowed: true }
   }
-  if (['2', '/2', 'always', '/always', 'allow-always', '/allow-always', '永久允许', '一直允许'].includes(shortcut)) {
+  if (['2', '/2', 'always', '/always', 'allow-always', '/allow-always', '永久允许', '一直允许', 'cho phép vĩnh viễn', 'luôn cho phép'].includes(shortcut)) {
     return { requestId, allowed: true, rule: 'always' }
   }
-  if (['3', '/3', 'deny', '/deny', 'n', 'no', '拒绝', '不允许', '否'].includes(shortcut)) {
+  if (['3', '/3', 'deny', '/deny', 'n', 'no', '拒绝', '不允许', '否', 'từ chối', 'không'].includes(shortcut)) {
     return { requestId, allowed: false }
   }
 
@@ -58,13 +62,10 @@ export function parsePermitCallbackData(data: string): PermissionDecision | null
 }
 
 export function formatPermissionInstructions(requestId: string): string {
-  return [
-    '回复 1 允许一次，2 永久允许，3 拒绝。',
-    `也可回复 /allow ${requestId}、/always ${requestId}、/deny ${requestId}。`,
-  ].join('\n')
+  return t('permission.instructions', { requestId })
 }
 
 export function formatPermissionDecisionStatus(decision: Pick<PermissionDecision, 'allowed' | 'rule'>): string {
-  if (!decision.allowed) return '❌ 已拒绝'
-  return decision.rule === 'always' ? '♾️ 已永久允许' : '✅ 已允许'
+  if (!decision.allowed) return t('permission.decision.denied')
+  return decision.rule === 'always' ? t('permission.decision.always') : t('permission.decision.allowed')
 }

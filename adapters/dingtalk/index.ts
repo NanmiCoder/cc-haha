@@ -13,6 +13,7 @@ import { MessageDedup } from '../common/message-dedup.js'
 import { MessageBuffer } from '../common/message-buffer.js'
 import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
+import { handleLanguageCommand, setAdapterLocale, t } from '../common/i18n.js'
 import { formatImHelp, formatImStatus, formatPermissionRequest, splitMessage } from '../common/format.js'
 import {
   formatPermissionDecisionStatus,
@@ -29,7 +30,7 @@ import {
   formatProjectSelectionOutcome,
   ProjectSelectionController,
 } from '../common/project-selection-router.js'
-import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
+import { restoreStoredSessionBinding, sessionReconnectNotice, type SessionRestoreResult } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
 import { checkAttachmentLimit } from '../common/attachment/attachment-limits.js'
@@ -58,6 +59,7 @@ import { finishAndResetDingTalkStreamingState, resetDingTalkStreamingState } fro
 const DINGTALK_API = 'https://api.dingtalk.com'
 
 const config = loadConfig()
+setAdapterLocale(config.language)
 if (!config.dingtalk.clientId || !config.dingtalk.clientSecret) {
   console.error('[DingTalk] Missing DINGTALK_CLIENT_ID / DINGTALK_CLIENT_SECRET. Bind with QR auth in Desktop Settings or set env.')
   process.exit(1)
@@ -263,7 +265,7 @@ async function ensureExistingSession(chatId: string): Promise<SessionRestoreResu
 
 async function buildStatusText(chatId: string): Promise<string> {
   const result = await ensureExistingSession(chatId)
-  if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+  if (result.status === 'unavailable') return sessionReconnectNotice()
   if (result.status === 'missing') return formatImStatus(null)
   const stored = result.session
 
@@ -318,7 +320,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
   const result = await ensureExistingSession(chatId)
   if (result.status === 'restored') return true
   if (result.status === 'unavailable') {
-    await sendText(chatId, SESSION_RECONNECT_NOTICE)
+    await sendText(chatId, sessionReconnectNotice())
     return false
   }
 
@@ -337,12 +339,12 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await sendText(chatId, '⚠️ 连接服务器超时，请重试。')
+      await sendText(chatId, '⚠️ ' + t('server.connectTimeout'))
       return false
     }
     return true
   } catch (err) {
-    await sendText(chatId, `❌ 无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, '❌ ' + t('session.createFailed', { error: err instanceof Error ? err.message : String(err) }))
     return false
   }
 }
@@ -352,7 +354,7 @@ function formatProjectList(projects: RecentProject[]): string {
     const branch = project.branch ? ` (${project.branch})` : ''
     return `${index + 1}. **${project.projectName}**${branch}\n   ${project.realPath}`
   })
-  return `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n也可以发送 /new <编号或名称>`
+  return t('project.pickerTitle', { list: lines.join('\n\n') })
 }
 
 async function showProjectPicker(chatId: string): Promise<void> {
@@ -360,12 +362,12 @@ async function showProjectPicker(chatId: string): Promise<void> {
   try {
     const projects = await projectSelectionController.listProjects(chatId)
     if (projects.length === 0) {
-      await sendText(chatId, `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`)
+      await sendText(chatId, t('project.noneRecent', { workDir: defaultWorkDir }))
       return
     }
     await sendText(chatId, formatProjectList(projects))
   } catch (err) {
-    await sendText(chatId, `❌ 无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, '❌ ' + t('project.listFailed', { error: err instanceof Error ? err.message : String(err) }))
   }
 }
 
@@ -451,7 +453,7 @@ async function sendPermissionRequest(chatId: string, msg: ServerMessage): Promis
       cardParamMap: buildDingTalkPermissionCardParams(msg.toolName, msg.input, msg.requestId),
     })
     if (card) {
-      await sendText(chatId, `${requestText}\n\n已发送钉钉权限卡片；如果卡片不可见，也可以${instructions}`)
+      await sendText(chatId, t('dingtalk.permissionSent', { requestText, instructions }))
       return
     }
   }
@@ -474,13 +476,13 @@ function applyPermissionDecision(chatId: string, decision: PermissionDecision): 
   const { requestId, allowed, rule } = decision
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(requestId)) {
-    void sendText(chatId, `未找到待确认的权限请求：${requestId}`)
+    void sendText(chatId, t('permission.requestMissing', { requestId }))
     return false
   }
 
   const sent = bridge.sendPermissionResponse(chatId, requestId, allowed, rule)
   if (!sent) {
-    void sendText(chatId, '权限响应发送失败，请检查会话状态。')
+    void sendText(chatId, t('permission.responseFailed'))
     return false
   }
 
@@ -496,6 +498,14 @@ async function routeUserMessage(chatId: string, text: string, attachments: Attac
     const trimmed = text.trim()
     const hasAttachments = attachments.length > 0
 
+    if (!hasAttachments) {
+      const languageReply = handleLanguageCommand(trimmed)
+      if (languageReply) {
+        await sendText(chatId, languageReply)
+        return
+      }
+    }
+
     if (!hasAttachments && handlePermissionCommand(chatId, trimmed)) return
 
     if (!hasAttachments && await sessionSelectionController.handleInput(chatId, trimmed)) return
@@ -508,53 +518,53 @@ async function routeUserMessage(chatId: string, text: string, attachments: Attac
       if (response) await sendText(chatId, response)
       return
     }
-    if (!hasAttachments && (trimmed === '/help' || trimmed === '帮助')) {
+    if (!hasAttachments && (trimmed === '/help' || trimmed === '帮助' || trimmed === 'trợ giúp')) {
       await sendText(chatId, formatImHelp())
       return
     }
-    if (!hasAttachments && (trimmed === '/status' || trimmed === '状态')) {
+    if (!hasAttachments && (trimmed === '/status' || trimmed === '状态' || trimmed === 'trạng thái')) {
       await sendText(chatId, await buildStatusText(chatId))
       return
     }
-    if (!hasAttachments && (trimmed === '/clear' || trimmed === '清空')) {
+    if (!hasAttachments && (trimmed === '/clear' || trimmed === '清空' || trimmed === 'xóa')) {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       clearTransientChatState(chatId)
       if (!bridge.sendUserMessage(chatId, '/clear')) {
-        await sendText(chatId, '⚠️ 无法发送 /clear，请先发送 /new 重新连接会话。')
+        await sendText(chatId, '⚠️ ' + t('runtime.clearFailed'))
         return
       }
       getRuntimeState(chatId).state = 'thinking'
-      await sendText(chatId, '🧹 已清空当前会话上下文。')
+      await sendText(chatId, '🧹 ' + t('runtime.cleared'))
       return
     }
-    if (!hasAttachments && (trimmed === '/stop' || trimmed === '停止')) {
+    if (!hasAttachments && (trimmed === '/stop' || trimmed === '停止' || trimmed === 'dừng')) {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       bridge.sendStopGeneration(chatId)
-      await sendText(chatId, '⏹ 已发送停止信号。')
+      await sendText(chatId, '⏹ ' + t('runtime.stopSent'))
       return
     }
-    if (!hasAttachments && (trimmed === '/projects' || trimmed === '项目列表')) {
+    if (!hasAttachments && (trimmed === '/projects' || trimmed === '项目列表' || trimmed === 'danh sách dự án')) {
       await showProjectPicker(chatId)
       return
     }
 
     const ready = await ensureSession(chatId)
     if (!ready) return
-    const effectiveText = trimmed || (attachments.length > 0 ? '(用户发送了附件)' : '')
+    const effectiveText = trimmed || (attachments.length > 0 ? t('runtime.attachmentsOnly') : '')
     if (!effectiveText && attachments.length === 0) return
     const sent = bridge.sendUserMessage(chatId, effectiveText, attachments.length ? attachments : undefined)
     if (sent) {
       getRuntimeState(chatId).state = 'thinking'
     } else {
-      await sendText(chatId, '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await sendText(chatId, '⚠️ ' + t('runtime.sendFailed'))
     }
   })
 }
@@ -575,8 +585,8 @@ async function handleRobotMessage(data: DingTalkRobotMessage): Promise<void> {
     await sendText(
       chatId,
       success
-        ? '✅ 配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。发送 /help 查看可用命令。'
-        : '🔒 未授权。请先在 Claude Code 桌面端完成钉钉扫码绑定，再生成 IM 配对码后发送给我。',
+        ? '✅ ' + t('pair.success')
+        : '🔒 ' + t('pair.denied.dingtalk'),
     )
     return
   }
@@ -615,7 +625,7 @@ async function collectAttachments(
     token = await getAccessToken()
   } catch (err) {
     console.error('[DingTalk] access token for attachment download failed:', err)
-    await sendText(chatId, '📎 附件下载授权失败，请稍后重试。')
+    await sendText(chatId, t('attachment.authorizationFailed'))
     return []
   }
 
@@ -660,7 +670,7 @@ async function collectAttachments(
   if (failures > 0) {
     await sendText(
       chatId,
-      failures === candidates.length ? '📎 附件下载失败，请稍后重试。' : `📎 ${failures} 个附件下载失败，已跳过。`,
+      failures === candidates.length ? t('attachment.downloadFailed') : t('attachment.downloadPartial', { count: failures }),
     )
   }
   return attachments
