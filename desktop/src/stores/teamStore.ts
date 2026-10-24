@@ -30,6 +30,14 @@ import type { MessageEntry } from '../types/session'
 
 const MEMBER_POLL_INTERVAL_MS = 1500
 const MEMBER_TRANSCRIPT_MATCH_WINDOW_MS = 120_000
+/**
+ * A steer sent mid-turn persists only when the member consumes its mailbox,
+ * which can sit behind the rest of the current turn — minutes after the
+ * optimistic bubble was drawn. A persisted user echo is therefore matched
+ * without an upper age bound; the lower bound (echo not older than the send)
+ * is what keeps an old identical prompt from consuming a new pending send.
+ */
+const USER_ECHO_TIMESTAMP_SKEW_MS = 5_000
 const WORKBENCH_HISTORY_LIMIT = 200
 const TEAM_DISCOVERY_TTL_MS = 5_000
 
@@ -416,20 +424,43 @@ function isPendingMemberMessage(message: UIMessage): message is Extract<UIMessag
   return message.type === 'user_text' && message.pending === true
 }
 
+/**
+ * Whether the user is the sender of a durable transcript row. A steer reaches
+ * the member through its mailbox, so it persists as a teammate envelope from
+ * "user"; teammate-to-teammate traffic never matches a locally pending send.
+ */
+function isUserEchoRow(message: UIMessage): message is Extract<UIMessage, { type: 'user_text' }> {
+  return message.type === 'user_text' && (
+    !message.teammateFrom || message.teammateFrom === 'user'
+  )
+}
+
+/**
+ * A durable user row counts as the echo of one pending send. Direct-persisted
+ * rows keep the near-send timestamp window; mailbox echoes may be minutes
+ * newer, so they only need to not predate the send.
+ */
+function echoMatchesPendingMessage(
+  echo: Extract<UIMessage, { type: 'user_text' }>,
+  pendingMessage: Extract<UIMessage, { type: 'user_text' }> & { pending: true },
+): boolean {
+  if (echo.content !== pendingMessage.content) return false
+  if (echo.teammateFrom === 'user') {
+    return echo.timestamp >= pendingMessage.timestamp - USER_ECHO_TIMESTAMP_SKEW_MS
+  }
+  return Math.abs(echo.timestamp - pendingMessage.timestamp) <= MEMBER_TRANSCRIPT_MATCH_WINDOW_MS
+}
+
 function pendingMessagesWithoutTranscriptEcho(
   pendingMessages: Array<Extract<UIMessage, { type: 'user_text' }> & { pending: true }>,
   transcriptMessages: UIMessage[],
 ): UIMessage[] {
   const availableEchoes = transcriptMessages.filter((message): message is Extract<UIMessage, { type: 'user_text' }> => (
-    message.type === 'user_text' &&
-    message.pending !== true &&
-    !message.teammateFrom
+    isUserEchoRow(message) &&
+    message.pending !== true
   ))
   return pendingMessages.filter((pendingMessage) => {
-    const matchIndex = availableEchoes.findIndex((message) => (
-      message.content === pendingMessage.content &&
-      Math.abs(message.timestamp - pendingMessage.timestamp) <= MEMBER_TRANSCRIPT_MATCH_WINDOW_MS
-    ))
+    const matchIndex = availableEchoes.findIndex((message) => echoMatchesPendingMessage(message, pendingMessage))
     if (matchIndex < 0) return true
     availableEchoes.splice(matchIndex, 1)
     return false
@@ -551,7 +582,7 @@ function isMemberTurnMessage(message: UIMessage): boolean {
     message.type === 'error'
 }
 
-function memberReplySettlement(
+export function memberReplySettlement(
   messages: UIMessage[],
   awaiting: AwaitingMemberReply,
 ): { settled: boolean; promptKey?: string } {
@@ -559,12 +590,15 @@ function memberReplySettlement(
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index]!
     if (
-      message.type === 'user_text' &&
+      isUserEchoRow(message) &&
       message.pending !== true &&
-      !message.teammateFrom &&
       !awaiting.baselineMessageKeys.has(memberMessageKey(message)) &&
       message.content === awaiting.content &&
-      Math.abs(message.timestamp - awaiting.sentAt) <= MEMBER_TRANSCRIPT_MATCH_WINDOW_MS
+      (message.teammateFrom === 'user'
+        // The steer persists when the member consumes its mailbox, which can
+        // lag the send by minutes; it must simply not predate the send.
+        ? message.timestamp >= awaiting.sentAt - USER_ECHO_TIMESTAMP_SKEW_MS
+        : Math.abs(message.timestamp - awaiting.sentAt) <= MEMBER_TRANSCRIPT_MATCH_WINDOW_MS)
     ) {
       promptIndex = index
       break
@@ -574,8 +608,7 @@ function memberReplySettlement(
 
   let turnEnd = messages.length
   const nextPromptOffset = messages.slice(promptIndex + 1).findIndex((message) => (
-    message.type === 'user_text' &&
-    !message.teammateFrom
+    isUserEchoRow(message)
   ))
   if (nextPromptOffset >= 0) {
     turnEnd = promptIndex + 1 + nextPromptOffset
