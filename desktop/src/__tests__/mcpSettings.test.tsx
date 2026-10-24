@@ -284,7 +284,7 @@ describe('McpSettings', () => {
         },
       },
     } as const
-    const updateServer = vi.fn().mockResolvedValue(server)
+    const updateServer = vi.fn().mockResolvedValue({ server, sessionSync: { applied: true } })
 
     useMcpStore.setState({ servers: [server], updateServer })
 
@@ -322,6 +322,7 @@ describe('McpSettings', () => {
         },
       },
       '/workspace/project',
+      'session-1',
     )
   })
 
@@ -715,6 +716,36 @@ describe('McpSettings', () => {
     expect(selectServer).toHaveBeenLastCalledWith(null)
   })
 
+  it.each([
+    [true, { applied: true }, 'success', 'Saved'],
+    [true, { applied: false, reason: 'failed', error: 'Reload timed out' }, 'warning', 'Reload timed out'],
+    [true, { applied: false, reason: 'different_project' }, 'warning', 'different project'],
+    [true, { applied: false, reason: 'no_session' }, 'warning', 'No chat was selected'],
+    [true, { applied: false, reason: 'lean_profile' }, 'warning', 'Lean mode'],
+    [false, undefined, 'success', 'Saved'],
+  ] as const)('reports save reload state without losing persisted edits: enabled=%s, receipt=%j', async (enabled, sessionSync, type, message) => {
+    const server = {
+      name: 'saved-server', scope: 'user', transport: 'stdio', enabled,
+      status: enabled ? 'connected' : 'disabled', statusLabel: enabled ? 'Connected' : 'Disabled',
+      configLocation: '/tmp/config', summary: 'echo',
+      canEdit: true, canRemove: true, canReconnect: enabled, canToggle: true,
+      config: { type: 'stdio', command: 'echo', args: [], env: {} },
+    } as const
+    const addToast = vi.fn()
+    const updateServer = vi.fn().mockResolvedValue({ server, sessionSync })
+    useUIStore.setState({ addToast })
+    useMcpStore.setState({ servers: [server], updateServer })
+    await renderLoadedMcpSettings()
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Open saved-server' })) })
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })) })
+    expect(updateServer).toHaveBeenCalledWith(server, { scope: 'user', config: server.config }, '/workspace/project', 'session-1')
+    expect(addToast).toHaveBeenCalledWith({ type, message: expect.stringContaining(message) })
+    expect(screen.getByRole('button', { name: /add server/i })).toBeInTheDocument()
+    if (type === 'warning') {
+      expect(addToast).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'success' }))
+    }
+  })
+
   it('requires an explicitly selected project before creating local MCP servers', async () => {
     const createdServer = {
       name: 'context7',
@@ -732,7 +763,7 @@ describe('McpSettings', () => {
       projectPath: '/workspace/project',
       config: { type: 'stdio' as const, command: 'npx', args: ['@upstash/context7-mcp'], env: {} },
     }
-    const createServer = vi.fn().mockResolvedValue(createdServer)
+    const createServer = vi.fn().mockResolvedValue({ server: createdServer, sessionSync: { applied: true } })
 
     useMcpStore.setState({ createServer })
 
@@ -777,6 +808,7 @@ describe('McpSettings', () => {
         },
       },
       '/workspace/selected-project',
+      'session-1',
     )
   })
 
@@ -793,7 +825,7 @@ describe('McpSettings', () => {
         sessionCount: 1,
       }],
     })
-    const updateServer = vi.fn().mockResolvedValue({
+    const updateServer = vi.fn().mockResolvedValue({ server: {
       name: 'shared-tools',
       scope: 'project',
       transport: 'stdio',
@@ -808,7 +840,7 @@ describe('McpSettings', () => {
       canToggle: true,
       projectPath: '/workspace/moved-project',
       config: { type: 'stdio' as const, command: 'npx', args: ['shared-tools'], env: {} },
-    })
+    }, sessionSync: { applied: false, reason: 'different_project' } })
     const server = {
       name: 'shared-tools',
       scope: 'project',
@@ -863,6 +895,7 @@ describe('McpSettings', () => {
         },
       },
       '/workspace/moved-project',
+      'session-1',
     )
   })
 

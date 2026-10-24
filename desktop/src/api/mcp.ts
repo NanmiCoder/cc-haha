@@ -1,5 +1,5 @@
 import { api } from './client'
-import type { McpServerRecord, McpReconnectResult, McpToggleResult, McpUpsertPayload } from '../types/mcp'
+import type { McpServerRecord, McpReconnectResult, McpSaveResult, McpToggleResult, McpUpsertPayload } from '../types/mcp'
 
 export const mcpApi = {
   list: (cwd?: string) => {
@@ -16,19 +16,21 @@ export const mcpApi = {
     return api.get<{ server: McpServerRecord }>(`/api/mcp/${encodeURIComponent(name)}/status${query}`)
   },
 
-  create: (name: string, payload: McpUpsertPayload, cwd?: string) => {
-    return api.post<{ server: McpServerRecord }>('/api/mcp', {
+  create: (name: string, payload: McpUpsertPayload, cwd?: string, sessionId?: string) => {
+    return api.post<McpSaveResult>('/api/mcp', {
       name,
       ...payload,
       ...(cwd ? { cwd } : {}),
+      ...(sessionId ? { sessionId } : {}),
     })
   },
 
-  update: (name: string, payload: McpUpsertPayload, cwd?: string, previousCwd?: string) => {
-    return api.put<{ server: McpServerRecord }>(`/api/mcp/${encodeURIComponent(name)}`, {
+  update: (name: string, payload: McpUpsertPayload, cwd?: string, previousCwd?: string, sessionId?: string) => {
+    return api.put<McpSaveResult>(`/api/mcp/${encodeURIComponent(name)}`, {
       ...payload,
       ...(cwd ? { cwd } : {}),
       ...(previousCwd ? { previousCwd } : {}),
+      ...(sessionId ? { sessionId } : {}),
     })
   },
 

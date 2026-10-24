@@ -615,10 +615,14 @@ let onMcpConnectionClosed: ((name: string, client: Client) => void) | undefined
 // currently has the same server name (including a changed configuration).
 type ConnectionAttempt = {
   key: string
+  name: string
+  config: ScopedMcpServerConfig
+  cwd: string
   cancel?: () => Promise<void>
   cleanup?: () => Promise<void>
 }
 const connectionAttempts = new Map<string, ConnectionAttempt>()
+const reconnectQueues = new Map<string, Promise<void>>()
 
 export function setMcpConnectionClosedHandler(
   handler: ((name: string, client: Client) => void) | undefined,
@@ -732,7 +736,12 @@ const connectToServerMemoized = memoize(
     },
   ): Promise<MCPServerConnection> => {
     const connectStartTime = Date.now()
-    const attempt: ConnectionAttempt = { key: getServerCacheKey(name, serverRef) }
+    const attempt: ConnectionAttempt = {
+      key: getServerCacheKey(name, serverRef),
+      name,
+      config: serverRef,
+      cwd: getCwd(),
+    }
     connectionAttempts.set(attempt.key, attempt)
     // The connected client's cleanup is registered only once the handshake and
     // setup finish. A CLI that shuts down before then (a runtime stopped while
@@ -2367,6 +2376,15 @@ export async function reconnectMcpServerImpl(
   commands: Command[]
   resources?: ServerResource[]
 }> {
+  // Config edits use a new connection key. Keep reconnect results in request
+  // order so a slower old cleanup cannot restore an earlier configuration.
+  const cwd = getCwd()
+  const queueKey = jsonStringify([cwd, name])
+  const previous = reconnectQueues.get(queueKey)
+  let release!: () => void
+  const completed = new Promise<void>(resolve => { release = resolve })
+  reconnectQueues.set(queueKey, completed)
+  await previous
   try {
     // Invalidate the keychain cache so we read fresh credentials from disk.
     // This is necessary when another process (e.g. the VS Code extension host)
@@ -2375,6 +2393,11 @@ export async function reconnectMcpServerImpl(
     // use stale cached data and never notice the tokens were removed.
     clearKeychainCache()
 
+    const nextKey = getServerCacheKey(name, config)
+    const staleAttempts = [...connectionAttempts.values()].filter(attempt => (
+      attempt.name === name && attempt.cwd === cwd && attempt.key !== nextKey
+    ))
+    await Promise.all(staleAttempts.map(attempt => clearServerCache(name, attempt.config)))
     await clearServerCache(name, config)
     const client = await connectToServer(name, config)
 
@@ -2430,6 +2453,9 @@ export async function reconnectMcpServerImpl(
       tools: [],
       commands: [],
     }
+  } finally {
+    release()
+    if (reconnectQueues.get(queueKey) === completed) reconnectQueues.delete(queueKey)
   }
 }
 
