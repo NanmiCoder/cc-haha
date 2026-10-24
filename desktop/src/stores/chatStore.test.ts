@@ -14123,6 +14123,8 @@ describe('chatStore history mapping', () => {
       retryDelayMs: 2500,
       errorStatus: 503,
       errorType: 'server_error',
+      errorMessage: 'Upstream service unavailable',
+      requestId: 'req-retry-123',
     })
 
     const retryingSession = useChatStore.getState().sessions[TEST_SESSION_ID]
@@ -14134,6 +14136,8 @@ describe('chatStore history mapping', () => {
       retryDelayMs: 2500,
       errorStatus: 503,
       errorType: 'server_error',
+      errorMessage: 'Upstream service unavailable',
+      requestId: 'req-retry-123',
     })
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
 
@@ -15107,6 +15111,43 @@ describe('chatStore history mapping', () => {
         content: 'The screenshot shows a repository list.',
       },
     ])
+  })
+
+  it.each(['simple', 'detailed'] as const)('reconciles a delayed image guide replay after history hydration (%s metadata)', async (metadataStyle) => {
+    // A guide is persisted before the CLI's first assistant record triggers its
+    // replay ACK. History can therefore restore the image metadata first.
+    const prompt = '造桥这块儿有闪烁的情况'
+    const metadata = ['first.png', 'second.png'].map((name) => metadataStyle === 'simple'
+      ? `[Image: source: /tmp/fixture-uploads/${name}]`
+      : `[Image: source: /tmp/fixture-uploads/${name}, original 1024x768, displayed at 512x384. Multiply coordinates by 2 to map to original image.]`)
+    const persistedGuide: MessageEntry = {
+      id: 'persisted-image-guide',
+      type: 'user',
+      timestamp: '2026-10-23T07:27:42.922Z',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'BBBB' } },
+        ...metadata.map(text => ({ type: 'text', text })),
+      ],
+    }
+    useChatStore.setState({ sessions: { [TEST_SESSION_ID]: makeSession({ chatState: 'thinking' }) } })
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({ messages: [persistedGuide] })
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+    const hydrated = useChatStore.getState().sessions[TEST_SESSION_ID]!.messages[0]!
+    expect(hydrated).toMatchObject({ content: prompt, modelContent: [prompt, ...metadata].join('\n') })
+
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'tool_use_complete', toolUseId: 'inspect-bridge', toolName: 'Bash', input: { command: 'ls bridge-lab' },
+    })
+    useChatStore.getState().handleServerMessage(TEST_SESSION_ID, {
+      type: 'user_message_replay', content: [prompt, ...metadata].join('\n'),
+    })
+
+    const messages = useChatStore.getState().sessions[TEST_SESSION_ID]!.messages
+    expect(messages.filter(message => message.type === 'user_text')).toEqual([hydrated])
+    expect(messages.map(message => message.type)).toEqual(['user_text', 'tool_use'])
+    expect(sendMock).not.toHaveBeenCalled()
   })
 
   it('dedupes a path-backed image after the server inlines it into replay content', () => {

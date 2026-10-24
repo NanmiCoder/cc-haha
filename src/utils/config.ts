@@ -883,6 +883,7 @@ let globalConfigCache: { config: GlobalConfig | null; mtime: number } = {
   config: null,
   mtime: 0,
 }
+let globalConfigRefreshGeneration = 0
 
 // Tracking for config file operations (telemetry)
 let lastReadFileStats: { mtime: number; size: number } | null = null
@@ -1020,11 +1021,14 @@ function startGlobalConfigFreshnessWatcher(): void {
       // Bun/Node also fire with curr.mtimeMs=0 when the file doesn't exist
       // (initial callback or deletion) — the <= handles that too.
       if (curr.mtimeMs <= globalConfigCache.mtime) return
+      const refreshGenerationAtReadStart = globalConfigRefreshGeneration
       void getFsImplementation()
         .readFile(file, { encoding: 'utf-8' })
         .then(content => {
           // A write-through may have advanced the cache while we were reading;
           // don't regress to the stale snapshot watchFile stat'd.
+          // Explicit refresh can also load a restored file with an older mtime.
+          if (globalConfigRefreshGeneration !== refreshGenerationAtReadStart) return
           if (curr.mtimeMs <= globalConfigCache.mtime) return
           const parsed = safeParseJSON(stripBOM(content))
           if (parsed === null || typeof parsed !== 'object') return
@@ -1050,8 +1054,34 @@ function startGlobalConfigFreshnessWatcher(): void {
 // the file's real mtime (Date.now() is recorded after the write) so the
 // freshness watcher skips re-reading our own write on its next tick.
 function writeThroughGlobalConfigCache(config: GlobalConfig): void {
+  globalConfigRefreshGeneration += 1
   globalConfigCache = { config, mtime: Date.now() }
   lastReadFileStats = null
+}
+
+// Explicit cross-process actions cannot wait for the background watcher. Keep
+// this read-only: a missing or partially written file must retain the good cache.
+export function refreshGlobalConfigFromDisk(): boolean {
+  if (process.env.NODE_ENV === 'test') return false
+  try {
+    const fs = getFsImplementation()
+    const file = getGlobalClaudeFile()
+    const stats = fs.statSync(file)
+    const parsed = safeParseJSON(stripBOM(fs.readFileSync(file, { encoding: 'utf-8' })))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false
+    globalConfigRefreshGeneration += 1
+    globalConfigCache = {
+      config: migrateConfigFields({
+        ...createDefaultGlobalConfig(),
+        ...(parsed as Partial<GlobalConfig>),
+      }),
+      mtime: stats.mtimeMs,
+    }
+    lastReadFileStats = { mtime: stats.mtimeMs, size: stats.size }
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function getGlobalConfig(): GlobalConfig {

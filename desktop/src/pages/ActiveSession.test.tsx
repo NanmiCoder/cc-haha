@@ -1353,7 +1353,7 @@ describe('ActiveSession task polling', () => {
     act(() => useActivityPanelStore.getState().close())
   })
 
-  it('auto-opens for current activity and seals unfinished tasks when the turn becomes idle', async () => {
+  it('keeps new activity collapsed until opened and seals unfinished tasks when the turn becomes idle', async () => {
     const sessionId = 'activity-auto-open-session'
     const fetchSessionTasks = vi.fn().mockResolvedValue(undefined)
 
@@ -1423,9 +1423,11 @@ describe('ActiveSession task polling', () => {
       })
     })
 
-    await waitFor(() => {
-      expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(true)
-    })
+    // #1639: the activity badge may update without reopening the conversation overlay.
+    expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(false)
+    expect(screen.queryByTestId('session-activity-panel')).not.toBeInTheDocument()
+
+    act(() => useActivityPanelStore.getState().open(sessionId))
     expect(screen.getByTestId('session-activity-panel')).toHaveAttribute('data-placement', 'rail')
     expect(screen.getByText('Draft implementation plan')).toBeInTheDocument()
     expect(within(screen.getByTestId('session-activity-panel')).getByLabelText('Task in progress')).toBeInTheDocument()
@@ -1445,6 +1447,22 @@ describe('ActiveSession task polling', () => {
     expect(within(screen.getByTestId('session-activity-panel')).getByLabelText('Stopped')).toBeInTheDocument()
     expect(within(screen.getByTestId('session-activity-panel')).queryByLabelText('Task in progress')).not.toBeInTheDocument()
     expect(screen.queryByText(/session active|会话活跃中/)).not.toBeInTheDocument()
+
+    act(() => {
+      useActivityPanelStore.getState().close(sessionId)
+      useCLITaskStore.setState({ tasks: [] })
+    })
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: { ...state.sessions, [sessionId]: { ...state.sessions[sessionId]!, chatState: 'thinking' } },
+      }))
+      useCLITaskStore.setState({ tasks: [{
+        id: 'task-2', subject: 'Next turn task', description: '', status: 'in_progress',
+        blocks: [], blockedBy: [], taskListId: sessionId,
+      }] })
+    })
+    expect(useActivityPanelStore.getState().isOpen(sessionId)).toBe(false)
+    expect(screen.queryByTestId('session-activity-panel')).not.toBeInTheDocument()
   })
 
   it('renders completed historical TodoWrite activity in the rail', () => {
@@ -2096,7 +2114,8 @@ describe('ActiveSession task polling', () => {
     })
 
     // Filtering is ownership-based, not a blanket Activity shutdown: a
-    // direct SubAgent spawned by the main session still opens the shared UI.
+    // direct SubAgent spawned by the main session still appears when Activity is opened.
+    act(() => useActivityPanelStore.getState().open(sessionId))
     const panel = await screen.findByTestId('session-activity-panel')
     expect(within(panel).getByText('Inspect a main-session seam')).toBeInTheDocument()
   })
@@ -3103,6 +3122,8 @@ describe('ActiveSession activity panel auto-close grace', () => {
 
     act(() => {
       patchSession({ backgroundAgentTasks: {}, messages: [], historyStatus: 'ready' })
+    })
+    act(() => {
       vi.advanceTimersByTime(1000)
     })
     act(() => {
@@ -3118,6 +3139,8 @@ describe('ActiveSession activity panel auto-close grace', () => {
           },
         },
       })
+    })
+    act(() => {
       vi.advanceTimersByTime(5000)
     })
 

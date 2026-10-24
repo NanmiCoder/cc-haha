@@ -7,6 +7,7 @@ import {
   getDeepSeekOAuthTokensAsync,
   isInferenceEligibleGrant,
 } from './storage.js'
+import { buildProviderMediaFetch } from '../api/providerMedia/fetch.js'
 
 const SIGN_IN_REQUIRED_MESSAGE =
   'DeepSeek account is not signed in. Sign in to DeepSeek again in Settings > Providers.'
@@ -32,7 +33,7 @@ export function buildDeepSeekFetch(
   fetchOverride: typeof fetch | undefined,
   inferenceOrigin: string = DEEPSEEK_INFERENCE_ORIGIN,
 ): typeof fetch {
-  const inner = fetchOverride ?? globalThis.fetch
+  const inner = buildProviderMediaFetch(fetchOverride ?? globalThis.fetch)
 
   return async (input, init) => {
     const request = input instanceof Request ? input : null

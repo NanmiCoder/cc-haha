@@ -66,7 +66,6 @@ import {
   createCompactBoundaryMessage,
   createUserMessage,
   getAssistantMessageText,
-  getLastAssistantMessage,
   getMessagesAfterCompactBoundary,
   isCompactBoundaryMessage,
   normalizeMessagesForAPI,
@@ -1195,6 +1194,23 @@ export function createCompactProgressReporter(
   }
 }
 
+// Each completed content block becomes an assistant message. Skip empty text
+// only within the same response: a blank continuation must not revive text
+// from an earlier, possibly truncated API attempt.
+function selectCompactSummaryResponse(
+  current: AssistantMessage | undefined,
+  next: AssistantMessage,
+): AssistantMessage {
+  if (!current || next.isApiErrorMessage || next.message.content.some(
+    block => block.type !== 'text' || block.text.trim() !== '',
+  )) return next
+  if (current.isApiErrorMessage) return current
+  if (current.message.id !== next.message.id || current.requestId !== next.requestId) return next
+  // message_delta updates only the last block. Keep its terminal metadata with
+  // the selected text, without changing the fork's messages or transcript.
+  return { ...current, message: { ...next.message, content: current.message.content } }
+}
+
 export async function streamCompactSummary({
   messages,
   summaryRequest,
@@ -1272,7 +1288,12 @@ export async function streamCompactSummary({
             apiAttemptBudget,
           },
         })
-        const assistantMsg = getLastAssistantMessage(result.messages)
+        if (context.abortController.signal.aborted) throw new APIUserAbortError()
+        const assistantMsg = result.messages.reduce<AssistantMessage | undefined>(
+          (current, message) => message.type === 'assistant'
+            ? selectCompactSummaryResponse(current, message) : current,
+          undefined,
+        )
         const assistantText = assistantMsg
           ? getAssistantMessageText(assistantMsg)
           : null
@@ -1321,6 +1342,7 @@ export async function streamCompactSummary({
           preCompactTokenCount,
         })
       } catch (error) {
+        if (context.abortController.signal.aborted) throw new APIUserAbortError()
         logError(error)
         logEvent('tengu_compact_cache_sharing_fallback', {
           reason:
@@ -1436,12 +1458,13 @@ export async function streamCompactSummary({
         }
 
         if (event.type === 'assistant') {
-          response = event
+          response = selectCompactSummaryResponse(response, event)
         }
 
         next = await streamIter.next()
       }
 
+      if (context.abortController.signal.aborted) throw new APIUserAbortError()
       if (response) {
         return response
       }

@@ -127,6 +127,32 @@ describe('coverage gate helpers', () => {
     expect(parseBunTestFileCount('process terminated before summary')).toBeNull()
   })
 
+  test('recovers discovery from Bun CI file groups when a failed run has no summary', () => {
+    const output = [
+      '::group::src/server/a.test.ts:',
+      '(pass) first test',
+      '::endgroup::',
+      '::group::src\\server\\a.test.ts:',
+      '::endgroup::',
+      '::group::src/utils/b.test.tsx:',
+      '(fail) second test',
+      '::group::Coverage report:',
+      '::group::src/not-a-test.ts:',
+    ].join('\r\n')
+
+    expect(parseBunTestFileCount(output)).toBe(2)
+    expect(parseBunTestFileCount(`${output}\nRan 10 tests across 3 files.`)).toBe(3)
+  })
+
+  test('keeps missing and partial CI discovery fail-closed', () => {
+    expect(parseBunTestFileCount('::group::Coverage report:\n::endgroup::')).toBeNull()
+    expect(parseBunTestFileCount('diagnostic ::group::src/a.test.ts:\n')).toBeNull()
+    const output = '::group::src/a.test.ts:\n::endgroup::\n'
+    expect(parseBunTestFileCount(output)).toBe(1)
+    expect(parseBunTestFileCount(output)).not.toBe(2)
+    expect(hasUsableLcov('')).toBe(false)
+  })
+
   test('rejects empty aggregate coverage summaries', () => {
     expect(hasUsableCoverageSummary({
       lines: { total: 0, covered: 0, pct: 100 },
@@ -311,6 +337,17 @@ describe('coverage gate helpers', () => {
 
     expect(result.files).toEqual([])
     expect(result.failures).toEqual([])
+  })
+
+  test.each(['__tests__', 'fixtures', '__fixtures__'])('excludes adapter %s fixtures while enforcing production coverage', directory => {
+    const changed = new Map([
+      [`adapters/feishu/${directory}/transport.ts`, new Set([1])],
+      ['adapters/feishu/http-client.ts', new Set([1])],
+    ])
+    const result = evaluateChangedLineCoverage(changed, new Map(), CHANGED_LINE_SCOPES, 90)
+    expect(result.files.map(file => file.file)).toEqual(['adapters/feishu/http-client.ts'])
+    expect(result.total).toBe(1)
+    expect(result.failures).toEqual(['changed-lines: coverage 0% is below minimum 90%'])
   })
 
   test('reports changed lines of a failed suite as unmeasured instead of uncovered', () => {

@@ -135,7 +135,9 @@ export function anthropicToOpenaiChat(
       result.reasoning_effort = 'high'
     }
     if (options.passThinkingToggle) {
-      result.thinking = { type: body.thinking.type }
+      result.thinking = {
+        type: body.thinking.type === 'adaptive' ? 'enabled' : body.thinking.type,
+      }
     }
   }
   const outputConfigEffort = normalizeOpenAIReasoningEffort(body.output_config?.effort)

@@ -17,6 +17,7 @@ import type { ConnectorDto } from '@/types/connector'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import type { NormalizedSkill } from '@/types/market'
 import type { WorkflowDefinition } from '@/types/workflow'
+import type { AgentProfile } from '@/types/session'
 import {
   buildCapabilitySections,
   type CapabilityAction,
@@ -118,6 +119,11 @@ export function resetPopularSkillsCache(): void {
 export function useCapabilityMenu(options: {
   open: boolean
   lean?: boolean
+  /**
+   * Shows the Agent mode row. Without `onChange` the row is the read-only
+   * record of a session's fixed mode.
+   */
+  agentProfile?: { value: AgentProfile, onChange?: (profile: AgentProfile) => void }
   cwd: string
   references: ComposerReferenceCandidate[]
   handlers: CapabilityMenuComposerHandlers
@@ -130,7 +136,7 @@ export function useCapabilityMenu(options: {
   agentTeamsNotice: AgentTeamsNotice
   computerUseConsent: ComputerUseConsent
 } {
-  const { open, cwd, references, handlers, lean = false } = options
+  const { open, cwd, references, handlers, lean = false, agentProfile } = options
   const t = useTranslation()
   const [data, setData] = useState<CapabilityMenuData>(EMPTY_DATA)
   const [popularSkills, setPopularSkills] = useState<NormalizedSkill[]>([])
@@ -141,6 +147,8 @@ export function useCapabilityMenu(options: {
   const agentTeamsEnabled = useSettingsStore(state => state.agentTeamsEnabled)
   const installingSkillIds = useMarketStore(state => state.installingIds)
   const agentTeamArmed = armed && agentTeamsEnabled && !lean
+  const profileValue = agentProfile?.value
+  const profileLocked = agentProfile ? !agentProfile.onChange : undefined
 
   useEffect(() => {
     if (!open || lean) return
@@ -193,8 +201,9 @@ export function useCapabilityMenu(options: {
     workflows: data.workflows,
     agentTeam: { enabled: agentTeamsEnabled, armed: agentTeamArmed },
     computerUse: data.computerUse,
+    agentProfile: profileValue ? { value: profileValue, locked: profileLocked ?? true } : undefined,
     t,
-  }), [references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamsEnabled, agentTeamArmed, t])
+  }), [references, recentSkillIds, popularSkills, installingSkillIds, data, agentTeamsEnabled, agentTeamArmed, profileValue, profileLocked, t])
 
   const setComputerUseEnabled = (enabled: boolean) => setData(previous => previous.computerUse
     ? { ...previous, computerUse: { ...previous.computerUse, enabled } }
@@ -268,6 +277,16 @@ export function useCapabilityMenu(options: {
           return
         }
         setArmed(previous => !previous)
+        return
+      case 'setAgentProfile':
+        if (!agentProfile?.onChange || action.profile === agentProfile.value) return
+        // Lean has no Agent Teams: the draft drops the arming now, so
+        // switching back to Standard does not bring it back unannounced.
+        if (action.profile === 'lean' && armed) {
+          setArmed(false)
+          useUIStore.getState().addToast({ type: 'info', message: t('agentProfile.teamReset') })
+        }
+        agentProfile.onChange(action.profile)
         return
       case 'toggleComputerUse': {
         // Turning it on goes through the same consent dialog as Settings —
@@ -344,7 +363,7 @@ export function useCapabilityMenu(options: {
 }
 
 function isLeanAction(action: CapabilityAction): boolean {
-  return action.type === 'attachment' || action.type === 'slashTrigger' ||
+  return action.type === 'attachment' || action.type === 'slashTrigger' || action.type === 'setAgentProfile' ||
     (action.type === 'insertMention' && action.reference.kind === 'skill')
 }
 
@@ -354,6 +373,6 @@ function filterLeanItems(items: CapabilityMenuItem[]): CapabilityMenuItem[] {
       const children = filterLeanItems(item.children)
       return children.length ? [{ ...item, children, count: children.length }] : []
     }
-    return item.action && isLeanAction(item.action) ? [item] : []
+    return item.choice || (item.action && isLeanAction(item.action)) ? [item] : []
   })
 }

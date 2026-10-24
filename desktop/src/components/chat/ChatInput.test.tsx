@@ -129,8 +129,8 @@ vi.mock('../controls/PermissionModeSelector', () => ({
   // Surfaces `compact` because that prop is the difference between the labelled
   // pill and the bare icon the real selector renders, and the composer decides
   // it from the column width.
-  PermissionModeSelector: ({ compact, sessionId }: { compact?: boolean; sessionId?: string }) => (
-    <button type="button" data-testid="permission-mode-selector" data-session={sessionId} data-compact={compact ? 'true' : 'false'}>
+  PermissionModeSelector: ({ compact, sessionId, trigger, menuAlign }: { compact?: boolean; sessionId?: string; trigger?: string; menuAlign?: string }) => (
+    <button type="button" data-testid="permission-mode-selector" data-session={sessionId} data-compact={compact ? 'true' : 'false'} data-trigger={trigger} data-menu-align={menuAlign}>
       Permissions
     </button>
   ),
@@ -855,16 +855,34 @@ describe('ChatInput file mentions', () => {
     expect(useUIStore.getState().toasts.some(toast => toast.message === 'This command is unavailable in lean mode. Start a standard chat to use it.')).toBe(true)
   })
 
-  // The badge used to read "Lean · experimental" next to its info button. On a
+  // The badge used to read "Lean · experimental" next to an info button. On a
   // phone that pair squeezed the model beside it down to a single letter
-  // ("e  Low"), so the toolbar now carries the short name on desktop and the
-  // phone moves the mode into the + sheet.
-  it('names the locked lean mode briefly on the toolbar and fully in its explanation', () => {
+  // ("e  Low"), and on desktop it pushed the trailing controls onto a second
+  // line. The toolbar now carries a short, locked chip, and the "+" menu has
+  // the Agent mode row with the explanation; the phone has it in its + sheet.
+  it('marks a lean conversation with a locked chip and explains the mode in the + menu', () => {
     useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const })) }))
     render(<ChatInput compact />)
     expect(screen.queryByText('Lean · experimental')).not.toBeInTheDocument()
-    fireEvent.focus(screen.getByRole('button', { name: 'About lean mode' }))
-    expect(screen.getByRole('tooltip')).toHaveTextContent('Lean · experimental')
+    expect(screen.queryByRole('button', { name: 'About lean mode' })).not.toBeInTheDocument()
+    const chip = screen.getByTestId('agent-profile-chip')
+    expect(chip).toHaveTextContent('Lean')
+    expect(within(chip).queryByRole('button')).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    const row = screen.getByRole('radiogroup', { name: 'Agent mode' })
+    expect(within(row).getByRole('radio', { name: 'Lean' })).toBeChecked()
+    expect(within(row).getByRole('radio', { name: 'Standard' })).toBeDisabled()
+    const detail = screen.getByTestId('agent-profile-detail')
+    expect(detail).toHaveTextContent('Mode is fixed for this conversation')
+    expect(detail).toHaveTextContent('Unavailable')
+  })
+
+  it('shows a standard conversation no mode chip and no mode row', () => {
+    render(<ChatInput compact />)
+    expect(screen.queryByTestId('agent-profile-chip')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    expect(screen.queryByRole('radiogroup', { name: 'Agent mode' })).not.toBeInTheDocument()
   })
 
   it('moves the locked lean badge off the phone toolbar into the + sheet, leaving the model its room', async () => {
@@ -892,29 +910,37 @@ describe('ChatInput file mentions', () => {
     expect(modeSheet).toHaveTextContent('Unavailable')
   })
 
-  // On desktop the badge and info button share the row with the project, branch
-  // and model, and the model's name was the one thing that gave way: a letter or
-  // nothing at the narrowest windows. Real widths are measured in a browser; this
-  // pins the pieces that keep it from coming back.
-  it('lets a lean session toolbar wrap on desktop, the model keeping a floor', () => {
+  // On desktop the lean badge and its info button used to share the row with
+  // the project, branch and model, and the row wrapped its trailing group onto a
+  // second line to make room, which left the first line's right half empty.
+  // The lean mode is a chip in the leading group now, so the row never wraps.
+  // jsdom lays nothing out; this pins the pieces that keep that from coming back.
+  it.each([false, true])('keeps the desktop toolbar to one row, the leading group giving way (lean session %s)', (lean) => {
     stubComposerColumnWidth(640)
-    useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const })) }))
+    if (lean) useSessionStore.setState(state => ({ sessions: state.sessions.map(session => ({ ...session, agentProfile: 'lean' as const })) }))
     render(<ChatInput compact />)
     const toolbar = screen.getByTestId('chat-input-toolbar')
+    const leading = screen.getByTestId('chat-input-toolbar-leading')
     const trailing = screen.getByTestId('chat-input-toolbar-trailing')
-    const modelSlot = screen.getByTestId('model-selector-shell').parentElement!
 
-    expect(toolbar).toHaveClass('flex-wrap')
-    expect(trailing).toHaveClass('min-w-max', 'flex-1')
-    expect(trailing).not.toHaveClass('min-w-0')
-    expect(modelSlot).toHaveClass('min-w-[128px]', 'max-w-max', 'grow')
-    expect(trailing).toContainElement(modelSlot)
-    expect(trailing).toContainElement(screen.getByTestId('agent-profile-control'))
+    expect(toolbar).not.toHaveClass('flex-wrap')
+    expect(leading).toHaveClass('min-w-0', 'shrink')
+    expect(trailing).toHaveClass('shrink-0')
+    expect(trailing).not.toHaveClass('min-w-max')
+    expect(trailing).toContainElement(screen.getByTestId('model-selector-shell'))
+    expect(screen.queryByTestId('agent-profile-control')).not.toBeInTheDocument()
+    if (lean) expect(leading).toContainElement(screen.getByTestId('agent-profile-chip'))
+    // Permission leads the trailing group as a quiet glyph; it is not in the leading one.
+    const permission = screen.getByTestId('permission-mode-selector')
+    expect(permission).toHaveAttribute('data-trigger', 'quiet')
+    // The trigger is at the card's right: its menu opens leftwards, inside the card.
+    expect(permission).toHaveAttribute('data-menu-align', 'right')
+    expect(trailing.firstElementChild).toContainElement(permission)
+    expect(leading).not.toContainElement(permission)
   })
 
-  // Everyone else keeps the row they always had: wrapping is for the lean badge.
+  // A phone keeps the row it always had; its mode lives in the + sheet.
   it.each([
-    { label: 'a standard session on desktop', phone: false, lean: false },
     { label: 'a standard session on a phone', phone: true, lean: false },
     { label: 'a lean session on a phone, whose badge moved to the + sheet', phone: true, lean: true },
   ])('leaves the toolbar as it always was for $label', async ({ phone, lean }) => {
@@ -929,8 +955,9 @@ describe('ChatInput file mentions', () => {
     const trailing = screen.getByTestId('chat-input-toolbar-trailing')
     const model = screen.getByTestId('model-selector-shell')
 
+    expect(phone).toBe(true)
     expect(toolbar).not.toHaveClass('flex-wrap')
-    expect(toolbar).toHaveClass(phone ? 'gap-1' : 'gap-2')
+    expect(toolbar).toHaveClass('gap-1')
     expect(trailing).toHaveClass('min-w-0', 'flex-1')
     expect(trailing).not.toHaveClass('min-w-max')
     // No slot around the picker: it is a direct child of the trailing group.
@@ -3297,16 +3324,15 @@ describe('ChatInput file mentions', () => {
     expect(panel).not.toHaveClass('overflow-hidden')
   })
 
-  it.each([320, 400, 529, 530, 640])('lets the model yield space without compressing toolbar actions in a %ipx desktop column', (width) => {
+  it.each([320, 400, 529, 530, 640])('keeps the toolbar actions at their width and lets the leading group give way in a %ipx desktop column', (width) => {
     stubComposerColumnWidth(width)
     render(<ChatInput compact />)
-    expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('shrink-0')
+    expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('min-w-0', 'shrink')
     if (width >= 530) {
-      expect(screen.getByTestId('chat-input-toolbar-leading')).toHaveClass('max-w-[55%]')
       expect(screen.getByTestId('chat-input-toolbar-location')).toHaveClass('min-w-0', 'flex-1')
     }
-    expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('min-w-0', 'flex-1', 'justify-end')
-    expect(screen.getByTestId('model-selector-shell')).toHaveClass('min-w-0', 'flex-1')
+    expect(screen.getByTestId('chat-input-toolbar-trailing')).toHaveClass('shrink-0', 'justify-end')
+    expect(screen.getByTestId('model-selector-shell')).toHaveClass('shrink-0')
     expect(screen.getByRole('button', { name: 'Run' })).toHaveClass('shrink-0')
   })
 

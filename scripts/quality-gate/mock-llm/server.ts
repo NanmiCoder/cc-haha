@@ -26,6 +26,7 @@ export type MockLlmServer = {
   url: string
   requests: RecordedRequest[]
   imageRequests: Array<{ path: string; body: Record<string, unknown>; headers: Headers }>
+  searchRequests: Array<{ body: Record<string, unknown>; headers: Headers }>
   stop(): Promise<void>
 }
 
@@ -155,6 +156,7 @@ function handleMessages(record: RecordedRequest, replyFor: (request: MockRequest
 export function startMockLlmServer(replyFor = decideReply): MockLlmServer {
   const requests: RecordedRequest[] = []
   const imageRequests: MockLlmServer['imageRequests'] = []
+  const searchRequests: MockLlmServer['searchRequests'] = []
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -164,6 +166,11 @@ export function startMockLlmServer(replyFor = decideReply): MockLlmServer {
         return Response.json({ data: [{ type: 'model', id: MODEL_FALLBACK, display_name: 'Mock model' }], has_more: false })
       }
       if (req.method !== 'POST') return new Response('not found', { status: 404 })
+
+      if (path === '/v1/tools/search') {
+        searchRequests.push({ body: await req.json() as Record<string, unknown>, headers: req.headers })
+        return Response.json({ results: [{ title: 'DeepSeek fixture', url: 'https://example.com/search-fixture', summary: 'DEEPSEEK_SUMMARY_REACHED_MODEL' }] })
+      }
 
       const isGeminiLiteImage = path === '/v1beta/models/gemini-3.1-flash-lite-image:generateContent'
       const isGeminiImage = path === '/v1beta/models/mock-image:generateContent' || isGeminiLiteImage
@@ -212,6 +219,7 @@ export function startMockLlmServer(replyFor = decideReply): MockLlmServer {
     url: `http://127.0.0.1:${server.port}`,
     requests,
     imageRequests,
+    searchRequests,
     async stop() {
       await server.stop(true)
     },

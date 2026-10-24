@@ -1,11 +1,11 @@
 import { getGlobalConfig } from '../config.js'
-import { parseUserSpecifiedModel } from '../model/model.js'
+import { isClaudeAgentModelSuggestion, resolveAgentModelSpec, usesNonClaudeAgentRouting } from '../model/agentModelRouting.js'
 import { getHardcodedTeammateModelFallback } from './teammateModel.js'
 
 function getDefaultTeammateModel(leaderModel: string | null): string {
   const configured = getGlobalConfig().teammateDefaultModel
   if (typeof configured === 'string' && configured.trim()) {
-    return parseUserSpecifiedModel(configured)
+    return resolveAgentModelSpec(configured, leaderModel)
   }
   // Unset (`undefined`) and /config "Default" (`null`) both follow the leader.
   // A first-party Opus ID here is what sent mapped third-party teammates
@@ -19,6 +19,8 @@ function getDefaultTeammateModel(leaderModel: string | null): string {
  * definition, then leader/default. `inherit` is never forwarded literally;
  * it falls through to the next source. gh-31069 documents why passing it to
  * --model is invalid.
+ * On non-Claude sessions, invocation tier aliases defer to the selected Agent
+ * or leader/default. Concrete user presets still resolve through provider slots.
  *
  * Exported for testing.
  */
@@ -42,7 +44,7 @@ export function resolveTeammateModel(
     configuredSubagentModel &&
     configuredSubagentModel.toLowerCase() !== 'inherit'
   ) {
-    return parseUserSpecifiedModel(configuredSubagentModel)
+    return resolveAgentModelSpec(configuredSubagentModel, leaderModel)
   }
 
   const invocationModel = normalizeModelSpec(inputModel)
@@ -50,7 +52,12 @@ export function resolveTeammateModel(
     if (invocationModel.toLowerCase() === 'inherit') {
       return leaderModel ?? getDefaultTeammateModel(leaderModel)
     }
-    return parseUserSpecifiedModel(invocationModel)
+    // A generated Claude tier is only a model choice in a Claude session.
+    // Non-Claude sessions keep the selected Agent/default rather than jumping
+    // from e.g. DeepSeek Flash to the provider's Opus → Pro mapping.
+    if (!usesNonClaudeAgentRouting(leaderModel) || !isClaudeAgentModelSuggestion(invocationModel)) {
+      return resolveAgentModelSpec(invocationModel, leaderModel)
+    }
   }
 
   if (hasAgentDefinition) {
@@ -62,7 +69,7 @@ export function resolveTeammateModel(
       // Agent page / frontmatter is the highest teammate-specific pin.
       // Resolve aliases so `opus` on a mapped provider becomes that
       // provider's opus slot, not a first-party Opus ID.
-      return parseUserSpecifiedModel(definitionModel)
+      return resolveAgentModelSpec(definitionModel, leaderModel)
     }
     // Official Agent frontmatter defaults to `inherit`, so a selected Agent
     // follows the leader when its model is omitted or explicitly inherit.

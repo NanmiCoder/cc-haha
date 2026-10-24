@@ -70,9 +70,12 @@ type Props = {
    * `chip` always shows the trigger. `elevatedOnly` hides it while every write
    * still asks first: the phone composer keeps the mode in its + sheet, and
    * only puts the trigger on the toolbar once some writes run unattended — the
-   * one state worth a glance.
+   * one state worth a glance. `quiet` shows only the mode glyph in the default
+   * mode (every write asks first) and the full chip (risk dot, label) in any
+   * other, plan mode included: the default stays out of the way, and a
+   * departure from it is named.
    */
-  trigger?: 'chip' | 'elevatedOnly'
+  trigger?: 'chip' | 'elevatedOnly' | 'quiet'
   menuPlacement?: 'top' | 'bottom'
   /**
    * Which trigger edge the desktop menu lines up with. `right` keeps it inside
@@ -172,7 +175,10 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
   // A quiet 28px chip on the composer row (risk dot + label + chevron); the
   // compact desktop form keeps only the mode glyph, and the phone form grows
   // to the 44px touch target.
-  const compactButtonClass = compact
+  // Plan mode shares the default's green dot but is not the default: it stops
+  // the agent from editing, so it is named rather than reduced to a glyph.
+  const glyphOnly = compact || (trigger === 'quiet' && currentMode === 'default')
+  const compactButtonClass = glyphOnly
     ? isMobile
       ? 'h-11 w-11 justify-center rounded-[var(--radius-md)] p-0'
       : 'h-7 w-7 justify-center rounded-[var(--radius-sm)] p-0'
@@ -296,7 +302,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
     </>
   )
 
-  const showTrigger = trigger === 'chip' || MODE_DOT_TONE[currentMode] !== 'success'
+  const showTrigger = trigger !== 'elevatedOnly' || MODE_DOT_TONE[currentMode] !== 'success'
 
   return (
     <div ref={ref} className="relative">
@@ -318,7 +324,7 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
-        title={isTurnActive ? t('permMode.disabledDuringTurn') : (compact ? MODE_LABELS[currentMode] : undefined)}
+        title={isTurnActive ? t('permMode.disabledDuringTurn') : (glyphOnly ? MODE_LABELS[currentMode] : undefined)}
         // `shrink-0` / `whitespace-nowrap`: it shares the composer toolbar with
         // the run-location pill, whose branch name can be arbitrarily long.
         // Without these the label wrapped to two lines and grew the whole row.
@@ -328,12 +334,12 @@ export const PermissionModeSelector = forwardRef<PermissionModeSelectorHandle, P
             : `hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] ${open ? 'bg-[var(--color-surface-hover)] text-[var(--color-text-primary)]' : ''}`
         } ${compactButtonClass}`}
       >
-        {compact ? (
+        {glyphOnly ? (
           <TriggerIcon data-mode-icon={currentMode} aria-hidden="true" size={isMobile ? 18 : 14} strokeWidth={1.75} />
         ) : (
           <StatusDot tone={MODE_DOT_TONE[currentMode]} data-testid="permission-mode-dot" />
         )}
-        {!compact && (
+        {!glyphOnly && (
           <>
             <span>{MODE_LABELS[currentMode]}</span>
             <ChevronDown aria-hidden="true" size={12} strokeWidth={2} className="text-[var(--color-text-tertiary)]" />

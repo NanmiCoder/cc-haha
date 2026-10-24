@@ -1,4 +1,5 @@
 import { promises as fsp } from 'fs'
+import { getAgentModelSetting } from './builtInAgentOverrides.js'
 import { getSdkAgentProgressSummariesEnabled } from '../../bootstrap/state.js'
 import { getSystemPrompt } from '../../constants/prompts.js'
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js'
@@ -201,7 +202,7 @@ export async function resumeAgentBackground({
 
   // Resolve model for analytics metadata (runAgent resolves its own internally)
   const resolvedAgentModel = getAgentModel(
-    selectedAgent.model,
+    getAgentModelSetting(selectedAgent, toolUseContext.options.mainLoopModel),
     toolUseContext.options.mainLoopModel,
     resumedModelOverride,
     permissionMode,

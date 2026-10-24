@@ -379,3 +379,46 @@ it('swaps a logo that fails to load for its fallback and keeps absolute icon URL
   expect(github.querySelector('img')).toBeNull()
   expect(github.querySelector('svg.lucide-plug')).toBeInTheDocument()
 })
+
+describe('the Agent mode row', () => {
+  const modeSections = (locked: boolean, value = 'standard'): CapabilityMenuSection[] => [{
+    id: 'run',
+    title: 'How it runs',
+    showTitle: true,
+    items: [{
+      key: 'agent-profile',
+      label: 'Agent mode',
+      icon: { kind: 'slash' },
+      choice: {
+        value,
+        locked,
+        options: [
+          { value: 'standard', label: 'Standard', action: { type: 'setAgentProfile', profile: 'standard' } },
+          { value: 'lean', label: 'Lean', action: { type: 'setAgentProfile', profile: 'lean' } },
+        ],
+      },
+      detail: [{ text: 'Choose before the first message.' }, { label: 'Unavailable', text: 'Connectors (MCP).' }],
+    }],
+  }]
+
+  it('picks a mode from the segmented control without running the row, and explains it underneath', () => {
+    const { onAction } = renderMenu({ sections: modeSections(false) })
+    const group = screen.getByRole('radiogroup', { name: 'Agent mode' })
+    expect(within(group).getByRole('radio', { name: 'Standard' })).toBeChecked()
+    fireEvent.click(within(group).getByRole('radio', { name: 'Lean' }))
+    expect(onAction).toHaveBeenCalledTimes(1)
+    expect(onAction).toHaveBeenCalledWith({ type: 'setAgentProfile', profile: 'lean' })
+    const detail = screen.getByTestId('agent-profile-detail')
+    expect(detail).toHaveTextContent('Choose before the first message.')
+    expect(detail).toHaveTextContent('Unavailable Connectors (MCP).')
+  })
+
+  it('shows a locked row as it is, with nothing to pick', () => {
+    const { onAction } = renderMenu({ sections: modeSections(true, 'lean') })
+    const group = screen.getByRole('radiogroup', { name: 'Agent mode' })
+    expect(within(group).getByRole('radio', { name: 'Lean' })).toBeChecked()
+    for (const radio of within(group).getAllByRole('radio')) expect(radio).toBeDisabled()
+    fireEvent.click(within(group).getByRole('radio', { name: 'Standard' }))
+    expect(onAction).not.toHaveBeenCalled()
+  })
+})

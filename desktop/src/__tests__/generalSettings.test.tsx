@@ -2191,11 +2191,37 @@ describe('Settings > General tab', () => {
     })
   })
 
+  it('saves the independent DeepSeek search key without changing other search keys', () => {
+    useSettingsStore.setState({
+      webSearch: { mode: 'auto', tavilyApiKey: 'tvly-existing', braveApiKey: 'brave-existing' },
+    })
+    render(<Settings />)
+    fireEvent.click(screen.getByText('General'))
+    expect(screen.getByRole('radio', { name: 'Model native' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'DeepSeek' }))
+    const keyInput = screen.getByLabelText('DeepSeek API key')
+    expect(keyInput).toHaveValue('')
+    expect(keyInput).toHaveAttribute('type', 'password')
+    fireEvent.change(keyInput, { target: { value: 'sk-deepseek-fixture' } })
+    const section = screen.getByRole('heading', { name: 'WebSearch' }).closest('section') as HTMLElement
+    fireEvent.click(within(section).getByRole('button', { name: 'Save' }))
+    expect(useSettingsStore.getState().setWebSearch).toHaveBeenCalledWith({
+      mode: 'deepseek',
+      tavilyApiKey: 'tvly-existing',
+      braveApiKey: 'brave-existing',
+      deepseekApiKey: 'sk-deepseek-fixture',
+    })
+  })
+
   it('links to WebSearch provider API key dashboards', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
 
+    expect(screen.getByRole('link', { name: 'Get DeepSeek API key' })).toHaveAttribute(
+      'href',
+      'https://platform.deepseek.com/api_keys',
+    )
     expect(screen.getByRole('link', { name: 'Get Tavily API key' })).toHaveAttribute(
       'href',
       'https://app.tavily.com/home',

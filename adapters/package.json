@@ -31,6 +31,7 @@
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "dingtalk-stream": "2.1.4",
     "grammy": "^1.42.0",
+    "proxy-agent": "6.5.0",
     "undici": "^7.24.6",
     "ws": "^8.18.0"
   },

@@ -31,4 +31,18 @@ describe('MCP toggle transport receipt', () => {
     expect(await mcpApi.toggle('echo')).toEqual(response)
     expect(JSON.parse(fetchMock.mock.lastCall![1].body)).toEqual({})
   })
+  it('sends reconnect to the selected session and preserves a failed CLI receipt', async () => {
+    const response = {
+      server: { name: 'late/server', enabled: true, status: 'connected' },
+      sessionSync: { applied: false, reason: 'failed', error: 'CLI reconnect failed' },
+    }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(await mcpApi.reconnect('late/server', '/tmp/project', 'chat-1')).toEqual(response)
+    const [url, options] = fetchMock.mock.lastCall!
+    expect(url).toContain('/api/mcp/late%2Fserver/reconnect')
+    expect(JSON.parse(options.body)).toEqual({ cwd: '/tmp/project', sessionId: 'chat-1' })
+  })
+
 })

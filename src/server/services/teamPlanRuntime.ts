@@ -17,6 +17,8 @@ import { TEAM_LEAD_NAME } from '../../utils/swarm/constants.js'
 import { createTask, listTasks, updateTask, withTaskListLifecycleLock, getCanonicalTeamTaskListId, type Task } from '../../utils/tasks.js'
 import { readUnreadMessages, readMailboxHistory, markMessagesAsReadByPredicate, writeToMailbox, createIdleNotification, formatTeammateMessages, isShutdownRequest, type TeammateMessage } from '../../utils/teammateMailbox.js'
 import { formatTeammateAutoContinuePrompt, isTransientTurnFailure, summarizeTurnFailure, TEAMMATE_AUTO_CONTINUE_DELAYS_MS } from '../../utils/swarm/turnFailure.js'
+import { getClaudeAgentModelFamily } from '../../utils/model/agentModelRouting.js'
+import { getCanonicalName } from '../../utils/model/model.js'
 
 const providerService = new ProviderService()
 const essentialTools = ['SendMessage', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate']
@@ -120,8 +122,14 @@ export async function validateTeamPlanRuntime(plan: TeamPlanRecord): Promise<Tea
     const requestedModel = member.runtime.modelId.trim()
     const aliases = provider?.models as Record<string, string> | undefined
     if (provider && ['default', 'main', 'fable', 'sonnet', 'opus', 'haiku'].includes(requestedModel) && !aliases?.[requestedModel === 'default' ? 'main' : requestedModel]) throw new Error(`Provider has no mapping for ${requestedModel}`)
+    const family = getClaudeAgentModelFamily(requestedModel)
+    const mappedFamilyModel = family ? aliases?.[family] || (family === 'fable' ? aliases?.opus : undefined) : undefined
+    // Legacy Agent pins follow this member's explicit non-Claude mapping.
+    // Claude providers keep the exact version the user selected.
+    const presetModel = mappedFamilyModel && !getCanonicalName(mappedFamilyModel).startsWith('claude-')
+      ? mappedFamilyModel : requestedModel
     const modelId = provider
-      ? (aliases?.[requestedModel === 'default' ? 'main' : requestedModel] || requestedModel)
+      ? (aliases?.[requestedModel === 'default' ? 'main' : requestedModel] || presetModel)
       : normalizeExplicitClaudeOfficialModelId(requestedModel)
     if (!modelId || !/^[^\s\x00-\x1f]+$/.test(modelId) || modelId === 'inherit') throw new Error(`Choose a concrete model for ${member.name}`)
     const requestedEffort = member.runtime.effortLevel

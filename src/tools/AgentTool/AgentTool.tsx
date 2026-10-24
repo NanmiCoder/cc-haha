@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle';
+import { getAgentModelSetting } from './builtInAgentOverrides.js'
 import * as React from 'react';
 import { buildTool, type ToolDef, toolMatchesName } from 'src/Tool.js';
 import type { Message as MessageType, NormalizedUserMessage } from 'src/types/message.js';
@@ -86,7 +87,7 @@ const baseInputSchema = lazySchema(() => z.object({
   description: z.string().describe('A short (3-5 word) description of the task'),
   prompt: z.string().describe('The task for the agent to perform'),
   subagent_type: z.string().optional().describe('The type of specialized agent to use for this task'),
-  model: z.enum(['fable', 'sonnet', 'opus', 'haiku']).optional().describe("Optional model override for this agent. Takes precedence over the agent definition's model frontmatter. If omitted, uses the agent definition's model, or inherits from the parent."),
+  model: z.enum(['fable', 'sonnet', 'opus', 'haiku']).optional().describe("Optional Claude model tier override. In a Claude session, takes precedence over the agent definition's model frontmatter. For non-Claude models on Anthropic-compatible providers, uses the configured agent model or inherits the parent's selected model instead."),
   run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.')
 }));
 
@@ -298,7 +299,7 @@ export const AgentTool = buildTool({
         team_name: teamName,
         use_splitpane: true,
         plan_mode_required: spawnMode === 'plan',
-        model: model ?? agentDef?.model,
+        model,
         agent_type: subagent_type,
         invokingRequestId: assistantMessage?.requestId
       }, toolUseContext);
@@ -428,7 +429,7 @@ export const AgentTool = buildTool({
     }
 
     // Resolve agent params for logging (these are already resolved in runAgent)
-    const resolvedAgentModel = getAgentModel(selectedAgent.model, toolUseContext.options.mainLoopModel, isForkPath ? undefined : model, permissionMode);
+    const resolvedAgentModel = getAgentModel(getAgentModelSetting(selectedAgent, toolUseContext.options.mainLoopModel), toolUseContext.options.mainLoopModel, isForkPath ? undefined : model, permissionMode);
     logEvent('tengu_agent_tool_selected', {
       agent_type: selectedAgent.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       model: resolvedAgentModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,

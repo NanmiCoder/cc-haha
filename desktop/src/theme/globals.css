@@ -1560,6 +1560,10 @@
   --color-media-selection: #4C4433;
   --color-media-cursor: #D07B52;
   --color-media-danger: #E06B52;
+  --color-lightbox-scrim: rgba(0, 0, 0, 0.82);
+  --color-lightbox-control-bg: #FAFAFA;
+  --color-lightbox-control-fg: #242628;
+  --color-lightbox-control-hover: #E6E7E8;
 
   /* Find-in-page highlights. These paint over arbitrary page content, not
      over a brand-soft panel, so they get their own pair instead of borrowing

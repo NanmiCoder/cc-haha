@@ -46,6 +46,7 @@ import { ComposerCapabilityMenu } from './ComposerCapabilityMenu'
 import { MobileComposerSheet, type MobileComposerSetting } from './MobileComposerSheet'
 import { MobileApprovalDock } from './MobileApprovalDock'
 import { useCapabilityMenu } from './useCapabilityMenu'
+import { AgentProfileChip } from './AgentProfileChip'
 import { AgentTeamChip } from './AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
@@ -414,8 +415,6 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
   // workspace panel open", so opening the panel dropped the location to a
   // second line on columns with hundreds of pixels to spare.
   const showLocationInToolbar = !useCompactControls && !isMemberSession
-  // The lean badge and info button take room on the toolbar row only on desktop; a phone keeps them in the "+" sheet.
-  const leanControlOnRow = isLean && !isMobileComposer
   const embedLaunchControlsInToolbar = showLocationInToolbar && showLaunchControls
   const pendingSlashUiAction = !isMemberSession && input.trim().startsWith('/')
     ? resolveSlashUiAction(input.trim().slice(1))
@@ -1348,11 +1347,31 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     ]
     : []
 
+  // Desktop: the quiet glyph (or, once writes run unattended, the named chip)
+  // sits first in the trailing group. A phone keeps it after the chips, where
+  // it only appears when some writes run unattended.
+  const permissionSelector = isMemberSession ? null : (
+    <PermissionModeSelector
+      lean={isLean}
+      ref={permissionSelectorRef}
+      sessionId={activeTabId ?? undefined}
+      workDir={resolvedWorkDir}
+      compact={useCompactControls}
+      trigger={isMobileComposer ? 'elevatedOnly' : 'quiet'}
+      // On the desktop the trigger sits at the right of the card: a menu that
+      // opened rightwards from it ran past the card and the window edge.
+      menuAlign={isMobileComposer ? 'left' : 'right'}
+    />
+  )
+
   const capabilityMenu = useCapabilityMenu({
     open: plusMenuOpen && !isMemberSession,
     cwd: referenceCwd,
     references: composerReferences,
     lean: isLean,
+    // A lean conversation's mode is fixed; its row only says so. A phone's "+"
+    // sheet opens its own sheet from a settings row instead.
+    agentProfile: isLean && !isMobileComposer ? { value: 'lean' } : undefined,
     handlers: {
       onInsertMention: (reference) => {
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? inputRef.current.length
@@ -1720,23 +1739,23 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             need a band of their own either.
           */}
           {/*
-            A lean session's badge and info button sit on this row on desktop,
-            and the model's name was the one thing that gave way for them: at the
-            narrowest windows it read as a letter or nothing. There the row lets
-            its trailing group wrap instead, with the model keeping a floor of
-            128px. Every other row is the one it always was.
+            One row that never wraps. The leading group (the "+", the armed
+            chips, the run location) gives up width first and truncates the
+            location; the trailing group (permission, usage, model, voice, send)
+            keeps its own width. The row used to let the trailing group wrap
+            onto a second line when a lean badge and its info button were on it,
+            which left the first line's right half empty. The lean mode is now a
+            row of the "+" menu and, once chosen, a chip on the leading group.
           */}
           <div
             data-testid="chat-input-toolbar"
-            className={`flex min-w-0 items-center justify-between pt-1.5 ${
-              leanControlOnRow ? 'flex-wrap gap-x-2 gap-y-1' : isMobileComposer ? 'gap-1' : 'gap-2'
-            }`}
+            className={`flex min-w-0 items-center justify-between pt-1.5 ${isMobileComposer ? 'gap-1' : 'gap-2'}`}
           >
             {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
             <div
               data-testid="chat-input-toolbar-leading"
               hidden={dictationLive}
-              className={`flex min-w-0 shrink-0 items-center gap-1 ${showLocationInToolbar ? 'max-w-[55%]' : ''}`}
+              className={`flex min-w-0 items-center gap-1 ${isMobileComposer ? 'shrink-0' : 'shrink'}`}
             >
               {!isMemberSession && (
                 <>
@@ -1797,16 +1816,9 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                     <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
                   ) : null}
 
-                  <div className="shrink-0">
-                    <PermissionModeSelector
-                      lean={isLean}
-                      ref={permissionSelectorRef}
-                      sessionId={activeTabId ?? undefined}
-                      workDir={resolvedWorkDir}
-                      compact={useCompactControls}
-                      trigger={isMobileComposer ? 'elevatedOnly' : 'chip'}
-                    />
-                  </div>
+                  {isLean && !isMobileComposer ? <AgentProfileChip /> : null}
+
+                  {isMobileComposer ? <div className="shrink-0">{permissionSelector}</div> : null}
 
                   {showLocationInToolbar && (
                     <div data-testid="chat-input-toolbar-location" className="min-w-0 flex-1">
@@ -1852,10 +1864,11 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
             <div
               data-testid="chat-input-toolbar-trailing"
               hidden={dictationLive}
-              className={leanControlOnRow
-                ? 'flex min-w-max flex-1 items-center justify-end gap-1'
-                : 'flex min-w-0 flex-1 items-center justify-end gap-1'}
+              className={isMobileComposer
+                ? 'flex min-w-0 flex-1 items-center justify-end gap-1'
+                : 'flex shrink-0 items-center justify-end gap-1'}
             >
+              {!isMobileComposer ? permissionSelector : null}
               {!isMemberSession && activeTabId && (
                 <ContextUsageIndicator
                   ref={contextUsageRef}
@@ -1872,26 +1885,22 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   }
                 />
               )}
-              <AgentProfileControl
-                ref={agentProfileRef}
-                value={isLean ? 'lean' : 'standard'}
-                presentation={isMobileComposer ? 'sheet' : 'toolbar'}
-              />
-              {!isMemberSession && activeTabId && (() => {
-                const modelSelector = (
-                  <ModelSelector
-                    ref={modelSelectorRef}
-                    runtimeKey={activeTabId}
-                    lockedProviderId={sideChat ? runtimeSelection?.providerId ?? null : undefined}
-                    disabled={isActive}
-                    compact={useCompactControls}
-                    fluid
-                  />
-                )
-                return leanControlOnRow
-                  ? <div className="flex w-0 min-w-[128px] max-w-max grow">{modelSelector}</div>
-                  : modelSelector
-              })()}
+              {isMobileComposer && (
+                <AgentProfileControl
+                  ref={agentProfileRef}
+                  value={isLean ? 'lean' : 'standard'}
+                />
+              )}
+              {!isMemberSession && activeTabId && (
+                <ModelSelector
+                  ref={modelSelectorRef}
+                  runtimeKey={activeTabId}
+                  lockedProviderId={sideChat ? runtimeSelection?.providerId ?? null : undefined}
+                  disabled={isActive}
+                  compact={useCompactControls}
+                  fluid={isMobileComposer}
+                />
+              )}
               <VoiceInputButton dictation={dictation} blocked={composerDisabled} mobile={isMobileComposer} />
               {stopOffer === 'background' ? (
                 // Stopping background work while the composer can still send:

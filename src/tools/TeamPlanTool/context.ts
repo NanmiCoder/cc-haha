@@ -8,6 +8,8 @@ import type { TeamPlanMember, TeamPlanRecord, TeamPlanRuntime, TeamPlanTask } fr
 import { getTeamLeaderRuntime } from '../../utils/swarm/teamPlanPolicy.js'
 import { listTasks, getCanonicalTeamTaskListId } from '../../utils/tasks.js'
 import { resolveTeammateModel } from '../../utils/swarm/resolveTeammateModel.js'
+import { getAgentModelSetting } from '../AgentTool/builtInAgentOverrides.js'
+import { isClaudeAgentModelSuggestion, usesNonClaudeAgentRouting } from '../../utils/model/agentModelRouting.js'
 
 const runtimeSchema = z.object({
   providerId: z.string().min(1),
@@ -45,7 +47,9 @@ export function snapshotTeamAgents(context: ToolUseContext) {
     systemPrompt: agent.rawSystemPrompt ?? agent.getSystemPrompt({ toolUseContext: context }),
     ...(agent.tools ? { tools: [...agent.tools] } : {}),
     ...(agent.disallowedTools ? { disallowedTools: [...agent.disallowedTools] } : {}),
-    ...(agent.model ? { model: agent.model } : {}),
+    // Only shipped defaults inherit here. Preserve manual model specs until
+    // the member's provider is known, instead of freezing the leader's mapping.
+    ...(agent.model ? { model: getAgentModelSetting(agent, context.options.mainLoopModel) === 'inherit' ? 'inherit' : agent.model } : {}),
     ...(agent.effort !== undefined ? { effortLevel: String(agent.effort) } : {}),
     ...(agent.permissionMode ? { permissionMode: agent.permissionMode } : {}),
     ...(agent.skills ? { skills: [...agent.skills] } : {}),
@@ -91,11 +95,17 @@ export function resolveProposedTeamPlan(plan: ProposedTeamPlan, context: ToolUse
     const suggested = member.runtime && isConfiguredProviderSuggestion(member.runtime.providerId, leaderRuntime)
       ? member.runtime
       : undefined
-    const runtime: TeamPlanRuntime = suggested ?? {
+    const normalizeSuggestion = suggested?.providerId === leaderRuntime.providerId
+      && usesNonClaudeAgentRouting(leaderRuntime.modelId)
+      && isClaudeAgentModelSuggestion(suggested.modelId)
+    // Claude tiers generated for the current provider follow the selected
+    // Agent/session, just as Agent tool calls do. Concrete provider models and
+    // other configured providers remain explicit choices in the review panel.
+    const runtime: TeamPlanRuntime = suggested && !normalizeSuggestion ? suggested : {
       ...leaderRuntime,
-      modelId: resolveTeammateModel(undefined, leaderRuntime.modelId, agentSnapshot.model, true),
+      modelId: resolveTeammateModel(normalizeSuggestion ? suggested?.modelId : undefined, leaderRuntime.modelId, agentSnapshot.model, true),
     }
-    if (!suggested) {
+    if (!suggested || normalizeSuggestion) {
       if (agentSnapshot.effortLevel !== undefined) runtime.effortLevel = agentSnapshot.effortLevel
       else if (runtime.modelId !== leaderRuntime.modelId) delete runtime.effortLevel
     }

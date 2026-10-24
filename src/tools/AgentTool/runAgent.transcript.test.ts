@@ -2,8 +2,12 @@ import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:
 import type { UUID } from 'crypto'
 import { mkdtemp, readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
-import { join } from 'path'
-import { switchSession } from '../../bootstrap/state.js'
+import { join, sep } from 'path'
+import {
+  getSessionId,
+  getSessionProjectDir,
+  switchSession,
+} from '../../bootstrap/state.js'
 import * as queryModule from '../../query.js'
 import { getDefaultAppState } from '../../state/AppStateStore.js'
 import type { ToolUseContext } from '../../Tool.js'
@@ -14,6 +18,7 @@ import {
   createAssistantMessage,
   createUserMessage,
 } from '../../utils/messages.js'
+import * as sessionStorage from '../../utils/sessionStorage.js'
 import {
   flushSessionStorage,
   getAgentTranscript,
@@ -25,12 +30,15 @@ import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { runAgent } from './runAgent.js'
 
 const AGENT_ID = asAgentId('aworker-00112233445566aa')
+const writeAgentMetadata = sessionStorage.writeAgentMetadata
 const savedEnv = {
   configDir: process.env.CLAUDE_CONFIG_DIR,
   persistence: process.env.TEST_ENABLE_SESSION_PERSISTENCE,
   userType: process.env.USER_TYPE,
 }
 let configDir: string
+let metadataWrites: Promise<void>[] = []
+let previousSession: { id: SessionId; projectDir: string | null }
 
 function restoreEnv(name: string, value: string | undefined): void {
   if (value === undefined) delete process.env[name]
@@ -38,21 +46,46 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 beforeEach(async () => {
+  previousSession = { id: getSessionId(), projectDir: getSessionProjectDir() }
+  metadataWrites = []
   configDir = await mkdtemp(join(tmpdir(), 'cc-haha-agent-transcript-'))
   process.env.CLAUDE_CONFIG_DIR = configDir
   process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
   process.env.USER_TYPE = 'external'
-  switchSession('7a1c4c5e-1d2b-4f3a-9b8c-0d1e2f3a4b5c' as SessionId)
+  // The cwd-based project directory cache outlives each temporary config dir.
+  switchSession(
+    '7a1c4c5e-1d2b-4f3a-9b8c-0d1e2f3a4b5c' as SessionId,
+    join(configDir, 'project'),
+  )
+  expect(getAgentTranscriptPath(AGENT_ID)).toStartWith(configDir + sep)
   resetProjectForTesting()
+  spyOn(sessionStorage, 'writeAgentMetadata').mockImplementation((...args) => {
+    const write = writeAgentMetadata(...args)
+    metadataWrites.push(write)
+    return write
+  })
 })
 
 afterEach(async () => {
-  mock.restore()
-  resetProjectForTesting()
-  restoreEnv('CLAUDE_CONFIG_DIR', savedEnv.configDir)
-  restoreEnv('TEST_ENABLE_SESSION_PERSISTENCE', savedEnv.persistence)
-  restoreEnv('USER_TYPE', savedEnv.userType)
-  await rm(configDir, { recursive: true, force: true })
+  try {
+    // Sidecars bypass the transcript queue. Drain both before changing paths,
+    // including when one writer rejects while another is still pending.
+    const writes = await Promise.allSettled([
+      ...metadataWrites,
+      flushSessionStorage(),
+    ])
+    for (const write of writes) {
+      if (write.status === 'rejected') throw write.reason
+    }
+  } finally {
+    mock.restore()
+    resetProjectForTesting()
+    restoreEnv('CLAUDE_CONFIG_DIR', savedEnv.configDir)
+    restoreEnv('TEST_ENABLE_SESSION_PERSISTENCE', savedEnv.persistence)
+    restoreEnv('USER_TYPE', savedEnv.userType)
+    switchSession(previousSession.id, previousSession.projectDir)
+    await rm(configDir, { recursive: true, force: true })
+  }
 })
 
 function parentContext(): ToolUseContext {
@@ -174,6 +207,9 @@ describe('a teammate transcript kept across runs', () => {
       answer: createAssistantMessage({ content: 'Started.' }),
       recordedUuids: new Set(),
     })
+    // runAgent starts this write without awaiting it; transcript flushes do
+    // not include metadata sidecars.
+    await Promise.all(metadataWrites)
 
     expect(await readAgentMetadata(AGENT_ID)).toEqual({
       agentType: 'worker',

@@ -14,6 +14,7 @@ process.env.ANTHROPIC_API_KEY = 'test-key'
 
 const mcpClient = { ...await import('../services/mcp/client.js') }
 const mcpConfig = { ...await import('../services/mcp/config.js') }
+const configUtils = { ...await import('../utils/config.js') }
 const contextModule = { ...await import('../commands/context/context-noninteractive.js') }
 mock.module('../commands/context/context-noninteractive.js', () => ({
   ...contextModule,
@@ -25,6 +26,7 @@ let sdkSetupEnabled = false
 let resolveSdkSetup: (() => void) | undefined
 const sdkCleanup = mock(async () => {})
 let hasConfig = true
+let externallyAddedConfig = false
 let resolveReconnect: ((result: ReturnType<typeof reconnectResult>) => void) | undefined
 const cleanup = mock(async () => {})
 const clearServerCache = mock(async () => {})
@@ -102,6 +104,14 @@ mock.module('../services/mcp/config.js', () => ({
   },
 }))
 
+mock.module('../utils/config.js', () => ({
+  ...configUtils,
+  refreshGlobalConfigFromDisk: () => {
+    if (externallyAddedConfig) hasConfig = true
+    return externallyAddedConfig
+  },
+}))
+
 const { __runHeadlessStreamingForTests } = await import('./print.js')
 
 function startHeadless(input: Stream<string>, initialClient?: MCPServerConnection, initialTools: Tool[] = []) {
@@ -157,6 +167,7 @@ async function nextControlResponse(output: AsyncIterable<unknown>) {
 
 afterEach(() => {
   hasConfig = true
+  externallyAddedConfig = false
   isDisabled = false
   sdkSetupEnabled = false
   resolveSdkSetup = undefined
@@ -169,6 +180,7 @@ afterEach(() => {
 afterAll(() => {
   mock.module('../services/mcp/client.js', () => mcpClient)
   mock.module('../services/mcp/config.js', () => mcpConfig)
+  mock.module('../utils/config.js', () => configUtils)
   mock.module('../commands/context/context-noninteractive.js', () => contextModule)
   if (originalAnthropicApiKey === undefined) {
     delete process.env.ANTHROPIC_API_KEY
@@ -178,6 +190,29 @@ afterAll(() => {
 })
 
 describe('headless MCP reconnect races', () => {
+  test('reconnect sees a config added externally after this CLI started', async () => {
+    hasConfig = false
+    externallyAddedConfig = true
+    const input = new Stream<string>()
+    const { output, getState } = startHeadless(input, {
+      name: 'unrelated-server',
+      type: 'pending',
+      config: { type: 'stdio', command: 'unrelated' },
+    })
+    input.enqueue(`${JSON.stringify({
+      type: 'control_request',
+      request_id: 'external-config',
+      request: { subtype: 'mcp_reconnect', serverName: 'test-server' },
+    })}\n`)
+    await Bun.sleep(0)
+    resolveReconnect?.(reconnectResult(connectedClient(), true))
+    await expect(nextControlResponse(output)).resolves.toMatchObject({
+      response: { request_id: 'external-config', subtype: 'success' },
+    })
+    expect(getState().mcp.tools.some(tool => tool.name === 'mcp__test-server__lookup')).toBe(true)
+    input.done()
+  })
+
   test('keeps a server disabled when reconnect resolves after disable', async () => {
     const input = new Stream<string>()
     const { output, getState } = startHeadless(input)

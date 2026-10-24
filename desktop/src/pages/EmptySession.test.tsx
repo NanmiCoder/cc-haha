@@ -156,11 +156,12 @@ vi.mock('@/components/layout/ProjectEditorModal', () => ({
 }))
 
 vi.mock('../components/controls/PermissionModeSelector', () => ({
-  PermissionModeSelector: ({ compact, value, onChange }: { compact?: boolean; value?: string; onChange?: (mode: string) => void }) => (
+  PermissionModeSelector: ({ compact, value, onChange, menuAlign }: { compact?: boolean; value?: string; onChange?: (mode: string) => void; menuAlign?: string }) => (
     <button
       type="button"
       data-testid="permission-mode-selector"
       data-compact={compact ? 'true' : 'false'}
+      data-menu-align={menuAlign}
       aria-label={`Permission mode: ${value ?? 'default'}`}
       onClick={() => onChange?.('auto')}
     >
@@ -200,6 +201,7 @@ import { usePluginStore } from '../stores/pluginStore'
 import { useWorkflowStore } from '../stores/workflowStore'
 import type { RepositoryContextResult } from '../api/sessions'
 import { browserHost } from '../lib/desktopHost/browserHost'
+import { AGENT_TEAMS_NOTICE_STORAGE_KEY } from '../lib/agentTeamsNotice'
 import { getComposerElement, getComposerText, getComposerView, setComposerSelection, setComposerText } from '../components/chat/composerTestUtils'
 import { useVoiceInputStore } from '../stores/voiceInputStore'
 
@@ -264,6 +266,13 @@ async function pickProject() {
     expect(screen.queryByRole('menu', { name: 'Location' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Pick project' })).not.toBeInTheDocument()
   })
+}
+
+// The Agent mode is a row of the "+" menu: open it, pick the segment, close it.
+function chooseMode(mode: 'Standard' | 'Lean') {
+  fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+  fireEvent.click(screen.getByRole('radio', { name: mode }))
+  fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
 }
 
 describe('EmptySession', () => {
@@ -458,7 +467,7 @@ describe('EmptySession', () => {
     mocks.listSkills.mockResolvedValue({ skills: legacyCommands })
     render(<EmptySession />)
     if (entry === '+') {
-      fireEvent.click(screen.getByLabelText('Open composer tools'))
+      fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
       fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'design' } })
     } else if (entry === '/empty') setComposerText('/', 1)
     else setComposerText(`${entry}design`, 7)
@@ -491,7 +500,7 @@ describe('EmptySession', () => {
     let resolveRefresh!: (value: { plugins: [], skills: typeof oldSkill[] }) => void
     mocks.listReferences.mockImplementation(() => new Promise(resolve => { resolveRefresh = resolve }))
 
-    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
     await waitFor(() => expect(mocks.listReferences.mock.calls.length).toBeGreaterThan(initialCalls))
     fireEvent.click(await screen.findByRole('option', { name: /^Skills/ }))
     fireEvent.click(await screen.findByRole('option', { name: /^All skills/ }))
@@ -511,7 +520,7 @@ describe('EmptySession', () => {
     render(<EmptySession />)
     await pickProject()
     setComposerText('Please review ', 14)
-    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
     fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'README' } })
     fireEvent.click(await screen.findByRole('option', { name: 'README.md' }))
 
@@ -1298,7 +1307,7 @@ describe('EmptySession', () => {
 
     render(<EmptySession />)
 
-    fireEvent.click(screen.getByLabelText('Open composer tools'))
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
     fireEvent.click(screen.getByText('Add files or photos'))
 
     expect(await screen.findByText('huge-a.log')).toBeInTheDocument()
@@ -1550,9 +1559,11 @@ describe('EmptySession', () => {
     expect(useSessionStore.getState().activeSessionId).toBeNull()
   })
 
-  it('hides the mode selector by default and creates a standard conversation', async () => {
+  it('hides the mode row by default and creates a standard conversation', async () => {
     render(<EmptySession />)
-    expect(screen.queryByRole('button', { name: /^Agent mode:/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    expect(screen.queryByRole('radiogroup', { name: 'Agent mode' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
     setComposerText('edit a file', 11)
     fireEvent.click(screen.getByRole('button', { name: /Run/i }))
     await waitFor(() => expect(mocks.createSession).toHaveBeenCalled())
@@ -1562,16 +1573,19 @@ describe('EmptySession', () => {
   it('clears a hidden lean selection when the setting is disabled, without losing draft text', async () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     const { rerender } = render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     setComposerText('keep these edits', 16)
     rerender(<EmptySession visible={false} />)
     act(() => useSettingsStore.setState({ leanModeEnabled: false }))
     rerender(<EmptySession visible />)
-    expect(screen.queryByRole('button', { name: /^Agent mode:/ })).not.toBeInTheDocument()
+    expect(screen.queryByTestId('agent-profile-chip')).not.toBeInTheDocument()
     expect(getComposerText()).toBe('keep these edits')
     act(() => useSettingsStore.setState({ leanModeEnabled: true }))
-    expect(screen.getByRole('button', { name: /^Agent mode:/ })).toHaveTextContent('Standard')
+    // Switched back on, the hidden lean choice is gone: the draft is standard.
+    expect(screen.queryByTestId('agent-profile-chip')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    expect(screen.getByRole('radio', { name: 'Standard' })).toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
     act(() => useSettingsStore.setState({ leanModeEnabled: false }))
     fireEvent.click(screen.getByRole('button', { name: /Run/i }))
     await waitFor(() => expect(mocks.createSession).toHaveBeenCalled())
@@ -1592,7 +1606,7 @@ describe('EmptySession', () => {
     render(<EmptySession />)
     await pickProject()
     if (kind === 'file') {
-      fireEvent.click(screen.getByLabelText('Open composer tools'))
+      fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
       fireEvent.change(screen.getByRole('combobox', { name: 'Search skills, connectors, files…' }), { target: { value: 'README' } })
       fireEvent.click(await screen.findByRole('option', { name: 'README.md' }))
     } else {
@@ -1601,9 +1615,8 @@ describe('EmptySession', () => {
     }
     await waitFor(() => expect(document.querySelector('.composer-mention')).toBeInTheDocument())
     // Both reselecting the current mode and switching modes must keep the live document metadata.
-    for (const mode of [/Standard/, /Lean · experimental/, /Standard/, /Lean · experimental/]) {
-      fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-      fireEvent.click(screen.getByRole('option', { name: mode }))
+    for (const mode of ['Standard', 'Lean', 'Standard', 'Lean'] as const) {
+      chooseMode(mode)
       expect(document.querySelector('.composer-mention')).toBeInTheDocument()
     }
     fireEvent.click(screen.getByRole('button', { name: /Run/i }))
@@ -1616,8 +1629,7 @@ describe('EmptySession', () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     useSettingsStore.setState({ permissionMode: 'plan' })
     render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     expect(useUIStore.getState().toasts.some(toast => toast.message.includes('Ask permissions'))).toBe(true)
     expect(screen.getByRole('button', { name: 'Permission mode: default' })).toBeInTheDocument()
   })
@@ -1626,8 +1638,7 @@ describe('EmptySession', () => {
     mocks.createSession.mockResolvedValue({ sessionId: 'lean-reset-session' })
     useSettingsStore.setState({ leanModeEnabled: true, permissionMode: 'plan' })
     render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     expect(useUIStore.getState().toasts.some(toast => toast.message.includes('Ask permissions'))).toBe(true)
 
     // The reset is this draft's own mode now, announced to the user.
@@ -1644,8 +1655,7 @@ describe('EmptySession', () => {
   it('keeps an unsupported command editable and explains how to use it', () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     setComposerText('/agent review this', 18)
     fireEvent.click(screen.getByRole('button', { name: /Run/i }))
     expect(mocks.createSession).not.toHaveBeenCalled()
@@ -1665,8 +1675,7 @@ describe('EmptySession', () => {
       modelText: 'Use the Skill tool with skill: "review" for this request.',
     }] })
     render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     await waitFor(() => expect(mocks.listReferences).toHaveBeenCalledWith(undefined, undefined, 'lean'))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     // The menu offers it too, not only the send.
@@ -1682,8 +1691,7 @@ describe('EmptySession', () => {
   it('still refuses a desktop built-in name in a lean draft when the project has no command of that name', async () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     await waitFor(() => expect(mocks.listReferences).toHaveBeenCalledWith(undefined, undefined, 'lean'))
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     setComposerText('/review', 7)
@@ -1713,8 +1721,7 @@ describe('EmptySession', () => {
     setComposerText('/forked', 7)
     expect(await screen.findByRole('option', { name: /forked-skill/ })).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     setComposerText('/forke', 6)
     setComposerText('/forked', 7)
     await waitFor(() => expect(screen.queryByRole('option', { name: /forked-skill/ })).not.toBeInTheDocument())
@@ -1726,8 +1733,7 @@ describe('EmptySession', () => {
     mocks.listSkills.mockResolvedValue(forkedAndInlineSkills)
     useSettingsStore.setState({ leanModeEnabled: true })
     render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     await waitFor(() => expect(mocks.listSkills).toHaveBeenCalled())
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
 
@@ -1744,8 +1750,7 @@ describe('EmptySession', () => {
   it('allows an absolute path prompt in lean mode', async () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     setComposerText('/tmp/cart.js fix this file', 26)
     fireEvent.click(screen.getByRole('button', { name: /Run/i }))
     await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentProfile: 'lean' })))
@@ -1754,13 +1759,11 @@ describe('EmptySession', () => {
   it('retains the lean mode and unsent text while the draft is hidden', () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     const { rerender } = render(<EmptySession />)
-    fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+    chooseMode('Lean')
     setComposerText('keep these edits', 16)
     rerender(<EmptySession visible={false} />)
     rerender(<EmptySession visible />)
-    // The chip is short; the accessible name still says which mode it is.
-    expect(screen.getByRole('button', { name: /^Agent mode:/ })).toHaveAccessibleName('Agent mode: Lean · experimental')
+    expect(screen.getByTestId('agent-profile-chip')).toHaveTextContent('Lean')
     expect(getComposerText()).toBe('keep these edits')
   })
 
@@ -1768,84 +1771,121 @@ describe('EmptySession', () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     mocks.createSession.mockRejectedValueOnce(new Error('create failed'))
     render(<EmptySession />)
-    const mode = screen.getByRole('button', { name: /^Agent mode:/ })
-    expect(mode).toHaveTextContent('Standard')
-    fireEvent.click(mode)
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
-    expect(screen.getByRole('button', { name: 'About lean mode' })).toBeInTheDocument()
+    expect(screen.queryByTestId('agent-profile-chip')).not.toBeInTheDocument()
+    chooseMode('Lean')
+    expect(screen.getByTestId('agent-profile-chip')).toHaveTextContent('Lean')
     setComposerText('edit a file', 11)
     fireEvent.click(screen.getByRole('button', { name: /Run/i }))
     await waitFor(() => expect(mocks.createSession).toHaveBeenCalledWith(expect.objectContaining({ agentProfile: 'lean' })))
-    await waitFor(() => expect(mode).not.toBeDisabled())
-    fireEvent.click(mode)
-    fireEvent.click(screen.getByRole('option', { name: /Standard/ }))
-    expect(mode).toHaveTextContent('Standard')
+    // The draft stays editable after a failure, so the chip can be taken off again.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Switch back to Standard mode' })).toBeInTheDocument())
+    fireEvent.click(screen.getByRole('button', { name: 'Switch back to Standard mode' }))
+    expect(screen.queryByTestId('agent-profile-chip')).not.toBeInTheDocument()
   })
 
-  // The toolbar row is shared with the project, branch and model. The mode
-  // control sat in it at its full "Lean · experimental" width, which cut the
-  // project down to "claude-cod…" and the branch to "…in" on desktop and
-  // covered the "+" on a phone. Real widths are measured in a browser; these
-  // pin the structure that keeps that from coming back.
-  it('shows the short mode name on the desktop chip, naming the full mode for assistive tech', () => {
+  // The mode is a row of the "+" menu, with its explanation under it, and the
+  // toolbar only marks a lean draft. A permanent "Standard ▾" and an info
+  // button used to sit on the row; they cut the project to "claude-cod…" and
+  // pushed the trailing group onto a second line. Real widths are measured in
+  // a browser; these pin the structure that keeps that from coming back.
+  it('picks the mode in the + menu, explains it there, and marks only a lean draft on the toolbar', () => {
     useSettingsStore.setState({ leanModeEnabled: true })
     render(<EmptySession />)
-    const chip = screen.getByRole('button', { name: /^Agent mode:/ })
-    expect(chip).toHaveTextContent(/^Standard$/)
-    fireEvent.click(chip)
-    fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
-    expect(chip).toHaveTextContent(/^Lean$/)
-    expect(chip).toHaveAccessibleName('Agent mode: Lean · experimental')
+    expect(screen.queryByTestId('agent-profile-chip')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('agent-profile-control')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    const row = screen.getByRole('radiogroup', { name: 'Agent mode' })
+    expect(within(row).getByRole('radio', { name: 'Standard' })).toBeChecked()
+    expect(screen.getByTestId('agent-profile-detail')).toHaveTextContent('Choose before the first message')
+    fireEvent.click(within(row).getByRole('radio', { name: 'Lean' }))
+    // Lean's limits are read next to the choice, and the toolbar says "Lean".
+    expect(screen.getByTestId('agent-profile-detail')).toHaveTextContent('Web search and fetch, connectors (MCP)')
+    expect(screen.getByTestId('agent-profile-chip')).toHaveTextContent(/^Lean$/)
+  })
+
+  it('takes a lean draft back to Standard from the chip', async () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    render(<EmptySession />)
+    chooseMode('Lean')
+    fireEvent.click(screen.getByRole('button', { name: 'Switch back to Standard mode' }))
+    expect(screen.queryByTestId('agent-profile-chip')).not.toBeInTheDocument()
+    setComposerText('edit a file', 11)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalled())
+    expect(mocks.createSession.mock.calls[0]![0]).not.toHaveProperty('agentProfile')
+  })
+
+  it('drops an armed Agent Team when the draft switches to lean, and says so', () => {
+    useSettingsStore.setState({ leanModeEnabled: true, agentTeamsEnabled: true })
+    window.localStorage.setItem(AGENT_TEAMS_NOTICE_STORAGE_KEY, JSON.stringify({ version: 1, dismissed: true }))
+    try {
+      render(<EmptySession />)
+      fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+      fireEvent.click(screen.getByRole('switch', { name: /Agent Teams/ }))
+      expect(screen.getByTestId('agent-team-chip')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('radio', { name: 'Lean' }))
+      expect(screen.queryByTestId('agent-team-chip')).not.toBeInTheDocument()
+      expect(useUIStore.getState().toasts.some(toast => toast.message.includes('Agent Teams'))).toBe(true)
+      // Back on Standard the team is not armed again behind the user's back.
+      fireEvent.click(screen.getByRole('radio', { name: 'Standard' }))
+      expect(screen.queryByTestId('agent-team-chip')).not.toBeInTheDocument()
+    } finally {
+      window.localStorage.removeItem(AGENT_TEAMS_NOTICE_STORAGE_KEY)
+    }
+  })
+
+  it('fixes the mode while the conversation is being created', async () => {
+    useSettingsStore.setState({ leanModeEnabled: true })
+    mocks.createSession.mockReturnValue(new Promise(() => {}))
+    render(<EmptySession />)
+    chooseMode('Lean')
+    setComposerText('edit a file', 11)
+    fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+    await waitFor(() => expect(mocks.createSession).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: 'Switch back to Standard mode' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open composer tools' }))
+    expect(within(screen.getByRole('radiogroup', { name: 'Agent mode' })).getByRole('radio', { name: 'Standard' })).toBeDisabled()
   })
 
   // jsdom lays nothing out, so this pins the pieces a real-browser measurement
-  // showed to matter: before, every control but the project and branch was
-  // `shrink-0`, and the two names paid for each control that was added.
-  it('lets the model give way and the trailing controls wrap, never squeezing the location', () => {
+  // showed to matter. The desktop row never wraps, with or without the lean
+  // mode: the leading group (the "+", chips, location) gives up width and the
+  // location truncates, while the trailing group keeps its own. The row used to
+  // wrap its trailing group onto a second line to make room for a lean control,
+  // which left the first line's right half empty.
+  it.each([false, true])('keeps the desktop toolbar to one row, the location giving way (lean mode %s)', (leanModeEnabled) => {
     mocks.isMobile = false
-    useSettingsStore.setState({ leanModeEnabled: true })
+    useSettingsStore.setState({ leanModeEnabled })
     render(<EmptySession />)
     const toolbar = screen.getByTestId('empty-session-toolbar')
+    const leading = screen.getByTestId('empty-session-toolbar-leading')
     const trailing = screen.getByTestId('empty-session-toolbar-trailing')
-    const modelSlot = screen.getByTestId('model-selector').parentElement!
-    // A row that cannot fit moves its trailing group to a second line.
-    expect(toolbar).toHaveClass('flex-wrap')
-    // The trailing group takes what the leading one leaves and is never narrower
-    // than its own smallest content, which is what makes it wrap rather than
-    // overflow onto the controls beside it.
-    expect(trailing).toHaveClass('flex-1', 'min-w-max')
-    expect(trailing).not.toHaveClass('shrink-0')
-    // The model's name is the part that gives way, down to a floor, and it
-    // cannot grow past its own width.
-    expect(modelSlot).toHaveClass('min-w-[128px]', 'max-w-max', 'grow')
-    expect(trailing).toContainElement(modelSlot)
-    expect(screen.getByTestId('model-selector')).toHaveAttribute('data-fluid', 'true')
-    expect(trailing).toContainElement(screen.getByTestId('agent-profile-control'))
+    expect(toolbar).not.toHaveClass('flex-wrap')
+    expect(leading).toHaveClass('min-w-0', 'shrink')
+    expect(trailing).toHaveClass('shrink-0')
+    expect(trailing).not.toHaveClass('min-w-max')
+    // The permission glyph leads the trailing group; the usage ring is not on a draft.
+    expect(trailing.firstElementChild).toContainElement(screen.getByRole('button', { name: /^Permission mode/ }))
+    // The trigger is at the card's right: its menu opens leftwards, inside the card.
+    expect(screen.getByTestId('permission-mode-selector')).toHaveAttribute('data-menu-align', 'right')
+    expect(screen.queryByTestId('context-usage-indicator')).not.toBeInTheDocument()
+    expect(leading).not.toContainElement(screen.getByRole('button', { name: /^Permission mode/ }))
   })
 
-  // The lean control is the reason the row has to give way, and it only takes
-  // room on the row on desktop (a phone keeps it in the "+" sheet). Everywhere
-  // else the row is the one every other user has always had, so it must not
-  // start wrapping or letting the model shrink just because lean exists.
+  // A phone keeps the row it always had; its mode lives in the "+" sheet.
   it.each([
-    { leanModeEnabled: false, phone: false },
     { leanModeEnabled: false, phone: true },
     { leanModeEnabled: true, phone: true },
-  ])('leaves the toolbar as it always was when the lean control is not on the row (%j)', ({ leanModeEnabled, phone }) => {
+  ])('leaves the phone toolbar as it always was (%j)', ({ leanModeEnabled, phone }) => {
     mocks.isMobile = phone
     useSettingsStore.setState({ leanModeEnabled })
     render(<EmptySession />)
     const toolbar = screen.getByTestId('empty-session-toolbar')
     const trailing = screen.getByTestId('empty-session-toolbar-trailing')
     const model = screen.getByTestId('model-selector')
-    if (phone) {
-      expect(toolbar).toHaveClass('flex-wrap', 'gap-1')
-      expect(trailing).toHaveClass('min-w-0', 'flex-1')
-    } else {
-      expect(toolbar).not.toHaveClass('flex-wrap')
-      expect(toolbar).toHaveClass('gap-2')
-      expect(trailing).toHaveClass('shrink-0')
-    }
+    expect(phone).toBe(true)
+    expect(toolbar).toHaveClass('flex-wrap', 'gap-1')
+    expect(trailing).toHaveClass('min-w-0', 'flex-1')
     expect(trailing).not.toHaveClass('min-w-max')
     expect(model).toHaveAttribute('data-fluid', 'false')
     // No slot around the picker: it is a direct child of the trailing group.
@@ -2306,8 +2346,7 @@ describe('EmptySession', () => {
       useUIStore.getState().startNewSessionDraft('')
       const draft = useUIStore.getState().newSessionDraft!
       const { rerender } = render(<EmptySession draftRevision={draft.revision} initialWorkDir="" visible={false} />)
-      fireEvent.click(screen.getByRole('button', { name: /^Agent mode:/ }))
-      fireEvent.click(screen.getByRole('option', { name: /Lean · experimental/ }))
+      chooseMode('Lean')
       // The mocked selector picks Auto.
       fireEvent.click(screen.getByRole('button', { name: 'Permission mode: default' }))
       const composer = getComposerElement()
@@ -2317,7 +2356,7 @@ describe('EmptySession', () => {
 
       expect(getComposerElement()).toBe(composer)
       expect(await screen.findByRole('button', { name: 'Location: project / main' })).toBeInTheDocument()
-      expect(screen.getByRole('button', { name: /^Agent mode:/ })).toHaveAccessibleName('Agent mode: Lean · experimental')
+      expect(screen.getByTestId('agent-profile-chip')).toHaveTextContent('Lean')
       expect(screen.getByRole('button', { name: 'Permission mode: auto' })).toBeInTheDocument()
 
       setComposerText('work here', 9)
@@ -2498,13 +2537,11 @@ describe('EmptySession', () => {
       expect(voice.nextElementSibling).toBe(run)
     })
 
-    it('keeps the microphone right after the model slot when the lean control is on the row', () => {
+    it('keeps the microphone right after the model picker when the lean mode is enabled', () => {
       useSettingsStore.setState({ leanModeEnabled: true })
       render(<EmptySession />)
 
-      // The picker sits in its own slot of the row (the one that gives way
-      // when the row is full), so the slot is what precedes the microphone.
-      const model = screen.getByTestId('model-selector').parentElement!
+      const model = screen.getByTestId('model-selector')
       const voice = screen.getByTestId('voice-input')
       const run = screen.getByRole('button', { name: 'Run' })
       expect(model.nextElementSibling).toBe(voice)

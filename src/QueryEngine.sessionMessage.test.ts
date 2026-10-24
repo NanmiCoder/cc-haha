@@ -124,3 +124,43 @@ test('busy peer attachments persist their stable ID before consumption acknowled
     expect(receipts).toMatchObject([{ message_id: 'busy', status: 'consumed' }])
   } finally { await iterator.return(); inbox.dispose() }
 })
+
+
+test('retry SDK output keeps transport details and provider request id', async () => {
+  const { APIError } = await import('@anthropic-ai/sdk')
+  const { createSystemAPIErrorMessage } = await import('./utils/messages.js')
+  const { SDKAPIRetryMessageSchema } = await import('./entrypoints/sdk/coreSchemas.js')
+  attachment = createSystemAPIErrorMessage(new APIError(503, { error: { message: 'No available channel' } },
+    '503 response', new Headers({ 'request-id': 'req-fixture' })), 500, 2, 10)
+  const iterator = engine().submitMessage('retry fixture')
+  try {
+    let retry: any
+    for (let i = 0; i < 5; i++) {
+      const next = await iterator.next()
+      if (next.value?.type === 'system' && next.value.subtype === 'api_retry') { retry = next.value; break }
+    }
+    expect(retry).toMatchObject({ error: 'server_error', error_message: 'No available channel', request_id: 'req-fixture' })
+    expect(SDKAPIRetryMessageSchema().parse(retry)).toMatchObject({ error_message: 'No available channel', request_id: 'req-fixture' })
+  } finally { await iterator.return() }
+})
+
+
+test.each(['connection', 'timeout'])('retry SDK schema accepts an actual %s failure', async kind => {
+  const { APIConnectionError, APIConnectionTimeoutError } = await import('@anthropic-ai/sdk')
+  const { createSystemAPIErrorMessage } = await import('./utils/messages.js')
+  const { SDKAPIRetryMessageSchema } = await import('./entrypoints/sdk/coreSchemas.js')
+  const error = kind === 'timeout' ? new APIConnectionTimeoutError() : new APIConnectionError({
+    cause: Object.assign(new Error('socket hang up'), { code: 'ECONNRESET' }),
+  })
+  attachment = createSystemAPIErrorMessage(error, 500, 1, 10)
+  const iterator = engine().submitMessage('transport retry fixture')
+  try {
+    let retry: any
+    for (let i = 0; i < 5; i++) {
+      const next = await iterator.next()
+      if (next.value?.type === 'system' && next.value.subtype === 'api_retry') { retry = next.value; break }
+    }
+    expect(retry).toMatchObject({ error: 'connection_error', error_status: null })
+    expect(SDKAPIRetryMessageSchema().parse(retry)).toMatchObject({ error: 'connection_error' })
+  } finally { await iterator.return() }
+})

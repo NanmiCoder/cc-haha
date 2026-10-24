@@ -26,7 +26,7 @@ import { isSafeMarkdownImageSource, normalizeMarkdownImageDestination } from '@/
 import { CodeViewer } from '../chat/CodeViewer'
 import { MermaidRenderer } from '../chat/MermaidRenderer'
 import { copyTextToClipboard } from '@/lib/clipboard'
-import { MarkdownHtml } from '@/components/markdown/MarkdownHtml'
+import { MarkdownHtml, originalMarkdownImageSource } from '@/components/markdown/MarkdownHtml'
 import { t } from '../../i18n'
 
 type Props = {
@@ -47,7 +47,8 @@ type Props = {
   /**
    * Called when an image is clicked (not one inside a link, which belongs to the
    * link), with every image in the text in reading order — sources as they load,
-   * so a viewer can show them — and the place of the one clicked.
+   * so a viewer can show them — and the place of the one clicked. An authenticated
+   * blob fallback also carries the resolved original source for stable identity.
    */
   onImageClick?: (click: MarkdownImageClick) => void
   /**
@@ -60,7 +61,7 @@ type Props = {
 }
 
 export type MarkdownImageClick = {
-  images: Array<{ src: string; alt: string }>
+  images: Array<{ src: string; originalSrc?: string; alt: string }>
   index: number
 }
 
@@ -547,6 +548,24 @@ function getCachedMarkdownParse(content: string, streaming: boolean): MarkdownPa
   return parsed
 }
 
+/** The images finalized prose can render, without mounting rows or starting requests. */
+export function extractResolvedMarkdownImageSources(
+  content: string,
+  resolveImageSrc?: (src: string) => string | null,
+): string[] {
+  // Most transcript rows have no pictures. Avoid parsing and sanitizing their
+  // entire text when opening a conversation gallery over a long history.
+  if ((!content.includes('![') && !/<(?:img|image)\b/i.test(content)) || typeof document === 'undefined') return []
+  const { html, mathBlocks } = getCachedMarkdownParse(content, false)
+  const part = enhanceMarkdownHtml(html, mathBlocks, { bare: false, inlineCode: false }, resolveImageSrc)
+  const template = document.createElement('template')
+  template.innerHTML = part.content
+  return Array.from(template.content.querySelectorAll('img')).flatMap((image) => {
+    const src = image.getAttribute('src')
+    return src ? [src] : []
+  })
+}
+
 export const __markdownParseCacheInternals = {
   finalizedSize: () => finalizedMarkdownCache.size,
   streamingSize: () => streamingMarkdownCache.size,
@@ -644,7 +663,15 @@ function reportImageClick(
   const index = images.indexOf(clicked)
   if (index < 0) return
   onImageClick({
-    images: images.map((image) => ({ src: image.getAttribute('src')!, alt: image.getAttribute('alt') ?? '' })),
+    images: images.map((image) => {
+      const src = image.getAttribute('src')!
+      const originalSrc = originalMarkdownImageSource(image)
+      return {
+        src,
+        ...(originalSrc && originalSrc !== src ? { originalSrc } : {}),
+        alt: image.getAttribute('alt') ?? '',
+      }
+    }),
     index,
   })
 }

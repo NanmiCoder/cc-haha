@@ -2,6 +2,7 @@ import {
   Box,
   Bot,
   Compass,
+  Feather,
   MonitorSmartphone,
   List,
   Paperclip,
@@ -20,6 +21,7 @@ import type { ConnectorDto } from '@/types/connector'
 import type { ComposerReferenceCandidate } from '@/types/composerReference'
 import type { NormalizedSkill } from '@/types/market'
 import type { WorkflowDefinition } from '@/types/workflow'
+import type { AgentProfile } from '@/types/session'
 
 /**
  * Data model behind the composer's capability ("+") menu.
@@ -54,6 +56,8 @@ export type CapabilityAction =
   | { type: 'toggleAgentTeam' }
   /** Flip the global Computer Use switch; turning it on asks for consent first. */
   | { type: 'toggleComputerUse' }
+  /** Pick the draft's Agent mode. Only a draft offers it; a session's is fixed. */
+  | { type: 'setAgentProfile', profile: AgentProfile }
 
 export type CapabilityIcon =
   | { kind: 'lucide', icon: LucideIcon }
@@ -73,6 +77,15 @@ export type CapabilityMenuItem = {
   action?: CapabilityAction
   /** Mode rows (Agent Team, Computer Use): an inline switch instead of a chevron. */
   switch?: { checked: boolean, disabled: boolean }
+  /** A pick between a few values, as a segmented control at the end of the row. */
+  choice?: {
+    value: string
+    options: Array<{ value: string, label: string, action: CapabilityAction }>
+    /** Fixed for this session: shown, not changeable. */
+    locked: boolean
+  }
+  /** Lines of explanation shown under the row (the root rows otherwise carry only a name). */
+  detail?: Array<{ label?: string, text: string }>
   /** A small button at the end of the row (Connect, Authorize, Install). */
   button?: { label: string, action: CapabilityAction, busy?: boolean }
   /** Connection state dot for connector rows. */
@@ -115,6 +128,11 @@ export type CapabilityMenuInput = {
   workflows: WorkflowDefinition[]
   agentTeam: { enabled: boolean, armed: boolean }
   computerUse: CapabilityMenuComputerUse
+  /**
+   * The Agent mode row. Absent when there is nothing to pick or to say: the
+   * lean mode is off in Settings, or this is an ordinary (standard) session.
+   */
+  agentProfile?: { value: AgentProfile, locked: boolean }
   t: (key: TranslationKey, params?: Record<string, string | number>) => string
 }
 
@@ -316,6 +334,39 @@ function buildConnectorChildren(input: CapabilityMenuInput): CapabilityMenuItem[
   ]
 }
 
+function buildAgentProfileItem(
+  profile: NonNullable<CapabilityMenuInput['agentProfile']>,
+  t: CapabilityMenuInput['t'],
+): CapabilityMenuItem {
+  const lean = profile.value === 'lean'
+  const limits = { label: t('agentProfile.unavailableLabel'), text: t('agentProfile.unavailable') }
+  const detail = profile.locked
+    ? [{ text: t('agentProfile.locked') }, ...(lean ? [limits] : [])]
+    : lean
+      ? [
+        { text: t('agentProfile.leanSummary') },
+        { label: t('agentProfile.availableLabel'), text: t('agentProfile.available') },
+        limits,
+        { text: t('agentProfile.draftHint') },
+      ]
+      : [{ text: t('agentProfile.standardSummary') }, { text: t('agentProfile.draftHint') }]
+  return {
+    key: 'agent-profile',
+    label: t('agentProfile.label'),
+    icon: { kind: 'lucide', icon: Feather },
+    choice: {
+      value: profile.value,
+      locked: profile.locked,
+      options: (['standard', 'lean'] as const).map(value => ({
+        value,
+        label: t(value === 'lean' ? 'agentProfile.leanShort' : 'agentProfile.standard'),
+        action: { type: 'setAgentProfile', profile: value },
+      })),
+    },
+    detail,
+  }
+}
+
 export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityMenuSection[] {
   const { t } = input
 
@@ -440,7 +491,11 @@ export function buildCapabilitySections(input: CapabilityMenuInput): CapabilityM
       id: 'run',
       title: t('chat.capabilities.sectionRun'),
       showTitle: true,
-      items: [agentTeamItem, computerUseItem],
+      items: [
+        ...(input.agentProfile ? [buildAgentProfileItem(input.agentProfile, t)] : []),
+        agentTeamItem,
+        computerUseItem,
+      ],
     },
     {
       id: 'more',

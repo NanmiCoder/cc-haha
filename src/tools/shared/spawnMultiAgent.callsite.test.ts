@@ -153,6 +153,20 @@ afterAll(() => {
 })
 
 describe('Agent Teams custom Agent runtime call sites', () => {
+  for (const mode of ['split-pane', 'separate-window', 'in-process'] as const) {
+    test(`${mode} inherits the executing Flash model when UI state is unset`, async () => {
+      spawnMode = mode
+      const context = makeContext({
+        agentType: 'deep-reviewer', source: 'projectSettings',
+        whenToUse: 'Fixture', rawSystemPrompt: 'Fixture', getSystemPrompt: () => 'Fixture', model: 'inherit',
+      })
+      context.options.mainLoopModel = 'deepseek-v4-flash'
+      context.setAppState(state => ({ ...state, mainLoopModel: null }))
+      const result = await spawnTeammate(makeConfig(mode === 'split-pane'), context)
+      expect(result.data.model).toBe('deepseek-v4-flash')
+    })
+  }
+
   test('split-pane command receives definition model, effort, and inherited thinking', async () => {
     const result = await spawnTeammate(
       makeConfig(true),

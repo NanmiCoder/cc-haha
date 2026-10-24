@@ -51,7 +51,7 @@ export type ZoomableImageProps = {
   initialScroll?: { left: number; top: number }
   onError?: () => void
   /** `media` on the dark lightbox, `default` on a panel. */
-  surface?: 'default' | 'media'
+  surface?: 'default' | 'media' | 'lightbox'
   className?: string
 }
 
@@ -79,7 +79,7 @@ export function ZoomableImage({
   surface = 'default',
   className,
 }: ZoomableImageProps) {
-  const media = surface === 'media'
+  const media = surface !== 'default'
   const [ownZoom, setOwnZoom] = useState<ImageZoom>(defaultZoom)
   const zoom = controlledZoom ?? ownZoom
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null)
@@ -288,7 +288,9 @@ export function ZoomableImage({
         </div>
       </div>
 
-      <div className="pointer-events-none absolute bottom-3 right-3 flex items-center gap-2">
+      <div className={surface === 'lightbox'
+        ? 'pointer-events-none flex shrink-0 items-center justify-center gap-2 py-4'
+        : 'pointer-events-none absolute bottom-3 right-3 flex items-center gap-2'}>
         <div className="pointer-events-auto flex items-center gap-2">
           <ZoomControls
             percent={zoomPercent(currentScale)}

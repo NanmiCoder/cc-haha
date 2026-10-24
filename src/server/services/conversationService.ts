@@ -1,3 +1,4 @@
+import { sanitizeRetryDiagnosticText } from '../../services/api/errorUtils.js'
 import { closeSideChatsForParent, getSideChat, isSideChatId, SIDE_CHAT_BOUNDARY } from './sideChatRegistry.js'
 import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
 /**
@@ -72,7 +73,7 @@ import {
   SYSTEM_PROXY_URL_ENV,
   type NetworkSettings,
 } from './networkSettings.js'
-import { readTraceCaptureSettings } from './traceCaptureService.js'
+import { readTraceCaptureSettings, traceCaptureService } from './traceCaptureService.js'
 import {
   killWindowsProcessTree,
   type WindowsTaskkillSpawn,
@@ -286,6 +287,7 @@ type SessionProcess = {
   teamWorker?: TeamWorkerStart
   providerId?: string | null
   providerConfigFingerprint?: string
+  providerAuth?: { baseUrl: string; apiKey: string; authToken: string }
   networkRoutingFingerprint: string
   networkDerivedFirstTokenTimeout: boolean
   networkDerivedStreamMaxDuration: boolean
@@ -857,6 +859,13 @@ export class ConversationService {
         ...(options.openAIFastMode !== undefined ? { openAIFastMode: options.openAIFastMode } : {}),
       } : undefined,
       providerConfigFingerprint: providerCapture.fingerprint,
+      ...(typeof options?.providerId === 'string' && {
+        providerAuth: {
+          baseUrl: childEnv.ANTHROPIC_BASE_URL ?? '',
+          apiKey: childEnv.ANTHROPIC_API_KEY ?? '',
+          authToken: childEnv.ANTHROPIC_AUTH_TOKEN ?? '',
+        },
+      }),
       networkRoutingFingerprint: networkRoutingFingerprint(networkSettings, childEnv),
       networkDerivedFirstTokenTimeout: networkRuntimeMetadata.firstTokenTimeoutDerived,
       networkDerivedStreamMaxDuration: networkRuntimeMetadata.streamMaxDurationDerived,
@@ -1029,10 +1038,14 @@ export class ConversationService {
       return false
     }
     session = this.sessions.get(sessionId)
+    if (session && !await this.refreshProviderCredentialsBeforeTurn(sessionId, session)) {
+      return false
+    }
+    session = this.sessions.get(sessionId)
     if (session) {
       await this.refreshOfficialOAuthTokenBeforeTurn(sessionId, session)
     }
-    // Building attachments, refreshing network settings, and refreshing OAuth
+    // Building attachments and refreshing network settings or credentials
     // can all suspend this call. Stop may revoke the owning desktop turn while
     // one of those awaits is pending, so check ownership at the last possible
     // point before writing the user message to the SDK socket.
@@ -1048,6 +1061,32 @@ export class ConversationService {
       session_id: '',
     })
     if (sent) options?.onCommitted?.()
+    return sent
+  }
+
+  private async refreshProviderCredentialsBeforeTurn(
+    sessionId: string,
+    session: SessionProcess,
+  ): Promise<boolean> {
+    if (!session.providerId || !session.providerAuth) return true
+    let env: Record<string, string>
+    try {
+      env = await this.providerService.getProviderRuntimeEnv(session.providerId)
+    } catch {
+      // A removed provider must not silently switch this session to another one.
+      return this.sessions.get(sessionId) === session
+    }
+    if (this.sessions.get(sessionId) !== session) return false
+    // A credential saved for a new address must never reach the old endpoint.
+    if ((env.ANTHROPIC_BASE_URL ?? '') !== session.providerAuth.baseUrl) return true
+    const apiKey = env.ANTHROPIC_API_KEY ?? ''
+    const authToken = env.ANTHROPIC_AUTH_TOKEN ?? ''
+    if (apiKey === session.providerAuth.apiKey && authToken === session.providerAuth.authToken) return true
+    const sent = this.sendSdkMessage(sessionId, {
+      type: 'update_environment_variables',
+      variables: { ANTHROPIC_API_KEY: apiKey, ANTHROPIC_AUTH_TOKEN: authToken },
+    })
+    if (sent) session.providerAuth = { ...session.providerAuth, apiKey, authToken }
     return sent
   }
 
@@ -1589,11 +1628,21 @@ export class ConversationService {
         if (sdkError) {
           void diagnosticsService.recordEvent({
             type: sdkError.type,
-            severity: 'error',
+            severity: sdkError.type === 'sdk_api_retry' ? 'warn' : 'error',
             sessionId,
             summary: sdkError.summary,
             details: sdkError.details,
           })
+          if (sdkError.type === 'sdk_api_retry') {
+            void traceCaptureService.recordEvent({
+              sessionId,
+              phase: 'api_retry',
+              severity: 'warning',
+              title: 'API request retry',
+              message: sdkError.summary,
+              metadata: sdkError.details,
+            }).catch(() => {})
+          }
         }
         if (msg?.type === 'system' && msg.subtype === 'init') {
           session.initMessage = msg
@@ -2804,6 +2853,23 @@ export class ConversationService {
     summary: string
     details: Record<string, unknown>
   } | null {
+    if (message?.type === 'system' && message.subtype === 'api_retry') {
+      const detail = typeof message.error_message === 'string' ? message.error_message : ''
+      return {
+        type: 'sdk_api_retry',
+        summary: sanitizeRetryDiagnosticText(detail || `API request retry: ${message.error ?? 'unknown'}`),
+        details: {
+          attempt: message.attempt,
+          maxRetries: message.max_retries,
+          retryDelayMs: message.retry_delay_ms,
+          errorStatus: message.error_status,
+          error: message.error,
+          requestId: typeof message.request_id === 'string' ? sanitizeRetryDiagnosticText(message.request_id) : undefined,
+          messageUuid: message.uuid,
+        },
+      }
+    }
+
     if (this.isAssistantApiErrorMessage(message)) {
       const summary = this.redactProcessOutput(
         this.extractAssistantApiErrorDetail(message) || 'Assistant API error',

@@ -18,7 +18,7 @@ const OTHER_NAMES: Record<string, string[]> = { jp: ['簡易'], kr: ['간소', '
 const leanModeKeys = Object.keys(en).filter(key => key.startsWith('agentProfile.') || key.startsWith('settings.general.leanMode'))
 // Messages that name the mode (the rest describe tools or timing).
 const NAMING_KEYS = [
-  'agentProfile.lean', 'agentProfile.leanShort', 'agentProfile.info', 'agentProfile.commandUnavailable',
+  'agentProfile.lean', 'agentProfile.leanShort', 'agentProfile.teamReset', 'agentProfile.commandUnavailable',
   'agentProfile.draftCommandUnavailable', 'agentProfile.planUnavailable', 'agentProfile.planReset',
   'settings.general.leanModeEnabled', 'settings.general.leanModeDescription',
 ]

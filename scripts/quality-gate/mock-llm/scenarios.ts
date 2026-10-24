@@ -6,17 +6,19 @@
  * the failure paths a real provider cannot be made to produce on demand.
  */
 
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { LiveScenarioRunner } from '../agent-flow/live'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 import { MOCK_IMAGE_PNG_BASE64, type MockLlmServer, type RecordedRequest } from './server'
-import { UPSTREAM_ERROR_TRIGGER } from './scriptedModel'
+import { UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedModel'
 
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-deepseek-web-search', title: 'DeepSeek standalone search returns summaries through the real CLI to the model' },
+  { id: 'mock-mcp-late-reconnect', title: 'Reconnect a late-starting MCP service into an already running CLI session' },
   { id: 'mock-session-delegation-review', title: 'Real CLI yields for model allocation and starts a child only after UI confirmation' },
   {
     id: 'mock-image-provider-protocols',
@@ -41,6 +43,10 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   {
     id: 'mock-upstream-error-recovers',
     title: 'An upstream error ends the turn visibly and the next turn still works',
+  },
+  {
+    id: 'mock-provider-refusal-recovers',
+    title: 'A third-party refusal names the selected model without changing provider and the next turn still works',
   },
 ]
 
@@ -81,8 +87,128 @@ function streamedText(messages: ReadonlyArray<{ type: string; text?: unknown }>)
 export function createMockOnlyRunners(
   requests: readonly RecordedRequest[],
   imageRequests: MockLlmServer['imageRequests'] = [],
+  searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    async 'mock-deepseek-web-search'(ctx) {
+      const settingsUrl = `${ctx.baseUrl}/api/settings/user`
+      const originalResponse = await fetch(settingsUrl)
+      if (!originalResponse.ok) throw new Error('reading sandbox settings failed')
+      const original = await originalResponse.json() as { webSearch?: unknown }
+      const update = async (webSearch: unknown) => {
+        const response = await fetch(settingsUrl, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ webSearch }),
+        })
+        if (!response.ok) throw new Error(`updating search settings failed: ${response.status}`)
+      }
+      await update({ mode: 'deepseek', deepseekApiKey: 'mock-deepseek-key' })
+      const socket = await ctx.openSocket(await ctx.createSession())
+      try {
+        ctx.pinRuntime(socket)
+        const since = requests.length
+        const searchStart = searchRequests.length
+        socket.send({ type: 'user_message', content: 'MOCK_DEEPSEEK_SEARCH' })
+        const settled = await socket.waitFor(m => m.type === 'permission_request' || m.type === 'message_complete', ctx.stepTimeoutMs, 'DeepSeek search permission or completion')
+        if (settled.type === 'permission_request') {
+          socket.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
+          await socket.waitFor(m => m.type === 'message_complete', ctx.stepTimeoutMs, 'DeepSeek search completion')
+        }
+        const searches = searchRequests.slice(searchStart)
+        if (searches.length !== 1) throw new Error(`expected one intercepted search, got ${searches.length}`)
+        const search = searches[0]!
+        if (search.headers.get('authorization') !== 'Bearer mock-deepseek-key') throw new Error('search did not use its own fake API key')
+        if (search.body.query !== 'DeepSeek fixture' || search.body.count !== 8 || search.body.need_content !== false) throw new Error(`unexpected search request: ${JSON.stringify(search.body)}`)
+        if (!toolResultsSentUpstream(requests, since).some(result => !result.is_error && contentText(result.content).includes('DEEPSEEK_SUMMARY_REACHED_MODEL'))) throw new Error('search summary did not reach the model')
+        if (!streamedText(socket.messages).includes('DEEPSEEK_SUMMARY_REACHED_MODEL')) throw new Error('search summary did not reach the client')
+      } finally {
+        socket.close()
+        await update(original.webSearch ?? { mode: 'auto' })
+      }
+    },
+    async 'mock-mcp-late-reconnect'(ctx) {
+      const cwd = realpathSync(ctx.workRoot)
+      let ready = false
+      let calls = 0
+      let unavailableAttempts = 0
+      const mcp = Bun.serve({
+        hostname: '127.0.0.1', port: 0,
+        async fetch(req) {
+          if (!ready) {
+            unavailableAttempts += 1
+            return new Response('MCP application has not started', { status: 503 })
+          }
+          if (req.method !== 'POST') return new Response(null, { status: 405 })
+          const request = await req.json() as { id?: number | string; method: string }
+          if (request.id === undefined) return new Response(null, { status: 202 })
+          let result: unknown
+          if (request.method === 'initialize') {
+            result = { protocolVersion: '2025-03-26', capabilities: { tools: {} }, serverInfo: { name: 'late-fixture', version: '1' } }
+          } else if (request.method === 'tools/list') {
+            result = { tools: [{ name: 'echo', description: 'Return the late MCP fixture marker', inputSchema: { type: 'object', properties: {} } }] }
+          } else if (request.method === 'tools/call') {
+            calls += 1
+            result = { content: [{ type: 'text', text: 'LATE_MCP_AVAILABLE' }] }
+          } else {
+            return Response.json({ jsonrpc: '2.0', id: request.id, error: { code: -32601, message: 'Method not found' } })
+          }
+          return Response.json({ jsonrpc: '2.0', id: request.id, result })
+        },
+      })
+      const name = 'late_start'
+      let socket: Awaited<ReturnType<typeof ctx.openSocket>> | undefined
+      let oldSocket: Awaited<ReturnType<typeof ctx.openSocket>> | undefined
+      try {
+        // Keep a CLI whose cached config predates this MCP alongside the CLI
+        // that starts with the configured but unavailable service.
+        oldSocket = await ctx.openSocket(await ctx.createSession())
+        ctx.pinRuntime(oldSocket)
+        oldSocket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+        await oldSocket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'turn before adding MCP config')
+        const created = await fetch(`${ctx.baseUrl}/api/mcp`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd, name, scope: 'local', config: { type: 'http', url: `http://127.0.0.1:${mcp.port}/mcp` } }),
+        })
+        if (!created.ok) throw new Error(`creating the fixture MCP config failed: ${created.status}`)
+        const sessionId = await ctx.createSession()
+        socket = await ctx.openSocket(sessionId)
+        ctx.pinRuntime(socket)
+        socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'initial turn without MCP')
+        if (unavailableAttempts === 0) throw new Error('The CLI must attempt the configured MCP before the application starts')
+        if (calls !== 0) throw new Error('The unavailable MCP must not execute a tool')
+        ready = true
+        const reconnected = await fetch(`${ctx.baseUrl}/api/mcp/${name}/reconnect`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cwd, sessionId }),
+        })
+        const receipt = await reconnected.json() as { sessionSync?: { applied: boolean }; server?: { status: string } }
+        if (!reconnected.ok || receipt.server?.status !== 'connected' || !receipt.sessionSync?.applied) {
+          throw new Error(`reconnect did not update the running conversation: ${JSON.stringify(receipt)}`)
+        }
+        for (const active of [oldSocket, socket]) {
+          const since = requests.length
+          const start = active.messages.length
+          active.send({ type: 'user_message', content: 'MOCK_LATE_MCP' })
+          const settled = await active.waitFor(message => message.type === 'permission_request' || message.type === 'message_complete', ctx.stepTimeoutMs, 'late MCP permission or completion', start)
+          if (settled.type === 'permission_request') {
+            active.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
+          }
+          await active.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'late MCP tool call', start)
+          const roundtrip = toolResultsSentUpstream(requests, since).some(result => contentText(result.content).includes('LATE_MCP_AVAILABLE') && !result.is_error)
+          if (!roundtrip) throw new Error('Each reconnected CLI must return the actual MCP tool result to the model')
+        }
+        if (calls !== 2) throw new Error('Both reconnected CLIs must execute the MCP tool exactly once')
+      } finally {
+        socket?.close()
+        oldSocket?.close()
+        try {
+          await fetch(`${ctx.baseUrl}/api/mcp/${name}?scope=local&cwd=${encodeURIComponent(cwd)}`, { method: 'DELETE' })
+        } finally {
+          mcp.stop(true)
+        }
+      }
+    },
     async 'mock-session-delegation-review'(ctx) {
       const sessionId = await ctx.createSession()
       const socket = await ctx.openSocket(sessionId)
@@ -326,6 +452,50 @@ export function createMockOnlyRunners(
         socket.send({ type: 'user_message', content: 'Reply with one short sentence after compact.' })
         await socket.waitFor(m => m.type === 'message_complete', ctx.stepTimeoutMs, 'next turn after reconnect', nextStart)
         if (!streamedText(socket.messages.slice(nextStart)).trim()) throw new Error('no reply after compact and reconnect')
+      } finally {
+        socket.close()
+      }
+    },
+
+    async 'mock-provider-refusal-recovers'(ctx) {
+      const sessionId = await ctx.createSession()
+      const socket = await ctx.openSocket(sessionId)
+      const assertRuntime = async () => {
+        const response = await fetch(`${ctx.baseUrl}/api/sessions/${sessionId}/summary`)
+        if (!response.ok) throw new Error(`reading refusal session runtime failed: ${response.status}`)
+        const session = await response.json() as { runtimeProviderId?: string | null; runtimeModelId?: string }
+        if (session.runtimeProviderId !== ctx.target.providerId || session.runtimeModelId !== ctx.target.modelId) {
+          throw new Error(`Refusal changed the selected provider or model: ${JSON.stringify(session)}`)
+        }
+      }
+      const requestStart = requests.length
+      try {
+        ctx.pinRuntime(socket)
+        const start = socket.messages.length
+        socket.send({ type: 'user_message', content: `${UPSTREAM_REFUSAL_TRIGGER}: refuse this turn.` })
+        await socket.waitFor(m => m.type === 'message_complete', ctx.stepTimeoutMs, 'refused turn completion', start)
+        const errors = socket.messages.slice(start).filter(m => m.type === 'error')
+        const detail = errors.map(m => String(m.message ?? '')).join('\n')
+        if (!/selected model.*refus/i.test(detail)) throw new Error(`Refusal did not identify the selected model: ${detail}`)
+        if (/anthropic\.com|Usage Policy|claude-sonnet|Claude Code/i.test(detail)) {
+          throw new Error(`Third-party refusal was attributed to Anthropic: ${detail}`)
+        }
+        if (requests.slice(requestStart).some(request => request.body.model !== ctx.target.modelId)) {
+          throw new Error('Refusal switched the upstream request model')
+        }
+        await assertRuntime()
+
+        const next = socket.messages.length
+        const recoveryRequestStart = requests.length
+        socket.send({ type: 'user_message', content: 'Reply with one short sentence after refusal.' })
+        await socket.waitFor(m => m.type === 'message_complete', ctx.stepTimeoutMs, 'next turn after refusal', next)
+        if (!streamedText(socket.messages.slice(next)).trim() || socket.messages.slice(next).some(m => m.type === 'error')) {
+          throw new Error('The session did not answer normally after a provider refusal')
+        }
+        if (requests.length === recoveryRequestStart || requests.slice(recoveryRequestStart).some(request => request.body.model !== ctx.target.modelId)) {
+          throw new Error('The turn after refusal did not use the selected upstream model')
+        }
+        await assertRuntime()
       } finally {
         socket.close()
       }

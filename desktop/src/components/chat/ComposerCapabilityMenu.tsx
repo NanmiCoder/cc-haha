@@ -5,6 +5,7 @@ import { useRoomAbove } from '@/hooks/useRoomAbove'
 import { publicAssetPath } from '@/lib/publicAsset'
 import { Button } from '@/components/ui/Button'
 import { Switch } from '@/components/ui/Switch'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { IconButton } from '@/components/ui/IconButton'
 import { ComposerSuggestionRow } from '@/components/chat/ComposerSuggestionRow'
 import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from '@/components/chat/ComposerReferenceMenu'
@@ -249,7 +250,22 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
     const status = item.status
       ? <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${item.status === 'ok' ? 'bg-[var(--color-success)]' : 'bg-[var(--color-warning)]'}`} />
       : null
-    const trailing = item.switch
+    const choice = item.choice
+    const trailing = choice
+      ? <span className="-my-1 shrink-0" onClick={event => event.stopPropagation()}>
+        <SegmentedControl
+          size="sm"
+          layout="auto"
+          label={item.label}
+          value={choice.value}
+          items={choice.options.map(option => ({ value: option.value, label: option.label, disabled: choice.locked }))}
+          onChange={value => {
+            const option = choice.options.find(candidate => candidate.value === value)
+            if (option) onAction(option.action)
+          }}
+        />
+      </span>
+      : item.switch
       ? <span className="-my-1 shrink-0" onClick={event => event.stopPropagation()}>
         <Switch size="sm" checked={item.switch.checked} disabled={item.switch.disabled} label={item.label} labelHidden onChange={() => item.action && onAction(item.action)} />
       </span>
@@ -315,7 +331,12 @@ export function ComposerCapabilityMenu({ id, sections, cwd = '', referencesLoadi
       offset += section.items.length
       return <div key={section.id} role="group" aria-label={section.title} className="border-b border-[var(--color-border)] py-1 first:pt-0 last:border-b-0 last:pb-0">
         {section.showTitle ? <div role="presentation" className={COMPOSER_MENU_SECTION}>{section.title}</div> : null}
-        {section.items.map((item, index) => renderRow(item, start + index, 'root'))}
+        {section.items.map((item, index) => <Fragment key={item.key}>
+          {renderRow(item, start + index, 'root')}
+          {item.detail ? <div role="presentation" data-testid={`${item.key}-detail`} className="mx-2 mb-1 mt-0.5 space-y-1 rounded-[var(--radius-sm)] bg-[var(--color-surface-container-low)] px-2.5 py-2 text-xs leading-relaxed text-[var(--color-text-secondary)]">
+            {item.detail.map(line => <p key={`${line.label ?? ''}${line.text}`}>{line.label ? <span className="font-medium text-[var(--color-text-primary)]">{line.label} </span> : null}{line.text}</p>)}
+          </div> : null}
+        </Fragment>)}
       </div>
     })}
   </div>
