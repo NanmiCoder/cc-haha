@@ -1,3 +1,5 @@
+import { t } from './i18n.js'
+
 export type PermissionDecision = {
   requestId: string
   allowed: boolean
@@ -59,12 +61,12 @@ export function parsePermitCallbackData(data: string): PermissionDecision | null
 
 export function formatPermissionInstructions(requestId: string): string {
   return [
-    '回复 1 允许一次，2 永久允许，3 拒绝。',
-    `也可回复 /allow ${requestId}、/always ${requestId}、/deny ${requestId}。`,
+    t('permission.hint'),
+    t('permission.hintAlt', { requestId }),
   ].join('\n')
 }
 
 export function formatPermissionDecisionStatus(decision: Pick<PermissionDecision, 'allowed' | 'rule'>): string {
-  if (!decision.allowed) return '❌ 已拒绝'
-  return decision.rule === 'always' ? '♾️ 已永久允许' : '✅ 已允许'
+  if (!decision.allowed) return t('permission.denied')
+  return decision.rule === 'always' ? t('permission.always') : t('permission.allowed')
 }

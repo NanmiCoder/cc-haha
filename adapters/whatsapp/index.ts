@@ -31,7 +31,7 @@ import { SessionStore } from '../common/session-store.js'
 import { syncImPermissionState } from '../common/permission-sync.js'
 import { SessionSelectionController } from '../common/session-selection.js'
 import { createAdapterClient } from '../common/adapter-client.js'
-import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
+import { restoreStoredSessionBinding, sessionReconnectNotice, type SessionRestoreResult } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
 import { checkAttachmentLimit } from '../common/attachment/attachment-limits.js'
@@ -182,7 +182,7 @@ async function ensureExistingSession(chatId: string): Promise<SessionRestoreResu
 
 async function buildStatusText(chatId: string): Promise<string> {
   const result = await ensureExistingSession(chatId)
-  if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+  if (result.status === 'unavailable') return sessionReconnectNotice()
   if (result.status === 'missing') return formatImStatus(null)
   const stored = result.session
 
@@ -213,7 +213,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
   const result = await ensureExistingSession(chatId)
   if (result.status === 'restored') return true
   if (result.status === 'unavailable') {
-    await sendWhatsAppText(chatId, SESSION_RECONNECT_NOTICE)
+    await sendWhatsAppText(chatId, sessionReconnectNotice())
     return false
   }
 
@@ -471,7 +471,7 @@ async function routeUserMessage(
     if (command === '/stop') {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendWhatsAppText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendWhatsAppText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       bridge.sendStopGeneration(chatId)
@@ -485,7 +485,7 @@ async function routeUserMessage(
     if (command === '/clear') {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendWhatsAppText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendWhatsAppText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       clearTransientChatState(chatId)

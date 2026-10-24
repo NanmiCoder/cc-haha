@@ -1,6 +1,6 @@
 import { formatImHelp } from '../common/format.js'
 import { listProjectSessionHistory, restoreSelectedSession } from '../common/session-selection.js'
-import { SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
+import { sessionReconnectNotice, type SessionRestoreResult } from '../common/session-recovery.js'
 import type { SessionEntry } from '../common/session-store.js'
 import type { ServerMessage } from '../common/ws-bridge.js'
 import {
@@ -530,7 +530,7 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
   const showSkills = async (chatId: string): Promise<void> => {
     const restored = await deps.ensureExistingSession(chatId)
     if (restored.status === 'unavailable') {
-      await deps.api.sendMessage(Number(chatId), SESSION_RECONNECT_NOTICE)
+      await deps.api.sendMessage(Number(chatId), sessionReconnectNotice())
       return
     }
     const cwd = restored.status === 'restored' ? restored.session.workDir : deps.defaultWorkDir
@@ -572,7 +572,7 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
 
     const restored = await deps.ensureExistingSession(chatId)
     if (restored.status === 'unavailable') {
-      await deps.api.sendMessage(Number(chatId), SESSION_RECONNECT_NOTICE)
+      await deps.api.sendMessage(Number(chatId), sessionReconnectNotice())
       return
     }
     if (restored.status === 'missing') {
@@ -583,7 +583,7 @@ export function createTelegramCommandController(deps: TelegramCommandControllerD
 
     const invocation = `/${item.value}`
     if (!deps.sendUserMessage(chatId, invocation)) {
-      await ctx.editMessageText(`⚠️ Skill 发送失败。${SESSION_RECONNECT_NOTICE}`)
+      await ctx.editMessageText(`⚠️ Skill 发送失败。${sessionReconnectNotice()}`)
       return
     }
 

@@ -25,6 +25,7 @@ import {
   type AdapterPlatformConfig,
 } from './config.js'
 import { formatImHelp, formatImStatus, formatPermissionRequest } from './format.js'
+import { t } from './i18n.js'
 import type { AdapterHttpClient } from './http-client.js'
 import { MessageBuffer } from './message-buffer.js'
 import type { MessageDedup } from './message-dedup.js'
@@ -35,7 +36,7 @@ import {
   parsePermissionCommand,
   type PermissionDecision,
 } from './permission.js'
-import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from './session-recovery.js'
+import { restoreStoredSessionBinding, sessionReconnectNotice, type SessionRestoreResult } from './session-recovery.js'
 import { SessionSelectionController } from './session-selection.js'
 import { syncImPermissionState } from './permission-sync.js'
 import type { SessionStore } from './session-store.js'
@@ -211,7 +212,7 @@ export class ImChatRuntime {
         this.port.setBusy?.(chatId, false)
         const detail = err instanceof Error ? err.message : String(err)
         console.error(`${this.port.logPrefix} Failed to handle message for ${chatId}:`, err)
-        await this.notifySafely(chatId, `处理消息失败：${detail}`)
+        await this.notifySafely(chatId, t('chat.error.processFailed', { detail }))
       }
     })
   }
@@ -228,9 +229,7 @@ export class ImChatRuntime {
         : false
       await this.port.sendNotice(
         chatId,
-        paired
-          ? '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话，发送 /help 查看可用命令。'
-          : '未授权。请在 Claude Code 桌面端生成配对码后发送给我。',
+        paired ? t('chat.pairing.success') : t('chat.pairing.unauthorized'),
       )
       return
     }
@@ -260,7 +259,7 @@ export class ImChatRuntime {
     const attachments = message.attachments
       ?? (message.loadAttachments ? await message.loadAttachments() : [])
 
-    const effective = text || (attachments.length > 0 ? '(用户发送了附件)' : '')
+    const effective = text || (attachments.length > 0 ? t('chat.attachments.placeholder') : '')
     if (!effective && attachments.length === 0) return
 
     this.port.setBusy?.(chatId, true)
@@ -273,7 +272,7 @@ export class ImChatRuntime {
     if (!sent) {
       this.port.setBusy?.(chatId, false)
       this.getRuntimeState(chatId).state = 'idle'
-      await this.port.sendNotice(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await this.port.sendNotice(chatId, t('chat.send.failed'))
     }
   }
 
@@ -303,17 +302,17 @@ export class ImChatRuntime {
     if (STOP_ALIASES.has(text)) {
       const result = await this.ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await this.port.sendNotice(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await this.port.sendNotice(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return true
       }
       this.bridge.sendStopGeneration(chatId)
-      await this.port.sendNotice(chatId, '已发送停止信号。')
+      await this.port.sendNotice(chatId, t('chat.stop.sent'))
       return true
     }
     if (CLEAR_ALIASES.has(text)) {
       const result = await this.ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await this.port.sendNotice(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await this.port.sendNotice(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return true
       }
       this.clearTransientChatState(chatId)
@@ -321,7 +320,7 @@ export class ImChatRuntime {
       if (sent) this.getRuntimeState(chatId).state = 'thinking'
       await this.port.sendNotice(
         chatId,
-        sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。',
+        sent ? t('chat.clear.done') : t('chat.clear.failed'),
       )
       return true
     }
@@ -334,7 +333,7 @@ export class ImChatRuntime {
   ): Promise<void> {
     const pending = this.pendingPermissions.get(chatId)
     if (!pending?.has(decision.requestId)) {
-      await this.port.sendNotice(chatId, `未找到待确认的权限请求：${decision.requestId}`)
+      await this.port.sendNotice(chatId, t('chat.permission.notFound', { requestId: decision.requestId }))
       return
     }
     const sent = this.bridge.sendPermissionResponse(
@@ -350,7 +349,7 @@ export class ImChatRuntime {
     }
     await this.port.sendNotice(
       chatId,
-      sent ? `${formatPermissionDecisionStatus(decision)}。` : '权限响应发送失败，请检查会话状态。',
+      sent ? formatPermissionDecisionStatus(decision) : t('chat.permission.sendFailed'),
     )
   }
 
@@ -462,21 +461,21 @@ export class ImChatRuntime {
       const stored = this.sessionStore.get(chatId)
       const workDir = stored?.workDir || this.defaultWorkDir
       if (workDir) {
-        await this.port.sendNotice(chatId, '会话上下文已失效，正在自动重建...')
+        await this.port.sendNotice(chatId, t('chat.session.rebuilding'))
         this.clearTransientChatState(chatId)
         this.bridge.resetSession(chatId)
         this.sessionStore.delete(chatId)
         const ok = await this.createSessionForChat(chatId, workDir)
         await this.port.sendNotice(
           chatId,
-          ok ? '已重建会话，请重新发送消息。' : '重建会话失败，请发送 /new 手动新建。',
+          ok ? t('chat.session.rebuilt') : t('chat.session.rebuildFailed'),
         )
         return
       }
-      await this.port.sendNotice(chatId, '会话上下文已失效，请发送 /new 新建会话。')
+      await this.port.sendNotice(chatId, t('chat.session.expired'))
       return
     }
-    await this.port.sendNotice(chatId, `错误: ${msg.message}`)
+    await this.port.sendNotice(chatId, t('chat.error.generic', { message: msg.message }))
   }
 
   private async dispatchOutboundImage(chatId: string, pending: PendingUpload): Promise<void> {
@@ -519,7 +518,7 @@ export class ImChatRuntime {
     const result = await this.ensureExistingSession(chatId)
     if (result.status === 'restored') return true
     if (result.status === 'unavailable') {
-      await this.port.sendNotice(chatId, SESSION_RECONNECT_NOTICE)
+      await this.port.sendNotice(chatId, sessionReconnectNotice())
       return false
     }
 
@@ -542,14 +541,14 @@ export class ImChatRuntime {
       this.bridge.onServerMessage(chatId, (msg) => this.handleServerMessage(chatId, msg))
       const opened = await this.bridge.waitForOpen(chatId)
       if (!opened) {
-        await this.port.sendNotice(chatId, '连接服务器超时，请重试。')
+        await this.port.sendNotice(chatId, t('chat.connect.timeout'))
         return false
       }
       return true
     } catch (err) {
       await this.port.sendNotice(
         chatId,
-        `无法创建会话: ${err instanceof Error ? err.message : String(err)}`,
+        t('chat.session.createFailed', { message: err instanceof Error ? err.message : String(err) }),
       )
       return false
     }
@@ -562,7 +561,7 @@ export class ImChatRuntime {
       if (projects.length === 0) {
         await this.port.sendNotice(
           chatId,
-          `没有找到最近的项目。发送 /new 会使用默认工作目录：${this.defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`,
+          t('chat.projects.none', { dir: this.defaultWorkDir }),
         )
         return
       }
@@ -572,12 +571,12 @@ export class ImChatRuntime {
       this.pendingProjectSelection.add(chatId)
       await this.port.sendNotice(
         chatId,
-        `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n下次可直接 /new <编号、名称或绝对路径> 快速新建会话`,
+        t('chat.projects.select', { list: lines.join('\n\n') }),
       )
     } catch (err) {
       await this.port.sendNotice(
         chatId,
-        `无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`,
+        t('chat.projects.listFailed', { message: err instanceof Error ? err.message : String(err) }),
       )
     }
   }
@@ -592,7 +591,7 @@ export class ImChatRuntime {
     if (!query) {
       if (this.defaultWorkDir) {
         const ok = await this.createSessionForChat(chatId, this.defaultWorkDir)
-        if (ok) await this.port.sendNotice(chatId, '已新建会话，可以开始对话了。')
+        if (ok) await this.port.sendNotice(chatId, t('chat.session.created'))
       } else {
         await this.showProjectPicker(chatId)
       }
@@ -606,19 +605,22 @@ export class ImChatRuntime {
         if (ok) {
           await this.port.sendNotice(
             chatId,
-            `已新建会话：${project.projectName}${project.branch ? ` (${project.branch})` : ''}`,
+            t('chat.session.createdNamed', {
+              name: project.projectName,
+              branch: project.branch ? ` (${project.branch})` : '',
+            }),
           )
         }
         return
       }
       if (ambiguous) {
         const list = ambiguous.map((p, i) => `${i + 1}. ${p.projectName} - ${p.realPath}`).join('\n')
-        await this.port.sendNotice(chatId, `匹配到多个项目，请更精确：\n\n${list}`)
+        await this.port.sendNotice(chatId, t('chat.projects.ambiguous', { list }))
         return
       }
       await this.port.sendNotice(
         chatId,
-        `未找到匹配 "${query}" 的项目。发送 /projects 查看完整列表。`,
+        t('chat.projects.notFound', { query }),
       )
     } catch (err) {
       await this.port.sendNotice(chatId, err instanceof Error ? err.message : String(err))
@@ -627,7 +629,7 @@ export class ImChatRuntime {
 
   async buildStatusText(chatId: string): Promise<string> {
     const result = await this.ensureExistingSession(chatId)
-    if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+    if (result.status === 'unavailable') return sessionReconnectNotice()
     if (result.status === 'missing') return formatImStatus(null)
     const stored = result.session
 
