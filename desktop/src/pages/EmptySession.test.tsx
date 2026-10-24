@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import '@testing-library/jest-dom'
+import { rawRecordDiagnosticEvent } from '../api/client'
 
 const originalRangeGetClientRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects')
 const originalRangeGetBoundingClientRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect')
@@ -38,6 +39,11 @@ const mocks = vi.hoisted(() => ({
     preferences: { enabled: false, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
     limits: { maxAudioSeconds: 60, maxAudioBytes: 1_000_000 },
   })),
+}))
+
+vi.mock('../api/client', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../api/client')>(),
+  rawRecordDiagnosticEvent: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('../api/sessions', () => ({
@@ -2379,6 +2385,100 @@ describe('EmptySession', () => {
       })
     })
 
+    it('completes workspace setup in the background after the user switches tabs', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useTabStore.getState().openTab('other-session', 'Other session'))
+
+      await act(async () => complete({ sessionId: 'background-session' }))
+
+      expect(useTabStore.getState().activeTabId).toBe('other-session')
+      expect(useTabStore.getState().tabs.map((tab) => tab.sessionId)).toContain('background-session')
+      expect(useWorkspaceStore.getState().getSession('background-session').layout).toBe('split')
+      expect(useUIStore.getState().draftWorkspaceRequest).toBeNull()
+    })
+
+    it('does not apply an in-flight workspace action to a newer draft revision', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useUIStore.setState({
+        newSessionDraft: { workDir: '/another/project', revision: draft.revision + 1, hasContent: false },
+      }))
+
+      await act(async () => complete({ sessionId: 'stale-session' }))
+
+      expect(useUIStore.getState().newSessionDraft?.revision).toBe(draft.revision + 1)
+      expect(useWorkspaceStore.getState().getSession('stale-session').layout).toBe('hidden')
+      expect(useTabStore.getState().activeTabId).not.toBe('stale-session')
+      expect(rawRecordDiagnosticEvent).toHaveBeenCalledWith({
+        type: 'draft_workspace_request_stale',
+        severity: 'warn',
+        summary: 'A draft workspace request became stale before it could be consumed.',
+      })
+    })
+
+    it('retains a workspace action requested while Run is creating the session', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('run this task', 'run this task'.length)
+
+      const runButton = screen.getByRole('button', { name: /Run/i })
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+
+      await act(async () => complete({ sessionId: 'run-workspace-session' }))
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().getSession('run-workspace-session').layout).toBe('split')
+        expect(useUIStore.getState().draftWorkspaceRequest).toBeNull()
+      })
+      expect(mocks.createSession).toHaveBeenCalledTimes(1)
+      expect(mocks.wsSend).toHaveBeenCalledWith('run-workspace-session', expect.objectContaining({
+        type: 'user_message',
+        content: 'run this task',
+      }))
+      expect(useChatStore.getState().sessions['run-workspace-session']?.composerPrefill).toBeNull()
+    })
+
+    it('keeps a failed request queued and consumes it after the next Run retry', async () => {
+      mocks.createSession.mockRejectedValueOnce(new Error('temporary failure'))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('retry this task', 'retry this task'.length)
+
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(useUIStore.getState().toasts.some((toast) => toast.type === 'error')).toBe(true))
+      expect(useUIStore.getState().draftWorkspaceRequest).toMatchObject({
+        action: 'toggle-side',
+        revision: draft.revision,
+      })
+      expect(useUIStore.getState().newSessionDraft).not.toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+      await waitFor(() => {
+        expect(useWorkspaceStore.getState().getSession('draft-session').layout).toBe('split')
+        expect(useUIStore.getState().draftWorkspaceRequest).toBeNull()
+      })
+      expect(mocks.createSession).toHaveBeenCalledTimes(2)
+    })
+
     it('keeps the draft and its input when the workspace action cannot create a session', async () => {
       mocks.getProviderAuthStatus.mockResolvedValue({ hasAuth: false, source: 'none' })
       useUIStore.getState().startNewSessionDraft('/workspace/project')
@@ -2388,7 +2488,11 @@ describe('EmptySession', () => {
 
       act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
 
-      await waitFor(() => expect(useUIStore.getState().draftWorkspaceRequest).toBeNull())
+      await waitFor(() => expect(useUIStore.getState().toasts.length).toBeGreaterThan(0))
+      expect(useUIStore.getState().draftWorkspaceRequest).toMatchObject({
+        action: 'toggle-side',
+        revision: draft.revision,
+      })
       expect(mocks.createSession).not.toHaveBeenCalled()
       expect(useUIStore.getState().newSessionDraft).not.toBeNull()
       expect(getComposerText()).toBe('keep this draft')
