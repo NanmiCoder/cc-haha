@@ -73,6 +73,8 @@ order: 3
 
 内置 Agent 的独立服务商保存为 `builtInAgentOverrides.<名称>.providerId`，例如 `Explore` 可单独使用便宜的检索模型，而主会话继续使用原服务商。未配置 `providerId` 的旧设置继续继承会话服务商。只选服务商、不单独选模型时，使用该服务商配置的主模型；服务商删除或不可用时，弹窗会提示并允许改回继承。
 
+`--bare` 模式不读取已保存的服务商凭据，因此不能使用独立服务商覆盖；移除 `providerId` 后，Agent 会继承显式提供的 API 密钥运行时。
+
 自定义 Agent 仍只保存模型 ID，运行时使用会话当前的 Provider。如果以后切换会话 Provider，别名会按新 Provider 的映射解析，完整模型 ID 则需要新 Provider 也支持。
 
 如果你自己建了一个同名的用户 Agent（比如手写一个 `name: Explore` 的 md 文件），它会完全盖住内置的那个，此时改内置的模型不会有任何效果——弹窗里会提示这一点。

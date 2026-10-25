@@ -36,6 +36,35 @@ afterEach(async () => {
 })
 
 describe('agent provider runtime resolution', () => {
+  test.each(['saved-provider', 'claude-official', 'openai-official', 'grok-official', 'deepseek-account'])(
+    'rejects explicit %s in bare mode before reading saved providers or accounts', async (providerId) => {
+      const previous = process.env.CLAUDE_CODE_SIMPLE
+      const providerRead = spyOn(ProviderService.prototype, 'getProvider')
+      const runtimeRead = spyOn(ProviderService.prototype, 'getProviderRuntimeEnv')
+      const accountRead = spyOn(hahaOAuthService, 'ensureFreshAccessToken').mockResolvedValue('fake-token')
+      process.env.CLAUDE_CODE_SIMPLE = '1'
+      try {
+        await expect(resolveAgentProviderRuntime(providerId, {})).rejects.toThrow('--bare')
+        expect(providerRead).not.toHaveBeenCalled()
+        expect(runtimeRead).not.toHaveBeenCalled()
+        expect(accountRead).not.toHaveBeenCalled()
+      } finally {
+        if (previous === undefined) delete process.env.CLAUDE_CODE_SIMPLE
+        else process.env.CLAUDE_CODE_SIMPLE = previous
+      }
+    },
+  )
+
+  test('honors the bare startup flag before the simple environment is initialized', async () => {
+    const previousArgv = process.argv
+    process.argv = [...previousArgv, '--bare']
+    try {
+      await expect(resolveAgentProviderRuntime('claude-official', {})).rejects.toThrow('--bare')
+    } finally {
+      process.argv = previousArgv
+    }
+  })
+
   test('loads the full saved runtime without activating it or changing parent credentials', async () => {
     const provider = await addProvider({ model1mSupport: { main: true, haiku: false, sonnet: false, opus: false }, toolSearchEnabled: true })
     const indexPath = join(configDir, 'cc-haha', 'providers.json')

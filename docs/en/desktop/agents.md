@@ -73,6 +73,8 @@ The override is written to `builtInAgentOverrides` in `~/.claude/settings.json` 
 
 The separate provider is stored as `builtInAgentOverrides.<name>.providerId`. For example, Explore can use a cheaper retrieval model while the main session stays on its original provider. Older settings without `providerId` keep inheriting the session provider. Selecting only a provider uses its configured main model. If the provider is deleted or unavailable, the dialog explains the problem and lets you return to inheritance.
 
+`--bare` mode does not read saved provider credentials, so separate provider overrides are unavailable. Remove `providerId` to inherit the explicitly supplied API-key runtime.
+
 Custom agents still store only a model ID and run through the session's current provider. After switching the session provider, aliases resolve through its new mapping, while a full model ID must also be supported by the new provider.
 
 If you create a user agent with the same name (a hand-written file with `name: Explore`, say), it shadows the built-in one completely — changing the built-in's model then has no effect, and the dialog says so.

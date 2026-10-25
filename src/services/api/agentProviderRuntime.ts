@@ -1,7 +1,7 @@
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '../../server/types/provider.js'
 import { attributionHeaderEnvForModel } from '../../server/services/attributionHeaderPolicy.js'
 import { isProviderManagedEnvVar } from '../../utils/managedEnvConstants.js'
-import { isEnvTruthy } from '../../utils/envUtils.js'
+import { isBareMode, isEnvTruthy } from '../../utils/envUtils.js'
 import { getProviderRuntimeEnvironment, type ProviderRuntimeContext } from './providerRuntimeContext.js'
 
 const inheritedCredentialKeys = new Set([
@@ -51,6 +51,11 @@ export async function resolveAgentProviderRuntime(
   providerId: string,
   source: Readonly<NodeJS.ProcessEnv> = getProviderRuntimeEnvironment(),
 ): Promise<ProviderRuntimeContext> {
+  // Bare mode permits only explicitly supplied API-key authentication. A
+  // provider id refers to saved credentials, even when supplied via --settings.
+  if (isBareMode()) {
+    throw new Error('Agent provider overrides are unavailable in --bare mode; remove providerId to inherit the explicit API-key runtime')
+  }
   // Agent tools are also imported while ProviderService initializes its model
   // helpers. Load server dependencies only when an explicit agent runs.
   const [{ ProviderService }, { getManagedEnvKeys }] = await Promise.all([
