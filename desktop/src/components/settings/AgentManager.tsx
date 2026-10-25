@@ -26,6 +26,8 @@ import type {
   AgentScope,
   AgentSource,
 } from '../../api/agents'
+import { agentsApi } from '@/api/agents'
+import type { SessionModelChoice } from '../../../../src/shared/sessionDelegation'
 import { useAgentStore } from '../../stores/agentStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -296,7 +298,11 @@ export function AgentManager() {
                             <span className="block min-w-0 flex-1">
                               <span className="flex flex-wrap items-center gap-1.5">
                                 <span className="break-all font-mono text-[13px] font-medium text-[var(--color-text-primary)]">{agent.agentType}</span>
-                                {agent.modelDisplay && <MetaPill mono>{agent.modelDisplay}</MetaPill>}
+                                {(usesProviderDefaultModel(agent) || agent.modelDisplay) && (
+                                  <MetaPill mono={!usesProviderDefaultModel(agent)}>
+                                    {usesProviderDefaultModel(agent) ? t('settings.agents.form.providerDefaultModel') : agent.modelDisplay}
+                                  </MetaPill>
+                                )}
                                 {agent.effort !== undefined && <MetaPill>{agent.effort}</MetaPill>}
                                 <Badge tone={agent.isActive ? 'success' : 'neutral'}>
                                   {agent.isActive ? t('settings.agents.status.active') : t('settings.agents.status.available')}
@@ -363,6 +369,12 @@ export function AgentManager() {
   )
 }
 
+function usesProviderDefaultModel(agent: AgentDefinition): boolean {
+  return agent.source === 'built-in' &&
+    Boolean(agent.providerId || agent.override?.providerId) &&
+    (!agent.override?.model || agent.override.model === 'inherit')
+}
+
 function AgentDetailView({
   agent,
   onBack,
@@ -409,8 +421,8 @@ function AgentDetailView({
                 {t('settings.agents.override')}
               </Button>
             )}
-            {/* Kept alongside the button: the prompt and tools really are fixed,
-                and only the model and effort are not. */}
+            {/* Kept alongside the button: the prompt and tools remain fixed,
+                while the provider, model and effort can be overridden. */}
             <Badge tone="neutral" icon={<LockKeyhole size={11} strokeWidth={2} aria-hidden="true" />}>
               {t('settings.agents.readOnly')}
             </Badge>
@@ -447,7 +459,9 @@ function AgentDetailView({
       <SettingsSection title={t('settings.agents.entryEyebrow')}>
         <SettingsGroup>
           <SettingsRow title={t('settings.agents.detail.configuredModel')} layout="inline">
-            <span className="break-all font-mono text-xs text-[var(--color-text-secondary)]">{agent.model || inherited}</span>
+            <span className="break-all font-mono text-xs text-[var(--color-text-secondary)]">
+              {usesProviderDefaultModel(agent) ? t('settings.agents.form.providerDefaultModel') : agent.model || inherited}
+            </span>
           </SettingsRow>
           <SettingsRow
             title={t('settings.agents.detail.configuredEffort')}
@@ -1042,8 +1056,29 @@ function BuiltInAgentOverrideModal({
   const initialModel = agent.override?.model
   const initialEffort = agent.override?.effort
   const [modelChoice, setModelChoice] = useState(
-    initialModel ?? DEFAULT_CHOICE,
+    agent.override?.providerId && initialModel === 'inherit' ? DEFAULT_CHOICE : initialModel ?? DEFAULT_CHOICE,
   )
+  const [providerChoice, setProviderChoice] = useState(agent.override?.providerId ?? '')
+  const [providerModels, setProviderModels] = useState<SessionModelChoice[]>([])
+  const [catalogState, setCatalogState] = useState<'loading' | 'ready' | 'error'>('loading')
+  useEffect(() => {
+    let cancelled = false
+    void agentsApi.providerModels(agent.agentType, cwd).then(({ models }) => {
+      if (!cancelled) {
+        setProviderModels(models)
+        setCatalogState('ready')
+      }
+    }).catch(() => { if (!cancelled) setCatalogState('error') })
+    return () => { cancelled = true }
+  }, [agent.agentType, cwd])
+  const providerItems = Array.from(new Map(providerModels.map(model => [
+    model.providerId ?? 'claude-official',
+    { value: model.providerId ?? 'claude-official', label: model.providerName },
+  ])).values())
+  const unlistedProvider = providerChoice !== '' && !providerItems.some(item => item.value === providerChoice)
+  const selectedProviderModels = providerModels.filter(model => (model.providerId ?? 'claude-official') === providerChoice)
+  const missingProvider = providerChoice !== '' && catalogState === 'ready' && selectedProviderModels.length === 0
+  const providerUnavailable = providerChoice !== '' && (catalogState !== 'ready' || missingProvider)
   const [effort, setEffort] = useState(
     initialEffort === undefined ? DEFAULT_CHOICE : String(initialEffort),
   )
@@ -1061,6 +1096,9 @@ function BuiltInAgentOverrideModal({
         agent.agentType,
         {
           ...(cwd ? { cwd } : {}),
+          ...(providerChoice || agent.override?.providerId
+            ? { providerId: providerChoice || null }
+            : {}),
           // `null` clears the override so the shipped default applies again.
           // Never send the default's literal value: that would freeze today's
           // default into the user's settings file forever.
@@ -1102,7 +1140,7 @@ function BuiltInAgentOverrideModal({
             </Button>
           )}
           <Button variant="secondary" onClick={onClose} disabled={isMutating}>{t('common.cancel')}</Button>
-          <Button onClick={() => void handleSave()} disabled={isMutating || isManaged}>
+          <Button onClick={() => void handleSave()} disabled={isMutating || isManaged || providerUnavailable}>
             {t('common.save')}
           </Button>
         </>
@@ -1134,14 +1172,34 @@ function BuiltInAgentOverrideModal({
           </p>
         )}
 
+        <Field label={t('settings.agents.form.provider')}>
+          <AgentSelect
+            label={t('settings.agents.form.provider')}
+            value={providerChoice}
+            onChange={(value) => {
+              setProviderChoice(value)
+              setModelChoice(DEFAULT_CHOICE)
+            }}
+            disabled={isManaged || catalogState === 'loading'}
+            items={[
+              { value: '', label: t('settings.agents.form.providerInherit') },
+              ...providerItems,
+              ...(unlistedProvider ? [{ value: providerChoice, label: t('settings.agents.form.providerUnavailable', { id: providerChoice }) }] : []),
+            ]}
+          />
+        </Field>
+        {catalogState === 'error' && <p role="alert" className="text-xs text-[var(--color-error)]">{t('settings.agents.form.providerLoadError')}</p>}
+        {missingProvider && <p role="status" className="text-xs text-[var(--color-text-secondary)]">{t('settings.agents.form.providerMissingHint')}</p>}
+
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label={t('settings.agents.form.model')}>
             <AgentModelSelector
               label={t('settings.agents.form.model')}
               value={modelChoice}
               onChange={setModelChoice}
-              disabled={isManaged}
-              defaultLabel={describeDefault(defaultModel)}
+              disabled={isManaged || providerUnavailable}
+              defaultLabel={providerChoice ? t('settings.agents.form.providerDefaultModel') : describeDefault(defaultModel)}
+              providerModels={providerChoice ? selectedProviderModels : undefined}
             />
           </Field>
           <Field label={t('settings.agents.form.effort')}>
@@ -1164,7 +1222,7 @@ function BuiltInAgentOverrideModal({
           {t('settings.agents.overrideHint')}
         </p>
         <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">
-          {t('settings.agents.form.modelProviderHint')}
+          {t('settings.agents.form.providerHint')}
         </p>
         <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">
           {t('settings.agents.overrideScopeHint')}
@@ -1305,12 +1363,14 @@ function AgentModelSelector({
   onChange,
   disabled,
   defaultLabel,
+  providerModels,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
   disabled?: boolean
   defaultLabel?: string
+  providerModels?: SessionModelChoice[]
 }) {
   const t = useTranslation()
   const availableModels = useSettingsStore((state) => state.availableModels)
@@ -1327,17 +1387,17 @@ function AgentModelSelector({
       add({
         id: DEFAULT_CHOICE,
         name: defaultLabel,
-        description: t('settings.agents.form.modelDefaultDescription'),
+        description: t(providerModels ? 'settings.agents.form.providerDefaultModelDescription' : 'settings.agents.form.modelDefaultDescription'),
         context: '',
       })
     }
-    add({
+    if (!providerModels) add({
       id: 'inherit',
       name: t('settings.agents.form.inherit'),
       description: t('settings.agents.form.modelInheritDescription'),
       context: '',
     })
-    for (const alias of BUILT_IN_MODELS) {
+    for (const alias of providerModels ? [] : BUILT_IN_MODELS) {
       add({
         id: alias,
         name: alias,
@@ -1354,9 +1414,10 @@ function AgentModelSelector({
         context: '',
       })
     }
-    availableModels.forEach(add)
+    if (providerModels) providerModels.forEach(model => add({ id: model.modelId, name: model.modelName, description: model.providerName, context: '' }))
+    else availableModels.forEach(add)
     return choices
-  }, [availableModels, defaultLabel, t, value])
+  }, [availableModels, defaultLabel, providerModels, t, value])
 
   return (
     <ModelSelector

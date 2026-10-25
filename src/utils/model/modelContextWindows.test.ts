@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { runWithProviderRuntime } from '../../services/api/providerRuntimeContext.js'
 
 import {
   getConfiguredOrBuiltInModelContextWindow,
@@ -6,6 +7,16 @@ import {
 } from './modelContextWindows.js'
 
 describe('model context windows', () => {
+  test('uses each provider snapshot for overlapping models with different declared windows', async () => {
+    const windows = await Promise.all([32_000, 128_000].map(window => runWithProviderRuntime({
+      providerId: String(window), runtimeKind: 'anthropic_compatible',
+      env: { CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({ 'shared-model': window }) },
+    }, async () => {
+      await Promise.resolve()
+      return getConfiguredOrBuiltInModelContextWindow('shared-model')
+    })))
+    expect(windows).toEqual([32_000, 128_000])
+  })
   test('recognizes updated domestic coding model context windows', () => {
     expect(getConfiguredOrBuiltInModelContextWindow('k3')).toBe(262_144)
     expect(getConfiguredOrBuiltInModelContextWindow('k3[1m]')).toBe(262_144)

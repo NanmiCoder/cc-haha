@@ -3,6 +3,7 @@ import { exec } from 'child_process'
 import { execa } from 'execa'
 import { mkdir, stat } from 'fs/promises'
 import memoize from 'lodash-es/memoize.js'
+import { getProviderRuntimeContext, getProviderRuntimeEnvironment } from '../services/api/providerRuntimeContext.js'
 import { join } from 'path'
 import { CLAUDE_AI_PROFILE_SCOPE } from 'src/constants/oauth.js'
 import {
@@ -102,6 +103,8 @@ function isManagedOAuthContext(): boolean {
 /** Whether we are supporting direct 1P auth. */
 // this code is closely related to getAuthTokenSource
 export function isAnthropicAuthEnabled(): boolean {
+  const runtime = getProviderRuntimeContext()
+  if (runtime) return runtime.runtimeKind === 'claude_oauth'
   // --bare: API-key-only, never OAuth.
   if (isBareMode()) return false
 
@@ -161,6 +164,16 @@ export function isAnthropicAuthEnabled(): boolean {
 /** Where the auth token is being sourced from, if any. */
 // this code is closely related to isAnthropicAuthEnabled
 export function getAuthTokenSource() {
+  const runtime = getProviderRuntimeContext()
+  if (runtime) {
+    if (runtime.runtimeKind === 'claude_oauth' && runtime.env.CLAUDE_CODE_OAUTH_TOKEN) {
+      return { source: 'CLAUDE_CODE_OAUTH_TOKEN' as const, hasToken: true }
+    }
+    if (runtime.env.ANTHROPIC_AUTH_TOKEN) {
+      return { source: 'ANTHROPIC_AUTH_TOKEN' as const, hasToken: true }
+    }
+    return { source: 'none' as const, hasToken: false }
+  }
   // --bare: API-key-only. apiKeyHelper (from --settings) is the only
   // bearer-token-shaped source allowed. OAuth env vars, FD tokens, and
   // keychain are ignored.
@@ -239,6 +252,13 @@ export function getAnthropicApiKeyWithSource(
   key: null | string
   source: ApiKeySource
 } {
+  const runtime = getProviderRuntimeContext()
+  if (runtime) {
+    const key = runtime.runtimeKind === 'anthropic_compatible'
+      ? runtime.env.ANTHROPIC_API_KEY || null
+      : null
+    return { key, source: key ? 'ANTHROPIC_API_KEY' : 'none' }
+  }
   // --bare: hermetic auth. Only ANTHROPIC_API_KEY env or apiKeyHelper from
   // the --settings flag. Never touches keychain, config file, or approval
   // lists. 3P (Bedrock/Vertex/Foundry) uses provider creds, not this path.
@@ -1285,7 +1305,7 @@ export function saveOAuthTokensIfNeeded(tokens: OAuthTokens): {
   }
 }
 
-export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
+const getDefaultClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
   // --bare: API-key-only. No OAuth env tokens, no keychain, no credentials file.
   if (isBareMode()) return null
 
@@ -1331,6 +1351,25 @@ export const getClaudeAIOAuthTokens = memoize((): OAuthTokens | null => {
     return null
   }
 })
+
+export const getClaudeAIOAuthTokens = Object.assign(
+  (): OAuthTokens | null => {
+    const runtime = getProviderRuntimeContext()
+    if (!runtime) return getDefaultClaudeAIOAuthTokens()
+    const accessToken = runtime.runtimeKind === 'claude_oauth'
+      ? runtime.env.CLAUDE_CODE_OAUTH_TOKEN
+      : undefined
+    return accessToken ? {
+      accessToken,
+      refreshToken: null,
+      expiresAt: null,
+      scopes: ['user:inference'],
+      subscriptionType: null,
+      rateLimitTier: null,
+    } : null
+  },
+  { cache: getDefaultClaudeAIOAuthTokens.cache },
+)
 
 /**
  * Clears all OAuth token caches. Call this on 401 errors to ensure
@@ -1430,6 +1469,7 @@ async function handleOAuth401ErrorImpl(
  * (which don't hit the keychain), and only uses async for storage reads.
  */
 export async function getClaudeAIOAuthTokensAsync(): Promise<OAuthTokens | null> {
+  if (getProviderRuntimeContext()) return getClaudeAIOAuthTokens()
   if (isBareMode()) return null
 
   // Env var and FD tokens are sync and don't hit the keychain
@@ -1461,6 +1501,9 @@ export function checkAndRefreshOAuthTokenIfNeeded(
   retryCount = 0,
   force = false,
 ): Promise<boolean> {
+  // An explicit Agent provider owns its refresh and credentials. Never run the
+  // session's shared refresh promise or overwrite its auth cache from here.
+  if (getProviderRuntimeContext()) return Promise.resolve(false)
   // Deduplicate concurrent non-retry, non-force calls
   if (retryCount === 0 && !force) {
     if (pendingRefreshCheck) {
@@ -1595,6 +1638,8 @@ async function checkAndRefreshOAuthTokenIfNeededImpl(
 }
 
 export function isClaudeAISubscriber(): boolean {
+  const runtime = getProviderRuntimeContext()
+  if (runtime) return runtime.runtimeKind === 'claude_oauth' && !!runtime.env.CLAUDE_CODE_OAUTH_TOKEN
   let anthropicAuthEnabled = false
   try {
     anthropicAuthEnabled = isAnthropicAuthEnabled()
@@ -1794,10 +1839,10 @@ export function getSubscriptionName(): string {
 /** Check if using third-party services (Bedrock or Vertex or Foundry) */
 export function isUsing3PServices(): boolean {
   return !!(
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_BEDROCK) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_VERTEX) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_FOUNDRY) ||
-    isEnvTruthy(process.env.CLAUDE_CODE_USE_AZURE_OPENAI)
+    isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_USE_BEDROCK) ||
+    isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_USE_VERTEX) ||
+    isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_USE_FOUNDRY) ||
+    isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_USE_AZURE_OPENAI)
   )
 }
 
@@ -1956,6 +2001,8 @@ export function hasOpenAIAuthLogin(): boolean {
 }
 
 export function isOpenAIAuthActive(): boolean {
+  const runtime = getProviderRuntimeContext()
+  if (runtime) return runtime.runtimeKind === 'openai_oauth' && !!getOpenAIOAuthTokens()?.accessToken
   return getOpenAIAccountInformationIfActive() !== undefined
 }
 

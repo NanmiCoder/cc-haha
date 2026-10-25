@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from '../api/providerRuntimeContext.js'
 import * as fs from 'fs'
 import * as path from 'path'
 import {
@@ -9,7 +10,7 @@ import type { DeepSeekOAuthTokens } from './types.js'
 export const DEEPSEEK_OAUTH_FILE_ENV_KEY = 'DEEPSEEK_OAUTH_FILE'
 
 export function getDeepSeekOAuthTokenFilePath(): string | null {
-  return process.env[DEEPSEEK_OAUTH_FILE_ENV_KEY]?.trim() || null
+  return getProviderRuntimeEnvironment()[DEEPSEEK_OAUTH_FILE_ENV_KEY]?.trim() || null
 }
 
 /**

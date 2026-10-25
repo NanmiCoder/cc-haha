@@ -9,14 +9,34 @@ import {
   resumeAgentBackground,
   resolveResumedAgentModelOverride,
   resolveResumedAgentOwnerAgentId,
+  resolveResumedAgentProvider,
 } from './resumeAgent.js'
 import * as runAgentModule from './runAgent.js'
+import * as providerRuntime from '../../services/api/agentProviderRuntime.js'
 
 afterEach(() => {
   mock.restore()
 })
 
 describe('resumed Agent model override', () => {
+  test('restores recorded provider inheritance and accepts old sidecars without rewriting them', () => {
+    const old = { providerModel: 'ignored-without-provider' }
+    expect(resolveResumedAgentProvider(GENERAL_PURPOSE_AGENT, old)).toEqual({})
+    expect(old).toEqual({ providerModel: 'ignored-without-provider' })
+    expect(resolveResumedAgentProvider(GENERAL_PURPOSE_AGENT, null)).toEqual({})
+    expect(resolveResumedAgentProvider(GENERAL_PURPOSE_AGENT, {
+      providerId: 'provider-b', providerModel: 'b-model',
+    })).toEqual({ providerId: 'provider-b', parentModel: 'b-model' })
+    expect(resolveResumedAgentProvider({ ...GENERAL_PURPOSE_AGENT, providerId: 'provider-c' }, {
+      providerId: 'provider-b', providerModel: 'b-model',
+    })).toEqual({ providerId: 'provider-c' })
+    expect(resolveResumedAgentProvider({ ...GENERAL_PURPOSE_AGENT, providerId: 'provider-b' }, {
+      providerId: 'provider-b', providerModel: 'b-recorded-model',
+    })).toEqual({ providerId: 'provider-b', parentModel: 'b-recorded-model' })
+    expect(resolveResumedAgentProvider(GENERAL_PURPOSE_AGENT, {
+      providerId: 7, providerModel: {},
+    } as never)).toEqual({})
+  })
   test('retains a valid per-invocation model alias', () => {
     expect(resolveResumedAgentModelOverride('fable')).toBe('fable')
     expect(resolveResumedAgentModelOverride('haiku')).toBe('haiku')
@@ -49,7 +69,7 @@ describe('resumed Agent ownership', () => {
     expect(resolveResumedAgentOwnerAgentId(undefined, undefined, null)).toBeUndefined()
   })
 
-  test('threads the current parent through restored registration and execution', async () => {
+  test.each([undefined, 'provider-b'])('threads the parent and recorded provider through restored execution (%s)', async providerId => {
     const agentId = 'resumed-agent-run'
     const appState = {
       ...getDefaultAppState(),
@@ -87,7 +107,14 @@ describe('resumed Agent ownership', () => {
       ownerAgentId: 'persisted-parent',
       description: 'Original description',
       toolUseId: 'toolu_original_agent',
+      ...(providerId && { providerId, providerModel: 'b-recorded-model' }),
     })
+    if (providerId) {
+      spyOn(providerRuntime, 'resolveAgentProviderRuntime').mockResolvedValue({
+        providerId, runtimeKind: 'anthropic_compatible',
+        env: { ANTHROPIC_BASE_URL: 'https://b.invalid', ANTHROPIC_MODEL: 'b-changed-default' },
+      })
+    }
     const taskAbortController = new AbortController()
     const registerSpy = spyOn(localAgentTask, 'registerAsyncAgent').mockReturnValue({
       agentId,
@@ -129,6 +156,10 @@ describe('resumed Agent ownership', () => {
       spawningToolUseId: 'toolu_original_agent',
       ownerAgentId: 'current-parent',
       streamTargetAgentId: agentId,
+      ...(providerId && {
+        providerRuntime: expect.objectContaining({ providerId }),
+        providerParentModel: 'b-recorded-model',
+      }),
     }))
   })
 })

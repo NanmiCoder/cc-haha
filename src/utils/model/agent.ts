@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from '../../services/api/providerRuntimeContext.js'
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { capitalize } from '../stringUtils.js'
 import { isModelAlias, MODEL_ALIASES } from './aliases.js'
@@ -42,7 +43,7 @@ export function getAgentModel(
   permissionMode?: PermissionMode,
 ): string {
   const configuredSubagentModel =
-    process.env.CLAUDE_CODE_SUBAGENT_MODEL?.trim()
+    getProviderRuntimeEnvironment().CLAUDE_CODE_SUBAGENT_MODEL?.trim()
   if (
     configuredSubagentModel &&
     configuredSubagentModel.toLowerCase() !== 'inherit'

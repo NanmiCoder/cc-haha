@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from '../services/api/providerRuntimeContext.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { isUltrathinkEnabled } from './thinking.js'
 import { getInitialSettings } from './settings/settings.js'
@@ -56,7 +57,7 @@ function getGrokCatalogEntry(model: string): (typeof GROK_MODEL_CATALOG)[number]
 // @[MODEL LAUNCH]: Add the new model to the allowlist if it supports the effort parameter.
 export function modelSupportsEffort(model: string): boolean {
   const m = model.toLowerCase()
-  if (isEnvTruthy(process.env.CLAUDE_CODE_ALWAYS_ENABLE_EFFORT)) {
+  if (isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_ALWAYS_ENABLE_EFFORT)) {
     return true
   }
   const supported3P = get3PModelCapabilityOverride(model, 'effort')
@@ -247,7 +248,7 @@ export function resolvePickerEffortPersistence(
 }
 
 export function getEffortEnvOverride(): EffortValue | null | undefined {
-  const envOverride = process.env.CLAUDE_CODE_EFFORT_LEVEL
+  const envOverride = getProviderRuntimeEnvironment().CLAUDE_CODE_EFFORT_LEVEL
   return envOverride?.toLowerCase() === 'unset' ||
     envOverride?.toLowerCase() === 'auto'
     ? null

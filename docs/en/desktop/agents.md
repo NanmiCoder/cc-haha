@@ -53,13 +53,14 @@ Click any row for its detail page: model, effort, tool scope, and the full syste
 
 Hover a row in the list and its actions appear on the right: **Edit** and **Delete** for user and project agents, **Adjust model** for built-in ones. The same controls sit in the top-right of the detail page.
 
-## Adjusting a Built-in Agent's Model
+## Adjusting a Built-in Agent's Provider and Model
 
 Built-in agents each pin a default model — `Explore` and `claude-code-guide` run on Haiku, `statusline-setup` on Sonnet — chosen for speed and cost. If you care more about their output quality, you can swap that out.
 
-Click **Adjust model** on the built-in agent's row, or the same button in the top-right of its detail page. Only two things are editable:
+Click **Adjust model** on the built-in agent's row, or the same button in the top-right of its detail page. You can change:
 
-- **Model** — Built-in default, Inherit from parent, the Haiku / Sonnet / Opus / Fable aliases, or a model configured for the current provider.
+- **Provider** — Inherit the session provider by default, or choose a configured provider for this built-in subagent. This does not switch the main session or global provider.
+- **Model** — When inheriting the session provider, choose Built-in default, Inherit from parent, a Haiku / Sonnet / Opus / Fable alias, or a model configured for the current provider. With a separate provider, the picker lists only that provider's models and offers Provider default model. Switching providers clears the previous model choice so its ID is not sent to a different provider.
 - **Reasoning effort** — Built-in default, or low / medium / high / xhigh / max.
 
 The system prompt, tool scope, and color stay fixed by Claude Code.
@@ -70,7 +71,9 @@ The system prompt, tool scope, and color stay fixed by Claude Code.
 
 The override is written to `builtInAgentOverrides` in `~/.claude/settings.json` and applies to every project. Resetting removes the entry entirely rather than leaving an empty shell behind in your config.
 
-Agent configuration stores a model ID, not a provider. The picker lists models from the current provider. If you switch providers later, aliases resolve through the new provider's mapping, while a full model ID must also be supported by the new provider.
+The separate provider is stored as `builtInAgentOverrides.<name>.providerId`. For example, Explore can use a cheaper retrieval model while the main session stays on its original provider. Older settings without `providerId` keep inheriting the session provider. Selecting only a provider uses its configured main model. If the provider is deleted or unavailable, the dialog explains the problem and lets you return to inheritance.
+
+Custom agents still store only a model ID and run through the session's current provider. After switching the session provider, aliases resolve through its new mapping, while a full model ID must also be supported by the new provider.
 
 If you create a user agent with the same name (a hand-written file with `name: Explore`, say), it shadows the built-in one completely — changing the built-in's model then has no effect, and the dialog says so.
 

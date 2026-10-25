@@ -4,6 +4,7 @@ import type { ToolUseContext } from '../../Tool.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { createUserMessage } from '../../utils/messages.js'
+import { getProviderRuntimeContext, type ProviderRuntimeContext } from '../../services/api/providerRuntimeContext.js'
 import type { CustomAgentDefinition } from './loadAgentsDir.js'
 import {
   resolvePersistedAgentType,
@@ -15,6 +16,52 @@ import {
 } from './runAgent.js'
 
 describe('subagent runtime configuration', () => {
+  test('binds concurrent foreground and background agent streams to their own provider', async () => {
+    const observed = await Promise.all(['b', 'c'].map(async (providerId, index) => {
+      const agentDefinition = {
+        agentType: 'general-purpose', source: 'built-in', providerId,
+        whenToUse: 'Check provider routing', getSystemPrompt: () => 'Reply.',
+      } as Parameters<typeof runAgent>[0]['agentDefinition']
+      const state = getDefaultAppState()
+      const toolUseContext = {
+        options: {
+          commands: [], debug: false, mainLoopModel: 'a-main', tools: [],
+          mcpClients: [], mcpResources: {}, isNonInteractiveSession: false,
+          agentDefinitions: { activeAgents: [agentDefinition], allAgents: [agentDefinition] },
+        },
+        abortController: new AbortController(), readFileState: createFileStateCacheWithSizeLimit(),
+        getAppState: () => state, setAppState: () => {}, setResponseLength: () => {}, messages: [],
+      } as unknown as ToolUseContext
+      const providerRuntime: ProviderRuntimeContext = {
+        providerId, runtimeKind: 'anthropic_compatible',
+        env: { ANTHROPIC_BASE_URL: `https://${providerId}.invalid`, ANTHROPIC_MODEL: `${providerId}-main` },
+      }
+      let captured: unknown
+      const stop = new Error('provider context captured')
+      const stream = runAgent({
+        agentDefinition, providerRuntime, toolUseContext, promptMessages: [],
+        canUseTool: (async () => ({ behavior: 'allow' })) as never,
+        isAsync: index === 1, querySource: 'agent:builtin', availableTools: [],
+        override: { userContext: {}, systemContext: {}, systemPrompt: asSystemPrompt([]) },
+        onCacheSafeParams: params => {
+          captured = [getProviderRuntimeContext()?.providerId, params.toolUseContext.options.mainLoopModel]
+          throw stop
+        },
+      })
+      // The caller advances both lazy iterators outside either provider scope.
+      await expect(stream.next()).rejects.toBe(stop)
+      return captured
+    }))
+    expect(observed).toEqual([['b', 'b-main'], ['c', 'c-main']])
+    expect(getProviderRuntimeContext()).toBeUndefined()
+  })
+
+  test('a removed explicit provider fails before a query or parent-provider fallback', async () => {
+    const stream = runAgent({
+      agentDefinition: { agentType: 'general-purpose', source: 'built-in', providerId: 'removed-provider' },
+    } as Parameters<typeof runAgent>[0])
+    await expect(stream.next()).rejects.toThrow('Provider not found')
+  })
   test('keeps a resumed teammate identity while allowing ordinary agents to use their runtime type', () => {
     expect(
       resolvePersistedAgentType('id-worker-a', 'general-purpose'),

@@ -39,6 +39,29 @@ describe('builtInAgentOverrides settings schema', () => {
     return getSettingsForSource('projectSettings', projectRoot)
   }
 
+  it('upgrades model-only fixtures by inheriting the provider without rewriting unknown fields', async () => {
+    const legacy = { model: 'opus', builtInAgentOverrides: { Explore: { model: 'sonnet', effort: 'low', futureField: true } } }
+    const settings = await readSettings(legacy)
+    expect(settings?.builtInAgentOverrides?.Explore).toEqual(legacy.builtInAgentOverrides.Explore)
+    expect(settings?.builtInAgentOverrides?.Explore?.providerId).toBeUndefined()
+    expect(JSON.parse(await fs.readFile(path.join(projectRoot, '.claude', 'settings.json'), 'utf8'))).toEqual(legacy)
+  })
+
+  it('normalizes provider IDs while invalid provider values keep sibling settings', async () => {
+    const settings = await readSettings({
+      model: 'opus',
+      builtInAgentOverrides: {
+        Explore: { providerId: '  provider-b  ', model: 'deepseek-flash' },
+        Plan: { providerId: 3, effort: 'high' },
+        verification: { providerId: '  ', model: 'sonnet' },
+      },
+    })
+    expect(settings?.builtInAgentOverrides?.Explore?.providerId).toBe('provider-b')
+    expect(settings?.builtInAgentOverrides?.Plan).toEqual({ providerId: undefined, effort: 'high' })
+    expect(settings?.builtInAgentOverrides?.verification?.providerId).toBeUndefined()
+    expect(settings?.model).toBe('opus')
+  })
+
   it('parses a well-formed override for both fields', async () => {
     const settings = await readSettings({
       builtInAgentOverrides: {

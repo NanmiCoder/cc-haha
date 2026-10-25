@@ -1,3 +1,5 @@
+import { getProviderRuntimeEnvironment } from '../../services/api/providerRuntimeContext.js'
+
 export const MODEL_CONTEXT_WINDOWS_ENV_KEY = 'CLAUDE_CODE_MODEL_CONTEXT_WINDOWS'
 export const MODEL_CONTEXT_WINDOW_MIN = 16_000
 export const MODEL_CONTEXT_WINDOW_MAX = 10_000_000
@@ -146,7 +148,7 @@ export function getModelContextWindowFromEnvValue(
 }
 
 function parseConfiguredContextWindows(): Record<string, number> {
-  const raw = process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY]
+  const raw = getProviderRuntimeEnvironment()[MODEL_CONTEXT_WINDOWS_ENV_KEY]
   if (!raw?.trim()) {
     return {}
   }

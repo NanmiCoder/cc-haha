@@ -1,5 +1,7 @@
 import { feature } from 'bun:bundle'
-import { getAgentModelSetting } from './builtInAgentOverrides.js'
+import { resolveAgentProviderRuntime } from '../../services/api/agentProviderRuntime.js'
+import { bindProviderRuntimeGenerator, getProviderRuntimeContext, type ProviderRuntimeContext } from '../../services/api/providerRuntimeContext.js'
+import { getAgentProviderModel, getBuiltInAgentProviderId } from './agentProviderModel.js'
 import type { UUID } from 'crypto'
 import { randomUUID } from 'crypto'
 import uniqBy from 'lodash-es/uniqBy.js'
@@ -57,7 +59,6 @@ import { registerFrontmatterHooks } from '../../utils/hooks/registerFrontmatterH
 import { clearSessionHooks } from '../../utils/hooks/sessionHooks.js'
 import { executeSubagentStartHooks } from '../../utils/hooks.js'
 import { createUserMessage } from '../../utils/messages.js'
-import { getAgentModel } from '../../utils/model/agent.js'
 import {
   isChainParticipant,
   recordSidechainTranscript,
@@ -320,7 +321,18 @@ function isRecordableMessage(
   )
 }
 
-export async function* runAgent({
+export async function* runAgent(
+  options: Parameters<typeof runAgentInProviderContext>[0],
+): AsyncGenerator<Message, void> {
+  const providerId = getBuiltInAgentProviderId(options.agentDefinition)
+  const runtime = options.providerRuntime ?? (providerId
+    ? await resolveAgentProviderRuntime(providerId)
+    : getProviderRuntimeContext())
+  const iterator = runAgentInProviderContext(options)
+  yield* runtime ? bindProviderRuntimeGenerator(runtime, iterator) : iterator
+}
+
+async function* runAgentInProviderContext({
   agentDefinition,
   promptMessages,
   toolUseContext,
@@ -350,8 +362,13 @@ export async function* runAgent({
   extraMetadata,
   workflow,
   onQueryProgress,
+  providerParentModel,
 }: {
   agentDefinition: AgentDefinition
+  /** A resolved snapshot shared by task metadata and the lazy query stream. */
+  providerRuntime?: ProviderRuntimeContext
+  /** Recorded provider model for a resumed child whose invoker has changed. */
+  providerParentModel?: string
   promptMessages: Message[]
   toolUseContext: ToolUseContext
   canUseTool: CanUseToolFn
@@ -448,11 +465,13 @@ export async function* runAgent({
   const rootSetAppState =
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
 
-  const resolvedAgentModel = getAgentModel(
-    getAgentModelSetting(agentDefinition, toolUseContext.options.mainLoopModel),
+  const resolvedAgentModel = getAgentProviderModel(
+    agentDefinition,
     toolUseContext.options.mainLoopModel,
     model,
     permissionMode,
+    getProviderRuntimeContext(),
+    providerParentModel,
   )
 
   const agentId = override?.agentId ? override.agentId : createAgentId()
@@ -911,6 +930,10 @@ export async function* runAgent({
     ...(description && { description }),
     ...(spawningToolUseId && { toolUseId: spawningToolUseId }),
     ...(ownerAgentId && { ownerAgentId }),
+    ...(getProviderRuntimeContext() && {
+      providerId: getProviderRuntimeContext()!.providerId,
+      providerModel: resolvedAgentModel,
+    }),
     ...(workflow && { workflow }),
     ...extraMetadata,
   }).catch(_err => logForDebugging(`Failed to write agent metadata: ${_err}`))

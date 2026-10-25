@@ -9,6 +9,10 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Built-in agent provider overrides inherit providers in legacy model-only settings',
+    command: ['bun', 'test', './src/utils/settings/__tests__/builtInAgentOverrides.schema.test.ts', './src/tools/AgentTool/builtInAgentOverrides.test.ts'],
+  },
+  {
     title: 'Desktop WebSearch settings migrate old fixtures for the DeepSeek backend',
     command: ['bun', 'run', 'test', '--', '--run', 'src/stores/settingsStoreWebSearch.test.ts'],
     cwd: 'desktop',

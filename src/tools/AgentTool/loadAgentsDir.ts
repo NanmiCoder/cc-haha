@@ -123,6 +123,8 @@ export type BaseAgentDefinition = {
   mcpServers?: AgentMcpServerSpec[] // MCP servers specific to this agent
   hooks?: HooksSettings // Session-scoped hooks registered when agent starts
   color?: AgentColorName
+  /** Built-in override only: a saved provider ID; absent inherits the session. */
+  providerId?: string
   model?: string
   effort?: EffortValue
   permissionMode?: PermissionMode

@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from '../../services/api/providerRuntimeContext.js'
 import { getCanonicalName, parseUserSpecifiedModel } from './model.js'
 import { getAPIProvider, isFirstPartyAnthropicBaseUrl } from './providers.js'
 import { isModelAlias } from './aliases.js'
@@ -27,8 +28,8 @@ export function resolveAgentModelSpec(model: string, parentModel: string | null)
   if (usesNonClaudeAgentRouting(parentModel)) {
     const family = getClaudeAgentModelFamily(model)
     if (family) {
-      const mapped = process.env[`ANTHROPIC_DEFAULT_${family.toUpperCase()}_MODEL`]?.trim() ||
-        (family === 'fable' ? process.env.ANTHROPIC_DEFAULT_OPUS_MODEL?.trim() : undefined)
+      const mapped = getProviderRuntimeEnvironment()[`ANTHROPIC_DEFAULT_${family.toUpperCase()}_MODEL`]?.trim() ||
+        (family === 'fable' ? getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_OPUS_MODEL?.trim() : undefined)
       if (mapped && !getCanonicalName(mapped).startsWith('claude-')) return mapped
     }
   }

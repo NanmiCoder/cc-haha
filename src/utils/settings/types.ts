@@ -816,6 +816,8 @@ export const SettingsSchema = lazySchema(() =>
           z.string(),
           z
             .object({
+              // Absent on legacy settings: inherit the parent session provider.
+              providerId: z.string().trim().min(1).optional().catch(undefined),
               // Any non-empty string, matching the Markdown `model` frontmatter
               // parser — third-party model IDs are not aliases.
               model: z.string().trim().min(1).optional().catch(undefined),
@@ -843,7 +845,7 @@ export const SettingsSchema = lazySchema(() =>
         // parseSettingsFileUncached drops every setting when the schema throws.
         .catch(undefined)
         .describe(
-          'Per-agent model/effort overrides for built-in agents. Keys are the ' +
+          'Per-agent provider/model/effort overrides for built-in agents. Keys are the ' +
             'agentType as spawned (e.g. "Explore"), case-sensitive. Other ' +
             'built-in fields stay read-only.',
         ),

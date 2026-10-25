@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { get3PModelCapabilityOverride } from './modelSupportOverrides.js'
+import { runWithProviderRuntime, type ProviderRuntimeContext } from '../../services/api/providerRuntimeContext.js'
 
 const ENV_KEYS = [
   'ANTHROPIC_API_KEY',
@@ -27,6 +28,25 @@ describe('third-party model capability overrides', () => {
   afterEach(() => {
     for (const key of ENV_KEYS) restoreEnv(key, originalEnv[key])
     clearCapabilityCache()
+  })
+
+  test('isolates overlapping providers using the same model without polluting the session cache', async () => {
+    process.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'shared-model'
+    expect(get3PModelCapabilityOverride('shared-model', 'thinking')).toBe(true)
+    const scoped = (providerId: string, capabilities: string): ProviderRuntimeContext => ({
+      providerId, runtimeKind: 'anthropic_compatible',
+      env: {
+        ANTHROPIC_BASE_URL: `https://${providerId}.example.test`,
+        ANTHROPIC_DEFAULT_SONNET_MODEL: 'shared-model',
+        ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES: capabilities,
+      },
+    })
+    const results = await Promise.all([scoped('first', 'none'), scoped('second', 'thinking,effort')].map(ctx => runWithProviderRuntime(ctx, async () => {
+      await Promise.resolve()
+      return [get3PModelCapabilityOverride('shared-model', 'thinking'), get3PModelCapabilityOverride('shared-model', 'effort')]
+    })))
+    expect(results).toEqual([[false, false], [true, true]])
+    expect(get3PModelCapabilityOverride('shared-model', 'thinking')).toBe(true)
   })
 
   test('ignores only 1M context markers when matching pinned provider models', () => {

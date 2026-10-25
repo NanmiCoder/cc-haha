@@ -1,3 +1,4 @@
+import { getProviderRuntimeContext, getProviderRuntimeEnvironment } from '../api/providerRuntimeContext.js'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -19,13 +20,13 @@ const FILE_CACHE_KEY_PREFIX = 'file:'
 const FILE_BACKED_STORAGE_MARKER_FILE = 'openai-oauth-file-backed'
 
 function getDesktopTokenFilePath(): string | null {
-  const filePath = process.env[OPENAI_CODEX_OAUTH_FILE_ENV_KEY]?.trim()
+  const filePath = getProviderRuntimeEnvironment()[OPENAI_CODEX_OAUTH_FILE_ENV_KEY]?.trim()
   return filePath ? filePath : null
 }
 
 function getCcHahaDir(): string {
   const configDir =
-    process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
+    getProviderRuntimeEnvironment().CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')
   return path.join(configDir, 'cc-haha')
 }
 
@@ -142,6 +143,9 @@ export function saveOpenAIOAuthTokens(tokens: OpenAIOAuthTokens): {
   success: boolean
   warning?: string
 } {
+  if (getProviderRuntimeContext() && !getDesktopTokenFilePath()) {
+    return { success: false, warning: 'Explicit OpenAI provider has no token file' }
+  }
   try {
     if (writeDesktopTokenFileSync(tokens)) {
       markFileBackedStorageUsed()
@@ -192,6 +196,7 @@ const getOpenAIOAuthTokensCached = memoize(
 
 export function getOpenAIOAuthTokens(): OpenAIOAuthTokens | null {
   const filePath = getDesktopTokenFilePath()
+  if (getProviderRuntimeContext() && !filePath) return null
   return getOpenAIOAuthTokensCached(
     filePath ? `${FILE_CACHE_KEY_PREFIX}${filePath}` : SECURE_STORAGE_CACHE_KEY,
   )
@@ -199,6 +204,7 @@ export function getOpenAIOAuthTokens(): OpenAIOAuthTokens | null {
 
 export async function getOpenAIOAuthTokensAsync(): Promise<OpenAIOAuthTokens | null> {
   const filePath = getDesktopTokenFilePath()
+  if (getProviderRuntimeContext() && !filePath) return null
   if (filePath) {
     return readDesktopTokenFileAsync(filePath)
   }

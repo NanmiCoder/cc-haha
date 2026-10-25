@@ -9,6 +9,7 @@ import { resetSettingsCache } from '../../utils/settings/settingsCache.js'
 import { findGitRoot } from '../../utils/git.js'
 import { refreshActivePlugins } from '../../utils/plugins/refresh.js'
 import { AgentService } from '../services/agentService.js'
+import { ProviderService } from '../services/providerService.js'
 import { conversationService } from '../services/conversationService.js'
 import {
   __resetWebSocketHandlerStateForTests,
@@ -1529,6 +1530,69 @@ describe('Agents API Markdown CRUD', () => {
 })
 
 describe('Agents API built-in overrides', () => {
+  async function addProvider() {
+    return new ProviderService().addProvider({
+      presetId: 'custom', name: 'Agent Provider B', apiKey: 'fake-agent-key',
+      baseUrl: 'http://127.0.0.1:1', apiFormat: 'anthropic',
+      models: { main: 'b-main', haiku: 'b-fast', sonnet: 'b-main', opus: 'b-deep' },
+    })
+  }
+
+  it('lists locally available provider models for built-ins without changing the global provider', async () => {
+    const provider = await addProvider()
+    const response = await api('GET', `/api/agents/Explore/provider-models?cwd=${encodeURIComponent(projectCwd)}`)
+    expect(response.status).toBe(200)
+    expect(response.data.models.filter((model: any) => model.providerId === provider.id).map((model: any) => model.modelId)).toEqual(['b-main', 'b-deep', 'b-fast'])
+    expect(JSON.stringify(response.data)).not.toContain('fake-agent-key')
+    expect((await new ProviderService().listProviders()).activeId).toBeNull()
+  })
+
+  it('persists a provider override and preserves it through model-only edits, then clears only that field', async () => {
+    const provider = await addProvider()
+    const updated = await api('PUT', '/api/agents/Explore/override', { cwd: projectCwd, providerId: provider.id, model: 'b-fast', effort: 'high' })
+    expect(updated.status).toBe(200)
+    expect(updated.data.agent.providerId).toBe(provider.id)
+    expect(updated.data.agent.override).toEqual({ providerId: provider.id, model: 'b-fast', effort: 'high', source: 'userSettings' })
+    await api('PUT', '/api/agents/Explore/override', { cwd: projectCwd, model: 'b-main' })
+    expect((await readUserSettings()).builtInAgentOverrides.Explore.providerId).toBe(provider.id)
+    const cleared = await api('PUT', '/api/agents/Explore/override', { cwd: projectCwd, providerId: null })
+    expect(cleared.status).toBe(200)
+    expect(cleared.data.agent.providerId).toBeUndefined()
+    expect((await readUserSettings()).builtInAgentOverrides.Explore).toEqual({ model: 'b-main', effort: 'high' })
+    expect((await new ProviderService().listProviders()).activeId).toBeNull()
+  })
+
+  it('resets the provider while preserving unknown future override fields', async () => {
+    await writeUserSettings({ builtInAgentOverrides: { Explore: { providerId: 'deleted-provider', model: 'old-model', futureField: 7 } } })
+    const reset = await api('DELETE', `/api/agents/Explore/override?cwd=${encodeURIComponent(projectCwd)}`)
+    expect(reset.status).toBe(200)
+    expect(reset.data.agent.providerId).toBeUndefined()
+    expect((await readUserSettings()).builtInAgentOverrides.Explore).toEqual({ futureField: 7 })
+  })
+
+  it('rejects unknown and malformed providers before changing settings', async () => {
+    for (const providerId of ['does-not-exist', '', 3, {}]) {
+      const response = await api('PUT', '/api/agents/Explore/override', { cwd: projectCwd, providerId, model: 'new-model' })
+      expect(response.status).toBe(400)
+      expect((await readUserSettings()).builtInAgentOverrides).toBeUndefined()
+    }
+  })
+
+  it('accepts provider-only settings without pinning a shipped model', async () => {
+    const provider = await addProvider()
+    const response = await api('PUT', '/api/agents/Explore/override', { cwd: projectCwd, providerId: provider.id })
+    expect(response.status).toBe(200)
+    expect(response.data.agent.override).toEqual({ providerId: provider.id, source: 'userSettings' })
+    expect((await readUserSettings()).builtInAgentOverrides.Explore).toEqual({ providerId: provider.id })
+  })
+
+  it('does not expose the built-in provider catalog through a custom agent target', async () => {
+    await api('POST', '/api/agents', { scope: 'user', cwd: projectCwd, name: 'custom-agent', description: 'Fixture', systemPrompt: 'Fixture prompt' })
+    const response = await api('GET', `/api/agents/custom-agent/provider-models?cwd=${encodeURIComponent(projectCwd)}`)
+    expect(response.status).toBe(403)
+    expect(response.data.error).toBe('NOT_A_BUILT_IN_AGENT')
+  })
+
   async function readUserSettings(): Promise<Record<string, any>> {
     try {
       return JSON.parse(

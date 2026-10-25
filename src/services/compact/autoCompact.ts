@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { getProviderRuntimeEnvironment } from '../api/providerRuntimeContext.js'
 import { markPostCompaction } from 'src/bootstrap/state.js'
 import { getSdkBetas } from '../../bootstrap/state.js'
 import type { QuerySource } from '../../constants/querySource.js'
@@ -47,7 +48,7 @@ const MAX_SUMMARY_RESERVE_CONTEXT_FRACTION = 0.25
 export function getEffectiveContextWindowSize(model: string): number {
   let contextWindow = getContextWindowForModel(model, getSdkBetas())
 
-  const autoCompactWindow = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW
+  const autoCompactWindow = getProviderRuntimeEnvironment().CLAUDE_CODE_AUTO_COMPACT_WINDOW
   if (autoCompactWindow) {
     const parsed = parseInt(autoCompactWindow, 10)
     if (!isNaN(parsed) && parsed > 0) {

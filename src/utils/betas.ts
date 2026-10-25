@@ -1,5 +1,16 @@
 import { feature } from 'bun:bundle'
 import memoize from 'lodash-es/memoize.js'
+import { getProviderRuntimeContext, getProviderRuntimeEnvironment } from '../services/api/providerRuntimeContext.js'
+
+// A beta result cached for the session cannot describe another provider using
+// the same model id. Scoped calculations are cheap and retain no credentials.
+function memoizeModelBetas(resolve: (model: string) => string[]) {
+  const cached = memoize(resolve)
+  return Object.assign(
+    (model: string) => getProviderRuntimeContext() ? resolve(model) : cached(model),
+    { cache: cached.cache },
+  )
+}
 import {
   checkStatsigFeatureGate_CACHED_MAY_BE_STALE,
   getFeatureValue_CACHED_MAY_BE_STALE,
@@ -248,7 +259,7 @@ export function shouldIncludeFirstPartyOnlyBetas(): boolean {
       isFirstPartyAnthropicBaseUrl() ||
       isClaudeAISubscriber()
     ) &&
-    !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)
+    !isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)
   )
 }
 
@@ -261,17 +272,17 @@ export function shouldUseGlobalCacheScope(): boolean {
   return (
     getAPIProvider() === 'firstParty' &&
     (isFirstPartyAnthropicBaseUrl() || isClaudeAISubscriber()) &&
-    !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)
+    !isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)
   )
 }
 
 function getEnvironmentBetas(): string[] {
-  return (process.env.ANTHROPIC_BETAS ?? '').split(',')
+  return (getProviderRuntimeEnvironment().ANTHROPIC_BETAS ?? '').split(',')
     .map(beta => beta.trim())
     .filter(Boolean)
 }
 
-export const getAllModelBetas = memoize((model: string): string[] => {
+export const getAllModelBetas = memoizeModelBetas((model: string): string[] => {
   const betaHeaders = []
   const isHaiku = getCanonicalName(model).includes('haiku')
   const provider = getAPIProvider()
@@ -281,7 +292,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
     betaHeaders.push(CLAUDE_CODE_20250219_BETA_HEADER)
     if (
       process.env.USER_TYPE === 'ant' &&
-      process.env.CLAUDE_CODE_ENTRYPOINT === 'cli'
+      getProviderRuntimeEnvironment().CLAUDE_CODE_ENTRYPOINT === 'cli'
     ) {
       if (CLI_INTERNAL_BETA_HEADER) {
         betaHeaders.push(CLI_INTERNAL_BETA_HEADER)
@@ -295,7 +306,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
     betaHeaders.push(CONTEXT_1M_BETA_HEADER)
   }
   if (
-    !isEnvTruthy(process.env.DISABLE_INTERLEAVED_THINKING) &&
+    !isEnvTruthy(getProviderRuntimeEnvironment().DISABLE_INTERLEAVED_THINKING) &&
     modelSupportsISP(model)
   ) {
     betaHeaders.push(INTERLEAVED_THINKING_BETA_HEADER)
@@ -330,8 +341,8 @@ export const getAllModelBetas = memoize((model: string): string[] => {
     SUMMARIZE_CONNECTOR_TEXT_BETA_HEADER &&
     process.env.USER_TYPE === 'ant' &&
     includeFirstPartyOnlyBetas &&
-    !isEnvDefinedFalsy(process.env.USE_CONNECTOR_TEXT_SUMMARIZATION) &&
-    (isEnvTruthy(process.env.USE_CONNECTOR_TEXT_SUMMARIZATION) ||
+    !isEnvDefinedFalsy(getProviderRuntimeEnvironment().USE_CONNECTOR_TEXT_SUMMARIZATION) &&
+    (isEnvTruthy(getProviderRuntimeEnvironment().USE_CONNECTOR_TEXT_SUMMARIZATION) ||
       getFeatureValue_CACHED_MAY_BE_STALE('tengu_slate_prism', false))
   ) {
     betaHeaders.push(SUMMARIZE_CONNECTOR_TEXT_BETA_HEADER)
@@ -339,7 +350,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
 
   // Add context management beta for tool clearing (ant opt-in) or thinking preservation
   const antOptedIntoToolClearing =
-    isEnvTruthy(process.env.USE_API_CONTEXT_MANAGEMENT) &&
+    isEnvTruthy(getProviderRuntimeEnvironment().USE_API_CONTEXT_MANAGEMENT) &&
     process.env.USER_TYPE === 'ant'
 
   const thinkingPreservationEnabled = modelSupportsContextManagement(model)
@@ -402,7 +413,7 @@ export const getAllModelBetas = memoize((model: string): string[] => {
   return betaHeaders
 })
 
-export const getModelBetas = memoize((model: string): string[] => {
+export const getModelBetas = memoizeModelBetas((model: string): string[] => {
   const modelBetas = getAllModelBetas(model)
   if (getAPIProvider() === 'bedrock') {
     return modelBetas.filter(b => !BEDROCK_EXTRA_PARAMS_HEADERS.has(b))
@@ -410,7 +421,7 @@ export const getModelBetas = memoize((model: string): string[] => {
   return modelBetas
 })
 
-export const getBedrockExtraBodyParamsBetas = memoize(
+export const getBedrockExtraBodyParamsBetas = memoizeModelBetas(
   (model: string): string[] => {
     const modelBetas = getAllModelBetas(model)
     return modelBetas.filter(b => BEDROCK_EXTRA_PARAMS_HEADERS.has(b))
@@ -436,7 +447,7 @@ export function getMergedBetas(
     // Third-party Anthropic relays may require explicitly selected features
     // (e.g. 1M context). Keep those opt-ins without enabling first-party defaults.
     return [...new Set([
-      ...(!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) && has1mContext(model)
+      ...(!isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS) && has1mContext(model)
         ? [CONTEXT_1M_BETA_HEADER] : []),
       ...getEnvironmentBetas(),
       ...(getSdkBetas() ?? []),
@@ -454,7 +465,7 @@ export function getMergedBetas(
     }
     if (
       process.env.USER_TYPE === 'ant' &&
-      process.env.CLAUDE_CODE_ENTRYPOINT === 'cli' &&
+      getProviderRuntimeEnvironment().CLAUDE_CODE_ENTRYPOINT === 'cli' &&
       CLI_INTERNAL_BETA_HEADER &&
       !baseBetas.includes(CLI_INTERNAL_BETA_HEADER)
     ) {
