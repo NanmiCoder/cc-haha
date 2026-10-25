@@ -2,6 +2,7 @@ import type { RuntimeConfig } from '../core/types'
 
 export type Question = {
   question: string
+  header?: string
   options: { label: string; description?: string }[]
   multiSelect: boolean
 }
@@ -43,6 +44,7 @@ export function readQuestions(input: Record<string, unknown>): Question[] {
     return [
       {
         question: value.question,
+        ...(typeof value.header === 'string' && value.header.trim() ? { header: value.header } : {}),
         options,
         multiSelect: value.multiSelect === true,
       },

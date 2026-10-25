@@ -5,7 +5,6 @@ import {
   Animated,
   Easing,
   FlatList,
-  KeyboardAvoidingView,
   Modal,
   Platform,
   Pressable,
@@ -23,6 +22,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import Svg, { Circle, Path, Rect } from 'react-native-svg'
 import { router } from 'expo-router'
 import { Text } from './Text'
+import { KeyboardViewport } from './KeyboardViewport'
 import { Icon, type IconName } from './icons'
 import { useTheme, type Colors } from './theme'
 import { monoFont, type } from './palette'
@@ -1375,12 +1375,14 @@ function DiffRow({
   numbers,
   gutter,
   colors,
+  rowHeight,
   fixedHeight,
 }: {
   line: DiffLine
   numbers: 'both' | 'single'
   gutter: number
   colors: Colors
+  rowHeight: number
   fixedHeight?: boolean
 }) {
   const add = line.kind === 'add'
@@ -1394,8 +1396,8 @@ function DiffRow({
   return (
     <View
       style={[
-        { flexDirection: 'row', backgroundColor: rowBg, minHeight: DIFF_LINE },
-        fixedHeight && { height: DIFF_LINE, overflow: 'hidden' },
+        { flexDirection: 'row', backgroundColor: rowBg, minHeight: rowHeight },
+        fixedHeight && { height: rowHeight, overflow: 'hidden' },
       ]}
     >
       {numbers === 'both' ? (
@@ -1436,16 +1438,25 @@ export function DiffView({
   virtualized?: boolean
 }) {
   const colors = useColors()
-  const { width: screenWidth } = useWindowDimensions()
+  const { width: screenWidth, fontScale } = useWindowDimensions()
   const [height, setHeight] = useState(0)
-  const gutter = numbers === 'both' ? 30 : 34
+  // Text scales natively; its containing row and virtualized offsets must match.
+  const rowHeight = Math.ceil(DIFF_LINE * fontScale)
+  const gutter = useMemo(() => {
+    let largest = 1
+    for (const line of lines) largest = Math.max(largest, line.before ?? 0, line.after ?? 0)
+    return Math.max(
+      (numbers === 'both' ? 30 : 34) * fontScale,
+      String(largest).length * 12 * 0.6 * fontScale + (numbers === 'both' ? 6 : 8),
+    )
+  }, [lines, numbers, fontScale])
   const contentWidth = useMemo(() => {
     if (!virtualized) return 0
     let widest = 0
     for (const line of lines) widest = Math.max(widest, diffTextWidth(line.text) + DIFF_FONT * 1.2)
     const gutters = numbers === 'both' ? gutter * 2 : gutter
-    return Math.min(12000, Math.max(screenWidth, Math.ceil(gutters + 8 + widest * 1.04 + 16)))
-  }, [virtualized, lines, numbers, gutter, screenWidth])
+    return Math.min(12000 * fontScale, Math.max(screenWidth, Math.ceil(gutters + 8 + widest * fontScale * 1.04 + 16)))
+  }, [virtualized, lines, numbers, gutter, screenWidth, fontScale])
   if (virtualized)
     return (
       <View style={[{ flex: 1 }, style]} onLayout={(event) => setHeight(event.nativeEvent.layout.height)}>
@@ -1456,12 +1467,12 @@ export function DiffView({
               contentContainerStyle={{ paddingVertical: 6 }}
               data={lines}
               keyExtractor={(_, index) => String(index)}
-              getItemLayout={(_, index) => ({ length: DIFF_LINE, offset: 6 + DIFF_LINE * index, index })}
+              getItemLayout={(_, index) => ({ length: rowHeight, offset: 6 + rowHeight * index, index })}
               initialNumToRender={60}
               maxToRenderPerBatch={80}
               windowSize={9}
               renderItem={({ item }) => (
-                <DiffRow line={item} numbers={numbers} gutter={gutter} colors={colors} fixedHeight />
+                <DiffRow line={item} numbers={numbers} gutter={gutter} colors={colors} rowHeight={rowHeight} fixedHeight />
               )}
             />
           </ScrollView>
@@ -1472,7 +1483,7 @@ export function DiffView({
     <ScrollView horizontal style={style} contentContainerStyle={{ minWidth: '100%' }}>
       <View style={{ minWidth: '100%', paddingVertical: 6 }}>
         {lines.map((line, index) => (
-          <DiffRow key={index} line={line} numbers={numbers} gutter={gutter} colors={colors} />
+          <DiffRow key={index} line={line} numbers={numbers} gutter={gutter} colors={colors} rowHeight={rowHeight} />
         ))}
       </View>
     </ScrollView>
@@ -1506,16 +1517,12 @@ export function Sheet({
 }>) {
   const colors = useColors()
   const insets = useSafeAreaInsets()
-  const { height } = useWindowDimensions()
   const close = () => {
     if (dismissable) onClose()
   }
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={close} statusBarTranslucent>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1, justifyContent: 'flex-end' }}
-      >
+      <KeyboardViewport style={{ flex: 1, justifyContent: 'flex-end' }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="关闭"
@@ -1527,7 +1534,8 @@ export function Sheet({
           // 遮罩在面板外，VoiceOver 读不到；双指 Z 手势走这里关闭。
           onAccessibilityEscape={close}
           style={{
-            maxHeight: height * 0.92,
+            maxHeight: '92%',
+            flexShrink: 1,
             backgroundColor: background ?? colors.sheet,
             borderTopLeftRadius: 28,
             borderTopRightRadius: 28,
@@ -1552,13 +1560,13 @@ export function Sheet({
           {scroll ? (
             <ScrollView
               keyboardShouldPersistTaps="handled"
-              style={{ flexGrow: 0 }}
+              style={{ flexGrow: 0, flexShrink: 1 }}
               contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 8, gap: 12 }}
             >
               {children}
             </ScrollView>
           ) : (
-            <View style={{ paddingHorizontal: 16, gap: 12 }}>{children}</View>
+            <View style={{ paddingHorizontal: 16, gap: 12, flexShrink: 1, minHeight: 0 }}>{children}</View>
           )}
           {footer ? (
             <View style={{ paddingHorizontal: 16, paddingTop: 12, paddingBottom: Math.max(insets.bottom, 16) }}>
@@ -1566,7 +1574,7 @@ export function Sheet({
             </View>
           ) : null}
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardViewport>
     </Modal>
   )
 }

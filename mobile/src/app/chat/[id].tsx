@@ -1,5 +1,9 @@
+import { ActivitySummary } from '../../ui/activity/ActivitySummary'
+import { serializeComposer, type ComposerReference } from '../../core/composerReferences'
+import { EffortControl } from '../../ui/EffortControl'
+import { KeyboardViewport } from '../../ui/KeyboardViewport'
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
-import { AppState, FlatList, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native'
+import { AppState, FlatList, Platform, Pressable, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import * as Clipboard from 'expo-clipboard'
@@ -33,7 +37,7 @@ import { ChatComposer } from '../../ui/ChatComposer'
 import { Message, type BubbleLayout } from '../../ui/Message'
 import { RuntimeSheet, type Model } from '../../ui/RuntimePicker'
 import { SessionChangesCard } from '../../ui/SessionChangesCard'
-import { effortName, modeName } from '../../ui/modes'
+import { modeName } from '../../ui/modes'
 import {
   Button,
   Callout,
@@ -57,11 +61,10 @@ import { QueuedMessages } from '../../ui/chat/QueuedMessages'
 import {
   canFlushQueue,
   clearParkedComposer,
-  parkComposer,
   parkedComposer,
-  queueAttachments,
   queuePauseReason,
-  queueToDraft,
+  withdrawQueuedComposer,
+  type ComposerQueueState,
   type QueuedMessage,
   type QueueGate,
 } from '../../ui/chat/queue'
@@ -140,7 +143,7 @@ function ChatSession({
     task: typeof initialTask
     phase: 'initial' | 'config' | 'done' | 'failed'
     /** 编辑重发前输入框里没发出的内容，发送成功后还回去。 */
-    restore?: { text: string; attachments: ComposerAttachment[] }
+    restore?: { text: string; attachments: ComposerAttachment[]; references?: ComposerReference[] }
   }>({
     task: initialTask,
     phase: 'initial',
@@ -153,16 +156,13 @@ function ChatSession({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(
     initialTask?.attachments ?? parked?.attachments ?? []
   )
+  const [references, setReferences] = useState<ComposerReference[]>(initialTask?.references ?? parked?.references ?? [])
   const [team, setTeam] = useState(initialDraft?.team ?? parked?.team ?? false)
   // 运行中追加的消息先在手机上排队，这一轮结束后按顺序发出。
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   const queueSeq = useRef(0)
-  const leaving = useRef({
-    queue: [] as QueuedMessage[],
-    draft: '',
-    attachments: [] as ComposerAttachment[],
-    team: false,
-  })
+  const leaving = useRef<ComposerQueueState>({ queue, draft, attachments, team, references })
+  const focused = useRef(false)
   // 在模型弹层里选过的模型：用它的显示名和上下文大小，其余时候只有模型 id。
   const [chosenModel, setChosenModel] = useState<Model | null>(null)
   const [state, setState] = useState<ChatState>(() => createChatState(id))
@@ -345,7 +345,7 @@ function ChatSession({
   const queuePaused = queue.length ? queuePauseReason(queueGate) : ''
   const flushQueue = useEffectEvent(() => {
     const next = queue[0]
-    if (!next || !canFlushQueue(queueGate)) return
+    if (!next || !canFlushQueue(queueGate, focused.current)) return
     if (dispatch(next.message, () => {})) {
       setQueue((items) => items.filter((item) => item.id !== next.id))
       follow.current = true
@@ -371,22 +371,33 @@ function ChatSession({
     lastUser?.delivery,
   ])
   useEffect(() => {
-    leaving.current = { queue, draft, attachments, team }
-  }, [queue, draft, attachments, team])
+    leaving.current = { queue, draft, attachments, team, references }
+  }, [queue, draft, attachments, team, references])
   useEffect(() => {
     clearParkedComposer(draftKey)
-    return () => {
-      // 离开会话页：排队的内容退回输入框（文字进草稿，材料和团队开关存在内存里），
-      // 下次进来还在，不会在背后发出。
-      const current = leaving.current
-      if (!current.queue.length) return
-      drafts.set(draftKey, queueToDraft(current.draft, current.queue))
-      parkComposer(draftKey, {
-        attachments: queueAttachments(current.queue, current.attachments),
-        team: current.team || current.queue.some((item) => item.team),
-      })
+  }, [draftKey])
+  const restoreQueue = useCallback((current: ComposerQueueState, ids?: string[]) => {
+    const restored = withdrawQueuedComposer(draftKey, current, drafts, ids)
+    // 先同步 ref 和内存草稿，停止后紧接着离开也不会丢稿或重复归还附件。
+    leaving.current = restored
+    if (restored !== current && mounted.current) {
+      setQueue(restored.queue)
+      setDraft(restored.draft)
+      setAttachments(restored.attachments)
+      setTeam(restored.team)
+      setReferences(restored.references ?? [])
     }
-  }, [drafts, draftKey])
+  }, [draftKey, drafts])
+  useFocusEffect(
+    useCallback(() => {
+      focused.current = true
+      return () => {
+        // push 工作区等页面时聊天仍挂载；失焦即停止自动续发并退回输入框。
+        focused.current = false
+        restoreQueue(leaving.current)
+      }
+    }, [restoreQueue])
+  )
   function sendQueuedNow(itemId: string) {
     const item = queue.find((value) => value.id === itemId)
     if (!item || !ready || state.turnActive || waitingForDecision || pendingUser) return
@@ -396,12 +407,7 @@ function ChatSession({
     }
   }
   function withdrawQueued(ids?: string[]) {
-    const taken = queue.filter((item) => !ids || ids.includes(item.id))
-    if (!taken.length) return
-    setQueue((items) => items.filter((item) => !taken.includes(item)))
-    setDraft((value) => queueToDraft(value, taken))
-    setAttachments((value) => queueAttachments(taken, value))
-    if (taken.some((item) => item.team)) setTeam(true)
+    restoreQueue({ queue, draft, attachments, team, references }, ids)
   }
   const runtime =
     state.runtime ??
@@ -413,11 +419,7 @@ function ChatSession({
         }
       : undefined)
   const knownModel = chosenModel && chosenModel.id === runtime?.modelId ? chosenModel : null
-  const modelLabel = runtime
-    ? [knownModel?.name || runtime.modelId, runtime.effortLevel ? effortName(runtime.effortLevel) : '']
-        .filter(Boolean)
-        .join(' · ')
-    : '选择模型'
+  const modelLabel = runtime ? knownModel?.name || runtime.modelId : '选择模型'
   const permissionMode = state.permissionMode ?? session?.permissionMode
   const backgroundCount = state.backgroundTaskIds.length
   const title = state.title || session?.title || '会话'
@@ -505,6 +507,7 @@ function ChatSession({
         setTeam(false)
         const restore = value.restore
         setDraft(restore?.text ?? '')
+        setReferences(restore?.references ?? [])
         setAttachments(restore?.attachments ?? [])
         if (restore?.text) drafts.set(draftKey, restore.text)
         else drafts.delete(draftKey)
@@ -597,7 +600,7 @@ function ChatSession({
   function submit() {
     if (workspaceMissing) return
     try {
-      const message = buildComposerMessage(draft, attachments, team)
+      const message = buildComposerMessage(serializeComposer(draft, references), attachments, team)
       validateMessageSize(message, host?.auth ?? 'lan')
       if (busy) {
         if (approval) return
@@ -608,10 +611,12 @@ function ChatSession({
             text: draft.trim(),
             attachments,
             team,
+            references,
             message,
           },
         ])
         setDraft('')
+        setReferences([])
         setAttachments([])
         setTeam(false)
         drafts.delete(draftKey)
@@ -621,6 +626,7 @@ function ChatSession({
       }
       if (dispatch(message)) {
         setDraft('')
+        setReferences([])
         setAttachments([])
         setTeam(false)
         drafts.delete(draftKey)
@@ -728,8 +734,9 @@ function ChatSession({
       handoff.current = {
         task: { content: editText.trim(), attachments: [] },
         phase: 'initial',
-        ...(draft.trim() || attachments.length ? { restore: { text: draft, attachments } } : {}),
+        ...(draft.trim() || attachments.length || references.length ? { restore: { text: draft, attachments, references } } : {}),
       }
+      setReferences([])
       setDraft(editText.trim())
       setAttachments([])
       drafts.set(draftKey, editText.trim())
@@ -1066,7 +1073,7 @@ function ChatSession({
           }
         />
       </View>
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <KeyboardViewport style={{ flex: 1 }}>
         <FlatList
           ref={list}
           data={rows}
@@ -1240,6 +1247,10 @@ function ChatSession({
           <ChatComposer
             client={client}
             sessionId={id}
+            workDir={session?.workDir ?? undefined}
+            runtime={runtime}
+            references={references}
+            onReferences={setReferences}
             draft={draft}
             onDraft={(value) => {
               setDraft(value)
@@ -1260,14 +1271,17 @@ function ChatSession({
             disabled={!ready || state.configPending || workspaceMissing || working}
             mode={modeName(permissionMode)}
             model={modelLabel}
+            effortControl={<EffortControl client={client} runtime={runtime}
+              disabled={!ready || busy || state.configPending || workspaceMissing || working}
+              onApply={(value) => { dispatch({ type: 'set_runtime_config', ...value }) }} />}
             onMode={() => openPanel('mode')}
             onModel={() => openPanel('model')}
             onSend={submit}
             onError={setError}
-            header={header}
+            header={<>{header}{host && <ActivitySummary host={host} sessionId={id} onPress={() => openRoute('/activity')} />}</>}
           />
         )}
-      </KeyboardAvoidingView>
+      </KeyboardViewport>
       <Menu
         visible={panel === 'menu'}
         onClose={() => setPanel(null)}

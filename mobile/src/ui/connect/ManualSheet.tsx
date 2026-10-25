@@ -128,7 +128,13 @@ export function ManualSheet({
         </View>
       }
     >
-      <View style={{ minHeight }}>
+      <View
+        // Android Fabric must not reparent the segmented controls or fields while
+        // the native sheet/screen retains its outgoing views for a transition.
+        collapsable={false}
+        collapsableChildren={false}
+        style={{ minHeight }}
+      >
         <Segmented
           label="连接方式"
           value={mode}

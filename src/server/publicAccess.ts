@@ -38,6 +38,20 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   const parts = url.pathname.split('/').filter(Boolean)
   if (parts[0] === 'ws') return parts.length === 2 && /^[\w-]{1,64}$/.test(parts[1]!)
   if (parts[0] !== 'api') return false
+  // Native project selection needs directory names, not the broader filesystem
+  // file/search surface. Keep the exact route and its query contract read-only.
+  if (parts[1] === 'filesystem') {
+    return method === 'GET' && url.pathname === '/api/filesystem/browse' &&
+      [...url.searchParams.keys()].every(key => key === 'path')
+  }
+  if (parts[1] === 'skills') return parts.length === 3 &&
+    (parts[2] === 'mentions' || parts[2] === 'commands') && method === 'GET'
+  if (parts[1] === 'computer-use') {
+    if (parts.length !== 3) return false
+    return (parts[2] === 'status' && method === 'GET') ||
+      (parts[2] === 'authorized-apps' && (method === 'GET' || method === 'PUT')) ||
+      (parts[2] === 'open-permission-card' && method === 'POST')
+  }
   if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && method === 'DELETE'
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
@@ -61,6 +75,19 @@ function secure(response: Response): Response {
     'X-Frame-Options': 'DENY',
     'Content-Security-Policy': "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
   })
+}
+
+function remoteComputerUseConsentPatch(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const patch = value as Record<string, unknown>
+  if (Object.keys(patch).some(key => key !== 'enabled' && key !== 'grantFlags')) return false
+  if (patch.enabled !== undefined && typeof patch.enabled !== 'boolean') return false
+  if (patch.grantFlags !== undefined) {
+    if (!patch.grantFlags || typeof patch.grantFlags !== 'object' || Array.isArray(patch.grantFlags)) return false
+    return Object.entries(patch.grantFlags).every(([key, flag]) =>
+      ['clipboardRead', 'clipboardWrite', 'systemKeyCombos'].includes(key) && typeof flag === 'boolean')
+  }
+  return true
 }
 const json = (value: unknown, status = 200) => secure(Response.json(value, { status }))
 
@@ -315,6 +342,11 @@ export class PublicAccessServer {
         const device = this.deviceFor(request)
         if (!device) return json({ error: 'Device pairing required' }, 401)
         if (!isPublicBusinessPathAllowed(url, request.method)) return json({ error: 'Desktop-only capability' }, 403)
+        if (route === 'api/computer-use/authorized-apps' && request.method === 'PUT') {
+          let patch: unknown
+          try { patch = await request.clone().json() } catch { return json({ error: 'Invalid JSON body' }, 400) }
+          if (!remoteComputerUseConsentPatch(patch)) return json({ error: 'Only global Computer Use consent can be changed remotely' }, 403)
+        }
         if (!this.rate(`api:${device.id}`, 1200)) return json({ error: 'Too many requests' }, 429)
         if (url.pathname.startsWith('/ws/')) {
           const upgraded = server.upgrade(request, { data: { sessionId: url.pathname.split('/').pop()!, connectedAt: this.now(), channel: 'client', clientKind: 'full', sdkToken: null, serverPort: this.deps.serverPort(), serverHost: '127.0.0.1', remoteDeviceId: device.id } })

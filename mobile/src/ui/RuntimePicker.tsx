@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Pressable, View } from 'react-native'
+import { FlatList, View, useWindowDimensions } from 'react-native'
 import { Text } from './Text'
 import type { ApiClient } from '../core/client'
 import {
@@ -8,34 +8,28 @@ import {
   loadRuntimeModels,
   modelDetail,
   runtimeProviderIdentity,
-  runtimeSelection,
+  runtimeModelSelection,
   type Model,
   type RuntimeDirectory,
-  type RuntimeSource,
 } from '../core/runtimeCatalog'
 import type { RuntimeConfig } from '../core/types'
 import {
   Button,
   Callout,
-  Chip,
-  Group,
   InlineError,
   Loading,
-  SectionHeader,
-  Segmented,
-  Separator,
   Sheet,
+  SearchField,
   TextButton,
   useColors,
 } from './kit'
-import { effortName } from './modes'
 import { errorText } from './theme'
 import { ChoiceRow } from './newtask/ChoiceRow'
 
 export type { Provider, Model } from '../core/runtimeCatalog'
 
 /**
- * 来源、模型、思考强度的选择状态。打开即从电脑重新读取来源与授权，
+ * 来源与模型的选择状态，保留独立的思考强度。打开即从电脑重新读取来源与授权，
  * 读完后回到 initial；`epoch` 变化表示重新打开，丢弃上次未保存的选择。
  */
 export function useRuntimeChoice({
@@ -67,6 +61,7 @@ export function useRuntimeChoice({
     message: string
   } | null>(null)
   const [revision, setRevision] = useState(0)
+  const [catalogRevision, setCatalogRevision] = useState(0)
   const initialProvider = initial?.providerId
   const initialModel = initial?.modelId
   const initialEffort = initial?.effortLevel
@@ -131,7 +126,7 @@ export function useRuntimeChoice({
           setModelError({ directory, id: providerId, message: errorText(e) })
       })
     return () => controller.abort()
-  }, [client, directory, providerId])
+  }, [client, directory, providerId, catalogRevision])
   const catalogReady = Boolean(
     directory && catalog?.directory === directory && catalog.id === providerId
   )
@@ -145,9 +140,11 @@ export function useRuntimeChoice({
     source,
     providerId,
     selectProvider(id: string | null) {
+      // Retrying this source must not reload the directory and reset to initial.
+      if (id === providerId && modelError?.directory === directory && modelError.id === id)
+        setCatalogRevision((value) => value + 1)
       setProviderId(id)
-      setModelId('')
-      setEffort(undefined)
+      if (id !== providerId) setModelId('')
       setModelError(null)
     },
     catalogReady,
@@ -156,219 +153,108 @@ export function useRuntimeChoice({
     model,
     selectModel(id: string) {
       setModelId(id)
-      setEffort(undefined)
     },
     effort,
     setEffort,
     canSetEffort,
+    selectConfig: (next: Model) => runtimeModelSelection(providerId, next, { ...initial, effortLevel: effort } as RuntimeConfig, defaultScope),
     reload: () => setRevision((value) => value + 1),
     /** 可以应用的选择；来源未授权或还没选模型时为 null。 */
     selection:
       model && source?.auth === 'ready'
-        ? runtimeSelection(providerId, model, effort, defaultScope)
+        ? runtimeModelSelection(providerId, model, { ...initial, effortLevel: effort } as RuntimeConfig, defaultScope)
         : null,
   }
 }
 export type RuntimeChoice = ReturnType<typeof useRuntimeChoice>
 
-function SourceChip({
-  source,
-  selected,
-  onPress,
-  disabled,
-}: {
-  source: RuntimeSource
-  selected: boolean
-  onPress(): void
-  disabled?: boolean
-}) {
-  const colors = useColors()
-  const ghost = source.auth !== 'ready'
-  const label =
-    source.auth === 'missing'
-      ? `${source.name} · 未登录`
-      : source.auth === 'error'
-        ? `${source.name} · 待确认`
-        : source.name
-  return (
-    <Pressable
-      accessibilityRole="radio"
-      accessibilityLabel={label}
-      accessibilityState={{ checked: selected, disabled }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        height: 36,
-        maxWidth: '100%',
-        paddingHorizontal: 14,
-        borderRadius: 18,
-        justifyContent: 'center',
-        backgroundColor: selected
-          ? colors.btn
-          : ghost
-            ? 'transparent'
-            : colors.card,
-        boxShadow: selected ? undefined : `inset 0 0 0 1px ${colors.hair}`,
-        opacity: disabled ? 0.45 : pressed ? 0.7 : 1,
-      })}
-    >
-      <Text
-        numberOfLines={1}
-        style={{
-          fontSize: 14,
-          fontWeight: selected ? '600' : '400',
-          color: selected ? colors.btnInk : ghost ? colors.ink3 : colors.ink,
-        }}
-      >
-        {label}
-      </Text>
-    </Pressable>
-  )
-}
-
-/** 来源 chips · 模型列表 · 思考强度，加提示与“重新读取”。新任务、会话、计划执行、默认模型页共用。 */
+/** Two short steps in one bottom sheet; source and model lists scroll independently. */
 export function RuntimeChoiceView({
   choice,
   busy = false,
   warning,
+  onApply,
 }: {
   choice: RuntimeChoice
   busy?: boolean
   warning?: string
+  onApply?(value: RuntimeConfig, model: Model): void
 }) {
   const colors = useColors()
-  const {
-    directory,
-    source,
-    providerId,
-    models,
-    model,
-    effort,
-    catalogReady,
-    canSetEffort,
-    error,
-  } = choice
-  const efforts = canSetEffort ? (model?.supportedReasoningEfforts ?? []) : []
-  const effortOptions = [
-    { label: '默认', value: '' },
-    ...efforts.map((value) => ({ label: effortName(value), value })),
-  ]
+  const { height } = useWindowDimensions()
+  const [step, setStep] = useState<'providers' | 'models'>('providers')
+  const [query, setQuery] = useState('')
+  const search = query.trim().toLocaleLowerCase()
+  const sources = (choice.directory?.sources ?? []).filter((source) =>
+    !search || source.name.toLocaleLowerCase().includes(search)
+  )
+  const models = choice.models.filter((model) =>
+    !search || `${model.name} ${model.id} ${model.description ?? ''}`.toLocaleLowerCase().includes(search)
+  )
   return (
-    <View>
-      <InlineError text={error} style={{ marginTop: 10 }} />
-      {choice.loading && <Loading />}
-      {directory && (
-        <>
-          <SectionHeader title="来源" style={{ paddingTop: 10 }} />
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-            {directory.sources.map((value) => (
-              <SourceChip
-                key={value.id ?? 'claude-official'}
-                source={value}
-                selected={value.id === providerId}
-                disabled={busy}
-                onPress={() => choice.selectProvider(value.id)}
-              />
-            ))}
-          </View>
-          {!source && (
-            <Callout tone="error" style={{ marginTop: 12 }}>
-              当前会话的来源已不可用，请重新选择。
-            </Callout>
-          )}
-          {source?.auth === 'missing' && (
-            <Callout style={{ marginTop: 12 }}>
-              此来源尚未授权。请在这台电脑上完成账号登录或配置，再重新读取。手机不接收官方账号凭据。
-            </Callout>
-          )}
-          {source?.auth === 'error' && (
-            <Callout tone="error" style={{ marginTop: 12 }}>
-              尚未确认此来源的授权状态，暂不能应用选择。
-            </Callout>
-          )}
-          {source?.auth === 'ready' && (
-            <>
-              <SectionHeader title="模型" style={{ paddingTop: 20 }} />
-              {models.length ? (
-                <Group>
-                  {models.map((value, index) => (
-                    <React.Fragment key={value.id}>
-                      {index > 0 && <Separator inset={14} />}
-                      <ChoiceRow
-                        title={value.name}
-                        detail={modelDetail(value) || undefined}
-                        selected={value.id === choice.modelId}
-                        disabled={busy}
-                        onPress={() => choice.selectModel(value.id)}
-                      />
-                    </React.Fragment>
-                  ))}
-                </Group>
-              ) : catalogReady ? (
-                <Text
-                  style={{
-                    fontSize: 14,
-                    lineHeight: 20,
-                    color: colors.ink3,
-                    paddingHorizontal: 4,
-                  }}
-                >
-                  所选来源没有返回可用模型。
-                </Text>
-              ) : !error ? (
-                <Loading />
-              ) : null}
-            </>
-          )}
-          {!canSetEffort && (
-            <Callout tone="info" style={{ marginTop: 16 }}>
-              这个账号来源的新会话使用电脑运行时的默认思考强度。需要调整时，请在具体会话内选择。
-            </Callout>
-          )}
-          {efforts.length ? (
-            <>
-              <SectionHeader title="思考强度" style={{ paddingTop: 20 }} />
-              {effortOptions.length <= 5 ? (
-                <Segmented
-                  label="思考强度"
-                  options={effortOptions}
-                  value={effort && efforts.includes(effort) ? effort : ''}
-                  disabled={busy}
-                  onChange={(value) => choice.setEffort(value || undefined)}
-                />
-              ) : (
-                <View
-                  accessibilityRole="radiogroup"
-                  accessibilityLabel="思考强度"
-                  style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}
-                >
-                  {effortOptions.map((option) => (
-                    <Chip
-                      key={option.value || 'default'}
-                      label={option.label}
-                      selected={
-                        option.value
-                          ? option.value === effort
-                          : !effort || !efforts.includes(effort)
-                      }
-                      disabled={busy}
-                      onPress={() => choice.setEffort(option.value || undefined)}
-                    />
-                  ))}
-                </View>
-              )}
-            </>
-          ) : null}
-        </>
-      )}
-      {warning ? <Callout style={{ marginTop: 16 }}>{warning}</Callout> : null}
-      <Button
-        title="重新读取来源与授权"
-        variant="plain"
-        disabled={busy || choice.loading}
-        onPress={choice.reload}
-        style={{ marginTop: 8, alignSelf: 'center' }}
+    <View style={{ height: Math.min(480, height * 0.58), flexShrink: 1, gap: 8 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', minHeight: 36 }}>
+        {step === 'models' ? (
+          <TextButton title="‹ 供应商" onPress={() => { setStep('providers'); setQuery('') }} />
+        ) : null}
+        <Text numberOfLines={1} style={{ flex: 1, fontSize: 14, color: colors.ink2, paddingHorizontal: 4 }}>
+          {step === 'providers' ? '先选择供应商' : choice.source?.name ?? '供应商已不可用'}
+        </Text>
+      </View>
+      <SearchField
+        value={query}
+        onChangeText={setQuery}
+        placeholder={step === 'providers' ? '搜索供应商' : '搜索模型'}
+        editable={!busy}
       />
+      <InlineError text={choice.error} />
+      {choice.loading ? <Loading /> : step === 'providers' ? (
+        <FlatList
+          style={{ flex: 1 }}
+          keyboardShouldPersistTaps="handled"
+          data={sources}
+          keyExtractor={(source) => source.id ?? 'claude-official'}
+          renderItem={({ item }) => (
+            <ChoiceRow
+              title={item.name}
+              selected={item.id === choice.providerId}
+              detail={item.auth === 'missing' ? '尚未登录' : item.auth === 'error' ? '授权状态待确认' : undefined}
+              trailingText="›"
+              disabled={busy}
+              onPress={() => { choice.selectProvider(item.id); setStep('models'); setQuery('') }}
+            />
+          )}
+          ListEmptyComponent={<Text style={{ color: colors.ink3, padding: 16 }}>没有匹配的供应商。</Text>}
+        />
+      ) : choice.source?.auth !== 'ready' ? (
+        <Callout>
+          {choice.source?.auth === 'missing'
+            ? '请先在电脑上登录或配置此供应商，再重新读取。'
+            : '尚未确认此供应商的授权状态，请重新读取后再选模型。'}
+        </Callout>
+      ) : !choice.catalogReady && !choice.error ? <Loading /> : (
+        <FlatList
+          style={{ flex: 1 }}
+          keyboardShouldPersistTaps="handled"
+          data={models}
+          keyExtractor={(model) => model.id}
+          renderItem={({ item }) => (
+            <ChoiceRow
+              title={item.name}
+              detail={modelDetail(item) || undefined}
+              selected={item.id === choice.modelId}
+              disabled={busy}
+              onPress={() => {
+                choice.selectModel(item.id)
+                onApply?.(choice.selectConfig(item), item)
+              }}
+            />
+          )}
+          ListEmptyComponent={<Text style={{ color: colors.ink3, padding: 16 }}>{query ? '没有匹配的模型。' : '这个供应商没有可用模型。'}</Text>}
+        />
+      )}
+      {warning ? <Callout>{warning}</Callout> : null}
+      <TextButton title="重新读取" disabled={busy || choice.loading} onPress={choice.reload} />
     </View>
   )
 }
@@ -408,7 +294,7 @@ export function RuntimePicker({
 
 /**
  * 模型选择弹层。会话输入框、计划执行模型、新任务都用它，接口保持稳定：
- * 头部“取消 · 标题 · 完成”，点“完成”回调 onApply，关闭不保存。
+ * 先选供应商，再点模型应用；关闭不保存。思考强度由独立控件设置。
  */
 export function RuntimeSheet({
   visible,
@@ -455,22 +341,11 @@ export function RuntimeSheet({
           <TextButton title="取消" onPress={onClose} />
         </View>
       }
-      right={
-        <View style={{ paddingHorizontal: 4 }}>
-          <TextButton
-            title="完成"
-            strong
-            disabled={!choice.selection || Boolean(busy)}
-            onPress={() => {
-              if (choice.selection) onApply(choice.selection, choice.model)
-            }}
-          />
-        </View>
-      }
+      scroll={false}
     >
-      <View>
+      <View style={{ flexShrink: 1, minHeight: 0 }}>
         {client ? (
-          <RuntimeChoiceView choice={choice} busy={busy} warning={warning} />
+          <RuntimeChoiceView key={epoch} choice={choice} busy={busy} warning={warning} onApply={onApply} />
         ) : warning ? (
           <Callout>{warning}</Callout>
         ) : null}

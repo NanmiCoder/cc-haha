@@ -1,7 +1,6 @@
+import { KeyboardViewport } from '../KeyboardViewport'
 import { useState } from 'react'
 import {
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
   ScrollView,
   View,
@@ -19,8 +18,9 @@ import {
   TextButton,
   useColors,
 } from '../kit'
-import { effortName, planExecutionModes } from '../modes'
+import { planExecutionModes } from '../modes'
 import { RuntimeSheet } from '../RuntimePicker'
+import { EffortControl } from '../EffortControl'
 import { Text } from '../Text'
 import type { PlanExecutionMode } from '../approvalData'
 import {
@@ -80,7 +80,7 @@ export function PlanDecision({
   const locked = !ready || sent
   const execution = executionRuntime ?? runtime
   const executionLabel = execution
-    ? `${(executionRuntime && executionModelName) || execution.modelId} · ${effortName(execution.effortLevel)}`
+    ? (executionRuntime && executionModelName) || execution.modelId
     : '沿用当前模型'
   const sheetError = notSent
     ? NOT_SENT
@@ -111,10 +111,7 @@ export function PlanDecision({
         background={colors.card}
         left={<TextButton title="稍后" onPress={() => setSheetOpen(false)} />}
       >
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={{ flex: 1 }}
-        >
+        <KeyboardViewport style={{ flex: 1 }}>
           <ScrollView
             style={{ flex: 1 }}
             contentContainerStyle={{ paddingTop: 4, paddingHorizontal: 22, paddingBottom: 24, gap: 12 }}
@@ -179,6 +176,9 @@ export function PlanDecision({
               </Text>
               <Icon name="chevron-right" size={15} color={colors.chevron} strokeWidth={2.2} />
             </Pressable>
+            <View style={{ alignItems: 'flex-start' }}>
+              <EffortControl client={client ?? null} runtime={execution} disabled={locked} onApply={setExecutionRuntime} />
+            </View>
             {feedbackOpen ? (
               <View style={{ gap: 6 }}>
                 <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>需要调整的地方</Text>
@@ -226,7 +226,7 @@ export function PlanDecision({
               </View>
             )}
           </View>
-        </KeyboardAvoidingView>
+        </KeyboardViewport>
         <RuntimeSheet
           visible={runtimeOpen}
           onClose={() => setRuntimeOpen(false)}

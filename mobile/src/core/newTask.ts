@@ -9,12 +9,17 @@ export type RepositoryContext = {
   state: 'ok' | 'not_git_repo' | 'missing_workdir' | 'error'
   currentBranch: string | null
   defaultBranch?: string | null
+  headCommit?: string | null
   dirty?: boolean
   branches: {
     name: string
     current?: boolean
     checkedOut?: boolean
     worktreePath?: string
+    local?: boolean
+    remote?: boolean
+    remoteRef?: string
+    commit?: string
   }[]
   error?: string
 }

@@ -1,9 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { ScrollView } from 'react-native'
+import { ScrollView, View } from 'react-native'
+import { KeyboardViewport } from '../ui/KeyboardViewport'
 import { useLocalSearchParams } from 'expo-router'
 import { useConnection } from '../state/AppContext'
 import type { ApiClient } from '../core/client'
 import { RuntimeChoiceView, useRuntimeChoice } from '../ui/RuntimePicker'
+import { EffortControl } from '../ui/EffortControl'
 import {
   BottomBar,
   Button,
@@ -161,15 +163,19 @@ function DefaultPicker({
 }) {
   const choice = useRuntimeChoice({ client, initial, defaultScope: true })
   return (
-    <>
-      <ScrollView
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24, gap: 12 }}
-      >
+    <KeyboardViewport style={{ flex: 1 }}>
+      <View style={{ flex: 1, minHeight: 0, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12, gap: 12 }}>
         {banner}
         <RuntimeChoiceView choice={choice} busy={busy} />
+        <EffortControl
+          client={client}
+          runtime={choice.selection ?? undefined}
+          defaultScope
+          disabled={busy}
+          onApply={(value) => choice.setEffort(value.effortLevel)}
+        />
         <Footnote style={{ paddingTop: 0 }}>只影响之后新建的任务，已经在跑的不变。</Footnote>
-      </ScrollView>
+      </View>
       <BottomBar>
         <Button
           title="保存"
@@ -181,6 +187,6 @@ function DefaultPicker({
           }}
         />
       </BottomBar>
-    </>
+    </KeyboardViewport>
   )
 }

@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test'
+import { Drafts } from '../../state/storage'
 import {
   canFlushQueue,
   clearParkedComposer,
@@ -7,6 +8,8 @@ import {
   queueAttachments,
   queuePauseReason,
   queueToDraft,
+  withdrawQueuedComposer,
+  type ComposerQueueState,
   type QueueGate,
 } from './queue'
 
@@ -71,4 +74,76 @@ test('attachments and the team switch survive leaving the page until the page ta
   expect(parkedComposer('h:s')).toBeUndefined()
   parkComposer('h:s', { attachments: [], team: false })
   expect(parkedComposer('h:s')).toBeUndefined()
+})
+
+test('a blurred chat cannot send a queued follow-up when the running turn finishes', () => {
+  expect(canFlushQueue(idle, false)).toBe(false)
+  expect(canFlushQueue(idle, true)).toBe(true)
+})
+
+const queuedComposer = (): ComposerQueueState => ({
+  queue: [{
+    id: 'one',
+    text: 'QA-queue-stop',
+    attachments: [{ kind: 'file', name: 'qa.txt' } as never],
+    team: true,
+    message: { type: 'user_message', content: 'QA-queue-stop' },
+  }],
+  draft: '还在写',
+  attachments: [],
+  team: false,
+})
+
+test('stop or withdraw saves the restored draft before leaving and reentering the chat', () => {
+  const drafts = new Drafts()
+  const key = 'stop-regression:session'
+  const restored = withdrawQueuedComposer(key, queuedComposer(), drafts)
+  expect(restored.queue).toEqual([])
+  expect(restored.draft).toBe('QA-queue-stop\n\n还在写')
+  // A later blur/unmount has no queue left. The next screen still receives the restored draft.
+  expect(withdrawQueuedComposer(key, restored, drafts)).toBe(restored)
+  expect(drafts.get(key)).toBe(restored.draft)
+  expect(parkedComposer(key)).toEqual({ attachments: restored.attachments, team: true })
+  clearParkedComposer(key)
+})
+
+test('withdrawing one message preserves the remaining queue and does not duplicate restored material', () => {
+  const drafts = new Drafts()
+  const key = 'partial-withdraw:session'
+  const initial = queuedComposer()
+  initial.queue.push({ ...initial.queue[0]!, id: 'two', text: 'second', attachments: [], team: false })
+  const first = withdrawQueuedComposer(key, initial, drafts, ['one'])
+  expect(first.queue.map((item) => item.id)).toEqual(['two'])
+  expect(drafts.get(key)).toBe('QA-queue-stop\n\n还在写')
+  const leaving = withdrawQueuedComposer(key, first, drafts)
+  expect(leaving.queue).toEqual([])
+  expect(drafts.get(key)).toBe('second\n\nQA-queue-stop\n\n还在写')
+  expect(parkedComposer(key)?.attachments).toHaveLength(1)
+  expect(withdrawQueuedComposer(key, leaving, drafts)).toBe(leaving)
+  clearParkedComposer(key)
+})
+
+test('editing or clearing a restored composer before blur replaces its parked contents', () => {
+  const drafts = new Drafts()
+  const key = 'edited-restored:session'
+  const restored = withdrawQueuedComposer(key, queuedComposer(), drafts)
+  withdrawQueuedComposer(key, { ...restored, draft: 'new text', attachments: [], team: false }, drafts)
+  expect(drafts.get(key)).toBe('new text')
+  expect(parkedComposer(key)).toBeUndefined()
+  withdrawQueuedComposer(key, { ...restored, draft: '', attachments: [], team: false }, drafts)
+  expect(drafts.get(key)).toBeUndefined()
+  expect(parkedComposer(key)).toBeUndefined()
+})
+
+test('withdrawing queued skills restores selection chips and plain draft, not model instructions', () => {
+  const reference = { kind: 'skill' as const, id: 'review', name: 'review', displayName: '审查', description: '', modelText: 'Use the Skill tool with skill: "review" for this request.' }
+  const drafts = { set: () => {}, delete: () => {} }
+  const next = withdrawQueuedComposer('skill-restore', {
+    queue: [{ id: 'q', text: '检查代码', attachments: [], team: false, references: [reference], message: { type: 'user_message', content: `${reference.modelText}\n\n检查代码` } }],
+    draft: '还有测试', attachments: [], team: false, references: [reference],
+  }, drafts)
+  expect(next.draft).toBe('检查代码\n\n还有测试')
+  expect(next.references).toEqual([reference])
+  expect(parkedComposer('skill-restore')?.references).toEqual([reference])
+  clearParkedComposer('skill-restore')
 })

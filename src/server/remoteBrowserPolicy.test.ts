@@ -58,3 +58,10 @@ test('remote auto-question settings reject malformed input and project only norm
   for (const autoQuestion of [null, [], true, 'true', {}, { enabled: 'true', timeoutMinutes: 5 }, { enabled: true }, { enabled: false, timeoutMinutes: -1 }]) expect(validateRemoteSettingsPatch({ autoQuestion })).toBe(false)
   expect(projectRemoteSettings({ autoQuestion: { enabled: true, timeoutMinutes: 5, secret: 'hidden' }, env: { TOKEN: 'hidden' } })).toEqual({ autoQuestion: { enabled: true, timeoutMinutes: 5 } })
 })
+
+
+test('remote composers can read the desktop team capability without changing it', () => {
+  expect(projectRemoteSettings({ agentTeamsEnabled: false, env: { TOKEN: 'hidden' } })).toEqual({ agentTeamsEnabled: false })
+  expect(projectRemoteSettings({ agentTeamsEnabled: true })).toEqual({ agentTeamsEnabled: true })
+  expect(validateRemoteSettingsPatch({ agentTeamsEnabled: true })).toBe(false)
+})

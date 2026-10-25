@@ -1,3 +1,4 @@
+import { parseUserMessageSegments } from '../../../src/shared/userMessageCapabilities'
 import { memo, useRef, type ComponentRef } from 'react'
 import { Image, Platform, Pressable, View, type TextStyle } from 'react-native'
 import { Text } from './Text'
@@ -240,7 +241,11 @@ export function UserBubble({
           selectable={selectable}
           style={{ fontSize: 16, lineHeight: 23, color: colors.ink }}
         >
-          {text}
+          {parseUserMessageSegments(text).map((segment, index) => segment.type === 'text' ? segment.text : (
+            <Text key={index} style={{ fontWeight: '600', backgroundColor: colors.fill, color: colors.ink2 }}>
+              {segment.type === 'command' ? segment.name : `@${segment.label}`}
+            </Text>
+          ))}
         </Text>
       ) : null}
       <Attachments item={item} />

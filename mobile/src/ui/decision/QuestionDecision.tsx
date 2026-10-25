@@ -13,7 +13,6 @@ import {
 import { monoFont } from '../palette'
 import { Text } from '../Text'
 import {
-  questionAnswerValues,
   questionClock,
   questionOptionPresentation,
   readQuestions,
@@ -29,7 +28,9 @@ import {
   webNoOutline,
 } from './parts'
 
-/** AskUserQuestion：一次一题，最后一题提交；“先讨论一下”按现有协议拒绝并附说明。 */
+import { initialQuestionFlow, changeQuestionFlow, questionFlowValues, canSubmitQuestions } from './questionFlow'
+
+/** AskUserQuestion：一次一题，汇总确认后提交；“先讨论一下”按现有协议拒绝并附说明。 */
 export function QuestionDecision({
   request,
   input,
@@ -51,9 +52,10 @@ export function QuestionDecision({
   const colors = useColors()
   const { height } = useWindowDimensions()
   const questions = readQuestions(input)
-  const [index, setIndex] = useState(0)
-  const [answers, setAnswers] = useState<Record<string, string[]>>({})
-  const [custom, setCustom] = useState<Record<string, string>>({})
+  const [flow, setFlow] = useState(initialQuestionFlow)
+  const { index, answers, custom, review } = flow
+  const change = (action: Parameters<typeof changeQuestionFlow>[2]) =>
+    setFlow((current) => changeQuestionFlow(current, questions, action))
   const [customOpen, setCustomOpen] = useState<Record<string, boolean>>({})
   const [discussOpen, setDiscussOpen] = useState(false)
   const [note, setNote] = useState('')
@@ -69,13 +71,12 @@ export function QuestionDecision({
     return () => clearInterval(timer)
   }, [deadline])
   const clock = questionClock(deadline, now, interacted, baseline)
-  const values = questionAnswerValues(questions, answers, custom)
+  const values = questionFlowValues(flow, questions)
   const locked = !ready || sent
   const current = questions[Math.min(index, Math.max(0, questions.length - 1))]
   const last = index >= questions.length - 1
   const currentAnswered = current ? Boolean(values[current.question]) : false
-  const complete =
-    questions.length > 0 && questions.every((question) => values[question.question])
+  const complete = canSubmitQuestions(flow, questions, ready)
 
   const activity = () => {
     if (signalActivity()) setInteracted(true)
@@ -85,19 +86,8 @@ export function QuestionDecision({
     if (!current) return
     activity()
     const key = current.question
-    setCustom((value) => ({ ...value, [key]: '' }))
     setCustomOpen((value) => ({ ...value, [key]: false }))
-    setAnswers((value) => {
-      const previous = value[key] ?? []
-      return {
-        ...value,
-        [key]: current.multiSelect
-          ? previous.includes(label)
-            ? previous.filter((item) => item !== label)
-            : [...previous, label]
-          : [label],
-      }
-    })
+    change({ type: 'choose', label })
   }
 
   const customText = current ? (custom[current.question] ?? '') : ''
@@ -113,7 +103,7 @@ export function QuestionDecision({
             在问你
             {questions.length > 1 ? (
               <Text style={{ fontFamily: monoFont, fontVariant: ['tabular-nums'], color: colors.ink3 }}>
-                {` · ${index + 1} / ${questions.length}`}
+                {review ? ' · 确认回答' : ` · ${index + 1} / ${questions.length}`}
               </Text>
             ) : null}
           </Text>
@@ -128,11 +118,44 @@ export function QuestionDecision({
           ) : null
         }
       />
+      {questions.length > 1 && (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+          {questions.map((question, position) => (
+            <Pressable
+              key={question.question}
+              accessibilityRole="tab"
+              accessibilityLabel={`${question.header || String.fromCharCode(65 + position)}，${values[question.question] ? '已回答' : '未回答'}`}
+              accessibilityState={{ selected: !review && index === position, disabled: sent }}
+              disabled={sent}
+              onPress={() => { activity(); change({ type: 'open', index: position }) }}
+              style={{ minHeight: 44, justifyContent: 'center', paddingHorizontal: 12, borderRadius: 12, backgroundColor: !review && index === position ? colors.sel : colors.fill }}
+            >
+              <Text style={{ color: colors.ink, fontSize: 14 }}>
+                {question.header || String.fromCharCode(65 + position)}{values[question.question] ? ' ✓' : ''}
+              </Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+      )}
       <ScrollView
         keyboardShouldPersistTaps="handled"
         style={{ maxHeight: height * 0.56, flexGrow: 0 }}
         contentContainerStyle={{ gap: 12 }}
       >
+        {review ? (
+          <View style={{ gap: 10 }}>
+            <Text accessibilityRole="header" style={{ fontSize: 19, fontWeight: '600', color: colors.ink }}>确认回答</Text>
+            {questions.map((question, position) => (
+              <Pressable key={question.question} accessibilityRole="button" accessibilityLabel={`修改回答：${question.question}`} disabled={sent}
+                onPress={() => { activity(); change({ type: 'open', index: position }) }}
+                style={{ padding: 14, gap: 6, borderRadius: 12, backgroundColor: colors.fill }}>
+                <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink2 }}>{question.header || String.fromCharCode(65 + position)} · {question.question}</Text>
+                <Text style={{ fontSize: 16, lineHeight: 23, color: colors.ink }}>{values[question.question] || '尚未回答'}</Text>
+                <Text style={{ fontSize: 12, color: colors.run }}>点此修改</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : <>
         <Text
           accessibilityRole="header"
           style={{ fontSize: 19, lineHeight: 26, fontWeight: '600', color: colors.ink }}
@@ -189,7 +212,7 @@ export function QuestionDecision({
                   onFocus={activity}
                   onChangeText={(value) => {
                     activity()
-                    setCustom((existing) => ({ ...existing, [current.question]: value }))
+                    change({ type: 'custom', text: value })
                   }}
                   style={[
                     {
@@ -232,6 +255,7 @@ export function QuestionDecision({
             )}
           </View>
         ) : null}
+        </>}
       </ScrollView>
       {sent ? (
         <SubmittedRow />
@@ -248,34 +272,34 @@ export function QuestionDecision({
               setDiscussOpen(true)
             }}
           />
-          {last ? (
+          {review ? (
             <Button
               title="提交回答"
               size="lg"
               style={{ flex: 1.4 }}
               disabled={!ready || !complete}
-              onPress={() => submit(values)}
+              onPress={() => { if (canSubmitQuestions(flow, questions, ready)) submit(values) }}
             />
           ) : (
             <Button
-              title="下一题"
+              title={last ? '确认全部回答' : '下一题'}
               size="lg"
               style={{ flex: 1.4 }}
-              disabled={!currentAnswered}
+              disabled={!currentAnswered || (last && !complete)}
               onPress={() => {
                 activity()
-                setIndex((value) => Math.min(value + 1, questions.length - 1))
+                change(last ? { type: 'review' } : { type: 'open', index: index + 1 })
               }}
             />
           )}
         </View>
       )}
-      {index > 0 && !sent ? (
+      {(index > 0 || review) && !sent ? (
         <QuietButton
           title="上一题"
           onPress={() => {
             activity()
-            setIndex((value) => Math.max(0, value - 1))
+            change({ type: 'open', index: review ? questions.length - 1 : Math.max(0, index - 1) })
           }}
         />
       ) : null}

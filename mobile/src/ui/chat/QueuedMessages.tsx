@@ -50,7 +50,7 @@ export function QueuedMessages({
               {item.team ? ' · 团队' : ''}
             </Text>
             <Text numberOfLines={1} style={{ fontSize: 14, lineHeight: 20, color: colors.ink }}>
-              {item.text || '（只有材料）'}
+              {item.text || item.references?.map((reference) => `@${reference.displayName || reference.name}`).join(' ') || '（只有材料）'}
             </Text>
           </View>
           {paused && index === 0 ? (

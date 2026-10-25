@@ -59,7 +59,7 @@ export function TargetCard({
         >
           {name}
         </Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        {(branch || status || mode) && <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <Icon name="git-branch" size={13} color={colors.ink3} strokeWidth={2} />
           {branch ? (
             <Mono
@@ -84,7 +84,7 @@ export function TargetCard({
               · {mode}
             </Text>
           ) : null}
-        </View>
+        </View>}
       </View>
       {hostName ? (
         <Text

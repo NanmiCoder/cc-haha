@@ -117,7 +117,9 @@ export function startFixtureServer({
     alwaysThinkingEnabled: true,
     workflowKeywordTriggerEnabled: true,
     autoQuestion: { enabled: true, timeoutMinutes: 5 },
+    agentTeamsEnabled: true,
   }
+  let computerUse = { enabled: false, authorizedApps: [], grantFlags: { clipboardRead: false, clipboardWrite: false, systemKeyCombos: false } }
   const scheduledTasks = new Map<string, ScheduledTask>()
   const scheduledRuns: TaskRun[] = []
   const branches = new Set(['main', 'feat/qr-pair', 'fix/ws-replay'])
@@ -340,7 +342,8 @@ export function startFixtureServer({
   function pendingDecision(
     session: FixtureSession,
     kind: 'approval' | 'question' | 'plan' | 'edit',
-    broadcast = true
+    broadcast = true,
+    multiple = false
   ) {
     const toolName =
       kind === 'question'
@@ -424,6 +427,14 @@ export function startFixtureServer({
                   : 'echo "FIXTURE: no command is executed"',
                 description: '测试服务中的模拟命令，不执行 shell',
               }
+    if (kind === 'question' && multiple) {
+      Object.assign(input, { questions: [
+        { header: 'A 平台', question: '这次先验证哪个平台？', multiSelect: false, options: [{ label: 'Android' }, { label: 'iOS' }] },
+        { header: 'B 范围', question: '需要覆盖哪些能力？', multiSelect: true, options: [{ label: 'Composer' }, { label: '目录与 Git' }, { label: '团队活动' }] },
+        { header: 'C 备注', question: '还有什么补充要求？', multiSelect: false, options: [{ label: '暂无' }, { label: '稍后补充' }] },
+        { header: 'D 顺序', question: '按什么顺序验证？', multiSelect: false, options: [{ label: '先输入后执行' }, { label: '先活动再输入' }] },
+      ] })
+    }
     const toolUseId = crypto.randomUUID()
     const autoQuestion = object(settings.autoQuestion)
     const request: Pending = {
@@ -864,6 +875,7 @@ export function startFixtureServer({
     }))
   }
   function repositoryContext(workDir = FIXTURE_ROOT) {
+    if (!workDir.startsWith(FIXTURE_ROOT)) return { state: 'not_git_repo', workDir, currentBranch: null, branches: [], worktrees: [] }
     return {
       state: 'ok',
       workDir,
@@ -1307,6 +1319,70 @@ export function startFixtureServer({
           uptime: Math.round(performance.now()),
           fixture: true,
         })
+      // Computer directories are deterministic fixture values, never host filesystem reads.
+      if (path === '/api/filesystem/browse' && method === 'GET') {
+        const currentPath = url.searchParams.get('path') || '/fixture'
+        const tree: Record<string, string[]> = {
+          '/fixture': ['cc-haha-demo', '中文项目', 'empty'],
+          [FIXTURE_ROOT]: ['src', 'mobile'],
+          [`${FIXTURE_ROOT}/src`]: [],
+          [`${FIXTURE_ROOT}/mobile`]: [],
+          '/fixture/中文项目': [],
+          '/fixture/empty': [],
+        }
+        const children = tree[currentPath]
+        if (!children) return fail('Fixture directory not found', 404, 'NOT_FOUND')
+        return json({
+          currentPath,
+          parentPath: currentPath === '/fixture' ? '/fixture' : currentPath.slice(0, currentPath.lastIndexOf('/')),
+          entries: children.map((name) => ({ name, path: `${currentPath}/${name}`, isDirectory: true })),
+        })
+      }
+      if (path === '/api/skills/commands' && method === 'GET')
+        return json({ commands: [
+          { name: 'compact', kind: 'command', description: '压缩上下文（fixture 命令）' },
+          { name: 'init', kind: 'command', description: '初始化项目说明（fixture 命令）' },
+        ] })
+      if (path === '/api/skills/mentions' && method === 'GET')
+        return json({ skills: [
+          { kind: 'skill', id: 'review', name: 'review', displayName: '代码审查', description: '检查当前改动（本地 fixture）', source: 'fixture', modelText: 'Use the Skill tool with skill: "review" for this request.' },
+          { kind: 'skill', id: 'explain', name: 'explain', displayName: '解释代码', description: '解释代码与调用关系（本地 fixture）', source: 'fixture', modelText: 'Use the Skill tool with skill: "explain" for this request.' },
+        ], plugins: [] })
+      if (path === '/api/computer-use/status' && method === 'GET')
+        return json({ platform: 'darwin', supported: true, engine: 'macos-native', cuHelper: { available: true, supported: true }, permissions: { accessibility: true, screenRecording: true } })
+      if (path === '/api/computer-use/authorized-apps') {
+        if (method === 'PUT') {
+          computerUse = { ...computerUse, ...body, grantFlags: { ...computerUse.grantFlags, ...object(body.grantFlags) } }
+          return json({ ok: true })
+        }
+        return json(computerUse)
+      }
+      const taskListMatch = path.match(/^\/api\/tasks\/lists\/([^/]+)$/)
+      const fixtureTasks = (id: string) => [
+        { id: '1', subject: 'Task 1 · 核对桌面交互', description: '沿着真实 API 验证输入与运行状态。', status: 'completed', owner: 'researcher', blocks: ['2'], blockedBy: [], taskListId: id },
+        { id: '2', subject: 'Task 2 · 改进手机 Composer', description: '共用输入区，加入技能候选。', status: 'in_progress', owner: 'builder', blocks: ['3'], blockedBy: ['1'], taskListId: id },
+        { id: '3', subject: 'Task 3 · 回归验证', description: '验证真机键盘、目录、模型与活动入口。', status: 'pending', owner: 'reviewer', blocks: [], blockedBy: ['2'], taskListId: id },
+      ]
+      if (taskListMatch && method === 'GET') {
+        const id = decodeURIComponent(taskListMatch[1]!)
+        if (!sessions.has(id)) return fail('Session not found', 404, 'NOT_FOUND')
+        return json({ tasks: fixtureTasks(id) })
+      }
+      const teamSession = path.match(/^\/api\/teams\/session\/([^/]+)\/workbench$/)
+      if (teamSession && method === 'GET') {
+        const id = decodeURIComponent(teamSession[1]!)
+        if (id !== 'fixture-plan') return fail('No team', 404, 'NOT_FOUND')
+        return json({ sessionId: id, teamName: 'mobile-qa', incarnationId: 'fixture-team-1', source: 'live', snapshots: [{
+          version: 'fixture-v1', generatedAt: new Date().toISOString(),
+          team: { name: 'mobile-qa', incarnationId: 'fixture-team-1', leadSessionId: id, leadAgentId: 'lead', createdAt: 1792886400000, members: [
+            { agentId: 'researcher', name: 'researcher', agentType: 'research', status: 'completed', activity: 'idle', model: 'fixture-sonnet' },
+            { agentId: 'builder', name: 'builder', agentType: 'developer', status: 'running', activity: 'active', model: 'fixture-sonnet' },
+            { agentId: 'reviewer', name: 'reviewer', agentType: 'reviewer', status: 'idle', activity: 'stopped', lastError: '测试用暂停状态', model: 'fixture-opus' },
+          ] }, tasks: fixtureTasks(id), messages: [{ id: 'message-1', from: 'lead', to: 'builder', text: '先复用已有目录 API，再验证手机输入。', timestamp: new Date().toISOString(), kind: 'direct' }],
+        }] })
+      }
+      if (/^\/api\/teams\/mobile-qa\/members\/[^/]+\/transcript$/.test(path) && method === 'GET')
+        return json({ messages: [{ id: 'fixture-member-message', type: 'assistant', content: 'Fixture 执行记录：已核对桌面契约，正在实现手机输入区。', timestamp: new Date().toISOString() }], ownerAgentIds: [], taskNotifications: [], taskAnchors: [] })
       if (path === '/api/providers/auth-status')
         return json({
           hasAuth: true,
@@ -1644,6 +1720,30 @@ export function startFixtureServer({
               },
             ],
           })
+        const backgroundOutput = action?.match(/^background-tasks\/([^/]+)\/output$/)
+        if (backgroundOutput) {
+          if (method !== 'GET') return fail('Method not allowed', 405, 'METHOD_NOT_ALLOWED')
+          if (url.search) return fail('Task output accepts only a session and task ID')
+          let taskId: string
+          try { taskId = decodeURIComponent(backgroundOutput[1]!) }
+          catch { return fail('Invalid task ID') }
+          if (!/^[A-Za-z0-9_-]{1,128}$/.test(taskId)) return fail('Invalid task ID')
+          const task = session.tasks.find((entry) => entry.taskId === taskId && entry.taskType === 'local_bash')
+          if (!task) return fail('Background shell task not found in this session', 404, 'NOT_FOUND')
+          // Fixture logs live in the task, so stopping does not remove them. No
+          // filesystem path is accepted or read, just like the real ID-only API.
+          const bytes = Buffer.from(task.result ?? '', 'utf8')
+          const offset = Math.max(0, bytes.length - 64 * 1024)
+          let start = offset
+          while (start < bytes.length && offset > 0 && (bytes[start]! & 0xc0) === 0x80) start++
+          return Response.json({
+            taskId,
+            state: task.result === undefined ? 'missing' : bytes.length ? 'available' : 'empty',
+            text: bytes.subarray(start).toString('utf8'),
+            totalBytes: bytes.length,
+            truncated: offset > 0,
+          }, { headers: { ...headers, 'Cache-Control': 'no-store' } })
+        }
         if (action === 'background-tasks' && method === 'GET')
           return json({ tasks: session.tasks, historyComplete: true })
         if (action?.startsWith('subagents/by-tool/') && method === 'GET') {
@@ -1950,7 +2050,9 @@ export function startFixtureServer({
         } else if (body.kind !== 'idle')
           pendingDecision(
             session,
-            body.kind as 'approval' | 'question' | 'plan' | 'edit'
+            body.kind as 'approval' | 'question' | 'plan' | 'edit',
+            true,
+            body.multiple === true
           )
         return json({
           ok: true,
@@ -2050,10 +2152,10 @@ async function selfTest() {
       )
     ).json()) as { messages: HistoryEntry[] }
     assert.equal(older.messages.length, 4)
-    async function socket(id: string) {
+    async function socket(id: string, origin = base) {
       const events: ServerMessage[] = []
       const ws = new WebSocket(
-        `${base.replace('http:', 'ws:')}/ws/${id}?token=${FIXTURE_TOKEN}`
+        `${origin.replace('http:', 'ws:')}/ws/${id}?token=${FIXTURE_TOKEN}`
       )
       sockets.push(ws)
       ws.onmessage = (event) => events.push(JSON.parse(String(event.data)))
@@ -2073,6 +2175,38 @@ async function selfTest() {
         until,
         send: (message: ClientMessage) => ws.send(JSON.stringify(message)),
       }
+    }
+    // Match the real shell-output route, including retained logs after stop.
+    const designFixture = startFixtureServer({ port: 0, quiet: true, design: true })
+    try {
+      const designBase = `http://127.0.0.1:${designFixture.server.port}`
+      const outputUrl = `${designBase}/api/sessions/fixture-plan/background-tasks/fixture-command/output`
+      const beforeResponse = await fetch(outputUrl, { headers })
+      assert.equal(beforeResponse.status, 200, 'Known shell task must expose the real output route')
+      assert.equal(beforeResponse.headers.get('Cache-Control'), 'no-store')
+      const before = await beforeResponse.json() as { taskId: string; state: string; text: string; totalBytes: number; truncated: boolean }
+      assert.deepEqual(Object.keys(before).sort(), ['state', 'taskId', 'text', 'totalBytes', 'truncated'])
+      assert.equal(before.taskId, 'fixture-command')
+      assert.equal(before.state, 'available')
+      assert.ok(before.text.includes('fixture listening'))
+      assert.equal(before.totalBytes, Buffer.byteLength(before.text, 'utf8'))
+      assert.equal(before.truncated, false)
+      const background = await socket('fixture-plan', designBase)
+      const from = background.events.length
+      background.send({ type: 'stop_background_task', taskId: 'fixture-command' })
+      const notification = await background.until('system_notification', from) as Extract<ServerMessage, { type: 'system_notification' }>
+      assert.equal(object(notification.data).task_id, 'fixture-command')
+      assert.equal(object(notification.data).status, 'stopped')
+      assert.deepEqual(await (await fetch(outputUrl, { headers })).json(), before, 'Stopping keeps the command output intact')
+      assert.equal((await fetch(`${outputUrl}?path=/fake`, { headers })).status, 400)
+      assert.equal((await fetch(outputUrl, { method: 'POST', headers, body: '{}' })).status, 405)
+      assert.equal((await fetch(outputUrl.replace('fixture-command/output', 'unknown/output'), { headers })).status, 404)
+      assert.equal((await fetch(outputUrl.replace('fixture-command/output', 'fixture-agent-ui/output'), { headers })).status, 404)
+      assert.equal((await fetch(outputUrl.replace('fixture-plan/', 'fixture-bench/'), { headers })).status, 404)
+      assert.equal((await fetch(outputUrl.replace('fixture-command/output', '%2F/output'), { headers })).status, 400)
+      background.ws.close()
+    } finally {
+      await designFixture.close()
     }
     const chat = await socket('fixture-chat')
     chat.send({ type: 'sync_state' })
@@ -2159,7 +2293,7 @@ async function selfTest() {
       'Stop must cancel delayed streaming output'
     )
     console.log(
-      'Fixture self-test passed: auth, paging/stale cursor, runtime, stream/tools, approval/question/plan, stop'
+      'Fixture self-test passed: auth, paging/stale cursor, runtime, stream/tools, approval/question/plan, stop, retained background output'
     )
   } finally {
     for (const ws of sockets) ws.close()

@@ -1,8 +1,11 @@
+import type { ComposerReference } from './composerReferences'
 import { visibleMessageText, type ComposerAttachment } from './chatComposer'
 import type { RuntimeConfig } from './types'
 
 export type PendingTask = {
   content: string
+  displayText?: string
+  references?: ComposerReference[]
   runtime?: RuntimeConfig
   attachments: ComposerAttachment[]
 }
@@ -18,6 +21,8 @@ export function putPendingTask(
 ) {
   tasks.set(key(hostId, sessionId), {
     content: task.content,
+    ...(task.displayText !== undefined ? { displayText: task.displayText } : {}),
+    ...(task.references?.length ? { references: task.references.map((value) => ({ ...value })) } : {}),
     runtime: task.runtime && { ...task.runtime },
     attachments: task.attachments.map((value) => ({ ...value })),
   })
@@ -35,5 +40,5 @@ export function clearPendingTask(hostId: string, sessionId: string) {
  */
 export function pendingTaskDraft(task: PendingTask) {
   const text = visibleMessageText(task.content)
-  return { text, team: text !== task.content }
+  return { text: task.displayText ?? text, team: text !== task.content }
 }

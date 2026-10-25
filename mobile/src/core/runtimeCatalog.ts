@@ -242,3 +242,22 @@ export function modelDetail(model: Pick<Model, 'description' | 'context'>) {
     .filter(Boolean)
     .join(' · ')
 }
+
+/** A model change preserves compatible composer effort and same-account fast mode. */
+export function runtimeModelSelection(
+  providerId: string | null,
+  model: Model,
+  previous: RuntimeConfig | undefined,
+  defaultScope = false,
+): RuntimeConfig {
+  const supported = model.supportedReasoningEfforts ?? []
+  const effort = previous?.effortLevel && supported.includes(previous.effortLevel)
+    ? previous.effortLevel
+    : model.defaultReasoningEffort
+  return {
+    ...runtimeSelection(providerId, model, effort, defaultScope),
+    ...(providerId === 'openai-official' && previous?.providerId === providerId && previous.openAIFastMode !== undefined
+      ? { openAIFastMode: previous.openAIFastMode }
+      : {}),
+  }
+}

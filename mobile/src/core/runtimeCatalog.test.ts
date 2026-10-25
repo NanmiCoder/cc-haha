@@ -10,6 +10,7 @@ import {
   loadRuntimeModels,
   modelDetail,
   runtimeSelection,
+  runtimeModelSelection,
   runtimeSourceName,
   savedProviderModels,
   type Provider,
@@ -322,4 +323,23 @@ test('model rows show description and a readable context size without inventing 
   )
   expect(modelDetail({ description: 'main · sonnet' })).toBe('main · sonnet')
   expect(modelDetail({ context: '' })).toBe('')
+})
+
+
+test('model selection retains only effort supported by the destination model', () => {
+  const previous = { providerId: 'provider-a', modelId: 'one', effortLevel: 'high' }
+  expect(runtimeModelSelection('provider-b', {
+    id: 'two', name: 'Two', supportedReasoningEfforts: ['low', 'high'], defaultReasoningEffort: 'low',
+  }, previous)).toEqual({ providerId: 'provider-b', modelId: 'two', effortLevel: 'high' })
+  expect(runtimeModelSelection('provider-b', {
+    id: 'three', name: 'Three', supportedReasoningEfforts: ['low'], defaultReasoningEffort: 'low',
+  }, previous).effortLevel).toBe('low')
+  expect(runtimeModelSelection('provider-b', { id: 'plain', name: 'Plain' }, previous).effortLevel).toBeUndefined()
+})
+
+test('model changes preserve fast mode only within the same official OpenAI account', () => {
+  const previous = { providerId: 'openai-official', modelId: 'one', openAIFastMode: true }
+  const model = { id: 'two', name: 'Two' }
+  expect(runtimeModelSelection('openai-official', model, previous).openAIFastMode).toBe(true)
+  expect(runtimeModelSelection('provider-b', model, previous).openAIFastMode).toBeUndefined()
 })

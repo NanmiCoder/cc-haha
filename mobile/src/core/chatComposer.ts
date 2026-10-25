@@ -9,7 +9,8 @@ export type ComposerAttachment = AttachmentRef & {
 export type SkillCommand = {
   name: string
   description: string
-  kind: 'skill' | 'command'
+  kind?: 'skill' | 'command' | 'plugin' | 'agent'
+  argumentHint?: string
 }
 const teamBlock =
   '<agent-team-request>\nUse an Agent Team for this request: create a team, split the goal below into tasks with clear owners, and coordinate the teammates until the goal is done.\n</agent-team-request>'

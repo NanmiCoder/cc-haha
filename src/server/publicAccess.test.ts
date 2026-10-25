@@ -354,3 +354,69 @@ test('push route allowlist refuses extra segments and unsupported methods', () =
   expect(allowed('/api/sessions/mobile-push/id/extra', 'DELETE')).toBe(false)
   expect(allowed('/api/sessions/mobile-push', 'POST')).toBe(false)
 })
+
+test('paired phones can browse directories without gaining file/search/write routes', async () => {
+  const calls: string[] = []
+  const f = fixture(async (_request, url) => {
+    calls.push(url.pathname + url.search)
+    return Response.json({ currentPath: '/fixture/project', parentPath: '/fixture', entries: [] })
+  })
+  const route = '/api/filesystem/browse?path=%2Ffixture%2F%E9%A1%B9%E7%9B%AE%20%26%20app'
+  expect((await f.remote(route)).status).toBe(401)
+  const { claim } = await f.pairNative()
+  expect((await f.native(route, claim.token)).status).toBe(200)
+  expect(calls).toEqual([route])
+  for (const route of [
+    '/api/filesystem/file?path=/fixture/secret',
+    '/api/filesystem/browse/extra',
+    '/api//filesystem/browse',
+    '/api/filesystem/browse?includeFiles=true',
+    '/api/filesystem/browse?includeFiles=false&includeFiles=true',
+    '/api/filesystem/browse?search=secret',
+  ]) expect((await f.native(route, claim.token)).status).toBe(403)
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) {
+    expect((await f.native('/api/filesystem/browse', claim.token, { method })).status).toBe(403)
+  }
+  expect(calls).toHaveLength(1)
+})
+
+test('paired phones can configure global computer-use consent and read composer mentions only', async () => {
+  const calls: { path: string, method: string, body?: unknown }[] = []
+  const f = fixture(async (request, url) => {
+    calls.push({ path: url.pathname + url.search, method: request.method,
+      ...(request.method === 'PUT' ? { body: await request.json() } : {}) })
+    return Response.json({ ok: true })
+  })
+  const allowed = [
+    ['/api/skills/mentions?cwd=%2Ffixture&providerId=fixture&agentProfile=lean', 'GET'],
+    ['/api/skills/commands?cwd=%2Ffixture&agentProfile=lean', 'GET'],
+    ['/api/computer-use/status', 'GET'],
+    ['/api/computer-use/authorized-apps', 'GET'],
+    ['/api/computer-use/authorized-apps', 'PUT'],
+    ['/api/computer-use/open-permission-card', 'POST'],
+  ] as const
+  const consent = { enabled: true, grantFlags: { clipboardRead: true, clipboardWrite: true, systemKeyCombos: true } }
+  for (const [route] of allowed) expect((await f.remote(route)).status).toBe(401)
+  const { claim } = await f.pairNative()
+  for (const [route, method] of allowed) {
+    expect((await f.native(route, claim.token, { method,
+      ...(method === 'PUT' ? { body: JSON.stringify(consent), headers: { 'Content-Type': 'application/json' } } : {}),
+    })).status).toBe(200)
+  }
+  expect(calls.find(call => call.method === 'PUT')?.body).toEqual(consent)
+  for (const body of [{ pythonPath: '/fixture/python' }, { enabled: true, authorizedApps: [] }, { grantFlags: { unknown: true } }]) {
+    expect((await f.native('/api/computer-use/authorized-apps', claim.token, {
+      method: 'PUT', body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' },
+    })).status).toBe(403)
+  }
+  for (const [route, method] of [
+    ['/api/skills', 'GET'], ['/api/skills/detail', 'GET'], ['/api/skills/mentions', 'POST'],
+    ['/api/skills/mentions/extra', 'GET'], ['/api/computer-use/status', 'POST'],
+    ['/api/skills/commands', 'POST'], ['/api/skills/commands/extra', 'GET'],
+    ['/api/computer-use/authorized-apps', 'DELETE'], ['/api/computer-use/authorized-apps/extra', 'PUT'],
+    ['/api/computer-use/setup', 'POST'], ['/api/computer-use/apps', 'GET'],
+    ['/api/computer-use/open-settings', 'POST'], ['/api/computer-use/open-permission-card', 'GET'],
+    ['/api/computer-use/execute', 'POST'],
+  ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
+  expect(calls).toHaveLength(allowed.length)
+})

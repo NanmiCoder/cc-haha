@@ -5,19 +5,14 @@ import { LinearGradient } from 'expo-linear-gradient'
 import { Text } from './Text'
 import type { ApiClient } from '../core/client'
 import {
-  draftSkill,
   formatBytes,
-  materialsFootnote,
-  withSkill,
   type ComposerAttachment,
-  type SkillCommand,
 } from '../core/chatComposer'
 import { pickChatMaterial } from './chatMaterials'
 import {
   Icon,
   Mono,
-  SearchField,
-  Separator,
+  Button,
   Sheet,
   Spinner,
   Switch,
@@ -25,6 +20,9 @@ import {
   type IconName,
 } from './kit'
 import { errorText } from './theme'
+import type { RuntimeConfig } from '../core/types'
+import { composerTrigger, insertComposerCandidate, loadComposerCandidates, mergeComposerReferences, type ComposerCandidate, type ComposerReference } from '../core/composerReferences'
+import { ComputerUseControl } from './ComputerUseControl'
 
 type MaterialKind = 'photos' | 'camera' | 'file'
 const tiles: { kind: MaterialKind; title: string; icon: IconName }[] = [
@@ -142,7 +140,7 @@ function SkillRow({
   onPress,
   numberOfLines = 1,
 }: {
-  skill: SkillCommand
+  skill: ComposerCandidate
   active: boolean
   onPress(): void
   numberOfLines?: number
@@ -151,7 +149,7 @@ function SkillRow({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`使用 /${skill.name}，${skill.description}`}
+      accessibilityLabel={`使用 ${skill.reference ? '@' : '/'}${skill.reference?.displayName || skill.name}，${skill.description}`}
       accessibilityState={{ selected: active }}
       onPress={onPress}
       style={({ pressed }) => ({
@@ -165,7 +163,7 @@ function SkillRow({
       })}
     >
       <Mono numberOfLines={1} style={{ fontSize: 14, color: active ? colors.run : colors.ink, flexShrink: 0, maxWidth: '50%' }}>
-        /{skill.name}
+        {skill.reference ? '@' : '/'}{skill.reference?.displayName || skill.name}
       </Mono>
       <Text numberOfLines={numberOfLines} style={{ flex: 1, minWidth: 0, fontSize: 14, color: colors.ink3 }}>
         {skill.description}
@@ -175,46 +173,27 @@ function SkillRow({
   )
 }
 
-/**
- * 会话输入框：输入行 + 控制行（材料、权限模式、模型、团队标记、发送）。
- * 「+」打开的材料面板占在键盘的位置。
- */
-export function ChatComposer({
-  client,
-  sessionId,
-  draft,
-  onDraft,
-  attachments,
-  onAttachments,
-  team,
-  onTeam,
-  lean,
-  empty,
-  busy,
-  queueing = false,
-  disabled,
-  mode,
-  model,
-  onMode,
-  onModel,
-  onSend,
-  onError,
-  header,
+/** New tasks and follow-ups share the same input, capabilities and runtime bar. */
+export function ChatComposer({ client, sessionId, workDir, runtime, draft, onDraft,
+  references, onReferences, attachments, onAttachments, team, onTeam, lean, empty,
+  busy, queueing = false, disabled, mode, model, onMode, onModel, onSend, onError,
+  header, effortControl, profileControl,
 }: {
   client: ApiClient | null
-  sessionId: string
+  sessionId?: string
+  workDir?: string
+  runtime?: RuntimeConfig
   draft: string
   onDraft(value: string): void
+  references: ComposerReference[]
+  onReferences(value: ComposerReference[]): void
   attachments: ComposerAttachment[]
   onAttachments(value: ComposerAttachment[]): void
   team: boolean
   onTeam(value: boolean): void
   lean: boolean
-  /** 还没有任何消息。 */
   empty: boolean
-  /** 这一轮还在进行，服务端不接收追加消息。 */
   busy: boolean
-  /** 运行中发送会先在手机上排队，这一轮结束后自动发出。 */
   queueing?: boolean
   disabled: boolean
   mode: string
@@ -223,47 +202,63 @@ export function ChatComposer({
   onModel(): void
   onSend(): void
   onError(message: string): void
-  /** 输入框上方的状态条和提示。 */
   header?: ReactNode
+  effortControl?: ReactNode
+  profileControl?: ReactNode
 }) {
   const colors = useColors()
   const inset = useBottomInset()
   const keyboard = useKeyboardVisible()
-  const bottom = keyboard ? 10 : inset
   const input = useRef<ComponentRef<typeof TextInput>>(null)
   const [panel, setPanel] = useState(false)
-  const [allSkills, setAllSkills] = useState(false)
-  const [query, setQuery] = useState('')
-  const [skills, setSkills] = useState<{ loaded: boolean; list: SkillCommand[]; error: string }>({
-    loaded: false,
-    list: [],
-    error: '',
-  })
-  const [recentSkills, setRecentSkills] = useState<SkillCommand[]>([])
+  const [selection, setSelection] = useState({ start: draft.length, end: draft.length })
+  const [candidates, setCandidates] = useState<ComposerCandidate[]>([])
+  const [catalogError, setCatalogError] = useState('')
+  const [loading, setLoading] = useState(false)
   const [picking, setPicking] = useState<MaterialKind | null>(null)
-  const [focusRequest, setFocusRequest] = useState(0)
+  const [computerEnabled, setComputerEnabled] = useState(false)
+  const [teamsEnabled, setTeamsEnabled] = useState(false)
+  const [teamConsent, setTeamConsent] = useState(false)
+  const [teamAccepted, setTeamAccepted] = useState(false)
+  const trigger = composerTrigger(draft, selection.start, selection.end)
+  const showCandidates = !panel && !disabled && !!trigger
+  const needsCatalog = panel || showCandidates
+  const providerId = runtime?.providerId
+  const hasRuntime = !!runtime
   useEffect(() => {
-    if (focusRequest) input.current?.focus()
-  }, [focusRequest])
-  useEffect(() => {
-    if (!panel || !client) return
+    if (!client || !needsCatalog) return
     const controller = new AbortController()
-    client
-      .get<{ commands: SkillCommand[] }>(
-        `/api/sessions/${encodeURIComponent(sessionId)}/slash-commands`,
-        { signal: controller.signal }
-      )
-      .then((value) => {
-        if (!controller.signal.aborted) setSkills({ loaded: true, list: value.commands, error: '' })
-      })
-      .catch((e) => {
-        if (!controller.signal.aborted) setSkills((value) => ({ ...value, loaded: true, error: errorText(e) }))
-      })
+    queueMicrotask(() => {
+      if (!controller.signal.aborted) { setLoading(true); setCatalogError(''); setCandidates([]) }
+    })
+    loadComposerCandidates(client, { sessionId, workDir, runtime: hasRuntime ? { providerId: providerId ?? null, modelId: '' } : undefined, lean }, controller.signal)
+      .then((value) => { if (!controller.signal.aborted) setCandidates(value) })
+      .catch((e) => { if (!controller.signal.aborted) setCatalogError(errorText(e)) })
+      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
     return () => controller.abort()
-  }, [client, sessionId, panel])
-  const canSend =
-    (!busy || queueing) && !disabled && (!!draft.trim() || attachments.length > 0)
-  const active = draftSkill(draft)
+  }, [client, sessionId, workDir, providerId, hasRuntime, lean, needsCatalog])
+  useEffect(() => {
+    if (!client) return
+    const controller = new AbortController()
+    client.get<{ agentTeamsEnabled?: boolean }>('/api/settings/user', { signal: controller.signal })
+      .then((value) => { if (!controller.signal.aborted) { setTeamsEnabled(value.agentTeamsEnabled !== false); if (value.agentTeamsEnabled === false) onTeam(false) } })
+      .catch(() => { if (!controller.signal.aborted) setTeamsEnabled(false) })
+    return () => controller.abort()
+  }, [client, panel, onTeam])
+  const canSend = (!busy || queueing) && !disabled && !picking && (!!draft.trim() || attachments.length > 0 || references.length > 0)
+  const query = trigger?.query.toLocaleLowerCase() ?? ''
+  const filtered = candidates.filter((candidate) =>
+    (trigger?.kind !== '@' || !!candidate.reference) &&
+    (!query || `${candidate.name} ${candidate.description} ${candidate.reference?.displayName ?? ''}`.toLocaleLowerCase().includes(query))
+  )
+  function choose(candidate: ComposerCandidate) {
+    const next = insertComposerCandidate(draft, showCandidates ? trigger : null, candidate)
+    onDraft(next.text)
+    if (candidate.reference) onReferences(mergeComposerReferences(references, [candidate.reference]))
+    setSelection({ start: next.cursor, end: next.cursor })
+    setPanel(false)
+    requestAnimationFrame(() => input.current?.focus())
+  }
   async function pick(kind: MaterialKind) {
     if (picking) return
     setPicking(kind)
@@ -271,356 +266,108 @@ export function ChatComposer({
       const next = await pickChatMaterial(kind)
       onAttachments([...attachments, ...next])
       if (next.length) setPanel(false)
-    } catch (e) {
-      onError(errorText(e))
-    } finally {
-      setPicking(null)
-    }
+    } catch (e) { onError(errorText(e)) }
+    finally { setPicking(null) }
   }
-  function chooseSkill(skill: SkillCommand) {
-    try {
-      onDraft(withSkill(draft, skill))
-      setRecentSkills((values) =>
-        [skill, ...values.filter((value) => value.name !== skill.name)].slice(0, 3)
-      )
-      setAllSkills(false)
-      setPanel(false)
-      setFocusRequest((value) => value + 1)
-    } catch (e) {
-      onError(errorText(e))
-    }
+  function toggleTeam(value: boolean) {
+    if (!value) onTeam(false)
+    else if (teamAccepted) onTeam(true)
+    else setTeamConsent(true)
   }
-  const shownSkills = [
-    ...recentSkills.filter((skill) => skills.list.some((value) => value.name === skill.name)),
-    ...skills.list.filter((skill) => !recentSkills.some((value) => value.name === skill.name)),
-  ].slice(0, 3)
-  const filtered = skills.list.filter(
-    (skill) =>
-      !query.trim() ||
-      `${skill.name} ${skill.description}`.toLowerCase().includes(query.trim().toLowerCase())
-  )
-  const placeholder = queueing
-    ? '补充要求，这一轮结束后自动发送'
-    : busy
-      ? '这一步结束后就能发送'
-      : empty
-        ? '说说你想做什么…'
-        : '接着说…'
-  const runtimeText = (
-    <>
-      {team ? (
-        <View
-          accessible
-          accessibilityLabel="这条消息使用 Agent 团队"
-          style={{
-            height: 28,
-            paddingHorizontal: 10,
-            borderRadius: 14,
-            backgroundColor: colors.runTint,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 5,
-            flexShrink: 0,
+  function send() {
+    if (!references.length && !attachments.length) {
+      if (draft.trim() === '/model') { onDraft(''); onModel(); return }
+      if (draft.trim() === '/permissions') { onDraft(''); onMode(); return }
+    }
+    onSend()
+    setPanel(false)
+  }
+  const candidateList = <View style={{ backgroundColor: colors.card, borderRadius: 14, overflow: 'hidden' }}>
+    <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 188 }}>
+      {loading ? <View style={{ padding: 14 }}><Spinner size={16} /></View> : catalogError ?
+        <Text style={{ padding: 14, color: colors.err }}>{catalogError}</Text> : filtered.length ? filtered.map((candidate) => (
+          <SkillRow key={`${candidate.kind}:${candidate.name}`} skill={candidate}
+            active={!!candidate.reference && references.some((value) => value.kind === candidate.reference?.kind && value.id === candidate.reference.id)}
+            onPress={() => choose(candidate)} numberOfLines={2} />
+        )) : <Text style={{ padding: 14, color: colors.ink3 }}>没有匹配的技能或命令</Text>}
+    </ScrollView>
+  </View>
+  return <View>
+    <LinearGradient pointerEvents="none" colors={[`${colors.bg}00`, colors.bg]}
+      style={{ position: 'absolute', top: -18, left: 0, right: 0, height: 18 }} />
+    <View style={{ backgroundColor: colors.bg, paddingHorizontal: 12, paddingTop: 10, paddingBottom: panel ? 8 : keyboard ? 10 : inset, gap: 8 }}>
+      {header}
+      {showCandidates && candidateList}
+      <View style={{ backgroundColor: colors.card, borderRadius: 22, padding: 6, gap: 4,
+        boxShadow: '0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.07)' }}>
+        {!!attachments.length && <AttachmentStrip attachments={attachments} onRemove={(id) => onAttachments(attachments.filter((value) => value.id !== id))} />}
+        {(references.length > 0 || team || computerEnabled) && <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingHorizontal: 8, paddingTop: 5, gap: 6 }}>
+          {references.map((reference) => <Pressable key={`${reference.kind}:${reference.id}`} accessibilityRole="button"
+            accessibilityLabel={`移除技能 ${reference.displayName || reference.name}`}
+            onPress={() => onReferences(references.filter((value) => value.kind !== reference.kind || value.id !== reference.id))}
+            style={{ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.fill, flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+            <Text style={{ fontSize: 13, color: colors.ink2 }}>@{reference.displayName || reference.name}</Text><Icon name="x" size={12} color={colors.ink3} />
+          </Pressable>)}
+          {team && <Pressable accessibilityRole="button" accessibilityLabel="关闭这条消息的 Agent 团队" onPress={() => onTeam(false)}
+            style={{ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.runTint, justifyContent: 'center' }}>
+            <Text style={{ fontSize: 13, color: colors.run }}>团队 ×</Text></Pressable>}
+          {computerEnabled && <Pressable accessibilityRole="button" accessibilityLabel="Computer Use 已开启，打开控制菜单" onPress={() => { input.current?.blur(); setPanel(true) }}
+            style={{ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.fill, justifyContent: 'center' }}>
+            <Text style={{ fontSize: 13, color: colors.ink2 }}>Computer Use</Text></Pressable>}
+        </ScrollView>}
+        <TextInput ref={input} accessibilityLabel={sessionId ? '消息' : '新任务内容'} value={draft} multiline editable={!disabled}
+          onChangeText={(value) => {
+            const cursor = Math.min(value.length, Math.max(0, selection.end + value.length - draft.length))
+            onDraft(value); setSelection({ start: cursor, end: cursor })
           }}
-        >
-          <Icon name="users" size={14} color={colors.run} strokeWidth={2} />
-          <Text style={{ fontSize: 13, fontWeight: '600', color: colors.run }}>团队</Text>
-        </View>
-      ) : null}
-      {team ? (
-        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 6, flexShrink: 1, minWidth: 0 }}>
-          <Pressable accessibilityRole="button" accessibilityLabel={`权限模式：${mode}`} hitSlop={8} onPress={onMode}>
-            <Text style={{ fontSize: 13, color: colors.ink2 }}>{mode} · </Text>
+          selection={{ start: Math.min(selection.start, draft.length), end: Math.min(selection.end, draft.length) }}
+          onSelectionChange={({ nativeEvent }) => setSelection(nativeEvent.selection)}
+          onFocus={() => setPanel(false)}
+          placeholder={queueing ? '补充要求，这一轮结束后自动发送' : empty ? '说说你想做什么…' : '接着说…'}
+          placeholderTextColor={colors.ink3}
+          {...(Platform.OS === 'web' ? { rows: 1 } : {})}
+          style={{ minHeight: 60, maxHeight: 136, paddingHorizontal: 10, paddingVertical: 12, fontSize: 16, lineHeight: 23, color: colors.ink }} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+          <Pressable accessibilityRole="button" accessibilityLabel={panel ? '收起工具' : '添加材料和工具'} accessibilityState={{ expanded: panel }}
+            onPress={() => { input.current?.blur(); setPanel(!panel) }} style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name={panel ? 'x' : 'plus'} size={20} color={colors.ink2} />
           </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`模型：${model}`}
-            hitSlop={8}
-            onPress={onModel}
-            style={{ flexShrink: 1, minWidth: 0 }}
-          >
-            <Text numberOfLines={1} style={{ fontSize: 13, color: colors.ink2 }}>
-              {model}
-            </Text>
+          <View style={{ flex: 1 }} />
+          <Pressable accessibilityRole="button" accessibilityLabel={sessionId ? '发送' : '开始任务'} disabled={!canSend}
+            accessibilityState={{ disabled: !canSend }} onPress={send}
+            style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: canSend ? colors.btn : colors.fill, alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="arrow-up" size={18} color={canSend ? colors.btnInk : colors.faint} strokeWidth={2.4} />
           </Pressable>
-        </View>
-      ) : (
-        <>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`权限模式：${mode}`}
-            onPress={onMode}
-            style={({ pressed }) => ({
-              height: 36,
-              paddingHorizontal: 10,
-              borderRadius: 18,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 5,
-              flexShrink: 0,
-              opacity: pressed ? 0.6 : 1,
-            })}
-          >
-            <Icon name="shield" size={15} color={colors.ink2} strokeWidth={2} />
-            <Text style={{ fontSize: 13, color: colors.ink2 }}>{mode}</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`模型：${model}`}
-            onPress={onModel}
-            style={({ pressed }) => ({
-              height: 36,
-              paddingHorizontal: 10,
-              borderRadius: 18,
-              justifyContent: 'center',
-              flexShrink: 1,
-              minWidth: 0,
-              opacity: pressed ? 0.6 : 1,
-            })}
-          >
-            <Text numberOfLines={1} style={{ fontSize: 13, color: colors.ink2 }}>
-              {model}
-            </Text>
-          </Pressable>
-        </>
-      )}
-    </>
-  )
-  return (
-    <View>
-      <LinearGradient
-        pointerEvents="none"
-        colors={[`${colors.bg}00`, colors.bg]}
-        style={{ position: 'absolute', top: -18, left: 0, right: 0, height: 18 }}
-      />
-      <View
-        style={{
-          backgroundColor: colors.bg,
-          paddingHorizontal: 12,
-          paddingTop: header ? 10 : 14,
-          paddingBottom: panel ? 10 : bottom,
-          gap: 8,
-        }}
-      >
-        {header}
-        <View
-          style={{
-            backgroundColor: colors.card,
-            borderRadius: 22,
-            boxShadow: '0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.07)',
-            paddingTop: attachments.length ? 8 : 6,
-            paddingHorizontal: 6,
-            paddingBottom: 6,
-            gap: attachments.length ? 4 : 0,
-          }}
-        >
-          {attachments.length > 0 && (
-            <AttachmentStrip
-              attachments={attachments}
-              onRemove={(id) => onAttachments(attachments.filter((value) => value.id !== id))}
-            />
-          )}
-          <TextInput
-            ref={input}
-            accessibilityLabel="消息"
-            value={draft}
-            onChangeText={onDraft}
-            onFocus={() => setPanel(false)}
-            placeholder={placeholder}
-            placeholderTextColor={colors.ink3}
-            multiline
-            // web 的 textarea 默认两行高；原生端的 rows 会固定行数，只在 web 上设。
-            {...(Platform.OS === 'web' ? { rows: 1 } : {})}
-            style={{
-              minHeight: 44,
-              maxHeight: 136,
-              paddingHorizontal: 10,
-              paddingTop: 11,
-              paddingBottom: 10,
-              fontSize: 16,
-              lineHeight: 23,
-              color: colors.ink,
-              outlineStyle: 'none',
-            } as object}
-          />
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={panel ? '收起材料面板' : '添加材料'}
-              accessibilityState={{ expanded: panel }}
-              onPress={() => {
-                input.current?.blur()
-                setPanel((value) => !value)
-              }}
-              style={({ pressed }) => ({
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: panel ? colors.fill : 'transparent',
-                opacity: pressed ? 0.6 : 1,
-                flexShrink: 0,
-              })}
-            >
-              <View style={{ transform: [{ rotate: panel ? '45deg' : '0deg' }] }}>
-                <Icon name="plus" size={20} color={panel ? colors.ink : colors.ink2} strokeWidth={2} />
-              </View>
-            </Pressable>
-            {runtimeText}
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="发送"
-              accessibilityState={{ disabled: !canSend }}
-              disabled={!canSend}
-              onPress={() => {
-                onSend()
-                setPanel(false)
-              }}
-              style={({ pressed }) => ({
-                marginLeft: 'auto',
-                width: 36,
-                height: 36,
-                borderRadius: 18,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: canSend ? colors.btn : colors.fill,
-                opacity: pressed ? 0.7 : 1,
-                flexShrink: 0,
-              })}
-            >
-              <Icon name="arrow-up" size={18} color={canSend ? colors.btnInk : colors.faint} strokeWidth={2.4} />
-            </Pressable>
-          </View>
         </View>
       </View>
-      {panel && (
-        <View
-          style={{
-            backgroundColor: colors.sheet,
-            borderTopWidth: 1,
-            borderTopColor: colors.hair,
-            paddingTop: 14,
-            paddingHorizontal: 16,
-            paddingBottom: bottom,
-            gap: 14,
-          }}
-        >
-          <View style={{ flexDirection: 'row', gap: 8 }}>
-            {tiles.map((tile) => (
-              <Pressable
-                key={tile.kind}
-                accessibilityRole="button"
-                accessibilityLabel={`从${tile.title}添加`}
-                disabled={!!picking}
-                onPress={() => void pick(tile.kind)}
-                style={({ pressed }) => ({
-                  flex: 1,
-                  height: 72,
-                  borderRadius: 14,
-                  backgroundColor: colors.card,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 6,
-                  opacity: pressed ? 0.6 : picking && picking !== tile.kind ? 0.5 : 1,
-                })}
-              >
-                {picking === tile.kind ? (
-                  <Spinner size={22} />
-                ) : (
-                  <Icon name={tile.icon} size={22} color={colors.ink} />
-                )}
-                <Text style={{ fontSize: 13, color: colors.ink }}>{tile.title}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <View style={{ gap: 6 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 4 }}>
-              <Text accessibilityRole="header" style={{ fontSize: 13, fontWeight: '600', color: colors.ink2 }}>
-                技能
-              </Text>
-              {skills.list.length > 0 ? (
-                <Pressable
-                  accessibilityRole="button"
-                  hitSlop={8}
-                  onPress={() => {
-                    setQuery('')
-                    setAllSkills(true)
-                  }}
-                  style={{ height: 28, justifyContent: 'center' }}
-                >
-                  <Text style={{ fontSize: 13, color: colors.ink2 }}>全部 {skills.list.length} 个</Text>
-                </Pressable>
-              ) : null}
-            </View>
-            <View style={{ backgroundColor: colors.card, borderRadius: 14, overflow: 'hidden' }}>
-              {!skills.loaded ? (
-                <View style={{ height: 48, flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 14 }}>
-                  <Spinner size={14} />
-                  <Text style={{ fontSize: 14, color: colors.ink3 }}>正在读取技能…</Text>
-                </View>
-              ) : skills.error ? (
-                <Text style={{ fontSize: 14, lineHeight: 20, color: colors.err, padding: 14 }}>{skills.error}</Text>
-              ) : !shownSkills.length ? (
-                <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink3, padding: 14 }}>
-                  这段会话没有可引用的技能或命令。
-                </Text>
-              ) : (
-                shownSkills.map((skill, index) => (
-                  <View key={skill.name}>
-                    {index > 0 && <Separator />}
-                    <SkillRow skill={skill} active={active === skill.name} onPress={() => chooseSkill(skill)} />
-                  </View>
-                ))
-              )}
-            </View>
-          </View>
-          <View
-            style={{
-              backgroundColor: colors.card,
-              borderRadius: 14,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 12,
-              paddingHorizontal: 14,
-              paddingVertical: 10,
-            }}
-          >
-            <View style={{ flex: 1, gap: 2 }}>
-              <Text style={{ fontSize: 15, color: lean ? colors.ink3 : colors.ink }}>Agent 团队</Text>
-              <Text style={{ fontSize: 12.5, lineHeight: 17, color: colors.ink3 }}>
-                {lean
-                  ? '轻量档位不支持团队，换成完整工具的会话后可用'
-                  : '只对这一条消息生效，由队长分派给多个成员'}
-              </Text>
-            </View>
-            <Switch value={team} onValueChange={onTeam} label="Agent 团队" disabled={lean || (busy && !queueing)} />
-          </View>
-          <Text style={{ paddingHorizontal: 4, fontSize: 12, lineHeight: 17, color: colors.ink3 }}>
-            {materialsFootnote()}
-          </Text>
-        </View>
-      )}
-      <Sheet visible={allSkills} onClose={() => setAllSkills(false)} title="技能">
-        <SearchField value={query} onChangeText={setQuery} placeholder="搜索技能和命令" />
-        <View style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
-          {filtered.length ? (
-            filtered.map((skill, index) => (
-              <View key={skill.name}>
-                {index > 0 && <Separator />}
-                <SkillRow
-                  skill={skill}
-                  active={active === skill.name}
-                  numberOfLines={2}
-                  onPress={() => chooseSkill(skill)}
-                />
-              </View>
-            ))
-          ) : (
-            <Text style={{ fontSize: 14, color: colors.ink3, padding: 14 }}>没有匹配的技能。</Text>
-          )}
-        </View>
-      </Sheet>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ alignItems: 'center', gap: 3 }}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`权限模式：${mode}`} onPress={onMode} disabled={busy || disabled}
+          style={{ minHeight: 40, paddingHorizontal: 9, justifyContent: 'center' }}><Text style={{ fontSize: 13, color: colors.ink2 }}>{mode}⌄</Text></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={`模型：${model}`} onPress={onModel} disabled={busy || disabled}
+          style={{ minHeight: 40, paddingHorizontal: 9, justifyContent: 'center' }}><Text numberOfLines={1} style={{ fontSize: 13, color: colors.ink2 }}>{model}⌄</Text></Pressable>
+        {effortControl}
+      </ScrollView>
     </View>
-  )
+    {panel && <View style={{ backgroundColor: colors.sheet, borderTopWidth: 1, borderTopColor: colors.hair, paddingHorizontal: 16, paddingTop: 12, paddingBottom: inset, gap: 10 }}>
+      <View style={{ flexDirection: 'row', gap: 8 }}>{tiles.map((tile) => <Pressable key={tile.kind} accessibilityRole="button" accessibilityLabel={`从${tile.title}添加`}
+        disabled={!!picking} onPress={() => void pick(tile.kind)} style={{ flex: 1, minHeight: 60, backgroundColor: colors.card, borderRadius: 14, alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+        {picking === tile.kind ? <Spinner size={20} /> : <Icon name={tile.icon} size={20} color={colors.ink2} />}<Text style={{ fontSize: 13, color: colors.ink }}>{tile.title}</Text>
+      </Pressable>)}</View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14, backgroundColor: colors.card }}>
+        <View style={{ flex: 1 }}><Text style={{ fontSize: 15, color: colors.ink }}>Agent 团队</Text>
+          <Text style={{ fontSize: 12, color: colors.ink3 }}>{lean ? '轻量档位不支持团队' : !teamsEnabled ? '请先在电脑设置中启用团队' : '只对下一条消息生效'}</Text></View>
+        <Switch label="Agent 团队" value={team} disabled={lean || !teamsEnabled || (busy && !queueing)} onValueChange={toggleTeam} />
+      </View>
+      {profileControl}
+      <Text style={{ fontSize: 12, color: colors.ink3 }}>输入 / 查找命令，输入 @ 引用技能</Text>
+    </View>}
+    <ComputerUseControl client={client} visible={panel} onEnabled={setComputerEnabled} />
+    <Sheet visible={teamConsent} onClose={() => setTeamConsent(false)} title="使用 Agent 团队">
+      <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>队长会拆分任务并协调多个成员。每个成员会独立调用模型，可能增加用量和费用。</Text>
+      <Button title="使用团队" onPress={() => { setTeamAccepted(true); onTeam(true); setTeamConsent(false); setPanel(false) }} />
+      <Button title="取消" variant="secondary" onPress={() => setTeamConsent(false)} />
+    </Sheet>
+  </View>
 }

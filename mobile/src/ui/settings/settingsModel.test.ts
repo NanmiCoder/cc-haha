@@ -107,8 +107,8 @@ describe('AI auto answer', () => {
   })
 })
 
-test('desktop-only list matches the design copy', () => {
+test('desktop-only list excludes Computer Use now available from the composer', () => {
   expect(desktopOnly).toBe(
-    'MCP、技能与插件 · 服务商与 API Key · 官方账号登录 · 操作电脑 · IM 机器人 · 局域网和公网访问'
+    'MCP、技能与插件 · 服务商与 API Key · 官方账号登录 · IM 机器人 · 局域网和公网访问'
   )
 })

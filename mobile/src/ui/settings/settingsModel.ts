@@ -102,7 +102,6 @@ export const desktopOnly = [
   'MCP、技能与插件',
   '服务商与 API Key',
   '官方账号登录',
-  '操作电脑',
   'IM 机器人',
   '局域网和公网访问',
 ].join(' · ')

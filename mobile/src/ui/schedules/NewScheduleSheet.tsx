@@ -1,5 +1,6 @@
+import { KeyboardViewport } from '../KeyboardViewport'
 import { useEffect, useRef, useState } from 'react'
-import { KeyboardAvoidingView, Platform, Pressable, ScrollView, TextInput, View } from 'react-native'
+import { Pressable, ScrollView, TextInput, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import type { ApiClient } from '../../core/client'
 import type { RecentProject } from '../../core/newTask'
@@ -137,10 +138,7 @@ export function NewScheduleSheet({
     : '电脑默认目录'
   return (
     <PageSheet visible={visible} onClose={close} title="新建定时任务">
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={{ flex: 1 }}
-      >
+      <KeyboardViewport style={{ flex: 1 }}>
         <ScrollView
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}
@@ -250,7 +248,7 @@ export function NewScheduleSheet({
             onPress={() => void create()}
           />
         </View>
-      </KeyboardAvoidingView>
+      </KeyboardViewport>
       <ProjectPickerSheet
         key={pickerKey}
         visible={picking}

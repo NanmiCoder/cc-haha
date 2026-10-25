@@ -36,6 +36,7 @@ import { TaskOutputSheet } from './TaskOutputSheet'
 import { TaskRow } from './TaskRow'
 import { stopTargets } from './taskLabels'
 import { useNow } from './useNow'
+import { WorkSections } from './WorkSections'
 
 const NativeSocket = WebSocket as unknown as new (
   url: string,
@@ -246,7 +247,7 @@ export function SessionActivity({ hostId, id }: { hostId: string; id: string }) 
   const error = connectionError || (running.length ? stopError : '') || resource.error
   return (
     <ScreenView>
-      <NavBar title="后台活动" subtitle={title} />
+      <NavBar title="活动" subtitle={title} />
       <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 }}>
         {error || showChannelNotice ? (
           <View style={{ gap: 8, paddingBottom: 8 }}>
@@ -274,6 +275,7 @@ export function SessionActivity({ hostId, id }: { hostId: string; id: string }) 
             )}
           </View>
         ) : null}
+        <WorkSections client={client} sessionId={id} />
         {resource.loading ? (
           <Loading />
         ) : tasks.length === 0 ? (

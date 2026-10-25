@@ -21,20 +21,22 @@ function columnsWidth(tokens: Token[]) {
 /** 只读代码视图：行号 + 轻量高亮；按行虚拟化，长行整体横向滚动。 */
 export function CodeView({ content, language }: { content: string; language: CodeLanguage }) {
   const colors = useColors()
-  const { width: screenWidth } = useWindowDimensions()
+  const { width: screenWidth, fontScale } = useWindowDimensions()
   const [height, setHeight] = useState(0)
+  // Keep native text scaling; scale only the surrounding geometry once.
+  const rowHeight = Math.ceil(LINE * fontScale)
   const lines = useMemo(() => {
     const result = highlight(content.replace(/\t/g, '    '), language)
     // 文件末尾的换行不算新的一行。
     if (result.length > 1 && !result[result.length - 1]!.length) result.pop()
     return result
   }, [content, language])
-  const gutter = Math.max(34, String(lines.length).length * NARROW + 4) + 12
+  const gutter = Math.max(34, String(lines.length).length * NARROW + 4) * fontScale + 12
   const width = useMemo(() => {
     let widest = 0
     for (const line of lines) widest = Math.max(widest, columnsWidth(line))
-    return Math.min(MAX_WIDTH, Math.max(screenWidth, Math.ceil(gutter + widest * 1.04 + 24)))
-  }, [lines, gutter, screenWidth])
+    return Math.min(MAX_WIDTH * fontScale, Math.max(screenWidth, Math.ceil(gutter + widest * fontScale * 1.04 + 24)))
+  }, [lines, gutter, screenWidth, fontScale])
   const tone: Record<TokenKind, string> = {
     kw: colors.kw,
     str: colors.str,
@@ -54,12 +56,12 @@ export function CodeView({ content, language }: { content: string; language: Cod
             contentContainerStyle={{ paddingVertical: 10 }}
             data={lines}
             keyExtractor={(_, index) => String(index)}
-            getItemLayout={(_, index) => ({ length: LINE, offset: 10 + LINE * index, index })}
+            getItemLayout={(_, index) => ({ length: rowHeight, offset: 10 + rowHeight * index, index })}
             initialNumToRender={60}
             maxToRenderPerBatch={80}
             windowSize={9}
             renderItem={({ item, index }) => (
-              <View style={{ height: LINE, flexDirection: 'row', overflow: 'hidden' }}>
+              <View style={{ height: rowHeight, flexDirection: 'row', overflow: 'hidden' }}>
                 <Mono
                   style={{
                     width: gutter,

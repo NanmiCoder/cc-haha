@@ -1,10 +1,14 @@
+import { clearParkedComposer, parkComposer, parkedComposer } from '../ui/chat/queue'
+import { ChatComposer } from '../ui/ChatComposer'
+import { EffortControl } from '../ui/EffortControl'
+import { GitSheet } from '../ui/newtask/GitSheet'
+import { serializeComposer, type ComposerReference } from '../core/composerReferences'
+import { KeyboardViewport } from '../ui/KeyboardViewport'
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import {
   BackHandler,
-  KeyboardAvoidingView,
   Platform,
   ScrollView,
-  TextInput,
   View,
 } from 'react-native'
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -31,9 +35,8 @@ import {
   runtimeSelection,
   type Model,
 } from '../core/runtimeCatalog'
-import { effortName, modeName, modes, profileDescription, profileName } from '../ui/modes'
+import { modeName, modes, profileDescription, profileName } from '../ui/modes'
 import { RuntimeSheet } from '../ui/RuntimePicker'
-import { pickChatMaterial } from '../ui/chatMaterials'
 import {
   Group,
   InlineError,
@@ -49,12 +52,7 @@ import { ChoiceRow } from '../ui/newtask/ChoiceRow'
 import { TargetCard } from '../ui/newtask/TargetCard'
 import { WherePanel } from '../ui/newtask/WherePanel'
 import {
-  AttachmentThumb,
-  MaterialTiles,
-  RoundButton,
-  StartButton,
   TaskChip,
-  TeamToggle,
 } from '../ui/newtask/parts'
 
 const repositoryUrl = (path: string) =>
@@ -71,7 +69,7 @@ export default function NewSession() {
   return <NewTask key={`${id}\n${initialDir}`} hostId={id} initialDir={initialDir} />
 }
 
-type Panel = 'mode' | 'runtime' | 'profile' | 'materials' | null
+type Panel = 'mode' | 'runtime' | 'profile' | 'git' | null
 
 function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string }) {
   const { host, client, error: connectionError } = useConnection(hostId)
@@ -80,23 +78,32 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   const insets = useSafeAreaInsets()
   const draftKey = `${hostId}:new`
   const [content, setContent] = useState(drafts.get(draftKey) ?? '')
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
+  const [parked] = useState(() => parkedComposer(draftKey))
+  const [references, setReferences] = useState<ComposerReference[]>(parked?.references ?? [])
+  const [repoEpoch, setRepoEpoch] = useState(0)
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>(parked?.attachments ?? [])
   const [path, setPath] = useState(initialDir)
   const [projects, setProjects] = useState<RecentProject[]>([])
   const [profile, setProfile] = useState<'standard' | 'lean'>('standard')
   const [mode, setMode] = useState<PermissionMode>('default')
   const [runtime, setRuntime] = useState<{ config: RuntimeConfig; name: string }>()
-  const [team, setTeam] = useState(false)
+  const [team, setTeam] = useState(parked?.team ?? false)
   const [worktree, setWorktree] = useState(false)
   const [repo, setRepo] = useState<RepositoryContext | null>(null)
   const [branch, setBranch] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [materialBusy, setMaterialBusy] = useState(false)
   const [view, setView] = useState<'compose' | 'where'>('compose')
   const [panel, setPanel] = useState<Panel>(null)
   const [creation] = useState(() => new FocusedRequests())
   // A directory passed from the home filter is an explicit choice, like picking one here.
+  const submitted = useRef(false)
+  const leaving = useRef({ attachments, references, team })
+  useEffect(() => { leaving.current = { attachments, references, team } }, [attachments, references, team])
+  useEffect(() => {
+    clearParkedComposer(draftKey)
+    return () => { if (!submitted.current) parkComposer(draftKey, leaving.current) }
+  }, [draftKey])
   const touchedPath = useRef(Boolean(initialDir))
   const touchedRuntime = useRef(false)
   const touchedMode = useRef(false)
@@ -192,7 +199,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
       clearTimeout(timer)
       controller.abort()
     }
-  }, [client, path])
+  }, [client, path, repoEpoch])
   const lean = profile === 'lean'
   const teamOn = team && !lean
   function changePath(value: string) {
@@ -216,33 +223,11 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
     setContent(value)
     drafts.set(draftKey, value)
   }
-  async function material(kind: 'camera' | 'photos' | 'file') {
-    if (materialBusy || busy) return
-    setMaterialBusy(true)
-    setError('')
-    try {
-      const result = await pickChatMaterial(kind)
-      if (!result.length) return
-      const next = [...attachments, ...result]
-      validateMessageSize(
-        buildComposerMessage(content, next, teamOn),
-        host?.auth ?? 'lan'
-      )
-      setAttachments(next)
-      setPanel(null)
-    } catch (e) {
-      setError(errorText(e))
-      setPanel(null)
-    } finally {
-      setMaterialBusy(false)
-    }
-  }
   async function create() {
     if (
       !client ||
       busy ||
-      materialBusy ||
-      (!content.trim() && !attachments.length)
+      (!content.trim() && !attachments.length && !references.length)
     )
       return
     const request = creation.begin()
@@ -250,7 +235,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
     setBusy(true)
     setError('')
     try {
-      const message = buildComposerMessage(content, attachments, teamOn)
+      const message = buildComposerMessage(serializeComposer(content, references), attachments, teamOn)
       validateMessageSize(message, client.host.auth)
       // Refresh at submission: a checkout may have changed while this draft was open.
       const context = path.trim()
@@ -268,9 +253,13 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
       // The team block travels inside the content; the chat page sends it unchanged.
       putPendingTask(client.host.id, result.sessionId, {
         content: message.content,
+        displayText: content,
+        references,
         attachments,
         runtime: runtime?.config,
       })
+      submitted.current = true
+      clearParkedComposer(draftKey)
       drafts.delete(draftKey)
       router.replace({
         pathname: '/chat/[id]',
@@ -287,7 +276,6 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
     connectionError ||
     error ||
     (repo?.state === 'missing_workdir' ? '这个目录不存在，请重新选择。' : '')
-  const empty = !content.trim() && !attachments.length
   const bottom = Platform.OS === 'web' ? 34 : Math.max(insets.bottom, 16)
   return (
     <SafeAreaView
@@ -302,20 +290,13 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
           projects={projectChoices(projects, path)}
           path={path}
           onPath={changePath}
-          repo={repo}
-          branch={branch}
-          onBranch={setBranch}
-          worktree={worktree}
-          onWorktree={setWorktree}
+          client={client}
           busy={busy}
           onBack={() => setView('compose')}
           bottomInset={bottom}
         />
       ) : (
-        <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          style={{ flex: 1 }}
-        >
+        <KeyboardViewport style={{ flex: 1 }}>
           <View
             style={{
               height: 56,
@@ -342,127 +323,38 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
             </Text>
             <View style={{ width: 60 }} />
           </View>
-          <View
-            style={{ flex: 1, minHeight: 0, paddingHorizontal: 16, gap: 12 }}
+          <ScrollView style={{ flex: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingHorizontal: 16, gap: 12, paddingBottom: 12 }}
           >
             <TargetCard
               name={target.name}
-              branch={target.branch}
-              status={target.status}
-              mode={target.mode}
               hostName={host?.name}
               disabled={busy}
               onPress={() => setView('where')}
             />
-            <View
-              style={{
-                flex: 1,
-                minHeight: 0,
-                backgroundColor: colors.card,
-                borderRadius: 18,
-                padding: 16,
-                gap: 12,
-              }}
-            >
-              <TextInput
-                accessibilityLabel="新任务内容"
-                value={content}
-                onChangeText={changeContent}
-                placeholder="想让电脑做什么？"
-                placeholderTextColor={colors.ink3}
-                multiline
-                editable={!busy}
-                textAlignVertical="top"
-                style={{
-                  flex: 1,
-                  minHeight: 54,
-                  padding: 0,
-                  fontSize: 18,
-                  lineHeight: 27,
-                  color: colors.ink,
-                }}
-              />
-              {attachments.length ? (
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  style={{ flexGrow: 0, marginTop: -6, marginRight: -6 }}
-                  contentContainerStyle={{ gap: 8, paddingTop: 6, paddingRight: 6 }}
-                >
-                  {attachments.map((item) => (
-                    <AttachmentThumb
-                      key={item.id}
-                      item={item}
-                      disabled={busy}
-                      onRemove={() =>
-                        setAttachments((values) =>
-                          values.filter((value) => value.id !== item.id)
-                        )
-                      }
-                    />
-                  ))}
-                </ScrollView>
-              ) : null}
-            </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-              <TaskChip
-                icon={mode === 'plan' ? 'list-checks' : 'shield'}
-                label={modeName(mode)}
-                accessibilityLabel={`权限模式：${modeName(mode)}`}
-                disabled={busy}
-                onPress={() => setPanel('mode')}
-              />
-              <TaskChip
-                label={`${runtime?.name ?? '电脑默认模型'} · ${effortName(runtime?.config.effortLevel)}`}
-                accessibilityLabel={`模型：${runtime?.name ?? '电脑默认模型'}，思考强度${effortName(runtime?.config.effortLevel)}`}
-                disabled={busy || !client}
-                onPress={() => setPanel('runtime')}
-              />
-              <TaskChip
-                label={profileName(profile)}
-                accessibilityLabel={`运行档位：${profileName(profile)}`}
-                disabled={busy}
-                onPress={() => setPanel('profile')}
-              />
-            </View>
+            {repo?.state !== 'not_git_repo' && <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <TaskChip icon="git-branch" label={target.branch ? `${target.branch} · ${target.mode}` : 'Git 选项'}
+                accessibilityLabel="Git 分支和工作树" disabled={busy} onPress={() => setPanel('git')} />
+            </View>}
+            <Text style={{ paddingTop: 24, paddingHorizontal: 4, fontSize: 25, fontWeight: '600', color: colors.ink }}>想让电脑做什么？</Text>
+            <Text style={{ paddingHorizontal: 4, fontSize: 15, lineHeight: 22, color: colors.ink3 }}>选好工作目录，描述任务。也可以输入 / 查找命令，或 @ 引用技能。</Text>
             <InlineError text={failure} />
-          </View>
-          <View
-            style={{
-              paddingTop: 12,
-              paddingHorizontal: 16,
-              paddingBottom: bottom,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <RoundButton
-              icon="plus"
-              label="添加材料"
-              disabled={busy || materialBusy}
-              onPress={() => setPanel('materials')}
-            />
-            <TeamToggle
-              value={teamOn}
-              onChange={setTeam}
-              disabled={busy || lean}
-              hint={lean ? '轻量档位不支持团队' : undefined}
-            />
-            <StartButton
-              busy={busy}
-              disabled={
-                !client ||
-                materialBusy ||
-                empty ||
-                repo?.state === 'missing_workdir'
-              }
-              onPress={() => {
-                void create()
-              }}
-            />
-          </View>
-        </KeyboardAvoidingView>
+          </ScrollView>
+          <ChatComposer client={client} workDir={path || undefined} runtime={runtime?.config}
+            draft={content} onDraft={changeContent} references={references} onReferences={setReferences}
+            attachments={attachments} onAttachments={setAttachments} team={teamOn} onTeam={setTeam}
+            lean={lean} empty busy={busy} disabled={!client || busy || repo?.state === 'missing_workdir'}
+            mode={modeName(mode)} model={runtime?.name ?? '电脑默认模型'} onMode={() => setPanel('mode')}
+            onModel={() => setPanel('runtime')} onSend={() => void create()} onError={setError}
+            effortControl={<EffortControl client={client} runtime={runtime?.config} disabled={!client || busy}
+              onApply={(value) => {
+                touchedRuntime.current = true
+                setRuntime((previous) => ({ config: value, name: previous?.name ?? value.modelId }))
+              }} />}
+            profileControl={<TaskChip label={profileName(profile)} accessibilityLabel={`运行档位：${profileName(profile)}`}
+              disabled={busy} onPress={() => setPanel('profile')} />}
+          />
+        </KeyboardViewport>
       )}
 
       <Sheet visible={panel === 'mode'} onClose={() => setPanel(null)} title="权限模式">
@@ -502,25 +394,9 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         ))}
       </Sheet>
 
-      <Sheet
-        visible={panel === 'materials'}
-        onClose={() => {
-          if (!materialBusy) setPanel(null)
-        }}
-        title="添加材料"
-      >
-        <MaterialTiles
-          disabled={materialBusy || busy}
-          onPick={(kind) => {
-            void material(kind)
-          }}
-        />
-        {materialBusy ? (
-          <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3, paddingHorizontal: 4 }}>
-            正在准备材料…
-          </Text>
-        ) : null}
-      </Sheet>
+      <GitSheet visible={panel === 'git'} onClose={() => setPanel(null)} path={path} repo={repo}
+        branch={branch} onBranch={setBranch} worktree={worktree} onWorktree={setWorktree} busy={busy}
+        onRetry={() => setRepoEpoch((value) => value + 1)} />
 
       <RuntimeSheet
         visible={panel === 'runtime'}
