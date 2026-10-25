@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment.js'
-import { projectRemoteProvider, projectRemoteSettings, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteProvider, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
 import { SavedProviderSchema, ImageGenerationConfigSchema } from './types/provider.js'
 
 test('remote image settings preserve the protocol while redacting image credentials', () => {
@@ -64,4 +64,14 @@ test('remote composers can read the desktop team capability without changing it'
   expect(projectRemoteSettings({ agentTeamsEnabled: false, env: { TOKEN: 'hidden' } })).toEqual({ agentTeamsEnabled: false })
   expect(projectRemoteSettings({ agentTeamsEnabled: true })).toEqual({ agentTeamsEnabled: true })
   expect(validateRemoteSettingsPatch({ agentTeamsEnabled: true })).toBe(false)
+})
+
+test('remote projections drop nested and unknown fields and tolerate malformed bodies', () => {
+  expect(projectRemoteConnectors({ items: [{ id: 'x', status: 'ready', operation: { kind: 'check', authUrl: 'https://secret.test' }, error: 'boom', setupFields: [{}] }, 'junk', null] }))
+    .toEqual({ items: [{ id: 'x', status: 'ready', operation: { kind: 'check' } }] })
+  expect(projectRemoteConnectors({ items: [{ id: 'y', operation: 'oops' }] })).toEqual({ items: [{ id: 'y' }] })
+  expect(projectRemoteConnectors({})).toEqual({ items: [] })
+  expect(projectRemoteWorkflows({ workflows: [{ name: 'w', filePath: '/p', script: 'code' }] })).toEqual({ workflows: [{ name: 'w' }] })
+  expect(projectRemoteWorkflows({ workflows: 'nope' })).toEqual({ workflows: [] })
+  expect(projectRemoteAgents({ activeAgents: [{ agentType: 'a', systemPrompt: 's', baseDir: '/b' }] })).toEqual({ activeAgents: [{ agentType: 'a' }], allAgents: [] })
 })

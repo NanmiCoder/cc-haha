@@ -420,3 +420,78 @@ test('paired phones can configure global computer-use consent and read composer 
   ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
   expect(calls).toHaveLength(allowed.length)
 })
+
+const fixtureConnector = {
+  id: 'feishu', displayName: 'Feishu', description: 'Docs and calendar', category: 'office', transport: 'cli',
+  collection: 'services', pluginId: 'office-feishu@haha-connectors', supported: true, installed: true, enabled: true,
+  connection: 'needs-auth', status: 'needs-auth', accountLabel: 'fixture-user',
+  packageName: '@larksuite/cli', version: '1.0.95', homepage: 'https://example.test/feishu', credentialMode: 'shared', platforms: ['darwin-arm64'],
+  setupFields: [{ key: 'appSecret', label: 'Secret', secret: true }], runtime: 'ready',
+  error: 'spawn /Users/fixture/.claude/connectors/feishu/bin failed: EACCES', failedPhase: 'authenticate',
+  operation: { id: 'op-1', kind: 'authenticate', phase: 'waiting-for-browser', startedAt: '2026-01-01T00:00:00Z', authUrl: 'https://accounts.example.test/oauth?state=fixture-secret' },
+}
+
+test('remote phones read the connector and workflow lists only', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed('/api/connectors', 'GET')).toBe(true)
+  expect(allowed('/api//connectors/', 'GET')).toBe(true)
+  expect(allowed('/api/workflows?cwd=%2Ffixture', 'GET')).toBe(true)
+  for (const [path, method] of [
+    ['/api/connectors/feishu', 'GET'], ['/api/connectors', 'POST'], ['/api/connectors', 'DELETE'],
+    ['/api/connectors/feishu/authenticate', 'POST'], ['/api/connectors/feishu/prepare', 'POST'], ['/api/connectors/feishu/remove', 'POST'],
+    ['/api/workflows', 'PUT'], ['/api/workflows', 'POST'], ['/api/workflows/save', 'POST'], ['/api/workflows/validate', 'POST'],
+    ['/api/workflows/runs', 'GET'], ['/api/workflows/session-runs/s1', 'GET'], ['/api/workflows/my-flow', 'GET'], ['/api/workflows/my-flow', 'DELETE'],
+    ['/api/mcp', 'GET'], ['/api/mcp/servers', 'POST'], ['/api/plugins', 'GET'],
+  ]) expect(allowed(path!, method!)).toBe(false)
+})
+
+test('paired phones get connector, workflow and agent lists without credentials, errors or local paths', async () => {
+  const f = fixture(async (_request, url) => {
+    if (url.pathname === '/api/connectors') return Response.json({ items: [fixtureConnector] })
+    if (url.pathname === '/api/workflows') return Response.json({ workflows: [
+      { name: 'ship', description: 'Ship it', whenToUse: 'release', source: 'user', phases: [{ title: 'Build' }], filePath: '/Users/fixture/.claude/workflows/ship.js' },
+    ] })
+    const agent = { agentType: 'reviewer', description: 'Reviews code', model: 'sonnet', modelDisplay: 'Sonnet', tools: ['Bash'], systemPrompt: 'fixture-secret-prompt', color: 'blue', source: 'userSettings', baseDir: '/Users/fixture/.claude', target: '/Users/fixture/.claude/agents/reviewer.md', isActive: true, editable: true }
+    if (url.pathname === '/api/agents/reviewer') return Response.json({ agent })
+    return Response.json({ availableTools: ['Bash'], activeAgents: [agent], allAgents: [{ ...agent, overriddenBy: 'projectSettings' }] })
+  })
+  const { claim } = await f.pairNative()
+  const read = async (route: string) => (await f.native(route, claim.token)).json()
+  expect(await read('/api/connectors')).toEqual({ items: [{
+    id: 'feishu', displayName: 'Feishu', description: 'Docs and calendar', category: 'office', transport: 'cli',
+    collection: 'services', pluginId: 'office-feishu@haha-connectors', supported: true, installed: true, enabled: true,
+    connection: 'needs-auth', status: 'needs-auth', accountLabel: 'fixture-user',
+    operation: { kind: 'authenticate', phase: 'waiting-for-browser' },
+  }] })
+  expect(await read('/api/workflows')).toEqual({ workflows: [{ name: 'ship', description: 'Ship it', whenToUse: 'release', source: 'user' }] })
+  const agents = await read('/api/agents?cwd=%2Ffixture')
+  expect(agents).toEqual({
+    activeAgents: [{ agentType: 'reviewer', description: 'Reviews code', modelDisplay: 'Sonnet', color: 'blue', source: 'userSettings', isActive: true }],
+    allAgents: [{ agentType: 'reviewer', description: 'Reviews code', modelDisplay: 'Sonnet', color: 'blue', source: 'userSettings', isActive: true, overriddenBy: 'projectSettings' }],
+  })
+  expect(await read('/api/agents/reviewer')).toEqual({ agent: { agentType: 'reviewer', description: 'Reviews code', modelDisplay: 'Sonnet', color: 'blue', source: 'userSettings', isActive: true } })
+  const text = JSON.stringify([await read('/api/connectors'), await read('/api/workflows'), agents])
+  for (const secret of ['authUrl', 'fixture-secret', 'EACCES', '/Users/fixture', 'setupFields', 'homepage', 'packageName', 'systemPrompt', 'filePath', 'availableTools']) expect(text).not.toContain(secret)
+})
+
+test('connector actions and details never reach the desktop handler from a phone', async () => {
+  const calls: string[] = []
+  const f = fixture(async (request, url) => { calls.push(`${request.method} ${url.pathname}`); return Response.json({ items: [] }) })
+  const { claim } = await f.pairNative()
+  for (const [route, method] of [
+    ['/api/connectors/feishu', 'GET'], ['/api/connectors/feishu/authenticate', 'POST'],
+    ['/api/workflows/runs', 'GET'], ['/api/workflows/save', 'POST'], ['/api/workflows', 'PUT'], ['/api/mcp', 'GET'],
+  ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
+  expect((await f.remote('/api/connectors')).status).toBe(401)
+  expect(calls).toEqual([])
+})
+
+test('paired browsers keep the full agent view while connectors stay projected', async () => {
+  const full = { agentType: 'reviewer', systemPrompt: 'visible-to-browser', isActive: true }
+  const f = fixture(async (_request, url) => url.pathname === '/api/connectors'
+    ? Response.json({ items: [fixtureConnector] })
+    : Response.json({ activeAgents: [full], allAgents: [full] }))
+  const { cookie } = await f.pair()
+  expect(await (await f.remote('/api/agents', undefined, cookie)).json()).toEqual({ activeAgents: [full], allAgents: [full] })
+  expect(JSON.stringify(await (await f.remote('/api/connectors', undefined, cookie)).json())).not.toContain('authUrl')
+})

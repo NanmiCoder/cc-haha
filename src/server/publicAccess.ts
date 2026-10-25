@@ -5,7 +5,7 @@ import path from 'node:path'
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun'
 import { isLocalAccessAuthorized } from './localAccessAuth.js'
 import { setResponseHeaders } from './middleware/responseHeaders.js'
-import { projectRemoteSettings, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import type { WebSocketData } from './ws/handler.js'
 
 const PREFIX = '/api/public-access'
@@ -44,6 +44,10 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
     return method === 'GET' && url.pathname === '/api/filesystem/browse' &&
       [...url.searchParams.keys()].every(key => key === 'path')
   }
+  // Read-only catalogs for the phone's "+" sheet. Connector detail and every
+  // connector action (authenticate, prepare, remove…) and every workflow
+  // mutation or run detail remain desktop-only.
+  if (parts[1] === 'connectors' || parts[1] === 'workflows') return parts.length === 2 && method === 'GET'
   if (parts[1] === 'skills') return parts.length === 3 &&
     (parts[2] === 'mentions' || parts[2] === 'commands') && method === 'GET'
   if (parts[1] === 'computer-use') {
@@ -361,6 +365,13 @@ export class PublicAccessServer {
             source: typeof status.source === 'string' && sources.includes(status.source) ? status.source : 'none',
             ...(typeof status.activeProvider === 'string' ? { activeProvider: status.activeProvider } : {}),
           })
+        }
+        if (route === 'api/connectors' && request.method === 'GET' && response.ok) return json(projectRemoteConnectors(await response.json() as Record<string, unknown>))
+        if (route === 'api/workflows' && request.method === 'GET' && response.ok) return json(projectRemoteWorkflows(await response.json() as Record<string, unknown>))
+        // Native apps authenticate with a bearer; browsers use the cookie and keep the full agent view.
+        if (request.headers.get('Authorization') !== null && request.method === 'GET' && response.ok &&
+          (route === 'api/agents' || /^api\/agents\/[^/]+$/.test(route))) {
+          return json(projectRemoteAgents(await response.json() as Record<string, unknown>))
         }
         if (route === 'api/settings/user' && request.method === 'GET' && response.ok) {
           const settings = await response.json() as Record<string, unknown>
