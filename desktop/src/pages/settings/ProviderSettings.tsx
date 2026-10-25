@@ -45,13 +45,15 @@ import { Badge } from '@/components/ui/Badge'
 import { Spinner } from '@/components/ui/Spinner'
 import { SettingsPageHeader, SettingsPill } from '@/components/settings/SettingsSection'
 import { Dropdown } from '@/components/ui/Dropdown'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { Tooltip } from '@/components/ui/Tooltip'
-import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ModelApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode } from '../../types/provider'
+import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ModelApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode, ProviderProxyMode } from '../../types/provider'
 import { groupProviderModels, providerModelsErrorKey } from '../../lib/providerModels'
 import { resolveModelApiFormat } from '../../../../src/shared/modelApiFormats'
 import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCompactWindowErrorKey, getModelContextWindowErrorKey, MODEL_SLOTS, parseAutoCompactWindowInput, parseModelContextWindowsInput, type ModelContextInputs, type ModelSlot } from '../../lib/providerModelContext'
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
+import { isValidHttpProxyUrl } from './shared'
 import { ClaudeOfficialLogin } from '../../components/settings/ClaudeOfficialLogin'
 import { ChatGPTOfficialLogin } from '../../components/settings/ChatGPTOfficialLogin'
 import { GrokOfficialLogin } from '../../components/settings/GrokOfficialLogin'
@@ -1193,6 +1195,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const addToast = useUIStore((s) => s.addToast)
   const t = useTranslation()
   const baseUrlInputId = useId()
+  const proxyUrlInputId = useId()
 
   const fallbackPreset = buildFallbackPreset(provider)
   const loadedPresets = presets.filter((p) => p.id !== 'official')
@@ -1242,6 +1245,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const [authStrategy, setAuthStrategy] = useState<ProviderAuthStrategy>(provider?.authStrategy ?? getPresetAuthStrategy(initialPreset))
   const [apiKey, setApiKey] = useState(provider?.apiKey ?? '')
   const [showApiKey, setShowApiKey] = useState(false)
+  const [proxyMode, setProxyMode] = useState<ProviderProxyMode>(provider?.proxy?.mode ?? 'follow_global')
+  const [proxyUrl, setProxyUrl] = useState(provider?.proxy?.url ?? '')
+  const proxyUrlInvalid = proxyMode === 'manual' && proxyUrl.trim() !== '' && !isValidHttpProxyUrl(proxyUrl.trim())
   const [notes, setNotes] = useState(provider?.notes ?? '')
   const [compatibility, setCompatibility] = useState(() => compatibilityForm(provider?.requestCompatibility))
   const [models, setModels] = useState<ModelMapping>(initialModels)
@@ -1425,7 +1431,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
   const compatibilityInvalid = invalidCompatibilityNumber(compatibility.maxOutputTokens)
     || (apiFormat !== 'anthropic' && invalidCompatibilityNumber(compatibility.outputTokenLimit))
-  const canSubmit = !compatibilityInvalid && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
+  const canSubmit = !compatibilityInvalid && !(proxyMode === 'manual' && !isValidHttpProxyUrl(proxyUrl.trim())) && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
   const normalizedBaseUrl = normalizeProviderBaseUrl(baseUrl)
   const isPresetDefaultEndpoint = normalizedBaseUrl === normalizeProviderBaseUrl(selectedPreset.baseUrl)
   const apiKeyUrl = isPresetDefaultEndpoint ? selectedPreset.apiKeyUrl?.trim() : undefined
@@ -1765,6 +1771,11 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           ...(imageGeneration.apiKey.trim() ? { apiKey: imageGeneration.apiKey.trim() } : {}),
         }
       : undefined
+    const storedProxy = proxyMode === 'manual'
+      ? { mode: proxyMode, url: proxyUrl.trim() }
+      : proxyMode === 'follow_global'
+        ? null
+        : { mode: proxyMode }
     setIsSubmitting(true)
     setSaveFailed(false)
     setCredentialRequired(false)
@@ -1805,6 +1816,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           ...(disableExperimentalBetas && { disableExperimentalBetas }),
           supportsNestedToolResultMedia,
           ...(storedImageGeneration !== undefined && { imageGeneration: storedImageGeneration }),
+          ...(storedProxy && { proxy: storedProxy }),
           notes: notes.trim() || undefined,
         })
       } else if (provider) {
@@ -1824,6 +1836,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           disableExperimentalBetas,
           supportsNestedToolResultMedia,
           imageGeneration: storedImageGeneration ?? null,
+          proxy: storedProxy,
           notes: notes.trim() || undefined,
         }
         if (apiKey.trim()) input.apiKey = apiKey.trim()
@@ -1853,12 +1866,18 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
     setTestResult(null)
     try {
       let result: ProviderTestResult
+      const proxyFormValue = proxyMode === 'manual'
+        ? { mode: proxyMode, url: proxyUrl.trim() }
+        : proxyMode === 'follow_global'
+          ? null
+          : { mode: proxyMode }
       const savedConfigUnchanged = mode === 'edit' && provider && !apiKey.trim() &&
         baseUrl.trim() === provider.baseUrl.trim() &&
         apiFormat === provider.apiFormat &&
         authStrategy === provider.authStrategy &&
         supportsNestedToolResultMedia === (provider.supportsNestedToolResultMedia ?? true) &&
-        JSON.stringify(formCompatibility) === JSON.stringify(provider.requestCompatibility)
+        JSON.stringify(formCompatibility) === JSON.stringify(provider.requestCompatibility) &&
+        JSON.stringify(proxyFormValue ?? null) === JSON.stringify(provider.proxy ?? null)
       if (savedConfigUnchanged && provider) {
         result = await useProviderStore.getState().testProvider(provider.id, {
           modelId: models.main.trim(),
@@ -1873,6 +1892,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           apiFormat,
           supportsNestedToolResultMedia,
           presetId: selectedPreset.id,
+          ...(proxyFormValue ? { proxy: proxyFormValue } : {}),
           ...(formCompatibility ? { requestCompatibility: formCompatibility } : {}),
         })
       }
@@ -2414,6 +2434,51 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           value={imageGeneration}
           onChange={setImageGeneration}
         />
+
+        <div className="flex flex-col gap-2 border-t border-[var(--color-border)] pt-4">
+          <div className="flex items-center gap-1">
+            <span className={FORM_FIELD_LABEL}>{t('settings.providers.proxyMode')}</span>
+            <Tooltip content={t('settings.providers.proxyModeTooltip')} placement="bottom-start">
+              <IconButton
+                icon={<Info size={12} strokeWidth={2} aria-hidden="true" />}
+                label={t('settings.providers.proxyModeHelp')}
+                showTooltip={false}
+                size="2xs"
+                tone="muted"
+                shape="circle"
+              />
+            </Tooltip>
+          </div>
+          <SegmentedControl<ProviderProxyMode>
+            label={t('settings.providers.proxyMode')}
+            layout="fill"
+            size="sm"
+            value={proxyMode}
+            onChange={setProxyMode}
+            items={[
+              { value: 'follow_global', label: t('settings.providers.proxyModeFollowGlobal') },
+              { value: 'direct', label: t('settings.providers.proxyModeDirect') },
+              { value: 'manual', label: t('settings.providers.proxyModeManual') },
+            ]}
+          />
+          <p className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]">{t('settings.providers.proxyModeHint')}</p>
+          {proxyMode === 'manual' && (
+            <div className="flex flex-col gap-1">
+              <label htmlFor={proxyUrlInputId} className={FORM_FIELD_LABEL}>{t('settings.providers.proxyUrl')}</label>
+              <Input
+                id={proxyUrlInputId}
+                required
+                value={proxyUrl}
+                onChange={(e) => setProxyUrl(e.target.value)}
+                placeholder={t('settings.providers.proxyUrlPlaceholder')}
+                className="font-mono text-[13px]"
+              />
+              {proxyUrlInvalid && (
+                <p role="alert" className="text-xs leading-[1.5] text-[var(--color-error)]">{t('settings.providers.proxyUrlInvalid')}</p>
+              )}
+            </div>
+          )}
+        </div>
       </div>
       </Modal>
       <ConfirmDialog

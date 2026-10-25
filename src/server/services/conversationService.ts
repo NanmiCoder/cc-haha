@@ -72,7 +72,7 @@ import {
   resolveStreamToolInputDurationMs,
   SYSTEM_PROXY_URL_ENV,
   type NetworkSettings,
-} from './networkSettings.js'
+  resolveProviderNetworkSettings,} from './networkSettings.js'
 import { readTraceCaptureSettings, traceCaptureService } from './traceCaptureService.js'
 import {
   killWindowsProcessTree,
@@ -1119,7 +1119,15 @@ export class ConversationService {
     sessionId: string,
     session: SessionProcess,
   ): Promise<boolean> {
-    const settings = await loadNetworkSettings()
+    // The session may pin a provider whose proxy override diverges from the
+    // global network settings; the hot update must keep honoring it.
+    const sessionProvider = session.providerId
+      ? await this.providerService.getProvider(session.providerId).catch(() => null)
+      : null
+    const settings = resolveProviderNetworkSettings(
+      await loadNetworkSettings(),
+      sessionProvider?.proxy,
+    )
     const baseEnv = await getProcessEnvWithTerminalShellEnvironment()
     const networkEnv = buildNetworkEnvironment(settings, baseEnv)
     const fingerprint = networkRoutingFingerprint(settings, {
@@ -2308,7 +2316,10 @@ export class ConversationService {
       : null
     if (explicitProviderEnv) delete explicitProviderEnv.CC_HAHA_OPENAI_FAST_MODE
     const networkEnv = buildNetworkEnvironment(
-      networkSettingsOverride ?? await loadNetworkSettings(),
+      resolveProviderNetworkSettings(
+        networkSettingsOverride ?? await loadNetworkSettings(),
+        explicitProvider?.proxy,
+      ),
       cleanEnv,
     )
     // The overall-duration cap has to scale with the user's "请求超时" or raising
