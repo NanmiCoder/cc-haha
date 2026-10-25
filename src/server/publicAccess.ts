@@ -68,7 +68,9 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   if (method === 'PUT' && ['/api/models/current', '/api/effort'].includes('/' + parts.join('/'))) return true
   if (method === 'GET' && ['/api/settings/user', '/api/permissions/mode', '/api/providers/auth-status'].includes('/' + parts.join('/'))) return true
   if (['sessions', 'conversations'].includes(parts[1] ?? '')) return true
-  return method === 'GET' && ['models', 'effort', 'search', 'agents', 'tasks', 'teams', 'activity-stats'].includes(parts[1] ?? '')
+  // Agent 只有列表和单项两种 GET；路由器会忽略单项名字后面多出来的段，所以多出来的段不能放行。
+  if (parts[1] === 'agents') return method === 'GET' && parts.length <= 3
+  return method === 'GET' && ['models', 'effort', 'search', 'tasks', 'teams', 'activity-stats'].includes(parts[1] ?? '')
 }
 
 function secure(response: Response): Response {
@@ -370,7 +372,7 @@ export class PublicAccessServer {
         if (route === 'api/workflows' && request.method === 'GET' && response.ok) return json(projectRemoteWorkflows(await response.json() as Record<string, unknown>))
         // Native apps authenticate with a bearer; browsers use the cookie and keep the full agent view.
         if (request.headers.get('Authorization') !== null && request.method === 'GET' && response.ok &&
-          (route === 'api/agents' || /^api\/agents\/[^/]+$/.test(route))) {
+          /^api\/agents(\/|$)/.test(route)) {
           return json(projectRemoteAgents(await response.json() as Record<string, unknown>))
         }
         if (route === 'api/settings/user' && request.method === 'GET' && response.ok) {

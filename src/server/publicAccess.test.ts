@@ -436,12 +436,16 @@ test('remote phones read the connector and workflow lists only', () => {
   expect(allowed('/api/connectors', 'GET')).toBe(true)
   expect(allowed('/api//connectors/', 'GET')).toBe(true)
   expect(allowed('/api/workflows?cwd=%2Ffixture', 'GET')).toBe(true)
+  expect(allowed('/api/agents', 'GET')).toBe(true)
+  expect(allowed('/api/agents/reviewer', 'GET')).toBe(true)
   for (const [path, method] of [
     ['/api/connectors/feishu', 'GET'], ['/api/connectors', 'POST'], ['/api/connectors', 'DELETE'],
     ['/api/connectors/feishu/authenticate', 'POST'], ['/api/connectors/feishu/prepare', 'POST'], ['/api/connectors/feishu/remove', 'POST'],
     ['/api/workflows', 'PUT'], ['/api/workflows', 'POST'], ['/api/workflows/save', 'POST'], ['/api/workflows/validate', 'POST'],
     ['/api/workflows/runs', 'GET'], ['/api/workflows/session-runs/s1', 'GET'], ['/api/workflows/my-flow', 'GET'], ['/api/workflows/my-flow', 'DELETE'],
     ['/api/mcp', 'GET'], ['/api/mcp/servers', 'POST'], ['/api/plugins', 'GET'],
+    // 路由器会忽略单项 Agent 名字后面多出来的段，放行它们等于绕过对手机的裁剪。
+    ['/api/agents/reviewer/override', 'GET'], ['/api/agents/reviewer/zzz', 'GET'], ['/api/agents/reviewer', 'DELETE'],
   ]) expect(allowed(path!, method!)).toBe(false)
 })
 
@@ -481,6 +485,7 @@ test('connector actions and details never reach the desktop handler from a phone
   for (const [route, method] of [
     ['/api/connectors/feishu', 'GET'], ['/api/connectors/feishu/authenticate', 'POST'],
     ['/api/workflows/runs', 'GET'], ['/api/workflows/save', 'POST'], ['/api/workflows', 'PUT'], ['/api/mcp', 'GET'],
+    ['/api/agents/reviewer/zzz', 'GET'],
   ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
   expect((await f.remote('/api/connectors')).status).toBe(401)
   expect(calls).toEqual([])
