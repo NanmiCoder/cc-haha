@@ -30,11 +30,19 @@ let socket: WebSocket | undefined
 try {
   const denied = await fetch(`${base}/api/public-access`)
   if (denied.status !== 403) throw new Error('Control plane accepted unauthenticated loopback')
-  const enabled = await (await control('/enable', { publicUrl: origin })).json()
+  let enabled = await (await control('/enable', { publicUrl: origin })).json()
+  const nativeClient = process.env.CC_HAHA_PUBLIC_ACCESS_TEST_CLIENT === 'native'
+  // Reuse a port allocated by this isolated process to exercise a custom
+  // tunnel's stable upstream without competing for a hard-coded machine port.
+  const fixedPort = nativeClient ? enabled.port : undefined
+  if (fixedPort !== undefined) {
+    await control('/disable', {})
+    enabled = await (await control('/enable', { publicUrl: origin, port: fixedPort })).json()
+    if (enabled.port !== fixedPort) throw new Error('Custom tunnel did not bind the requested fixed port')
+  }
   let remote = `http://127.0.0.1:${enabled.port}`
   const code = await (await control('/pairing', {})).json()
   const post = (route: string, body: unknown) => fetch(`${remote}/api/public-access/${route}`, { method: 'POST', headers: { Origin: origin }, body: JSON.stringify(body) })
-  const nativeClient = process.env.CC_HAHA_PUBLIC_ACCESS_TEST_CLIENT === 'native'
   const pending = await (await post('pair', { secret: code.secret, name: 'Smoke phone', ...(nativeClient ? { clientType: 'native' } : {}) })).json()
   await control('/approve', { id: pending.id })
   const claim = await post('claim', pending)
@@ -107,12 +115,13 @@ try {
   const second = await connect()
   const replay = await waitFor(() => second.messages.find(m => m.type === 'permission_request'), 'replayed approval')
   if (replay.requestId !== approval.requestId) throw new Error('Reconnection replaced pending approval')
-  const secondClosed = new Promise<void>(resolve => { second.ws.onclose = () => resolve() })
+  const secondClosed = new Promise<number>(resolve => { second.ws.onclose = event => resolve(event.code) })
   await control('/disable', {})
-  await secondClosed
+  if (await secondClosed !== 1012) throw new Error('Temporary tunnel shutdown incorrectly invalidated device authorization')
   if (!conversationService.hasSession(created.sessionId)) throw new Error('Disabling remote access terminated active agent')
   if (!conversationService.getPendingPermissionRequests(created.sessionId).some(p => p.requestId === approval.requestId)) throw new Error('Disabling remote access lost pending approval')
-  const restarted = await (await control('/enable', { publicUrl: origin })).json()
+  const restarted = await (await control('/enable', { publicUrl: origin, ...(fixedPort === undefined ? {} : { port: fixedPort }) })).json()
+  if (fixedPort !== undefined && restarted.port !== fixedPort) throw new Error('Custom tunnel upstream changed after restart')
   remote = `http://127.0.0.1:${restarted.port}`
   const third = await connect()
   await waitFor(() => third.messages.find(m => m.type === 'permission_request' && m.requestId === approval.requestId), 'approval after enable')
@@ -129,9 +138,9 @@ try {
   const settled = fourth.messages.find(m => m.type === 'permission_requests_snapshot')
   if (settled?.toolRequestIds.includes(approval.requestId)) throw new Error('Completed approval replayed after reconnect')
   const ws = fourth.ws
-  const revoked = new Promise<void>(resolve => { ws.onclose = () => resolve() })
+  const revoked = new Promise<number>(resolve => { ws.onclose = event => resolve(event.code) })
   await control('/revoke', { id: pending.id })
-  await revoked
+  if (await revoked !== 1008) throw new Error('Revocation did not reject the paired device')
   if ((await fetch(`${remote}/api/sessions`, { headers: { Origin: origin, ...authHeaders } })).status !== 401) throw new Error('Revoked device retained API access')
   await control('/disable', {})
   if ((await (await control('')).json()).enabled !== false) throw new Error('Disable did not clear status')

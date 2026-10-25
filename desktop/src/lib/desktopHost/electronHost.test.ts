@@ -43,6 +43,19 @@ describe('electron desktop host', () => {
     await expect(browserHost.publicAccess.getStatus()).rejects.toThrow('desktop app runtime')
   })
 
+  it('carries custom tunnel configuration through validated IPC and rejects unsafe local targets', async () => {
+    const invoke = vi.fn().mockResolvedValue(null)
+    const host = createElectronHost({ invoke, subscribe: vi.fn() })
+    const configuration = { mode: 'custom' as const, customUrl: 'https://relay.example.test', localPort: 17463, ngrokDomain: '' }
+    await host.publicAccess.configure(configuration)
+    expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.publicAccessConfigure, configuration)
+    await expect(host.publicAccess.configure({ ...configuration, customUrl: 'http://relay.example.test' })).rejects.toThrow('Invalid Electron IPC payload')
+    await expect(host.publicAccess.configure({ ...configuration, localHost: '0.0.0.0' } as never)).rejects.toThrow('Invalid Electron IPC payload')
+    expect(invoke).toHaveBeenCalledTimes(1)
+    const { browserHost } = await import('./browserHost')
+    await expect(browserHost.publicAccess.configure(configuration)).rejects.toThrow('desktop app runtime')
+  })
+
   it('carries a terminal startup identity through the production IPC validator and early events', async () => {
     const handlers = new Map<string, (event: unknown) => void>()
     const host = createElectronHost({

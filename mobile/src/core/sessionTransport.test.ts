@@ -863,7 +863,7 @@ describe('transport lifecycle and outbound commands', () => {
     h.transport.dispose()
   })
 
-  test('HTTP 401 and WS 1008 require re-pairing and cancel all reconnect attempts', async () => {
+  test('HTTP 401 and a confirmed credential rejection after WS 1008 require re-pairing', async () => {
     const unauthorized = harness(async () => {
       throw new ApiError('Unauthorized', 401)
     })
@@ -873,15 +873,83 @@ describe('transport lifecycle and outbound commands', () => {
     expect(unauthorized.transport.connection).toBe('pairing_required')
     unauthorized.timers.advance(60000)
     expect(unauthorized.sockets).toHaveLength(1)
-    const revoked = harness()
+    let rejectCredential = false
+    const revoked = harness(async () => {
+      if (rejectCredential) throw new ApiError('Unauthorized', 401)
+      return history()
+    })
     const socket = await revoked.ready()
+    rejectCredential = true
     socket.drop(1008)
+    await flush()
     revoked.transport.reconnect()
     revoked.timers.advance(60000)
     expect(revoked.transport.connection).toBe('pairing_required')
     expect(revoked.sockets).toHaveLength(1)
     unauthorized.transport.dispose()
     revoked.transport.dispose()
+  })
+
+  test.each([1008, 1012])('a tunnel restart (%i) reconnects with the same credential when HTTP still authorizes it', async code => {
+    const h = harness()
+    const socket = await h.ready()
+    socket.drop(code)
+    await flush()
+    expect(h.transport.connection).toBe('reconnecting')
+    expect(h.errors).toHaveLength(0)
+    h.timers.advance(500)
+    const reconnected = await h.ready()
+    expect(h.sockets).toHaveLength(2)
+    expect(h.transport.connection).toBe('ready')
+    expect(reconnected.sent).toEqual([{ type: 'sync_state' }])
+    h.transport.dispose()
+  })
+
+  test.each([0, 403, 429, 503])('a 1008 close followed by HTTP %i keeps retrying instead of discarding authorization', async status => {
+    let unavailable = false
+    const h = harness(async () => {
+      if (unavailable) throw new ApiError('Temporarily unavailable', status)
+      return history()
+    })
+    const socket = await h.ready()
+    unavailable = true
+    socket.drop(1008)
+    await flush()
+    expect(h.transport.connection).toBe('reconnecting')
+    expect(h.connections).not.toContain('pairing_required')
+    h.timers.advance(500)
+    await flush()
+    expect(h.transport.connection).toBe('reconnecting')
+    unavailable = false
+    h.timers.advance(1000)
+    await h.ready()
+    expect(h.transport.connection).toBe('ready')
+    expect(h.connections).not.toContain('pairing_required')
+    h.transport.dispose()
+  })
+
+  test('a late rejected authorization probe cannot invalidate a newer healthy connection', async () => {
+    const pending = deferred<HistoryPage>()
+    let probePending = false
+    const h = harness(async () => {
+      if (probePending) {
+        probePending = false
+        return pending.promise
+      }
+      return history()
+    })
+    const socket = await h.ready()
+    probePending = true
+    socket.drop(1008)
+    await flush()
+    h.transport.reconnect()
+    await h.ready()
+    expect(h.transport.connection).toBe('ready')
+    pending.reject(new ApiError('Stale credential rejection', 401))
+    await flush()
+    expect(h.transport.connection).toBe('ready')
+    expect(h.connections).not.toContain('pairing_required')
+    h.transport.dispose()
   })
 
   test('1006 handshake failure probes HTTP to expose otherwise hidden 401', async () => {
