@@ -413,6 +413,10 @@ maxTurns: 10
 4. settings.json 中 `builtInAgentOverrides` 指定的 `model`（仅内置 Agent）
 5. 主会话模型
 
+Anthropic 兼容供应商的当前会话使用非 Claude 模型（例如 DeepSeek Flash）时，模型在 `Agent` 调用里生成的 Claude 档位建议（`opus`、`sonnet`、`haiku`、`fable`）不覆盖上述 Agent 配置；未指定 Agent 模型或内置 Agent 未手动覆盖模型时，继续使用当前会话模型。此规则也适用于 Teams 成员及整队提案中的同供应商 Claude 型号建议，避免自动调用把 Flash 升级到供应商的 Pro 档位。手动设置的 Agent 模型、环境变量覆盖和队友默认模型仍然生效。
+
+旧 Agent 预设中的完整 Claude 型号（例如 `claude-opus-4-8`）在非 Claude 会话中会使用供应商对应的显式模型映射。使用 Claude 模型的会话仍保留具体版本选择。
+
 推理强度的解析优先级从高到低为：
 
 1. `CLAUDE_CODE_EFFORT_LEVEL`

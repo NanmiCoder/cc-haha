@@ -176,6 +176,22 @@ test('preset switches recalculate suggestion under same provider and preserve hu
   expect(switched.members[0]?.suggestedRuntime).toEqual({ providerId: 'other', modelId: 'large-model', effortLevel: 'high' })
 })
 
+test.each([
+  ['fake', 'leader-model'],
+  ['other', 'member-model'],
+])('an inherit preset keeps the correct model under provider %s', async (providerId, expectedModel) => {
+  const plan = await ready()
+  const withCatalog = await replaceTeamPlan('review', identity(plan), {
+    leaderRuntime: { providerId: 'fake', modelId: 'leader-model' },
+    agentCatalog: { inherited: { systemPrompt: 'inherited instructions', model: 'inherit' } },
+    members: [{ ...plan.members[0]!, runtime: { providerId, modelId: 'member-model' } }],
+  })
+  const service = new TeamPlanService({ validate: async item => item, launch: async () => ({ memberIds: {} }), stop: async () => {} })
+  const changed = await service.update('review', identity(withCatalog), { members: [{ id: 'worker', agentType: 'inherited' }] })
+  expect(changed.members[0]?.runtime).toEqual({ providerId, modelId: expectedModel })
+  expect(changed.members[0]?.suggestedRuntime).toEqual({ providerId, modelId: expectedModel })
+})
+
 
 test('launch transitions preserve future persisted launch metadata', async () => {
   const { mutateTeamPlan } = await import('../../utils/swarm/teamPlanStore.js')

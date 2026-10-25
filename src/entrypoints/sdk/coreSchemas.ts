@@ -1289,6 +1289,7 @@ export const NonNullableUsagePlaceholder = lazySchema(() => z.unknown())
 
 export const SDKAssistantMessageErrorSchema = lazySchema(() =>
   z.enum([
+    'connection_error',
     'authentication_failed',
     'billing_error',
     'rate_limit',
@@ -1630,6 +1631,8 @@ export const SDKAPIRetryMessageSchema = lazySchema(() =>
       retry_delay_ms: z.number(),
       error_status: z.number().nullable(),
       error: SDKAssistantMessageErrorSchema(),
+      error_message: z.string().optional(),
+      request_id: z.string().optional(),
       uuid: UUIDPlaceholder(),
       session_id: z.string(),
     })

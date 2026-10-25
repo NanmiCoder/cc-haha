@@ -413,6 +413,8 @@ export type AgentFlowAgainstProviderOptions = {
   /** Copy the user's saved providers into the sandbox (live lane only). */
   seedProviders: boolean
   stepTimeoutMs: number
+  /** Test-only process environment, scoped to the disposable sandbox. */
+  envOverrides?: Record<string, string>
   scenarios: ReadonlyArray<{ id: string; title: string }>
   runners: Record<string, LiveScenarioRunner>
   /**
@@ -452,6 +454,7 @@ export async function executeAgentFlowAgainstProvider(
       // CI set, the CLI insists on ANTHROPIC_API_KEY (src/utils/auth.ts) and exits at
       // startup on the desktop provider path, which hands credentials over differently.
       CI: '',
+      ...options.envOverrides,
     },
   })
 

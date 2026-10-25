@@ -30,7 +30,10 @@ import {
   isNonCustomOpusModel,
 } from 'src/utils/model/model.js'
 import { getModelStrings } from 'src/utils/model/modelStrings.js'
-import { getAPIProvider } from 'src/utils/model/providers.js'
+import {
+  getAPIProvider,
+  hasAnthropicCompatibleThirdPartyConfig,
+} from 'src/utils/model/providers.js'
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
 import {
   API_PDF_MAX_PAGES,
@@ -50,7 +53,7 @@ import {
   type OverageDisabledReason,
 } from '../claudeAiLimits.js'
 import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mock-limits command
-import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
+import { extractConnectionErrorDetails, formatAPIError, sanitizeRetryDiagnosticText } from './errorUtils.js'
 import {
   formatStreamEndedEarlyMessage,
   StreamEndedEarlyError,
@@ -1435,9 +1438,34 @@ export function classifyAPIError(error: unknown): string {
   return 'unknown'
 }
 
+export function getRetryableAPIErrorDiagnostics(error: APIError): {
+  error_message?: string
+  request_id?: string
+} {
+  const details = [getAPIErrorDetail(error)]
+  let cause: unknown = error.cause
+  const seen = new Set<unknown>([error])
+  for (let depth = 0; cause instanceof Error && depth < 5 && !seen.has(cause); depth++) {
+    seen.add(cause)
+    const code = 'code' in cause && typeof cause.code === 'string' ? cause.code : ''
+    const detail = [code, cause.message].filter(Boolean).join(': ')
+    if (detail && !details.includes(detail)) details.push(detail)
+    cause = cause.cause
+  }
+  // Keep an unterminated quoted value from consuming the next cause's delimiter.
+  const message = details.filter(Boolean).map(sanitizeRetryDiagnosticText).join(' · ').slice(0, 2000)
+  const requestId = error.requestID
+  return {
+    ...(message ? { error_message: message } : {}),
+    ...(typeof requestId === 'string' && /^[a-zA-Z0-9_.:-]{1,200}$/.test(requestId)
+      ? { request_id: sanitizeRetryDiagnosticText(requestId) } : {}),
+  }
+}
+
 export function categorizeRetryableAPIError(
   error: APIError,
 ): SDKAssistantMessageError {
+  if (error instanceof APIConnectionError) return 'connection_error'
   if (
     error.status === 529 ||
     error.message?.includes('"type":"overloaded_error"')
@@ -1465,6 +1493,15 @@ export function getErrorMessageIfRefusal(
   }
 
   logEvent('tengu_refusal_api_response', {})
+
+  // Compatible providers also emit `refusal`. The stop reason does not tell
+  // us which policy caused it, or make Anthropic model ids valid there.
+  if (hasAnthropicCompatibleThirdPartyConfig()) {
+    return createAssistantAPIErrorMessage({
+      content: `${API_ERROR_MESSAGE_PREFIX}: The selected model (${model}) refused this request. Try rephrasing the request or choosing another model from your configured provider.`,
+      error: 'invalid_request',
+    })
+  }
 
   const baseMessage = getIsNonInteractiveSession()
     ? `${API_ERROR_MESSAGE_PREFIX}: Claude Code is unable to respond to this request, which appears to violate our Usage Policy (https://www.anthropic.com/legal/aup). Try rephrasing the request or attempting a different approach.`

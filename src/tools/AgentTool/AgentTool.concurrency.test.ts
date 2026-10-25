@@ -420,6 +420,21 @@ describe('ordinary AgentTool process concurrency', () => {
     next.finish(undefined)
     expect((await spawn()).data.status).toBe('completed')
   })
+
+  test('keeps a selected Agent preset separate from a generated team model suggestion', async () => {
+    spyOn(swarms, 'isAgentSwarmsEnabled').mockReturnValue(true)
+    const teamPath = getTeamFilePath('fixture-team')
+    mkdirSync(dirname(teamPath), { recursive: true })
+    writeFileSync(teamPath, JSON.stringify({ name: 'fixture-team', createdAt: 1, leadAgentId: 'fixture-lead', members: [] }))
+    context.options.agentDefinitions.activeAgents[0]!.model = 'opus'
+    const spawnSpy = spyOn(teams, 'spawnTeammate').mockResolvedValue({ data: { staged: false, agent_id: 'fixture-teammate' } } as never)
+
+    await spawn(false, { team_name: 'fixture-team', name: 'preset-member' })
+    expect(spawnSpy.mock.calls[0]?.[0].model).toBeUndefined()
+    expect(spawnSpy.mock.calls[0]?.[1].options.agentDefinitions.activeAgents[0]?.model).toBe('opus')
+    await spawn(false, { team_name: 'fixture-team', name: 'suggested-member', model: 'haiku' })
+    expect(spawnSpy.mock.calls[1]?.[0].model).toBe('haiku')
+  })
 })
 
 describe('SendMessageTool ordinary worker resume concurrency', () => {

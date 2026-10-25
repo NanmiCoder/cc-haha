@@ -34,6 +34,54 @@ function splitDirectory(path: string): [string, string] {
   return cut === -1 ? ['', path] : [path.slice(0, cut), path.slice(cut + 1)]
 }
 
+function directoriesFor(targets: AssistantOutputTarget[]): string[] {
+  return [...new Set(targets
+    .filter((target) => target.nameCandidates?.length || target.awaitsConfirmation)
+    .map((target) => splitDirectory(target.normalizedPath ?? target.href)[0]),
+  )].sort()
+}
+
+/** Shares the row renderer's cache and name resolution with the full-history viewer. */
+export async function confirmDiskTargets(sessionId: string, targets: AssistantOutputTarget[]): Promise<AssistantOutputTarget[]> {
+  const results = await Promise.all(directoriesFor(targets).map(async (directory) => {
+    const names = await listFileNames(sessionId, directory)
+    return names ? [directory, names] as const : null
+  }))
+  return settleTargets(targets, new Map(results.filter((result) => result !== null)))
+}
+
+function settleTargets(targets: AssistantOutputTarget[], namesByDir: Map<string, Set<string>>): AssistantOutputTarget[] {
+  const seen = new Set<string>()
+  return targets.map((target): AssistantOutputTarget | null => {
+    if (!target.nameCandidates?.length && !target.awaitsConfirmation) return target
+    const [directory, name] = splitDirectory(target.normalizedPath ?? target.href)
+    const names = namesByDir.get(directory)
+    const confirmed = names && [...(target.nameCandidates ?? []), name]
+      .sort((left, right) => right.length - left.length)
+      .find((candidate) => names.has(candidate.normalize('NFC')))
+    // A name only the disk could vouch for is not shown on a guess.
+    if (!confirmed) return target.awaitsConfirmation ? null : target
+
+    const { awaitsConfirmation: _awaitsConfirmation, ...settled } = target
+    if (confirmed === name) return settled
+    const corrected = directory ? `${directory}/${confirmed}` : confirmed
+    return {
+      ...settled,
+      id: `${target.kind}:${corrected}`,
+      title: confirmed,
+      href: corrected,
+      normalizedPath: corrected,
+      subtitle: corrected,
+    }
+  }).filter((target): target is AssistantOutputTarget => {
+    if (!target) return false
+    // `v2.docx` and `报告v2.docx` in one reply can settle on the same file.
+    if (seen.has(target.id)) return false
+    seen.add(target.id)
+    return true
+  })
+}
+
 /**
  * Let the disk settle names the text could not bound.
  *
@@ -49,11 +97,7 @@ export function useDiskConfirmedTargets(
   sessionId: string | undefined,
   targets: AssistantOutputTarget[],
 ): AssistantOutputTarget[] {
-  const directories = useMemo(() => [...new Set(
-    targets
-      .filter((target) => target.nameCandidates?.length || target.awaitsConfirmation)
-      .map((target) => splitDirectory(target.normalizedPath ?? target.href)[0]),
-  )].sort(), [targets])
+  const directories = useMemo(() => directoriesFor(targets), [targets])
   const key = sessionId && directories.length > 0 ? `${sessionId}${DIR_SEPARATOR}${directories.join(DIR_SEPARATOR)}` : ''
   const [listing, setListing] = useState<Listing | null>(null)
 
@@ -76,34 +120,6 @@ export function useDiskConfirmedTargets(
 
   return useMemo(() => {
     if (!listing || listing.key !== key) return targets.filter((target) => !target.awaitsConfirmation)
-    const seen = new Set<string>()
-    return targets.map((target): AssistantOutputTarget | null => {
-      if (!target.nameCandidates?.length && !target.awaitsConfirmation) return target
-      const [directory, name] = splitDirectory(target.normalizedPath ?? target.href)
-      const names = listing.namesByDir.get(directory)
-      const confirmed = names && [...(target.nameCandidates ?? []), name]
-        .sort((left, right) => right.length - left.length)
-        .find((candidate) => names.has(candidate.normalize('NFC')))
-      // A name only the disk could vouch for is not shown on a guess.
-      if (!confirmed) return target.awaitsConfirmation ? null : target
-
-      const { awaitsConfirmation: _awaitsConfirmation, ...settled } = target
-      if (confirmed === name) return settled
-      const corrected = directory ? `${directory}/${confirmed}` : confirmed
-      return {
-        ...settled,
-        id: `${target.kind}:${corrected}`,
-        title: confirmed,
-        href: corrected,
-        normalizedPath: corrected,
-        subtitle: corrected,
-      }
-    }).filter((target): target is AssistantOutputTarget => {
-      if (!target) return false
-      // `v2.docx` and `报告v2.docx` in one reply can settle on the same file.
-      if (seen.has(target.id)) return false
-      seen.add(target.id)
-      return true
-    })
+    return settleTargets(targets, listing.namesByDir)
   }, [key, listing, targets])
 }

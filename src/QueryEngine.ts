@@ -38,7 +38,7 @@ import type { CanUseToolFn } from './hooks/useCanUseTool.js'
 import { loadMemoryPrompt } from './memdir/memdir.js'
 import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
-import { categorizeRetryableAPIError } from './services/api/errors.js'
+import { categorizeRetryableAPIError, getRetryableAPIErrorDiagnostics } from './services/api/errors.js'
 import type { MCPServerConnection } from './services/mcp/types.js'
 import type { AppState } from './state/AppState.js'
 import {
@@ -1102,6 +1102,7 @@ export class QueryEngine {
               retry_delay_ms: message.retryInMs,
               error_status: message.error.status ?? null,
               error: categorizeRetryableAPIError(message.error),
+              ...getRetryableAPIErrorDiagnostics(message.error),
               session_id: getSessionId(),
               uuid: message.uuid,
             }

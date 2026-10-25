@@ -413,6 +413,10 @@ Model resolution uses this precedence, from highest to lowest:
 4. `model` from `builtInAgentOverrides` in settings.json (built-in Agents only)
 5. The primary conversation model
 
+When an Anthropic-compatible provider session uses a non-Claude model, such as DeepSeek Flash, Claude tier suggestions generated in an `Agent` call (`opus`, `sonnet`, `haiku`, `fable`) defer to the configured Agent model or inherit the current session model. Built-in Agents without a manual model override also inherit. Teams members and same-provider Claude model suggestions in team proposals follow the same rule, preventing an automatic call from upgrading Flash to the provider's Pro tier. Manually configured Agent models, environment overrides, and teammate defaults still apply.
+
+Full Claude IDs saved in older Agent presets, such as `claude-opus-4-8`, use the provider's corresponding explicit model mapping in non-Claude sessions. Sessions using Claude models retain their specific version selections.
+
 Reasoning effort resolution uses this precedence, from highest to lowest:
 
 1. `CLAUDE_CODE_EFFORT_LEVEL`

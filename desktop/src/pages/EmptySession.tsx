@@ -30,7 +30,6 @@ import { PERMISSION_MODE_LABEL_KEYS } from '../components/controls/permissionMod
 import { ModelSelector, type ModelSelectorHandle } from '../components/controls/ModelSelector'
 import { AttachmentGallery } from '../components/chat/AttachmentGallery'
 import { ComposerDropOverlay } from '../components/chat/ComposerDropOverlay'
-import { ContextUsageIndicator } from '../components/chat/ContextUsageIndicator'
 import { ComposerReferenceMenu, type ComposerReferenceMenuHandle } from '@/components/chat/ComposerReferenceMenu'
 import { ComposerReferenceDetail } from '@/components/chat/ComposerReferenceDetail'
 import { composerReferencesApi, mentionProviderId } from '@/api/composerReferences'
@@ -85,6 +84,7 @@ import {
 import { ComposerCapabilityMenu } from '@/components/chat/ComposerCapabilityMenu'
 import { MobileComposerSheet, type MobileComposerSetting } from '@/components/chat/MobileComposerSheet'
 import { useCapabilityMenu } from '@/components/chat/useCapabilityMenu'
+import { AgentProfileChip } from '@/components/chat/AgentProfileChip'
 import { AgentTeamChip } from '@/components/chat/AgentTeamChip'
 import { ComputerUseEnableDialog } from '@/components/computer-use/ComputerUseEnableDialog'
 import { AgentTeamsCostDialog } from '@/components/agentTeams/AgentTeamsCostDialog'
@@ -278,13 +278,18 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     setSlashMenuOpen(false)
   }, [workDir])
 
-  const draftRuntimeSelectionKey = draftRuntimeSelection
-    ? `${draftRuntimeSelection.providerId ?? 'official'}:${draftRuntimeSelection.modelId}:${draftRuntimeSelection.effortLevel ?? 'auto'}`
-    : undefined
   const draftModelLabel = draftRuntimeSelection?.modelId ?? currentModel?.name ?? currentModel?.id
   const isMobileComposer = useMobileViewport() && !isDesktopRuntime()
-  // The mode control only takes room on the toolbar row on desktop; a phone keeps it in the "+" sheet.
-  const leanControlOnRow = leanModeEnabled && !isMobileComposer
+  // Picking the Agent mode is a row of the "+" menu (the phone's "+" sheet opens
+  // its own sheet from a row); the toolbar only marks a lean draft.
+  const changeAgentProfile = (profile: AgentProfile) => {
+    if (profile === agentProfile) return
+    setAgentProfile(profile)
+    if (profile === 'lean' && draftPermissionMode === 'plan') {
+      setDraftPermissionMode('default')
+      addToast({ type: 'info', message: t('agentProfile.planReset') })
+    }
+  }
   const dictation = useComposerDictation({
     composerRef,
     draft: input,
@@ -930,11 +935,32 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
   // The "+" capability menu: the shared hook owns data and navigation actions,
   // these handlers are only the composer-local edits. Kept identical to
   // ChatInput's block on purpose — the two composers are one control.
+  // Desktop: first in the trailing group, as a quiet glyph until writes run
+  // unattended. A phone keeps it after the chips, where it only shows then.
+  const permissionSelector = (
+    <PermissionModeSelector
+      ref={permissionSelectorRef}
+      workDir={workDir}
+      compact={isMobileComposer}
+      trigger={isMobileComposer ? 'elevatedOnly' : 'quiet'}
+      // On the desktop the trigger sits at the right of the card: a menu that
+      // opened rightwards from it ran past the card and the window edge.
+      menuAlign={isMobileComposer ? 'left' : 'right'}
+      lean={isLean}
+      value={draftPermissionMode}
+      onChange={setDraftPermissionMode}
+    />
+  )
+
   const capabilityMenu = useCapabilityMenu({
     open: plusMenuOpen,
     cwd: workDir,
     references: composerReferences,
     lean: isLean,
+    // While the conversation is being created the mode is fixed, as it will be after.
+    agentProfile: leanModeEnabled && !isMobileComposer
+      ? { value: agentProfile, onChange: isSubmitting ? undefined : changeAgentProfile }
+      : undefined,
     handlers: {
       onInsertMention: (reference) => {
         const cursorPos = composerRef.current?.getSelectionOffsets().start ?? input.length
@@ -1166,7 +1192,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
               <div
                 data-testid="empty-session-toolbar"
                 className={`flex min-w-0 items-center justify-between pt-1.5 ${
-                  leanControlOnRow ? 'flex-wrap gap-x-2 gap-y-1' : isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
+                  isMobileComposer ? 'flex-wrap gap-1' : 'gap-2'
                 }`}
               >
                 {dictationLive && <VoiceRecordingBar dictation={dictation} mobile={isMobileComposer} />}
@@ -1221,15 +1247,11 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                     <AgentTeamChip touch={isMobileComposer} onRemove={capabilityMenu.disarmAgentTeam} />
                   ) : null}
 
-                  <PermissionModeSelector
-                    ref={permissionSelectorRef}
-                    workDir={workDir}
-                    compact={isMobileComposer}
-                    trigger={isMobileComposer ? 'elevatedOnly' : 'chip'}
-                    lean={isLean}
-                    value={draftPermissionMode}
-                    onChange={setDraftPermissionMode}
-                  />
+                  {isLean && !isMobileComposer ? (
+                    <AgentProfileChip onRemove={isSubmitting ? undefined : () => changeAgentProfile('standard')} />
+                  ) : null}
+
+                  {isMobileComposer ? permissionSelector : null}
 
                   {!isMobileComposer && (
                     <RepositoryLaunchControls
@@ -1248,50 +1270,21 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
                   )}
                 </div>
 
+                {/* A draft has used none of its context, so the usage ring is not
+                    on this row: it appears with the session's first reading. */}
                 <div
                   data-testid="empty-session-toolbar-trailing"
                   hidden={dictationLive}
-                  className={leanControlOnRow
-                    ? 'flex min-w-max flex-1 items-center justify-end gap-1'
-                    : isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}
+                  className={isMobileComposer ? 'flex min-w-0 flex-1 items-center justify-end gap-1' : 'flex shrink-0 items-center gap-1'}
                 >
-                  {/* A draft has used none of its context; on a phone that is not
-                      worth one of the toolbar's few touch targets. */}
-                  {!isMobileComposer && (
-                    <ContextUsageIndicator
-                      chatState="idle"
-                      messageCount={0}
-                      runtimeSelectionKey={draftRuntimeSelectionKey}
-                      fallbackModelLabel={draftModelLabel}
-                      draft
-                      compact={isMobileComposer}
-                    />
-                  )}
-                  {leanModeEnabled && <AgentProfileControl
+                  {leanModeEnabled && isMobileComposer && <AgentProfileControl
                     ref={agentProfileRef}
                     value={agentProfile}
-                    presentation={isMobileComposer ? 'sheet' : 'toolbar'}
-                    onChange={(profile) => {
-                      if (profile === agentProfile) return
-                      setAgentProfile(profile)
-                      if (profile === 'lean' && draftPermissionMode === 'plan') {
-                        setDraftPermissionMode('default')
-                        addToast({ type: 'info', message: t('agentProfile.planReset') })
-                      }
-                    }}
+                    onChange={changeAgentProfile}
                     disabled={isSubmitting}
                   />}
-                  {/* With the lean control on the row, the model's name is what
-                      gives way when the row is full: `w-0` + `min-w-[128px]`
-                      make 128px its smallest share (about eight letters and the
-                      effort), `max-w-max` stops it growing past its own width. */}
-                  {leanControlOnRow ? (
-                    <div className="flex w-0 min-w-[128px] max-w-max grow">
-                      <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} fluid />
-                    </div>
-                  ) : (
-                    <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
-                  )}
+                  {!isMobileComposer ? permissionSelector : null}
+                  <ModelSelector ref={modelSelectorRef} runtimeKey={DRAFT_RUNTIME_SELECTION_KEY} disabled={isSubmitting} compact={isMobileComposer} />
                   <VoiceInputButton dictation={dictation} blocked={isSubmitting} mobile={isMobileComposer} />
                   {/* Kept identical to ChatInput's send button — same
                       component, shape, size and icon. See the note there for

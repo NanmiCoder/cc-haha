@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Check, Ellipsis, Filter, Folder, RefreshCw, Settings, SlidersHorizontal, Trash2, X } from 'lucide-react'
 
+import { AgentProfileChip } from '@/components/chat/AgentProfileChip'
 import { AgentProfileControl, type AgentProfileControlHandle } from '@/components/chat/AgentProfileControl'
 import type { AgentProfile } from '@/types/session'
 import { AgentTeamsPlanCard } from '@/components/agentTeams/AgentTeamsPlanCard'
@@ -511,12 +512,12 @@ export function ComponentGallery() {
         </div>
       </header>
 
-      <Section title="Agent mode" note="Draft selection, the immutable lean conversation badge, and the sheet the phone's + sheet opens instead. Experimental core coding tools only.">
+      <Section title="Agent mode" note="The removable chip of a lean draft, the locked chip of a lean conversation, and the sheet the phone's + sheet opens. The desktop picks the mode in a row of the + menu. Experimental core coding tools only.">
         <div className="flex flex-wrap items-center gap-2">
-          <AgentProfileControl value={agentProfile} onChange={setAgentProfile} />
-          <AgentProfileControl value="lean" />
+          <AgentProfileChip onRemove={() => setAgentProfile('standard')} />
+          <AgentProfileChip />
           <Button variant="secondary" size="sm" onClick={() => agentProfileSheet.current?.open()}>Open phone sheet</Button>
-          <AgentProfileControl ref={agentProfileSheet} value={agentProfile} onChange={setAgentProfile} presentation="sheet" />
+          <AgentProfileControl ref={agentProfileSheet} value={agentProfile} onChange={setAgentProfile} />
         </div>
       </Section>
 

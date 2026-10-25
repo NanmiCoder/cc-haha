@@ -7,14 +7,16 @@ export type WebSearchMode =
   | 'anthropic'
   | 'tavily'
   | 'brave'
+  | 'deepseek'
   | 'disabled'
 
-export type WebSearchProvider = 'anthropic' | 'tavily' | 'brave' | 'disabled'
+export type WebSearchProvider = 'anthropic' | 'tavily' | 'brave' | 'deepseek' | 'disabled'
 
 export type WebSearchSettings = {
   mode?: WebSearchMode
   tavilyApiKey?: string
   braveApiKey?: string
+  deepseekApiKey?: string
 }
 
 export type ResolvedWebSearch = {
@@ -25,6 +27,7 @@ export type ResolvedWebSearch = {
 type ExternalSearchHit = {
   title: string
   url: string
+  summary?: string
 }
 
 const WEB_SEARCH_MODES = new Set<WebSearchMode>([
@@ -32,6 +35,7 @@ const WEB_SEARCH_MODES = new Set<WebSearchMode>([
   'anthropic',
   'tavily',
   'brave',
+  'deepseek',
   'disabled',
 ])
 
@@ -59,6 +63,7 @@ export function getConfiguredWebSearchSettings(
     mode: WEB_SEARCH_MODES.has(modeCandidate) ? modeCandidate : 'auto',
     tavilyApiKey: normalizeApiKey(raw.tavilyApiKey),
     braveApiKey: normalizeApiKey(raw.braveApiKey),
+    deepseekApiKey: normalizeApiKey(raw.deepseekApiKey),
   }
 }
 
@@ -80,6 +85,10 @@ export function resolveWebSearchProvider(
     return { provider: settings.braveApiKey ? 'brave' : 'disabled', settings }
   }
 
+  if (mode === 'deepseek') {
+    return { provider: settings.deepseekApiKey ? 'deepseek' : 'disabled', settings }
+  }
+
   if (mode === 'anthropic') {
     return {
       provider: canUseAnthropicNativeWebSearch(model) ? 'anthropic' : 'disabled',
@@ -97,6 +106,10 @@ export function resolveWebSearchProvider(
 
   if (settings.braveApiKey) {
     return { provider: 'brave', settings }
+  }
+
+  if (settings.deepseekApiKey) {
+    return { provider: 'deepseek', settings }
   }
 
   return { provider: 'disabled', settings }
@@ -134,7 +147,9 @@ export async function searchWithExternalProvider(
 ): Promise<Output> {
   const startTime = performance.now()
   const hits =
-    provider === 'tavily'
+    provider === 'deepseek'
+      ? await searchWithDeepSeek(input, apiKey, signal)
+      : provider === 'tavily'
       ? await searchWithTavily(input, apiKey, signal)
       : await searchWithBrave(input, apiKey, signal)
   const durationSeconds = (performance.now() - startTime) / 1000
@@ -151,6 +166,9 @@ export function getFallbackProvider(
   if (settings.braveApiKey) {
     return 'brave'
   }
+  if (settings.deepseekApiKey) {
+    return 'deepseek'
+  }
   return null
 }
 
@@ -158,6 +176,7 @@ export function getApiKeyForProvider(
   provider: Exclude<WebSearchProvider, 'anthropic' | 'disabled'>,
   settings: WebSearchSettings,
 ): string | null {
+  if (provider === 'deepseek') return settings.deepseekApiKey ?? null
   return provider === 'tavily'
     ? settings.tavilyApiKey ?? null
     : settings.braveApiKey ?? null
@@ -313,4 +332,46 @@ function makeExternalSearchOutput(
 async function readErrorBody(response: Response): Promise<string> {
   const text = await response.text().catch(() => '')
   return text.slice(0, 500)
+}
+
+async function searchWithDeepSeek(
+  input: Input,
+  apiKey: string,
+  signal: AbortSignal,
+): Promise<ExternalSearchHit[]> {
+  const query = applyDomainFiltersToQuery(input)
+  // Include filters in the limit; never silently truncate the user's query.
+  if (!query.trim() || Array.from(query).length > 128) {
+    throw new Error('DeepSeek search query (including domain filters) must contain 1–128 Unicode characters.')
+  }
+  const response = await fetch('https://api.deepseek.com/v1/tools/search', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, count: 8, need_content: false }),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(30_000)]),
+  })
+  if (!response.ok) {
+    // Do not expose upstream response bodies: they can echo request credentials.
+    const reason = response.status === 401 ? 'invalid API key'
+      : response.status === 402 ? 'insufficient balance'
+      : response.status === 429 ? 'rate limit exceeded; retry later'
+      : 'request failed'
+    throw new Error(`DeepSeek search failed: ${response.status} (${reason})`)
+  }
+  const body = await response.json() as { results?: unknown }
+  if (!body || !Array.isArray(body.results)) {
+    throw new Error('DeepSeek search returned an invalid results payload')
+  }
+  return body.results.flatMap((hit: unknown) => {
+    if (!hit || typeof hit !== 'object') return []
+    const row = hit as Record<string, unknown>
+    const normalized = normalizeHit(row.title, row.url)
+    if (!normalized) return []
+    try {
+      if (!['https:', 'http:'].includes(new URL(normalized.url).protocol)) return []
+    } catch { return [] }
+    const summary = typeof row.summary === 'string' && row.summary.trim()
+      ? row.summary : typeof row.snippet === 'string' ? row.snippet : ''
+    return [{ ...normalized, summary: summary.slice(0, 4000) }]
+  }).slice(0, 8)
 }

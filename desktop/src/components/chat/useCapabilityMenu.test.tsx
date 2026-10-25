@@ -218,3 +218,60 @@ it('keeps explicit installed skills in lean while blocking plugin mentions', () 
   act(() => result.current.onAction({ type: 'insertMention', reference: plugin }))
   expect(composer.onInsertMention).toHaveBeenCalledTimes(1)
 })
+
+describe('the Agent mode row', () => {
+  const runItems = (result: { current: ReturnType<typeof useCapabilityMenu> }) =>
+    result.current.sections.flatMap(section => section.items).map(item => item.key)
+
+  it('changes a draft to lean through the row, and drops an armed Agent Team with a notice', () => {
+    dismissAgentTeamsNotice()
+    const onChange = vi.fn()
+    const { result } = renderHook(() => useCapabilityMenu({
+      open: true, cwd: '/repo', references: [], handlers: handlers(), agentProfile: { value: 'standard', onChange },
+    }))
+    act(() => result.current.onAction({ type: 'toggleAgentTeam' }))
+    expect(result.current.agentTeamArmed).toBe(true)
+
+    act(() => result.current.onAction({ type: 'setAgentProfile', profile: 'lean' }))
+    expect(onChange).toHaveBeenCalledWith('lean')
+    expect(result.current.agentTeamArmed).toBe(false)
+    expect(useUIStore.getState().toasts.some(toast => toast.message.includes('Agent Teams'))).toBe(true)
+  })
+
+  it('does not announce anything for a switch that dropped nothing, nor re-pick the current mode', () => {
+    const onChange = vi.fn()
+    const { result } = renderHook(() => useCapabilityMenu({
+      open: true, cwd: '/repo', references: [], handlers: handlers(), agentProfile: { value: 'standard', onChange },
+    }))
+    act(() => result.current.onAction({ type: 'setAgentProfile', profile: 'standard' }))
+    expect(onChange).not.toHaveBeenCalled()
+    act(() => result.current.onAction({ type: 'setAgentProfile', profile: 'lean' }))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(useUIStore.getState().toasts).toEqual([])
+  })
+
+  it('shows a locked row that ignores a change, whichever way the action arrives', () => {
+    const { result } = renderHook(() => useCapabilityMenu({
+      open: true, lean: true, cwd: '/repo', references: [], handlers: handlers(), agentProfile: { value: 'lean' },
+    }))
+    const row = result.current.sections.flatMap(section => section.items).find(item => item.key === 'agent-profile')!
+    expect(row.choice).toMatchObject({ value: 'lean', locked: true })
+    expect(() => act(() => result.current.onAction({ type: 'setAgentProfile', profile: 'standard' }))).not.toThrow()
+  })
+
+  it('keeps the row in a lean menu while everything lean cannot run leaves it', () => {
+    const { result } = renderHook(() => useCapabilityMenu({
+      open: true, lean: true, cwd: '/repo', references: [], handlers: handlers(), agentProfile: { value: 'lean', onChange: vi.fn() },
+    }))
+    const items = runItems(result)
+    expect(items).toContain('agent-profile')
+    expect(items).toContain('add-files')
+    expect(items).toContain('slash-commands')
+    for (const gone of ['agent-team', 'computer-use', 'connectors', 'agents', 'workflows']) expect(items).not.toContain(gone)
+  })
+
+  it('has no row when the composer offers none', () => {
+    const { result } = renderMenu()
+    expect(runItems(result)).not.toContain('agent-profile')
+  })
+})

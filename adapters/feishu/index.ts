@@ -45,6 +45,7 @@ import { ImageBlockWatcher } from '../common/attachment/image-block-watcher.js'
 import type { PendingUpload } from '../common/attachment/attachment-types.js'
 import { materializePendingUploadImage } from '../common/attachment/safe-remote-image.js'
 import { isOutsideWorkDir } from './path-safety.js'
+import { createFeishuHttpClient } from './http-client.js'
 
 // ---------- init ----------
 
@@ -57,12 +58,14 @@ if (!config.feishu.appId || !config.feishu.appSecret) {
 /** International (Lark) tenants serve the same APIs from a different origin;
  *  a bot provisioned there cannot authenticate against open.feishu.cn. */
 const larkDomain = config.feishu.domain === 'lark' ? Lark.Domain.Lark : Lark.Domain.Feishu
+const sdkHttpClient = createFeishuHttpClient()
 
 const larkClient = new Lark.Client({
   appId: config.feishu.appId,
   appSecret: config.feishu.appSecret,
   appType: Lark.AppType.SelfBuild,
   domain: larkDomain,
+  httpInstance: sdkHttpClient,
 })
 
 const bridge = new WsBridge(config.serverUrl, 'feishu')
@@ -1283,6 +1286,7 @@ async function start(): Promise<void> {
     appId: config.feishu.appId,
     appSecret: config.feishu.appSecret,
     domain: larkDomain,
+    httpInstance: sdkHttpClient,
     loggerLevel: Lark.LoggerLevel.info,
   })
 

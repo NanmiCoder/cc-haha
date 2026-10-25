@@ -190,11 +190,13 @@ describe('Content-only pages render without errors', () => {
     expect(container.innerHTML).toContain('Ask anything')
   })
 
-  it('EmptySession shows draft context usage before a session is created', async () => {
+  it('EmptySession draws no context usage before a session is created', async () => {
     render(<EmptySession />)
 
-    const indicator = await screen.findByLabelText('Context usage not calculated')
-    expect(indicator).toHaveTextContent('--')
+    // A draft has no reading: no "--" ring on the toolbar, and nothing is inspected.
+    expect(await screen.findByRole('button', { name: /^Run$/ })).toBeInTheDocument()
+    expect(screen.queryByTestId('context-usage-indicator')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Context usage not calculated')).not.toBeInTheDocument()
     expect(vi.mocked(sessionsApi.getInspection)).not.toHaveBeenCalled()
   })
 

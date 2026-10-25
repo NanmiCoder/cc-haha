@@ -178,6 +178,8 @@ describe('ContextUsageIndicator request behavior', () => {
     expect(sessionsApiMock.getInspection).not.toHaveBeenCalled()
     expect(screen.queryByLabelText('Context usage loading')).not.toBeInTheDocument()
     expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('--')
+    // No reading yet: a "--" says nothing, so the ring is not drawn at all.
+    expect(screen.getByTestId('context-usage-indicator')).not.toBeVisible()
 
     rerender(
       <ContextUsageIndicator
@@ -245,6 +247,8 @@ describe('ContextUsageIndicator request behavior', () => {
       expect(sessionsApiMock.getInspection).toHaveBeenCalledTimes(1)
     })
     expect(screen.getByTestId('context-usage-indicator')).toHaveTextContent('--')
+    // A session under way shows its ring while the first reading loads.
+    expect(screen.getByTestId('context-usage-indicator')).toBeVisible()
 
     rerender(
       <ContextUsageIndicator

@@ -9,6 +9,7 @@ import {
 } from '../../utils/settings/pluginOnlyPolicy.js'
 import { getSettingsForSource } from '../../utils/settings/settings.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
+import { resolveAgentModelSpec, usesNonClaudeAgentRouting } from '../../utils/model/agentModelRouting.js'
 
 /**
  * `SettingsSchema` inlines its effort level list to avoid a
@@ -79,6 +80,22 @@ export function resolveBuiltInAgentOverrides(): Map<
   }
 
   return resolved
+}
+
+/** Shipped Claude tiers are defaults; only user overrides pin non-Claude runs. */
+export function getAgentModelSetting(
+  agent: AgentDefinition | undefined,
+  parentModel: string | null,
+): string | undefined {
+  if (
+    agent?.source === 'built-in' &&
+    usesNonClaudeAgentRouting(parentModel) &&
+    !resolveBuiltInAgentOverrides().get(agent.agentType)?.model
+  ) return 'inherit'
+  const model = agent?.model
+  return model && model !== 'inherit' && usesNonClaudeAgentRouting(parentModel)
+    ? resolveAgentModelSpec(model, parentModel)
+    : model
 }
 
 /**

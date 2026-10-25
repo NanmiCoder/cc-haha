@@ -240,7 +240,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   skipWebFetchPreflight: true,
   desktopNotificationsEnabled: false,
   desktopTerminal: DEFAULT_DESKTOP_TERMINAL_SETTINGS,
-  webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '' },
+  webSearch: { mode: 'auto', tavilyApiKey: '', braveApiKey: '', deepseekApiKey: '' },
   updateProxy: DEFAULT_UPDATE_PROXY_SETTINGS,
   autoUpdateEnabled: true,
   network: DEFAULT_NETWORK_SETTINGS,
@@ -824,10 +824,13 @@ subscribeLocaleChanges((locale) => {
 })
 
 function normalizeWebSearchSettings(settings: WebSearchSettings | undefined): WebSearchSettings {
+  // Forward read migration: older settings keep their mode and keys; the new key defaults empty.
   return {
+    ...settings,
     mode: settings?.mode ?? 'auto',
     tavilyApiKey: settings?.tavilyApiKey ?? '',
     braveApiKey: settings?.braveApiKey ?? '',
+    deepseekApiKey: settings?.deepseekApiKey ?? '',
   }
 }
 

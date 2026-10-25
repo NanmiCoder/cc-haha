@@ -22,6 +22,14 @@ function renderControls(overrides: Partial<ZoomControlsProps> = {}) {
 }
 
 describe('ZoomControls', () => {
+  it('keeps lightbox zoom controls readable on a dark scrim with touch-sized buttons', () => {
+    const { onZoomIn } = renderControls({ surface: 'lightbox' })
+    expect(screen.getByRole('group')).toHaveClass('rounded-[var(--radius-full)]', 'bg-[var(--color-lightbox-control-bg)]')
+    const zoomIn = screen.getByRole('button', { name: 'Zoom in' })
+    expect(zoomIn).toHaveClass('h-11', 'w-11', 'text-[var(--color-lightbox-control-fg)]')
+    fireEvent.click(zoomIn)
+    expect(onZoomIn).toHaveBeenCalledOnce()
+  })
   it('names the cluster and each control from the labels the caller supplies', () => {
     renderControls()
 

@@ -1,3 +1,4 @@
+import { sanitizeRetryDiagnosticText } from '../../services/api/errorUtils.js'
 import { closeSideChatsForParent, getSideChat, isSideChatId, SIDE_CHAT_BOUNDARY } from './sideChatRegistry.js'
 import { migrationMaintenance, waitForMigrationExit } from '../migrationMaintenance.js'
 /**
@@ -72,7 +73,7 @@ import {
   SYSTEM_PROXY_URL_ENV,
   type NetworkSettings,
 } from './networkSettings.js'
-import { readTraceCaptureSettings } from './traceCaptureService.js'
+import { readTraceCaptureSettings, traceCaptureService } from './traceCaptureService.js'
 import {
   killWindowsProcessTree,
   type WindowsTaskkillSpawn,
@@ -1627,11 +1628,21 @@ export class ConversationService {
         if (sdkError) {
           void diagnosticsService.recordEvent({
             type: sdkError.type,
-            severity: 'error',
+            severity: sdkError.type === 'sdk_api_retry' ? 'warn' : 'error',
             sessionId,
             summary: sdkError.summary,
             details: sdkError.details,
           })
+          if (sdkError.type === 'sdk_api_retry') {
+            void traceCaptureService.recordEvent({
+              sessionId,
+              phase: 'api_retry',
+              severity: 'warning',
+              title: 'API request retry',
+              message: sdkError.summary,
+              metadata: sdkError.details,
+            }).catch(() => {})
+          }
         }
         if (msg?.type === 'system' && msg.subtype === 'init') {
           session.initMessage = msg
@@ -2842,6 +2853,23 @@ export class ConversationService {
     summary: string
     details: Record<string, unknown>
   } | null {
+    if (message?.type === 'system' && message.subtype === 'api_retry') {
+      const detail = typeof message.error_message === 'string' ? message.error_message : ''
+      return {
+        type: 'sdk_api_retry',
+        summary: sanitizeRetryDiagnosticText(detail || `API request retry: ${message.error ?? 'unknown'}`),
+        details: {
+          attempt: message.attempt,
+          maxRetries: message.max_retries,
+          retryDelayMs: message.retry_delay_ms,
+          errorStatus: message.error_status,
+          error: message.error,
+          requestId: typeof message.request_id === 'string' ? sanitizeRetryDiagnosticText(message.request_id) : undefined,
+          messageUuid: message.uuid,
+        },
+      }
+    }
+
     if (this.isAssistantApiErrorMessage(message)) {
       const summary = this.redactProcessOutput(
         this.extractAssistantApiErrorDetail(message) || 'Assistant API error',

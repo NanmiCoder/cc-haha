@@ -339,6 +339,17 @@ describe('coverage gate helpers', () => {
     expect(result.failures).toEqual([])
   })
 
+  test.each(['__tests__', 'fixtures', '__fixtures__'])('excludes adapter %s fixtures while enforcing production coverage', directory => {
+    const changed = new Map([
+      [`adapters/feishu/${directory}/transport.ts`, new Set([1])],
+      ['adapters/feishu/http-client.ts', new Set([1])],
+    ])
+    const result = evaluateChangedLineCoverage(changed, new Map(), CHANGED_LINE_SCOPES, 90)
+    expect(result.files.map(file => file.file)).toEqual(['adapters/feishu/http-client.ts'])
+    expect(result.total).toBe(1)
+    expect(result.failures).toEqual(['changed-lines: coverage 0% is below minimum 90%'])
+  })
+
   test('reports changed lines of a failed suite as unmeasured instead of uncovered', () => {
     const changedLines = parseChangedLinesFromDiff([
       'diff --git a/desktop/src/main.tsx b/desktop/src/main.tsx',

@@ -141,6 +141,7 @@ const ADAPTERS_SCOPE: CoverageScope = {
   title: 'IM adapters',
   includePrefixes: ['adapters/'],
   excludePrefixes: ['adapters/node_modules/'],
+  excludePathFragments: ['/__tests__/', '/fixtures/', '/__fixtures__/'],
   excludeSuffixes: ['.test.ts', '.test.tsx', '.d.ts'],
 }
 

@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import { getAgentModelSetting } from './builtInAgentOverrides.js'
 import type { UUID } from 'crypto'
 import { randomUUID } from 'crypto'
 import uniqBy from 'lodash-es/uniqBy.js'
@@ -57,7 +58,6 @@ import { clearSessionHooks } from '../../utils/hooks/sessionHooks.js'
 import { executeSubagentStartHooks } from '../../utils/hooks.js'
 import { createUserMessage } from '../../utils/messages.js'
 import { getAgentModel } from '../../utils/model/agent.js'
-import type { ModelAlias } from '../../utils/model/aliases.js'
 import {
   isChainParticipant,
   recordSidechainTranscript,
@@ -370,7 +370,7 @@ export async function* runAgent({
     abortController?: AbortController
     agentId?: AgentId
   }
-  model?: ModelAlias
+  model?: string
   maxTurns?: number
   /** Preserve toolUseResult on messages for subagents with viewable transcripts */
   preserveToolUseResults?: boolean
@@ -449,7 +449,7 @@ export async function* runAgent({
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState
 
   const resolvedAgentModel = getAgentModel(
-    agentDefinition.model,
+    getAgentModelSetting(agentDefinition, toolUseContext.options.mainLoopModel),
     toolUseContext.options.mainLoopModel,
     model,
     permissionMode,

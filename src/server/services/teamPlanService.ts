@@ -63,7 +63,9 @@ export class TeamPlanService {
       const snapshot = current.agentCatalog?.[agentType]
       if (!snapshot) throw new TeamPlanError('Agent preset is unavailable', 400)
       const presetChanged = agentType !== member.agentType
-      const presetModel = snapshot.model && snapshot.model !== 'inherit' ? snapshot.model : current.leaderRuntime.modelId
+      const inheritedModel = member.runtime.providerId === current.leaderRuntime.providerId
+        ? current.leaderRuntime.modelId : member.runtime.modelId
+      const presetModel = snapshot.model && snapshot.model !== 'inherit' ? snapshot.model : inheritedModel
       const suggestedRuntime = { providerId: member.runtime.providerId, modelId: presetModel, ...(snapshot.effortLevel ? { effortLevel: snapshot.effortLevel } : {}) }
       return { ...member, agentType, agentSnapshot: structuredClone(snapshot),
         ...(presetChanged ? { suggestedRuntime } : {}),

@@ -1,4 +1,5 @@
 import { resolveTeammateModel } from '../../utils/swarm/resolveTeammateModel.js'
+import { getAgentModelSetting } from '../AgentTool/builtInAgentOverrides.js'
 export { resolveTeammateModel } from '../../utils/swarm/resolveTeammateModel.js'
 /**
  * Shared spawn module for teammate creation.
@@ -330,14 +331,15 @@ async function handleSpawnSplitPane(
   const { setAppState, getAppState } = context
   const { name, prompt, agent_type, cwd, plan_mode_required } = input
   const appState = getAppState()
+  const leaderModel = context.options.mainLoopModel ?? appState.mainLoopModel
   const selectedAgentDefinition =
     context.options.agentDefinitions.activeAgents.find(
       agent => agent.agentType === agent_type,
     )
   const model = resolveTeammateModel(
     input.model,
-    appState.mainLoopModel,
-    selectedAgentDefinition?.model,
+    leaderModel,
+    getAgentModelSetting(selectedAgentDefinition, leaderModel),
     selectedAgentDefinition !== undefined,
   )
 
@@ -575,14 +577,15 @@ async function handleSpawnSeparateWindow(
   const { setAppState, getAppState } = context
   const { name, prompt, agent_type, cwd, plan_mode_required } = input
   const appState = getAppState()
+  const leaderModel = context.options.mainLoopModel ?? appState.mainLoopModel
   const selectedAgentDefinition =
     context.options.agentDefinitions.activeAgents.find(
       agent => agent.agentType === agent_type,
     )
   const model = resolveTeammateModel(
     input.model,
-    appState.mainLoopModel,
-    selectedAgentDefinition?.model,
+    leaderModel,
+    getAgentModelSetting(selectedAgentDefinition, leaderModel),
     selectedAgentDefinition !== undefined,
   )
 
@@ -873,14 +876,15 @@ async function handleSpawnInProcess(
   const { setAppState, getAppState } = context
   const { name, prompt, agent_type, plan_mode_required } = input
   const appState = getAppState()
+  const leaderModel = context.options.mainLoopModel ?? appState.mainLoopModel
   const selectedAgentDefinition =
     context.options.agentDefinitions.activeAgents.find(
       agent => agent.agentType === agent_type,
     )
   const model = resolveTeammateModel(
     input.model,
-    appState.mainLoopModel,
-    selectedAgentDefinition?.model,
+    leaderModel,
+    getAgentModelSetting(selectedAgentDefinition, leaderModel),
     selectedAgentDefinition !== undefined,
   )
 

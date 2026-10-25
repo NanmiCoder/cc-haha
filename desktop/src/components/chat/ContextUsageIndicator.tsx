@@ -598,7 +598,9 @@ export const ContextUsageIndicator = forwardRef<ContextUsageIndicatorHandle, Pro
       <button
         ref={triggerRef}
         type="button"
-        hidden={hideTrigger}
+        // No reading yet (a draft, or a session before its first turn): a "--"
+        // says nothing and costs a toolbar slot, so the ring appears with data.
+        hidden={hideTrigger || isPendingContext}
         aria-label={ariaLabel}
         aria-expanded={detailsOpen}
         aria-haspopup="dialog"

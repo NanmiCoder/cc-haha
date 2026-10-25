@@ -57,6 +57,7 @@ const searchResultSchema = lazySchema(() => {
   const searchHitSchema = z.object({
     title: z.string().describe('The title of the search result'),
     url: z.string().describe('The URL of the search result'),
+    summary: z.string().optional().describe('Search result summary for the model'),
   })
 
   return z.object({
@@ -254,12 +255,12 @@ export const WebSearchTool = buildTool({
         data: makeWebSearchUnavailableOutput(
           query,
           durationSeconds,
-          'Web search is not configured for this model. Use a Claude model for native web search or add a Tavily/Brave API key in Settings.',
+          'Web search is not configured for this model. Use a supported native search endpoint (Claude or official DeepSeek Anthropic API), or add a Tavily/Brave/DeepSeek API key in Settings.',
         ),
       }
     }
 
-    if (resolved.provider === 'tavily' || resolved.provider === 'brave') {
+    if (resolved.provider === 'tavily' || resolved.provider === 'brave' || resolved.provider === 'deepseek') {
       onProgress?.({
         toolUseID: `${resolved.provider}-web-search`,
         data: {
@@ -317,7 +318,7 @@ export const WebSearchTool = buildTool({
           data: makeWebSearchUnavailableOutput(
             query,
             durationSeconds,
-            'Native Anthropic web search failed for this endpoint, and no Tavily/Brave API key is configured for fallback.',
+            'Native web search failed for this endpoint, and no Tavily/Brave/DeepSeek API key is configured for fallback.',
           ),
         }
       }

@@ -134,6 +134,67 @@ describe('shouldUseOpenAICodexTransport', () => {
 })
 
 describe('getAnthropicClient', () => {
+  test.each(['api_key', 'auth_token'] as const)('uploads large DeepSeek images through the SDK using %s authentication', async authStrategy => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'deepseek-client-media-'))
+    const previousEnv = { ...process.env }
+    const key = `fake-deepseek-client-media-${authStrategy}`
+    const testEnv = createSandboxedTestEnvironment(tempDir, {
+      ANTHROPIC_BASE_URL: 'https://api.deepseek.com/anthropic',
+      [authStrategy === 'api_key' ? 'ANTHROPIC_API_KEY' : 'ANTHROPIC_AUTH_TOKEN']: key,
+      CLAUDE_CODE_SIMPLE: '1',
+      OPENAI_CODEX_OAUTH_FILE: path.join(tempDir, 'missing-openai-oauth.json'),
+    })
+    for (const name of Object.keys(process.env)) delete process.env[name]
+    Object.assign(process.env, testEnv)
+    const image = {
+      type: 'image' as const,
+      source: { type: 'base64' as const, media_type: 'image/png' as const, data: 'A'.repeat(41 * 1024 * 1024) },
+    }
+    const calls: string[] = []
+    try {
+      const { getAnthropicClient } = await import('./client.js')
+      const client = await getAnthropicClient({
+        maxRetries: 0,
+        model: 'deepseek-flash',
+        fetchOverride: async (input, init) => {
+          const url = new URL(input instanceof Request ? input.url : String(input))
+          const headers = new Headers(init?.headers)
+          calls.push(url.pathname)
+          if (url.pathname === '/files') {
+            expect(headers.get('authorization')).toBe(`Bearer ${key}`)
+            expect(headers.has('x-dsh-auth-token')).toBe(false)
+            expect(init?.body instanceof FormData).toBe(true)
+            expect((init?.body as FormData).get('purpose')).toBe('user_data')
+            expect(((init?.body as FormData).get('file') as Blob).size).toBe(image.source.data.length * 3 / 4)
+            expect(init?.signal).toBeDefined()
+            return Response.json({ id: 'file-client-media' })
+          }
+          expect(url.pathname).toBe('/anthropic/v1/messages')
+          expect(headers.get(authStrategy === 'api_key' ? 'x-api-key' : 'authorization')).toBe(authStrategy === 'api_key' ? key : `Bearer ${key}`)
+          expect(headers.get('anthropic-beta')).toContain('files-api-2025-04-14')
+          const request = JSON.parse(String(init?.body))
+          expect(request.messages[0].content).toEqual([{ type: 'image', source: { type: 'file', file_id: 'file-client-media' } }])
+          return Response.json({
+            id: 'msg-client-media', type: 'message', role: 'assistant', model: 'deepseek-flash',
+            content: [{ type: 'text', text: 'Image received' }], stop_reason: 'end_turn', stop_sequence: null,
+            usage: { input_tokens: 3, output_tokens: 1 },
+          })
+        },
+      })
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await client.messages.create({ model: 'deepseek-flash', max_tokens: 16, messages: [{ role: 'user', content: [image] }] })
+        expect(response.content).toEqual([{ type: 'text', text: 'Image received' }])
+      }
+      expect(calls).toEqual(['/files', '/anthropic/v1/messages', '/anthropic/v1/messages'])
+      expect(image.source.type).toBe('base64')
+      expect(image.source.data.length).toBe(41 * 1024 * 1024)
+    } finally {
+      for (const name of Object.keys(process.env)) delete process.env[name]
+      Object.assign(process.env, previousEnv)
+      await fs.rm(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('uses one API version in direct message and token-count requests while preserving path prefixes', async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'anthropic-client-base-url-'))
     const previousEnv = { ...process.env }

@@ -818,3 +818,42 @@ describe('PermissionModeSelector', () => {
     expect(screen.queryByRole('dialog', { name: 'Enable bypass mode' })).not.toBeInTheDocument()
   })
 })
+
+describe('the quiet trigger', () => {
+  it('is a bare glyph while every write asks first, and the named chip once some run unattended', () => {
+    viewportMocks.isMobile = false
+    useTabStore.setState({ activeTabId: 'tab', tabs: [] })
+    useChatStore.setState({ sessions: { tab: { ...makeChatSession('idle'), permissionMode: 'default' } } })
+
+    render(<PermissionModeSelector trigger="quiet" />)
+    const glyph = screen.getByRole('button', { name: 'Ask permissions' })
+    expect(glyph.textContent).toBe('')
+    expect(glyph).toHaveClass('h-7', 'w-7')
+    expect(screen.queryByTestId('permission-mode-dot')).not.toBeInTheDocument()
+
+    act(() => useChatStore.setState({ sessions: { tab: { ...makeChatSession('idle'), permissionMode: 'bypassPermissions' } } }))
+    const chip = screen.getByRole('button', { name: 'Bypass permissions' })
+    expect(chip).toHaveTextContent('Bypass permissions')
+    expect(chip).not.toHaveClass('w-7')
+    expect(screen.getByTestId('permission-mode-dot')).toBeInTheDocument()
+  })
+
+  it('names plan mode too: it shares the default\'s dot colour but is not the default', () => {
+    viewportMocks.isMobile = false
+    useTabStore.setState({ activeTabId: 'tab', tabs: [] })
+    useChatStore.setState({ sessions: { tab: { ...makeChatSession('idle'), permissionMode: 'plan' } } })
+    render(<PermissionModeSelector trigger="quiet" />)
+    const chip = screen.getByRole('button', { name: 'Plan mode' })
+    expect(chip).toHaveTextContent('Plan mode')
+    expect(chip).not.toHaveClass('w-7')
+  })
+
+  it('still opens the mode menu from the glyph', () => {
+    viewportMocks.isMobile = false
+    useTabStore.setState({ activeTabId: 'tab', tabs: [] })
+    useChatStore.setState({ sessions: { tab: { ...makeChatSession('idle'), permissionMode: 'default' } } })
+    render(<PermissionModeSelector trigger="quiet" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Ask permissions' }))
+    expect(screen.getByRole('menuitem', { name: /Auto accept edits/ })).toBeInTheDocument()
+  })
+})

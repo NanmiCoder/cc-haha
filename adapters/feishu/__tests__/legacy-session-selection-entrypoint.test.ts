@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, it, spyOn } from 'bun:test'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import * as Lark from '@larksuiteoapi/node-sdk'
+import { ProxyAgent } from 'proxy-agent'
 import { enqueue } from '../../common/chat-queue.js'
 import { StreamingCard } from '../streaming-card.js'
 import { FeishuMediaService } from '../media.js'
@@ -11,6 +13,7 @@ type Platform = 'feishu' | 'dingtalk' | 'wechat' | 'whatsapp'
 const platforms: Platform[] = ['feishu', 'dingtalk', 'wechat', 'whatsapp']
 const chatFor = (platform: Platform) => platform === 'dingtalk' ? 'dingtalk:dm:fixture-user' : `${platform}-chat`
 let feishu: typeof import('../index.js')
+let feishuStartupWsClient: Lark.WSClient
 let dingtalk: typeof import('../../dingtalk/index.js')
 let wechat: typeof import('../../wechat/index.js')
 let whatsapp: typeof import('../../whatsapp/index.js')
@@ -122,7 +125,34 @@ beforeAll(async () => {
     }
     throw new Error(`External network is forbidden in this fixture: ${url.origin}${url.pathname}`)
   }) as typeof fetch
-  feishu = await import('../index.js')
+  // Exercise the sidecar's actual startup branch, with only the external SDK
+  // boundary replaced. The later test checks both clients' transport wiring.
+  let started!: () => void
+  const startup = new Promise<void>(resolve => { started = resolve })
+  const botInfo = spyOn(Lark.Client.prototype, 'request').mockImplementation(async () => ({
+    code: 0, bot: { open_id: 'fixture-bot' },
+  }))
+  const wsStart = spyOn(Lark.WSClient.prototype, 'start').mockImplementation(async function () {
+    feishuStartupWsClient = this
+    started()
+  })
+  const originalArgv = [...process.argv]
+  const shutdownSignals = ['SIGINT', 'SIGTERM'] as const
+  const signalListeners = new Map(shutdownSignals.map(signal => [signal, new Set(process.listeners(signal))]))
+  process.argv.push('--feishu')
+  try {
+    feishu = await import('../index.js')
+    await startup
+  } finally {
+    process.argv.splice(0, process.argv.length, ...originalArgv)
+    botInfo.mockRestore()
+    wsStart.mockRestore()
+    for (const signal of shutdownSignals) {
+      for (const listener of process.listeners(signal)) {
+        if (!signalListeners.get(signal)!.has(listener)) process.removeListener(signal, listener)
+      }
+    }
+  }
   dingtalk = await import('../../dingtalk/index.js')
   wechat = await import('../../wechat/index.js')
   whatsapp = await import('../../whatsapp/index.js')
@@ -158,6 +188,29 @@ afterAll(async () => {
 function adapterFor(platform: Platform) {
   return { feishu, dingtalk, wechat, whatsapp }[platform]
 }
+
+it('uses the CONNECT-capable HTTP transport for both clients created by Feishu startup', async () => {
+  const restHttp = (feishu.larkClient as unknown as { httpInstance: Lark.HttpInstance }).httpInstance
+  const wsHttp = (feishuStartupWsClient as unknown as { httpInstance: Lark.HttpInstance }).httpInstance
+  const request = spyOn(Lark.defaultHttpInstance, 'request').mockResolvedValue({ code: 0 })
+  try {
+    for (const transport of [restHttp, wsHttp]) {
+      expect(transport).not.toBe(Lark.defaultHttpInstance)
+      await transport.request({ method: 'POST', url: 'https://fixture.invalid/startup', data: { fixture: true } })
+    }
+    expect(request).toHaveBeenCalledTimes(2)
+    for (const [options] of request.mock.calls) {
+      expect(options).toMatchObject({
+        proxy: false,
+        httpAgent: expect.any(ProxyAgent),
+        httpsAgent: expect.any(ProxyAgent),
+        method: 'POST', url: 'https://fixture.invalid/startup', data: { fixture: true },
+      })
+    }
+  } finally {
+    request.mockRestore()
+  }
+})
 
 async function send(platform: Platform, text: string, options: { unauthorized?: boolean; attachment?: boolean } = {}) {
   const userId = options.unauthorized ? 'outsider' : 'fixture-user'

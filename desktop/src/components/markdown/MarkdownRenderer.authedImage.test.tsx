@@ -121,6 +121,27 @@ describe('MarkdownRenderer local images', () => {
     expect(apiGetBlob).toHaveBeenCalledWith('/api/filesystem/file?path=%2Ftmp%2Fchart.png')
   })
 
+  it('reports the trusted original source after authenticated fallback, ignoring raw HTML identity claims', async () => {
+    const onImageClick = vi.fn()
+    const { container } = render(
+      <MarkdownRenderer
+        content={'<img src="chart.png" alt="chart" data-md-image="" data-original-src="file:///tmp/forged.png">'}
+        resolveImageSrc={() => LOCAL}
+        onImageClick={onImageClick}
+      />,
+    )
+    const image = container.querySelector('img')!
+    fireEvent.error(image)
+    await waitFor(() => expect(image).toHaveAttribute('src', 'blob:http://localhost/chart'))
+
+    fireEvent.click(image)
+
+    expect(onImageClick).toHaveBeenCalledExactlyOnceWith({
+      images: [{ src: 'blob:http://localhost/chart', originalSrc: LOCAL, alt: 'chart' }],
+      index: 0,
+    })
+  })
+
   it('also covers a document with code blocks, which render in separate parts', async () => {
     const { container } = render(
       <MarkdownRenderer content={'![chart](chart.png)\n\n```ts\nconst a = 1\n```'} resolveImageSrc={() => LOCAL} />,

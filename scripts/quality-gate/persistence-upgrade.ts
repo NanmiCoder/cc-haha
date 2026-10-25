@@ -9,6 +9,15 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Desktop WebSearch settings migrate old fixtures for the DeepSeek backend',
+    command: ['bun', 'run', 'test', '--', '--run', 'src/stores/settingsStoreWebSearch.test.ts'],
+    cwd: 'desktop',
+  },
+  {
+    title: 'WebSearch legacy settings remain compatible with the DeepSeek backend',
+    command: ['bun', 'test', './src/tools/WebSearchTool/deepseekSearch.test.ts'],
+  },
+  {
     title: 'Data directory relocation metadata and legacy attachment aliases',
     command: ['bun', 'test', './src/utils/storageMigrationMetadata.test.ts', './src/utils/storageRelocations.test.ts'],
   },
