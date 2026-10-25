@@ -312,6 +312,19 @@ export const goldenScenarios: GoldenScenario[] = [
     ],
   },
   {
+    id: 'official-sdk-notifications',
+    description: 'Native command replacements, model switches and exact refusal retractions retain their structured data.',
+    messages: [
+      { type: 'system', subtype: 'commands_changed', cc_haha_agent_sdk: true, commands: [] },
+      { type: 'system', subtype: 'model_refusal_fallback', cc_haha_agent_sdk: true,
+        original_model: 'primary', fallback_model: 'fallback', scope: 'session', retracted_message_uuids: ['partial'] },
+      { type: 'system', subtype: 'model_consent_fallback', cc_haha_agent_sdk: true,
+        original_model: 'primary', fallback_model: 'default', choice: 'switch_default' },
+      { type: 'system', subtype: 'official_sdk_messages_retracted', ids: ['partial', 'block'],
+        edit: { uuid: 'human', text: 'Original prompt' } },
+    ],
+  },
+  {
     id: 'hook-frames',
     description: 'Hook frames are deliberately not forwarded; forwarding them would leak internals into chat.',
     expectsNoClientOutput: true,

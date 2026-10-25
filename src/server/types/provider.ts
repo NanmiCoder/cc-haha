@@ -16,6 +16,7 @@ export const PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION = 5
 export const PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION = 6
 export const PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION = 7
 export const PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION = 8
+export const PROVIDER_AGENT_SDK_RUNTIME_SCHEMA_VERSION = 9
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -58,6 +59,9 @@ export const ProviderRuntimeKindSchema = z.enum([
   'deepseek_oauth',
 ])
 export type ProviderRuntimeKind = z.infer<typeof ProviderRuntimeKindSchema>
+
+export const ProviderRuntimeSchema = z.enum(['claude-code', 'agent-sdk'])
+export type ProviderRuntime = z.infer<typeof ProviderRuntimeSchema>
 
 export const ModelMappingSchema = z.object({
   main: z.string(),
@@ -126,6 +130,7 @@ export const SavedProviderSchema = z.object({
   baseUrl: z.string(),
   apiFormat: ApiFormatSchema.default('anthropic'),
   runtimeKind: ProviderRuntimeKindSchema.default('anthropic_compatible'),
+  runtime: ProviderRuntimeSchema.optional(),
   models: ModelMappingSchema,
   model1mSupport: Model1mSupportSchema.optional(),
   autoCompactWindow: AutoCompactWindowSchema.optional(),
@@ -154,6 +159,7 @@ export const CreateProviderSchema = z.object({
   baseUrl: z.string(),
   apiFormat: ApiFormatSchema.default('anthropic'),
   runtimeKind: ProviderRuntimeKindSchema.default('anthropic_compatible'),
+  runtime: ProviderRuntimeSchema.optional(),
   models: ModelMappingSchema,
   model1mSupport: Model1mSupportSchema.optional(),
   autoCompactWindow: AutoCompactWindowSchema.optional(),
@@ -173,6 +179,7 @@ export const UpdateProviderSchema = z.object({
   baseUrl: z.string().optional(),
   apiFormat: ApiFormatSchema.optional(),
   runtimeKind: ProviderRuntimeKindSchema.optional(),
+  runtime: ProviderRuntimeSchema.optional(),
   models: ModelMappingSchema.optional(),
   model1mSupport: Model1mSupportSchema.nullable().optional(),
   autoCompactWindow: AutoCompactWindowSchema.nullable().optional(),

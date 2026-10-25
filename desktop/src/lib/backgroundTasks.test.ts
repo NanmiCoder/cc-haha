@@ -23,6 +23,14 @@ function task(
   }
 }
 
+it('does not mark native ambient, paused or foreground work as busy background work', () => {
+  for (const metadata of [{ ambient: true }, { skipTranscript: true }, { nativeStatus: 'paused' as const }, { isBackgrounded: false }]) {
+    const tasks = { native: task('native', { taskType: 'local_agent', nativeTask: true, ...metadata }) }
+    expect(hasRunningBackgroundTasks(tasks)).toBe(false)
+    expect(hasRunningSubagentTasks(tasks)).toBe(false)
+  }
+})
+
 describe('hasRunningBackgroundTasks', () => {
   it('does not treat AutoDream as foreground session activity', () => {
     expect(hasRunningBackgroundTasks({

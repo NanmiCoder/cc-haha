@@ -49,6 +49,8 @@ import {
 import { MobileBottomSheet } from '@/components/ui/MobileBottomSheet'
 import { SearchField } from '@/components/ui/SearchField'
 import { ReasoningEffortPopover } from './ReasoningEffortPopover'
+import { UltracodeControl } from './UltracodeControl'
+import { useSessionUltracode } from '@/hooks/useSessionUltracode'
 import { useUIStore } from '../../stores/uiStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import {
@@ -593,6 +595,14 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
   const selectedRuntimeProvider = activeRuntimeSelection?.providerId
     ? providers.find((provider) => provider.id === activeRuntimeSelection.providerId) ?? null
     : null
+  const ultracodeSessionId = selectedRuntimeProvider?.runtime === 'agent-sdk' && runtimeKey &&
+    runtimeKey !== DRAFT_RUNTIME_SELECTION_KEY && !runtimeKey.startsWith('side-') && lockedProviderId === undefined
+    ? runtimeKey : undefined
+  const runtimeChatState = useChatStore(state => runtimeKey ? state.sessions[runtimeKey]?.chatState : undefined)
+  const runtimeLastMessage = useChatStore(state => runtimeKey ? state.sessions[runtimeKey]?.messages.at(-1)?.id : undefined)
+  const ultracode = useSessionUltracode(ultracodeSessionId,
+    `${activeRuntimeSelection?.modelId}:${activeRuntimeSelection?.effortLevel}:${runtimeChatState}:${runtimeLastMessage}`,
+    effortOpen)
   const runtimeEffortSuppressedByProvider =
     selectedRuntimeProvider?.disableExperimentalBetas === true &&
     (selectedRuntimeProvider.apiFormat ?? 'anthropic') === 'anthropic' &&
@@ -607,7 +617,9 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     ? selectedProviderChoice?.providerName ?? null
     : null
   const supportedRuntimeEfforts = selectedRuntimeModel?.supportedReasoningEfforts
-  const requestedRuntimeEffort = activeRuntimeSelection?.effortLevel ?? effortLevel
+  const acknowledgedEffort = ultracode.state?.running && isModelReasoningEffort(ultracode.state.effort ?? '')
+    ? ultracode.state!.effort as ReasoningEffortLevel : undefined
+  const requestedRuntimeEffort = acknowledgedEffort ?? activeRuntimeSelection?.effortLevel ?? effortLevel
   const selectedRuntimeEffort = selectedRuntimeModel && !runtimeEffortSuppressedByProvider
     ? supportedRuntimeEfforts?.length === 0
       ? undefined
@@ -1003,7 +1015,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
             ref={effortButtonRef}
             type="button"
             disabled={disabled || lockedProviderId !== undefined}
-            aria-label={`${t('model.effort')}: ${effortLabels[selectedRuntimeEffort]}${showOpenAIFastMode && activeRuntimeSelection?.openAIFastMode ? ` · ${t('model.openAIFastMode')}` : ''}`}
+            aria-label={`${t('model.effort')}: ${ultracode.state?.enabled ? t(ultracode.state.active ? 'model.ultracodeActive' : 'model.ultracodePaused') : effortLabels[selectedRuntimeEffort]}${showOpenAIFastMode && activeRuntimeSelection?.openAIFastMode ? ` · ${t('model.openAIFastMode')}` : ''}`}
             aria-expanded={effortOpen}
             onClick={() => {
               if (disabled) return
@@ -1015,7 +1027,7 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
             className={`flex shrink-0 items-center gap-1 rounded-r-[var(--radius-sm)] pl-0.5 pr-1.5 text-[var(--color-text-tertiary)] outline-none transition-colors hover:text-[var(--color-text-primary)] focus-visible:rounded-[var(--radius-sm)] focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)] disabled:cursor-not-allowed`}
           >
             <span className="inline-flex h-[18px] items-center rounded-full bg-[var(--color-surface-container)] px-1.5 text-[11px]">
-              {effortLabels[selectedRuntimeEffort]}
+              {ultracode.state?.enabled ? t(ultracode.state.active ? 'model.ultracodeActive' : 'model.ultracodePaused') : effortLabels[selectedRuntimeEffort]}
             </span>
             {showOpenAIFastMode && activeRuntimeSelection?.openAIFastMode && (
               <span className="text-[11px] text-[var(--color-text-secondary)]">{t('model.openAIFastMode')}</span>
@@ -1034,6 +1046,13 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
           labels={effortLabels}
           ariaLabel={t('model.effort')}
           onChange={handleRuntimeEffortSelect}
+          sessionControls={ultracodeSessionId ? <UltracodeControl
+            state={ultracode.state}
+            pending={ultracode.pending}
+            error={ultracode.error}
+            modelSupported={supportedRuntimeEfforts?.includes('xhigh') === true}
+            onChange={enabled => { void ultracode.setEnabled(enabled) }}
+          /> : undefined}
           {...(showOpenAIFastMode ? {
             fastMode: activeRuntimeSelection?.openAIFastMode === true,
             onFastModeChange: handleOpenAIFastModeChange,

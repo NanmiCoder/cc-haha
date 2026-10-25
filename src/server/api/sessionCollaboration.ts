@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod/v4'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import type { SessionCollaborationService } from '../services/sessionCollaborationService.js'
+import { executeOfficialAgentSdkHostAction } from '../services/officialAgentSdkHostActions.js'
 
 function stringField(body: Record<string, unknown>, name: string, required = false): string | undefined {
   const value = body[name]
@@ -55,6 +56,12 @@ export async function handleSessionCollaborationApi(req: Request, action: string
       body = value
     } catch { throw ApiError.badRequest('A JSON object is required') }
     switch (action) {
+      case 'cron-create':
+      case 'cron-list':
+      case 'cron-update':
+      case 'cron-delete':
+      case 'team-delete':
+        return Response.json(await executeOfficialAgentSdkHostAction(action, callerSessionId, body))
       case 'list': return Response.json(await service.list({ query: stringField(body, 'query'), limit: numberField(body, 'limit'), offset: numberField(body, 'offset'), signal: req.signal }))
       case 'read': return Response.json(await service.read(stringField(body, 'sessionId', true)!, {
         cursor: stringField(body, 'cursor'), limit: numberField(body, 'limit'), signal: req.signal,

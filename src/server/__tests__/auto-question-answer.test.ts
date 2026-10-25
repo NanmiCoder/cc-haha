@@ -40,7 +40,7 @@ describe('automatic AskUserQuestion answers', () => {
     await fs.rm(configDir, { recursive: true, force: true })
   })
 
-  function createPendingService() {
+  function createPendingService(runtime: 'claude-code' | 'agent-sdk' = 'claude-code') {
     const service = new ConversationService()
     const sent: any[] = []
     const callbacks: any[] = []
@@ -57,6 +57,7 @@ describe('automatic AskUserQuestion answers', () => {
       },
     }
     const session = {
+      runtime,
       sdkSocket: { send(line: string) { sent.push(JSON.parse(line)) } },
       pendingOutbound: [],
       pendingPermissionRequests: new Map([['req-1', request]]),
@@ -77,11 +78,11 @@ describe('automatic AskUserQuestion answers', () => {
       .toEqual({ futureField: { keep: true } })
   })
 
-  it('submits the model choice and marks the answer as automatic', async () => {
+  it.each(['claude-code', 'agent-sdk'] as const)('submits the %s model choice and marks the answer as automatic', async (runtime) => {
     await fs.writeFile(path.join(configDir, 'settings.json'), JSON.stringify({
       autoQuestion: { enabled: true, timeoutMinutes: 5 },
     }))
-    const { service, session, request, sent, callbacks } = createPendingService()
+    const { service, session, request, sent, callbacks } = createPendingService(runtime)
     ;(request.input as any).metadata = { source: 'remember' }
 
     await (service as any).scheduleAutoQuestionAnswer('session-1', session, 'req-1', request)

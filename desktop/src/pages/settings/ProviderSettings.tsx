@@ -40,6 +40,7 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { FIELD_BASE_CLASSES, FIELD_SIZE_CLASSES, fieldStateClasses, Input } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { Checkbox } from '@/components/ui/Checkbox'
+import { SelectField } from '@/components/ui/SelectField'
 import { IconButton } from '@/components/ui/IconButton'
 import { Badge } from '@/components/ui/Badge'
 import { Spinner } from '@/components/ui/Spinner'
@@ -49,6 +50,7 @@ import { Tooltip } from '@/components/ui/Tooltip'
 import type { SavedProvider, UpdateProviderInput, ProviderTestResult, ModelMapping, Model1mSupport, ApiFormat, ModelApiFormat, ProviderAuthStrategy, ProviderModelInfo, ProviderModelsErrorCode } from '../../types/provider'
 import { groupProviderModels, providerModelsErrorKey } from '../../lib/providerModels'
 import { resolveModelApiFormat } from '../../../../src/shared/modelApiFormats'
+import { getAgentSdkProviderError, type ProviderRuntime } from '../../../../src/shared/providerRuntime'
 import { apply1mSupportToContextInput, apply1mSupportToContextInputs, getAutoCompactWindowErrorKey, getModelContextWindowErrorKey, MODEL_SLOTS, parseAutoCompactWindowInput, parseModelContextWindowsInput, type ModelContextInputs, type ModelSlot } from '../../lib/providerModelContext'
 import type { ProviderPreset } from '../../types/providerPreset'
 import { normalizeProviderBaseUrl, presetMatchesBaseUrl, selectableProviderPresets } from '../../config/providerPresets'
@@ -449,6 +451,9 @@ export function ProviderSettings({ browserMode = false }: { browserMode?: boolea
                     <>
                       {preset && preset.id !== 'custom' && (
                         <Badge tone="neutral">{preset.name}</Badge>
+                      )}
+                      {provider.runtime === 'agent-sdk' && (
+                        <Badge tone="info">{t('settings.providers.runtimeAgentSdk')}</Badge>
                       )}
                       {preset?.modelApiFormats?.length ? (
                         // A path-bound gateway declares one format on the record but
@@ -1230,6 +1235,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const [selectedPreset, setSelectedPreset] = useState<ProviderPreset>(initialPreset)
   const [name, setName] = useState(provider?.name ?? presetLabel(initialPreset))
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? initialPreset.baseUrl)
+  const [runtime, setRuntime] = useState<ProviderRuntime>(provider?.runtime ?? 'claude-code')
   // A preset that decides the protocol per model owns this field: the picked value
   // is only the fallback for models no rule matches, so a record carrying a stale
   // one (cc-switch import, a paste, an older save) must not override it.
@@ -1390,6 +1396,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const handlePresetChange = (preset: ProviderPreset) => {
     settingsJsonUserEditedRef.current = false
     setSelectedPreset(preset)
+    setRuntime('claude-code')
     setCompatibility(compatibilityForm())
     setName(presetLabel(preset))
     setBaseUrl(preset.baseUrl)
@@ -1425,7 +1432,12 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
   const compatibilityInvalid = invalidCompatibilityNumber(compatibility.maxOutputTokens)
     || (apiFormat !== 'anthropic' && invalidCompatibilityNumber(compatibility.outputTokenLimit))
-  const canSubmit = !compatibilityInvalid && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
+  const runtimeInvalid = Boolean(getAgentSdkProviderError({
+    runtime, baseUrl, apiFormat, authStrategy, runtimeKind: provider?.runtimeKind,
+    // Browser edits omit the saved secret; the server validates the merged record.
+    apiKey: apiKey.trim() || (mode === 'edit' ? 'saved-provider-key' : ''),
+  }))
+  const canSubmit = !runtimeInvalid && !compatibilityInvalid && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
   const normalizedBaseUrl = normalizeProviderBaseUrl(baseUrl)
   const isPresetDefaultEndpoint = normalizedBaseUrl === normalizeProviderBaseUrl(selectedPreset.baseUrl)
   const apiKeyUrl = isPresetDefaultEndpoint ? selectedPreset.apiKeyUrl?.trim() : undefined
@@ -1796,6 +1808,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           authStrategy,
           baseUrl: baseUrl.trim(),
           apiFormat,
+          runtime,
           ...(storedCompatibility ? { requestCompatibility: storedCompatibility } : {}),
           models: normalizedModels,
           ...(storedModel1mSupport !== undefined && { model1mSupport: storedModel1mSupport }),
@@ -1813,6 +1826,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           baseUrl: baseUrl.trim(),
           authStrategy,
           apiFormat,
+          runtime,
           requestCompatibility: storedCompatibility ?? null,
           models: normalizedModels,
           model1mSupport: storedModel1mSupport ?? null,
@@ -1921,6 +1935,24 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
         )}
 
         <Input label={t('settings.providers.name')} required value={name} onChange={(e) => setName(e.target.value)} placeholder={t('settings.providers.namePlaceholder')} />
+
+        <SelectField<ProviderRuntime>
+          label={t('settings.providers.runtime')}
+          value={runtime}
+          onChange={setRuntime}
+          options={[
+            { value: 'claude-code', label: t('settings.providers.runtimeClaudeCode') },
+            { value: 'agent-sdk', label: t('settings.providers.runtimeAgentSdk') },
+          ]}
+          error={runtimeInvalid ? t('settings.providers.runtimeRequirements') : undefined}
+        />
+        {runtime === 'agent-sdk' && (
+          <div className="space-y-1 text-xs leading-5 text-[var(--color-text-secondary)]">
+            <p>{t('settings.providers.runtimeAgentSdkHint')}</p>
+            <p>{t('settings.providers.runtimeAgentSdkLimitations')}</p>
+            <p>{t('settings.providers.runtimeAgentSdkBilling')}</p>
+          </div>
+        )}
 
         {regionalEndpointItems.length > 1 && (
           <div className="flex flex-col gap-1">

@@ -15,6 +15,8 @@ const testFiles = [
   'src/server/__tests__/provider-runtime-env.test.ts',
   'src/server/services/ccSwitchImport.test.ts',
   'src/server/services/providerModelCatalog.test.ts',
+  'src/server/services/providerAgentSdk.test.ts',
+  'src/shared/providerRuntime.test.ts',
   'src/shared/modelReasoning.test.ts',
   'src/shared/modelApiFormats.test.ts',
   'src/server/proxy/upstreamHeaders.test.ts',

@@ -61,6 +61,17 @@ export const activeNonAgentTasks = new Map<string, Map<string, ActiveNonAgentTas
 
 export const authoritativeStoppedTaskIds = new Map<string, Set<string>>()
 
+type OfficialSdkTaskState = {
+  runId?: string
+  status: string
+  taskType?: string
+  toolUseId?: string
+  description?: string
+  backgrounded?: boolean
+}
+/** Retain ended generations so late terminal/progress frames cannot corrupt a resumed task. */
+export const officialSdkTaskStates = new Map<string, Map<string, OfficialSdkTaskState>>()
+
 export const agentStopRequestedSessions = new Set<string>()
 
 export const nonAgentStopRequestedSessions = new Set<string>()
@@ -79,6 +90,67 @@ export type CliBackgroundTaskLifecycle = {
   ownerAgentId?: string
   status?: string
   suppressForward?: boolean
+  runId?: string
+  newRun?: boolean
+  backgrounded?: boolean
+}
+
+export function getOfficialSdkTaskLifecycles(sessionId: string, value: unknown): {
+  lifecycles: CliBackgroundTaskLifecycle[]
+  stale?: boolean
+  snapshot?: boolean
+} | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const frame = value as Record<string, any>
+  if (frame.cc_haha_agent_sdk !== true || frame.type !== 'system') return null
+  const snapshot = frame.subtype === 'background_tasks_changed'
+  if (!snapshot && !['task_started', 'task_progress', 'task_notification', 'task_updated'].includes(frame.subtype)) return null
+  const string = (entry: unknown) => typeof entry === 'string' && entry.length > 0 ? entry : undefined
+  const object = (entry: unknown): entry is Record<string, any> => entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+  if (snapshot && (!Array.isArray(frame.tasks) || frame.tasks.some((entry: unknown) => !object(entry) || !string(entry.task_id)))) return null
+  if (!snapshot && (!string(frame.task_id) || frame.subtype === 'task_updated' && !object(frame.patch))) return null
+  const states = officialSdkTaskStates.get(sessionId) ?? new Map<string, OfficialSdkTaskState>()
+  officialSdkTaskStates.set(sessionId, states)
+  const lifecycles: CliBackgroundTaskLifecycle[] = []
+  const terminal = (status: string) => ['completed', 'failed', 'killed', 'stopped'].includes(status)
+  let stale = false
+  function apply(entry: Record<string, any>, subtype: string) {
+    const taskId = entry.task_id as string
+    const previous = states.get(taskId)
+    const runId = string(entry.run_id)
+    if (previous?.runId && (!runId || runId < previous.runId)) { stale = true; return }
+    const newRun = Boolean(previous && (runId && runId !== previous.runId ||
+      !runId && !previous.runId && subtype === 'task_started' && terminal(previous.status)))
+    const patch = subtype === 'task_updated' ? entry.patch : entry
+    const status = ['pending', 'running', 'completed', 'failed', 'killed', 'paused', 'stopped'].includes(patch.status)
+      ? patch.status as string : subtype === 'task_notification' ? 'completed'
+        : !newRun && previous ? previous.status : 'running'
+    if (previous && !newRun && terminal(previous.status) && !terminal(status)) { stale = true; return }
+    // A terminal same-run task cannot be resurrected by a duplicate start/progress/snapshot.
+    if (previous && !newRun && terminal(previous.status) && subtype !== 'task_notification' && subtype !== 'task_updated') { stale = true; return }
+    const next: OfficialSdkTaskState = {
+      ...previous, runId, status,
+      ...(typeof patch.task_type === 'string' ? { taskType: patch.task_type } : {}),
+      ...(typeof patch.tool_use_id === 'string' ? { toolUseId: patch.tool_use_id } : {}),
+      ...(typeof patch.description === 'string' ? { description: patch.description } : {}),
+      ...(typeof patch.is_backgrounded === 'boolean' ? { backgrounded: patch.is_backgrounded } : {}),
+      ...(snapshot ? { backgrounded: true } : {}),
+    }
+    states.set(taskId, next)
+    lifecycles.push({ taskId, running: !terminal(status), status, runId, newRun,
+      taskType: next.taskType, toolUseId: next.toolUseId, description: next.description,
+      backgrounded: next.backgrounded })
+  }
+  if (snapshot) {
+    const present = new Set<string>(frame.tasks.map((entry: Record<string, any>) => entry.task_id))
+    for (const [taskId, state] of states) {
+      if (present.has(taskId) || terminal(state.status) || state.backgrounded === false) continue
+      states.set(taskId, { ...state, status: 'completed' })
+      lifecycles.push({ taskId, running: false, status: 'completed', runId: state.runId })
+    }
+    for (const entry of frame.tasks) apply(entry, 'task_started')
+  } else apply(frame, frame.subtype)
+  return { lifecycles, ...(snapshot ? { snapshot: true } : stale ? { stale: true } : {}) }
 }
 
 export function getCliBackgroundTaskLifecycle(cliMsg: any): CliBackgroundTaskLifecycle | null {
@@ -168,6 +240,7 @@ export function clearAgentRuntimeState(
   activeAgentTasks.delete(sessionId)
   activeNonAgentTasks.delete(sessionId)
   authoritativeStoppedTaskIds.delete(sessionId)
+  officialSdkTaskStates.delete(sessionId)
   agentStopRequestedSessions.delete(sessionId)
   nonAgentStopRequestedSessions.delete(sessionId)
   runtimeExitStoppedSessions.delete(sessionId)
@@ -190,6 +263,8 @@ export function markTaskAuthoritativelyStopped(sessionId: string, taskId: string
     authoritativeStoppedTaskIds.set(sessionId, taskIds)
   }
   taskIds.add(taskId)
+  const nativeTask = officialSdkTaskStates.get(sessionId)?.get(taskId)
+  if (nativeTask) nativeTask.status = 'stopped'
 }
 
 export function hasActiveBackgroundTasks(sessionId: string): boolean {

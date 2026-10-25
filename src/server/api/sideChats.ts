@@ -4,6 +4,9 @@ import { conversationService } from '../services/conversationService.js'
 import { getSideChat, isSideChatId, registerSideChat, SIDE_CHAT_PREFIX, type SideChat } from '../services/sideChatRegistry.js'
 import { ApiError } from '../middleware/errorHandler.js'
 import { loadMessagesFromJsonlPath } from '../../utils/conversationRecovery.js'
+import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { readConversationRuntime } from '../services/officialAgentSdkRuntime.js'
+import { getOfficialAgentSdkSideChatBoundary } from '../services/officialAgentSdkSessions.js'
 
 const inputSchema = z.strictObject({ sideChatId: z.uuid().optional() })
 function response(entry: SideChat): Response {
@@ -37,11 +40,14 @@ export async function handleSideChatsRoute(req: Request, parentSessionId: string
   if (!info) throw ApiError.notFound('Parent session not found')
   // Capture a stable transcript boundary. The CLI truncates at this UUID even
   // if the parent appends more messages before the child starts.
-  const { messages } = await loadMessagesFromJsonlPath(info.filePath)
-  const last = messages.findLast(message => message.type !== 'system')
-  if (!last) throw ApiError.conflict('Start a conversation before opening a side chat')
+  // Native SDK forks accept any chain UUID. Keep trailing structured output,
+  // tool carriers and compaction records belonging to the completed turn.
+  const resumeAt = readConversationRuntime(getClaudeConfigHomeDir(), parentSessionId) === 'agent-sdk'
+    ? await getOfficialAgentSdkSideChatBoundary(info.filePath)
+    : (await loadMessagesFromJsonlPath(info.filePath)).messages.findLast(message => message.type !== 'system')?.uuid
+  if (!resumeAt) throw ApiError.conflict('Start a conversation before opening a side chat')
   const entry: SideChat = {
-    sessionId, parentSessionId, cliSessionId, resumePath: info.filePath, resumeAt: last.uuid,
+    sessionId, parentSessionId, cliSessionId, resumePath: info.filePath, resumeAt,
     launchInfo: { ...info, filePath: '', repository: undefined, worktreeSession: undefined, transcriptMessageCount: 0, customTitle: 'Side chat' },
     createdAt: new Date().toISOString(), started: false, closed: false,
   }

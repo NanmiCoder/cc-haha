@@ -5,6 +5,8 @@ import {
   type SessionTaskNotification,
 } from './sessionService.js'
 import { workflowService } from './workflowService.js'
+import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { readConversationRuntime } from './officialAgentSdkRuntime.js'
 
 export type SubagentRunStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'unknown'
 export type SubagentRunSource = 'subagent-jsonl' | 'session-history' | 'live-task' | 'none'
@@ -790,7 +792,12 @@ export async function getSubagentRunByTool(
   // true while that agent runs — which is exactly the window where queuing a
   // follow-up works. A synchronous subagent only produces its tool_result at
   // the very end, so it never qualifies.
-  const canSendMessage = Boolean(resolvedAgentId) && (
+  // The pinned official SDK has no working send-task-message control. Do not
+  // offer a composer that would start a process then fail; native Agent
+  // follow-ups go through the parent conversation, and cc-hh teams keep their
+  // separate, supported member-mailbox API.
+  const canSendMessage = readConversationRuntime(getClaudeConfigHomeDir(), sessionId) !== 'agent-sdk' &&
+    Boolean(resolvedAgentId) && (
     Boolean(teammateName) || (resolution.isAsyncLaunch && status === 'running')
   )
   const transcriptMessages = transcript.messages

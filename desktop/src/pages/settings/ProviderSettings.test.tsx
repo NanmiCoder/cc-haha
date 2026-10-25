@@ -36,6 +36,88 @@ const savedProviders: SavedProvider[] = ([
   models: { main: model, haiku: model, sonnet: model, opus: model },
 }))
 
+describe('official Agent SDK provider settings', () => {
+  const provider: SavedProvider = {
+    ...savedProviders[0]!, id: 'official-api-fixture', presetId: 'custom', name: 'Official API fixture',
+    baseUrl: 'https://api.anthropic.com', authStrategy: 'api_key',
+  }
+  let originalPresets = useProviderStore.getState().presets
+
+  beforeEach(() => {
+    originalPresets = useProviderStore.getState().presets
+    useProviderStore.setState({ presets: BUNDLED_PROVIDER_PRESETS })
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [provider], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState({ presets: originalPresets })
+  })
+
+  it('keeps a legacy provider on Claude Code until the user selects and saves the SDK runtime', async () => {
+    const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider: { ...provider, runtime: 'agent-sdk' } })
+    render(<ProviderSettings />)
+    fireEvent.click(within(await screen.findByTestId(`provider-${provider.id}`)).getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    const runtime = dialog.getByRole('combobox', { name: 'Conversation runtime' })
+    expect(runtime).toHaveValue('claude-code')
+    fireEvent.change(runtime, { target: { value: 'agent-sdk' } })
+    const limitations = dialog.getByText(/Existing legacy conversations retain their runtime/)
+    expect(limitations).toHaveTextContent('cc-hh teams, workflows, scheduled tasks and Computer Use')
+    expect(limitations).toHaveTextContent('Loads user and project CLAUDE.md, Skills, MCP, hooks and plugins')
+    expect(limitations).toHaveTextContent('Restart the conversation after changing network settings')
+    expect(dialog.getByText(/Anthropic determines promotional credit eligibility/)).toBeInTheDocument()
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(provider.id, expect.objectContaining({
+      runtime: 'agent-sdk', baseUrl: provider.baseUrl, authStrategy: 'api_key', apiFormat: 'anthropic',
+    })))
+  })
+
+  it('blocks incompatible endpoints before saving and permits returning to Claude Code', async () => {
+    vi.mocked(providersApi.list).mockResolvedValue({ providers: [{ ...provider, runtime: 'agent-sdk' }], activeId: null })
+    const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider: { ...provider, runtime: 'claude-code' } })
+    render(<ProviderSettings />)
+    const card = within(await screen.findByTestId(`provider-${provider.id}`))
+    expect(card.getByText('Official Agent SDK')).toBeInTheDocument()
+    fireEvent.click(card.getByRole('button', { name: 'Edit' }))
+    const dialog = within(screen.getByRole('dialog'))
+    expect(dialog.getByRole('combobox', { name: 'Conversation runtime' })).toHaveValue('agent-sdk')
+    fireEvent.change(dialog.getByLabelText(/Base URL/, { selector: 'input' }), { target: { value: 'https://other.invalid' } })
+    expect(dialog.getByRole('alert')).toHaveTextContent('Official Agent SDK requires')
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(update).not.toHaveBeenCalled()
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Conversation runtime' }), { target: { value: 'claude-code' } })
+    expect(dialog.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(provider.id, expect.objectContaining({ runtime: 'claude-code', baseUrl: 'https://other.invalid' })))
+  })
+
+  it('creates an SDK provider only after the official endpoint and API Key authentication are set', async () => {
+    const create = vi.spyOn(providersApi, 'create').mockResolvedValue({ provider: { ...provider, runtime: 'agent-sdk' } })
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'Custom API' }))
+    fireEvent.change(dialog.getByRole('combobox', { name: 'Conversation runtime' }), { target: { value: 'agent-sdk' } })
+    fireEvent.change(dialog.getByLabelText(/Base URL/, { selector: 'input' }), { target: { value: 'https://api.anthropic.com' } })
+    fireEvent.change(dialog.getByLabelText(/API Key/, { selector: 'input' }), { target: { value: 'fake-sdk-key' } })
+    fireEvent.change(dialog.getByLabelText(/Main Model/, { selector: 'input' }), { target: { value: 'fixture-main' } })
+    expect(dialog.getByRole('button', { name: 'Add' })).toBeDisabled()
+    fireEvent.click(dialog.getByRole('button', { name: 'Bearer Token (ANTHROPIC_AUTH_TOKEN)' }))
+    fireEvent.click(screen.getByRole('option', { name: /API Key \(ANTHROPIC_API_KEY\)/ }))
+    expect(dialog.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      presetId: 'custom', runtime: 'agent-sdk', baseUrl: 'https://api.anthropic.com', authStrategy: 'api_key', apiKey: 'fake-sdk-key',
+    })))
+  })
+})
+
 describe('image generation protocol settings', () => {
   let originalPresets = useProviderStore.getState().presets
   beforeEach(() => {

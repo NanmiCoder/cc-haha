@@ -1051,20 +1051,25 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     }
 
     const targetChatState = useChatStore.getState().sessions[targetSessionId]?.chatState ?? 'idle'
+    let accepted: boolean
     if (!isMemberSession && targetChatState !== 'idle') {
-      queueUserMessage(targetSessionId, {
+      accepted = Boolean(queueUserMessage(targetSessionId, {
         content: contentForModel,
         sessionReferences,
         attachments: [...uploadAttachmentPayload, ...workspaceAttachmentPayload],
         displayContent,
         displayAttachments: visibleAttachmentPayload,
-      })
+      }))
     } else {
-      sendMessage(targetSessionId, contentForModel, [...uploadAttachmentPayload, ...workspaceAttachmentPayload], {
+      accepted = sendMessage(targetSessionId, contentForModel, [...uploadAttachmentPayload, ...workspaceAttachmentPayload], {
         sessionReferences,
         displayContent,
         displayAttachments: visibleAttachmentPayload,
-      })
+      }) !== false
+    }
+    if (!accepted) {
+      useUIStore.getState().addToast({ type: 'error', message: t('chat.inputRecoveryUnavailable') })
+      return
     }
     recordRecentSkills(mentions.flatMap(mention => mention.kind === 'skill' && mention.id ? [mention.id] : []))
     if (sendAsTeam) capabilityMenu.disarmAgentTeam()
@@ -1264,7 +1269,10 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     if (!activeTabId || !editingQueuedMessageId) return
     const nextContent = editingQueuedMessageText.trim()
     if (!nextContent) return
-    updateQueuedUserMessage(activeTabId, editingQueuedMessageId, nextContent)
+    if (updateQueuedUserMessage(activeTabId, editingQueuedMessageId, nextContent) === false) {
+      useUIStore.getState().addToast({ type: 'error', message: t('chat.inputRecoveryUnavailable') })
+      return
+    }
     setEditingQueuedMessageId(null)
     setEditingQueuedMessageText('')
   }

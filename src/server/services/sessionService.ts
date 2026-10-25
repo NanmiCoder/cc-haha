@@ -56,6 +56,9 @@ import {
 import { ProviderService } from './providerService.js'
 import { shouldHideCommandMetadataContent } from '../../utils/commandMetadata.js'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
+import { normalizeOfficialAgentSdkToolContent } from '../../shared/officialAgentSdkToolNames.js'
+import { readConversationRuntime } from './officialAgentSdkRuntime.js'
+import { officialAgentSdkRewindFilter } from './officialAgentSdkSessions.js'
 import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
 import {
   extractGoalCreationTitle,
@@ -1455,6 +1458,27 @@ export class SessionService {
     return (await this.getMetadataProjection(filePath, projectDir)).summary
   }
 
+  /**
+   * SDK startup temporarily relocates the metadata-only transcript so the native
+   * CLI can reserve its session ID. A lookup can finish just before either move;
+   * resolve the session again instead of using that now-stale file path.
+   */
+  private async getSessionMetadataProjection(sessionId: string) {
+    for (let attempt = 0; ; attempt++) {
+      const found = await this.findSessionFile(sessionId)
+      if (!found) return null
+      try {
+        return await this.getMetadataProjection(found.filePath, found.projectDir)
+      } catch (error) {
+        const relocated = (error as NodeJS.ErrnoException).code === 'ENOENT'
+        const changed = error instanceof ApiError && error.code === 'HISTORY_CHANGED'
+        // Cover canonical → staging → canonical, without hiding persistent
+        // failures or substituting default launch settings for unreadable data.
+        if (attempt >= 2 || (!relocated && !changed)) throw error
+      }
+    }
+  }
+
   private async getMetadataProjection(filePath: string, projectDir: string): Promise<{
     summary: SessionListSummary
     launchInfo: SessionLaunchInfo
@@ -2143,7 +2167,7 @@ export class SessionService {
         }) ?? undefined
       : undefined
 
-    let content = msg.content
+    let content = normalizeOfficialAgentSdkToolContent(msg.content)
     let sessionReferences: { sessionId: string }[] | undefined
     let collaboration: { sourceSessionId: string; messageId: string } | undefined
     if (type === 'user') {
@@ -4952,10 +4976,7 @@ export class SessionService {
     if (isSideChatId(sessionId)) return getSideChat(sessionId)?.launchInfo.customTitle ?? null
     const memory = this.memoryLaunchInfo.get(this.memorySessionKey(sessionId))
     if (memory?.customTitle) return memory.customTitle
-    const found = await this.findSessionFile(sessionId)
-    if (!found) return null
-
-    return (await this.getMetadataProjection(found.filePath, found.projectDir)).customTitle
+    return (await this.getSessionMetadataProjection(sessionId))?.customTitle ?? null
   }
 
   /**
@@ -4966,11 +4987,8 @@ export class SessionService {
     if (isSideChatId(sessionId)) return getSideChat(sessionId)?.launchInfo.workDir ?? null
     const memory = this.memoryLaunchInfo.get(this.memorySessionKey(sessionId))
     if (memory) return memory.workDir
-    const found = await this.findSessionFile(sessionId)
-    if (!found) return null
-
-    const projection = await this.getMetadataProjection(found.filePath, found.projectDir)
-    return projection.launchInfo.workDir
+    const projection = await this.getSessionMetadataProjection(sessionId)
+    return projection?.launchInfo.workDir ?? null
   }
 
   async getSessionMessageCwd(
@@ -4999,10 +5017,9 @@ export class SessionService {
       return side && !side.closed ? { ...side.launchInfo } : null
     }
     const memory = this.memoryLaunchInfo.get(this.memorySessionKey(sessionId))
-    const found = await this.findSessionFile(sessionId)
-    if (!found) return memory ? { ...memory, transcriptMessageCount: 0 } : null
+    const projection = await this.getSessionMetadataProjection(sessionId)
+    if (!projection) return memory ? { ...memory, transcriptMessageCount: 0 } : null
 
-    const projection = await this.getMetadataProjection(found.filePath, found.projectDir)
     const projected = projection.launchInfo
     return { ...projected, ...memory, transcriptMessageCount: projected.transcriptMessageCount }
   }
@@ -5392,7 +5409,11 @@ export class SessionService {
     }
 
     const removedIds = new Set(removedMessageIds)
+    const sdkKept = readConversationRuntime(getClaudeConfigHomeDir(), sessionId) === 'agent-sdk'
+      ? officialAgentSdkRewindFilter(entries, startMessageId)
+      : null
     const kept = (entry: RawEntry): boolean => {
+      if (sdkKept) return sdkKept(entry)
       if (typeof entry.uuid !== 'string') return true
       if (removedIds.has(entry.uuid)) return false
       if (

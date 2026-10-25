@@ -14,6 +14,7 @@ function isBusyBackgroundTask(task: BackgroundAgentTask): boolean {
   // AutoDream is detached maintenance work: it remains visible and stoppable
   // in Activity, but must not keep the foreground conversation marked busy.
   return isVisibleSessionBackgroundTask(task) &&
+    !task.ambient && !task.skipTranscript && task.isBackgrounded !== false && task.nativeStatus !== 'paused' &&
     task.status === 'running' &&
     task.taskType !== 'dream'
 }
@@ -35,6 +36,7 @@ export function listRunningBackgroundTasks(tasks?: Record<string, BackgroundAgen
 export function hasRunningSubagentTasks(tasks?: Record<string, BackgroundAgentTask>): boolean {
   return Object.values(tasks ?? {}).some(
     (task) => isVisibleSessionBackgroundTask(task) &&
+      !task.ambient && !task.skipTranscript && task.isBackgrounded !== false && task.nativeStatus !== 'paused' &&
       task.status === 'running' &&
       (task.taskType === 'local_agent' || task.taskType === 'remote_agent'),
   )

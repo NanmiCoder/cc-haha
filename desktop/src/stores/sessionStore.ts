@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { removePendingInputRecovery } from './pendingInputRecovery'
 import {
   sessionsApi,
   type BatchDeleteSessionsResponse,
@@ -65,7 +66,7 @@ type SessionStore = {
   branchSession: (
     sourceSessionId: string,
     targetMessageId: string,
-    options?: { title?: string },
+    options?: { title?: string; agentSdk?: { providerId: string; modelId?: string } },
   ) => Promise<BranchSessionResult>
   deleteSession: (id: string) => Promise<void>
   deleteSessions: (ids: string[]) => Promise<BatchDeleteSessionsResponse>
@@ -348,6 +349,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
     const result = await sessionsApi.branch(sourceSessionId, {
       targetMessageId,
       ...(options?.title ? { title: options.title } : {}),
+      ...(options?.agentSdk ? { agentSdk: options.agentSdk } : {}),
     })
     invalidateRecentProjectsCache()
     const sourceSession = get().sessions.find((session) => session.id === sourceSessionId)
@@ -362,6 +364,14 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       projectRoot: sourceSession?.projectRoot ?? sourceSession?.workDir ?? result.workDir ?? null,
       workDir: result.workDir ?? sourceSession?.workDir ?? null,
       workDirExists: true,
+      ...(result.runtimeProviderId ? { runtimeProviderId: result.runtimeProviderId } : {}),
+      ...(result.runtimeModelId ? { runtimeModelId: result.runtimeModelId } : {}),
+    }
+
+    if (result.runtimeProviderId && result.runtimeModelId) {
+      useSessionRuntimeStore.getState().setSelection(result.sessionId, {
+        providerId: result.runtimeProviderId, modelId: result.runtimeModelId,
+      })
     }
 
     pendingCreatedSessionIds.add(result.sessionId)
@@ -385,6 +395,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
 
   deleteSession: async (id: string) => {
     await sessionsApi.delete(id)
+    removePendingInputRecovery(id)
     releaseWorkspaceSession(id)
     useTabStore.getState().markSessionsDeleted([id])
     pendingCreatedSessionIds.delete(id)
@@ -411,6 +422,7 @@ export const useSessionStore = create<SessionStore>((set, get) => ({
       invalidateRecentProjectsCache()
     }
     for (const id of result.successes) {
+      removePendingInputRecovery(id)
       releaseWorkspaceSession(id)
       pendingCreatedSessionIds.delete(id)
       pendingSessionTitles.delete(id)

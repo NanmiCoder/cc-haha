@@ -1015,6 +1015,7 @@
           {
             "id": "msg#1",
             "type": "error",
+            "localHistoryRecovery": "error",
             "message": "Prompt is too long",
             "code": "API_ERROR",
             "timestamp": 0
@@ -1043,6 +1044,7 @@
           {
             "id": "msg#1",
             "type": "error",
+            "localHistoryRecovery": "error",
             "message": "Prompt is too long",
             "code": "API_ERROR",
             "timestamp": 0
@@ -1071,6 +1073,7 @@
           {
             "id": "msg#1",
             "type": "error",
+            "localHistoryRecovery": "error",
             "message": "Prompt is too long",
             "code": "API_ERROR",
             "timestamp": 0
@@ -1099,6 +1102,7 @@
           {
             "id": "msg#1",
             "type": "error",
+            "localHistoryRecovery": "error",
             "message": "Prompt is too long",
             "code": "API_ERROR",
             "timestamp": 0

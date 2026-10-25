@@ -1,4 +1,7 @@
 import { isInlineImagePath } from '@/lib/attachmentImages'
+import { nativeMessageMatches, sameNativeMessageIds, stampNativeMessageProvenance } from './nativeMessageProvenance'
+import { applyOfficialSdkTaskEvent } from './officialAgentSdkEvents'
+import { readPendingInputRecovery, removePendingInputRecovery, savePendingInputError, savePendingInputRecovery } from './pendingInputRecovery'
 import { isSideChatSession } from '@/lib/sideChatSessions'
 import { CHAT_HISTORY_CACHE_BYTES, historyCacheBytes } from '../lib/chatHistoryCache'
 import { normalizeSessionReferences, splitSessionReferenceContext } from '@/lib/sessionReferences'
@@ -171,6 +174,7 @@ export type PerSessionState = {
   historyPageLoading?: boolean
   historyRecoveryStatus?: 'loading' | 'ready' | 'incomplete' | 'error'
   streamingText: string
+  nativeStreamingMessageIds?: string[]
   streamingToolInput: string
   activeToolUseId: string | null
   activeToolName: string | null
@@ -428,8 +432,8 @@ type ChatStore = {
     sessionId: string,
     content: string,
     attachments?: AttachmentRef[],
-    options?: { sessionReferences?: Array<{ sessionId: string }>; displayContent?: string; displayAttachments?: AttachmentRef[]; hideDisplayContent?: boolean },
-  ) => void
+    options?: { sessionReferences?: Array<{ sessionId: string }>; displayContent?: string; displayAttachments?: AttachmentRef[]; hideDisplayContent?: boolean; recoveryInputId?: string },
+  ) => boolean
   respondToPermission: (
     sessionId: string,
     requestId: string,
@@ -494,7 +498,7 @@ type ChatStore = {
     sessionId: string,
     message: Omit<QueuedUserMessage, 'id' | 'createdAt'>,
   ) => string
-  updateQueuedUserMessage: (sessionId: string, messageId: string, content: string) => void
+  updateQueuedUserMessage: (sessionId: string, messageId: string, content: string) => boolean
   removeQueuedUserMessage: (sessionId: string, messageId: string) => void
   sendQueuedUserMessage: (sessionId: string, messageId: string) => void
   clearMessages: (sessionId: string) => void
@@ -1184,6 +1188,7 @@ function appendAssistantTextMessage(
   // 才生效，够不到一轮之内被工具调用隔开的重复。
   const canMergeIntoLast =
     last?.type === 'assistant_text' &&
+    !last.nativeMessageIds?.length &&
     (
       transcriptMessageId
         ? last.transcriptMessageId === transcriptMessageId
@@ -1992,6 +1997,8 @@ function isCoalescibleProse(message: UIMessage): message is CoalescibleProseMess
 
 function sameRestoredProse(live: CoalescibleProseMessage, restored: UIMessage): boolean {
   if (restored.type !== live.type) return false
+  if (live.type === 'user_text' && live.localHistoryRecovery === 'input' &&
+    !live.transcriptMessageId) return false
   // Live thinking concatenates consecutive streamed blocks while history joins
   // them with blank lines, so only the non-whitespace text identifies it.
   if (live.type === 'thinking') {
@@ -2172,6 +2179,65 @@ function mergeColdRestoredHistoryIntoLiveMessages(
     if (index < restoredCount) ordered.push(merged[index]!)
   }
   return collapseDuplicateStoppedStatuses(ordered)
+}
+
+function retainLocalHistoryRecovery(
+  sessionId: string,
+  restoredMessages: UIMessage[],
+  liveMessages: UIMessage[],
+  durableMessages: UIMessage[],
+): UIMessage[] {
+  // A transport/startup error can happen before the CLI writes the user's
+  // input. Transcript refreshes are authoritative for model output, but not
+  // for these client-owned rows. Keep their exact text and attachments until
+  // a durable user row confirms delivery (or the user explicitly rewinds).
+  if (!liveMessages.some((message) => message.localHistoryRecovery)) return restoredMessages
+  const claimedInputIds = new Set<string>()
+  const hydrated = mergeRestoredTranscriptMessageIds(liveMessages, durableMessages).map((message, index) => {
+    if (message.localHistoryRecovery !== 'input' || message.type !== 'user_text') return message
+    // After restart the only cached row may be an unconfirmed input. Equal
+    // text in an older turn does not prove that this new send reached disk.
+    const nextInputIndex = liveMessages.findIndex((candidate, candidateIndex) =>
+      candidateIndex > index && candidate.type === 'user_text')
+    const failedBeforeNextInput = nextInputIndex >= 0 && liveMessages.slice(index + 1, nextInputIndex)
+      .some((candidate) => candidate.type === 'error')
+    const retryStartedAt = failedBeforeNextInput ? liveMessages[nextInputIndex]!.timestamp : Infinity
+    const confirmed = durableMessages.find((candidate) => candidate.type === 'user_text' &&
+      candidate.transcriptMessageId && !claimedInputIds.has(candidate.transcriptMessageId) &&
+      candidate.content.trim() === message.content.trim() &&
+      (message.nativeMessageIds?.includes(candidate.transcriptMessageId) ||
+        (candidate.timestamp >= message.timestamp && candidate.timestamp < retryStartedAt)))
+    const transcriptMessageId = confirmed?.type === 'user_text' ? confirmed.transcriptMessageId : undefined
+    if (transcriptMessageId) claimedInputIds.add(transcriptMessageId)
+    return { ...message, transcriptMessageId }
+  })
+  const acceptedIds = new Set(hydrated.flatMap((message) =>
+    message.localHistoryRecovery === 'input' && message.type === 'user_text' && message.transcriptMessageId
+      ? [message.id] : []))
+  if (acceptedIds.size) removePendingInputRecovery(sessionId, acceptedIds)
+  const confirmedNoticeIds = new Set([...acceptedIds].map((id) => `pending-input-${id}`))
+  const isConfirmedRecoveryNotice = (message: UIMessage) =>
+    message.type === 'error' && message.code === 'INPUT_DELIVERY_UNCONFIRMED' &&
+    confirmedNoticeIds.has(message.id)
+  const restoredWithConfirmedNoticesRemoved = restoredMessages.filter((message) => !isConfirmedRecoveryNotice(message))
+  const restoredByIdentity = new Map<string, UIMessage>()
+  for (const message of restoredWithConfirmedNoticesRemoved) {
+    for (const identity of strongHistoryMessageIdentities(message)) {
+      restoredByIdentity.set(identity, message)
+    }
+  }
+  const recoveryAndAnchors = hydrated.flatMap((message) => {
+    if (isConfirmedRecoveryNotice(message)) return []
+    if (message.localHistoryRecovery === 'error' ||
+      (message.localHistoryRecovery === 'input' &&
+        message.type === 'user_text' && !message.transcriptMessageId)) return [message]
+    const anchor = strongHistoryMessageIdentities(message)
+      .map((identity) => restoredByIdentity.get(identity)).find(Boolean)
+    // Anchors supply placement only. Overlaying an old cached tool here would
+    // resurrect stale pending/stopped state after an authoritative refresh.
+    return anchor ? [anchor] : []
+  })
+  return mergeColdRestoredHistoryIntoLiveMessages(restoredWithConfirmedNoticesRemoved, recoveryAndAnchors)
 }
 
 function needsTranscriptIdHydrationRetry(session: PerSessionState | undefined): boolean {
@@ -3163,7 +3229,34 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       void useCLITaskStore.getState().fetchSessionTasks(sessionId)
     }
 
-    const existing = get().sessions[sessionId]
+    let existing = get().sessions[sessionId]
+    const knownInputIds = new Set([
+      ...(existing?.messages.map((message) => message.id) ?? []),
+      ...(existing?.queuedUserMessages?.map((message) => message.id) ?? []),
+    ])
+    let restoreInput = false
+    const recoveryRows = readPendingInputRecovery(sessionId, t('chat.inputRecoveryUnconfirmed')).filter((message) => {
+      if (message.type === 'user_text') restoreInput = !knownInputIds.has(message.id)
+      return restoreInput && !knownInputIds.has(message.id)
+    })
+    if (recoveryRows.length > 0) {
+      // Runtime selection/draft hydration can create an empty session before
+      // the page connects. Recover before the already-connected early return,
+      // rather than treating an existing [] as proof there is nothing to load.
+      set((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...createDefaultSessionState(),
+            ...state.sessions[sessionId],
+            messages: mergeColdRestoredHistoryIntoLiveMessages(state.sessions[sessionId]?.messages ?? [], recoveryRows),
+            historyHydrated: false,
+            historyStatus: 'idle',
+          },
+        },
+      }))
+      existing = get().sessions[sessionId]
+    }
     if (existing && existing.connectionState !== 'disconnected') {
       const enableHistoryBootstrap =
         existing.historyBootstrapDisabled === true &&
@@ -3471,6 +3564,20 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       ? sessionTasks.map((t) => ({ id: t.id, subject: t.subject, status: t.status, activeForm: t.activeForm }))
       : []
 
+    const userMessage: Extract<UIMessage, { type: 'user_text' }> = {
+      id: options?.recoveryInputId ?? nextId(), type: 'user_text', localHistoryRecovery: 'input',
+      ...(options?.sessionReferences?.length ? { sessionReferences: options.sessionReferences } : {}),
+      content: userFacingContent,
+      ...(userFacingContent !== modelFacingContent ? { modelContent: modelFacingContent } : {}),
+      attachments: isDirectAgentSession ? undefined : uiAttachments,
+      timestamp: Date.now(),
+      ...(isDirectAgentSession ? { pending: true } : { awaitingReplay: true }),
+    }
+    if (!savePendingInputRecovery(sessionId, userMessage)) {
+      get().setPreparingTurn(sessionId, false)
+      return false
+    }
+
     if (!isDirectAgentSession && allTasksDone) {
       void taskStore.resetCompletedTasks(sessionId)
     }
@@ -3499,16 +3606,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           timestamp: now,
         })
       }
-      newMessages.push({
-        id: nextId(),
-        type: 'user_text',
-        ...(options?.sessionReferences?.length ? { sessionReferences: options.sessionReferences } : {}),
-        content: userFacingContent,
-        ...(userFacingContent !== modelFacingContent ? { modelContent: modelFacingContent } : {}),
-        attachments: isDirectAgentSession ? undefined : uiAttachments,
-        timestamp: now,
-        ...(isDirectAgentSession ? { pending: true } : { awaitingReplay: true }),
-      })
+      newMessages.push(userMessage)
 
       if (!isDirectAgentSession && session.elapsedTimer) clearInterval(session.elapsedTimer)
 
@@ -3561,7 +3659,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             })),
           }))
         })
-      return
+      return true
     }
 
     if (
@@ -3600,7 +3698,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }),
         }))
       })
-      return
+      return true
     }
 
     const selection = useSessionRuntimeStore.getState().selections[sessionId]
@@ -3622,6 +3720,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
     }
     wsManager.send(sessionId, { type: 'user_message', content, attachments, ...(options?.sessionReferences?.length ? { sessionReferences: options.sessionReferences } : {}) })
+    return true
   },
 
   respondToPermission: (sessionId, requestId, allowed, options) => {
@@ -4006,7 +4105,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                     mergeRestoredTranscriptMessageIds(s.messages, uiMessages),
                   )
                 : currentLiveMessages
-              const messages = shouldBackfillColdHistory
+              const restoredMessages = shouldBackfillColdHistory
                 ? mergeBackgroundTaskMessages(
                     mergeColdRestoredHistoryIntoLiveMessages(
                       uiMessages,
@@ -4019,6 +4118,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                     mergeBackgroundTaskMessages(s.messages, backgroundAgentTasks),
                     uiMessages,
                   )
+              const messages = retainLocalHistoryRecovery(sessionId, restoredMessages, s.messages, uiMessages)
               const agentTaskNotifications = mergeAgentTaskNotificationRecords(
                 currentAgentTaskNotifications,
                 applicableRestoredNotifications,
@@ -4371,7 +4471,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             )
           : uiMessages
         const messages = mergeBackgroundTaskMessages(
-          reloadedMessages,
+          options?.requireApplied
+            ? reloadedMessages
+            : retainLocalHistoryRecovery(sessionId, reloadedMessages, session.messages, uiMessages),
           backgroundAgentTasks,
         )
         const agentTaskNotifications = mergeAgentTaskNotificationRecords(
@@ -4431,6 +4533,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       })
 
       if (!historyApplied) return skipReload()
+      if (options?.requireApplied) removePendingInputRecovery(sessionId)
       if (!historyComplete && page) void recoverSessionHistory(sessionId, page.sourceVersion)
       const terminalReconnectBoundary = terminalReconnectHistoryBoundaries.get(sessionId)
       if (
@@ -4631,6 +4734,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
   queueUserMessage: (sessionId, message) => {
     const id = `queued-user-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const queued = { ...message, id, createdAt: Date.now() }
+    const human = appendOptimisticQueuedUserMessage([], queued, queued.createdAt)[0]
+    if (human?.type !== 'user_text' || !savePendingInputRecovery(sessionId, human)) return ''
     set((state) => {
       const session = state.sessions[sessionId] ?? createDefaultSessionState()
       return {
@@ -4640,11 +4746,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ...session,
             queuedUserMessages: [
               ...(session.queuedUserMessages ?? []),
-              {
-                ...message,
-                id,
-                createdAt: Date.now(),
-              },
+              queued,
             ],
           },
         },
@@ -4655,7 +4757,12 @@ export const useChatStore = create<ChatStore>((setState, get) => {
 
   updateQueuedUserMessage: (sessionId, messageId, content) => {
     const nextContent = content.trim()
-    if (!nextContent) return
+    if (!nextContent) return false
+    const queued = get().sessions[sessionId]?.queuedUserMessages?.find((message) => message.id === messageId)
+    if (!queued) return false
+    const edited = { ...queued, content: replaceQueuedMessageDisplayContent(queued, nextContent), displayContent: nextContent }
+    const human = appendOptimisticQueuedUserMessage([], edited, queued.createdAt)[0]
+    if (human?.type !== 'user_text' || !savePendingInputRecovery(sessionId, human)) return false
     set((state) => ({
       sessions: updateSessionIn(state.sessions, sessionId, (session) => ({
         queuedUserMessages: (session.queuedUserMessages ?? []).map((message) =>
@@ -4668,9 +4775,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             : message),
       })),
     }))
+    return true
   },
 
   removeQueuedUserMessage: (sessionId, messageId) => {
+    removePendingInputRecovery(sessionId, new Set([messageId]))
     set((state) => ({
       sessions: updateSessionIn(state.sessions, sessionId, (session) => ({
         queuedUserMessages: (session.queuedUserMessages ?? []).filter((message) => message.id !== messageId),
@@ -4684,8 +4793,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     if (!session || !queuedMessage) return
 
     if (session.chatState === 'idle') {
-      get().removeQueuedUserMessage(sessionId, messageId)
-      get().sendMessage(
+      const sent = get().sendMessage(
         sessionId,
         queuedMessage.content,
         queuedMessage.attachments,
@@ -4693,8 +4801,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           sessionReferences: queuedMessage.sessionReferences,
           displayContent: queuedMessage.displayContent,
           displayAttachments: queuedMessage.displayAttachments,
+          recoveryInputId: queuedMessage.id,
         },
       )
+      if (sent) set((state) => ({
+        sessions: updateSessionIn(state.sessions, sessionId, (current) => ({
+          queuedUserMessages: (current.queuedUserMessages ?? []).filter((message) => message.id !== messageId),
+        })),
+      }))
       return
     }
 
@@ -4724,6 +4838,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
   },
 
   clearMessages: (sessionId) => {
+    removePendingInputRecovery(sessionId)
     advanceHistoryLifecycle(sessionId)
     clearPendingTaskToolUseIds(sessionId)
     clearPendingToolParentUseIds(sessionId)
@@ -4757,7 +4872,14 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       return
     }
     const update = (updater: (session: PerSessionState) => Partial<PerSessionState>) => {
-      set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, updater) }))
+      set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, session => {
+        const patch = updater(session)
+        return {
+          ...patch,
+          ...(patch.messages ? { messages: stampNativeMessageProvenance(session.messages, patch.messages, msg, session.nativeStreamingMessageIds) } : {}),
+          ...(patch.streamingText === '' && !('nativeStreamingMessageIds' in patch) ? { nativeStreamingMessageIds: undefined } : {}),
+        }
+      }) }))
     }
     const ensureElapsedTimer = () => {
       const session = get().sessions[sessionId]
@@ -5129,7 +5251,9 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           update(() => ({ stopAllSubagentsRequested: false }))
         }
         const pendingText = `${session.streamingText}${consumePendingDelta(sessionId)}`
-        if (msg.blockType !== 'text' && pendingText.trim()) {
+        const newNativeBlock = Boolean(msg.nativeMessageIds?.length) &&
+          !sameNativeMessageIds(session.nativeStreamingMessageIds, msg.nativeMessageIds)
+        if ((msg.blockType !== 'text' || newNativeBlock) && pendingText.trim()) {
           update((s) => ({
             messages: appendAssistantTextMessage(s.messages, pendingText, Date.now()),
             streamingText: '',
@@ -5137,7 +5261,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
         if (msg.blockType === 'text') {
           update((s) => ({
-            ...(pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
+            ...(!newNativeBlock && pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
+            ...(msg.nativeMessageIds?.length ? { nativeStreamingMessageIds: msg.nativeMessageIds } : {}),
             chatState: 'streaming',
             activeThinkingId: null,
             apiRetry: null,
@@ -5361,7 +5486,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             skippedThinkingBlock = true
             return { messages: base, streamingText: '' }
           }
-          if (last && last.type === 'thinking') {
+          if (last && last.type === 'thinking' && sameNativeMessageIds(last.nativeMessageIds, msg.nativeMessageIds)) {
             const updated = [...base]
             updated[lastIndex] = {
               ...last,
@@ -5729,7 +5854,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ? appendAssistantTextMessage(session.messages, pendingText, Date.now())
             : session.messages
           return {
-            messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration),
+            messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.nativeMessageIds),
             ...(pendingText.trim() ? { streamingText: '' } : {}),
             activeThinkingId: null,
             replaceHistoryOnCompletion: false,
@@ -5748,11 +5873,15 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         const errorMessage: Extract<UIMessage, { type: 'error' }> = {
           id: nextId(),
           type: 'error',
+          localHistoryRecovery: 'error',
           message: msg.message,
           code: msg.code,
           ...(msg.businessErrorCode ? { businessErrorCode: msg.businessErrorCode } : {}),
           timestamp: Date.now(),
         }
+        const failedInput = [...(get().sessions[sessionId]?.messages ?? [])].reverse()
+          .find((message) => message.type === 'user_text' && message.localHistoryRecovery === 'input')
+        if (failedInput) savePendingInputError(sessionId, errorMessage, failedInput.id)
         if (msg.code === 'RUNTIME_CONFIG_INVALID') {
           // Validation rejects the selection before changing the runtime. It
           // neither ends the active turn nor invalidates an in-flight history load.
@@ -5865,6 +5994,116 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         useTabStore.getState().updateTabTitle(msg.sessionId, msg.title)
         break
       case 'system_notification':
+        if ((msg.data as { official_agent_sdk?: boolean } | undefined)?.official_agent_sdk) {
+          const data = msg.data as Record<string, unknown>
+          const previousNativeTasks = get().sessions[sessionId]?.backgroundAgentTasks ?? {}
+          const nativeTasks = applyOfficialSdkTaskEvent(previousNativeTasks, msg.subtype, data, Date.now())
+          if (nativeTasks) {
+            // Rejected old-run frames must not overwrite notifications, clear a
+            // current Stop request, or mutate the history boundary.
+            if (nativeTasks === previousNativeTasks) break
+            update(session => {
+              const agentTaskNotifications = { ...session.agentTaskNotifications }
+              const stoppingBackgroundTaskIds = { ...session.stoppingBackgroundTaskIds }
+              const pendingBackgroundTaskStopFailures = { ...session.pendingBackgroundTaskStopFailures }
+              for (const task of Object.values(nativeTasks)) {
+                if (task === previousNativeTasks[task.taskId]) continue
+                if (task.status === 'running') {
+                  // Hydrated terminal notifications take precedence over the
+                  // task map in Agent cards. A resumed run must retire them.
+                  for (const [key, notification] of Object.entries(agentTaskNotifications)) {
+                    if (notification.taskId === task.taskId || key === task.toolUseId) delete agentTaskNotifications[key]
+                  }
+                  const previous = previousNativeTasks[task.taskId]
+                  if (previous?.runId !== task.runId || previous?.status !== 'running') {
+                    delete stoppingBackgroundTaskIds[task.taskId]
+                    delete pendingBackgroundTaskStopFailures[task.taskId]
+                  }
+                  if (session.stopAllSubagentsRequested && isCancellableSubagentTask(task)) {
+                    stoppingBackgroundTaskIds[task.taskId] = true
+                  }
+                } else {
+                  delete stoppingBackgroundTaskIds[task.taskId]
+                  delete pendingBackgroundTaskStopFailures[task.taskId]
+                  if (task.toolUseId) {
+                    agentTaskNotifications[task.toolUseId] = {
+                      taskId: task.taskId, toolUseId: task.toolUseId, status: task.status,
+                      workflowRunId: task.workflowRunId, summary: task.summary ?? task.error,
+                      result: task.result, outputFile: task.outputFile, usage: task.usage,
+                    }
+                  }
+                }
+              }
+              const transcriptTasks = Object.fromEntries(Object.entries(nativeTasks).filter(([, task]) => !task.skipTranscript))
+              const messages = session.messages.filter(message =>
+                message.type !== 'background_task' || !nativeTasks[message.task.taskId]?.skipTranscript)
+              return {
+                backgroundAgentTasks: nativeTasks,
+                messages: mergeBackgroundTaskMessages(messages, transcriptTasks),
+                agentTaskNotifications, stoppingBackgroundTaskIds, pendingBackgroundTaskStopFailures,
+                historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
+              }
+            })
+            if (msg.subtype === 'task_started' || msg.subtype === 'task_progress' || msg.subtype === 'task_notification') {
+              useWorkflowStore.getState().handleTaskEvent(sessionId, msg.subtype, data)
+            }
+            if (get().sessions[sessionId]?.chatState === 'idle') {
+              useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundTasks(nativeTasks) ? 'running' : 'idle')
+            }
+            break
+          }
+          if (msg.subtype === 'commands_changed' && Array.isArray(data.commands)) {
+            const commands = normalizeSlashCommandList(data.commands)
+            update(() => ({ slashCommands: commands }))
+            break
+          }
+          if (msg.subtype === 'conversation_reset') {
+            get().handleServerMessage(sessionId, { type: 'system_notification', subtype: 'session_cleared' })
+            break
+          }
+          if ((msg.subtype === 'model_refusal_fallback' && data.scope !== 'local') || msg.subtype === 'model_consent_fallback') {
+            const selected = useSessionRuntimeStore.getState().selections[sessionId]
+            if (selected && typeof data.fallback_model === 'string' &&
+              (selected.modelId === data.original_model || selected.modelId === 'default')) {
+              useSessionRuntimeStore.getState().setSelection(sessionId, { ...selected, modelId: data.fallback_model })
+              useSessionRuntimeStore.getState().settleSelection(sessionId)
+            }
+          }
+          if (['model_refusal_fallback', 'model_refusal_no_fallback', 'model_consent_fallback'].includes(msg.subtype) && msg.message) {
+            const noticeId = typeof data.uuid === 'string' ? data.uuid : nextId()
+            update(session => session.messages.some(message => message.id === noticeId) ? {} : {
+              messages: [...session.messages, { id: noticeId, type: 'system', content: msg.message!, timestamp: Date.now() }],
+            })
+          }
+        }
+        if (msg.subtype === 'official_sdk_messages_retracted') {
+          const data = msg.data as { ids?: unknown; edit?: { text?: unknown; uuid?: unknown } } | undefined
+          const ids = new Set<string>(Array.isArray(data?.ids) ? data.ids.filter((id): id is string => typeof id === 'string') : [])
+          const current = get().sessions[sessionId]
+          if (current?.nativeStreamingMessageIds?.some(id => ids.has(id))) clearPendingDelta(sessionId)
+          update(session => {
+            const removed = session.messages.filter(message => nativeMessageMatches(message, ids))
+            const removedTools = new Set(removed.flatMap(message => message.type === 'tool_use' ? [message.toolUseId] : []))
+            const clearTool = Boolean(session.activeToolUseId && removedTools.has(session.activeToolUseId))
+            if (clearTool) clearPendingToolInputDelta(sessionId)
+            return {
+              messages: session.messages.filter(message => !nativeMessageMatches(message, ids)),
+              ...(session.nativeStreamingMessageIds?.some(id => ids.has(id)) ? { streamingText: '', nativeStreamingMessageIds: undefined } : {}),
+              ...(clearTool ? { activeToolUseId: null, activeToolName: null, streamingToolInput: '' } : {}),
+              ...(removed.some(message => message.id === session.activeThinkingId) ? { activeThinkingId: null } : {}),
+            }
+          })
+          if (typeof data?.edit?.text === 'string' && typeof data.edit.uuid === 'string') {
+            const human = current?.messages.find(message => message.type === 'user_text' &&
+              (message.id === data.edit!.uuid || message.nativeMessageIds?.includes(String(data.edit!.uuid)) ||
+                ('transcriptMessageId' in message && message.transcriptMessageId === data.edit!.uuid)))
+            get().queueComposerPrefill(sessionId, {
+              text: data.edit.text,
+              ...(human?.type === 'user_text' ? { attachments: human.attachments, sessionReferences: human.sessionReferences } : {}),
+            })
+          }
+          break
+        }
         if (msg.subtype === 'session_state_changed') {
           const runState = (msg.data as { state?: unknown } | undefined)?.state
           if (runState === 'running' || runState === 'idle') {
@@ -5909,6 +6148,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             })
         }
         if (msg.subtype === 'session_cleared') {
+          removePendingInputRecovery(sessionId)
           pendingOwnedTaskEvents.delete(sessionId)
           advanceHistoryLifecycle(sessionId)
           const session = get().sessions[sessionId]
@@ -7737,6 +7977,7 @@ export function appendReplayedUserMessage(
   timestamp: number,
   sessionReferences?: Array<{ sessionId: string }>,
   collaboration?: { sourceSessionId: string; messageId?: string },
+  nativeMessageIds?: string[],
 ): UIMessage[] {
   // The replayed text carries server-appended image-metadata lines that the
   // optimistic message never had. Normalize them away (same as the history
@@ -7752,11 +7993,11 @@ export function appendReplayedUserMessage(
   const currentTurnUserIndex = findCurrentTurnUserMessageIndex(messages, modelContent, parsed)
   if (currentTurnUserIndex >= 0) {
     const optimisticMessage = messages[currentTurnUserIndex]
-    if (optimisticMessage?.type === 'user_text' && (optimisticMessage.optimisticQueued || optimisticMessage.awaitingReplay)) {
+    if (optimisticMessage?.type === 'user_text' && (optimisticMessage.optimisticQueued || optimisticMessage.awaitingReplay || nativeMessageIds?.length)) {
       const { optimisticQueued: _optimisticQueued, awaitingReplay: _awaitingReplay, ...confirmedMessage } = optimisticMessage
       return [
         ...messages.slice(0, currentTurnUserIndex),
-        confirmedMessage,
+        { ...confirmedMessage, ...(nativeMessageIds?.length ? { nativeMessageIds } : {}) },
         ...messages.slice(currentTurnUserIndex + 1),
       ]
     }
@@ -7768,6 +8009,7 @@ export function appendReplayedUserMessage(
     {
       id: nextId(),
       type: 'user_text',
+      ...(nativeMessageIds?.length ? { nativeMessageIds } : {}),
       content: displayContent,
       ...(references.length ? { sessionReferences: references } : {}),
       ...(collaboration ? { collaboration } : {}),
@@ -7791,9 +8033,10 @@ function appendOptimisticQueuedUserMessage(
   return [
     ...messages,
     {
-      id: nextId(),
+      id: message.id,
       type: 'user_text',
       content: displayContent,
+      localHistoryRecovery: 'input',
       ...(message.sessionReferences?.length ? { sessionReferences: message.sessionReferences } : {}),
       ...(modelContent && modelContent !== displayContent ? { modelContent } : {}),
       ...(attachments ? { attachments } : {}),

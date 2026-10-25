@@ -33,6 +33,10 @@ import * as path from 'node:path'
 import { handleSideQuestionRoute } from './sideQuestions.js'
 import { sessionService } from '../services/sessionService.js'
 import { conversationService } from '../services/conversationService.js'
+import { readConversationRuntime, resolveOfficialAgentSdkModel } from '../services/officialAgentSdkRuntime.js'
+import { createOfficialAgentSdkBranch } from '../services/officialAgentSdkSessions.js'
+import { ProviderService } from '../services/providerService.js'
+import { getAgentSdkProviderError } from '../../shared/providerRuntime.js'
 import { endTeamsForParent } from '../services/teamPlanRuntime.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import {
@@ -323,6 +327,41 @@ export async function handleSessionsApi(
       return await getSessionSlashCommands(sessionId)
     }
 
+    // Ultracode is runtime state, deliberately absent from stored metadata.
+    // A read must never start a CLI or restore a previous opt-in after restart.
+    if (subResource === 'ultracode') {
+      if (segments.length !== 4) throw ApiError.notFound('Ultracode route not found')
+      if (req.method !== 'GET' && req.method !== 'PUT') throw new ApiError(405, 'Method not allowed', 'METHOD_NOT_ALLOWED')
+      if (!await sessionService.getSessionLaunchInfo(sessionId)) throw ApiError.notFound(`Session not found: ${sessionId}`)
+      if (req.method === 'GET' && !conversationService.hasSession(sessionId)) {
+        return Response.json({ enabled: false, active: false, available: true, running: false })
+      }
+      let enabled: boolean | undefined
+      if (req.method === 'PUT') {
+        let body: unknown
+        try { body = await req.json() } catch { throw ApiError.badRequest('Invalid JSON body') }
+        if (!body || typeof body !== 'object' || Array.isArray(body) ||
+          Object.keys(body).some(key => key !== 'enabled') || typeof (body as { enabled?: unknown }).enabled !== 'boolean') {
+          throw ApiError.badRequest('enabled (boolean) is required')
+        }
+        enabled = (body as { enabled: boolean }).enabled
+        // Turning off an already stopped process is idempotent and must not
+        // launch a new process just to turn its default-off flag off again.
+        if (!enabled && !conversationService.hasSession(sessionId)) {
+          return Response.json({ enabled: false, active: false, available: true, running: false })
+        }
+        await ensureCliSessionStartedForControl(sessionId, url)
+      }
+      if (readConversationRuntime(getClaudeConfigHomeDir(), sessionId) !== 'agent-sdk') {
+        throw ApiError.badRequest('This control requires an official Agent SDK conversation')
+      }
+      const state = await conversationService.requestControl(sessionId, {
+        subtype: req.method === 'GET' ? 'get_ultracode' : 'set_ultracode',
+        ...(enabled !== undefined ? { enabled } : {}),
+      }, 10_000, req.signal)
+      return Response.json({ ...state, running: true })
+    }
+
     if (subResource === 'inspection') {
       if (req.method !== 'GET') {
         return Response.json(
@@ -422,6 +461,9 @@ export async function handleSessionsApi(
         if (!content) throw ApiError.badRequest('content (string) is required in request body')
         if (!result.agentId) {
           throw ApiError.conflict(`SubAgent run has no resumable agent id: ${toolUseId}`)
+        }
+        if (readConversationRuntime(getClaudeConfigHomeDir(), sessionId) === 'agent-sdk') {
+          throw ApiError.conflict('The official Agent SDK does not support direct subagent messages. Continue in the main conversation, or use the team member panel for cc-hh teammates.')
         }
         await ensureCliSessionStartedForControl(sessionId, url)
         const response = await conversationService.requestControl(sessionId, {
@@ -1609,9 +1651,9 @@ async function rewindSession(req: Request, sessionId: string): Promise<Response>
 
 async function branchSession(req: Request, sessionId: string): Promise<Response> {
   if ((await sessionService.getSessionLaunchInfo(sessionId))?.agentProfile === 'lean') throw ApiError.conflict('Forking is unavailable in lean sessions')
-  let body: { targetMessageId?: unknown; title?: unknown }
+  let body: { targetMessageId?: unknown; title?: unknown; agentSdk?: { providerId?: unknown; modelId?: unknown } }
   try {
-    body = (await req.json()) as { targetMessageId?: unknown; title?: unknown }
+    body = (await req.json()) as typeof body
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
@@ -1623,6 +1665,19 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
   if (body.title !== undefined && typeof body.title !== 'string') {
     throw ApiError.badRequest('title must be a string')
   }
+  let importContext: { providerId: string; modelId: string; legacy: boolean } | undefined
+  if (body.agentSdk !== undefined) {
+    if (!body.agentSdk || typeof body.agentSdk !== 'object' || typeof body.agentSdk.providerId !== 'string' ||
+      !body.agentSdk.providerId.trim() || (body.agentSdk.modelId !== undefined && (typeof body.agentSdk.modelId !== 'string' || !body.agentSdk.modelId.trim()))) {
+      throw ApiError.badRequest('agentSdk requires providerId and an optional non-empty modelId')
+    }
+    const provider = await new ProviderService().getProvider(body.agentSdk.providerId).catch(() => null)
+    if (!provider || provider.runtime !== 'agent-sdk' || getAgentSdkProviderError(provider)) {
+      throw ApiError.badRequest('Select a configured official Agent SDK provider')
+    }
+    importContext = { providerId: provider.id, modelId: resolveOfficialAgentSdkModel(provider, body.agentSdk.modelId as string | undefined),
+      legacy: readConversationRuntime(getClaudeConfigHomeDir(), sessionId) !== 'agent-sdk' }
+  }
 
   const launchInfo = await sessionService.getSessionLaunchInfo(sessionId)
   if (!launchInfo) {
@@ -1630,15 +1685,23 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
   }
 
   try {
-    const result = await createSessionBranch({
-      sourceSessionId: sessionId,
-      sourceTranscriptPath: launchInfo.filePath,
-      targetMessageId: body.targetMessageId.trim(),
-      title: body.title?.trim() || undefined,
-      sourceWorkDir: launchInfo.workDir,
-      sourceRepository: launchInfo.repository,
-      sourceWorktreeSession: launchInfo.worktreeSession,
-    })
+    const result = importContext || readConversationRuntime(getClaudeConfigHomeDir(), sessionId) === 'agent-sdk'
+      ? await createOfficialAgentSdkBranch({
+        sourceSessionId: sessionId,
+        launchInfo,
+        targetMessageId: body.targetMessageId.trim(),
+        title: body.title?.trim() || undefined,
+        importContext,
+      })
+      : await createSessionBranch({
+        sourceSessionId: sessionId,
+        sourceTranscriptPath: launchInfo.filePath,
+        targetMessageId: body.targetMessageId.trim(),
+        title: body.title?.trim() || undefined,
+        sourceWorkDir: launchInfo.workDir,
+        sourceRepository: launchInfo.repository,
+        sourceWorktreeSession: launchInfo.worktreeSession,
+      })
 
     recentProjectsCache = null
 
@@ -1648,6 +1711,7 @@ async function branchSession(req: Request, sessionId: string): Promise<Response>
       workDir: result.workDir ?? launchInfo.workDir,
       sourceSessionId: sessionId,
       targetMessageId: body.targetMessageId.trim(),
+      ...(importContext ? { runtimeProviderId: importContext.providerId, runtimeModelId: importContext.modelId } : {}),
     }, { status: 201 })
   } catch (error) {
     if (error instanceof SessionBranchingError) {

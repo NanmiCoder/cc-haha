@@ -91,6 +91,26 @@ describe('autoQuestionDecisionService', () => {
     }
   })
 
+  test('SDK automatic answers use the selected provider Haiku over ordinary API authentication', async () => {
+    const provider = await new ProviderService().addProvider({
+      presetId: 'custom', name: 'SDK fixture', apiKey: 'fake-sdk-key', authStrategy: 'api_key',
+      baseUrl: 'https://api.anthropic.com', apiFormat: 'anthropic', runtime: 'agent-sdk',
+      models: { main: 'claude-opus-5-5', haiku: 'claude-haiku-5-5', sonnet: '', opus: '' },
+    })
+    const requests: Array<{ url: string; headers: Headers; body: any }> = []
+    globalThis.fetch = (async (url: any, init: RequestInit) => {
+      requests.push({ url: String(url), headers: new Headers(init.headers), body: JSON.parse(String(init.body)) })
+      return Response.json({ content: [{ type: 'text', text: '{"answers":[{"questionIndex":0,"optionLabels":["Use cache (Recommended)"]}]}' }] })
+    }) as typeof fetch
+    expect(await decideAutoQuestionAnswers({ questions: [recommended], conversationText: 'Use the recommended option.', providerId: provider.id, signal: new AbortController().signal }))
+      .toEqual({ 'Which approach?': 'Use cache (Recommended)' })
+    expect(requests).toHaveLength(1)
+    expect(requests[0]!.url).toBe('https://api.anthropic.com/v1/messages')
+    expect(requests[0]!.body.model).toBe('claude-haiku-5-5')
+    expect(requests[0]!.headers.get('x-api-key')).toBe('fake-sdk-key')
+    expect(requests[0]!.headers.has('authorization')).toBe(false)
+  })
+
   test('passes natural-language recommendations to the model and never invents answers locally', async () => {
     const bodies: Array<Record<string, any>> = []
     let modelText = ''

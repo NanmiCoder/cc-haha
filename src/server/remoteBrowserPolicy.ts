@@ -57,7 +57,7 @@ export function validateRemoteSettingsPatch(input: Record<string, unknown>): boo
 
 export function projectRemoteProvider(provider: SavedProvider) {
   const publicKeys = [
-    'id', 'presetId', 'name', 'authStrategy', 'baseUrl', 'apiFormat', 'runtimeKind', 'models',
+    'id', 'presetId', 'name', 'authStrategy', 'baseUrl', 'apiFormat', 'runtimeKind', 'runtime', 'models',
     'model1mSupport', 'autoCompactWindow', 'modelContextWindows', 'toolSearchEnabled',
     'disableExperimentalBetas', 'supportsNestedToolResultMedia', 'notes',
   ] as const

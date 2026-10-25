@@ -13,6 +13,7 @@ import { COMPUTER_USE_ENABLE_REQUEST } from '@/lib/computerUseEnable'
 import { AGENT_TEAMS_NOTICE_STORAGE_KEY, dismissAgentTeamsNotice } from '@/lib/agentTeamsNotice'
 import { readRecentSkills, RECENT_SKILLS_STORAGE_KEY } from '@/lib/recentSkills'
 import { act, StrictMode } from 'react'
+import { PENDING_INPUT_RECOVERY_KEY } from '@/stores/pendingInputRecovery'
 
 const viewportMocks = vi.hoisted(() => ({
   isMobile: false,
@@ -256,6 +257,7 @@ describe('ChatInput file mentions', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.removeItem(RECENT_SKILLS_STORAGE_KEY)
+    localStorage.removeItem(PENDING_INPUT_RECOVERY_KEY)
     localStorage.removeItem(AGENT_TEAMS_NOTICE_STORAGE_KEY)
     useSideChatStore.setState({ entries: {} })
     useTeamPlanStore.setState({ bySession: {} })
@@ -1154,6 +1156,27 @@ describe('ChatInput file mentions', () => {
     const guidedMessages = useChatStore.getState().sessions[sessionId]?.messages
       .filter((message) => message.type === 'user_text' && message.content === 'please adjust the current direction')
     expect(guidedMessages).toHaveLength(1)
+  })
+
+  it.each(['idle', 'streaming'] as const)('keeps the composer intact when recovery storage rejects a %s send', async (chatState) => {
+    const current = useChatStore.getState().sessions[sessionId]!
+    useChatStore.setState({ sessions: { [sessionId]: { ...current, chatState } } })
+    render(<ChatInput compact />)
+    const prompt = 'A long prompt that must remain editable\n第二段不能丢'
+    setComposerText(prompt, prompt.length)
+    const original = Storage.prototype.setItem
+    const quota = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === PENDING_INPUT_RECOVERY_KEY) throw new Error('QuotaExceededError')
+      return original.call(this, key, value)
+    })
+    try {
+      fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+      await waitFor(() => expect(useUIStore.getState().toasts.some((toast) =>
+        toast.message.includes('Your draft is still here'))).toBe(true))
+      expect(getComposerText()).toBe(prompt)
+      expect(useChatStore.getState().sessions[sessionId]?.queuedUserMessages ?? []).toEqual([])
+      expect(mocks.wsSend).not.toHaveBeenCalledWith(sessionId, expect.objectContaining({ type: 'user_message' }))
+    } finally { quota.mockRestore() }
   })
 
   describe('while a question is waiting for an answer', () => {

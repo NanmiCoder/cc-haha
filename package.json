@@ -52,6 +52,7 @@
     "check:computer-use-signed-chain": "bun run scripts/quality-gate/computer-use-signed-chain.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.304",
     "@anthropic-ai/sandbox-runtime": "^0.0.44",
     "@anthropic-ai/sdk": "^0.128.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1020.0",
