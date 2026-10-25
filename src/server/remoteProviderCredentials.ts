@@ -2,11 +2,21 @@ import type { SavedProvider } from './types/provider.js'
 
 const nonempty = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
 
+function proxyDestination(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return 'follow_global'
+  const proxy = value as Record<string, unknown>
+  if (proxy.mode === 'manual') return `manual:${typeof proxy.url === 'string' ? proxy.url.trim() : ''}`
+  return proxy.mode === 'direct' ? 'direct' : 'follow_global'
+}
+
 /** A redacted credential may be reused only at its existing destination. */
 export function remoteProviderNeedsCredentials(current: SavedProvider, input: Record<string, unknown>): boolean {
   const nextBaseUrl = typeof input.baseUrl === 'string' ? input.baseUrl : current.baseUrl
   const replacesMainKey = nonempty(input.apiKey)
-  if (current.apiKey && nextBaseUrl !== current.baseUrl && !replacesMainKey) return true
+  // A forward proxy can read HTTP provider credentials even when the API URL
+  // stays unchanged. Route changes must protect image credentials as well.
+  const proxyChanged = input.proxy !== undefined && proxyDestination(input.proxy) !== proxyDestination(current.proxy)
+  if (current.apiKey && (nextBaseUrl !== current.baseUrl || proxyChanged) && !replacesMainKey) return true
 
   if (input.imageGeneration === null) return false
   const imagePatch = input.imageGeneration && typeof input.imageGeneration === 'object' && !Array.isArray(input.imageGeneration)
@@ -18,7 +28,7 @@ export function remoteProviderNeedsCredentials(current: SavedProvider, input: Re
   const nextImageDestination = imagePatch
     ? (nonempty(imagePatch.baseUrl) ? imagePatch.baseUrl.trim() : nextBaseUrl)
     : (current.imageGeneration?.baseUrl?.trim() || nextBaseUrl)
-  if (nextImageDestination === oldImageDestination) return false
+  if (nextImageDestination === oldImageDestination && !proxyChanged) return false
 
   const replacesImageKey = !!imagePatch && nonempty(imagePatch.apiKey)
   const retainedImageKey = current.imageGeneration?.apiKey?.trim()

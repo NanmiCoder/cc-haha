@@ -375,11 +375,10 @@ export class SessionTransport {
       }
       socket.onclose = ({ code }) => {
         if (!this.#valid(generation)) return
-        if (code === 1008) this.#requirePairing()
-        else {
-          this.#disconnect()
-          if (code === 1006) void this.#probeAuthorization()
-        }
+        this.#disconnect()
+        // Older gateways also use 1008 for restarts and rate limits. Only an
+        // authenticated HTTP rejection can establish that pairing was revoked.
+        if (code === 1006 || code === 1008) void this.#probeAuthorization()
       }
       socket.onerror = () => {
         if (this.#valid(generation)) {
@@ -669,6 +668,7 @@ export class SessionTransport {
 
   async #probeAuthorization() {
     // Native WebSocket handshake failures often hide HTTP 401 behind close 1006.
+    const generation = this.#generation
     const controller = this.#requestController()
     try {
       await this.#options.client.history(this.#options.sessionId, undefined, {
@@ -676,7 +676,7 @@ export class SessionTransport {
       })
     } catch (error) {
       if (
-        !this.#disposed &&
+        this.#valid(generation) &&
         !controller.signal.aborted &&
         this.#isUnauthorized(error)
       )

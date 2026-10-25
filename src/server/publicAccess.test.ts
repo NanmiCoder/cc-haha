@@ -59,6 +59,56 @@ function fixture(
 }
 
 describe('public transport boundary', () => {
+  test('custom tunnels use the requested fixed port across restarts without changing device credentials', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    const port = f.service.status().port!
+    f.service.disable()
+    const enabled = await f.control('enable', { port, publicUrl: 'https://fixture.ngrok-free.app' })
+    expect(enabled.status).toBe(200)
+    expect(await enabled.json()).toMatchObject({ enabled: true, port, publicUrl: 'https://fixture.ngrok-free.app' })
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(200)
+    f.service.disable()
+    expect((await f.control('enable', { port, publicUrl: 'https://fixture.ngrok-free.app' })).status).toBe(200)
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(200)
+  })
+
+  test.each([null, '17463', 0, 1023, 65536, 17463.5, true, {}, []].map(port => [port]))('rejects invalid explicit custom port %j without changing the running gateway', async port => {
+    const f = fixture()
+    const before = f.service.status()
+    const response = await f.control('enable', { port, publicUrl: 'https://other.example' })
+    expect(response.status).toBe(400)
+    expect(f.service.status()).toEqual(before)
+  })
+
+  test('a running gateway refuses a different port before changing its origin', async () => {
+    const f = fixture()
+    const before = f.service.status()
+    const port = before.port === 17463 ? 17464 : 17463
+    expect((await f.control('enable', { port, publicUrl: 'https://other.example' })).status).toBe(400)
+    expect(f.service.status()).toEqual(before)
+  })
+
+  test('an occupied fixed port fails closed instead of silently picking another port', async () => {
+    const f = fixture()
+    f.service.disable()
+    const occupied = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('other service') })
+    cleanups.push(() => { occupied.stop(true) })
+    const response = await f.control('enable', { port: occupied.port, publicUrl: 'https://fixture.ngrok-free.app' })
+    expect(response.status).toBe(400)
+    expect(f.service.status()).toMatchObject({ enabled: false, port: null })
+    expect(await (await fetch(`http://127.0.0.1:${occupied.port}`)).text()).toBe('other service')
+  })
+
+  test('custom tunnel setup never accepts a non-HTTPS origin or a path prefix', async () => {
+    const f = fixture()
+    f.service.disable()
+    for (const publicUrl of ['http://example.test', 'https://example.test/desktop/a', 'https://example.test?token=secret', 42, null]) {
+      expect((await f.control('enable', { publicUrl })).status).toBe(400)
+      expect(f.service.status().enabled).toBe(false)
+    }
+  })
+
   test('loopback Host and local bearer cannot bypass cookie authentication on remote listener', async () => {
     const f = fixture()
     const response = await f.service.fetch(new Request('http://localhost/api/sessions', { headers: { Host: 'localhost', Authorization: 'Bearer fixture-process-credential' } }), {} as never)
@@ -275,7 +325,7 @@ describe('public transport boundary', () => {
       ws.send('must-not-reach-agent')
     }
     if (action === 'disable') f.service.disable()
-    await closed
+    expect(await closed).toBe(action === 'disable' ? 1012 : 1008)
     expect(f.messages).toEqual(['native-message'])
     const response = await f.service.fetch(new Request(`${f.base}/api/sessions`, { headers: { Origin: 'https://fixture.ngrok-free.app', Authorization: `Bearer ${claim.token}` } }), {} as never)
     expect(response?.status).toBe(action === 'disable' ? 503 : 401)

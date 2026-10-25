@@ -1,5 +1,6 @@
 export const ELECTRON_IPC_CHANNELS = {
   publicAccessGetStatus: 'desktop:public-access:get-status',
+  publicAccessConfigure: 'desktop:public-access:configure',
   publicAccessSaveCredential: 'desktop:public-access:save-credential',
   publicAccessDeleteCredential: 'desktop:public-access:delete-credential',
   publicAccessStart: 'desktop:public-access:start',

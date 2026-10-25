@@ -201,12 +201,16 @@ export class PublicAccessServer {
     this.publicUrl = url.origin
   }
 
-  enable(publicUrl?: string) {
+  enable(publicUrl?: string, port?: number) {
+    if (port !== undefined && (!Number.isInteger(port) || port < 1024 || port > 65535)) throw new Error('Invalid remote listener port')
+    // A proxy's fixed upstream must never silently move, including while another
+    // connection attempt already owns the gateway. Validate before changing origin.
+    if (this.server && port !== undefined && this.server.port !== port) throw new Error('Remote listener already uses another port')
     this.load()
-    if (publicUrl) this.setOrigin(publicUrl)
+    if (publicUrl !== undefined) this.setOrigin(publicUrl)
     if (this.server) return this.status()
     this.server = Bun.serve<RemoteData>({
-      hostname: '127.0.0.1', port: 0, idleTimeout: 0, maxRequestBodySize: 16 * 1024 * 1024,
+      hostname: '127.0.0.1', port: port ?? 0, idleTimeout: 0, maxRequestBodySize: 16 * 1024 * 1024,
       fetch: (req, server) => this.fetch(req, server),
       websocket: {
         maxPayloadLength: 1024 * 1024,
@@ -243,7 +247,8 @@ export class PublicAccessServer {
     this.rates.clear()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
-    for (const ws of this.sockets) ws.close(1008, 'Remote access disabled')
+    // Disabling/rebuilding the tunnel does not revoke the stored device token.
+    for (const ws of this.sockets) ws.close(1012, 'Remote access disabled')
     listener?.stop(true)
     return this.status()
   }
@@ -256,7 +261,11 @@ export class PublicAccessServer {
       const route = new URL(request.url).pathname.split('/').filter(Boolean).slice(2).join('/')
       if ((route === 'status' || route === '') && request.method === 'GET') return json(this.status())
       const input = request.method === 'GET' ? {} : await this.readInput(request)
-      if (route === 'enable' && request.method === 'POST') return json(this.enable(typeof input.publicUrl === 'string' ? input.publicUrl : undefined))
+      if (route === 'enable' && request.method === 'POST') {
+        if (input.publicUrl !== undefined && typeof input.publicUrl !== 'string') throw new Error('HTTPS origin required')
+        if (input.port !== undefined && typeof input.port !== 'number') throw new Error('Invalid remote listener port')
+        return json(this.enable(input.publicUrl as string | undefined, input.port as number | undefined))
+      }
       if (route === 'origin' && request.method === 'PUT') { this.setOrigin(input.publicUrl); return json(this.status()) }
       if (route === 'disable' && request.method === 'POST') return json(this.disable())
       if (route === 'pairing' && request.method === 'POST') {

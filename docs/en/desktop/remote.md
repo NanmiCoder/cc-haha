@@ -1,18 +1,19 @@
 ---
-title: Phone (H5) and IM
+title: Mobile App, H5, and IM
 nav_title: Phone and IM
-description: Continue a session in your phone's browser, or chat from WeChat, Feishu, or Telegram.
+description: Scan to connect your mobile app or browser to your computer, or chat from WeChat, Feishu, or Telegram.
 order: 9
 ---
 
-# Phone (H5) and IM
+# Mobile App, H5, and IM
 
-A task is running on your computer and you want to check on it, or add one more instruction, from your phone. Two routes:
+A task is running on your computer and you want to check on it, or add one more instruction, from your phone. Use the mobile app, a browser, or IM:
 
+- **Mobile app** — scan to connect the iOS or Android client, check tasks, and respond to approvals.
 - **H5 Access** — open the same interface in a mobile browser: sessions, messages, attachments, permission buttons, all of it.
 - **IM Adapters** — talk to Claude directly inside WeChat, DingTalk, WhatsApp, Telegram, or Feishu.
 
-Both require your computer to be on with the app running. Tasks execute on your computer; public tunnels and IM platforms carry content through their respective service providers.
+All of these require your computer to be on with the app running. Tasks execute on your computer; public tunnels and IM platforms carry content through their respective service providers. The mobile app and H5 share the public pairing entry described below.
 
 ## H5 Access
 
@@ -34,7 +35,7 @@ The scanned link carries the server address and token. Scan with your phone came
 Anyone holding that link can reach what your desktop exposes. So:
 
 - Never paste a link containing the token into a group chat, a public issue, a log screenshot, or any public page.
-- Only enable it on networks you trust. For anything reachable from the internet, put HTTPS, a VPN, or access control in front of it — don't rely on one long-lived token.
+- Only enable it on networks you trust. Outside your LAN, use **Public access** below for HTTPS and individual device pairing.
 - If you suspect a leak, click **Regenerate token**. The old QR code and old token stop working immediately. Turning H5 off and on again does *not* rotate the token.
 
 Turn it off when you're not using it. That immediately rejects remote access while keeping the token, so the same one still works next time.
@@ -47,9 +48,9 @@ H5 is off by default, and it isn't a public service. Confirm you're on a network
 
 **Access host / IP** takes your computer's current LAN IP, e.g. `192.168.1.20`, on the current service port. After switching Wi-Fi or unplugging Ethernet the old IP may no longer be yours; the page notices and offers the working one.
 
-If you run your own reverse proxy, put the full URL here instead — `https://cc.example.com` — and add that origin to **Allowed origins**.
+LAN H5 also accepts a full URL with the corresponding **Allowed origins** configuration. That remains the existing H5 token access mode. To expose the mobile app or browser over the internet, use **Existing HTTPS tunnel** below and forward to its separate, restricted public gateway instead of mapping the desktop's main service port.
 
-A **fixed port** is worth setting when a phone bookmark has to stay valid, a firewall only opens specific ports, or Nginx or Caddy forwards to one fixed upstream. The port must be between 1024 and 65535, and the change takes effect after a restart — the page tells you which port is currently live in the meantime.
+A **fixed port** here keeps the LAN address stable or works with a LAN firewall or reverse proxy. The port must be between 1024 and 65535, and the change takes effect after a restart — the page tells you which port is currently live in the meantime. It is independent of the public gateway's local port below.
 
 ### Locking your phone won't kill the task
 
@@ -65,26 +66,55 @@ The **Settings** entry at the bottom of the sidebar provides **Model providers**
 
 Provider website login, configuration import, and desktop administration remain on the computer. The desktop workspace, embedded terminal, native "open with", Computer Use authorization, and the desktop pet are not part of H5. Remote terminal execution is deferred: the current terminal is owned by Electron and requires a separate device-authorized transport with reconnect and revocation support.
 
-## Public access with ngrok
+## Public access
 
-Open **Settings → H5 Access → Public access · ngrok** to connect your own ngrok account. You do not need to install ngrok or run commands. LAN settings remain independent.
+Open **Settings → H5 Access → Public access**. Choose the default **ngrok** option for the quickest setup, or **Existing HTTPS tunnel** if you already run Cloudflare Tunnel, frp, or another reverse proxy. Both use the same phone pairing and device revocation flow. LAN settings remain independent.
+
+### Quick setup with ngrok
+
+You do not need your own server or domain, install ngrok, or run commands.
 
 1. Open the account link, sign up or sign in on ngrok's official website, and copy your **Authtoken**. This is the tunnel credential, not an API Key.
 2. Paste it in the desktop app. Read the access and privacy notice, then choose **Agree and enable public access**.
-3. Wait for the public address, generate a pairing QR code, scan it in your phone browser, and submit the pairing request.
-4. Approve the phone on the desktop. Bookmark the public address for later visits.
+3. A pairing QR code appears automatically when connected. Scan it in the mobile app, or use your phone camera to open it in a browser and submit the pairing request.
+4. Approve the phone on the desktop. The app saves the connection; browser users can bookmark the public address. Choose **Connect a phone** to generate another QR code when adding a device.
+
+Free ngrok accounts include a development domain tied to the account (`*.ngrok-free.dev` or `*.ngrok-free.app`). The desktop automatically remembers and reuses these addresses. If your paid account already has a fixed domain, enter its full HTTPS origin in ngrok's advanced options, without a port or path. A paid account without a specified fixed domain may receive a temporary random address that changes on the next connection; saving an address does not reserve it.
+
+Free plans still have transfer and request quotas, and browsers may show ngrok's warning page first. The app never purchases an upgrade. See [ngrok's current free plan limits](https://ngrok.com/docs/pricing-limits/free-plan-limits). Switching ngrok accounts or changing the domain requires connecting your phone with the new address.
+
+### Existing HTTPS tunnel
+
+If you already run a tunnel, forward it to the local target provided here. cc-haha does not require its own relay server and does not create a cloud server, DNS records, or a tunnel for you.
+
+1. Select **Existing HTTPS tunnel** and enter a fixed HTTPS origin, such as `https://home.example.com`. Do not include `/remote`, another path, query parameters, or a pairing code.
+2. Keep the default local port, `17463`, or choose an unused port. Read the access and privacy notice, then enable public access.
+3. Forward your tunnel to the local target shown in settings, **`http://127.0.0.1:17463`** by default. This gateway listens only on this computer and enforces device authentication and a restricted access scope. Do not substitute the desktop's main service port.
+4. Check that the public address works over your phone's cellular connection, then scan the pairing QR code and approve the phone on the desktop.
+
+Forward the public hostname's root and all subpaths unchanged to the gateway, including the `/remote` page, `/assets/` files, `/api/`, and `/ws/`. Forwarding only the `/remote` page is not enough to load and use H5.
+
+**Local gateway ready** only means the entry on your computer has started. **It does not verify the external domain, certificate, or tunnel.** Your tunnel must support HTTP and WebSocket, preserve Origin, authorization information, and cookies, and serve an HTTPS certificate trusted by the phone's operating system. The app rejects public HTTP, redirects to another address, and redirects to an additional login page.
+
+For Cloudflare Named Tunnel, use that local target as the Service URL. Use a named tunnel for a stable hostname; Quick Tunnel assigns a different temporary hostname when recreated. See [Cloudflare tunnel setup](https://developers.cloudflare.com/tunnel/get-started/) and [Quick Tunnel limitations](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/).
+
+With frp, frpc on the computer connects to this local target. Nginx or Caddy on a cloud server forwards to the server-side tunnel endpoint; it cannot directly access your personal computer's `127.0.0.1`. To change the public address or local port, turn public access off first and update both the app and tunnel configuration. An occupied port produces an error instead of silently switching ports.
+
+**Privacy:** The HTTPS termination point of a reverse proxy or hosted tunnel may read traffic and credentials. Use only servers and providers you trust. Hosting your own relay does not make the traffic end-to-end encrypted against the relay.
+
+### Pairing, disconnections, and recovery
 
 Pairing codes expire after 5 minutes and can only be used once. Phone credentials last 30 days by default. Keep QR codes private. Revoke individual phones or turn off public access to disconnect remote clients immediately; running tasks continue.
 
+When the network recovers and the public address stays the same, the mobile app reconnects using its saved credential and synchronizes the session. A temporary outage or gateway restart does not invalidate authorization or require another scan. Your computer remains unreachable while asleep or while the desktop app is closed; it must resume running before you can reconnect. Expired or revoked authorization requires pairing again. The current implementation does not automatically extend the 30-day lifetime.
+
 The public entry also supports the provider and General settings above. Unrestricted local directory browsing and path-based file previews remain desktop-only; session-scoped file and review APIs remain available.
 
-Once paired, public authorization persists in a secure browser cookie. Scanning again while it is valid opens the app without consuming another pairing code. Long-lived public credentials are not stored in localStorage. Camera scanning works in system browsers, but different browsers, private windows, and hostnames do not share authorization. If a scanner opens an embedded browser, switch to your preferred browser before pairing. Clearing browser data, expiration, or revocation requires pairing again.
+The mobile app saves credentials in secure system storage. Browsers persist public authorization in a secure cookie. Scanning again while it is valid opens the app without consuming another pairing code. Long-lived public credentials are not stored in localStorage. Camera scanning works in system browsers, but different browsers, private windows, and hostnames do not share authorization. If a scanner opens an embedded browser, switch to your preferred browser before pairing. Clearing browser data, expiration, or revocation requires pairing again.
 
 **Privacy:** Standard ngrok HTTPS tunnels terminate TLS at ngrok, which then forwards traffic through an encrypted tunnel to your computer. ngrok can technically access the conversations, commands, and files being transferred. This is not end-to-end encryption that prevents the relay from reading content. The Authtoken is stored in a separate private file in the active application data directory, without system keychain encryption. Your local account or an administrator may read it. Deleting the saved credential does not close your ngrok account; revoke the credential at ngrok if it may have leaked.
 
-Free accounts include an assigned development domain, with transfer and request quotas. Browsers may first show ngrok's warning page; continue to reach the app. The app never purchases an upgrade. See [ngrok's current free plan limits](https://ngrok.com/docs/pricing-limits/free-plan-limits).
-
-Automatic restoration on desktop startup is off by default. Enable it to reconnect on later launches. Your computer must remain running, connected, and awake. Connectivity varies by network. For authentication or quota errors, follow the settings panel guidance before retrying.
+Automatic restoration on desktop startup is off by default. Enable it to restore the ngrok connection or local public gateway on later launches. With an existing tunnel, you remain responsible for starting its client. Your computer must remain running, connected, and awake. When a connection fails, check the computer's network, tunnel, certificate, and account quota separately. A fixed hostname does not guarantee that the service is always online.
 
 ## IM Adapters
 
