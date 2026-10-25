@@ -163,6 +163,7 @@ export type ServerMessage =
       errorStatus: number | null
       errorType?: string
       errorMessage?: string
+      requestId?: string
     }
   // 流式请求失败后的恢复状态：可能安全重试流，也可能降级为非流式请求。
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
@@ -190,7 +191,7 @@ export type AgentRunStreamMessage =
   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
   | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean }
-  | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string }
+  | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string; requestId?: string }
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
 
@@ -218,6 +219,7 @@ export type ApiRetryState = {
   errorStatus: number | null
   errorType?: string
   errorMessage?: string
+  requestId?: string
   receivedAt: number
 }
 

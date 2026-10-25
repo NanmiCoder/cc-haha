@@ -460,6 +460,88 @@ describe('MessageList nested tool calls', () => {
     expect(className).toContain('max-w-[360px]')
   })
 
+  it('navigates from a user attachment through assistant and tool images in the same session', () => {
+    const messages: UIMessage[] = [
+      { id: 'gallery-user', type: 'user_text', content: 'Compare images', timestamp: 1, attachments: [
+        { type: 'image', name: 'upload.png', data: 'data:image/png;base64,AAAA' },
+      ] },
+      { id: 'gallery-reply', type: 'assistant_text', content: '![reply](/tmp/reply.png)', timestamp: 2 },
+      { id: 'gallery-tool', type: 'tool_use', toolUseId: 'gallery-shot', toolName: 'Bash', input: { command: 'screenshot' }, timestamp: 3 },
+      { id: 'gallery-result', type: 'tool_result', toolUseId: 'gallery-shot', content: 'Saved /tmp/tool-shot.png', isError: false, timestamp: 4 },
+    ]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
+    render(<MessageList sessionId={ACTIVE_TAB} />)
+
+    fireEvent.click(screen.getByRole('img', { name: 'upload.png' }).closest('button')!)
+    expect(screen.getByRole('dialog', { name: 'upload.png' })).toBeTruthy()
+    expect(screen.getByText('1 / 3')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Next image' }))
+    expect(screen.getByRole('dialog', { name: 'reply.png' })).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'ArrowRight' })
+    expect(screen.getByRole('dialog', { name: 'tool-shot.png' })).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByRole('dialog')).toBeNull()
+
+    // The provider stays stable while the store grows, but the next opening must
+    // collect the latest messages rather than retain the initial closure.
+    act(() => useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages: [
+      ...messages,
+      { id: 'gallery-followup', type: 'assistant_text', content: '![new](/tmp/new.png)', timestamp: 5 },
+    ] }) } }))
+    fireEvent.click(screen.getByRole('img', { name: 'upload.png' }).closest('button')!)
+    expect(screen.getByText('1 / 4')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Previous image' }))
+    expect(screen.getByRole('dialog', { name: 'new.png' })).toBeTruthy()
+  })
+
+  it('opens an assistant image with neighbors from virtualized-away message rows', () => {
+    const messages: UIMessage[] = [
+      { id: 'gallery-old-user', type: 'user_text', content: 'Old attachment', timestamp: 0, attachments: [
+        { type: 'image', name: 'old.png', data: 'data:image/png;base64,AAAA' },
+      ] },
+      ...Array.from({ length: 220 }, (_, index): UIMessage => ({
+        id: `gallery-filler-${index}`, type: 'assistant_text', content: `History row ${index}`, timestamp: index + 1,
+      })),
+      { id: 'gallery-latest', type: 'assistant_text', content: '![latest](/tmp/latest.png)', timestamp: 222 },
+    ]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
+    const { container } = render(<MessageList sessionId={ACTIVE_TAB} />)
+    expect(container.querySelector('[data-virtual-spacer="top"]')).not.toBeNull()
+    expect(screen.queryByRole('img', { name: 'old.png' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('img', { name: 'latest' }))
+    expect(screen.getByText('2 / 2')).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'ArrowLeft' })
+    const dialog = screen.getByRole('dialog', { name: 'old.png' })
+    expect(within(dialog).getByRole('img', { name: 'old.png' }).getAttribute('src')).toBe('data:image/png;base64,AAAA')
+  })
+
+  it('includes disk-confirmed Chinese images from virtualized-away replies', async () => {
+    vi.spyOn(sessionsApi, 'getWorkspaceTree').mockResolvedValue({
+      state: 'ok', path: '', entries: [{ name: '流程图.png', path: '流程图.png', isDirectory: false }],
+    })
+    const messages: UIMessage[] = [
+      { id: 'gallery-old-reply', type: 'assistant_text', content: '已导出 流程图.png，格式选.png即可', timestamp: 0 },
+      ...Array.from({ length: 220 }, (_, index): UIMessage => ({
+        id: `gallery-filler-${index}`, type: 'assistant_text', content: `History row ${index}`, timestamp: index + 1,
+      })),
+      { id: 'gallery-latest-user', type: 'user_text', content: 'Compare', timestamp: 222, attachments: [
+        { type: 'image', name: 'upload.png', data: 'data:image/png;base64,AAAA' },
+      ] },
+    ]
+    useChatStore.setState({ sessions: { [ACTIVE_TAB]: makeSessionState({ messages }) } })
+    const { container } = render(<MessageList sessionId={ACTIVE_TAB} />)
+    expect(container.querySelector('[data-virtual-spacer="top"]')).not.toBeNull()
+    expect(screen.queryByRole('img', { name: '流程图.png' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('img', { name: 'upload.png' }).closest('button')!)
+    await screen.findByText('2 / 2')
+    fireEvent.keyDown(document, { key: 'ArrowLeft' })
+    const image = within(screen.getByRole('dialog')).getByRole('img', { name: '流程图.png' })
+    expect(decodeURIComponent(image.getAttribute('src')!)).toContain(`/preview-fs/${ACTIVE_TAB}/流程图.png`)
+    expect(sessionsApi.getWorkspaceTree).toHaveBeenCalledWith(ACTIVE_TAB, '')
+  })
+
   it('keeps the ImageGen result as the only image owner when final Markdown repeats its managed path', () => {
     const generatedPath = '/Users/me/.claude/cc-haha/generated-images/session/result.png'
     render(<MessageList sessionId={ACTIVE_TAB} />)

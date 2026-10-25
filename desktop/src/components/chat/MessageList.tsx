@@ -1,4 +1,8 @@
 import { openSideChat } from '@/lib/workspace/openSideChat'
+import { ConversationImageGalleryContext } from '@/components/chat/conversationImageGallery'
+import { resolveConversationImages } from '@/components/chat/conversationImages'
+import { getServerBaseUrl } from '@/lib/desktopRuntime'
+import { useWorkspaceContentStore } from '@/stores/workspaceContentStore'
 import { useRef, useEffect, useMemo, memo, useState, useCallback, useDeferredValue, useLayoutEffect, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { createPortal, flushSync } from 'react-dom'
 import { ArrowDown, BookMarked, Bot, CheckCircle2, ChevronDown, ChevronRight, CircleStop, FileStack, LoaderCircle, Settings, Target, Undo2, XCircle } from 'lucide-react'
@@ -2470,6 +2474,18 @@ export function MessageList({
   // Keep disclosure choices across virtualized row remounts and later turns.
   const [expandedChangeCards, setExpandedChangeCards] = useState<Record<string, boolean>>({})
   const [turnChangeCards, setTurnChangeCards] = useState<TurnChangeCardModel[]>([])
+  // Read the latest history on open without invalidating every image row while
+  // the active response streams.
+  const getConversationImages = useCallback(() => resolvedSessionId ? resolveConversationImages(
+    useChatStore.getState().sessions[resolvedSessionId]?.messages ?? EMPTY_MESSAGES,
+    {
+      sessionId: resolvedSessionId,
+      baseUrl: getServerBaseUrl(),
+      workDir: useWorkspaceContentStore.getState().statusBySession[resolvedSessionId]?.workDir,
+      imageLabel: t('assistantOutputs.kind.image'),
+      changedFilesByTurnId: new Map(turnChangeCards.map((card) => [card.target.messageId, card.checkpoint.code.filesChanged])),
+    },
+  ) : [], [resolvedSessionId, t, turnChangeCards])
   const [turnChangeLoadError, setTurnChangeLoadError] = useState<string | null>(null)
   const [workspaceChangesFallback, setWorkspaceChangesFallback] = useState<{
     sessionId: string
@@ -3868,6 +3884,9 @@ export function MessageList({
   }
 
   return (
+    <ConversationImageGalleryContext.Provider
+      value={getConversationImages}
+    >
     <div ref={messageListRef} data-testid="message-list" className="relative min-h-0 flex-1">
       <div
         ref={scrollContainerRef}
@@ -4042,6 +4061,7 @@ export function MessageList({
         loading={editResendDialog.loading}
       />
     </div>
+    </ConversationImageGalleryContext.Provider>
   )
 }
 

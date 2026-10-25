@@ -3964,6 +3964,78 @@ describe('SessionService', () => {
         totalOutputTokens: 5,
       })
   })
+
+  it('shows the provider fallback window as the context window of a session without a running CLI', async () => {
+    // deepseek-v4-flash is 1M in the built-in table. Capping the provider's
+    // fallback window lowers compaction, and the window shown has to follow.
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, 'context-window-cap')
+    const userId = crypto.randomUUID()
+    const assistant = makeAssistantEntry('reply', userId, { input_tokens: 1200, output_tokens: 80 })
+    ;(assistant.message as { model: string }).model = 'deepseek-v4-flash'
+    await writeSessionFile(sanitizePath(workDir), sessionId, [
+      { ...makeUserEntry('hello', userId), sessionId },
+      { ...assistant, sessionId },
+    ])
+
+    const providerService = (service as unknown as {
+      providerService: {
+        listProviders: () => Promise<unknown>
+        getProviderRuntimeEnv: (id: string) => Promise<Record<string, string> | null>
+      }
+    }).providerService
+    // The snapshot cache is keyed on the saved providers, so the capped state
+    // has to be visible there as it is when the user saves the setting.
+    let autoCompactWindow: number | undefined
+    spyOn(providerService, 'listProviders').mockImplementation(async () => ({
+      activeId: 'cap-provider',
+      providers: [{ id: 'cap-provider', models: {}, autoCompactWindow }],
+    }))
+    spyOn(providerService, 'getProviderRuntimeEnv').mockImplementation(async () => (
+      autoCompactWindow === undefined
+        ? {}
+        : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(autoCompactWindow) }
+    ))
+
+    const uncapped = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(uncapped?.contextEstimate?.rawMaxTokens).toBe(1_000_000)
+
+    autoCompactWindow = 200_000
+    const capped = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(capped?.contextEstimate?.rawMaxTokens).toBe(200_000)
+  })
+
+  it('caps a session whose recorded provider was deleted with the provider it now runs on', async () => {
+    // A resumed session is relaunched on the active provider when the recorded
+    // one is gone, so the window shown must use the active provider's cap.
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, 'context-window-deleted-provider')
+    const userId = crypto.randomUUID()
+    const assistant = makeAssistantEntry('reply', userId, { input_tokens: 1200, output_tokens: 80 })
+    ;(assistant.message as { model: string }).model = 'deepseek-v4-flash'
+    await writeSessionFile(sanitizePath(workDir), sessionId, [
+      { ...makeSessionMetaEntry(workDir), sessionId, runtimeProviderId: 'deleted-provider' },
+      { ...makeUserEntry('hello', userId), sessionId },
+      { ...assistant, sessionId },
+    ])
+
+    const providerService = (service as unknown as {
+      providerService: {
+        listProviders: () => Promise<unknown>
+        getProviderRuntimeEnv: (id: string) => Promise<Record<string, string> | null>
+      }
+    }).providerService
+    spyOn(providerService, 'listProviders').mockImplementation(async () => ({
+      activeId: 'active-provider',
+      providers: [{ id: 'active-provider', models: {}, autoCompactWindow: 200_000 }],
+    }))
+    spyOn(providerService, 'getProviderRuntimeEnv').mockImplementation(async (id: string) => (
+      id === 'active-provider' ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000' } : null
+    ))
+
+    const snapshot = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(snapshot?.contextEstimate?.rawMaxTokens).toBe(200_000)
+  })
 })
 
 // ============================================================================

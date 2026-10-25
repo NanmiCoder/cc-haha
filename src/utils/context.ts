@@ -13,6 +13,7 @@ import { getModelCapability } from './model/modelCapabilities.js'
 import {
   getBuiltInModelContextWindow,
   getConfiguredModelContextWindow,
+  getConfiguredOrBuiltInModelContextWindow,
 } from './model/modelContextWindows.js'
 
 // Default fallback when the model-specific capability is unknown.
@@ -145,6 +146,49 @@ export function getContextWindowForModel(
     }
   }
   return MODEL_CONTEXT_WINDOW_DEFAULT
+}
+
+/**
+ * Applies the provider's fallback window (CLAUDE_CODE_AUTO_COMPACT_WINDOW) to a
+ * resolved model window. For a model whose window is known (configured,
+ * built-in, [1m], or Codex catalog) the override can only lower it — a 1M value
+ * left over from another provider's preset must not pin a smaller model above
+ * its provider's hard cap, where auto-compact never fires (#1162). Unknown
+ * models resolve to the 200K default, and this env is the only way to declare
+ * their real window, so there it applies directly.
+ *
+ * Compaction and the window shown in the UI both go through this, so the
+ * context ring cannot keep reading 1M after the user capped the window.
+ */
+export function applyAutoCompactWindowLimit(
+  window: number,
+  rawAutoCompactWindow: string | undefined,
+  windowIsKnown: boolean,
+): number {
+  if (!rawAutoCompactWindow) return window
+  const parsed = parseInt(rawAutoCompactWindow, 10)
+  if (isNaN(parsed) || parsed <= 0) return window
+  return windowIsKnown ? Math.min(window, parsed) : parsed
+}
+
+export function isModelWindowKnownForAutoCompact(model: string): boolean {
+  return (
+    has1mContext(model) ||
+    getConfiguredOrBuiltInModelContextWindow(model) !== undefined ||
+    getOpenAICodexContextWindowForModel(model) != null
+  )
+}
+
+/** The window the UI and compaction treat as the model's usable context. */
+export function getEffectiveModelContextWindow(
+  model: string,
+  betas?: string[],
+): number {
+  return applyAutoCompactWindowLimit(
+    getContextWindowForModel(model, betas),
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW,
+    isModelWindowKnownForAutoCompact(model),
+  )
 }
 
 /**
