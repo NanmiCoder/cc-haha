@@ -322,3 +322,14 @@ export function projectName(status: { repoName?: string | null; workDir?: string
   const dir = status?.workDir?.replace(/[\\/]+$/, '')
   return dir ? (dir.split(/[\\/]/).pop() ?? '') : ''
 }
+
+/** 会话里变更卡的读屏文案：`3 个文件，新增 18 行，删除 4 行`；没有增删统计时只说文件数。 */
+export function changesCardLabel(files: number, insertions: number, deletions: number) {
+  return [
+    `${files} 个文件`,
+    insertions ? `新增 ${insertions} 行` : '',
+    deletions ? `删除 ${deletions} 行` : '',
+  ]
+    .filter(Boolean)
+    .join('，')
+}

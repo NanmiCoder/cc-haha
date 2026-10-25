@@ -12,6 +12,7 @@ import {
   restoreFileReferences,
   restoreImageReplay,
 } from './chatComposer'
+import { reduceSubagents } from './subagentLive'
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -515,7 +516,14 @@ export function appendPendingUserMessage(
   )
 }
 
+/** 子 Agent 的实时轨迹另存一份（state.subagents），供运行中底单使用。 */
 export function chatReducer(state: ChatState, event: ServerEvent): ChatState {
+  const next = reduceChat(state, event)
+  const subagents = reduceSubagents(next.subagents, event)
+  return subagents === next.subagents ? next : { ...next, subagents }
+}
+
+function reduceChat(state: ChatState, event: ServerEvent): ChatState {
   switch (event.type) {
     case 'connected':
       return event.sessionId === state.sessionId

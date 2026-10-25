@@ -9,6 +9,8 @@ export type ComposerReference = {
   displayName: string
   description: string
   modelText: string
+  /** 插件自带的 MCP 服务：有它的插件对用户来说是「连接器」。 */
+  mcpServerNames?: string[]
 }
 export type ComposerCandidate = SkillCommand & { reference?: ComposerReference }
 export type ComposerTrigger = { start: number; end: number; kind: '/' | '@'; query: string }
@@ -19,6 +21,22 @@ export function composerTrigger(text: string, start: number, end = start): Compo
   const match = text.slice(0, start).match(/(?:^|\s)([/@])([^\s/@]*)$/)
   if (!match) return null
   return { start: start - match[2].length - 1, end: start, kind: match[1] as '/' | '@', query: match[2] }
+}
+
+/** `/` 列出命令和技能，`@` 只列出能引用的技能；关键词匹配名称、说明和显示名。 */
+export function filterComposerCandidates(candidates: ComposerCandidate[], trigger: ComposerTrigger | null): ComposerCandidate[] {
+  if (!trigger) return []
+  const query = trigger.query.toLocaleLowerCase()
+  return candidates.filter((candidate) =>
+    (trigger.kind !== '@' || !!candidate.reference) &&
+    (!query || `${candidate.name} ${candidate.description} ${candidate.reference?.displayName ?? ''}`.toLocaleLowerCase().includes(query))
+  )
+}
+
+/** 候选行右侧的类型标签。 */
+export function candidateTypeLabel(candidate: ComposerCandidate): string {
+  if (candidate.reference) return candidate.reference.kind === 'plugin' ? '插件' : '技能'
+  return candidate.kind === 'skill' ? '技能' : candidate.kind === 'agent' ? 'Agent' : candidate.kind === 'plugin' ? '插件' : '命令'
 }
 
 export function insertComposerCandidate(text: string, trigger: ComposerTrigger | null, candidate: ComposerCandidate) {

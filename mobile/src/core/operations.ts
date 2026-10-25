@@ -143,6 +143,20 @@ export type TaskOutput =
   | { kind: 'notice'; text: string }
 export const isAgent = (task: BackgroundTask) =>
   task.taskType === 'local_agent' || task.taskType === 'remote_agent'
+/** 子 Agent 的只读 transcript；taskId 用来在同一个 toolUseId 下区分多次运行。 */
+export function loadSubagentRun(
+  client: ApiClient,
+  sessionId: string,
+  toolUseId: string,
+  taskId: string | undefined,
+  signal: AbortSignal
+) {
+  const query = taskId ? `?taskId=${encodeURIComponent(taskId)}` : ''
+  return client.get<SubagentOutput>(
+    `${sessionPath(sessionId)}/subagents/by-tool/${encodeURIComponent(toolUseId)}${query}`,
+    { signal }
+  )
+}
 export async function loadTaskOutput(
   client: ApiClient,
   sessionId: string,
@@ -152,10 +166,7 @@ export async function loadTaskOutput(
   if (isAgent(task) && task.toolUseId)
     return {
       kind: 'agent',
-      output: await client.get<SubagentOutput>(
-        `${sessionPath(sessionId)}/subagents/by-tool/${encodeURIComponent(task.toolUseId)}?taskId=${encodeURIComponent(task.taskId)}`,
-        { signal }
-      ),
+      output: await loadSubagentRun(client, sessionId, task.toolUseId, task.taskId, signal),
     }
   if (task.taskType === 'local_bash')
     return {

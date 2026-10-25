@@ -261,3 +261,23 @@ export function runtimeModelSelection(
       : {}),
   }
 }
+
+/** Why the effort control has nothing to offer, in the words shown beside it. */
+export function effortUnavailableReason(choice: {
+  source?: { auth: RuntimeSource['auth'] }
+  model?: unknown
+  catalogReady: boolean
+  canSetEffort: boolean
+}): string {
+  return choice.source?.auth === 'missing'
+    ? '请先在电脑上登录或配置此供应商，再重新读取。'
+    : choice.source?.auth === 'error'
+      ? '尚未确认此供应商的授权状态，请重新读取。'
+      : !choice.source
+        ? '当前供应商已不可用，请重新选择模型。'
+        : !choice.model && choice.catalogReady
+          ? '当前模型已不在供应商列表中，请重新选择模型。'
+          : !choice.canSetEffort
+            ? '此账号的新任务沿用电脑默认强度，可在会话中调整。'
+            : '当前模型没有可调的思考强度。'
+}

@@ -1,6 +1,4 @@
-import { ActivitySummary } from '../../ui/activity/ActivitySummary'
 import { serializeComposer, type ComposerReference } from '../../core/composerReferences'
-import { EffortControl } from '../../ui/EffortControl'
 import { KeyboardViewport } from '../../ui/KeyboardViewport'
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 import { AppState, FlatList, Platform, Pressable, View } from 'react-native'
@@ -35,28 +33,40 @@ import type { ChatItem, ChatState, ClientMessage, PermissionMode, Session } from
 import { Approval } from '../../ui/Approval'
 import { ChatComposer } from '../../ui/ChatComposer'
 import { Message, type BubbleLayout } from '../../ui/Message'
-import { RuntimeSheet, type Model } from '../../ui/RuntimePicker'
+import { type Model } from '../../ui/RuntimePicker'
+import { RunSheet } from '../../ui/compose/RunSheet'
+import { runCapsule } from '../../ui/compose/runLogic'
+import { useComputerUse } from '../../core/useComputerUse'
+import { useSessionActivity } from '../../core/sessionActivity'
+import { registerSessionSender } from '../../core/sessionSender'
+import { ActivityCapsule } from '../../ui/activity/ActivityCapsule'
+import { ActivitySheet } from '../../ui/activity/ActivitySheet'
+import { useNow } from '../../ui/activity/useNow'
+import { StatusCaption } from '../../ui/chat/StatusCaption'
+import { ContextMenuHeader, ContextSheet, useContextInspection } from '../../ui/chat/ContextSheet'
+import { contextSummary } from '../../ui/chat/contextUsage'
+import { turnOutputTokens } from '../../core/streamRate'
+import { currentStepLabel } from '../../ui/chat/captionModel'
+import { elapsedLabel } from '../../core/dashboard'
 import { SessionChangesCard } from '../../ui/SessionChangesCard'
-import { modeName } from '../../ui/modes'
 import {
+  ActionMenu,
   Button,
   Callout,
   Card,
-  Icon,
+  FloatingButton,
   InlineError,
-  Menu,
   Mono,
   NavBar,
   ScreenView,
   Spinner,
   goBack,
   useColors,
-  type MenuItem,
+  type ActionMenuItem,
 } from '../../ui/kit'
 import { errorText } from '../../ui/theme'
-import { buildChatRows, type ChatRow } from '../../ui/chat/steps'
-import { StepGroup, type StepContext, type StepUi } from '../../ui/chat/StepGroup'
-import { RunningBar } from '../../ui/chat/RunningBar'
+import { buildChatRows, visibleChatRows, type ChatRow } from '../../ui/chat/steps'
+import { StepGroup, TurnFold, type StepContext, type StepUi } from '../../ui/chat/StepGroup'
 import { QueuedMessages } from '../../ui/chat/QueuedMessages'
 import {
   canFlushQueue,
@@ -72,13 +82,11 @@ import { MessageMenu, type MessageAction } from '../../ui/chat/MessageMenu'
 import {
   ConfirmSheet,
   EditResendSheet,
-  ModeSheet,
   RenameSheet,
   SelectTextSheet,
 } from '../../ui/chat/sheets'
 import {
   connectionLabels,
-  contextPercent,
   contextWindow,
   displayPath,
   latestTurnCheckpoint,
@@ -92,7 +100,7 @@ const NativeSocket = WebSocket as unknown as new (
   protocols?: string[],
   options?: { headers?: Record<string, string> }
 ) => SocketLike
-type Panel = 'menu' | 'rename' | 'delete' | 'mode' | 'model' | 'stop' | 'select' | 'edit' | null
+type Panel = 'menu' | 'rename' | 'delete' | 'run' | 'stop' | 'select' | 'edit' | 'activity' | 'context' | null
 type RewindPreview = {
   target: { targetUserMessageId: string }
   conversation: { messagesRemoved: number }
@@ -423,6 +431,20 @@ function ChatSession({
   const permissionMode = state.permissionMode ?? session?.permissionMode
   const backgroundCount = state.backgroundTaskIds.length
   const title = state.title || session?.title || '会话'
+  const computer = useComputerUse(client)
+  const sendRaw = useCallback((message: ClientMessage) => transport.current?.send(message) ?? false, [])
+  useEffect(() => registerSessionSender(id, sendRaw), [id, sendRaw])
+  const activity = useSessionActivity({
+    client,
+    host: { id: hostId },
+    sessionId: id,
+    turnActive: state.turnActive,
+    backgroundTaskIds: state.backgroundTaskIds,
+    live: state.subagents,
+    pendingApprovals: state.permissions.length,
+    workDir: session?.workDir ?? undefined,
+    send: sendRaw,
+  })
 
   // 分支只用于副标题与菜单；取不到就只显示项目名。
   useEffect(() => {
@@ -594,8 +616,10 @@ function ChatSession({
   const closePanel = () => {
     if (!working) setPanel(null)
   }
-  const openRoute = (pathname: '/changes' | '/workspace' | '/activity') =>
+  const openRoute = (pathname: '/changes') =>
     router.push({ pathname, params: { id, host: hostId } })
+  const openFiles = (tab: 'changed' | 'all') =>
+    router.push({ pathname: '/files', params: { id, host: hostId, tab } })
 
   function submit() {
     if (workspaceMissing) return
@@ -779,7 +803,19 @@ function ChatSession({
   }
 
   // 消息流：连续工具调用合成一组；展开状态留在页面里，列表回收行时不丢。
-  const rows = useMemo(() => buildChatRows(state.items, state.turnActive), [state.items, state.turnActive])
+  // 子 Agent 内部的工具步骤只在它自己的页面里看，不混进主对话。
+  const rows = useMemo(
+    () =>
+      visibleChatRows(
+        buildChatRows(
+          state.items.filter((item) => !item.parentToolUseId),
+          state.turnActive,
+          { clock: turnClock }
+        ),
+        ui.open
+      ),
+    [state.items, state.turnActive, turnClock, ui.open]
+  )
   const waitingKey = state.permissions.map((request) => request.toolUseId ?? '').join('\n')
   const runningBackgroundKey = backgroundCount
     ? backgroundTasks
@@ -814,6 +850,8 @@ function ChatSession({
     ({ item: row }: { item: ChatRow }) =>
       row.kind === 'message' ? (
         <Message item={row.item} onLongPress={longPress} />
+      ) : row.kind === 'turn' ? (
+        <TurnFold label={row.label} open={ui.open.has(row.key)} onToggle={() => toggleOpen(row.key)} />
       ) : (
         <StepGroup
           row={row}
@@ -901,22 +939,38 @@ function ChatSession({
       </Callout>
     ) : null,
   ].filter(Boolean)
-  const runningBar =
-    busy && !approval ? (
-      <RunningBar
-        compacting={state.status === 'compacting'}
-        startedAt={
-          state.turnActive
-            ? turnClock.live
-              ? turnClock.startedAt
-              : (serverTurnStart ?? turnClock.startedAt)
-            : undefined
-        }
-        backgroundCount={backgroundCount}
-        onOpen={() => openRoute('/activity')}
-        onStop={() => openPanel('stop')}
-      />
-    ) : null
+  const runStartedAt = state.turnActive
+    ? turnClock.live
+      ? turnClock.startedAt
+      : (serverTurnStart ?? turnClock.startedAt)
+    : undefined
+  const captionStep = useMemo(
+    () => currentStepLabel(state.items, session?.workDir),
+    [state.items, session?.workDir]
+  )
+  const outputTokens = useMemo(() => turnOutputTokens({ items: state.items }).tokens, [state.items])
+  // 「…」菜单头部和上下文底单共用一份占用：优先用电脑上报的实时上下文，读不到再用本轮用量近似。
+  const insight = useContextInspection({
+    client,
+    sessionId: id,
+    active: panel === 'menu' || panel === 'context',
+    refreshKey: state.usage,
+  })
+  const usageSummary = contextSummary({
+    snapshot: insight.snapshot,
+    usage: state.usage,
+    window: contextWindow(runtime?.modelId, knownModel?.context),
+  })
+  // 输入框上方唯一的运行提示；等批准时同一行变琥珀。
+  const caption = busy ? (
+    <StatusCaption
+      step={captionStep}
+      waiting={waitingForDecision}
+      compacting={state.status === 'compacting'}
+      startedAt={runStartedAt}
+      tokens={outputTokens}
+    />
+  ) : undefined
   const queued = queue.length ? (
     <QueuedMessages
       items={queue}
@@ -925,19 +979,20 @@ function ChatSession({
       onSendNow={sendQueuedNow}
     />
   ) : null
-  const header =
-    noticeArea.length || runningBar || queued ? (
+  const above =
+    noticeArea.length || queued ? (
       <>
         {noticeArea}
         {queued}
-        {runningBar}
       </>
     ) : undefined
+  const sheetNow = useNow(panel === 'activity' && state.turnActive)
+  const elapsed = runStartedAt && state.turnActive ? elapsedLabel(runStartedAt, sheetNow) : undefined
 
   // 菜单锚在导航栏下沿（kit 的 Menu 在 Android 上不覆盖状态栏）。
   const menuTop = (Platform.OS === 'web' ? 54 : insets.top) + 46
-  const percent = contextPercent(state.usage, contextWindow(runtime?.modelId, knownModel?.context))
-  const menuItems: MenuItem[] = [
+  const changedCount = latest?.code.filesChanged.length ?? 0
+  const menuItems: ActionMenuItem[] = [
     {
       key: 'rename',
       label: '重命名',
@@ -948,37 +1003,39 @@ function ChatSession({
       },
     },
     {
-      key: 'changes',
-      label: '改动与回退',
-      icon: 'rotate-ccw',
-      value: latest?.code.filesChanged.length ? `${latest.code.filesChanged.length} 个文件` : undefined,
-      onPress: () => openRoute('/changes'),
-    },
-    { key: 'files', label: '项目文件', icon: 'folder', onPress: () => openRoute('/workspace') },
-    {
-      key: 'activity',
-      label: '后台活动',
-      icon: 'activity',
-      value: backgroundCount ? `${backgroundCount} 项在跑` : undefined,
-      valueColor: colors.run,
-      onPress: () => openRoute('/activity'),
+      key: 'copy-id',
+      label: '复制会话 ID',
+      icon: 'copy',
+      onPress: () => {
+        setPanel(null)
+        copy(id)
+      },
     },
     { key: 'sync', label: '重新同步', icon: 'refresh-cw', onPress: reconnect },
+    {
+      key: 'delete',
+      label: '删除会话…',
+      icon: 'trash',
+      destructive: true,
+      onPress: () => openPanel('delete'),
+    },
     'separator',
-    { key: 'delete', label: '删除会话…', icon: 'trash', destructive: true, onPress: () => openPanel('delete') },
+    {
+      key: 'changes',
+      label: '更改',
+      icon: 'git-branch',
+      count: changedCount || undefined,
+      onPress: () => openFiles('changed'),
+    },
+    { key: 'files', label: '文件', icon: 'folder', onPress: () => openFiles('all') },
+    {
+      key: 'activity',
+      label: '运行中',
+      icon: 'activity',
+      count: activity.runningCount || undefined,
+      onPress: () => openPanel('activity'),
+    },
   ]
-  const menuHeader = (
-    <>
-      <Mono numberOfLines={1} ellipsizeMode="middle" style={{ fontSize: 12.5, color: colors.ink3 }}>
-        {[displayPath(session?.workDir) || '默认目录', branch].filter(Boolean).join(' · ')}
-      </Mono>
-      <Text numberOfLines={1} style={{ fontSize: 12.5, color: colors.ink3 }}>
-        {[runtime ? modelLabel : '', percent !== undefined ? `上下文用了 ${percent}%` : '']
-          .filter(Boolean)
-          .join(' · ') || modeName(permissionMode)}
-      </Text>
-    </>
-  )
 
   const messageActions = (item: ChatItem): MessageAction[] => {
     const persisted = persistedMessageId(item)
@@ -1042,37 +1099,30 @@ function ChatSession({
 
   return (
     <ScreenView>
-      <View
-        style={{
-          backgroundColor: colors.bar,
-          borderBottomWidth: 1,
-          borderBottomColor: colors.hair,
-          paddingBottom: 6,
-        }}
-      >
-        <NavBar
-          title={title}
-          subtitle={ready ? sessionSubtitle(session, branch) || host?.name : connectionLabels[connection]}
-          right={
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel="会话操作"
+      <NavBar
+        floating
+        back
+        title={title}
+        subtitle={ready ? sessionSubtitle(session, branch) || host?.name : connectionLabels[connection]}
+        right={
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <ActivityCapsule
+              progress={activity.progress}
+              runningCount={activity.runningCount}
+              tone={activity.tone}
+              active={activity.active}
+              visible={activity.capsuleVisible}
+              onPress={() => openPanel('activity')}
+            />
+            <FloatingButton
+              icon="more"
+              label="会话操作"
+              active={panel === 'menu'}
               onPress={() => openPanel('menu')}
-              style={({ pressed }) => ({
-                width: 44,
-                height: 44,
-                borderRadius: 22,
-                alignItems: 'center',
-                justifyContent: 'center',
-                backgroundColor: panel === 'menu' ? colors.fill : 'transparent',
-                opacity: pressed ? 0.6 : 1,
-              })}
-            >
-              <Icon name="more" size={22} color={colors.ink} />
-            </Pressable>
-          }
-        />
-      </View>
+            />
+          </View>
+        }
+      />
       <KeyboardViewport style={{ flex: 1 }}>
         <FlatList
           ref={list}
@@ -1211,10 +1261,9 @@ function ChatSession({
                 ))}
                 {turnSettled ? (
                   <SessionChangesCard
-                    client={client}
-                    sessionId={id}
                     checkpoint={latest}
-                    onOpen={() => openRoute('/changes')}
+                    onOpen={() => openFiles('changed')}
+                    onUndo={() => openRoute('/changes')}
                   />
                 ) : null}
                 {meta ? <Mono style={{ fontSize: 12, color: colors.ink3 }}>{meta}</Mono> : null}
@@ -1224,10 +1273,10 @@ function ChatSession({
         />
         {approval ? (
           <>
-            {noticeArea.length || queued ? (
+            {above || caption ? (
               <View style={{ paddingHorizontal: 12, paddingTop: 10, gap: 8 }}>
-                {noticeArea}
-                {queued}
+                {above}
+                {caption}
               </View>
             ) : null}
             <Approval
@@ -1264,30 +1313,75 @@ function ChatSession({
             }}
             team={team}
             onTeam={setTeam}
+            computer={computer}
             lean={lean}
             empty={!hasItems}
             busy={busy}
-            queueing={busy && !approval}
+            queueing={busy}
             disabled={!ready || state.configPending || workspaceMissing || working}
-            mode={modeName(permissionMode)}
-            model={modelLabel}
-            effortControl={<EffortControl client={client} runtime={runtime}
-              disabled={!ready || busy || state.configPending || workspaceMissing || working}
-              onApply={(value) => { dispatch({ type: 'set_runtime_config', ...value }) }} />}
-            onMode={() => openPanel('mode')}
-            onModel={() => openPanel('model')}
+            run={runCapsule({
+              mode: permissionMode,
+              model: runtime ? modelLabel : undefined,
+              effort: runtime?.effortLevel,
+              disabled: !ready || state.configPending || workspaceMissing,
+              locked: busy,
+            })}
+            onOpenRun={() => openPanel('run')}
             onSend={submit}
+            onStop={() => openPanel('stop')}
             onError={setError}
-            header={<>{header}{host && <ActivitySummary host={host} sessionId={id} onPress={() => openRoute('/activity')} />}</>}
+            above={above}
+            caption={caption}
           />
         )}
       </KeyboardViewport>
-      <Menu
+      <ActionMenu
         visible={panel === 'menu'}
         onClose={() => setPanel(null)}
-        anchor={{ top: menuTop, right: 12 }}
-        header={menuHeader}
+        anchor={{ top: menuTop, right: 16 }}
         items={menuItems}
+        header={
+          <>
+            <Mono numberOfLines={1} ellipsizeMode="middle" style={{ fontSize: 12.5, color: colors.ink3 }}>
+              {[displayPath(session?.workDir) || '默认目录', branch].filter(Boolean).join(' · ')}
+            </Mono>
+            <ContextMenuHeader
+              modelLabel={runtime ? modelLabel : undefined}
+              summary={usageSummary}
+              onPress={() => openPanel('context')}
+            />
+          </>
+        }
+      />
+      <ContextSheet
+        visible={panel === 'context'}
+        onClose={closePanel}
+        summary={usageSummary}
+        modelLabel={runtime ? modelLabel : undefined}
+        usage={state.usage}
+        snapshot={insight.snapshot}
+        stats={insight.stats}
+        loading={insight.loading}
+        failed={insight.failed}
+        onRetry={insight.reload}
+      />
+      <ActivitySheet
+        visible={panel === 'activity'}
+        onClose={() => setPanel(null)}
+        activity={activity}
+        elapsed={elapsed}
+        host={{ id: hostId }}
+        sessionId={id}
+        onOpenAgent={(task) => {
+          setPanel(null)
+          router.push({
+            pathname: '/subagent',
+            params: { host: hostId, id, taskId: task.taskId, toolUseId: task.toolUseId ?? '' },
+          })
+        }}
+        onStopTurn={() => {
+          if (state.turnActive) dispatch({ type: 'stop_generation' })
+        }}
       />
       <MessageMenu
         item={selected?.item ?? null}
@@ -1336,33 +1430,31 @@ function ChatSession({
           }
         }}
       />
-      <ModeSheet
-        visible={panel === 'mode'}
+      <RunSheet
+        visible={panel === 'run'}
         onClose={closePanel}
-        current={permissionMode}
-        lean={lean}
-        unavailable={modeUnavailable}
-        error={sheetError}
-        onSelect={(mode: PermissionMode) => {
-          if (dispatch({ type: 'set_permission_mode', mode }, setSheetError)) setPanel(null)
-        }}
-      />
-      <RuntimeSheet
-        visible={panel === 'model'}
-        onClose={closePanel}
-        title="这段会话的模型"
         client={client}
-        initial={runtime}
-        busy={busy || state.configPending || !ready}
+        mode={permissionMode as PermissionMode | undefined}
+        onMode={(mode: PermissionMode) => {
+          dispatch({ type: 'set_permission_mode', mode }, setSheetError)
+        }}
+        runtime={runtime}
+        onRuntime={(value, model) => {
+          if (dispatch({ type: 'set_runtime_config', ...value }, setSheetError)) setChosenModel(model ?? null)
+        }}
+        lean={lean}
+        disabled={{
+          ...(modeUnavailable ? { mode: modeUnavailable } : {}),
+          ...(busy || state.configPending || !ready
+            ? { runtime: modeUnavailable ?? '这一轮结束后才能切换。' }
+            : {}),
+        }}
         warning={
           backgroundCount
             ? `换模型会重启执行环境，正在跑的 ${backgroundCount} 项后台任务会停下。`
             : undefined
         }
-        onApply={(value, model) => {
-          setPanel(null)
-          if (dispatch({ type: 'set_runtime_config', ...value })) setChosenModel(model ?? null)
-        }}
+        error={sheetError}
       />
       <SelectTextSheet
         visible={panel === 'select'}

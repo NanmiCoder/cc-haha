@@ -1,55 +1,67 @@
 import { useMemo, useState } from 'react'
 import { Pressable, RefreshControl, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../ui/Text'
 import { useApp, useConnection } from '../state/AppContext'
 import { useDashboard } from '../state/DashboardContext'
 import { groupDashboard, type DashboardRow } from '../core/dashboard'
-import {
-  BottomBar,
-  Button,
-  EmptyState,
-  Icon,
-  IconButton,
-  InlineError,
-  LargeTitle,
-  Loading,
-  ScreenView,
-  SectionHeader,
-  TextButton,
-  useColors,
-} from '../ui/kit'
+import { EmptyState, Icon, InlineError, Loading, ScreenView, useColors } from '../ui/kit'
 import {
   canStartTask,
   hostLink,
   hostStatusLine,
-  inProject,
   projectsOf,
   type HostLink,
 } from '../ui/home/homeModel'
-import { DecisionCard } from '../ui/home/DecisionCard'
+import {
+  applyFilter,
+  filterOptions,
+  homeCounts,
+  projectGroups,
+  recentRows,
+  resolveFilter,
+  type HomeFilter,
+} from '../ui/home/homeList'
 import { HomeSearch } from '../ui/home/HomeSearch'
 import { HostSheet } from '../ui/home/HostSheet'
-import { ConnectEmpty, OfflineCard, ProjectSheet } from '../ui/home/HomeStates'
-import { RowGroup, StatusDot, useNow } from '../ui/home/parts'
-import { MoreRow, OfflineRow, RunningRow, SettledRow } from '../ui/home/SessionRows'
+import { ConnectEmpty, OfflineCard } from '../ui/home/HomeStates'
+import {
+  FilterPills,
+  FloatButton,
+  FloatingComposer,
+  MenuGlyph,
+  MoreSessions,
+  OfflineRow,
+  ProjectHeader,
+  ProjectSessionRow,
+  RecentRow,
+  SectionTitle,
+} from '../ui/home/LightRows'
+import { StatusDot, useNow } from '../ui/home/parts'
 import { useBackgroundCounts } from '../ui/home/useBackgroundCounts'
 
-const recentPage = 10
+const projectPage = 6
 const offlineRecent = 5
 
 export default function Home() {
   const colors = useColors()
+  const insets = useSafeAreaInsets()
   const { ready, error: storageError } = useApp()
   const { host, error: credentialError } = useConnection()
   const { snapshot, loading, fresh, error, failure, refresh } = useDashboard()
   const [searching, setSearching] = useState(false)
   const [hostSheet, setHostSheet] = useState(false)
-  const [projectSheet, setProjectSheet] = useState(false)
-  // 项目筛选只在内存里，并且跟着电脑走：换电脑后回到“全部项目”。
-  const [filter, setFilter] = useState<{ hostId: string; key: string | null } | null>(null)
-  const [recentShown, setRecentShown] = useState(recentPage)
-  const projectKey = filter && filter.hostId === host?.id ? filter.key : null
+  // 状态筛选、项目展开都只在内存里，并且跟着电脑走：换电脑后回到默认。
+  const [view, setView] = useState<{
+    hostId: string
+    filter: HomeFilter
+    expanded: Record<string, boolean>
+    shown: Record<string, number>
+  } | null>(null)
+  const mine = view && view.hostId === host?.id ? view : null
+  const expanded = useMemo(() => mine?.expanded ?? {}, [mine])
+  const shown = useMemo(() => mine?.shown ?? {}, [mine])
   const link = hostLink({ host, fresh, failure, credentialError })
 
   const grouped = useMemo(
@@ -64,10 +76,11 @@ export default function Home() {
     [grouped]
   )
   const projects = useMemo(() => projectsOf(all), [all])
-  const project = projects.find((item) => item.key === projectKey) ?? null
-  const waiting = grouped.waiting.filter((row) => inProject(row, projectKey))
-  const running = grouped.running.filter((row) => inProject(row, projectKey))
-  const settled = grouped.settled.filter((row) => inProject(row, projectKey))
+  const counts = useMemo(() => homeCounts(all), [all])
+  const filter = resolveFilter(mine?.filter ?? 'all', counts)
+  const rows = useMemo(() => applyFilter(all, filter), [all, filter])
+  const recent = useMemo(() => recentRows(rows), [rows])
+  const groups = useMemo(() => projectGroups(rows, expanded, new Set(recent)), [rows, expanded, recent])
   const activeSessionIds = useMemo(
     () => [...grouped.waiting, ...grouped.running].map((row) => row.session.id),
     [grouped]
@@ -76,6 +89,15 @@ export default function Home() {
     grouped.running.map((row) => row.session.id),
     link === 'online' && !searching
   )
+  const patch = (next: Partial<NonNullable<typeof view>>) =>
+    host &&
+    setView({
+      hostId: host.id,
+      filter,
+      expanded,
+      shown,
+      ...next,
+    })
 
   const open = (row: DashboardRow, params: Record<string, string> = {}) =>
     host &&
@@ -83,13 +105,15 @@ export default function Home() {
       pathname: '/chat/[id]',
       params: { id: row.session.id, host: host.id, ...params },
     })
-  const newTask = () =>
+  // dir 是新任务页已有的参数：带上就把工作目录预选为这个项目。
+  const newTask = (dir?: string) =>
     host &&
     router.push({
       pathname: '/new',
-      params: { host: host.id, ...(project ? { dir: project.dir } : {}) },
+      params: { host: host.id, ...(dir ? { dir } : {}) },
     })
   const disconnected = link === 'offline' || link === 'unauthorized'
+  const canStart = canStartTask(link)
 
   if (searching && host)
     return (
@@ -97,7 +121,7 @@ export default function Home() {
         <HomeSearch
           rows={all}
           projects={projects}
-          initialProject={projectKey}
+          initialProject={null}
           onCancel={() => setSearching(false)}
           onOpen={(row) => open(row)}
         />
@@ -108,24 +132,59 @@ export default function Home() {
     <ScreenView>
       <View
         style={{
-          height: 44,
+          height: 52,
           flexDirection: 'row',
           alignItems: 'center',
-          justifyContent: 'flex-end',
+          gap: 12,
           paddingHorizontal: 16,
         }}
       >
-        <IconButton
-          icon="settings"
-          label="设置"
-          color={colors.ink2}
-          iconSize={22}
-          onPress={() => router.push('/settings')}
-        />
+        <FloatButton label="设置" onPress={() => router.push('/settings')}>
+          <MenuGlyph color={colors.ink} />
+        </FloatButton>
+        <View style={{ flex: 1, minWidth: 0, alignItems: 'center' }}>
+          {host ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`${host.name}，切换电脑或查看这台电脑`}
+              onPress={() => setHostSheet(true)}
+              style={({ pressed }) => ({
+                alignItems: 'center',
+                justifyContent: 'center',
+                minHeight: 44,
+                maxWidth: '100%',
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: '100%' }}>
+                <Text
+                  numberOfLines={1}
+                  style={{ flexShrink: 1, fontSize: 18, lineHeight: 22, fontWeight: '600', color: colors.ink }}
+                >
+                  {host.name}
+                </Text>
+                <Icon name="chevron-down" size={16} color={colors.ink3} strokeWidth={2.2} />
+              </View>
+              <StatusLine link={link} host={host} lastSyncedAt={snapshot?.checkedAt} />
+            </Pressable>
+          ) : null}
+        </View>
+        {host && !disconnected ? (
+          <FloatButton label="搜索任务或项目" onPress={() => setSearching(true)}>
+            <Icon name="search" size={20} color={colors.ink} strokeWidth={2} />
+          </FloatButton>
+        ) : (
+          <View style={{ width: 44 }} />
+        )}
       </View>
       <ScrollView
         keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 28, flexGrow: 1 }}
+        contentContainerStyle={{
+          paddingHorizontal: 16,
+          paddingTop: 8,
+          paddingBottom: 96 + Math.max(insets.bottom, 12),
+          flexGrow: 1,
+        }}
         refreshControl={
           host ? (
             <RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.ink3} />
@@ -141,19 +200,9 @@ export default function Home() {
           </View>
         ) : (
           <>
-            <LargeTitle
-              title={host.name}
-              chevron
-              subtitle={
-                <StatusLine link={link} host={host} lastSyncedAt={snapshot?.checkedAt} />
-              }
-              accessibilityLabel={`${host.name}，切换电脑或查看这台电脑`}
-              onPress={() => setHostSheet(true)}
-            />
-            {disconnected ? null : <SearchEntry onPress={() => setSearching(true)} />}
             <InlineError
               text={storageError || (link === 'failed' ? error : '')}
-              style={{ marginTop: disconnected ? 0 : 12, marginBottom: disconnected ? 12 : 0 }}
+              style={{ marginBottom: 12 }}
             />
             {disconnected ? (
               <>
@@ -165,14 +214,16 @@ export default function Home() {
                   }
                 />
                 {all.length ? (
-                  <>
-                    <SectionHeader title="断开前的状态" />
-                    <RowGroup style={{ opacity: 0.72 }}>
-                      {[...waiting, ...running, ...settled.slice(0, offlineRecent)].map((row) => (
-                        <OfflineRow key={row.session.id} row={row} />
-                      ))}
-                    </RowGroup>
-                  </>
+                  <View style={{ opacity: 0.72 }}>
+                    <SectionTitle>断开前的状态</SectionTitle>
+                    {[
+                      ...grouped.waiting,
+                      ...grouped.running,
+                      ...grouped.settled.slice(0, offlineRecent),
+                    ].map((row) => (
+                      <OfflineRow key={row.session.id} row={row} />
+                    ))}
+                  </View>
                 ) : null}
               </>
             ) : !snapshot ? (
@@ -182,113 +233,68 @@ export default function Home() {
                 icon="compose"
                 title="还没有任务"
                 detail="把下一件事交给电脑，在这里看它的进展。"
-                action={<Button title="新任务" icon="compose" onPress={newTask} />}
-              />
-            ) : !waiting.length && !running.length && !settled.length ? (
-              <EmptyState
-                icon="folder"
-                title={`${project?.name ?? '这个项目'} 里没有任务`}
-                action={
-                  <View style={{ alignItems: 'center' }}>
-                    <TextButton title="查看全部项目" onPress={() => setFilter(null)} />
-                  </View>
-                }
               />
             ) : (
               <>
-                {waiting.length ? (
-                  <>
-                    <SectionHeader title="等你决定" count={waiting.length} countColor={colors.attn} />
-                    <View style={{ gap: 10 }}>
-                      {waiting.map((row) => (
-                        <DecisionCard
-                          key={row.session.id}
-                          row={row}
-                          onOpen={() => open(row)}
-                          onRespond={(action, requestId) =>
-                            open(row, { requestId, notificationAction: action })
-                          }
-                        />
-                      ))}
-                    </View>
-                  </>
+                {filterOptions(counts).length > 1 ? (
+                  <FilterPills
+                    options={filterOptions(counts)}
+                    value={filter}
+                    onChange={(value) => patch({ filter: value })}
+                  />
                 ) : null}
-                {running.length ? (
-                  <>
-                    <SectionHeader title="进行中" count={running.length} countColor={colors.run} />
-                    <RowGroup>
-                      {running.map((row) => (
-                        <RunningRow
-                          key={row.session.id}
-                          row={row}
-                          background={background[row.session.id]}
-                          onPress={() => open(row)}
-                        />
-                      ))}
-                    </RowGroup>
-                  </>
-                ) : null}
-                {settled.length ? (
-                  <>
-                    <SectionHeader title="最近" />
-                    <RowGroup>
-                      {settled.slice(0, recentShown).map((row) => (
-                        <SettledRow key={row.session.id} row={row} onPress={() => open(row)} />
-                      ))}
-                      {settled.length > recentShown ? (
-                        <MoreRow
-                          count={settled.length - recentShown}
-                          onPress={() => setRecentShown((value) => value + 20)}
-                        />
+                <SectionTitle>最近</SectionTitle>
+                {recent.map((row) => (
+                  <RecentRow
+                    key={row.session.id}
+                    row={row}
+                    background={background[row.session.id]}
+                    onPress={() => open(row)}
+                  />
+                ))}
+                {groups.length ? <SectionTitle>项目</SectionTitle> : null}
+                {groups.map((group) => {
+                  const limit = shown[group.key] ?? projectPage
+                  return (
+                    <View key={group.key}>
+                      <ProjectHeader
+                        group={group}
+                        canStart={canStart}
+                        onToggle={() =>
+                          patch({ expanded: { ...expanded, [group.key]: !group.expanded } })
+                        }
+                        onNewTask={() => newTask(group.dir)}
+                      />
+                      {group.expanded ? (
+                        <>
+                          {group.rows.slice(0, limit).map((row) => (
+                            <ProjectSessionRow
+                              key={row.session.id}
+                              row={row}
+                              onPress={() => open(row)}
+                            />
+                          ))}
+                          {group.rows.length > limit ? (
+                            <MoreSessions
+                              count={group.rows.length - limit}
+                              onPress={() =>
+                                patch({ shown: { ...shown, [group.key]: limit + 20 } })
+                              }
+                            />
+                          ) : null}
+                        </>
                       ) : null}
-                    </RowGroup>
-                  </>
-                ) : null}
+                    </View>
+                  )
+                })}
               </>
             )}
           </>
         )}
       </ScrollView>
-      <BottomBar
-        style={{
-          paddingTop: 8,
-          flexDirection: 'row',
-          alignItems: 'flex-start',
-          justifyContent: host ? 'space-between' : 'flex-end',
-        }}
-      >
-        {host ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`按项目查看，当前${project?.name ?? '全部项目'}`}
-            onPress={() => setProjectSheet(true)}
-            style={({ pressed }) => ({
-              height: 44,
-              flexShrink: 1,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 6,
-              paddingHorizontal: 6,
-              opacity: pressed ? 0.5 : 1,
-            })}
-          >
-            <Icon name="list-filter" size={19} color={colors.ink2} />
-            <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 15, color: colors.ink2 }}>
-              {project?.name ?? '全部项目'}
-            </Text>
-          </Pressable>
-        ) : null}
-        <Button
-          title="新任务"
-          icon="compose"
-          pill
-          disabled={!canStartTask(link)}
-          onPress={newTask}
-          style={{ paddingLeft: 14 }}
-        />
-      </BottomBar>
       {host ? (
         <>
+          <FloatingComposer disabled={!canStart} onPress={() => newTask()} />
           <HostSheet
             visible={hostSheet}
             onClose={() => setHostSheet(false)}
@@ -296,24 +302,13 @@ export default function Home() {
             link={link}
             activeSessionIds={activeSessionIds}
           />
-          <ProjectSheet
-            visible={projectSheet}
-            onClose={() => setProjectSheet(false)}
-            projects={projects}
-            selected={projectKey}
-            total={all.length}
-            onSelect={(key) => {
-              setFilter({ hostId: host.id, key })
-              setRecentShown(recentPage)
-            }}
-          />
         </>
       ) : null}
     </ScreenView>
   )
 }
 
-/** 大标题下的状态行：圆点 + “在线 · 局域网 / 连接中… / 离线 · N 分钟前最后同步”。 */
+/** 标题下的状态行：圆点 + “在线 · 局域网 / 连接中… / 离线 · N 分钟前最后同步”。 */
 function StatusLine({
   link,
   host,
@@ -329,35 +324,12 @@ function StatusLine({
   return (
     <View
       accessibilityLiveRegion="polite"
-      style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+      style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}
     >
-      <StatusDot tone={status.tone} />
-      <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{status.text}</Text>
+      <StatusDot tone={status.tone} size={6} />
+      <Text numberOfLines={1} style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>
+        {status.text}
+      </Text>
     </View>
-  )
-}
-
-/** 常驻在大标题下的搜索入口；点开进入搜索态。 */
-function SearchEntry({ onPress }: { onPress(): void }) {
-  const colors = useColors()
-  return (
-    <Pressable
-      accessibilityRole="search"
-      accessibilityLabel="搜索任务或项目"
-      onPress={onPress}
-      style={({ pressed }) => ({
-        height: 40,
-        borderRadius: 12,
-        backgroundColor: colors.fill,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 12,
-        opacity: pressed ? 0.7 : 1,
-      })}
-    >
-      <Icon name="search" size={17} color={colors.ink3} strokeWidth={2} />
-      <Text style={{ fontSize: 15, color: colors.ink3 }}>搜索任务或项目</Text>
-    </Pressable>
   )
 }

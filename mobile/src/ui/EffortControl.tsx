@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Pressable, View } from 'react-native'
 import type { ApiClient } from '../core/client'
 import type { RuntimeConfig } from '../core/types'
-import { runtimeSelection } from '../core/runtimeCatalog'
+import { effortUnavailableReason, runtimeSelection } from '../core/runtimeCatalog'
 import { useRuntimeChoice } from './RuntimePicker'
 import { Callout, InlineError, Loading, Sheet, TextButton, useColors } from './kit'
 import { ChoiceRow } from './newtask/ChoiceRow'
@@ -25,17 +25,7 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
   const options = choice.canSetEffort ? choice.model?.supportedReasoningEfforts ?? [] : []
   const unavailable = disabled || !client || !runtime
   const waiting = choice.loading || (!choice.catalogReady && !choice.error && choice.source?.auth === 'ready')
-  const reason = choice.source?.auth === 'missing'
-    ? '请先在电脑上登录或配置此供应商，再重新读取。'
-    : choice.source?.auth === 'error'
-      ? '尚未确认此供应商的授权状态，请重新读取。'
-      : !choice.source
-        ? '当前供应商已不可用，请重新选择模型。'
-        : !choice.model && choice.catalogReady
-          ? '当前模型已不在供应商列表中，请重新选择模型。'
-          : !choice.canSetEffort
-            ? '此账号的新任务沿用电脑默认强度，可在会话中调整。'
-            : '当前模型没有可调的思考强度。'
+  const reason = effortUnavailableReason(choice)
 
   return (
     <>

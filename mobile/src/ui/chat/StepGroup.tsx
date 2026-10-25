@@ -4,15 +4,17 @@ import { Text } from '../Text'
 import type { ChatItem } from '../../core/types'
 import { DiffView, HaloDot, Icon, Mono, Spinner, useColors } from '../kit'
 import {
-  collapsible,
+  activityLabel,
   describeStep,
+  groupTail,
   editDiff,
   formatInput,
   outputTail,
   stepInput,
-  summaryLabel,
-  visibleSteps,
+  stepsBehindCaption,
+  summarizeActivity,
   type ChatRow,
+  type StepState,
 } from './steps'
 
 export type StepContext = {
@@ -28,11 +30,10 @@ export type StepContext = {
 export type StepUi = {
   expanded: ReadonlySet<string>
   open: ReadonlySet<string>
+  /** 不再使用（摘要行取代了“前面还有 N 步”）；保留字段让聊天页的 state 形状不变。 */
   revealed: ReadonlySet<string>
 }
 
-/** done = 有结果；missing = 这一轮已经结束却没拿到结果（例如被停止）。 */
-type StepState = 'running' | 'waiting' | 'background' | 'error' | 'done' | 'missing'
 
 function stepState(item: ChatItem, live: boolean, context: StepContext): StepState {
   if (item.type === 'thinking')
@@ -327,105 +328,126 @@ function StepCard({
   )
 }
 
-function Fold({ label, open, onPress }: { label: string; open: boolean; onPress(): void }) {
+/** 一轮结束后的“用时 3 分 12 秒 ›”：点开看这一轮的摘要行。 */
+export const TurnFold = memo(function TurnFold({
+  label,
+  open,
+  onToggle,
+}: {
+  label: string
+  open: boolean
+  onToggle(): void
+}) {
   const colors = useColors()
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={open ? '收起处理过程' : `展开处理过程，${label}`}
       accessibilityState={{ expanded: open }}
-      onPress={onPress}
+      onPress={onToggle}
       hitSlop={6}
       style={({ pressed }) => ({
         alignSelf: 'flex-start',
         height: 32,
+        marginTop: 4,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
+        gap: 4,
         opacity: pressed ? 0.6 : 1,
       })}
     >
-      <Icon name={open ? 'chevron-down' : 'chevron-right'} size={14} color={colors.ink3} strokeWidth={2.2} />
-      <Text style={{ fontSize: 13, color: colors.ink3 }}>{label}</Text>
+      <Text style={{ fontSize: 14, color: colors.ink3 }}>{label}</Text>
+      <Icon name={open ? 'chevron-down' : 'chevron-right'} size={15} color={colors.ink3} strokeWidth={2.2} />
     </Pressable>
   )
-}
+})
 
-/** 工具步骤时间线：左侧发丝竖线，每步一个空心点；结束后的组折成摘要行。 */
+/**
+ * 工具调用在消息流里是一行灰字摘要“已读 3 个文件 · 运行 2 条命令 ›”，点一下在原地展开成
+ * 步骤时间线。进行中的组同样是摘要行，当前这一步由顶栏下方的状态行显示，这里不重复。
+ */
 export const StepGroup = memo(function StepGroup({
   row,
   context,
   ui,
   onToggleStep,
   onToggleOpen,
-  onReveal,
 }: {
   row: Extract<ChatRow, { kind: 'steps' }>
   context: StepContext
   ui: StepUi
   onToggleStep(id: string): void
   onToggleOpen(key: string): void
-  onReveal(key: string): void
+  /** @deprecated 不再需要“前面还有 N 步”；保留是为了聊天页接线不变。 */
+  onReveal?(key: string): void
 }) {
   const colors = useColors()
-  const folded = !row.live && collapsible(row.summary)
   const open = ui.open.has(row.key)
-  const timeline = (steps: ChatItem[]) => (
-    <View
-      style={{
-        borderLeftWidth: 1.5,
-        borderLeftColor: colors.hair,
-        marginLeft: 6,
-        paddingLeft: 14,
-      }}
-    >
-      {steps.map((item) =>
-        ui.expanded.has(item.id) ? (
-          <View key={item.id} style={{ marginVertical: 4 }}>
-            <StepCard item={item} live={row.live} context={context} onToggle={onToggleStep} />
-          </View>
-        ) : (
-          <StepRow key={item.id} item={item} live={row.live} context={context} onToggle={onToggleStep} />
-        )
-      )}
-    </View>
-  )
-  if (folded)
-    return (
-      <View style={{ gap: open ? 0 : 14 }}>
-        <Fold label={summaryLabel(row.summary)} open={open} onPress={() => onToggleOpen(row.key)} />
-        {open
-          ? timeline(row.steps)
-          : row.steps
-              .filter((item) => ui.expanded.has(item.id))
-              .map((item) => (
-                <StepCard key={item.id} item={item} live={false} context={context} onToggle={onToggleStep} />
-              ))}
-      </View>
-    )
-  const visible = visibleSteps(row.steps, !row.live || ui.revealed.has(row.key))
+  const states = new Map(row.steps.map((item) => [item, stepState(item, row.live, context)] as const))
+  const shown = row.live
+    ? stepsBehindCaption(row.steps, (item) => states.get(item) === 'running')
+    : row.steps
+  const segments = shown.length === row.steps.length ? row.segments : summarizeActivity(shown)
+  const tail = groupTail(shown.map((item) => states.get(item) ?? 'done'))
+  const label = activityLabel(segments)
+  const divider = row.turnEnd ? (
+    <View aria-hidden style={{ height: 1, backgroundColor: colors.hair, marginTop: 6, marginBottom: 4 }} />
+  ) : null
+  if (!shown.length) return divider
+  const tailColor = tail?.tone === 'err' ? colors.err : tail?.tone === 'run' ? colors.run : colors.attn
   return (
     <View>
-      {visible.hidden ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`前面还有 ${visible.hidden} 步，点按展开`}
-          onPress={() => onReveal(row.key)}
-          hitSlop={6}
-          style={({ pressed }) => ({
-            alignSelf: 'flex-start',
-            height: 32,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 8,
-            opacity: pressed ? 0.6 : 1,
-          })}
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={[label, tail?.text].filter(Boolean).join('，')}
+        accessibilityHint={open ? '收起步骤' : '展开步骤'}
+        accessibilityState={{ expanded: open }}
+        onPress={() => onToggleOpen(row.key)}
+        hitSlop={4}
+        style={({ pressed }) => ({
+          minHeight: 32,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+          opacity: pressed ? 0.6 : 1,
+        })}
+      >
+        <Icon name={segments.at(-1)?.icon ?? 'terminal'} size={16} color={colors.ink3} strokeWidth={1.9} />
+        <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 14, color: colors.ink3 }}>
+          {label}
+        </Text>
+        <Icon
+          name={open ? 'chevron-down' : 'chevron-right'}
+          size={15}
+          color={colors.ink3}
+          strokeWidth={2.2}
+        />
+        {tail ? (
+          <Text style={{ fontSize: 12.5, color: tailColor, flexShrink: 0 }}>{tail.text}</Text>
+        ) : null}
+      </Pressable>
+      {open ? (
+        <View
+          style={{
+            borderLeftWidth: 1.5,
+            borderLeftColor: colors.hair,
+            marginLeft: 6,
+            marginTop: 2,
+            paddingLeft: 14,
+          }}
         >
-          <Icon name="chevron-down" size={14} color={colors.ink3} strokeWidth={2.2} />
-          <Text style={{ fontSize: 13, color: colors.ink3 }}>前面还有 {visible.hidden} 步</Text>
-        </Pressable>
+          {shown.map((item) =>
+            ui.expanded.has(item.id) ? (
+              <View key={item.id} style={{ marginVertical: 4 }}>
+                <StepCard item={item} live={row.live} context={context} onToggle={onToggleStep} />
+              </View>
+            ) : (
+              <StepRow key={item.id} item={item} live={row.live} context={context} onToggle={onToggleStep} />
+            )
+          )}
+        </View>
       ) : null}
-      {timeline(visible.steps)}
+      {divider}
     </View>
   )
 })

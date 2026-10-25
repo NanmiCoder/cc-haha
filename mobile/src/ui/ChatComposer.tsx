@@ -4,32 +4,32 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { LinearGradient } from 'expo-linear-gradient'
 import { Text } from './Text'
 import type { ApiClient } from '../core/client'
-import {
-  formatBytes,
-  type ComposerAttachment,
-} from '../core/chatComposer'
+import { formatBytes, type ComposerAttachment } from '../core/chatComposer'
 import { pickChatMaterial } from './chatMaterials'
-import {
-  Icon,
-  Mono,
-  Button,
-  Sheet,
-  Spinner,
-  Switch,
-  useColors,
-  type IconName,
-} from './kit'
+import { Icon, Mono, Spinner, useColors } from './kit'
 import { errorText } from './theme'
 import type { RuntimeConfig } from '../core/types'
-import { composerTrigger, insertComposerCandidate, loadComposerCandidates, mergeComposerReferences, type ComposerCandidate, type ComposerReference } from '../core/composerReferences'
-import { ComputerUseControl } from './ComputerUseControl'
-
-type MaterialKind = 'photos' | 'camera' | 'file'
-const tiles: { kind: MaterialKind; title: string; icon: IconName }[] = [
-  { kind: 'photos', title: '相册', icon: 'image' },
-  { kind: 'camera', title: '拍照', icon: 'camera' },
-  { kind: 'file', title: '文件', icon: 'file' },
-]
+import {
+  candidateTypeLabel,
+  composerTrigger,
+  filterComposerCandidates,
+  insertComposerCandidate,
+  loadComposerCandidates,
+  mergeComposerReferences,
+  type ComposerCandidate,
+  type ComposerReference,
+} from '../core/composerReferences'
+import { BringSheet, type MaterialKind } from './compose/BringSheet'
+import { Glyph } from './compose/glyphs'
+import type { ComputerUse } from '../core/useComputerUse'
+import {
+  composerPlaceholder,
+  runCapsuleA11y,
+  runLockedNote,
+  runShortcut,
+  sendSlot,
+  type RunCapsule,
+} from './compose/runLogic'
 
 /** web 预览里模拟 iPhone 的 Home 指示条高度，原生端用真实安全区。 */
 export function useBottomInset() {
@@ -57,20 +57,61 @@ function useKeyboardVisible() {
   return visible
 }
 
-function AttachmentStrip({
-  attachments,
-  onRemove,
+/** 小胶囊：视觉 32 高，点按区域 44 高。 */
+function Pill({
+  label,
+  accessibilityLabel,
+  onPress,
+  removable = true,
+  icon,
+  mono,
 }: {
-  attachments: ComposerAttachment[]
-  onRemove(id: string): void
+  label: string
+  accessibilityLabel: string
+  onPress(): void
+  removable?: boolean
+  icon?: ReactNode
+  mono?: boolean
 }) {
   const colors = useColors()
-  const remove = (attachment: ComposerAttachment) => (
+  const Body = mono ? Mono : Text
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      onPress={onPress}
+      style={{ height: 44, justifyContent: 'center' }}
+    >
+      <View
+        style={{
+          height: 32,
+          paddingLeft: 11,
+          paddingRight: removable ? 8 : 11,
+          borderRadius: 16,
+          backgroundColor: colors.runTint,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
+        {icon}
+        <Body numberOfLines={1} style={{ maxWidth: 180, fontSize: 13, fontWeight: '600', color: colors.run }}>
+          {label}
+        </Body>
+        {removable ? <Icon name="x" size={13} color={colors.run} strokeWidth={2.6} /> : null}
+      </View>
+    </Pressable>
+  )
+}
+
+function AttachmentChip({ attachment, onRemove }: { attachment: ComposerAttachment; onRemove(): void }) {
+  const colors = useColors()
+  const remove = (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={`移除 ${attachment.name}`}
-      hitSlop={8}
-      onPress={() => onRemove(attachment.id)}
+      hitSlop={10}
+      onPress={onRemove}
       style={{
         position: 'absolute',
         top: -6,
@@ -87,97 +128,203 @@ function AttachmentStrip({
       <Icon name="x" size={10} color={colors.bg} strokeWidth={3.5} />
     </Pressable>
   )
+  if (attachment.type === 'image' && attachment.uri)
+    return (
+      <View style={{ width: 52, height: 52 }}>
+        <Image
+          accessibilityLabel={attachment.name}
+          source={{ uri: attachment.uri }}
+          style={{ width: 52, height: 52, borderRadius: 12, backgroundColor: colors.fill }}
+        />
+        {remove}
+      </View>
+    )
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      keyboardShouldPersistTaps="handled"
-      style={{ marginTop: -6 }}
-      contentContainerStyle={{ gap: 8, paddingTop: 8, paddingLeft: 6, paddingRight: 12, paddingBottom: 4 }}
+    <View
+      style={{
+        height: 52,
+        maxWidth: 220,
+        borderRadius: 12,
+        backgroundColor: colors.fill,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 12,
+      }}
     >
-      {attachments.map((attachment) =>
-        attachment.type === 'image' && attachment.uri ? (
-          <View key={attachment.id} style={{ width: 56, height: 56 }}>
-            <Image
-              accessibilityLabel={attachment.name}
-              source={{ uri: attachment.uri }}
-              style={{ width: 56, height: 56, borderRadius: 12, backgroundColor: colors.fill }}
-            />
-            {remove(attachment)}
-          </View>
-        ) : (
-          <View
-            key={attachment.id}
-            style={{
-              height: 56,
-              maxWidth: 220,
-              borderRadius: 12,
-              backgroundColor: colors.fill,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 8,
-              paddingHorizontal: 12,
-            }}
-          >
-            <Icon name={attachment.type === 'image' ? 'image' : 'file'} size={20} color={colors.ink2} />
-            <View style={{ flexShrink: 1, minWidth: 0 }}>
-              <Text numberOfLines={1} style={{ fontSize: 13, fontWeight: '500', color: colors.ink }}>
-                {attachment.name}
-              </Text>
-              <Mono style={{ fontSize: 12, color: colors.ink3 }}>{formatBytes(attachment.bytes)}</Mono>
-            </View>
-            {remove(attachment)}
-          </View>
-        )
-      )}
-    </ScrollView>
+      <Icon name={attachment.type === 'image' ? 'image' : 'file'} size={20} color={colors.ink2} />
+      <View style={{ flexShrink: 1, minWidth: 0 }}>
+        <Text numberOfLines={1} style={{ fontSize: 13, fontWeight: '500', color: colors.ink }}>
+          {attachment.name}
+        </Text>
+        <Mono style={{ fontSize: 12, color: colors.ink3 }}>{formatBytes(attachment.bytes)}</Mono>
+      </View>
+      {remove}
+    </View>
   )
 }
 
-function SkillRow({
-  skill,
-  active,
-  onPress,
-  numberOfLines = 1,
+/** `/` 和 `@` 触发的悬浮候选卡：每行右侧是类型标签。 */
+function CandidateCard({
+  candidates,
+  loading,
+  error,
+  references,
+  onChoose,
 }: {
-  skill: ComposerCandidate
-  active: boolean
-  onPress(): void
-  numberOfLines?: number
+  candidates: ComposerCandidate[]
+  loading: boolean
+  error: string
+  references: ComposerReference[]
+  onChoose(candidate: ComposerCandidate): void
 }) {
   const colors = useColors()
   return (
+    <View
+      style={{
+        backgroundColor: colors.card,
+        borderRadius: 18,
+        overflow: 'hidden',
+        boxShadow: `0 1px 2px rgba(28,25,23,0.06), 0 10px 28px rgba(28,25,23,0.14), 0 0 0 1px ${colors.hair}`,
+      }}
+    >
+      <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 232 }} contentContainerStyle={{ padding: 6 }}>
+        {loading ? (
+          <View style={{ padding: 14 }}>
+            <Spinner size={16} />
+          </View>
+        ) : error ? (
+          <Text style={{ padding: 14, color: colors.err }}>{error}</Text>
+        ) : candidates.length ? (
+          candidates.map((candidate) => {
+            const reference = candidate.reference
+            const active =
+              !!reference && references.some((value) => value.kind === reference.kind && value.id === reference.id)
+            const token = `${reference ? '@' : '/'}${reference?.displayName || candidate.name}`
+            return (
+              <Pressable
+                key={`${candidate.kind}:${candidate.name}`}
+                accessibilityRole="button"
+                accessibilityLabel={`使用 ${token}，${candidate.description}，${candidateTypeLabel(candidate)}`}
+                accessibilityState={{ selected: active }}
+                onPress={() => onChoose(candidate)}
+                style={({ pressed }) => ({
+                  minHeight: 48,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 10,
+                  paddingHorizontal: 10,
+                  paddingVertical: 6,
+                  borderRadius: 12,
+                  backgroundColor: pressed || active ? colors.runTint : 'transparent',
+                })}
+              >
+                <Mono numberOfLines={1} style={{ flexShrink: 0, maxWidth: '45%', fontSize: 14, fontWeight: '500', color: active ? colors.run : colors.ink }}>
+                  {token}
+                </Mono>
+                <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 14, color: colors.ink3 }}>
+                  {candidate.description}
+                </Text>
+                {active ? <Icon name="check" size={16} color={colors.run} strokeWidth={2.4} /> : null}
+                <View style={{ height: 22, paddingHorizontal: 7, borderRadius: 7, backgroundColor: colors.fill, justifyContent: 'center' }}>
+                  <Text style={{ fontSize: 12, lineHeight: 16, color: colors.ink2 }}>{candidateTypeLabel(candidate)}</Text>
+                </View>
+              </Pressable>
+            )
+          })
+        ) : (
+          <Text style={{ padding: 14, color: colors.ink3 }}>没有匹配的技能或命令</Text>
+        )}
+      </ScrollView>
+    </View>
+  )
+}
+
+/** 运行胶囊：盾牌 + 「模型 · 强度」+ ⌄；运行中锁住时置灰带锁。 */
+function RunPill({ run, onPress }: { run: ChatComposerRun; onPress(): void }) {
+  const colors = useColors()
+  const inactive = !!run.disabled || !!run.locked
+  const tone =
+    run.risk === 'danger'
+      ? { bg: colors.errSoft, fg: colors.err, label: colors.err }
+      : run.risk === 'attention'
+        ? { bg: colors.attnSoft, fg: colors.attn, label: colors.attnInk }
+        : { bg: colors.fill, fg: colors.ink2, label: colors.ink }
+  const muted = !!run.locked
+  return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={`使用 ${skill.reference ? '@' : '/'}${skill.reference?.displayName || skill.name}，${skill.description}`}
-      accessibilityState={{ selected: active }}
+      accessibilityLabel={runCapsuleA11y(run)}
+      accessibilityState={{ disabled: inactive }}
+      aria-disabled={inactive}
+      disabled={inactive}
       onPress={onPress}
       style={({ pressed }) => ({
-        minHeight: 48,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        paddingHorizontal: 14,
-        paddingVertical: numberOfLines > 1 ? 8 : 0,
-        backgroundColor: pressed ? colors.fill : 'transparent',
+        height: 44,
+        flexShrink: 1,
+        justifyContent: 'center',
+        opacity: run.disabled && !run.locked ? 0.45 : pressed ? 0.7 : 1,
       })}
     >
-      <Mono numberOfLines={1} style={{ fontSize: 14, color: active ? colors.run : colors.ink, flexShrink: 0, maxWidth: '50%' }}>
-        {skill.reference ? '@' : '/'}{skill.reference?.displayName || skill.name}
-      </Mono>
-      <Text numberOfLines={numberOfLines} style={{ flex: 1, minWidth: 0, fontSize: 14, color: colors.ink3 }}>
-        {skill.description}
-      </Text>
-      {active ? <Icon name="check" size={16} color={colors.run} strokeWidth={2.4} /> : null}
+      <View
+        style={{
+          height: 34,
+          paddingHorizontal: 10,
+          borderRadius: 17,
+          backgroundColor: muted ? colors.fill : tone.bg,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 6,
+        }}
+      >
+        <Icon name="shield" size={15} color={muted ? colors.ink3 : tone.fg} strokeWidth={2} />
+        <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, fontWeight: '500', color: muted ? colors.ink3 : tone.label }}>
+          {run.label}
+        </Text>
+        {run.locked ? (
+          <Glyph name="lock" size={13} color={colors.ink3} strokeWidth={2.2} />
+        ) : (
+          <Icon name="chevron-down" size={12} color={colors.ink3} strokeWidth={2.4} />
+        )}
+      </View>
     </Pressable>
   )
 }
 
-/** New tasks and follow-ups share the same input, capabilities and runtime bar. */
-export function ChatComposer({ client, sessionId, workDir, runtime, draft, onDraft,
-  references, onReferences, attachments, onAttachments, team, onTeam, lean, empty,
-  busy, queueing = false, disabled, mode, model, onMode, onModel, onSend, onError,
-  header, effortControl, profileControl,
+export type ChatComposerRun = RunCapsule
+
+/**
+ * 新任务和追问共用的输入框：输入区在上，下面一行 ＋（带什么）…… 运行胶囊（怎么跑）+ 发送。
+ * 已选的技能、团队、电脑和材料缩略图是输入区里的小胶囊。底部带一段向上渐隐，
+ * 放在页面底部时内容可以在它下面滚动。
+ */
+export function ChatComposer({
+  client,
+  sessionId,
+  workDir,
+  runtime,
+  draft,
+  onDraft,
+  references,
+  onReferences,
+  attachments,
+  onAttachments,
+  team,
+  onTeam,
+  computer,
+  lean,
+  empty,
+  busy,
+  queueing = false,
+  disabled,
+  run,
+  onOpenRun,
+  onSend,
+  onStop,
+  onError,
+  above,
+  caption,
+  onHeight,
 }: {
   client: ApiClient | null
   sessionId?: string
@@ -191,72 +338,84 @@ export function ChatComposer({ client, sessionId, workDir, runtime, draft, onDra
   onAttachments(value: ComposerAttachment[]): void
   team: boolean
   onTeam(value: boolean): void
+  /** 「操作电脑」的状态与动作（useComputerUse）：输入框上的「电脑」胶囊和「＋」里的开关共用。 */
+  computer: ComputerUse
   lean: boolean
   empty: boolean
   busy: boolean
   queueing?: boolean
   disabled: boolean
-  mode: string
-  model: string
-  onMode(): void
-  onModel(): void
+  run: ChatComposerRun
+  onOpenRun(): void
   onSend(): void
+  /** 运行中且输入框是空的，发送位变成停止键。 */
+  onStop?(): void
   onError(message: string): void
-  header?: ReactNode
-  effortControl?: ReactNode
-  profileControl?: ReactNode
+  /** 输入框上方：通知、排队中的消息。 */
+  above?: ReactNode
+  /** 输入框上方的一行状态说明。 */
+  caption?: ReactNode
+  /** 整块（含渐隐区）的高度，页面给内容留底边距用。 */
+  onHeight?(height: number): void
 }) {
   const colors = useColors()
   const inset = useBottomInset()
   const keyboard = useKeyboardVisible()
   const input = useRef<ComponentRef<typeof TextInput>>(null)
-  const [panel, setPanel] = useState(false)
+  const [bringOpen, setBringOpen] = useState(false)
   const [selection, setSelection] = useState({ start: draft.length, end: draft.length })
   const [candidates, setCandidates] = useState<ComposerCandidate[]>([])
   const [catalogError, setCatalogError] = useState('')
   const [loading, setLoading] = useState(false)
   const [picking, setPicking] = useState<MaterialKind | null>(null)
-  const [computerEnabled, setComputerEnabled] = useState(false)
-  const [teamsEnabled, setTeamsEnabled] = useState(false)
-  const [teamConsent, setTeamConsent] = useState(false)
-  const [teamAccepted, setTeamAccepted] = useState(false)
   const trigger = composerTrigger(draft, selection.start, selection.end)
-  const showCandidates = !panel && !disabled && !!trigger
-  const needsCatalog = panel || showCandidates
+  const showCandidates = !bringOpen && !disabled && !!trigger
+  const needsCatalog = bringOpen || showCandidates
   const providerId = runtime?.providerId
   const hasRuntime = !!runtime
   useEffect(() => {
     if (!client || !needsCatalog) return
     const controller = new AbortController()
     queueMicrotask(() => {
-      if (!controller.signal.aborted) { setLoading(true); setCatalogError(''); setCandidates([]) }
+      if (!controller.signal.aborted) {
+        setLoading(true)
+        setCatalogError('')
+        setCandidates([])
+      }
     })
-    loadComposerCandidates(client, { sessionId, workDir, runtime: hasRuntime ? { providerId: providerId ?? null, modelId: '' } : undefined, lean }, controller.signal)
-      .then((value) => { if (!controller.signal.aborted) setCandidates(value) })
-      .catch((e) => { if (!controller.signal.aborted) setCatalogError(errorText(e)) })
-      .finally(() => { if (!controller.signal.aborted) setLoading(false) })
+    loadComposerCandidates(
+      client,
+      { sessionId, workDir, runtime: hasRuntime ? { providerId: providerId ?? null, modelId: '' } : undefined, lean },
+      controller.signal
+    )
+      .then((value) => {
+        if (!controller.signal.aborted) setCandidates(value)
+      })
+      .catch((e) => {
+        if (!controller.signal.aborted) setCatalogError(errorText(e))
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
     return () => controller.abort()
   }, [client, sessionId, workDir, providerId, hasRuntime, lean, needsCatalog])
-  useEffect(() => {
-    if (!client) return
-    const controller = new AbortController()
-    client.get<{ agentTeamsEnabled?: boolean }>('/api/settings/user', { signal: controller.signal })
-      .then((value) => { if (!controller.signal.aborted) { setTeamsEnabled(value.agentTeamsEnabled !== false); if (value.agentTeamsEnabled === false) onTeam(false) } })
-      .catch(() => { if (!controller.signal.aborted) setTeamsEnabled(false) })
-    return () => controller.abort()
-  }, [client, panel, onTeam])
-  const canSend = (!busy || queueing) && !disabled && !picking && (!!draft.trim() || attachments.length > 0 || references.length > 0)
-  const query = trigger?.query.toLocaleLowerCase() ?? ''
-  const filtered = candidates.filter((candidate) =>
-    (trigger?.kind !== '@' || !!candidate.reference) &&
-    (!query || `${candidate.name} ${candidate.description} ${candidate.reference?.displayName ?? ''}`.toLocaleLowerCase().includes(query))
-  )
+
+  const hasContent = !!draft.trim() || attachments.length > 0 || references.length > 0
+  const slot = sendSlot({
+    hasContent,
+    busy,
+    queueing,
+    disabled,
+    picking: !!picking,
+    canStop: !!onStop,
+    starting: !sessionId,
+  })
+
   function choose(candidate: ComposerCandidate) {
     const next = insertComposerCandidate(draft, showCandidates ? trigger : null, candidate)
     onDraft(next.text)
     if (candidate.reference) onReferences(mergeComposerReferences(references, [candidate.reference]))
     setSelection({ start: next.cursor, end: next.cursor })
-    setPanel(false)
     requestAnimationFrame(() => input.current?.focus())
   }
   async function pick(kind: MaterialKind) {
@@ -265,109 +424,214 @@ export function ChatComposer({ client, sessionId, workDir, runtime, draft, onDra
     try {
       const next = await pickChatMaterial(kind)
       onAttachments([...attachments, ...next])
-      if (next.length) setPanel(false)
-    } catch (e) { onError(errorText(e)) }
-    finally { setPicking(null) }
+      if (next.length) setBringOpen(false)
+    } catch (e) {
+      onError(errorText(e))
+    } finally {
+      setPicking(null)
+    }
   }
-  function toggleTeam(value: boolean) {
-    if (!value) onTeam(false)
-    else if (teamAccepted) onTeam(true)
-    else setTeamConsent(true)
-  }
-  function send() {
-    if (!references.length && !attachments.length) {
-      if (draft.trim() === '/model') { onDraft(''); onModel(); return }
-      if (draft.trim() === '/permissions') { onDraft(''); onMode(); return }
+  function press() {
+    if (slot.kind === 'stop') return onStop?.()
+    if (runShortcut(draft, references.length > 0 || attachments.length > 0)) {
+      onDraft('')
+      onOpenRun()
+      return
     }
     onSend()
-    setPanel(false)
   }
-  const candidateList = <View style={{ backgroundColor: colors.card, borderRadius: 14, overflow: 'hidden' }}>
-    <ScrollView keyboardShouldPersistTaps="handled" style={{ maxHeight: 188 }}>
-      {loading ? <View style={{ padding: 14 }}><Spinner size={16} /></View> : catalogError ?
-        <Text style={{ padding: 14, color: colors.err }}>{catalogError}</Text> : filtered.length ? filtered.map((candidate) => (
-          <SkillRow key={`${candidate.kind}:${candidate.name}`} skill={candidate}
-            active={!!candidate.reference && references.some((value) => value.kind === candidate.reference?.kind && value.id === candidate.reference.id)}
-            onPress={() => choose(candidate)} numberOfLines={2} />
-        )) : <Text style={{ padding: 14, color: colors.ink3 }}>没有匹配的技能或命令</Text>}
-    </ScrollView>
-  </View>
-  return <View>
-    <LinearGradient pointerEvents="none" colors={[`${colors.bg}00`, colors.bg]}
-      style={{ position: 'absolute', top: -18, left: 0, right: 0, height: 18 }} />
-    <View style={{ backgroundColor: colors.bg, paddingHorizontal: 12, paddingTop: 10, paddingBottom: panel ? 8 : keyboard ? 10 : inset, gap: 8 }}>
-      {header}
-      {showCandidates && candidateList}
-      <View style={{ backgroundColor: colors.card, borderRadius: 22, padding: 6, gap: 4,
-        boxShadow: '0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.07)' }}>
-        {!!attachments.length && <AttachmentStrip attachments={attachments} onRemove={(id) => onAttachments(attachments.filter((value) => value.id !== id))} />}
-        {(references.length > 0 || team || computerEnabled) && <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
-          contentContainerStyle={{ paddingHorizontal: 8, paddingTop: 5, gap: 6 }}>
-          {references.map((reference) => <Pressable key={`${reference.kind}:${reference.id}`} accessibilityRole="button"
-            accessibilityLabel={`移除技能 ${reference.displayName || reference.name}`}
-            onPress={() => onReferences(references.filter((value) => value.kind !== reference.kind || value.id !== reference.id))}
-            style={{ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.fill, flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-            <Text style={{ fontSize: 13, color: colors.ink2 }}>@{reference.displayName || reference.name}</Text><Icon name="x" size={12} color={colors.ink3} />
-          </Pressable>)}
-          {team && <Pressable accessibilityRole="button" accessibilityLabel="关闭这条消息的 Agent 团队" onPress={() => onTeam(false)}
-            style={{ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.runTint, justifyContent: 'center' }}>
-            <Text style={{ fontSize: 13, color: colors.run }}>团队 ×</Text></Pressable>}
-          {computerEnabled && <Pressable accessibilityRole="button" accessibilityLabel="Computer Use 已开启，打开控制菜单" onPress={() => { input.current?.blur(); setPanel(true) }}
-            style={{ minHeight: 32, paddingHorizontal: 10, borderRadius: 10, backgroundColor: colors.fill, justifyContent: 'center' }}>
-            <Text style={{ fontSize: 13, color: colors.ink2 }}>Computer Use</Text></Pressable>}
-        </ScrollView>}
-        <TextInput ref={input} accessibilityLabel={sessionId ? '消息' : '新任务内容'} value={draft} multiline editable={!disabled}
+  function openBring() {
+    input.current?.blur()
+    setBringOpen(true)
+  }
+
+  const chips = attachments.length > 0 || references.length > 0 || team || computer.enabled
+  return (
+    <View
+      onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
+      style={{ paddingTop: 22, paddingHorizontal: 12, paddingBottom: keyboard ? 10 : inset, gap: 8 }}
+    >
+      <LinearGradient
+        pointerEvents="none"
+        colors={[`${colors.bg}00`, colors.bg]}
+        style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 22 }}
+      />
+      <View
+        pointerEvents="none"
+        style={{ position: 'absolute', top: 22, left: 0, right: 0, bottom: 0, backgroundColor: colors.bg }}
+      />
+      {above}
+      {caption ? (
+        typeof caption === 'string' ? (
+          <Text style={{ paddingHorizontal: 8, fontSize: 12, lineHeight: 16, color: colors.ink3 }}>{caption}</Text>
+        ) : (
+          caption
+        )
+      ) : null}
+      {showCandidates ? (
+        <CandidateCard
+          candidates={filterComposerCandidates(candidates, trigger)}
+          loading={loading}
+          error={catalogError}
+          references={references}
+          onChoose={choose}
+        />
+      ) : null}
+      <View
+        style={{
+          backgroundColor: colors.card,
+          borderRadius: 22,
+          paddingHorizontal: 6,
+          paddingTop: chips ? 10 : 6,
+          paddingBottom: 4,
+          boxShadow: `0 1px 2px rgba(28,25,23,0.05), 0 6px 20px rgba(28,25,23,0.10), 0 0 0 1px ${colors.hair}`,
+        }}
+      >
+        {chips ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            style={{ flexGrow: 0 }}
+            contentContainerStyle={{ alignItems: 'center', gap: 10, paddingTop: 8, paddingBottom: 2, paddingLeft: 10, paddingRight: 14 }}
+          >
+            {attachments.map((attachment) => (
+              <AttachmentChip
+                key={attachment.id}
+                attachment={attachment}
+                onRemove={() => onAttachments(attachments.filter((value) => value.id !== attachment.id))}
+              />
+            ))}
+            {references.map((reference) => (
+              <Pill
+                key={`${reference.kind}:${reference.id}`}
+                label={`@${reference.displayName || reference.name}`}
+                accessibilityLabel={`移除技能 ${reference.displayName || reference.name}`}
+                onPress={() =>
+                  onReferences(references.filter((value) => value.kind !== reference.kind || value.id !== reference.id))
+                }
+              />
+            ))}
+            {team ? (
+              <Pill
+                label="团队"
+                accessibilityLabel="关闭这条消息的 Agent 团队"
+                onPress={() => onTeam(false)}
+                icon={<Icon name="users" size={14} color={colors.run} strokeWidth={2} />}
+              />
+            ) : null}
+            {computer.enabled ? (
+              <Pill
+                label="操作电脑"
+                accessibilityLabel="操作电脑已开启，打开「＋」查看"
+                removable={false}
+                onPress={() => setBringOpen(true)}
+                icon={<Glyph name="monitor" size={14} color={colors.run} strokeWidth={2} />}
+              />
+            ) : null}
+          </ScrollView>
+        ) : null}
+        <TextInput
+          ref={input}
+          accessibilityLabel={sessionId ? '消息' : '新任务内容'}
+          value={draft}
+          multiline
+          editable={!disabled}
           onChangeText={(value) => {
             const cursor = Math.min(value.length, Math.max(0, selection.end + value.length - draft.length))
-            onDraft(value); setSelection({ start: cursor, end: cursor })
+            onDraft(value)
+            setSelection({ start: cursor, end: cursor })
           }}
-          selection={{ start: Math.min(selection.start, draft.length), end: Math.min(selection.end, draft.length) }}
+          selection={{
+            start: Math.min(selection.start, draft.length),
+            end: Math.min(selection.end, draft.length),
+          }}
           onSelectionChange={({ nativeEvent }) => setSelection(nativeEvent.selection)}
-          onFocus={() => setPanel(false)}
-          placeholder={queueing ? '补充要求，这一轮结束后自动发送' : empty ? '说说你想做什么…' : '接着说…'}
+          placeholder={composerPlaceholder({ queueing, empty })}
           placeholderTextColor={colors.ink3}
           {...(Platform.OS === 'web' ? { rows: 1 } : {})}
-          style={{ minHeight: 60, maxHeight: 136, paddingHorizontal: 10, paddingVertical: 12, fontSize: 16, lineHeight: 23, color: colors.ink }} />
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-          <Pressable accessibilityRole="button" accessibilityLabel={panel ? '收起工具' : '添加材料和工具'} accessibilityState={{ expanded: panel }}
-            onPress={() => { input.current?.blur(); setPanel(!panel) }} style={{ width: 40, height: 40, alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name={panel ? 'x' : 'plus'} size={20} color={colors.ink2} />
+          style={{
+            minHeight: 44,
+            maxHeight: 136,
+            paddingHorizontal: 10,
+            paddingTop: 10,
+            paddingBottom: 10,
+            fontSize: 16,
+            lineHeight: 23,
+            color: colors.ink,
+          }}
+        />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="添加：技能、命令、材料"
+            accessibilityState={{ expanded: bringOpen }}
+            onPress={openBring}
+            style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+          >
+            <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.fill, alignItems: 'center', justifyContent: 'center' }}>
+              <Icon name="plus" size={20} color={colors.ink} strokeWidth={2} />
+            </View>
           </Pressable>
-          <View style={{ flex: 1 }} />
-          <Pressable accessibilityRole="button" accessibilityLabel={sessionId ? '发送' : '开始任务'} disabled={!canSend}
-            accessibilityState={{ disabled: !canSend }} onPress={send}
-            style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: canSend ? colors.btn : colors.fill, alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name="arrow-up" size={18} color={canSend ? colors.btnInk : colors.faint} strokeWidth={2.4} />
+          <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+            {run.locked ? (
+              <Text numberOfLines={1} style={{ flexShrink: 0, textAlign: 'right', fontSize: 12, lineHeight: 16, color: colors.ink3 }}>
+                {runLockedNote}
+              </Text>
+            ) : null}
+            <RunPill run={run} onPress={onOpenRun} />
+          </View>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={slot.label}
+            accessibilityState={{ disabled: !slot.enabled }}
+            disabled={!slot.enabled}
+            onPress={press}
+            style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+          >
+            <View
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                backgroundColor: slot.enabled ? colors.btn : colors.fill,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {slot.kind === 'stop' ? (
+                <Icon name="stop" size={14} color={colors.btnInk} />
+              ) : (
+                <Icon name="arrow-up" size={18} color={slot.enabled ? colors.btnInk : colors.faint} strokeWidth={2.4} />
+              )}
+            </View>
           </Pressable>
         </View>
       </View>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ alignItems: 'center', gap: 3 }}>
-        <Pressable accessibilityRole="button" accessibilityLabel={`权限模式：${mode}`} onPress={onMode} disabled={busy || disabled}
-          style={{ minHeight: 40, paddingHorizontal: 9, justifyContent: 'center' }}><Text style={{ fontSize: 13, color: colors.ink2 }}>{mode}⌄</Text></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={`模型：${model}`} onPress={onModel} disabled={busy || disabled}
-          style={{ minHeight: 40, paddingHorizontal: 9, justifyContent: 'center' }}><Text numberOfLines={1} style={{ fontSize: 13, color: colors.ink2 }}>{model}⌄</Text></Pressable>
-        {effortControl}
-      </ScrollView>
+      <BringSheet
+        visible={bringOpen}
+        onClose={() => setBringOpen(false)}
+        client={client}
+        workDir={workDir}
+        lean={lean}
+        candidates={candidates}
+        loading={loading}
+        error={catalogError}
+        references={references}
+        draft={draft}
+        picking={picking}
+        onPick={(kind) => void pick(kind)}
+        team={team}
+        onTeam={onTeam}
+        computer={computer}
+        onApply={(next) => {
+          onDraft(next.draft)
+          onReferences(next.references)
+          setSelection({ start: next.draft.length, end: next.draft.length })
+          setBringOpen(false)
+          requestAnimationFrame(() => input.current?.focus())
+        }}
+      />
     </View>
-    {panel && <View style={{ backgroundColor: colors.sheet, borderTopWidth: 1, borderTopColor: colors.hair, paddingHorizontal: 16, paddingTop: 12, paddingBottom: inset, gap: 10 }}>
-      <View style={{ flexDirection: 'row', gap: 8 }}>{tiles.map((tile) => <Pressable key={tile.kind} accessibilityRole="button" accessibilityLabel={`从${tile.title}添加`}
-        disabled={!!picking} onPress={() => void pick(tile.kind)} style={{ flex: 1, minHeight: 60, backgroundColor: colors.card, borderRadius: 14, alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-        {picking === tile.kind ? <Spinner size={20} /> : <Icon name={tile.icon} size={20} color={colors.ink2} />}<Text style={{ fontSize: 13, color: colors.ink }}>{tile.title}</Text>
-      </Pressable>)}</View>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 14, backgroundColor: colors.card }}>
-        <View style={{ flex: 1 }}><Text style={{ fontSize: 15, color: colors.ink }}>Agent 团队</Text>
-          <Text style={{ fontSize: 12, color: colors.ink3 }}>{lean ? '轻量档位不支持团队' : !teamsEnabled ? '请先在电脑设置中启用团队' : '只对下一条消息生效'}</Text></View>
-        <Switch label="Agent 团队" value={team} disabled={lean || !teamsEnabled || (busy && !queueing)} onValueChange={toggleTeam} />
-      </View>
-      {profileControl}
-      <Text style={{ fontSize: 12, color: colors.ink3 }}>输入 / 查找命令，输入 @ 引用技能</Text>
-    </View>}
-    <ComputerUseControl client={client} visible={panel} onEnabled={setComputerEnabled} />
-    <Sheet visible={teamConsent} onClose={() => setTeamConsent(false)} title="使用 Agent 团队">
-      <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>队长会拆分任务并协调多个成员。每个成员会独立调用模型，可能增加用量和费用。</Text>
-      <Button title="使用团队" onPress={() => { setTeamAccepted(true); onTeam(true); setTeamConsent(false); setPanel(false) }} />
-      <Button title="取消" variant="secondary" onPress={() => setTeamConsent(false)} />
-    </Sheet>
-  </View>
+  )
 }

@@ -1347,7 +1347,27 @@ export function startFixtureServer({
         return json({ skills: [
           { kind: 'skill', id: 'review', name: 'review', displayName: '代码审查', description: '检查当前改动（本地 fixture）', source: 'fixture', modelText: 'Use the Skill tool with skill: "review" for this request.' },
           { kind: 'skill', id: 'explain', name: 'explain', displayName: '解释代码', description: '解释代码与调用关系（本地 fixture）', source: 'fixture', modelText: 'Use the Skill tool with skill: "explain" for this request.' },
-        ], plugins: [] })
+        ], plugins: [
+          { kind: 'plugin', id: 'github@haha-connectors', name: 'github', displayName: 'GitHub', description: '检索仓库代码、Issue 和 Pull Request（本地 fixture）', source: 'fixture', modelText: 'Use the GitHub connector for this request.', mcpServerNames: ['github'] },
+        ] })
+      // Same shape the desktop sends a paired phone: no auth links, error text or local paths.
+      if (path === '/api/connectors' && method === 'GET')
+        return json({ items: [
+          { id: 'github', displayName: 'GitHub', description: '检索仓库代码、Issue 和 Pull Request。', category: 'development', transport: 'mcp', collection: 'services', pluginId: 'github@haha-connectors', supported: true, installed: true, enabled: true, connection: 'connected', status: 'ready', accountLabel: 'fixture-user' },
+          { id: 'feishu', displayName: '飞书', description: '消息、日历与文档。', category: 'office', transport: 'cli', collection: 'services', pluginId: 'office-feishu@haha-connectors', supported: true, installed: true, enabled: true, connection: 'needs-auth', status: 'needs-auth' },
+          { id: 'notion', displayName: 'Notion', description: '搜索工作区资料，整理页面与项目知识。', category: 'office', transport: 'mcp', collection: 'services', pluginId: 'notion@haha-connectors', supported: true, installed: false, enabled: false, connection: 'disconnected', status: 'not-installed' },
+          { id: 'context7', displayName: 'Context7', description: '查阅软件库的最新文档与用法示例。', category: 'development', transport: 'mcp', collection: 'services', pluginId: 'context7@haha-connectors', supported: true, installed: false, enabled: false, connection: 'disconnected', status: 'not-installed' },
+        ] })
+      if (path === '/api/agents' && method === 'GET')
+        return json({ activeAgents: [
+          { agentType: 'code-reviewer', description: '按团队规范审查改动并给出修改建议（fixture）', modelDisplay: 'Fixture Sonnet', color: 'blue', source: 'userSettings', isActive: true },
+          { agentType: 'Explore', description: '只读地探索代码库并回答问题（fixture）', modelDisplay: 'Fixture Sonnet', source: 'built-in', isActive: true },
+        ], allAgents: [] })
+      if (path === '/api/workflows' && method === 'GET')
+        return json({ workflows: [
+          { name: 'ship-release', description: '跑测试、写发布说明并打 tag（fixture）', source: 'user' },
+          { name: 'triage-issues', description: '整理新 Issue 并按优先级分类（fixture）', source: 'project' },
+        ] })
       if (path === '/api/computer-use/status' && method === 'GET')
         return json({ platform: 'darwin', supported: true, engine: 'macos-native', cuHelper: { available: true, supported: true }, permissions: { accessibility: true, screenRecording: true } })
       if (path === '/api/computer-use/authorized-apps') {
@@ -1705,6 +1725,33 @@ export function startFixtureServer({
             changedFiles: 3,
             worktree: null,
           })
+        if (action === 'inspection' && method === 'GET') {
+          // 桌面端上报的实时上下文：手机的「上下文」底单读它；fixture 给一份固定的假数据。
+          const query = new URL(request.url).searchParams
+          if (query.get('usageOnly') === '1')
+            return json({
+              usage: {
+                totalInputTokens: 18200,
+                totalOutputTokens: 5400,
+                totalCacheReadInputTokens: 61000,
+                totalCacheCreationInputTokens: 9000,
+                totalAPIDuration: 120000,
+                costDisplay: '$0.42',
+              },
+            })
+          return json({
+            context: {
+              totalTokens: 76400,
+              rawMaxTokens: 200000,
+              model: session.runtime.modelId,
+              categories: [
+                { name: '系统提示', tokens: 6200 },
+                { name: '消息', tokens: 61300 },
+                { name: '工具', tokens: 8900 },
+              ],
+            },
+          })
+        }
         if (action === 'slash-commands' && method === 'GET')
           return json({
             commands: [
@@ -2143,6 +2190,14 @@ async function selfTest() {
     const latest = (await (
       await fetch(`${base}/api/sessions/fixture-chat/messages`, { headers })
     ).json()) as { messages: HistoryEntry[]; page: { nextCursor: string } }
+    // The three "+" catalogs (connectors, agents, workflows) in the phone's projected shape.
+    const connectors = (await (await fetch(`${base}/api/connectors`, { headers })).json()) as { items: { id: string; connection: string }[] }
+    assert.deepEqual(connectors.items.map((item) => [item.id, item.connection]), [
+      ['github', 'connected'], ['feishu', 'needs-auth'], ['notion', 'disconnected'], ['context7', 'disconnected'],
+    ])
+    assert.ok(!JSON.stringify(connectors).includes('authUrl'))
+    assert.equal(((await (await fetch(`${base}/api/agents`, { headers })).json()) as { activeAgents: unknown[] }).activeAgents.length, 2)
+    assert.equal(((await (await fetch(`${base}/api/workflows`, { headers })).json()) as { workflows: unknown[] }).workflows.length, 2)
     assert.equal(latest.messages.length, 6)
     assert.ok(latest.page.nextCursor)
     const older = (await (

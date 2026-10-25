@@ -2,18 +2,21 @@ import { describe, expect, test } from 'bun:test'
 import type { ChatItem } from '../../core/types'
 import { chatReducer, createChatState } from '../../core/chat'
 import {
+  activityLabel,
   buildChatRows,
-  collapsible,
   describeStep,
   editCounts,
   editDiff,
   formatInput,
+  formatTurnDuration,
+  groupTail,
   lineDiff,
   outputTail,
   relativePath,
-  summarizeSteps,
-  summaryLabel,
-  visibleSteps,
+  stepsBehindCaption,
+  summarizeActivity,
+  turnFoldLabel,
+  visibleChatRows,
 } from './steps'
 
 const tool = (id: string, toolName: string, input: unknown, extra: Partial<ChatItem> = {}): ChatItem => ({
@@ -28,6 +31,9 @@ const tool = (id: string, toolName: string, input: unknown, extra: Partial<ChatI
 const user = (id: string, text = '问题'): ChatItem => ({ id, type: 'user', text })
 const assistant = (id: string, text = '回复'): ChatItem => ({ id, type: 'assistant', text })
 
+const stamped = (item: ChatItem, at: string): ChatItem => ({ ...item, timestamp: at })
+const rowKinds = (rows: ReturnType<typeof buildChatRows>) => rows.map((row) => row.kind)
+
 describe('step grouping', () => {
   test('merges consecutive tools and thinking into one group between messages', () => {
     const rows = buildChatRows(
@@ -40,14 +46,13 @@ describe('step grouping', () => {
         assistant('a2'),
         tool('r2', 'Read', { file_path: '/repo/b.ts' }),
       ],
-      false
+      true
     )
-    expect(rows.map((row) => row.kind)).toEqual(['message', 'message', 'steps', 'message', 'steps'])
+    expect(rowKinds(rows)).toEqual(['message', 'message', 'steps', 'message', 'steps'])
     const group = rows[2]
     expect(group.kind === 'steps' && group.steps.map((step) => step.id)).toEqual(['t1', 'r1', 'b1'])
     expect(group.key).toBe('steps:t1')
-    // Thinking is a visible step but not an action in the summary.
-    expect(group.kind === 'steps' && group.summary).toEqual({ total: 2, read: 1, edit: 0, run: 1 })
+    expect(group.kind === 'steps' && activityLabel(group.segments)).toBe('思考 · 已读 1 个文件 · 运行 1 条命令')
   })
 
   test('only groups after the last user message are live while the turn runs', () => {
@@ -74,29 +79,179 @@ describe('step grouping', () => {
     expect(rows).toHaveLength(1)
     expect(rows[0].key).toBe(first)
   })
+})
 
-  test('folds older live steps and collapses settled groups of two or more tools', () => {
-    const steps = Array.from({ length: 6 }, (_, index) => tool(`s${index}`, 'Read', {}))
-    expect(visibleSteps(steps, false)).toMatchObject({ hidden: 2 })
-    expect(visibleSteps(steps, false).steps.map((step) => step.id)).toEqual(['s2', 's3', 's4', 's5'])
-    expect(visibleSteps(steps, true).hidden).toBe(0)
-    expect(visibleSteps(steps.slice(0, 4), false).hidden).toBe(0)
-    expect(collapsible(summarizeSteps(steps.slice(0, 1)))).toBe(false)
-    expect(collapsible(summarizeSteps(steps.slice(0, 2)))).toBe(true)
-    expect(collapsible(summarizeSteps([{ id: 'x', type: 'thinking', text: '' }]))).toBe(false)
+describe('activity summary', () => {
+  test('counts by tool kind in first-appearance order and omits nothing the model did', () => {
+    const segments = summarizeActivity([
+      tool('1', 'Read', { file_path: '/a.ts' }),
+      tool('2', 'Read', { file_path: '/b.ts' }),
+      tool('3', 'Read', { file_path: '/c.ts' }),
+      tool('4', 'Bash', { command: 'ls' }),
+      tool('5', 'Bash', { command: 'bun test' }),
+    ])
+    expect(activityLabel(segments)).toBe('已读 3 个文件 · 运行 2 条命令')
+    expect(segments.map((segment) => segment.icon)).toEqual(['file', 'terminal'])
   })
 
-  test('summary names reads, edits and runs and omits empty categories', () => {
-    const summary = summarizeSteps([
-      tool('1', 'Read', {}),
-      tool('2', 'Grep', {}),
-      tool('3', 'Edit', {}),
-      tool('4', 'Write', {}),
-      tool('5', 'Bash', {}),
-      tool('6', 'WebSearch', {}),
-    ])
-    expect(summaryLabel(summary)).toBe('做了 6 步 · 读 2 · 改 2 · 运行 1')
-    expect(summaryLabel({ total: 3, read: 3, edit: 0, run: 0 })).toBe('做了 3 步 · 读 3')
+  test('reading or editing one file repeatedly counts the file once, calls without a path count each', () => {
+    expect(
+      activityLabel(
+        summarizeActivity([
+          tool('1', 'Read', { file_path: '/a.ts' }),
+          tool('2', 'Read', { file_path: '/a.ts' }),
+          tool('3', 'Edit', { file_path: '/a.ts' }),
+          tool('4', 'Edit', { file_path: '/a.ts' }),
+          tool('5', 'Edit', { file_path: '/b.ts' }),
+          tool('6', 'Write', { file_path: '/new.ts' }),
+          tool('7', 'Edit', {}),
+          tool('8', 'Edit', {}),
+        ])
+      )
+    ).toBe('已读 1 个文件 · 编辑 4 个文件 · 新建 1 个文件')
+  })
+
+  test('groups search, web, sub-agents, todos and MCP tools under their own clauses', () => {
+    expect(
+      activityLabel(
+        summarizeActivity([
+          { id: 't', type: 'thinking', text: '' },
+          tool('1', 'Grep', { pattern: 'a' }),
+          tool('2', 'Grep', { pattern: 'b' }),
+          tool('3', 'Glob', { pattern: '*' }),
+          tool('4', 'WebSearch', { query: 'x' }),
+          tool('5', 'WebFetch', { url: 'https://a' }),
+          tool('6', 'Task', { description: 'd' }),
+          tool('7', 'TodoWrite', {}),
+          tool('8', 'TaskUpdate', {}),
+          tool('9', 'mcp__github__create_issue', {}),
+          tool('10', 'mcp__github__list_issues', {}),
+          tool('11', 'SomeNewTool', {}),
+        ])
+      )
+    ).toBe(
+      '思考 · 搜索 2 次 · 查找文件 · 搜索网页 · 打开 1 个网页 · 派出 1 个子 Agent · 更新待办 · 调用 github 2 次 · 调用 SomeNewTool'
+    )
+  })
+
+  test('thinking alone is still a one-line summary; several thoughts are counted', () => {
+    expect(activityLabel(summarizeActivity([{ id: 't', type: 'thinking', text: '' }]))).toBe('思考')
+    expect(
+      activityLabel(
+        summarizeActivity([
+          { id: 't1', type: 'thinking', text: '' },
+          tool('1', 'Read', { file_path: '/a' }),
+          { id: 't2', type: 'thinking', text: '' },
+        ])
+      )
+    ).toBe('思考 2 次 · 已读 1 个文件')
+  })
+
+  test('a live group leaves its unfinished last step to the status caption', () => {
+    const steps = [tool('1', 'Read', { file_path: '/a' }), tool('2', 'Bash', { command: 'ls' }, { pending: true })]
+    const unfinished = (step: ChatItem) => step.result === undefined
+    expect(stepsBehindCaption(steps, unfinished).map((step) => step.id)).toEqual(['1'])
+        // A finished last step stays: only the current step is hidden.
+    expect(stepsBehindCaption(steps, () => false)).toHaveLength(2)
+    expect(stepsBehindCaption([], unfinished)).toEqual([])
+  })
+})
+
+describe('group status tail', () => {
+  test('approval outranks failure outranks background; finished groups say nothing', () => {
+    expect(groupTail(['done', 'missing'])).toBeNull()
+    expect(groupTail(['done', 'background'])).toEqual({ text: '后台进行中', tone: 'run' })
+    expect(groupTail(['error', 'background'])).toEqual({ text: '失败', tone: 'err' })
+    expect(groupTail(['error', 'done', 'error'])).toEqual({ text: '2 项失败', tone: 'err' })
+    expect(groupTail(['error', 'waiting', 'background'])).toEqual({ text: '等你批准', tone: 'attn' })
+  })
+})
+
+describe('turn duration', () => {
+  test('formats seconds, minutes and hours the way the board reads', () => {
+    expect(formatTurnDuration(800)).toBe('')
+    expect(formatTurnDuration(1000)).toBe('1 秒')
+    expect(formatTurnDuration(45_900)).toBe('45 秒')
+    expect(formatTurnDuration(60_000)).toBe('1 分')
+    expect(formatTurnDuration(192_000)).toBe('3 分 12 秒')
+    expect(formatTurnDuration(3_600_000)).toBe('1 小时')
+    expect(formatTurnDuration(3_720_000 + 30_000)).toBe('1 小时 2 分')
+    expect(formatTurnDuration(Number.NaN)).toBe('')
+  })
+
+  test('uses message times, falls back to the local clock, and never invents a number', () => {
+    const u = stamped(user('u'), '2026-10-25T10:00:00.000Z')
+    const last = stamped(assistant('a'), '2026-10-25T10:03:12.000Z')
+    expect(turnFoldLabel(u, [last])).toBe('用时 3 分 12 秒')
+    const start = Date.parse('2026-10-25T10:00:00.000Z')
+    expect(turnFoldLabel(user('u2'), [assistant('a2')], { startedAt: start, endedAt: start + 45_000 })).toBe('用时 45 秒')
+    expect(turnFoldLabel(user('u3'), [assistant('a3')])).toBe('处理过程')
+    expect(turnFoldLabel(u, [stamped(assistant('b'), '2026-10-25T10:00:00.400Z')])).toBe('处理过程')
+  })
+})
+
+describe('turn folding', () => {
+  const turn = (n: number, at = (s: number) => `2026-10-25T10:0${n}:${String(s).padStart(2, '0')}.000Z`): ChatItem[] => [
+    stamped(user(`u${n}`), at(0)),
+    stamped(assistant(`pre${n}`, '先看一下'), at(2)),
+    stamped(tool(`r${n}`, 'Read', { file_path: '/a.ts' }, { result: 'ok' }), at(3)),
+    stamped(tool(`b${n}`, 'Bash', { command: 'ls' }, { result: 'ok' }), at(4)),
+    stamped(assistant(`final${n}`, '完成了'), at(30)),
+  ]
+
+  test('a settled turn folds everything before the final reply into one timed row', () => {
+    const rows = buildChatRows(turn(1), false)
+    expect(rows.map((row) => row.key)).toEqual(['u1', 'turn:pre1', 'pre1', 'steps:r1', 'final1'])
+    expect(rows[1]).toMatchObject({ kind: 'turn', label: '用时 30 秒', hidden: 2 })
+    expect(rows[2]).toMatchObject({ turn: 'turn:pre1' })
+    expect(rows[3]).toMatchObject({ kind: 'steps', turn: 'turn:pre1', turnEnd: true })
+    expect(rows[4]).not.toHaveProperty('turn')
+  })
+
+  test('closed folds hide their rows, open folds show them, the fold row and final reply always stay', () => {
+    const rows = buildChatRows(turn(1), false)
+    expect(visibleChatRows(rows, new Set()).map((row) => row.key)).toEqual(['u1', 'turn:pre1', 'final1'])
+    expect(visibleChatRows(rows, new Set(['turn:pre1'])).map((row) => row.key)).toEqual(rows.map((row) => row.key))
+  })
+
+  test('the running turn is never folded, earlier turns are', () => {
+    const items = [...turn(1), ...turn(2)]
+    const running = buildChatRows(items, true)
+    expect(running.filter((row) => row.kind === 'turn').map((row) => row.key)).toEqual(['turn:pre1'])
+    const settled = buildChatRows(items, false)
+    expect(settled.filter((row) => row.kind === 'turn').map((row) => row.key)).toEqual(['turn:pre1', 'turn:pre2'])
+  })
+
+  test('a turn without tool steps has nothing to fold', () => {
+    const rows = buildChatRows([user('u'), assistant('a')], false)
+    expect(rowKinds(rows)).toEqual(['message', 'message'])
+  })
+
+  test('errors stay visible and a turn that ends on tools folds into just the row', () => {
+    const rows = buildChatRows(
+      [user('u'), tool('r', 'Read', {}), { id: 'e', type: 'error', text: '出错了' }, tool('b', 'Bash', {})],
+      false
+    )
+    const visible = visibleChatRows(rows, new Set())
+    expect(visible.map((row) => row.key)).toEqual(['u', 'turn:steps:r', 'e'])
+  })
+
+  test('the latest turn takes its duration from the local clock when messages carry no time', () => {
+    const items = [user('u'), tool('r', 'Read', {}), assistant('a')]
+    const rows = buildChatRows(items, false, { clock: { startedAt: 1_000, endedAt: 1_000 + 192_000 } })
+    expect(rows.find((row) => row.kind === 'turn')).toMatchObject({ label: '用时 3 分 12 秒' })
+    // The clock describes the latest turn only.
+    const two = buildChatRows([user('u0'), tool('r0', 'Read', {}), assistant('a0'), ...items], false, {
+      clock: { startedAt: 1_000, endedAt: 61_000 },
+    })
+    expect(two.filter((row) => row.kind === 'turn').map((row) => row.kind === 'turn' && row.label)).toEqual(['处理过程', '用时 1 分'])
+  })
+
+  test('fold keys survive the turn finishing, so a user choice made while streaming is not lost', () => {
+    const live = buildChatRows([user('u'), assistant('p'), tool('r', 'Read', {})], true)
+    expect(live.some((row) => row.kind === 'turn')).toBe(false)
+    const done = buildChatRows([user('u'), assistant('p'), tool('r', 'Read', {}), assistant('f')], false)
+    expect(done.find((row) => row.kind === 'turn')?.key).toBe('turn:p')
   })
 })
 

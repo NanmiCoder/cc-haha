@@ -1,7 +1,7 @@
 import { parseUserMessageSegments } from '../../../src/shared/userMessageCapabilities'
 import { describe, expect, test } from 'bun:test'
 import type { ApiClient } from './client'
-import { composerTrigger, insertComposerCandidate, loadComposerCandidates, mergeComposerReferences, serializeComposer, type ComposerReference } from './composerReferences'
+import { candidateTypeLabel, composerTrigger, filterComposerCandidates, insertComposerCandidate, loadComposerCandidates, mergeComposerReferences, serializeComposer, type ComposerReference } from './composerReferences'
 import { buildComposerMessage } from './chatComposer'
 import { clearPendingTask, peekPendingTask, pendingTaskDraft, putPendingTask } from './pendingTask'
 
@@ -82,4 +82,30 @@ test('sent native skill prompts use the desktop reader to recover visible refere
     { type: 'text', text: '\n\n检查结果' },
   ])
   expect(parseUserMessageSegments('普通手写 @review')).toEqual([{ type: 'text', text: '普通手写 @review' }])
+})
+
+describe('inline candidate card', () => {
+  const plugin: ComposerReference = { ...skill, kind: 'plugin', id: 'p', name: 'tool-box', displayName: '工具箱' }
+  const list = [
+    { name: skill.name, description: skill.description, kind: skill.kind, reference: skill },
+    { name: plugin.name, description: '一组工具', kind: plugin.kind, reference: plugin },
+    { name: 'compact', description: '压缩上下文', kind: 'command' as const },
+    { name: 'init', description: '初始化项目说明', kind: 'skill' as const },
+  ]
+  test('slash lists commands and skills, at-sign lists only what can be referenced', () => {
+    expect(filterComposerCandidates(list, composerTrigger('/', 1)).map((value) => value.name)).toEqual(['review', 'tool-box', 'compact', 'init'])
+    expect(filterComposerCandidates(list, composerTrigger('@', 1)).map((value) => value.name)).toEqual(['review', 'tool-box'])
+    expect(filterComposerCandidates(list, null)).toEqual([])
+  })
+  test('the query matches name, description and display name regardless of case', () => {
+    expect(filterComposerCandidates(list, composerTrigger('/COMP', 5)).map((value) => value.name)).toEqual(['compact'])
+    expect(filterComposerCandidates(list, composerTrigger('/压缩', 3)).map((value) => value.name)).toEqual(['compact'])
+    expect(filterComposerCandidates(list, composerTrigger('@工具', 3)).map((value) => value.name)).toEqual(['tool-box'])
+    expect(filterComposerCandidates(list, composerTrigger('/zzz', 4))).toEqual([])
+  })
+  test('each row says what kind of thing it is', () => {
+    expect(list.map(candidateTypeLabel)).toEqual(['技能', '插件', '命令', '技能'])
+    expect(candidateTypeLabel({ name: 'x', description: '', kind: 'agent' })).toBe('Agent')
+    expect(candidateTypeLabel({ name: 'x', description: '' })).toBe('命令')
+  })
 })

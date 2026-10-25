@@ -6,6 +6,7 @@ import {
   OFFICIAL_RUNTIME_SOURCES,
   canSetRuntimeEffort,
   contextLabel,
+  effortUnavailableReason,
   loadRuntimeDirectory,
   loadRuntimeModels,
   modelDetail,
@@ -342,4 +343,16 @@ test('model changes preserve fast mode only within the same official OpenAI acco
   const model = { id: 'two', name: 'Two' }
   expect(runtimeModelSelection('openai-official', model, previous).openAIFastMode).toBe(true)
   expect(runtimeModelSelection('provider-b', model, previous).openAIFastMode).toBeUndefined()
+})
+
+describe('effort control explanation', () => {
+  const base = { source: { auth: 'ready' as const }, model: {}, catalogReady: true, canSetEffort: true }
+  test('each reason names what the user has to fix', () => {
+    expect(effortUnavailableReason({ ...base, source: { auth: 'missing' } })).toContain('请先在电脑上登录')
+    expect(effortUnavailableReason({ ...base, source: { auth: 'error' } })).toContain('尚未确认此供应商的授权状态')
+    expect(effortUnavailableReason({ ...base, source: undefined })).toContain('供应商已不可用')
+    expect(effortUnavailableReason({ ...base, model: undefined })).toContain('当前模型已不在供应商列表')
+    expect(effortUnavailableReason({ ...base, canSetEffort: false })).toContain('沿用电脑默认强度')
+    expect(effortUnavailableReason(base)).toBe('当前模型没有可调的思考强度。')
+  })
 })

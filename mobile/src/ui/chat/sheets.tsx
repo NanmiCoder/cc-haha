@@ -1,17 +1,11 @@
 import type { ReactNode } from 'react'
 import { TextInput, View } from 'react-native'
 import { Text } from '../Text'
-import type { PermissionMode } from '../../core/types'
-import { modes } from '../modes'
 import {
   Button,
   Callout,
   Footnote,
-  Group,
-  Icon,
   InlineError,
-  ListRow,
-  Separator,
   Sheet,
   TextButton,
   type,
@@ -103,57 +97,6 @@ export function ConfirmSheet({
         onCancel={onClose}
         onConfirm={onConfirm}
       />
-    </Sheet>
-  )
-}
-
-/** 权限模式：标题、说明和勾选；轻量会话不提供计划模式。 */
-export function ModeSheet({
-  visible,
-  onClose,
-  current,
-  lean,
-  unavailable,
-  error,
-  onSelect,
-}: {
-  visible: boolean
-  onClose(): void
-  current?: string
-  lean: boolean
-  /** 现在不能切换的原因；为空表示可以切换。 */
-  unavailable?: string
-  error?: string
-  onSelect(mode: PermissionMode): void
-}) {
-  const colors = useColors()
-  const options = modes.filter((mode) => !lean || mode.id !== 'plan')
-  return (
-    <Sheet visible={visible} onClose={onClose} title="权限模式">
-      <Group>
-        {options.map((mode, index) => (
-          <View key={mode.id}>
-            {index > 0 && <Separator />}
-            <ListRow
-              title={mode.title}
-              subtitle={mode.description}
-              disabled={!!unavailable}
-              accessibilityLabel={`${mode.title}，${mode.description}`}
-              onPress={() => onSelect(mode.id)}
-              trailing={
-                (current ?? 'default') === mode.id ? (
-                  <Icon name="check" size={18} color={colors.run} strokeWidth={2.4} />
-                ) : null
-              }
-            />
-          </View>
-        ))}
-      </Group>
-      {unavailable ? <Footnote style={{ paddingTop: 0 }}>{unavailable}</Footnote> : null}
-      {lean ? (
-        <Footnote style={{ paddingTop: 0 }}>轻量档位不支持计划模式。</Footnote>
-      ) : null}
-      <InlineError text={error} />
     </Sheet>
   )
 }

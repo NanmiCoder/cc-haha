@@ -110,6 +110,27 @@ export type ChatItem = {
   pending?: boolean
   delivery?: 'pending' | 'confirmed' | 'uncertain'
 }
+/** 子 Agent 最近的一步工具调用（实时事件里能拿到的部分）。 */
+export type SubagentStep = {
+  toolUseId: string
+  toolName: string
+  input?: unknown
+  /** 已收到结果。 */
+  done: boolean
+  isError?: boolean
+}
+/**
+ * 子 Agent 的实时轨迹，由 WebSocket 事件累积：`agent_run_event`、带 parentToolUseId 的
+ * 工具事件、`task_progress` 通知。只留最近几步，条数有上限，不会无限增长。
+ */
+export type SubagentLive = {
+  steps: SubagentStep[]
+  /** 读过的不同文件路径（有上限）。 */
+  reads: string[]
+  /** 电脑在 task_progress 里给出的工具调用总数，权威值。 */
+  toolUses?: number
+  finished?: boolean
+}
 export type ChatState = {
   sessionId: string
   items: ChatItem[]
@@ -126,6 +147,8 @@ export type ChatState = {
   permissions: PermissionRequest[]
   computerUsePermissions: ComputerUsePermissionRequest[]
   backgroundTaskIds: string[]
+  /** 子 Agent 实时轨迹，键见 core/subagentLive.ts；没有事件时不存在。 */
+  subagents?: Record<string, SubagentLive>
   runtime?: RuntimeConfig
   permissionMode?: PermissionMode
   usage?: TokenUsage

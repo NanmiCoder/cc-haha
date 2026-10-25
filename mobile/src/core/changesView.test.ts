@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
   breadcrumbs,
+  changesCardLabel,
   checkpointPrompt,
   checkpointSignature,
   checkpointsNewestFirst,
@@ -277,4 +278,11 @@ describe('file preview fallback', () => {
     expect(previewFallback({ state: 'binary' })?.detail).toBe('此文件暂不支持预览 (二进制文件)')
     expect(previewFallback({ state: 'error', error: 'EACCES' })?.detail).toBe('EACCES')
   })
+})
+
+test('the changes card reads files first and only mentions non-zero line counts', () => {
+  expect(changesCardLabel(3, 18, 4)).toBe('3 个文件，新增 18 行，删除 4 行')
+  expect(changesCardLabel(1, 0, 2)).toBe('1 个文件，删除 2 行')
+  expect(changesCardLabel(2, 5, 0)).toBe('2 个文件，新增 5 行')
+  expect(changesCardLabel(2, 0, 0)).toBe('2 个文件')
 })

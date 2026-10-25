@@ -68,6 +68,14 @@ function Navigation() {
           }}
         />
         <Stack.Screen name="new" options={{ presentation: 'modal' }} />
+        <Stack.Screen
+          name="files"
+          options={{
+            presentation: 'transparentModal',
+            animation: 'none',
+            contentStyle: { backgroundColor: 'transparent' },
+          }}
+        />
       </Stack>
     </>
   )

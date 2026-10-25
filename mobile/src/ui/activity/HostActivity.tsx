@@ -63,7 +63,7 @@ export function HostActivity({ hostId }: { hostId: string }) {
   const missing = resource.value?.missing ?? 0
   const now = useNow(groups.some((group) => group.tasks.some((task) => task.status === 'running')))
   const open = (sessionId: string) =>
-    router.push({ pathname: '/activity', params: { id: sessionId, host: hostId } })
+    router.push({ pathname: '/chat/[id]', params: { id: sessionId, host: hostId } })
   return (
     <ScreenView>
       <NavBar title="后台活动" subtitle={host?.name} />

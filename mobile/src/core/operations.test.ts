@@ -7,6 +7,7 @@ import {
   dailyCron,
   latestRuns,
   listCheckpoints,
+  loadSubagentRun,
   loadTaskOutput,
   parseDiff,
   rewind,
@@ -189,4 +190,19 @@ test('closing or changing the focused task aborts its fetch and late output cann
     expect(visible).toBeNull()
     requests.blur()
   }
+})
+
+test('subagent run reads the by-tool transcript with escaped IDs; taskId is optional', async () => {
+  const urls: string[] = []
+  const client = new ApiClient({ id: 'a', name: 'a', url: 'http://192.168.1.2:3456', auth: 'lan' }, 'fixture', { fetch: async (url) => {
+    urls.push(url)
+    return { ok: true, status: 200, url, redirected: false, text: async () => JSON.stringify({ messages: [], status: 'running' }) }
+  } })
+  const signal = new AbortController().signal
+  expect(await loadSubagentRun(client, 'session/a', 'tool/a', 'task?b', signal)).toEqual({ messages: [], status: 'running' })
+  await loadSubagentRun(client, 'session/a', 'tool/a', undefined, signal)
+  expect(urls).toEqual([
+    'http://192.168.1.2:3456/api/sessions/session%2Fa/subagents/by-tool/tool%2Fa?taskId=task%3Fb',
+    'http://192.168.1.2:3456/api/sessions/session%2Fa/subagents/by-tool/tool%2Fa',
+  ])
 })

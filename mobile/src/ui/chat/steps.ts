@@ -1,73 +1,247 @@
 import type { ChatItem } from '../../core/types'
 import type { DiffLine } from '../../core/operations'
+import type { IconName } from '../icons'
 
-/** 消息流里的一行：普通消息，或连续工具调用/思考合成的一组步骤。 */
+/** 摘要里的一段：“已读 3 个文件”。 */
+export type ActivitySegment = {
+  key: string
+  icon: IconName
+  text: string
+  count: number
+}
+
+/** 一个已经结束的回合的时间窗口：开始取用户消息，结束取这一轮最后一条消息。 */
+export type TurnClock = { startedAt?: number; endedAt?: number }
+
+/** 消息流里的一行：普通消息、连续工具调用/思考合成的一组步骤，或一轮处理过程的折叠条。 */
 export type ChatRow =
-  | { kind: 'message'; key: string; item: ChatItem }
+  | { kind: 'message'; key: string; item: ChatItem; turn?: string }
   | {
       kind: 'steps'
       key: string
       steps: ChatItem[]
-      /** 属于正在进行的这一轮：保持展开，运行中的步骤显示转圈。 */
+      /** 属于正在进行的这一轮：当前步骤由顶栏下方的状态行显示，这里不重复。 */
       live: boolean
-      summary: StepSummary
+      segments: ActivitySegment[]
+      /** 属于哪一轮的折叠条（折叠条的 key）；没有就始终显示。 */
+      turn?: string
+      /** 这一轮处理过程的最后一组：展开时在它后面画一条分隔线，下面是最终回复。 */
+      turnEnd?: boolean
     }
-
-export type StepSummary = { total: number; read: number; edit: number; run: number }
+  | {
+      kind: 'turn'
+      key: string
+      label: string
+      /** 折叠起来的行数（消息 + 步骤组）。 */
+      hidden: number
+    }
 
 const isStep = (item: ChatItem) => item.type === 'tool' || item.type === 'thinking'
 
-const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead'])
-const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit'])
-const RUN_TOOLS = new Set(['Bash', 'PowerShell'])
+const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskList', 'TaskGet', 'TaskOutput', 'TaskStop'])
 
-export function summarizeSteps(steps: readonly ChatItem[]): StepSummary {
-  const summary = { total: 0, read: 0, edit: 0, run: 0 }
-  for (const step of steps) {
-    if (step.type !== 'tool') continue
-    summary.total++
-    const name = step.toolName ?? ''
-    if (READ_TOOLS.has(name)) summary.read++
-    else if (EDIT_TOOLS.has(name)) summary.edit++
-    else if (RUN_TOOLS.has(name)) summary.run++
-  }
-  return summary
+const pathOf = (step: ChatItem) => {
+  const input = stepInput(step)
+  return str(input?.file_path) ?? str(input?.notebook_path) ?? str(input?.path)
 }
 
-/** “做了 14 步 · 读 6 · 改 2 · 运行 6”；为 0 的类别不出现。 */
-export function summaryLabel(summary: StepSummary) {
-  return [
-    `做了 ${summary.total} 步`,
-    summary.read ? `读 ${summary.read}` : '',
-    summary.edit ? `改 ${summary.edit}` : '',
-    summary.run ? `运行 ${summary.run}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ')
+/** 一类工具的摘要：返回 [归类 key, 文案, 图标]。同一类里按文件去重计数。 */
+function classify(step: ChatItem): { key: string; icon: IconName; dedupe?: string } {
+  if (step.type === 'thinking') return { key: 'thinking', icon: 'sparkle' }
+  const name = step.toolName ?? ''
+  switch (name) {
+    case 'Read':
+    case 'NotebookRead':
+      return { key: 'read', icon: 'file', dedupe: pathOf(step) }
+    case 'Write':
+      return { key: 'write', icon: 'pencil', dedupe: pathOf(step) }
+    case 'Edit':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+      return { key: 'edit', icon: 'pencil', dedupe: pathOf(step) }
+    case 'Bash':
+    case 'PowerShell':
+      return { key: 'run', icon: 'terminal' }
+    case 'Grep':
+      return { key: 'search', icon: 'search' }
+    case 'Glob':
+    case 'LS':
+      return { key: 'find', icon: 'search' }
+    case 'WebSearch':
+      return { key: 'websearch', icon: 'globe' }
+    case 'WebFetch':
+      return { key: 'webfetch', icon: 'globe' }
+    case 'Task':
+    case 'Agent':
+      return { key: 'agent', icon: 'users' }
+    case 'TodoWrite':
+      return { key: 'todo', icon: 'list-checks' }
+    case 'ExitPlanMode':
+      return { key: 'plan', icon: 'list-checks' }
+    case 'AskUserQuestion':
+      return { key: 'ask', icon: 'info' }
+    default:
+      if (TASK_TOOLS.has(name)) return { key: 'todo', icon: 'list-checks' }
+      // 同一个 MCP 服务的工具合成一类，不露出内部工具名。
+      return { key: `tool:${/^mcp__(.+?)__/.exec(name)?.[1] ?? (name || '工具')}`, icon: 'cpu' }
+  }
+}
+
+function segmentText(key: string, count: number): string {
+  switch (key) {
+    case 'thinking':
+      return count === 1 ? '思考' : `思考 ${count} 次`
+    case 'read':
+      return `已读 ${count} 个文件`
+    case 'write':
+      return `新建 ${count} 个文件`
+    case 'edit':
+      return `编辑 ${count} 个文件`
+    case 'run':
+      return `运行 ${count} 条命令`
+    case 'search':
+      return `搜索 ${count} 次`
+    case 'find':
+      return count === 1 ? '查找文件' : `查找文件 ${count} 次`
+    case 'websearch':
+      return count === 1 ? '搜索网页' : `搜索网页 ${count} 次`
+    case 'webfetch':
+      return `打开 ${count} 个网页`
+    case 'agent':
+      return `派出 ${count} 个子 Agent`
+    case 'todo':
+      return '更新待办'
+    case 'plan':
+      return '提交计划'
+    case 'ask':
+      return '提问'
+    default: {
+      const label = key.slice('tool:'.length)
+      return count === 1 ? `调用 ${label}` : `调用 ${label} ${count} 次`
+    }
+  }
 }
 
 /**
- * 连续的工具调用和思考块合成一组。最后一条用户消息之后、且这一轮还在跑的组是
- * “进行中”，其余组在结束后折叠成摘要。
+ * 一组步骤的摘要，按首次出现的顺序归类计数（规则参考桌面 activityGroupModel）：
+ * 读/写/改按文件去重，命令、搜索按次数；没有路径的调用照数。
+ */
+export function summarizeActivity(steps: readonly ChatItem[]): ActivitySegment[] {
+  const order: string[] = []
+  const counts = new Map<string, number>()
+  const icons = new Map<string, IconName>()
+  const seen = new Map<string, Set<string>>()
+  for (const step of steps) {
+    const { key, icon, dedupe } = classify(step)
+    if (!counts.has(key)) {
+      order.push(key)
+      icons.set(key, icon)
+    }
+    if (dedupe) {
+      const files = seen.get(key) ?? new Set<string>()
+      seen.set(key, files)
+      if (files.has(dedupe)) continue
+      files.add(dedupe)
+    }
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return order.map((key) => ({
+    key,
+    icon: icons.get(key) ?? 'cpu',
+    count: counts.get(key) ?? 0,
+    text: segmentText(key, counts.get(key) ?? 0),
+  }))
+}
+
+/** “已读 3 个文件 · 运行 2 条命令”。 */
+export function activityLabel(segments: readonly ActivitySegment[]) {
+  return segments.map((segment) => segment.text).join(' · ')
+}
+
+/**
+ * 进行中的组最后一步（还没结果的工具、正在想的思考）由顶栏下方的状态行显示，
+ * 摘要里不重复；等审批、后台进行中的步骤仍然保留。
+ */
+export function stepsBehindCaption<T>(steps: readonly T[], isCurrent: (step: T) => boolean): T[] {
+  const last = steps.at(-1)
+  return last !== undefined && isCurrent(last) ? steps.slice(0, -1) : [...steps]
+}
+
+/** done = 有结果；missing = 这一轮已经结束却没拿到结果（例如被停止）。 */
+export type StepState = 'running' | 'waiting' | 'background' | 'error' | 'done' | 'missing'
+
+/** 摘要行尾的状态：等批准 > 失败 > 后台进行中，颜色之外有文字。 */
+export function groupTail(states: readonly StepState[]): { text: string; tone: 'attn' | 'err' | 'run' } | null {
+  if (states.includes('waiting')) return { text: '等你批准', tone: 'attn' }
+  const failed = states.filter((state) => state === 'error').length
+  if (failed) return { text: failed === 1 ? '失败' : `${failed} 项失败`, tone: 'err' }
+  if (states.includes('background')) return { text: '后台进行中', tone: 'run' }
+  return null
+}
+
+/** 时长文案：45 秒 / 3 分 12 秒 / 1 小时 2 分；不到 1 秒返回空。 */
+export function formatTurnDuration(ms: number) {
+  const total = Math.floor(ms / 1000)
+  if (!Number.isFinite(total) || total < 1) return ''
+  const hours = Math.floor(total / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+  if (hours) return minutes ? `${hours} 小时 ${minutes} 分` : `${hours} 小时`
+  if (minutes) return seconds ? `${minutes} 分 ${seconds} 秒` : `${minutes} 分`
+  return `${seconds} 秒`
+}
+
+const stamp = (value?: string) => {
+  const parsed = value ? Date.parse(value) : NaN
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+/**
+ * 折叠条上的文案“用时 3 分 12 秒”。历史消息用消息时间；这一页亲眼看着结束的最新一轮
+ * （消息没有时间戳）用本地起止时间。算不出时长就只写“处理过程”，不编数字。
+ */
+export function turnFoldLabel(
+  user: ChatItem | undefined,
+  turnItems: readonly ChatItem[],
+  clock?: TurnClock
+) {
+  const lastStamp = [...turnItems].reverse().map((item) => stamp(item.timestamp)).find((value) => value !== undefined)
+  const start = stamp(user?.timestamp) ?? clock?.startedAt
+  const end = lastStamp ?? clock?.endedAt
+  const duration = start !== undefined && end !== undefined ? formatTurnDuration(end - start) : ''
+  return duration ? `用时 ${duration}` : '处理过程'
+}
+
+type BaseRow = Exclude<ChatRow, { kind: 'turn' }>
+
+/**
+ * 连续的工具调用和思考块合成一组；每一轮（用户消息之后）结束后，处理过程
+ * （最后一组工具调用之前的全部助手文字和步骤组）折成一行“用时 …”，最终回复留在外面。
+ * 正在进行的这一轮不折。折叠条的开合状态放在页面里，用 {@link visibleChatRows} 过滤。
  */
 export function buildChatRows(
   items: readonly ChatItem[],
-  turnActive: boolean
+  turnActive: boolean,
+  options: { clock?: TurnClock } = {}
 ): ChatRow[] {
   let lastUser = -1
   items.forEach((item, index) => {
     if (item.type === 'user') lastUser = index
   })
-  const rows: ChatRow[] = []
+  const base: { row: BaseRow; index: number }[] = []
   let group: { start: number; steps: ChatItem[] } | null = null
   const flush = () => {
     if (!group) return
-    rows.push({
-      kind: 'steps',
-      key: `steps:${group.steps[0].id}`,
-      steps: group.steps,
-      live: turnActive && group.start > lastUser,
-      summary: summarizeSteps(group.steps),
+    const live = turnActive && group.start > lastUser
+    base.push({
+      index: group.start,
+      row: {
+        kind: 'steps',
+        key: `steps:${group.steps[0].id}`,
+        steps: group.steps,
+        live,
+        segments: summarizeActivity(group.steps),
+      },
     })
     group = null
   }
@@ -78,25 +252,56 @@ export function buildChatRows(
       return
     }
     flush()
-    rows.push({ kind: 'message', key: item.id, item })
+    base.push({ index, row: { kind: 'message', key: item.id, item } })
   })
   flush()
+
+  // 按用户消息切成回合；回合 = 用户消息之后到下一条用户消息之前。
+  const isUser = (entry: { row: BaseRow }) => entry.row.kind === 'message' && entry.row.item.type === 'user'
+  const rows: ChatRow[] = []
+  let cursor = 0
+  while (cursor < base.length) {
+    const user = isUser(base[cursor]) ? (base[cursor].row as { item: ChatItem }).item : undefined
+    if (user) rows.push(base[cursor].row)
+    const first = cursor + (user ? 1 : 0)
+    let end = first
+    while (end < base.length && !isUser(base[end])) end++
+    const turn = base.slice(first, end)
+    const live = turnActive && end === base.length
+    const lastSteps = turn.findLastIndex((entry) => entry.row.kind === 'steps')
+    if (live || lastSteps < 0) {
+      rows.push(...turn.map((entry) => entry.row))
+    } else {
+      const folded = new Set(
+        turn
+          .slice(0, lastSteps + 1)
+          .filter((entry) => entry.row.kind === 'steps' || (entry.row.kind === 'message' && entry.row.item.type === 'assistant'))
+          .map((entry) => entry.row)
+      )
+      const key = `turn:${turn.find((entry) => folded.has(entry.row))?.row.key}`
+      const turnItems = items.slice(turn[0].index, end < base.length ? base[end].index : items.length)
+      rows.push({
+        kind: 'turn',
+        key,
+        label: turnFoldLabel(user, turnItems, end === base.length ? options.clock : undefined),
+        hidden: folded.size,
+      })
+      turn.forEach((entry, position) => {
+        if (!folded.has(entry.row)) rows.push(entry.row)
+        else if (entry.row.kind === 'steps')
+          rows.push({ ...entry.row, turn: key, ...(position === lastSteps ? { turnEnd: true } : {}) })
+        else rows.push({ ...entry.row, turn: key })
+      })
+    }
+    cursor = end
+  }
   return rows
 }
 
-/** 进行中的组最多显示最近 4 步，较早的折成“前面还有 N 步”。 */
-export const VISIBLE_LIVE_STEPS = 4
-export function visibleSteps(steps: readonly ChatItem[], revealed: boolean) {
-  if (revealed || steps.length <= VISIBLE_LIVE_STEPS)
-    return { hidden: 0, steps: [...steps] }
-  return {
-    hidden: steps.length - VISIBLE_LIVE_STEPS,
-    steps: steps.slice(-VISIBLE_LIVE_STEPS),
-  }
+/** 折叠条没展开的回合，里面的行不进列表。 */
+export function visibleChatRows(rows: readonly ChatRow[], open: ReadonlySet<string>): ChatRow[] {
+  return rows.filter((row) => row.kind === 'turn' || !row.turn || open.has(row.turn))
 }
-
-/** 结束后的组：两个以上工具调用才折成摘要，单步直接显示那一步。 */
-export const collapsible = (summary: StepSummary) => summary.total >= 2
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)

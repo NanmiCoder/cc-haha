@@ -1,17 +1,18 @@
 import { clearParkedComposer, parkComposer, parkedComposer } from '../ui/chat/queue'
 import { ChatComposer } from '../ui/ChatComposer'
-import { EffortControl } from '../ui/EffortControl'
-import { GitSheet } from '../ui/newtask/GitSheet'
+import { RunSheet } from '../ui/compose/RunSheet'
+import { runCapsule } from '../ui/compose/runLogic'
+import { useComputerUse } from '../core/useComputerUse'
+import { WherePage } from '../ui/newtask/WherePage'
 import { serializeComposer, type ComposerReference } from '../core/composerReferences'
 import { KeyboardViewport } from '../ui/KeyboardViewport'
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  BackHandler,
   Platform,
   ScrollView,
   View,
 } from 'react-native'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
+import { SafeAreaView } from 'react-native-safe-area-context'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { Text } from '../ui/Text'
 import { useApp, useConnection } from '../state/AppContext'
@@ -35,25 +36,9 @@ import {
   runtimeSelection,
   type Model,
 } from '../core/runtimeCatalog'
-import { modeName, modes, profileDescription, profileName } from '../ui/modes'
-import { RuntimeSheet } from '../ui/RuntimePicker'
-import {
-  Group,
-  InlineError,
-  OptionCard,
-  Separator,
-  Sheet,
-  TextButton,
-  goBack,
-  useColors,
-} from '../ui/kit'
+import { InlineError, TextButton, goBack, useColors } from '../ui/kit'
 import { errorText } from '../ui/theme'
-import { ChoiceRow } from '../ui/newtask/ChoiceRow'
 import { TargetCard } from '../ui/newtask/TargetCard'
-import { WherePanel } from '../ui/newtask/WherePanel'
-import {
-  TaskChip,
-} from '../ui/newtask/parts'
 
 const repositoryUrl = (path: string) =>
   `/api/sessions/repository-context?workDir=${encodeURIComponent(path)}`
@@ -69,13 +54,10 @@ export default function NewSession() {
   return <NewTask key={`${id}\n${initialDir}`} hostId={id} initialDir={initialDir} />
 }
 
-type Panel = 'mode' | 'runtime' | 'profile' | 'git' | null
-
 function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string }) {
   const { host, client, error: connectionError } = useConnection(hostId)
   const { drafts } = useApp()
   const colors = useColors()
-  const insets = useSafeAreaInsets()
   const draftKey = `${hostId}:new`
   const [content, setContent] = useState(drafts.get(draftKey) ?? '')
   const [parked] = useState(() => parkedComposer(draftKey))
@@ -93,8 +75,9 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
   const [branch, setBranch] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
-  const [view, setView] = useState<'compose' | 'where'>('compose')
-  const [panel, setPanel] = useState<Panel>(null)
+  const [whereOpen, setWhereOpen] = useState(false)
+  const [runOpen, setRunOpen] = useState(false)
+  const computer = useComputerUse(client)
   const [creation] = useState(() => new FocusedRequests())
   // A directory passed from the home filter is an explicit choice, like picking one here.
   const submitted = useRef(false)
@@ -114,14 +97,6 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
       return () => creation.blur()
     }, [creation])
   )
-  useEffect(() => {
-    if (view !== 'where') return
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      setView('compose')
-      return true
-    })
-    return () => subscription.remove()
-  }, [view])
   useEffect(() => {
     if (!client) return
     const controller = new AbortController()
@@ -276,7 +251,12 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
     connectionError ||
     error ||
     (repo?.state === 'missing_workdir' ? '这个目录不存在，请重新选择。' : '')
-  const bottom = Platform.OS === 'web' ? 34 : Math.max(insets.bottom, 16)
+  const run = runCapsule({
+    mode,
+    model: runtime?.name,
+    effort: runtime?.config.effortLevel,
+    disabled: busy,
+  })
   return (
     <SafeAreaView
       edges={Platform.OS === 'ios' ? ['left', 'right'] : ['top', 'left', 'right']}
@@ -285,130 +265,106 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         Platform.OS === 'web' && { paddingTop: 47 },
       ]}
     >
-      {view === 'where' ? (
-        <WherePanel
-          projects={projectChoices(projects, path)}
-          path={path}
-          onPath={changePath}
-          client={client}
-          busy={busy}
-          onBack={() => setView('compose')}
-          bottomInset={bottom}
-        />
-      ) : (
-        <KeyboardViewport style={{ flex: 1 }}>
-          <View
-            style={{
-              height: 56,
-              flexDirection: 'row',
-              alignItems: 'center',
-              paddingHorizontal: 8,
-            }}
-          >
-            <View style={{ paddingHorizontal: 10 }}>
-              <TextButton title="取消" onPress={goBack} />
-            </View>
-            <Text
-              accessibilityRole="header"
-              style={{
-                flex: 1,
-                textAlign: 'center',
-                fontSize: 17,
-                lineHeight: 22,
-                fontWeight: '600',
-                color: colors.ink,
-              }}
-            >
-              新任务
-            </Text>
-            <View style={{ width: 60 }} />
+      <KeyboardViewport style={{ flex: 1 }}>
+        <View
+          style={{
+            height: 56,
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingHorizontal: 8,
+          }}
+        >
+          <View style={{ paddingHorizontal: 10 }}>
+            <TextButton title="取消" onPress={goBack} />
           </View>
-          <ScrollView style={{ flex: 1, minHeight: 0 }} keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingHorizontal: 16, gap: 12, paddingBottom: 12 }}
-          >
-            <TargetCard
-              name={target.name}
-              hostName={host?.name}
-              disabled={busy}
-              onPress={() => setView('where')}
-            />
-            {repo?.state !== 'not_git_repo' && <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <TaskChip icon="git-branch" label={target.branch ? `${target.branch} · ${target.mode}` : 'Git 选项'}
-                accessibilityLabel="Git 分支和工作树" disabled={busy} onPress={() => setPanel('git')} />
-            </View>}
-            <Text style={{ paddingTop: 24, paddingHorizontal: 4, fontSize: 25, fontWeight: '600', color: colors.ink }}>想让电脑做什么？</Text>
-            <Text style={{ paddingHorizontal: 4, fontSize: 15, lineHeight: 22, color: colors.ink3 }}>选好工作目录，描述任务。也可以输入 / 查找命令，或 @ 引用技能。</Text>
-            <InlineError text={failure} />
-          </ScrollView>
-          <ChatComposer client={client} workDir={path || undefined} runtime={runtime?.config}
-            draft={content} onDraft={changeContent} references={references} onReferences={setReferences}
-            attachments={attachments} onAttachments={setAttachments} team={teamOn} onTeam={setTeam}
-            lean={lean} empty busy={busy} disabled={!client || busy || repo?.state === 'missing_workdir'}
-            mode={modeName(mode)} model={runtime?.name ?? '电脑默认模型'} onMode={() => setPanel('mode')}
-            onModel={() => setPanel('runtime')} onSend={() => void create()} onError={setError}
-            effortControl={<EffortControl client={client} runtime={runtime?.config} disabled={!client || busy}
-              onApply={(value) => {
-                touchedRuntime.current = true
-                setRuntime((previous) => ({ config: value, name: previous?.name ?? value.modelId }))
-              }} />}
-            profileControl={<TaskChip label={profileName(profile)} accessibilityLabel={`运行档位：${profileName(profile)}`}
-              disabled={busy} onPress={() => setPanel('profile')} />}
-          />
-        </KeyboardViewport>
-      )}
-
-      <Sheet visible={panel === 'mode'} onClose={() => setPanel(null)} title="权限模式">
-        <Group>
-          {modes
-            .filter((item) => !lean || item.id !== 'plan')
-            .map((item, index) => (
-              <React.Fragment key={item.id}>
-                {index > 0 && <Separator inset={14} />}
-                <ChoiceRow
-                  title={item.title}
-                  detail={item.description}
-                  selected={mode === item.id}
-                  onPress={() => {
-                    changeMode(item.id)
-                    setPanel(null)
-                  }}
-                />
-              </React.Fragment>
-            ))}
-        </Group>
-      </Sheet>
-
-      <Sheet visible={panel === 'profile'} onClose={() => setPanel(null)} title="运行档位">
-        {(['standard', 'lean'] as const).map((value) => (
-          <OptionCard
-            key={value}
-            title={profileName(value)}
-            description={profileDescription(value)}
-            selected={profile === value}
-            background={colors.card}
-            onPress={() => {
-              changeProfile(value)
-              setPanel(null)
+          <Text
+            accessibilityRole="header"
+            style={{
+              flex: 1,
+              textAlign: 'center',
+              fontSize: 17,
+              lineHeight: 22,
+              fontWeight: '600',
+              color: colors.ink,
             }}
+          >
+            新任务
+          </Text>
+          <View style={{ width: 60 }} />
+        </View>
+        <ScrollView
+          style={{ flex: 1, minHeight: 0 }}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={{ paddingHorizontal: 16, gap: 12, paddingBottom: 12 }}
+        >
+          <TargetCard
+            name={target.name}
+            branch={target.branch}
+            status={target.status}
+            worktree={worktree}
+            disabled={busy}
+            onPress={() => setWhereOpen(true)}
           />
-        ))}
-      </Sheet>
+          <InlineError text={failure} />
+        </ScrollView>
+        <ChatComposer
+          client={client}
+          workDir={path || undefined}
+          runtime={runtime?.config}
+          draft={content}
+          onDraft={changeContent}
+          references={references}
+          onReferences={setReferences}
+          attachments={attachments}
+          onAttachments={setAttachments}
+          team={teamOn}
+          onTeam={setTeam}
+          computer={computer}
+          lean={lean}
+          empty
+          busy={busy}
+          disabled={!client || busy || repo?.state === 'missing_workdir'}
+          run={run}
+          onOpenRun={() => setRunOpen(true)}
+          onSend={() => void create()}
+          onError={setError}
+        />
+      </KeyboardViewport>
 
-      <GitSheet visible={panel === 'git'} onClose={() => setPanel(null)} path={path} repo={repo}
-        branch={branch} onBranch={setBranch} worktree={worktree} onWorktree={setWorktree} busy={busy}
-        onRetry={() => setRepoEpoch((value) => value + 1)} />
-
-      <RuntimeSheet
-        visible={panel === 'runtime'}
-        onClose={() => setPanel(null)}
-        title="这次任务的模型"
+      <RunSheet
+        visible={runOpen}
+        onClose={() => setRunOpen(false)}
         client={client}
-        initial={runtime?.config}
-        onApply={(value, model) => {
+        mode={mode}
+        onMode={changeMode}
+        runtime={runtime?.config}
+        onRuntime={(value, model) => {
           touchedRuntime.current = true
-          setRuntime({ config: value, name: model?.name ?? value.modelId })
-          setPanel(null)
+          setRuntime((previous) => ({
+            config: value,
+            name: model?.name ?? (previous?.config.modelId === value.modelId ? previous.name : value.modelId),
+          }))
         }}
+        lean={lean}
+        disabled={busy ? { mode: '正在创建任务。', runtime: '正在创建任务。' } : undefined}
+        profile={{ value: profile, onChange: changeProfile, disabled: busy ? '正在创建任务。' : undefined }}
+      />
+
+      <WherePage
+        visible={whereOpen}
+        onClose={() => setWhereOpen(false)}
+        projects={projectChoices(projects, path)}
+        path={path}
+        onPath={changePath}
+        repo={repo}
+        branch={branch}
+        onBranch={setBranch}
+        worktree={worktree}
+        onWorktree={setWorktree}
+        client={client}
+        hostName={host?.name}
+        busy={busy}
+        onRetry={() => setRepoEpoch((value) => value + 1)}
       />
     </SafeAreaView>
   )

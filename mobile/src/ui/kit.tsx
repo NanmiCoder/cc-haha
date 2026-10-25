@@ -121,6 +121,7 @@ export function NavBar({
   right,
   bordered = false,
   background,
+  floating = false,
 }: {
   title?: string
   subtitle?: React.ReactNode
@@ -131,9 +132,59 @@ export function NavBar({
   right?: React.ReactNode
   bordered?: boolean
   background?: string
+  /**
+   * 浮动样式：返回和右侧是 44 圆形白底按钮，中间只有标题与副标题，没有底线和底色。
+   * `right` 里请放 {@link FloatingButton}。
+   */
+  floating?: boolean
 }) {
   const colors = useColors()
   const TitleText = titleMono ? Mono : Text
+  if (floating)
+    return (
+      <View style={{ minHeight: 44, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={{ minWidth: 44, alignItems: 'flex-start' }}>
+          {back ? (
+            <FloatingButton
+              icon="chevron-left"
+              label={backLabel ? `返回${backLabel}` : '返回'}
+              onPress={onBack ?? goBack}
+            />
+          ) : null}
+        </View>
+        <View style={{ flex: 1, minWidth: 0, alignItems: 'center' }}>
+          {title ? (
+            <TitleText
+              numberOfLines={1}
+              style={{
+                maxWidth: '100%',
+                fontSize: 16,
+                lineHeight: 21,
+                fontWeight: '600',
+                color: colors.ink,
+              }}
+            >
+              {title}
+            </TitleText>
+          ) : null}
+          {subtitle ? (
+            typeof subtitle === 'string' ? (
+              <Text
+                numberOfLines={1}
+                style={{ maxWidth: '100%', fontSize: 12, lineHeight: 16, color: colors.ink3 }}
+              >
+                {subtitle}
+              </Text>
+            ) : (
+              subtitle
+            )
+          ) : null}
+        </View>
+        <View style={{ minWidth: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+          {right}
+        </View>
+      </View>
+    )
   return (
     <View
       style={{
@@ -201,6 +252,202 @@ export function NavBar({
       </View>
       <View style={{ minWidth: 44, alignItems: 'flex-end' }}>{right}</View>
     </View>
+  )
+}
+
+/** 浮动圆钮的投影与描边（NavBar 的 floating 样式、会话页的活动胶囊共用）。 */
+export const floatingShadow = (hair: string) =>
+  `0 1px 2px rgba(28,25,23,0.06), 0 4px 14px rgba(28,25,23,0.09), 0 0 0 1px ${hair}`
+
+/**
+ * 44 圆形白底按钮，带轻阴影：浮动导航栏的返回和“…”。可带角标，或用 children 放自定义内容
+ * （例如转圈）。`active` 表示它正在展开菜单，外圈画一道墨色描边。
+ */
+export function FloatingButton({
+  icon,
+  label,
+  onPress,
+  badge,
+  active,
+  disabled,
+  children,
+}: {
+  icon?: IconName
+  label: string
+  onPress?(): void
+  /** 右上角的小圆角标，数字或短文字；没有就不画。 */
+  badge?: string | number
+  active?: boolean
+  disabled?: boolean
+  children?: React.ReactNode
+}) {
+  const colors = useColors()
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled, expanded: active }}
+      disabled={disabled}
+      onPress={onPress}
+      hitSlop={4}
+      style={({ pressed }) => ({
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        backgroundColor: colors.card,
+        alignItems: 'center',
+        justifyContent: 'center',
+        boxShadow: active
+          ? `0 0 0 2px ${colors.ink}, 0 4px 14px rgba(28,25,23,0.18)`
+          : floatingShadow(colors.hair),
+        opacity: disabled ? 0.4 : pressed ? 0.7 : 1,
+      })}
+    >
+      {children ?? (icon ? <Icon name={icon} size={22} color={colors.ink} strokeWidth={2.2} /> : null)}
+      {badge !== undefined && badge !== '' ? (
+        <View
+          style={{
+            position: 'absolute',
+            top: -3,
+            right: -3,
+            minWidth: 18,
+            height: 18,
+            paddingHorizontal: 5,
+            borderRadius: 9,
+            backgroundColor: colors.btn,
+            alignItems: 'center',
+            justifyContent: 'center',
+            boxShadow: `0 0 0 2px ${colors.bg}`,
+          }}
+        >
+          <Text style={{ fontSize: 11, lineHeight: 14, fontWeight: '600', color: colors.btnInk }}>{badge}</Text>
+        </View>
+      ) : null}
+    </Pressable>
+  )
+}
+
+export type ActionMenuItem =
+  | {
+      key: string
+      label: string
+      icon?: IconName
+      /** 右侧的计数小胶囊（如“更改 3”）。 */
+      count?: number | string
+      /** 右侧自定义内容（如“2 项在跑”）；和 count 同时给时 trailing 优先。 */
+      trailing?: React.ReactNode
+      destructive?: boolean
+      disabled?: boolean
+      onPress(): void
+    }
+  | 'separator'
+
+/**
+ * “…”会话菜单：白底圆角 16、268 宽，一行 48 高，图标在左（X2 画板）。
+ * 和 {@link Menu} 的区别只在外观，锚点语义相同（相对整块屏幕）。
+ */
+export function ActionMenu({
+  visible,
+  onClose,
+  items,
+  anchor,
+  width = 268,
+  header,
+}: {
+  visible: boolean
+  onClose(): void
+  items: ActionMenuItem[]
+  anchor: { top: number; right?: number; left?: number }
+  width?: number
+  /** 菜单顶部的小字区（路径、模型 · 上下文用量），下面有一条分隔线。 */
+  header?: React.ReactNode
+}) {
+  const colors = useColors()
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose} statusBarTranslucent>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="关闭菜单"
+        onPress={onClose}
+        style={{ flex: 1, backgroundColor: colors.scrim }}
+      />
+      <View
+        accessibilityRole="menu"
+        accessibilityViewIsModal
+        onAccessibilityEscape={onClose}
+        style={{
+          position: 'absolute',
+          top: anchor.top,
+          right: anchor.left === undefined ? (anchor.right ?? 16) : undefined,
+          left: anchor.left,
+          width,
+          paddingVertical: 6,
+          backgroundColor: colors.card,
+          borderRadius: 16,
+          boxShadow: `0 10px 32px rgba(28,25,23,0.14), 0 2px 6px rgba(28,25,23,0.06), 0 0 0 1px ${colors.hair}`,
+        }}
+      >
+        {header ? (
+          <>
+            <View style={{ paddingHorizontal: 16, paddingTop: 4, gap: 2 }}>{header}</View>
+            <View aria-hidden style={{ height: 1, backgroundColor: colors.hair, marginTop: 4, marginBottom: 6, marginHorizontal: 16 }} />
+          </>
+        ) : null}
+        {items.map((item, index) => {
+          if (item === 'separator')
+            return (
+              <View
+                key={`sep-${index}`}
+                aria-hidden
+                style={{ height: 1, backgroundColor: colors.hair, marginVertical: 6, marginHorizontal: 16 }}
+              />
+            )
+          const tint = item.destructive ? colors.err : colors.ink
+          return (
+            <Pressable
+              key={item.key}
+              accessibilityRole="menuitem"
+              accessibilityState={{ disabled: item.disabled }}
+              disabled={item.disabled}
+              onPress={() => {
+                onClose()
+                item.onPress()
+              }}
+              style={({ pressed }) => ({
+                height: 48,
+                paddingHorizontal: 16,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 14,
+                backgroundColor: pressed ? colors.fill : 'transparent',
+                opacity: item.disabled ? 0.4 : 1,
+              })}
+            >
+              {item.icon ? <Icon name={item.icon} size={20} color={tint} strokeWidth={1.75} /> : null}
+              <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 16, color: tint }}>
+                {item.label}
+              </Text>
+              {item.trailing ??
+                (item.count !== undefined ? (
+                  <View
+                    style={{
+                      minWidth: 22,
+                      height: 22,
+                      paddingHorizontal: 7,
+                      borderRadius: 11,
+                      backgroundColor: colors.fill,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Mono style={{ fontSize: 13, fontWeight: '600', color: colors.ink2 }}>{item.count}</Mono>
+                  </View>
+                ) : null)}
+            </Pressable>
+          )
+        })}
+      </View>
+    </Modal>
   )
 }
 
