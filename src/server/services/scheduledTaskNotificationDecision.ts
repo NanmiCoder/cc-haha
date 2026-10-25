@@ -1,3 +1,5 @@
+import { ApiError } from '../middleware/errorHandler.js'
+
 type Decision = 'notify' | 'silent'
 const activeRuns = new Map<string, { sessionId: string; decision?: Decision }>()
 
@@ -18,5 +20,3 @@ export function reportScheduledTaskNotificationDecision(runId: string, callerSes
   if (decision !== 'notify' && decision !== 'silent') throw ApiError.badRequest('Invalid notification decision')
   run.decision = decision
 }
-import { ApiError } from '../middleware/errorHandler.js'
-
