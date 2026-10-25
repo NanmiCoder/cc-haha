@@ -2281,12 +2281,14 @@ function VirtualSpacer({ height, position }: { height: number; position: 'top' |
 
 const MeasuredRenderItem = memo(function MeasuredRenderItem({
   itemKey,
+  navigationKey,
   onHeightChange,
   highlighted,
   railPosition,
   children,
 }: {
   itemKey: string
+  navigationKey: string
   onHeightChange: (itemKey: string, height: number, initial?: boolean) => void
   highlighted: boolean
   railPosition: TurnRailPosition
@@ -2327,7 +2329,7 @@ const MeasuredRenderItem = memo(function MeasuredRenderItem({
     <div
       ref={itemRef}
       data-virtual-message-item={itemKey}
-      data-chat-render-item-key={itemKey}
+      data-chat-render-item-key={navigationKey}
       data-turn-rail={railPosition}
       className={`${CHAT_RENDER_ITEM_CLASS} ${turnRailClass(railPosition)} ${highlighted ? 'chat-render-item--navigation-target' : ''}`}
     >
@@ -3018,12 +3020,27 @@ export function MessageList({
     }
     return { keys, byTool }
   }, [renderItems, resolvedSessionId])
+  const renderItemMountKeys = useMemo(() => {
+    const occurrences = new Map<string, number>()
+    return renderItems.map(item => {
+      const itemKey = getRenderItemKey(item)
+      const key = groupMountKeys.keys.get(itemKey) ?? itemKey
+      const occurrence = occurrences.get(key) ?? 0
+      occurrences.set(key, occurrence + 1)
+      // Distinct parent projections may share a durable record ID. Keep the
+      // store/navigation identity, but never give React duplicate mount keys:
+      // reconciliation can otherwise strand old DOM in the next session.
+      // Encode every key to avoid collisions with literal ID suffixes, and
+      // count over the full list so virtual-window changes keep keys stable.
+      return JSON.stringify([key, occurrence])
+    })
+  }, [groupMountKeys, renderItems])
   useLayoutEffect(() => {
     committedGroupKeys.current = { sessionId: resolvedSessionId, byTool: groupMountKeys.byTool }
   }, [groupMountKeys, resolvedSessionId])
   const renderItemMetrics = useMemo(
     () => renderItems.map((item, index) => {
-      const key = renderItemKeys[index]!
+      const key = renderItemMountKeys[index]!
       const signature = getRenderItemMetricSignature(item)
       const cached = virtualItemMetricCacheRef.current.get(key)
       if (cached?.signature === signature) return cached
@@ -3036,7 +3053,7 @@ export function MessageList({
       virtualItemMetricCacheRef.current.set(key, metric)
       return metric
     }),
-    [renderItemKeys, renderItems],
+    [renderItemMountKeys, renderItems],
   )
   const conversationNavigationItems = useMemo(() => {
     const sources = renderItems.flatMap((item, renderIndex) => item.kind === 'message'
@@ -3052,13 +3069,13 @@ export function MessageList({
   const virtualTranscriptWindow = useMemo(
     () => buildVirtualTranscriptWindow(
       renderItems,
-      renderItemKeys,
+      renderItemMountKeys,
       renderItemMetrics,
       virtualItemHeightsRef.current,
       virtualViewport,
       VIRTUAL_OVERSCAN_PX,
     ),
-    [measuredItemsVersion, renderItemKeys, renderItemMetrics, renderItems, virtualViewport],
+    [measuredItemsVersion, renderItemMountKeys, renderItemMetrics, renderItems, virtualViewport],
   )
 
   useLayoutEffect(() => {
@@ -3074,13 +3091,13 @@ export function MessageList({
     const oldOffsets = virtualTranscriptWindow.offsets
     const oldScrollTop = virtualViewport.scrollTop
     let anchorIndex = 0
-    while (anchorIndex + 1 < renderItemKeys.length && oldOffsets[anchorIndex + 1]! <= oldScrollTop) anchorIndex += 1
+    while (anchorIndex + 1 < renderItemMountKeys.length && oldOffsets[anchorIndex + 1]! <= oldScrollTop) anchorIndex += 1
     virtualItemHeightsRef.current.clear()
     for (const node of container.querySelectorAll<HTMLElement>('[data-virtual-message-item]')) {
       const height = node.getBoundingClientRect().height
       if (height > 0) virtualItemHeightsRef.current.set(node.dataset.virtualMessageItem!, clampNumber(height, VIRTUAL_MIN_ITEM_HEIGHT, VIRTUAL_MAX_ITEM_HEIGHT))
     }
-    const offsets = buildVirtualItemOffsets(renderItemKeys, renderItemMetrics, virtualItemHeightsRef.current)
+    const offsets = buildVirtualItemOffsets(renderItemMountKeys, renderItemMetrics, virtualItemHeightsRef.current)
     const intraRowOffset = Math.max(0, oldScrollTop - (oldOffsets[anchorIndex] ?? 0))
     const rowHeight = (offsets[anchorIndex + 1] ?? 0) - (offsets[anchorIndex] ?? 0)
     const nextScrollTop = shouldAutoScrollRef.current
@@ -3091,7 +3108,7 @@ export function MessageList({
     pendingAppearanceScrollTop.current = nextScrollTop
     setVirtualViewport((current) => ({ ...current, scrollTop: nextScrollTop }))
     setMeasuredItemsVersion((version) => version + 1)
-  }, [appearanceSignature, renderItemKeys, renderItemMetrics, resolvedSessionId, virtualTranscriptWindow, virtualViewport.scrollTop])
+  }, [appearanceSignature, renderItemMountKeys, renderItemMetrics, resolvedSessionId, virtualTranscriptWindow, virtualViewport.scrollTop])
 
   useLayoutEffect(() => {
     const target = pendingAppearanceScrollTop.current
@@ -3177,7 +3194,7 @@ export function MessageList({
         )
 
   useEffect(() => {
-    const liveKeys = new Set(renderItemKeys)
+    const liveKeys = new Set(renderItemMountKeys)
     let removed = false
     for (const key of virtualItemHeightsRef.current.keys()) {
       if (!liveKeys.has(key)) {
@@ -3191,7 +3208,7 @@ export function MessageList({
       }
     }
     if (removed) setMeasuredItemsVersion((version) => version + 1)
-  }, [renderItemKeys])
+  }, [renderItemMountKeys])
 
   useEffect(() => {
     if (!resolvedSessionId || !checkpointHistoryReady || completedTurnTargets.length === 0 || isDirectAgentSession) {
@@ -3933,14 +3950,15 @@ export function MessageList({
 
           {virtualTranscriptWindow.items.map(({ item, index }) => {
             const itemKey = getRenderItemKey(item)
-            const mountKey = groupMountKeys.keys.get(itemKey) ?? itemKey
+            const mountKey = renderItemMountKeys[index]!
             const content = renderTranscriptItem(item, index)
             const railPosition = turnRailPositions[index] ?? 'none'
 
             return virtualTranscriptWindow.enabled ? (
               <MeasuredRenderItem
                 key={mountKey}
-                itemKey={itemKey}
+                itemKey={mountKey}
+                navigationKey={itemKey}
                 onHeightChange={handleVirtualItemHeightChange}
                 highlighted={highlightedNavigationItemKey === itemKey}
                 railPosition={railPosition}

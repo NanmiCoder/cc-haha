@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { runDesktopUiTeamPlanSmoke, TEAM_SMOKE_MODEL, TEAM_SMOKE_PROVIDER } from './team-plan'
+import { runDesktopUiSessionIsolationSmoke, seedDesktopUiDuplicateHistory } from './session-isolation'
 import { buildMockToolPrompt } from '../agent-flow/scenarios'
 import { applyUserStateGuard, createQualityGateSandbox } from '../sandbox'
 import type { LaneResult } from '../types'
@@ -201,6 +202,7 @@ export async function executeDeterministicDesktopSmoke(
     },
   })
   seedDesktopUiSmokeProvider(sandbox.configDir)
+  const duplicateHistory = seedDesktopUiDuplicateHistory(sandbox.configDir, projectDir)
 
   const server = Bun.spawn(['bun', 'run', 'src/server/index.ts', '--host', '127.0.0.1', '--port', String(serverPort)], {
     cwd: rootDir,
@@ -301,6 +303,7 @@ export async function executeDeterministicDesktopSmoke(
     await browserStep(['screenshot', join(artifactDir, 'final.png')], { allowFailure: true })
 
     await runDesktopUiTeamPlanSmoke({ configDir: sandbox.configDir, sessionId: session.sessionId, projectDir, baseUrl, artifactDir, auditPath: join(workRoot, 'team-worker-audit.jsonl'), browserStep })
+    await runDesktopUiSessionIsolationSmoke({ fixture: duplicateHistory, artifactDir, browserStep })
 
     return applyUserStateGuard({
       id: resultId,

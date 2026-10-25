@@ -137,6 +137,49 @@ afterEach(async () => {
 })
 
 describe('session messages HTTP surface', () => {
+  it('projects replayed transcript UUIDs once without rewriting the saved history', async () => {
+    const sessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+    const filePath = path.join(tmpDir, 'projects', '-tmp-replayed-history', `${sessionId}.jsonl`)
+    const user = (uuid: string) => ({
+      type: 'user', uuid, timestamp: '2026-01-01T00:00:00Z',
+      message: { role: 'user', content: 'Try again' },
+    })
+    const error = {
+      type: 'assistant', uuid: 'quota-error', timestamp: '2026-01-01T00:00:01Z',
+      isApiErrorMessage: true, error: 'rate_limit',
+      message: { role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'API Error: 429 quota exhausted' }] },
+    }
+    const answer = {
+      type: 'assistant', uuid: 'answer', timestamp: '2026-01-01T00:00:02Z',
+      message: { role: 'assistant', content: [{ type: 'text', text: 'Partial reply' }] },
+    }
+    const updatedAnswer = {
+      ...answer,
+      message: { role: 'assistant', content: [
+        { type: 'thinking', thinking: 'Preserved thinking' },
+        { type: 'text', text: 'Completed reply' },
+        { type: 'tool_use', id: 'read-fixture', name: 'Read', input: { file_path: '/tmp/fixture' } },
+      ] },
+    }
+    // Compaction/replay can append existing UUIDs again. A repeated human
+    // prompt with a new UUID is a separate message and must remain visible.
+    await writeJsonl(filePath, [user('first-user'), error, answer, user('second-user'), error, updatedAnswer])
+    const original = await fs.readFile(filePath, 'utf-8')
+
+    const histories = [(await sessionService.getSessionHistory(sessionId)).messages]
+    for (const suffix of ['', '/messages', '/messages?mode=full']) {
+      const response = await api('GET', `/api/sessions/${sessionId}${suffix}`)
+      expect(response.status).toBe(200)
+      histories.push((await response.json() as { messages: typeof histories[number] }).messages)
+    }
+    for (const messages of histories) {
+      expect(messages.map(message => message.id)).toEqual(['first-user', 'quota-error', 'answer', 'second-user'])
+      expect(messages.filter(message => message.content === 'Try again')).toHaveLength(2)
+      expect(messages.find(message => message.id === 'answer')?.content).toEqual(updatedAnswer.message.content)
+    }
+    expect(await fs.readFile(filePath, 'utf-8')).toBe(original)
+  })
+
   it('keeps a transcript readable when checkpoint previews exceed their budget (#1373)', async () => {
     const sessionId = await seedSessionWithSubagent()
     const filePath = path.join(tmpDir, 'projects', '-tmp-http-invariant', `${sessionId}.jsonl`)
