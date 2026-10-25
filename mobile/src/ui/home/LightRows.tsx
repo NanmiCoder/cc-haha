@@ -356,13 +356,16 @@ export function ProjectSessionRow({
         alignItems: 'center',
         gap: 10,
         paddingVertical: 4,
-        paddingLeft: 48,
+        paddingLeft: 16,
         paddingRight: 16,
         marginHorizontal: -16,
         backgroundColor: pressed ? colors.fill : 'transparent',
       })}
     >
-      {lit ? <StatusGlyph status={glyphOf[state]} /> : <View style={{ width: 16 }} />}
+      {/* 状态图标和项目头的文件夹图标同一列，标题与项目名左对齐。 */}
+      <View style={{ width: 22, alignItems: 'center' }}>
+        {lit ? <StatusGlyph status={glyphOf[state]} /> : null}
+      </View>
       <Text numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 15, color: colors.ink }}>
         {title(row)}
       </Text>
@@ -387,7 +390,7 @@ export function MoreSessions({ count, onPress }: { count: number; onPress(): voi
       style={({ pressed }) => ({
         minHeight: 44,
         justifyContent: 'center',
-        paddingLeft: 74,
+        paddingLeft: 48,
         marginHorizontal: -16,
         backgroundColor: pressed ? colors.fill : 'transparent',
       })}
