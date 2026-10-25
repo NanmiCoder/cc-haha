@@ -134,13 +134,17 @@ export class SystemProxyBridge implements SystemProxyBridgeLike {
   ): Promise<void> {
     try {
       const target = resolveHttpTarget(request)
+      const method = request.method ?? 'GET'
+      if (target.protocol === 'https:') {
+        await this.forwardAbsoluteUriHttps(request, response, target, method)
+        return
+      }
       if (target.protocol !== 'http:') {
         response.writeHead(400, { Connection: 'close' })
         response.end('HTTPS proxy requests must use CONNECT')
         return
       }
       const rules = await this.resolveRules(target)
-      const method = request.method ?? 'GET'
       const headers = sanitizeProxyRequestHeaders(request.headers)
       const onSocket = (socket: Duplex) => this.trackOutboundSocket(socket)
       // Model calls are usually POSTs. Never replay them after bytes may have reached a provider;
@@ -172,6 +176,32 @@ export class SystemProxyBridge implements SystemProxyBridgeLike {
       response.writeHead(502, { Connection: 'close' })
       response.end(`System proxy bridge failed: ${error instanceof Error ? error.message : String(error)}`)
     }
+  }
+
+  // Forwards an absolute-URI HTTPS proxy request: opens TLS to the target host
+  // (or first reachable rule), rewrites the request to origin-form, and writes
+  // the upstream response back to the client as-is. Bytes received from the
+  // client are forwarded exactly once — there is no PAC-rule retry, because the
+  // request body may already be in flight to the upstream.
+  private async forwardAbsoluteUriHttps(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    target: URL,
+    method: string,
+  ): Promise<void> {
+    const rules = await this.resolveRules(target)
+    const headers = sanitizeProxyRequestHeaders(request.headers)
+    const onSocket = (socket: Duplex) => this.trackOutboundSocket(socket)
+    const upstreamResponse = await requestStreamingUsingRule(
+      await selectReachableRule(rules, target),
+      target,
+      method,
+      headers,
+      request,
+      onSocket,
+    )
+    response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.statusMessage, upstreamResponse.headers)
+    await pipeline(upstreamResponse, response)
   }
 
   private async handleConnect(
@@ -335,9 +365,10 @@ async function createRuleRequest(
   onSocket: (socket: Duplex) => void,
 ): Promise<{ transport: typeof http | typeof https, options: OutgoingRequestOptions }> {
   const outgoingHeaders = { ...headers, connection: 'close' }
+  const targetTransport = target.protocol === 'https:' ? https : http
   if (rule.type === 'direct') {
     return {
-      transport: http,
+      transport: targetTransport,
       options: {
         method,
         host: target.hostname,
@@ -345,6 +376,7 @@ async function createRuleRequest(
         path: `${target.pathname}${target.search}`,
         headers: outgoingHeaders,
         agent: false,
+        servername: net.isIP(target.hostname) ? undefined : target.hostname,
       },
     }
   }
@@ -370,7 +402,7 @@ async function createRuleRequest(
     : await connectSocks5(endpoint, target.hostname, targetPort(target))
   onSocket(socket)
   return {
-    transport: http,
+    transport: targetTransport,
     options: {
       method,
       host: target.hostname,
@@ -378,17 +410,21 @@ async function createRuleRequest(
       path: `${target.pathname}${target.search}`,
       headers: outgoingHeaders,
       agent: new SingleSocketAgent(socket),
+      servername: net.isIP(target.hostname) ? undefined : target.hostname,
     },
   }
 }
 
 async function selectReachableRule(rules: SystemProxyRule[], target: URL): Promise<SystemProxyRule> {
   const errors: string[] = []
+  const useTls = target.protocol === 'https:'
   for (const rule of rules) {
     let socket: Duplex | null = null
     try {
       if (rule.type === 'direct') {
-        socket = await connectTcp(target.hostname, targetPort(target))
+        socket = useTls
+          ? await connectTls(target.hostname, targetPort(target))
+          : await connectTcp(target.hostname, targetPort(target))
       } else {
         const endpoint = requireEndpoint(rule)
         socket = rule.type === 'http' || rule.type === 'https'

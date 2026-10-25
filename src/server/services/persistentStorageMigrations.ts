@@ -256,6 +256,37 @@ function migrateManagedSettings(value: unknown): JsonObject {
   return value
 }
 
+/**
+ * Move legacy desktop-written settings keys onto the schema-canonical keys the
+ * CLI actually reads:
+ *   - top-level `defaultMode`  -> `permissions.defaultMode`
+ *   - top-level `effort`       -> `effortLevel`
+ * The desktop server used to persist these under the wrong keys, so the CLI
+ * (which reads `permissions.defaultMode` / `effortLevel`) never saw them.
+ * Never overwrite an already-correct key with a stale legacy one.
+ */
+function migrateUserSettings(value: unknown): JsonObject {
+  if (!isRecord(value)) return {}
+  const next: JsonObject = { ...value }
+
+  const existingDefaultMode = isRecord(next.permissions) && typeof next.permissions.defaultMode === 'string'
+    ? next.permissions.defaultMode
+    : undefined
+  if (typeof next.defaultMode === 'string' && existingDefaultMode === undefined) {
+    next.permissions = isRecord(next.permissions)
+      ? { ...next.permissions, defaultMode: next.defaultMode }
+      : { defaultMode: next.defaultMode }
+    delete next.defaultMode
+  }
+
+  if (typeof next.effort === 'string' && typeof next.effortLevel !== 'string') {
+    next.effortLevel = next.effort
+    delete next.effort
+  }
+
+  return next
+}
+
 async function migrateJsonEntry(
   filePath: string,
   entryName: string,
@@ -441,6 +472,13 @@ async function runPersistentStorageMigrations(configDir: string): Promise<Migrat
     'cc-haha/settings.json',
     report,
     migrateManagedSettings,
+  )
+
+  await migrateJsonEntry(
+    path.join(configDir, 'settings.json'),
+    'settings.json',
+    report,
+    migrateUserSettings,
   )
 
   return report

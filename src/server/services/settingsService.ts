@@ -364,22 +364,27 @@ export class SettingsService {
   // 权限模式
   // ---------------------------------------------------------------------------
 
-  /** 获取当前权限模式 */
+  /** 获取当前权限模式（`permissions.defaultMode`，与 CLI/schema 一致） */
   async getPermissionMode(): Promise<string> {
     const settings = await this.getUserSettings()
-    const mode = settings.defaultMode
+    const mode = normalizeJsonObject(settings.permissions)?.defaultMode
     return isValidPermissionMode(mode)
       ? mode
       : 'default'
   }
 
-  /** 设置权限模式 */
+  /** 设置权限模式（写入 `permissions.defaultMode`，保留既有权限规则） */
   async setPermissionMode(mode: string): Promise<void> {
     if (!isValidPermissionMode(mode)) {
       throw ApiError.badRequest(
         `Invalid permission mode: "${mode}". Valid modes: ${VALID_PERMISSION_MODES.join(', ')}`,
       )
     }
-    await this.updateUserSettings({ defaultMode: mode })
+    const current = await this.getUserSettings()
+    const permissions = {
+      ...normalizeJsonObject(current.permissions),
+      defaultMode: mode,
+    }
+    await this.updateUserSettings({ permissions })
   }
 }

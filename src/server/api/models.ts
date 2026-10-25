@@ -602,7 +602,7 @@ async function handleCurrentModel(req: Request): Promise<Response> {
 async function handleEffort(req: Request): Promise<Response> {
   if (req.method === 'GET') {
     const settings = await settingsService.getUserSettings()
-    const level = normalizeEffortLevel(settings.effort)
+    const level = normalizeEffortLevel(settings.effortLevel)
     return Response.json({ level, available: EFFORT_LEVELS })
   }
 
@@ -617,7 +617,7 @@ async function handleEffort(req: Request): Promise<Response> {
         `Invalid effort level: "${level}". Valid levels: ${EFFORT_LEVELS.join(', ')}`,
       )
     }
-    await settingsService.updateUserSettings({ effort: level })
+    await settingsService.updateUserSettings({ effortLevel: level })
     return Response.json({ ok: true, level })
   }
 

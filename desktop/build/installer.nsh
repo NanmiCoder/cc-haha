@@ -1,6 +1,7 @@
 !include "LogicLib.nsh"
 !include "getProcessInfo.nsh"
 !include "${BUILD_RESOURCES_DIR}\check-install-processes.nsh"
+!include "${BUILD_RESOURCES_DIR}\firewall.nsh"
 !define /ifndef INSTALL_REGISTRY_KEY "Software\${APP_GUID}"
 !define /ifndef UNINSTALL_REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${UNINSTALL_APP_KEY}"
 Var pid
