@@ -1,4 +1,5 @@
 import { convertMarkdownTablesToBullets, splitMessage } from '../common/format.js'
+import { t } from '../common/i18n.js'
 
 const DEFAULT_THINKING_PREVIEW_LIMIT = 800
 
@@ -15,7 +16,7 @@ export function buildWhatsAppThinkingPreview(
   const preview = fullText.slice(0, Math.max(0, previewLimit)).trimStart()
   return {
     fullText,
-    messageText: preview ? `思考中...\n${preview}` : '思考中...',
+    messageText: preview ? `${t('thinking.indicator')}\n${preview}` : t('thinking.indicator'),
   }
 }
 

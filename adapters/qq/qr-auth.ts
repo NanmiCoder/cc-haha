@@ -9,6 +9,7 @@
  */
 
 import * as crypto from 'node:crypto'
+import { t } from '../common/i18n.js'
 
 export type QqQrCredentials = { appId: string; appSecret: string; userOpenid?: string }
 
@@ -145,14 +146,14 @@ export async function startQqQrLogin(
         const first = credentials?.[0]
         if (!first?.appId || !first?.appSecret) {
           session.status = 'failed'
-          session.failureMessage = 'QQ 返回的机器人凭据不完整，请重新扫码。'
+          session.failureMessage = t('qq.incomplete')
           return
         }
         session.status = 'success'
         session.credentials = first
       },
       onFailure(error) {
-        const message = error?.message ?? 'QQ 扫码授权失败。'
+        const message = error?.message ?? t('qq.failed')
         // The connector reports expiry through onFailure once it stops retrying.
         session.status = /expire|timeout|过期/i.test(message) ? 'expired' : 'failed'
         session.failureMessage = message
@@ -170,7 +171,7 @@ export async function startQqQrLogin(
       ready,
       new Promise<string>((_, reject) => {
         readyTimer = setTimeout(
-          () => reject(new Error('QQ 二维码获取超时，请重试。')),
+          () => reject(new Error(t('qq.qrTimeout'))),
           QR_READY_TIMEOUT_MS,
         )
       }),
@@ -191,7 +192,7 @@ export async function startQqQrLogin(
     sessionKey,
     verificationUrl,
     pollIntervalMs: QQ_POLL_INTERVAL_MS,
-    message: '使用 QQ 扫描二维码，创建并授权机器人。',
+    message: t('qq.qrInstruction'),
   }
 }
 
@@ -203,7 +204,7 @@ export function pollQqQrLogin(opts: { sessionKey: string }): QqQrPollResult {
     return {
       connected: false,
       status: 'not_started',
-      message: '当前没有进行中的 QQ 绑定，请重新生成二维码。',
+      message: t('qq.noBinding'),
     }
   }
 
@@ -225,7 +226,7 @@ export function pollQqQrLogin(opts: { sessionKey: string }): QqQrPollResult {
       connected: false,
       status: session.status,
       message: session.failureMessage
-        ?? (session.status === 'expired' ? '二维码已过期，请重新生成。' : 'QQ 授权失败，请重新扫码。'),
+        ?? (session.status === 'expired' ? t('qq.expired') : t('qq.failedRescan')),
     }
   }
 
@@ -234,7 +235,7 @@ export function pollQqQrLogin(opts: { sessionKey: string }): QqQrPollResult {
   return {
     connected: false,
     status: 'waiting',
-    message: '等待 QQ 扫码确认...',
+    message: t('qq.waiting'),
     verificationUrl: rotated ? session.verificationUrl : undefined,
   }
 }

@@ -1,3 +1,5 @@
+import { t } from '../common/i18n.js'
+
 /**
  * 单个 chat 的流式卡片生命周期状态机
  *
@@ -49,7 +51,7 @@ export function buildInitialStreamingCard(): Record<string, unknown> {
       elements: [
         {
           tag: 'markdown',
-          content: '☁️ *正在思考中...*',
+          content: t('feishu.thinking'),
           text_align: 'left',
           element_id: STREAMING_ELEMENT_ID,
         },
@@ -87,14 +89,14 @@ export function buildErrorCard(message: string): Record<string, unknown> {
     schema: '2.0',
     config: { update_multi: true },
     header: {
-      title: { tag: 'plain_text', content: '❌ 出错了' },
+      title: { tag: 'plain_text', content: t('feishu.errorCardTitle') },
       template: 'red',
     },
     body: {
       elements: [
         {
           tag: 'markdown',
-          content: message || '未知错误',
+          content: message || t('feishu.unknownError'),
         },
       ],
     },
@@ -477,14 +479,14 @@ export class StreamingCard {
       )
       // openclaw 风格: 一行 header + 空行 + 原文。不引用 / 不缩进，让飞书
       // markdown 元素按普通段落渲染。
-      sections.push(`💭 **思考中**\n\n${preview}`)
+      sections.push(`${t('thinking.reasoning')}\n\n${preview}`)
     }
 
     if (this.accumulatedText) {
       sections.push(this.accumulatedText)
     }
 
-    if (sections.length === 0) return '☁️ *正在思考中...*'
+    if (sections.length === 0) return t('feishu.thinking')
 
     // 用一行分隔符把 sections 分开，比单纯空行更稳定
     const composed = sections.join('\n\n---\n\n')

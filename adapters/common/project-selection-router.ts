@@ -1,4 +1,5 @@
 import type { AdapterHttpClient, RecentProject } from './http-client.js'
+import { t } from './i18n.js'
 
 export type ProjectSelectionRoute = {
   kind: 'new' | 'picker_reply'
@@ -22,14 +23,24 @@ type ProjectSelectionControllerDeps = {
 const NON_PROJECT_COMMANDS = new Set([
   '/help',
   '帮助',
+  'trợ giúp',
   '/status',
   '状态',
+  'trạng thái',
   '/clear',
   '清空',
+  'xóa',
   '/stop',
   '停止',
+  'dừng',
   '/projects',
   '项目列表',
+  'danh sách dự án',
+  '/language',
+  '/lang',
+  '/ngon-ngu',
+  '语言',
+  'ngôn ngữ',
 ])
 
 export class ProjectSelectionRouter {
@@ -106,22 +117,25 @@ export function formatAmbiguousProjectSelection(projects: RecentProject[]): stri
   const choices = projects
     .map((project, index) => `${index + 1}. **${project.projectName}** — ${project.realPath}`)
     .join('\n')
-  return `匹配到多个项目，请发送 /new <更完整名称或路径> 选择：\n\n${choices}`
+  return t('project.ambiguousOutcome', { choices })
 }
 
 export function formatProjectSelectionOutcome(outcome: ProjectSelectionOutcome): string | null {
   switch (outcome.kind) {
     case 'created':
       return outcome.project
-        ? `✅ 已新建会话：**${outcome.project.projectName}**${outcome.project.branch ? ` (${outcome.project.branch})` : ''}`
-        : '✅ 已新建会话，可以开始对话了。'
+        ? t('project.createdNamed', {
+            name: outcome.project.projectName,
+            branch: outcome.project.branch ? ` (${outcome.project.branch})` : '',
+          })
+        : t('project.createdReady')
     case 'creation_failed':
       return null
     case 'ambiguous':
       return formatAmbiguousProjectSelection(outcome.projects)
     case 'not_found':
-      return `未找到匹配 "${outcome.query}" 的项目。发送 /projects 查看完整列表。`
+      return t('project.notFound', { query: outcome.query })
     case 'error':
-      return `❌ ${outcome.message}`
+      return t('project.outcomeError', { message: outcome.message })
   }
 }

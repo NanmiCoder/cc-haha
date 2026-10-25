@@ -15,6 +15,7 @@ import { MessageDedup } from '../common/message-dedup.js'
 import { StreamingCard } from './streaming-card.js'
 import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
+import { handleLanguageCommand, setAdapterLocale, t } from '../common/i18n.js'
 import {
   formatImHelp,
   formatImStatus,
@@ -35,7 +36,7 @@ import {
   formatProjectSelectionOutcome,
   ProjectSelectionController,
 } from '../common/project-selection-router.js'
-import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
+import { restoreStoredSessionBinding, sessionReconnectNotice, type SessionRestoreResult } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { extractInboundPayload } from './extract-payload.js'
 import { FeishuMediaService } from './media.js'
@@ -50,6 +51,7 @@ import { createFeishuHttpClient } from './http-client.js'
 // ---------- init ----------
 
 const config = loadConfig()
+setAdapterLocale(config.language)
 if (!config.feishu.appId || !config.feishu.appSecret) {
   console.error('[Feishu] Missing FEISHU_APP_ID / FEISHU_APP_SECRET. Set env or ~/.claude/adapters.json')
   process.exit(1)
@@ -238,7 +240,7 @@ async function ensureExistingSession(chatId: string): Promise<SessionRestoreResu
 
 async function buildStatusText(chatId: string): Promise<string> {
   const result = await ensureExistingSession(chatId)
-  if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+  if (result.status === 'unavailable') return sessionReconnectNotice()
   if (result.status === 'missing') return formatImStatus(null)
   const stored = result.session
 
@@ -367,8 +369,8 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
   const total = projects.length
   const subtitleText =
     total > items.length
-      ? `共 ${total} 个最近项目，显示前 ${items.length}`
-      : `共 ${total} 个最近项目`
+      ? t('feishu.projectCount', { total, shown: items.length })
+      : t('feishu.projectCountShort', { total })
 
   const rows = items.map((p, i) => {
     const branch = p.branch ? `  ·  *${p.branch}*` : ''
@@ -405,7 +407,7 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
           elements: [
             {
               tag: 'button',
-              text: { tag: 'plain_text', content: '选择' },
+              text: { tag: 'plain_text', content: t('feishu.choose') },
               type: i === 0 ? 'primary' : 'default',
               size: 'small',
               value: {
@@ -427,7 +429,7 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
       update_multi: true,
     },
     header: {
-      title: { tag: 'plain_text', content: '📁 选择项目' },
+      title: { tag: 'plain_text', content: t('feishu.projectCardTitle') },
       subtitle: { tag: 'plain_text', content: subtitleText },
       template: 'blue',
     },
@@ -437,7 +439,7 @@ function buildProjectPickerCard(projects: RecentProject[]): Record<string, unkno
         { tag: 'hr', margin: '14px 0 0 0' },
         {
           tag: 'markdown',
-          content: '💡 点击右侧 **选择** 按钮，或发送 `/new <项目名>`',
+          content: t('feishu.projectCardHint'),
           text_size: 'notation',
           margin: '6px 0 0 0',
         },
@@ -467,27 +469,27 @@ function summarizeToolCall(toolName: string, input: unknown): ToolCallSummary {
   switch (toolName) {
     case 'Write': {
       const fp = str('file_path')
-      return { icon: '✏️', label: '写入文件', target: fp, filePath: fp }
+      return { icon: '✏️', label: t('feishu.tool.writeFile'), target: fp, filePath: fp }
     }
     case 'Edit':
     case 'MultiEdit':
     case 'NotebookEdit': {
       const fp = str('file_path') ?? str('notebook_path')
-      return { icon: '✏️', label: '修改文件', target: fp, filePath: fp }
+      return { icon: '✏️', label: t('feishu.tool.editFile'), target: fp, filePath: fp }
     }
     case 'Read': {
       const fp = str('file_path')
-      return { icon: '📖', label: '读取文件', target: fp, filePath: fp }
+      return { icon: '📖', label: t('feishu.tool.readFile'), target: fp, filePath: fp }
     }
     case 'Bash':
     case 'BashOutput': {
-      return { icon: '🖥️', label: '执行命令', target: str('command') }
+      return { icon: '🖥️', label: t('feishu.tool.runCommand'), target: str('command') }
     }
     case 'Grep': {
       const pattern = str('pattern')
       return {
         icon: '🔍',
-        label: '搜索内容',
+        label: t('feishu.tool.searchContent'),
         target: pattern ? `pattern: ${pattern}` : undefined,
         filePath: str('path'),
       }
@@ -496,15 +498,15 @@ function summarizeToolCall(toolName: string, input: unknown): ToolCallSummary {
       const pattern = str('pattern')
       return {
         icon: '📁',
-        label: '查找文件',
+        label: t('feishu.tool.findFiles'),
         target: pattern ? `pattern: ${pattern}` : undefined,
         filePath: str('path'),
       }
     }
     case 'WebFetch':
-      return { icon: '🌐', label: '访问网页', target: str('url') }
+      return { icon: '🌐', label: t('feishu.tool.visitWeb'), target: str('url') }
     case 'WebSearch':
-      return { icon: '🌐', label: '搜索网页', target: str('query') }
+      return { icon: '🌐', label: t('feishu.tool.searchWeb'), target: str('query') }
     default:
       return { icon: '🔧', label: toolName }
   }
@@ -566,7 +568,7 @@ function buildPermissionCard(
   if (crossDir) {
     elements.push({
       tag: 'markdown',
-      content: '⚠️ **该操作位于当前项目目录之外**',
+      content: t('feishu.crossDirWarning'),
       margin: '8px 0 0 0',
       text_size: 'notation',
     })
@@ -590,7 +592,7 @@ function buildPermissionCard(
         elements: [
           {
             tag: 'button',
-            text: { tag: 'plain_text', content: '✅ 允许' },
+            text: { tag: 'plain_text', content: t('permission.button.allow') },
             type: 'primary',
             size: 'medium',
             value: { action: 'permit', requestId, allowed: true },
@@ -605,7 +607,7 @@ function buildPermissionCard(
         elements: [
           {
             tag: 'button',
-            text: { tag: 'plain_text', content: '♾️ 永久允许' },
+            text: { tag: 'plain_text', content: t('permission.button.always') },
             type: 'default',
             size: 'medium',
             value: { action: 'permit', requestId, allowed: true, rule: 'always' },
@@ -620,7 +622,7 @@ function buildPermissionCard(
         elements: [
           {
             tag: 'button',
-            text: { tag: 'plain_text', content: '❌ 拒绝' },
+            text: { tag: 'plain_text', content: t('permission.button.deny') },
             type: 'danger',
             size: 'medium',
             value: { action: 'permit', requestId, allowed: false },
@@ -637,10 +639,10 @@ function buildPermissionCard(
       update_multi: true,
     },
     header: {
-      title: { tag: 'plain_text', content: '🔐 需要权限确认' },
+      title: { tag: 'plain_text', content: t('feishu.permissionTitle') },
       subtitle: {
         tag: 'plain_text',
-        content: crossDir ? '⚠️ 跨目录操作' : toolName,
+        content: crossDir ? t('feishu.crossDirShort') : toolName,
       },
       template: crossDir ? 'red' : 'orange',
       padding: '12px 12px 12px 12px',
@@ -656,7 +658,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
   const result = await ensureExistingSession(chatId)
   if (result.status === 'restored') return true
   if (result.status === 'unavailable') {
-    await sendText(chatId, SESSION_RECONNECT_NOTICE)
+    await sendText(chatId, sessionReconnectNotice())
     return false
   }
 
@@ -690,12 +692,12 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await sendText(chatId, '⚠️ 连接服务器超时，请重试。')
+      await sendText(chatId, '⚠️ ' + t('server.connectTimeout'))
       return false
     }
     return true
   } catch (err) {
-    await sendText(chatId, `❌ 无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, '❌ ' + t('session.createFailed', { error: err instanceof Error ? err.message : String(err) }))
     return false
   }
 }
@@ -706,7 +708,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
     const projects = await projectSelectionController.listProjects(chatId)
     if (projects.length === 0) {
       await sendText(chatId,
-        `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`)
+        t('project.noneRecent', { workDir: defaultWorkDir }))
       return
     }
     const cardId = await sendCard(chatId, buildProjectPickerCard(projects))
@@ -715,10 +717,10 @@ async function showProjectPicker(chatId: string): Promise<void> {
       const lines = projects.slice(0, 10).map((p, i) =>
         `${i + 1}. **${p.projectName}**${p.branch ? ` (${p.branch})` : ''}\n   ${p.realPath}`
       )
-      await sendText(chatId, `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n💡 下次可直接 /new <编号、名称或绝对路径> 快速新建会话`)
+      await sendText(chatId, '💡 ' + t('project.pickerTitle', { list: lines.join('\n\n') }))
     }
   } catch (err) {
-    await sendText(chatId, `❌ 无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+    await sendText(chatId, '❌ ' + t('project.listFailed', { error: err instanceof Error ? err.message : String(err) }))
   }
 }
 
@@ -872,7 +874,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
         const stored = sessionStore.get(chatId)
         const workDir = stored?.workDir || defaultWorkDir
         if (workDir) {
-          await sendText(chatId, '⚠️ 会话上下文已失效，正在自动重建...')
+          await sendText(chatId, '⚠️ ' + t('session.invalidReconnecting'))
           bridge.resetSession(chatId)
           sessionStore.delete(chatId)
           imageWatchers.delete(chatId)
@@ -880,12 +882,12 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
           runtimeStates.delete(chatId)
           const ok = await createSessionForChat(chatId, workDir)
           if (ok) {
-            await sendText(chatId, '✅ 已重建会话，请重新发送消息。')
+            await sendText(chatId, '✅ ' + t('session.rebuilt'))
           } else {
-            await sendText(chatId, '❌ 重建会话失败，请发送 /new 手动新建。')
+            await sendText(chatId, '❌ ' + t('session.rebuildFailed'))
           }
         } else {
-          await sendText(chatId, '⚠️ 会话上下文已失效，请发送 /new 新建会话。')
+          await sendText(chatId, '⚠️ ' + t('session.invalid'))
         }
       } else if (streamingCards.has(chatId)) {
         await abortStreamingCard(chatId, new Error(msg.message ?? 'unknown error'))
@@ -950,9 +952,9 @@ async function handleMessage(data: any): Promise<void> {
       if (pairText) {
         const success = tryPair(pairText.trim(), { userId: senderOpenId, displayName: 'Feishu User' }, 'feishu')
         if (success) {
-          await sendText(chatId, '✅ 配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。')
+          await sendText(chatId, t('pair.success.short'))
         } else {
-          await sendText(chatId, '🔒 未授权。请在 Claude Code 桌面端生成配对码后发送给我。')
+          await sendText(chatId, '🔒 ' + t('pair.denied'))
         }
       }
       return
@@ -985,6 +987,14 @@ async function handleMessage(data: any): Promise<void> {
     // ----- Commands (only when there are no attachments — `command + image`
     //       isn't a meaningful combo, so attachments always take precedence) -----
 
+    if (!hasAttachments) {
+      const languageReply = handleLanguageCommand(msgText)
+      if (languageReply) {
+        await sendText(chatId, languageReply)
+        return
+      }
+    }
+
     const permissionDecision = !hasAttachments ? parsePermissionCommand(msgText, pendingPermissions.get(chatId)) : null
     if (permissionDecision) {
       await handlePermissionDecision(chatId, permissionDecision)
@@ -1012,27 +1022,27 @@ async function handleMessage(data: any): Promise<void> {
     if (!hasAttachments && (msgText === '/clear' || msgText === '清空')) {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       clearTransientChatState(chatId)
       const sent = bridge.sendUserMessage(chatId, '/clear')
       if (sent) getRuntimeState(chatId).state = 'thinking'
       if (!sent) {
-        await sendText(chatId, '⚠️ 无法发送 /clear，请先发送 /new 重新连接会话。')
+        await sendText(chatId, '⚠️ ' + t('runtime.clearFailed'))
         return
       }
-      await sendText(chatId, '🧹 已清空当前会话上下文。')
+      await sendText(chatId, '🧹 ' + t('runtime.cleared'))
       return
     }
     if (!hasAttachments && (msgText === '/stop' || msgText === '停止')) {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       bridge.sendStopGeneration(chatId)
-      await sendText(chatId, '⏹ 已发送停止信号。')
+      await sendText(chatId, '⏹ ' + t('runtime.stopSent'))
       return
     }
     if (!hasAttachments && (msgText === '/projects' || msgText === '项目列表')) {
@@ -1097,20 +1107,20 @@ async function handleMessage(data: any): Promise<void> {
           await sendText(
             chatId,
             downloadFailures === pendingDownloads.length
-              ? '📎 附件下载失败,请稍后重试'
-              : `📎 ${downloadFailures} 个附件下载失败,已跳过`,
+              ? t('attachment.downloadFailed')
+              : t('attachment.downloadPartial', { count: downloadFailures }),
           )
         }
         if (accepted.length > 0) attachments = accepted
       } catch (err) {
         console.error('[Feishu] Unexpected attachment pipeline error:', err)
-        await sendText(chatId, '📎 附件处理异常,请稍后重试')
+        await sendText(chatId, t('feishu.attachmentProcessFailed'))
         return
       }
     }
 
     const effectiveText =
-      msgText || (attachments && attachments.length > 0 ? '(用户发送了附件)' : '')
+      msgText || (attachments && attachments.length > 0 ? t('runtime.attachmentsOnly') : '')
 
     // If all attachments were rejected (limit / download fail) AND user had
     // no text, silently abort — the rejection hints have already been sent
@@ -1130,7 +1140,7 @@ async function handleMessage(data: any): Promise<void> {
     const sent = bridge.sendUserMessage(chatId, effectiveText, attachments)
     if (sent) getRuntimeState(chatId).state = 'thinking'
     if (!sent) {
-      await sendText(chatId, '⚠️ 消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await sendText(chatId, '⚠️ ' + t('runtime.sendFailed'))
     }
   })
 }
@@ -1139,13 +1149,13 @@ function applyPermissionDecision(chatId: string, decision: PermissionDecision): 
   const { requestId, allowed, rule } = decision
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(requestId)) {
-    void sendText(chatId, `未找到待确认的权限请求：${requestId}`)
+    void sendText(chatId, t('permission.requestMissing', { requestId }))
     return false
   }
 
   const sent = bridge.sendPermissionResponse(chatId, requestId, allowed, rule)
   if (!sent) {
-    void sendText(chatId, '权限响应发送失败，请检查会话状态。')
+    void sendText(chatId, t('permission.responseFailed'))
     return false
   }
 
@@ -1191,15 +1201,15 @@ async function handleCardAction(data: any): Promise<any> {
       allowed,
       rule: rule === 'always' ? 'always' : undefined,
     })
-    if (!sent) return { toast: { type: 'warning', content: '权限响应发送失败' } }
+    if (!sent) return { toast: { type: 'warning', content: t('permission.sendFailed') } }
 
     const statusText = allowed
       ? rule === 'always'
-        ? '♾️ 已永久允许（本次会话内不再询问相同操作）'
-        : '✅ 已允许'
-      : '❌ 已拒绝'
+        ? t('permission.toast.always')
+        : t('permission.toast.allowed')
+      : t('permission.toast.denied')
     await sendText(chatId, statusText)
-    return { toast: { type: 'info', content: allowed ? (rule === 'always' ? '♾️ 永久允许' : '✅ 已允许') : '❌ 已拒绝' } }
+    return { toast: { type: 'info', content: allowed ? (rule === 'always' ? t('permission.button.always') : t('permission.toast.allowed')) : t('permission.toast.denied') } }
   }
 
   if (action === 'pick_project') {
@@ -1212,7 +1222,7 @@ async function handleCardAction(data: any): Promise<any> {
       // createSessionForChat handles its own error messaging on failure
       const ok = await createSessionForChat(chatId, realPath)
       if (ok) {
-        await sendText(chatId, `✅ 已新建会话：**${projectName}**`)
+        await sendText(chatId, t('feishu.sessionCreatedNamed', { name: projectName }))
       }
     })
     return { toast: { type: 'info', content: `📁 ${projectName}` } }

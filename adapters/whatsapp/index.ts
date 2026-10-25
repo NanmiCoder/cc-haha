@@ -16,6 +16,7 @@ import { WsBridge, type ServerMessage, type AttachmentRef } from '../common/ws-b
 import { MessageDedup } from '../common/message-dedup.js'
 import { enqueue } from '../common/chat-queue.js'
 import { loadConfig } from '../common/config.js'
+import { handleLanguageCommand, setAdapterLocale, t } from '../common/i18n.js'
 import {
   formatImHelp,
   formatImStatus,
@@ -31,7 +32,7 @@ import { SessionStore } from '../common/session-store.js'
 import { syncImPermissionState } from '../common/permission-sync.js'
 import { SessionSelectionController } from '../common/session-selection.js'
 import { createAdapterClient } from '../common/adapter-client.js'
-import { restoreStoredSessionBinding, SESSION_RECONNECT_NOTICE, type SessionRestoreResult } from '../common/session-recovery.js'
+import { restoreStoredSessionBinding, sessionReconnectNotice, type SessionRestoreResult } from '../common/session-recovery.js'
 import { isAllowedUser, tryPair } from '../common/pairing.js'
 import { AttachmentStore } from '../common/attachment/attachment-store.js'
 import { checkAttachmentLimit } from '../common/attachment/attachment-limits.js'
@@ -57,6 +58,7 @@ const RECONNECT_BASE_MS = 1000
 const RECONNECT_MAX_MS = 30_000
 
 const config = loadConfig()
+setAdapterLocale(config.language)
 const authDir = config.whatsapp.authDir
 if (!hasWhatsAppAuth(authDir)) {
   console.error('[WhatsApp] No linked WhatsApp account found. Bind with QR in Desktop Settings first.')
@@ -146,13 +148,13 @@ async function sendWhatsAppText(jid: string, text: string): Promise<void> {
 }
 
 async function sendHelp(jid: string): Promise<void> {
-  await sendWhatsAppText(jid, `Claude Code WhatsApp 已就绪。\n\n${formatImHelp()}`)
+  await sendWhatsAppText(jid, `${t('whatsapp.ready')}\n\n${formatImHelp()}`)
 }
 
 async function handlePermissionDecision(chatId: string, decision: PermissionDecision): Promise<void> {
   const pending = pendingPermissions.get(chatId)
   if (!pending?.has(decision.requestId)) {
-    await sendWhatsAppText(chatId, `未找到待确认的权限请求：${decision.requestId}`)
+    await sendWhatsAppText(chatId, t('permission.requestMissing', { requestId: decision.requestId }))
     return
   }
 
@@ -164,7 +166,7 @@ async function handlePermissionDecision(chatId: string, decision: PermissionDeci
   }
   await sendWhatsAppText(
     chatId,
-    sent ? `${formatPermissionDecisionStatus(decision)}。` : '权限响应发送失败，请检查会话状态。',
+    sent ? formatPermissionDecisionStatus(decision) : t('permission.responseFailed'),
   )
 }
 
@@ -182,7 +184,7 @@ async function ensureExistingSession(chatId: string): Promise<SessionRestoreResu
 
 async function buildStatusText(chatId: string): Promise<string> {
   const result = await ensureExistingSession(chatId)
-  if (result.status === 'unavailable') return SESSION_RECONNECT_NOTICE
+  if (result.status === 'unavailable') return sessionReconnectNotice()
   if (result.status === 'missing') return formatImStatus(null)
   const stored = result.session
 
@@ -213,7 +215,7 @@ async function ensureSession(chatId: string): Promise<boolean> {
   const result = await ensureExistingSession(chatId)
   if (result.status === 'restored') return true
   if (result.status === 'unavailable') {
-    await sendWhatsAppText(chatId, SESSION_RECONNECT_NOTICE)
+    await sendWhatsAppText(chatId, sessionReconnectNotice())
     return false
   }
 
@@ -236,12 +238,12 @@ async function createSessionForChat(chatId: string, workDir: string): Promise<bo
     bridge.onServerMessage(chatId, (msg) => handleServerMessage(chatId, msg))
     const opened = await bridge.waitForOpen(chatId)
     if (!opened) {
-      await sendWhatsAppText(chatId, '连接服务器超时，请重试。')
+      await sendWhatsAppText(chatId, t('server.connectTimeout'))
       return false
     }
     return true
   } catch (err) {
-    await sendWhatsAppText(chatId, `无法创建会话: ${err instanceof Error ? err.message : String(err)}`)
+    await sendWhatsAppText(chatId, t('session.createFailed', { error: err instanceof Error ? err.message : String(err) }))
     return false
   }
 }
@@ -253,7 +255,7 @@ async function showProjectPicker(chatId: string): Promise<void> {
     if (projects.length === 0) {
       await sendWhatsAppText(
         chatId,
-        `没有找到最近的项目。发送 /new 会使用默认工作目录：${defaultWorkDir}\n也可以发送 /new /path/to/project 指定项目。`,
+        t('project.noneRecent', { workDir: defaultWorkDir }),
       )
       return
     }
@@ -264,10 +266,10 @@ async function showProjectPicker(chatId: string): Promise<void> {
     pendingProjectSelection.set(chatId, true)
     await sendWhatsAppText(
       chatId,
-      `选择项目（回复编号）：\n\n${lines.join('\n\n')}\n\n下次可直接 /new <编号、名称或绝对路径> 快速新建会话`,
+      t('project.pickerTitle', { list: lines.join('\n\n') }),
     )
   } catch (err) {
-    await sendWhatsAppText(chatId, `无法获取项目列表: ${err instanceof Error ? err.message : String(err)}`)
+    await sendWhatsAppText(chatId, t('project.listFailed', { error: err instanceof Error ? err.message : String(err) }))
   }
 }
 
@@ -309,7 +311,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
       runtime.verb = typeof msg.verb === 'string' ? msg.verb : undefined
       if (msg.state === 'thinking' && !thinkingNotices.has(chatId)) {
         thinkingNotices.add(chatId)
-        await sendWhatsAppText(chatId, '思考中...')
+        await sendWhatsAppText(chatId, t('thinking.indicator'))
       }
       break
 
@@ -367,17 +369,17 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
         const stored = sessionStore.get(chatId)
         const workDir = stored?.workDir || defaultWorkDir
         if (workDir) {
-          await sendWhatsAppText(chatId, '会话上下文已失效，正在自动重建...')
+          await sendWhatsAppText(chatId, t('session.invalidReconnecting'))
           clearTransientChatState(chatId)
           bridge.resetSession(chatId)
           sessionStore.delete(chatId)
           const ok = await createSessionForChat(chatId, workDir)
-          await sendWhatsAppText(chatId, ok ? '已重建会话，请重新发送消息。' : '重建会话失败，请发送 /new 手动新建。')
+          await sendWhatsAppText(chatId, ok ? t('session.rebuilt') : t('session.rebuildFailed'))
         } else {
-          await sendWhatsAppText(chatId, '会话上下文已失效，请发送 /new 新建会话。')
+          await sendWhatsAppText(chatId, t('session.invalid'))
         }
       } else {
-        await sendWhatsAppText(chatId, `错误: ${msg.message}`)
+        await sendWhatsAppText(chatId, t('runtime.error', { message: msg.message }))
       }
       break
 
@@ -410,24 +412,24 @@ async function startNewSession(chatId: string, query?: string): Promise<void> {
       if (project) {
         const ok = await createSessionForChat(chatId, project.realPath)
         if (ok) {
-          await sendWhatsAppText(chatId, `已新建会话：${project.projectName}${project.branch ? ` (${project.branch})` : ''}`)
+          await sendWhatsAppText(chatId, t('session.createdNamed', { name: project.projectName, branch: project.branch ? ` (${project.branch})` : '' }))
         }
         return
       }
       if (ambiguous) {
         const list = ambiguous.map((p, i) => `${i + 1}. ${p.projectName} - ${p.realPath}`).join('\n')
-        await sendWhatsAppText(chatId, `匹配到多个项目，请更精确：\n\n${list}`)
+        await sendWhatsAppText(chatId, t('project.ambiguous', { list }))
         return
       }
-      await sendWhatsAppText(chatId, `未找到匹配 "${query}" 的项目。发送 /projects 查看完整列表。`)
+      await sendWhatsAppText(chatId, t('project.notFound', { query }))
     } catch (err) {
-      await sendWhatsAppText(chatId, `错误: ${err instanceof Error ? err.message : String(err)}`)
+      await sendWhatsAppText(chatId, t('runtime.error', { message: err instanceof Error ? err.message : String(err) }))
     }
   } else {
     const workDir = defaultWorkDir
     if (workDir) {
       const ok = await createSessionForChat(chatId, workDir)
-      if (ok) await sendWhatsAppText(chatId, '已新建会话，可以开始对话了。')
+      if (ok) await sendWhatsAppText(chatId, t('project.createdReady'))
     } else {
       await showProjectPicker(chatId)
     }
@@ -448,14 +450,19 @@ async function routeUserMessage(
     await sendWhatsAppText(
       chatId,
       success
-        ? '配对成功！现在可以开始聊天了。\n\n发送消息即可与 Claude 对话。'
-        : '未授权。请在 Claude Code 桌面端生成配对码后发送给我。',
+        ? t('pair.success.short')
+        : t('pair.denied'),
     )
     return
   }
 
   enqueue(chatId, async () => {
     const command = text.trim()
+    const languageReply = handleLanguageCommand(command)
+    if (languageReply) {
+      await sendWhatsAppText(chatId, languageReply)
+      return
+    }
     if (command === '/start' || command === '/help') {
       await sendHelp(chatId)
       return
@@ -471,11 +478,11 @@ async function routeUserMessage(
     if (command === '/stop') {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendWhatsAppText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendWhatsAppText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       bridge.sendStopGeneration(chatId)
-      await sendWhatsAppText(chatId, '已发送停止信号。')
+      await sendWhatsAppText(chatId, t('runtime.stopSent'))
       return
     }
     if (command === '/status') {
@@ -485,13 +492,13 @@ async function routeUserMessage(
     if (command === '/clear') {
       const result = await ensureExistingSession(chatId)
       if (result.status !== 'restored') {
-        await sendWhatsAppText(chatId, result.status === 'unavailable' ? SESSION_RECONNECT_NOTICE : formatImStatus(null))
+        await sendWhatsAppText(chatId, result.status === 'unavailable' ? sessionReconnectNotice() : formatImStatus(null))
         return
       }
       clearTransientChatState(chatId)
       const sent = bridge.sendUserMessage(chatId, '/clear')
       if (sent) getRuntimeState(chatId).state = 'thinking'
-      await sendWhatsAppText(chatId, sent ? '已清空当前会话上下文。' : '无法发送 /clear，请先发送 /new 重新连接会话。')
+      await sendWhatsAppText(chatId, sent ? t('runtime.cleared') : t('runtime.clearFailed'))
       return
     }
 
@@ -512,12 +519,12 @@ async function routeUserMessage(
 
     const ready = await ensureSession(chatId)
     if (!ready) return
-    const effective = text || (attachments.length > 0 ? '(用户发送了附件)' : '')
+    const effective = text || (attachments.length > 0 ? t('runtime.attachmentsOnly') : '')
     if (!effective && attachments.length === 0) return
     const sent = bridge.sendUserMessage(chatId, effective, attachments.length ? attachments : undefined)
     if (sent) getRuntimeState(chatId).state = 'thinking'
     if (!sent) {
-      await sendWhatsAppText(chatId, '消息发送失败，连接可能已断开。请发送 /new 重新开始。')
+      await sendWhatsAppText(chatId, t('runtime.sendFailed'))
     }
   })
 }
@@ -554,7 +561,7 @@ async function collectAttachments(
     }
   } catch (err) {
     console.error('[WhatsApp] download media failed:', err instanceof Error ? err.message : err)
-    rejections.push('附件下载失败，请稍后重试。')
+    rejections.push(t('attachment.downloadFailed'))
   }
   return { attachments, rejections }
 }

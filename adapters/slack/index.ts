@@ -13,6 +13,7 @@ import { adapterMigrationLifecycle, registerAdapterShutdown } from '../common/mi
 import { WsBridge, type AttachmentRef } from '../common/ws-bridge.js'
 import { MessageDedup } from '../common/message-dedup.js'
 import { loadConfig } from '../common/config.js'
+import { setAdapterLocale, t } from '../common/i18n.js'
 import { splitMessage } from '../common/format.js'
 import { SessionStore } from '../common/session-store.js'
 import { createAdapterClient } from '../common/adapter-client.js'
@@ -38,6 +39,7 @@ const SLACK_TEXT_LIMIT = 3_500
 const SLACK_EDIT_INTERVAL_MS = 1_200
 
 const config = loadConfig()
+setAdapterLocale(config.language)
 if (!config.slack.botToken || !config.slack.appToken) {
   console.error('[Slack] Missing SLACK_BOT_TOKEN / SLACK_APP_TOKEN. Configure Slack in Desktop Settings > IM.')
   process.exit(1)
@@ -235,7 +237,7 @@ async function collectAttachments(chatId: string, files: SlackFile[]): Promise<A
   if (failures > 0) {
     await port.sendNotice(
       chatId,
-      failures === files.length ? '附件下载失败，请稍后重试。' : `${failures} 个附件下载失败，已跳过。`,
+      failures === files.length ? t('attachment.downloadFailed') : t('attachment.downloadPartial', { count: failures }),
     )
   }
   return refs

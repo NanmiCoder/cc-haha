@@ -1,3 +1,5 @@
+import { t } from './i18n.js'
+
 /**
  * 消息格式化工具
  */
@@ -25,20 +27,23 @@ type ImStatusSummary = {
   }
 }
 
-const IM_HELP_LINES = [
-  '/new [项目] / 新会话 — 新建会话或切换项目',
-  '/projects / 项目列表 — 查看最近项目',
-  '/sessions [项目] / 会话列表 — 查看当前项目的旧会话',
-  '/sessions projects — 选择其他项目的旧会话',
-  '/resume <编号> / 继续会话 <编号> — 恢复列表中的会话',
-  '/sessions next / /sessions prev — 翻页',
-  '/cancel / 取消选择 — 退出选择，保留当前会话',
-  '/status / 状态 — 查看当前会话状态',
-  '/clear / 清空 — 清空当前会话上下文',
-  '/stop / 停止 — 停止当前生成',
-  '/help / 帮助 — 显示这份帮助',
-  '权限审批：/allow <id>、/always <id>、/deny <id>',
-]
+function imHelpLines(): string[] {
+  return [
+    t('help.new'),
+    t('help.projects'),
+    t('help.sessions'),
+    t('help.sessionsProjects'),
+    t('help.resume'),
+    t('help.paging'),
+    t('help.cancel'),
+    t('help.status'),
+    t('help.clear'),
+    t('help.stop'),
+    t('help.help'),
+    t('help.language'),
+    t('help.permission'),
+  ]
+}
 
 /** Split text into chunks that fit within a character limit, respecting paragraph/sentence boundaries. */
 export function splitMessage(text: string, limit: number): string[] {
@@ -297,7 +302,7 @@ function truncate(s: string, max: number): string {
 /** Format a permission request for display in IM. */
 export function formatPermissionRequest(toolName: string, input: unknown, requestId: string): string {
   const preview = truncateInput(input, 300)
-  return `🔐 需要权限确认 [${requestId}]\n工具: ${toolName}\n${preview}`
+  return t('permission.request', { requestId, tool: toolName, preview })
 }
 
 /** Truncate tool input to a preview string. */
@@ -316,42 +321,44 @@ export function escapeMarkdownV2(text: string): string {
 }
 
 export function formatImHelp(): string {
-  return `可用命令：\n\n${IM_HELP_LINES.join('\n')}`
+  return `${t('help.header')}\n\n${imHelpLines().join('\n')}`
 }
 
 export function formatImStatus(summary: ImStatusSummary | null): string {
   if (!summary?.sessionId) {
-    return '当前没有活动会话。\n\n发送 /sessions 选择旧会话，/new 新建会话，或 /projects 选择项目。'
+    return t('status.noSession')
   }
 
-  const lines = ['当前会话状态：']
+  const lines = [t('status.title')]
 
   if (summary.projectName) {
-    lines.push(`项目: ${summary.projectName}${summary.branch ? ` (${summary.branch})` : ''}`)
+    lines.push(t('status.project', {
+      name: `${summary.projectName}${summary.branch ? ` (${summary.branch})` : ''}`,
+    }))
   } else if (summary.branch) {
-    lines.push(`分支: ${summary.branch}`)
+    lines.push(t('status.branch', { branch: summary.branch }))
   }
 
-  lines.push(`会话: ${shortSessionId(summary.sessionId)}`)
+  lines.push(t('status.session', { id: shortSessionId(summary.sessionId) }))
 
   if (summary.model) {
-    lines.push(`模型: ${summary.model}`)
+    lines.push(t('status.model', { model: summary.model }))
   }
 
-  lines.push(`状态: ${formatAdapterChatState(summary.state, summary.verb)}`)
+  lines.push(t('status.state', { state: formatAdapterChatState(summary.state, summary.verb) }))
 
   const pendingPermissionCount = summary.pendingPermissionCount ?? 0
   if (pendingPermissionCount > 0) {
-    lines.push(`审批: ${pendingPermissionCount} 个待确认`)
+    lines.push(t('status.approvals', { count: pendingPermissionCount }))
   }
 
   const taskCounts = summary.taskCounts
   if (taskCounts && taskCounts.total > 0) {
-    const taskParts = [`总计 ${taskCounts.total}`]
-    if (taskCounts.inProgress > 0) taskParts.push(`进行中 ${taskCounts.inProgress}`)
-    if (taskCounts.pending > 0) taskParts.push(`待处理 ${taskCounts.pending}`)
-    if (taskCounts.completed > 0) taskParts.push(`已完成 ${taskCounts.completed}`)
-    lines.push(`任务: ${taskParts.join(' · ')}`)
+    const taskParts = [t('status.taskTotal', { count: taskCounts.total })]
+    if (taskCounts.inProgress > 0) taskParts.push(t('status.taskInProgress', { count: taskCounts.inProgress }))
+    if (taskCounts.pending > 0) taskParts.push(t('status.taskPending', { count: taskCounts.pending }))
+    if (taskCounts.completed > 0) taskParts.push(t('status.taskCompleted', { count: taskCounts.completed }))
+    lines.push(t('status.tasks', { parts: taskParts.join(' · ') }))
   }
 
   return lines.join('\n')
@@ -364,16 +371,16 @@ function formatAdapterChatState(
   const label = (() => {
     switch (state) {
       case 'thinking':
-        return '思考中'
+        return t('state.thinking')
       case 'streaming':
-        return '生成中'
+        return t('state.streaming')
       case 'tool_executing':
-        return '执行工具中'
+        return t('state.toolExecuting')
       case 'permission_pending':
-        return '等待权限确认'
+        return t('state.permissionPending')
       case 'idle':
       default:
-        return '空闲'
+        return t('state.idle')
     }
   })()
 
