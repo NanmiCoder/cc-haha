@@ -78,6 +78,8 @@ type FixtureSession = {
   lastProgressAt: number
   completedAt?: number
   terminalOutcome?: 'completed' | 'failed' | 'stopped'
+  /** Only the `stalled` scenario sets this; real servers derive it from progress time. */
+  stalled?: boolean
   restoredTargets: Set<string>
   streamingText?: string
 }
@@ -140,8 +142,10 @@ export function startFixtureServer({
   function emit(session: FixtureSession, event: ServerMessage) {
     if (
       ['content_delta', 'tool_result', 'message_complete'].includes(event.type)
-    )
+    ) {
       session.lastProgressAt = Date.now()
+      delete session.stalled
+    }
     const payload = JSON.stringify(event)
     for (const ws of session.sockets) if (ws.readyState === 1) ws.send(payload)
   }
@@ -278,9 +282,64 @@ export function startFixtureServer({
       })
     )
   }
+  /** `/steps`: a timeline sample with finished tools, a background agent and a running command. */
+  function toolSteps(session: FixtureSession) {
+    const file = (path: string) => `${FIXTURE_ROOT}/${path}`
+    const steps: [string, Record<string, unknown>, string][] = [
+      ['Read', { file_path: file('src/app/connect.tsx') }, 'export default function Connect() {}'],
+      ['Grep', { pattern: 'pairHost' }, 'src/core/connectHost.ts:12'],
+      ['Glob', { pattern: 'src/core/connect*.ts' }, 'src/core/connectHost.ts'],
+      ['Read', { file_path: file('src/core/connectHost.ts') }, 'export async function connectHost() {}'],
+      ['Edit', { file_path: file('src/core/connectHost.ts'), old_string: 'save(credential)\nreturn host', new_string: 'await verify(address)\nsave(credential)\nreturn { host, verified: true }' }, 'Fixture edit applied in memory'],
+      ['Agent', { description: '做扫码页界面', run_in_background: true }, 'Fixture background agent started'],
+    ]
+    const text = '先看现有的连接流程，再拆成扫码页和连接校验两块。界面交给一个子 Agent。'
+    emit(session, { type: 'content_start', blockType: 'text' })
+    emit(session, { type: 'content_delta', text })
+    append(session, 'assistant', [{ type: 'text', text }], session.runtime.modelId)
+    steps.forEach(([toolName, input, result], index) =>
+      schedule(session, 150 * (index + 1), () => {
+        const toolUseId = crypto.randomUUID()
+        emit(session, { type: 'content_start', blockType: 'tool_use', toolName, toolUseId })
+        emit(session, { type: 'tool_use_complete', toolName, toolUseId, input })
+        append(session, 'tool_use', [{ type: 'tool_use', id: toolUseId, name: toolName, input }], session.runtime.modelId)
+        emit(session, { type: 'tool_result', toolUseId, content: result, isError: false })
+        append(session, 'tool_result', [{ type: 'tool_result', tool_use_id: toolUseId, content: result, is_error: false }])
+        if (toolName !== 'Agent') return
+        const task: BackgroundTask = {
+          taskId: `fixture-steps-${toolUseId.slice(0, 8)}`,
+          toolUseId,
+          taskType: 'local_agent',
+          description: String(input.description),
+          status: 'running',
+          summary: '编辑 src/app/connect.tsx',
+          startedAt: new Date().toISOString(),
+        }
+        session.tasks.push(task)
+        emit(session, {
+          type: 'system_notification',
+          subtype: 'task_started',
+          data: { task_id: task.taskId, tool_use_id: toolUseId, task_type: task.taskType },
+        })
+      })
+    )
+    const command = 'bun test src/core/connectHost.test.ts'
+    const bashId = crypto.randomUUID()
+    schedule(session, 150 * (steps.length + 1), () => {
+      emit(session, { type: 'content_start', blockType: 'tool_use', toolName: 'Bash', toolUseId: bashId })
+      emit(session, { type: 'tool_use_complete', toolName: 'Bash', toolUseId: bashId, input: { command } })
+      append(session, 'tool_use', [{ type: 'tool_use', id: bashId, name: 'Bash', input: { command } }], session.runtime.modelId)
+    })
+    schedule(session, 150 * (steps.length + 1) + 8000, () => {
+      const output = 'bun test v1.3 (fixture)\n src/core/connectHost.test.ts:\n✓ verifies the address before saving\n\n 4 pass\n 0 fail'
+      emit(session, { type: 'tool_result', toolUseId: bashId, content: output, isError: false })
+      append(session, 'tool_result', [{ type: 'tool_result', tool_use_id: bashId, content: output, is_error: false }])
+      stream(session, '连接校验已经改成先验证地址再保存凭据，测试通过。扫码页界面还在后台做。')
+    })
+  }
   function pendingDecision(
     session: FixtureSession,
-    kind: 'approval' | 'question' | 'plan',
+    kind: 'approval' | 'question' | 'plan' | 'edit',
     broadcast = true
   ) {
     const toolName =
@@ -288,7 +347,9 @@ export function startFixtureServer({
         ? 'AskUserQuestion'
         : kind === 'plan'
           ? 'ExitPlanMode'
-          : 'Bash'
+          : kind === 'edit'
+            ? 'Edit'
+            : 'Bash'
     const input =
       kind === 'question' && design
         ? {
@@ -348,6 +409,15 @@ export function startFixtureServer({
                   { tool: 'Bash', prompt: 'run fixture checks' },
                 ],
               }
+            : kind === 'edit'
+              ? {
+                  // Fake text for the diff preview only; the fixture never writes files.
+                  file_path: 'src/core/sessionTransport.ts',
+                  old_string:
+                    '  const seen = this.delivered\n  for (const message of batch) {\n    const key = message.localId\n    if (seen.has(key)) continue\n    seen.add(key)\n    this.emit(message)\n  }',
+                  new_string:
+                    '  const seen = this.delivered\n  for (const message of batch) {\n    // 重放的消息带同一个 serverId\n    const key = message.serverId\n      ?? message.localId\n    if (seen.has(key)) continue\n    seen.add(key)\n    this.emit(message)\n  }',
+                }
             : {
                 command: design
                   ? 'bun test src/core/sessionTransport.test.ts'
@@ -732,7 +802,7 @@ export function startFixtureServer({
       activityState: pending ? 'waiting' : session.running ? 'running' : 'idle',
       startedAt: session.startedAt,
       lastProgressAt: session.lastProgressAt,
-      stalled: false,
+      stalled: Boolean(session.running && !pending && session.stalled),
       ...(!pending && !session.running && session.terminalOutcome
         ? { terminalOutcome: session.terminalOutcome, ...(session.completedAt !== undefined ? { completedAt: session.completedAt } : {}) }
         : {}),
@@ -745,7 +815,9 @@ export function startFixtureServer({
                 ? '旧字段保留还是直接丢弃？'
                 : typeof input.command === 'string'
                   ? input.command
-                  : '计划已就绪',
+                  : pending.toolName === 'ExitPlanMode'
+                    ? '计划等待确认'
+                    : '等待工具权限确认',
             autoAnswerDeadline: pending.autoAnswerDeadline,
           }
         : {}),
@@ -927,7 +999,9 @@ export function startFixtureServer({
             code: 'RUNTIME_CONFIG_INVALID',
             message: 'Fixture plan remains pending: invalid execution model',
           })
-        if (message.allowed && request.toolName === 'ExitPlanMode')
+        // Like the real server, session setMode updates apply to any approval
+        // (plan execution mode or “auto-accept edits” on a file edit).
+        if (message.allowed)
           for (const update of message.permissionUpdates ?? []) {
             const value = object(update)
             if (
@@ -1037,6 +1111,7 @@ export function startFixtureServer({
         delete session.terminalOutcome
         session.startedAt = Date.now()
         session.lastProgressAt = Date.now()
+        delete session.stalled
         emit(session, { type: 'status', state: 'thinking', verb: 'Fixture' })
         const prompt = message.content.toLowerCase()
         if (/\/error|模拟错误/.test(prompt))
@@ -1057,6 +1132,9 @@ export function startFixtureServer({
           )
         if (/\/plan|计划/.test(prompt))
           return schedule(session, 200, () => pendingDecision(session, 'plan'))
+        if (/\/edit|改文件/.test(prompt))
+          return schedule(session, 200, () => pendingDecision(session, 'edit'))
+        if (/\/steps/.test(prompt)) return schedule(session, 200, () => toolSteps(session))
         if (
           /\/approval|审批|批准/.test(prompt) &&
           !session.allowedTools.has('Bash')
@@ -1846,16 +1924,33 @@ export function startFixtureServer({
         const session = sessions.get(String(body.sessionId))
         if (
           !session ||
-          !['approval', 'question', 'plan', 'idle'].includes(String(body.kind))
+          ![
+            'approval',
+            'question',
+            'plan',
+            'idle',
+            'failed',
+            'stalled',
+            'edit',
+          ].includes(String(body.kind))
         )
           return fail(
-            'Specify an existing sessionId and approval/question/plan/idle kind'
+            'Specify an existing sessionId and approval/question/plan/edit/idle/failed/stalled kind'
           )
         stop(session)
-        if (body.kind !== 'idle')
+        delete session.stalled
+        if (body.kind === 'failed') session.terminalOutcome = 'failed'
+        else if (body.kind === 'stalled') {
+          // Running with no CLI output for six minutes; no timer advances it.
+          session.running = true
+          delete session.terminalOutcome
+          session.startedAt = Date.now() - 1300000
+          session.lastProgressAt = Date.now() - 360000
+          session.stalled = true
+        } else if (body.kind !== 'idle')
           pendingDecision(
             session,
-            body.kind as 'approval' | 'question' | 'plan'
+            body.kind as 'approval' | 'question' | 'plan' | 'edit'
           )
         return json({
           ok: true,
@@ -1908,7 +2003,7 @@ export function startFixtureServer({
   })
   if (!quiet)
     console.log(
-      `LOCAL ${design ? 'DESIGN ' : ''}FIXTURE ONLY — no models, no real files\nHost: ${hostName}\nURL: http://127.0.0.1:${server.port}\nFake token: ${FIXTURE_TOKEN}\nCommands: /approval /question /plan /slow /error /retry`
+      `LOCAL ${design ? 'DESIGN ' : ''}FIXTURE ONLY — no models, no real files\nHost: ${hostName}\nURL: http://127.0.0.1:${server.port}\nFake token: ${FIXTURE_TOKEN}\nCommands: /approval /edit /question /plan /slow /error /retry`
     )
   return {
     server,

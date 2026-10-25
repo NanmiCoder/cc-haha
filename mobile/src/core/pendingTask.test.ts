@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
+import { buildComposerMessage } from './chatComposer'
 import {
   clearPendingTask,
   peekPendingTask,
+  pendingTaskDraft,
   putPendingTask,
 } from './pendingTask'
 
@@ -43,4 +45,18 @@ test('handoff snapshots the submitted draft instead of following later form edit
     'note.txt'
   )
   clearPendingTask('host', 'session')
+})
+
+test('a team task keeps its marker for sending but drafts only the user text', () => {
+  const team = buildComposerMessage('拆成三个人做', [], true).content
+  putPendingTask('host', 'team', { content: team, attachments: [] })
+  const task = peekPendingTask('host', 'team')!
+  expect(task.content).toBe(team)
+  expect(buildComposerMessage(task.content, [], false).content).toBe(team)
+  expect(pendingTaskDraft(task)).toEqual({ text: '拆成三个人做', team: true })
+  expect(pendingTaskDraft({ content: '普通任务', attachments: [] })).toEqual({
+    text: '普通任务',
+    team: false,
+  })
+  clearPendingTask('host', 'team')
 })

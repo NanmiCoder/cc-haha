@@ -1,19 +1,11 @@
-import { useEffect, useEffectEvent, useRef, useState } from 'react'
-import {
-  AppState,
-  FlatList,
-  KeyboardAvoidingView,
-  Modal,
-  Platform,
-  Pressable,
-  ScrollView,
-  View,
-} from 'react-native'
-import { Text } from '../../ui/Text'
-import { SafeAreaView } from 'react-native-safe-area-context'
-import { router, useLocalSearchParams } from 'expo-router'
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
+import { AppState, FlatList, KeyboardAvoidingView, Platform, Pressable, View } from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import * as Clipboard from 'expo-clipboard'
+import { Text } from '../../ui/Text'
 import { useApp, useConnection } from '../../state/AppContext'
+import { useDashboard } from '../../state/DashboardContext'
 import { createChatState } from '../../core/chat'
 import { ChatRecovery } from '../../core/chatRecovery'
 import {
@@ -23,62 +15,92 @@ import {
   visibleMessageText,
   type ComposerAttachment,
 } from '../../core/chatComposer'
+import { notificationPermissionResponse, runtimeMatches } from '../../core/chatActions'
+import { clearPendingTask, peekPendingTask, pendingTaskDraft } from '../../core/pendingTask'
+import { SessionTransport, type ConnectionState, type SocketLike } from '../../core/sessionTransport'
+import { shouldReconnectOnResume } from '../../core/resume'
+import { takeSessionStale } from '../../core/sessionStale'
 import {
-  notificationPermissionResponse,
-  runtimeMatches,
-} from '../../core/chatActions'
-import { clearPendingTask, peekPendingTask } from '../../core/pendingTask'
-import {
-  SessionTransport,
-  type ConnectionState,
-  type SocketLike,
-} from '../../core/sessionTransport'
-import type {
-  ChatItem,
-  ChatState,
-  ClientMessage,
-  Session,
-} from '../../core/types'
-import { Approval, PlanPreview } from '../../ui/Approval'
+  listCheckpoints,
+  sessionPath,
+  type BackgroundSnapshot,
+  type BackgroundTask,
+  type Checkpoint,
+} from '../../core/operations'
+import type { ChatItem, ChatState, ClientMessage, PermissionMode, Session } from '../../core/types'
+import { Approval } from '../../ui/Approval'
 import { ChatComposer } from '../../ui/ChatComposer'
-import { Message } from '../../ui/Message'
-import { RuntimePicker } from '../../ui/RuntimePicker'
+import { Message, type BubbleLayout } from '../../ui/Message'
+import { RuntimeSheet, type Model } from '../../ui/RuntimePicker'
 import { SessionChangesCard } from '../../ui/SessionChangesCard'
-import { modeName, modes } from '../../ui/modes'
+import { effortName, modeName } from '../../ui/modes'
 import {
   Button,
-  CircleButton,
-  Empty,
-  Field,
+  Callout,
+  Card,
   Icon,
-  Notice,
-  PageHeader,
-  PrimaryButton,
-  Raised,
-  Row,
-  errorText,
-  mono,
-  useTheme,
-} from '../../ui/theme'
+  InlineError,
+  Menu,
+  Mono,
+  NavBar,
+  ScreenView,
+  Spinner,
+  goBack,
+  useColors,
+  type MenuItem,
+} from '../../ui/kit'
+import { errorText } from '../../ui/theme'
+import { buildChatRows, type ChatRow } from '../../ui/chat/steps'
+import { StepGroup, type StepContext, type StepUi } from '../../ui/chat/StepGroup'
+import { RunningBar } from '../../ui/chat/RunningBar'
+import { QueuedMessages } from '../../ui/chat/QueuedMessages'
+import {
+  canFlushQueue,
+  clearParkedComposer,
+  parkComposer,
+  parkedComposer,
+  queueAttachments,
+  queuePauseReason,
+  queueToDraft,
+  type QueuedMessage,
+  type QueueGate,
+} from '../../ui/chat/queue'
+import { MessageMenu, type MessageAction } from '../../ui/chat/MessageMenu'
+import {
+  ConfirmSheet,
+  EditResendSheet,
+  ModeSheet,
+  RenameSheet,
+  SelectTextSheet,
+} from '../../ui/chat/sheets'
+import {
+  connectionLabels,
+  contextPercent,
+  contextWindow,
+  displayPath,
+  latestTurnCheckpoint,
+  nextTurnStart,
+  sessionSubtitle,
+  turnMeta,
+} from '../../ui/chat/session'
 
-const labels: Record<ConnectionState, string> = {
-  connecting: '连接电脑中',
-  syncing: '同步会话中',
-  ready: '已连接',
-  reconnecting: '正在重连',
-  offline: '连接已断开',
-  pairing_required: '需要重新配对',
-}
 const NativeSocket = WebSocket as unknown as new (
   url: string,
   protocols?: string[],
   options?: { headers?: Record<string, string> }
 ) => SocketLike
-type Panel = 'model' | 'mode' | 'more' | 'stop' | 'message' | 'edit' | null
+type Panel = 'menu' | 'rename' | 'delete' | 'mode' | 'model' | 'stop' | 'select' | 'edit' | null
 type RewindPreview = {
   target: { targetUserMessageId: string }
   conversation: { messagesRemoved: number }
 }
+const toggle = (set: ReadonlySet<string>, key: string) => {
+  const next = new Set(set)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  return next
+}
+
 export default function Chat() {
   const { id, host, notificationAction, requestId } = useLocalSearchParams<{
     id: string
@@ -96,6 +118,7 @@ export default function Chat() {
     />
   )
 }
+
 function ChatSession({
   id,
   hostId,
@@ -107,27 +130,41 @@ function ChatSession({
   notificationAction?: string
   notificationRequestId?: string
 }) {
-  const {
-    client,
-    host,
-    credential,
-    error: connectionError,
-  } = useConnection(hostId)
+  const { client, host, credential, error: connectionError } = useConnection(hostId)
   const { drafts } = useApp()
-  const { colors: c, styles: s } = useTheme()
+  const colors = useColors()
+  const insets = useSafeAreaInsets()
   const draftKey = `${hostId}:${id}`
   const [initialTask] = useState(() => peekPendingTask(hostId, id))
-  const handoff = useRef({
+  const handoff = useRef<{
+    task: typeof initialTask
+    phase: 'initial' | 'config' | 'done' | 'failed'
+    /** 编辑重发前输入框里没发出的内容，发送成功后还回去。 */
+    restore?: { text: string; attachments: ComposerAttachment[] }
+  }>({
     task: initialTask,
-    phase: 'initial' as 'initial' | 'config' | 'done' | 'failed',
+    phase: 'initial',
   })
-  const [draft, setDraft] = useState(
-    initialTask?.content ?? drafts.get(draftKey) ?? ''
-  )
+  // 新任务移交的内容可能带团队标记：输入框只显示用户的话，团队开关替代标记。
+  const [initialDraft] = useState(() => (initialTask ? pendingTaskDraft(initialTask) : null))
+  const [draft, setDraft] = useState(initialDraft?.text ?? drafts.get(draftKey) ?? '')
+  // 上次离开时排队消息里的材料和团队开关（文字已经在草稿里）。
+  const [parked] = useState(() => (initialTask ? undefined : parkedComposer(draftKey)))
   const [attachments, setAttachments] = useState<ComposerAttachment[]>(
-    initialTask?.attachments ?? []
+    initialTask?.attachments ?? parked?.attachments ?? []
   )
-  const [team, setTeam] = useState(false)
+  const [team, setTeam] = useState(initialDraft?.team ?? parked?.team ?? false)
+  // 运行中追加的消息先在手机上排队，这一轮结束后按顺序发出。
+  const [queue, setQueue] = useState<QueuedMessage[]>([])
+  const queueSeq = useRef(0)
+  const leaving = useRef({
+    queue: [] as QueuedMessage[],
+    draft: '',
+    attachments: [] as ComposerAttachment[],
+    team: false,
+  })
+  // 在模型弹层里选过的模型：用它的显示名和上下文大小，其余时候只有模型 id。
+  const [chosenModel, setChosenModel] = useState<Model | null>(null)
   const [state, setState] = useState<ChatState>(() => createChatState(id))
   const [connection, setConnection] = useState<ConnectionState>('connecting')
   const [session, setSession] = useState<Session | null>(null)
@@ -135,38 +172,80 @@ function ChatSession({
   const [recoveryError, setRecoveryError] = useState('')
   const [notice, setNotice] = useState('')
   const [panel, setPanel] = useState<Panel>(null)
-  const [title, setTitle] = useState('')
+  const [sheetError, setSheetError] = useState('')
+  const [titleDraft, setTitleDraft] = useState('')
   const [working, setWorking] = useState(false)
-  const [deleteConfirm, setDeleteConfirm] = useState(false)
-  const [selected, setSelected] = useState<ChatItem | null>(null)
+  const [selected, setSelected] = useState<{ item: ChatItem; layout: BubbleLayout } | null>(null)
+  const [menuBusy, setMenuBusy] = useState<'edit' | 'fork' | null>(null)
+  const [selectText, setSelectText] = useState('')
   const [editText, setEditText] = useState('')
   const [rewindPreview, setRewindPreview] = useState<RewindPreview | null>(null)
   const [revision, setRevision] = useState(0)
-  const transport = useRef<SessionTransport | null>(null)
-  const list = useRef<FlatList>(null)
-  const follow = useRef(true)
-  const notificationSeen = useRef(new Set<string>())
-  const mounted = useRef(true)
   const [hasOlder, setHasOlder] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [branch, setBranch] = useState<string | null>(null)
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
+  const [ui, setUi] = useState<StepUi>(() => ({ expanded: new Set(), open: new Set(), revealed: new Set() }))
+  const [turnClock, setTurnClock] = useState<{ startedAt?: number; endedAt?: number; live?: boolean }>({})
+  // 进页面时已经在跑的一轮，用电脑给的开始时间，和首页一致。
+  const { snapshot: dashboard } = useDashboard()
+  const liveActivity =
+    dashboard?.hostId === hostId ? dashboard.activity.find((item) => item.id === id) : undefined
+  const serverTurnStart =
+    liveActivity && ['running', 'waiting'].includes(liveActivity.activityState)
+      ? liveActivity.startedAt
+      : undefined
+  const clockRef = useRef<{ active: boolean; startedAt?: number; live: boolean } | undefined>(undefined)
+  const connectionRef = useRef<ConnectionState>('connecting')
+  const transport = useRef<SessionTransport | null>(null)
+  const list = useRef<FlatList<ChatRow>>(null)
+  const follow = useRef(true)
+  const scrollMetrics = useRef({ height: 0, offset: 0 })
+  const holdScroll = useRef(false)
+  const notificationSeen = useRef(new Set<string>())
+  const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
     return () => {
       mounted.current = false
+      clearTimeout(noticeTimer.current)
     }
   }, [])
+
   useEffect(() => {
     if (!client || !credential) return
     let alive = true
+    /** 本轮起止时间只在收到状态时记录：亲眼看到开始用本地时间，否则用消息时间。 */
+    function trackTurn(value: ChatState) {
+      const previous = clockRef.current
+      const now = Date.now()
+      const lastUser = value.items.findLast((item) => item.type === 'user')
+      const startedAt = nextTurnStart({
+        previous,
+        active: value.turnActive,
+        lastUserTimestamp: lastUser?.timestamp,
+        now,
+      })
+      clockRef.current = {
+        active: value.turnActive,
+        startedAt,
+        live: connectionRef.current === 'ready',
+      }
+      if (previous?.active === value.turnActive && previous?.startedAt === startedAt) return
+      // 本页亲眼看到这一轮开始（连着线、从空闲变成运行）时本地时间最准；
+      // 进页面时已经在跑的一轮才借用电脑给的开始时间。
+      if (value.turnActive)
+        setTurnClock({ startedAt, live: !!previous && !previous.active && previous.live })
+      else if (previous?.active)
+        setTurnClock({ startedAt: previous.startedAt, endedAt: now })
+    }
     const recovery = new ChatRecovery({
       loadSummary: (signal) =>
-        client.get<Session>(`/api/sessions/${encodeURIComponent(id)}/summary`, {
-          signal,
-        }),
+        client.get<Session>(`/api/sessions/${encodeURIComponent(id)}/summary`, { signal }),
       onSummary: (value) => {
-        if (alive) {
-          setSession(value)
-          setTitle(value.title)
-        }
+        if (alive) setSession(value)
       },
       onConnectionError: (message) => {
         if (alive) setRecoveryError(message)
@@ -183,24 +262,20 @@ function ChatSession({
       socketFactory: (options) =>
         Platform.OS === 'web'
           ? (new WebSocket(options.url) as unknown as SocketLike)
-          : new NativeSocket(options.url, undefined, {
-              headers: options.headers,
-            }),
+          : new NativeSocket(options.url, undefined, { headers: options.headers }),
       onState: (value) => {
         if (alive) {
           setState(value)
           setHasOlder(Boolean(channel.historyPage?.page?.nextCursor))
+          trackTurn(value)
         }
       },
       onConnection: (value) => {
         if (alive) {
+          connectionRef.current = value
           setConnection(value)
           recovery.onConnection(value)
-          if (
-            value !== 'ready' &&
-            value !== 'syncing' &&
-            handoff.current.phase === 'config'
-          )
+          if (value !== 'ready' && value !== 'syncing' && handoff.current.phase === 'config')
             handoff.current.phase = 'failed'
         }
       },
@@ -214,8 +289,21 @@ function ChatSession({
     transport.current = channel
     recovery.start()
     channel.start()
+    let hiddenAt: number | undefined
     const listener = AppState.addEventListener('change', (value) => {
-      if (value === 'active') channel.reconnect()
+      if (value !== 'active') {
+        hiddenAt ??= Date.now()
+        return
+      }
+      if (
+        shouldReconnectOnResume({
+          connection: connectionRef.current,
+          hiddenAt,
+          now: Date.now(),
+        })
+      )
+        channel.reconnect()
+      hiddenAt = undefined
     })
     return () => {
       alive = false
@@ -225,6 +313,7 @@ function ChatSession({
       if (transport.current === channel) transport.current = null
     }
   }, [client, credential, id, revision])
+
   const ready = connection === 'ready'
   const busy =
     state.turnActive ||
@@ -235,7 +324,85 @@ function ChatSession({
     session?.workspaceState === 'missing' ||
     session?.workspaceState === 'worktree_removed' ||
     session?.workDirExists === false
+  const lean = session?.agentProfile === 'lean'
   const approval = state.permissions[0]
+  const pendingUser = state.items.some((item) => item.type === 'user' && item.pending)
+  const waitingForDecision =
+    state.permissions.length > 0 || state.computerUsePermissions.length > 0
+  // 这一轮结束后按顺序发出排队的消息。发送失败（断线、电脑还没确认上一条）时
+  // 保持排队，条件变化后再试；传输层本身也会拒绝在上一条未确认时再发。
+  const lastUser = state.items.findLast((item) => item.type === 'user')
+  const queueGate: QueueGate = {
+    ready,
+    turnActive: state.turnActive,
+    waitingForDecision,
+    pendingUser,
+    configPending: state.configPending,
+    workspaceMissing,
+    lastTurnFailed: !!state.error,
+    deliveryUncertain: lastUser?.delivery === 'uncertain',
+  }
+  const queuePaused = queue.length ? queuePauseReason(queueGate) : ''
+  const flushQueue = useEffectEvent(() => {
+    const next = queue[0]
+    if (!next || !canFlushQueue(queueGate)) return
+    if (dispatch(next.message, () => {})) {
+      setQueue((items) => items.filter((item) => item.id !== next.id))
+      follow.current = true
+    }
+  })
+  useEffect(() => {
+    let active = true
+    queueMicrotask(() => {
+      if (active) flushQueue()
+    })
+    return () => {
+      active = false
+    }
+  }, [
+    queue,
+    ready,
+    state.turnActive,
+    waitingForDecision,
+    pendingUser,
+    state.configPending,
+    workspaceMissing,
+    state.error,
+    lastUser?.delivery,
+  ])
+  useEffect(() => {
+    leaving.current = { queue, draft, attachments, team }
+  }, [queue, draft, attachments, team])
+  useEffect(() => {
+    clearParkedComposer(draftKey)
+    return () => {
+      // 离开会话页：排队的内容退回输入框（文字进草稿，材料和团队开关存在内存里），
+      // 下次进来还在，不会在背后发出。
+      const current = leaving.current
+      if (!current.queue.length) return
+      drafts.set(draftKey, queueToDraft(current.draft, current.queue))
+      parkComposer(draftKey, {
+        attachments: queueAttachments(current.queue, current.attachments),
+        team: current.team || current.queue.some((item) => item.team),
+      })
+    }
+  }, [drafts, draftKey])
+  function sendQueuedNow(itemId: string) {
+    const item = queue.find((value) => value.id === itemId)
+    if (!item || !ready || state.turnActive || waitingForDecision || pendingUser) return
+    if (dispatch(item.message)) {
+      setQueue((items) => items.filter((value) => value.id !== itemId))
+      follow.current = true
+    }
+  }
+  function withdrawQueued(ids?: string[]) {
+    const taken = queue.filter((item) => !ids || ids.includes(item.id))
+    if (!taken.length) return
+    setQueue((items) => items.filter((item) => !taken.includes(item)))
+    setDraft((value) => queueToDraft(value, taken))
+    setAttachments((value) => queueAttachments(taken, value))
+    if (taken.some((item) => item.team)) setTeam(true)
+  }
   const runtime =
     state.runtime ??
     (session?.runtimeModelId
@@ -245,6 +412,59 @@ function ChatSession({
           effortLevel: session.effortLevel,
         }
       : undefined)
+  const knownModel = chosenModel && chosenModel.id === runtime?.modelId ? chosenModel : null
+  const modelLabel = runtime
+    ? [knownModel?.name || runtime.modelId, runtime.effortLevel ? effortName(runtime.effortLevel) : '']
+        .filter(Boolean)
+        .join(' · ')
+    : '选择模型'
+  const permissionMode = state.permissionMode ?? session?.permissionMode
+  const backgroundCount = state.backgroundTaskIds.length
+  const title = state.title || session?.title || '会话'
+
+  // 分支只用于副标题与菜单；取不到就只显示项目名。
+  useEffect(() => {
+    if (!client || !ready) return
+    const controller = new AbortController()
+    client
+      .get<{ branch: string | null }>(`${sessionPath(id)}/git-info`, { signal: controller.signal })
+      .then((value) => {
+        if (!controller.signal.aborted) setBranch(value.branch ?? null)
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [client, id, ready])
+
+  // 本轮改动卡和菜单里的文件数都来自最新一轮检查点；运行中不读。
+  const hasItems = state.items.length > 0
+  useEffect(() => {
+    if (!client || !ready || state.turnActive || !hasItems) return
+    const controller = new AbortController()
+    listCheckpoints(client, id, controller.signal)
+      .then((value) => {
+        if (!controller.signal.aborted) setCheckpoints(value.checkpoints)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setCheckpoints([])
+      })
+    return () => controller.abort()
+  }, [client, id, ready, state.turnActive, hasItems, revision])
+  const latest = useMemo(() => latestTurnCheckpoint(checkpoints), [checkpoints])
+
+  // 后台任务列表只用来把“后台进行中”对到具体的子 Agent 步骤上。
+  const backgroundKey = state.backgroundTaskIds.join('\n')
+  useEffect(() => {
+    if (!client || !backgroundKey) return
+    const controller = new AbortController()
+    client
+      .get<BackgroundSnapshot>(`${sessionPath(id)}/background-tasks`, { signal: controller.signal })
+      .then((value) => {
+        if (!controller.signal.aborted) setBackgroundTasks(value.tasks ?? [])
+      })
+      .catch(() => {})
+    return () => controller.abort()
+  }, [client, id, backgroundKey])
+
   const deliverPendingTask = useEffectEvent(() => {
     const value = handoff.current
     if (
@@ -258,7 +478,7 @@ function ChatSession({
       return
     if (busy || workspaceMissing) {
       value.phase = 'failed'
-      setNotice('首条任务保留在输入框，确认会话状态后再发送。')
+      setNotice('首条任务留在输入框里了，确认会话状态后再发送。')
       return
     }
     try {
@@ -266,33 +486,31 @@ function ChatSession({
       if (desired && !runtimeMatches(state.runtime, desired)) {
         if (value.phase === 'config') {
           value.phase = 'failed'
-          setError('电脑未应用所选模型，首条任务保留在输入框。')
+          setError('电脑没有换成所选模型，首条任务留在输入框里了。')
           return
         }
         value.phase = 'config'
-        if (
-          !transport.current?.send({ type: 'set_runtime_config', ...desired })
-        ) {
+        if (!transport.current?.send({ type: 'set_runtime_config', ...desired })) {
           value.phase = 'failed'
-          setError('模型尚未准备好，首条任务保留在输入框。')
+          setError('模型还没准备好，首条任务留在输入框里了。')
         }
         return
       }
-      const message = buildComposerMessage(
-        value.task.content,
-        value.task.attachments,
-        false
-      )
+      const message = buildComposerMessage(value.task.content, value.task.attachments, false)
       validateMessageSize(message, host?.auth ?? 'lan')
       value.phase = 'done'
       if (transport.current?.send(message)) {
         clearPendingTask(hostId, id)
-        setDraft('')
-        setAttachments([])
-        drafts.delete(draftKey)
+        // 团队只对首条生效；编辑重发时把之前没发出的输入框内容还回去。
+        setTeam(false)
+        const restore = value.restore
+        setDraft(restore?.text ?? '')
+        setAttachments(restore?.attachments ?? [])
+        if (restore?.text) drafts.set(draftKey, restore.text)
+        else drafts.delete(draftKey)
       } else {
         value.phase = 'failed'
-        setError('首条任务未发出，请确认连接后手动发送。')
+        setError('首条任务没发出去，确认连接后手动发送。')
       }
     } catch (e) {
       value.phase = 'failed'
@@ -307,35 +525,25 @@ function ChatSession({
     return () => {
       active = false
     }
-  }, [
-    ready,
-    session,
-    busy,
-    workspaceMissing,
-    state.configPending,
-    state.runtime,
-  ])
+  }, [ready, session, busy, workspaceMissing, state.configPending, state.runtime])
+
   const respondToNotification = useEffectEvent(() => {
     if (!ready || !notificationAction || !notificationRequestId) return
     const key = `${notificationRequestId}:${notificationAction}`
     if (notificationSeen.current.has(key)) return
     notificationSeen.current.add(key)
-    const response = notificationPermissionResponse(
-      state,
-      notificationAction,
-      notificationRequestId
-    )
+    const response = notificationPermissionResponse(state, notificationAction, notificationRequestId)
     if (!response) {
-      setNotice('这条审批已处理或需要在会话里作答，请核对当前状态。')
+      setNotice('这条审批已经处理过，或者需要在会话里作答，请核对当前状态。')
       return
     }
     if (transport.current?.send(response))
       setNotice(
         notificationAction === 'allow'
-          ? '已提交这一次允许，等待电脑确认。'
-          : '已提交这一次拒绝，等待电脑确认。'
+          ? '已提交这一次允许，等电脑确认。'
+          : '已提交这一次拒绝，等电脑确认。'
       )
-    else setError('通知操作未发出，请在当前审批面板重试。')
+    else setError('通知里的操作没发出去，请在当前审批里重试。')
   })
   useEffect(() => {
     let active = true
@@ -346,24 +554,72 @@ function ChatSession({
       active = false
     }
   }, [ready, notificationAction, notificationRequestId, state])
-  function send(message: ClientMessage) {
-    setError('')
+
+  /** 发出一条指令；失败原因写到调用处给的位置，同一个错误只显示一次。 */
+  function dispatch(message: ClientMessage, report: (message: string) => void = setError) {
+    report('')
     try {
       const sent = transport.current?.send(message) ?? false
-      if (!sent)
-        setError('操作尚未发出。请等待会话同步完成，或核对当前任务状态。')
+      if (!sent) report('操作还没发出。等会话同步完成，或核对当前任务状态。')
       return sent
     } catch (e) {
-      setError(errorText(e))
+      report(errorText(e))
       return false
     }
   }
+  const send = (message: ClientMessage) => dispatch(message)
+  function showNotice(text: string, transient = false) {
+    clearTimeout(noticeTimer.current)
+    setNotice(text)
+    if (transient)
+      noticeTimer.current = setTimeout(() => {
+        if (mounted.current) setNotice((value) => (value === text ? '' : value))
+      }, 2000)
+  }
+  /** iOS 不能在一个弹层收起的同时弹出另一个，先收起再打开。 */
+  function openPanel(next: Exclude<Panel, null>) {
+    setSheetError('')
+    const covered = panel !== null || selected !== null
+    setSelected(null)
+    if (Platform.OS === 'ios' && covered) {
+      setPanel(null)
+      setTimeout(() => {
+        if (mounted.current) setPanel(next)
+      }, 350)
+    } else setPanel(next)
+  }
+  const closePanel = () => {
+    if (!working) setPanel(null)
+  }
+  const openRoute = (pathname: '/changes' | '/workspace' | '/activity') =>
+    router.push({ pathname, params: { id, host: hostId } })
+
   function submit() {
-    if (busy || workspaceMissing) return
+    if (workspaceMissing) return
     try {
       const message = buildComposerMessage(draft, attachments, team)
       validateMessageSize(message, host?.auth ?? 'lan')
-      if (send(message)) {
+      if (busy) {
+        if (approval) return
+        setQueue((items) => [
+          ...items,
+          {
+            id: `queued-${++queueSeq.current}`,
+            text: draft.trim(),
+            attachments,
+            team,
+            message,
+          },
+        ])
+        setDraft('')
+        setAttachments([])
+        setTeam(false)
+        drafts.delete(draftKey)
+        follow.current = true
+        setError('')
+        return
+      }
+      if (dispatch(message)) {
         setDraft('')
         setAttachments([])
         setTeam(false)
@@ -378,9 +634,10 @@ function ChatSession({
     }
   }
   async function rename() {
-    const nextTitle = title.trim()
+    const nextTitle = titleDraft.trim()
     if (!client || !nextTitle || working) return
     setWorking(true)
+    setSheetError('')
     try {
       await client.request(`/api/sessions/${encodeURIComponent(id)}`, {
         method: 'PATCH',
@@ -391,37 +648,53 @@ function ChatSession({
       setSession((value) => (value ? { ...value, title: nextTitle } : null))
       setPanel(null)
     } catch (e) {
-      if (mounted.current) setError(errorText(e))
+      if (mounted.current) setSheetError(errorText(e))
     } finally {
       if (mounted.current) setWorking(false)
     }
   }
-  async function fork() {
-    const targetMessageId = selected && persistedMessageId(selected)
-    if (!client || !targetMessageId || working) return
+  async function remove() {
+    if (!client || working) return
     setWorking(true)
+    setSheetError('')
+    try {
+      await client.delete(`/api/sessions/${encodeURIComponent(id)}`)
+      if (mounted.current) {
+        setPanel(null)
+        goBack()
+      }
+    } catch (e) {
+      if (mounted.current) setSheetError(errorText(e))
+    } finally {
+      if (mounted.current) setWorking(false)
+    }
+  }
+  async function fork(item: ChatItem) {
+    const targetMessageId = persistedMessageId(item)
+    if (!client || !targetMessageId || working || menuBusy) return
+    setMenuBusy('fork')
     try {
       const result = await client.post<{ sessionId: string }>(
         `/api/sessions/${encodeURIComponent(id)}/branch`,
         { targetMessageId }
       )
       if (mounted.current) {
-        setPanel(null)
-        router.push({
-          pathname: '/chat/[id]',
-          params: { id: result.sessionId, host: hostId },
-        })
+        setSelected(null)
+        router.push({ pathname: '/chat/[id]', params: { id: result.sessionId, host: hostId } })
       }
     } catch (e) {
-      if (mounted.current) setError(errorText(e))
+      if (mounted.current) {
+        setSelected(null)
+        setError(errorText(e))
+      }
     } finally {
-      if (mounted.current) setWorking(false)
+      if (mounted.current) setMenuBusy(null)
     }
   }
-  async function previewEdit() {
-    const targetUserMessageId = selected && persistedMessageId(selected)
-    if (!client || !targetUserMessageId || busy || working) return
-    setWorking(true)
+  async function previewEdit(item: ChatItem) {
+    const targetUserMessageId = persistedMessageId(item)
+    if (!client || !targetUserMessageId || busy || working || menuBusy) return
+    setMenuBusy('edit')
     try {
       const preview = await client.post<RewindPreview>(
         `/api/sessions/${encodeURIComponent(id)}/rewind`,
@@ -429,20 +702,22 @@ function ChatSession({
       )
       if (mounted.current) {
         setRewindPreview(preview)
-        setEditText(
-          visibleMessageText(selected!.editableText ?? selected!.text)
-        )
-        setPanel('edit')
+        setEditText(visibleMessageText(item.editableText ?? item.text))
+        openPanel('edit')
       }
     } catch (e) {
-      if (mounted.current) setError(errorText(e))
+      if (mounted.current) {
+        setSelected(null)
+        setError(errorText(e))
+      }
     } finally {
-      if (mounted.current) setWorking(false)
+      if (mounted.current) setMenuBusy(null)
     }
   }
   async function resendEdit() {
     if (!client || !rewindPreview || !editText.trim() || busy || working) return
     setWorking(true)
+    setSheetError('')
     try {
       await client.post(`/api/sessions/${encodeURIComponent(id)}/rewind`, {
         targetUserMessageId: rewindPreview.target.targetUserMessageId,
@@ -453,313 +728,514 @@ function ChatSession({
       handoff.current = {
         task: { content: editText.trim(), attachments: [] },
         phase: 'initial',
+        ...(draft.trim() || attachments.length ? { restore: { text: draft, attachments } } : {}),
       }
       setDraft(editText.trim())
       setAttachments([])
       drafts.set(draftKey, editText.trim())
       setPanel(null)
-      setState(createChatState(id))
-      setConnection('connecting')
+      reloadSession()
       setNotice('已回退对话，正在重新同步并发送修改后的消息。')
-      setRevision((value) => value + 1)
     } catch (e) {
-      if (mounted.current) setError(errorText(e))
+      if (mounted.current) setSheetError(errorText(e))
     } finally {
       if (mounted.current) setWorking(false)
     }
   }
-  return (
-    <SafeAreaView style={s.page} edges={['top', 'left', 'right']}>
-      <View
-        style={[
-          s.header,
-          {
-            paddingTop: 7,
-            paddingBottom: 12,
-            boxShadow: `0 1px 0 ${c.line}, 0 2px 0 ${c.highlight}`,
-          },
-        ]}
-      >
-        <CircleButton
-          name="chevron-left"
-          label="返回会话列表"
-          onPress={() => router.replace('/')}
+  /** 会话记录在别处被改写（回退）后，丢掉本地状态、重新连接并读取历史。 */
+  const reloadSession = useCallback(() => {
+    setState(createChatState(id))
+    setUi({ expanded: new Set(), open: new Set(), revealed: new Set() })
+    setConnection('connecting')
+    connectionRef.current = 'connecting'
+    clockRef.current = undefined
+    setTurnClock({})
+    setCheckpoints([])
+    setRevision((value) => value + 1)
+  }, [id])
+  useFocusEffect(
+    useCallback(() => {
+      if (!takeSessionStale(hostId, id)) return
+      reloadSession()
+      setNotice('已回退，正在重新读取这段会话。')
+    }, [hostId, id, reloadSession])
+  )
+  function copy(text: string) {
+    void Clipboard.setStringAsync(text)
+      .then((ok) => {
+        if (!ok) throw new Error('系统没有允许复制，请用“选择文字”手动选取。')
+        if (mounted.current) showNotice('已复制。', true)
+      })
+      .catch((e) => {
+        if (mounted.current) setError(errorText(e))
+      })
+  }
+
+  // 消息流：连续工具调用合成一组；展开状态留在页面里，列表回收行时不丢。
+  const rows = useMemo(() => buildChatRows(state.items, state.turnActive), [state.items, state.turnActive])
+  const waitingKey = state.permissions.map((request) => request.toolUseId ?? '').join('\n')
+  const runningBackgroundKey = backgroundCount
+    ? backgroundTasks
+        .filter((task) => task.status === 'running' && task.toolUseId)
+        .map((task) => task.toolUseId)
+        .join('\n')
+    : ''
+  const stepContext = useMemo<StepContext>(
+    () => ({
+      workDir: session?.workDir,
+      waiting: new Set(waitingKey.split('\n').filter(Boolean)),
+      background: new Set(runningBackgroundKey.split('\n').filter(Boolean)),
+      activeThinkingId: state.activeThinkingId,
+      turnActive: state.turnActive,
+    }),
+    [session?.workDir, waitingKey, runningBackgroundKey, state.activeThinkingId, state.turnActive]
+  )
+  const toggleStep = useCallback(
+    (key: string) => setUi((value) => ({ ...value, expanded: toggle(value.expanded, key) })),
+    []
+  )
+  const toggleOpen = useCallback(
+    (key: string) => setUi((value) => ({ ...value, open: toggle(value.open, key) })),
+    []
+  )
+  const reveal = useCallback(
+    (key: string) => setUi((value) => ({ ...value, revealed: toggle(value.revealed, key) })),
+    []
+  )
+  const longPress = useCallback((item: ChatItem, layout: BubbleLayout) => setSelected({ item, layout }), [])
+  const renderRow = useCallback(
+    ({ item: row }: { item: ChatRow }) =>
+      row.kind === 'message' ? (
+        <Message item={row.item} onLongPress={longPress} />
+      ) : (
+        <StepGroup
+          row={row}
+          context={stepContext}
+          ui={ui}
+          onToggleStep={toggleStep}
+          onToggleOpen={toggleOpen}
+          onReveal={reveal}
         />
-        <View style={{ flex: 1, gap: 4 }}>
+      ),
+    [longPress, stepContext, ui, toggleStep, toggleOpen, reveal]
+  )
+
+  // 一轮结束：不在运行、最后一条不是用户消息（长的一轮里用户消息可能还在更早的分页里）。
+  const turnSettled = !busy && hasItems && state.items.at(-1)?.type !== 'user'
+  const meta = turnSettled
+    ? turnMeta({ items: state.items, checkpoint: latest, local: turnClock, modelId: runtime?.modelId })
+    : ''
+
+  // 连接问题只在这一处说明并给出重试；导航栏副标题只显示状态。
+  const reconnect = () => transport.current?.reconnect()
+  const connectionProblem: {
+    tone: 'attention' | 'error'
+    text: string
+    action: 'retry' | 'hosts'
+  } | null = connectionError
+    ? { tone: 'error', text: connectionError, action: 'hosts' }
+    : connection === 'pairing_required'
+      ? {
+          tone: 'error',
+          text: recoveryError || '这台电脑的配对已经失效，重新配对后才能继续。',
+          action: 'hosts',
+        }
+      : connection === 'reconnecting' || connection === 'offline'
+        ? {
+            tone: 'attention',
+            text: recoveryError || '和电脑的连接断开了，正在自动重连。',
+            action: 'retry',
+          }
+        : recoveryError
+          ? { tone: 'error', text: recoveryError, action: 'retry' }
+          : null
+  const noticeArea = [
+    connectionProblem ? (
+      <Callout key="connection" tone={connectionProblem.tone}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
           <Text
-            numberOfLines={1}
-            style={{ color: c.ink, fontSize: 15, fontWeight: '600' }}
+            selectable
+            style={{
+              flex: 1,
+              fontSize: 13,
+              lineHeight: 19,
+              color: connectionProblem.tone === 'error' ? colors.err : colors.attnInk,
+            }}
           >
-            {state.title || session?.title || '会话'}
+            {connectionProblem.text}
           </Text>
-          <Text
-            numberOfLines={1}
-            style={{ color: c.muted, fontFamily: mono, fontSize: 10 }}
-          >
-            {host?.name} ·{' '}
-            {ready
-              ? session?.workDir?.split(/[\\/]/).filter(Boolean).at(-1) ||
-                '默认目录'
-              : labels[connection]}
-          </Text>
+          <Button
+            title={connectionProblem.action === 'hosts' ? '管理电脑' : '重试'}
+            size="sm"
+            variant="outline"
+            pill
+            onPress={() => {
+              if (connectionProblem.action === 'hosts') router.push('/hosts')
+              else reconnect()
+            }}
+          />
         </View>
-        <CircleButton
-          name="more-horizontal"
-          label="会话操作"
-          onPress={() => setPanel('more')}
+      </Callout>
+    ) : null,
+    workspaceMissing ? (
+      <Callout key="workspace" tone="error">
+        这段会话的工作目录已经不可用。请在电脑上恢复目录后继续。
+      </Callout>
+    ) : null,
+    error ? <InlineError key="error" text={error} /> : null,
+    notice ? (
+      <Callout key="notice" tone="info">
+        {notice}
+      </Callout>
+    ) : null,
+    state.configPending ? (
+      <Callout key="config" tone="info">
+        正在等电脑确认新的运行配置…
+      </Callout>
+    ) : null,
+  ].filter(Boolean)
+  const runningBar =
+    busy && !approval ? (
+      <RunningBar
+        compacting={state.status === 'compacting'}
+        startedAt={
+          state.turnActive
+            ? turnClock.live
+              ? turnClock.startedAt
+              : (serverTurnStart ?? turnClock.startedAt)
+            : undefined
+        }
+        backgroundCount={backgroundCount}
+        onOpen={() => openRoute('/activity')}
+        onStop={() => openPanel('stop')}
+      />
+    ) : null
+  const queued = queue.length ? (
+    <QueuedMessages
+      items={queue}
+      paused={queuePaused}
+      onWithdraw={(itemId) => withdrawQueued([itemId])}
+      onSendNow={sendQueuedNow}
+    />
+  ) : null
+  const header =
+    noticeArea.length || runningBar || queued ? (
+      <>
+        {noticeArea}
+        {queued}
+        {runningBar}
+      </>
+    ) : undefined
+
+  // 菜单锚在导航栏下沿（kit 的 Menu 在 Android 上不覆盖状态栏）。
+  const menuTop = (Platform.OS === 'web' ? 54 : insets.top) + 46
+  const percent = contextPercent(state.usage, contextWindow(runtime?.modelId, knownModel?.context))
+  const menuItems: MenuItem[] = [
+    {
+      key: 'rename',
+      label: '重命名',
+      icon: 'pencil',
+      onPress: () => {
+        setTitleDraft(title === '会话' ? '' : title)
+        openPanel('rename')
+      },
+    },
+    {
+      key: 'changes',
+      label: '改动与回退',
+      icon: 'rotate-ccw',
+      value: latest?.code.filesChanged.length ? `${latest.code.filesChanged.length} 个文件` : undefined,
+      onPress: () => openRoute('/changes'),
+    },
+    { key: 'files', label: '项目文件', icon: 'folder', onPress: () => openRoute('/workspace') },
+    {
+      key: 'activity',
+      label: '后台活动',
+      icon: 'activity',
+      value: backgroundCount ? `${backgroundCount} 项在跑` : undefined,
+      valueColor: colors.run,
+      onPress: () => openRoute('/activity'),
+    },
+    { key: 'sync', label: '重新同步', icon: 'refresh-cw', onPress: reconnect },
+    'separator',
+    { key: 'delete', label: '删除会话…', icon: 'trash', destructive: true, onPress: () => openPanel('delete') },
+  ]
+  const menuHeader = (
+    <>
+      <Mono numberOfLines={1} ellipsizeMode="middle" style={{ fontSize: 12.5, color: colors.ink3 }}>
+        {[displayPath(session?.workDir) || '默认目录', branch].filter(Boolean).join(' · ')}
+      </Mono>
+      <Text numberOfLines={1} style={{ fontSize: 12.5, color: colors.ink3 }}>
+        {[runtime ? modelLabel : '', percent !== undefined ? `上下文用了 ${percent}%` : '']
+          .filter(Boolean)
+          .join(' · ') || modeName(permissionMode)}
+      </Text>
+    </>
+  )
+
+  const messageActions = (item: ChatItem): MessageAction[] => {
+    const persisted = persistedMessageId(item)
+    const text = visibleMessageText(item.text)
+    const actions: MessageAction[] = [
+      { key: 'copy', label: '复制', icon: 'copy', disabled: !text },
+      { key: 'select', label: '选择文字', icon: 'text-cursor', disabled: !text },
+    ]
+    if (item.type === 'user')
+      actions.push({
+        key: 'edit',
+        group: true,
+        label: '编辑后重新发送',
+        icon: 'pencil',
+        detail: busy
+          ? '这一轮结束后才能用'
+          : !persisted
+            ? '等电脑保存这条消息后可用'
+            : item.editableText === undefined
+              ? '带材料的消息请复制文字后重新添加材料'
+              : '回退到这条消息，电脑上的文件不动',
+        disabled: busy || working || !persisted || item.editableText === undefined || menuBusy === 'fork',
+        busy: menuBusy === 'edit',
+      })
+    actions.push({
+      key: 'fork',
+      group: item.type !== 'user',
+      label: '从这里分叉',
+      icon: 'git-fork',
+      detail: lean
+        ? '轻量档位不支持分叉'
+        : !persisted
+          ? '等电脑保存这条消息后可用'
+          : '保留到这条，另开一段新会话',
+      disabled: lean || !persisted || working || menuBusy === 'edit',
+      busy: menuBusy === 'fork',
+    })
+    return actions
+  }
+  function runMessageAction(key: MessageAction['key']) {
+    const item = selected?.item
+    if (!item) return
+    const text = visibleMessageText(item.text)
+    if (key === 'copy') {
+      setSelected(null)
+      copy(text)
+    } else if (key === 'select') {
+      setSelectText(text)
+      openPanel('select')
+    } else if (key === 'edit') void previewEdit(item)
+    else void fork(item)
+  }
+
+  const modeUnavailable = busy
+    ? '这一轮结束后才能切换。'
+    : state.configPending
+      ? '正在等电脑确认上一次修改。'
+      : !ready
+        ? '连上电脑后才能切换。'
+        : undefined
+
+  return (
+    <ScreenView>
+      <View
+        style={{
+          backgroundColor: colors.bar,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.hair,
+          paddingBottom: 6,
+        }}
+      >
+        <NavBar
+          title={title}
+          subtitle={ready ? sessionSubtitle(session, branch) || host?.name : connectionLabels[connection]}
+          right={
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="会话操作"
+              onPress={() => openPanel('menu')}
+              style={({ pressed }) => ({
+                width: 44,
+                height: 44,
+                borderRadius: 22,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: panel === 'menu' ? colors.fill : 'transparent',
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <Icon name="more" size={22} color={colors.ink} />
+            </Pressable>
+          }
         />
       </View>
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {approval?.toolName === 'ExitPlanMode' ? (
-          <ScrollView
-            key={approval.requestId}
-            contentContainerStyle={{ padding: 16 }}
-          >
-            <Notice
-              text={
-                connectionError || error || state.error?.message || recoveryError
-              }
-              error
-            />
-            <PlanPreview request={approval} />
-          </ScrollView>
-        ) : (
-          <FlatList
-            ref={list}
-            data={state.items}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={{
-              paddingHorizontal: 16,
-              paddingTop: 8,
-              paddingBottom: 18,
-              gap: 14,
-              flexGrow: 1,
-              width: '100%',
-              maxWidth: 800,
-              alignSelf: 'center',
-            }}
-            keyboardShouldPersistTaps="handled"
-            onScroll={({ nativeEvent: value }) => {
-              follow.current =
-                value.contentSize.height -
-                  value.contentOffset.y -
-                  value.layoutMeasurement.height <
-                150
-            }}
-            scrollEventThrottle={100}
-            onContentSizeChange={() => {
-              if (follow.current) list.current?.scrollToEnd({ animated: false })
-            }}
-            ListHeaderComponent={
-              <View style={{ gap: 9 }}>
-                <Notice
-                  text={
-                    connectionError || error || state.error?.message || recoveryError
-                  }
-                  error
-                />
-                <Notice text={notice} />
-                {state.configPending && (
-                  <Notice text="正在等待电脑确认运行配置…" />
-                )}
-                {workspaceMissing && (
-                  <Notice
-                    text="这段会话的工作目录已不可用。请在电脑上恢复目录后继续。"
-                    error
-                  />
-                )}
-                {hasOlder && (
-                  <Button
-                    title="加载更早的消息"
-                    secondary
-                    onPress={() => {
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <FlatList
+          ref={list}
+          data={rows}
+          extraData={ui}
+          keyExtractor={(row) => row.key}
+          renderItem={renderRow}
+          style={{ flex: 1 }}
+          contentContainerStyle={{
+            paddingHorizontal: 16,
+            paddingTop: 12,
+            paddingBottom: 16,
+            gap: 16,
+            flexGrow: 1,
+            width: '100%',
+            maxWidth: 800,
+            alignSelf: 'center',
+          }}
+          keyboardShouldPersistTaps="handled"
+          onScroll={({ nativeEvent: value }) => {
+            // 贴底时继续跟随；只有用户往上滚才停止跟随。内容变短（一轮结束后整组折叠、
+            // 历史重载）引起的位置回弹不算用户操作。
+            if (holdScroll.current) return
+            const previous = scrollMetrics.current
+            const distance =
+              value.contentSize.height - value.contentOffset.y - value.layoutMeasurement.height
+            const shrank = value.contentSize.height < previous.height - 1
+            if (distance < 150) follow.current = true
+            else if (!shrank && value.contentOffset.y < previous.offset - 1) follow.current = false
+            scrollMetrics.current = { height: value.contentSize.height, offset: value.contentOffset.y }
+          }}
+          scrollEventThrottle={100}
+          onContentSizeChange={() => {
+            if (follow.current && !holdScroll.current) list.current?.scrollToEnd({ animated: false })
+          }}
+          ListHeaderComponent={
+            hasOlder ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={loadingOlder}
+                onPress={() => {
+                  // 加载期间不跟随到底部，留在用户正在看的位置。
+                  follow.current = false
+                  holdScroll.current = true
+                  setLoadingOlder(true)
+                  transport.current
+                    ?.loadOlder()
+                    .catch((e) => setError(errorText(e)))
+                    .finally(() => {
+                      holdScroll.current = false
                       follow.current = false
-                      transport.current
-                        ?.loadOlder()
-                        .catch((e) => setError(errorText(e)))
-                    }}
-                  />
-                )}
-                {!ready && (
-                  <Button
-                    title={`${labels[connection]} · 重试`}
-                    secondary
-                    onPress={() => transport.current?.reconnect()}
-                  />
-                )}
-              </View>
-            }
-            ListEmptyComponent={
-              <Empty
-                title="从这里开始。"
-                detail={`你的任务会在 ${host?.name ?? '电脑'} 上执行。选择模型和权限，然后告诉我你想做什么。`}
-              />
-            }
-            renderItem={({ item }) => (
-              <Message
-                item={item}
-                onLongPress={(value) => {
-                  setSelected(value)
-                  setPanel('message')
+                      if (mounted.current) setLoadingOlder(false)
+                    })
                 }}
-              />
-            )}
-            ListFooterComponent={
+                style={({ pressed }) => ({
+                  alignSelf: 'center',
+                  height: 36,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8,
+                  paddingHorizontal: 12,
+                  opacity: pressed ? 0.5 : 1,
+                })}
+              >
+                {loadingOlder ? <Spinner size={14} /> : null}
+                <Text style={{ fontSize: 14, color: colors.ink2 }}>
+                  {loadingOlder ? '正在加载…' : '加载更早的消息'}
+                </Text>
+              </Pressable>
+            ) : undefined
+          }
+          ListEmptyComponent={
+            ready ? (
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 }}>
+                <Text style={{ fontSize: 16, lineHeight: 22, fontWeight: '600', color: colors.ink, textAlign: 'center' }}>
+                  从这里开始
+                </Text>
+                <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink3, textAlign: 'center' }}>
+                  {`说说你想做什么，任务会在 ${host?.name ?? '电脑'} 上执行。下面可以换模型和权限模式。`}
+                </Text>
+              </View>
+            ) : connectionProblem ? undefined : (
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                <Spinner size={20} />
+              </View>
+            )
+          }
+          ListFooterComponent={
+            state.computerUsePermissions.length || (turnSettled && (latest || meta)) ? (
               <View style={{ gap: 14 }}>
                 {state.computerUsePermissions.map((request) => (
-                  <Raised
-                    style={{ padding: 16, gap: 12 }}
-                    key={request.requestId}
-                  >
-                    <Text style={s.text}>Computer Use 需要电脑端确认</Text>
-                    <Text style={s.small}>
-                      {request.request.reason}{' '}
-                      请在电脑设置中完成全局启用和系统权限授权。
+                  <Card key={request.requestId}>
+                    <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>
+                      操作电脑需要在电脑上确认
                     </Text>
-                    <Button
-                      title="刷新授权状态"
-                      secondary
-                      onPress={() => transport.current?.reconnect()}
-                    />
-                    <Button
-                      title="拒绝本次请求"
-                      secondary
-                      disabled={!ready}
-                      onPress={() =>
-                        send({
-                          type: 'computer_use_permission_response',
-                          requestId: request.requestId,
-                          response: {
-                            granted: [],
-                            denied: request.request.apps.map((app) => ({
-                              bundleId:
-                                app.resolved?.bundleId ?? app.requestedName,
-                              reason: 'user_denied',
-                            })),
-                            flags: {
-                              clipboardRead: false,
-                              clipboardWrite: false,
-                              systemKeyCombos: false,
+                    {request.request.reason ? (
+                      <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
+                        {request.request.reason}
+                      </Text>
+                    ) : null}
+                    <Callout>请在电脑设置里完成全局启用和系统权限授权。</Callout>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Button
+                        title="刷新授权状态"
+                        variant="secondary"
+                        style={{ flex: 1 }}
+                        onPress={reconnect}
+                      />
+                      <Button
+                        title="拒绝本次请求"
+                        variant="danger"
+                        disabled={!ready}
+                        style={{ flex: 1 }}
+                        onPress={() =>
+                          send({
+                            type: 'computer_use_permission_response',
+                            requestId: request.requestId,
+                            response: {
+                              granted: [],
+                              denied: request.request.apps.map((app) => ({
+                                bundleId: app.resolved?.bundleId ?? app.requestedName,
+                                reason: 'user_denied',
+                              })),
+                              flags: {
+                                clipboardRead: false,
+                                clipboardWrite: false,
+                                systemKeyCombos: false,
+                              },
+                              userConsented: false,
                             },
-                            userConsented: false,
-                          },
-                        })
-                      }
-                    />
-                  </Raised>
-                ))}
-                {state.turnActive && !approval && (
-                  <View style={[s.row, { gap: 7 }]}>
-                    <View
-                      style={{
-                        width: 6,
-                        height: 6,
-                        borderRadius: 3,
-                        backgroundColor: c.accent,
-                      }}
-                    />
-                    <Text style={[s.small, { color: c.accent }]}>
-                      {state.status === 'compacting'
-                        ? '正在整理上下文…'
-                        : state.status === 'tool_executing'
-                          ? '正在执行工具…'
-                          : '正在处理…'}
-                    </Text>
-                  </View>
-                )}
-                {state.backgroundTaskIds.length > 0 && (
-                  <Raised style={{ padding: 14 }}>
-                    <Row
-                      title="后台活动"
-                      detail={`${state.backgroundTaskIds.length} 项在跑`}
-                      onPress={() =>
-                        router.push({
-                          pathname: '/activity',
-                          params: { id, host: hostId },
-                        })
-                      }
-                    />
-                    {state.backgroundTaskIds.map((taskId) => (
-                      <Row
-                        key={taskId}
-                        title={taskId}
-                        trailing={
-                          <Button
-                            title="停止"
-                            secondary
-                            disabled={!ready}
-                            onPress={() =>
-                              send({ type: 'stop_background_task', taskId })
-                            }
-                          />
+                          })
                         }
                       />
-                    ))}
-                  </Raised>
-                )}
-                {state.items.length > 0 &&
-                  approval?.toolName !== 'ExitPlanMode' && (
-                    <SessionChangesCard
-                      client={client}
-                      sessionId={id}
-                      revision={`${connection}:${state.turnActive}:${approval?.requestId ?? ''}`}
-                      onOpen={() =>
-                        router.push({
-                          pathname: '/changes',
-                          params: { id, host: hostId },
-                        })
-                      }
-                    />
-                  )}
-                {state.items.length > 0 &&
-                  approval?.toolName !== 'ExitPlanMode' && (
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() =>
-                        router.push({
-                          pathname: '/workspace',
-                          params: { id, host: hostId },
-                        })
-                      }
-                    >
-                      <Raised
-                        style={{
-                          padding: 14,
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          gap: 10,
-                        }}
-                      >
-                        <Icon name="folder" size={16} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={[s.text, { fontSize: 13 }]}>
-                            工作区与文件
-                          </Text>
-                          <Text style={[s.small, { fontSize: 10 }]}>
-                            查看电脑上的最新文件和变更
-                          </Text>
-                        </View>
-                        <Icon name="chevron-right" size={14} />
-                      </Raised>
-                    </Pressable>
-                  )}
+                    </View>
+                  </Card>
+                ))}
+                {turnSettled ? (
+                  <SessionChangesCard
+                    client={client}
+                    sessionId={id}
+                    checkpoint={latest}
+                    onOpen={() => openRoute('/changes')}
+                  />
+                ) : null}
+                {meta ? <Mono style={{ fontSize: 12, color: colors.ink3 }}>{meta}</Mono> : null}
               </View>
-            }
-          />
-        )}
+            ) : undefined
+          }
+        />
         {approval ? (
-          <Approval
-            key={approval.requestId}
-            request={approval}
-            client={client}
-            runtime={runtime}
-            ready={ready}
-            send={send}
-            serverError={state.error}
-          />
+          <>
+            {noticeArea.length || queued ? (
+              <View style={{ paddingHorizontal: 12, paddingTop: 10, gap: 8 }}>
+                {noticeArea}
+                {queued}
+              </View>
+            ) : null}
+            <Approval
+              key={approval.requestId}
+              request={approval}
+              client={client}
+              runtime={runtime}
+              ready={ready}
+              send={send}
+              serverError={state.error}
+              position={{ index: 1, total: state.permissions.length }}
+              onStop={() => openPanel('stop')}
+              workDir={session?.workDir ?? undefined}
+            />
+          </>
         ) : (
           <ChatComposer
             client={client}
@@ -770,294 +1246,131 @@ function ChatSession({
               drafts.set(draftKey, value)
             }}
             attachments={attachments}
-            onAttachments={setAttachments}
+            onAttachments={(value) => {
+              // 换了材料，之前关于材料的错误就过时了。
+              setAttachments(value)
+              setError('')
+            }}
             team={team}
             onTeam={setTeam}
-            lean={session?.agentProfile === 'lean'}
-            model={runtime?.modelId ?? '选择模型'}
-            mode={modeName(state.permissionMode ?? session?.permissionMode)}
-            disabled={
-              !ready || state.configPending || workspaceMissing || working
-            }
+            lean={lean}
+            empty={!hasItems}
             busy={busy}
+            queueing={busy && !approval}
+            disabled={!ready || state.configPending || workspaceMissing || working}
+            mode={modeName(permissionMode)}
+            model={modelLabel}
+            onMode={() => openPanel('mode')}
+            onModel={() => openPanel('model')}
             onSend={submit}
-            onStop={() => setPanel('stop')}
-            onModel={() => setPanel('model')}
-            onMode={() => setPanel('mode')}
             onError={setError}
+            header={header}
           />
         )}
       </KeyboardAvoidingView>
-      <Modal
-        visible={panel !== null}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => {
-          if (!working) setPanel(null)
+      <Menu
+        visible={panel === 'menu'}
+        onClose={() => setPanel(null)}
+        anchor={{ top: menuTop, right: 12 }}
+        header={menuHeader}
+        items={menuItems}
+      />
+      <MessageMenu
+        item={selected?.item ?? null}
+        layout={selected?.layout ?? null}
+        actions={selected ? messageActions(selected.item) : []}
+        onAction={runMessageAction}
+        onClose={() => {
+          if (!menuBusy) setSelected(null)
         }}
-      >
-        <SafeAreaView style={s.page}>
-          <PageHeader
-            title={
-              panel === 'model'
-                ? '这段会话的模型'
-                : panel === 'mode'
-                  ? '权限模式'
-                  : panel === 'stop'
-                    ? '停止任务'
-                    : panel === 'message'
-                      ? '消息操作'
-                      : panel === 'edit'
-                        ? '编辑并重新发送'
-                        : '会话操作'
-            }
-            subtitle="cc-haha"
-            back={false}
-            right={
-              <CircleButton
-                name="x"
-                label="关闭面板"
-                onPress={() => {
-                  if (!working) setPanel(null)
-                }}
-              />
-            }
-          />
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={s.body}
-          >
-            <Notice text={error} error />
-            {panel === 'model' && client && (
-              <>
-                {state.backgroundTaskIds.length > 0 && (
-                  <Notice text="更改模型或思考强度会重启执行环境，当前后台任务也会停止。" />
-                )}
-                <RuntimePicker
-                  client={client}
-                  initial={runtime}
-                  busy={busy || state.configPending || !ready}
-                  onApply={(value) => {
-                    if (send({ type: 'set_runtime_config', ...value }))
-                      setPanel(null)
-                  }}
-                />
-              </>
-            )}
-            {panel === 'mode' &&
-              modes
-                .filter(
-                  (item) =>
-                    session?.agentProfile !== 'lean' || item.id !== 'plan'
-                )
-                .map((item) => (
-                  <Row
-                    key={item.id}
-                    title={item.title}
-                    detail={item.description}
-                    onPress={
-                      busy || state.configPending || !ready
-                        ? undefined
-                        : () => {
-                            if (
-                              send({
-                                type: 'set_permission_mode',
-                                mode: item.id,
-                              })
-                            )
-                              setPanel(null)
-                          }
-                    }
-                  />
-                ))}
-            {panel === 'stop' && (
-              <>
-                <Text style={s.text}>停止这段会话的当前生成和后台任务？</Text>
-                <Text style={s.small}>已完成的文件修改会保留。</Text>
-                <PrimaryButton
-                  title="停止会话任务"
-                  danger
-                  disabled={!ready}
-                  onPress={() => {
-                    if (send({ type: 'stop_generation' })) setPanel(null)
-                  }}
-                />
-              </>
-            )}
-            {panel === 'message' && selected && (
-              <>
-                <Text numberOfLines={5} style={s.small}>
-                  {visibleMessageText(selected.text) || '附件消息'}
-                </Text>
-                <Row
-                  icon="copy"
-                  title="复制"
-                  onPress={() => {
-                    void Clipboard.setStringAsync(
-                      visibleMessageText(selected.text)
-                    )
-                      .then((ok) => {
-                        if (!ok)
-                          throw new Error('系统未允许复制，请长按文本选择。')
-                        setNotice('已复制消息。')
-                        setPanel(null)
-                      })
-                      .catch((e) => setError(errorText(e)))
-                  }}
-                />
-                <Row
-                  icon="git-branch"
-                  title="从这里分叉会话"
-                  detail={
-                    session?.agentProfile === 'lean'
-                      ? 'Lean 会话不支持分叉'
-                      : !persistedMessageId(selected)
-                        ? '等待电脑保存这条消息后可用'
-                        : '保留到这条消息，开启一段新会话'
-                  }
-                  onPress={
-                    session?.agentProfile === 'lean' ||
-                    !persistedMessageId(selected) ||
-                    working
-                      ? undefined
-                      : () => void fork()
-                  }
-                />
-                {selected.type === 'user' && (
-                  <Row
-                    icon="edit-3"
-                    title="编辑并重新发送"
-                    detail={
-                      busy
-                        ? '请先等待当前任务完成'
-                        : selected.editableText === undefined
-                          ? '带材料的消息请复制文字后重新添加材料'
-                          : '回退到这条消息后重新发送，文件修改会保留'
-                    }
-                    onPress={
-                      busy ||
-                      working ||
-                      !persistedMessageId(selected) ||
-                      selected.editableText === undefined
-                        ? undefined
-                        : () => void previewEdit()
-                    }
-                  />
-                )}
-                {working && <Notice text="正在处理…" />}
-              </>
-            )}
-            {panel === 'edit' && rewindPreview && (
-              <>
-                <Notice
-                  text={`将回退这条消息及之后的 ${rewindPreview.conversation.messagesRemoved} 条对话记录。电脑文件保持当前内容。`}
-                />
-                <Field
-                  label="修改后的消息"
-                  value={editText}
-                  onChangeText={setEditText}
-                  multiline
-                  editable={!working}
-                />
-                <PrimaryButton
-                  title="确认回退并重新发送"
-                  busy={working}
-                  disabled={busy || !editText.trim()}
-                  onPress={() => void resendEdit()}
-                />
-              </>
-            )}
-            {panel === 'more' && (
-              <>
-                <Text style={s.small}>
-                  {host?.name} · {session?.workDir || '默认目录'}
-                </Text>
-                <Field
-                  label="会话名称"
-                  value={title}
-                  onChangeText={setTitle}
-                  editable={!working}
-                />
-                <PrimaryButton
-                  title="保存名称"
-                  busy={working}
-                  onPress={() => void rename()}
-                />
-                <Row
-                  icon="git-commit"
-                  title="本轮改动与回退"
-                  onPress={() => {
-                    setPanel(null)
-                    router.push({
-                      pathname: '/changes',
-                      params: { id, host: hostId },
-                    })
-                  }}
-                />
-                <Row
-                  icon="activity"
-                  title="后台活动"
-                  onPress={() => {
-                    setPanel(null)
-                    router.push({
-                      pathname: '/activity',
-                      params: { id, host: hostId },
-                    })
-                  }}
-                />
-                <Row
-                  icon="folder"
-                  title="工作区与文件"
-                  onPress={() => {
-                    setPanel(null)
-                    router.push({
-                      pathname: '/workspace',
-                      params: { id, host: hostId },
-                    })
-                  }}
-                />
-                <Row
-                  icon="refresh-cw"
-                  title="重新同步会话"
-                  onPress={() => {
-                    transport.current?.reconnect()
-                    setPanel(null)
-                  }}
-                />
-                <Button
-                  title={deleteConfirm ? '确认从电脑删除会话' : '删除会话'}
-                  danger
-                  busy={working}
-                  onPress={async () => {
-                    if (!client || working) return
-                    if (!deleteConfirm) {
-                      setDeleteConfirm(true)
-                      return
-                    }
-                    setWorking(true)
-                    try {
-                      await client.delete(
-                        `/api/sessions/${encodeURIComponent(id)}`
-                      )
-                      if (mounted.current) {
-                        setPanel(null)
-                        router.replace('/')
-                      }
-                    } catch (e) {
-                      if (mounted.current) setError(errorText(e))
-                    } finally {
-                      if (mounted.current) setWorking(false)
-                    }
-                  }}
-                />
-                {deleteConfirm && (
-                  <Notice text="这会删除电脑上保存的这段会话，并停止它的任务。" />
-                )}
-              </>
-            )}
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
-    </SafeAreaView>
+      />
+      <RenameSheet
+        visible={panel === 'rename'}
+        onClose={closePanel}
+        value={titleDraft}
+        onChange={setTitleDraft}
+        busy={working}
+        error={sheetError}
+        onSave={() => void rename()}
+      />
+      <ConfirmSheet
+        visible={panel === 'delete'}
+        onClose={closePanel}
+        title="删除这段会话？"
+        message="这会删除电脑上保存的这段会话，并停止它的任务。"
+        confirmLabel="删除"
+        destructive
+        busy={working}
+        disabled={!client}
+        error={sheetError}
+        onConfirm={() => void remove()}
+      />
+      <ConfirmSheet
+        visible={panel === 'stop'}
+        onClose={closePanel}
+        title="停止这段会话？"
+        message="当前生成和后台任务都会停下，已经改好的文件会保留。"
+        confirmLabel="停止"
+        destructive
+        disabled={!ready}
+        error={sheetError || (!ready ? '连上电脑后才能停止。' : '')}
+        onConfirm={() => {
+          if (dispatch({ type: 'stop_generation' }, setSheetError)) {
+            setPanel(null)
+            // 停下来就不再自动追加：排队的内容回到输入框，由用户决定要不要发。
+            withdrawQueued()
+          }
+        }}
+      />
+      <ModeSheet
+        visible={panel === 'mode'}
+        onClose={closePanel}
+        current={permissionMode}
+        lean={lean}
+        unavailable={modeUnavailable}
+        error={sheetError}
+        onSelect={(mode: PermissionMode) => {
+          if (dispatch({ type: 'set_permission_mode', mode }, setSheetError)) setPanel(null)
+        }}
+      />
+      <RuntimeSheet
+        visible={panel === 'model'}
+        onClose={closePanel}
+        title="这段会话的模型"
+        client={client}
+        initial={runtime}
+        busy={busy || state.configPending || !ready}
+        warning={
+          backgroundCount
+            ? `换模型会重启执行环境，正在跑的 ${backgroundCount} 项后台任务会停下。`
+            : undefined
+        }
+        onApply={(value, model) => {
+          setPanel(null)
+          if (dispatch({ type: 'set_runtime_config', ...value })) setChosenModel(model ?? null)
+        }}
+      />
+      <SelectTextSheet
+        visible={panel === 'select'}
+        onClose={closePanel}
+        text={selectText}
+        onCopy={() => {
+          setPanel(null)
+          copy(selectText)
+        }}
+      />
+      <EditResendSheet
+        visible={panel === 'edit' && !!rewindPreview}
+        onClose={closePanel}
+        value={editText}
+        onChange={setEditText}
+        removed={rewindPreview?.conversation.messagesRemoved ?? 0}
+        busy={working}
+        disabled={busy}
+        disabledReason={busy ? '这一轮结束后才能回退。' : undefined}
+        error={sheetError}
+        onConfirm={() => void resendEdit()}
+      />
+    </ScreenView>
   )
 }

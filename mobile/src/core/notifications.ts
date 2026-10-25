@@ -1,6 +1,46 @@
 import type { MobileActivity } from './dashboard'
 import type { Preferences } from '../state/preferences'
 import { isQuietTime } from '../state/preferences'
+
+const SIMPLE_TOOLS = new Set(['AskUserQuestion', 'ExitPlanMode', 'ComputerUse'])
+const FILE_EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'NotebookEdit'])
+const READ_TOOLS = new Set(['Read', 'Grep', 'Glob', 'LS', 'NotebookRead'])
+
+/** 待决定事项的短标题（锁屏、灵动岛、通知共用一套口吻）。 */
+export function decisionLabel(toolName?: string) {
+  if (!toolName) return '需要你决定'
+  if (toolName === 'Bash' || toolName === 'PowerShell') return '想运行命令'
+  if (toolName === 'AskUserQuestion') return '在问你'
+  if (toolName === 'ExitPlanMode') return '计划等你确认'
+  if (toolName === 'ComputerUse') return '想操作电脑'
+  if (FILE_EDIT_TOOLS.has(toolName)) return '想修改文件'
+  if (toolName === 'Write') return '想写入文件'
+  if (toolName === 'WebFetch' || toolName === 'WebSearch') return '想联网'
+  if (READ_TOOLS.has(toolName)) return '想读取文件'
+  return `想使用 ${toolName}`
+}
+
+/**
+ * 通知正文：“想运行 {命令}”“在问你：{问题}”“计划写好了，等你确认”。
+ * 服务端只为 Bash 投影命令、为提问投影题目，其他工具的 preview 是通用占位，不拼进正文。
+ */
+export function decisionText(toolName?: string, preview?: string) {
+  const text = preview?.trim()
+  if (toolName === 'Bash') return text ? `想运行 ${text}` : '想运行命令'
+  if (toolName === 'AskUserQuestion')
+    return text ? `在问你：${text}` : '在问你一个问题'
+  if (toolName === 'ExitPlanMode') return '计划写好了，等你确认'
+  if (toolName === 'ComputerUse') return '想操作电脑，等你允许'
+  if (!toolName) return text || '需要你做决定'
+  return `${decisionLabel(toolName)}，等你确认`
+}
+
+export const NOTIFICATION_COPY = {
+  stalled: '超过 5 分钟没有进展，打开看看',
+  failed: '出错停下了，打开查看原因',
+  completed: '完成了，打开查看结果',
+} as const
+
 export type NotificationEvent = {
   sessionId: string
   requestId?: string
@@ -32,12 +72,9 @@ export function notificationEvents(
           requestId: item.requestId,
           kind: 'decision',
           toolName: item.toolName,
-          preview: item.preview ?? '任务需要你做决定',
+          preview: decisionText(item.toolName, item.preview),
           category:
-            item.toolName &&
-            !['AskUserQuestion', 'ExitPlanMode', 'ComputerUse'].includes(
-              item.toolName
-            )
+            item.toolName && !SIMPLE_TOOLS.has(item.toolName)
               ? 'cchahaTool'
               : 'cchahaDecision',
           key: `${item.id}:decision:${item.requestId ?? ''}`,
@@ -54,7 +91,7 @@ export function notificationEvents(
         {
           sessionId: item.id,
           kind: 'error',
-          preview: '任务超过 5 分钟没有进展，打开查看详情',
+          preview: NOTIFICATION_COPY.stalled,
           category: 'cchahaResult',
           key: `${item.id}:stalled:${item.lastProgressAt ?? ''}`,
         } satisfies NotificationEvent,
@@ -69,7 +106,7 @@ export function notificationEvents(
         {
           sessionId: item.id,
           kind: 'error',
-          preview: '任务遇到了错误，打开查看详情',
+          preview: NOTIFICATION_COPY.failed,
           category: 'cchahaResult',
           key: `${item.id}:error`,
         } satisfies NotificationEvent,
@@ -87,7 +124,7 @@ export function notificationEvents(
         {
           sessionId: item.id,
           kind: 'completed',
-          preview: '任务已完成，打开查看结果',
+          preview: NOTIFICATION_COPY.completed,
           category: 'cchahaResult',
           key: `${item.id}:completed:${item.completedAt}`,
         } satisfies NotificationEvent,

@@ -49,26 +49,26 @@ function sameDay(a: Date, b: Date) {
     a.getDate() === b.getDate()
   )
 }
-export function elapsedLabel(date: string | number, now = Date.now()) {
-  const elapsed = Math.max(
-    0,
-    Math.floor((now - new Date(date).getTime()) / 1000)
-  )
-  return `${String(Math.floor(elapsed / 60)).padStart(2, '0')}:${String(elapsed % 60).padStart(2, '0')}`
+/** 时长：不到一小时 m:ss，超过一小时 h:mm:ss；负值按 0 处理。 */
+export function formatDuration(totalSeconds: number) {
+  const seconds = Math.max(0, Math.floor(totalSeconds))
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = String(seconds % 60).padStart(2, '0')
+  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${s}` : `${m}:${s}`
 }
+export function elapsedLabel(date: string | number, now = Date.now()) {
+  return formatDuration((now - new Date(date).getTime()) / 1000)
+}
+/** 列表右侧的时间：刚刚 / N 分钟 / N 小时（同一天）/ 昨天 / 10/21。 */
 export function relativeLabel(date: string, now = new Date()) {
   const timestamp = new Date(date)
   const minutes = Math.floor((now.getTime() - timestamp.getTime()) / 60000)
   if (minutes < 1) return '刚刚'
   if (minutes < 60) return `${minutes} 分钟`
-  return sameDay(timestamp, now)
-    ? timestamp.toLocaleTimeString('zh-CN', {
-        hour: '2-digit',
-        minute: '2-digit',
-        hour12: false,
-      })
-    : timestamp.toLocaleDateString('zh-CN', {
-        month: 'numeric',
-        day: 'numeric',
-      })
+  if (sameDay(timestamp, now)) return `${Math.floor(minutes / 60)} 小时`
+  const yesterday = new Date(now)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (sameDay(timestamp, yesterday)) return '昨天'
+  return `${timestamp.getMonth() + 1}/${timestamp.getDate()}`
 }

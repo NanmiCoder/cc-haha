@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { ApiClient } from './client'
-import { connectHost, pairingMessage } from './connectHost'
+import { connectHost, pairingMessage, type ConnectPhase } from './connectHost'
 
 function fixture(
   replies: unknown[],
@@ -39,10 +39,17 @@ const input = () => ({
 
 test('LAN connection uses the verification contract and separates credentials from metadata', async () => {
   const requests: Parameters<typeof fixture>[1] = []
+  const phases: ConnectPhase[] = []
   const result = await connectHost(
-    { ...input(), value: 'http://192.168.1.2:3456/?h5Token=fake-lan' },
+    {
+      ...input(),
+      value: 'http://192.168.1.2:3456/?h5Token=fake-lan',
+      onStatus: (_value, phase) => phases.push(phase),
+    },
     { client: fixture([{ ok: true }], requests) }
   )
+  // LAN never enters the approval phase, so the form keeps its inline progress.
+  expect(phases).toEqual(['verifying'])
   expect(requests).toEqual([
     {
       path: '/api/h5-access/verify',
@@ -61,24 +68,37 @@ test('LAN connection uses the verification contract and separates credentials fr
 
 test('native pairing waits for approval and accepts only the native Bearer contract', async () => {
   const requests: Parameters<typeof fixture>[1] = []
-  const result = await connectHost(input(), {
-    now: () => 100,
-    wait: async () => {},
-    client: fixture(
-      [
-        { id: 'pair', claimSecret: 'claim' },
-        { status: 'pending' },
-        {
-          status: 'approved',
-          token: 'native_fake',
-          tokenType: 'Bearer',
-          deviceId: 'device',
-          expiresAt: 200,
-        },
-      ],
-      requests
-    ),
-  })
+  const phases: { phase: ConnectPhase; requests: number }[] = []
+  const result = await connectHost(
+    {
+      ...input(),
+      onStatus: (_value, phase) =>
+        phases.push({ phase, requests: requests.length }),
+    },
+    {
+      now: () => 100,
+      wait: async () => {},
+      client: fixture(
+        [
+          { id: 'pair', claimSecret: 'claim' },
+          { status: 'pending' },
+          {
+            status: 'approved',
+            token: 'native_fake',
+            tokenType: 'Bearer',
+            deviceId: 'device',
+            expiresAt: 200,
+          },
+        ],
+        requests
+      ),
+    }
+  )
+  // The approval page appears only after the desktop accepted the pair request.
+  expect(phases).toEqual([
+    { phase: 'requesting', requests: 0 },
+    { phase: 'approval', requests: 1 },
+  ])
   expect(requests[0].body).toEqual({
     secret: 'fake-secret',
     name: 'cc-haha App · ios',

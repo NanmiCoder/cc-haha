@@ -5,8 +5,10 @@ import { ApiClient, type FetchAdapter } from './client'
 import {
   OFFICIAL_RUNTIME_SOURCES,
   canSetRuntimeEffort,
+  contextLabel,
   loadRuntimeDirectory,
   loadRuntimeModels,
+  modelDetail,
   runtimeSelection,
   runtimeSourceName,
   savedProviderModels,
@@ -304,4 +306,20 @@ describe('runtime choices use desktop provider identities and capability contrac
       modelId: 'test',
     })
   })
+})
+
+test('model rows show description and a readable context size without inventing either', () => {
+  expect(contextLabel('200k')).toBe('200K 上下文')
+  expect(contextLabel('1m')).toBe('1M 上下文')
+  expect(contextLabel('128000')).toBe('128K 上下文')
+  expect(contextLabel('1048576')).toBe('1M 上下文')
+  expect(contextLabel('1500000')).toBe('1.5M 上下文')
+  expect(contextLabel('')).toBeUndefined()
+  expect(contextLabel('unknown')).toBeUndefined()
+  expect(contextLabel('0')).toBeUndefined()
+  expect(modelDetail({ description: '日常编码', context: '200k' })).toBe(
+    '日常编码 · 200K 上下文'
+  )
+  expect(modelDetail({ description: 'main · sonnet' })).toBe('main · sonnet')
+  expect(modelDetail({ context: '' })).toBe('')
 })

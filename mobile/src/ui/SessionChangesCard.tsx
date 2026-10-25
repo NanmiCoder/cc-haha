@@ -1,124 +1,119 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useEffectEvent, useState } from 'react'
 import { Pressable, View } from 'react-native'
 import { Text } from './Text'
 import type { ApiClient } from '../core/client'
-import { listCheckpoints, type Checkpoint } from '../core/operations'
-import { Icon, Raised, mono, useTheme } from './theme'
+import { checkpointDiff, type Checkpoint } from '../core/operations'
+import { DiffStat, Icon, Mono, useColors } from './kit'
+import { fileChange, type FileChange } from './chat/changes'
 
-/** The summary is the actual latest turn checkpoint, not the entire working tree diff. */
+const SHOWN = 3
+
+/**
+ * 一轮结束后的「本轮改动」：标题 + 总增删，最多 3 个文件行，再进入改动与回退。
+ * 文件的新增/修改和行数来自这一轮检查点的真实差异，读不到的行只显示路径。
+ */
 export function SessionChangesCard({
   client,
   sessionId,
-  revision,
+  checkpoint,
   onOpen,
 }: {
   client: ApiClient | null
   sessionId: string
-  revision: string
+  checkpoint?: Checkpoint
   onOpen(): void
 }) {
-  const { colors: c, styles: s } = useTheme()
-  const [result, setResult] = useState<{
-    checkpoint?: Checkpoint
-    error?: boolean
-  } | null>(null)
+  const colors = useColors()
+  const files = checkpoint?.code.available ? checkpoint.code.filesChanged : []
+  const target = checkpoint?.target
+  const key = `${target?.targetUserMessageId ?? ''}:${files.slice(0, SHOWN).join('\n')}`
+  const [details, setDetails] = useState<{ key: string; files: Record<string, FileChange> }>({
+    key: '',
+    files: {},
+  })
+  const load = useEffectEvent((signal: AbortSignal) => {
+    if (!client || !target || !files.length) return
+    const shown = files.slice(0, SHOWN)
+    void Promise.allSettled(
+      shown.map((path) => checkpointDiff(client, sessionId, target, path, signal))
+    ).then((results) => {
+      if (signal.aborted) return
+      const next: Record<string, FileChange> = {}
+      results.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value.state === 'ok' && result.value.diff)
+          next[shown[index]] = fileChange(result.value.diff)
+      })
+      setDetails({ key, files: next })
+    })
+  })
   useEffect(() => {
-    if (!client) return
     const controller = new AbortController()
-    listCheckpoints(client, sessionId, controller.signal)
-      .then((value) => {
-        if (!controller.signal.aborted)
-          setResult({
-            checkpoint: value.checkpoints.reduce<Checkpoint | undefined>(
-              (previous, current) =>
-                !previous ||
-                current.target.userMessageIndex >
-                  previous.target.userMessageIndex
-                  ? current
-                  : previous,
-              undefined
-            ),
-          })
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setResult({ error: true })
-      })
+    load(controller.signal)
     return () => controller.abort()
-  }, [client, sessionId, revision])
-  if (!result) return null
-  const checkpoint = result.checkpoint
-  const total =
-    (checkpoint?.code.insertions ?? 0) + (checkpoint?.code.deletions ?? 0)
+  }, [client, sessionId, key])
+  if (!checkpoint || !files.length) return null
+  const known = details.key === key ? details.files : {}
+  const more = files.length - SHOWN
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel="查看本轮改动"
+      accessibilityLabel={`本轮改动 ${files.length} 个文件，新增 ${checkpoint.code.insertions} 行，删除 ${checkpoint.code.deletions} 行，看差异或回退`}
       onPress={onOpen}
+      style={({ pressed }) => ({
+        backgroundColor: colors.card,
+        borderRadius: 16,
+        opacity: pressed ? 0.75 : 1,
+      })}
     >
-      <Raised style={{ paddingHorizontal: 16, paddingVertical: 14, gap: 10 }}>
-        <View style={s.between}>
-          <Text style={{ fontSize: 14, fontWeight: '600', color: c.ink }}>
-            {checkpoint?.code.available
-              ? `改动 ${checkpoint.code.filesChanged.length} 个文件`
-              : '本轮改动'}
-          </Text>
-          {checkpoint?.code.available ? (
-            <Text style={{ fontFamily: mono, fontSize: 12, color: c.red }}>
-              <Text style={{ color: c.green }}>
-                +{checkpoint.code.insertions}
-              </Text>{' '}
-              −{checkpoint.code.deletions}
-            </Text>
-          ) : (
-            <Icon name="chevron-right" size={14} />
-          )}
-        </View>
-        {total > 0 && (
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingTop: 12, paddingHorizontal: 14, paddingBottom: 8 }}>
+        <Text style={{ flex: 1, fontSize: 15, fontWeight: '600', color: colors.ink }}>本轮改动</Text>
+        <DiffStat added={checkpoint.code.insertions} removed={checkpoint.code.deletions} />
+      </View>
+      {files.slice(0, SHOWN).map((path, index, shown) => {
+        const change = known[path]
+        return (
           <View
+            key={path}
             style={{
-              height: 6,
-              borderRadius: 3,
-              backgroundColor: c.inset,
               flexDirection: 'row',
-              overflow: 'hidden',
+              alignItems: 'center',
+              gap: 8,
+              paddingHorizontal: 14,
+              paddingTop: 6,
+              paddingBottom: index === shown.length - 1 ? 10 : 6,
             }}
           >
-            <View
+            <Text
               style={{
-                flex: checkpoint!.code.insertions / total,
-                backgroundColor: c.green,
+                width: 14,
+                fontSize: 11,
+                fontWeight: '700',
+                color: change?.status === 'A' ? colors.add : change?.status === 'D' ? colors.del : colors.attn,
               }}
-            />
-            <View
-              style={{
-                flex: checkpoint!.code.deletions / total,
-                backgroundColor: c.accent,
-              }}
-            />
+            >
+              {change?.status ?? ''}
+            </Text>
+            <Mono numberOfLines={1} ellipsizeMode="head" style={{ flex: 1, minWidth: 0, fontSize: 13, color: colors.ink }}>
+              {path}
+            </Mono>
+            {change && (change.added || change.removed) ? (
+              <Mono style={{ fontSize: 12.5, color: colors.ink3 }}>
+                {[change.added ? `+${change.added}` : '', change.removed ? `−${change.removed}` : '']
+                  .filter(Boolean)
+                  .join(' ')}
+              </Mono>
+            ) : null}
           </View>
-        )}
-        {checkpoint?.code.filesChanged.slice(0, 3).map((path) => (
-          <Text
-            key={path}
-            numberOfLines={1}
-            style={{ fontFamily: mono, fontSize: 11, color: c.secondary }}
-          >
-            {path}
-          </Text>
-        ))}
-        <View style={s.between}>
-          <Text style={[s.small, { fontSize: 10 }]}>
-            {result.error
-              ? '暂时无法读取，打开后重试'
-              : !checkpoint
-                ? '查看文件检查点与可用的回退'
-                : checkpoint.code.filesChanged.length > 3
-                  ? `还有 ${checkpoint.code.filesChanged.length - 3} 个文件`
-                  : '查看差异与回退选项'}
-          </Text>
-          <Icon name="arrow-right" size={14} color={c.muted} />
-        </View>
-      </Raised>
+        )
+      })}
+      <View style={{ height: 1, backgroundColor: colors.hair, marginHorizontal: 14 }} />
+      <View style={{ height: 44, flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14 }}>
+        <Text style={{ flex: 1, fontSize: 14, color: colors.ink2 }}>看差异或回退</Text>
+        {more > 0 ? (
+          <Text style={{ fontSize: 13, color: colors.ink3 }}>另 {more} 个文件</Text>
+        ) : null}
+        <Icon name="chevron-right" size={14} color={colors.ink2} strokeWidth={2.2} />
+      </View>
     </Pressable>
   )
 }

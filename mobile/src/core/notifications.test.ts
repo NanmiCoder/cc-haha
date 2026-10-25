@@ -2,6 +2,8 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { migratePreferences } from '../state/preferences'
 import {
+  NOTIFICATION_COPY,
+  decisionLabel,
   notificationEvents,
   notificationRequestTarget,
   notificationTarget,
@@ -262,4 +264,56 @@ test('notification actions remain scoped to a known host and exact request', () 
       new Set(['a'])
     )?.action
   ).toBe('allow')
+})
+test('decision notifications share one voice and only quote previews the server really projects', () => {
+  const event = (toolName: string | undefined, preview?: string) =>
+    notificationEvents(
+      null,
+      [{ id: 's', activityState: 'waiting', requestId: 'r', toolName, preview }],
+      prefs,
+      new Date()
+    )[0]
+  expect(event('Bash', 'bun test src/core')).toMatchObject({
+    preview: '想运行 bun test src/core',
+    category: 'cchahaTool',
+  })
+  expect(event('AskUserQuestion', '旧字段怎么处理？')).toMatchObject({
+    preview: '在问你：旧字段怎么处理？',
+    category: 'cchahaDecision',
+  })
+  expect(event('ExitPlanMode', '计划等待确认')).toMatchObject({
+    preview: '计划写好了，等你确认',
+    category: 'cchahaDecision',
+  })
+  // Non-Bash previews are generic server placeholders and are not quoted.
+  expect(event('Edit', '等待工具权限确认').preview).toBe('想修改文件，等你确认')
+  expect(event('PowerShell', '等待工具权限确认').preview).toBe('想运行命令，等你确认')
+  expect(event('ComputerUse', '等待电脑操作权限确认')).toMatchObject({
+    preview: '想操作电脑，等你允许',
+    category: 'cchahaDecision',
+  })
+  expect(event(undefined).preview).toBe('需要你做决定')
+  expect(event('Bash', '  ').preview).toBe('想运行命令')
+  expect(decisionLabel('mcp__x__y')).toBe('想使用 mcp__x__y')
+})
+test('result notifications use the same plain wording', () => {
+  expect(
+    notificationEvents([{ id: 's', activityState: 'running' }], [{ id: 's', activityState: 'failed' }], prefs, new Date())[0].preview
+  ).toBe(NOTIFICATION_COPY.failed)
+  expect(
+    notificationEvents(
+      [{ id: 's', activityState: 'running', lastProgressAt: 1 }],
+      [{ id: 's', activityState: 'running', lastProgressAt: 1, stalled: true }],
+      prefs,
+      new Date()
+    )[0].preview
+  ).toBe(NOTIFICATION_COPY.stalled)
+  expect(
+    notificationEvents(
+      [{ id: 's', activityState: 'running' }],
+      [{ id: 's', activityState: 'idle', terminalOutcome: 'completed', completedAt: 100 }],
+      prefs,
+      new Date()
+    )[0].preview
+  ).toBe(NOTIFICATION_COPY.completed)
 })

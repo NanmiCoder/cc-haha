@@ -126,12 +126,17 @@ export function buildComposerMessage(
       : {}),
   }
 }
+/** 一条消息（含附件）的上限：局域网 8 MB，公网中继 1 MB。 */
+export const MESSAGE_LIMIT_BYTES: Record<Host['auth'], number> = {
+  lan: 8 * 1024 * 1024,
+  remote: 1024 * 1024,
+}
 export function validateMessageSize(
   message: ClientMessage,
   auth: Host['auth']
 ) {
   const bytes = new TextEncoder().encode(JSON.stringify(message)).length
-  const limit = auth === 'remote' ? 1024 * 1024 : 8 * 1024 * 1024
+  const limit = MESSAGE_LIMIT_BYTES[auth === 'remote' ? 'remote' : 'lan']
   if (bytes >= limit)
     throw new Error(
       auth === 'remote'
@@ -172,4 +177,24 @@ export function withSkill(text: string, skill: SkillCommand): string {
   if (!skill.name.trim() || /[\r\n\s]/.test(skill.name))
     throw new Error('电脑返回的技能名称无效。')
   return `/${skill.name.replace(/^\//, '')}${text.trim() ? ` ${text.trim()}` : ' '}`
+}
+
+/** 附件大小：1 MB 以上保留一位小数，以下按 KB 向上取整。 */
+export function formatBytes(bytes: number) {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 KB'
+  if (bytes >= 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(1).replace(/\.0$/, '')} MB`
+  return `${Math.max(1, Math.ceil(bytes / 1024))} KB`
+}
+/** 草稿以“/技能名 ”开头时，这个技能就是这条消息正在用的。 */
+export function draftSkill(text: string): string | null {
+  const match = text.match(/^\/([^\s/]+)(?:\s|$)/)
+  return match ? match[1] : null
+}
+/** 选图时压缩到的长边，以及单个文件的上限（chatMaterials 使用同一组数值）。 */
+export const IMAGE_MAX_EDGE = 1280
+export const FILE_MAX_BYTES = 6 * 1024 * 1024
+/** 材料面板脚注，数值全部来自真实上限。 */
+export function materialsFootnote() {
+  return `图片会压缩到长边 ${IMAGE_MAX_EDGE}，单个文件不超过 ${formatBytes(FILE_MAX_BYTES)}。这条消息在局域网下最多 ${formatBytes(MESSAGE_LIMIT_BYTES.lan)}，公网 ${formatBytes(MESSAGE_LIMIT_BYTES.remote)}。`
 }

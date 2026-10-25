@@ -1,10 +1,15 @@
-import { staleActivityProps, type TaskActivityProps } from './activityData'
+import {
+  staleActivityProps,
+  type FinishedActivity,
+  type TaskActivityProps,
+} from './activityData'
 
+export type DismissalPolicy = 'immediate' | 'default' | { after: Date }
 export type ActivityInstance = {
   getId(): string
   update(props: TaskActivityProps, staleDate?: Date): Promise<void>
   end(
-    policy?: 'immediate' | 'default',
+    policy?: DismissalPolicy,
     props?: TaskActivityProps,
     date?: Date
   ): Promise<void>
@@ -51,7 +56,8 @@ export class TaskActivityController {
   sync(
     props: TaskActivityProps | null,
     register: RegisterActivityToken,
-    registrationKey: string
+    registrationKey: string,
+    finished: FinishedActivity[] = []
   ): Promise<void> {
     this.fresh = props !== null
     return this.serial(async () => {
@@ -62,6 +68,24 @@ export class TaskActivityController {
           await activity.end('immediate')
         this.initialized = true
       }
+      const tracked = this.current
+      const done =
+        tracked &&
+        finished.find(
+          (item) =>
+            item.props.hostId === tracked.props.hostId &&
+            item.props.sessionId === tracked.props.sessionId
+        )
+      // A session that is live again in this snapshot is not finished.
+      if (
+        done &&
+        !(
+          props &&
+          props.hostId === done.props.hostId &&
+          props.sessionId === done.props.sessionId
+        )
+      )
+        await this.conclude(done)
       if (
         !props ||
         (this.current &&
@@ -168,6 +192,21 @@ export class TaskActivityController {
     current.registrationKey = current.desiredKey
     current.registeredAt = this.now()
     current.unregister = unregister
+  }
+  /** Show the final completed/failed card until its dismissal date, then let
+   * ActivityKit remove it. Outcomes already past their window end immediately. */
+  private async conclude(done: FinishedActivity) {
+    const current = this.current
+    if (!current) return
+    current.listener.remove()
+    const linger = done.dismissAt > this.now()
+    await this.native(() =>
+      linger
+        ? current.instance.end({ after: new Date(done.dismissAt) }, done.props)
+        : current.instance.end('immediate')
+    )
+    this.current = undefined
+    if (current.unregister) await current.unregister()
   }
   private async finish(revoke = true) {
     const current = this.current

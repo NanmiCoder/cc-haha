@@ -1,10 +1,38 @@
-import { useState } from 'react'
-import { Image, Pressable, ScrollView, View } from 'react-native'
+import { memo, useRef, type ComponentRef } from 'react'
+import { Image, Platform, Pressable, View, type TextStyle } from 'react-native'
 import { Text } from './Text'
 import type { ChatItem } from '../core/types'
 import { visibleMessageText } from '../core/chatComposer'
-import { Icon, Inset, mono, useTheme } from './theme'
+import { Callout, CodeBlock, Icon, InlineCode, useColors } from './kit'
+import { parseInline, parseMarkdown } from './chat/markdown'
 
+function Inline({
+  text,
+  selectable,
+  style,
+}: {
+  text: string
+  selectable: boolean
+  style: TextStyle
+}) {
+  return (
+    <Text selectable={selectable} style={style}>
+      {parseInline(text).map((segment, index) =>
+        segment.type === 'code' ? (
+          <InlineCode key={index}>{segment.text}</InlineCode>
+        ) : segment.type === 'bold' ? (
+          <Text key={index} style={{ fontWeight: '600' }}>
+            {segment.text}
+          </Text>
+        ) : (
+          segment.text
+        )
+      )}
+    </Text>
+  )
+}
+
+/** 助手正文与计划内容共用的 Markdown 渲染（16/25，代码块用 CodeBlock）。 */
 export function Markdown({
   text,
   selectable = true,
@@ -12,250 +40,216 @@ export function Markdown({
   text: string
   selectable?: boolean
 }) {
-  const { colors: c, styles: s } = useTheme()
+  const colors = useColors()
+  const body: TextStyle = { fontSize: 16, lineHeight: 25, color: colors.ink }
   return (
-    <View style={{ gap: 9 }}>
-      {text.split(/(```[\s\S]*?```)/g).map((part, index) => {
-        if (part.startsWith('```'))
-          return (
-            <ScrollView
-              key={index}
-              horizontal
-              style={{
-                borderRadius: 12,
-                backgroundColor: c.well,
-                boxShadow: 'inset 0 1px 3px #00000060',
-              }}
-              contentContainerStyle={{ padding: 14 }}
-            >
-              <Text
+    <View style={{ gap: 10 }}>
+      {parseMarkdown(text).map((block, index) => {
+        switch (block.type) {
+          case 'code':
+            return <CodeBlock key={index}>{block.text || ' '}</CodeBlock>
+          case 'heading':
+            return (
+              <Inline
+                key={index}
+                text={block.text}
                 selectable={selectable}
                 style={{
-                  color: '#D8D4CA',
-                  fontFamily: mono,
-                  fontSize: 12,
-                  lineHeight: 20,
-                }}
-              >
-                {part.replace(/^```[^\n]*\n?/, '').replace(/```$/, '')}
-              </Text>
-            </ScrollView>
-          )
-        return part.split('\n').map((line, lineIndex) => {
-          const heading = line.match(/^(#{1,4})\s+(.+)$/)
-          const value = heading ? heading[2] : line.replace(/^[-*]\s+/, '• ')
-          return value ? (
-            <Text
-              key={`${index}-${lineIndex}`}
-              selectable={selectable}
-              style={[
-                s.text,
-                { lineHeight: 24 },
-                heading && {
-                  fontSize: heading[1].length < 3 ? 18 : 16,
+                  ...body,
                   fontWeight: '600',
-                  marginTop: 6,
-                },
-              ]}
-            >
-              {value
-                .split(/(\*\*[^*]+\*\*|`[^`]+`)/g)
-                .map((segment, segmentIndex) => (
-                  <Text
-                    key={segmentIndex}
-                    style={
-                      segment.startsWith('**')
-                        ? { fontWeight: '600' }
-                        : segment.startsWith('`')
-                          ? { fontFamily: mono, fontSize: 13 }
-                          : undefined
-                    }
-                  >
-                    {segment.startsWith('**')
-                      ? segment.slice(2, -2)
-                      : segment.startsWith('`')
-                        ? segment.slice(1, -1)
-                        : segment}
-                  </Text>
+                  ...(block.level <= 2 ? { fontSize: 18, lineHeight: 26 } : {}),
+                }}
+              />
+            )
+          case 'list':
+            return (
+              <View key={index} style={{ gap: 4, paddingLeft: 4 }}>
+                {block.items.map((item, itemIndex) => (
+                  <View key={itemIndex} style={{ flexDirection: 'row', gap: 10 }}>
+                    <Text style={[body, { color: colors.ink3 }]}>{item.marker}</Text>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Inline text={item.text} selectable={selectable} style={body} />
+                    </View>
+                  </View>
                 ))}
-            </Text>
-          ) : (
-            <View key={`${index}-${lineIndex}`} style={{ height: 2 }} />
-          )
-        })
+              </View>
+            )
+          case 'quote':
+            return (
+              <View
+                key={index}
+                style={{ borderLeftWidth: 3, borderLeftColor: colors.hair, paddingLeft: 12 }}
+              >
+                <Inline text={block.text} selectable={selectable} style={{ ...body, color: colors.ink2 }} />
+              </View>
+            )
+          case 'rule':
+            return <View key={index} style={{ height: 1, backgroundColor: colors.hair }} />
+          default:
+            return <Inline key={index} text={block.text} selectable={selectable} style={body} />
+        }
       })}
     </View>
   )
 }
 
-export function Message({
-  item,
-  onLongPress,
-}: {
-  item: ChatItem
-  onLongPress?(item: ChatItem): void
-}) {
-  const { colors: c, styles: s } = useTheme()
-  const [expanded, setExpanded] = useState(false)
-  if (item.type === 'tool' || item.type === 'thinking')
-    return (
-      <View
-        style={{
-          borderRadius: 12,
-          overflow: 'hidden',
-          backgroundColor: c.well,
-          boxShadow: 'inset 0 1px 3px #00000070',
-        }}
-      >
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`展开 ${item.toolName || '思考过程'}`}
-          onPress={() => setExpanded((value) => !value)}
-          onLongPress={() => onLongPress?.(item)}
-          style={[s.row, { padding: 13, gap: 9 }]}
-        >
-          <Icon
-            name={
-              item.type === 'thinking'
-                ? 'sun'
-                : item.isError
-                  ? 'alert-circle'
-                  : 'terminal'
-            }
-            size={15}
-            color={item.isError ? '#EBA38D' : c.screenText}
-          />
-          <Text
-            style={{
-              flex: 1,
-              color: '#D8D4CA',
-              fontFamily: mono,
-              fontSize: 12,
-            }}
-          >
-            {item.toolName || '思考过程'}
-            {item.pending ? ' · 进行中' : ''}
-          </Text>
-          <Icon
-            name={expanded ? 'chevron-up' : 'chevron-down'}
-            size={14}
-            color="#8D897F"
-          />
-        </Pressable>
-        {expanded && (
-          <View style={{ padding: 14, paddingTop: 0, gap: 10 }}>
-            <Text
-              selectable
-              style={{
-                color: '#D8D4CA',
-                fontFamily: mono,
-                fontSize: 12,
-                lineHeight: 20,
-              }}
-            >
-              {item.type === 'thinking'
-                ? item.text
-                : JSON.stringify(
-                    item.input ?? item.partialInput ?? {},
-                    null,
-                    2
-                  )}
-            </Text>
-            {item.result !== undefined && (
-              <Text
-                selectable
-                style={{
-                  color: '#BEB8AC',
-                  fontFamily: mono,
-                  fontSize: 12,
-                  lineHeight: 20,
-                }}
-              >
-                {typeof item.result === 'string'
-                  ? item.result
-                  : JSON.stringify(item.result, null, 2)}
-              </Text>
-            )}
-          </View>
-        )}
-      </View>
-    )
-  if (item.type === 'system' || item.type === 'error')
-    return (
-      <Text
-        selectable
-        style={[s.small, { color: item.type === 'error' ? c.red : c.muted }]}
-      >
-        {item.text}
-      </Text>
-    )
-  const body = (
-    <View style={{ gap: 8 }}>
-      {item.text ? (
-        <Markdown text={visibleMessageText(item.text)} selectable={false} />
-      ) : null}
-      {item.text.includes('<agent-team-request>') && (
-        <Text style={[s.small, { color: c.secondary }]}>♧ Agent 团队</Text>
-      )}
-      {item.attachments?.map((attachment, index) =>
+export type BubbleLayout = { x: number; y: number; width: number; height: number }
+
+/**
+ * 原生端 Text 的 selectable 会抢走长按（系统复制菜单和本应用的消息菜单同时出现），
+ * 所以原生端靠长按菜单里的“选择文字”选取；web 端直接可选中。
+ */
+const inlineSelectable = Platform.OS === 'web'
+
+function Attachments({ item }: { item: ChatItem }) {
+  const colors = useColors()
+  if (!item.attachments?.length) return null
+  return (
+    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      {item.attachments.map((attachment, index) =>
         attachment.type === 'image' && attachment.data ? (
           <Image
             key={index}
+            accessibilityLabel={attachment.name || '图片'}
             source={{
               uri: `data:${attachment.mimeType ?? 'image/jpeg'};base64,${attachment.data.replace(/^data:[^,]*,/, '')}`,
             }}
-            resizeMode="contain"
-            style={{ width: '100%', height: 170, borderRadius: 10 }}
+            resizeMode="cover"
+            style={{ width: 120, height: 120, borderRadius: 12, backgroundColor: colors.fill }}
           />
         ) : (
-          <View key={index} style={s.row}>
-            <Icon name="file-text" size={16} />
-            <Text style={[s.small, { flexShrink: 1 }]} numberOfLines={1}>
-              {attachment.name || '附件'}
+          <View
+            key={index}
+            style={{
+              maxWidth: '100%',
+              minHeight: 40,
+              borderRadius: 12,
+              backgroundColor: item.type === 'user' ? colors.card : colors.fill,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+            }}
+          >
+            <Icon name={attachment.type === 'image' ? 'image' : 'file'} size={18} color={colors.ink2} />
+            <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, fontWeight: '500', color: colors.ink }}>
+              {attachment.name || (attachment.type === 'image' ? '图片' : '附件')}
             </Text>
           </View>
         )
       )}
-      {item.type === 'user' && item.pending && (
-        <Text style={s.small}>已发出，等待电脑处理</Text>
-      )}
-      {item.delivery === 'uncertain' && (
-        <Text style={[s.small, { color: c.accent }]}>
-          未确认送达，请核对会话后再决定是否重发。
-        </Text>
-      )}
     </View>
   )
+}
+
+/** 用户气泡与助手正文；长按时把气泡位置交给消息菜单，让它在原处浮起。 */
+export const Message = memo(function Message({
+  item,
+  onLongPress,
+}: {
+  item: ChatItem
+  onLongPress?(item: ChatItem, layout: BubbleLayout): void
+}) {
+  const colors = useColors()
+  const bubble = useRef<ComponentRef<typeof View>>(null)
+  if (item.type === 'error')
+    return <Callout tone="error">{item.text}</Callout>
+  if (item.type === 'system')
+    return (
+      <Text selectable style={{ fontSize: 13, lineHeight: 19, color: colors.ink3 }}>
+        {item.text}
+      </Text>
+    )
+  const text = visibleMessageText(item.text)
+  const team = item.text.includes('<agent-team-request>')
+  const longPress = () => {
+    const node = bubble.current
+    if (!node || !onLongPress) return
+    node.measureInWindow((x, y, width, height) =>
+      onLongPress(item, { x, y, width, height })
+    )
+  }
+  if (item.type === 'user')
+    return (
+      <View style={{ alignItems: 'flex-end', gap: 6 }}>
+        <Pressable
+          accessibilityHint="你的消息。长按可复制、选择文字、编辑后重新发送或分叉"
+          onLongPress={longPress}
+          delayLongPress={400}
+          style={{ maxWidth: 300 }}
+        >
+          <View ref={bubble} collapsable={false}>
+            <UserBubble item={item} text={text} team={team} selectable={inlineSelectable} />
+          </View>
+        </Pressable>
+        {item.pending ? (
+          <Text style={{ fontSize: 12.5, lineHeight: 17, color: colors.ink3 }}>
+            已发出，等待电脑处理
+          </Text>
+        ) : null}
+        {item.delivery === 'uncertain' ? (
+          <Text style={{ fontSize: 12.5, lineHeight: 17, color: colors.attn, textAlign: 'right' }}>
+            未确认送达，请核对会话后再决定是否重发。
+          </Text>
+        ) : null}
+      </View>
+    )
   return (
     <Pressable
-      accessibilityLabel={
-        item.type === 'user' ? '你的消息，长按查看操作' : '回复，长按查看操作'
-      }
-      onLongPress={() => onLongPress?.(item)}
+      accessibilityHint="长按可复制、选择文字或从这里分叉"
+      onLongPress={longPress}
       delayLongPress={400}
-      style={
-        item.type === 'user'
-          ? {
-              alignSelf: 'flex-end',
-              maxWidth: '88%',
-              ...(item.attachments?.length ? { width: '88%' } : {}),
-            }
-          : { paddingHorizontal: 4, paddingVertical: 2 }
-      }
     >
-      {item.type === 'user' ? (
-        <Inset
-          style={{
-            borderBottomRightRadius: 6,
-            paddingHorizontal: 14,
-            paddingVertical: 12,
-          }}
-        >
-          {body}
-        </Inset>
-      ) : (
-        body
-      )}
+      <View ref={bubble} collapsable={false} style={{ gap: 10 }}>
+        {text ? <Markdown text={text} selectable={inlineSelectable} /> : null}
+        <Attachments item={item} />
+      </View>
     </Pressable>
+  )
+})
+
+/** 用户气泡本体：消息流和长按浮起的副本共用。 */
+export function UserBubble({
+  item,
+  text,
+  team,
+  selectable = false,
+}: {
+  item: ChatItem
+  text: string
+  team: boolean
+  selectable?: boolean
+}) {
+  const colors = useColors()
+  return (
+    <View
+      style={{
+        backgroundColor: colors.bubble,
+        borderTopLeftRadius: 20,
+        borderTopRightRadius: 20,
+        borderBottomRightRadius: 6,
+        borderBottomLeftRadius: 20,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        gap: 8,
+      }}
+    >
+      {text ? (
+        <Text
+          selectable={selectable}
+          style={{ fontSize: 16, lineHeight: 23, color: colors.ink }}
+        >
+          {text}
+        </Text>
+      ) : null}
+      <Attachments item={item} />
+      {team ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+          <Icon name="users" size={13} color={colors.run} strokeWidth={2} />
+          <Text style={{ fontSize: 12.5, fontWeight: '600', color: colors.run }}>Agent 团队</Text>
+        </View>
+      ) : null}
+    </View>
   )
 }

@@ -222,3 +222,72 @@ test('foreground offline before the first snapshot retires unknown recovered act
   await controller.markStale()
   expect(log).toEqual(['retire-old'])
 })
+
+function endingFactory(log: string[], ends: { policy: unknown; props?: TaskActivityProps }[]) {
+  const source = factory(log)
+  const create = source.start
+  source.start = (value, url, date) => ({
+    ...create(value, url, date),
+    end: async (policy, finalProps) => {
+      ends.push({ policy, props: finalProps })
+      log.push(`end:${value.sessionId}`)
+    },
+  })
+  return source
+}
+const finishedProps = (sessionId: string, status: 'completed' | 'failed'): TaskActivityProps => ({
+  ...props('a'),
+  sessionId,
+  status,
+  detail: '',
+  summary: status === 'completed' ? '完成 · 用时 1:00' : '出错停下',
+})
+
+test('a tracked task that finishes shows its outcome until the dismissal date and revokes its push registration', async () => {
+  const log: string[] = []
+  const ends: { policy: unknown; props?: TaskActivityProps }[] = []
+  const controller = new TaskActivityController(endingFactory(log, ends), () => 1_000)
+  const register = async () => async () => {
+    log.push('revoke')
+  }
+  await controller.sync(props('a'), register, 'a')
+  const done = { props: finishedProps('session', 'completed'), dismissAt: 61_000 }
+  await controller.sync(null, register, 'a', [done])
+  expect(ends).toEqual([{ policy: { after: new Date(61_000) }, props: done.props }])
+  expect(log).toEqual(['start:a', 'end:session', 'revoke'])
+  // The concluded card is not restarted by later snapshots that still report the outcome.
+  await controller.sync(null, register, 'a', [done])
+  expect(log).toEqual(['start:a', 'end:session', 'revoke'])
+})
+
+test('an outcome already past its window ends immediately and a different running task starts afterwards', async () => {
+  const log: string[] = []
+  const ends: { policy: unknown; props?: TaskActivityProps }[] = []
+  const controller = new TaskActivityController(endingFactory(log, ends), () => 100_000)
+  await controller.sync(props('a'), async () => undefined, 'a')
+  const other = { ...props('a'), sessionId: 'other' }
+  await controller.sync(other, async () => undefined, 'a', [
+    { props: finishedProps('session', 'failed'), dismissAt: 50_000 },
+  ])
+  expect(ends[0]).toEqual({ policy: 'immediate', props: undefined })
+  expect(log).toEqual(['start:a', 'end:session', 'start:a'])
+})
+
+test('finished entries for other sessions, or a session that is live again, do not end the tracked card', async () => {
+  const log: string[] = []
+  const ends: { policy: unknown; props?: TaskActivityProps }[] = []
+  const controller = new TaskActivityController(endingFactory(log, ends), () => 1_000)
+  await controller.sync(props('a'), async () => undefined, 'a')
+  await controller.sync(props('a'), async () => undefined, 'a', [
+    { props: finishedProps('elsewhere', 'completed'), dismissAt: 9_000 },
+    { props: finishedProps('session', 'completed'), dismissAt: 9_000 },
+  ])
+  expect(ends).toEqual([])
+  expect(log).toEqual(['start:a', 'update:a'])
+  // Never starts an activity just to announce an outcome.
+  const fresh = new TaskActivityController(endingFactory(log, ends), () => 1_000)
+  await fresh.sync(null, async () => undefined, 'a', [
+    { props: finishedProps('session', 'completed'), dismissAt: 9_000 },
+  ])
+  expect(log).toEqual(['start:a', 'update:a'])
+})

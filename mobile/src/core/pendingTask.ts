@@ -1,4 +1,4 @@
-import type { ComposerAttachment } from './chatComposer'
+import { visibleMessageText, type ComposerAttachment } from './chatComposer'
 import type { RuntimeConfig } from './types'
 
 export type PendingTask = {
@@ -27,4 +27,13 @@ export function peekPendingTask(hostId: string, sessionId: string) {
 }
 export function clearPendingTask(hostId: string, sessionId: string) {
   tasks.delete(key(hostId, sessionId))
+}
+
+/**
+ * A new task's content already carries the team request block, so it is sent as-is.
+ * Show only the user's words in an input box; `team` tells the box the block is there.
+ */
+export function pendingTaskDraft(task: PendingTask) {
+  const text = visibleMessageText(task.content)
+  return { text, team: text !== task.content }
 }

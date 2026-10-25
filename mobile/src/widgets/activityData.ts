@@ -1,6 +1,11 @@
 import type { Host, Session } from '../core/types'
-import type { MobileActivity } from '../core/dashboard'
+import { formatDuration, type MobileActivity } from '../core/dashboard'
+import { decisionLabel } from '../core/notifications'
 
+/**
+ * Live Activity 的 content state。这份结构也由电脑端 APNs 推送（只带基础字段），
+ * 新增字段一律可选，组件在缺少时兜底。
+ */
 export type TaskActivityProps = {
   hostId: string
   sessionId: string
@@ -9,6 +14,14 @@ export type TaskActivityProps = {
   detail: string
   status: 'running' | 'waiting' | 'failed' | 'completed'
   activeCount: number
+  /** 等待态标题：“想运行命令”“在问你”“计划等你确认”。 */
+  label?: string
+  /** 本次运行开始时间（毫秒），运行态显示实时计时。 */
+  startedAt?: number
+  /** 结束态一句话：“完成 · 用时 m:ss” / “出错停下”。 */
+  summary?: string
+  /** 等待态没有允许/拒绝时，唯一按钮的文字。 */
+  actionLabel?: string
   requestId?: string
   allowUrl?: string
   denyUrl?: string
@@ -16,6 +29,10 @@ export type TaskActivityProps = {
   connectionState?: 'stale'
 }
 export const TASK_ACTIVITY_NAME = 'CCHahaTaskActivity'
+/** 结束态在锁屏上停留的时间，与电脑端 APNs 结束推送的 dismissal-date（60 秒）一致。 */
+export const FINISHED_ACTIVITY_MS = 60_000
+const SIMPLE_DECISIONS = ['AskUserQuestion', 'ExitPlanMode', 'ComputerUse']
+
 export function activityBridgeAction(state: {
   hostsReady: boolean
   preferencesReady: boolean
@@ -57,6 +74,23 @@ export function activityUrl(
   if (requestId && action) query.set('notificationAction', action)
   return `cchaha:///chat/${encodeURIComponent(sessionId)}?${query}`
 }
+
+/** 等待态的等宽详情：命令带 “$ ”，提问是题目，计划提示去看全文。 */
+function waitingDetail(item: MobileActivity) {
+  const preview = item.preview?.trim()
+  if (item.toolName === 'Bash') return preview ? `$ ${preview}` : '打开 App 查看命令'
+  if (item.toolName === 'AskUserQuestion') return preview || '需要你补充信息'
+  if (item.toolName === 'ExitPlanMode') return '打开 App 看完整计划'
+  // 其他工具的 preview 是服务端的通用占位，不重复显示。
+  return '打开 App 查看详情'
+}
+
+const activeCount = (activity: MobileActivity[]) =>
+  activity.filter((item) => ['running', 'waiting'].includes(item.activityState))
+    .length
+const finite = (value?: number | null): value is number =>
+  typeof value === 'number' && Number.isFinite(value)
+
 export function taskActivityData(
   host: Host,
   sessions: Session[],
@@ -75,9 +109,7 @@ export function taskActivityData(
     waiting &&
     candidate.requestId &&
     candidate.toolName &&
-    !['AskUserQuestion', 'ExitPlanMode', 'ComputerUse'].includes(
-      candidate.toolName
-    ) &&
+    !SIMPLE_DECISIONS.includes(candidate.toolName) &&
     (!candidate.autoAnswerDeadline || candidate.autoAnswerDeadline > now)
   const openUrl = activityUrl(host.id, session.id)
   return {
@@ -85,20 +117,26 @@ export function taskActivityData(
     sessionId: session.id,
     hostName: host.name,
     title: (session.title || '进行中的任务').slice(0, 90),
-    detail: (waiting
-      ? candidate.toolName === 'AskUserQuestion'
-        ? `在问你：${candidate.preview || '需要你补充信息'}`
-        : candidate.toolName === 'ExitPlanMode'
-          ? '计划已就绪，打开 App 确认执行方式'
-          : candidate.preview
-            ? `想运行 ${candidate.preview}`
-            : '等待你的审批'
-      : candidate.preview || '电脑正在处理任务'
-    ).slice(0, 160),
+    detail: (waiting ? waitingDetail(candidate) : candidate.preview || '').slice(
+      0,
+      160
+    ),
     status: waiting ? 'waiting' : 'running',
-    activeCount: activity.filter((item) =>
-      ['running', 'waiting'].includes(item.activityState)
-    ).length,
+    activeCount: activeCount(activity),
+    ...(waiting ? { label: decisionLabel(candidate.toolName) } : {}),
+    ...(waiting && !canAnswer
+      ? {
+          actionLabel:
+            candidate.toolName === 'AskUserQuestion'
+              ? '去回答'
+              : candidate.toolName === 'ExitPlanMode'
+                ? '看完整计划'
+                : '打开处理',
+        }
+      : {}),
+    ...(!waiting && finite(candidate.startedAt)
+      ? { startedAt: candidate.startedAt }
+      : {}),
     ...(waiting && candidate.requestId
       ? { requestId: candidate.requestId }
       : {}),
@@ -120,4 +158,56 @@ export function taskActivityData(
       : {}),
     openUrl,
   }
+}
+
+export type FinishedActivity = {
+  props: TaskActivityProps
+  /** 结束态从锁屏消失的时间；已过去时控制器直接结束、不再展示。 */
+  dismissAt: number
+}
+
+/**
+ * 刚结束的任务：成功（有持久化的完成时间）或出错。只用于收尾已经在锁屏上的那张卡，
+ * 不会为已结束的任务新开实时活动；停止、消失和未知的空闲都不算成功。
+ */
+export function finishedActivities(
+  host: Host,
+  sessions: Session[],
+  activity: MobileActivity[],
+  now: number
+): FinishedActivity[] {
+  const others = activeCount(activity)
+  return activity.flatMap((item) => {
+    const session = sessions.find((value) => value.id === item.id)
+    if (!session) return []
+    const completed =
+      ['idle', 'review'].includes(item.activityState) &&
+      item.terminalOutcome === 'completed' &&
+      finite(item.completedAt) &&
+      item.completedAt > 0
+    const failed = item.activityState === 'failed'
+    if (!completed && !failed) return []
+    const duration =
+      completed && finite(item.startedAt) && item.completedAt! >= item.startedAt
+        ? ` · 用时 ${formatDuration((item.completedAt! - item.startedAt) / 1000)}`
+        : ''
+    return [
+      {
+        props: {
+          hostId: host.id,
+          sessionId: session.id,
+          hostName: host.name,
+          title: (session.title || '任务').slice(0, 90),
+          detail: '',
+          status: completed ? 'completed' : 'failed',
+          activeCount: others,
+          summary: completed ? `完成${duration}` : '出错停下',
+          openUrl: activityUrl(host.id, session.id),
+        },
+        dismissAt: completed
+          ? item.completedAt! + FINISHED_ACTIVITY_MS
+          : now + FINISHED_ACTIVITY_MS,
+      },
+    ]
+  })
 }

@@ -1,10 +1,23 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { ScrollView } from 'react-native'
 import { useLocalSearchParams } from 'expo-router'
 import { useConnection } from '../state/AppContext'
-import { RuntimePicker } from '../ui/RuntimePicker'
-import { Button, Loading, Notice, Screen, errorText } from '../ui/theme'
+import type { ApiClient } from '../core/client'
+import { RuntimeChoiceView, useRuntimeChoice } from '../ui/RuntimePicker'
+import {
+  BottomBar,
+  Button,
+  Callout,
+  Footnote,
+  InlineError,
+  Loading,
+  NavBar,
+  ScreenView,
+} from '../ui/kit'
+import { errorText } from '../ui/theme'
 import type { RuntimeConfig } from '../core/types'
 
+/** HostSheet “新任务默认模型”：改电脑的默认来源、模型和思考强度。 */
 export default function Models() {
   const { host: id } = useLocalSearchParams<{ host: string }>()
   const { host, client, error: connectionError } = useConnection(id)
@@ -70,33 +83,104 @@ export default function Models() {
     }
   }
   return (
-    <Screen
-      title="模型与思考"
-      subtitle={`${host?.name ?? '所选电脑'} · 更改电脑默认值；会话内可独立选择`}
-    >
-      <Notice text={connectionError || error} error />
-      <Notice text={status} />
-      {!currentConfig && !error && <Loading />}
-      {client && currentConfig && (
-        <RuntimePicker
+    <ScreenView>
+      <NavBar title="新任务默认模型" subtitle={host?.name ?? '所选电脑'} />
+      {client && currentConfig ? (
+        <DefaultPicker
           key={JSON.stringify(currentConfig)}
           client={client}
           initial={currentConfig}
-          onApply={save}
           busy={busy}
-          defaultScope
+          onSave={(value) => {
+            void save(value)
+          }}
+          banner={
+            <Banner
+              error={connectionError || error}
+              status={status}
+              onReload={() => {
+                setError('')
+                setRevision((value) => value + 1)
+              }}
+            />
+          }
         />
+      ) : (
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, gap: 12 }}>
+          <Banner
+            error={connectionError || error}
+            status={status}
+            onReload={() => {
+              setError('')
+              setRevision((value) => value + 1)
+            }}
+          />
+          {!connectionError && !error && <Loading />}
+        </ScrollView>
       )}
-      {error && (
+    </ScreenView>
+  )
+}
+
+function Banner({
+  error,
+  status,
+  onReload,
+}: {
+  error: string
+  status: string
+  onReload(): void
+}) {
+  return (
+    <>
+      <InlineError text={error} />
+      {error ? (
+        <Button title="重新读取电脑配置" variant="outline" onPress={onReload} />
+      ) : null}
+      {status ? (
+        <Callout tone="info" icon="circle-check">
+          {status}
+        </Callout>
+      ) : null}
+    </>
+  )
+}
+
+function DefaultPicker({
+  client,
+  initial,
+  busy,
+  onSave,
+  banner,
+}: {
+  client: ApiClient
+  initial: RuntimeConfig
+  busy: boolean
+  onSave(value: RuntimeConfig): void
+  banner: ReactNode
+}) {
+  const choice = useRuntimeChoice({ client, initial, defaultScope: true })
+  return (
+    <>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24, gap: 12 }}
+      >
+        {banner}
+        <RuntimeChoiceView choice={choice} busy={busy} />
+        <Footnote style={{ paddingTop: 0 }}>只影响之后新建的任务，已经在跑的不变。</Footnote>
+      </ScrollView>
+      <BottomBar>
         <Button
-          title="重新读取电脑配置"
-          secondary
+          title="保存"
+          size="lg"
+          busy={busy}
+          disabled={!choice.selection}
           onPress={() => {
-            setError('')
-            setRevision((value) => value + 1)
+            if (choice.selection) onSave(choice.selection)
           }}
         />
-      )}
-    </Screen>
+      </BottomBar>
+    </>
   )
 }

@@ -219,3 +219,26 @@ export function runtimeSelection(
       : {}),
   }
 }
+
+/** Desktop catalogs report context as a tier ("200k", "1m") or a raw token count. */
+export function contextLabel(context?: string): string | undefined {
+  const raw = context?.trim()
+  if (!raw || raw.toLowerCase() === 'unknown') return undefined
+  const tier = raw.match(/^(\d+(?:\.\d+)?)\s*([km])$/i)
+  if (tier) return `${tier[1]}${tier[2]!.toUpperCase()} 上下文`
+  if (/^\d+$/.test(raw)) {
+    const tokens = Number(raw)
+    if (!tokens) return undefined
+    if (tokens >= 1_000_000) return `${Number((tokens / 1_000_000).toFixed(1))}M 上下文`
+    if (tokens >= 1000) return `${Math.round(tokens / 1000)}K 上下文`
+    return `${tokens} 上下文`
+  }
+  return `${raw} 上下文`
+}
+
+/** Second line of a model row: description · context, omitting whatever the computer did not report. */
+export function modelDetail(model: Pick<Model, 'description' | 'context'>) {
+  return [model.description?.trim(), contextLabel(model.context)]
+    .filter(Boolean)
+    .join(' · ')
+}

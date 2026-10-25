@@ -12,14 +12,20 @@ import { Platform, View } from 'react-native'
 import { Text } from '../ui/Text'
 import Constants, { ExecutionEnvironment } from 'expo-constants'
 
+// web 预览：输入框的聚焦反馈由设计自己画（光标、描边），去掉浏览器默认的蓝色外框。
+if (Platform.OS === 'web' && typeof document !== 'undefined') {
+  const style = document.createElement('style')
+  style.textContent = 'input:focus, textarea:focus { outline: none; }'
+  document.head.appendChild(style)
+}
+
 function Navigation() {
   const { colors, dark } = useTheme()
   const [loaded, error] = useFonts({
-    Geist: require('../../assets/fonts/Geist.ttf'),
     GeistMono: require('../../assets/fonts/GeistMono.ttf'),
   })
   if (!loaded && !error)
-    return <View style={{ flex: 1, backgroundColor: colors.paper }} />
+    return <View style={{ flex: 1, backgroundColor: colors.bg }} />
   if (
     Platform.OS === 'android' &&
     Constants.executionEnvironment === ExecutionEnvironment.StoreClient
@@ -31,13 +37,13 @@ function Navigation() {
           padding: 30,
           justifyContent: 'center',
           gap: 16,
-          backgroundColor: colors.paper,
+          backgroundColor: colors.bg,
         }}
       >
         <Text style={{ color: colors.ink, fontSize: 22 }}>
           请安装 cc-haha 原生 App
         </Text>
-        <Text style={{ color: colors.muted, lineHeight: 24 }}>
+        <Text style={{ color: colors.ink3, lineHeight: 24 }}>
           请使用项目生成的开发版或安装包，以启用原生连接保护。
         </Text>
       </View>
@@ -50,18 +56,18 @@ function Navigation() {
       <Stack
         screenOptions={{
           headerShown: false,
-          contentStyle: { backgroundColor: colors.paper },
+          contentStyle: { backgroundColor: colors.bg },
           animation: 'slide_from_right',
         }}
       >
-        <Stack.Screen name="connect" options={{ presentation: 'modal' }} />
         <Stack.Screen
-          name="new"
+          name="connect"
           options={{
-            presentation: 'transparentModal',
-            contentStyle: { backgroundColor: 'transparent' },
+            presentation: 'fullScreenModal',
+            contentStyle: { backgroundColor: '#121110' },
           }}
         />
+        <Stack.Screen name="new" options={{ presentation: 'modal' }} />
       </Stack>
     </>
   )

@@ -2,6 +2,12 @@ import { ApiError, type ApiClient } from './client'
 import { parseConnectionInput } from './connection'
 import type { Host, PairClaim, PairRequest } from './types'
 
+/**
+ * 连接进度阶段：界面据此决定在表单里内联显示进度，还是切到「等电脑批准」整页。
+ * verifying=局域网验证，requesting=向电脑发起配对，approval=等待电脑上的人批准。
+ */
+export type ConnectPhase = 'verifying' | 'requesting' | 'approval'
+
 const cancelled = (signal: AbortSignal) => {
   if (signal.aborted) throw new ApiError('连接已取消', 0, 'ABORTED')
 }
@@ -36,7 +42,7 @@ export async function connectHost(
     id: string
     platform: string
     signal: AbortSignal
-    onStatus(value: string): void
+    onStatus(value: string, phase: ConnectPhase): void
   },
   dependencies: {
     client(host: Host, credential: string): Pick<ApiClient, 'post' | 'verify'>
@@ -59,7 +65,7 @@ export async function connectHost(
       throw new Error(
         '请输入电脑「设置 → H5 访问」中的访问令牌，或扫描完整二维码。'
       )
-    input.onStatus('正在验证局域网连接…')
+    input.onStatus('正在验证局域网连接…', 'verifying')
     await dependencies.client(host, credential).verify({ signal: input.signal })
   } else {
     if (input.platform === 'web')
@@ -69,7 +75,7 @@ export async function connectHost(
         '请在电脑「设置 → 公网访问」生成并扫描配对二维码，或粘贴完整配对链接。'
       )
     const client = dependencies.client(host, '')
-    input.onStatus('正在请求电脑授权…')
+    input.onStatus('正在请求电脑授权…', 'requesting')
     const pair = await client.post<PairRequest>(
       '/api/public-access/pair',
       {
@@ -83,7 +89,7 @@ export async function connectHost(
       throw new Error('电脑返回了无效的配对请求，请升级电脑端后重试。')
     const deadline = now() + 300000
     credential = ''
-    input.onStatus('请在电脑上批准这台手机。批准后会自动连接。')
+    input.onStatus('请在电脑上批准这台手机。批准后会自动连接。', 'approval')
     while (now() < deadline) {
       cancelled(input.signal)
       const claim = await client.post<PairClaim>(

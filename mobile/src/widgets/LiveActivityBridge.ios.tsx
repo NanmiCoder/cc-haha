@@ -9,6 +9,7 @@ import { getDevicePushToken } from '../state/devicePushToken'
 import TaskActivity from './TaskActivity.ios'
 import {
   activityBridgeAction,
+  finishedActivities,
   taskActivityData,
   TASK_ACTIVITY_NAME,
 } from './activityData'
@@ -95,12 +96,20 @@ export function LiveActivityBridge({
     const host = registry.hosts.find((value) => value.id === snapshot.hostId)
     if (!host || client.host.id !== host.id) return
     const quiet = isQuietTime(preferences, new Date())
+    const now = Date.now()
     const props = taskActivityData(
       host,
       snapshot.sessions,
       snapshot.activity,
       preferences.notifications.decisions && !quiet,
-      Date.now()
+      now
+    )
+    // Only used to close the card already on the lock screen with its outcome.
+    const finished = finishedActivities(
+      host,
+      snapshot.sessions,
+      snapshot.activity,
+      now
     )
     const registrationKey = JSON.stringify([
       host.id,
@@ -158,7 +167,8 @@ export function LiveActivityBridge({
           const id = response.id
           return () => pushRegistrations.unregister(client, id, token)
         },
-        registrationKey
+        registrationKey,
+        finished
       )
       .then(() => {
         lastError.current = ''

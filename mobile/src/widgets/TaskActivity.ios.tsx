@@ -1,6 +1,7 @@
 import {
   Circle,
   HStack,
+  Image,
   Link,
   Spacer,
   Text,
@@ -15,277 +16,275 @@ import {
   foregroundStyle,
   frame,
   lineLimit,
-  offset,
+  monospacedDigit,
+  multilineTextAlignment,
   padding,
-  shadow,
 } from '@expo/ui/swift-ui/modifiers'
 import { createLiveActivity, type LiveActivityEnvironment } from 'expo-widgets'
 import type { TaskActivityProps } from './activityData'
 
+/**
+ * 锁屏实时活动与灵动岛（LockScreen 稿）。'widget' 函数会被序列化后在扩展里执行，
+ * 只能用 props、environment 和 @expo/ui 的全局组件；文案都在 activityData 里算好。
+ * 电脑端 APNs 推送只带基础字段，新字段缺失时这里兜底。
+ */
 const TaskActivity = (
   props: TaskActivityProps,
   environment: LiveActivityEnvironment
 ) => {
   'widget'
   const dim = environment.isLuminanceReduced
-  const ink = dim ? '#D5D2CB' : '#23201C'
-  const muted = dim ? '#ABA59B' : '#5E5952'
-  const paper = dim ? '#24221E' : '#E8E7E3'
   const stale = environment.isStale || props.connectionState === 'stale'
-  const statusText = stale
-    ? '状态待更新 · 打开 App 重新连接'
-    : props.status === 'waiting'
-      ? props.detail
-      : props.status === 'completed'
-        ? '任务已完成'
-        : props.status === 'failed'
-          ? '遇到问题，打开 App 查看'
-          : props.detail
-  const canAnswer = !stale && Boolean(props.allowUrl && props.denyUrl)
-  const lens = (
-    <ZStack modifiers={[frame({ width: 44, height: 44 })]}>
-      <Circle
+  const ink = dim ? '#CFCCC5' : '#F3F1EC'
+  const ink2 = dim ? 'rgba(207,204,197,0.72)' : 'rgba(243,241,236,0.72)'
+  const ink3 = dim ? 'rgba(207,204,197,0.6)' : 'rgba(243,241,236,0.6)'
+  const attn = '#F0A445'
+  const run = '#8DB0F4'
+  const ok = '#6CC892'
+  const err = '#F07B86'
+  const glass = 'rgba(58,56,52,0.62)'
+  const waiting = !stale && props.status === 'waiting'
+  const running = !stale && props.status === 'running'
+  const completed = !stale && props.status === 'completed'
+  const failed = !stale && props.status === 'failed'
+  const tone = waiting ? attn : running ? run : completed ? ok : failed ? err : ink3
+  const label = stale ? '状态待更新' : props.label || '需要你决定'
+  const detail = stale ? '打开 App 重新连接' : props.detail
+  const summary =
+    props.summary || (completed ? '完成' : failed ? '出错停下' : '')
+  const others = Math.max(0, props.activeCount - (completed || failed ? 0 : 1))
+  const othersText = others > 0 ? `还有 ${others} 个任务在跑` : ''
+  const footer = othersText ? `${props.hostName} · ${othersText}` : props.hostName
+  const canAnswer = waiting && Boolean(props.allowUrl && props.denyUrl)
+  const started =
+    running && typeof props.startedAt === 'number'
+      ? new Date(props.startedAt)
+      : null
+  const timer = (size: number) =>
+    started ? (
+      <Text
+        timerInterval={{
+          lower: started,
+          upper: new Date(started.getTime() + 24 * 3600 * 1000),
+        }}
+        countsDown={false}
         modifiers={[
-          frame({ width: 44, height: 44 }),
-          foregroundStyle({
-            type: 'radialGradient',
-            colors: ['#D27A5C', '#B4553A', '#8F3F2A'],
-            center: { x: 0.34, y: 0.28 },
-            startRadius: 0,
-            endRadius: 30,
-          }),
-          shadow({ radius: 3, y: 3, color: '#6E342040' }),
+          font({ size, weight: 'medium', design: 'monospaced' }),
+          monospacedDigit(),
+          foregroundStyle(ink),
+          multilineTextAlignment('trailing'),
+          frame({ width: size * 4.6, alignment: 'trailing' }),
         ]}
       />
-      <Circle
-        modifiers={[
-          frame({ width: 34, height: 34 }),
-          foregroundStyle({
-            type: 'angularGradient',
-            colors: ['#EDEBE6', '#C7C3BA', '#F6F5F1', '#BAB6AD', '#EDEBE6'],
-            center: { x: 0.5, y: 0.5 },
-          }),
-        ]}
-      />
-      <Circle
-        modifiers={[
-          frame({ width: 26, height: 26 }),
-          foregroundStyle('#1D1C1A'),
-        ]}
-      />
+    ) : null
+  const dot = (size: number) =>
+    running ? (
+      <ZStack modifiers={[frame({ width: size + 6, height: size + 6 })]}>
+        <Circle
+          modifiers={[
+            frame({ width: size + 6, height: size + 6 }),
+            foregroundStyle('rgba(141,176,244,0.25)'),
+          ]}
+        />
+        <Circle
+          modifiers={[frame({ width: size - 1, height: size - 1 }), foregroundStyle(run)]}
+        />
+      </ZStack>
+    ) : (
+      <Circle modifiers={[frame({ width: size, height: size }), foregroundStyle(tone)]} />
+    )
+  const pill = (title: string, url: string, primary: boolean) => (
+    <Link destination={url} modifiers={[frame({ maxWidth: Infinity })]}>
       <Text
         modifiers={[
-          font({ size: 13, weight: 'medium', design: 'monospaced' }),
-          foregroundStyle('#F2C38A'),
+          font({ size: 15, weight: 'semibold' }),
+          foregroundStyle(primary ? '#111111' : ink),
+          frame({ maxWidth: Infinity, minHeight: 44 }),
+          background(primary ? '#F3F1EC' : 'rgba(255,255,255,0.16)'),
+          clipShape('capsule'),
         ]}
       >
-        {String(props.activeCount)}
-      </Text>
-      <Circle
-        modifiers={[
-          frame({ width: 7, height: 7 }),
-          foregroundStyle({
-            type: 'radialGradient',
-            colors: ['#FFD9A0', '#E39A3B', '#A86A1C'],
-            center: { x: 0.35, y: 0.3 },
-            startRadius: 0,
-            endRadius: 5,
-          }),
-          offset({ x: 14.5, y: -15.5 }),
-        ]}
-      />
-    </ZStack>
-  )
-  const actions = canAnswer ? (
-    <HStack spacing={8}>
-      <Link
-        destination={props.denyUrl!}
-        modifiers={[frame({ maxWidth: Infinity })]}
-      >
-        <Text
-          modifiers={[
-            font({ size: 14, weight: 'semibold' }),
-            foregroundStyle(ink),
-            frame({ maxWidth: Infinity }),
-            frame({ height: 40 }),
-            background({
-              type: 'linearGradient',
-              colors: ['#F7F6F3', '#E9E8E4'],
-              startPoint: { x: 0, y: 0 },
-              endPoint: { x: 0, y: 1 },
-            }),
-            clipShape('roundedRectangle', 13),
-            shadow({ radius: 0, y: 2, color: '#C8C5BE' }),
-          ]}
-        >
-          拒绝
-        </Text>
-      </Link>
-      <Link
-        destination={props.allowUrl!}
-        modifiers={[frame({ maxWidth: Infinity })]}
-      >
-        <Text
-          modifiers={[
-            font({ size: 14, weight: 'semibold' }),
-            foregroundStyle('#FFFFFF'),
-            frame({ maxWidth: Infinity }),
-            frame({ height: 40 }),
-            background({
-              type: 'linearGradient',
-              colors: ['#C1603F', '#A64D33'],
-              startPoint: { x: 0, y: 0 },
-              endPoint: { x: 0, y: 1 },
-            }),
-            clipShape('roundedRectangle', 13),
-            shadow({ radius: 0, y: 2, color: '#7E3824' }),
-          ]}
-        >
-          允许
-        </Text>
-      </Link>
-    </HStack>
-  ) : (
-    <Link destination={props.openUrl}>
-      <Text
-        modifiers={[
-          font({ size: 13, weight: 'medium' }),
-          foregroundStyle(dim ? '#E3B49C' : '#B4553A'),
-        ]}
-      >
-        {props.status === 'waiting' ? '打开 App 处理' : '查看任务'}
+        {title}
       </Text>
     </Link>
   )
-  return {
-    banner: (
+  const actions = canAnswer ? (
+    <HStack spacing={8}>
+      {pill('拒绝', props.denyUrl!, false)}
+      {pill('允许', props.allowUrl!, true)}
+    </HStack>
+  ) : waiting || stale ? (
+    pill(stale ? '打开 App' : props.actionLabel || '打开 App 处理', props.openUrl, false)
+  ) : null
+  const titleText = (size: number) => (
+    <Text
+      modifiers={[
+        font({ size, weight: 'semibold' }),
+        foregroundStyle(ink),
+        lineLimit(1),
+        frame({ maxWidth: Infinity, alignment: 'leading' }),
+      ]}
+    >
+      {props.title}
+    </Text>
+  )
+  const detailText = detail ? (
+    <Text
+      modifiers={[
+        font({ size: 13, design: 'monospaced' }),
+        foregroundStyle(ink2),
+        lineLimit(1),
+      ]}
+    >
+      {detail}
+    </Text>
+  ) : null
+  const footerText = (
+    <Text modifiers={[font({ size: 12.5 }), foregroundStyle(ink3), lineLimit(1)]}>
+      {footer}
+    </Text>
+  )
+  const outcome = (
+    <HStack spacing={12}>
+      <Image
+        systemName={completed ? 'checkmark.circle' : 'exclamationmark.circle'}
+        size={20}
+        color={completed ? ok : err}
+      />
+      <VStack alignment="leading" spacing={2} modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}>
+        {titleText(15)}
+        <Text modifiers={[font({ size: 13 }), foregroundStyle(ink2), lineLimit(1)]}>
+          {summary}
+        </Text>
+      </VStack>
+    </HStack>
+  )
+  const waitingHeader = (
+    <HStack spacing={10}>
+      {dot(9)}
+      <Text modifiers={[font({ size: 13, weight: 'semibold' }), foregroundStyle(stale ? ink3 : attn), lineLimit(1)]}>
+        {label}
+      </Text>
+      <Spacer />
+      <Text modifiers={[font({ size: 13 }), foregroundStyle(ink3), lineLimit(1)]}>
+        {props.hostName}
+      </Text>
+    </HStack>
+  )
+  const banner =
+    completed || failed ? (
+      <VStack alignment="leading" modifiers={[padding({ vertical: 14, horizontal: 16 }), activityBackgroundTint(glass)]}>
+        {outcome}
+      </VStack>
+    ) : running ? (
+      <VStack
+        alignment="leading"
+        spacing={10}
+        modifiers={[padding({ all: 16 }), activityBackgroundTint(glass)]}
+      >
+        <HStack spacing={10}>
+          {dot(9)}
+          {titleText(16)}
+          {timer(16)}
+        </HStack>
+        {detailText}
+        {footerText}
+      </VStack>
+    ) : (
       <VStack
         alignment="leading"
         spacing={12}
-        modifiers={[padding({ all: 14 }), activityBackgroundTint(paper)]}
+        modifiers={[padding({ all: 16 }), activityBackgroundTint(glass)]}
       >
-        <HStack spacing={12}>
-          {lens}
-          <VStack
-            alignment="leading"
-            spacing={3}
-            modifiers={[frame({ maxWidth: Infinity, alignment: 'leading' })]}
-          >
-            <Text
-              modifiers={[
-                font({ size: 14, weight: 'semibold' }),
-                foregroundStyle(ink),
-                lineLimit(1),
-              ]}
-            >
-              {props.title}
-            </Text>
-            <Text
-              modifiers={[
-                font({ size: 12 }),
-                foregroundStyle(muted),
-                lineLimit(1),
-              ]}
-            >
-              {statusText}
-            </Text>
-          </VStack>
-        </HStack>
+        {waitingHeader}
+        <VStack alignment="leading" spacing={4}>
+          {titleText(16)}
+          {detailText}
+        </VStack>
         {actions}
-        <HStack spacing={8} modifiers={[padding({ horizontal: 2 })]}>
-          <Circle
-            modifiers={[
-              frame({ width: 6, height: 6 }),
-              foregroundStyle(stale ? '#A39B8D' : '#8FA35A'),
-            ]}
-          />
-          <Text
-            modifiers={[
-              font({ size: 11, design: 'monospaced' }),
-              foregroundStyle(muted),
-              lineLimit(1),
-            ]}
-          >
-            {props.hostName}
-            {props.activeCount > 1
-              ? ` · 另有 ${props.activeCount - 1} 个在跑`
-              : ' · cc-haha'}
-          </Text>
-          <Spacer />
-        </HStack>
       </VStack>
+    )
+  const compactText = stale
+    ? '待更新'
+    : waiting
+      ? '等你'
+      : completed
+        ? '完成'
+        : failed
+          ? '出错'
+          : String(props.activeCount)
+  return {
+    banner,
+    compactLeading: dot(10),
+    compactTrailing:
+      running && started ? (
+        timer(12)
+      ) : (
+        <Text
+          modifiers={[
+            font({ size: 12, weight: 'semibold' }),
+            foregroundStyle(tone),
+            lineLimit(1),
+          ]}
+        >
+          {compactText}
+        </Text>
+      ),
+    minimal: dot(10),
+    expandedLeading: (
+      <HStack spacing={8} modifiers={[padding({ leading: 6, top: 4 })]}>
+        {dot(9)}
+        <Text
+          modifiers={[
+            font({ size: 13, weight: 'semibold' }),
+            foregroundStyle(waiting ? attn : ink3),
+            lineLimit(1),
+          ]}
+        >
+          {waiting || stale ? label : props.hostName}
+        </Text>
+      </HStack>
     ),
-    compactLeading: (
-      <Circle
-        modifiers={[
-          frame({ width: 15, height: 15 }),
-          foregroundStyle('#B4553A'),
-        ]}
-      />
-    ),
-    compactTrailing: (
+    expandedTrailing: running && started ? (
+      <HStack modifiers={[padding({ trailing: 6, top: 4 })]}>{timer(13)}</HStack>
+    ) : waiting || stale ? (
       <Text
         modifiers={[
-          font({ size: 12, design: 'monospaced' }),
-          foregroundStyle(props.status === 'waiting' ? '#F2C38A' : '#A9C27A'),
-        ]}
-      >
-        {stale
-          ? '待更新'
-          : props.status === 'waiting'
-            ? '待确认'
-            : String(props.activeCount)}
-      </Text>
-    ),
-    minimal: (
-      <Text
-        modifiers={[
-          font({ size: 12, weight: 'semibold' }),
-          foregroundStyle('#F2C38A'),
-        ]}
-      >
-        {stale ? '…' : String(props.activeCount)}
-      </Text>
-    ),
-    expandedLeading: lens,
-    expandedTrailing: (
-      <Text
-        modifiers={[
-          font({ size: 12 }),
-          foregroundStyle('#C4BEB4'),
+          font({ size: 13 }),
+          foregroundStyle(ink3),
           lineLimit(1),
+          padding({ trailing: 6, top: 4 }),
         ]}
       >
         {props.hostName}
       </Text>
-    ),
-    expandedBottom: (
-      <VStack
-        alignment="leading"
-        spacing={10}
-        modifiers={[padding({ all: 8 })]}
-      >
-        <Text
-          modifiers={[
-            font({ size: 14, weight: 'semibold' }),
-            foregroundStyle('#ECE8E0'),
-            lineLimit(1),
-          ]}
+    ) : null,
+    expandedBottom:
+      completed || failed ? (
+        <VStack alignment="leading" modifiers={[padding({ horizontal: 6, bottom: 6 })]}>
+          {outcome}
+        </VStack>
+      ) : (
+        <VStack
+          alignment="leading"
+          spacing={12}
+          modifiers={[padding({ horizontal: 6, bottom: 6 })]}
         >
-          {props.title}
-        </Text>
-        <Text
-          modifiers={[
-            font({ size: 12 }),
-            foregroundStyle('#B3ADA3'),
-            lineLimit(2),
-          ]}
-        >
-          {statusText}
-        </Text>
-        {actions}
-      </VStack>
-    ),
+          <VStack alignment="leading" spacing={4}>
+            {titleText(16)}
+            {detailText}
+          </VStack>
+          {running ? (
+            othersText ? (
+              <Text modifiers={[font({ size: 12.5 }), foregroundStyle(ink3), lineLimit(1)]}>
+                {othersText}
+              </Text>
+            ) : null
+          ) : (
+            actions
+          )}
+        </VStack>
+      ),
   }
 }
 export default createLiveActivity<TaskActivityProps>(

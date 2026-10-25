@@ -1,3 +1,5 @@
+import type { RuntimeConfig } from '../core/types'
+
 export type Question = {
   question: string
   options: { label: string; description?: string }[]
@@ -98,5 +100,110 @@ export function remainingQuestionTime(
   return {
     seconds,
     label: `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`,
+  }
+}
+
+/** 每道题的提交值：自己写的内容优先覆盖已选项，多选用 “, ” 连接。 */
+export function questionAnswerValues(
+  questions: Question[],
+  answers: Record<string, string[]>,
+  custom: Record<string, string>
+) {
+  return Object.fromEntries(
+    questions.map((question) => [
+      question.question,
+      custom[question.question]?.trim() ||
+        answers[question.question]?.join(', ') ||
+        '',
+    ])
+  )
+}
+
+export type QuestionClock =
+  | { state: 'counting'; label: string; fraction: number }
+  | { state: 'takenOver' }
+  | { state: 'expired' }
+
+/**
+ * AI 代答胶囊。只在服务端宣布过代答（deadline 为数字或 null）时出现；
+ * 本机已发出接手信号就显示“你已接手”；倒计时以首次看到的剩余时间为满环。
+ */
+export function questionClock(
+  deadline: number | null | undefined,
+  now: number,
+  interacted: boolean,
+  baselineSeconds?: number
+): QuestionClock | null {
+  if (interacted && deadline !== undefined) return { state: 'takenOver' }
+  const remaining = remainingQuestionTime(deadline, now)
+  if (!remaining) return null
+  if (!remaining.seconds) return { state: 'expired' }
+  const total = Math.max(baselineSeconds ?? remaining.seconds, remaining.seconds)
+  return {
+    state: 'counting',
+    label: remaining.label,
+    fraction: total ? remaining.seconds / total : 1,
+  }
+}
+
+export type DecisionResponse = {
+  type: 'permission_response'
+  requestId: string
+  allowed: boolean
+  rule?: 'always'
+  updatedInput?: Record<string, unknown>
+  denyMessage?: string
+  permissionUpdates?: unknown[]
+  runtimeOverride?: RuntimeConfig
+}
+
+/**
+ * 组装 permission_response。拒绝只带 denyMessage（所有工具都能附说明）；
+ * 允许时按工具带答案、计划执行方式或会话规则（rule:'always'，由电脑套用 CLI 的放行建议）。
+ */
+export function decisionResponse(options: {
+  requestId: string
+  toolName: string
+  input: Record<string, unknown>
+  allowed: boolean
+  answers?: Record<string, string>
+  plan?: { mode: PlanExecutionMode; runtime?: RuntimeConfig }
+  remember?: boolean
+  note?: string
+}): DecisionResponse {
+  const { requestId, toolName, input, allowed } = options
+  const note = options.note?.trim()
+  if (!allowed)
+    return {
+      type: 'permission_response',
+      requestId,
+      allowed,
+      ...(note ? { denyMessage: note } : {}),
+    }
+  if (toolName === 'AskUserQuestion')
+    return {
+      type: 'permission_response',
+      requestId,
+      allowed,
+      updatedInput: questionAnswerInput(input, options.answers ?? {}),
+    }
+  if (toolName === 'ExitPlanMode')
+    return {
+      type: 'permission_response',
+      requestId,
+      allowed,
+      permissionUpdates: planPermissionUpdates(
+        options.plan?.mode ?? 'acceptEdits',
+        input
+      ),
+      ...(options.plan?.runtime
+        ? { runtimeOverride: options.plan.runtime }
+        : {}),
+    }
+  return {
+    type: 'permission_response',
+    requestId,
+    allowed,
+    ...(options.remember ? { rule: 'always' as const } : {}),
   }
 }

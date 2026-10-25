@@ -4,7 +4,10 @@ import * as DocumentPicker from 'expo-document-picker'
 import { File } from 'expo-file-system'
 import { ImageManipulator, SaveFormat } from 'expo-image-manipulator'
 import {
+  FILE_MAX_BYTES,
+  IMAGE_MAX_EDGE,
   attachmentFromBase64,
+  formatBytes,
   type ComposerAttachment,
 } from '../core/chatComposer'
 
@@ -20,10 +23,13 @@ export async function pickChatMaterial(
     if (result.canceled) return []
     return Promise.all(
       result.assets.map(async (asset) => {
-        if ((asset.size ?? 0) > 6 * 1024 * 1024)
-          throw new Error('文件超过 6 MB，请拆分后发送。')
+        if ((asset.size ?? 0) > FILE_MAX_BYTES)
+          throw new Error(`文件超过 ${formatBytes(FILE_MAX_BYTES)}，请拆分后发送。`)
+        // web 端的 uri 是 blob: 地址，内容在 base64（data URL）里。
         const base64 =
-          Platform.OS === 'web' ? asset.uri : await new File(asset.uri).base64()
+          Platform.OS === 'web'
+            ? (asset.base64 ?? asset.uri)
+            : await new File(asset.uri).base64()
         if (Platform.OS === 'web' && !base64.startsWith('data:'))
           throw new Error('浏览器未提供文件内容，请重新选择。')
         return attachmentFromBase64({
@@ -60,9 +66,11 @@ export async function pickChatMaterial(
   return Promise.all(
     result.assets.map(async (asset) => {
       const context = ImageManipulator.manipulate(asset.uri)
-      if (Math.max(asset.width, asset.height) > 1280)
+      if (Math.max(asset.width, asset.height) > IMAGE_MAX_EDGE)
         context.resize(
-          asset.width >= asset.height ? { width: 1280 } : { height: 1280 }
+          asset.width >= asset.height
+            ? { width: IMAGE_MAX_EDGE }
+            : { height: IMAGE_MAX_EDGE }
         )
       const rendered = await context.renderAsync()
       try {

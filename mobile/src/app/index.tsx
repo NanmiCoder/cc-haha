@@ -1,427 +1,363 @@
-import { useState } from 'react'
-import {
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  TextInput,
-  View,
-} from 'react-native'
-import { Text } from '../ui/Text'
-import { SafeAreaView } from 'react-native-safe-area-context'
+import { useMemo, useState } from 'react'
+import { Pressable, RefreshControl, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
+import { Text } from '../ui/Text'
 import { useApp, useConnection } from '../state/AppContext'
 import { useDashboard } from '../state/DashboardContext'
-import {
-  elapsedLabel,
-  groupDashboard,
-  relativeLabel,
-  type DashboardRow,
-} from '../core/dashboard'
-import { Porthole } from '../ui/Porthole'
+import { groupDashboard, type DashboardRow } from '../core/dashboard'
 import {
   BottomBar,
-  CircleButton,
-  Divider,
-  Empty,
+  Button,
+  EmptyState,
   Icon,
-  Inset,
+  IconButton,
+  InlineError,
+  LargeTitle,
   Loading,
-  Notice,
-  PrimaryButton,
-  Raised,
-  mono,
-  useTheme,
-} from '../ui/theme'
+  ScreenView,
+  SectionHeader,
+  TextButton,
+  useColors,
+} from '../ui/kit'
+import {
+  canStartTask,
+  hostLink,
+  hostStatusLine,
+  inProject,
+  projectsOf,
+  type HostLink,
+} from '../ui/home/homeModel'
+import { DecisionCard } from '../ui/home/DecisionCard'
+import { HomeSearch } from '../ui/home/HomeSearch'
+import { HostSheet } from '../ui/home/HostSheet'
+import { ConnectEmpty, OfflineCard, ProjectSheet } from '../ui/home/HomeStates'
+import { RowGroup, StatusDot, useNow } from '../ui/home/parts'
+import { MoreRow, OfflineRow, RunningRow, SettledRow } from '../ui/home/SessionRows'
+import { useBackgroundCounts } from '../ui/home/useBackgroundCounts'
+
+const recentPage = 10
+const offlineRecent = 5
 
 export default function Home() {
-  const { colors: c, styles: s, dark } = useTheme()
+  const colors = useColors()
   const { ready, error: storageError } = useApp()
-  const { host, error: connectionError } = useConnection()
-  const { snapshot, loading, fresh, error, refresh } = useDashboard()
-  const [query, setQuery] = useState('')
-  const [search, setSearch] = useState(false)
-  const data = groupDashboard(
-    (snapshot?.sessions ?? []).filter((session) =>
-      `${session.title} ${session.workDir ?? ''}`
-        .toLowerCase()
-        .includes(query.toLowerCase())
-    ),
-    snapshot?.activity ?? []
+  const { host, error: credentialError } = useConnection()
+  const { snapshot, loading, fresh, error, failure, refresh } = useDashboard()
+  const [searching, setSearching] = useState(false)
+  const [hostSheet, setHostSheet] = useState(false)
+  const [projectSheet, setProjectSheet] = useState(false)
+  // 项目筛选只在内存里，并且跟着电脑走：换电脑后回到“全部项目”。
+  const [filter, setFilter] = useState<{ hostId: string; key: string | null } | null>(null)
+  const [recentShown, setRecentShown] = useState(recentPage)
+  const projectKey = filter && filter.hostId === host?.id ? filter.key : null
+  const link = hostLink({ host, fresh, failure, credentialError })
+
+  const grouped = useMemo(
+    () => groupDashboard(snapshot?.sessions ?? [], snapshot?.activity ?? []),
+    [snapshot]
   )
-  const open = (row: DashboardRow) =>
+  const all = useMemo(
+    () =>
+      [...grouped.waiting, ...grouped.running, ...grouped.settled].sort((a, b) =>
+        b.session.modifiedAt.localeCompare(a.session.modifiedAt)
+      ),
+    [grouped]
+  )
+  const projects = useMemo(() => projectsOf(all), [all])
+  const project = projects.find((item) => item.key === projectKey) ?? null
+  const waiting = grouped.waiting.filter((row) => inProject(row, projectKey))
+  const running = grouped.running.filter((row) => inProject(row, projectKey))
+  const settled = grouped.settled.filter((row) => inProject(row, projectKey))
+  const activeSessionIds = useMemo(
+    () => [...grouped.waiting, ...grouped.running].map((row) => row.session.id),
+    [grouped]
+  )
+  const background = useBackgroundCounts(
+    grouped.running.map((row) => row.session.id),
+    link === 'online' && !searching
+  )
+
+  const open = (row: DashboardRow, params: Record<string, string> = {}) =>
     host &&
     router.push({
       pathname: '/chat/[id]',
-      params: { id: row.session.id, host: host.id },
+      params: { id: row.session.id, host: host.id, ...params },
     })
-  const dot = (color: string, size = 7) => (
-    <View
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: color,
-      }}
-    />
-  )
+  const newTask = () =>
+    host &&
+    router.push({
+      pathname: '/new',
+      params: { host: host.id, ...(project ? { dir: project.dir } : {}) },
+    })
+  const disconnected = link === 'offline' || link === 'unauthorized'
+
+  if (searching && host)
+    return (
+      <ScreenView>
+        <HomeSearch
+          rows={all}
+          projects={projects}
+          initialProject={projectKey}
+          onCancel={() => setSearching(false)}
+          onOpen={(row) => open(row)}
+        />
+      </ScreenView>
+    )
+
   return (
-    <SafeAreaView
-      style={[s.page, Platform.OS === 'web' && { paddingTop: 47 }]}
-      edges={['top', 'left', 'right']}
-    >
-      <ScrollView
-        contentContainerStyle={{ paddingTop: 7, paddingBottom: 24 }}
-        refreshControl={
-          <RefreshControl
-            refreshing={loading}
-            onRefresh={refresh}
-            tintColor={c.accent}
-          />
-        }
-        keyboardShouldPersistTaps="handled"
+    <ScreenView>
+      <View
+        style={{
+          height: 44,
+          flexDirection: 'row',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          paddingHorizontal: 16,
+        }}
       >
-        <View style={[s.between, { paddingHorizontal: 20 }]}>
+        <IconButton
+          icon="settings"
+          label="设置"
+          color={colors.ink2}
+          iconSize={22}
+          onPress={() => router.push('/settings')}
+        />
+      </View>
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 28, flexGrow: 1 }}
+        refreshControl={
+          host ? (
+            <RefreshControl refreshing={loading} onRefresh={refresh} tintColor={colors.ink3} />
+          ) : undefined
+        }
+      >
+        {!ready ? (
+          <Loading />
+        ) : !host ? (
+          <View style={{ flex: 1, justifyContent: 'center', paddingBottom: 44 }}>
+            <InlineError text={storageError} />
+            <ConnectEmpty onConnect={() => router.push('/connect')} />
+          </View>
+        ) : (
+          <>
+            <LargeTitle
+              title={host.name}
+              chevron
+              subtitle={
+                <StatusLine link={link} host={host} lastSyncedAt={snapshot?.checkedAt} />
+              }
+              accessibilityLabel={`${host.name}，切换电脑或查看这台电脑`}
+              onPress={() => setHostSheet(true)}
+            />
+            {disconnected ? null : <SearchEntry onPress={() => setSearching(true)} />}
+            <InlineError
+              text={storageError || (link === 'failed' ? error : '')}
+              style={{ marginTop: disconnected ? 0 : 12, marginBottom: disconnected ? 12 : 0 }}
+            />
+            {disconnected ? (
+              <>
+                <OfflineCard
+                  unauthorized={link === 'unauthorized'}
+                  onSwitch={() => setHostSheet(true)}
+                  onReconnect={() =>
+                    link === 'unauthorized' ? router.push('/connect') : refresh()
+                  }
+                />
+                {all.length ? (
+                  <>
+                    <SectionHeader title="断开前的状态" />
+                    <RowGroup style={{ opacity: 0.72 }}>
+                      {[...waiting, ...running, ...settled.slice(0, offlineRecent)].map((row) => (
+                        <OfflineRow key={row.session.id} row={row} />
+                      ))}
+                    </RowGroup>
+                  </>
+                ) : null}
+              </>
+            ) : !snapshot ? (
+              <Loading />
+            ) : !all.length ? (
+              <EmptyState
+                icon="compose"
+                title="还没有任务"
+                detail="把下一件事交给电脑，在这里看它的进展。"
+                action={<Button title="新任务" icon="compose" onPress={newTask} />}
+              />
+            ) : !waiting.length && !running.length && !settled.length ? (
+              <EmptyState
+                icon="folder"
+                title={`${project?.name ?? '这个项目'} 里没有任务`}
+                action={
+                  <View style={{ alignItems: 'center' }}>
+                    <TextButton title="查看全部项目" onPress={() => setFilter(null)} />
+                  </View>
+                }
+              />
+            ) : (
+              <>
+                {waiting.length ? (
+                  <>
+                    <SectionHeader title="等你决定" count={waiting.length} countColor={colors.attn} />
+                    <View style={{ gap: 10 }}>
+                      {waiting.map((row) => (
+                        <DecisionCard
+                          key={row.session.id}
+                          row={row}
+                          onOpen={() => open(row)}
+                          onRespond={(action, requestId) =>
+                            open(row, { requestId, notificationAction: action })
+                          }
+                        />
+                      ))}
+                    </View>
+                  </>
+                ) : null}
+                {running.length ? (
+                  <>
+                    <SectionHeader title="进行中" count={running.length} countColor={colors.run} />
+                    <RowGroup>
+                      {running.map((row) => (
+                        <RunningRow
+                          key={row.session.id}
+                          row={row}
+                          background={background[row.session.id]}
+                          onPress={() => open(row)}
+                        />
+                      ))}
+                    </RowGroup>
+                  </>
+                ) : null}
+                {settled.length ? (
+                  <>
+                    <SectionHeader title="最近" />
+                    <RowGroup>
+                      {settled.slice(0, recentShown).map((row) => (
+                        <SettledRow key={row.session.id} row={row} onPress={() => open(row)} />
+                      ))}
+                      {settled.length > recentShown ? (
+                        <MoreRow
+                          count={settled.length - recentShown}
+                          onPress={() => setRecentShown((value) => value + 20)}
+                        />
+                      ) : null}
+                    </RowGroup>
+                  </>
+                ) : null}
+              </>
+            )}
+          </>
+        )}
+      </ScrollView>
+      <BottomBar
+        style={{
+          paddingTop: 8,
+          flexDirection: 'row',
+          alignItems: 'flex-start',
+          justifyContent: host ? 'space-between' : 'flex-end',
+        }}
+      >
+        {host ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="搜索会话"
-            onPress={() => setSearch(!search)}
-            style={[s.row, { gap: 9, minHeight: 40 }]}
+            accessibilityLabel={`按项目查看，当前${project?.name ?? '全部项目'}`}
+            onPress={() => setProjectSheet(true)}
+            style={({ pressed }) => ({
+              height: 44,
+              flexShrink: 1,
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              paddingHorizontal: 6,
+              opacity: pressed ? 0.5 : 1,
+            })}
           >
-            <View
-              style={{
-                width: 18,
-                height: 18,
-                borderRadius: 9,
-                borderWidth: 4,
-                borderColor: c.accent,
-                boxShadow: `inset 0 0 0 1.5px ${c.line}`,
-              }}
-            />
-            <Text
-              style={{
-                fontFamily: 'Geist',
-                fontSize: 15,
-                fontWeight: '600',
-                color: c.ink,
-                letterSpacing: -0.15,
-              }}
-            >
-              cc-haha
+            <Icon name="list-filter" size={19} color={colors.ink2} />
+            <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 15, color: colors.ink2 }}>
+              {project?.name ?? '全部项目'}
             </Text>
           </Pressable>
-          <CircleButton
-            name="sliders"
-            label="设置"
-            onPress={() => router.push('/settings')}
-          />
-        </View>
-        {search && (
-          <View style={{ paddingHorizontal: 20, paddingTop: 14 }}>
-            <TextInput
-              autoFocus
-              accessibilityLabel="搜索会话标题"
-              value={query}
-              onChangeText={setQuery}
-              placeholder="搜索标题或项目"
-              placeholderTextColor={c.muted}
-              style={s.input}
-            />
-          </View>
-        )}
-        <View
-          accessibilityLabel="电脑状态"
-          style={[s.row, { paddingHorizontal: 20, marginTop: 22, gap: 22 }]}
-        >
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`切换电脑，当前${host?.name ?? '未连接'}`}
-            onPress={() => router.push('/hosts')}
-          >
-            <Porthole size={176} variant="home" online={fresh}>
-              <View
-                style={{
-                  flex: 1,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: 4,
-                }}
-              >
-                <Text
-                  numberOfLines={1}
-                  style={{
-                    fontFamily: 'Geist',
-                    fontWeight: '600',
-                    fontSize: 14,
-                    color: '#EDEAE4',
-                    maxWidth: 108,
-                  }}
-                >
-                  {host?.name ?? '你的电脑'}
-                </Text>
-                <Text
-                  style={{ fontFamily: mono, fontSize: 11, color: '#A9C27A' }}
-                >
-                  {host
-                    ? `${fresh ? '已连接' : error ? '已断开' : '连接中'} · ${host.auth === 'lan' ? '局域网' : '公网'}`
-                    : '等待连接'}
-                </Text>
-              </View>
-            </Porthole>
-          </Pressable>
-          <View style={{ flex: 1 }}>
-            {[
-              { label: '等你处理', count: data.waiting.length, color: c.amber },
-              { label: '运行中', count: data.running.length, color: c.green },
-              { label: '今天完成', count: data.completedToday, color: c.muted },
-            ].map((item, index) => (
-              <View key={item.label}>
-                {index > 0 && <Divider inset={0} />}
-                <View style={[s.row, { gap: 8, paddingVertical: 10 }]}>
-                  {dot(item.color, 8)}
-                  <Text style={{ flex: 1, color: c.secondary, fontSize: 13 }}>
-                    {item.label}
-                  </Text>
-                  <Text
-                    style={{
-                      fontFamily: mono,
-                      fontSize: 22,
-                      fontWeight: '500',
-                      letterSpacing: -0.44,
-                      color: index === 2 ? c.muted : c.ink,
-                    }}
-                  >
-                    {fresh ? String(item.count).padStart(2, '0') : '—'}
-                  </Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        </View>
-        <View style={{ paddingHorizontal: 16, paddingTop: 24, gap: 10 }}>
-          <Notice text={storageError || connectionError || error} error />
-          {!ready ? (
-            <Loading />
-          ) : !host ? (
-            <Raised style={{ padding: 18 }}>
-              <Empty
-                title="连接你的电脑"
-                detail="扫码回到你的工作现场，随时处理审批、派任务和查看结果。"
-              />
-              <PrimaryButton
-                title="扫码连接"
-                icon="maximize"
-                onPress={() => router.push('/connect')}
-              />
-            </Raised>
-          ) : (
-            <>
-              {data.waiting.map((row) => (
-                <Pressable
-                  key={row.session.id}
-                  accessibilityRole="button"
-                  onPress={() => open(row)}
-                >
-                  <Raised
-                    style={{
-                      paddingTop: 14,
-                      paddingBottom: 14,
-                      paddingLeft: 16,
-                      paddingRight: 14,
-                      gap: 7,
-                    }}
-                  >
-                    <View style={[s.row, { gap: 8 }]}>
-                      {dot(c.amber)}
-                      <Text
-                        numberOfLines={1}
-                        style={{
-                          flex: 1,
-                          fontSize: 15,
-                          fontWeight: '600',
-                          color: c.ink,
-                        }}
-                      >
-                        {row.session.title || '未命名任务'}
-                      </Text>
-                    </View>
-                    <View style={[s.row, { gap: 8 }]}>
-                      {row.activity?.toolName === 'Bash' ? (
-                        <View
-                          style={{
-                            flex: 1,
-                            flexDirection: 'row',
-                            alignItems: 'center',
-                            gap: 8,
-                          }}
-                        >
-                          <Text style={{ fontSize: 12, color: c.muted }}>
-                            想运行
-                          </Text>
-                          <Text
-                            numberOfLines={1}
-                            style={{
-                              flexShrink: 1,
-                              fontFamily: mono,
-                              fontSize: 12,
-                              color: c.ink,
-                              backgroundColor: c.inset,
-                              paddingVertical: 3,
-                              paddingHorizontal: 8,
-                              borderRadius: 7,
-                              boxShadow: 'inset 0 1px 2px rgba(40,30,20,.16)',
-                            }}
-                          >
-                            {row.activity.preview ?? 'Bash'}
-                          </Text>
-                        </View>
-                      ) : (
-                        <Text
-                          numberOfLines={1}
-                          style={{ flex: 1, fontSize: 12, color: c.secondary }}
-                        >
-                          {row.activity?.toolName === 'AskUserQuestion'
-                            ? '在问你：'
-                            : ''}
-                          {row.activity?.preview ?? '需要你做决定'}
-                        </Text>
-                      )}
-                      <Text
-                        style={{
-                          fontFamily: mono,
-                          fontSize: 11,
-                          color: c.muted,
-                        }}
-                      >
-                        {relativeLabel(row.session.modifiedAt)}
-                      </Text>
-                    </View>
-                  </Raised>
-                </Pressable>
-              ))}
-              {data.running.length > 0 && (
-                <Inset style={{ marginTop: 8 }}>
-                  {data.running.map((row, index) => (
-                    <View key={row.session.id}>
-                      {index > 0 && <Divider />}
-                      <Pressable
-                        accessibilityRole="button"
-                        onPress={() => open(row)}
-                        style={[
-                          s.row,
-                          { paddingVertical: 13, paddingHorizontal: 16 },
-                        ]}
-                      >
-                        {dot(c.green)}
-                        <View style={{ flex: 1, gap: 3 }}>
-                          <Text
-                            numberOfLines={1}
-                            style={{
-                              fontSize: 14,
-                              fontWeight: '500',
-                              color: c.ink,
-                            }}
-                          >
-                            {row.session.title || '未命名任务'}
-                          </Text>
-                          <Text
-                            numberOfLines={1}
-                            style={{
-                              fontFamily: mono,
-                              fontSize: 11,
-                              color: c.secondary,
-                            }}
-                          >
-                            {row.activity?.preview ||
-                              row.session.workDir
-                                ?.split(/[\\/]/)
-                                .filter(Boolean)
-                                .pop() ||
-                              '正在处理'}
-                          </Text>
-                        </View>
-                        <Text
-                          style={{
-                            fontFamily: mono,
-                            fontSize: 12,
-                            color: c.screenText,
-                            backgroundColor: c.well,
-                            paddingVertical: 4,
-                            paddingHorizontal: 7,
-                            borderRadius: 6,
-                          }}
-                        >
-                          {row.activity?.startedAt
-                            ? elapsedLabel(row.activity.startedAt)
-                            : '运行中'}
-                        </Text>
-                      </Pressable>
-                    </View>
-                  ))}
-                </Inset>
-              )}
-              <View style={{ marginTop: 8 }}>
-                {data.settled.map((row) => (
-                  <Pressable
-                    key={row.session.id}
-                    accessibilityRole="button"
-                    onPress={() => open(row)}
-                    style={[
-                      s.row,
-                      { paddingVertical: 11, paddingHorizontal: 16 },
-                    ]}
-                  >
-                    {dot(
-                      row.activity?.activityState === 'failed'
-                        ? c.red
-                        : dark ? '#4A4743' : '#C9C6BF'
-                    )}
-                    <Text
-                      numberOfLines={1}
-                      style={{ flex: 1, fontSize: 14, color: c.secondary }}
-                    >
-                      {row.session.title || '未命名任务'}
-                    </Text>
-                    {row.activity?.activityState === 'failed' && (
-                      <Icon name="alert-circle" size={13} color={c.red} />
-                    )}
-                    <Text
-                      style={{ fontFamily: mono, fontSize: 11, color: c.muted }}
-                    >
-                      {relativeLabel(row.session.modifiedAt)}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-              {!loading && !snapshot?.sessions.length && (
-                <Empty
-                  title="还没有任务"
-                  detail="把下一件事交给电脑，在这里看它的进展。"
-                />
-              )}
-              {query &&
-                !data.waiting.length &&
-                !data.running.length &&
-                !data.settled.length && (
-                  <Empty
-                    title="没有找到会话"
-                    detail="换个标题或项目名称试试。"
-                  />
-                )}
-            </>
-          )}
-        </View>
-      </ScrollView>
-      <BottomBar>
-        <PrimaryButton
+        ) : null}
+        <Button
           title="新任务"
-          icon="plus"
-          disabled={!host || !fresh}
-          onPress={() =>
-            host && router.push({ pathname: '/new', params: { host: host.id } })
-          }
+          icon="compose"
+          pill
+          disabled={!canStartTask(link)}
+          onPress={newTask}
+          style={{ paddingLeft: 14 }}
         />
       </BottomBar>
-    </SafeAreaView>
+      {host ? (
+        <>
+          <HostSheet
+            visible={hostSheet}
+            onClose={() => setHostSheet(false)}
+            host={host}
+            link={link}
+            activeSessionIds={activeSessionIds}
+          />
+          <ProjectSheet
+            visible={projectSheet}
+            onClose={() => setProjectSheet(false)}
+            projects={projects}
+            selected={projectKey}
+            total={all.length}
+            onSelect={(key) => {
+              setFilter({ hostId: host.id, key })
+              setRecentShown(recentPage)
+            }}
+          />
+        </>
+      ) : null}
+    </ScreenView>
+  )
+}
+
+/** 大标题下的状态行：圆点 + “在线 · 局域网 / 连接中… / 离线 · N 分钟前最后同步”。 */
+function StatusLine({
+  link,
+  host,
+  lastSyncedAt,
+}: {
+  link: HostLink
+  host: { auth: 'lan' | 'remote' }
+  lastSyncedAt?: number
+}) {
+  const colors = useColors()
+  const now = useNow(30000, link !== 'online')
+  const status = hostStatusLine(link, host, lastSyncedAt, now)
+  return (
+    <View
+      accessibilityLiveRegion="polite"
+      style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+    >
+      <StatusDot tone={status.tone} />
+      <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{status.text}</Text>
+    </View>
+  )
+}
+
+/** 常驻在大标题下的搜索入口；点开进入搜索态。 */
+function SearchEntry({ onPress }: { onPress(): void }) {
+  const colors = useColors()
+  return (
+    <Pressable
+      accessibilityRole="search"
+      accessibilityLabel="搜索任务或项目"
+      onPress={onPress}
+      style={({ pressed }) => ({
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: colors.fill,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 12,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <Icon name="search" size={17} color={colors.ink3} strokeWidth={2} />
+      <Text style={{ fontSize: 15, color: colors.ink3 }}>搜索任务或项目</Text>
+    </Pressable>
   )
 }

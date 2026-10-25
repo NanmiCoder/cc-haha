@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  MESSAGE_LIMIT_BYTES,
   attachmentFromBase64,
   buildComposerMessage,
+  draftSkill,
+  formatBytes,
+  materialsFootnote,
   persistedMessageId,
   restoreFileReferences,
   validateMessageSize,
@@ -166,5 +170,30 @@ describe('real mobile composition', () => {
       false
     )
     expect(runtimeMatches({ ...desired }, desired)).toBe(true)
+  })
+})
+
+describe('composer materials copy', () => {
+  test('sizes read like the design and never show zero for a real file', () => {
+    expect(formatBytes(1)).toBe('1 KB')
+    expect(formatBytes(320 * 1024)).toBe('320 KB')
+    expect(formatBytes(1.4 * 1024 * 1024)).toBe('1.4 MB')
+    expect(formatBytes(8 * 1024 * 1024)).toBe('8 MB')
+    expect(formatBytes(0)).toBe('0 KB')
+  })
+  test('the footnote states the same limits the validator enforces', () => {
+    expect(materialsFootnote()).toBe(
+      '图片会压缩到长边 1280，单个文件不超过 6 MB。这条消息在局域网下最多 8 MB，公网 1 MB。'
+    )
+    const big = { type: 'user_message' as const, content: 'x'.repeat(MESSAGE_LIMIT_BYTES.remote) }
+    expect(() => validateMessageSize(big, 'remote')).toThrow('1 MB')
+    expect(() => validateMessageSize(big, 'lan')).not.toThrow()
+  })
+  test('detects the skill a draft starts with, matching withSkill output', () => {
+    const skill = { name: 'review', description: '', kind: 'skill' as const }
+    expect(draftSkill(withSkill('改完看一遍', skill))).toBe('review')
+    expect(draftSkill(withSkill('', skill))).toBe('review')
+    expect(draftSkill('先 /review 一下')).toBeNull()
+    expect(draftSkill('/')).toBeNull()
   })
 })

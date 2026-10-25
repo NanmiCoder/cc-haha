@@ -1,5 +1,6 @@
 import type { ApiClient } from './client'
 import type { HistoryEntry } from './types'
+import { formatDuration } from './dashboard'
 
 export type RewindMode = 'both' | 'conversation' | 'code'
 export type Checkpoint = {
@@ -226,8 +227,7 @@ export function taskElapsed(task: BackgroundTask, now = Date.now()) {
   if (!task.startedAt) return ''
   const since = Date.parse(task.startedAt)
   if (!Number.isFinite(since)) return ''
-  const seconds = Math.max(0, Math.floor((now - since) / 1000))
-  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+  return formatDuration((now - since) / 1000)
 }
 
 export type ScheduledTask = {

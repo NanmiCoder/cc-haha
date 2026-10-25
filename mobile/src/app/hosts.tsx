@@ -1,42 +1,31 @@
-import { useCallback, useMemo, useState } from 'react'
-import {
-  ActivityIndicator,
-  Alert,
-  Animated,
-  AppState,
-  PanResponder,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  View,
-} from 'react-native'
+import { Fragment, useMemo, useState } from 'react'
+import { Alert, Animated, PanResponder, Pressable, RefreshControl, ScrollView, View } from 'react-native'
+import { router } from 'expo-router'
 import { Text } from '../ui/Text'
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
-import { router, useFocusEffect } from 'expo-router'
-import { useApp, useConnection } from '../state/AppContext'
-import { ApiError } from '../core/client'
+import { useApp } from '../state/AppContext'
 import type { Host } from '../core/types'
 import {
-  CircleButton,
-  Empty,
+  EmptyState,
+  Footnote,
+  Group,
   Icon,
-  Notice,
-  PrimaryButton,
-  Raised,
-  errorText,
-  mono,
-  useTheme,
-} from '../ui/theme'
-import { Porthole } from '../ui/Porthole'
+  InlineError,
+  ListRow,
+  Mono,
+  NavBar,
+  ScreenView,
+  Separator,
+  Spinner,
+  useColors,
+} from '../ui/kit'
+import { errorText } from '../ui/theme'
+import { hostCheckBadge, hostCheckLine } from '../ui/home/homeModel'
+import { StatusDot, useNow, useToneColor } from '../ui/home/parts'
+import { useHostCheck } from '../ui/home/useHostCheck'
 
-type HostStatus = {
-  state: 'checking' | 'online' | 'offline' | 'unauthorized'
-  message?: string
-  expiresAt?: number
-  running?: number
-  checkedAt?: number
-}
-function HostCard({
+const actionWidth = 84
+
+function HostRow({
   host,
   current,
   refresh,
@@ -49,9 +38,10 @@ function HostCard({
   onSelect(): void
   onRemove(): void
 }) {
-  const { colors, styles } = useTheme()
-  const { client, error } = useConnection(host.id)
-  const [status, setStatus] = useState<HostStatus>({ state: 'checking' })
+  const colors = useColors()
+  const toneColor = useToneColor()
+  const check = useHostCheck(host, refresh)
+  const now = useNow(60000)
   const [offset] = useState(() => new Animated.Value(0))
   const [opened, setOpened] = useState(false)
   const swipe = useMemo(
@@ -62,130 +52,36 @@ function HostCard({
           Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
         onPanResponderMove: (_, gesture) =>
           offset.setValue(
-            Math.min(0, Math.max(-84, gesture.dx + (opened ? -84 : 0)))
+            Math.min(0, Math.max(-actionWidth, gesture.dx + (opened ? -actionWidth : 0)))
           ),
         onPanResponderRelease: (_, gesture) => {
           const next = gesture.dx < -30 || (opened && gesture.dx < 30)
           setOpened(next)
           Animated.spring(offset, {
-            toValue: next ? -84 : 0,
+            toValue: next ? -actionWidth : 0,
             useNativeDriver: true,
           }).start()
         },
         onPanResponderTerminate: () =>
           Animated.spring(offset, {
-            toValue: opened ? -84 : 0,
+            toValue: opened ? -actionWidth : 0,
             useNativeDriver: true,
           }).start(),
       }),
     [offset, opened]
   )
-  useFocusEffect(
-    useCallback(() => {
-      if (!client) return
-      void refresh
-      const controller = new AbortController()
-      let timer: ReturnType<typeof setTimeout>
-      let checking = false
-      async function check() {
-        if (checking || controller.signal.aborted) return
-        checking = true
-        try {
-          let expiresAt: number | undefined
-          if (client!.host.auth === 'remote') {
-            const result = await client!.get<{
-              authenticated: boolean
-              expiresAt?: number
-            }>('/api/public-access/session', {
-              signal: controller.signal,
-              timeoutMs: 6000,
-            })
-            if (!result.authenticated)
-              throw new ApiError('授权已失效，请重新配对', 401)
-            expiresAt = result.expiresAt
-          } else
-            await client!.verify({ signal: controller.signal, timeoutMs: 6000 })
-          if (controller.signal.aborted) return
-          setStatus({ state: 'online', expiresAt, checkedAt: Date.now() })
-          try {
-            const live = await client!.get<{
-              sessions: { activityState: string }[]
-            }>('/api/sessions/live-status', {
-              signal: controller.signal,
-              timeoutMs: 6000,
-            })
-            if (!controller.signal.aborted)
-              setStatus({
-                state: 'online',
-                expiresAt,
-                running: live.sessions.length,
-                checkedAt: Date.now(),
-              })
-          } catch {
-            /* Older desktops can still be connected without live activity metadata. */
-          }
-        } catch (failure) {
-          if (!controller.signal.aborted)
-            setStatus({
-              state:
-                failure instanceof ApiError &&
-                [401, 403].includes(failure.status)
-                  ? 'unauthorized'
-                  : 'offline',
-              message: errorText(failure),
-            })
-        } finally {
-          checking = false
-          if (!controller.signal.aborted) timer = setTimeout(check, 20000)
-        }
-      }
-      setStatus({ state: 'checking' })
-      void check()
-      const listener = AppState.addEventListener('change', (state) => {
-        if (state === 'active') {
-          clearTimeout(timer)
-          void check()
-        }
-      })
-      return () => {
-        controller.abort()
-        clearTimeout(timer)
-        listener.remove()
-      }
-    }, [client, refresh])
-  )
-  const state = error ? 'unauthorized' : status.state
-  const online = state === 'online'
-  const days = status.expiresAt
-    ? Math.max(
-        0,
-        Math.ceil(
-          (status.expiresAt - (status.checkedAt ?? status.expiresAt)) / 86400000
-        )
-      )
-    : undefined
-  const detail =
-    state === 'checking'
-      ? '正在检查连接…'
-      : state === 'unauthorized'
-        ? '授权已失效 · 请重新连接'
-        : state === 'offline'
-          ? '离线 · 暂时无法连接'
-          : status.running
-            ? `${status.running} 个任务进行中`
-            : host.auth === 'remote'
-              ? days !== undefined
-                ? `已授权 · ${days < 1 ? '不足 1 天' : `${days} 天`}后到期`
-                : '已授权 · 在线'
-              : '在线 · 可以开始任务'
+  const detail = hostCheckLine(host, check, now)
+  const badge = hostCheckBadge(check)
+  const tone =
+    check.state === 'online' ? 'ok' : check.state === 'unauthorized' ? 'err' : 'faint'
+  let address = host.url
+  try {
+    address = new URL(host.url).host
+  } catch {
+    /* 已保存的地址都校验过，这里只是展示兜底。 */
+  }
   return (
-    <View
-      style={{
-        borderRadius: 20,
-        backgroundColor: colors.red,
-        overflow: 'hidden',
-      }}
-    >
+    <View style={{ backgroundColor: colors.err }}>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`移除 ${host.name}`}
@@ -195,22 +91,22 @@ function HostCard({
           right: 0,
           top: 0,
           bottom: 0,
-          width: 80,
+          width: actionWidth,
           alignItems: 'center',
           justifyContent: 'center',
-          gap: 6,
+          gap: 4,
         }}
       >
-        <Icon name="trash-2" color="#fff" />
-        <Text style={{ color: '#fff', fontSize: 12 }}>移除</Text>
+        <Icon name="trash" size={20} color="#FFFFFF" />
+        <Text style={{ color: colors.onErr, fontSize: 12, fontWeight: '600' }}>移除</Text>
       </Pressable>
       <Animated.View
         {...swipe.panHandlers}
-        style={{ transform: [{ translateX: offset }] }}
+        style={{ backgroundColor: colors.card, transform: [{ translateX: offset }] }}
       >
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={`${host.name}，${detail}${current ? '，当前电脑' : ''}`}
+          accessibilityLabel={`${host.name}，${detail}${badge ? `，${badge.text}` : ''}${current ? '，当前电脑' : ''}`}
           accessibilityActions={[{ name: 'delete', label: '移除连接' }]}
           onAccessibilityAction={(event) => {
             if (event.nativeEvent.actionName === 'delete') onRemove()
@@ -219,107 +115,48 @@ function HostCard({
           onPress={() => {
             if (opened) {
               setOpened(false)
-              Animated.spring(offset, {
-                toValue: 0,
-                useNativeDriver: true,
-              }).start()
+              Animated.spring(offset, { toValue: 0, useNativeDriver: true }).start()
             } else onSelect()
           }}
+          style={({ pressed }) => ({
+            minHeight: 72,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 12,
+            backgroundColor: pressed ? colors.fill : colors.card,
+          })}
         >
-          <Raised
-            style={{
-              padding: 16,
-              borderRadius: 20,
-              backgroundColor:
-                state === 'offline' ? colors.inset : colors.surface,
-              borderWidth: current ? 1.5 : 0,
-              borderColor: colors.accent,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 14,
-              minHeight: 100,
-            }}
-          >
-            <Porthole
-              size={58}
-              online={online}
-              muted={state === 'offline' || state === 'unauthorized'}
-            />
-            <View style={{ flex: 1, gap: 5 }}>
-              <View
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 7 }}
-              >
-                <Text
-                  numberOfLines={1}
-                  style={{
-                    fontSize: 16,
-                    fontWeight: '600',
-                    color: colors.ink,
-                    flexShrink: 1,
-                  }}
-                >
-                  {host.name}
-                </Text>
-                {current && (
-                  <Text
-                    style={{
-                      color: colors.accent,
-                      borderColor: colors.accent,
-                      borderWidth: 1,
-                      borderRadius: 5,
-                      paddingHorizontal: 4,
-                      paddingVertical: 1,
-                      fontSize: 10,
-                    }}
-                  >
-                    当前
-                  </Text>
-                )}
-              </View>
-              <Text
-                numberOfLines={1}
-                style={{ color: colors.muted, fontFamily: mono, fontSize: 10 }}
-              >
-                {host.auth === 'lan' ? '局域网' : '公网'} ·{' '}
-                {new URL(host.url).host}
-              </Text>
-              <Text
-                style={[
-                  styles.small,
-                  {
-                    fontSize: 11,
-                    color: online
-                      ? colors.green
-                      : state === 'unauthorized'
-                        ? colors.red
-                        : colors.muted,
-                  },
-                ]}
-              >
-                {detail}
-              </Text>
-            </View>
-            {state === 'checking' ? (
-              <ActivityIndicator size="small" color={colors.muted} />
-            ) : (
-              !current && (
-                <View
-                  style={{
-                    minHeight: 36,
-                    paddingHorizontal: 12,
-                    justifyContent: 'center',
-                    borderRadius: 12,
-                    backgroundColor: colors.surface,
-                    boxShadow: `inset 0 1px 0 ${colors.highlight}, 0 1px 3px rgba(60,45,30,.16)`,
-                  }}
-                >
-                  <Text style={{ fontSize: 12, color: colors.secondary }}>
-                    切换
-                  </Text>
-                </View>
-              )
-            )}
-          </Raised>
+          <View style={{ marginHorizontal: 6 }}>
+            <StatusDot tone={tone} size={8} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+            <Text
+              numberOfLines={1}
+              style={{
+                fontSize: 16,
+                lineHeight: 21,
+                color: check.state === 'online' ? colors.ink : colors.ink2,
+              }}
+            >
+              {host.name}
+            </Text>
+            <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
+              {detail}
+            </Text>
+            <Mono numberOfLines={1} style={{ fontSize: 12.5, lineHeight: 18, color: colors.ink3 }}>
+              {address}
+            </Mono>
+          </View>
+          {check.state === 'checking' ? (
+            <Spinner color={colors.ink3} track={colors.fill} />
+          ) : badge ? (
+            <Text style={{ fontSize: 13, color: toneColor(badge.tone) }}>{badge.text}</Text>
+          ) : null}
+          {current ? (
+            <Icon name="check" size={18} color={colors.ink} strokeWidth={2.2} />
+          ) : null}
         </Pressable>
       </Animated.View>
     </View>
@@ -328,8 +165,7 @@ function HostCard({
 
 export default function Hosts() {
   const { registry, select, remove, error: storageError } = useApp()
-  const { colors, styles } = useTheme()
-  const insets = useSafeAreaInsets()
+  const colors = useColors()
   const [error, setError] = useState('')
   const [refresh, setRefresh] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -363,77 +199,57 @@ export default function Hosts() {
     }
   }
   return (
-    <SafeAreaView style={styles.page} edges={['top', 'left', 'right']}>
-      <View style={{ paddingHorizontal: 16, paddingTop: 7 }}>
-        <CircleButton
-          name="chevron-left"
-          label="返回"
-          onPress={() =>
-            router.canGoBack() ? router.back() : router.replace('/')
-          }
-        />
-      </View>
+    <ScreenView>
+      <NavBar title="你的电脑" />
       <ScrollView
         refreshControl={
           <RefreshControl
             refreshing={false}
             onRefresh={() => setRefresh((value) => value + 1)}
-            tintColor={colors.accent}
+            tintColor={colors.ink3}
           />
         }
-        contentContainerStyle={{
-          paddingHorizontal: 16,
-          paddingTop: 14,
-          paddingBottom: 24,
-          gap: 10,
-          flexGrow: 1,
-        }}
+        contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 8, paddingBottom: 32 }}
       >
-        <Text style={[styles.title, { marginLeft: 4, marginBottom: 8 }]}>
-          你的电脑
-        </Text>
-        <Notice text={error || storageError} error />
-        {!registry.hosts.length && (
-          <Empty
+        <InlineError text={error || storageError} style={{ marginBottom: 12 }} />
+        {registry.hosts.length ? (
+          <>
+            <Group>
+              {registry.hosts.map((host, index) => (
+                <Fragment key={host.id}>
+                  {index > 0 && <Separator inset={46} />}
+                  <HostRow
+                    host={host}
+                    current={registry.selectedId === host.id}
+                    refresh={refresh}
+                    onSelect={() => {
+                      void selectHost(host)
+                    }}
+                    onRemove={() => removeHost(host)}
+                  />
+                </Fragment>
+              ))}
+            </Group>
+            <Footnote>
+              电脑休眠或没打开 cc-haha 时连不上。左滑或长按可移除，只会删掉手机上的连接，电脑上的会话还在。
+            </Footnote>
+          </>
+        ) : (
+          <EmptyState
+            icon="laptop"
             title="先连接第一台电脑"
             detail="打开电脑上的 cc-haha，在「设置 → H5 访问」或「公网访问」中获取连接二维码。"
           />
         )}
-        {registry.hosts.map((host) => (
-          <HostCard
-            key={host.id}
-            host={host}
-            current={registry.selectedId === host.id}
-            refresh={refresh}
-            onSelect={() => {
-              void selectHost(host)
-            }}
-            onRemove={() => removeHost(host)}
+        <Group style={{ marginTop: 22 }}>
+          <ListRow
+            leading={<Icon name="plus" size={20} color={colors.ink} strokeWidth={2} />}
+            title="添加电脑"
+            minHeight={52}
+            onPress={() => router.push('/connect')}
           />
-        ))}
-        <Text
-          style={[
-            styles.small,
-            { paddingHorizontal: 4, marginTop: 6, lineHeight: 19 },
-          ]}
-        >
-          电脑休眠或没打开 cc-haha
-          时连不上。左滑可移除，只会删掉手机上的连接，电脑上的会话还在。
-        </Text>
+        </Group>
       </ScrollView>
-      <View
-        style={{
-          paddingHorizontal: 20,
-          paddingTop: 12,
-          paddingBottom: Math.max(insets.bottom, 18),
-        }}
-      >
-        <PrimaryButton
-          title="扫码添加电脑"
-          icon="maximize"
-          onPress={() => router.push('/connect')}
-        />
-      </View>
-    </SafeAreaView>
+    </ScreenView>
   )
 }

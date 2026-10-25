@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { ApiClient, ApiError } from './client'
 import {
   DashboardPoller,
+  classifyDashboardError,
   loadDashboardSnapshot,
   type DashboardSnapshot,
 } from './dashboardSync'
@@ -311,6 +312,39 @@ test('a network failure retains the last snapshot for viewing but clears its fre
   poller.stop()
 })
 
+test('one network blip after a good snapshot is a retry, not offline; two in a row are offline', async () => {
+  const time = clock()
+  const kinds: (string | undefined)[] = []
+  const outcomes = ['ok', 'down', 'ok', 'down', 'down', 'auth']
+  let calls = 0
+  const poller = new DashboardPoller(
+    client(() => ({})),
+    {
+      snapshot: () => {},
+      fresh: () => {},
+      loading: () => {},
+      error: (message, kind) => {
+        kinds.push(message ? kind : 'clear')
+      },
+    },
+    time,
+    async () => {
+      const outcome = outcomes[calls++] ?? 'ok'
+      if (outcome === 'down') throw new ApiError('无法连接服务器', 0, 'NETWORK_ERROR')
+      if (outcome === 'auth') throw new ApiError('Unauthorized', 401)
+      return snapshot('a', time.now())
+    }
+  )
+  poller.start()
+  for (let index = 0; index < outcomes.length; index++) {
+    await flush()
+    time.advance(3000)
+  }
+  await flush()
+  expect(kinds.slice(0, 6)).toEqual(['clear', 'slow', 'clear', 'slow', 'offline', 'unauthorized'])
+  poller.stop()
+})
+
 test('stopping a host poller prevents its delayed response from replacing a newly selected host', async () => {
   const time = clock(),
     observed = observer(),
@@ -336,4 +370,72 @@ test('stopping a host poller prevents its delayed response from replacing a newl
   expect(observed.state.snapshots.map((value) => value.hostId)).toEqual(['b'])
   expect(observed.state.fresh).toBe(true)
   second.stop()
+})
+
+test('failures are classified so the home can tell offline from revoked access and bad responses', () => {
+  expect(
+    classifyDashboardError(new ApiError('无法连接服务器', 0, 'NETWORK_ERROR'))
+  ).toBe('offline')
+  expect(
+    classifyDashboardError(new ApiError('连接超时', 0, 'TIMEOUT'))
+  ).toBe('offline')
+  expect(classifyDashboardError(new ApiError('Bad gateway', 502))).toBe(
+    'offline'
+  )
+  expect(classifyDashboardError(new ApiError('Unauthorized', 401))).toBe(
+    'unauthorized'
+  )
+  expect(classifyDashboardError(new ApiError('Forbidden', 403))).toBe(
+    'unauthorized'
+  )
+  expect(
+    classifyDashboardError(
+      new ApiError('需要重新配对这台电脑', 401, 'PAIRING_REQUIRED')
+    )
+  ).toBe('unauthorized')
+  expect(
+    classifyDashboardError(
+      new ApiError('电脑返回的会话分页无效', 0, 'INVALID_RESPONSE')
+    )
+  ).toBe('failed')
+  expect(classifyDashboardError(new ApiError('Server error', 500))).toBe(
+    'failed'
+  )
+  expect(classifyDashboardError(new TypeError('boom'))).toBe('failed')
+})
+
+test('the poller reports the failure kind with the message and clears it on recovery', async () => {
+  const time = clock()
+  const kinds: (string | undefined)[] = []
+  let calls = 0
+  const poller = new DashboardPoller(
+    client(() => ({})),
+    {
+      snapshot: () => {},
+      fresh: () => {},
+      loading: () => {},
+      error: (message, kind) => {
+        kinds.push(message ? kind : 'clear')
+      },
+    },
+    time,
+    async () => {
+      calls++
+      if (calls === 1)
+        throw new ApiError('无法连接服务器', 0, 'NETWORK_ERROR')
+      if (calls === 2) throw new ApiError('Unauthorized', 401)
+      if (calls === 3) return snapshot('a', time.now() - 20000)
+      return snapshot('a', time.now())
+    }
+  )
+  poller.start()
+  await flush()
+  time.advance(3000)
+  await flush()
+  time.advance(3000)
+  await flush()
+  time.advance(3000)
+  await flush()
+  expect(kinds).toEqual(['offline', 'unauthorized', 'slow', 'clear'])
+  poller.stop()
 })

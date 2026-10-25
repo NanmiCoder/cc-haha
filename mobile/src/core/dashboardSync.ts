@@ -12,6 +12,21 @@ export type DashboardSnapshot = {
 type DashboardClient = Pick<ApiClient, 'host' | 'get'>
 const pageSize = 500
 
+/** slow=电脑回应太慢；offline=连不上；unauthorized=凭据被拒；failed=电脑回应了但读取失败。 */
+export type DashboardFailure = 'slow' | 'offline' | 'unauthorized' | 'failed'
+export function classifyDashboardError(error: unknown): DashboardFailure {
+  if (!(error instanceof ApiError)) return 'failed'
+  if ([401, 403].includes(error.status) || error.code === 'PAIRING_REQUIRED')
+    return 'unauthorized'
+  // 公网访问经中转时，睡着的电脑表现为网关错误。
+  if (
+    ['NETWORK_ERROR', 'TIMEOUT'].includes(error.code ?? '') ||
+    [502, 503, 504].includes(error.status)
+  )
+    return 'offline'
+  return 'failed'
+}
+
 /** The desktop's offset advances over index rows, including unreadable rows it
  * filters from a response. A short page therefore does not mean end-of-list. */
 export async function loadDashboardSnapshot(
@@ -79,7 +94,8 @@ type Callbacks = {
   snapshot(value: DashboardSnapshot): void
   fresh(value: boolean): void
   loading(value: boolean): void
-  error(value: string): void
+  /** 空字符串表示恢复；kind 让界面区分离线、授权失效和读取失败。 */
+  error(value: string, kind?: DashboardFailure): void
 }
 type Timers = {
   set(task: () => void, delay: number): unknown
@@ -100,6 +116,8 @@ export class DashboardPoller {
   private inFlight = false
   private pending = false
   private hasSnapshot = false
+  /** 连续连不上的次数；已有快照时第一次失败只算“正在重试”，不立刻判离线。 */
+  private offlineStreak = 0
   private epoch = 0
   private request?: AbortController
   private pollTimer: unknown
@@ -166,11 +184,11 @@ export class DashboardPoller {
       )
       if (current()) {
         this.hasSnapshot = true
+        this.offlineStreak = 0
         this.callbacks.snapshot(snapshot)
         const remaining = snapshot.checkedAt + 12000 - this.clock.now()
-        this.callbacks.error(
-          remaining > 0 ? '' : '电脑状态更新耗时较长，正在重新同步'
-        )
+        if (remaining > 0) this.callbacks.error('')
+        else this.callbacks.error('电脑状态更新耗时较长，正在重新同步', 'slow')
         this.callbacks.fresh(remaining > 0)
         this.clock.clear(this.freshnessTimer)
         if (remaining > 0)
@@ -182,9 +200,16 @@ export class DashboardPoller {
       if (current()) {
         this.clock.clear(this.freshnessTimer)
         this.callbacks.fresh(false)
-        this.callbacks.error(
-          error instanceof Error ? error.message : '无法同步电脑状态'
-        )
+        const kind = classifyDashboardError(error)
+        this.offlineStreak = kind === 'offline' ? this.offlineStreak + 1 : 0
+        // 一次网络抖动不应把首页切到离线卡；连续两次连不上才算离线。
+        if (kind === 'offline' && this.hasSnapshot && this.offlineStreak < 2)
+          this.callbacks.error('连接不太稳定，正在重试', 'slow')
+        else
+          this.callbacks.error(
+            error instanceof Error ? error.message : '无法同步电脑状态',
+            kind
+          )
       }
     } finally {
       this.inFlight = false
