@@ -253,7 +253,7 @@ describe('Business Flow: Permission Modes', () => {
     const settingsPath = path.join(tmpDir, 'settings.json')
     const raw = await fs.readFile(settingsPath, 'utf-8')
     const settings = JSON.parse(raw)
-    expect(settings.defaultMode).toBe('plan')
+    expect(settings.permissions?.defaultMode).toBe('plan')
   })
 })
 
@@ -494,7 +494,7 @@ describe('Business Flow: Models & Effort', () => {
     const raw = await fs.readFile(settingsPath, 'utf-8')
     const settings = JSON.parse(raw)
     expect(settings.model).toBe('claude-opus-4-7')
-    expect(settings.effort).toBe('high')
+    expect(settings.effortLevel).toBe('high')
   })
 })
 

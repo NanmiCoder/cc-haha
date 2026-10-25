@@ -65,7 +65,10 @@
       "target": "nsis",
       "icon": "src-tauri/icons/icon.ico",
       "extraResources": [
-        { "from": "src-tauri/icons/icon.ico", "to": "app-icon.ico" }
+        {
+          "from": "src-tauri/icons/icon.ico",
+          "to": "app-icon.ico"
+        }
       ]
     },
     "nsis": {
@@ -164,7 +167,7 @@
     "@vitest/coverage-v8": "3.2.4",
     "docx-preview": "0.4.1",
     "electron": "^42.4.0",
-    "electron-builder": "^26.8.1",
+    "electron-builder": "^26.18.0",
     "eslint": "^9",
     "eslint-plugin-react-hooks": "^5",
     "fflate": "^0.8.3",

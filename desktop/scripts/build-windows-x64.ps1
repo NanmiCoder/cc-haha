@@ -83,7 +83,7 @@ function Clear-Directory {
 
 Assert-WindowsHost
 Assert-Command bun
-Assert-Command bunx
+Assert-Command node
 Import-VsDevEnvironment
 
 if ($env:SKIP_INSTALL -ne '1') {
@@ -138,7 +138,8 @@ try {
 
   if ($env:REBUILD_NATIVE -eq '1') {
     Write-Step 'Rebuilding native dependencies for Electron ABI...'
-    & bunx electron-builder install-app-deps
+    # electron-builder must run under node; bun crashes in NodeModuleCollector traversal.
+    & node (Join-Path $desktopDir 'node_modules\electron-builder\out\cli\cli.js') install-app-deps
     if ($LASTEXITCODE -ne 0) {
       throw "[build-windows-x64] electron-builder install-app-deps failed (exit $LASTEXITCODE)"
     }
@@ -148,14 +149,17 @@ try {
     }
   }
 
-  $args = @('electron-builder', '--win', 'nsis', '--x64', '--publish', 'never')
+  # electron-builder must run under node; under bun it crashes silently in
+  # NodeModuleCollector ("manual traversal of node_modules") and the build appears stuck.
+  $builderCli = Join-Path $desktopDir 'node_modules\electron-builder\out\cli\cli.js'
+  $builderCliArgs = @('--win', 'nsis', '--x64', '--publish', 'never')
   $remainingArgs = @($BuilderArgs)
   if ($remainingArgs.Count -gt 0) {
-    $args += $remainingArgs
+    $builderCliArgs += $remainingArgs
   }
 
   Write-Step 'Packaging Electron app...'
-  & bunx @args
+  & node $builderCli @builderCliArgs
   if ($LASTEXITCODE -ne 0) {
     throw "[build-windows-x64] electron-builder failed (exit $LASTEXITCODE)"
   }

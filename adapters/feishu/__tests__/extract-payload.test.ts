@@ -22,6 +22,16 @@ describe('extractInboundPayload', () => {
     expect(result.pendingDownloads).toEqual([])
   })
 
+  it('pulls text out of a single-locale post (rich text) message', () => {
+    const content = JSON.stringify({
+      title: 'greeting',
+      content: [[{ tag: 'text', text: 'hi ' }, { tag: 'text', text: 'there' }]],
+    })
+    const result = extractInboundPayload(content, 'post')
+    expect(result.text).toBe('hi there')
+    expect(result.pendingDownloads).toEqual([])
+  })
+
   it('identifies an image message as a pending image download', () => {
     const content = JSON.stringify({ image_key: 'img_key_abc' })
     const result = extractInboundPayload(content, 'image')

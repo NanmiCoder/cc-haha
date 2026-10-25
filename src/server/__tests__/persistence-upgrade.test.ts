@@ -624,6 +624,49 @@ describe('persistent storage upgrade migrations', () => {
     expect(settings.userOwnedFutureField).toEqual({ nested: true })
   })
 
+  test('moves legacy desktop defaultMode/effort keys onto schema-canonical keys', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'settings.json'),
+      JSON.stringify({
+        defaultMode: 'acceptEdits',
+        effort: 'high',
+        permissions: { allow: ['Read'] },
+      }, null, 2),
+      'utf-8',
+    )
+
+    const report = await ensurePersistentStorageUpgraded()
+
+    expect(report.failures).toEqual([])
+    expect(report.migratedEntries).toContain('settings.json')
+    const settings = JSON.parse(await fs.readFile(path.join(tempDir, 'settings.json'), 'utf-8')) as Record<string, unknown>
+    expect(settings.defaultMode).toBeUndefined()
+    expect(settings.effort).toBeUndefined()
+    expect((settings.permissions as Record<string, unknown>).defaultMode).toBe('acceptEdits')
+    expect((settings.permissions as Record<string, unknown>).allow).toEqual(['Read'])
+    expect(settings.effortLevel).toBe('high')
+  })
+
+  test('does not overwrite existing canonical keys with stale legacy keys', async () => {
+    await fs.writeFile(
+      path.join(tempDir, 'settings.json'),
+      JSON.stringify({
+        defaultMode: 'acceptEdits',
+        effort: 'high',
+        permissions: { defaultMode: 'plan' },
+        effortLevel: 'low',
+      }, null, 2),
+      'utf-8',
+    )
+
+    const report = await ensurePersistentStorageUpgraded()
+
+    expect(report.failures).toEqual([])
+    const settings = JSON.parse(await fs.readFile(path.join(tempDir, 'settings.json'), 'utf-8')) as Record<string, unknown>
+    expect((settings.permissions as Record<string, unknown>).defaultMode).toBe('plan')
+    expect(settings.effortLevel).toBe('low')
+  })
+
   test('quarantines malformed managed settings instead of blocking startup', async () => {
     const ccHahaDir = path.join(tempDir, 'cc-haha')
     await fs.mkdir(ccHahaDir, { recursive: true })

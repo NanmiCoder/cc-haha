@@ -5583,8 +5583,8 @@ async function getDefaultRuntimeSettings(): Promise<RuntimeSettings> {
       ? modelSettings.modelContext
       : undefined
   let effort =
-    typeof userSettings.effort === 'string' && userSettings.effort.trim()
-      ? userSettings.effort
+    typeof userSettings.effortLevel === 'string' && userSettings.effortLevel.trim()
+      ? userSettings.effortLevel
       : undefined
   const thinking = resolveDesktopThinkingMode(userSettings, resolvedActiveId)
 

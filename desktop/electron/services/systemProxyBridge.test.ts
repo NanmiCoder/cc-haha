@@ -1,17 +1,40 @@
 import http from 'node:http'
+import https from 'node:https'
 import net from 'node:net'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'node:events'
 import { PassThrough, type Duplex } from 'node:stream'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import {
   parseSystemProxyRules,
   sanitizeProxyRequestHeaders,
   SystemProxyBridge,
 } from './systemProxyBridge'
 
-const servers: Array<http.Server | net.Server> = []
+const servers: Array<http.Server | https.Server | net.Server> = []
 const bridges: SystemProxyBridge[] = []
 const sockets = new Set<Duplex>()
+
+// Allow self-signed loopback test certs for the absolute-URI HTTPS forwarding tests.
+// This is enabled only inside this test file at module load, before any TLS handshake runs.
+beforeAll(() => {
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'
+})
+
+const TEST_CERT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '__fixtures__')
+
+type TestCert = { cert: Buffer, key: Buffer }
+let cachedTestCert: TestCert | null = null
+function loadTestCert(): TestCert {
+  if (cachedTestCert) return cachedTestCert
+  cachedTestCert = {
+    cert: fs.readFileSync(path.join(TEST_CERT_DIR, 'tls-test.cert.pem')),
+    key: fs.readFileSync(path.join(TEST_CERT_DIR, 'tls-test.key.pem')),
+  }
+  return cachedTestCert
+}
 
 afterEach(async () => {
   await Promise.all(bridges.splice(0).map(bridge => bridge.stop()))
@@ -308,6 +331,102 @@ describe('SystemProxyBridge', () => {
 
     await expect(requestThroughProxy(bridge, `http://127.0.0.1:${targetPort}/health`))
       .resolves.toBe('loopback')
+    expect(resolver).not.toHaveBeenCalled()
+  })
+
+  it('forwards absolute-URI HTTPS POST through the bridge as origin-form with body and headers intact', async () => {
+    const { port: targetPort, record } = await createHttpsEchoServer()
+    const bridge = await startBridge(async () => 'DIRECT')
+
+    const absoluteUrl = `https://127.0.0.1:${targetPort}/api/v1/auth?lang=en`
+    const response = await requestAbsoluteHttpsThroughBridge(
+      bridge,
+      absoluteUrl,
+      'POST',
+      JSON.stringify({ app_id: 'cli_test', app_secret: 's' }),
+      { 'content-type': 'application/json', 'x-custom-header': 'preserve-me' },
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers['x-echo']).toBe('ok')
+    const payload = JSON.parse(response.body)
+    expect(payload.method).toBe('POST')
+    expect(payload.url).toBe('/api/v1/auth?lang=en')
+    expect(payload.host).toBe(`127.0.0.1:${targetPort}`)
+    expect(payload.contentType).toBe('application/json')
+    expect(payload.body).toBe(JSON.stringify({ app_id: 'cli_test', app_secret: 's' }))
+
+    const captured = record()
+    expect(captured.method).toBe('POST')
+    expect(captured.url).toBe('/api/v1/auth?lang=en')
+    expect(captured.headers['x-custom-header']).toBe('preserve-me')
+    expect(captured.body).toBe(JSON.stringify({ app_id: 'cli_test', app_secret: 's' }))
+  })
+
+  it('forwards absolute-URI HTTPS GET through the bridge as origin-form', async () => {
+    const { port: targetPort, record } = await createHttpsEchoServer()
+    const bridge = await startBridge(async () => 'DIRECT')
+
+    const absoluteUrl = `https://127.0.0.1:${targetPort}/open-apis/im/v1/messages?count=2`
+    const response = await requestAbsoluteHttpsThroughBridge(bridge, absoluteUrl, 'GET')
+
+    expect(response.status).toBe(200)
+    const payload = JSON.parse(response.body)
+    expect(payload.method).toBe('GET')
+    expect(payload.url).toBe('/open-apis/im/v1/messages?count=2')
+    expect(payload.host).toBe(`127.0.0.1:${targetPort}`)
+    expect(payload.body).toBe('')
+
+    const captured = record()
+    expect(captured.method).toBe('GET')
+    expect(captured.url).toBe('/open-apis/im/v1/messages?count=2')
+    expect(captured.headers.host).toBe(`127.0.0.1:${targetPort}`)
+  })
+
+  it('returns 502 when the upstream HTTPS target is unreachable and does not hang', async () => {
+    const closedPort = await reserveClosedPort()
+    const bridge = new SystemProxyBridge(async () => 'DIRECT')
+    bridges.push(bridge)
+    const bridgeUrl = await bridge.start()
+    const trackedSockets: Duplex[] = []
+    vi.spyOn(bridge as unknown as { trackOutboundSocket(socket: Duplex): void }, 'trackOutboundSocket')
+      .mockImplementation((socket: Duplex) => {
+        trackedSockets.push(socket)
+      })
+
+    const absoluteUrl = `https://127.0.0.1:${closedPort}/will-not-connect`
+    const outcome = await Promise.race([
+      requestAbsoluteHttpsThroughBridge(bridgeUrl, absoluteUrl, 'GET')
+        .then(result => ({ kind: 'completed' as const, result })),
+      new Promise<{ kind: 'hung' }>(resolve => setTimeout(() => resolve({ kind: 'hung' }), 1000)),
+    ])
+
+    expect(outcome.kind).toBe('completed')
+    if (outcome.kind !== 'completed') return
+    expect(outcome.result.status).toBe(502)
+    expect(outcome.result.headers.connection).toBe('close')
+    expect(/HTTPS|System proxy bridge failed/.test(outcome.result.body)).toBe(true)
+
+    // Either the reachability probe never reached trackOutboundSocket (TLS handshake
+    // failed before the request was issued) or it did and the socket was captured.
+    // In every case no socket should be left open after the response has been sent.
+    await new Promise(resolve => setTimeout(resolve, 50))
+    for (const socket of trackedSockets) {
+      expect(socket.destroyed).toBe(true)
+    }
+  })
+
+  it('preserves the loopback direct exemption for HTTPS targets', async () => {
+    const { port: targetPort } = await createHttpsEchoServer()
+    const resolver = vi.fn(async () => 'PROXY unreachable.example:8080')
+    const bridge = await startBridge(resolver)
+
+    const response = await requestAbsoluteHttpsThroughBridge(
+      bridge,
+      `https://127.0.0.1:${targetPort}/health`,
+      'GET',
+    )
+    expect(response.status).toBe(200)
     expect(resolver).not.toHaveBeenCalled()
   })
 
@@ -611,5 +730,77 @@ function openConnectTunnel(proxyUrl: string, authority: string): Promise<net.Soc
     }
     socket.on('data', onData)
     socket.once('error', reject)
+  })
+}
+
+async function createHttpsEchoServer(): Promise<{
+  port: number
+  record: () => {
+    method?: string
+    url?: string
+    headers: http.IncomingHttpHeaders
+    body: string
+  }
+}> {
+  const { cert, key } = loadTestCert()
+  const record: {
+    method?: string
+    url?: string
+    headers: http.IncomingHttpHeaders
+    body: string
+  } = { headers: {}, body: '' }
+  const server = https.createServer({ cert, key }, (request, response) => {
+    record.method = request.method
+    record.url = request.url
+    record.headers = request.headers
+    const chunks: Buffer[] = []
+    request.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+    request.once('end', () => {
+      record.body = Buffer.concat(chunks).toString()
+      response.writeHead(200, { 'content-type': 'application/json', 'x-echo': 'ok' })
+      response.end(JSON.stringify({
+        method: request.method,
+        url: request.url,
+        host: request.headers.host,
+        body: record.body,
+        contentType: request.headers['content-type'] ?? null,
+      }))
+    })
+    request.once('error', error => response.destroy(error))
+  })
+  servers.push(server)
+  const port = await listen(server)
+  return { port, record: () => record }
+}
+
+function requestAbsoluteHttpsThroughBridge(
+  proxyUrl: string,
+  absoluteUrl: string,
+  method = 'GET',
+  body?: string,
+  extraHeaders: http.OutgoingHttpHeaders = {},
+): Promise<{ status: number, body: string, headers: http.IncomingHttpHeaders }> {
+  const proxy = new URL(proxyUrl)
+  const target = new URL(absoluteUrl)
+  return new Promise((resolve, reject) => {
+    const request = http.request({
+      host: proxy.hostname,
+      port: Number(proxy.port),
+      path: absoluteUrl,
+      method,
+      headers: { Host: target.host, ...extraHeaders },
+    }, response => {
+      const chunks: Buffer[] = []
+      response.on('data', chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)))
+      response.on('end', () => {
+        resolve({
+          status: response.statusCode ?? 0,
+          body: Buffer.concat(chunks).toString(),
+          headers: response.headers,
+        })
+      })
+    })
+    request.on('error', reject)
+    request.end(body)
   })
 }

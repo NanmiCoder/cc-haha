@@ -58,6 +58,10 @@ bug_attachments/
 *.p12
 credentials*.json
 
+# Allow self-signed loopback test TLS certs (loopback-only, throwaway)
+!desktop/electron/services/__fixtures__/*.pem
+!desktop/electron/services/__fixtures__/*.key
+
 # TS build cache
 *.tsbuildinfo
 

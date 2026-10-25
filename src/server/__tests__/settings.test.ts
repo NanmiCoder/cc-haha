@@ -415,7 +415,7 @@ describe('SettingsService', () => {
   it('should ignore stale invalid permission modes from older installs', async () => {
     await fs.writeFile(
       path.join(tmpDir, 'settings.json'),
-      JSON.stringify({ defaultMode: 'legacy-yolo' }),
+      JSON.stringify({ permissions: { defaultMode: 'legacy-yolo' } }),
       'utf-8',
     )
 
@@ -438,7 +438,7 @@ describe('SettingsService', () => {
     await svc.setPermissionMode('auto')
 
     expect(await svc.getPermissionMode()).toBe('auto')
-    expect(await svc.getUserSettings()).toMatchObject({ defaultMode: 'auto' })
+    expect(await svc.getUserSettings()).toMatchObject({ permissions: { defaultMode: 'auto' } })
   })
 
   it('should reject invalid permission mode', async () => {
@@ -453,7 +453,17 @@ describe('SettingsService', () => {
 
     const settings = await svc.getUserSettings()
     expect(settings.theme).toBe('dark')
-    expect(settings.defaultMode).toBe('acceptEdits')
+    expect(settings.permissions?.defaultMode).toBe('acceptEdits')
+  })
+
+  it('should preserve existing permission rules when setting the default mode', async () => {
+    const svc = new SettingsService()
+    await svc.updateUserSettings({ permissions: { allow: ['Bash(npm run test)'] } })
+    await svc.setPermissionMode('plan')
+
+    const settings = await svc.getUserSettings()
+    expect(settings.permissions?.defaultMode).toBe('plan')
+    expect(settings.permissions?.allow).toEqual(['Bash(npm run test)'])
   })
 
   it('should serialize concurrent user settings writes to the same file', async () => {
@@ -472,7 +482,7 @@ describe('SettingsService', () => {
 
     const settings = await svc.getUserSettings()
     expect(settings.theme).toBe('dark')
-    expect(settings.defaultMode).toBe('bypassPermissions')
+    expect(settings.permissions?.defaultMode).toBe('bypassPermissions')
   })
 })
 
