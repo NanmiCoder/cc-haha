@@ -23,6 +23,22 @@ test('remote image settings preserve the protocol while redacting image credenti
   expect(ImageGenerationConfigSchema.safeParse({ model: 'image-model', protocol: 'unknown' }).success).toBe(false)
 })
 
+test('remote provider proxy settings expose the mode without any saved URL or authentication', () => {
+  const provider = SavedProviderSchema.parse({
+    id: 'proxy-fixture', presetId: 'custom', name: 'Proxy fixture', apiKey: 'fake-model-key',
+    baseUrl: 'https://model.example.test', models: { main: 'model', haiku: '', sonnet: '', opus: '' },
+  })
+  expect(projectRemoteProvider(provider)).not.toHaveProperty('proxy')
+  for (const mode of ['manual', 'direct', 'follow_global'] as const) {
+    const proxy = { mode, url: 'http://fake-user:fake-password@proxy.example.test:7890?credential=fake-query' }
+    const projected = projectRemoteProvider({ ...provider, proxy })
+    expect(projected.proxy).toEqual({ mode })
+    expect(JSON.stringify(projected)).not.toContain(proxy.url)
+    expect(JSON.stringify(projected)).not.toContain('fake-password')
+    expect(JSON.stringify(projected)).not.toContain('fake-query')
+  }
+})
+
 test('remote settings boundary permits only intended provider routes and General fields', () => {
   const parts = (pathname: string) => pathname.split('/').filter(Boolean)
   expect(remoteProviderRouteAllowed(parts('/api//providers/settings/'), 'GET')).toBe(false)

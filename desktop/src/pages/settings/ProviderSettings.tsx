@@ -1247,6 +1247,9 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const [showApiKey, setShowApiKey] = useState(false)
   const [proxyMode, setProxyMode] = useState<ProviderProxyMode>(provider?.proxy?.mode ?? 'follow_global')
   const [proxyUrl, setProxyUrl] = useState(provider?.proxy?.url ?? '')
+  // The phone receives only the saved mode: proxy URLs can contain credentials.
+  const keepRemoteProxy = browserMode && mode === 'edit' &&
+    proxyMode === (provider?.proxy?.mode ?? 'follow_global') && proxyUrl === (provider?.proxy?.url ?? '')
   const proxyUrlInvalid = proxyMode === 'manual' && proxyUrl.trim() !== '' && !isValidHttpProxyUrl(proxyUrl.trim())
   const [notes, setNotes] = useState(provider?.notes ?? '')
   const [compatibility, setCompatibility] = useState(() => compatibilityForm(provider?.requestCompatibility))
@@ -1431,7 +1434,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
   const modelContextWindowErrorSlots = MODEL_SLOTS.filter((slot) => getModelContextWindowErrorKey(modelContextInputs[slot]))
   const compatibilityInvalid = invalidCompatibilityNumber(compatibility.maxOutputTokens)
     || (apiFormat !== 'anthropic' && invalidCompatibilityNumber(compatibility.outputTokenLimit))
-  const canSubmit = !compatibilityInvalid && !(proxyMode === 'manual' && !isValidHttpProxyUrl(proxyUrl.trim())) && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
+  const canSubmit = !compatibilityInvalid && !(!keepRemoteProxy && proxyMode === 'manual' && !isValidHttpProxyUrl(proxyUrl.trim())) && name.trim() && baseUrl.trim() && (mode === 'edit' || !requiresApiKey || apiKey.trim()) && models.main.trim() && (!imageGeneration.enabled || imageGeneration.model.trim()) && !settingsJsonError && !autoCompactWindowErrorKey && modelContextWindowErrorSlots.length === 0
   const normalizedBaseUrl = normalizeProviderBaseUrl(baseUrl)
   const isPresetDefaultEndpoint = normalizedBaseUrl === normalizeProviderBaseUrl(selectedPreset.baseUrl)
   const apiKeyUrl = isPresetDefaultEndpoint ? selectedPreset.apiKeyUrl?.trim() : undefined
@@ -1836,7 +1839,7 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
           disableExperimentalBetas,
           supportsNestedToolResultMedia,
           imageGeneration: storedImageGeneration ?? null,
-          proxy: storedProxy,
+          ...(!keepRemoteProxy && { proxy: storedProxy }),
           notes: notes.trim() || undefined,
         }
         if (apiKey.trim()) input.apiKey = apiKey.trim()
@@ -2467,10 +2470,10 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
               <label htmlFor={proxyUrlInputId} className={FORM_FIELD_LABEL}>{t('settings.providers.proxyUrl')}</label>
               <Input
                 id={proxyUrlInputId}
-                required
+                required={!keepRemoteProxy}
                 value={proxyUrl}
                 onChange={(e) => setProxyUrl(e.target.value)}
-                placeholder={t('settings.providers.proxyUrlPlaceholder')}
+                placeholder={t(keepRemoteProxy ? 'settings.providers.proxyUrlSaved' : 'settings.providers.proxyUrlPlaceholder')}
                 className="font-mono text-[13px]"
               />
               {proxyUrlInvalid && (

@@ -46,9 +46,9 @@ describe('per-provider network proxy override', () => {
     useProviderStore.setState({ presets: originalPresets })
   })
 
-  const openEditDialog = async (provider: SavedProvider) => {
+  const openEditDialog = async (provider: SavedProvider, browserMode = false) => {
     vi.mocked(providersApi.list).mockResolvedValue({ providers: [provider], activeId: null })
-    render(<ProviderSettings />)
+    render(<ProviderSettings browserMode={browserMode} />)
     fireEvent.click(within(await screen.findByTestId('provider-saved-proxy-target')).getByRole('button', { name: 'Edit' }))
     return within(screen.getByRole('dialog'))
   }
@@ -124,5 +124,46 @@ describe('per-provider network proxy override', () => {
     })
     expect(dialog.getByRole('radio', { name: 'Manual' })).toBeChecked()
     expect(dialog.getByRole('textbox', { name: /Proxy URL/ })).toHaveValue('http://saved.example:1080')
+  })
+
+  it.each(['direct', 'manual'] as const)('preserves the hidden %s proxy when a phone only edits the name', async (mode) => {
+    // Remote projections expose the mode, but never a saved proxy URL or password.
+    const provider = { ...savedProvider, apiKey: '', proxy: { mode } }
+    const dialog = await openEditDialog(provider, true)
+    expect(dialog.getByRole('radio', { name: mode === 'manual' ? 'Manual' : 'Direct' })).toBeChecked()
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeEnabled()
+    if (mode === 'manual') {
+      expect(dialog.getByRole('textbox', { name: /Proxy URL/ })).toHaveValue('')
+      expect(dialog.getByPlaceholderText('Saved on the computer; leave blank to keep')).toBeInTheDocument()
+    }
+    const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider })
+    fireEvent.change(dialog.getByDisplayValue(savedProvider.name), { target: { value: 'Renamed on phone' } })
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeEnabled()
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(provider.id, expect.objectContaining({ name: 'Renamed on phone' })))
+    expect(update.mock.calls[0]![1]).not.toHaveProperty('proxy')
+  })
+
+  it('submits an explicit proxy replacement from a phone without restoring a hidden URL', async () => {
+    const provider = { ...savedProvider, apiKey: '', proxy: { mode: 'manual' as const } }
+    const dialog = await openEditDialog(provider, true)
+    const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider })
+    fireEvent.change(dialog.getByRole('textbox', { name: /Proxy URL/ }), { target: { value: 'invalid' } })
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled()
+    fireEvent.change(dialog.getByRole('textbox', { name: /Proxy URL/ }), { target: { value: 'https://replacement.example:8443' } })
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-replacement-key' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(provider.id, expect.objectContaining({
+      proxy: { mode: 'manual', url: 'https://replacement.example:8443' }, apiKey: 'fake-replacement-key',
+    })))
+  })
+
+  it('lets a phone explicitly clear its saved direct override', async () => {
+    const provider = { ...savedProvider, apiKey: '', proxy: { mode: 'direct' as const } }
+    const dialog = await openEditDialog(provider, true)
+    const update = vi.spyOn(providersApi, 'update').mockResolvedValue({ provider })
+    fireEvent.click(dialog.getByRole('radio', { name: 'Follow global' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(update).toHaveBeenCalledWith(provider.id, expect.objectContaining({ proxy: null })))
   })
 })

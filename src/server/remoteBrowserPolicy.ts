@@ -65,6 +65,9 @@ export function projectRemoteProvider(provider: SavedProvider) {
     ...Object.fromEntries(publicKeys.filter(key => provider[key] !== undefined).map(key => [key, provider[key]])),
     apiKey: '',
     hasApiKey: !!provider.apiKey,
+    // Proxy URLs can include authentication and private endpoints. The phone
+    // needs only the mode; an omitted edit retains the desktop's full value.
+    ...(provider.proxy ? { proxy: { mode: provider.proxy.mode } } : {}),
     ...(provider.requestCompatibility ? {
       requestCompatibility: Object.fromEntries([...REMOTE_COMPATIBILITY_KEYS].filter(key => provider.requestCompatibility![key] !== undefined).map(key => [key, provider.requestCompatibility![key]])),
     } : {}),
