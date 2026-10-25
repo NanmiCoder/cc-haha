@@ -198,6 +198,39 @@ describe('bundled provider presets', () => {
       .not.toContain('jiekouai')
   })
 
+  it('bundles OpenRouter as a direct Anthropic-native aggregation preset', () => {
+    const preset = BUNDLED_PROVIDER_PRESETS.find((candidate) => candidate.id === 'openrouter')
+
+    expect(preset).toMatchObject({
+      name: 'OpenRouter',
+      baseUrl: 'https://openrouter.ai/api',
+      apiFormat: 'anthropic',
+      authStrategy: 'auth_token',
+      needsApiKey: true,
+      websiteUrl: 'https://openrouter.ai',
+      apiKeyUrl: 'https://openrouter.ai/settings/keys',
+      isNew: true,
+      defaultModels: {
+        main: 'anthropic/claude-sonnet-5.5',
+        haiku: 'anthropic/claude-haiku-5.5',
+        sonnet: 'anthropic/claude-sonnet-5.5',
+        opus: 'anthropic/claude-opus-5.5',
+      },
+    })
+    expect(preset?.deprecated).toBeUndefined()
+    // A format rule or upstream header here would silently route the preset
+    // through the local proxy; OpenRouter speaks Anthropic natively at its root.
+    expect(preset?.modelApiFormats).toBeUndefined()
+    expect(preset?.upstreamHeaders).toBeUndefined()
+    expect(preset && presetMatchesBaseUrl(preset, ' HTTPS://OPENROUTER.AI/API/ ')).toBe(true)
+    expect(selectableProviderPresets(BUNDLED_PROVIDER_PRESETS).map((candidate) => candidate.id))
+      .toContain('openrouter')
+    // Every default model is namespaced, so the table has to carry their windows.
+    for (const model of Object.values(preset!.defaultModels)) {
+      expect(preset?.modelContextWindows?.[model], model).toBeGreaterThan(0)
+    }
+  })
+
   it('does not bundle the removed TeamoRouter preset', () => {
     expect(BUNDLED_PROVIDER_PRESETS.some((preset) => preset.id === 'teamorouter')).toBe(false)
   })

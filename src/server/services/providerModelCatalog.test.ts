@@ -7,6 +7,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { buildModelsUrlCandidates, fetchProviderModels } from './providerModelCatalog.js'
+import { PROVIDER_PRESETS } from '../config/providerPresets.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -149,8 +150,10 @@ describe('buildModelsUrlCandidates', () => {
       ],
     },
     {
-      name: '/api is not a compat suffix (OpenRouter)',
-      baseUrl: 'https://openrouter.ai/api',
+      name: '/api is not a compat suffix (OpenRouter preset)',
+      // Read from the shipped preset: a baseUrl edit must not silently strand
+      // model discovery on a path OpenRouter does not serve.
+      baseUrl: PROVIDER_PRESETS.find((preset) => preset.id === 'openrouter')!.baseUrl,
       expected: ['https://openrouter.ai/api/v1/models'],
     },
     {
@@ -320,6 +323,32 @@ describe('fetchProviderModels', () => {
       ],
       endpoint: 'https://api.example.com/v1/models',
     })
+  })
+
+  test('keeps the author/slug namespace of OpenRouter model ids', async () => {
+    const preset = PROVIDER_PRESETS.find((candidate) => candidate.id === 'openrouter')!
+    stubFetchSequence([() => jsonResponse({
+      object: 'list',
+      data: [
+        { id: 'z-ai/glm-5.3', owned_by: 'z-ai' },
+        { id: 'anthropic/claude-sonnet-5.5', owned_by: 'anthropic' },
+      ],
+    })])
+
+    const result = await fetchProviderModels({ baseUrl: preset.baseUrl, apiKey: 'sk-or-offline-fixture' })
+
+    expect(result).toEqual({
+      ok: true,
+      // Sorting and namespaces both survive: the id the user picks here is the id
+      // the request must carry, so a stripped author prefix would 404 upstream.
+      models: [
+        { id: 'anthropic/claude-sonnet-5.5', ownedBy: 'anthropic' },
+        { id: 'z-ai/glm-5.3', ownedBy: 'z-ai' },
+      ],
+      endpoint: 'https://openrouter.ai/api/v1/models',
+    })
+    expect(calls[0].url).toBe('https://openrouter.ai/api/v1/models')
+    expect(authHeaderOf(calls[0])).toBe('Bearer sk-or-offline-fixture')
   })
 
   test('accepts models[]/items[]/bare arrays and string entries', async () => {

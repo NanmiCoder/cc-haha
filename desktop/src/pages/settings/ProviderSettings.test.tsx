@@ -694,3 +694,67 @@ describe('OpenCode Go provider', () => {
   })
 
 })
+
+/**
+ * OpenRouter is a one-key aggregation gateway: the user pastes an sk-or- key and
+ * the preset supplies the endpoint, the credential header and the Claude 5.5
+ * defaults. Nothing here may require hand-entering an URL or a format.
+ */
+describe('OpenRouter provider', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('is added with an API key alone, prefilled with the direct endpoint and Claude 5.5 slots', async () => {
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'saved-openrouter', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'OpenRouter' }))
+
+    // The root, not /api/v1 — the CLI appends /v1/messages itself.
+    expect(dialog.getByDisplayValue('https://openrouter.ai/api')).toBeInTheDocument()
+    // Main and Sonnet share the balanced default; Haiku and Opus stay distinct.
+    expect(dialog.getAllByDisplayValue('anthropic/claude-sonnet-5.5')).toHaveLength(2)
+    expect(dialog.getByDisplayValue('anthropic/claude-haiku-5.5')).toBeInTheDocument()
+    expect(dialog.getByDisplayValue('anthropic/claude-opus-5.5')).toBeInTheDocument()
+
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'sk-or-v1-fake' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      presetId: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api',
+      apiFormat: 'anthropic',
+      authStrategy: 'auth_token',
+      apiKey: 'sk-or-v1-fake',
+      models: {
+        main: 'anthropic/claude-sonnet-5.5',
+        haiku: 'anthropic/claude-haiku-5.5',
+        sonnet: 'anthropic/claude-sonnet-5.5',
+        opus: 'anthropic/claude-opus-5.5',
+      },
+    })))
+  })
+
+  it('links the key field to the OpenRouter key page', async () => {
+    const open = vi.spyOn(getDesktopHost().shell, 'open').mockResolvedValue()
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'OpenRouter' }))
+
+    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    expect(open).toHaveBeenCalledWith('https://openrouter.ai/settings/keys')
+  })
+})

@@ -4405,6 +4405,105 @@ describe('ApiSmart preset request contract (offline fixtures)', () => {
 })
 
 /**
+ * OpenRouter speaks Anthropic Messages natively at its own root, so this preset
+ * has to stay a direct connection: the CLI and the connectivity probe must reach
+ * https://openrouter.ai/api/v1/messages — exactly one /v1 — over Bearer, with
+ * ANTHROPIC_API_KEY cleared so no inherited x-api-key rides along, and with the
+ * local proxy staying out of the path entirely. These tests pin that contract
+ * against offline fixtures.
+ */
+describe('OpenRouter preset request contract (offline fixtures)', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  const apiKey = 'sk-or-v1-offline-fixture'
+
+  async function loadPreset() {
+    const { PROVIDER_PRESETS } = await import('../config/providerPresets.js')
+    const preset = PROVIDER_PRESETS.find(item => item.id === 'openrouter')
+    expect(preset).toBeDefined()
+    return preset!
+  }
+
+  async function createProvider() {
+    const preset = await loadPreset()
+    // Exercised through the same API boundary the desktop's save action uses.
+    const { req, url, segments } = makeRequest('POST', '/api/providers', {
+      presetId: preset.id,
+      name: preset.name,
+      baseUrl: preset.baseUrl,
+      apiFormat: preset.apiFormat,
+      apiKey,
+      models: preset.defaultModels,
+    })
+    const result = await handleProvidersApi(req, url, segments)
+    expect(result.status).toBe(201)
+    const saved = await result.json()
+    return { preset, provider: saved.provider as { id: string } }
+  }
+
+  test('activation configures the CLI for a direct Bearer connection, not the local proxy', async () => {
+    const { provider } = await createProvider()
+    const activate = makeRequest('POST', `/api/providers/${provider.id}/activate`)
+    const activated = await handleProvidersApi(activate.req, activate.url, activate.segments)
+    expect(activated.status).toBe(200)
+
+    const env = (await readSettings()).env as Record<string, string>
+    // OpenRouter's Claude Code guide requires the root; the CLI appends /v1/messages.
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://openrouter.ai/api')
+    expect(env.ANTHROPIC_BASE_URL).not.toContain('127.0.0.1')
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe(apiKey)
+    // Left over from an inherited key, this would be read as an Anthropic credential.
+    expect(env.ANTHROPIC_API_KEY).toBe('')
+    expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toMatchObject({
+      'anthropic/claude-sonnet-5.5': 1000000,
+      'anthropic/claude-opus-5.5': 1000000,
+    })
+  })
+
+  test('the connectivity probe reaches /api/v1/messages over Bearer and stops after one request', async () => {
+    const preset = await loadPreset()
+    const originalFetch = globalThis.fetch
+    const calls: Array<{ url: string; headers: Headers; body: any }> = []
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        headers: new Headers(init?.headers),
+        body: JSON.parse(String(init?.body)),
+      })
+      return Response.json({
+        id: 'msg-offline', type: 'message', role: 'assistant', model: preset.defaultModels.main,
+        stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }],
+        usage: { input_tokens: 3, output_tokens: 1 },
+      })
+    }) as typeof fetch
+    try {
+      const result = await new ProviderService().testProviderConfig({
+        presetId: preset.id,
+        baseUrl: preset.baseUrl,
+        apiKey,
+        modelId: preset.defaultModels.main,
+        apiFormat: preset.apiFormat,
+        authStrategy: preset.authStrategy,
+      })
+      expect(result.connectivity.success).toBe(true)
+      expect(result.connectivity.modelUsed).toBe('anthropic/claude-sonnet-5.5')
+      // An anthropic-format provider reaches OpenRouter directly, so there is no
+      // proxy step to validate and the probe must not fire a second request.
+      expect(result.proxy).toBeUndefined()
+      expect(calls).toHaveLength(1)
+      expect(calls[0].url).toBe('https://openrouter.ai/api/v1/messages')
+      expect(calls[0].headers.get('authorization')).toBe(`Bearer ${apiKey}`)
+      expect(calls[0].headers.get('x-api-key')).toBeNull()
+      expect(calls[0].headers.get('anthropic-version')).toBe('2023-06-01')
+      expect(calls[0].body).toMatchObject({ model: 'anthropic/claude-sonnet-5.5', max_tokens: 16 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+/**
  * OpenCode Go binds the wire format to the URL path and does no cross-protocol
  * translation, so one provider record has to reach three different endpoints
  * depending on the model. These tests pin that contract: which URL each model
