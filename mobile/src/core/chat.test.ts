@@ -229,7 +229,8 @@ describe('real WebSocket event state transitions', () => {
     ])
     expect(state.backgroundTaskIds).toEqual(['task-a', 'task-b'])
     expect(state).toMatchObject({ turnActive: false, status: 'idle' })
-    expect(state.items[0].text).toBe('Detached task started')
+    // 任务通知的说明文字不进主对话流，只有任务 id 的增减。
+    expect(state.items).toEqual([])
     for (const status of ['completed', 'failed', 'stopped', 'killed']) {
       const settled = chatReducer(state, {
         type: 'system_notification',
@@ -242,6 +243,16 @@ describe('real WebSocket event state transitions', () => {
       expect(settled.turnActive).toBe(false)
     }
     expect(state.backgroundTaskIds).toEqual(['task-a', 'task-b'])
+  })
+
+  test('task started, progress and finish messages stay out of the transcript, other notices do not', () => {
+    const state = run([
+      { type: 'system_notification', subtype: 'task_started', message: 'Summarize src/todo.ts', data: { task_id: 'a' } },
+      { type: 'system_notification', subtype: 'task_progress', message: 'Reading src/todo.ts', data: { task_id: 'a', status: 'running' } },
+      { type: 'system_notification', subtype: 'task_notification', message: 'Done', data: { task_id: 'a', status: 'completed' } },
+      { type: 'system_notification', subtype: 'status', message: 'Compacted context' },
+    ])
+    expect(state.items.map((item) => item.text)).toEqual(['Compacted context'])
   })
 
   test('unknown or malformed task notifications cannot remove active IDs', () => {

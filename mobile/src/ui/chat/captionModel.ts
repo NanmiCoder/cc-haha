@@ -62,3 +62,14 @@ export function captionParts({ step, waiting, compacting }: CaptionInput): Capti
   const { lead, object } = progressive(step)
   return { tone: 'run', lead, object, mono: step.mono }
 }
+
+/** 等批准时，状态行要说的是正在等批准的那一次调用，而不是最近一个还没结果的调用（并行调用时两者不是同一个）。 */
+export function pendingStepLabel(
+  items: readonly ChatItem[],
+  toolUseId: string | undefined,
+  workDir?: string | null
+): StepLabel | null {
+  if (!toolUseId) return null
+  const item = items.findLast((entry) => entry.type === 'tool' && entry.toolUseId === toolUseId)
+  return item ? describeStep(item, workDir) : null
+}

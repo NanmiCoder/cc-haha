@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Animated, BackHandler, Easing, Pressable, ScrollView, View, useWindowDimensions } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
-import { Stack, router, useLocalSearchParams } from 'expo-router'
+import { Stack, router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../ui/Text'
 import { useConnection } from '../state/AppContext'
@@ -82,13 +82,17 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
       else router.replace('/')
     })
   }, [closing, progress])
-  useEffect(() => {
-    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
-      close()
-      return true
-    })
-    return () => subscription.remove()
-  }, [close])
+  // 只在这一页是当前页时接管返回键。页面压在 diff / file / changes 下面时它仍然挂载，
+  // 若一直监听，返回键会被它抢走：它自己滑出屏幕后留下一层看不见的透明页盖住聊天页。
+  useFocusEffect(
+    useCallback(() => {
+      const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+        close()
+        return true
+      })
+      return () => subscription.remove()
+    }, [close])
+  )
 
   /* 已修改：最近一轮检查点 */
   const key = sessionKey(hostId, id)
@@ -125,6 +129,7 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
   const openFile = (path: string) =>
     router.push({ pathname: '/file', params: { id, host: hostId, path } })
   const openChanges = () => router.push({ pathname: '/changes', params: { id, host: hostId } })
+  const openWorkspace = () => router.push({ pathname: '/workspace', params: { id, host: hostId } })
 
   const pageError = connectionError || (checkpoints.value ? '' : checkpoints.error)
   const bottomGap = Math.max(insets.bottom, 12) + 22
@@ -140,11 +145,15 @@ function FilesSheet({ hostId, id, initialTab }: { hostId: string; id: string; in
       )
     } else if (!latest) {
       body = (
-        <EmptyState
-          icon="file"
-          title="还没有改动记录"
-          detail="电脑会在会话运行后记录可用的文件检查点。"
-        />
+        <>
+          {/* 没有检查点也能看项目目录里没提交的改动，否则这一页进不了「项目文件」。 */}
+          <LinkRow title="查看项目当前未提交的改动" onPress={openWorkspace} />
+          <EmptyState
+            icon="file"
+            title="还没有改动记录"
+            detail="电脑会在会话运行后记录可用的文件检查点。"
+          />
+        </>
       )
     } else {
       body = (

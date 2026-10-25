@@ -209,10 +209,22 @@ export function turnFoldLabel(
   const start = stamp(user?.timestamp) ?? clock?.startedAt
   const end = lastStamp ?? clock?.endedAt
   const duration = start !== undefined && end !== undefined ? formatTurnDuration(end - start) : ''
-  return duration ? `用时 ${duration}` : '处理过程'
+  // 失败的工具调用折进去之后不能无声无息：折叠条上写明有几步失败，展开才看得到是哪一步。
+  const failed = turnItems.filter((item) => item.type === 'tool' && !item.parentToolUseId && item.isError === true).length
+  const base = duration ? `用时 ${duration}` : '处理过程'
+  return failed ? `${base} · ${failed} 步失败` : base
 }
 
 type BaseRow = Exclude<ChatRow, { kind: 'turn' }>
+
+/**
+ * 过程中的短说明（「接下来跑一遍测试」）可以折进「用时 ›」；较长的回复、表格或代码块是实质内容，
+ * 即使后面还跟着别的工具调用（例如等后台任务）也不能被藏起来。
+ */
+export function isSubstantialReply(item: ChatItem): boolean {
+  const text = item.text ?? ''
+  return text.trim().length > 160 || /^\s*\|.+\|\s*$/m.test(text) || text.includes('```')
+}
 
 /**
  * 连续的工具调用和思考块合成一组；每一轮（用户消息之后）结束后，处理过程
@@ -272,10 +284,21 @@ export function buildChatRows(
     if (live || lastSteps < 0) {
       rows.push(...turn.map((entry) => entry.row))
     } else {
+      // 一轮里最后一条有文字的助手回复就是答案，哪怕它后面还跟着收尾的工具调用（TodoWrite、取后台输出）。
+      const lastReply = turn.findLast(
+        (entry) => entry.row.kind === 'message' && entry.row.item.type === 'assistant' && !!entry.row.item.text?.trim()
+      )
       const folded = new Set(
         turn
           .slice(0, lastSteps + 1)
-          .filter((entry) => entry.row.kind === 'steps' || (entry.row.kind === 'message' && entry.row.item.type === 'assistant'))
+          .filter(
+            (entry) =>
+              entry.row.kind === 'steps' ||
+              (entry.row.kind === 'message' &&
+                entry.row.item.type === 'assistant' &&
+                entry !== lastReply &&
+                !isSubstantialReply(entry.row.item))
+          )
           .map((entry) => entry.row)
       )
       const key = `turn:${turn.find((entry) => folded.has(entry.row))?.row.key}`

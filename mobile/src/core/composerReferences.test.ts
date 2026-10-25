@@ -72,6 +72,20 @@ describe('native composer references', () => {
     expect(result[0].reference).toEqual(skill)
     expect(result.some((value) => value.name === 'compact')).toBe(true)
   })
+  test('withdrawn managed packages never reach the candidate list, same as the desktop composer', async () => {
+    const withdrawnPlugin: ComposerReference = { ...skill, kind: 'plugin', id: 'office-mcp-builder@haha-connectors', name: 'office-mcp-builder', displayName: 'MCP Builder' }
+    const withdrawnSkill = { ...skill, id: 'ws', name: 'old-skill', source: 'office-canvas-design@haha-connectors' }
+    const mine = { ...skill, id: 'mine', name: 'my-skill', source: 'userSettings' }
+    const client = { get: async (path: string) =>
+      path.includes('slash-commands') || path.includes('/commands')
+        ? { commands: [{ name: 'office-algorithmic-art:make', description: 'x' }, { name: 'office-algorithmic-art:make2', description: 'x', source: 'user' }, { name: 'compact', description: 'c' }] }
+        : { skills: [withdrawnSkill, mine], plugins: [withdrawnPlugin] } } as unknown as ApiClient
+    const names = (await loadComposerCandidates(client, { sessionId: 's', lean: false }, new AbortController().signal)).map((value) => value.name)
+    expect(names).toContain('my-skill')
+    expect(names).toContain('compact')
+    expect(names).toContain('office-algorithmic-art:make2')
+    for (const gone of ['office-mcp-builder', 'old-skill', 'office-algorithmic-art:make']) expect(names).not.toContain(gone)
+  })
 })
 
 

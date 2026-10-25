@@ -5,6 +5,7 @@ import { DetentSheet } from '../DetentSheet'
 import type { Detent } from '../detents'
 import { Button, Callout, Dot, Icon, Mono, Spinner, useColors, type IconName } from '../kit'
 import { Glyph } from './glyphs'
+import { ConnectorIcon } from '../ConnectorIcon'
 import type { ApiClient } from '../../core/client'
 import type { ComposerCandidate, ComposerReference } from '../../core/composerReferences'
 import type { RecentItem } from '../../core/recentSkills'
@@ -128,7 +129,19 @@ function ResultRow({ hit, selected, onPress, onNotice }: {
         backgroundColor: pressed ? colors.fill : 'transparent',
       })}
     >
-      {dotColor ? <Dot color={dotColor} size={8} /> : null}
+      {item.group === 'connector' ? (
+        // 连接器：左边是 logo，状态点压在 logo 右下角。
+        <View style={{ width: 30, height: 30 }}>
+          <ConnectorIcon id={item.iconId} size={30} />
+          {dotColor ? (
+            <View style={{ position: 'absolute', right: -3, bottom: -3, padding: 2, borderRadius: 7, backgroundColor: colors.card }}>
+              <Dot color={dotColor} size={8} />
+            </View>
+          ) : null}
+        </View>
+      ) : dotColor ? (
+        <Dot color={dotColor} size={8} />
+      ) : null}
       <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
         <Highlighted
           text={item.token}
@@ -414,6 +427,7 @@ export function BringSheet({
   const colors = useColors()
   const input = useRef<ComponentRef<typeof TextInput>>(null)
   const [detent, setDetent] = useState<Detent>('half')
+  const [teamAccepted, setTeamAccepted] = useState(false)
   const [page, setPage] = useState<Page>('root')
   const [query, setQuery] = useState('')
   const [focused, setFocused] = useState(false)
@@ -687,8 +701,22 @@ export function BringSheet({
               这台电脑上暂时没有可带的技能或命令
             </Text>
           )}
-          <SectionTitle title="运行方式" />
-          <RunToggles visible={visible} client={client} team={team} onTeam={onTeam} lean={lean} computer={computer} />
+          {/* 轻量档位不支持团队和操作电脑：和桌面一样整组不显示。 */}
+          {lean ? null : (
+            <>
+              <SectionTitle title="运行方式" />
+              <RunToggles
+                visible={visible}
+                client={client}
+                team={team}
+                onTeam={onTeam}
+                lean={lean}
+                computer={computer}
+                accepted={teamAccepted}
+                onAccept={() => setTeamAccepted(true)}
+              />
+            </>
+          )}
         </View>
       )}
     </DetentSheet>

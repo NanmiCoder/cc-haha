@@ -903,7 +903,13 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
           }
         }
       }
-      return event.message
+      // 子 Agent / 后台任务的开始、进度、结束只更新活动底单和顶栏胶囊；它们的说明文字
+      // （「Reading src/todo.ts」「Sleep 45 seconds…」）若进主对话流，一个任务会刷出几十行灰字。
+      const taskEvent =
+        event.subtype === 'task_started' ||
+        event.subtype === 'task_progress' ||
+        event.subtype === 'task_notification'
+      return event.message && !taskEvent
         ? append(next, { type: 'system', text: event.message })
         : next
     }

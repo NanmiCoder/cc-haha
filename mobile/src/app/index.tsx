@@ -18,6 +18,7 @@ import {
   applyFilter,
   filterOptions,
   homeCounts,
+  looseRows,
   projectGroups,
   recentRows,
   resolveFilter,
@@ -81,6 +82,7 @@ export default function Home() {
   const rows = useMemo(() => applyFilter(all, filter), [all, filter])
   const recent = useMemo(() => recentRows(rows), [rows])
   const groups = useMemo(() => projectGroups(rows, expanded, new Set(recent)), [rows, expanded, recent])
+  const loose = useMemo(() => looseRows(rows, new Set(recent)), [rows, recent])
   const activeSessionIds = useMemo(
     () => [...grouped.waiting, ...grouped.running].map((row) => row.session.id),
     [grouped]
@@ -252,7 +254,7 @@ export default function Home() {
                     onPress={() => open(row)}
                   />
                 ))}
-                {groups.length ? <SectionTitle>项目</SectionTitle> : null}
+                {groups.length || loose.length ? <SectionTitle>项目</SectionTitle> : null}
                 {groups.map((group) => {
                   const limit = shown[group.key] ?? projectPage
                   return (
@@ -265,7 +267,7 @@ export default function Home() {
                         }
                         onNewTask={() => newTask(group.dir)}
                       />
-                      {group.expanded ? (
+                      {group.expanded && group.expandable ? (
                         <>
                           {group.rows.slice(0, limit).map((row) => (
                             <ProjectSessionRow
@@ -287,6 +289,19 @@ export default function Home() {
                     </View>
                   )
                 })}
+                {loose.length ? (
+                  <>
+                    <SectionTitle>其他</SectionTitle>
+                    {loose.map((row) => (
+                      <RecentRow
+                        key={row.session.id}
+                        row={row}
+                        background={background[row.session.id]}
+                        onPress={() => open(row)}
+                      />
+                    ))}
+                  </>
+                ) : null}
               </>
             )}
           </>

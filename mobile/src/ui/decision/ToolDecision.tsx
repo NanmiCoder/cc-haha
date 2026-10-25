@@ -25,6 +25,7 @@ import {
   workDirCaption,
 } from './decisionCopy'
 import { fileChange } from './fileDiff'
+import { relativePath } from '../chat/steps'
 import {
   DecisionHeader,
   DecisionSurface,
@@ -159,8 +160,14 @@ export function ToolDecision({
       <DecisionSurface label="审批" style={{ height: Math.max(360, height - 196) }}>
         <DecisionHeader title={approvalTitle(toolName)} position={position} />
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          <Mono selectable numberOfLines={1} style={{ flex: 1, minWidth: 0, fontSize: 13.5, lineHeight: 19, color: colors.ink }}>
-            {change.path || toolName}
+          {/* 相对项目目录显示；仍放不下就从头部省略，文件名永远看得见。 */}
+          <Mono
+            selectable
+            numberOfLines={1}
+            ellipsizeMode="head"
+            style={{ flex: 1, minWidth: 0, fontSize: 13.5, lineHeight: 19, color: colors.ink }}
+          >
+            {change.path ? relativePath(change.path, workDir) : toolName}
           </Mono>
           <DiffStat added={change.added} removed={change.removed} size={13} />
         </View>

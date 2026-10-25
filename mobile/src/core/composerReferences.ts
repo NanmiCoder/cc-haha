@@ -1,6 +1,7 @@
 import type { ApiClient } from './client'
 import type { RuntimeConfig } from './types'
 import type { SkillCommand } from './chatComposer'
+import { isCommandVisible, isReferenceVisible } from './capabilityVisibility'
 
 export type ComposerReference = {
   kind: 'skill' | 'plugin'
@@ -11,6 +12,8 @@ export type ComposerReference = {
   modelText: string
   /** 插件自带的 MCP 服务：有它的插件对用户来说是「连接器」。 */
   mcpServerNames?: string[]
+  /** 技能所属的插件 id 或来源（电脑给什么就是什么）。 */
+  source?: string
 }
 export type ComposerCandidate = SkillCommand & { reference?: ComposerReference }
 export type ComposerTrigger = { start: number; end: number; kind: '/' | '@'; query: string }
@@ -77,10 +80,10 @@ export async function loadComposerCandidates(client: ApiClient, context: {
       ? client.get<{ commands: SkillCommand[] }>(`/api/sessions/${encodeURIComponent(context.sessionId)}/slash-commands`, { signal })
       : client.get<{ commands: SkillCommand[] }>(`/api/skills/commands?${query}`, { signal }),
   ])
-  const candidates: ComposerCandidate[] = [...references.skills, ...references.plugins].map((reference) => ({
+  const candidates: ComposerCandidate[] = [...references.skills, ...references.plugins].filter(isReferenceVisible).map((reference) => ({
     name: reference.name, description: reference.description, kind: reference.kind, reference,
   }))
-  for (const command of commands.commands) {
+  for (const command of commands.commands.filter(isCommandVisible)) {
     if (!candidates.some((candidate) => candidate.name === command.name)) candidates.push(command)
   }
   for (const command of [{ name: 'model', description: '选择这次任务的模型' }, { name: 'permissions', description: '选择权限模式' }]) {

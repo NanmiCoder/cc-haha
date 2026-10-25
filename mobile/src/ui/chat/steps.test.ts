@@ -10,6 +10,7 @@ import {
   formatInput,
   formatTurnDuration,
   groupTail,
+  isSubstantialReply,
   lineDiff,
   outputTail,
   relativePath,
@@ -363,5 +364,63 @@ describe('step details', () => {
     expect(formatInput({ title: 'x', labels: ['a'] })).toBe('title: x\nlabels: ["a"]')
     expect(formatInput({ body: 'y'.repeat(700) }).endsWith('…')).toBe(true)
     expect(formatInput(null)).toBe('')
+  })
+})
+
+
+describe('turn fold keeps substantial replies visible', () => {
+  const user = { id: 'u', type: 'user', text: 'go' } as ChatItem
+  const tool = (id: string) => ({ id, type: 'tool', toolName: 'Read', toolUseId: id, input: { file_path: '/a' }, result: 'ok' }) as ChatItem
+  const say = (id: string, text: string) => ({ id, type: 'assistant', text }) as ChatItem
+
+  test('a long summary that is followed by one more tool call stays outside the fold', () => {
+    const summary = '汇总如下：' + '这个函数返回新数组，不修改原数组。'.repeat(12)
+    const rows = buildChatRows([user, tool('t1'), say('a1', summary), tool('t2'), say('a2', '后台命令已完成。')], false)
+    const visible = visibleChatRows(rows, new Set()).filter((row) => row.kind === 'message')
+    expect(visible.map((row) => (row as { item: ChatItem }).item.id)).toEqual(['u', 'a1', 'a2'])
+  })
+
+  test('markdown tables and code blocks count as substantial even when short', () => {
+    expect(isSubstantialReply(say('x', '| a | b |\n|---|---|\n| 1 | 2 |'))).toBe(true)
+    expect(isSubstantialReply(say('x', '```ts\nlet a = 1\n```'))).toBe(true)
+    expect(isSubstantialReply(say('x', '接下来跑一遍相关测试。'))).toBe(false)
+  })
+
+  test('short narration before the last tool call is still folded', () => {
+    const rows = buildChatRows([user, say('a0', '先看看文件。'), tool('t1'), say('a1', '完成。')], false)
+    const visible = visibleChatRows(rows, new Set()).filter((row) => row.kind === 'message')
+    expect(visible.map((row) => (row as { item: ChatItem }).item.id)).toEqual(['u', 'a1'])
+  })
+})
+
+describe('turn fold never hides the answer or a failure silently', () => {
+  const user = { id: 'u', type: 'user', text: '修一下' } as ChatItem
+  const tool = (id: string, patch: Partial<ChatItem> = {}) =>
+    ({ id, type: 'tool', toolName: 'Bash', toolUseId: id, input: { command: 'bun test' }, result: 'ok', ...patch }) as ChatItem
+  const say = (id: string, text: string) => ({ id, type: 'assistant', text }) as ChatItem
+  const visibleIds = (items: ChatItem[]) =>
+    visibleChatRows(buildChatRows(items, false), new Set())
+      .filter((row) => row.kind === 'message')
+      .map((row) => (row as { item: ChatItem }).item.id)
+
+  test('a short last reply followed by a closing tool call stays visible', () => {
+    expect(visibleIds([user, tool('t1'), say('a', '好了，已完成。'), tool('t2', { toolName: 'TodoWrite', input: { todos: [] } })])).toEqual([
+      'u',
+      'a',
+    ])
+  })
+
+  test('earlier short narration is still folded, only the last reply is kept', () => {
+    expect(visibleIds([user, say('a0', '先看看文件。'), tool('t1'), say('a1', '再跑一遍。'), tool('t2'), say('a2', '完成。'), tool('t3')])).toEqual([
+      'u',
+      'a2',
+    ])
+  })
+
+  test('failed tool calls are counted on the fold label', () => {
+    const items = [user, tool('t1', { isError: true }), tool('t2', { isError: true }), tool('t3'), say('a', '完成')]
+    const label = (buildChatRows(items, false).find((row) => row.kind === 'turn') as { label: string }).label
+    expect(label).toBe('处理过程 · 2 步失败')
+    expect(turnFoldLabel(user, [tool('x')])).toBe('处理过程')
   })
 })

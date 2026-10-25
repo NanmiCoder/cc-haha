@@ -445,7 +445,7 @@ export function ChatComposer({
     setBringOpen(true)
   }
 
-  const chips = attachments.length > 0 || references.length > 0 || team || computer.enabled
+  const chips = attachments.length > 0 || references.length > 0 || team || (computer.enabled && !lean)
   return (
     <View
       onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
@@ -520,7 +520,7 @@ export function ChatComposer({
                 icon={<Icon name="users" size={14} color={colors.run} strokeWidth={2} />}
               />
             ) : null}
-            {computer.enabled ? (
+            {computer.enabled && !lean ? (
               <Pill
                 label="操作电脑"
                 accessibilityLabel="操作电脑已开启，打开「＋」查看"

@@ -135,6 +135,19 @@ describe('catalog to items', () => {
     ])
   })
 
+  test('every connector row carries its id so the logo can be found, in every section', () => {
+    expect(fromCatalog.map((item) => item.iconId)).toEqual([
+      'feishu',
+      'github',
+      'dingtalk',
+      'broken',
+      'context7',
+      'notion',
+      'amap',
+      'busy',
+    ])
+  })
+
   test('a connected connector with its plugin can be picked as a reference; without one it is shown only', () => {
     expect(row('ref:plugin:feishu@market')).toMatchObject({ token: '飞书', dot: 'ok' })
     expect(row('ref:plugin:feishu@market').reference).toBe(feishu)

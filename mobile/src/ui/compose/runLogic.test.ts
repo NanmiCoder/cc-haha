@@ -5,6 +5,7 @@ import {
   effortSegments,
   modeRisk,
   modelRowLabel,
+  nextChosenModel,
   runCapsule,
   runCapsuleA11y,
   runLabel,
@@ -154,5 +155,22 @@ describe('run sheet reasons', () => {
     expect(effortSegments({ canSetEffort: false, authReady: true, efforts })).toEqual([])
     expect(effortSegments({ canSetEffort: true, authReady: false, efforts })).toEqual([])
     expect(effortSegments({ canSetEffort: true, authReady: true })).toEqual([])
+  })
+})
+
+describe('nextChosenModel', () => {
+  const sonnet = { id: 'sonnet', name: 'Sonnet 4.5' }
+  const opus = { id: 'opus', name: 'Opus' }
+  test('只改思考强度（没带 model）、模型没变时，保留已选模型', () => {
+    expect(nextChosenModel({ appliedModelId: 'sonnet', currentModelId: 'sonnet', chosen: sonnet })).toBe(sonnet)
+  })
+  test('选了新模型就用新的', () => {
+    expect(nextChosenModel({ picked: opus, appliedModelId: 'opus', currentModelId: 'sonnet', chosen: sonnet })).toBe(opus)
+  })
+  test('换了模型却没带 model，旧的显示名和窗口不能留着', () => {
+    expect(nextChosenModel({ appliedModelId: 'opus', currentModelId: 'sonnet', chosen: sonnet })).toBeNull()
+  })
+  test('原来就没有已选模型时保持为空', () => {
+    expect(nextChosenModel({ appliedModelId: 'sonnet', currentModelId: 'sonnet', chosen: null })).toBeNull()
   })
 })

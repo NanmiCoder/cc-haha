@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { ChatItem } from '../../core/types'
-import { captionParts, currentStepLabel } from './captionModel'
+import { captionParts, currentStepLabel, pendingStepLabel } from './captionModel'
 
 const tool = (id: string, toolName: string, input: unknown, patch: Partial<ChatItem> = {}): ChatItem => ({
   id,
@@ -95,5 +95,22 @@ describe('captionParts 文案', () => {
   })
   test('等批准优先于整理上下文', () => {
     expect(captionParts({ waiting: true, compacting: true }).tone).toBe('attention')
+  })
+})
+
+describe('pendingStepLabel', () => {
+  test('并行调用时说的是正在等批准的那一个，不是最后一个', () => {
+    const items = [
+      user('u'),
+      tool('edit-a', 'Edit', { file_path: '/p/src/todo.ts', old_string: 'a', new_string: 'b' }),
+      tool('edit-b', 'Edit', { file_path: '/p/README.md', old_string: 'a', new_string: 'b' }),
+    ]
+    expect(currentStepLabel(items, '/p')?.object).toContain('README.md')
+    expect(pendingStepLabel(items, 'edit-a', '/p')?.object).toContain('src/todo.ts')
+  })
+  test('找不到对应调用或没有 id 时返回 null', () => {
+    const items = [user('u'), tool('t', 'Bash', { command: 'bun test' })]
+    expect(pendingStepLabel(items, 'missing')).toBeNull()
+    expect(pendingStepLabel(items, undefined)).toBeNull()
   })
 })

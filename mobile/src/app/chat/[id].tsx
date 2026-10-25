@@ -35,7 +35,7 @@ import { ChatComposer } from '../../ui/ChatComposer'
 import { Message, type BubbleLayout } from '../../ui/Message'
 import { type Model } from '../../ui/RuntimePicker'
 import { RunSheet } from '../../ui/compose/RunSheet'
-import { runCapsule } from '../../ui/compose/runLogic'
+import { nextChosenModel, runCapsule } from '../../ui/compose/runLogic'
 import { useComputerUse } from '../../core/useComputerUse'
 import { useSessionActivity } from '../../core/sessionActivity'
 import { registerSessionSender } from '../../core/sessionSender'
@@ -46,7 +46,7 @@ import { StatusCaption } from '../../ui/chat/StatusCaption'
 import { ContextMenuHeader, ContextSheet, useContextInspection } from '../../ui/chat/ContextSheet'
 import { contextSummary } from '../../ui/chat/contextUsage'
 import { turnOutputTokens } from '../../core/streamRate'
-import { currentStepLabel } from '../../ui/chat/captionModel'
+import { currentStepLabel, pendingStepLabel } from '../../ui/chat/captionModel'
 import { elapsedLabel } from '../../core/dashboard'
 import { SessionChangesCard } from '../../ui/SessionChangesCard'
 import {
@@ -944,9 +944,12 @@ function ChatSession({
       ? turnClock.startedAt
       : (serverTurnStart ?? turnClock.startedAt)
     : undefined
+  const approvalToolUseId = approval?.toolUseId
   const captionStep = useMemo(
-    () => currentStepLabel(state.items, session?.workDir),
-    [state.items, session?.workDir]
+    () =>
+      pendingStepLabel(state.items, approvalToolUseId, session?.workDir) ??
+      currentStepLabel(state.items, session?.workDir),
+    [state.items, approvalToolUseId, session?.workDir]
   )
   const outputTokens = useMemo(() => turnOutputTokens({ items: state.items }).tokens, [state.items])
   // 「…」菜单头部和上下文底单共用一份占用：优先用电脑上报的实时上下文，读不到再用本轮用量近似。
@@ -1380,7 +1383,8 @@ function ChatSession({
           })
         }}
         onStopTurn={() => {
-          if (state.turnActive) dispatch({ type: 'stop_generation' })
+          // 和「停止这段会话」一样：停下来就不再自动追加，排队的内容回到输入框由用户决定要不要发。
+          if (state.turnActive && dispatch({ type: 'stop_generation' })) withdrawQueued()
         }}
       />
       <MessageMenu
@@ -1440,7 +1444,10 @@ function ChatSession({
         }}
         runtime={runtime}
         onRuntime={(value, model) => {
-          if (dispatch({ type: 'set_runtime_config', ...value }, setSheetError)) setChosenModel(model ?? null)
+          if (dispatch({ type: 'set_runtime_config', ...value }, setSheetError))
+            setChosenModel(
+              nextChosenModel({ picked: model, appliedModelId: value.modelId, currentModelId: runtime?.modelId, chosen: chosenModel })
+            )
         }}
         lean={lean}
         disabled={{

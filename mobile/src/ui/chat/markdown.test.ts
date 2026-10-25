@@ -85,3 +85,27 @@ describe('turn file changes', () => {
     })
   })
 })
+
+describe('tables', () => {
+  test('a header, rule and rows become one table block', () => {
+    const blocks = parseMarkdown('| 函数 | 作用 |\n|---|---|\n| addTodo | 追加 |\n| `remaining` | 统计 |\n\n后面的段落')
+    expect(blocks).toEqual([
+      { type: 'table', header: ['函数', '作用'], rows: [['addTodo', '追加'], ['`remaining`', '统计']] },
+      { type: 'paragraph', text: '后面的段落' },
+    ])
+  })
+
+  test('outer pipes are optional, alignment colons and escaped pipes are handled', () => {
+    const blocks = parseMarkdown('a | b\n:--- | ---:\nx \\| y | z')
+    expect(blocks).toEqual([{ type: 'table', header: ['a', 'b'], rows: [['x | y', 'z']] }])
+  })
+
+  test('short rows are padded so the table stays rectangular', () => {
+    const [table] = parseMarkdown('| a | b | c |\n|---|---|---|\n| 1 | 2 |')
+    expect(table).toEqual({ type: 'table', header: ['a', 'b', 'c'], rows: [['1', '2', '']] })
+  })
+
+  test('a lone pipe line without a rule row stays a paragraph', () => {
+    expect(parseMarkdown('a | b\nplain text')).toEqual([{ type: 'paragraph', text: 'a | b\nplain text' }])
+  })
+})

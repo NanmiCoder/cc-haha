@@ -5,6 +5,8 @@
  * 手机上不能安装也不能授权，这里只负责分类和展示。
  */
 
+import { isPluginIdVisible } from './capabilityVisibility'
+
 /** 手机拿到的一个连接器：服务端对远程请求已经裁掉授权链接、错误原文和安装细节。 */
 export type Connector = {
   id: string
@@ -39,24 +41,19 @@ export const SUGGESTED_CONNECTOR_IDS = [
 ]
 export const SUGGESTED_CONNECTOR_LIMIT = 3
 
-/** 已经从技能市场下架的托管包，桌面输入框里也不出现。 */
-const withdrawnPluginNames = new Set([
-  'office-frontend-design',
-  'office-canvas-design',
-  'office-algorithmic-art',
-  'office-webapp-testing',
-  'office-mcp-builder',
-])
-
-export function isPluginIdVisible(pluginId: string): boolean {
-  const [name, marketplace, ...rest] = pluginId.split('@')
-  return marketplace !== 'haha-connectors' || rest.length > 0 || !withdrawnPluginNames.has(name ?? '')
-}
+export { isPluginIdVisible }
 
 const text = (value: unknown) => (typeof value === 'string' ? value : undefined)
 const flag = (value: unknown) => (typeof value === 'boolean' ? value : undefined)
 
 /** `/api/connectors` 的返回体：不是 `{ items: [...] }`（接口不存在、被拦截后的错误体）就当作不可用。 */
+/** 电脑端对这三个原生连接器不发名称（桌面端用多语言文案显示），手机端用同样的中文名。 */
+const nativeNames: Record<string, { name: string; description: string }> = {
+  feishu: { name: '飞书', description: '管理飞书文档、日历与办公协作。' },
+  dingtalk: { name: '钉钉', description: '连接钉钉的日程与团队办公服务。' },
+  wecom: { name: '企业微信', description: '使用企业微信开展团队协作。' },
+}
+
 export function normalizeConnectors(value: unknown): Connector[] | null {
   if (!value || typeof value !== 'object') return null
   const list = (value as Record<string, unknown>).items
@@ -73,8 +70,8 @@ export function normalizeConnectors(value: unknown): Connector[] | null {
         : undefined
     connectors.push({
       id,
-      displayName: text(raw.displayName),
-      description: text(raw.description),
+      displayName: text(raw.displayName) ?? nativeNames[id]?.name,
+      description: text(raw.description) ?? nativeNames[id]?.description,
       category: text(raw.category),
       transport: text(raw.transport),
       collection: text(raw.collection),

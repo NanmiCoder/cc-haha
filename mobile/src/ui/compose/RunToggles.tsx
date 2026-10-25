@@ -20,6 +20,8 @@ export function RunToggles({
   onTeam,
   lean,
   computer,
+  accepted,
+  onAccept,
 }: {
   visible: boolean
   client: ApiClient | null
@@ -27,10 +29,12 @@ export function RunToggles({
   onTeam(value: boolean): void
   lean: boolean
   computer: ComputerUse
+  /** 费用确认已经点过「使用团队」。状态在「＋」底单这一层，进二级页、搜索再返回不会重置。 */
+  accepted: boolean
+  onAccept(): void
 }) {
   const colors = useColors()
   const [teamConsent, setTeamConsent] = useState(false)
-  const [teamAccepted, setTeamAccepted] = useState(false)
   // 每次打开都重读电脑上的设置，在渲染期间调整，避免 effect 里再 setState。
   const [shown, setShown] = useState(visible)
   const [epoch, setEpoch] = useState(0)
@@ -48,7 +52,7 @@ export function RunToggles({
 
   function toggleTeam(value: boolean) {
     if (!value) onTeam(false)
-    else if (teamAccepted) onTeam(true)
+    else if (accepted) onTeam(true)
     else setTeamConsent(true)
   }
 
@@ -72,7 +76,7 @@ export function RunToggles({
         <Button
           title="使用团队"
           onPress={() => {
-            setTeamAccepted(true)
+            onAccept()
             setTeamConsent(false)
             onTeam(true)
           }}

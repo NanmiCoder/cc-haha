@@ -163,3 +163,17 @@ export type RunProfile = {
   onChange(value: 'standard' | 'lean'): void
   disabled?: string
 }
+
+/**
+ * 应用一次运行配置后，页面里记住的「已选模型」（带显示名和上下文窗口）该是什么：
+ * 选了新模型就用新的；只改了思考强度（没带 model）且模型没变就保留；换了模型但没带 model 就清掉。
+ */
+export function nextChosenModel<T extends { id: string }>(input: {
+  picked?: T | null
+  appliedModelId: string
+  currentModelId?: string
+  chosen: T | null
+}): T | null {
+  if (input.picked) return input.picked
+  return input.appliedModelId === input.currentModelId ? input.chosen : null
+}

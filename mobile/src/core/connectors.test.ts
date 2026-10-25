@@ -107,3 +107,19 @@ test('withdrawn managed plugins are hidden but same-named personal plugins are n
   expect(isPluginIdVisible('feishu@haha-connectors')).toBe(true)
   expect(isPluginIdVisible('')).toBe(true)
 })
+
+test('native connectors without a display name get their Chinese name, others keep the server value', () => {
+  const list = normalizeConnectors({
+    items: [
+      { id: 'feishu', supported: true },
+      { id: 'github', displayName: 'GitHub', description: '检索仓库代码。', supported: true },
+      { id: 'unknown-service', supported: true },
+    ],
+  })!
+  expect(list.map((item) => [item.id, item.displayName])).toEqual([
+    ['feishu', '飞书'],
+    ['github', 'GitHub'],
+    ['unknown-service', undefined],
+  ])
+  expect(list[0].description).toBe('管理飞书文档、日历与办公协作。')
+})

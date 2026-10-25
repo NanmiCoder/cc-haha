@@ -43,6 +43,31 @@ const toggle = (set: ReadonlySet<string>, key: string) => {
   return next
 }
 
+/** 主 Agent 交给子 Agent 的任务往往有几十行：默认只显示前几行，点一下展开。 */
+function TaskPrompt({ text }: { text: string }) {
+  const colors = useColors()
+  const [open, setOpen] = useState(false)
+  const long = text.length > 220 || text.split('\n').length > 6
+  return (
+    <View style={{ maxWidth: '88%', backgroundColor: colors.bubble, borderRadius: 18, paddingHorizontal: 14, paddingVertical: 10, gap: 6 }}>
+      <Text numberOfLines={open || !long ? undefined : 6} style={{ fontSize: 15, lineHeight: 22, color: colors.ink }}>
+        {text}
+      </Text>
+      {long ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: open }}
+          onPress={() => setOpen((value) => !value)}
+          hitSlop={8}
+          style={{ minHeight: 28, justifyContent: 'center' }}
+        >
+          <Text style={{ fontSize: 13, color: colors.run }}>{open ? '收起' : '展开全部'}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  )
+}
+
 function LockIcon({ color }: { color: string }) {
   return (
     <Svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
@@ -231,7 +256,7 @@ export function SubagentRun({
             ) : row.kind === 'message' && row.item.id === view.prompt?.id ? (
               <View style={{ alignItems: 'flex-end', gap: 5 }}>
                 <Text style={{ fontSize: 12, color: colors.ink3, paddingRight: 4 }}>主 Agent 交给它的任务</Text>
-                <Message item={row.item} />
+                <TaskPrompt text={row.item.text ?? ''} />
               </View>
             ) : row.kind === 'message' ? (
               <Message item={row.item} />

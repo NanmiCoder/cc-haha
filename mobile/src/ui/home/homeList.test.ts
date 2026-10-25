@@ -6,6 +6,7 @@ import {
   filterOptions,
   homeCounts,
   projectBadge,
+  looseRows,
   projectGroups,
   projectTrailing,
   recentLine,
@@ -205,4 +206,16 @@ test('every visible state has words for screen readers except unknown history', 
   expect(stateWords('waiting')).toBe('等你决定')
   expect(stateWords('review')).toBe('已完成，未查看')
   expect(stateWords('unknown')).toBe('')
+})
+
+test('a project whose sessions are all under 最近 is not expandable; loose sessions get their own list', () => {
+  const only = row('5', c)
+  const [group] = projectGroups([only], {}, new Set([only]))
+  expect(group).toMatchObject({ expandable: false, total: 1 })
+  const [other] = projectGroups([row('6', c), row('7', c)], {}, new Set([row('x', c)]))
+  expect(other.expandable).toBe(true)
+
+  const orphan = row('8', null)
+  const shown = row('9', null)
+  expect(looseRows([orphan, shown, row('10', a)], new Set([shown])).map((r) => r.session.id)).toEqual(['8'])
 })

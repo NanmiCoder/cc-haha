@@ -1,13 +1,22 @@
-/** 聊天里够用的 Markdown 子集：代码块、标题、列表、引用、分隔线和段落。 */
+/** 聊天里够用的 Markdown 子集：代码块、标题、列表、引用、表格、分隔线和段落。 */
 export type MarkdownBlock =
   | { type: 'code'; text: string; lang?: string }
   | { type: 'heading'; level: number; text: string }
   | { type: 'list'; ordered: boolean; items: { marker: string; text: string }[] }
   | { type: 'quote'; text: string }
+  | { type: 'table'; header: string[]; rows: string[][] }
   | { type: 'rule' }
   | { type: 'paragraph'; text: string }
 
 const listLine = /^\s*([-*+]|\d+[.)])\s+(.*)$/
+// 表格分隔行：| --- | :---: | ---: |（外侧竖线可省）。
+const tableRule = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/
+
+/** 把一行表格拆成单元格：去掉外侧竖线，支持 \| 转义。 */
+export function splitTableRow(line: string): string[] {
+  const body = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '')
+  return body.split(/(?<!\\)\|/).map((cell) => cell.replace(/\\\|/g, '|').trim())
+}
 
 export function parseMarkdown(source: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = []
@@ -33,6 +42,21 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
     }
     if (!line.trim()) {
       flush()
+      continue
+    }
+    if (line.includes('|') && index + 1 < lines.length && lines[index + 1].includes('-') && tableRule.test(lines[index + 1]) && lines[index + 1].includes('|')) {
+      flush()
+      const header = splitTableRow(line)
+      const rows: string[][] = []
+      index += 2
+      while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
+        const cells = splitTableRow(lines[index])
+        // 行比表头短就补空，长就截断，保持矩形。
+        rows.push(header.map((_, column) => cells[column] ?? ''))
+        index++
+      }
+      index--
+      blocks.push({ type: 'table', header, rows })
       continue
     }
     const heading = line.match(/^(#{1,6})\s+(.+)$/)

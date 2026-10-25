@@ -74,6 +74,8 @@ export function recentRows(rows: readonly DashboardRow[], limit = recentLimit) {
 export type ProjectGroup = Project & {
   /** 项目下要列出的会话：已经在「最近」里出现的不再重复。 */
   rows: DashboardRow[]
+  /** 下面有会话可以展开；会话全都在「最近」里的项目没有，不能点开一个空列表。 */
+  expandable: boolean
   /** 这个项目的会话总数（含已在「最近」里的）。 */
   total: number
   waiting: number
@@ -98,7 +100,7 @@ export function projectGroups(
     if (!project) continue
     let group = groups.get(project.key)
     if (!group) {
-      group = { ...project, rows: [], total: 0, waiting: 0, running: 0, expanded: false }
+      group = { ...project, rows: [], expandable: false, total: 0, waiting: 0, running: 0, expanded: false }
       groups.set(project.key, group)
     }
     group.total++
@@ -109,8 +111,17 @@ export function projectGroups(
   }
   return [...groups.values()].map((group, index) => ({
     ...group,
+    expandable: group.rows.length > 0,
     expanded: overrides[group.key] ?? (index === 0 || group.waiting > 0 || group.running > 0),
   }))
+}
+
+/**
+ * 没有项目目录的会话进不了任何项目，不在「最近」里就哪儿都看不到（只能搜索）：
+ * 单独列在项目段最后。
+ */
+export function looseRows(rows: readonly DashboardRow[], exclude: ReadonlySet<DashboardRow> = new Set()) {
+  return rows.filter((row) => !projectOf(row.session) && !exclude.has(row))
 }
 
 /** 折叠着的项目头右侧的提示：有等你决定的先说，其次是运行中；都没有就不显示。 */

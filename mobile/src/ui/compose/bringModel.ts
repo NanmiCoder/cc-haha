@@ -49,6 +49,8 @@ export type BringItem = {
   insertText?: string
   /** 现在不能选的原因（例如连接器还没授权）；同时作为行尾的状态标签。 */
   unavailable?: string
+  /** 连接器的 logo：用连接器 id 在 connectorIconSources 里找。 */
+  iconId?: string
   /** 连接器所在的段：已连接、需要处理、推荐、其余。 */
   section?: ConnectorSection
   /** 连接器状态点：绿是已连接，琥珀是需要处理。 */
@@ -193,6 +195,7 @@ export function connectorBringItems(connectors: Connector[], existing: BringItem
       result.push({
         ...plugin,
         group: 'connector',
+        iconId: connector.id,
         token: title(connector),
         description: plugin.description || connector.description || '',
         section: 'connected',
@@ -202,6 +205,7 @@ export function connectorBringItems(connectors: Connector[], existing: BringItem
       result.push({
         key: `connector:${connector.id}`,
         group: 'connector',
+        iconId: connector.id,
         token: title(connector),
         name: title(connector),
         description: connector.description ?? '',
@@ -218,6 +222,7 @@ export function connectorBringItems(connectors: Connector[], existing: BringItem
     result.push({
       key: `connector:${connector.id}`,
       group: 'connector',
+      iconId: connector.id,
       token: title(connector),
       name: title(connector),
       description: failed ? '连接出错' : '需要登录授权',
@@ -231,6 +236,7 @@ export function connectorBringItems(connectors: Connector[], existing: BringItem
   const offline = (connector: Connector, section: 'suggested' | 'rest'): BringItem => ({
     key: `connector:${connector.id}`,
     group: 'connector',
+    iconId: connector.id,
     token: title(connector),
     name: title(connector),
     description: connector.description ?? '',

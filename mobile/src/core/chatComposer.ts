@@ -11,6 +11,8 @@ export type SkillCommand = {
   description: string
   kind?: 'skill' | 'command' | 'plugin' | 'agent'
   argumentHint?: string
+  /** 命令来自哪里：用户、项目、插件……（电脑给什么就是什么）。 */
+  source?: string
 }
 const teamBlock =
   '<agent-team-request>\nUse an Agent Team for this request: create a team, split the goal below into tasks with clear owners, and coordinate the teammates until the goal is done.\n</agent-team-request>'

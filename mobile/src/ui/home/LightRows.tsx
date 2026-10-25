@@ -290,7 +290,8 @@ export function ProjectHeader({
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={`${group.name}，${group.total} 个任务${badge ? `，${badge.text}` : ''}`}
-        accessibilityState={{ expanded: group.expanded }}
+        accessibilityState={group.expandable ? { expanded: group.expanded } : undefined}
+        disabled={!group.expandable}
         onPress={onToggle}
         style={({ pressed }) => ({
           flex: 1,

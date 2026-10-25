@@ -1,6 +1,6 @@
 import { parseUserMessageSegments } from '../../../src/shared/userMessageCapabilities'
 import { memo, useRef, type ComponentRef } from 'react'
-import { Image, Platform, Pressable, View, type TextStyle } from 'react-native'
+import { Image, Platform, Pressable, ScrollView, View, type TextStyle } from 'react-native'
 import { Text } from './Text'
 import type { ChatItem } from '../core/types'
 import { visibleMessageText } from '../core/chatComposer'
@@ -30,6 +30,59 @@ function Inline({
         )
       )}
     </Text>
+  )
+}
+
+/** 表格：列宽按内容估算，整张表可以横向滑动，手机上不挤成一团。 */
+function MarkdownTable({
+  header,
+  rows,
+  selectable,
+}: {
+  header: string[]
+  rows: string[][]
+  selectable: boolean
+}) {
+  const colors = useColors()
+  const widths = header.map((title, column) => {
+    const longest = Math.max(title.length, ...rows.map((row) => (row[column] ?? '').length))
+    return Math.min(240, Math.max(72, longest * 9 + 24))
+  })
+  const cell = (text: string, column: number, head: boolean, last: boolean) => (
+    <View
+      key={column}
+      style={{
+        width: widths[column],
+        paddingHorizontal: 10,
+        paddingVertical: 8,
+        borderRightWidth: last ? 0 : 1,
+        borderRightColor: colors.hair,
+      }}
+    >
+      <Inline
+        text={text}
+        selectable={selectable}
+        style={{ fontSize: 14, lineHeight: 20, color: colors.ink, ...(head ? { fontWeight: '600' } : {}) }}
+      />
+    </View>
+  )
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={{ borderRadius: 12, borderWidth: 1, borderColor: colors.hair, backgroundColor: colors.card }}
+    >
+      <View>
+        <View style={{ flexDirection: 'row', backgroundColor: colors.fill }}>
+          {header.map((title, column) => cell(title, column, true, column === header.length - 1))}
+        </View>
+        {rows.map((row, rowIndex) => (
+          <View key={rowIndex} style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.hair }}>
+            {row.map((text, column) => cell(text, column, false, column === row.length - 1))}
+          </View>
+        ))}
+      </View>
+    </ScrollView>
   )
 }
 
@@ -84,6 +137,8 @@ export function Markdown({
                 <Inline text={block.text} selectable={selectable} style={{ ...body, color: colors.ink2 }} />
               </View>
             )
+          case 'table':
+            return <MarkdownTable key={index} header={block.header} rows={block.rows} selectable={selectable} />
           case 'rule':
             return <View key={index} style={{ height: 1, backgroundColor: colors.hair }} />
           default:
