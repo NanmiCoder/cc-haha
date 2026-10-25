@@ -10,6 +10,7 @@ import {
 } from './autoCompact.js'
 import { getContextWindowForModel } from '../../utils/context.js'
 import { MODEL_CONTEXT_WINDOWS_ENV_KEY } from '../../utils/model/modelContextWindows.js'
+import { runWithProviderRuntime } from '../api/providerRuntimeContext.js'
 
 let originalAutoCompactWindow: string | undefined
 let originalContextWindows: string | undefined
@@ -51,6 +52,22 @@ afterEach(() => {
 })
 
 describe('model context window resolution', () => {
+  test('uses the selected agent provider compact window rather than the parent session override', async () => {
+    process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = '1000000'
+    process.env[MODEL_CONTEXT_WINDOWS_ENV_KEY] = JSON.stringify({ 'shared-model': 400_000 })
+    const effective = await Promise.all([80_000, 160_000].map(window => runWithProviderRuntime({
+      providerId: String(window), runtimeKind: 'anthropic_compatible',
+      env: {
+        CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(window),
+        CLAUDE_CODE_MODEL_CONTEXT_WINDOWS: JSON.stringify({ 'shared-model': 320_000 }),
+      },
+    }, async () => {
+      await Promise.resolve()
+      return getEffectiveContextWindowSize('shared-model')
+    })))
+    expect(effective).toEqual([60_000, 140_000])
+    expect(getEffectiveContextWindowSize('shared-model')).toBe(380_000)
+  })
   test('uses built-in windows for current third-party coding models', () => {
     expect(getContextWindowForModel('deepseek-v4-pro')).toBe(1_000_000)
     expect(getContextWindowForModel('MiniMax-M2.7')).toBe(204_800)

@@ -1,5 +1,7 @@
 import { promises as fsp } from 'fs'
-import { getAgentModelSetting } from './builtInAgentOverrides.js'
+import { getAgentProviderModel, getBuiltInAgentProviderId } from './agentProviderModel.js'
+import { resolveAgentProviderRuntime } from '../../services/api/agentProviderRuntime.js'
+import { getProviderRuntimeContext } from '../../services/api/providerRuntimeContext.js'
 import { getSdkAgentProgressSummariesEnabled } from '../../bootstrap/state.js'
 import { getSystemPrompt } from '../../constants/prompts.js'
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js'
@@ -18,7 +20,6 @@ import {
   filterUnresolvedToolUses,
   filterWhitespaceOnlyAssistantMessages,
 } from '../../utils/messages.js'
-import { getAgentModel } from '../../utils/model/agent.js'
 import {
   isModelAlias,
   type ModelAlias,
@@ -52,6 +53,20 @@ export function resolveResumedAgentModelOverride(
   model: unknown,
 ): ModelAlias | undefined {
   return typeof model === 'string' && isModelAlias(model) ? model : undefined
+}
+
+export function resolveResumedAgentProvider(
+  agent: AgentDefinition,
+  metadata: Pick<AgentMetadata, 'providerId' | 'providerModel'> | null,
+): { providerId?: string; parentModel?: string } {
+  const explicitId = getBuiltInAgentProviderId(agent)
+  // Old sidecars have no provider fields. Do not coerce malformed JSON values
+  // into provider ids or use the invoker's model on a recorded provider.
+  const providerId = typeof metadata?.providerId === 'string' ? metadata.providerId.trim() : ''
+  if (explicitId && explicitId !== providerId) return { providerId: explicitId }
+  if (!providerId) return {}
+  const parentModel = typeof metadata?.providerModel === 'string' ? metadata.providerModel.trim() : ''
+  return { providerId, ...(parentModel ? { parentModel } : {}) }
 }
 
 /** Resolve the original lifecycle owner before a resume re-registers the task.
@@ -201,11 +216,19 @@ export async function resumeAgentBackground({
   }
 
   // Resolve model for analytics metadata (runAgent resolves its own internally)
-  const resolvedAgentModel = getAgentModel(
-    getAgentModelSetting(selectedAgent, toolUseContext.options.mainLoopModel),
+  const resumedProvider = resolveResumedAgentProvider(selectedAgent, meta)
+  const selectedProviderId = resumedProvider.providerId
+  const providerRuntime = selectedProviderId
+    ? await resolveAgentProviderRuntime(selectedProviderId)
+    : getProviderRuntimeContext()
+  const providerParentModel = resumedProvider.parentModel
+  const resolvedAgentModel = getAgentProviderModel(
+    selectedAgent,
     toolUseContext.options.mainLoopModel,
     resumedModelOverride,
     permissionMode,
+    providerRuntime,
+    providerParentModel,
   )
 
   const workerPermissionContext = {
@@ -222,6 +245,8 @@ export async function resumeAgentBackground({
 
   const runAgentParams: Parameters<typeof runAgent>[0] = {
     agentDefinition: selectedAgent,
+    providerRuntime,
+    providerParentModel,
     promptMessages: [
       ...resumedMessages,
       createUserMessage({ content: prompt }),

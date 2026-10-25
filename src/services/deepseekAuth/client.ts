@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from '../api/providerRuntimeContext.js'
 /**
  * DeepSeek platform account login (the "DSH" browser PKCE flow).
  *
@@ -77,7 +78,7 @@ export type DeepSeekRequestOptions = {
  * back to production so a stray variable cannot redirect credentials.
  */
 export function getDeepSeekPlatformOrigin(): string {
-  const override = process.env[DEEPSEEK_PLATFORM_ORIGIN_ENV_KEY]?.trim()
+  const override = getProviderRuntimeEnvironment()[DEEPSEEK_PLATFORM_ORIGIN_ENV_KEY]?.trim()
   if (!override) return DEEPSEEK_PLATFORM_ORIGIN
   try {
     const url = new URL(override)

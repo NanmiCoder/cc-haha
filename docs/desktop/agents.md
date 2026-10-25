@@ -53,13 +53,14 @@ order: 3
 
 鼠标移到列表里的某一行上，右侧会出现操作按钮：用户和项目 Agent 是「编辑」和「删除」，内置 Agent 是「调整模型」。详情页右上角也有同样的入口。
 
-## 调整内置 Agent 的模型
+## 调整内置 Agent 的服务商与模型
 
 内置 Agent 各自钉了默认模型——`Explore` 和 `claude-code-guide` 走 Haiku，`statusline-setup` 走 Sonnet——图的是快和省。如果你更在意它们的结果质量，可以单独换掉。
 
-在列表里点内置 Agent 那一行的「调整模型」，或者进详情页点右上角的同名按钮。能改的只有两项：
+在列表里点内置 Agent 那一行的「调整模型」，或者进详情页点右上角的同名按钮。可以调整：
 
-- **模型** — 「内置默认」「继承主会话」、Haiku / Sonnet / Opus / Fable 别名，以及当前 Provider 已配置的模型。
+- **服务商** — 默认继承会话服务商，也可以为此内置子 Agent 单独指定已配置的 Provider。不会切换主会话或全局服务商。
+- **模型** — 继承会话服务商时提供「内置默认」「继承主会话」、Haiku / Sonnet / Opus / Fable 别名和当前 Provider 的模型；单独指定服务商时，只列出该 Provider 的模型，并提供「服务商默认模型」。切换服务商会清除之前的模型选择，避免把旧模型 ID 发到新服务商。
 - **思考强度** — 「内置默认」或低 / 中 / 高 / 极高 / 最大。
 
 系统提示词、工具范围和颜色不能改，仍由 Claude Code 固定。
@@ -70,7 +71,11 @@ order: 3
 
 覆盖写进 `~/.claude/settings.json` 的 `builtInAgentOverrides`，对所有项目生效。恢复默认时这条记录会被整个删掉，不会在配置文件里留下空壳。
 
-Agent 配置只保存模型 ID，不绑定 Provider。选择器会列出当前 Provider 的可用模型；如果以后切换 Provider，别名会按新 Provider 的映射解析，完整模型 ID 则需要新 Provider 也支持。
+内置 Agent 的独立服务商保存为 `builtInAgentOverrides.<名称>.providerId`，例如 `Explore` 可单独使用便宜的检索模型，而主会话继续使用原服务商。未配置 `providerId` 的旧设置继续继承会话服务商。只选服务商、不单独选模型时，使用该服务商配置的主模型；服务商删除或不可用时，弹窗会提示并允许改回继承。
+
+`--bare` 模式不读取已保存的服务商凭据，因此不能使用独立服务商覆盖；移除 `providerId` 后，Agent 会继承显式提供的 API 密钥运行时。
+
+自定义 Agent 仍只保存模型 ID，运行时使用会话当前的 Provider。如果以后切换会话 Provider，别名会按新 Provider 的映射解析，完整模型 ID 则需要新 Provider 也支持。
 
 如果你自己建了一个同名的用户 Agent（比如手写一个 `name: Explore` 的 md 文件），它会完全盖住内置的那个，此时改内置的模型不会有任何效果——弹窗里会提示这一点。
 

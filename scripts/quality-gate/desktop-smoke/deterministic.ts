@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { runDesktopUiTeamPlanSmoke, TEAM_SMOKE_MODEL, TEAM_SMOKE_PROVIDER } from './team-plan'
+import { runDesktopUiAgentProviderSmoke } from './agent-provider'
 import { buildMockToolPrompt } from '../agent-flow/scenarios'
 import { applyUserStateGuard, createQualityGateSandbox } from '../sandbox'
 import type { LaneResult } from '../types'
@@ -252,6 +253,11 @@ export async function executeDeterministicDesktopSmoke(
 
     await browserStep(['open', appUrl])
     await browserStep(['eval', buildDesktopUiSmokeBootstrap(session.sessionId)], { timeoutMs: 15_000 })
+    await browserStep(['reload'])
+    await browserStep(['wait', DESKTOP_SMOKE_COMPOSER_SELECTOR])
+    await runDesktopUiAgentProviderSmoke({ baseUrl, projectDir, artifactDir, browserStep })
+    // Restore the isolated session tab after exercising Settings with real clicks.
+    await browserStep(['eval', buildDesktopUiSmokeBootstrap(session.sessionId)])
     await browserStep(['reload'])
     // The composer is a ProseMirror contenteditable (MentionComposer), not a
     // <textarea> — `[data-composer-editor]` is the attribute the editor sets on

@@ -1,4 +1,5 @@
 import { api } from './client'
+import type { SessionModelChoice } from '../../../src/shared/sessionDelegation'
 
 export type AgentSource =
   | 'built-in'
@@ -14,6 +15,7 @@ export type AgentDefinition = {
   description?: string
   model?: string
   modelDisplay?: string
+  providerId?: string
   effort?: string | number
   tools?: string[]
   systemPrompt?: string
@@ -25,7 +27,7 @@ export type AgentDefinition = {
   isActive: boolean
   /** The backing file can be rewritten. Never true for built-in agents. */
   editable?: boolean
-  /** Built-in agents only: model and effort can be changed via setOverride. */
+  /** Built-in agents only: provider, model and effort can be changed via setOverride. */
   overridable?: boolean
   /**
    * Built-in agents only: what this build ships with, so the UI can name and
@@ -33,12 +35,13 @@ export type AgentDefinition = {
    */
   defaults?: { model?: string; effort?: string | number }
   /** Built-in agents only: the override currently in effect, if any. */
-  override?: { model?: string; effort?: string | number; source: AgentSource }
+  override?: { providerId?: string; model?: string; effort?: string | number; source: AgentSource }
 }
 
 /** `null` clears that field; an omitted field is left unchanged. */
 export type AgentOverrideInput = {
   cwd?: string
+  providerId?: string | null
   model?: string | null
   effort?: string | number | null
 }
@@ -85,6 +88,10 @@ export type AgentReloadResponse = {
 }
 
 export const agentsApi = {
+  providerModels: (name: string, cwd?: string) => {
+    const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
+    return api.get<{ models: SessionModelChoice[] }>(`/api/agents/${encodeURIComponent(name)}/provider-models${query}`)
+  },
   list: (cwd?: string) => {
     const query = cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''
     return api.get<AgentListResponse>(`/api/agents${query}`)

@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from '../api/providerRuntimeContext.js'
 import type { ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import type { OpenAICodexTurnState } from './turnState.js'
@@ -74,7 +75,7 @@ export function buildOpenAICodexFetch(
       [
         nativeRequestEffort,
         transformedBody.reasoning?.effort,
-        process.env[OPENAI_CODEX_REASONING_EFFORT_ENV_KEY],
+        getProviderRuntimeEnvironment()[OPENAI_CODEX_REASONING_EFFORT_ENV_KEY],
       ],
     )
     const upstreamBody = {
@@ -85,7 +86,7 @@ export function buildOpenAICodexFetch(
       },
       include: ['reasoning.encrypted_content'],
       stream: true,
-      ...(process.env.CC_HAHA_OPENAI_FAST_MODE === '1' ? { service_tier: 'priority' as const } : {}),
+      ...(getProviderRuntimeEnvironment().CC_HAHA_OPENAI_FAST_MODE === '1' ? { service_tier: 'priority' as const } : {}),
     }
 
     const tokens = await ensureFreshOpenAITokens()

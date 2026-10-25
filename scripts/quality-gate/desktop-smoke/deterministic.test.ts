@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { seedDesktopUiTeamPlan } from './team-plan'
+import { AGENT_PROVIDER_SMOKE_OVERRIDE_SELECTOR, AGENT_PROVIDER_SMOKE_PROVIDER_SELECTOR } from './agent-provider'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,6 +16,21 @@ import {
 } from './deterministic'
 
 describe('deterministic desktop UI smoke setup', () => {
+  test('runs agent provider changes through the actual settings controls and verifies their saved result', () => {
+    const lane = readFileSync('scripts/quality-gate/desktop-smoke/deterministic.ts', 'utf8')
+    const scenario = readFileSync('scripts/quality-gate/desktop-smoke/agent-provider.ts', 'utf8')
+    const manager = readFileSync('desktop/src/components/settings/AgentManager.tsx', 'utf8')
+    const english = readFileSync('desktop/src/i18n/locales/en.ts', 'utf8')
+    expect(lane).toContain('runDesktopUiAgentProviderSmoke({ baseUrl, projectDir, artifactDir, browserStep })')
+    expect(english).toContain("'settings.agents.rowOverride': 'Adjust the model and effort for {name}'")
+    expect(manager).toContain("label={t('settings.agents.form.provider')}")
+    expect(AGENT_PROVIDER_SMOKE_OVERRIDE_SELECTOR).toBe('button[aria-label="Adjust the model and effort for Explore"]')
+    expect(AGENT_PROVIDER_SMOKE_PROVIDER_SELECTOR).toBe('select[aria-label="Provider"]')
+    expect(scenario).toContain("['select', AGENT_PROVIDER_SMOKE_PROVIDER_SELECTOR, TEAM_SMOKE_PROVIDER]")
+    expect(scenario).toContain('globalProviderUnchanged: true')
+    expect(scenario).not.toContain("method: 'PUT'")
+    expect(scenario).not.toContain('/activate')
+  })
   test('pins the locale so the approval button label is stable for every contributor', () => {
     const bootstrap = buildDesktopUiSmokeBootstrap('session-1')
 

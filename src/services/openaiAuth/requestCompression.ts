@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from '../api/providerRuntimeContext.js'
 import { registerEncodedRequestBody } from '../api/requestBodyAudit.js'
 
 /** Called only after conversion to the fixed Codex OAuth endpoint. No network retries. */
@@ -8,7 +9,7 @@ export async function encodeOpenAIRequestBody(
 ): Promise<string | Uint8Array> {
   signal?.throwIfAborted()
   // An explicit compatibility opt-out leaves the established plain JSON path.
-  if (/^(0|false|off)$/i.test(process.env.CC_HAHA_OPENAI_REQUEST_COMPRESSION ?? '') ||
+  if (/^(0|false|off)$/i.test(getProviderRuntimeEnvironment().CC_HAHA_OPENAI_REQUEST_COMPRESSION ?? '') ||
       headers.has('Content-Encoding') ||
       typeof Bun === 'undefined' || typeof Bun.zstdCompress !== 'function') {
     return plainBody

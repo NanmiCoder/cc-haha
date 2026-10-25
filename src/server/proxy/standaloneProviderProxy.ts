@@ -1,6 +1,8 @@
 import { handleProxyRequest } from './handler.js'
+import { registerCleanup } from '../../utils/cleanupRegistry.js'
 
 let standaloneProviderProxy: ReturnType<typeof Bun.serve> | null = null
+let unregisterCleanup: (() => void) | undefined
 
 export function ensureStandaloneProviderProxy(): number {
   if (standaloneProviderProxy) {
@@ -21,11 +23,16 @@ export function ensureStandaloneProviderProxy(): number {
       return Response.json({ error: 'Not Found' }, { status: 404 })
     },
   })
+  unregisterCleanup = registerCleanup(async () => stopStandaloneProviderProxy())
 
   return standaloneProviderProxy.port
 }
 
-export function stopStandaloneProviderProxyForTests(): void {
+function stopStandaloneProviderProxy(): void {
   standaloneProviderProxy?.stop(true)
   standaloneProviderProxy = null
+  unregisterCleanup?.()
+  unregisterCleanup = undefined
 }
+
+export const stopStandaloneProviderProxyForTests = stopStandaloneProviderProxy

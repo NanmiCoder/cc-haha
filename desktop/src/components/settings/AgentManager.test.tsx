@@ -9,6 +9,7 @@ const apiDeleteMock = vi.hoisted(() => vi.fn())
 const apiReloadMock = vi.hoisted(() => vi.fn())
 const apiSetOverrideMock = vi.hoisted(() => vi.fn())
 const apiClearOverrideMock = vi.hoisted(() => vi.fn())
+const apiProviderModelsMock = vi.hoisted(() => vi.fn())
 const recentProjectsMock = vi.hoisted(() => vi.fn())
 
 vi.mock('../../api/agents', async (importOriginal) => {
@@ -23,6 +24,7 @@ vi.mock('../../api/agents', async (importOriginal) => {
       reload: apiReloadMock,
       setOverride: apiSetOverrideMock,
       clearOverride: apiClearOverrideMock,
+      providerModels: apiProviderModelsMock,
     },
   }
 })
@@ -123,6 +125,11 @@ function chooseAgentModel(option: string | RegExp) {
 describe('AgentManager', () => {
   beforeEach(() => {
     vi.resetAllMocks()
+    apiProviderModelsMock.mockResolvedValue({ models: [
+      { providerId: 'provider-a', providerName: 'Provider A', modelId: 'a-main', modelName: 'A Main', supportedEfforts: [], isDefault: true, isProviderDefault: true },
+      { providerId: 'provider-b', providerName: 'Provider B', modelId: 'b-main', modelName: 'B Main', supportedEfforts: ['high'], isDefault: false, isProviderDefault: true },
+      { providerId: 'provider-b', providerName: 'Provider B', modelId: 'b-fast', modelName: 'B Fast', supportedEfforts: [], isDefault: false },
+    ] })
     apiReloadMock.mockResolvedValue({
       ok: true,
       session: {
@@ -745,6 +752,35 @@ describe('AgentManager', () => {
     expect(screen.queryByRole('button', { name: 'Edit Explore' })).toBeNull()
   })
 
+  it('shows the provider default model in both the row and detail for a provider-only override', async () => {
+    const agent = makeBuiltInAgent({ providerId: 'provider-b', override: { providerId: 'provider-b', source: 'userSettings' } })
+    await renderManager({ activeAgents: [agent], allAgents: [agent] })
+    expect(screen.getByText('Provider default model')).toBeInTheDocument()
+    expect(screen.queryByText('haiku')).toBeNull()
+    fireEvent.click(screen.getByText('Explore'))
+    expect(screen.getByText('Provider default model')).toBeInTheDocument()
+    expect(screen.queryByText('haiku')).toBeNull()
+  })
+
+  it('preserves shipped and explicitly selected model labels alongside provider defaults', async () => {
+    const defaults = makeBuiltInAgent()
+    const explicit = makeBuiltInAgent({
+      agentType: 'Plan', providerId: 'provider-b', model: 'b-deep', modelDisplay: 'b-deep',
+      override: { providerId: 'provider-b', model: 'b-deep', source: 'userSettings' },
+    })
+    const inherited = makeBuiltInAgent({
+      agentType: 'verification', providerId: 'provider-b', model: 'inherit', modelDisplay: 'inherit',
+      override: { providerId: 'provider-b', model: 'inherit', source: 'userSettings' },
+    })
+    await renderManager({ activeAgents: [defaults, explicit, inherited], allAgents: [defaults, explicit, inherited] })
+    expect(screen.getByText('haiku')).toBeInTheDocument()
+    expect(screen.getByText('b-deep')).toBeInTheDocument()
+    expect(screen.getByText('Provider default model')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('Plan'))
+    expect(screen.getByText('b-deep')).toBeInTheDocument()
+    expect(screen.queryByText('Provider default model')).toBeNull()
+  })
+
   it('saves and resets an override through the active same-project session without a warning', async () => {
     const shipped = makeBuiltInAgent()
     const overridden = makeBuiltInAgent({
@@ -931,6 +967,7 @@ describe('AgentManager', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'Adjust the model and effort for Explore' }),
     )
+    await screen.findByRole('option', { name: 'Provider B' })
 
     expect(screen.getByRole('button', { name: 'Model' })).toBeDisabled()
     expect(screen.getByRole('combobox', { name: 'Reasoning effort' })).toBeDisabled()
@@ -951,6 +988,7 @@ describe('AgentManager', () => {
     fireEvent.click(
       screen.getByRole('button', { name: 'Adjust the model and effort for Explore' }),
     )
+    await screen.findByRole('option', { name: 'Provider B' })
 
     expect(screen.getByRole('status')).toHaveTextContent(
       'An agent of the same name from User is active',
@@ -981,5 +1019,77 @@ describe('AgentManager', () => {
 
     expect(await screen.findByText('加载 Agent 失败')).toBeInTheDocument()
     expect(screen.queryByText(/internal agent path leaked/)).not.toBeInTheDocument()
+  })
+
+  it('filters models by the selected agent provider and saves without activating the global provider', async () => {
+    const builtIn = makeBuiltInAgent()
+    await renderManager({ activeAgents: [builtIn], allAgents: [builtIn] })
+    apiSetOverrideMock.mockResolvedValue({ agent: builtIn })
+    fireEvent.click(screen.getByRole('button', { name: 'Adjust the model and effort for Explore' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Provider' })).not.toBeDisabled())
+    chooseAgentSelect('Provider', 'Provider B')
+    fireEvent.click(screen.getByRole('button', { name: 'Model' }))
+    const picker = screen.getByTestId('model-selector-dropdown')
+    expect(within(picker).queryByRole('button', { name: /A Main/ })).toBeNull()
+    expect(within(picker).queryByRole('button', { name: /Provider Custom/ })).toBeNull()
+    expect(within(picker).queryByRole('button', { name: /^haiku/ })).toBeNull()
+    fireEvent.click(within(picker).getByRole('button', { name: /B Fast/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(apiSetOverrideMock).toHaveBeenCalledWith('Explore', {
+      cwd: '/workspace/project', providerId: 'provider-b', model: 'b-fast', effort: null,
+    }))
+    expect(apiProviderModelsMock).toHaveBeenCalledWith('Explore', '/workspace/project')
+  })
+
+  it('uses the selected provider default and clears the old provider model when switching', async () => {
+    const builtIn = makeBuiltInAgent({ override: { providerId: 'provider-a', model: 'a-main', source: 'userSettings' } })
+    await renderManager({ activeAgents: [builtIn], allAgents: [builtIn] })
+    apiSetOverrideMock.mockResolvedValue({ agent: builtIn })
+    fireEvent.click(screen.getByRole('button', { name: 'Adjust the model and effort for Explore' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: 'Provider' })).not.toBeDisabled())
+    chooseAgentSelect('Provider', 'Provider B')
+    expect(screen.getByRole('button', { name: 'Model' })).toHaveTextContent('Provider default model')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(apiSetOverrideMock).toHaveBeenCalledWith('Explore', {
+      cwd: '/workspace/project', providerId: 'provider-b', model: null, effort: null,
+    }))
+  })
+
+  it('explains a deleted provider and permits clearing it back to session inheritance', async () => {
+    const builtIn = makeBuiltInAgent({ override: { providerId: 'deleted-provider', model: 'old-model', source: 'userSettings' } })
+    await renderManager({ activeAgents: [builtIn], allAgents: [builtIn] })
+    apiSetOverrideMock.mockResolvedValue({ agent: builtIn })
+    fireEvent.click(screen.getByRole('button', { name: 'Adjust the model and effort for Explore' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('This provider is unavailable.')
+    expect(screen.getByRole('combobox', { name: 'Provider' })).toHaveValue('deleted-provider')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    chooseAgentSelect('Provider', 'Inherit session provider')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(apiSetOverrideMock).toHaveBeenCalledWith('Explore', {
+      cwd: '/workspace/project', providerId: null, model: null, effort: null,
+    }))
+  })
+
+  it('reports catalog failures without exposing server errors or blocking inherited model edits', async () => {
+    apiProviderModelsMock.mockRejectedValue(new Error('secret internal provider path'))
+    const builtIn = makeBuiltInAgent()
+    await renderManager({ activeAgents: [builtIn], allAgents: [builtIn] })
+    fireEvent.click(screen.getByRole('button', { name: 'Adjust the model and effort for Explore' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load providers.')
+    expect(screen.getByRole('alert')).not.toHaveTextContent('secret internal')
+    expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled()
+  })
+
+  it('keeps a saved explicit provider locked when the catalog cannot be loaded', async () => {
+    apiProviderModelsMock.mockRejectedValue(new Error('unavailable'))
+    const builtIn = makeBuiltInAgent({ override: { providerId: 'provider-b', source: 'userSettings' } })
+    await renderManager({ activeAgents: [builtIn], allAgents: [builtIn] })
+    fireEvent.click(screen.getByRole('button', { name: 'Adjust the model and effort for Explore' }))
+    await screen.findByRole('alert')
+    expect(screen.getByRole('combobox', { name: 'Provider' })).toHaveValue('provider-b')
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Model' })).toBeDisabled()
+    chooseAgentSelect('Provider', 'Inherit session provider')
+    expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled()
   })
 })

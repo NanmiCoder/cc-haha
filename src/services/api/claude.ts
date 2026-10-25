@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from './providerRuntimeContext.js'
 ﻿import { getConfiguredProviderOutputBudget, getOutputBudgetHeaders, markOutputBudgetSource } from './outputBudget.js'
 import { OpenAICodexTurnState } from '../openaiAuth/turnState.js';
 import type {
@@ -316,7 +317,7 @@ type JsonArray = JsonValue[];
  */
 export function getExtraBodyParams(betaHeaders?: string[]): JsonObject {
   // Parse user's extra body parameters first
-  const extraBodyStr = process.env.CLAUDE_CODE_EXTRA_BODY;
+  const extraBodyStr = getProviderRuntimeEnvironment().CLAUDE_CODE_EXTRA_BODY;
   let result: JsonObject = {};
 
   if (extraBodyStr) {
@@ -346,7 +347,7 @@ export function getExtraBodyParams(betaHeaders?: string[]): JsonObject {
   // Anti-distillation: send fake_tools opt-in for 1P CLI only
   if (
     feature("ANTI_DISTILLATION_CC")
-      ? process.env.CLAUDE_CODE_ENTRYPOINT === "cli" &&
+      ? getProviderRuntimeEnvironment().CLAUDE_CODE_ENTRYPOINT === "cli" &&
         shouldIncludeFirstPartyOnlyBetas() &&
         getFeatureValue_CACHED_MAY_BE_STALE(
           "tengu_anti_distill_fake_tool_injection",
@@ -377,22 +378,22 @@ export function getExtraBodyParams(betaHeaders?: string[]): JsonObject {
 
 export function getPromptCachingEnabled(model: string): boolean {
   // Global disable takes precedence
-  if (isEnvTruthy(process.env.DISABLE_PROMPT_CACHING)) return false;
+  if (isEnvTruthy(getProviderRuntimeEnvironment().DISABLE_PROMPT_CACHING)) return false;
 
   // Check if we should disable for small/fast model
-  if (isEnvTruthy(process.env.DISABLE_PROMPT_CACHING_HAIKU)) {
+  if (isEnvTruthy(getProviderRuntimeEnvironment().DISABLE_PROMPT_CACHING_HAIKU)) {
     const smallFastModel = getSmallFastModel();
     if (model === smallFastModel) return false;
   }
 
   // Check if we should disable for default Sonnet
-  if (isEnvTruthy(process.env.DISABLE_PROMPT_CACHING_SONNET)) {
+  if (isEnvTruthy(getProviderRuntimeEnvironment().DISABLE_PROMPT_CACHING_SONNET)) {
     const defaultSonnet = getDefaultSonnetModel();
     if (model === defaultSonnet) return false;
   }
 
   // Check if we should disable for default Opus
-  if (isEnvTruthy(process.env.DISABLE_PROMPT_CACHING_OPUS)) {
+  if (isEnvTruthy(getProviderRuntimeEnvironment().DISABLE_PROMPT_CACHING_OPUS)) {
     const defaultOpus = getDefaultOpusModel();
     if (model === defaultOpus) return false;
   }
@@ -440,7 +441,7 @@ function should1hCacheTTL(querySource?: QuerySource): boolean {
   // No GrowthBook gating needed since 3P users don't have GrowthBook configured
   if (
     getAPIProvider() === "bedrock" &&
-    isEnvTruthy(process.env.ENABLE_PROMPT_CACHING_1H_BEDROCK)
+    isEnvTruthy(getProviderRuntimeEnvironment().ENABLE_PROMPT_CACHING_1H_BEDROCK)
   ) {
     return true;
   }
@@ -538,11 +539,11 @@ export function configureEffortParams(
 }
 
 function shouldSuppressEffortOutputConfig(): boolean {
-  if (!isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)) {
+  if (!isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS)) {
     return false
   }
 
-  const baseUrl = process.env.ANTHROPIC_BASE_URL ?? ''
+  const baseUrl = getProviderRuntimeEnvironment().ANTHROPIC_BASE_URL ?? ''
   try {
     const url = new URL(baseUrl)
     const proxyPath = url.pathname.replace(/\/+$/, '')
@@ -596,7 +597,7 @@ export function configureTaskBudgetParams(
 export function getAPIMetadata() {
   // https://docs.google.com/document/d/1dURO9ycXXQCBS0V4Vhl4poDBRgkelFc5t2BNPoEgH5Q/edit?tab=t.0#heading=h.5g7nec5b09w5
   let extra: JsonObject = {};
-  const extraStr = process.env.CLAUDE_CODE_EXTRA_METADATA;
+  const extraStr = getProviderRuntimeEnvironment().CLAUDE_CODE_EXTRA_METADATA;
   if (extraStr) {
     const parsed = safeParseJSON(extraStr, false);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -918,9 +919,9 @@ function shouldDeferLspTool(tool: Tool): boolean {
  * approaching the API's 10-minute non-streaming boundary.
  */
 function getNonstreamingFallbackTimeoutMs(): number {
-  const override = parseInt(process.env.API_TIMEOUT_MS || "", 10);
+  const override = parseInt(getProviderRuntimeEnvironment().API_TIMEOUT_MS || "", 10);
   if (override) return override;
-  return isEnvTruthy(process.env.CLAUDE_CODE_REMOTE) ? 120_000 : 300_000;
+  return isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_REMOTE) ? 120_000 : 300_000;
 }
 
 /**
@@ -1749,7 +1750,7 @@ async function* queryModel(
     const usesAdaptiveThinking =
       (modelRequiresThinking(options.model) ||
         modelRejectsManualThinking(options.model) ||
-        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING)) &&
+        !isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING)) &&
       modelSupportsAdaptiveThinking(options.model)
     // Manual thinking needs at least 1024 tokens and room for the answer.
     // Keep the explicit output cap; disable optional thinking when it cannot fit.
@@ -1758,7 +1759,7 @@ async function* queryModel(
     const hasThinking = thinkingFitsOutputBudget && resolveModelThinkingEnabled(
       options.model,
       thinkingConfig.type !== 'disabled' &&
-        !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_THINKING),
+        !isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_DISABLE_THINKING),
     )
     const modelCanThink = modelSupportsThinking(options.model)
     const sendsExplicitDisabledThinking =
@@ -1931,8 +1932,8 @@ async function* queryModel(
     const explicitOutputBudget = Boolean(
       retryContext?.maxTokensOverride || options.maxOutputTokensOverride ||
       getConfiguredProviderOutputBudget() ||
-      (Number.isSafeInteger(Number(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS)) &&
-        Number(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS) > 0) ||
+      (Number.isSafeInteger(Number(getProviderRuntimeEnvironment().CLAUDE_CODE_MAX_OUTPUT_TOKENS)) &&
+        Number(getProviderRuntimeEnvironment().CLAUDE_CODE_MAX_OUTPUT_TOKENS) > 0) ||
       extraBodyParams.max_tokens !== undefined
     )
 
@@ -2153,10 +2154,10 @@ async function* queryModel(
     // the session indefinitely since the SDK's request timeout only covers the
     // initial fetch(), not the streaming body.
     const streamWatchdogEnabled = isEnvTruthy(
-      process.env.CLAUDE_ENABLE_STREAM_WATCHDOG,
+      getProviderRuntimeEnvironment().CLAUDE_ENABLE_STREAM_WATCHDOG,
     );
     const STREAM_IDLE_TIMEOUT_MS =
-      parseInt(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS || "", 10) || 90_000;
+      parseInt(getProviderRuntimeEnvironment().CLAUDE_STREAM_IDLE_TIMEOUT_MS || "", 10) || 90_000;
     // Budget for the FIRST chunk after response headers arrive (the prefill /
     // time-to-first-token phase). Slow local models and 3P gateways can spend
     // minutes prefilling a large context while emitting zero SSE bytes (#826);
@@ -2166,8 +2167,8 @@ async function* queryModel(
     // Falls back to API_TIMEOUT_MS (the user's request-timeout knob), then to
     // the idle value so terminal CLI behavior is unchanged when unset.
     const configuredFirstTokenTimeoutMs =
-      parseInt(process.env.CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS || "", 10) ||
-      parseInt(process.env.API_TIMEOUT_MS || "", 10) ||
+      parseInt(getProviderRuntimeEnvironment().CLAUDE_STREAM_FIRST_TOKEN_TIMEOUT_MS || "", 10) ||
+      parseInt(getProviderRuntimeEnvironment().API_TIMEOUT_MS || "", 10) ||
       STREAM_IDLE_TIMEOUT_MS;
     // ChatGPT Codex can emit encrypted reasoning items for minutes before any
     // user-visible text. The OAuth fetch adapter marks only that direct path,
@@ -2187,13 +2188,13 @@ async function* queryModel(
     // idle watchdog can then never fire and the request hangs forever (#766).
     // 0 disables it (terminal CLI default); the desktop injects a value.
     const STREAM_MAX_DURATION_MS =
-      parseInt(process.env.CLAUDE_STREAM_MAX_DURATION_MS || "", 10) || 0;
+      parseInt(getProviderRuntimeEnvironment().CLAUDE_STREAM_MAX_DURATION_MS || "", 10) || 0;
     // Despite the legacy env name, this is an inactivity budget: each
     // non-empty input_json_delta proves the tool call is still progressing.
     // STREAM_MAX_DURATION_MS remains the independent total response cap.
     const STREAM_TOOL_INPUT_MAX_DURATION_MS =
       parseInt(
-        process.env.CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS || "",
+        getProviderRuntimeEnvironment().CLAUDE_STREAM_TOOL_INPUT_MAX_DURATION_MS || "",
         10,
       ) || 0;
     let streamIdleAborted = false;
@@ -2973,7 +2974,7 @@ async function* queryModel(
       // starts a tool, then the non-streaming retry produces the same tool_use
       // and runs it again. See inc-4258.
       const disableFallback =
-        isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK) ||
+        isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK) ||
         getFeatureValue_CACHED_MAY_BE_STALE(
           "tengu_disable_streaming_to_non_streaming_fallback",
           false,
@@ -4071,7 +4072,7 @@ function isMaxTokensCapEnabled(): boolean {
 export function getMaxOutputTokensForModel(model: string): number {
   const maxOutputTokens = getModelMaxOutputTokens(model);
   const providerBudget = getConfiguredProviderOutputBudget()
-  const globalBudget = Number(process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS)
+  const globalBudget = Number(getProviderRuntimeEnvironment().CLAUDE_CODE_MAX_OUTPUT_TOKENS)
   const hasValidGlobalBudget = Number.isSafeInteger(globalBudget) && globalBudget > 0
   if (!hasValidGlobalBudget && providerBudget !== undefined) {
     // The provider's explicit setting is not constrained by a guessed model
@@ -4091,7 +4092,7 @@ export function getMaxOutputTokensForModel(model: string): number {
 
   const result = validateBoundedIntEnvVar(
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
-    process.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS,
+    getProviderRuntimeEnvironment().CLAUDE_CODE_MAX_OUTPUT_TOKENS,
     defaultTokens,
     maxOutputTokens.upperLimit,
   );

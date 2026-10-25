@@ -22,6 +22,7 @@ const { getBuiltInAgents, getBuiltInAgentsWithoutOverrides } = await import(
 )
 const { BUILT_IN_AGENT_OVERRIDE_EFFORT_LEVELS, resolveBuiltInAgentOverrides } =
   await import('./builtInAgentOverrides.js')
+const { getAgentModelSetting } = await import('./builtInAgentOverrides.js')
 
 const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
 
@@ -73,6 +74,48 @@ afterEach(() => {
 })
 
 describe('built-in agent overrides', () => {
+  test('applies provider-only overrides without mutating shipped defaults or resolving parent aliases', () => {
+    writeUserSettings({ builtInAgentOverrides: { Explore: { providerId: 'provider-b' } } })
+    const overridden = effective('Explore')
+    expect(overridden.providerId).toBe('provider-b')
+    expect(overridden.model).toBe('inherit')
+    expect(baseline('Explore').providerId).toBeUndefined()
+    expect(getAgentModelSetting(overridden, 'parent-a-model')).toBe('inherit')
+    expect(resolveBuiltInAgentOverrides().get('Explore')?.providerId).toEqual({ value: 'provider-b', source: 'userSettings' })
+    writeUserSettings({})
+    expect(effective('Explore').providerId).toBeUndefined()
+  })
+
+  test('preserves explicit provider model spelling for the runtime provider resolver', () => {
+    writeUserSettings({ builtInAgentOverrides: { Explore: { providerId: 'provider-b', model: 'opus' } } })
+    expect(getAgentModelSetting(effective('Explore'), 'deepseek-v4-flash')).toBe('opus')
+    writeUserSettings({ builtInAgentOverrides: { Explore: { providerId: 'provider-b', model: 'CustomDeployment' } } })
+    expect(getAgentModelSetting(effective('Explore'), 'parent-a-model')).toBe('CustomDeployment')
+  })
+
+  test('keeps a selected provider/model definition stable when settings change before execution', () => {
+    writeUserSettings({ builtInAgentOverrides: { Explore: { providerId: 'provider-b', model: 'b-fast' } } })
+    const selected = effective('Explore')
+    writeUserSettings({ builtInAgentOverrides: { Explore: { providerId: 'provider-c', model: 'c-main' } } })
+    expect(selected.providerId).toBe('provider-b')
+    expect(getAgentModelSetting(selected, 'parent-a-model')).toBe('b-fast')
+    expect(effective('Explore').providerId).toBe('provider-c')
+    expect(getAgentModelSetting(effective('Explore'), 'parent-a-model')).toBe('c-main')
+    writeUserSettings({ builtInAgentOverrides: { Explore: { providerId: 'provider-b' } } })
+    const providerOnly = effective('Explore')
+    writeUserSettings({ builtInAgentOverrides: { Explore: { model: 'opus' } } })
+    expect(getAgentModelSetting(providerOnly, 'parent-a-model')).toBe('inherit')
+    expect(baseline('Explore').providerId).toBeUndefined()
+  })
+
+  test('does not apply provider overrides when agents customization is locked', () => {
+    writeUserSettings({ builtInAgentOverrides: { Explore: { providerId: 'provider-b' } } })
+    agentsSurfaceLocked = true
+    resetSettingsCache()
+    expect(effective('Explore').providerId).toBeUndefined()
+    expect(resolveBuiltInAgentOverrides().size).toBe(0)
+  })
+
   test('applies model and effort without mutating the shipped definitions', () => {
     const shippedModel = baseline('Explore').model
     const shippedEffort = baseline('Explore').effort

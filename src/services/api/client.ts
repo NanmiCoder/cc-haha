@@ -1,6 +1,7 @@
 import type { OpenAICodexTurnState } from '../openaiAuth/turnState.js'
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { normalizeAnthropicBaseUrl } from './anthropicBaseUrl.js'
+import { getProviderRuntimeContext, getProviderRuntimeEnvironment, runWithProviderRuntime, type ProviderRuntimeContext } from './providerRuntimeContext.js'
 import { randomUUID } from 'crypto'
 import type { GoogleAuth } from 'google-auth-library'
 import {
@@ -104,8 +105,8 @@ function createStderrLogger(): ClientOptions['logger'] {
 
 export function resolveAnthropicClientApiKey({
   explicitApiKey,
-  envAuthToken = process.env.ANTHROPIC_AUTH_TOKEN,
-  envApiKey = process.env.ANTHROPIC_API_KEY,
+  envAuthToken = getProviderRuntimeEnvironment().ANTHROPIC_AUTH_TOKEN,
+  envApiKey = getProviderRuntimeEnvironment().ANTHROPIC_API_KEY,
   getFallbackApiKey = getAnthropicApiKey,
 }: {
   explicitApiKey?: string
@@ -121,10 +122,10 @@ export function resolveAnthropicClientApiKey({
 }
 
 export function resolveManagedProviderProxyAccessToken({
-  providerManagedByHost = process.env.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST,
-  apiKey = process.env.ANTHROPIC_API_KEY,
-  baseUrl = process.env.ANTHROPIC_BASE_URL,
-  localAccessToken = process.env.CC_HAHA_LOCAL_ACCESS_TOKEN,
+  providerManagedByHost = getProviderRuntimeEnvironment().CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST,
+  apiKey = getProviderRuntimeEnvironment().ANTHROPIC_API_KEY,
+  baseUrl = getProviderRuntimeEnvironment().ANTHROPIC_BASE_URL,
+  localAccessToken = getProviderRuntimeEnvironment().CC_HAHA_LOCAL_ACCESS_TOKEN,
   requestUrl = baseUrl,
 }: {
   providerManagedByHost?: string
@@ -219,6 +220,10 @@ export async function getAnthropicClient({
   openAITurnState?: OpenAICodexTurnState
   agentId?: string
 }): Promise<Anthropic> {
+  const providerRuntime = getProviderRuntimeContext()
+  if (providerRuntime) {
+    return getScopedProviderClient(providerRuntime, { maxRetries, model, fetchOverride, source, openAITurnState, agentId })
+  }
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
   const clientApp = process.env.CLAUDE_AGENT_SDK_CLIENT_APP
@@ -238,7 +243,7 @@ export async function getAnthropicClient({
 
   // Log API client configuration for HFI debugging
   logForDebugging(
-    `[API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: ${!!process.env.ANTHROPIC_CUSTOM_HEADERS}, has Authorization header: ${!!customHeaders['Authorization']}`,
+    `[API:request] Creating client, ANTHROPIC_CUSTOM_HEADERS present: ${!!getProviderRuntimeEnvironment().ANTHROPIC_CUSTOM_HEADERS}, has Authorization header: ${!!customHeaders['Authorization']}`,
   )
 
   // Add additional protection header if enabled via env var
@@ -264,7 +269,7 @@ export async function getAnthropicClient({
   const hasOpenAIAuth = shouldUseOpenAICodexAuth()
   const usingGrok = forceGrok && shouldUseGrokAuth()
   const hasFallbackApiKey = hasOpenAIAuth &&
-    !process.env.ANTHROPIC_AUTH_TOKEN &&
+    !getProviderRuntimeEnvironment().ANTHROPIC_AUTH_TOKEN &&
     !apiKey &&
     !!getAnthropicApiKey()
   const usingOpenAICodex = !usingDeepSeek && shouldUseOpenAICodexTransport({
@@ -272,7 +277,7 @@ export async function getAnthropicClient({
     isClaudeSubscriber,
     forceOpenAICodex,
     isOpenAIModel,
-    hasAnthropicAuthToken: !!process.env.ANTHROPIC_AUTH_TOKEN,
+    hasAnthropicAuthToken: !!getProviderRuntimeEnvironment().ANTHROPIC_AUTH_TOKEN,
     hasExplicitApiKey: !!apiKey,
     hasFallbackApiKey,
   })
@@ -292,7 +297,7 @@ export async function getAnthropicClient({
     isEnvTruthy(process.env.USE_STAGING_OAUTH)
     ? getOauthConfig().BASE_API_URL
     : undefined
-  const baseURL = stagingOAuthBaseUrl || process.env.ANTHROPIC_BASE_URL
+  const baseURL = stagingOAuthBaseUrl || getProviderRuntimeEnvironment().ANTHROPIC_BASE_URL
 
   const ARGS = {
     defaultHeaders,
@@ -477,21 +482,104 @@ export async function getAnthropicClient({
   return new Anthropic(clientConfig)
 }
 
+/** An explicit agent provider never borrows the parent session's auth mode. */
+function getScopedProviderClient(
+  runtime: ProviderRuntimeContext,
+  options: {
+    maxRetries: number
+    model?: string
+    fetchOverride?: ClientOptions['fetch']
+    source?: string
+    openAITurnState?: OpenAICodexTurnState
+    agentId?: string
+  },
+): Anthropic {
+  const env = runtime.env
+  const { runtimeKind } = runtime
+  const nativeAccount = runtimeKind === 'openai_oauth' || runtimeKind === 'grok_oauth' || runtimeKind === 'deepseek_oauth'
+  const authToken = runtimeKind === 'claude_oauth'
+    ? env.CLAUDE_CODE_OAUTH_TOKEN
+    : nativeAccount ? undefined : env.ANTHROPIC_AUTH_TOKEN
+  const apiKey = runtimeKind === 'openai_oauth'
+    ? OPENAI_OAUTH_DUMMY_KEY
+    : runtimeKind === 'grok_oauth'
+      ? GROK_OAUTH_DUMMY_KEY
+      : runtimeKind === 'deepseek_oauth'
+        ? DEEPSEEK_OAUTH_DUMMY_KEY
+        : runtimeKind === 'claude_oauth' ? null : env.ANTHROPIC_API_KEY || null
+  if (!apiKey && !authToken) {
+    throw new Error(`Provider "${runtime.providerId}" is not authenticated`)
+  }
+  // The SDK reads ANTHROPIC_CUSTOM_HEADERS directly, independently of our
+  // runtime. Explicit nulls veto those defaults before target headers win.
+  const headers: Record<string, string | null> = Object.fromEntries(
+    Object.keys(getCustomHeaders(process.env)).map(name => [name, null]),
+  )
+  Object.assign(headers, getCustomHeaders())
+  for (const name of Object.keys(headers)) {
+    if (name.toLowerCase() === 'authorization' || name.toLowerCase() === 'x-api-key') headers[name] = null
+  }
+  headers.Authorization = authToken ? `Bearer ${authToken}` : null
+  headers['X-Api-Key'] = apiKey
+  const baseURL = env.ANTHROPIC_BASE_URL
+  const resolvedFetch = runtimeKind === 'openai_oauth'
+    ? buildOpenAICodexFetch(options.fetchOverride, options.source, options.openAITurnState, options.agentId)
+    : runtimeKind === 'grok_oauth'
+      ? buildGrokFetch(options.fetchOverride, options.source)
+      : runtimeKind === 'deepseek_oauth'
+        ? buildDeepSeekFetch(options.fetchOverride)
+        : buildFetch(options.fetchOverride, options.source)
+  // An SDK client can outlive the generator step that created it. Bind the
+  // actual fetch as well, so refresh and token-file reads retain this runtime.
+  const fetch = ((input, init) => runWithProviderRuntime(runtime, async () => {
+    if (runtimeKind === 'claude_oauth' && runtime.getClaudeOAuthAccessToken) {
+      const token = await runtime.getClaudeOAuthAccessToken()
+      if (!token) throw new Error(`Provider "${runtime.providerId}" is not authenticated`)
+      const headers = new Headers(input instanceof Request ? input.headers : undefined)
+      if (init?.headers) new Headers(init.headers).forEach((value, name) => headers.set(name, value))
+      headers.set('Authorization', `Bearer ${token}`)
+      headers.delete('x-api-key')
+      return resolvedFetch!(input, { ...init, headers })
+    }
+    return resolvedFetch!(input, init)
+  })) as ClientOptions['fetch']
+  return new Anthropic({
+    apiKey,
+    authToken: runtimeKind === 'claude_oauth' ? authToken : null,
+    // Undefined auth/baseURL options make the SDK read process.env itself.
+    // Explicit values prevent the parent provider from re-entering here.
+    baseURL: normalizeAnthropicBaseUrl(baseURL || 'https://api.anthropic.com'),
+    defaultHeaders: {
+      'x-app': 'cli',
+      'User-Agent': getUserAgent(),
+      'X-Claude-Code-Session-Id': getSessionId(),
+      ...headers,
+    },
+    maxRetries: options.maxRetries,
+    timeout: parseInt(env.API_TIMEOUT_MS || String(600 * 1000), 10),
+    dangerouslyAllowBrowser: true,
+    // The SSH tunnel belongs to the parent session and hardcodes Anthropic.
+    // Explicit providers must use their selected endpoint, including Official.
+    fetchOptions: getProxyFetchOptions({ targetUrl: baseURL }) as ClientOptions['fetchOptions'],
+    fetch,
+  })
+}
+
 async function configureApiKeyHeaders(
   headers: Record<string, string>,
   isNonInteractiveSession: boolean,
 ): Promise<void> {
   const token =
-    process.env.ANTHROPIC_AUTH_TOKEN ||
+    getProviderRuntimeEnvironment().ANTHROPIC_AUTH_TOKEN ||
     (await getApiKeyFromApiKeyHelper(isNonInteractiveSession))
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
 }
 
-function getCustomHeaders(): Record<string, string> {
+function getCustomHeaders(env: Readonly<NodeJS.ProcessEnv> = getProviderRuntimeEnvironment()): Record<string, string> {
   const customHeaders: Record<string, string> = {}
-  const customHeadersEnv = process.env.ANTHROPIC_CUSTOM_HEADERS
+  const customHeadersEnv = env.ANTHROPIC_CUSTOM_HEADERS
 
   if (!customHeadersEnv) return customHeaders
 

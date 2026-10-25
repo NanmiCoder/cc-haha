@@ -1,4 +1,5 @@
 import type { ClientOptions } from '@anthropic-ai/sdk'
+import { getProviderRuntimeEnvironment } from './providerRuntimeContext.js'
 import { getRequestBodyAudit } from './requestBodyAudit.js'
 import { createHash } from 'crypto'
 import { promises as fs } from 'fs'
@@ -73,9 +74,9 @@ function isLocalProviderProxyUrl(value: string): boolean {
 }
 
 function getTraceProviderFromEnv(): TraceProviderInfo | undefined {
-  const id = process.env.CC_HAHA_TRACE_PROVIDER_ID?.trim()
-  const name = process.env.CC_HAHA_TRACE_PROVIDER_NAME?.trim()
-  const format = process.env.CC_HAHA_TRACE_PROVIDER_FORMAT?.trim()
+  const id = getProviderRuntimeEnvironment().CC_HAHA_TRACE_PROVIDER_ID?.trim()
+  const name = getProviderRuntimeEnvironment().CC_HAHA_TRACE_PROVIDER_NAME?.trim()
+  const format = getProviderRuntimeEnvironment().CC_HAHA_TRACE_PROVIDER_FORMAT?.trim()
   if (!id && !name && !format) return undefined
 
   return {

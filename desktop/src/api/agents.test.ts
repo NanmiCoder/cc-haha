@@ -29,6 +29,17 @@ const input: AgentMutationInput = {
 }
 
 describe('agentsApi', () => {
+  it('fetches the read-only provider catalog for the selected built-in and workspace', () => {
+    agentsApi.providerModels('Explore', '/workspace/project one')
+    expect(apiGetMock).toHaveBeenCalledWith('/api/agents/Explore/provider-models?cwd=%2Fworkspace%2Fproject%20one')
+    agentsApi.providerModels('general-purpose')
+    expect(apiGetMock).toHaveBeenCalledWith('/api/agents/general-purpose/provider-models')
+  })
+
+  it('preserves an explicit provider reset on the wire', () => {
+    agentsApi.setOverride('Explore', { providerId: null })
+    expect(apiPutMock).toHaveBeenCalledWith('/api/agents/Explore/override', { providerId: null })
+  })
   afterEach(() => {
     vi.clearAllMocks()
   })

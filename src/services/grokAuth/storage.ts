@@ -1,3 +1,4 @@
+import { getProviderRuntimeEnvironment } from '../api/providerRuntimeContext.js'
 import * as fs from 'fs'
 import * as path from 'path'
 import type { GrokOAuthTokens } from './types.js'
@@ -5,7 +6,7 @@ import type { GrokOAuthTokens } from './types.js'
 export const GROK_OAUTH_FILE_ENV_KEY = 'GROK_OAUTH_FILE'
 
 export function getGrokOAuthTokenFilePath(): string | null {
-  return process.env[GROK_OAUTH_FILE_ENV_KEY]?.trim() || null
+  return getProviderRuntimeEnvironment()[GROK_OAUTH_FILE_ENV_KEY]?.trim() || null
 }
 
 export function getGrokOAuthTokens(): GrokOAuthTokens | null {

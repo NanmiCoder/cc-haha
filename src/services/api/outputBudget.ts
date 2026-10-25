@@ -1,3 +1,5 @@
+import { getProviderRuntimeEnvironment } from './providerRuntimeContext.js'
+
 export const OUTPUT_BUDGET_SOURCE_HEADER = 'x-cc-haha-output-budget-source'
 export type OutputBudgetSource = 'default' | 'explicit'
 
@@ -23,14 +25,14 @@ export function isLocalProtocolProxy(baseUrl: string | undefined): boolean {
 
 export function getOutputBudgetHeaders(
   params: object,
-  baseUrl = process.env.ANTHROPIC_BASE_URL,
+  baseUrl = getProviderRuntimeEnvironment().ANTHROPIC_BASE_URL,
 ): Record<string, string> {
   return isLocalProtocolProxy(baseUrl)
     ? { [OUTPUT_BUDGET_SOURCE_HEADER]: sources.get(params) ?? 'explicit' }
     : {}
 }
 
-export function getConfiguredProviderOutputBudget(env: NodeJS.ProcessEnv = process.env): number | undefined {
+export function getConfiguredProviderOutputBudget(env: Readonly<NodeJS.ProcessEnv> = getProviderRuntimeEnvironment()): number | undefined {
   const raw = env.CLAUDE_CODE_PROVIDER_MAX_OUTPUT_TOKENS
   if (!raw || !/^\d+$/.test(raw)) return undefined
   const value = Number(raw)

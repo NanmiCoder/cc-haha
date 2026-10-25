@@ -275,6 +275,9 @@ function getAgentMetadataPath(agentId: AgentId): string {
 }
 
 export type AgentMetadata = {
+  /** Optional for transcripts written before per-Agent provider routing. */
+  providerId?: string
+  providerModel?: string
   agentType: string
   /** Agent whose transcript owns this run's lifecycle. Absent for root runs
    * and for metadata written before lifecycle ownership was persisted. */

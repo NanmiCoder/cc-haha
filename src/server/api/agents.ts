@@ -52,6 +52,7 @@ import { parseEffortValue } from '../../utils/effort.js'
 import { reloadSessionComponents } from '../services/sessionComponentReloadService.js'
 import { getAllBaseTools } from '../../tools.js'
 import { filterToolsForAgent } from '../../tools/AgentTool/agentToolUtils.js'
+import { listSessionModels } from '../services/sessionModelCatalog.js'
 
 const agentService = new AgentService()
 const settingsService = new SettingsService()
@@ -113,6 +114,13 @@ async function handleAgents(
     })
   }
 
+  // ── GET /api/agents/:name/provider-models ───────────────────────────
+  if (method === 'GET' && segments[3] === 'provider-models' && agentName) {
+    const cwd = url.searchParams.get('cwd') || getCwd()
+    await assertOverridableBuiltInAgent(agentName, cwd)
+    return Response.json({ models: await listSessionModels() })
+  }
+
   // ── GET /api/agents/:name ────────────────────────────────────────────
   if (method === 'GET' && agentName) {
     agentService.assertValidName(agentName)
@@ -155,6 +163,12 @@ async function handleAgents(
       const cwd = typeof body.cwd === 'string' ? body.cwd : getCwd()
       await assertOverridableBuiltInAgent(agentName, cwd)
       const patch = parseBuiltInOverridePatch(body)
+      if (patch.providerId) {
+        const providerId = patch.providerId === 'claude-official' ? null : patch.providerId
+        if (!(await listSessionModels()).some(model => model.providerId === providerId)) {
+          throw ApiError.badRequest('Requested agent provider is unavailable; choose an available provider or inherit the session provider')
+        }
+      }
       await settingsService.updateBuiltInAgentOverride(agentName, patch)
       clearAgentDefinitionsCache()
       return Response.json({
@@ -311,6 +325,7 @@ type ApiAgentDefinition = {
   description?: string
   model?: string
   modelDisplay?: string
+  providerId?: string
   effort?: SharedAgentDefinition['effort']
   tools?: string[]
   systemPrompt?: string
@@ -325,12 +340,13 @@ type ApiAgentDefinition = {
    * `overridable` below, which is a much narrower capability.
    */
   editable?: boolean
-  /** Built-in agents only: model/effort can be changed via /override. */
+  /** Built-in agents only: provider/model/effort can be changed via /override. */
   overridable?: boolean
   /** Built-in agents only: what model/effort this build ships with. */
   defaults?: { model?: string; effort?: SharedAgentDefinition['effort'] }
   /** Built-in agents only: the override currently in effect, if any. */
   override?: {
+    providerId?: string
     model?: string
     effort?: SharedAgentDefinition['effort']
     source: SettingSource
@@ -353,6 +369,7 @@ function serializeActiveAgent(
     agentType: agent.agentType,
     description: agent.whenToUse,
     model: agent.model,
+    ...(agent.providerId ? { providerId: agent.providerId } : {}),
     modelDisplay: resolveAgentModelDisplay(agent),
     effort: agent.effort,
     tools,
@@ -390,7 +407,7 @@ function serializeBuiltInOverride(
   )
   const override: ResolvedBuiltInAgentOverride | undefined =
     resolveBuiltInAgentOverrides().get(agent.agentType)
-  const fields = [override?.model, override?.effort].filter(
+  const fields = [override?.providerId, override?.model, override?.effort].filter(
     field => field !== undefined,
   )
 
@@ -400,6 +417,7 @@ function serializeBuiltInOverride(
     ...(fields.length > 0
       ? {
           override: {
+            ...(override?.providerId ? { providerId: override.providerId.value } : {}),
             ...(override?.model ? { model: override.model.value } : {}),
             ...(override?.effort ? { effort: override.effort.value } : {}),
             // Fields can come from different files. Report the highest-priority
@@ -432,10 +450,10 @@ const UPDATE_AGENT_FIELDS = new Set([...CREATE_AGENT_FIELDS, 'target'])
 
 // No `scope`: built-in overrides are user-level by definition. Accepting and
 // ignoring one would silently write somewhere the caller did not ask for.
-const BUILT_IN_OVERRIDE_FIELDS = new Set(['model', 'effort', 'cwd'])
+const BUILT_IN_OVERRIDE_FIELDS = new Set(['providerId', 'model', 'effort', 'cwd'])
 
 /**
- * Only the model and effort of an agent that is genuinely built-in right now.
+ * Only the provider, model and effort of an agent that is genuinely built-in right now.
  *
  * Membership, not `assertValidName`: AGENT_SLUG_PATTERN is lowercase-only and
  * would reject `Explore` and `Plan` outright.
@@ -469,11 +487,15 @@ async function assertOverridableBuiltInAgent(
 }
 
 function parseBuiltInOverridePatch(body: Record<string, unknown>): {
+  providerId?: string | null
   model?: string | null
   effort?: string | number | null
 } {
-  const patch: { model?: string | null; effort?: string | number | null } = {}
+  const patch: { providerId?: string | null; model?: string | null; effort?: string | number | null } = {}
 
+  if (Object.hasOwn(body, 'providerId')) {
+    patch.providerId = body.providerId === null ? null : requireNonEmptyString(body.providerId, 'providerId')
+  }
   if (Object.hasOwn(body, 'model')) {
     patch.model =
       body.model === null ? null : requireNonEmptyString(body.model, 'model')

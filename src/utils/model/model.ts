@@ -1,3 +1,4 @@
+import { getProviderRuntimeContext, getProviderRuntimeEnvironment } from '../../services/api/providerRuntimeContext.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 /**
  * Ensure that any model codenames introduced here are also added to
@@ -47,7 +48,7 @@ export type ModelName = string
 export type ModelSetting = ModelName | ModelAlias | null
 
 export function getSmallFastModel(): ModelName {
-  return process.env.ANTHROPIC_SMALL_FAST_MODEL || getDefaultHaikuModel()
+  return getProviderRuntimeEnvironment().ANTHROPIC_SMALL_FAST_MODEL || getDefaultHaikuModel()
 }
 
 export function isNonCustomOpusModel(model: ModelName): boolean {
@@ -82,7 +83,7 @@ export function getUserSpecifiedModelSetting(): ModelSetting | undefined {
     specifiedModel = modelOverride
   } else {
     const settings = getSettings_DEPRECATED() || {}
-    specifiedModel = process.env.ANTHROPIC_MODEL || settings.model || undefined
+    specifiedModel = getProviderRuntimeEnvironment().ANTHROPIC_MODEL || settings.model || undefined
   }
 
   // Ignore the user-specified model if it's not in the availableModels allowlist.
@@ -122,11 +123,13 @@ function shouldUseThirdPartyAnthropicModelDefaults(): boolean {
 }
 
 export function getDefaultFableModel(): ModelName {
+  const scoped = getProviderRuntimeContext()?.env.ANTHROPIC_DEFAULT_FABLE_MODEL
+  if (scoped) return scoped
   if (isOpenAIAuthActive()) {
     return resolveOpenAICodexModel('fable')
   }
-  if (process.env.ANTHROPIC_DEFAULT_FABLE_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_FABLE_MODEL
+  if (getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_FABLE_MODEL) {
+    return getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_FABLE_MODEL
   }
   if (shouldUseThirdPartyAnthropicModelDefaults()) {
     return getDefaultOpusModel()
@@ -136,11 +139,13 @@ export function getDefaultFableModel(): ModelName {
 
 // @[MODEL LAUNCH]: Update the default Opus model (3P providers may lag so keep defaults unchanged).
 export function getDefaultOpusModel(): ModelName {
+  const scoped = getProviderRuntimeContext()?.env.ANTHROPIC_DEFAULT_OPUS_MODEL
+  if (scoped) return scoped
   if (isOpenAIAuthActive()) {
     return resolveOpenAICodexModel('opus')
   }
-  if (process.env.ANTHROPIC_DEFAULT_OPUS_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_OPUS_MODEL
+  if (getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_OPUS_MODEL) {
+    return getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_OPUS_MODEL
   }
   // 3P providers (Bedrock, Vertex, Foundry) — kept as a separate branch
   // even when values match, since 3P availability lags firstParty and
@@ -153,11 +158,13 @@ export function getDefaultOpusModel(): ModelName {
 
 // @[MODEL LAUNCH]: Update the default Sonnet model (3P providers may lag so keep defaults unchanged).
 export function getDefaultSonnetModel(): ModelName {
+  const scoped = getProviderRuntimeContext()?.env.ANTHROPIC_DEFAULT_SONNET_MODEL
+  if (scoped) return scoped
   if (isOpenAIAuthActive()) {
     return resolveOpenAICodexModel('sonnet')
   }
-  if (process.env.ANTHROPIC_DEFAULT_SONNET_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_SONNET_MODEL
+  if (getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_SONNET_MODEL) {
+    return getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_SONNET_MODEL
   }
   // Default to Sonnet 4.5 for 3P since they may not have 4.6 yet
   if (shouldUseThirdPartyAnthropicModelDefaults()) {
@@ -168,11 +175,13 @@ export function getDefaultSonnetModel(): ModelName {
 
 // @[MODEL LAUNCH]: Update the default Haiku model (3P providers may lag so keep defaults unchanged).
 export function getDefaultHaikuModel(): ModelName {
+  const scoped = getProviderRuntimeContext()?.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+  if (scoped) return scoped
   if (isOpenAIAuthActive()) {
     return resolveOpenAICodexModel('haiku')
   }
-  if (process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL) {
-    return process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL
+  if (getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_HAIKU_MODEL) {
+    return getProviderRuntimeEnvironment().ANTHROPIC_DEFAULT_HAIKU_MODEL
   }
 
   // Default to Haiku 4.5 for 3P since they may not have 5.5 yet
@@ -681,7 +690,7 @@ function isLegacyOpusFirstParty(model: string): boolean {
  * Opt-out for the legacy Opus 4.0/4.1 → current Opus remap.
  */
 export function isLegacyModelRemapEnabled(): boolean {
-  return !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_LEGACY_MODEL_REMAP)
+  return !isEnvTruthy(getProviderRuntimeEnvironment().CLAUDE_CODE_DISABLE_LEGACY_MODEL_REMAP)
 }
 
 export function modelDisplayString(model: ModelSetting): string {
