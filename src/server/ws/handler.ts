@@ -10,6 +10,7 @@ import { migrationMaintenance } from '../migrationMaintenance.js'
  */
 
 import type { ServerWebSocket } from 'bun'
+import { readScheduledTaskMetadata, scheduledTaskDisplayText, type ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
 import { sessionMessageUuid } from '../../utils/sessionMessageInbox.js'
 import { parseSessionCollaborationEnvelope } from '../../utils/sessionCollaborationEnvelope.js'
 import { isShutdownTeamPrompt } from '../../utils/swarm/teamShutdownPrompt.js'
@@ -246,6 +247,7 @@ type ActiveUserTurnState = {
   interruptBoundaryPending?: boolean
   replacementAfterStop?: boolean
   expectedReplayUuid?: string
+  scheduledTask?: ScheduledTaskMetadata
   expectedLocalCommand?: NonNullable<ReturnType<typeof parseSlashCommand>>
   cancelled?: boolean
 }
@@ -270,6 +272,7 @@ const activeCliRuns = new Set<string>()
 const cliRunsAwaitingBackgroundTasks = new Set<string>()
 const pendingInterruptedTurnResults = new Map<string, number>()
 const interruptedTurnResultMessages = new WeakMap<object, string>()
+const scheduledTurnResults = new WeakMap<object, { sessionId: string; metadata: ScheduledTaskMetadata }>()
 const sessionClearInProgress = new Set<string>()
 const deferredRuntimeRestarts = new Map<string, RuntimeOverride>()
 const deferredPermissionModes = new Map<string, PermissionMode>()
@@ -1016,12 +1019,13 @@ async function handleUserMessage(
   ws: SessionConnection,
   message: Extract<ClientMessage, { type: 'user_message' }>,
   activeTurn: ActiveUserTurnState,
-  collaboration?: { messageId: string; sourceSessionId: string; canSend?: () => boolean },
+  delivery?: { messageId: string; sourceSessionId?: string; scheduledTask?: ScheduledTaskMetadata; canSend?: () => boolean; beforeSend?: () => Promise<boolean>; signal?: AbortSignal },
 ) {
   const persistTitleSource = sessionService.shouldPersistSession()
   const { sessionId } = ws.data
+  const collaboration = delivery && !delivery.scheduledTask
 
-  const desktopSlashCommand = collaboration ? null : getDesktopSlashCommand(message.content)
+  const desktopSlashCommand = delivery ? null : getDesktopSlashCommand(message.content)
   if (desktopSlashCommand?.commandName === 'clear' && desktopSlashCommand.args.trim()) {
     sendMessage(ws, {
       type: 'error',
@@ -1112,7 +1116,7 @@ async function handleUserMessage(
       }
       sessionTitleState.set(sessionId, titleState)
     }
-    const titleInput = getTitleInputForUserMessage(message.content, desktopSlashCommand)
+    const titleInput = delivery?.scheduledTask ? '' : getTitleInputForUserMessage(message.content, desktopSlashCommand)
     let titleTurnNumber: number | null = null
     if (titleInput) {
       titleState.persistTitleSource &&= persistTitleSource
@@ -1207,13 +1211,14 @@ async function handleUserMessage(
     refreshDisconnectedTurnCleanupWatcher(sessionId)
 
     activeTurn.sendStarted = true
-    const sent = collaboration
+    const sent = delivery
       ? await (async () => {
           if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return false
-          const result = await conversationService.requestControl(sessionId, {
-            subtype: 'enqueue_session_message', message_id: collaboration.messageId,
-            sender_session_id: collaboration.sourceSessionId, text: content, start_if_idle: true,
-          }, 10_000, undefined, () => activeUserTurns.get(sessionId) === activeTurn && !activeTurn.cancelled && (collaboration.canSend?.() ?? true))
+          const request = delivery.scheduledTask
+            ? { subtype: 'enqueue_scheduled_task', message_id: delivery.messageId, text: content, scheduled_task: delivery.scheduledTask, start_if_idle: true }
+            : { subtype: 'enqueue_session_message', message_id: delivery.messageId, sender_session_id: delivery.sourceSessionId, text: content, start_if_idle: true }
+          const result = await conversationService.requestControl(sessionId, request, 10_000, delivery.signal,
+            () => activeUserTurns.get(sessionId) === activeTurn && !activeTurn.cancelled && (delivery.canSend?.() ?? true), delivery.beforeSend)
           if (result.status !== 'queued' && result.status !== 'consumed') return false
           activeTurn.collaborationAck = result.status
           activeTurn.messageSent = true
@@ -1236,7 +1241,7 @@ async function handleUserMessage(
         },
       },
     )
-    if (collaboration && sent && activeTurn.messageSent && !activeUserTurns.has(sessionId)) return
+    if (delivery && sent && activeTurn.messageSent && !activeUserTurns.has(sessionId)) return
     if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) {
       // Once onCommitted has run the SDK owns this turn and will still emit its
       // terminal result. Keep the completion callback long enough to consume
@@ -1270,7 +1275,7 @@ async function handleUserMessage(
     activeTurn.messageSent = true
     if (!collaboration) emitSessionTurnEvent({ type: 'input-committed', sessionId })
     // After the user's own words, so the lead weighs them first.
-    if (!collaboration) {
+    if (!delivery) {
       void noteLeadUserMessage(sessionId).catch(error =>
         console.error('[WS] cannot tell the lead about its stopped team members', error),
       )
@@ -1307,6 +1312,32 @@ export async function submitSessionTurn(
   return { status: turn.collaborationAck }
 }
 
+/** Host-only scheduled input uses normal admission and its own provenance. */
+export async function submitScheduledTaskTurn(
+  sessionId: string,
+  content: string,
+  options: { serverHost: string; serverPort: number; messageId: string; scheduledTask: ScheduledTaskMetadata; canSend?: () => boolean; beforeSend?: () => Promise<boolean>; signal?: AbortSignal },
+): Promise<{ status: 'queued' | 'consumed' }> {
+  if (options.signal?.aborted || (options.canSend && !options.canSend())) throw new Error('Scheduled delivery was cancelled')
+  if (getSessionTurnState(sessionId) !== 'idle') throw new Error('Session already has an active turn')
+  let failure: string | undefined
+  const connection = sessionTurnConnection(sessionId, options, message => {
+    if (message.type === 'error') failure = message.message
+  })
+  const turn: ActiveUserTurnState = { messageSent: false, expectedReplayUuid: sessionMessageUuid(options.messageId), scheduledTask: options.scheduledTask }
+  try {
+    await handleUserMessage(connection, { type: 'user_message', content }, turn, options)
+  } catch (error) {
+    if (activeUserTurns.get(sessionId) === turn) {
+      releaseUserTurnWithoutResult(sessionId, turn)
+      failSessionChatActivity(sessionId)
+    }
+    throw error
+  }
+  if (!turn.messageSent || !turn.collaborationAck) throw new Error(failure ?? 'CLI did not acknowledge the scheduled task')
+  return { status: turn.collaborationAck }
+}
+
 function sessionTurnConnection(
   sessionId: string,
   endpoint: { serverHost: string; serverPort: number },
@@ -1326,6 +1357,12 @@ function sessionTurnConnection(
 
 export function stopSessionTurn(sessionId: string): void {
   handleStopGeneration(sessionTurnConnection(sessionId, { serverHost: '127.0.0.1', serverPort: 0 }))
+}
+
+/** Cancel only the scheduled delivery that still owns this session's turn. */
+export function stopScheduledTaskTurn(sessionId: string, messageId: string): void {
+  if (activeUserTurns.get(sessionId)?.expectedReplayUuid !== sessionMessageUuid(messageId)) return
+  stopSessionTurn(sessionId)
 }
 
 /** Read the applied process snapshot; never substitute the global provider for a stale explicit choice. */
@@ -1615,6 +1652,9 @@ function bindActiveUserTurnCompletion(
 ): () => void {
   const callback = (cliMsg: any) => {
     const interruptedResult = consumeInterruptedTurnResult(sessionId, cliMsg)
+    if (cliMsg?.type === 'result' && activeTurn.scheduledTask && !isAgentRunMessageFrame(cliMsg)) {
+      scheduledTurnResults.set(cliMsg, { sessionId, metadata: activeTurn.scheduledTask })
+    }
     if (activeTurn.cancelled) {
       if (cliMsg?.type === 'result') {
         const stillOwnsTurn = activeUserTurns.get(sessionId) === activeTurn
@@ -4136,8 +4176,11 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
         }
       }
 
+      const scheduledTask = readScheduledTaskMetadata(cliMsg.scheduledTask)
       const replayText = extractReplayUserText(cliMsg)
-      if (replayText && !isShutdownTeamPrompt(cliMsg.message?.content) && (!cliMsg.isMeta || parseSessionCollaborationEnvelope(replayText))) {
+      if (scheduledTask && replayText) {
+        messages.push({ type: 'user_message_replay', content: String(scheduledTaskDisplayText(replayText)), scheduledTask })
+      } else if (replayText && !isShutdownTeamPrompt(cliMsg.message?.content) && (!cliMsg.isMeta || parseSessionCollaborationEnvelope(replayText))) {
         const collaborationEnvelope = parseSessionCollaborationEnvelope(replayText)
         messages.push(collaborationEnvelope
           ? {
@@ -4360,6 +4403,19 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
       // 对话结果（成功或错误）
       const usage = translateCliUsage(cliMsg.usage)
       const timing = translateCliTiming(cliMsg)
+      // Renderer reconnects and consumed human guides cannot recover the root
+      // trigger from the last user message. Keep host-owned provenance on the
+      // terminal frame, including when admission cleanup runs before forwarding.
+      const activeTurn = activeUserTurns.get(sessionId)
+      const remembered = scheduledTurnResults.get(cliMsg)
+      const scheduledTask = remembered?.sessionId === sessionId
+        ? remembered.metadata
+        : activeTurn?.scheduledTask
+      const completion: ServerMessage = {
+        type: 'message_complete', usage,
+        ...(timing ? { timing } : {}),
+        ...(scheduledTask ? { scheduledTask } : {}),
+      }
       // Buffered assistant blocks can arrive as a batch after all raw events
       // for one provider message. Keep deduplication active across the entire
       // batch, then clear it only at the terminal result boundary.
@@ -4374,7 +4430,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
           interruptedTurnResultMessages.get(cliMsg) === sessionId ||
           sessionStopRequested.has(sessionId)
         ) {
-          return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
+          return [completion]
         }
 
         const resultMessage =
@@ -4384,7 +4440,7 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             : 'Unknown error')
         if (isDuplicateOfLastApiError(streamState.lastApiError, resultMessage)) {
           streamState.lastApiError = undefined
-          return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
+          return [completion]
         }
         // 错误和完成消息都发送
         return [
@@ -4393,12 +4449,12 @@ export function translateCliMessage(cliMsg: any, sessionId: string): ServerMessa
             message: resultMessage,
             code: classifyRuntimeErrorCode(resultMessage, 'CLI_ERROR'),
           },
-          { type: 'message_complete', usage, ...(timing ? { timing } : {}) },
+          completion,
         ]
       }
 
       streamState.lastApiError = undefined
-      return [{ type: 'message_complete', usage, ...(timing ? { timing } : {}) }]
+      return [completion]
     }
 
     case 'system': {

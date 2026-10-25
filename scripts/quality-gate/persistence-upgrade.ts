@@ -9,6 +9,10 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Desktop scheduled tasks preserve legacy definitions and replay scheduled provenance',
+    command: ['bun', 'test', './src/server/services/scheduledTaskRuntime.test.ts', './src/server/services/sessionService.scheduledTask.test.ts'],
+  },
+  {
     title: 'Desktop WebSearch settings migrate old fixtures for the DeepSeek backend',
     command: ['bun', 'run', 'test', '--', '--run', 'src/stores/settingsStoreWebSearch.test.ts'],
     cwd: 'desktop',

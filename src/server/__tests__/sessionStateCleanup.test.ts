@@ -89,6 +89,10 @@ const CONTAINERS: Record<string, Classification> = {
     kind: 'not-session-state',
     reason: 'WeakMap keyed by the CLI message object, so entries die with the message.',
   },
+  scheduledTurnResults: {
+    kind: 'not-session-state',
+    reason: 'WeakMap keyed by the terminal CLI message; provenance survives callback ordering and is collected with that message.',
+  },
   validPermissionModes: {
     kind: 'not-session-state',
     reason: 'Constant lookup set, never written at runtime, so it has no session lifetime.',

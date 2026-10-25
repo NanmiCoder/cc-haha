@@ -1,6 +1,8 @@
+import { configureScheduledTaskHost } from './services/scheduledTaskHost.js'
 import { configureSessionCollaborationHost, getSessionCollaborationService } from './services/sessionCollaborationHost.js'
 import { authenticateCollaborationCaller, collaborationToolAction } from './sessionCollaborationAuth.js'
 import { handleSessionCollaborationApi } from './api/sessionCollaboration.js'
+import { handleScheduledTaskToolsApi } from './api/scheduledTaskTools.js'
 /**
  * Claude Code Desktop App — HTTP + WebSocket Server
  *
@@ -337,6 +339,11 @@ export function startServer(port = PORT, host = HOST) {
           await localIndexCoordinator.start().catch(() => undefined)
           await ensurePersistentStorageUpgraded()
         }
+        if (url.pathname === '/api/scheduled-task-tools') {
+          const caller = authenticateCollaborationCaller(req, (id, token) => conversationService.authorizeSdkConnection(id, token))
+          if (!caller) return Response.json({ error: 'Invalid session credential' }, { status: 401 })
+          return handleScheduledTaskToolsApi(req, caller)
+        }
         const collaborationAction = collaborationToolAction(url.pathname)
         if (collaborationAction) {
           const caller = authenticateCollaborationCaller(req, (id, token) => conversationService.authorizeSdkConnection(id, token))
@@ -665,10 +672,12 @@ export function startServer(port = PORT, host = HOST) {
       websocket: handleWebSocket,
     })
     const disposeCollaboration = configureSessionCollaborationHost(localConnectHost, server.port)
+    const disposeScheduledTaskHost = configureScheduledTaskHost(localConnectHost, server.port)
     const stop = server.stop.bind(server)
     server.stop = (closeActiveConnections?: boolean) => {
       apiPerformanceMonitor.stop()
       disposeCollaboration()
+      disposeScheduledTaskHost()
       publicAccess.disable()
       publicAccessServers.delete(publicAccess)
       return stop(closeActiveConnections)

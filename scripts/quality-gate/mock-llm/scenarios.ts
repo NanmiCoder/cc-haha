@@ -6,7 +6,7 @@
  * the failure paths a real provider cannot be made to produce on demand.
  */
 
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { LiveScenarioRunner } from '../agent-flow/live'
@@ -20,6 +20,9 @@ export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
   { id: 'mock-deepseek-web-search', title: 'DeepSeek standalone search returns summaries through the real CLI to the model' },
   { id: 'mock-mcp-late-reconnect', title: 'Reconnect a late-starting MCP service into an already running CLI session' },
   { id: 'mock-session-delegation-review', title: 'Real CLI yields for model allocation and starts a child only after UI confirmation' },
+  { id: 'mock-scheduled-task-roundtrip', title: 'Real CLI creates a desktop schedule and reads a persisted execution result through the scheduled task tool' },
+  { id: 'mock-scheduled-task-session-resume', title: 'Desktop scheduler resumes the actual original CLI conversation and persists scheduled provenance' },
+  { id: 'mock-scheduled-task-default-runtime', title: 'A task-page new conversation without model overrides runs on the active custom provider' },
   {
     id: 'mock-image-provider-protocols',
     title: 'Configured image protocols generate and edit real files through the CLI and return their paths to the model',
@@ -90,6 +93,128 @@ export function createMockOnlyRunners(
   searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    async 'mock-scheduled-task-default-runtime'(ctx) {
+      const providers = await (await fetch(`${ctx.baseUrl}/api/providers`)).json() as { activeId: string | null }
+      let taskId: string | undefined
+      try {
+        const activated = await fetch(`${ctx.baseUrl}/api/providers/${ctx.target.providerId}/activate`, { method: 'POST' })
+        if (!activated.ok) throw new Error('Cannot activate the isolated mock provider')
+        const response = await fetch(`${ctx.baseUrl}/api/scheduled-tasks`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Default runtime fixture', prompt: 'Reply with Ready when you are.', folderPath: ctx.workRoot,
+            execution: { kind: 'new-session' }, schedule: { kind: 'once', runAt: '2099-01-01T00:00:00Z', timeZone: 'UTC' } }),
+        })
+        if (!response.ok) throw new Error(`Task-page creation failed: ${response.status}`)
+        const { task } = await response.json() as { task: { id: string; sourceSessionId?: string; providerId?: string; model?: string } }
+        taskId = task.id
+        if (task.sourceSessionId || task.providerId || task.model) throw new Error('Fixture must exercise omitted provider/model with no source conversation')
+        const since = requests.length
+        const started = await fetch(`${ctx.baseUrl}/api/scheduled-tasks/${taskId}/run`, { method: 'POST' })
+        if (!started.ok) throw new Error(`Task start failed: ${started.status}`)
+        const deadline = Date.now() + ctx.stepTimeoutMs
+        let run: { status: string; sessionId?: string; output?: string; error?: string } | undefined
+        do {
+          const page = await (await fetch(`${ctx.baseUrl}/api/scheduled-tasks/${taskId}/runs?limit=5`)).json() as { runs: typeof run[] }
+          run = page.runs[0]
+          if (run && run.status !== 'running') break
+          await Bun.sleep(50)
+        } while (Date.now() < deadline)
+        if (run?.status !== 'completed' || !run.sessionId || !run.output) throw new Error(`Default scheduled runtime did not complete: ${JSON.stringify(run)}`)
+        if (!requests.slice(since).some(request => request.body.model === ctx.target.modelId)) throw new Error('Scheduled CLI did not reach the selected default model')
+      } finally {
+        if (taskId) await fetch(`${ctx.baseUrl}/api/scheduled-tasks/${taskId}`, { method: 'DELETE' })
+        await fetch(providers.activeId ? `${ctx.baseUrl}/api/providers/${providers.activeId}/activate` : `${ctx.baseUrl}/api/providers/official`, { method: 'POST' })
+      }
+    },
+    async 'mock-scheduled-task-session-resume'(ctx) {
+      const sessionId = await ctx.createSession()
+      const socket = await ctx.openSocket(sessionId)
+      let taskId: string | undefined
+      try {
+        ctx.pinRuntime(socket)
+        socket.send({ type: 'user_message', content: 'MOCK_SCHEDULED_TASK_CREATE' })
+        const first = await socket.waitFor(message => message.type === 'permission_request' || message.type === 'message_complete', ctx.stepTimeoutMs, 'create scheduled task')
+        if (first.type === 'permission_request') socket.send({ type: 'permission_response', requestId: first.requestId, allowed: true, rule: 'agent-flow-mock' })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'original creation turn completed')
+        const { tasks } = await (await fetch(`${ctx.baseUrl}/api/scheduled-tasks`)).json() as { tasks: Array<{ id: string; sourceSessionId?: string }> }
+        taskId = tasks.find(task => task.sourceSessionId === sessionId)?.id
+        if (!taskId) throw new Error('The conversation did not create its scheduled task')
+        const start = socket.messages.length
+        const ran = await fetch(`${ctx.baseUrl}/api/scheduled-tasks/${taskId}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+        if (!ran.ok) throw new Error(`Manual scheduler trigger failed: ${ran.status}`)
+        const completed = await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'scheduled turn on original conversation', start)
+        const deadline = Date.now() + ctx.stepTimeoutMs
+        let run: Record<string, unknown> | undefined
+        do {
+          const page = await (await fetch(`${ctx.baseUrl}/api/scheduled-tasks/${taskId}/runs?limit=5`)).json() as { runs: Array<Record<string, unknown>> }
+          run = page.runs.find(item => item.taskId === taskId)
+          if (run && run.status !== 'running') break
+          await Bun.sleep(50)
+        } while (Date.now() < deadline)
+        if (run?.status !== 'completed' || run.sessionId !== sessionId || typeof run.output !== 'string' || !run.output) throw new Error(`Scheduler must capture completion from the original CLI: ${JSON.stringify(run)}`)
+        if ((completed as { scheduledTask?: { runId: string } }).scheduledTask?.runId !== run.id) throw new Error('Completion must carry host-owned scheduled provenance for reconnect-safe notifications')
+        const replay = socket.messages.slice(start).find(message => message.type === 'user_message_replay' && (message as unknown as { scheduledTask?: { runId?: string } }).scheduledTask?.runId === run!.id)
+        if (!replay) throw new Error('The actual SDK replay must carry scheduled task metadata')
+        const history = await (await fetch(`${ctx.baseUrl}/api/sessions/${sessionId}/messages`)).json() as { messages: Array<{ type: string; scheduledTask?: { taskId: string; runId: string }; content: unknown }> }
+        const triggers = history.messages.filter(message => message.scheduledTask?.runId === run!.id)
+        if (triggers.length !== 1 || triggers[0]!.scheduledTask?.taskId !== taskId) throw new Error(`History must preserve exactly one scheduled trigger: ${JSON.stringify(triggers)}`)
+        if (JSON.stringify(triggers[0]!.content).includes('Scheduled task invocation (host context)')) throw new Error('History must display the task prompt instead of host instructions')
+      } finally {
+        socket.close()
+        if (taskId) await fetch(`${ctx.baseUrl}/api/scheduled-tasks/${taskId}`, { method: 'DELETE' })
+      }
+    },
+    async 'mock-scheduled-task-roundtrip'(ctx) {
+      const sessionId = await ctx.createSession()
+      const socket = await ctx.openSocket(sessionId)
+      const runsPath = join(ctx.configDir, 'scheduled_tasks_log.json')
+      const runId = `mock-scheduled-run-${sessionId}`
+      let taskId: string | undefined
+      const readRuns = () => existsSync(runsPath) ? JSON.parse(readFileSync(runsPath, 'utf8')) as { runs: Array<Record<string, unknown>> } : { runs: [] }
+      const turn = async (content: string) => {
+        const start = socket.messages.length
+        socket.send({ type: 'user_message', content })
+        const settled = await socket.waitFor(message => message.type === 'permission_request' || message.type === 'message_complete', ctx.stepTimeoutMs, 'scheduled task tool permission or completion', start)
+        if (settled.type === 'permission_request') socket.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'scheduled task tool completion', start)
+      }
+      try {
+        ctx.pinRuntime(socket)
+        const since = requests.length
+        await turn('MOCK_SCHEDULED_TASK_CREATE')
+        const response = await fetch(`${ctx.baseUrl}/api/scheduled-tasks`)
+        const body = await response.json() as { tasks: Array<{ id: string; name?: string; execution?: { kind: string; targetSessionId?: string } }> }
+        const task = body.tasks.find(item => item.name === 'Fixture scheduled review')
+        if (!task || task.execution?.kind !== 'session' || task.execution.targetSessionId !== sessionId) throw new Error('The tool must create the same desktop task and bind the current authenticated session')
+        taskId = task.id
+        const created = toolResultsSentUpstream(requests, since).some(result => {
+          try { const data = JSON.parse(contentText(result.content)); return !result.is_error && data.kind === 'scheduled_task' && data.operation === 'created' && data.taskId === taskId } catch { return false }
+        })
+        if (!created) throw new Error('A versioned creation snapshot must survive the actual tool_result roundtrip')
+        // Only the disposable quality-gate config is seeded. Runtime execution
+        // is tested separately; this lane proves result access through the LLM.
+        const history = readRuns()
+        history.runs.push({ id: runId, taskId, taskName: task.name, prompt: 'Fixture review', status: 'completed', startedAt: '2026-01-01T00:00:00Z', completedAt: '2026-01-01T00:00:01Z', sessionId, output: 'SCHEDULED_FIXTURE_RESULT: reviewed 3 fixture files', durationMs: 1000 })
+        writeFileSync(runsPath, JSON.stringify(history))
+        const resultSince = requests.length
+        await turn(`MOCK_SCHEDULED_TASK_RESULTS ${taskId}`)
+        const readResult = toolResultsSentUpstream(requests, resultSince).some(result => {
+          try {
+            const data = JSON.parse(contentText(result.content))
+            return !result.is_error && data.kind === 'scheduled_task_runs' && data.operation === 'viewed' && data.runs?.[0]?.sessionId === sessionId && data.runs[0].output?.includes('SCHEDULED_FIXTURE_RESULT')
+          } catch { return false }
+        })
+        if (!readResult) throw new Error('The model must receive the persisted status, output and session link through runs and run')
+        await turn(`MOCK_SCHEDULED_TASK_DELETE ${taskId}`)
+        const remaining = await (await fetch(`${ctx.baseUrl}/api/scheduled-tasks`)).json() as { tasks: Array<{ id: string }> }
+        if (remaining.tasks.some(item => item.id === taskId)) throw new Error('Deleting from the conversation must update the desktop task list')
+      } finally {
+        socket.close()
+        if (taskId) await fetch(`${ctx.baseUrl}/api/scheduled-tasks/${taskId}`, { method: 'DELETE' })
+        const history = readRuns()
+        if (history.runs.some(run => run.id === runId)) writeFileSync(runsPath, JSON.stringify({ ...history, runs: history.runs.filter(run => run.id !== runId) }))
+      }
+    },
     async 'mock-deepseek-web-search'(ctx) {
       const settingsUrl = `${ctx.baseUrl}/api/settings/user`
       const originalResponse = await fetch(settingsUrl)

@@ -1,3 +1,5 @@
+import { TaskEditorHost } from '@/components/tasks/TaskEditorHost'
+import { useScheduledTasksSync } from '@/hooks/useScheduledTasksSync'
 import { useCallback, useEffect, useState } from 'react'
 import { Sidebar } from './Sidebar'
 import { ContentRouter } from './ContentRouter'
@@ -44,6 +46,7 @@ export function AppShell() {
   const fetchSettings = useSettingsStore((s) => s.fetchAll)
   const sidebarOpen = useUIStore((s) => s.sidebarOpen)
   const [ready, setReady] = useState(false)
+  useScheduledTasksSync(ready)
   const [startupError, setStartupError] = useState<string | null>(null)
   const [h5StartupError, setH5StartupError] = useState<H5ConnectionRequiredError | null>(null)
   const [bootstrapNonce, setBootstrapNonce] = useState(0)
@@ -220,7 +223,7 @@ export function AppShell() {
   }
 
   if (shellLayout !== 'desktop') {
-    return <MobileShell layout={shellLayout} preferencesRequest={desktopUiPreferencesRequest} />
+    return <><MobileShell layout={shellLayout} preferencesRequest={desktopUiPreferencesRequest} /><TaskEditorHost /></>
   }
 
   return (
@@ -260,6 +263,7 @@ export function AppShell() {
       </main>
       <ToastContainer />
       <UpdateChecker />
+      <TaskEditorHost />
     </div>
   )
 }
