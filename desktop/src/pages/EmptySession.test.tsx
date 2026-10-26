@@ -2457,6 +2457,8 @@ describe('EmptySession', () => {
     })
 
     it('keeps a failed request queued and consumes it after the next Run retry', async () => {
+      let resolveContext!: (context: RepositoryContextResult) => void
+      mocks.getRepositoryContext.mockImplementationOnce(() => new Promise(resolve => { resolveContext = resolve }))
       mocks.createSession.mockRejectedValueOnce(new Error('temporary failure'))
       useUIStore.getState().startNewSessionDraft('/workspace/project')
       const draft = useUIStore.getState().newSessionDraft!
@@ -2471,7 +2473,14 @@ describe('EmptySession', () => {
       })
       expect(useUIStore.getState().newSessionDraft).not.toBeNull()
 
-      fireEvent.click(screen.getByRole('button', { name: /Run/i }))
+      const runButton = screen.getByRole('button', { name: /Run/i })
+      expect(runButton).toBeDisabled()
+      // Run is unavailable until repository context finishes loading, even
+      // after the failed creation has reported its toast. Retry via the UI
+      // only once that independent prerequisite has completed.
+      await act(async () => resolveContext(okRepositoryContext()))
+      await waitFor(() => expect(runButton).not.toBeDisabled())
+      fireEvent.click(runButton)
       await waitFor(() => {
         expect(useWorkspaceStore.getState().getSession('draft-session').layout).toBe('split')
         expect(useUIStore.getState().draftWorkspaceRequest).toBeNull()
