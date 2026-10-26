@@ -1,3 +1,4 @@
+import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { useCallback, useId, useState, type FormEvent, type ReactNode } from 'react'
 import { ChevronRight, PencilLine, Trash2 } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../../i18n'
@@ -257,6 +258,7 @@ function MobileSessionRow({
           {[workspaceLabel, relativeTime].filter(Boolean).join(' · ')}
         </span>
       </span>
+      <SessionScheduleMark sessionId={session.id} />
       <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" className="shrink-0 text-[var(--color-text-tertiary)]" />
     </button>
   )

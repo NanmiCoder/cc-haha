@@ -86,12 +86,12 @@ type MergedTurnCodePreview = {
  * whose files cannot be restored — losing the ability to undo the code should
  * not also cost the user the ability to back out of the prompt.
  */
-export type SessionRewindMode = 'both' | 'conversation'
+export type SessionRewindMode = 'both' | 'conversation' | 'code'
 
 export function parseSessionRewindMode(value: unknown): SessionRewindMode {
   if (value === undefined || value === null) return 'both'
-  if (value === 'both' || value === 'conversation') return value
-  throw ApiError.badRequest(`Invalid rewind mode: expected 'both' or 'conversation'.`)
+  if (value === 'both' || value === 'conversation' || value === 'code') return value
+  throw ApiError.badRequest(`Invalid rewind mode: expected 'both', 'conversation' or 'code'.`)
 }
 
 export type RewindTargetSelector = {
@@ -2540,7 +2540,7 @@ export async function executeSessionRewind(
   selector: RewindTargetSelector,
   mode: SessionRewindMode = 'both',
 ): Promise<SessionRewindExecuteResult> {
-  const restoreFiles = mode === 'both'
+  const restoreFiles = mode !== 'conversation'
   const selectedTarget = await resolveRewindTarget(sessionId, selector)
 
   // Stop and drain the runtime before the final completeness check. Otherwise
@@ -2611,12 +2611,14 @@ export async function executeSessionRewind(
     await applyRestorePlan(checkpointBaseDir, appliedRestorePlan)
   }
 
-  let trimResult: Awaited<ReturnType<typeof sessionService.trimSessionMessagesFrom>>
+  let trimResult: Pick<Awaited<ReturnType<typeof sessionService.trimSessionMessagesFrom>>, 'removedCount' | 'removedMessageIds'> = { removedCount: 0, removedMessageIds: [] }
   try {
-    trimResult = await sessionService.trimSessionMessagesFrom(
-      sessionId,
-      target.targetUserMessageId,
-    )
+    if (mode !== 'code') {
+      trimResult = await sessionService.trimSessionMessagesFrom(
+        sessionId,
+        target.targetUserMessageId,
+      )
+    }
   } catch (error) {
     const rollbackErrors = await rollbackRestorePlan(
       checkpointBaseDir,

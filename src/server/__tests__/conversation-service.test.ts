@@ -10,7 +10,7 @@ import {
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
-import { updateTraceCaptureSettings } from '../services/traceCaptureService.js'
+import { updateTraceCaptureSettings, traceCaptureService } from '../services/traceCaptureService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
 
@@ -823,6 +823,36 @@ describe('ConversationService', () => {
     expect(session.officialOAuthRefreshPromise).toBeUndefined()
     expect(refreshCalls).toBe(0)
     expect(sent).toEqual([])
+  })
+
+  test('keeps a retry event in session tracing even when the next attempt succeeds', () => {
+    const capture = spyOn(traceCaptureService, 'recordEvent').mockResolvedValue(null)
+    try {
+      const service = new ConversationService() as any
+      const session = installNetworkTestSession(service, 'recovered-retry', [])
+      Object.assign(session, { sdkMessages: [], sdkMessageBytes: 0, seenSdkMessageUuids: new Set(), initMessage: null })
+      service.handleSdkPayload('recovered-retry', JSON.stringify({ type: 'system', subtype: 'api_retry',
+        attempt: 1, max_retries: 10, retry_delay_ms: 500, error_status: null,
+        error: 'connection_error', error_message: 'ECONNRESET: socket hang up', request_id: 'req-fixture', uuid: 'retry-uuid',
+      }))
+      service.handleSdkPayload('recovered-retry', JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Recovered' }))
+      expect(capture).toHaveBeenCalledTimes(1)
+      expect(capture).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'recovered-retry', phase: 'api_retry', severity: 'warning',
+        message: 'ECONNRESET: socket hang up', metadata: expect.objectContaining({ requestId: 'req-fixture', messageUuid: 'retry-uuid' }),
+      }))
+    } finally { capture.mockRestore() }
+  })
+
+  test('records recovered retry details in existing session diagnostics', () => {
+    const service = new ConversationService() as any
+    const event = service.extractSdkErrorEvent({ type: 'system', subtype: 'api_retry',
+      attempt: 2, max_retries: 10, retry_delay_ms: 500, error_status: null,
+      error: 'connection_error', error_message: 'ECONNRESET: socket hang up', request_id: 'req-fixture', uuid: 'retry-uuid',
+    })
+    expect(event).toMatchObject({ type: 'sdk_api_retry', summary: 'ECONNRESET: socket hang up',
+      details: { attempt: 2, maxRetries: 10, retryDelayMs: 500, errorStatus: null,
+        error: 'connection_error', requestId: 'req-fixture', messageUuid: 'retry-uuid' },
+    })
   })
 
   test('sendMessage does not enqueue a user turn after its owner is cancelled', async () => {

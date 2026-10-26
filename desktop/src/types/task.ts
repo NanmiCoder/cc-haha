@@ -5,7 +5,24 @@ export type TaskNotificationConfig = {
   channels: ('desktop' | 'telegram' | 'feishu')[]
 }
 
-export type CronTask = {
+export type TaskSchedule =
+  | { kind: 'once'; runAt: string; timeZone: string }
+  | { kind: 'cron'; expression: string; timeZone: string }
+
+export type TaskExecution = { kind: 'session'; targetSessionId: string } | { kind: 'new-session' }
+export type TaskNotificationPolicy = 'important' | 'all' | 'failed' | 'none'
+export type ScheduledTaskTrigger = { taskId: string; runId: string; scheduledFor: string; taskName: string }
+
+type TaskOptions = {
+  schedule?: TaskSchedule
+  execution?: TaskExecution
+  sourceSessionId?: string
+  revision?: number
+  notificationPolicy?: TaskNotificationPolicy
+  scheduleState?: 'active' | 'paused' | 'completed'
+}
+
+export type CronTask = TaskOptions & {
   id: string
   name: string
   description?: string
@@ -26,7 +43,7 @@ export type CronTask = {
   notification?: TaskNotificationConfig
 }
 
-export type CreateTaskInput = {
+export type CreateTaskInput = TaskOptions & {
   name: string
   description?: string
   cron: string
@@ -59,4 +76,5 @@ export type TaskRun = {
   exitCode?: number
   durationMs?: number
   sessionId?: string
+  notificationDecision?: 'notify' | 'silent'
 }

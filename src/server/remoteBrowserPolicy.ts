@@ -1,8 +1,8 @@
 import type { RequestCompatibility, SavedProvider } from './types/provider.js'
 import { AUTO_QUESTION_TIMEOUT_OPTIONS, normalizeAutoQuestionSettings } from '../shared/autoQuestionSettings.js'
 
-export type ApiRequestContext = { remoteBrowser?: boolean }
-const READ_SETTINGS = ['alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language']
+export type ApiRequestContext = { remoteBrowser?: boolean; remoteDeviceId?: string; remoteDeviceExpiresAt?: number }
+const READ_SETTINGS = ['agentTeamsEnabled', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language']
 const WRITE_SETTINGS = new Set(['language', 'chatSendBehavior', 'alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'outputStyle', 'autoQuestion'])
 const RESERVED_PROVIDER_PATHS = new Set(['settings', 'cc-switch', 'test', 'models', 'presets', 'auth-status', 'official', 'reorder'])
 const REMOTE_COMPATIBILITY_KEYS = new Set(['maxOutputTokens', 'outputTokenLimit', 'outputTokenField', 'sampling', 'reasoning', 'parallelTools', 'structuredOutput'])
@@ -65,6 +65,9 @@ export function projectRemoteProvider(provider: SavedProvider) {
     ...Object.fromEntries(publicKeys.filter(key => provider[key] !== undefined).map(key => [key, provider[key]])),
     apiKey: '',
     hasApiKey: !!provider.apiKey,
+    // Proxy URLs can include authentication and private endpoints. The phone
+    // needs only the mode; an omitted edit retains the desktop's full value.
+    ...(provider.proxy ? { proxy: { mode: provider.proxy.mode } } : {}),
     ...(provider.requestCompatibility ? {
       requestCompatibility: Object.fromEntries([...REMOTE_COMPATIBILITY_KEYS].filter(key => provider.requestCompatibility![key] !== undefined).map(key => [key, provider.requestCompatibility![key]])),
     } : {}),
@@ -76,5 +79,64 @@ export function projectRemoteProvider(provider: SavedProvider) {
         apiKey: '', hasApiKey: !!provider.imageGeneration.apiKey,
       },
     } : {}),
+  }
+}
+
+const asRecords = (value: unknown): Record<string, unknown>[] =>
+  Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object' && !Array.isArray(item)) : []
+
+/** Copies the listed keys whose value is a string, boolean or number; nothing nested survives. */
+function pickScalars(source: Record<string, unknown>, keys: readonly string[]) {
+  return Object.fromEntries(keys.filter(key => ['string', 'boolean', 'number'].includes(typeof source[key])).map(key => [key, source[key]]))
+}
+
+const CONNECTOR_PUBLIC_KEYS = [
+  'id', 'displayName', 'description', 'category', 'transport', 'status', 'connection',
+  'supported', 'installed', 'enabled', 'accountLabel', 'collection', 'pluginId',
+] as const
+
+/**
+ * `GET /api/connectors` for a paired phone. The phone only shows which services
+ * are connected or need attention, so OAuth links (`operation.authUrl`), error
+ * text (can carry paths or command output), setup fields and package metadata
+ * stay on the desktop. `operation` shrinks to its kind and phase, which is
+ * enough to tell that a setup is in progress.
+ */
+export function projectRemoteConnectors(body: Record<string, unknown>) {
+  return {
+    items: asRecords(body.items).map(connector => {
+      const operation = connector.operation && typeof connector.operation === 'object' && !Array.isArray(connector.operation)
+        ? pickScalars(connector.operation as Record<string, unknown>, ['kind', 'phase'])
+        : undefined
+      return { ...pickScalars(connector, CONNECTOR_PUBLIC_KEYS), ...(operation ? { operation } : {}) }
+    }),
+  }
+}
+
+/** `GET /api/workflows`: names and descriptions to run by `/name`; script paths stay on the desktop. */
+export function projectRemoteWorkflows(body: Record<string, unknown>) {
+  return {
+    workflows: asRecords(body.workflows).map(workflow => pickScalars(workflow, ['name', 'description', 'whenToUse', 'source'])),
+  }
+}
+
+const AGENT_PUBLIC_KEYS = ['agentType', 'description', 'modelDisplay', 'color', 'source', 'isActive'] as const
+const projectRemoteAgent = (agent: Record<string, unknown>) => pickScalars(agent, AGENT_PUBLIC_KEYS)
+
+/**
+ * `GET /api/agents` and `/api/agents/:name` for a paired native app: the
+ * picker needs the type, description and colour. System prompts, definition
+ * file paths and tool lists stay on the desktop.
+ */
+export function projectRemoteAgents(body: Record<string, unknown>) {
+  if (body.agent && typeof body.agent === 'object' && !Array.isArray(body.agent)) {
+    return { agent: projectRemoteAgent(body.agent as Record<string, unknown>) }
+  }
+  return {
+    activeAgents: asRecords(body.activeAgents).map(projectRemoteAgent),
+    allAgents: asRecords(body.allAgents).map(agent => ({
+      ...projectRemoteAgent(agent),
+      ...pickScalars(agent, ['overriddenBy']),
+    })),
   }
 }

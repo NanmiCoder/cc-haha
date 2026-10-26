@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import { useScheduledTaskDesktopNotifications } from './useScheduledTaskDesktopNotifications'
 
-const { listMock, getRecentRunsMock, notifyDesktopMock, serverReadyMock } = vi.hoisted(() => ({
+const { listMock, getRecentRunsMock, getRunDetailMock, notifyDesktopMock, serverReadyMock } = vi.hoisted(() => ({
   listMock: vi.fn(),
   getRecentRunsMock: vi.fn(),
+  getRunDetailMock: vi.fn(),
   notifyDesktopMock: vi.fn(),
   serverReadyMock: vi.fn(),
 }))
@@ -13,6 +14,7 @@ vi.mock('../api/tasks', () => ({
   tasksApi: {
     list: listMock,
     getRecentRuns: getRecentRunsMock,
+    getRunDetail: getRunDetailMock,
   },
 }))
 
@@ -36,10 +38,36 @@ describe('useScheduledTaskDesktopNotifications', () => {
     localStorage.clear()
     listMock.mockReset()
     getRecentRunsMock.mockReset()
+    getRunDetailMock.mockReset()
     notifyDesktopMock.mockReset()
     notifyDesktopMock.mockResolvedValue(true)
     serverReadyMock.mockReset()
     serverReadyMock.mockResolvedValue(undefined)
+  })
+
+  it('resolves important decisions from run details when summary rows omit them', async () => {
+    listMock.mockResolvedValue({ tasks: [{ id: 'task', name: 'Watch', notificationPolicy: 'important', notification: { enabled: true, channels: ['desktop'] } }] })
+    const run = { id: 'silent', taskId: 'task', status: 'completed', startedAt: '2026-05-03T00:00:29Z', completedAt: '2026-05-03T00:00:31Z' }
+    getRecentRunsMock.mockImplementation((_limit, options) => Promise.resolve({ runs: options?.nonterminalOnly ? [] : [run] }))
+    getRunDetailMock.mockResolvedValue({ run: { ...run, notificationDecision: 'silent' } })
+    render(<Harness />)
+    await vi.waitFor(() => expect(getRunDetailMock).toHaveBeenCalledWith('silent'))
+    expect(notifyDesktopMock).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(getRunDetailMock).toHaveBeenCalledTimes(1)
+    expect(notifyDesktopMock).not.toHaveBeenCalled()
+  })
+
+  it('retries unreadable important run details without sending a speculative notification', async () => {
+    listMock.mockResolvedValue({ tasks: [{ id: 'task', name: 'Watch', notificationPolicy: 'important', notification: { enabled: true, channels: ['desktop'] } }] })
+    const run = { id: 'notify', taskId: 'task', status: 'completed', startedAt: '2026-05-03T00:00:29Z', completedAt: '2026-05-03T00:00:31Z' }
+    getRecentRunsMock.mockImplementation((_limit, options) => Promise.resolve({ runs: options?.nonterminalOnly ? [] : [run] }))
+    getRunDetailMock.mockRejectedValueOnce(new Error('temporary')).mockResolvedValue({ run: { ...run, notificationDecision: 'notify' } })
+    render(<Harness />)
+    await vi.waitFor(() => expect(getRunDetailMock).toHaveBeenCalledTimes(1))
+    expect(notifyDesktopMock).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(notifyDesktopMock).toHaveBeenCalledTimes(1)
   })
 
   it('does not poll until the desktop server is ready', async () => {

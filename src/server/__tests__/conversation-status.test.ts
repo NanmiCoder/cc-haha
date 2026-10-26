@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import { handleConversationsApi } from '../api/conversations.js'
 import { conversationService } from '../services/conversationService.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
+import { mobileActivityClock } from '../ws/mobileActivityClock.js'
 import {
   __markActiveTurnForTests,
   __registerPendingUserTurnForTests,
   __resetWebSocketHandlerStateForTests,
   __settleActiveTurnForTests,
+  closeSessionConnection,
   getSessionChatActivityState,
   handleWebSocket,
   translateCliMessage,
@@ -62,6 +64,19 @@ describe('read-only session chat activity status', () => {
 
     __markActiveTurnForTests(sessionId)
     expect(await getStatus(sessionId)).toBe('running')
+  })
+
+  it('closing a session removes its mobile timing without clearing another session', () => {
+    __markActiveTurnForTests('closing-clock')
+    __markActiveTurnForTests('retained-clock')
+    const retained = mobileActivityClock.read('retained-clock')
+    expect(mobileActivityClock.read('closing-clock')).toBeDefined()
+    closeSessionConnection('closing-clock')
+    expect(mobileActivityClock.read('closing-clock')).toBeUndefined()
+    expect(mobileActivityClock.read('retained-clock')).toEqual(retained)
+    mobileActivityClock.progress('closing-clock')
+    mobileActivityClock.finish('closing-clock')
+    expect(mobileActivityClock.read('closing-clock')).toBeUndefined()
   })
 
   it('gives pending tool and Computer Use permissions priority over other states', () => {
@@ -271,6 +286,38 @@ describe('live session activity for the phone session list', () => {
 
     expect(live).toContainEqual({ id: lead, activityState: 'waiting' })
     expect(live.some((entry) => entry.id === worker)).toBe(false)
+  })
+
+  it('mobile dashboard includes failed sessions and safe permission summaries without tool input', async () => {
+    const { handleSessionsApi } = await import('../api/sessions.js')
+    const failed = 'mobile-status-failed'
+    const waiting = 'mobile-status-waiting'
+    __markActiveTurnForTests(failed)
+    __settleActiveTurnForTests(failed, { type: 'result', is_error: true })
+    __markActiveTurnForTests(waiting)
+    spyOn(conversationService, 'getPendingPermissionRequests').mockImplementation((id: string) => id === waiting ? [{ requestId: 'q1', toolName: 'AskUserQuestion', input: { secret: 'NEVER_PROJECT' }, autoAnswerDeadline: 12345 }] : [])
+    const url = new URL('http://127.0.0.1/api/sessions/mobile-status')
+    const response = await handleSessionsApi(new Request(url), url, ['api', 'sessions', 'mobile-status'])
+    const body = await response.json() as { sessions: Array<{ id: string; completedAt?: number }> }
+    expect(body.sessions).toContainEqual(expect.objectContaining({ id: failed, activityState: 'failed', terminalOutcome: 'failed', startedAt: expect.any(Number), lastProgressAt: expect.any(Number), stalled: false }))
+    expect(body.sessions.find(session => session.id === failed)?.completedAt).toBeUndefined()
+    expect(body.sessions).toContainEqual(expect.objectContaining({ id: waiting, activityState: 'waiting', toolName: 'AskUserQuestion', requestId: 'q1', preview: '等待你回答问题', autoAnswerDeadline: 12345 }))
+    expect(JSON.stringify(body)).not.toContain('NEVER_PROJECT')
+    expect((await handleSessionsApi(new Request(url, { method: 'POST' }), url, ['api', 'sessions', 'mobile-status'])).status).toBe(405)
+  })
+
+  it('mobile dashboard projects bounded question and command previews with actual run timing', async () => {
+    const { listMobileSessionActivity } = await import('../ws/handler.js')
+    for (const id of ['running-clock', 'question-clock', 'command-clock']) __markActiveTurnForTests(id)
+    spyOn(mobileActivityClock, 'read').mockReturnValue({ startedAt: 1000, lastProgressAt: 2000 })
+    spyOn(conversationService, 'getPendingPermissionRequests').mockImplementation((id: string) => id === 'question-clock'
+      ? [{ requestId: 'question', toolName: 'AskUserQuestion', input: { questions: [{ question: '第一行\n第二行', hidden: 'NEVER_PROJECT' }], secret: 'NEVER_PROJECT' } }]
+      : id === 'command-clock' ? [{ requestId: 'command', toolName: 'Bash', input: { command: `echo\n${'x'.repeat(250)}`, env: { SECRET: 'NEVER_PROJECT' } } }] : [])
+    const rows = listMobileSessionActivity()
+    expect(rows).toContainEqual(expect.objectContaining({ id: 'running-clock', startedAt: 1000, lastProgressAt: 2000, stalled: true }))
+    expect(rows).toContainEqual(expect.objectContaining({ id: 'question-clock', preview: '第一行 第二行', stalled: false }))
+    expect(rows.find(row => row.id === 'command-clock')?.preview).toHaveLength(200)
+    expect(JSON.stringify(rows)).not.toContain('NEVER_PROJECT')
   })
 
   it('rejects writes to the live-status collection route', async () => {

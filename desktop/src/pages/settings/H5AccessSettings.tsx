@@ -279,78 +279,82 @@ export function H5AccessSettings() {
           description={t('settings.general.h5AccessDescription')}
         />
 
-        <SettingsGroup className="mt-7">
-          <SettingsRow
-            layout="inline"
-            title={t('settings.general.h5AccessEnabled')}
-            description={t('settings.general.h5AccessEnabledHint')}
-          >
-            <Badge tone={h5Access.enabled ? 'success' : 'neutral'} size="sm">
-              {h5Access.enabled ? t('settings.general.h5AccessStatusEnabled') : t('settings.general.h5AccessDisabledValue')}
-            </Badge>
-            <Switch
-              label={t('settings.general.h5AccessEnabled')}
-              labelHidden
-              checked={h5Access.enabled}
-              disabled={h5ActionRunning}
-              onChange={(checked) => {
-                if (checked) {
-                  setH5EnableConfirmOpen(true)
-                } else {
-                  void handleH5Disable()
-                }
-              }}
-            />
-          </SettingsRow>
+        <PublicAccessSettings />
 
-          {h5AccessDiagnostics?.storedHostStaleness === 'unreachable' && h5AccessDiagnostics.storedPublicBaseUrl ? (
-            <SettingsBlock>
-              <div
-                data-testid="h5-access-stale-host-banner"
-                className="rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-3 text-xs leading-[1.5] text-[var(--color-on-warning-container)]"
-              >
-                <div className="font-semibold">
-                  {t('settings.general.h5AccessStaleHostTitle')}
-                </div>
-                <div className="mt-1">
-                  {h5AccessDiagnostics.suggestedHost
-                    ? t('settings.general.h5AccessStaleHostBody', {
-                        storedHost: extractHostnameFromUrl(h5AccessDiagnostics.storedPublicBaseUrl) ?? h5AccessDiagnostics.storedPublicBaseUrl,
-                      })
-                    : t('settings.general.h5AccessStaleHostNoSuggestion', {
-                        storedHost: extractHostnameFromUrl(h5AccessDiagnostics.storedPublicBaseUrl) ?? h5AccessDiagnostics.storedPublicBaseUrl,
-                      })}
-                </div>
-                {h5AccessDiagnostics.suggestedHost && (
-                  <div className="mt-2">
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      loading={h5ActionRunning}
-                      onClick={() => void handleH5SwitchToSuggestedHost()}
-                      data-testid="h5-access-stale-host-apply"
-                    >
-                      {t('settings.general.h5AccessStaleHostApply', {
-                        suggestedHost: h5AccessDiagnostics.suggestedHost,
-                      })}
-                    </Button>
+        <SettingsSection title={t('publicAccess.lanTitle')} description={t('publicAccess.lanHint')}>
+          <SettingsGroup>
+            <SettingsRow
+              layout="inline"
+              title={t('settings.general.h5AccessEnabled')}
+              description={t('settings.general.h5AccessEnabledHint')}
+            >
+              <Badge tone={h5Access.enabled ? 'success' : 'neutral'} size="sm">
+                {h5Access.enabled ? t('settings.general.h5AccessStatusEnabled') : t('settings.general.h5AccessDisabledValue')}
+              </Badge>
+              <Switch
+                label={t('settings.general.h5AccessEnabled')}
+                labelHidden
+                checked={h5Access.enabled}
+                disabled={h5ActionRunning}
+                onChange={(checked) => {
+                  if (checked) {
+                    setH5EnableConfirmOpen(true)
+                  } else {
+                    void handleH5Disable()
+                  }
+                }}
+              />
+            </SettingsRow>
+
+            {h5AccessDiagnostics?.storedHostStaleness === 'unreachable' && h5AccessDiagnostics.storedPublicBaseUrl ? (
+              <SettingsBlock>
+                <div
+                  data-testid="h5-access-stale-host-banner"
+                  className="rounded-[var(--radius-md)] bg-[var(--color-warning-container)] px-3 py-3 text-xs leading-[1.5] text-[var(--color-on-warning-container)]"
+                >
+                  <div className="font-semibold">
+                    {t('settings.general.h5AccessStaleHostTitle')}
                   </div>
-                )}
-              </div>
-            </SettingsBlock>
-          ) : null}
+                  <div className="mt-1">
+                    {h5AccessDiagnostics.suggestedHost
+                      ? t('settings.general.h5AccessStaleHostBody', {
+                          storedHost: extractHostnameFromUrl(h5AccessDiagnostics.storedPublicBaseUrl) ?? h5AccessDiagnostics.storedPublicBaseUrl,
+                        })
+                      : t('settings.general.h5AccessStaleHostNoSuggestion', {
+                          storedHost: extractHostnameFromUrl(h5AccessDiagnostics.storedPublicBaseUrl) ?? h5AccessDiagnostics.storedPublicBaseUrl,
+                        })}
+                  </div>
+                  {h5AccessDiagnostics.suggestedHost && (
+                    <div className="mt-2">
+                      <Button
+                        size="sm"
+                        variant="primary"
+                        loading={h5ActionRunning}
+                        onClick={() => void handleH5SwitchToSuggestedHost()}
+                        data-testid="h5-access-stale-host-apply"
+                      >
+                        {t('settings.general.h5AccessStaleHostApply', {
+                          suggestedHost: h5AccessDiagnostics.suggestedHost,
+                        })}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </SettingsBlock>
+            ) : null}
 
-          {h5AccessDiagnostics?.storedHostStaleness === 'proxy' ? (
-            <SettingsBlock>
-              <p
-                data-testid="h5-access-proxy-note"
-                className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]"
-              >
-                {t('settings.general.h5AccessProxyNote')}
-              </p>
-            </SettingsBlock>
-          ) : null}
-        </SettingsGroup>
+            {h5AccessDiagnostics?.storedHostStaleness === 'proxy' ? (
+              <SettingsBlock>
+                <p
+                  data-testid="h5-access-proxy-note"
+                  className="text-xs leading-[1.5] text-[var(--color-text-tertiary)]"
+                >
+                  {t('settings.general.h5AccessProxyNote')}
+                </p>
+              </SettingsBlock>
+            ) : null}
+          </SettingsGroup>
+        </SettingsSection>
 
         <SettingsSection title={t('settings.general.h5AccessUrl')} description={t('settings.general.h5AccessOpenHint')}>
           <SettingsGroup>
@@ -559,8 +563,6 @@ export function H5AccessSettings() {
           </p>
         )}
       </section>
-
-      <PublicAccessSettings />
 
       <ConfirmDialog
         open={h5EnableConfirmOpen}
