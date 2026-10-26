@@ -2516,6 +2516,40 @@ describe('EmptySession', () => {
       expect(mocks.createSession).toHaveBeenCalledTimes(1)
     })
 
+    it('preserves draft after a second workspace click while session creation is pending', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('must preserve this input', 'must preserve this input'.length)
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await act(async () => complete({ sessionId: 'twice-session' }))
+      expect(mocks.createSession).toHaveBeenCalledTimes(1)
+      expect(useWorkspaceStore.getState().getSession('twice-session').layout).toBe('split')
+      expect(useUIStore.getState().newSessionDraft).toBeNull()
+      expect(useChatStore.getState().sessions['twice-session']?.composerPrefill?.text).toBe('must preserve this input')
+    })
+
+    it('preserves typing while workspace creation is pending', async () => {
+      let complete!: (value: { sessionId: string }) => void
+      mocks.createSession.mockImplementationOnce(() => new Promise((resolve) => { complete = resolve }))
+      useUIStore.getState().startNewSessionDraft('/workspace/project')
+      const draft = useUIStore.getState().newSessionDraft!
+      render(<EmptySession draftRevision={draft.revision} initialWorkDir="/workspace/project" />)
+      setComposerText('first input', 'first input'.length)
+      act(() => useUIStore.getState().requestDraftWorkspace('toggle-side'))
+      await waitFor(() => expect(mocks.createSession).toHaveBeenCalledTimes(1))
+      expect(getComposerElement()).toHaveAttribute('contenteditable', 'true')
+      setComposerText('first input plus more', 'first input plus more'.length)
+      expect(getComposerText()).toBe('first input plus more')
+      await act(async () => complete({ sessionId: 'typing-session' }))
+      expect(useUIStore.getState().newSessionDraft).toBeNull()
+      expect(useChatStore.getState().sessions['typing-session']?.composerPrefill?.text).toBe('first input plus more')
+    })
+
     it('does not report into a draft it does not belong to', () => {
       useUIStore.getState().startNewSessionDraft('')
       const draft = useUIStore.getState().newSessionDraft!

@@ -3023,7 +3023,7 @@ function runHeadlessStreaming(
       }
 
       if (message.type === 'control_request') {
-        if (message.request.subtype === 'enqueue_session_message') {
+        if (message.request.subtype === 'enqueue_session_message' || message.request.subtype === 'enqueue_scheduled_task') {
           try {
             const deliveryUuid = sessionMessageUuid(message.request.message_id)
             const persisted = !isPendingSessionMessage(deliveryUuid) && await doesMessageExistInSession(

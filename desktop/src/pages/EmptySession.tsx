@@ -256,8 +256,9 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     promise: Promise<{ sessionId: string, ownedDraft: boolean } | null>
   } | null>(null)
   const workspaceRequestInFlightRef = useRef(new Set<number>())
-  const isSubmittingRef = useRef(isSubmitting)
-  isSubmittingRef.current = isSubmitting
+  const runSubmittingRef = useRef(false)
+  const draftComposerRef = useRef({ input, attachments, mentions })
+  draftComposerRef.current = { input, attachments, mentions }
   const workspaceRequestAttemptRef = useRef(new Map<number, number>())
   const [materializationAttempt, setMaterializationAttempt] = useState(0)
   const composerContainerRef = useRef<HTMLDivElement>(null)
@@ -724,6 +725,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     const submittedTabId = useTabStore.getState().activeTabId
     const serializedText = (composerRef.current?.getModelContent() ?? input).trim()
     setIsSubmitting(true)
+    runSubmittingRef.current = true
     setMaterializationAttempt((attempt) => attempt + 1)
     try {
       const materialized = await materializeDraftSession()
@@ -765,6 +767,7 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         message: resolveCreateSessionErrorMessage(error, t),
       })
     } finally {
+      runSubmittingRef.current = false
       setIsSubmitting(false)
     }
   }
@@ -779,11 +782,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
     workspaceRequestAttemptRef.current.set(request.nonce, materializationAttempt)
     workspaceRequestInFlightRef.current.add(request.nonce)
 
-    const draftText = input
-    const draftAttachments = attachments
-    const draftMentions = mentions
     const draftWorkDir = workDir
-    const runAlreadySubmitting = isSubmittingRef.current
+    const runAlreadySubmitting = runSubmittingRef.current
     setIsSubmitting(true)
     void (async () => {
       let consumed = false
@@ -808,6 +808,8 @@ export function EmptySession({ initialWorkDir = '', visible = true, draftRevisio
         useTabStore.getState().openTab(sessionId, t('sidebar.newSession'))
         if (activeTabId !== request.originatingTabId && activeTabId !== sessionId) useTabStore.getState().setActiveTab(activeTabId)
         connectToSession(sessionId)
+        // The editor stays usable during creation; carry its latest content.
+        const { input: draftText, attachments: draftAttachments, mentions: draftMentions } = draftComposerRef.current
         if (!runAlreadySubmitting && (draftText || draftAttachments.length > 0 || draftMentions.length > 0)) {
           useChatStore.getState().queueComposerPrefill(sessionId, {
             text: draftText,

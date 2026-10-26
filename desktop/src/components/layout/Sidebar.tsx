@@ -1,3 +1,4 @@
+import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { Bell, CalendarClock, Check, ChevronRight, Clock, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, SquarePen, Store, X } from 'lucide-react'
 import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
@@ -1428,6 +1429,7 @@ export function Sidebar({
                                         {t('sidebar.missingDir')}
                                       </span>
                                     )}
+                                    <SessionScheduleMark sessionId={session.id} />
                                     <SessionRowMeta
                                       isRunning={runningSessionIds.has(session.id)}
                                       needsAttention={attentionSessionIds.has(session.id)}

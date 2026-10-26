@@ -34,6 +34,14 @@ export type ModelContextWindows = Record<string, number>
 
 export type ImageGenerationProtocol = 'openai_images' | 'gemini_native' | 'xai_images'
 
+/** Per-provider network proxy override. Absent means follow the global setting. */
+export type ProviderProxyMode = 'follow_global' | 'direct' | 'manual'
+
+export type ProviderProxyConfig = {
+  mode: ProviderProxyMode
+  url?: string
+}
+
 export type ImageGenerationConfig = {
   model: string
   protocol?: ImageGenerationProtocol
@@ -70,6 +78,7 @@ export type SavedProvider = {
   supportsNestedToolResultMedia?: boolean
   requestCompatibility?: RequestCompatibility
   imageGeneration?: ImageGenerationConfig
+  proxy?: ProviderProxyConfig
   notes?: string
 }
 
@@ -90,6 +99,7 @@ export type CreateProviderInput = {
   supportsNestedToolResultMedia?: boolean
   requestCompatibility?: RequestCompatibility
   imageGeneration?: ImageGenerationConfig
+  proxy?: ProviderProxyConfig
   notes?: string
 }
 
@@ -109,6 +119,7 @@ export type UpdateProviderInput = {
   supportsNestedToolResultMedia?: boolean
   requestCompatibility?: RequestCompatibility | null
   imageGeneration?: ImageGenerationConfig | null
+  proxy?: ProviderProxyConfig | null
   notes?: string
 }
 
@@ -120,6 +131,11 @@ export type TestProviderConfigInput = {
   apiFormat?: ApiFormat
   supportsNestedToolResultMedia?: boolean
   requestCompatibility?: RequestCompatibility
+  /**
+   * Per-provider proxy override typed on the test payload so an unsaved form
+   * probes with the same routing the saved provider would use.
+   */
+  proxy?: ProviderProxyConfig | null
   /**
    * Preset the form is based on, so the server can resolve per-model protocol
    * rules and upstream headers for an unsaved config. Only the id is sent.

@@ -41,6 +41,21 @@ describe('Electron IPC capabilities', () => {
     }
   })
 
+  it('accepts only a root HTTPS custom tunnel and a nonprivileged fixed local port', () => {
+    const channel = ELECTRON_IPC_CHANNELS.publicAccessConfigure
+    const configuration = { mode: 'custom', customUrl: 'https://relay.example.test', localPort: 17463, ngrokDomain: '' }
+    expect(validateElectronIpcPayload(channel, configuration)).toBe(true)
+    expect(validateElectronIpcPayload(channel, { mode: 'ngrok', customUrl: '', localPort: 17463, ngrokDomain: '' })).toBe(true)
+    expect(validateElectronIpcPayload(channel, { ...configuration, ngrokDomain: 'https://registered.ngrok.app' })).toBe(true)
+    for (const ngrokDomain of [undefined, null, 'registered.ngrok.app', 'http://registered.ngrok.app', 'https://registered.ngrok.app:8443', 'https://registered.ngrok.app/path']) {
+      expect(validateElectronIpcPayload(channel, { ...configuration, ngrokDomain })).toBe(false)
+    }
+    for (const value of [undefined, {}, { ...configuration, customUrl: 'http://relay.example.test' }, { ...configuration, customUrl: 'https://relay.example.test/remote' }, { ...configuration, customUrl: 'https://user:password@relay.example.test' }, { ...configuration, localPort: 80 }, { ...configuration, localPort: '17463' }, { ...configuration, mode: 'unknown' }, { ...configuration, localHost: '0.0.0.0' }]) {
+      expect(validateElectronIpcPayload(channel, value)).toBe(false)
+    }
+    expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+  })
+
   it('accepts only the typed browser-menu fields and keeps the channel unavailable to pets', () => {
     const channel = ELECTRON_IPC_CHANNELS.workspaceBrowserShowMenu
     const labels = Object.fromEntries(['find', 'print', 'zoom', 'zoomIn', 'zoomOut', 'zoomReset', 'capture', 'pickElement', 'downloads', 'history', 'openExternal'].map(key => [key, key]))
