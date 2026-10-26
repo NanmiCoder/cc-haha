@@ -31,24 +31,23 @@ export function isDeepSeekAccountProviderId(id: string | null | undefined): bool
   return id === DEEPSEEK_ACCOUNT_PROVIDER_ID
 }
 
-// The account route keeps the DeepSeek preset's request shape (endpoint
-// format, capability flags), but its `/models` listing names its own models:
-// V4.1 Flash is `deepseek-flash`, and the API-key route's `deepseek-v4-flash`
-// (V4 Flash) is not listed. The default mapping therefore names listed ids,
-// and the account catalog adds its context windows over the preset's.
+// The account route shares the API-key preset's Flash defaults and request
+// capabilities. Its live catalog supplies account-specific model availability
+// and context windows.
 const deepseekPreset = PROVIDER_PRESETS.find((preset) => preset.id === 'deepseek')
 if (!deepseekPreset) {
   throw new Error('DeepSeek account provider requires the bundled deepseek preset')
 }
 
 export const DEEPSEEK_ACCOUNT_FLASH_MODEL = 'deepseek-flash'
-const DEEPSEEK_ACCOUNT_PRO_MODEL = 'deepseek-v4-pro[1m]'
+const DEEPSEEK_ACCOUNT_DEFAULT_MODEL = `${DEEPSEEK_ACCOUNT_FLASH_MODEL}[1m]`
 
 export const DEEPSEEK_ACCOUNT_DEFAULT_MODELS: ModelMapping = {
-  main: DEEPSEEK_ACCOUNT_PRO_MODEL,
-  haiku: DEEPSEEK_ACCOUNT_FLASH_MODEL,
-  sonnet: DEEPSEEK_ACCOUNT_PRO_MODEL,
-  opus: DEEPSEEK_ACCOUNT_PRO_MODEL,
+  main: DEEPSEEK_ACCOUNT_DEFAULT_MODEL,
+  fable: DEEPSEEK_ACCOUNT_DEFAULT_MODEL,
+  haiku: DEEPSEEK_ACCOUNT_DEFAULT_MODEL,
+  sonnet: DEEPSEEK_ACCOUNT_DEFAULT_MODEL,
+  opus: DEEPSEEK_ACCOUNT_DEFAULT_MODEL,
 }
 
 export const DEEPSEEK_ACCOUNT_PROVIDER: SavedProvider = {

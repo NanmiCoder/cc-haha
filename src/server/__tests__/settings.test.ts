@@ -1628,7 +1628,7 @@ describe('Models API', () => {
     expect(body.model).toMatchObject({ id: 'grok-4.5', name: 'Grok 4.5' })
   })
 
-  it('GET /api/models lists the account models, not the API-key preset ids, when DeepSeek Account is active', async () => {
+  it('GET /api/models deduplicates the default Flash aliases and retains the account catalog', async () => {
     const providerSvc = new ProviderService()
     await providerSvc.activateProvider('deepseek-account')
 
@@ -1639,28 +1639,31 @@ describe('Models API', () => {
       provider: { id: string; name: string }
     }
     expect(body.provider).toEqual({ id: 'deepseek-account', name: 'DeepSeek Account' })
-    // Signed out, so the bundled account catalog names the alias rows; the
-    // account listing does not include `deepseek-v4-flash`, and the `[1m]` alias
-    // is the same model as the listed `deepseek-v4-pro`.
+    // All five default slots collapse to one Flash row with its 1M marker;
+    // Pro remains available as an explicit choice from the account catalog.
     expect(body.models.map((model) => [model.id, model.name])).toEqual([
-      ['deepseek-v4-pro[1m]', 'DeepSeek-V4-Pro'],
-      ['deepseek-flash', 'DeepSeek-V4.1-Flash'],
+      ['deepseek-flash[1m]', 'DeepSeek-V4.1-Flash'],
+      ['deepseek-v4-pro', 'DeepSeek-V4-Pro'],
     ])
-    expect(body.models[1]?.description).toBe('Haiku model')
+    expect(body.models[0]?.description).toBe('Main model')
     expect(body.models[1]?.supportedReasoningEfforts).toEqual(
       body.models[0]?.supportedReasoningEfforts,
     )
   })
 
-  it('persists and reads a DeepSeek Account model from managed settings', async () => {
+  it.each(['deepseek-flash', 'deepseek-flash[1m]', 'deepseek-v4-pro[1m]'])('preserves the DeepSeek Account selection and catalog metadata for %s', async (modelId) => {
     const providerSvc = new ProviderService()
     await providerSvc.activateProvider('deepseek-account')
-    const put = makeRequest('PUT', '/api/models/current', { modelId: 'deepseek-flash' })
+    const put = makeRequest('PUT', '/api/models/current', { modelId })
     expect((await handleModelsApi(put.req, put.url, put.segments)).status).toBe(200)
 
     const get = makeRequest('GET', '/api/models/current')
     const body = await (await handleModelsApi(get.req, get.url, get.segments)).json()
-    expect(body.model).toMatchObject({ id: 'deepseek-flash', name: 'DeepSeek-V4.1-Flash' })
+    expect(body.model).toMatchObject({
+      id: modelId,
+      name: modelId.startsWith('deepseek-flash') ? 'DeepSeek-V4.1-Flash' : 'DeepSeek-V4-Pro',
+      context: '1000000',
+    })
   })
 
   describe('GET /api/models/catalog', () => {

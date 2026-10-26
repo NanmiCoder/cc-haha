@@ -253,6 +253,6 @@ describe('built-in DeepSeek Account runtime selection', () => {
 
   it('falls back to the bundled DeepSeek preset main model when no model is known', () => {
     expect(resolveDefaultRuntimeSelection('deepseek-account', null, [], undefined))
-      .toEqual({ providerId: 'deepseek-account', modelId: 'deepseek-v4-pro[1m]' })
+      .toEqual({ providerId: 'deepseek-account', modelId: 'deepseek-flash[1m]' })
   })
 })
