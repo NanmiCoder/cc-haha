@@ -223,6 +223,20 @@ test('deletion waits for an in-flight append and stays on its captured custom ro
   expect((await traceCaptureService.getSessionTraceOverview('shared-session')).calls).toEqual([])
 })
 
+test('a directory shared with other JSONL files neither lists nor deletes them as traces', async () => {
+  const shared = join(root, 'shared')
+  process.env.CC_HAHA_TRACE_DIR = shared
+  await record('mine')
+  const history = join(shared, 'history.jsonl')
+  await fs.writeFile(history, '{"display":"a user prompt"}\n')
+
+  const listed = (await traceCaptureService.listSessionTraces({ all: true })).traces.map(trace => trace.sessionId)
+  expect(listed).toEqual(['shared-session'])
+  expect(await traceCaptureService.deleteSessionTrace('history')).toMatchObject({ deleted: false })
+  expect(await fs.readFile(history, 'utf8')).toContain('a user prompt')
+  expect(await traceCaptureService.deleteSessionTrace('shared-session')).toMatchObject({ deleted: true })
+})
+
 test('rejects relative paths without writing to the default directory', async () => {
   process.env.CC_HAHA_TRACE_DIR = 'relative-traces'
   expect(() => getTraceStorageDir()).toThrow('CC_HAHA_TRACE_DIR must be an absolute directory path')
