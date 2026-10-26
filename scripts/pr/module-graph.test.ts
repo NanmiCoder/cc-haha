@@ -142,6 +142,10 @@ describe('this repository', () => {
     // desktop/src/lib/runtimeSelection.ts imports root shared reasoning helpers.
     expect(dependentsOf(['src/shared/modelReasoning.ts'], graph))
       .toContain('desktop/src/lib/runtimeSelection.ts')
+    expect(dependentsOf(['src/shared/modelReasoning.ts'], graph))
+      .toContain('mobile/src/core/runtimeCatalog.ts')
+    expect(dependentsOf(['src/shared/userMessageCapabilities.ts'], graph))
+      .toContain('mobile/src/ui/Message.tsx')
     // desktop/electron/** compiles against desktop/src/** but is excluded from
     // desktop/tsconfig.json, so `check:desktop` alone cannot prove it still builds.
     expect(dependentsOf(['desktop/src/lib/browserSafePort.ts'], graph))

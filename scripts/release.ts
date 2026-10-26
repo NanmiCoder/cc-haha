@@ -11,6 +11,7 @@
  *   bun run scripts/release.ts major       # 0.1.0 → 1.0.0
  *   bun run scripts/release.ts 2.0.0       # explicit version
  *   bun run scripts/release.ts patch --dry # preview without changes
+ *   bun run scripts/release.ts patch --mobile patch # also bump the independent mobile version
  *   bun run scripts/release.ts --tag 0.1.1 # after the release PR merged: tag origin/main
  */
 
@@ -26,7 +27,7 @@ const VERSION_FILES = [
   },
 ]
 
-const USAGE = 'Usage: bun run scripts/release.ts <patch|minor|major|x.y.z> [--dry] | --tag <x.y.z>'
+const USAGE = 'Usage: bun run scripts/release.ts <patch|minor|major|x.y.z> [--mobile <patch|minor|major|x.y.z>] [--dry] | --tag <x.y.z>'
 
 export function bumpVersion(current: string, bump: string): string | null {
   if (/^\d+\.\d+\.\d+$/.test(bump)) {
@@ -63,13 +64,31 @@ function releaseNotesPath(version: string) {
 }
 
 /** Step 1: bump the version and commit it with its notes on release/v<version>. */
-export async function prepareRelease(root: string, bumpArg: string, options: { dryRun?: boolean, log?: (line: string) => void } = {}) {
+export async function prepareRelease(root: string, bumpArg: string, options: { dryRun?: boolean, mobileBump?: string, log?: (line: string) => void } = {}) {
   const log = options.log ?? console.log
   const current = JSON.parse(readFileSync(path.join(root, 'desktop/package.json'), 'utf-8')).version as string
   const next = bumpVersion(current, bumpArg)
   if (!next) throw new Error(`Invalid bump type: ${bumpArg}\n${USAGE}`)
   const notes = releaseNotesPath(next)
   const branch = `release/v${next}`
+  const updates = VERSION_FILES.map(file => ({ path: file.path, content: file.update(readFileSync(path.join(root, file.path), 'utf8'), next) }))
+  if (options.mobileBump) {
+    const mobilePackage = JSON.parse(readFileSync(path.join(root, 'mobile/package.json'), 'utf8'))
+    const mobileApp = JSON.parse(readFileSync(path.join(root, 'mobile/app.json'), 'utf8'))
+    const currentMobile = mobileApp.expo.version
+    if (mobilePackage.version !== currentMobile) throw new Error('Mobile package.json and app.json versions differ')
+    const mobileVersion = bumpVersion(currentMobile, options.mobileBump)
+    if (!mobileVersion) throw new Error(`Invalid mobile bump: ${options.mobileBump}`)
+    const before = currentMobile.split('.').map(Number)
+    const after = mobileVersion.split('.').map(Number)
+    const firstDifferent = before.findIndex((value: number, index: number) => value !== after[index])
+    if (firstDifferent === -1 || after[firstDifferent] <= before[firstDifferent]) throw new Error('Mobile version must increase')
+    mobilePackage.version = mobileVersion
+    mobileApp.expo.version = mobileVersion
+    updates.push({ path: 'mobile/package.json', content: JSON.stringify(mobilePackage, null, 2) + '\n' })
+    updates.push({ path: 'mobile/app.json', content: JSON.stringify(mobileApp, null, 2) + '\n' })
+    log(`  Mobile:  ${currentMobile} → ${mobileVersion}`)
+  }
 
   log(`\n  Version: ${current} → ${next}`)
   log(`  Branch:  ${branch}`)
@@ -78,7 +97,7 @@ export async function prepareRelease(root: string, bumpArg: string, options: { d
 
   if (options.dryRun) {
     log('Files that would be updated:')
-    for (const file of VERSION_FILES) log(`  - ${file.path}`)
+    for (const file of updates) log(`  - ${file.path}`)
     log(`  - ${notes} ${existsSync(path.join(root, notes)) ? '(present)' : '(missing)'}`)
     return { version: next, branch, committed: false }
   }
@@ -88,12 +107,12 @@ export async function prepareRelease(root: string, bumpArg: string, options: { d
   }
 
   await run(['git', 'switch', '-c', branch], root)
-  for (const file of VERSION_FILES) {
+  for (const file of updates) {
     const target = path.join(root, file.path)
-    writeFileSync(target, file.update(readFileSync(target, 'utf-8'), next))
+    writeFileSync(target, file.content)
     log(`  Updated: ${file.path}`)
   }
-  await run(['git', 'add', ...VERSION_FILES.map(file => file.path), notes], root)
+  await run(['git', 'add', ...updates.map(file => file.path), notes], root)
   await run(['git', 'commit', '-m', `release: v${next}`], root)
 
   log(`\n  Done! Committed v${next} on ${branch}.`)
@@ -137,9 +156,12 @@ if (import.meta.main) {
       if (!version) throw new Error(USAGE)
       await tagRelease(root, version)
     } else {
-      const bumpArg = args.find((a) => a !== '--dry')
+      const mobileIndex = args.indexOf('--mobile')
+      const mobileBump = mobileIndex === -1 ? undefined : args[mobileIndex + 1]
+      if (mobileIndex !== -1 && (!mobileBump || mobileBump.startsWith('--'))) throw new Error(USAGE)
+      const bumpArg = args.find((a, index) => a !== '--dry' && index !== mobileIndex && (mobileIndex === -1 || index !== mobileIndex + 1))
       if (!bumpArg) throw new Error(USAGE)
-      await prepareRelease(root, bumpArg, { dryRun: args.includes('--dry') })
+      await prepareRelease(root, bumpArg, { dryRun: args.includes('--dry'), mobileBump })
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

@@ -60,6 +60,7 @@ describe('PR quality workflow', () => {
     expect(installIndex).toBeLessThan(regressionIndex)
     for (const jobId of [
       'desktop-checks',
+      'mobile-checks',
       'server-checks',
       'provider-contract-checks',
       'chat-contract-checks',
@@ -166,6 +167,44 @@ describe('PR quality workflow', () => {
     const result = Bun.spawnSync(['bash', '-c', script], {
       env: { PATH: process.env.PATH ?? '' },
       stdout: 'pipe', stderr: 'pipe',
+    })
+    expect(result.exitCode, new TextDecoder().decode(result.stdout)).toBe(scenario.exit)
+  })
+
+  test('mobile checks install frozen dependencies and run the isolated local entry point', () => {
+    const workflow = readFileSync('.github/workflows/pr-quality.yml', 'utf8')
+    const jobs = workflowJobs(workflow)
+    const job = jobs['mobile-checks']!
+    const steps = job.steps ?? []
+    expect(job.if).toBe("needs.scope-plan.outputs.mobile_checks == 'true'")
+    expect(job['continue-on-error']).not.toBe(true)
+    const check = steps.findIndex(step => step.run === 'bun run check:mobile')
+    expect(check).toBeGreaterThanOrEqual(0)
+    const install = steps.findIndex(step => step['working-directory'] === 'mobile' && step.run === 'bun install --frozen-lockfile')
+    expect(install).toBeGreaterThanOrEqual(0)
+    expect(install).toBeLessThan(check)
+    expect(jobs['pr-quality-gate'].needs).toContain('mobile-checks')
+    expect(workflow).toContain('mobile_checks: ${{ steps.policy.outputs.mobile_checks }}')
+  })
+
+  test.each([
+    { selected: true, result: 'success', exit: 0 },
+    { selected: true, result: 'failure', exit: 1 },
+    { selected: true, result: 'skipped', exit: 1 },
+    { selected: false, result: 'skipped', exit: 0 },
+    { selected: false, result: 'success', exit: 1 },
+  ])('enforces the selected mobile result in the stable gate: %j', scenario => {
+    const jobs = workflowJobs(readFileSync('.github/workflows/pr-quality.yml', 'utf8'))
+    const script = jobs['pr-quality-gate']!.steps!.find(step => step.run?.includes('require_selected'))!.run!
+      .replace(/\$\{\{\s*([^}]+?)\s*\}\}/g, (_match, expression: string) => {
+        if (expression === 'needs.scope-plan.outputs.mobile_checks') return String(scenario.selected)
+        if (expression.startsWith('needs.scope-plan.outputs.')) return 'false'
+        if (expression === 'needs.mobile-checks.result') return scenario.result
+        if (expression === 'needs.scope-plan.result' || expression === 'needs.policy-enforcement.result') return 'success'
+        return 'skipped'
+      })
+    const result = Bun.spawnSync(['bash', '-c', script], {
+      env: { PATH: process.env.PATH ?? '' }, stdout: 'pipe', stderr: 'pipe',
     })
     expect(result.exitCode, new TextDecoder().decode(result.stdout)).toBe(scenario.exit)
   })
@@ -331,6 +370,7 @@ describe('full quality workflow', () => {
       'bun run check:chat-contract',
       'bun run check:adapters',
       'bun run check:desktop',
+      'bun run check:mobile',
       'bun run check:electron',
       'bun run check:persistence-upgrade',
       'bun run check:quarantine',

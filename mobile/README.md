@@ -24,6 +24,8 @@ React Native / Expo 58 / Expo Router 的 iOS、Android 客户端。按「cc-haha
 
 ## 运行与构建
 
+正式 CI 签名、随 Release 发布 APK / TestFlight、独立版本号及失败重试，见 [移动端发布](RELEASING.md)。
+
 以下命令在 `mobile/` 执行。需要 Bun、Node；iOS 需要 Xcode / CocoaPods，Android 需要 JDK / Android SDK。
 
 ```sh
