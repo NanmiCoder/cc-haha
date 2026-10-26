@@ -2954,15 +2954,22 @@ type TraceFileSnapshot = {
 // Every line this module writes is `{"type":"call"|"event",...}`.
 const TRACE_LINE_PREFIX = /^\{"type":"(?:call|event)"/
 
+/**
+ * Whether a `.jsonl` file is positively something other than a trace. Only a file whose head was
+ * read and does not look like a trace line is excluded; one that is empty or cannot be read (for
+ * example removed between listing and opening) stays a trace candidate so the normal read path
+ * decides what to do with it.
+ */
 async function isTraceFile(path: string): Promise<boolean> {
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined
   try {
     handle = await fs.open(path, 'r')
     const head = Buffer.alloc(16)
     const { bytesRead } = await handle.read(head, 0, head.length, 0)
+    if (bytesRead === 0) return true
     return TRACE_LINE_PREFIX.test(head.toString('utf8', 0, bytesRead))
   } catch {
-    return false
+    return true
   } finally {
     await handle?.close().catch(() => {})
   }
