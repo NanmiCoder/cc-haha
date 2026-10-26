@@ -4774,11 +4774,11 @@ describe('OpenCode Go preset request contract', () => {
         message: 'Upstream returned no body for stream',
       },
       {
-        name: 'safety stop with no output',
+        name: 'malformed function call with no output',
         stream: false,
-        upstream: [() => Response.json({ candidates: [{ finishReason: 'SAFETY' }] })],
+        upstream: [() => Response.json({ candidates: [{ finishReason: 'MALFORMED_FUNCTION_CALL' }] })],
         status: 502,
-        message: 'Gemini stopped with SAFETY',
+        message: 'Gemini stopped with MALFORMED_FUNCTION_CALL',
       },
       {
         name: 'refused continuation',
@@ -4805,6 +4805,31 @@ describe('OpenCode Go preset request contract', () => {
         expect(reported, name).toContain(message)
         expect(text, name).not.toContain('message_stop')
         expect(call, name).toBe(upstream.length)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('reports a Gemini policy block as a refusal rather than an error the CLI would retry', async () => {
+    const { provider } = await createProvider()
+    const originalFetch = globalThis.fetch
+    try {
+      for (const stream of [false, true]) {
+        let calls = 0
+        globalThis.fetch = (async () => {
+          calls++
+          const body = { candidates: [{ finishReason: 'SAFETY' }] }
+          return stream
+            ? new Response(`data: ${JSON.stringify(body)}\r\n\r\n`, { headers: { 'Content-Type': 'text/event-stream' } })
+            : Response.json(body)
+        }) as unknown as typeof fetch
+        const response = await proxy(provider.id, {
+          model: 'gemini-4-argon-contributor', max_tokens: 32, stream, messages: [{ role: 'user', content: 'hello' }],
+        })
+        expect(response.status, `stream=${stream}`).toBe(200)
+        expect(await response.text(), `stream=${stream}`).toContain('"stop_reason":"refusal"')
+        expect(calls, `stream=${stream}`).toBe(1)
       }
     } finally {
       globalThis.fetch = originalFetch
