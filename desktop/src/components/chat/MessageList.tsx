@@ -1,3 +1,4 @@
+import { getDisclosure } from '@/lib/disclosureMemory'
 import { ScheduledTaskCard } from '@/components/tasks/ScheduledTaskCard'
 import { ScheduledTaskTrigger } from '@/components/tasks/ScheduledTaskTrigger'
 import { parseScheduledTaskResult } from '@/lib/scheduledTask'
@@ -2110,7 +2111,7 @@ function getMessageMetricSignature(message: UIMessage): string {
 
 /**
  * Move measured heights from rows that disappeared to rows that appeared with
- * the same metric signature, in order. Rows that kept their key are untouched.
+ * the same reload signature, in order. Rows that kept their key are untouched.
  *
  * A transcript reload after a reply, or a checkpoint refresh, can hand the same
  * messages back under new ids. Heights are keyed by id, so those rows would
@@ -2149,6 +2150,18 @@ export function carryMeasuredHeightsToRenamedItems(
     carried += 1
   })
   return carried
+}
+
+// Metric signatures summarize lengths for cheap estimates, not row identity:
+// equal-length Markdown can have different geometry. Include disclosure state
+// because renamed thinking/result rows may remount collapsed after being open.
+function getRenderItemReloadSignature(item: RenderItem): string {
+  if (item.kind !== 'message') return JSON.stringify(item)
+  const message = item.message
+  const expanded = message.type === 'thinking' || message.type === 'tool_result'
+    ? getDisclosure(message.id) ?? false
+    : false
+  return JSON.stringify([{ ...message, id: undefined, timestamp: undefined }, expanded])
 }
 
 function haveSameRenderItemKeys(previous: string[], next: string[]): boolean {
@@ -3103,29 +3116,27 @@ export function MessageList({
     }),
     [renderItemKeys, renderItems],
   )
-  // Rows renamed by a transcript reload keep their measured heights (see
-  // carryMeasuredHeightsToRenamedItems). This mutates the shared per-session
-  // height cache during render, like the metric cache above, so the offsets
-  // computed below in the same render already see the carried heights.
+  // Compare against the last committed list, so an interrupted render cannot
+  // become the source of measured geometry for a later history reload.
   const previousRenderItemsRef = useRef<{
     sessionId: string | null | undefined
     keys: string[]
-    signatures: string[]
-  }>({ sessionId: resolvedSessionId, keys: [], signatures: [] })
+    items: RenderItem[]
+  }>({ sessionId: resolvedSessionId, keys: [], items: [] })
   useMemo(() => {
     const previous = previousRenderItemsRef.current
-    const signatures = renderItemMetrics.map((metric) => metric.signature)
-    if (previous.sessionId === resolvedSessionId) {
-      carryMeasuredHeightsToRenamedItems(
-        virtualItemHeightsRef.current,
-        previous.keys,
-        previous.signatures,
-        renderItemKeys,
-        signatures,
-      )
-    }
-    previousRenderItemsRef.current = { sessionId: resolvedSessionId, keys: renderItemKeys, signatures }
-  }, [renderItemKeys, renderItemMetrics, resolvedSessionId])
+    if (previous.sessionId !== resolvedSessionId || haveSameRenderItemKeys(previous.keys, renderItemKeys)) return
+    carryMeasuredHeightsToRenamedItems(
+      virtualItemHeightsRef.current,
+      previous.keys,
+      previous.items.map(getRenderItemReloadSignature),
+      renderItemKeys,
+      renderItems.map(getRenderItemReloadSignature),
+    )
+  }, [renderItemKeys, renderItems, resolvedSessionId])
+  useLayoutEffect(() => {
+    previousRenderItemsRef.current = { sessionId: resolvedSessionId, keys: renderItemKeys, items: renderItems }
+  }, [renderItemKeys, renderItems, resolvedSessionId])
   // A history reload or checkpoint refresh after a reply rewrites the rows while
   // the chat is idle, where neither the streaming follow nor the message-count
   // follow runs. A reader who was at the bottom stays there.
