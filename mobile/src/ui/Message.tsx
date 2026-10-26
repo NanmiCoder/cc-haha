@@ -1,11 +1,11 @@
 import { parseUserMessageSegments } from '../../../src/shared/userMessageCapabilities'
-import { memo, useRef, type ComponentRef } from 'react'
+import { memo, useMemo, useRef, useState, type ComponentRef } from 'react'
 import { Image, Platform, Pressable, ScrollView, View, type TextStyle } from 'react-native'
 import { Text } from './Text'
 import type { ChatItem } from '../core/types'
 import { visibleMessageText } from '../core/chatComposer'
 import { Callout, CodeBlock, Icon, InlineCode, useColors } from './kit'
-import { parseInline, parseMarkdown } from './chat/markdown'
+import { fitColumnWidths, naturalColumnWidths, parseInline, parseMarkdown } from './chat/markdown'
 
 function Inline({
   text,
@@ -33,7 +33,11 @@ function Inline({
   )
 }
 
-/** 表格：列宽按内容估算，整张表可以横向滑动，手机上不挤成一团。 */
+/**
+ * 表格：按容器的可用宽度分配列宽，整张表铺满一屏；列太多、压到可读下限还放不下时，
+ * 才退回横向滑动。之前列宽只按内容估算，窄屏上表头底色和最后一列会在右侧留一截空白，
+ * 看起来像被截断。
+ */
 function MarkdownTable({
   header,
   rows,
@@ -44,10 +48,15 @@ function MarkdownTable({
   selectable: boolean
 }) {
   const colors = useColors()
-  const widths = header.map((title, column) => {
-    const longest = Math.max(title.length, ...rows.map((row) => (row[column] ?? '').length))
-    return Math.min(240, Math.max(72, longest * 9 + 24))
-  })
+  const [available, setAvailable] = useState(0)
+  const natural = useMemo(() => naturalColumnWidths(header, rows), [header, rows])
+  // ScrollView 的 1px 边框算在布局宽度里，内容只分到去掉边框后的宽度。
+  const measured = available > 2
+  const fitted = measured ? fitColumnWidths(natural, available - 2) : null
+  const widths = fitted ?? natural
+  // 宽度还没量到（0）时先按自然列宽渲染；量到 1–2px 这种退化宽度时仍允许横滑，
+  // 否则内容会超宽又动不了。
+  const scroll = measured ? fitted === null : available > 0
   const cell = (text: string, column: number, head: boolean, last: boolean) => (
     <View
       key={column}
@@ -67,22 +76,31 @@ function MarkdownTable({
     </View>
   )
   return (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={{ borderRadius: 12, borderWidth: 1, borderColor: colors.hair, backgroundColor: colors.card }}
+    <View
+      style={{ width: '100%' }}
+      onLayout={(event) => {
+        const next = Math.round(event.nativeEvent.layout.width)
+        setAvailable((previous) => (previous === next ? previous : next))
+      }}
     >
-      <View>
-        <View style={{ flexDirection: 'row', backgroundColor: colors.fill }}>
-          {header.map((title, column) => cell(title, column, true, column === header.length - 1))}
-        </View>
-        {rows.map((row, rowIndex) => (
-          <View key={rowIndex} style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.hair }}>
-            {row.map((text, column) => cell(text, column, false, column === row.length - 1))}
+      <ScrollView
+        horizontal
+        scrollEnabled={scroll}
+        showsHorizontalScrollIndicator={scroll}
+        style={{ borderRadius: 12, borderWidth: 1, borderColor: colors.hair, backgroundColor: colors.card }}
+      >
+        <View>
+          <View style={{ flexDirection: 'row', backgroundColor: colors.fill }}>
+            {header.map((title, column) => cell(title, column, true, column === header.length - 1))}
           </View>
-        ))}
-      </View>
-    </ScrollView>
+          {rows.map((row, rowIndex) => (
+            <View key={rowIndex} style={{ flexDirection: 'row', borderTopWidth: 1, borderTopColor: colors.hair }}>
+              {row.map((text, column) => cell(text, column, false, column === row.length - 1))}
+            </View>
+          ))}
+        </View>
+      </ScrollView>
+    </View>
   )
 }
 

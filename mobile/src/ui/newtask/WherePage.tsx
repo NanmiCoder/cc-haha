@@ -167,65 +167,65 @@ export function WherePage(props: WherePageProps) {
                   ) : null}
                 </View>
               ) : (
-                <View style={{ gap: 8 }}>
-                  <SearchField value={query} onChangeText={setQuery} placeholder="搜索分支" editable={!busy} />
-                  <Group>
-                    {model.rows.map((row) => (
-                      <View key={row.name}>
-                        <ChoiceRow
-                          title={row.name}
-                          titleMono
-                          detail={row.detail}
-                          trailingText={row.current ? '当前' : undefined}
-                          selected={row.selected}
-                          disabled={busy || row.disabled}
-                          onPress={() => onBranch(row.name)}
-                        />
-                        <Separator inset={14} />
-                      </View>
-                    ))}
-                    <ChoiceRow
-                      title={model.follow.title}
-                      titleWeight="400"
-                      detail={model.follow.detail}
-                      selected={model.follow.selected}
-                      disabled={busy}
-                      onPress={() => onBranch(null)}
-                    />
-                  </Group>
-                  {model.noMatch ? <Text style={{ fontSize: 14, color: colors.ink3 }}>没有匹配的分支</Text> : null}
-                  {model.warning ? <Callout>{model.warning}</Callout> : null}
-                </View>
-              )}
-
-              {model.reason ? null : (
-                <View
-                  style={{
-                    marginTop: 12,
-                    backgroundColor: colors.card,
-                    borderRadius: 16,
-                    flexDirection: 'row',
-                    alignItems: 'center',
-                    gap: 12,
-                    paddingVertical: 10,
-                    paddingHorizontal: 14,
-                  }}
-                >
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={{ fontSize: 16, color: colors.ink }}>新开一个工作树</Text>
-                    <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{model.worktree.detail}</Text>
-                  </View>
-                  <Switch
-                    label="新开一个工作树"
-                    value={model.worktree.on}
-                    disabled={busy || model.worktree.disabled}
-                    onValueChange={(enabled) => {
-                      const next = toggleWorktree(repo, branch, enabled)
-                      onBranch(next.branch)
-                      onWorktree(next.worktree)
+                <>
+                  {/* 工作树放在分支列表上面：远端分支很多时不用滑到底也能看到。 */}
+                  <View
+                    style={{
+                      marginTop: 2,
+                      backgroundColor: colors.card,
+                      borderRadius: 16,
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 12,
+                      paddingVertical: 10,
+                      paddingHorizontal: 14,
                     }}
-                  />
-                </View>
+                  >
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={{ fontSize: 16, color: colors.ink }}>新开一个工作树</Text>
+                      <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>{model.worktree.detail}</Text>
+                    </View>
+                    <Switch
+                      label="新开一个工作树"
+                      value={model.worktree.on}
+                      disabled={busy || model.worktree.disabled}
+                      onValueChange={(enabled) => {
+                        const next = toggleWorktree(repo, branch, enabled)
+                        onBranch(next.branch)
+                        onWorktree(next.worktree)
+                      }}
+                    />
+                  </View>
+                  <View style={{ gap: 8, marginTop: 12 }}>
+                    <SearchField value={query} onChangeText={setQuery} placeholder="搜索分支" editable={!busy} />
+                    <Group>
+                      {model.rows.map((row) => (
+                        <View key={row.name}>
+                          <ChoiceRow
+                            title={row.name}
+                            titleMono
+                            detail={row.detail}
+                            trailingText={row.current ? '当前' : undefined}
+                            selected={row.selected}
+                            disabled={busy || row.disabled}
+                            onPress={() => onBranch(row.name)}
+                          />
+                          <Separator inset={14} />
+                        </View>
+                      ))}
+                      <ChoiceRow
+                        title={model.follow.title}
+                        titleWeight="400"
+                        detail={model.follow.detail}
+                        selected={model.follow.selected}
+                        disabled={busy}
+                        onPress={() => onBranch(null)}
+                      />
+                    </Group>
+                    {model.noMatch ? <Text style={{ fontSize: 14, color: colors.ink3 }}>没有匹配的分支</Text> : null}
+                    {model.warning ? <Callout>{model.warning}</Callout> : null}
+                  </View>
+                </>
               )}
             </>
           )}

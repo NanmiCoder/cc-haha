@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { detentFraction, detentHeight, settleDetent } from './detents'
+import { detentFraction, detentHeight, settleDetent, sheetAvailable } from './detents'
 
 describe('settleDetent', () => {
   test('半高：慢速短距离拖动回弹，向下拖远或甩动关闭，向上拖远或甩动展开', () => {
@@ -29,5 +29,16 @@ describe('detentHeight', () => {
     expect(detentHeight('half', 800)).toBe(Math.round(800 * detentFraction.half))
     expect(detentHeight('full', 800)).toBe(Math.round(800 * detentFraction.full))
     expect(detentHeight('half', -10)).toBe(0)
+  })
+})
+
+describe('sheetAvailable', () => {
+  test('扣掉状态栏和顶部留白', () => {
+    expect(sheetAvailable(844, 47)).toBe(844 - 47 - 8)
+  })
+
+  test('键盘把可视区压得很小时不会为负', () => {
+    expect(sheetAvailable(300, 47)).toBe(245)
+    expect(sheetAvailable(40, 47)).toBe(0)
   })
 })

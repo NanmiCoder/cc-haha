@@ -109,6 +109,11 @@ export type ChatItem = {
   isError?: boolean
   pending?: boolean
   delivery?: 'pending' | 'confirmed' | 'uncertain'
+  /**
+   * 本地已发出、还在等服务端回放的用户消息。回合可能先结束（pending 被清掉），
+   * 回放随后才到；保留这个标记才能对上原来那条，而不是再追加一个重复气泡。
+   */
+  awaitingReplay?: boolean
 }
 /** 子 Agent 最近的一步工具调用（实时事件里能拿到的部分）。 */
 export type SubagentStep = {

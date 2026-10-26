@@ -14,7 +14,7 @@ import { Text } from './Text'
 import { KeyboardViewport } from './KeyboardViewport'
 import { type } from './palette'
 import { useColors } from './kit'
-import { detentHeight, settleDetent, type Detent } from './detents'
+import { detentHeight, settleDetent, sheetAvailable, type Detent } from './detents'
 
 export type DetentSheetProps = PropsWithChildren<{
   visible: boolean
@@ -44,20 +44,40 @@ export type DetentSheetProps = PropsWithChildren<{
  */
 export function DetentSheet(props: DetentSheetProps) {
   const colors = useColors()
+  const { height: windowHeight } = useWindowDimensions()
+  // 键盘弹出时 KeyboardViewport 会缩小内容区，这里量到的就是真正可用的高度。
+  const [viewportHeight, setViewportHeight] = useState(windowHeight)
+  // 关闭后子树被卸载，onLayout 不会再把键盘态的小高度改回来；下次打开会先矮后长。
+  // 收起时恢复成窗口高度，重新打开的首帧就是对的。
+  const [wasVisible, setWasVisible] = useState(props.visible)
+  if (props.visible !== wasVisible) {
+    setWasVisible(props.visible)
+    if (!props.visible) setViewportHeight(windowHeight)
+  }
+  // 收起状态下窗口尺寸变了（旋转/分屏）也要跟上。
+  if (!props.visible && viewportHeight !== windowHeight) setViewportHeight(windowHeight)
   const close = () => {
     if (props.dismissable !== false) props.onClose()
   }
   return (
     <Modal visible={props.visible} transparent animationType="slide" onRequestClose={close} statusBarTranslucent>
-      <KeyboardViewport style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <KeyboardViewport style={{ flex: 1 }}>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="关闭"
           onPress={close}
           style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: colors.scrim }}
         />
-        {/* Modal 关闭时子树被卸载，所以每次打开都从 initialDetent 开始。 */}
-        <Panel {...props} onClose={close} />
+        <View
+          style={{ flex: 1, justifyContent: 'flex-end' }}
+          onLayout={(event) => {
+            const next = Math.round(event.nativeEvent.layout.height)
+            setViewportHeight((previous) => (previous === next ? previous : next))
+          }}
+        >
+          {/* Modal 关闭时子树被卸载，所以每次打开都从 initialDetent 开始。 */}
+          <Panel {...props} onClose={close} viewportHeight={viewportHeight} />
+        </View>
       </KeyboardViewport>
     </Modal>
   )
@@ -109,6 +129,7 @@ class DetentGesture {
 }
 
 function Panel({
+  viewportHeight,
   onClose,
   title,
   left,
@@ -122,11 +143,10 @@ function Panel({
   scroll = true,
   background,
   children,
-}: DetentSheetProps) {
+}: DetentSheetProps & { viewportHeight: number }) {
   const colors = useColors()
   const insets = useSafeAreaInsets()
-  const { height: windowHeight } = useWindowDimensions()
-  const available = windowHeight - insets.top
+  const available = sheetAvailable(viewportHeight, insets.top)
   const [inner, setInner] = useState<Detent>(initialDetent)
   const level: Detent = allowFull ? (detent ?? inner) : 'half'
   const target = detentHeight(level, available)

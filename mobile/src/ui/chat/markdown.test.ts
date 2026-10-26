@@ -1,5 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { parseInline, parseMarkdown } from './markdown'
+import {
+  fitColumnWidths,
+  naturalColumnWidths,
+  parseInline,
+  parseMarkdown,
+  TABLE_MAX_COLUMN,
+  TABLE_MIN_COLUMN,
+  textWidthUnits,
+} from './markdown'
 import { fileChange } from './changes'
 
 describe('chat markdown', () => {
@@ -107,5 +115,45 @@ describe('tables', () => {
 
   test('a lone pipe line without a rule row stays a paragraph', () => {
     expect(parseMarkdown('a | b\nplain text')).toEqual([{ type: 'paragraph', text: 'a | b\nplain text' }])
+  })
+})
+
+describe('table column widths', () => {
+  test('中文和 emoji 按两个半角单位算，避免列宽估得太窄', () => {
+    expect(textWidthUnits('abc')).toBe(3)
+    expect(textWidthUnits('章节')).toBe(4)
+    expect(textWidthUnits('a章')).toBe(3)
+    expect(textWidthUnits('🙂')).toBe(2)
+  })
+
+  test('自然列宽有上下限', () => {
+    const [narrow, wide] = naturalColumnWidths(['a', '内容'], [['b', 'x'.repeat(200)]])
+    expect(narrow).toBe(TABLE_MIN_COLUMN)
+    expect(wide).toBe(TABLE_MAX_COLUMN)
+  })
+
+  test('放得下时按比例铺满可用宽度', () => {
+    const widths = fitColumnWidths([87, 240], 358)
+    expect(widths).not.toBeNull()
+    expect(widths!.reduce((sum, value) => sum + value, 0)).toBe(358)
+    expect(widths![0]).toBeGreaterThan(87)
+    expect(widths![1]).toBeGreaterThan(240)
+  })
+
+  test('放不下时等比压缩，每列不低于可读下限', () => {
+    const widths = fitColumnWidths([320, 320, 320], 358)
+    expect(widths).not.toBeNull()
+    expect(widths!.reduce((sum, value) => sum + value, 0)).toBe(358)
+    for (const value of widths!) expect(value).toBeGreaterThanOrEqual(TABLE_MIN_COLUMN)
+  })
+
+  test('列太多、压到下限还放不下时返回 null，交给横向滚动', () => {
+    expect(fitColumnWidths(new Array(10).fill(320), 358)).toBeNull()
+    expect(fitColumnWidths(new Array(8).fill(320), 358)).toBeNull()
+    expect(fitColumnWidths(new Array(4).fill(320), 358)).not.toBeNull()
+  })
+
+  test('宽度未知时沿用自然列宽', () => {
+    expect(fitColumnWidths([87, 240], 0)).toEqual([87, 240])
   })
 })

@@ -38,3 +38,14 @@ export function settleDetent({
 export function detentHeight(level: Detent, available: number): number {
   return Math.round(Math.max(0, available) * detentFraction[level])
 }
+
+/** 全高时也要留在状态栏下面，否则弹层顶部会被状态栏压住。 */
+export const SHEET_TOP_GAP = 8
+
+/**
+ * 底单能用的高度：从弹层实际可视高度里去掉状态栏和最小顶部留白。
+ * 键盘弹出时 viewportHeight 已经变小，底单会跟着变矮，不会顶出屏幕。
+ */
+export function sheetAvailable(viewportHeight: number, topInset: number): number {
+  return Math.max(0, viewportHeight - Math.max(0, topInset) - SHEET_TOP_GAP)
+}

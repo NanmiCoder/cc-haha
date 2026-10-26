@@ -23,6 +23,8 @@ export type ConnectionState =
   | 'reconnecting'
   | 'offline'
   | 'pairing_required'
+/** 翻更早历史的结果：界面据此区分加载成功、到底、正在翻和暂时不可用。 */
+export type LoadOlderResult = 'loaded' | 'busy' | 'unavailable' | 'end'
 export type SocketLike = {
   readyState: number
   send(data: string): void
@@ -233,49 +235,115 @@ export class SessionTransport {
     }
   }
 
-  async loadOlder(): Promise<void> {
-    const current = this.historyPage
-    const cursor = current?.page?.nextCursor
+  /**
+   * 把一条消息立即送进正在运行的一轮（桌面端的「引导」）。
+   * 和 `send` 不同，这里允许 turnActive；但模型被决定卡住、配置还没确认、
+   * 上一条用户消息还没被电脑确认，或连接没就绪时不发。最后一条很关键：
+   * 服务端收到新消息会替换当前 activeTurn，若上一条还在写 SDK 之前，
+   * 它会被静默丢掉，客户端却只看到一条已发送的乐观消息。
+   */
+  steer(message: ClientMessage): boolean {
+    if (message.type !== 'user_message') return false
     if (
       this.#disposed ||
-      !this.#historyReady ||
-      this.#paginationPending ||
-      !current ||
-      !cursor
+      this.connection !== 'ready' ||
+      this.#socket?.readyState !== 1
     )
-      return
+      return false
+    const waitingForDecision =
+      this.state.permissions.length > 0 ||
+      this.state.computerUsePermissions.length > 0
+    const pendingUser = this.state.items.some(
+      (item) => item.type === 'user' && item.pending
+    )
+    if (
+      !this.state.turnActive ||
+      pendingUser ||
+      waitingForDecision ||
+      this.state.configPending ||
+      (!message.content.trim() && !message.attachments?.length)
+    )
+      return false
+    try {
+      this.#socket.send(JSON.stringify(message))
+      // 先显示在消息流里；服务端回放同一段文字时会按 pending 匹配并确认，
+      // 不会出现两条一样的消息。
+      this.#publish(
+        appendPendingUserMessage(
+          this.state,
+          message.content,
+          message.attachments
+        )
+      )
+      return true
+    } catch {
+      this.#options.onError(
+        new ApiError('发送失败，消息没有自动重试', 0, 'SEND_FAILED')
+      )
+      this.#disconnect()
+      return false
+    }
+  }
+
+  /**
+   * 往更早翻历史。默认一次翻一页；`pages` 可以在一轮里连续翻多页，
+   * 让「加载更早的消息」一次给出更多内容。
+   * 返回结果让界面能区分「真的加载了」「没连上」「已经在翻」「到底了」，
+   * 不会出现点了没反应又没有任何提示的情况。
+   */
+  async loadOlder(pages = 1): Promise<LoadOlderResult> {
+    if (this.#disposed || !this.#historyReady) return 'unavailable'
+    if (this.#paginationPending) return 'busy'
+    let current = this.historyPage
+    let cursor: string | null = current?.page?.nextCursor ?? null
+    if (!current || !cursor) return 'end'
     this.#paginationPending = true
     const generation = this.#generation
     const historyEpoch = this.#historyEpoch
     const controller = this.#requestController()
+    const limit = Math.max(1, Math.min(10, Math.trunc(pages) || 1))
+    let loaded = false
     try {
-      const older = await this.#options.client.history(
-        this.#options.sessionId,
-        cursor,
-        { signal: controller.signal }
-      )
-      if (!this.#valid(generation) || historyEpoch !== this.#historyEpoch)
-        return
-      if (older.page?.nextCursor === cursor)
-        throw new ApiError(
-          '历史分页没有推进，请重新加载',
-          409,
-          'HISTORY_PAGE_STALE'
+      for (let page = 0; page < limit; page++) {
+        if (!cursor) break
+        const older = await this.#options.client.history(
+          this.#options.sessionId,
+          cursor,
+          { signal: controller.signal }
         )
-      const merged = mergeHistoryPages(current, older)
-      this.historyPage = merged
-      this.#publish({
-        ...this.state,
-        items: [
-          ...normalizeHistory(merged.messages),
-          ...this.state.items.filter((item) => item.id.startsWith('live:')),
-        ],
-      })
+        if (!this.#valid(generation) || historyEpoch !== this.#historyEpoch)
+          return loaded ? 'loaded' : 'unavailable'
+        if (older.page?.nextCursor === cursor)
+          throw new ApiError(
+            '历史分页没有推进，请重新加载',
+            409,
+            'HISTORY_PAGE_STALE'
+          )
+        const merged = mergeHistoryPages(current, older)
+        this.historyPage = merged
+        this.#publish({
+          ...this.state,
+          items: [
+            ...normalizeHistory(merged.messages),
+            ...this.state.items.filter((item) => item.id.startsWith('live:')),
+          ],
+        })
+        current = merged
+        cursor = merged.page?.nextCursor ?? null
+        loaded = true
+      }
+      return loaded ? 'loaded' : 'end'
     } catch (error) {
-      if (!this.#valid(generation) || controller.signal.aborted) return
-      if (this.#isUnauthorized(error)) return this.#requirePairing()
+      if (!this.#valid(generation) || controller.signal.aborted)
+        return loaded ? 'loaded' : 'unavailable'
+      if (this.#isUnauthorized(error)) {
+        this.#requirePairing()
+        return loaded ? 'loaded' : 'unavailable'
+      }
       if (
-        (error instanceof ApiError && error.code === 'HISTORY_PAGE_STALE') ||
+        (error instanceof ApiError &&
+          (error.code === 'HISTORY_PAGE_STALE' ||
+            error.code === 'HISTORY_CHANGED')) ||
         (error instanceof Error && error.message === 'HISTORY_PAGE_STALE')
       ) {
         this.#options.onError(
@@ -286,7 +354,10 @@ export class SessionTransport {
           )
         )
         await this.#reloadHistory(generation)
+        // 已经用最新一页恢复，不再让界面提示“没连上”。
+        return 'loaded'
       } else this.#report(error)
+      return loaded ? 'loaded' : 'unavailable'
     } finally {
       this.#requests.delete(controller)
       this.#paginationPending = false

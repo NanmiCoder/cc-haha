@@ -58,7 +58,8 @@ export async function pickChatMaterial(
       : await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
           allowsMultipleSelection: true,
-          selectionLimit: 3,
+          // 一次最多选 10 张；可以分多次继续添加。
+          selectionLimit: 10,
           quality: 1,
           exif: false,
         })

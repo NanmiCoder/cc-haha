@@ -118,6 +118,19 @@ describe('host-scoped API transport', () => {
       code: 'HISTORY_PAGE_STALE',
       message: 'history changed',
     })
+    // 服务端把机器码放在 error 里；没有 code 字段时也要保留，调用方才能识别。
+    const rewritten = new ApiClient(lan, 'fake', {
+      fetch: async () =>
+        response(
+          { error: 'HISTORY_CHANGED', message: 'Session history changed' },
+          409
+        ),
+    })
+    await expect(rewritten.history('session', 'opaque')).rejects.toMatchObject({
+      status: 409,
+      code: 'HISTORY_CHANGED',
+      message: 'Session history changed',
+    })
     const html = new ApiClient(lan, 'fake', {
       fetch: async () =>
         response({}, 200, { text: async () => '<html>proxy</html>' }),

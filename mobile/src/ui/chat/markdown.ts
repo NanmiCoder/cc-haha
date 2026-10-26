@@ -94,6 +94,79 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   return blocks
 }
 
+/* ───────────── 表格列宽 ───────────── */
+
+export const TABLE_MIN_COLUMN = 72
+export const TABLE_MAX_COLUMN = 320
+
+/**
+ * 估算文字的“半角单位”宽度：中日韩、全角标点和 emoji 按 2 个单位，
+ * 其余按 1 个。只用来给列宽定初值，不要求精确。
+ */
+export function textWidthUnits(text: string): number {
+  let units = 0
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0
+    const wide =
+      (code >= 0x1100 && code <= 0x115f) ||
+      (code >= 0x2e80 && code <= 0xa4cf) ||
+      (code >= 0xac00 && code <= 0xd7a3) ||
+      (code >= 0xf900 && code <= 0xfaff) ||
+      (code >= 0xfe30 && code <= 0xfe4f) ||
+      (code >= 0xff00 && code <= 0xff60) ||
+      (code >= 0xffe0 && code <= 0xffe6) ||
+      (code >= 0x1f300 && code <= 0x1faff)
+    units += wide ? 2 : 1
+  }
+  return units
+}
+
+/** 每列按内容估算的自然宽度；用于放不下时判断谁更需要空间。 */
+export function naturalColumnWidths(header: string[], rows: string[][]): number[] {
+  return header.map((title, column) => {
+    let units = textWidthUnits(title)
+    for (const row of rows) units = Math.max(units, textWidthUnits(row[column] ?? ''))
+    return Math.min(TABLE_MAX_COLUMN, Math.max(TABLE_MIN_COLUMN, Math.ceil(units * 7 + 20)))
+  })
+}
+
+function roundToTotal(values: number[], total: number): number[] {
+  const rounded = values.map((value) => Math.floor(value))
+  let left = total - rounded.reduce((sum, value) => sum + value, 0)
+  for (let index = 0; left > 0; index = (index + 1) % rounded.length, left--) rounded[index] += 1
+  return rounded
+}
+
+/**
+ * 把自然列宽分配到可用宽度：放得下就按比例铺满整行，放不下就等比压缩、
+ * 但每列不低于 `TABLE_MIN_COLUMN`。列实在太多时返回 null，调用方退回横向滚动。
+ */
+export function fitColumnWidths(natural: number[], available: number): number[] | null {
+  const count = natural.length
+  if (!count) return []
+  if (!(available > 0)) return natural
+  const min = TABLE_MIN_COLUMN
+  if (available < min * count) return null
+  let remaining = available
+  let open = natural.map((_, index) => index)
+  const widths = new Array<number>(count).fill(0)
+  while (open.length) {
+    const total = open.reduce((sum, index) => sum + natural[index], 0)
+    const scale = remaining / total
+    const narrow = open.filter((index) => natural[index] * scale < min)
+    if (!narrow.length) {
+      for (const index of open) widths[index] = natural[index] * scale
+      break
+    }
+    for (const index of narrow) {
+      widths[index] = min
+      remaining -= min
+    }
+    open = open.filter((index) => !narrow.includes(index))
+  }
+  return roundToTotal(widths, available)
+}
+
 export type InlineSegment = { type: 'text' | 'bold' | 'code'; text: string }
 
 export function parseInline(text: string): InlineSegment[] {

@@ -512,6 +512,7 @@ export function appendPendingUserMessage(
       ...(attachments?.length ? { attachments } : {}),
       pending: true,
       delivery: 'pending',
+      awaitingReplay: true,
     }
   )
 }
@@ -756,8 +757,9 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
       const restored = restoreFileReferences(event.content)
       let matchedText = restored.text
       let metadata: { path?: string }[] = []
-      const pending = state.items.find((item) => {
-        if (item.type !== 'user' || !item.pending) return false
+      const matched = state.items.find((item) => {
+        // 回合先结束时 pending 会被清掉，但 awaitingReplay 还留着：回放晚到也要对回原消息。
+        if (item.type !== 'user' || !(item.pending || item.awaitingReplay)) return false
         if (item.text === event.content || item.text === restored.text) {
           matchedText = item.text
           return true
@@ -785,19 +787,20 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
         turnActive: true,
         status: state.status === 'idle' ? ('thinking' as const) : state.status,
       }
-      return pending
-        ? updateItem(next, pending.id, {
+      return matched
+        ? updateItem(next, matched.id, {
             text:
-              pending.attachments?.length && attachmentOnlyPlaceholder(matchedText)
-                ? pending.text
+              matched.attachments?.length && attachmentOnlyPlaceholder(matchedText)
+                ? matched.text
                 : matchedText,
-            ...(pending.attachments?.length
-              ? { attachments: applyImageMetadata(pending.attachments, metadata) }
+            ...(matched.attachments?.length
+              ? { attachments: applyImageMetadata(matched.attachments, metadata) }
               : restored.attachments.length
                 ? { attachments: restored.attachments }
                 : {}),
             pending: false,
             delivery: 'confirmed',
+            awaitingReplay: false,
           })
         : append(next, {
             type: 'user',

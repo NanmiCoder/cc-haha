@@ -211,6 +211,11 @@ function ChatSession({
   const follow = useRef(true)
   const scrollMetrics = useRef({ height: 0, offset: 0 })
   const holdScroll = useRef(false)
+  const olderInFlight = useRef(false)
+  // 自动加载每次只能补一批：停在顶部回弹时不能连续把历史全拉下来。
+  const autoLoadArmed = useRef(true)
+  // 手动加载完后回到顶部，让用户看见刚补进来的更早消息（自动加载则保持阅读位置）。
+  const scrollTopAfterLoad = useRef(false)
   const notificationSeen = useRef(new Set<string>())
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const mounted = useRef(true)
@@ -414,6 +419,22 @@ function ChatSession({
       follow.current = true
     }
   }
+  /** 立即把排队消息插进正在运行的一轮；这一轮刚好结束时退回普通发送。 */
+  function guideQueued(itemId: string) {
+    const item = queue.find((value) => value.id === itemId)
+    if (!item) return
+    if (transport.current?.steer(item.message)) {
+      setQueue((items) => items.filter((value) => value.id !== itemId))
+      follow.current = true
+      return
+    }
+    if (!state.turnActive && dispatch(item.message)) {
+      setQueue((items) => items.filter((value) => value.id !== itemId))
+      follow.current = true
+      return
+    }
+    showNotice('现在还不能引导，等上一条确认或当前决定处理完再试。', true)
+  }
   function withdrawQueued(ids?: string[]) {
     restoreQueue({ queue, draft, attachments, team, references }, ids)
   }
@@ -593,6 +614,52 @@ function ChatSession({
     }
   }
   const send = (message: ClientMessage) => dispatch(message)
+  /** 一次翻三页，长会话不用反复点；in-flight 只认 ref，避免连点重复请求。 */
+  function loadOlderBatch(mode: 'auto' | 'manual' = 'manual') {
+    if (olderInFlight.current) return
+    const channel = transport.current
+    if (!channel) return
+    olderInFlight.current = true
+    autoLoadArmed.current = false
+    follow.current = false
+    holdScroll.current = true
+    setLoadingOlder(true)
+    channel
+      .loadOlder(3)
+      .then((result) => {
+        if (!mounted.current) return
+        if (result === 'unavailable') showNotice('等这台电脑连上后再加载更早的消息。', true)
+        else if (result === 'end') setHasOlder(false)
+        else if (result === 'loaded' && mode === 'manual') {
+          scrollTopAfterLoad.current = true
+          // 没有可见新增（行被合并）时 onContentSizeChange 不会触发，别让它留到下一次。
+          setTimeout(() => {
+            scrollTopAfterLoad.current = false
+          }, 1200)
+        }
+      })
+      .catch((e) => {
+        if (mounted.current) setError(errorText(e))
+      })
+      .finally(() => {
+        olderInFlight.current = false
+        holdScroll.current = false
+        follow.current = false
+        if (mounted.current) setLoadingOlder(false)
+      })
+  }
+  /**
+   * 滚到接近顶部就自动接着翻，按钮仍保留给想手动加载的人。
+   * 一次只触发一批：要等用户先往下离开顶部再回来，回弹时不会连续补页。
+   */
+  function autoLoadOlder(offset: number) {
+    if (offset > 320) {
+      autoLoadArmed.current = true
+      return
+    }
+    if (offset >= 160 || !autoLoadArmed.current || olderInFlight.current || !hasOlder || !ready) return
+    loadOlderBatch('auto')
+  }
   function showNotice(text: string, transient = false) {
     clearTimeout(noticeTimer.current)
     setNotice(text)
@@ -980,6 +1047,16 @@ function ChatSession({
       paused={queuePaused}
       onWithdraw={(itemId) => withdrawQueued([itemId])}
       onSendNow={sendQueuedNow}
+      onGuide={guideQueued}
+      guiding={state.turnActive}
+      guideDisabled={
+        !ready ||
+        queueGate.pendingUser ||
+        waitingForDecision ||
+        state.configPending ||
+        workspaceMissing ||
+        queueGate.deliveryUncertain
+      }
     />
   ) : null
   const above =
@@ -1145,6 +1222,8 @@ function ChatSession({
             alignSelf: 'center',
           }}
           keyboardShouldPersistTaps="handled"
+          // 自动补历史时保持正在阅读的位置；手动按钮补完后会显式回到顶部。
+          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
           onScroll={({ nativeEvent: value }) => {
             // 贴底时继续跟随；只有用户往上滚才停止跟随。内容变短（一轮结束后整组折叠、
             // 历史重载）引起的位置回弹不算用户操作。
@@ -1156,43 +1235,40 @@ function ChatSession({
             if (distance < 150) follow.current = true
             else if (!shrank && value.contentOffset.y < previous.offset - 1) follow.current = false
             scrollMetrics.current = { height: value.contentSize.height, offset: value.contentOffset.y }
+            autoLoadOlder(value.contentOffset.y)
           }}
           scrollEventThrottle={100}
           onContentSizeChange={() => {
+            if (scrollTopAfterLoad.current) {
+              scrollTopAfterLoad.current = false
+              list.current?.scrollToOffset({ offset: 0, animated: false })
+              return
+            }
             if (follow.current && !holdScroll.current) list.current?.scrollToEnd({ animated: false })
           }}
           ListHeaderComponent={
             hasOlder ? (
               <Pressable
                 accessibilityRole="button"
-                disabled={loadingOlder}
-                onPress={() => {
-                  // 加载期间不跟随到底部，留在用户正在看的位置。
-                  follow.current = false
-                  holdScroll.current = true
-                  setLoadingOlder(true)
-                  transport.current
-                    ?.loadOlder()
-                    .catch((e) => setError(errorText(e)))
-                    .finally(() => {
-                      holdScroll.current = false
-                      follow.current = false
-                      if (mounted.current) setLoadingOlder(false)
-                    })
-                }}
+                accessibilityLabel="加载更早的消息"
+                accessibilityState={{ disabled: loadingOlder || !ready, busy: loadingOlder }}
+                disabled={loadingOlder || !ready}
+                hitSlop={8}
+                onPress={() => loadOlderBatch('manual')}
                 style={({ pressed }) => ({
                   alignSelf: 'center',
-                  height: 36,
+                  minHeight: 44,
+                  justifyContent: 'center',
                   flexDirection: 'row',
                   alignItems: 'center',
                   gap: 8,
-                  paddingHorizontal: 12,
-                  opacity: pressed ? 0.5 : 1,
+                  paddingHorizontal: 16,
+                  opacity: loadingOlder ? 0.6 : pressed ? 0.5 : ready ? 1 : 0.45,
                 })}
               >
                 {loadingOlder ? <Spinner size={14} /> : null}
                 <Text style={{ fontSize: 14, color: colors.ink2 }}>
-                  {loadingOlder ? '正在加载…' : '加载更早的消息'}
+                  {loadingOlder ? '正在加载…' : ready ? '加载更早的消息' : '等电脑连接后加载'}
                 </Text>
               </Pressable>
             ) : undefined

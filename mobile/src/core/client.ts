@@ -137,7 +137,13 @@ export class ApiClient {
               ? data.error
               : `请求失败 (${response.status})`,
           response.status,
-          typeof data.code === 'string' ? data.code : undefined
+          // 服务端把机器码放在 error 里（如 HISTORY_CHANGED）；没有 code 字段时也要保留，
+          // 否则调用方只能按提示文案猜。
+          typeof data.code === 'string'
+            ? data.code
+            : typeof data.error === 'string'
+              ? data.error
+              : undefined
         )
       }
       return value as T

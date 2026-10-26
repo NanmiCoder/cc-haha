@@ -1013,6 +1013,76 @@ describe('transport lifecycle and outbound commands', () => {
   })
 })
 
+describe('steering a running turn', () => {
+  test('guides a queued message into the active turn and dedupes the replay', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    expect(h.transport.send({ type: 'user_message', content: 'first' })).toBe(true)
+    expect(h.transport.state.turnActive).toBe(true)
+    socket.receive({ type: 'user_message_replay', content: 'first' })
+    expect(h.transport.steer({ type: 'user_message', content: 'go left' })).toBe(true)
+    expect(socket.sent.at(-1)).toEqual({ type: 'user_message', content: 'go left' })
+    expect(h.transport.state.items.map((item) => item.text)).toEqual(['first', 'go left'])
+    expect(h.transport.state.items.at(-1)).toMatchObject({ type: 'user', pending: true })
+
+    socket.receive({ type: 'user_message_replay', content: 'go left' })
+    const guided = h.transport.state.items.filter((item) => item.text === 'go left')
+    expect(guided).toHaveLength(1)
+    expect(guided[0]).toMatchObject({ pending: false, delivery: 'confirmed' })
+    expect(h.transport.state.turnActive).toBe(true)
+    h.transport.dispose()
+  })
+
+  test('refuses to steer while the previous message is still unconfirmed', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    expect(h.transport.send({ type: 'user_message', content: 'first' })).toBe(true)
+    expect(h.transport.steer({ type: 'user_message', content: 'too early' })).toBe(false)
+    socket.receive({ type: 'user_message_replay', content: 'first' })
+    expect(h.transport.steer({ type: 'user_message', content: 'go left' })).toBe(true)
+    h.transport.dispose()
+  })
+
+  test('a guide replay after the turn already completed does not add a duplicate', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    expect(h.transport.send({ type: 'user_message', content: 'first' })).toBe(true)
+    socket.receive({ type: 'user_message_replay', content: 'first' })
+    expect(h.transport.steer({ type: 'user_message', content: 'go left' })).toBe(true)
+    socket.receive({ type: 'message_complete', usage: { input_tokens: 1, output_tokens: 1 } })
+    socket.receive({ type: 'user_message_replay', content: 'go left' })
+    const guided = h.transport.state.items.filter((item) => item.text === 'go left')
+    expect(guided).toHaveLength(1)
+    expect(guided[0]).toMatchObject({ pending: false, delivery: 'confirmed' })
+    h.transport.dispose()
+  })
+
+  test('refuses to steer while idle or disconnected', async () => {
+    const h = harness()
+    expect(h.transport.steer({ type: 'user_message', content: 'early' })).toBe(false)
+    await h.ready()
+    expect(h.transport.steer({ type: 'user_message', content: 'idle' })).toBe(false)
+    h.transport.dispose()
+  })
+
+  test('refuses to steer while a permission decision is waiting', async () => {
+    const h = harness()
+    const socket = await h.ready()
+    expect(h.transport.send({ type: 'user_message', content: 'first' })).toBe(true)
+    socket.receive({ type: 'user_message_replay', content: 'first' })
+    socket.receive({
+      type: 'permission_request',
+      requestId: 'r1',
+      toolName: 'Bash',
+      toolUseId: 't1',
+      input: {},
+    })
+    expect(h.transport.state.permissions).toHaveLength(1)
+    expect(h.transport.steer({ type: 'user_message', content: 'blocked' })).toBe(false)
+    h.transport.dispose()
+  })
+})
+
 describe('history cursor safety', () => {
   test('older pages prepend but cannot remove live data arriving during the request', async () => {
     const pending = deferred<HistoryPage>()
@@ -1035,6 +1105,54 @@ describe('history cursor safety', () => {
     h.transport.dispose()
   })
 
+  test('loads several older pages in one call and stops at the end', async () => {
+    const older: Record<string, HistoryPage> = {
+      c1: history([entry('a', 'user', 'A')], 'v1', 'c2'),
+      c2: history([entry('b', 'user', 'B')], 'v1', 'c3'),
+      c3: history([entry('c', 'user', 'C')], 'v1'),
+    }
+    const h = harness(
+      async (_id, cursor) =>
+        cursor ? older[cursor]! : history([entry('z', 'user', 'Z')], 'v1', 'c1')
+    )
+    await h.ready()
+    expect(await h.transport.loadOlder(3)).toBe('loaded')
+    // 每次拿到的都是更早的一页：C（最早）→ B → A → 原本的 Z。
+    expect(h.transport.state.items.map((item) => item.text)).toEqual(['C', 'B', 'A', 'Z'])
+    expect(h.transport.historyPage?.page?.nextCursor).toBeNull()
+    expect(await h.transport.loadOlder(3)).toBe('end')
+    h.transport.dispose()
+  })
+
+  test('reports busy while an older page is already loading', async () => {
+    const pending = deferred<HistoryPage>()
+    const h = harness(async (_id, cursor) =>
+      cursor ? pending.promise : history([entry('z', 'user', 'Z')], 'v1', 'c1')
+    )
+    await h.ready()
+    const first = h.transport.loadOlder(3)
+    expect(await h.transport.loadOlder(3)).toBe('busy')
+    pending.resolve(history([entry('a', 'user', 'A')], 'v1'))
+    expect(await first).toBe('loaded')
+    h.transport.dispose()
+  })
+
+  test('reports unavailable before history is ready', async () => {
+    const h = harness()
+    expect(await h.transport.loadOlder()).toBe('unavailable')
+    h.transport.dispose()
+  })
+
+  test('reports end when there is no older cursor', async () => {
+    const h = harness(
+      async () => history([entry('z', 'user', 'Z')], 'v1'),
+      history([entry('z', 'user', 'Z')], 'v1')
+    )
+    await h.ready()
+    expect(await h.transport.loadOlder(3)).toBe('end')
+    h.transport.dispose()
+  })
+
   test('stale cursor reloads newest history instead of merging different transcript versions', async () => {
     let reads = 0
     const h = harness(async (_id, cursor) => {
@@ -1046,6 +1164,23 @@ describe('history cursor safety', () => {
     })
     await h.ready()
     await h.transport.loadOlder()
+    expect(h.transport.state.items.map((i) => i.text)).toEqual(['Fresh'])
+    expect(h.transport.historyPage?.page?.sourceVersion).toBe('v2')
+    expect(h.errors.at(-1)).toMatchObject({ code: 'HISTORY_PAGE_STALE' })
+    h.transport.dispose()
+  })
+
+  test('a rewritten transcript (HISTORY_CHANGED) also reloads instead of getting stuck', async () => {
+    let reads = 0
+    const h = harness(async (_id, cursor) => {
+      if (cursor) throw new ApiError('Session history changed', 409, 'HISTORY_CHANGED')
+      reads++
+      return reads === 1
+        ? history([entry('old', 'user', 'Old')], 'v1', 'older')
+        : history([entry('fresh', 'user', 'Fresh')], 'v2')
+    })
+    await h.ready()
+    expect(await h.transport.loadOlder()).toBe('loaded')
     expect(h.transport.state.items.map((i) => i.text)).toEqual(['Fresh'])
     expect(h.transport.historyPage?.page?.sourceVersion).toBe('v2')
     expect(h.errors.at(-1)).toMatchObject({ code: 'HISTORY_PAGE_STALE' })
