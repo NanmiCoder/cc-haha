@@ -3244,6 +3244,35 @@ describe('chatStore history mapping', () => {
     })
   })
 
+  it('counts the final usage of a reply whose first content-block line carried zero output', async () => {
+    const line = (id: string, usage: MessageEntry['usage']) => ({
+      id,
+      type: 'assistant' as const,
+      timestamp: '2026-08-31T00:00:00.000Z',
+      content: [{ type: 'text', text: id }],
+      usage,
+      usageKey: 'msg_zero_first\0req_zero_first',
+    })
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({
+      messages: [
+        line('a1', { input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 1_000 }),
+        line('a2', { input_tokens: 100, output_tokens: 5, cache_read_input_tokens: 1_000 }),
+        line('a3', { input_tokens: 100, output_tokens: 250, cache_read_input_tokens: 1_000 }),
+      ] as never,
+    })
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ messages: [] }) },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 100,
+      output_tokens: 250,
+      cache_read_tokens: 1_000,
+    })
+  })
+
   it('does not replace newer live token usage with a stale cold snapshot', async () => {
     let resolveHistory!: (value: { messages: MessageEntry[] }) => void
     vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => {

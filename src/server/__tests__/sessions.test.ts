@@ -4322,6 +4322,54 @@ describe('Sessions API', () => {
     expect(body.usage?.totalCacheCreationInputTokens).toBe(20)
   })
 
+  it('counts the final usage of a reply whose first content-block line carried zero output', async () => {
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-usage-zero-first-'))
+    const sessionId = '33333333-4444-5555-6666-777777777777'
+    const projectDir = '-tmp-api-session-usage-zero-first'
+    // The first line of a reply can be written before the final usage is known; only a later
+    // line carries the real output tokens. Keeping the first line recorded such replies as ~0.
+    const blockLine = (usage: Record<string, number>) => ({
+      parentUuid: null,
+      isSidechain: false,
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-4-7',
+        id: 'msg_zero_first_reply',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'block' }],
+        usage,
+      },
+      uuid: crypto.randomUUID(),
+      timestamp: '2026-01-01T00:02:00.000Z',
+      sessionId,
+      cwd: workDir,
+    })
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeUserEntry('go', crypto.randomUUID()),
+      blockLine({ input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 1_000 }),
+      blockLine({ input_tokens: 100, output_tokens: 5, cache_read_input_tokens: 1_000 }),
+      blockLine({ input_tokens: 100, output_tokens: 250, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 20 }),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      usage?: {
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalCacheReadInputTokens: number
+        totalCacheCreationInputTokens: number
+      }
+    }
+
+    expect(body.usage?.totalInputTokens).toBe(100)
+    expect(body.usage?.totalOutputTokens).toBe(250)
+    expect(body.usage?.totalCacheReadInputTokens).toBe(1_000)
+    expect(body.usage?.totalCacheCreationInputTokens).toBe(20)
+  })
+
   it('still totals separate assistant replies separately after dedup', async () => {
     // The negative control for the test above: a dedup key that collapsed too much would make
     // every reply after the first free, which is a far worse error than the inflation it fixes.

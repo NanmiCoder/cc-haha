@@ -4,9 +4,13 @@ import { extractShotCountFromAssistantContent } from '../../../utils/shotStats.j
 import { normalizeDriveRootPathForPlatform } from '../windowsDrivePath.js'
 import {
   activeGapMs,
+  claimUsageIncrement,
   estimateCostUSD,
   isBillableUsageRecord,
   usageRecordKey,
+  type PricedTokens,
+  type UsageIncrement,
+  type UsageLedger,
 } from '../../../utils/usageAccounting.js'
 import type {
   ActivityDailyProjection,
@@ -113,13 +117,14 @@ type ReducerState = {
   activityModels: Map<string, ActivityModelProjection>
   activityTools: Map<string, ActivityNamedUsageProjection>
   activitySkills: Map<string, ActivityNamedUsageProjection>
-  // (message.id, requestId) pairs whose usage has already been counted for this source. Claude
-  // Code writes one JSONL line per content block of an assistant message — a turn with thinking,
-  // text and 12 tool_use blocks is 14 lines — and every one of them repeats the same complete
-  // `usage` object. Without this the tokens of a single reply get counted once per block; on real
-  // transcripts that inflated the total by 2.2x. Lives only in memory alongside the projection
-  // Maps: a full re-read starts empty (correct), and an incremental read clones it forward.
-  activityUsageKeys: Set<string>
+  // Usage already counted per (message.id, requestId) for this source. Claude Code writes one
+  // JSONL line per content block of an assistant message — a turn with thinking, text and 12
+  // tool_use blocks is 14 lines — and each repeats a `usage` object. Counting every line inflated
+  // real transcripts 2.2x; counting only the first under-counted replies whose first line carried
+  // zero/partial usage. The ledger keeps the per-field maximum seen and bills only the excess.
+  // Lives only in memory alongside the projection Maps: a full re-read starts empty (correct),
+  // and an incremental read clones it forward.
+  activityUsageLedger: UsageLedger
 }
 
 export type TranscriptReductionOptions = {
@@ -244,7 +249,9 @@ function cloneState(state: ReducerState): ReducerState {
     activitySkills: new Map(
       [...state.activitySkills].map(([key, value]) => [key, { ...value }]),
     ),
-    activityUsageKeys: new Set(state.activityUsageKeys),
+    activityUsageLedger: new Map(
+      [...state.activityUsageLedger].map(([key, value]) => [key, { ...value }]),
+    ),
   }
 }
 
@@ -312,7 +319,7 @@ function createInitialState(
         { ...skill },
       ]),
     ),
-    activityUsageKeys: new Set(),
+    activityUsageLedger: new Map(),
   }
 }
 
@@ -355,15 +362,27 @@ function usageIdentity(entry: ReducerEntry) {
 }
 
 /**
- * Claim this usage record, returning false when its key was already counted — i.e. this line is
- * another content block of a reply already accounted for.
+ * Fold this line's usage into the reply's running total and return what it adds. Another
+ * content-block line of an already-counted reply adds only the fields that grew.
  */
-function claimUsageRecord(state: ReducerState, entry: ReducerEntry, suffix = ''): boolean {
+function claimUsageRecord(
+  state: ReducerState,
+  entry: ReducerEntry,
+  tokens: PricedTokens,
+  suffix = '',
+): UsageIncrement {
   const key = usageRecordKey(usageIdentity(entry), suffix)
-  if (key === null) return true
-  if (state.activityUsageKeys.has(key)) return false
-  state.activityUsageKeys.add(key)
-  return true
+  return claimUsageIncrement(state.activityUsageLedger, key, tokens)
+}
+
+function pricedTokens(usage: ReducerUsage): PricedTokens {
+  return {
+    inputTokens: usage.input_tokens ?? 0,
+    outputTokens: usage.output_tokens ?? 0,
+    cacheReadInputTokens: usage.cache_read_input_tokens ?? 0,
+    cacheCreationInputTokens: cacheCreationTokens(usage),
+    webSearchRequests: usage.server_tool_use?.web_search_requests ?? 0,
+  }
 }
 
 function cacheCreationTokens(usage: ReducerUsage): number {
@@ -378,7 +397,8 @@ function accumulateUsage(
   state: ReducerState,
   date: string,
   model: string,
-  usage: ReducerUsage,
+  speed: string | undefined,
+  increment: UsageIncrement,
 ): void {
   const key = `${date}\0${model}`
   let aggregate = state.activityModels.get(key)
@@ -397,32 +417,22 @@ function accumulateUsage(
     }
     state.activityModels.set(key, aggregate)
   }
-  const inputTokens = usage.input_tokens ?? 0
-  const outputTokens = usage.output_tokens ?? 0
-  const cacheReadInputTokens = usage.cache_read_input_tokens ?? 0
-  const cacheCreationInputTokens = cacheCreationTokens(usage)
-  const webSearchRequests = usage.server_tool_use?.web_search_requests ?? 0
+  const { delta, total, previous } = increment
 
-  aggregate.inputTokens += inputTokens
-  aggregate.outputTokens += outputTokens
-  aggregate.cacheReadInputTokens += cacheReadInputTokens
-  aggregate.cacheCreationInputTokens += cacheCreationInputTokens
-  aggregate.webSearchRequests += webSearchRequests
+  aggregate.inputTokens += delta.inputTokens
+  aggregate.outputTokens += delta.outputTokens
+  aggregate.cacheReadInputTokens += delta.cacheReadInputTokens
+  aggregate.cacheCreationInputTokens += delta.cacheCreationInputTokens
+  aggregate.webSearchRequests += delta.webSearchRequests
 
   // A model we have no published rates for (every third-party provider) contributes tokens but no
-  // dollars — see modelPricing.ts for why a null must never be folded in as a zero.
-  const cost = estimateCostUSD(
-    model,
-    {
-      inputTokens,
-      outputTokens,
-      cacheReadInputTokens,
-      cacheCreationInputTokens,
-      webSearchRequests,
-    },
-    usage.speed,
-  )
-  if (cost !== null) aggregate.costUSD += cost
+  // dollars — see modelPricing.ts for why a null must never be folded in as a zero. Priced on the
+  // reply's running total and billed as the difference, so a prompt-length tier is decided by the
+  // whole prompt rather than by whichever fragment arrived last.
+  const totalCost = estimateCostUSD(model, total, speed)
+  if (totalCost === null) return
+  const previousCost = previous ? estimateCostUSD(model, previous, speed) : 0
+  aggregate.costUSD += totalCost - (previousCost ?? 0)
 }
 
 /**
@@ -447,8 +457,9 @@ function accumulateAdvisorUsage(
     // key as the first line's Nth advisor rather than shifting by the number already claimed.
     const index = advisorIndex
     advisorIndex += 1
-    if (!claimUsageRecord(state, entry, `\0advisor:${index}`)) continue
-    accumulateUsage(state, date, record.model, record)
+    const increment = claimUsageRecord(state, entry, pricedTokens(record), `\0advisor:${index}`)
+    if (increment.isEmpty && increment.previous) continue
+    accumulateUsage(state, date, record.model, record.speed, increment)
   }
 }
 
@@ -526,9 +537,12 @@ function applyActivityEntry(state: ReducerState, entry: ReducerEntry): void {
   const model = entry.message?.model || 'unknown'
   if (!usage || model === SYNTHETIC_MODEL) return
   if (!isBillableUsageRecord(usageIdentity(entry))) return
-  // Every content-block line of this reply carries the same usage; bill only the first one.
-  if (!claimUsageRecord(state, entry)) return
-  accumulateUsage(state, timestamp.date, model, usage)
+  // Every content-block line of this reply carries a usage object; bill each field's excess over
+  // what earlier lines of the same reply already reported.
+  const increment = claimUsageRecord(state, entry, pricedTokens(usage))
+  if (!(increment.isEmpty && increment.previous)) {
+    accumulateUsage(state, timestamp.date, model, usage.speed, increment)
+  }
   accumulateAdvisorUsage(state, entry, timestamp.date, usage)
 }
 
