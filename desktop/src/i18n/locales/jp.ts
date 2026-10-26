@@ -3652,6 +3652,7 @@ export const jp: Record<TranslationKey, string> = {
   'agentTeams.task.layer': '第 {layer} 層',
   'agentTeams.task.dependencies': '依存 {dependencies}',
   'agentTeams.task.unclaimed': 'メンバーの取得待ち',
+  'agentTeams.task.runningNoOwner': '担当者の記録なし',
   'agentTeams.task.completedNoOwner': '完了 · 担当者の記録なし',
   'agentTeams.member.working': '作業中',
   'agentTeams.member.idle': '待機中',

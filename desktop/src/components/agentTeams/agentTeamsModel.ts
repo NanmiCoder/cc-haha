@@ -354,6 +354,10 @@ export function inferTaskOwner(
 ): TaskOwnerAttribution | undefined {
   const owner = task.owner?.trim()
   if (owner) return { identity: owner, inferred: false }
+  // TaskUpdate persists an explicit empty owner when an assignment is cleared.
+  // Old mailbox envelopes must not undo that decision; only a missing field
+  // permits reconstructing ownership from legacy task records.
+  if (task.owner !== undefined) return undefined
 
   // Messages are stored in send order. A task can be reassigned before it is
   // completed, so the last matching envelope is the only one that describes
@@ -489,20 +493,18 @@ export function layoutWorkbenchTasks(
   }
 }
 
-function memberNames(member: TeamMember): string[] {
-  return [
-    member.agentId,
-    member.agentId.split('@')[0] ?? '',
-    member.name ?? '',
-  ].filter(Boolean)
-}
-
 export function taskOwnedByMember(
   task: TeamWorkbenchTask,
   member: TeamMember,
+  snapshot?: TeamWorkbenchSnapshot,
 ): boolean {
-  if (!task.owner) return false
-  return memberNames(member).includes(task.owner)
+  const owner = snapshot ? inferTaskOwner(task, snapshot)?.identity : task.owner
+  if (!owner?.trim()) return false
+  const memberAliases = [
+    ...identityAliases(member.agentId),
+    ...(member.name ? identityAliases(member.name) : []),
+  ]
+  return identityAliases(owner).some(alias => memberAliases.includes(alias))
 }
 
 export function runningTaskForMember(
@@ -532,7 +534,7 @@ export function currentTaskForMember(
   const selected = snapshots[selectedIndex]
   if (!selected) return undefined
   const running = selected.tasks.filter((task) => (
-    task.status === 'in_progress' && taskOwnedByMember(task, member)
+    task.status === 'in_progress' && taskOwnedByMember(task, member, selected)
   ))
   if (running.length <= 1) return running[0]
 
