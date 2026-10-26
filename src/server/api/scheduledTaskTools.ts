@@ -66,7 +66,15 @@ export async function handleScheduledTaskToolsApi(req: Request, callerSessionId:
       }
       case 'update': {
         await validateTarget(input.changes.execution)
-        return Response.json(taskResult('updated', await deps.tasks.updateTask(input.id, input.changes, { expectedRevision: input.expectedRevision })))
+        const { notificationPolicy } = input.changes
+        let changes = input.changes
+        if (notificationPolicy !== undefined && changes.notification === undefined) {
+          // Delivery is gated on notification.enabled, so a policy change must carry it
+          // along the way create derives it; otherwise none -> important never notifies.
+          const existing = await getTask(input.id)
+          changes = { ...changes, notification: { enabled: notificationPolicy !== 'none', channels: existing.notification?.channels ?? ['desktop'] } }
+        }
+        return Response.json(taskResult('updated', await deps.tasks.updateTask(input.id, changes, { expectedRevision: input.expectedRevision })))
       }
       case 'delete': {
         const task = await getTask(input.id)

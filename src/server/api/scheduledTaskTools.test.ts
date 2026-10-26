@@ -59,6 +59,17 @@ test('update is a bounded patch and deletion returns a historical snapshot', asy
   expect(await tasks.listTasks()).toEqual([])
 })
 
+test('changing the notification policy keeps delivery enabled in step, as creation derives it', async () => {
+  const { task } = await (await invoke({ ...create, notificationPolicy: 'none' })).json() as any
+  expect(task.notification.enabled).toBe(false)
+  const resumed = await (await invoke({ action: 'update', id: task.id, changes: { notificationPolicy: 'important' } })).json() as any
+  expect(resumed.task).toMatchObject({ notificationPolicy: 'important', notification: { enabled: true, channels: ['desktop'] } })
+  const muted = await (await invoke({ action: 'update', id: task.id, changes: { notificationPolicy: 'none' } })).json() as any
+  expect(muted.task).toMatchObject({ notificationPolicy: 'none', notification: { enabled: false } })
+  const explicit = await (await invoke({ action: 'update', id: task.id, changes: { notificationPolicy: 'all', notification: { enabled: true, channels: ['desktop', 'telegram'] } } })).json() as any
+  expect(explicit.task.notification).toEqual({ enabled: true, channels: ['desktop', 'telegram'] })
+})
+
 test('result queries preserve status and session links and page bounded output without starting a task', async () => {
   const pageCalls: unknown[] = []
   const run = { id: 'r', taskId: 't', taskName: 'Review', prompt: 'Inspect', status: 'failed' as const, startedAt: '2026-01-01T00:00:00Z', sessionId: 's', output: 'a'.repeat(250), error: 'missing fixture' }

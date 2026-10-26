@@ -54,16 +54,27 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
     }
   }
 
-  const handleToggle = () => {
+  // A finished one-time task has no future run to resume; it is not "disabled".
+  const finished = task.scheduleState === 'completed'
+
+  const handleToggle = async () => {
     setConfirmAction(null)
     setShowMenu(false)
-    updateTask(task.id, { enabled: !task.enabled })
+    try {
+      await updateTask(task.id, { enabled: !task.enabled })
+    } catch (err) {
+      console.error('Failed to update task:', err)
+    }
   }
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     setConfirmAction(null)
     setShowMenu(false)
-    deleteTask(task.id)
+    try {
+      await deleteTask(task.id)
+    } catch (err) {
+      console.error('Failed to delete task:', err)
+    }
   }
 
   const menuItem = 'flex h-8 w-full items-center gap-2 rounded-[var(--radius-sm)] px-2.5 text-left text-[13px] transition-colors'
@@ -87,7 +98,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
         <StatusDot
           tone={task.enabled ? 'success' : 'neutral'}
           size="md"
-          label={task.enabled ? t('tasks.active') : t('tasks.disabled')}
+          label={finished ? t('scheduledChat.completed') : task.enabled ? t('tasks.active') : t('tasks.disabled')}
         />
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium text-[var(--color-text-primary)]">{task.name}</div>
@@ -173,15 +184,17 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
                 </button>
 
                 {/* Toggle */}
-                <button
-                  onClick={() => setConfirmAction('toggle')}
-                  className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
-                >
-                  {task.enabled
-                    ? <CirclePause size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
-                    : <CirclePlay size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />}
-                  {task.enabled ? t('common.disable') : t('common.enable')}
-                </button>
+                {!finished && (
+                  <button
+                    onClick={() => setConfirmAction('toggle')}
+                    className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
+                  >
+                    {task.enabled
+                      ? <CirclePause size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
+                      : <CirclePlay size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />}
+                    {task.enabled ? t('common.disable') : t('common.enable')}
+                  </button>
+                )}
 
                 <div className="mx-1 my-1 h-px bg-[var(--color-border)]" />
 

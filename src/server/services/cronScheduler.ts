@@ -34,6 +34,7 @@ import { diagnosticsService } from './diagnosticsService.js'
 import {
   buildNetworkEnvironment,
   loadNetworkSettings,
+  resolveProviderNetworkSettings,
 } from './networkSettings.js'
 import { resolveLocalIndexMode } from './localIndex/config.js'
 import {
@@ -1090,6 +1091,12 @@ export class CronScheduler {
       typeof task.providerId === 'string'
         ? await this.providerService.getProviderRuntimeEnv(task.providerId)
         : null
+    // The provider's own proxy override (direct / manual) wins over the global setting, the same
+    // way an interactive session resolves it.
+    const explicitProvider =
+      typeof task.providerId === 'string'
+        ? await this.providerService.getProvider(task.providerId).catch(() => null)
+        : null
     if (explicitProviderEnv && task.model?.trim()) {
       explicitProviderEnv.ANTHROPIC_MODEL = task.model.trim()
     }
@@ -1099,7 +1106,10 @@ export class CronScheduler {
         cleanEnv.ANTHROPIC_MODEL,
     )
     const networkEnv = buildNetworkEnvironment(
-      await loadNetworkSettings(),
+      resolveProviderNetworkSettings(
+        await loadNetworkSettings(),
+        explicitProvider?.proxy,
+      ),
       cleanEnv,
     )
     const agentTeamsEnabled = await new SettingsService().getAgentTeamsEnabled()
