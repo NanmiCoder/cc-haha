@@ -57,6 +57,34 @@ function makeRequest(
 }
 
 describe('provider presets API', () => {
+  test('exposes Flash with 1M in every DeepSeek slot and carries it into the runtime', async () => {
+    const { req, url, segments } = makeRequest('GET', '/api/providers/presets')
+    const response = await handleProvidersApi(req, url, segments)
+    const { presets } = await response.json()
+    const preset = presets.find((entry: { id: string }) => entry.id === 'deepseek')
+    expect(preset.defaultModels).toEqual({
+      main: 'deepseek-flash[1m]',
+      fable: 'deepseek-flash[1m]',
+      haiku: 'deepseek-flash[1m]',
+      sonnet: 'deepseek-flash[1m]',
+      opus: 'deepseek-flash[1m]',
+    })
+    const env = buildProviderManagedEnv({
+      id: 'deepseek-test', presetId: preset.id, name: preset.name,
+      baseUrl: preset.baseUrl, apiFormat: preset.apiFormat,
+      authStrategy: preset.authStrategy, apiKey: 'fake-deepseek-key',
+      models: preset.defaultModels,
+    })
+    for (const key of [
+      'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ]) {
+      expect(env[key]).toBe('deepseek-flash[1m]')
+    }
+    expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)['deepseek-flash']).toBe(1_000_000)
+  })
+
   test('exposes AruHub first among sponsors with signup copy and the new badge', async () => {
     const { req, url, segments } = makeRequest('GET', '/api/providers/presets')
     const response = await handleProvidersApi(req, url, segments)
@@ -214,10 +242,10 @@ describe('provider presets API', () => {
     expect(ollama?.authStrategy).toBe('auth_token_empty_api_key')
     expect(ollama?.defaultModels.main).toBe('qwen3.6:27b')
     expect(deepseek?.authStrategy).toBe('auth_token')
-    expect(deepseek?.defaultModels.main).toBe('deepseek-v4-pro[1m]')
-    expect(deepseek?.defaultModels.haiku).toBe('deepseek-v4-flash')
-    expect(deepseek?.defaultModels.sonnet).toBe('deepseek-v4-pro[1m]')
-    expect(deepseek?.defaultModels.opus).toBe('deepseek-v4-pro[1m]')
+    expect(deepseek?.defaultModels.main).toBe('deepseek-flash[1m]')
+    expect(deepseek?.defaultModels.haiku).toBe('deepseek-flash[1m]')
+    expect(deepseek?.defaultModels.sonnet).toBe('deepseek-flash[1m]')
+    expect(deepseek?.defaultModels.opus).toBe('deepseek-flash[1m]')
     expect(deepseek?.defaultEnv?.CC_HAHA_SEND_DISABLED_THINKING).toBeUndefined()
     expect(deepseek?.defaultEnv).toEqual({})
     expect(zhipu?.baseUrl).toBe('https://open.bigmodel.cn/api/anthropic')

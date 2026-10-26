@@ -941,10 +941,13 @@ describe('ProviderService', () => {
           baseUrl: 'https://api.deepseek.com/anthropic',
           runtimeKind: 'deepseek_oauth',
         })
-        expect(provider.models.main).toBe('deepseek-v4-pro[1m]')
-        // The account listing names V4.1 Flash `deepseek-flash`; it does not
-        // list the API-key route's `deepseek-v4-flash`.
-        expect(provider.models.haiku).toBe('deepseek-flash')
+        expect(provider.models).toEqual({
+          main: 'deepseek-flash[1m]',
+          fable: 'deepseek-flash[1m]',
+          haiku: 'deepseek-flash[1m]',
+          sonnet: 'deepseek-flash[1m]',
+          opus: 'deepseek-flash[1m]',
+        })
         expect(provider.modelContextWindows?.['deepseek-flash']).toBe(1_000_000)
       })
 
@@ -989,7 +992,13 @@ describe('ProviderService', () => {
           path.join(tmpDir, 'cc-haha', 'deepseek-oauth.json'),
         )
         expect(env.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic')
-        expect(env.ANTHROPIC_MODEL).toBe('deepseek-v4-pro[1m]')
+        for (const key of [
+          'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL',
+          'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+          'ANTHROPIC_DEFAULT_OPUS_MODEL',
+        ]) {
+          expect(env[key]).toBe('deepseek-flash[1m]')
+        }
         expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
         expect(env.ANTHROPIC_API_KEY).toBe('deepseek-oauth-dummy-key')
         // The previously active OAuth provider's markers are cleared.
@@ -3871,8 +3880,11 @@ describe('Providers API', () => {
       }
     }
     expect((await list()).deepSeekAccountModels).toMatchObject({
-      main: 'deepseek-v4-pro[1m]',
-      haiku: 'deepseek-flash',
+      main: 'deepseek-flash[1m]',
+      fable: 'deepseek-flash[1m]',
+      haiku: 'deepseek-flash[1m]',
+      sonnet: 'deepseek-flash[1m]',
+      opus: 'deepseek-flash[1m]',
     })
 
     const saved = {

@@ -1038,7 +1038,7 @@ describe('EmptySession', () => {
     try {
       expect(useSessionRuntimeStore.getState().selections['draft-session']).toEqual({
         providerId: 'deepseek-account',
-        modelId: 'deepseek-v4-pro[1m]',
+        modelId: 'deepseek-flash[1m]',
         effortLevel: 'high',
       })
     } finally {

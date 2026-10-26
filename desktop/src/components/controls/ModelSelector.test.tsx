@@ -1438,10 +1438,10 @@ describe('ModelSelector', () => {
 
       const dropdown = screen.getByTestId('model-selector-dropdown')
       expect(dropdown.textContent).toContain('DeepSeek Account')
-      // The account listing names V4.1 Flash `deepseek-flash`, not the
-      // API-key route's `deepseek-v4-flash`, and the `[1m]` alias row stands
-      // for the listed `deepseek-v4-pro` instead of repeating it.
+      // The `[1m]` alias row stands for the listed Flash model instead of
+      // repeating it; Pro remains available as an explicit alternative.
       expect(dropdown.textContent).not.toContain('deepseek-v4-flash')
+      expect(within(dropdown).getAllByRole('button', { name: /DeepSeek-V4\.1-Flash/ })).toHaveLength(1)
       expect(within(dropdown).getAllByRole('button', { name: /DeepSeek-V4-Pro/ })).toHaveLength(1)
       await act(async () => {
         fireEvent.click(within(dropdown).getByRole('button', { name: /DeepSeek-V4\.1-Flash/ }))
@@ -1450,7 +1450,7 @@ describe('ModelSelector', () => {
 
       expect(useSessionRuntimeStore.getState().selections['session-ds-in']).toMatchObject({
         providerId: 'deepseek-account',
-        modelId: 'deepseek-flash',
+        modelId: 'deepseek-flash[1m]',
       })
     })
 
@@ -1526,17 +1526,24 @@ describe('ModelSelector', () => {
       })
     })
 
-    it('keeps a restored DeepSeek Account selection instead of falling back to the saved provider', () => {
+    it.each([
+      ['deepseek-v4-pro[1m]', 'DeepSeek-V4-Pro'],
+      ['deepseek-flash', 'DeepSeek-V4.1-Flash'],
+    ])('keeps restored DeepSeek selection %s and its catalog display name', (modelId, modelName) => {
       useSavedProviderActive()
       useHahaDeepSeekOAuthStore.setState({ status: null, fetchStatus: async () => {} })
       useSessionRuntimeStore.getState().setSelection('session-ds-restored', {
         providerId: 'deepseek-account',
-        modelId: 'deepseek-v4-pro[1m]',
+        modelId,
       })
 
       render(<ModelSelector runtimeKey="session-ds-restored" />)
 
-      expect(screen.getByRole('button', { name: /DeepSeek-V4-Pro, DeepSeek Account/ })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: `${modelName}, DeepSeek Account` })).toBeInTheDocument()
+      expect(useSessionRuntimeStore.getState().selections['session-ds-restored']).toMatchObject({
+        providerId: 'deepseek-account',
+        modelId,
+      })
     })
 
     it('fetches the DeepSeek sign-in status when the selector opens', async () => {
