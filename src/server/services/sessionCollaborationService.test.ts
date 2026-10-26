@@ -80,6 +80,12 @@ describe('session collaboration', () => {
     await expect(service.send('root', 'existing', 'different', 'stable-id')).rejects.toThrow('different content')
   })
 
+  test('rejects a session messaging itself instead of feeding its own turn', async () => {
+    await expect(service.send('root', 'root', 'ping')).rejects.toThrow('cannot send a message to itself')
+    expect(injected).toHaveLength(0)
+    expect(started).toHaveLength(0)
+  })
+
   test('Stop fences automatic wakeups and survives restart; explicit input clears it', async () => {
     const child = await service.create('root', { prompt: 'a' })
     await service.stop('root')

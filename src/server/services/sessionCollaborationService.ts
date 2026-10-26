@@ -699,6 +699,7 @@ export class SessionCollaborationService {
 
   async send(callerSessionId: string, targetSessionId: string, content: string, messageId?: string): Promise<CollaborationMessage> {
     if (!content?.trim()) throw ApiError.badRequest('content is required')
+    if (callerSessionId === targetSessionId) throw ApiError.badRequest('A session cannot send a message to itself')
     if (!await this.deps.sessions.exists(targetSessionId)) throw ApiError.notFound('Target session not found')
     const message = await this.mutate(() => {
       if (this.ensureMember(callerSessionId).stopped) throw ApiError.conflict('Caller session was stopped; new user input is required')
