@@ -16,6 +16,7 @@ export const PROVIDER_REQUEST_COMPATIBILITY_SCHEMA_VERSION = 5
 export const PROVIDER_OFFICIAL_MODEL_SETTINGS_SCHEMA_VERSION = 6
 export const PROVIDER_IMAGE_PROTOCOL_SCHEMA_VERSION = 7
 export const PROVIDER_DEEPSEEK_ACCOUNT_MODEL_IDS_SCHEMA_VERSION = 8
+export const PROVIDER_PROXY_CONFIG_SCHEMA_VERSION = 9
 export const BUILT_IN_PROVIDER_IDS = [
   CLAUDE_OFFICIAL_PROVIDER_ID,
   OPENAI_OFFICIAL_PROVIDER_ID,
@@ -117,6 +118,29 @@ export const ImageGenerationConfigSchema = z.object({
   apiKey: z.string().trim().optional(),
 }).passthrough()
 
+export const ProviderProxyModeSchema = z.enum(['follow_global', 'direct', 'manual'])
+export type ProviderProxyMode = z.infer<typeof ProviderProxyModeSchema>
+
+/**
+ * Per-provider network proxy override. Absent (or mode 'follow_global') means
+ * the provider keeps using the global NetworkSettings proxy — built-in
+ * official providers never grow this field, so they always follow the global
+ * setting by construction.
+ */
+export const ProviderProxyConfigSchema = z.object({
+  mode: ProviderProxyModeSchema,
+  url: z.string().trim().optional(),
+}).superRefine((config, ctx) => {
+  if (config.mode === 'manual' && !config.url) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['url'],
+      message: 'proxy.url is required when proxy.mode is manual',
+    })
+  }
+})
+export type ProviderProxyConfig = z.infer<typeof ProviderProxyConfigSchema>
+
 export const SavedProviderSchema = z.object({
   id: z.string(),
   presetId: z.string(),
@@ -135,6 +159,7 @@ export const SavedProviderSchema = z.object({
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
+  proxy: ProviderProxyConfigSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -163,6 +188,7 @@ export const CreateProviderSchema = z.object({
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.optional(),
   imageGeneration: ImageGenerationConfigSchema.optional(),
+  proxy: ProviderProxyConfigSchema.optional(),
   notes: z.string().optional(),
 })
 
@@ -182,6 +208,7 @@ export const UpdateProviderSchema = z.object({
   supportsNestedToolResultMedia: SupportsNestedToolResultMediaSchema.optional(),
   requestCompatibility: RequestCompatibilitySchema.nullable().optional(),
   imageGeneration: ImageGenerationConfigSchema.nullable().optional(),
+  proxy: ProviderProxyConfigSchema.nullable().optional(),
   notes: z.string().optional(),
 })
 
@@ -199,6 +226,7 @@ export const TestProviderSchema = z.object({
    * wire — the rules themselves stay server-side.
    */
   presetId: z.string().optional(),
+  proxy: ProviderProxyConfigSchema.optional(),
 })
 
 export const ReorderProvidersSchema = z.object({

@@ -1,9 +1,9 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { createSandboxedTestEnvironment } from '../../scripts/pr/test-environment.js'
-import { projectRemoteProvider, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteProvider, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, validateRemoteSettingsPatch } from './remoteBrowserPolicy.js'
 import { SavedProviderSchema, ImageGenerationConfigSchema } from './types/provider.js'
 
 test('remote image settings preserve the protocol while redacting image credentials', () => {
@@ -21,6 +21,22 @@ test('remote image settings preserve the protocol while redacting image credenti
     baseUrl: 'https://images.example.test', apiKey: '', hasApiKey: true,
   })
   expect(ImageGenerationConfigSchema.safeParse({ model: 'image-model', protocol: 'unknown' }).success).toBe(false)
+})
+
+test('remote provider proxy settings expose the mode without any saved URL or authentication', () => {
+  const provider = SavedProviderSchema.parse({
+    id: 'proxy-fixture', presetId: 'custom', name: 'Proxy fixture', apiKey: 'fake-model-key',
+    baseUrl: 'https://model.example.test', models: { main: 'model', haiku: '', sonnet: '', opus: '' },
+  })
+  expect(projectRemoteProvider(provider)).not.toHaveProperty('proxy')
+  for (const mode of ['manual', 'direct', 'follow_global'] as const) {
+    const proxy = { mode, url: 'http://fake-user:fake-password@proxy.example.test:7890?credential=fake-query' }
+    const projected = projectRemoteProvider({ ...provider, proxy })
+    expect(projected.proxy).toEqual({ mode })
+    expect(JSON.stringify(projected)).not.toContain(proxy.url)
+    expect(JSON.stringify(projected)).not.toContain('fake-password')
+    expect(JSON.stringify(projected)).not.toContain('fake-query')
+  }
 })
 
 test('remote settings boundary permits only intended provider routes and General fields', () => {
@@ -48,7 +64,30 @@ test('LAN and public provider CRUD redact and preserve keys; General edits isola
     try {
       const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
       expect({ exitCode, output: exitCode === 0 ? '' : `${stdout}\n${stderr}` }).toEqual({ exitCode: 0, output: '' })
-      expect(stdout).toContain('REMOTE_SETTINGS_INTEGRATION_PASSED')
+      expect(readFileSync(path.join(home, '.claude', 'REMOTE_SETTINGS_INTEGRATION_PASSED'), 'utf8')).toBe('passed')
     } finally { clearTimeout(timeout); child.kill() }
   } finally { rmSync(home, { recursive: true, force: true }) }
 }, 20_000)
+
+
+test('remote auto-question settings reject malformed input and project only normalized fields', () => {
+  for (const autoQuestion of [null, [], true, 'true', {}, { enabled: 'true', timeoutMinutes: 5 }, { enabled: true }, { enabled: false, timeoutMinutes: -1 }]) expect(validateRemoteSettingsPatch({ autoQuestion })).toBe(false)
+  expect(projectRemoteSettings({ autoQuestion: { enabled: true, timeoutMinutes: 5, secret: 'hidden' }, env: { TOKEN: 'hidden' } })).toEqual({ autoQuestion: { enabled: true, timeoutMinutes: 5 } })
+})
+
+
+test('remote composers can read the desktop team capability without changing it', () => {
+  expect(projectRemoteSettings({ agentTeamsEnabled: false, env: { TOKEN: 'hidden' } })).toEqual({ agentTeamsEnabled: false })
+  expect(projectRemoteSettings({ agentTeamsEnabled: true })).toEqual({ agentTeamsEnabled: true })
+  expect(validateRemoteSettingsPatch({ agentTeamsEnabled: true })).toBe(false)
+})
+
+test('remote projections drop nested and unknown fields and tolerate malformed bodies', () => {
+  expect(projectRemoteConnectors({ items: [{ id: 'x', status: 'ready', operation: { kind: 'check', authUrl: 'https://secret.test' }, error: 'boom', setupFields: [{}] }, 'junk', null] }))
+    .toEqual({ items: [{ id: 'x', status: 'ready', operation: { kind: 'check' } }] })
+  expect(projectRemoteConnectors({ items: [{ id: 'y', operation: 'oops' }] })).toEqual({ items: [{ id: 'y' }] })
+  expect(projectRemoteConnectors({})).toEqual({ items: [] })
+  expect(projectRemoteWorkflows({ workflows: [{ name: 'w', filePath: '/p', script: 'code' }] })).toEqual({ workflows: [{ name: 'w' }] })
+  expect(projectRemoteWorkflows({ workflows: 'nope' })).toEqual({ workflows: [] })
+  expect(projectRemoteAgents({ activeAgents: [{ agentType: 'a', systemPrompt: 's', baseDir: '/b' }] })).toEqual({ activeAgents: [{ agentType: 'a' }], allAgents: [] })
+})

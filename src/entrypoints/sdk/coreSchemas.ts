@@ -7,6 +7,7 @@
  * @see scripts/generate-sdk-types.ts for type generation
  */
 
+import { scheduledTaskMetadataSchema } from '../../utils/scheduledTaskMessage.js'
 import { z } from 'zod/v4'
 import { HooksSchema } from '../../schemas/hooks.js'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -1334,6 +1335,7 @@ export const SDKUserMessageReplaySchema = lazySchema(() =>
     uuid: UUIDPlaceholder(),
     session_id: z.string(),
     isReplay: z.literal(true),
+    scheduledTask: scheduledTaskMetadataSchema.optional(),
   }),
 )
 

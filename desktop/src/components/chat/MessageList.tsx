@@ -1,3 +1,6 @@
+import { ScheduledTaskCard } from '@/components/tasks/ScheduledTaskCard'
+import { ScheduledTaskTrigger } from '@/components/tasks/ScheduledTaskTrigger'
+import { parseScheduledTaskResult } from '@/lib/scheduledTask'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { ConversationImageGalleryContext } from '@/components/chat/conversationImageGallery'
 import { resolveConversationImages } from '@/components/chat/conversationImages'
@@ -1023,6 +1026,11 @@ export function buildRenderModel(
         continue
       }
       const toolResult = toolResultMap.get(msg.toolUseId)
+      if (toolResult && parseScheduledTaskResult(msg.toolName, toolResult.content, toolResult.isError)) {
+        flushGroup()
+        items.push({ kind: 'message', message: msg })
+        continue
+      }
       let summarizedTeamDelete = false
       if (options.hideTeamCoordinationTools) {
         if (msg.toolName === 'TeamCreate' && lifecycleToolSucceeded(toolResult)) {
@@ -4119,6 +4127,7 @@ export const MessageBlock = memo(function MessageBlock({
 
   switch (message.type) {
     case 'user_text':
+      if (message.scheduledTask) return <ScheduledTaskTrigger trigger={message.scheduledTask} />
       return (
         <SelectableChatMessage
           sessionId={sessionId}
@@ -4166,7 +4175,9 @@ export const MessageBlock = memo(function MessageBlock({
       // No wrapper padding: the row's own `-mx-2 … px-2` already lands its text
       // on the column's left edge, the same as one inside a run.
       return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} disclosureKey={message.id} />
-    case 'tool_use':
+    case 'tool_use': {
+      const scheduledResult = toolResult && parseScheduledTaskResult(message.toolName, toolResult.content, toolResult.isError)
+      if (scheduledResult) return <ScheduledTaskCard result={scheduledResult} />
       if (message.toolName === 'AskUserQuestion' && !message.isPending) {
         return (
           <AskUserQuestion
@@ -4202,6 +4213,7 @@ export const MessageBlock = memo(function MessageBlock({
           }
         />
       )
+    }
     case 'tool_result':
       return (
         <ToolResultBlock

@@ -5,17 +5,18 @@ import path from 'node:path'
 import type { Server, ServerWebSocket, WebSocketHandler } from 'bun'
 import { isLocalAccessAuthorized } from './localAccessAuth.js'
 import { setResponseHeaders } from './middleware/responseHeaders.js'
-import { remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
+import { projectRemoteAgents, projectRemoteConnectors, projectRemoteSettings, projectRemoteWorkflows, remoteProviderRouteAllowed, remoteSettingsRouteAllowed, type ApiRequestContext } from './remoteBrowserPolicy.js'
 import type { WebSocketData } from './ws/handler.js'
 
 const PREFIX = '/api/public-access'
 const COOKIE = '__Host-haha-remote'
+const NATIVE_TOKEN_PREFIX = 'native_'
 const PAIR_TTL = 5 * 60_000
 const SESSION_TTL = 30 * 24 * 60 * 60_000
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const secret = () => randomBytes(32).toString('base64url')
 type Device = { id: string, name: string, createdAt: number, expiresAt: number, tokenHash: string }
-type Pending = { id: string, name: string, expiresAt: number, claimHash: string, status: 'pending' | 'approved' | 'rejected' }
+type Pending = { id: string, name: string, expiresAt: number, claimHash: string, status: 'pending' | 'approved' | 'rejected', clientType: 'browser' | 'native' }
 type Stored = Record<string, unknown> & { version: number, devices: Device[] }
 type RemoteData = WebSocketData & { remoteDeviceId: string }
 
@@ -37,12 +38,39 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   const parts = url.pathname.split('/').filter(Boolean)
   if (parts[0] === 'ws') return parts.length === 2 && /^[\w-]{1,64}$/.test(parts[1]!)
   if (parts[0] !== 'api') return false
+  // Native project selection needs directory names, not the broader filesystem
+  // file/search surface. Keep the exact route and its query contract read-only.
+  if (parts[1] === 'filesystem') {
+    return method === 'GET' && url.pathname === '/api/filesystem/browse' &&
+      [...url.searchParams.keys()].every(key => key === 'path')
+  }
+  // Read-only catalogs for the phone's "+" sheet. Connector detail and every
+  // connector action (authenticate, prepare, remove…) and every workflow
+  // mutation or run detail remain desktop-only.
+  if (parts[1] === 'connectors' || parts[1] === 'workflows') return parts.length === 2 && method === 'GET'
+  if (parts[1] === 'skills') return parts.length === 3 &&
+    (parts[2] === 'mentions' || parts[2] === 'commands') && method === 'GET'
+  if (parts[1] === 'computer-use') {
+    if (parts.length !== 3) return false
+    return (parts[2] === 'status' && method === 'GET') ||
+      (parts[2] === 'authorized-apps' && (method === 'GET' || method === 'PUT')) ||
+      (parts[2] === 'open-permission-card' && method === 'POST')
+  }
+  if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && method === 'DELETE'
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
+  if (parts[1] === 'scheduled-tasks') {
+    if (parts.length === 2) return method === 'GET' || method === 'POST'
+    if (parts[2] === 'runs') return method === 'GET' && (parts.length === 3 || parts.length === 4)
+    if (parts.length === 3) return method === 'PUT' || method === 'DELETE'
+    return parts.length === 4 && ((parts[3] === 'run' && method === 'POST') || (parts[3] === 'runs' && method === 'GET'))
+  }
   if (method === 'PUT' && ['/api/models/current', '/api/effort'].includes('/' + parts.join('/'))) return true
   if (method === 'GET' && ['/api/settings/user', '/api/permissions/mode', '/api/providers/auth-status'].includes('/' + parts.join('/'))) return true
   if (['sessions', 'conversations'].includes(parts[1] ?? '')) return true
-  return method === 'GET' && ['models', 'effort', 'search', 'agents', 'tasks', 'teams', 'activity-stats'].includes(parts[1] ?? '')
+  // Agent 只有列表和单项两种 GET；路由器会忽略单项名字后面多出来的段，所以多出来的段不能放行。
+  if (parts[1] === 'agents') return method === 'GET' && parts.length <= 3
+  return method === 'GET' && ['models', 'effort', 'search', 'tasks', 'teams', 'activity-stats'].includes(parts[1] ?? '')
 }
 
 function secure(response: Response): Response {
@@ -53,6 +81,19 @@ function secure(response: Response): Response {
     'X-Frame-Options': 'DENY',
     'Content-Security-Policy': "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
   })
+}
+
+function remoteComputerUseConsentPatch(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const patch = value as Record<string, unknown>
+  if (Object.keys(patch).some(key => key !== 'enabled' && key !== 'grantFlags')) return false
+  if (patch.enabled !== undefined && typeof patch.enabled !== 'boolean') return false
+  if (patch.grantFlags !== undefined) {
+    if (!patch.grantFlags || typeof patch.grantFlags !== 'object' || Array.isArray(patch.grantFlags)) return false
+    return Object.entries(patch.grantFlags).every(([key, flag]) =>
+      ['clipboardRead', 'clipboardWrite', 'systemKeyCombos'].includes(key) && typeof flag === 'boolean')
+  }
+  return true
 }
 const json = (value: unknown, status = 200) => secure(Response.json(value, { status }))
 
@@ -124,8 +165,17 @@ export class PublicAccessServer {
     return this.server !== null && this.stored.devices.some(d => d.id === id && d.expiresAt > this.now())
   }
 
+  isDeviceActive(id: string) { return this.authorizedDevice(id) }
+
   private deviceFor(request: Request): Device | undefined {
-    const token = request.headers.get('Cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1)
+    const authorization = request.headers.get('Authorization')
+    // Native credentials are explicitly issued at pairing, never inferred from
+    // a LAN/local bearer or a browser cookie. An invalid explicit credential
+    // must not silently fall back to an ambient cookie belonging to another device.
+    const token = authorization !== null
+      ? /^Bearer (native_[A-Za-z0-9_-]{43})$/i.exec(authorization)?.[1]
+      : request.headers.get('Cookie')?.split(';').map(s => s.trim()).find(s => s.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1)
+    if (authorization === null && /^native_[A-Za-z0-9_-]{43}$/.test(token ?? '')) return undefined
     if (!token || token.length > 128 || !this.server) return undefined
     return this.stored.devices.find(d => d.tokenHash === hash(token) && d.expiresAt > this.now())
   }
@@ -151,12 +201,16 @@ export class PublicAccessServer {
     this.publicUrl = url.origin
   }
 
-  enable(publicUrl?: string) {
+  enable(publicUrl?: string, port?: number) {
+    if (port !== undefined && (!Number.isInteger(port) || port < 1024 || port > 65535)) throw new Error('Invalid remote listener port')
+    // A proxy's fixed upstream must never silently move, including while another
+    // connection attempt already owns the gateway. Validate before changing origin.
+    if (this.server && port !== undefined && this.server.port !== port) throw new Error('Remote listener already uses another port')
     this.load()
-    if (publicUrl) this.setOrigin(publicUrl)
+    if (publicUrl !== undefined) this.setOrigin(publicUrl)
     if (this.server) return this.status()
     this.server = Bun.serve<RemoteData>({
-      hostname: '127.0.0.1', port: 0, idleTimeout: 0, maxRequestBodySize: 16 * 1024 * 1024,
+      hostname: '127.0.0.1', port: port ?? 0, idleTimeout: 0, maxRequestBodySize: 16 * 1024 * 1024,
       fetch: (req, server) => this.fetch(req, server),
       websocket: {
         maxPayloadLength: 1024 * 1024,
@@ -193,7 +247,8 @@ export class PublicAccessServer {
     this.rates.clear()
     if (this.timer) clearInterval(this.timer)
     this.timer = null
-    for (const ws of this.sockets) ws.close(1008, 'Remote access disabled')
+    // Disabling/rebuilding the tunnel does not revoke the stored device token.
+    for (const ws of this.sockets) ws.close(1012, 'Remote access disabled')
     listener?.stop(true)
     return this.status()
   }
@@ -206,7 +261,11 @@ export class PublicAccessServer {
       const route = new URL(request.url).pathname.split('/').filter(Boolean).slice(2).join('/')
       if ((route === 'status' || route === '') && request.method === 'GET') return json(this.status())
       const input = request.method === 'GET' ? {} : await this.readInput(request)
-      if (route === 'enable' && request.method === 'POST') return json(this.enable(typeof input.publicUrl === 'string' ? input.publicUrl : undefined))
+      if (route === 'enable' && request.method === 'POST') {
+        if (input.publicUrl !== undefined && typeof input.publicUrl !== 'string') throw new Error('HTTPS origin required')
+        if (input.port !== undefined && typeof input.port !== 'number') throw new Error('Invalid remote listener port')
+        return json(this.enable(input.publicUrl as string | undefined, input.port as number | undefined))
+      }
       if (route === 'origin' && request.method === 'PUT') { this.setOrigin(input.publicUrl); return json(this.status()) }
       if (route === 'disable' && request.method === 'POST') return json(this.disable())
       if (route === 'pairing' && request.method === 'POST') {
@@ -257,30 +316,38 @@ export class PublicAccessServer {
       const route = url.pathname.split('/').filter(Boolean).join('/')
       if (route.startsWith('api/public-access/')) {
         if (!this.rate('pairing-global', 180)) return json({ error: 'Too many requests' }, 429)
-        if (route === 'api/public-access/session' && request.method === 'GET') return json({ authenticated: !!this.deviceFor(request) })
+        if (route === 'api/public-access/session' && request.method === 'GET') {
+          const device = this.deviceFor(request)
+          return json(device ? { authenticated: true, expiresAt: device.expiresAt } : { authenticated: false })
+        }
         const input = await this.readInput(request)
         this.prune()
         if (route === 'api/public-access/pair' && request.method === 'POST') {
           if (!this.rate('pair-attempts', 20)) return json({ error: 'Too many attempts' }, 429)
+          if (input.clientType !== undefined && input.clientType !== 'browser' && input.clientType !== 'native') return json({ error: 'Unsupported pairing client type' }, 400)
           if (!this.pairing || this.pairing.expiresAt <= this.now() || typeof input.secret !== 'string' || hash(input.secret) !== this.pairing.hash) return json({ error: 'Pairing code expired or invalid' }, 401)
           if (this.stored.devices.length >= 32 || this.pending.size >= 8) return json({ error: 'Device limit reached' }, 429)
           const expiresAt = this.pairing.expiresAt
           this.pairing = null
           const id = secret()
           const claimSecret = secret()
-          const name = typeof input.name === 'string' ? input.name.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80) : 'Mobile browser'
-          this.pending.set(id, { id, name, claimHash: hash(claimSecret), status: 'pending', expiresAt })
+          const clientType = input.clientType === 'native' ? 'native' : 'browser'
+          const name = typeof input.name === 'string' ? input.name.replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 80) : clientType === 'native' ? 'Mobile app' : 'Mobile browser'
+          this.pending.set(id, { id, name, claimHash: hash(claimSecret), status: 'pending', expiresAt, clientType })
           return json({ id, claimSecret })
         }
         if (route === 'api/public-access/claim' && request.method === 'POST') {
           const p = typeof input.id === 'string' ? this.pending.get(input.id) : undefined
           if (!p || typeof input.claimSecret !== 'string' || hash(input.claimSecret) !== p.claimHash) return json({ error: 'Pairing request expired or invalid' }, 401)
           if (p.status !== 'approved') return json({ status: p.status })
-          const token = secret()
+          // The delivery mechanism is bound before desktop approval. Keep the
+          // durable store hash-only and compatible with existing browser devices.
+          const token = `${p.clientType === 'native' ? NATIVE_TOKEN_PREFIX : ''}${secret()}`
           const device = { id: p.id, name: p.name, createdAt: this.now(), expiresAt: this.now() + SESSION_TTL, tokenHash: hash(token) }
           this.stored.devices.push(device)
           try { this.persist() } catch (error) { this.stored.devices.pop(); throw error }
           this.pending.delete(p.id)
+          if (p.clientType === 'native') return json({ status: 'approved', token, tokenType: 'Bearer', deviceId: device.id, expiresAt: device.expiresAt })
           return secure(Response.json({ status: 'approved' }, { headers: { 'Set-Cookie': `${COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${SESSION_TTL / 1000}` } }))
         }
         return json({ error: 'Not found' }, 404)
@@ -290,12 +357,17 @@ export class PublicAccessServer {
         const device = this.deviceFor(request)
         if (!device) return json({ error: 'Device pairing required' }, 401)
         if (!isPublicBusinessPathAllowed(url, request.method)) return json({ error: 'Desktop-only capability' }, 403)
+        if (route === 'api/computer-use/authorized-apps' && request.method === 'PUT') {
+          let patch: unknown
+          try { patch = await request.clone().json() } catch { return json({ error: 'Invalid JSON body' }, 400) }
+          if (!remoteComputerUseConsentPatch(patch)) return json({ error: 'Only global Computer Use consent can be changed remotely' }, 403)
+        }
         if (!this.rate(`api:${device.id}`, 1200)) return json({ error: 'Too many requests' }, 429)
         if (url.pathname.startsWith('/ws/')) {
           const upgraded = server.upgrade(request, { data: { sessionId: url.pathname.split('/').pop()!, connectedAt: this.now(), channel: 'client', clientKind: 'full', sdkToken: null, serverPort: this.deps.serverPort(), serverHost: '127.0.0.1', remoteDeviceId: device.id } })
           return upgraded ? undefined : json({ error: 'Upgrade failed' }, 400)
         }
-        const response = await this.deps.handleApiRequest(request, url, { remoteBrowser: true })
+        const response = await this.deps.handleApiRequest(request, url, { remoteBrowser: true, remoteDeviceId: device.id, remoteDeviceExpiresAt: device.expiresAt })
         if (route === 'api/providers/auth-status' && response.ok) {
           const status = await response.json() as Record<string, unknown>
           const sources = ['cc-haha-provider', 'claude-oauth', 'openai-oauth', 'grok-oauth', 'deepseek-oauth', 'original-settings', 'env', 'none']
@@ -305,10 +377,16 @@ export class PublicAccessServer {
             ...(typeof status.activeProvider === 'string' ? { activeProvider: status.activeProvider } : {}),
           })
         }
+        if (route === 'api/connectors' && request.method === 'GET' && response.ok) return json(projectRemoteConnectors(await response.json() as Record<string, unknown>))
+        if (route === 'api/workflows' && request.method === 'GET' && response.ok) return json(projectRemoteWorkflows(await response.json() as Record<string, unknown>))
+        // Native apps authenticate with a bearer; browsers use the cookie and keep the full agent view.
+        if (request.headers.get('Authorization') !== null && request.method === 'GET' && response.ok &&
+          /^api\/agents(\/|$)/.test(route)) {
+          return json(projectRemoteAgents(await response.json() as Record<string, unknown>))
+        }
         if (route === 'api/settings/user' && request.method === 'GET' && response.ok) {
           const settings = await response.json() as Record<string, unknown>
-          const allowed = ['alwaysThinkingEnabled', 'workflowKeywordTriggerEnabled', 'autoDreamEnabled', 'skipAutoPermissionPrompt', 'chatSendBehavior', 'outputStyle', 'skipWebFetchPreflight', 'language']
-          return json(Object.fromEntries(allowed.filter(key => ['string', 'boolean', 'number'].includes(typeof settings[key])).map(key => [key, settings[key]])))
+          return json(projectRemoteSettings(settings))
         }
         return secure(response)
       }

@@ -5,6 +5,7 @@ import { getSessionCollaborationService } from './services/sessionCollaborationH
  */
 
 import { handleSessionsApi } from './api/sessions.js'
+import { handleMobilePushApi } from './api/mobilePush.js'
 import { handleSettingsApi } from './api/settings.js'
 import { handleModelsApi } from './api/models.js'
 import { handleScheduledTasksApi } from './api/scheduled-tasks.js'
@@ -52,6 +53,8 @@ export async function handleApiRequest(req: Request, url: URL, context: ApiReque
 }
 
 async function handleApiRequestWithoutPerformance(req: Request, url: URL, context: ApiRequestContext = {}): Promise<Response> {
+  const mobileParts = url.pathname.split('/').filter(Boolean)
+  if (mobileParts[1] === 'sessions' && mobileParts[2] === 'mobile-push') return handleMobilePushApi(req, mobileParts, context)
   if (!context.remoteBrowser) return routeApiRequest(req, url)
   const parts = url.pathname.split('/').filter(Boolean)
   const isProvider = parts[1] === 'providers'

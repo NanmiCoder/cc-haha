@@ -1,11 +1,10 @@
+import { describeTaskSchedule } from '@/lib/scheduledTask'
 import { Fragment, useCallback, useState, useRef } from 'react'
 import { CirclePause, CirclePlay, Clock, Ellipsis, LoaderCircle, Pencil, Play, ScrollText, Trash2 } from 'lucide-react'
 import type { CronTask } from '../../types/task'
 import { useTaskStore } from '../../stores/taskStore'
 import { useTranslation } from '../../i18n'
-import { describeCron } from '../../lib/cronDescribe'
 import { TaskRunsPanel } from './TaskRunsPanel'
-import { NewTaskModal } from './NewTaskModal'
 import { ConfirmPopover } from '@/components/tasks/ConfirmPopover'
 import { Badge, StatusDot } from '@/components/ui/Badge'
 import { IconButton } from '@/components/ui/IconButton'
@@ -22,7 +21,7 @@ type ConfirmAction = 'run' | 'toggle' | 'delete' | null
 export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
   const { deleteTask, updateTask, runTask } = useTaskStore()
   const t = useTranslation()
-  const [showEdit, setShowEdit] = useState(false)
+  const openTaskEditor = useTaskStore(state => state.openTaskEditor)
   const [showMenu, setShowMenu] = useState(false)
   const [isRunning, setIsRunning] = useState(false)
   const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null)
@@ -108,7 +107,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
         {/* Right: schedule + actions. The schedule is a sentence, not code, so
             it is not set in mono; the raw cron stays on hover. */}
         <Badge title={task.cron} icon={<Clock size={11} strokeWidth={2} aria-hidden="true" />}>
-          {describeCron(task.cron, t)}
+          {describeTaskSchedule(task, t)}
         </Badge>
 
         <div className="flex shrink-0 items-center gap-0.5">
@@ -166,7 +165,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
               <div className="glass-panel absolute right-0 top-full z-[var(--z-dropdown)] mt-1.5 w-44 rounded-[var(--radius-lg)] p-1">
                 {/* Edit */}
                 <button
-                  onClick={() => { setShowMenu(false); setShowEdit(true) }}
+                  onClick={() => { setShowMenu(false); openTaskEditor(task.id) }}
                   className={`${menuItem} text-[var(--color-text-primary)] hover:bg-[var(--color-surface-hover)]`}
                 >
                   <Pencil size={14} strokeWidth={1.75} aria-hidden="true" className="text-[var(--color-text-tertiary)]" />
@@ -234,9 +233,7 @@ export function TaskRow({ task, showLogs, onToggleLogs }: Props) {
       )}
 
       {/* Edit modal */}
-      {showEdit && (
-        <NewTaskModal open editTask={task} onClose={() => setShowEdit(false)} />
-      )}
+
     </div>
   )
 }

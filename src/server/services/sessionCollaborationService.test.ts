@@ -151,6 +151,40 @@ describe('session collaboration', () => {
     expect(stored.futureField).toEqual({ preserve: true })
   })
 
+  test('completion migration keeps old unknown dates and persists a real successful result across recovery', async () => {
+    let now = new Date('2026-10-24T01:00:00Z')
+    deps.now = () => now
+    await writeFile(deps.statePath, JSON.stringify({
+      version: 1, revision: 2, futureField: { keep: true }, messages: [],
+      members: { old: { sessionId: 'old', rootSessionId: 'old', parentSessionId: null, state: 'completed', stopped: false, extension: 'keep' } },
+    }))
+    service = new SessionCollaborationService(deps)
+    expect((await service.status(['old'])).members[0]?.completedAt).toBeUndefined()
+    await service.onUserInput('new')
+    await service.onSessionState('new', 'completed', 'Done', 'result-1')
+    expect((await service.status(['new'])).members[0]?.completedAt).toBe(now.toISOString())
+    now = new Date('2026-10-25T01:00:00Z')
+    await service.onSessionState('new', 'completed', 'Done', 'result-1')
+    service = new SessionCollaborationService(deps)
+    await service.recover()
+    expect((await service.status(['new'])).members[0]?.completedAt).toBe('2026-10-24T01:00:00.000Z')
+    const stored = JSON.parse(await readFile(deps.statePath, 'utf8'))
+    expect(stored.futureField).toEqual({ keep: true })
+    expect(stored.members.old.extension).toBe('keep')
+    expect(stored.members.old.completedAt).toBeUndefined()
+  })
+
+  test('failed and explicitly stopped results never gain a completion timestamp', async () => {
+    await service.onUserInput('failed')
+    await service.onSessionState('failed', 'failed', 'Error', 'failed-result')
+    await service.onUserInput('stopped')
+    await service.onStopped('stopped')
+    await service.onSessionState('stopped', 'completed', 'Partial response', 'late-result')
+    const rows = (await service.status()).members
+    expect(rows.find(row => row.sessionId === 'failed')?.completedAt).toBeUndefined()
+    expect(rows.find(row => row.sessionId === 'stopped')?.completedAt).toBeUndefined()
+  })
+
   test('wait wakes on incoming messages and user input interrupts the caller wait', async () => {
     const initial = await service.status()
     const waiting = service.wait(initial.revision, undefined, 1000)

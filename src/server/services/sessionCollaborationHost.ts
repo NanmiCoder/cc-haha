@@ -186,7 +186,10 @@ export async function handleSessionCollaborationEvent(service: SessionCollaborat
     await service.onMessageConsumed(message.message_id, event.sessionId)
     collaborationStateChanged = true
   } else if (message.type === 'result') {
-    await service.onSessionState(event.sessionId, message.is_error ? 'failed' : 'completed',
+    // Nested results and incomplete envelopes are not proof that the root turn succeeded.
+    if (message.parent_tool_use_id || typeof message.is_error !== 'boolean') return false
+    const succeeded = !message.is_error && (!message.subtype || message.subtype === 'success')
+    await service.onSessionState(event.sessionId, succeeded ? 'completed' : 'failed',
       String(message.result ?? message.errors?.join('\n') ?? '').slice(0, 8000), message.uuid)
     collaborationStateChanged = true
   } else if (message.type === 'control_request' && message.request?.subtype === 'can_use_tool') {

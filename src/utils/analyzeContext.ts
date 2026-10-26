@@ -52,7 +52,7 @@ import { toolToAPISchema } from './api.js'
 import { filterInjectedMemoryFiles, getMemoryFiles } from './claudemd.js'
 import {
   calculateCurrentContextTokenTotal,
-  getContextWindowForModel,
+  getEffectiveModelContextWindow,
 } from './context.js'
 import { getProviderUsageTrust, hasMediaInput } from './contextBudget.js'
 import { getCwd } from './cwd.js'
@@ -976,7 +976,7 @@ export async function analyzeContextUsage(
     mainLoopModel: model,
   })
   // Get context window size
-  const contextWindow = getContextWindowForModel(runtimeModel, getSdkBetas())
+  const contextWindow = getEffectiveModelContextWindow(runtimeModel, getSdkBetas())
 
   // Build the effective system prompt using the shared utility
   const defaultSystemPrompt = await getSystemPrompt(tools, runtimeModel)
