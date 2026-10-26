@@ -36,4 +36,27 @@ export function withGoogleServicesFile(
   return { ...config, android: { ...config.android, googleServicesFile: path } }
 }
 
-export default ({ config }: ConfigContext) => withGoogleServicesFile(config)
+/** CI overrides are public project identifiers, never signing or upload secrets. */
+export function withEasProject(
+  config: Partial<ExpoConfig>,
+  environment: { EXPO_PROJECT_ID?: string, EXPO_OWNER?: string } = {
+    EXPO_PROJECT_ID: process.env.EXPO_PROJECT_ID,
+    EXPO_OWNER: process.env.EXPO_OWNER,
+  }
+): Partial<ExpoConfig> {
+  const projectId = environment.EXPO_PROJECT_ID?.trim() || config.extra?.eas?.projectId
+  const owner = environment.EXPO_OWNER?.trim() || config.owner
+  if (projectId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(projectId)) {
+    throw new Error('EXPO_PROJECT_ID 必须是 EAS 项目的 UUID')
+  }
+  if (!projectId && !owner) return config
+  return {
+    ...config,
+    ...(owner ? { owner } : {}),
+    ...(projectId ? {
+      extra: { ...config.extra, eas: { ...config.extra?.eas, projectId } },
+    } : {}),
+  }
+}
+
+export default ({ config }: ConfigContext) => withGoogleServicesFile(withEasProject(config))
