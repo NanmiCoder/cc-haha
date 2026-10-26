@@ -35,6 +35,7 @@ import { SettingsService } from '../services/settingsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { resetTerminalShellEnvironmentCacheForTests } from '../../utils/terminalShellEnvironment.js'
 import * as openAIModelCatalog from '../../services/openaiAuth/modelCatalog.js'
+import * as titleService from '../services/titleService.js'
 
 async function rmWithRetry(targetPath: string): Promise<void> {
   const attempts = process.platform === 'win32' ? 5 : 1
@@ -5443,6 +5444,96 @@ describe('WebSocket Chat Integration', () => {
       })
     }
   }, 20_000)
+
+  for (const stopDuringTitle of [false, true]) {
+    it(`should ${stopDuringTitle ? 'cancel startup' : 'finish the first turn'} after a pending placeholder title save`, async () => {
+      const createRes = await fetch(`${baseUrl}/api/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workDir: process.cwd(), permissionMode: 'acceptEdits' }),
+      })
+      expect(createRes.status).toBe(201)
+      const { sessionId } = await createRes.json() as { sessionId: string }
+      const titleStarted = withResolvers<void>()
+      const releaseTitle = withResolvers<void>()
+      const titleFinished = withResolvers<void>()
+      let titlePending = false
+      let startupReadDuringTitle = false
+      let startupReads = 0
+      const originalSaveTitle = titleService.saveAiTitle
+      const originalWorkDir = sessionService.getSessionWorkDir.bind(sessionService)
+      const titleSpy = spyOn(titleService, 'saveAiTitle').mockImplementation(async (...args) => {
+        if (args[0] !== sessionId) return originalSaveTitle(...args)
+        titlePending = true
+        titleStarted.resolve()
+        try {
+          await releaseTitle.promise
+          return await originalSaveTitle(...args)
+        } finally {
+          titlePending = false
+          titleFinished.resolve()
+        }
+      })
+      const workDirSpy = spyOn(sessionService, 'getSessionWorkDir').mockImplementation(async (sid) => {
+        if (sid === sessionId) {
+          startupReads++
+          startupReadDuringTitle ||= titlePending
+        }
+        return originalWorkDir(sid)
+      })
+      const ws = new WebSocket(`${wsUrl}/ws/${sessionId}`)
+      const messages: any[] = []
+      const connected = withResolvers<void>()
+      ws.onmessage = (event) => {
+        const message = JSON.parse(event.data as string)
+        messages.push(message)
+        if (message.type === 'connected') connected.resolve()
+      }
+      try {
+        await connected.promise
+        ws.send(JSON.stringify({ type: 'user_message', content: 'first turn after permission switch' }))
+        await titleStarted.promise
+        if (stopDuringTitle) {
+          ws.send(JSON.stringify({ type: 'stop_generation' }))
+          await waitUntil(() => messages.some(message => message.type === 'status' && message.state === 'idle'), 'stop while saving placeholder title')
+        }
+        releaseTitle.resolve()
+        await titleFinished.promise
+        if (!stopDuringTitle) {
+          await waitUntil(() => messages.some(message => message.type === 'message_complete'), 'first turn after placeholder title save')
+          expect(conversationService.getSessionPermissionMode(sessionId)).toBe('acceptEdits')
+          expect(startupReads).toBeGreaterThan(0)
+        } else {
+          // Let the handler resume from the completed save before observing it.
+          await new Promise<void>(resolve => setImmediate(resolve))
+          expect(startupReads).toBe(0)
+          expect(conversationService.hasSession(sessionId)).toBe(false)
+        }
+        expect(startupReadDuringTitle).toBe(false)
+        expect(messages.filter(message => message.type === 'error')).toEqual([])
+      } finally {
+        releaseTitle.resolve()
+        ws.close()
+        titleSpy.mockRestore()
+        workDirSpy.mockRestore()
+        conversationService.stopSession(sessionId)
+      }
+    }, 20_000)
+  }
+
+  it('should finish the first turn when saving the placeholder title fails', async () => {
+    const sessionId = `title-save-failure-${crypto.randomUUID()}`
+    const titleSpy = spyOn(titleService, 'saveAiTitle').mockRejectedValue(new Error('fixture title write failed'))
+    try {
+      const messages = await runTurnUntilComplete(sessionId, 'continue despite a title write failure')
+      expect(titleSpy).toHaveBeenCalled()
+      expect(messages.some(message => message.type === 'message_complete')).toBe(true)
+      expect(messages.filter(message => message.type === 'error')).toEqual([])
+    } finally {
+      titleSpy.mockRestore()
+      conversationService.stopSession(sessionId)
+    }
+  })
 
   it('should switch from bypass permissions back to default without restarting', async () => {
     const createRes = await fetch(`${baseUrl}/api/sessions`, {

@@ -14,6 +14,13 @@ function agentRequest(messages: MockRequest['messages']): MockRequest {
 }
 
 describe('scripted model', () => {
+  test('sends task ownership requests and exposes rejected assignment results', () => {
+    const messages: MockRequest['messages'] = [{ role: 'user', content: 'MOCK_TEAM_OWNER {"tool":"TaskUpdate","input":{"taskId":"1","owner":"patcher"}}' }]
+    const request = { ...agentRequest(messages), tools: [...AGENT_TOOLS, { name: 'TaskUpdate' }] }
+    expect(decideReply(request)).toMatchObject({ content: [{ type: 'tool_use', name: 'TaskUpdate', input: { taskId: '1', owner: 'patcher' } }] })
+    expect(decideReply({ ...request, messages: [...messages, { role: 'user', content: [{ type: 'tool_result', content: "No teammate named 'patcher'" }] }] }))
+      .toMatchObject({ content: [{ type: 'text', text: "Tool result: No teammate named 'patcher'" }] })
+  })
   test('answers side calls without tools with neutral text', () => {
     const reply = decideReply({ messages: [{ role: 'user', content: 'Create a file called a.txt containing the word X' }] })
     expect(reply).toEqual({ kind: 'message', content: [{ type: 'text', text: 'Mock title' }], stopReason: 'end_turn' })

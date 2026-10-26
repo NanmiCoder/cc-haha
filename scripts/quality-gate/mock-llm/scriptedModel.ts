@@ -165,6 +165,15 @@ export function decideReply(request: MockRequest): MockReply {
 
   // A tool just ran: report what came back, the way a model summarises a result.
   const results = blocksOf(last).filter((block) => block.type === 'tool_result')
+  if (prompt.startsWith('MOCK_TEAM_OWNER ')) {
+    const { tool, input } = JSON.parse(prompt.slice('MOCK_TEAM_OWNER '.length)) as { tool: string; input: Record<string, unknown> }
+    const discovered = results.some(block => Array.isArray(block.content) &&
+      block.content.some(reference => reference?.type === 'tool_reference' && reference.tool_name === tool))
+    if (results.length === 0 || discovered) {
+      if (hasTool(request, tool)) return toolUse(tool, input)
+      if (hasTool(request, 'ToolSearch')) return toolUse('ToolSearch', { query: `select:${tool}` })
+    }
+  }
   if (prompt === 'MOCK_LATE_MCP' && !results.some(block => toolResultText(block).includes('LATE_MCP_AVAILABLE'))) {
     const toolName = 'mcp__late_start__echo'
     if (hasTool(request, toolName)) return toolUse(toolName, {})

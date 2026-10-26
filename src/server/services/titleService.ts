@@ -8,6 +8,7 @@
 
 import { ProviderService } from './providerService.js'
 import { normalizeAnthropicBaseUrl } from '../../services/api/anthropicBaseUrl.js'
+import { normalizeModelStringForAPI } from '../../utils/model/model.js'
 import {
   getPresetAuthStrategy,
   providerNeedsProxy,
@@ -217,7 +218,7 @@ export async function generateTitle(
     if (!resolvedProvider?.baseUrl) return null
     if (!resolvedProvider.apiKey && !accountHeaders) return null
 
-    const model = resolvedProvider.models.haiku || resolvedProvider.models.main
+    const model = normalizeModelStringForAPI(resolvedProvider.models.haiku || resolvedProvider.models.main)
     const url = `${normalizeAnthropicBaseUrl(resolvedProvider.baseUrl.replace(/\/+$/, ''))}/v1/messages`
     const authStrategy = resolvedProvider.authStrategy ?? getPresetAuthStrategy(resolvedProvider.presetId)
     const requestHeaders = accountHeaders ??

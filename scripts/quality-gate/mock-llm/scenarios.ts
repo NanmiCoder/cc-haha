@@ -18,6 +18,7 @@ import { UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedMode
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-team-task-owner', title: 'Real task tools reject an unknown teammate and recover with a valid assignment' },
   { id: 'mock-openrouter-required-thinking', title: 'OpenRouter Claude defaults preserve compatible thinking and effort through the real CLI' },
   { id: 'mock-deepseek-web-search', title: 'DeepSeek standalone search returns summaries through the real CLI to the model' },
   { id: 'mock-mcp-late-reconnect', title: 'Reconnect a late-starting MCP service into an already running CLI session' },
@@ -95,6 +96,34 @@ export function createMockOnlyRunners(
   searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    async 'mock-team-task-owner'(ctx) {
+      const sessionId = await ctx.createSession()
+      const teamName = `owner-${sessionId}`
+      const socket = await ctx.openSocket(sessionId)
+      const turn = async (tool: string, input: Record<string, unknown>) => {
+        const start = socket.messages.length
+        socket.send({ type: 'user_message', content: `MOCK_TEAM_OWNER ${JSON.stringify({ tool, input })}` })
+        const settled = await socket.waitFor(message => message.type === 'permission_request' || message.type === 'message_complete', ctx.stepTimeoutMs, `${tool} completion`, start)
+        if (settled.type === 'permission_request') socket.send({ type: 'permission_response', requestId: settled.requestId, allowed: true, rule: 'agent-flow-mock' })
+        await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, `${tool} completion`, start)
+      }
+      try {
+        ctx.pinRuntime(socket)
+        await turn('TeamCreate', { team_name: teamName, description: 'Disposable ownership fixture' })
+        await turn('TaskCreate', { subject: 'Fix Guide state', description: 'Fixture task' })
+        const taskPath = join(ctx.configDir, 'tasks', teamName, '1.json')
+        if (!existsSync(taskPath)) throw new Error('Real TeamCreate and TaskCreate did not persist the fixture task')
+        const since = requests.length
+        await turn('TaskUpdate', { taskId: '1', owner: 'patcher' })
+        const rejected = toolResultsSentUpstream(requests, since).some(result => contentText(result.content).includes("No teammate named 'patcher'"))
+        const unchanged = JSON.parse(readFileSync(taskPath, 'utf8'))
+        if (!rejected || unchanged.owner || unchanged.status !== 'pending' || existsSync(join(ctx.configDir, 'teams', teamName, 'inboxes', 'patcher.json'))) {
+          throw new Error('Unknown owner must reach the model as a rejected assignment without task or inbox mutation')
+        }
+        await turn('TaskUpdate', { taskId: '1', owner: 'team-lead' })
+        if (JSON.parse(readFileSync(taskPath, 'utf8')).owner !== 'team-lead') throw new Error('The next turn must recover by assigning an existing team member')
+      } finally { socket.close() }
+    },
     async 'mock-openrouter-required-thinking'(ctx) {
       const preset = PROVIDER_PRESETS.find(candidate => candidate.id === 'openrouter')!
       const settingsUrl = `${ctx.baseUrl}/api/settings/user`

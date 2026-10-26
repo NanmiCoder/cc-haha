@@ -3649,6 +3649,7 @@ export const zh: Record<TranslationKey, string> = {
   'agentTeams.task.layer': '第 {layer} 层',
   'agentTeams.task.dependencies': '依赖 {dependencies}',
   'agentTeams.task.unclaimed': '等待成员领取',
+  'agentTeams.task.runningNoOwner': '未记录负责人',
   'agentTeams.task.completedNoOwner': '已完成 · 未记录负责人',
   'agentTeams.member.working': '工作中',
   'agentTeams.member.idle': '待命',

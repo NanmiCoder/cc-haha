@@ -3651,6 +3651,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'agentTeams.task.layer': 'Layer {layer}',
   'agentTeams.task.dependencies': 'Depends on {dependencies}',
   'agentTeams.task.unclaimed': 'Waiting for a teammate',
+  'agentTeams.task.runningNoOwner': 'Owner not recorded',
   'agentTeams.task.completedNoOwner': 'Completed · owner not recorded',
   'agentTeams.member.working': 'Working',
   'agentTeams.member.idle': 'Idle',

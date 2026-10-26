@@ -164,6 +164,23 @@ describe('Agent Teams workbench model', () => {
     })
   })
 
+  it.each(['pending', 'in_progress', 'completed'] as const)('does not infer an explicitly cleared owner for a %s task', (status) => {
+    const cleared = task('7', status, [], '')
+    const frame = snapshot([cleared])
+    frame.messages = [{
+      id: 'old-assignment', from: 'team-lead', to: 'backend-dev', recipients: ['backend-dev'],
+      kind: 'system', protocolType: 'task_assignment', taskId: '7', text: 'Task 7',
+      timestamp: frame.generatedAt,
+    }]
+
+    expect(inferTaskOwner(cleared, frame)).toBeUndefined()
+    expect(inferTaskOwner({ ...cleared, owner: '  ' }, frame)).toBeUndefined()
+    // Only an absent field permits reconstruction of older task records.
+    expect(inferTaskOwner({ ...cleared, owner: undefined }, frame)).toEqual({
+      identity: 'backend-dev', inferred: true,
+    })
+  })
+
   it('falls back deterministically for cyclic dependencies instead of recursing forever', () => {
     const tasks = [
       task('a', 'pending', ['b']),

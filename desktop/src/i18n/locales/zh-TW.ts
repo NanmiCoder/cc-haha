@@ -3651,6 +3651,7 @@ export const zh: Record<TranslationKey, string> = {
   'agentTeams.task.layer': '第 {layer} 層',
   'agentTeams.task.dependencies': '依賴 {dependencies}',
   'agentTeams.task.unclaimed': '等待成員領取',
+  'agentTeams.task.runningNoOwner': '未記錄負責人',
   'agentTeams.task.completedNoOwner': '已完成 · 未記錄負責人',
   'agentTeams.member.working': '工作中',
   'agentTeams.member.idle': '待命',

@@ -19,10 +19,11 @@
     "baseUrl": "https://api.deepseek.com/anthropic",
     "apiFormat": "anthropic",
     "defaultModels": {
-      "main": "deepseek-v4-pro[1m]",
-      "haiku": "deepseek-v4-flash",
-      "sonnet": "deepseek-v4-pro[1m]",
-      "opus": "deepseek-v4-pro[1m]"
+      "main": "deepseek-flash[1m]",
+      "fable": "deepseek-flash[1m]",
+      "haiku": "deepseek-flash[1m]",
+      "sonnet": "deepseek-flash[1m]",
+      "opus": "deepseek-flash[1m]"
     },
     "needsApiKey": true,
     "websiteUrl": "https://platform.deepseek.com",
@@ -30,6 +31,8 @@
     "authStrategy": "auth_token",
     "defaultEnv": {},
     "modelContextWindows": {
+      "deepseek-flash[1m]": 1000000,
+      "deepseek-flash": 1000000,
       "deepseek-v4-pro[1m]": 1000000,
       "deepseek-v4-pro": 1000000,
       "deepseek-v4-flash": 1000000,

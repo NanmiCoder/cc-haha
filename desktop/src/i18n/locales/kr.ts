@@ -3654,6 +3654,7 @@ export const kr: Record<TranslationKey, string> = {
   'agentTeams.task.layer': '{layer}단계',
   'agentTeams.task.dependencies': '{dependencies}에 의존',
   'agentTeams.task.unclaimed': '팀원 할당 대기 중',
+  'agentTeams.task.runningNoOwner': '담당자 기록 없음',
   'agentTeams.task.completedNoOwner': '완료 · 담당자 기록 없음',
   'agentTeams.member.working': '작업 중',
   'agentTeams.member.idle': '대기 중',
