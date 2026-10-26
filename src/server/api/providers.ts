@@ -28,6 +28,7 @@ import {
   CreateProviderSchema,
   DEEPSEEK_ACCOUNT_PROVIDER_ID,
   ModelMappingSchema,
+  ProviderProxyConfigSchema,
   UpdateProviderSchema,
   TestProviderSchema,
   ReorderProvidersSchema,
@@ -51,6 +52,7 @@ const FetchProviderModelsSchema = z.object({
   baseUrl: z.string().min(1),
   apiKey: z.string().min(1),
   isFullUrl: z.boolean().optional(),
+  proxy: ProviderProxyConfigSchema.optional(),
   // `modelsUrl` is deliberately NOT accepted over HTTP. The service still
   // supports the override for internal callers, but exposing a free-form
   // endpoint on an authenticated route only widens the request surface — no

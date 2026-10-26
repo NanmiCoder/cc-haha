@@ -3,7 +3,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { buildModelsUrlCandidates, fetchProviderModels } from './providerModelCatalog.js'
@@ -244,6 +244,33 @@ describe('endpoint scheme safety', () => {
 
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.errorCode).toBe('missing-config')
+  })
+})
+
+describe('provider proxy override', () => {
+  async function probeProxy(proxy?: { mode: 'follow_global' | 'direct' | 'manual'; url?: string }) {
+    await writeFile(
+      path.join(tmpDir, 'settings.json'),
+      JSON.stringify({ network: { proxy: { mode: 'manual', url: 'http://127.0.0.1:1' } } }),
+    )
+    stubFetch(() => jsonResponse({ data: [{ id: 'm1' }] }))
+    const result = await fetchProviderModels({
+      baseUrl: 'https://api.example.com/v1', apiKey: 'fake-key', ...(proxy && { proxy }),
+    })
+    expect(result.ok).toBe(true)
+    return (calls[0]!.init as { proxy?: string } | undefined)?.proxy
+  }
+
+  test('follows the global proxy unless the provider overrides it', async () => {
+    expect(await probeProxy()).toBe('http://127.0.0.1:1')
+    calls = []
+    expect(await probeProxy({ mode: 'follow_global' })).toBe('http://127.0.0.1:1')
+  })
+
+  test('a direct provider ignores the global proxy and a manual one uses its own', async () => {
+    expect(await probeProxy({ mode: 'direct' })).toBeUndefined()
+    calls = []
+    expect(await probeProxy({ mode: 'manual', url: 'http://127.0.0.1:2' })).toBe('http://127.0.0.1:2')
   })
 })
 

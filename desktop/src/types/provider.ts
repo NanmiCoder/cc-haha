@@ -221,6 +221,8 @@ export type ProviderModelsInput = {
   apiKey: string
   isFullUrl?: boolean
   modelsUrl?: string
+  /** The form's proxy override, so the probe takes the route chat will take. */
+  proxy?: ProviderProxyConfig
 }
 
 export type ProviderModelsErrorCode =

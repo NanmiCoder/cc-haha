@@ -173,6 +173,24 @@ describe('active sponsor providers', () => {
     })))
   })
 
+  it('fetches models through the proxy mode chosen in the form, not the global one', async () => {
+    const fetchModels = vi.spyOn(providersApi, 'fetchModels').mockResolvedValue({
+      ok: true,
+      endpoint: 'https://modelflare.dev/v1/models',
+      models: [{ id: 'claude-opus-5-5', ownedBy: 'anthropic' }],
+    })
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'Modelflare' }))
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-modelflare-key' } })
+    fireEvent.click(dialog.getByRole('radio', { name: 'Direct' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Fetch models' }))
+    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith({
+      baseUrl: 'https://modelflare.dev', apiKey: 'fake-modelflare-key', proxy: { mode: 'direct' },
+    }))
+  })
+
   it('adds Modelflare from the second sponsor pill with badges, model discovery and Claude 5.5 defaults', async () => {
     const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
       provider: { ...input, id: 'saved-modelflare', apiFormat: input.apiFormat ?? 'anthropic' },

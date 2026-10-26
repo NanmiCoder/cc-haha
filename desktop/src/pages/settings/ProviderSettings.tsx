@@ -1676,7 +1676,13 @@ function ProviderFormModal({ open, onClose, mode, provider, presets, browserMode
     try {
       // Upstream failures arrive as a resolved `ok: false`, so the catch below
       // only covers our own server being unreachable.
-      const result = await fetchModels({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim() })
+      // Probe through the proxy this provider will actually use for chat.
+      const probeProxy = proxyMode === 'direct'
+        ? { mode: proxyMode }
+        : proxyMode === 'manual' && isValidHttpProxyUrl(proxyUrl.trim())
+          ? { mode: proxyMode, url: proxyUrl.trim() }
+          : undefined
+      const result = await fetchModels({ baseUrl: baseUrl.trim(), apiKey: apiKey.trim(), ...(probeProxy && { proxy: probeProxy }) })
       // The form moved on while we were probing — this answer describes a base
       // URL or key the user no longer has typed in.
       if (modelsRequestRef.current !== requestId) return
