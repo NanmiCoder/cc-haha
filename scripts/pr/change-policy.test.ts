@@ -5,6 +5,40 @@ import { join } from 'node:path'
 import { codeOwnerLogins, evaluateChangePolicy } from './change-policy'
 
 describe('evaluateChangePolicy', () => {
+  test('validates mobile archive selection changes without desktop packaging', () => {
+    const result = evaluateChangePolicy(['.easignore'])
+    expect(result.areas).toEqual(['release'])
+    expect(result.checks.mobile).toBe(true)
+    expect(result.checks.policy).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.checks.desktopNative).toBe(false)
+    expect(result.blocked).toBe(false)
+  })
+
+  test.each(['scripts/mobile-release.ts', 'scripts/mobile-release.test.ts', '.github/workflows/release-mobile.yml'])('routes mobile publishing changes through release policy: %s', file => {
+    const result = evaluateChangePolicy([file])
+    expect(result.areas).toContain('release')
+    expect(result.checks.policy).toBe(true)
+  })
+
+  test.each(['mobile/src/app/index.tsx', 'mobile/app.json', 'mobile/bun.lock', 'mobile/plugins/withPinnedWebSockets.js'])('selects mobile checks for %s without desktop packaging', (file) => {
+    const result = evaluateChangePolicy([file])
+    expect(result.areas).toEqual(['mobile'])
+    expect(result.checks.mobile).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.checks.desktopNative).toBe(false)
+  })
+
+  test('selects mobile consumers of shared code without adding unrelated areas', () => {
+    const files = ['src/shared/modelReasoning.ts', 'src/shared/modelReasoning.test.ts']
+    expect(evaluateChangePolicy(files).checks.mobile).toBe(false)
+    const result = evaluateChangePolicy(files, [], ['mobile/src/core/runtimeCatalog.ts'])
+    expect(result.checks.mobile).toBe(true)
+    expect(result.areas).toEqual([])
+    expect(result.blocked).toBe(false)
+    expect(evaluateChangePolicy(['desktop/src/pages/Settings.tsx']).checks.mobile).toBe(false)
+  })
+
   test('blocks CLI core changes without an override label', () => {
     const result = evaluateChangePolicy([
       'src/commands/help.ts',

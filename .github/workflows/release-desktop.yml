@@ -776,6 +776,8 @@ jobs:
     if: github.event_name == 'push' || inputs.draft == false || inputs.publish_draft_release == true
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      release_tag: v${{ steps.version.outputs.value }}
 
     steps:
       - name: Checkout
@@ -948,3 +950,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release view "v${{ steps.version.outputs.value }}" --json isDraft --jq 'if .isDraft then "release remains draft" else error("workflow-dispatch release was published unexpectedly") end' --repo "${{ github.repository }}"
+
+  release-mobile:
+    needs: publish-release
+    if: vars.MOBILE_RELEASE_ENABLED == 'true' && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.draft == false))
+    uses: ./.github/workflows/release-mobile.yml
+    with:
+      release_tag: ${{ needs.publish-release.outputs.release_tag }}
+    secrets:
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}

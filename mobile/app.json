@@ -1,7 +1,13 @@
 {
   "expo": {
     "name": "cc-haha",
-    "slug": "cc-haha-mobile",
+    "slug": "cc-haha",
+    "owner": "relakkesyangs-team",
+    "extra": {
+      "eas": {
+        "projectId": "4e75f835-1b64-463c-a196-cc181b4c83ec"
+      }
+    },
     "version": "0.1.0",
     "orientation": "portrait",
     "scheme": "cchaha",
