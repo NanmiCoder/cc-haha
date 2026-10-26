@@ -1130,8 +1130,12 @@ async function handleUserMessage(
       if (titleState.userMessageCount === 1) {
         titleState.firstUserMessage = titleInput
       }
-      triggerTitleGeneration(ws, sessionId, 'user-message')
+      // Finish the local title write before startup scans and replaces the
+      // empty transcript. Concurrent metadata I/O can invalidate those reads.
+      await triggerTitleGeneration(ws, sessionId, 'user-message')
     }
+
+    if (activeUserTurns.get(sessionId) !== activeTurn || activeTurn.cancelled) return
 
     // 启动 CLI 子进程（如果还没有）
     try {
@@ -3459,7 +3463,7 @@ function triggerTitleGeneration(
   sessionId: string,
   phase: TitleGenerationPhase,
   completedTurnCount?: number,
-): void {
+): void | Promise<void> {
   const state = sessionTitleState.get(sessionId)
   if (!state || state.hasCustomTitle || state.hasExistingTranscript) return
   if (migrationMaintenance.isActive) return
@@ -3478,7 +3482,7 @@ function triggerTitleGeneration(
     if (state.startedGenerationKeys.has(key)) return
     state.startedGenerationKeys.add(key)
 
-    void migrationMaintenance.track((async () => {
+    return migrationMaintenance.track((async () => {
       try {
         const text = state.firstUserMessage
         const placeholder = deriveTitle(text)
@@ -3494,7 +3498,6 @@ function triggerTitleGeneration(
         console.error(`[Title] Failed to derive title for ${sessionId}:`, err)
       }
     })())
-    return
   }
 
   // Generate polished titles after assistant output completes on turn 1 and 3.
