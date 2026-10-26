@@ -882,6 +882,173 @@ describe('MCP API', () => {
     })
   })
 
+  it.each(['POST', 'PUT'])('syncs %s saves into matching running sessions without a settings connection', async (method) => {
+    const body = {
+      cwd: projectRoot, name: 'saved-server', scope: 'local',
+      config: { type: 'http', url: 'http://127.0.0.1:1/old', headers: {} },
+    }
+    if (method === 'PUT') {
+      const create = makeRequest('POST', '/api/mcp', body)
+      await handleMcpApi(create.req, create.url, create.segments)
+    }
+    conversationService.getActiveSessions = () => ['current', 'background', 'other', 'lean']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = id => id === 'other' ? tmpDir : projectRoot
+    const requestControl = mock(async () => ({}))
+    conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    const launchInfoSpy = spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation((async (id: string) => (
+      { agentProfile: id === 'lean' ? 'lean' : 'standard' }
+    )) as unknown as typeof sessionService.getSessionLaunchInfo)
+    try {
+      const save = makeRequest(method, method === 'POST' ? '/api/mcp' : '/api/mcp/saved-server', {
+        ...body, sessionId: 'current',
+        config: { ...body.config, url: 'http://127.0.0.1:1/new' },
+      })
+      const response = await handleMcpApi(save.req, save.url, save.segments)
+      expect(response.status).toBe(method === 'POST' ? 201 : 200)
+      expect(await response.json()).toMatchObject({
+        server: { config: { url: 'http://127.0.0.1:1/new' } },
+        sessionSync: { applied: true },
+      })
+      expect(requestControl.mock.calls.map(call => call[0])).toEqual(['current', 'background'])
+      expect(requestControl).toHaveBeenCalledWith('current', { subtype: 'mcp_reconnect', serverName: 'saved-server' }, 60_000)
+      expect(connectSpy).not.toHaveBeenCalled()
+    } finally {
+      launchInfoSpy.mockRestore()
+    }
+  })
+
+  it('returns saved configuration and a timeout receipt before the desktop request deadline', async () => {
+    conversationService.getActiveSessions = () => ['current']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = () => projectRoot
+    let controlStarted!: () => void
+    const started = new Promise<void>(resolve => { controlStarted = resolve })
+    let fireDeadline: (() => void) | undefined
+    let deadlineMs = 0
+    const originalSetTimeout = globalThis.setTimeout
+    const timerSpy = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: () => void, ms: number, ...args: unknown[]) => {
+      if (ms >= 60_000) {
+        fireDeadline = callback
+        deadlineMs = ms
+        return 0 as unknown as ReturnType<typeof setTimeout>
+      }
+      return originalSetTimeout(callback, ms, ...args)
+    }) as typeof setTimeout)
+    conversationService.requestControl = ((_id, _action, timeoutMs) => new Promise((_, reject) => {
+      setTimeout(() => reject(new Error('CLI control timed out')), timeoutMs)
+      controlStarted()
+    })) as typeof conversationService.requestControl
+    const save = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'timed-save', scope: 'local', sessionId: 'current',
+      config: { type: 'http', url: 'http://127.0.0.1:1/mcp', headers: {} },
+    })
+    const pending = handleMcpApi(save.req, save.url, save.segments)
+    try {
+      await started
+      // Advance the captured control timer without spending real wall time.
+      expect(deadlineMs).toBe(60_000)
+      expect(deadlineMs).toBeLessThan(120_000)
+      fireDeadline!()
+      const response = await pending
+      expect(response.status).toBe(201)
+      expect(await response.json()).toMatchObject({
+        server: { name: 'timed-save', enabled: true },
+        sessionSync: { applied: false, reason: 'failed', error: 'CLI control timed out' },
+      })
+      expect(runWithCwdOverride(projectRoot, () => mcpConfig.getMcpConfigByName('timed-save'))).not.toBeNull()
+    } finally {
+      fireDeadline?.()
+      await pending
+      timerSpy.mockRestore()
+    }
+  })
+
+  it('keeps a saved config when a background session reload fails', async () => {
+    conversationService.getActiveSessions = () => ['current', 'background']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = () => projectRoot
+    conversationService.requestControl = (async (id: string) => {
+      if (id === 'background') throw new Error('reload timed out')
+      return {}
+    }) as typeof conversationService.requestControl
+    const save = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'reload-failure', scope: 'local', sessionId: 'current',
+      config: { type: 'http', url: 'http://127.0.0.1:1/mcp', headers: {} },
+    })
+    const response = await handleMcpApi(save.req, save.url, save.segments)
+    expect(response.status).toBe(201)
+    expect(await response.json()).toMatchObject({
+      server: { name: 'reload-failure' },
+      sessionSync: { applied: false, reason: 'failed', error: 'reload timed out' },
+    })
+    expect(runWithCwdOverride(projectRoot, () => mcpConfig.getMcpConfigByName('reload-failure'))).not.toBeNull()
+  })
+
+  it('does not reconnect a different local server when a user config is shadowed', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'shadowed-save', scope: 'local',
+      config: { type: 'http', url: 'http://127.0.0.1:1/local', headers: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    conversationService.getActiveSessions = () => ['current']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = () => projectRoot
+    const requestControl = mock(async () => ({}))
+    conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    const save = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'shadowed-save', scope: 'user', sessionId: 'current',
+      config: { type: 'http', url: 'http://127.0.0.1:1/user', headers: {} },
+    })
+    const response = await handleMcpApi(save.req, save.url, save.segments)
+    expect(response.status).toBe(201)
+    expect((await response.json()).sessionSync).toEqual({ applied: false, reason: 'different_project' })
+    expect(requestControl).not.toHaveBeenCalled()
+  })
+
+  it('saves disabled servers without reconnecting or enabling them', async () => {
+    const create = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'disabled-save', scope: 'local',
+      config: { type: 'http', url: 'http://127.0.0.1:1/old', headers: {} },
+    })
+    await handleMcpApi(create.req, create.url, create.segments)
+    runWithCwdOverride(projectRoot, () => mcpConfig.setMcpServerEnabled('disabled-save', false))
+    conversationService.getActiveSessions = () => ['current']
+    conversationService.hasSession = () => true
+    conversationService.getSessionWorkDir = () => projectRoot
+    const requestControl = mock(async () => ({}))
+    conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    const save = makeRequest('PUT', '/api/mcp/disabled-save', {
+      cwd: projectRoot, sessionId: 'current',
+      config: { type: 'http', url: 'http://127.0.0.1:1/new', headers: {} },
+    })
+    const response = await handleMcpApi(save.req, save.url, save.segments)
+    expect(response.status).toBe(200)
+    expect((await response.json()).server).toMatchObject({ enabled: false, status: 'disabled', config: { url: 'http://127.0.0.1:1/new' } })
+    expect(requestControl).not.toHaveBeenCalled()
+    expect(connectSpy).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['stopped', 'not_running'],
+    ['other', 'different_project'],
+    [undefined, 'no_session'],
+  ])('returns an honest save acknowledgement for session %s', async (sessionId, reason) => {
+    conversationService.getActiveSessions = () => []
+    conversationService.hasSession = id => id !== 'stopped'
+    conversationService.getSessionWorkDir = () => tmpDir
+    const requestControl = mock(async () => ({}))
+    conversationService.requestControl = requestControl as typeof conversationService.requestControl
+    const save = makeRequest('POST', '/api/mcp', {
+      cwd: projectRoot, name: 'save-receipt', scope: 'local', sessionId,
+      config: { type: 'http', url: 'http://127.0.0.1:1/mcp', headers: {} },
+    })
+    const response = await handleMcpApi(save.req, save.url, save.segments)
+    expect(response.status).toBe(201)
+    expect((await response.json()).sessionSync).toEqual({ applied: false, reason })
+    expect(requestControl).not.toHaveBeenCalled()
+  })
+
   it('syncs MCP toggles into the active CLI session control channel', async () => {
     const create = makeRequest('POST', '/api/mcp', {
       cwd: projectRoot,

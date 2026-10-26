@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { runDesktopUiTeamPlanSmoke, TEAM_SMOKE_MODEL, TEAM_SMOKE_PROVIDER } from './team-plan'
+import { runDesktopUiMcpSaveSmoke } from './mcp-save'
 import { buildMockToolPrompt } from '../agent-flow/scenarios'
 import { applyUserStateGuard, createQualityGateSandbox } from '../sandbox'
 import type { LaneResult } from '../types'
@@ -37,7 +38,7 @@ import {
  */
 
 const FIXTURE = 'scripts/quality-gate/agent-flow/fixtures/workspace'
-const MOCK_CLI = 'src/server/__tests__/fixtures/mock-sdk-cli.ts'
+const MOCK_CLI = 'scripts/quality-gate/desktop-smoke/fixtures/mcp-save-cli.ts'
 const TARGET_FILE = 'ui-smoke-output.txt'
 const TARGET_CONTENT = 'written-through-the-desktop-ui'
 const SMOKE_PROVIDER_ID = 'desktop-ui-smoke-provider'
@@ -198,6 +199,7 @@ export async function executeDeterministicDesktopSmoke(
       CLAUDE_CLI_PATH: resolve(rootDir, MOCK_CLI),
       CC_HAHA_DISABLE_TERMINAL_SHELL_ENV: '1',
       MOCK_SDK_TEAM_WORKER_AUDIT: join(workRoot, 'team-worker-audit.jsonl'),
+      MOCK_SDK_MCP_SAVE_AUDIT: join(workRoot, 'mcp-save-audit.jsonl'),
     },
   })
   seedDesktopUiSmokeProvider(sandbox.configDir)
@@ -300,6 +302,7 @@ export async function executeDeterministicDesktopSmoke(
     }
     await browserStep(['screenshot', join(artifactDir, 'final.png')], { allowFailure: true })
 
+    await runDesktopUiMcpSaveSmoke({ projectDir, baseUrl, artifactDir, auditPath: join(workRoot, 'mcp-save-audit.jsonl'), browserStep })
     await runDesktopUiTeamPlanSmoke({ configDir: sandbox.configDir, sessionId: session.sessionId, projectDir, baseUrl, artifactDir, auditPath: join(workRoot, 'team-worker-audit.jsonl'), browserStep })
 
     return applyUserStateGuard({

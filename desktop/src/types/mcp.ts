@@ -56,6 +56,11 @@ export type McpToggleResult = {
   sessionSync?: McpSessionSync
 }
 
+export type McpSaveResult = {
+  server: McpServerRecord
+  sessionSync?: McpSessionSync
+}
+
 export type McpReconnectResult = {
   server: McpServerRecord
   sessionSync?: McpSessionSync

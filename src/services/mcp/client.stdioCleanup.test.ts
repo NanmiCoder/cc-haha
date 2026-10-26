@@ -9,6 +9,7 @@ import {
   __setStdioProcessTreeKillForTests,
   clearServerCache,
   connectToServer,
+  reconnectMcpServerImpl,
 } from './client.js'
 import type { McpServerConfig } from './types.js'
 import type { WindowsTaskkillSpawn } from '../../utils/windowsProcessTree.js'
@@ -85,6 +86,20 @@ async function connectStdio(name: string, config: McpServerConfig) {
 }
 
 describe('stdio MCP server cleanup', () => {
+  test('reconnecting edited stdio arguments stops the previous server process', async () => {
+    __setStdioProcessTreeKillForTests({ platform: 'linux' })
+    const kills = recordProcessKills()
+    const name = 'edited-stdio-cleanup'
+    await connectStdio(name, { command: 'node', args: ['old-server.js'] })
+    const config = { command: 'node', args: ['new-server.js'] }
+    connected.push({ name, config })
+
+    const result = await reconnectMcpServerImpl(name, config)
+
+    expect(result.client.type).toBe('connected')
+    expect(kills.signalsTo(SERVER_PID)).toEqual(['SIGINT'])
+  })
+
   test('a stdio server configured without `type` gets the same signal escalation as an explicit one', async () => {
     const kills = recordProcessKills()
     const result = await connectStdio('untyped-stdio-cleanup', {

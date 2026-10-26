@@ -790,18 +790,22 @@ export function McpSettings() {
     setIsSaving(true)
     try {
       const payload = buildPayload(draft)
-      const operationCwd = scopeRequiresProject(draft.scope) ? draft.projectPath.trim() : undefined
-      const saved = view.type === 'edit'
-        ? await updateServer(view.server, payload, operationCwd)
-        : await createServer(draft.name.trim(), payload, operationCwd)
+      const operationCwd = scopeRequiresProject(draft.scope) ? draft.projectPath.trim() : currentWorkDir
+      const { server: saved, sessionSync } = view.type === 'edit'
+        ? await updateServer(view.server, payload, operationCwd, activeSessionId ?? undefined)
+        : await createServer(draft.name.trim(), payload, operationCwd, activeSessionId ?? undefined)
 
       await fetchServersForKnownProjects(currentWorkDir)
 
+      const message = view.type === 'edit'
+        ? t('settings.mcp.toast.saved', { name: saved.name })
+        : t('settings.mcp.toast.created', { name: saved.name })
+      const syncWarning = saved.enabled && !sessionSync?.applied
       addToast({
-        type: 'success',
-        message: view.type === 'edit'
-          ? t('settings.mcp.toast.saved', { name: saved.name })
-          : t('settings.mcp.toast.created', { name: saved.name }),
+        type: syncWarning ? 'warning' : 'success',
+        message: syncWarning
+          ? `${message}. ${describeSessionSync(sessionSync, t('settings.mcp.toast.saveFailed'))}`
+          : message,
       })
       setView({ type: 'list' })
       selectServer(null)

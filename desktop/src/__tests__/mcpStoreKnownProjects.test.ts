@@ -19,6 +19,7 @@ vi.mock('../api/mcp', async (importOriginal) => {
       ...actual.mcpApi,
       projectPaths: vi.fn(),
       list: vi.fn(),
+      create: vi.fn(),
       update: vi.fn(),
       toggle: vi.fn(),
       reconnect: vi.fn(),
@@ -59,10 +60,31 @@ describe('fetchServersForKnownProjects', () => {
     vi.mocked(sessionsApi.getRecentProjects).mockReset()
     vi.mocked(mcpApi.projectPaths).mockReset()
     vi.mocked(mcpApi.list).mockReset()
+    vi.mocked(mcpApi.create).mockReset()
     vi.mocked(mcpApi.update).mockReset()
     vi.mocked(mcpApi.toggle).mockReset()
     vi.mocked(mcpApi.reconnect).mockReset()
     vi.mocked(mcpApi.status).mockReset()
+  })
+
+  it.each(['create', 'update'] as const)('preserves the %s save receipt and the persisted record after reload failure', async (operation) => {
+    const server = record('saved-server', 'local', { projectPath: '/tmp/project' })
+    const sessionSync = { applied: false, reason: 'failed' as const, error: 'reload timed out' }
+    vi.mocked(mcpApi.create).mockResolvedValue({ server, sessionSync })
+    vi.mocked(mcpApi.update).mockResolvedValue({ server, sessionSync })
+    useMcpStore.setState({ servers: operation === 'update' ? [server] : [], selectedServer: server })
+    const payload = { scope: 'local' as const, config: server.config }
+    const result = operation === 'create'
+      ? await useMcpStore.getState().createServer(server.name, payload, server.projectPath, 'chat-1')
+      : await useMcpStore.getState().updateServer(server, payload, server.projectPath, 'chat-1')
+    expect(result).toEqual({ server, sessionSync })
+    expect(useMcpStore.getState().selectedServer).toEqual(server)
+    expect(useMcpStore.getState().servers).toEqual([server])
+    if (operation === 'create') {
+      expect(mcpApi.create).toHaveBeenCalledWith(server.name, payload, server.projectPath, 'chat-1')
+    } else {
+      expect(mcpApi.update).toHaveBeenCalledWith(server.name, payload, server.projectPath, server.projectPath, 'chat-1')
+    }
   })
 
   it('queries the union of current cwd, recent projects, and configured MCP paths', async () => {
@@ -237,7 +259,7 @@ describe('fetchServersForKnownProjects', () => {
     vi.mocked(mcpApi.status).mockResolvedValue(response)
     useMcpStore.setState({ servers: [inactive], selectedServer: inactive })
 
-    const updated = await useMcpStore.getState().updateServer(inactive, {
+    const { server: updated } = await useMcpStore.getState().updateServer(inactive, {
       scope: 'project',
       config: inactive.config,
     }, inactive.projectPath)

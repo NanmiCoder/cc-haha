@@ -7,7 +7,7 @@ import {
   isSameMcpServer,
   mcpProjectPathKey,
 } from '../lib/mcpIdentity'
-import type { McpServerRecord, McpReconnectResult, McpToggleResult, McpUpsertPayload } from '../types/mcp'
+import type { McpServerRecord, McpReconnectResult, McpSaveResult, McpToggleResult, McpUpsertPayload } from '../types/mcp'
 
 type McpStore = {
   servers: McpServerRecord[]
@@ -16,8 +16,8 @@ type McpStore = {
   error: string | null
   fetchServers: (projectPaths?: string[], fallbackCwd?: string) => Promise<void>
   fetchServersForKnownProjects: (currentWorkDir?: string) => Promise<void>
-  createServer: (name: string, payload: McpUpsertPayload, cwd?: string) => Promise<McpServerRecord>
-  updateServer: (server: McpServerRecord, payload: McpUpsertPayload, cwd?: string) => Promise<McpServerRecord>
+  createServer: (name: string, payload: McpUpsertPayload, cwd?: string, sessionId?: string) => Promise<McpSaveResult>
+  updateServer: (server: McpServerRecord, payload: McpUpsertPayload, cwd?: string, sessionId?: string) => Promise<McpSaveResult>
   deleteServer: (server: McpServerRecord, cwd?: string) => Promise<void>
   toggleServer: (server: McpServerRecord, cwd?: string, sessionId?: string) => Promise<McpToggleResult>
   reconnectServer: (server: McpServerRecord, cwd?: string, sessionId?: string) => Promise<McpReconnectResult>
@@ -165,20 +165,20 @@ export const useMcpStore = create<McpStore>((set, get) => ({
     )
   },
 
-  createServer: async (name, payload, cwd) => {
-    const response = await mcpApi.create(name, payload, cwd)
+  createServer: async (name, payload, cwd, sessionId) => {
+    const response = await mcpApi.create(name, payload, cwd, sessionId)
     const created = attachProjectPath(response.server, cwd)
     set((state) => ({
       servers: [...state.servers, created],
       selectedServer: created,
       error: null,
     }))
-    return created
+    return { ...response, server: created }
   },
 
-  updateServer: async (server, payload, cwd) => {
+  updateServer: async (server, payload, cwd, sessionId) => {
     const previousCwd = isProjectScoped(server) ? server.projectPath : undefined
-    const response = await mcpApi.update(server.name, payload, cwd, previousCwd)
+    const response = await mcpApi.update(server.name, payload, cwd, previousCwd, sessionId)
     const updated = preserveCurrentContextActivity(
       attachProjectPath(response.server, cwd ?? server.projectPath),
       server,
@@ -188,7 +188,7 @@ export const useMcpStore = create<McpStore>((set, get) => ({
       selectedServer: state.selectedServer && isSameMcpServer(state.selectedServer, server) ? updated : state.selectedServer,
       error: null,
     }))
-    return updated
+    return { ...response, server: updated }
   },
 
   deleteServer: async (server, cwd) => {

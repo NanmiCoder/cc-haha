@@ -11,12 +11,23 @@ import {
   getServerCacheKey,
   getMcpClientCacheKey,
   setMcpConnectionClosedHandler,
+  reconnectMcpServerImpl,
 } from './client.js'
+import type { ScopedMcpServerConfig } from './types.js'
+import { getCwd, runWithCwdOverride } from '../../utils/cwd.js'
 
 const config = { type: 'sse' as const, url: 'http://127.0.0.1:1/mcp' }
 const name = 'lifecycle-test'
 let root: string
 let previousConfigDir: string | undefined
+const extraConnections: Array<{ name: string; config: ScopedMcpServerConfig; cwd: string }> = []
+
+async function connectAt(serverName: string, serverConfig: ScopedMcpServerConfig, cwd = getCwd()) {
+  extraConnections.push({ name: serverName, config: serverConfig, cwd })
+  const result = await runWithCwdOverride(cwd, () => connectToServer(serverName, serverConfig))
+  if (result.type !== 'connected') throw new Error(`Fixture failed: ${result.type}`)
+  return result
+}
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'mcp-lifecycle-'))
@@ -39,6 +50,9 @@ async function connect() {
 afterEach(async () => {
   setMcpConnectionClosedHandler(undefined)
   await clearServerCache(name, config)
+  for (const connection of extraConnections.splice(0)) {
+    await runWithCwdOverride(connection.cwd, () => clearServerCache(connection.name, connection.config))
+  }
   mock.restore()
   if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
   else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
@@ -46,6 +60,84 @@ afterEach(async () => {
 })
 
 describe('MCP connection ownership', () => {
+  test('reconnecting edited configuration closes the previous client and clears its tools only in this project', async () => {
+    spyOn(Client.prototype, 'connect').mockResolvedValue(undefined)
+    const old = await connectAt(name, config)
+    const otherProject = await connectAt(name, config, root)
+    const otherName = await connectAt('unrelated-server', config)
+    const closeOld = spyOn(old.client, 'close').mockResolvedValue(undefined)
+    const closeOtherProject = spyOn(otherProject.client, 'close').mockResolvedValue(undefined)
+    const closeOtherName = spyOn(otherName.client, 'close').mockResolvedValue(undefined)
+    await fetchToolsForClient(old)
+    const nextConfig = { ...config, url: 'http://127.0.0.1:1/new' }
+    extraConnections.push({ name, config: nextConfig, cwd: getCwd() })
+
+    const next = await reconnectMcpServerImpl(name, nextConfig)
+
+    expect(next.client.type).toBe('connected')
+    expect(closeOld).toHaveBeenCalledTimes(1)
+    expect(connectToServer.cache.has(getServerCacheKey(name, config))).toBe(false)
+    expect(fetchToolsForClient.cache.has(getMcpClientCacheKey(old))).toBe(false)
+    expect(closeOtherProject).not.toHaveBeenCalled()
+    expect(closeOtherName).not.toHaveBeenCalled()
+    expect(await runWithCwdOverride(root, () => connectToServer(name, config))).toBe(otherProject)
+    expect(await connectToServer('unrelated-server', config)).toBe(otherName)
+  })
+
+  test('reconnecting edited configuration retires a previous pending handshake', async () => {
+    const started = deferred()
+    const handshake = deferred()
+    spyOn(Client.prototype, 'connect').mockImplementationOnce(async () => {
+      started.resolve()
+      await handshake.promise
+    }).mockResolvedValue(undefined)
+    const close = spyOn(Client.prototype, 'close').mockResolvedValue(undefined)
+    const oldConnecting = connectToServer(name, config)
+    await started.promise
+    const nextConfig = { ...config, url: 'http://127.0.0.1:1/replacement' }
+    extraConnections.push({ name, config: nextConfig, cwd: getCwd() })
+    try {
+      const next = await reconnectMcpServerImpl(name, nextConfig)
+      expect(next.client.type).toBe('connected')
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(connectToServer.cache.has(getServerCacheKey(name, config))).toBe(false)
+      handshake.resolve()
+      expect((await oldConnecting).type).toBe('failed')
+      expect(await connectToServer(name, nextConfig)).toBe(next.client)
+    } finally {
+      handshake.resolve()
+      await oldConnecting
+    }
+  })
+
+  test('concurrent configuration reconnects complete in order and retain only the latest client', async () => {
+    spyOn(Client.prototype, 'connect').mockResolvedValue(undefined)
+    const old = await connectAt(name, config)
+    const closeStarted = deferred()
+    const finishClose = deferred()
+    old.client.close = async () => {
+      closeStarted.resolve()
+      await finishClose.promise
+    }
+    const firstConfig = { ...config, url: 'http://127.0.0.1:1/first' }
+    const nextConfig = { ...config, url: 'http://127.0.0.1:1/latest' }
+    extraConnections.push({ name, config: firstConfig, cwd: getCwd() }, { name, config: nextConfig, cwd: getCwd() })
+    const firstReconnect = reconnectMcpServerImpl(name, firstConfig)
+    try {
+      await closeStarted.promise
+      const latestReconnect = reconnectMcpServerImpl(name, nextConfig)
+      finishClose.resolve()
+      expect((await firstReconnect).client.type).toBe('connected')
+      const latest = await latestReconnect
+      expect(latest.client.type).toBe('connected')
+      expect(await connectToServer(name, nextConfig)).toBe(latest.client)
+      expect(connectToServer.cache.has(getServerCacheKey(name, firstConfig))).toBe(false)
+    } finally {
+      finishClose.resolve()
+      await firstReconnect
+    }
+  })
+
   test('clearing an absent connection does not start a server', async () => {
     const open = spyOn(Client.prototype, 'connect').mockResolvedValue(undefined)
     await clearServerCache(name, config)

@@ -110,7 +110,7 @@ describe('deterministic desktop UI smoke setup', () => {
   test('runs the real UI against the mock runtime with a sandboxed config dir', () => {
     const source = readFileSync('scripts/quality-gate/desktop-smoke/deterministic.ts', 'utf8')
 
-    expect(source).toContain('src/server/__tests__/fixtures/mock-sdk-cli.ts')
+    expect(source).toContain('scripts/quality-gate/desktop-smoke/fixtures/mcp-save-cli.ts')
     expect(source).toContain('CLAUDE_CLI_PATH')
     expect(source).toContain('seedProviders: false')
     expect(source).toContain('seedDesktopUiSmokeProvider(sandbox.configDir)')
