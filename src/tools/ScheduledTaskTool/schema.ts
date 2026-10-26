@@ -1,4 +1,5 @@
 import { z } from 'zod/v4'
+import type { ToolInputJSONSchema } from '../../Tool.js'
 
 const id = z.string().trim().min(1).max(200)
 const timeZone = z.string().min(1).max(100).refine(value => {
@@ -44,3 +45,41 @@ export const scheduledTaskInputSchema = z.discriminatedUnion('action', [
 ])
 
 export type ScheduledTaskInput = z.infer<typeof scheduledTaskInputSchema>
+
+type JsonObject = Record<string, unknown>
+
+/**
+ * Model providers require a tool's top-level input_schema to be `type: "object"`,
+ * so the action union cannot be sent as a bare `oneOf`. Fold every variant into
+ * one object schema; the zod union stays the validation authority at runtime.
+ */
+export function flattenActionUnionSchema(schema: z.ZodType): ToolInputJSONSchema {
+  const { oneOf } = z.toJSONSchema(schema) as { oneOf: JsonObject[] }
+  const properties: Record<string, JsonObject[]> = {}
+  const requirements: string[] = []
+  for (const variant of oneOf) {
+    const props = (variant.properties ?? {}) as Record<string, JsonObject>
+    const required = ((variant.required ?? []) as string[]).filter(key => key !== 'action')
+    const action = (props.action as { const: string }).const
+    requirements.push(`${action}${required.length ? ` (requires ${required.join(', ')})` : ''}`)
+    for (const [key, def] of Object.entries(props)) {
+      const seen = (properties[key] ??= [])
+      if (!seen.some(existing => JSON.stringify(existing) === JSON.stringify(def))) seen.push(def)
+    }
+  }
+  const merged: Record<string, unknown> = {}
+  for (const [key, defs] of Object.entries(properties)) {
+    merged[key] = key === 'action'
+      ? { type: 'string', enum: defs.map(def => def.const) }
+      : defs.length === 1 ? defs[0] : { anyOf: defs }
+  }
+  return {
+    type: 'object',
+    description: `Actions: ${requirements.join('; ')}.`,
+    properties: merged,
+    required: ['action'],
+    additionalProperties: false,
+  }
+}
+
+export const scheduledTaskInputJSONSchema = flattenActionUnionSchema(scheduledTaskInputSchema)

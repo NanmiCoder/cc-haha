@@ -71,3 +71,25 @@ test('bridge does not expose arbitrary error bodies or follow redirects', async 
     await expect(callScheduledTaskBridge({ action: 'list' })).rejects.toThrow('ScheduledTask failed (500)')
   } finally { server.stop(true) }
 })
+
+test('advertises a flat object schema that still accepts every action the union accepts', () => {
+  const schema = ScheduledTaskTool.inputJSONSchema as { type: string; required: string[]; properties: Record<string, { enum?: string[] }> }
+  expect(schema.type).toBe('object')
+  expect(schema).not.toHaveProperty('oneOf')
+  expect(schema.required).toEqual(['action'])
+  const samples = [
+    { action: 'list' },
+    { action: 'view', id: 't' },
+    { action: 'create', name: 'n', prompt: 'p', schedule: { kind: 'cron', expression: '0 9 * * *', timeZone: 'Asia/Shanghai' } },
+    { action: 'update', id: 't', changes: { enabled: false } },
+    { action: 'delete', id: 't' },
+    { action: 'runs' },
+    { action: 'run', runId: 'r' },
+    { action: 'report', runId: 'r', decision: 'silent' },
+  ]
+  expect(schema.properties.action.enum).toEqual(samples.map(sample => sample.action))
+  for (const sample of samples) {
+    expect(ScheduledTaskTool.inputSchema.safeParse(sample).success).toBe(true)
+    for (const key of Object.keys(sample)) expect(schema.properties).toHaveProperty(key)
+  }
+})

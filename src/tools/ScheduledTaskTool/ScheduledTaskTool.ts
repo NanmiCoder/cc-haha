@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { buildTool } from '../../Tool.js'
 import { callScheduledTaskBridge } from './bridge.js'
-import { scheduledTaskInputSchema } from './schema.js'
+import { scheduledTaskInputJSONSchema, scheduledTaskInputSchema } from './schema.js'
 import { isDesktopScheduleAvailable } from './gate.js'
 
 const description = `Manage persistent desktop scheduled tasks and read their execution results. Use when the user asks to remind them, continue later, check periodically, create/update/pause/resume/delete a schedule, or inspect what a scheduled task did. Tasks appear in the desktop Scheduled Tasks page. The desktop app must be running to execute them.
@@ -16,6 +16,7 @@ export const ScheduledTaskTool = buildTool({
   alwaysLoad: true,
   maxResultSizeChars: 100_000,
   inputSchema: scheduledTaskInputSchema,
+  inputJSONSchema: scheduledTaskInputJSONSchema,
   isEnabled: isDesktopScheduleAvailable,
   isReadOnly: input => ['list', 'view', 'runs', 'run'].includes(input.action),
   isConcurrencySafe: input => ['list', 'view', 'runs', 'run'].includes(input.action),
