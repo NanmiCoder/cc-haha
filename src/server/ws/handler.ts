@@ -610,7 +610,9 @@ export function listMobileSessionActivity() {
     const preview = typeof text === 'string' ? text.replace(/\s+/g, ' ').trim().slice(0, 200) : ''
     return {
       id, activityState, ...timing,
-      ...(timing ? { stalled: activityState === 'running' && Date.now() - timing.lastProgressAt >= 300000 } : {}),
+      // Only a turn still in flight can stall; a finished turn kept "running" by a
+      // background task has no further output to wait for.
+      ...(timing ? { stalled: activityState === 'running' && timing.completedAt === undefined && Date.now() - timing.lastProgressAt >= 300000 } : {}),
       ...(request ? {
         requestId: request.requestId,
         toolName: request.toolName,

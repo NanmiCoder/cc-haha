@@ -7,6 +7,7 @@ import {
   ConversationService,
   DESKTOP_CLI_GRACEFUL_SHUTDOWN_TIMEOUT_MS,
 } from '../services/conversationService.js'
+import { diagnosticsService } from '../services/diagnosticsService.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
@@ -841,6 +842,24 @@ describe('ConversationService', () => {
         message: 'ECONNRESET: socket hang up', metadata: expect.objectContaining({ requestId: 'req-fixture', messageUuid: 'retry-uuid' }),
       }))
     } finally { capture.mockRestore() }
+  })
+
+  test('a retry still in progress is not recorded as a warning or error', () => {
+    const record = spyOn(diagnosticsService, 'recordEvent').mockResolvedValue({ ok: true } as never)
+    const capture = spyOn(traceCaptureService, 'recordEvent').mockResolvedValue(null)
+    try {
+      const service = new ConversationService() as any
+      const session = installNetworkTestSession(service, 'retry-severity', [])
+      Object.assign(session, { sdkMessages: [], sdkMessageBytes: 0, seenSdkMessageUuids: new Set(), initMessage: null })
+      service.handleSdkPayload('retry-severity', JSON.stringify({ type: 'system', subtype: 'api_retry',
+        attempt: 1, max_retries: 10, retry_delay_ms: 500, error_status: 529,
+        error: 'overloaded', error_message: 'Overloaded', request_id: 'req-severity', uuid: 'retry-severity-uuid',
+      }))
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ type: 'sdk_api_retry', severity: 'info' }))
+    } finally {
+      record.mockRestore()
+      capture.mockRestore()
+    }
   })
 
   test('records recovered retry details in existing session diagnostics', () => {

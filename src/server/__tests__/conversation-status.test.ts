@@ -306,6 +306,13 @@ describe('live session activity for the phone session list', () => {
     expect((await handleSessionsApi(new Request(url, { method: 'POST' }), url, ['api', 'sessions', 'mobile-status'])).status).toBe(405)
   })
 
+  it('mobile dashboard does not call a finished turn stalled while a background task keeps it running', async () => {
+    const { listMobileSessionActivity } = await import('../ws/handler.js')
+    __markActiveTurnForTests('finished-turn')
+    spyOn(mobileActivityClock, 'read').mockReturnValue({ startedAt: 1000, lastProgressAt: 2000, completedAt: 2000 })
+    expect(listMobileSessionActivity()).toContainEqual(expect.objectContaining({ id: 'finished-turn', activityState: 'running', stalled: false }))
+  })
+
   it('mobile dashboard projects bounded question and command previews with actual run timing', async () => {
     const { listMobileSessionActivity } = await import('../ws/handler.js')
     for (const id of ['running-clock', 'question-clock', 'command-clock']) __markActiveTurnForTests(id)
