@@ -1,3 +1,4 @@
+import { setDisclosure, getDisclosure, clearDisclosureMemory } from '@/lib/disclosureMemory'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -725,6 +726,40 @@ describe('MessageList nested tool calls', () => {
     act(() => useChatAppearanceStore.setState({ appearance: { font: 'system', fontSize: 14, width: 'standard' } }))
     dispose()
     localStorage.removeItem(CHAT_APPEARANCE_STORAGE_KEY)
+    dropSession(sessionId)
+  })
+
+  it.each([true, false])('preserves follow intent after an idle same-ID height correction (following=%s, #1652)', async (following) => {
+    const sessionId = 'issue1652-idle-resize'
+    const observers: Array<{ callback: ResizeObserverCallback, targets: Element[] }> = []
+    class TestResizeObserver {
+      targets: Element[] = []
+      observe = (target: Element) => { this.targets.push(target) }
+      unobserve = vi.fn()
+      disconnect = vi.fn()
+      constructor(callback: ResizeObserverCallback) { observers.push({ callback, targets: this.targets }) }
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+    dropSession(sessionId)
+    useChatStore.setState({ sessions: { [sessionId]: makeSessionState({ chatState: 'idle', messages: Array.from({ length: 220 }, (_, i) => ({ id: `idle-row-${i}`, type: 'assistant_text' as const, content: `answer ${i}`, timestamp: i })) }) } })
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector('.chat-scroll-area') as HTMLElement
+    let scrollTop = following ? 15000 : 7000
+    let scrollHeight = 15500
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 500 })
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => scrollTop, set: (value) => { scrollTop = value } })
+    await waitForProgrammaticScrollReset()
+    fireEvent.scroll(scroller)
+    const item = container.querySelector('[data-virtual-message-item]') as HTMLElement
+    const observer = observers.find(o => o.targets.includes(item))!
+    expect(observer).toBeTruthy()
+    const key = item.dataset.virtualMessageItem!
+    const oldHeight = getHeightsForSession(sessionId).get(key) ?? 112
+    scrollHeight += 600
+    act(() => observer.callback([{ target: item, borderBoxSize: [{ blockSize: oldHeight + 600, inlineSize: 800 }], contentRect: { height: oldHeight + 600 } } as unknown as ResizeObserverEntry], {} as ResizeObserver))
+    await waitForProgrammaticScrollReset()
+    expect(scrollTop).toBe(following ? scrollHeight - 500 : 7000)
     dropSession(sessionId)
   })
 
@@ -4533,6 +4568,255 @@ describe('MessageList nested tool calls', () => {
         quote: 'Second assistant reply',
       },
     ])
+  })
+
+  it.each(['thinking', 'tool_result'] as const)('does not transfer expanded %s geometry into renamed collapsed rows', async (messageType) => {
+    const sessionId = 'review-thinking-state'
+    dropSession(sessionId)
+    clearDisclosureMemory()
+    const messages: UIMessage[] = Array.from({ length: 220 }, (_, index) => {
+      const common = { id: `thinking-old-${index}`, content: `Reasoning ${index}`, timestamp: index }
+      return messageType === 'tool_result'
+        ? { ...common, type: 'tool_result', toolUseId: `orphan-${index}`, isError: false }
+        : { ...common, type: 'thinking' }
+    })
+    setDisclosure('thinking-old-0', true)
+    const heights = getHeightsForSession(sessionId)
+    for (const message of messages) heights.set(message.id, message.id === 'thinking-old-0' ? 300 : 40)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: 0, bottom: 40, width: 800, height: this.hasAttribute('data-virtual-message-item')
+        ? (this.querySelector('[data-thinking-content="expanded"]') ? 300 : 40) : 0 } as DOMRect
+    })
+    useChatStore.setState({ sessions: { [sessionId]: makeSessionState({ messages }) } })
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector<HTMLElement>('.chat-scroll-area')!
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 9060 })
+    await waitForProgrammaticScrollReset()
+    scroller.scrollTop = 5000
+    fireEvent.scroll(scroller)
+    expect(container.querySelector('[data-virtual-message-item="thinking-old-0"]')).toBeNull()
+    act(() => useChatStore.setState({ sessions: { [sessionId]: makeSessionState({
+      messages: messages.map((message, index) => ({ ...message, id: `thinking-new-${index}` })),
+    }) } }))
+    await waitForProgrammaticScrollReset()
+    expect(getDisclosure('thinking-new-0')).toBeUndefined()
+    expect(container.querySelector('[data-virtual-message-item="thinking-new-0"]')).toBeNull()
+    // Its disclosure state reset under the new key, so the old 300px open
+    // geometry cannot be used for this 40px collapsed offscreen row.
+    expect(heights.get('thinking-new-0')).not.toBe(300)
+    expect(heights.get('thinking-new-1')).toBe(40)
+    clearDisclosureMemory()
+  })
+
+  it.each([0, 1])('preserves the reading position when standalone tool-result button %s expands (idle)', async (buttonIndex) => {
+    const sessionId = 'review-idle-tool-result'
+    dropSession(sessionId)
+    clearDisclosureMemory()
+    const observers: Array<{callback: ResizeObserverCallback, targets: Element[]}> = []
+    class TestResizeObserver {
+      targets: Element[] = []
+      observe = (target: Element) => this.targets.push(target)
+      disconnect = vi.fn()
+      unobserve = vi.fn()
+      constructor(callback: ResizeObserverCallback) { observers.push({callback, targets: this.targets}) }
+    }
+    vi.stubGlobal('ResizeObserver', TestResizeObserver)
+    const messages: UIMessage[] = Array.from({ length: 220 }, (_, index) => ({
+      id: `reader-${index}`, type: 'assistant_text', content: `answer ${index}`, timestamp: index,
+    }))
+    messages[219] = { id: 'reader-219', type: 'tool_result', toolUseId: 'orphan-result', content: 'long result line\n'.repeat(100), isError: true, timestamp: 219 }
+    const heights = getHeightsForSession(sessionId)
+    for (const message of messages) heights.set(message.id, 80)
+    useChatStore.setState({ sessions: { [sessionId]: makeSessionState({ messages }) } })
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector<HTMLElement>('.chat-scroll-area')!
+    let scrollTop = 17200
+    let scrollHeight = 17600
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => scrollTop, set: value => { scrollTop = Math.min(value, scrollHeight - 400) } })
+    await waitForProgrammaticScrollReset()
+    fireEvent.scroll(scroller)
+    const row = container.querySelector<HTMLElement>('[data-virtual-message-item="reader-219"]')!
+    const button = row.querySelectorAll('button')[buttonIndex]!
+    expect(button).toBeTruthy()
+    const observer = observers.find(observer => observer.targets.includes(row))!
+    expect(observer).toBeTruthy()
+    act(() => {
+      fireEvent.click(button)
+      scrollHeight += 600
+      observer.callback([{target: row, borderBoxSize: [{blockSize: 680, inlineSize: 800}], contentRect: {height: 680}} as unknown as ResizeObserverEntry], {} as ResizeObserver)
+    })
+    await waitForProgrammaticScrollReset()
+    expect(scrollTop).toBe(17200)
+    clearDisclosureMemory()
+  })
+
+  it('issue1662 retains the tail after idle history replaces local row ids', async () => {
+    const sessionId = 'issue1662-tail-reload'
+    dropSession(sessionId)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return { top: 0, bottom: 80, width: 800, height: this.hasAttribute('data-virtual-message-item') ? 80 : 0 } as DOMRect
+    })
+    const messages: UIMessage[] = Array.from({ length: 220 }, (_, index) => ({
+      id: `local-${index}`, type: 'assistant_text',
+      content: `line ${index} ` + 'x'.repeat(800), timestamp: index,
+    }))
+    const heights = getHeightsForSession(sessionId)
+    for (const message of messages) heights.set(message.id, 80)
+    useChatStore.setState({ sessions: { [sessionId]: makeSessionState({ messages }) } })
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector<HTMLElement>('.chat-scroll-area')!
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 400 })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, value: 17600 })
+    await waitForProgrammaticScrollReset()
+    scroller.scrollTop = 17200
+    fireEvent.scroll(scroller)
+    expect(container.querySelector('[data-virtual-message-item="local-219"]')).not.toBeNull()
+    act(() => useChatStore.setState({ sessions: { [sessionId]: makeSessionState({
+      messages: messages.map((message, index) => ({ ...message, id: `history-${index}` })),
+    }) } }))
+    await waitForProgrammaticScrollReset()
+    expect(container.querySelector('[data-virtual-message-item="history-219"]')).not.toBeNull()
+    dropSession(sessionId)
+  })
+
+  it.each([true, false])('preserves the reader position after a transcript reload (following=%s, #1652)', async (following) => {
+    const sessionId = 'reload-renames-rows'
+    // Many short lines inflate the estimate (22px a line) far above the 40px the
+    // rows were measured at, the shape of a collapsed tool-heavy transcript.
+    const content = (index: number) => `reloaded transcript line ${index}\n${'filler\n'.repeat(60)}`
+    const liveMessages: UIMessage[] = Array.from({ length: 220 }, (_, index) => ({
+      id: `live-${index}`,
+      type: 'assistant_text',
+      content: content(index),
+      timestamp: index,
+    }))
+    const heights = getHeightsForSession(sessionId)
+    heights.clear()
+    for (const message of liveMessages) heights.set(message.id, 40)
+    useChatStore.setState({
+      sessions: { [sessionId]: makeSessionState({ messages: liveMessages }) },
+    })
+
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector('.chat-scroll-area') as HTMLElement
+    const clientHeight = 500
+    const scrollHeight = 220 * 40
+    const expectedScrollTop = following ? scrollHeight - clientHeight : 110 * 40
+    let scrollTop = expectedScrollTop
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: clientHeight })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = Math.min(value, scrollHeight - clientHeight)
+      },
+    })
+    await waitForProgrammaticScrollReset()
+    await act(async () => {
+      fireEvent.scroll(scroller)
+    })
+    expect(container.querySelector(`[data-virtual-message-item="live-${following ? 219 : 110}"]`)).not.toBeNull()
+
+    // The post-reply history reload: same messages, new ids.
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...state.sessions[sessionId]!,
+            messages: liveMessages.map((message, index) => ({ ...message, id: `restored-${index}` })),
+          },
+        },
+      }))
+    })
+    await waitForProgrammaticScrollReset()
+    await waitForProgrammaticScrollReset()
+
+    expect(heights.get('restored-219')).toBe(40)
+    expect(container.querySelector(`[data-virtual-message-item="restored-${following ? 219 : 110}"]`)).not.toBeNull()
+    expect(scrollTop).toBe(expectedScrollTop)
+  })
+
+  it('does not carry a measured height to different text of the same length on reload', async () => {
+    const sessionId = 'reload-equal-length-content'
+    const oldMessage: UIMessage = { id: 'old-row', type: 'assistant_text', content: 'abcdefgh', timestamp: 1 }
+    const heights = getHeightsForSession(sessionId)
+    heights.set(oldMessage.id, 400)
+    useChatStore.setState({ sessions: { [sessionId]: makeSessionState({ messages: [oldMessage] }) } })
+    render(<MessageList sessionId={sessionId} />)
+    act(() => useChatStore.setState({ sessions: { [sessionId]: makeSessionState({
+      messages: [{ ...oldMessage, id: 'new-row', content: 'a\nb\nc\nd\n' }],
+    }) } }))
+    expect(heights.has('new-row')).toBe(false)
+  })
+
+  it('re-pins to the bottom when an idle transcript rewrite changes the row heights (#1662)', async () => {
+    const sessionId = 'idle-rewrite-repins'
+    const liveMessages: UIMessage[] = Array.from({ length: 220 }, (_, index) => ({
+      id: `live-${index}`,
+      type: 'assistant_text',
+      content: `idle transcript line ${index}`,
+      timestamp: index,
+    }))
+    const heights = getHeightsForSession(sessionId)
+    heights.clear()
+    for (const message of liveMessages) heights.set(message.id, 40)
+    useChatStore.setState({
+      sessions: { [sessionId]: makeSessionState({ messages: liveMessages }) },
+    })
+
+    const { container } = render(<MessageList sessionId={sessionId} />)
+    const scroller = container.querySelector('.chat-scroll-area') as HTMLElement
+    const clientHeight = 500
+    let scrollHeight = 220 * 40
+    let scrollTop = scrollHeight - clientHeight
+    Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: clientHeight })
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => scrollHeight })
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (value) => {
+        scrollTop = Math.min(value, scrollHeight - clientHeight)
+      },
+    })
+    await waitForProgrammaticScrollReset()
+    await act(async () => {
+      fireEvent.scroll(scroller)
+    })
+    expect(screen.getByText('idle transcript line 219')).toBeTruthy()
+
+    // The reload rewrites every row with different content (and ids), so no
+    // measured height applies and the transcript grows under the reader to the
+    // estimated height of the new rows.
+    const restoredMessages: UIMessage[] = liveMessages.map((message, index) => ({
+      ...message,
+      id: `restored-${index}`,
+      content: `restored transcript line ${index}\n${'filler\n'.repeat(60)}`,
+    }))
+    scrollHeight = restoredMessages.reduce(
+      (total, message) => total + estimateRenderItemHeight({ kind: 'message', message } as Parameters<typeof estimateRenderItemHeight>[0]),
+      0,
+    )
+    act(() => {
+      useChatStore.setState((state) => ({
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...state.sessions[sessionId]!,
+            messages: restoredMessages,
+          },
+        },
+      }))
+    })
+    await waitForProgrammaticScrollReset()
+    await waitForProgrammaticScrollReset()
+
+    expect(scrollTop).toBe(scrollHeight - clientHeight)
+    expect(screen.getByText(/restored transcript line 219/)).toBeTruthy()
   })
 
   it('does not force-scroll to the bottom while the user is reading history', async () => {

@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { PROVIDER_PRESETS } from '../../../src/server/config/providerPresets'
 import type { LiveScenarioRunner } from '../agent-flow/live'
 import { LIVE_AGENT_FLOW_SCENARIOS } from '../agent-flow/liveScenarios'
 import { MOCK_IMAGE_PNG_BASE64, type MockLlmServer, type RecordedRequest } from './server'
@@ -17,6 +18,7 @@ import { UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedMode
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-openrouter-required-thinking', title: 'OpenRouter Claude defaults preserve compatible thinking and effort through the real CLI' },
   { id: 'mock-deepseek-web-search', title: 'DeepSeek standalone search returns summaries through the real CLI to the model' },
   { id: 'mock-mcp-late-reconnect', title: 'Reconnect a late-starting MCP service into an already running CLI session' },
   { id: 'mock-session-delegation-review', title: 'Real CLI yields for model allocation and starts a child only after UI confirmation' },
@@ -93,6 +95,57 @@ export function createMockOnlyRunners(
   searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    async 'mock-openrouter-required-thinking'(ctx) {
+      const preset = PROVIDER_PRESETS.find(candidate => candidate.id === 'openrouter')!
+      const settingsUrl = `${ctx.baseUrl}/api/settings/user`
+      const original = await (await fetch(settingsUrl)).json() as { alwaysThinkingEnabled?: boolean }
+      const updateThinking = async (enabled: boolean) => {
+        const response = await fetch(settingsUrl, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ alwaysThinkingEnabled: enabled }),
+        })
+        if (!response.ok) throw new Error(`Updating fixture thinking failed: ${response.status}`)
+      }
+      let providerId: string | undefined
+      try {
+        const response = await fetch(`${ctx.baseUrl}/api/providers`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            presetId: preset.id, name: 'OpenRouter offline fixture', apiKey: 'mock-openrouter-key',
+            baseUrl: ctx.target.host, apiFormat: preset.apiFormat, authStrategy: preset.authStrategy,
+            models: preset.defaultModels,
+          }),
+        })
+        if (!response.ok) throw new Error(`Creating OpenRouter fixture failed: ${response.status}`)
+        providerId = ((await response.json()) as { provider: { id: string } }).provider.id
+        await updateThinking(false)
+        for (const modelId of [preset.defaultModels.sonnet, preset.defaultModels.opus, preset.defaultModels.haiku]) {
+          const socket = await ctx.openSocket(await ctx.createSession())
+          try {
+            socket.send({ type: 'set_runtime_config', providerId, modelId, effortLevel: 'max' })
+            const since = requests.length
+            socket.send({ type: 'user_message', content: 'Reply with one short sentence.' })
+            await socket.waitFor(message => message.type === 'message_complete', ctx.stepTimeoutMs, 'OpenRouter completion')
+            if (socket.messages.some(message => message.type === 'error') || !streamedText(socket.messages).trim()) {
+              throw new Error(`OpenRouter ${modelId} did not complete a reply`)
+            }
+            const sent = requests.slice(since).filter(request => request.stream && request.body.model === modelId)
+            if (sent.length === 0) throw new Error(`No request preserved OpenRouter model ID ${modelId}`)
+            for (const request of sent) {
+              const body = request.body as typeof request.body & { thinking?: { type?: string }; output_config?: { effort?: string } }
+              const isHaiku = modelId === preset.defaultModels.haiku
+              const expectedThinking = isHaiku ? 'disabled' : 'adaptive'
+              if (body.thinking?.type !== expectedThinking || (isHaiku && body.output_config?.effort !== 'high')) {
+                throw new Error(`OpenRouter ${modelId} sent incompatible controls: ${JSON.stringify({ thinking: body.thinking, output: body.output_config })}`)
+              }
+            }
+          } finally { socket.close() }
+        }
+      } finally {
+        await updateThinking(original.alwaysThinkingEnabled !== false)
+        if (providerId) await fetch(`${ctx.baseUrl}/api/providers/${providerId}`, { method: 'DELETE' })
+      }
+    },
     async 'mock-scheduled-task-default-runtime'(ctx) {
       const providers = await (await fetch(`${ctx.baseUrl}/api/providers`)).json() as { activeId: string | null }
       let taskId: string | undefined

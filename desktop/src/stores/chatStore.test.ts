@@ -4458,6 +4458,29 @@ describe('chatStore history mapping', () => {
     expect(mapped[2]).not.toHaveProperty('teammateFrom')
   })
 
+  it.each([false, true])('preserves mailbox envelopes when projecting a batch (blocks=%s)', (asBlocks) => {
+    const envelopes = [
+      '<teammate-message teammate_id="peer">peer note</teammate-message>',
+      '<teammate-message teammate_id="user">repeat</teammate-message>',
+      '<teammate-message teammate_id="user">repeat</teammate-message>',
+    ]
+    const content = envelopes.join('\n\n')
+    const mapped = mapHistoryMessagesToUiMessages([{
+      id: 'batch',
+      type: 'user',
+      timestamp: '2026-10-26T00:00:00.000Z',
+      content: asBlocks ? [{ type: 'text', text: content }] : content,
+    }], { includeTeammateMessages: true })
+
+    expect(mapped).toHaveLength(1)
+    expect(mapped[0]).toMatchObject({
+      type: 'user_text',
+      transcriptMessageId: 'batch',
+      modelContent: content,
+    })
+    expect(mapped[0]?.type === 'user_text' && mapped[0].content).not.toContain('<teammate-message')
+  })
+
   it('preserves source user ids when restoring array-content user prompts', () => {
     const messages: MessageEntry[] = [
       {

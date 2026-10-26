@@ -46,13 +46,23 @@ The built-in presets, as they appear in the dialog:
 
 - **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — major Chinese model vendors; the base URLs point at each one's Anthropic-compatible endpoint.
 - **XuanShu API** · **FennoAI** — routing services that give you access to official Claude models through their own gateways.
-- **Qiniu Cloud AI** — an aggregator MaaS platform: one key for DeepSeek, GLM, Kimi, Qwen, and more.
+- **Qiniu Cloud AI** · **OpenRouter** — aggregators: one key for DeepSeek, GLM, Kimi, Qwen, Claude, and more.
 - **LM Studio** · **Ollama** — local models; see the next section.
 - **Custom** — anything not listed above.
 
 Which models FennoAI and Qiniu Cloud AI give you depends on the plan you bought, so those two presets fill in the base URL only and pin no models: paste your key, hit "Fetch models", and pick one from the live list.
 
 When a preset has a signup page for API keys, a "Get API Key" button appears under the key field.
+
+### OpenRouter
+
+OpenRouter is an aggregator: one key reaches Claude, DeepSeek, GLM, Kimi and more. The preset fills in `https://openrouter.ai/api`, where OpenRouter serves an Anthropic-native protocol. The app connects directly instead of going through the local proxy, so thinking, tool use, and prompt caching keep their native semantics. As with the local models, don't append `/v1` to that address.
+
+Three things to know:
+
+- **Model IDs carry an `author/slug` namespace**, e.g. `anthropic/claude-sonnet-5.5` or `deepseek/deepseek-v4-pro`. All four prefilled slots are Claude 5.5; for anything else, click "Fetch models" and pick from the live list instead of copying a name from elsewhere — with a catalogue this size, a hand-typed ID is easy to get wrong.
+- **Claude Code only guarantees full compatibility with Anthropic first-party providers.** Reaching another vendor's model through OpenRouter can hit differences in tool calling, thinking, or parameter shape. On a 400, check "Disable experimental beta headers" first, then try another model.
+- **To use `/fast`**, pin the slot to a specific Opus ID (`~…-latest` aliases don't carry the fast parameter) and add `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1` to `env` in "Settings JSON". To let Claude Code run its own model discovery, add `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1` there too.
 
 ## Local models
 

@@ -272,6 +272,18 @@ export type NewSessionDraft = {
   hasContent: boolean
 }
 
+/** A workspace action the draft composer should perform after it assigns a session. */
+export type DraftWorkspaceAction = 'toggle-side' | 'toggle-bottom' | 'toggle-fullscreen'
+
+export type DraftWorkspaceRequest = {
+  action: DraftWorkspaceAction
+  /** Only the draft revision that asked for it may consume the request. */
+  revision: number
+  nonce: number
+  originatingTabId: string | null
+  originatingView: ActiveView
+}
+
 type UIStore = {
   /** The theme currently on `<html>` — resolved, not necessarily the manual pick. */
   theme: ThemeMode
@@ -297,6 +309,8 @@ type UIStore = {
   newSessionRequest: number
   /** Ephemeral composer seed. No server session exists until the first send. */
   newSessionDraft: NewSessionDraft | null
+  /** Set when a workspace control is used before the draft owns a session. */
+  draftWorkspaceRequest: DraftWorkspaceRequest | null
   activeModal: string | null
   toasts: Toast[]
 
@@ -319,6 +333,8 @@ type UIStore = {
   startNewSessionDraft: (workDir?: string) => void
   /** The composer of draft `revision` reports whether it holds unsent content. */
   setNewSessionDraftContent: (revision: number, hasContent: boolean) => void
+  requestDraftWorkspace: (action: DraftWorkspaceAction, originatingTabId?: string | null, originatingView?: ActiveView) => void
+  clearDraftWorkspaceRequest: (nonce: number) => void
   openModal: (id: string) => void
   closeModal: () => void
   addToast: (toast: Omit<Toast, 'id'>) => void
@@ -327,6 +343,7 @@ type UIStore = {
 
 let toastCounter = 0
 let newSessionDraftRevision = 0
+let draftWorkspaceRequestNonce = 0
 
 export const useUIStore = create<UIStore>((set) => ({
   theme: getInitialAppliedTheme(),
@@ -342,6 +359,7 @@ export const useUIStore = create<UIStore>((set) => ({
   pendingMarketTarget: null,
   newSessionRequest: 0,
   newSessionDraft: null,
+  draftWorkspaceRequest: null,
   activeModal: null,
   toasts: [],
 
@@ -422,6 +440,7 @@ export const useUIStore = create<UIStore>((set) => ({
       return {
         activeView: 'code',
         newSessionDraft: { workDir: workDir ?? '', revision: ++newSessionDraftRevision, hasContent: false },
+        draftWorkspaceRequest: null,
       }
     }
     // New-chat navigation returns to the retained composer and never replaces
@@ -436,6 +455,19 @@ export const useUIStore = create<UIStore>((set) => ({
       ? { newSessionDraft: { ...state.newSessionDraft, hasContent } }
       : state
   )),
+  requestDraftWorkspace: (action, originatingTabId = null, originatingView = 'code') => set(state => state.newSessionDraft
+    ? {
+        draftWorkspaceRequest: {
+          action,
+          revision: state.newSessionDraft.revision,
+          nonce: ++draftWorkspaceRequestNonce,
+          originatingTabId,
+          originatingView,
+        },
+      }
+    : state),
+  clearDraftWorkspaceRequest: (nonce) => set(state =>
+    state.draftWorkspaceRequest?.nonce === nonce ? { draftWorkspaceRequest: null } : state),
   requestNewSession: () => set((state) => ({ newSessionRequest: state.newSessionRequest + 1 })),
   openModal: (id) => set({ activeModal: id }),
   closeModal: () => set({ activeModal: null }),

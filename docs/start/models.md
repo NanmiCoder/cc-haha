@@ -46,13 +46,23 @@ cc-haha 自己不带模型，它只是那个替你干活的壳。装完之后第
 
 - **DeepSeek** · **Zhipu GLM** · **Kimi** · **MiniMax** — 国内主流模型厂商，接口地址是各家的 Anthropic 兼容端点。
 - **玄枢API** · **FennoAI** — 中转类服务商，用它们的通道调 Claude 官方模型。
-- **七牛云 AI** — 聚合类 MaaS 平台，一个密钥调 DeepSeek、GLM、Kimi、通义等多家模型。
+- **七牛云 AI** · **OpenRouter** — 聚合平台：一个密钥调 DeepSeek、GLM、Kimi、通义、Claude 等多家模型。
 - **LM Studio** · **Ollama** — 本地模型，见下一节。
 - **Custom** — 上面都没有，自己填。
 
 FennoAI 和七牛云 AI 能用哪些模型取决于你买的套餐，所以这两个预设只填接口地址、不预填模型：粘好密钥后点「拉取模型」，从实时列表里挑一个即可。
 
 选中预设后，如果这家服务商有申请密钥的页面，密钥输入框下面会出现一颗「获取 API Key」按钮，点开就是注册/取密钥的地址。
+
+### OpenRouter
+
+OpenRouter 是聚合平台，一个密钥就能调 Claude、DeepSeek、GLM、Kimi 等多家厂商的模型。预设把接口地址填成 `https://openrouter.ai/api`：它在这条地址上提供 Anthropic 原生协议，应用直连、不经过本地代理，thinking、工具调用和提示词缓存都按原生语义走。和本地模型一样，这个地址后面不要再补 `/v1`。
+
+三点需要留意：
+
+- **模型 ID 带 `author/slug` 命名空间**，例如 `anthropic/claude-sonnet-5.5`、`deepseek/deepseek-v4-pro`。预设的四个槽位预填的都是 Claude 5.5；想换别的模型就点「拉取模型」从实时列表里挑，别照抄别处的名字——模型一多，手写很容易拼错。
+- **Claude Code 只保证 Anthropic 第一方服务商的完全兼容。** 经 OpenRouter 调其他厂商的模型，工具调用、thinking 或参数形态可能对不上；报 400 时先勾「关闭实验性 Beta 头」，再考虑换模型。
+- **要用 `/fast`**，模型槽位得固定写一个具体的 Opus ID（`~…-latest` 这类别名不会带上 fast 参数），并在「设置 JSON」的 `env` 里加 `CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1`。想让 Claude Code 用自带的模型发现，同样在 `env` 里加 `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1`。
 
 ## 本地模型
 
