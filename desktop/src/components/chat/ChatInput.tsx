@@ -516,7 +516,13 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
     if (composerPrefill.mode === 'append') {
       setComposerAttachments((previous) => [...previous, ...uploads])
     } else {
-      let restored = { text: composerPrefill.text, mentions: [] as ComposerMention[] }
+      // The draft's structured pills travel with its projected text; restoring
+      // both keeps @-file references as pills instead of demoting them to
+      // literal `@"path"` text.
+      let restored: { text: string, mentions: ComposerMention[] } = {
+        text: composerPrefill.text,
+        mentions: composerPrefill.mentions ?? [],
+      }
       for (const reference of normalizeSessionReferences(composerPrefill.sessionReferences)) {
         const title = useSessionStore.getState().sessions.find((session) => session.id === reference.sessionId)?.title
         restored = insertMentionIntoText(restored.text, restored.mentions, restored.text.length, restored.text.length, {

@@ -231,6 +231,7 @@ export type PerSessionState = {
   composerPrefill?: {
     text: string
     attachments?: UIAttachment[]
+    mentions?: ComposerMention[]
     sessionReferences?: Array<{ sessionId: string }>
     mode?: ComposerPrefillMode
     nonce: number
@@ -478,6 +479,7 @@ type ChatStore = {
     prefill: {
       text: string
       attachments?: UIAttachment[]
+      mentions?: ComposerMention[]
       sessionReferences?: Array<{ sessionId: string }>
       mode?: ComposerPrefillMode
     },
@@ -4554,6 +4556,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             composerPrefill: {
               text: prefill.text,
               attachments: prefill.attachments,
+              ...(prefill.mentions ? { mentions: prefill.mentions } : {}),
               ...(prefill.sessionReferences ? { sessionReferences: prefill.sessionReferences } : {}),
               mode: prefill.mode,
               nonce: Date.now(),
@@ -7370,7 +7373,7 @@ export type VisibleTeammateMessage = { from: string; content: string }
  * Teammate turns carry the sender in the tag; keeping it lets the transcript
  * attribute the message instead of rendering it as an anonymous user turn.
  */
-function extractVisibleTeammateMessages(text: string): VisibleTeammateMessage[] {
+export function extractVisibleTeammateMessages(text: string): VisibleTeammateMessage[] {
   const messages: VisibleTeammateMessage[] = []
 
   for (const match of text.matchAll(TEAMMATE_CONTENT_REGEX)) {
@@ -8117,6 +8120,9 @@ export function mapHistoryMessagesToUiMessages(
           id: msg.id || nextId(),
           type: 'user_text',
           content: teammateMessages.map((message) => message.content).join('\n\n'),
+          // Preserve envelope occurrences for member-send reconciliation. A
+          // mailbox batch is one model prompt but can acknowledge many sends.
+          modelContent: msg.content,
           ...(msg.id ? { transcriptMessageId: msg.id } : {}),
           ...(sender ? { teammateFrom: sender } : {}),
           timestamp,
