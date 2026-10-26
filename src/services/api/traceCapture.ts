@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'crypto'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { promises as fs } from 'fs'
 import type { Stats } from 'fs'
-import { dirname, join } from 'path'
+import { dirname, isAbsolute, join, resolve } from 'path'
 import { getClaudeConfigHomeDir, isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
 import {
   openTraceIndexDatabase,
@@ -294,6 +294,7 @@ type CanonicalTraceRevisionState = {
 export type TraceIndexTarget = {
   path: string
   scope: string
+  customStorage?: boolean
 }
 
 type TraceScopeContext = {
@@ -345,17 +346,29 @@ export function isTraceCaptureEnabled(): boolean {
 }
 
 export function getTraceStorageDir(): string {
-  return join(getClaudeConfigHomeDir(), 'cc-haha', 'traces')
+  return currentTraceScopeContext().storageDir
 }
 
 function currentTraceScopeContext(): TraceScopeContext {
   const scope = getClaudeConfigHomeDir()
+  const configuredDir = process.env.CC_HAHA_TRACE_DIR?.trim()
+  if (configuredDir && (!isAbsolute(configuredDir) || configuredDir.includes('\0'))) {
+    throw traceResourceError('TRACE_INVALID_STORAGE_DIR', 'CC_HAHA_TRACE_DIR must be an absolute directory path')
+  }
+  const storageDir = configuredDir ? resolve(configuredDir) : join(scope, 'cc-haha', 'traces')
+  // Keep the managed settings scope separate from the trace storage scope.
+  // A custom directory gets its own disposable index under the existing
+  // managed-path boundary, rather than sharing an index with another root.
+  const indexScope = configuredDir ? storageDir : scope
   return {
     scope,
-    storageDir: join(scope, 'cc-haha', 'traces'),
+    storageDir,
     target: {
-      path: join(scope, 'cc-haha', 'db', 'trace-index-v1.sqlite'),
-      scope,
+      // The storage root may equal the config root, whose legacy index describes
+      // a different JSONL directory. Never share that index with custom storage.
+      path: join(indexScope, 'cc-haha', 'db', configuredDir ? 'trace-storage-index-v1.sqlite' : 'trace-index-v1.sqlite'),
+      scope: indexScope,
+      customStorage: Boolean(configuredDir),
     },
   }
 }
@@ -365,19 +378,19 @@ function currentTraceIndexTarget(): TraceIndexTarget {
 }
 
 export function readTraceCaptureSettingsSync(): TraceCaptureSettings {
-  const scope = getClaudeConfigHomeDir()
+  const { scope, storageDir } = currentTraceScopeContext()
   const settings = readManagedSettingsSync(scope)
-  return normalizeTraceCaptureSettings(settings, scope)
+  return normalizeTraceCaptureSettings(settings, storageDir)
 }
 
 export async function readTraceCaptureSettings(): Promise<TraceCaptureSettings> {
-  const scope = getClaudeConfigHomeDir()
+  const { scope, storageDir } = currentTraceScopeContext()
   const settings = await readManagedSettings(scope)
-  return normalizeTraceCaptureSettings(settings, scope)
+  return normalizeTraceCaptureSettings(settings, storageDir)
 }
 
 export async function updateTraceCaptureSettings(input: Partial<Pick<TraceCaptureSettings, 'enabled'>>): Promise<TraceCaptureSettings> {
-  const scope = getClaudeConfigHomeDir()
+  const { scope, storageDir } = currentTraceScopeContext()
   const current = await readManagedSettings(scope)
   const traceCapture = current[TRACE_SETTINGS_KEY]
   const previous = traceCapture && typeof traceCapture === 'object' && !Array.isArray(traceCapture)
@@ -392,7 +405,7 @@ export async function updateTraceCaptureSettings(input: Partial<Pick<TraceCaptur
     [TRACE_SETTINGS_KEY]: nextTraceCapture,
   }
   await writeManagedSettings(nextSettings, scope)
-  return normalizeTraceCaptureSettings(nextSettings, scope)
+  return normalizeTraceCaptureSettings(nextSettings, storageDir)
 }
 
 export const TRACE_CAPTURE_NODE_LIMIT = 4096
@@ -994,11 +1007,11 @@ class TraceCaptureService {
     if (!normalizedSessionId) return { sessionId: normalizedSessionId, deleted: false }
 
     const context = currentTraceScopeContext()
-    const { scope, target } = context
-    const pendingWrite = traceWriteQueues.get(`${scope}\0${normalizedSessionId}`)
+    const { target } = context
+    const filePath = getTraceFilePath(normalizedSessionId, context)
+    const pendingWrite = traceWriteQueues.get(filePath)
     if (pendingWrite) await pendingWrite.catch(() => {})
 
-    const filePath = getTraceFilePath(normalizedSessionId, context)
     try {
       await fs.unlink(filePath)
       traceReadCache.delete(filePath)
@@ -1028,7 +1041,7 @@ class TraceCaptureService {
     const { target, storageDir } = context
     const settings = normalizeTraceCaptureSettings(
       await readManagedSettings(context.scope),
-      context.scope,
+      storageDir,
     )
     const all = options?.all === true
     const limit = all ? Number.POSITIVE_INFINITY : clampListLimit(options?.limit ?? 50)
@@ -1124,7 +1137,7 @@ class TraceCaptureService {
     const { storageDir } = context
     const settings = normalizeTraceCaptureSettings(
       await readManagedSettings(context.scope),
-      context.scope,
+      storageDir,
     )
     const files = (await listTraceFiles(storageDir))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
@@ -1503,6 +1516,7 @@ function getTraceIndex(target = currentTraceIndexTarget()): TraceIndex | null {
     const database = openTraceIndexDatabase({
       path: databasePath,
       scope: target.scope,
+      customStorage: target.customStorage,
     })
     const index = createTraceIndex(database)
     traceIndexStates.set(databasePath, { path: databasePath, database, index })
@@ -2898,18 +2912,10 @@ async function projectAppendedTraceEntry(
 
 async function appendTraceEntry(sessionId: string, entry: TraceFileEntry): Promise<void> {
   const normalizedSessionId = sanitizeTraceFileName(sessionId)
-  const scope = getClaudeConfigHomeDir()
-  const filePath = join(
-    scope,
-    'cc-haha',
-    'traces',
-    `${normalizedSessionId}.jsonl`,
-  )
-  const target: TraceIndexTarget = {
-    scope,
-    path: join(scope, 'cc-haha', 'db', 'trace-index-v1.sqlite'),
-  }
-  const queueKey = `${scope}\0${normalizedSessionId}`
+  const context = currentTraceScopeContext()
+  const filePath = getTraceFilePath(normalizedSessionId, context)
+  const { target } = context
+  const queueKey = filePath
   const previous = traceWriteQueues.get(queueKey) ?? Promise.resolve()
   const next = previous
     .catch(() => {})
@@ -3386,19 +3392,19 @@ function getManagedSettingsPath(scope = getClaudeConfigHomeDir()): string {
 }
 
 function defaultTraceCaptureSettings(
-  scope = getClaudeConfigHomeDir(),
+  storageDir: string,
 ): TraceCaptureSettings {
   return {
     enabled: true,
-    storageDir: join(scope, 'cc-haha', 'traces'),
+    storageDir,
   }
 }
 
 function normalizeTraceCaptureSettings(
   settings: Record<string, unknown>,
-  scope = getClaudeConfigHomeDir(),
+  storageDir: string,
 ): TraceCaptureSettings {
-  const defaultSettings = defaultTraceCaptureSettings(scope)
+  const defaultSettings = defaultTraceCaptureSettings(storageDir)
   const traceCapture = settings[TRACE_SETTINGS_KEY]
   if (!traceCapture || typeof traceCapture !== 'object' || Array.isArray(traceCapture)) {
     return defaultSettings

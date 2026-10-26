@@ -58,11 +58,12 @@ function configureConnection(database: Database): void {
 export function openTraceIndexDatabase(options?: {
   path?: string
   scope?: string
+  customStorage?: boolean
 }): TraceIndexDatabase {
   const databasePath = options?.path ?? getTraceIndexDatabasePath()
   prepareManagedDatabasePath({
     databasePath,
-    filename: 'trace-index-v1.sqlite',
+    filename: options?.customStorage ? 'trace-storage-index-v1.sqlite' : 'trace-index-v1.sqlite',
     scope: options?.scope ?? (options?.path ? undefined : getClaudeConfigHomeDir()),
   })
   const database = new Database(databasePath)
