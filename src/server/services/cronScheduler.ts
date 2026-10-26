@@ -15,6 +15,9 @@ import * as os from 'os'
 import * as crypto from 'crypto'
 import { isBlankFileContent } from './blankFileContent.js'
 import { CronService, type CronTask } from './cronService.js'
+import { getScheduledSessionTaskExecutor } from './scheduledTaskExecution.js'
+import { nextScheduledTime } from './scheduledTaskSchedule.js'
+import { claimScheduledTaskReceipt, finishScheduledTaskReceipt, readScheduledTaskReceipts, pruneScheduledTaskReceipts, isReceiptOwnerAlive, scheduledTaskReceiptsDir, type ScheduledTaskReceipt } from './scheduledTaskReceipts.js'
 import { SessionService } from './sessionService.js'
 import { sendTaskNotification } from './notificationService.js'
 import { ProviderService } from './providerService.js'
@@ -59,6 +62,10 @@ export type TaskRun = {
   error?: string
   exitCode?: number
   durationMs?: number
+  occurrenceId?: string
+  scheduledFor?: string
+  notificationDecision?: 'notify' | 'silent'
+  notificationPolicy?: 'important' | 'all' | 'failed' | 'none'
   sessionId?: string // links to a session for rich output rendering
 }
 
@@ -74,6 +81,13 @@ export function buildCronTaskSpawnOptions(
     env,
     windowsHide: true,
   } as const
+}
+
+export function shouldNotifyScheduledRun(task: CronTask, run: TaskRun): boolean {
+  if (task.notificationPolicy === 'none') return false
+  if (task.notificationPolicy === 'failed') return run.status === 'failed' || run.status === 'timeout'
+  if (task.notificationPolicy === 'important') return run.status !== 'completed' || run.notificationDecision !== 'silent'
+  return true
 }
 
 // ─── Output extraction ────────────────────────────────────────────────────────
@@ -534,8 +548,14 @@ export function buildCronCliArgs(
   ]
 }
 
+// Reserve a target before asynchronous admission/claim work. Separate scheduler
+// instances in the same host must not claim competing tasks for one conversation.
+const sessionTaskTargets = new Set<string>()
+
 export class CronScheduler {
   private intervalId: Timer | null = null
+  private sessionTasks = new Map<string, AbortController>()
+  private sessionTaskPromises = new Set<Promise<TaskRun | undefined>>()
   private runningTasks = new Map<
     string,
     { proc: ReturnType<typeof Bun.spawn>; startedAt: number; runId: string; resultReceived?: boolean; migrationInterrupted?: boolean }
@@ -565,6 +585,7 @@ export class CronScheduler {
     migrationMaintenance.track(this.cleanupStaleRuns()).catch((err) =>
       console.error('[CronScheduler] Error cleaning up stale runs:', err),
     )
+    migrationMaintenance.track(this.recoverSessionTaskReceipts()).catch(error => console.error('[CronScheduler] Cannot recover scheduled receipts:', error))
     this.intervalId = setInterval(() => this.tick(), 60_000)
     // Immediate first check
     this.tick()
@@ -572,13 +593,14 @@ export class CronScheduler {
 
   /** Stop the scheduler and kill any running task processes. */
   stop(): void {
-    const wasRunning = this.intervalId !== null || this.runningTasks.size > 0
+    const wasRunning = this.intervalId !== null || this.runningTasks.size > 0 || this.sessionTasks.size > 0
     if (!wasRunning) return
 
     if (this.intervalId) {
       clearInterval(this.intervalId)
       this.intervalId = null
     }
+    for (const controller of this.sessionTasks.values()) controller.abort(new Error('Scheduler stopped'))
     for (const [taskId, entry] of this.runningTasks) {
       try {
         entry.proc.kill()
@@ -591,17 +613,27 @@ export class CronScheduler {
   }
 
   /** One tick of the scheduler — evaluate all tasks against the current time. */
-  async tick(): Promise<void> {
+  async tick(now = new Date()): Promise<void> {
     if (migrationMaintenance.isActive) return
     try {
       const tasks = await this.cronService.listTasks()
-      const now = new Date()
       const currentKey = CronScheduler.minuteKey(now)
 
       for (const task of tasks) {
         if (migrationMaintenance.isActive) return
         // Skip disabled tasks
         if (task.enabled === false) continue
+
+        if (task.execution) {
+          if (task.schedule?.kind === 'once' && task.lastFiredAt && Date.parse(task.lastFiredAt) >= (task.scheduleAnchorAt ?? task.createdAt)) continue
+          const due = task.schedule
+            ? nextScheduledTime(task.schedule, Math.max(task.scheduleAnchorAt ?? task.createdAt, task.lastFiredAt ? Date.parse(task.lastFiredAt) : 0))
+            : cronMatches(task.cron, now) ? Math.floor(now.getTime() / 60_000) * 60_000 : null
+          if (due !== null && due <= now.getTime() && !this.sessionTasks.has(task.id)) {
+            void this.launchSessionTask(task, new Date(due).toISOString()).catch(error => console.error('[CronScheduler] Session task failed:', error))
+          }
+          continue
+        }
 
         // Skip if already running (in-memory guard — same process)
         if (this.runningTasks.has(task.id)) continue
@@ -616,7 +648,8 @@ export class CronScheduler {
           if (lastFiredKey === currentKey) continue
         }
 
-        if (cronMatches(task.cron, now)) {
+        const scheduledDue = task.schedule ? nextScheduledTime(task.schedule, Math.max(task.scheduleAnchorAt ?? task.createdAt, task.lastFiredAt ? Date.parse(task.lastFiredAt) : 0)) : null
+        if (task.schedule ? scheduledDue !== null && scheduledDue <= now.getTime() : cronMatches(task.cron, now)) {
           // Record the minute key BEFORE firing to prevent double-fire
           this.lastFiredMinuteKey.set(task.id, currentKey)
           // Fire and forget — don't await; we want all matching tasks to start
@@ -640,6 +673,10 @@ export class CronScheduler {
    */
   executeTask(task: CronTask, options?: { createSession?: boolean }): Promise<TaskRun> {
     if (migrationMaintenance.isActive) return Promise.reject(new Error('Data migration is in progress'))
+    if (task.execution) return migrationMaintenance.track(this.launchSessionTask(task, new Date().toISOString(), true).then(run => {
+      if (!run) throw new Error('Scheduled task target is busy or this occurrence was already claimed')
+      return run
+    }))
     return migrationMaintenance.track(this.executeTaskOnce(task, options))
   }
 
@@ -648,6 +685,8 @@ export class CronScheduler {
   }
 
   async stopAndWait(): Promise<void> {
+    for (const controller of this.sessionTasks.values()) controller.abort(new Error('Data migration is in progress'))
+    await Promise.allSettled([...this.sessionTaskPromises])
     const entries = [...this.runningTasks.values()]
     for (const entry of entries) {
       if (!entry.resultReceived) entry.migrationInterrupted = true
@@ -666,6 +705,108 @@ export class CronScheduler {
     for (const proc of processes) {
       const exited = await waitForMigrationExit(proc.exited)
       if (!exited) throw new Error('Scheduled task process did not exit')
+    }
+  }
+
+  private launchSessionTask(task: CronTask, scheduledFor: string, manual = false): Promise<TaskRun | undefined> {
+    const promise = migrationMaintenance.track(this.executeSessionTask(task, scheduledFor, manual))
+    this.sessionTaskPromises.add(promise)
+    void promise.finally(() => this.sessionTaskPromises.delete(promise)).catch(() => {})
+    return promise
+  }
+
+  private async executeSessionTask(task: CronTask, scheduledFor: string, manual = false): Promise<TaskRun | undefined> {
+    if (this.sessionTasks.has(task.id)) return
+    const executor = getScheduledSessionTaskExecutor()
+    if (!executor) return
+    const directory = scheduledTaskReceiptsDir()
+    const targetKey = task.execution?.kind === 'session' ? `${directory}\0${task.execution.targetSessionId}` : undefined
+    if (targetKey && sessionTaskTargets.has(targetKey)) return
+    if (targetKey) sessionTaskTargets.add(targetKey)
+    const controller = new AbortController()
+    this.sessionTasks.set(task.id, controller)
+    const logTarget = captureRunsFileMutationTarget()
+    try {
+      let preflightError: string | undefined
+      try { if (!await executor.canStart(task)) return } catch (error) { preflightError = String(error) }
+      const current = await this.cronService.getTask(task.id)
+      if (!current || (!manual && current.enabled === false) || (current.revision ?? 1) !== (task.revision ?? 1) || controller.signal.aborted) return
+      const occurrenceId = manual ? `manual:${task.id}:${crypto.randomUUID()}` : `${task.id}:${task.revision ?? 1}:${scheduledFor}`
+      const runId = crypto.createHash('sha256').update(occurrenceId).digest('hex').slice(0, 24)
+      const startedAt = new Date().toISOString()
+      const receipt: ScheduledTaskReceipt = { version: 1, occurrenceId, taskId: task.id, taskRevision: task.revision ?? 1, runId, scheduledFor, claimedAt: startedAt, ownerPid: process.pid, state: 'claimed' }
+      if (!await claimScheduledTaskReceipt(receipt, directory)) return
+      const run: TaskRun = {
+        id: runId, taskId: task.id, taskName: task.name || task.prompt.slice(0, 60), prompt: task.prompt,
+        startedAt, scheduledFor, occurrenceId, status: 'running', notificationPolicy: task.notificationPolicy,
+        ...(task.execution?.kind === 'session' ? { sessionId: task.execution.targetSessionId } : {}),
+      }
+      await appendRun(run, logTarget)
+      await this.cronService.updateLastFired(task.id, startedAt, { expectedRevision: task.revision ?? 1 })
+      const timeout = setTimeout(() => controller.abort(new Error('Scheduled task timed out')), resolveCronTaskTimeoutMs())
+      let completed: TaskRun
+      try {
+        if (preflightError) throw new Error(preflightError)
+        const latest = await this.cronService.getTask(task.id)
+        if (!latest || (!manual && latest.enabled === false) || (latest.revision ?? 1) !== (task.revision ?? 1)) throw new Error('Task changed before delivery')
+        const result = await executor.execute({ task, runId, occurrenceId, scheduledFor, signal: controller.signal, onSessionResolved: async sessionId => {
+          run.sessionId = sessionId
+          await updateRun(run, logTarget)
+        }, canSend: async () => {
+          const fresh = await this.cronService.getTask(task.id)
+          return !controller.signal.aborted && !!fresh && (manual || fresh.enabled !== false) && (fresh.revision ?? 1) === (task.revision ?? 1)
+        } })
+        completed = { ...run, ...result, completedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt) }
+      } catch (error) {
+        completed = { ...run, status: 'failed', error: error instanceof Error ? error.message : String(error), completedAt: new Date().toISOString(), durationMs: Date.now() - Date.parse(startedAt) }
+      } finally { clearTimeout(timeout) }
+      // Receipt first: a crash before the history write is repaired without resending a turn.
+      await finishScheduledTaskReceipt(receipt, completed, directory)
+      await updateRun(completed, logTarget)
+      if (task.notification?.enabled && task.notification.channels.length > 0 && shouldNotifyScheduledRun(task, completed)) {
+        void sendTaskNotification(completed, task.notification).catch(error => console.error('[CronScheduler] Notification error:', error))
+      }
+      if (task.schedule?.kind === 'once' || !task.recurring) {
+        const latest = await this.cronService.getTask(task.id)
+        const sameSchedule = latest && JSON.stringify(latest.schedule) === JSON.stringify(task.schedule) && latest.scheduleAnchorAt === task.scheduleAnchorAt
+        if (sameSchedule && latest.enabled !== false) await this.cronService.updateTask(task.id, { enabled: false, completedAt: completed.completedAt }, { expectedRevision: latest.revision ?? 1 }).catch(() => {})
+      }
+      await finishScheduledTaskReceipt(receipt, completed, directory, true)
+      await pruneScheduledTaskReceipts(task.id, directory).catch(error => console.error('[CronScheduler] Receipt retention failed:', error))
+      return completed
+    } finally {
+      this.sessionTasks.delete(task.id)
+      if (targetKey) sessionTaskTargets.delete(targetKey)
+    }
+  }
+
+  private async recoverSessionTaskReceipts(): Promise<void> {
+    const directory = scheduledTaskReceiptsDir()
+    const target = captureRunsFileMutationTarget()
+    for (const receipt of await readScheduledTaskReceipts(directory)) {
+      if (receipt.state === 'finished' && receipt.historyWritten) continue
+      if (receipt.state === 'claimed' && isReceiptOwnerAlive(receipt.ownerPid)) continue
+      const existing = await this.getRunDetail(receipt.runId)
+      const task = await this.cronService.getTask(receipt.taskId)
+      const run: TaskRun = receipt.run ?? (existing && existing.status !== 'running' ? existing : undefined) ?? {
+        id: receipt.runId, taskId: receipt.taskId, taskName: task?.name ?? existing?.taskName ?? receipt.taskId,
+        prompt: task?.prompt ?? existing?.prompt ?? '', startedAt: receipt.claimedAt, completedAt: new Date().toISOString(),
+        scheduledFor: receipt.scheduledFor, occurrenceId: receipt.occurrenceId, status: 'failed',
+        error: 'Execution was interrupted. Delivery may have occurred; automatic replay was suppressed.',
+        ...(existing?.sessionId ? { sessionId: existing.sessionId } : task?.execution?.kind === 'session' ? { sessionId: task.execution.targetSessionId } : {}),
+      }
+      if (receipt.state !== 'finished') await finishScheduledTaskReceipt(receipt, run, directory)
+      // Upsert under the log mutation queue: concurrent recovery must not append duplicates.
+      await updateRun(run, target)
+      // A process can die after exclusive claim but before appendRun/updateLastFired.
+      // Advance only the claimed task revision, otherwise its next tick gets stuck
+      // on the receipt forever (or an old receipt overwrites a newly edited schedule).
+      const recoveryAnchor = new Date(Math.max(Date.parse(receipt.claimedAt), Date.parse(receipt.scheduledFor))).toISOString()
+      await this.cronService.updateLastFired(receipt.taskId, recoveryAnchor, { expectedRevision: receipt.taskRevision })
+      if (task && (task.schedule?.kind === 'once' || !task.recurring)) {
+        await this.cronService.updateTask(task.id, { enabled: false, completedAt: run.completedAt }, { expectedRevision: receipt.taskRevision }).catch(() => {})
+      }
+      await finishScheduledTaskReceipt(receipt, run, directory, true)
     }
   }
 
@@ -723,6 +864,7 @@ export class CronScheduler {
       startedAt,
       status: 'running',
       prompt: task.prompt,
+      notificationPolicy: task.notificationPolicy,
       sessionId,
     }
 
@@ -861,7 +1003,7 @@ export class CronScheduler {
       await updateRun(completedRun, runLogTarget)
 
       // Send IM notification if configured
-      if (task.notification?.enabled && task.notification.channels.length > 0) {
+      if (task.notification?.enabled && task.notification.channels.length > 0 && shouldNotifyScheduledRun(task, completedRun)) {
         migrationMaintenance.track(sendTaskNotification(completedRun, task.notification)).catch((err) => {
           console.error(`[CronScheduler] Notification error for task ${task.id}:`, err)
         })

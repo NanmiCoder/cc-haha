@@ -38,6 +38,7 @@ import {
 } from '../grokAuth/fetch.js'
 import { DEEPSEEK_OAUTH_DUMMY_KEY } from '../deepseekAuth/client.js'
 import { buildDeepSeekFetch } from '../deepseekAuth/fetch.js'
+import { buildProviderMediaFetch } from './providerMedia/fetch.js'
 import { isDebugToStdErr, logForDebugging } from '../../utils/debug.js'
 import {
   getAWSRegion,
@@ -521,7 +522,7 @@ function buildFetch(
   source: string | undefined,
 ): ClientOptions['fetch'] {
   // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
-  const inner = fetchOverride ?? globalThis.fetch
+  const inner = buildProviderMediaFetch(fetchOverride ?? globalThis.fetch)
   // Only send to the first-party API — Bedrock/Vertex/Foundry don't log it
   // and unknown headers risk rejection by strict proxies (inc-4029 class).
   const injectClientRequestId =

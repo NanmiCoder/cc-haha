@@ -9,6 +9,10 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Desktop scheduled tasks preserve legacy definitions and replay scheduled provenance',
+    command: ['bun', 'test', './src/server/services/scheduledTaskRuntime.test.ts', './src/server/services/sessionService.scheduledTask.test.ts'],
+  },
+  {
     title: 'Desktop WebSearch settings migrate old fixtures for the DeepSeek backend',
     command: ['bun', 'run', 'test', '--', '--run', 'src/stores/settingsStoreWebSearch.test.ts'],
     cwd: 'desktop',
@@ -49,6 +53,10 @@ const checks: Check[] = [
   {
     title: 'Connector installation state migrations',
     command: ['bun', 'test', './src/server/services/connectorsPersistence.test.ts'],
+  },
+  {
+    title: 'Mobile push registration encryption and schema migration',
+    command: ['bun', 'test', './src/server/services/mobilePushService.test.ts', '--test-name-pattern', 'migration|extensions|encrypted'],
   },
   {
     title: 'Public browser device store migration',

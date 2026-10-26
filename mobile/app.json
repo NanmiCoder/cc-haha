@@ -1,0 +1,88 @@
+{
+  "expo": {
+    "name": "cc-haha",
+    "slug": "cc-haha-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "cchaha",
+    "userInterfaceStyle": "automatic",
+    "icon": "./assets/icon.png",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yunce.cchaha.mobile",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "连接同一局域网中运行 cc-haha 的电脑。",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": true
+        },
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "app.cchaha.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icon.png",
+        "backgroundColor": "#E8E7E3"
+      },
+      "permissions": [
+        "CAMERA"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/icon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "扫描 cc-haha 桌面端的连接二维码。",
+          "recordAudioAndroid": false
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ],
+      "expo-font",
+      "./plugins/withPinnedWebSockets",
+      "expo-sharing",
+      [
+        "expo-widgets",
+        {
+          "bundleIdentifier": "com.yunce.cchaha.mobile.widgets",
+          "groupIdentifier": "group.com.yunce.cchaha.mobile",
+          "enablePushNotifications": true,
+          "frequentUpdates": false,
+          "widgets": []
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "cc-haha",
+          "enableBackgroundRemoteNotifications": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "选择图片和截图，作为任务材料发送到你连接的电脑。",
+          "cameraPermission": "拍摄照片，作为任务材料发送到你连接的电脑。",
+          "microphonePermission": false
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

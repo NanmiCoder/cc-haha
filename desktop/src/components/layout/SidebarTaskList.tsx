@@ -1,3 +1,4 @@
+import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { Check, Folder, GitBranch } from 'lucide-react'
 import { Spinner } from '@/components/ui/Spinner'
 import type { TranslationKey } from '../../i18n'
@@ -169,6 +170,7 @@ function SidebarTaskRow({
           </span>
         ) : null}
         <span className={`min-w-0 flex-1 truncate text-[13px] ${isActive || isSelected ? 'font-medium' : ''}`}>{title}</span>
+        <SessionScheduleMark sessionId={session.id} />
         <span className="ml-auto flex h-4 flex-shrink-0 items-center justify-end">
           {needsAttention ? (
             <span className="inline-flex h-4 w-4 items-center justify-center">

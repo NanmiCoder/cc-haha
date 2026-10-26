@@ -524,6 +524,7 @@ describe('WebSocket handler session isolation', () => {
       {
         requestId: 'request-ask-1',
         toolName: 'AskUserQuestion',
+        autoAnswerDeadline: 1_800_000_030_000,
         toolUseId: 'tool-ask-1',
         input: {
           questions: [
@@ -544,6 +545,7 @@ describe('WebSocket handler session isolation', () => {
       type: 'permission_request',
       requestId: 'request-ask-1',
       toolName: 'AskUserQuestion',
+      autoAnswerDeadline: 1_800_000_030_000,
       toolUseId: 'tool-ask-1',
       input: {
         questions: [

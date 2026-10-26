@@ -1,3 +1,4 @@
+import type { ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
 /**
  * WebSocket event type definitions
  *
@@ -89,6 +90,8 @@ export type ServerMessage =
       input: unknown
       description?: string
       displayName?: string
+      /** Server epoch milliseconds; null cancels a previously announced automatic-answer timer. */
+      autoAnswerDeadline?: number | null
     }
   | {
       type: 'computer_use_permission_request'
@@ -107,8 +110,8 @@ export type ServerMessage =
       computerUseRequestIds: string[]
       turnActive: boolean
     }
-  | { type: 'user_message_replay'; content: string; sessionReferences?: { sessionId: string }[] }
-  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming }
+  | { type: 'user_message_replay'; content: string; sessionReferences?: { sessionId: string }[]; scheduledTask?: ScheduledTaskMetadata }
+  | { type: 'message_complete'; usage: TokenUsage; timing?: TurnTiming; scheduledTask?: ScheduledTaskMetadata }
   /**
    * `text` is a fragment when the CLI streams `thinking_delta`, and a whole block when
    * it hands over a finished `thinking` block. The client has to concatenate the first
@@ -137,6 +140,7 @@ export type ServerMessage =
       errorStatus: number | null
       errorType?: string
       errorMessage?: string
+      requestId?: string
     }
   // 流式请求失败、CLI 已降级为非流式重试。非流式响应要等完整生成才返回，
   // 期间没有任何增量输出，前端据此显示"慢速模式"轻提示而不是裸转圈。
@@ -160,7 +164,7 @@ export type AgentRunStreamMessage =
   | { type: 'tool_result'; toolUseId: string; originalToolUseId?: string; content: unknown; isError: boolean; parentToolUseId?: string }
   | { type: 'thinking'; text: string; complete?: boolean }
   | { type: 'status'; state: ChatState; verb?: string; attemptStart?: boolean; compactProgress?: { outputChars: number } }
-  | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string }
+  | { type: 'api_retry'; attempt: number; maxRetries: number; retryDelayMs: number; errorStatus: number | null; errorType?: string; errorMessage?: string; requestId?: string }
   | { type: 'streaming_fallback'; cause: StreamingFallbackCause }
   | { type: 'error'; message: string; code: string; retryable?: boolean; businessErrorCode?: string }
 
