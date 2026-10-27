@@ -5786,7 +5786,13 @@ export class SessionService {
   // --------------------------------------------------------------------------
 
   private entriesToMessages(entries: RawEntry[]): MessageEntry[] {
-    const messages: MessageEntry[] = []
+    // The append-only transcript can replay UUIDs after compaction. Project
+    // each logical message once, with its latest body in its original position.
+    // Duplicate UI identities otherwise leave orphaned React nodes on tab changes.
+    const messages = new Map<string, MessageEntry>()
+    const rememberMessage = (message: MessageEntry) => {
+      messages.set(JSON.stringify([message.id, message.parentToolUseId ?? null]), message)
+    }
     const entriesByUuid = new Map<string, RawEntry>()
     const parentToolUseIdCache = new Map<string, string | undefined>()
 
@@ -5799,7 +5805,7 @@ export class SessionService {
     for (const entry of entries) {
       const goalLocalCommandMessage = this.goalLocalCommandEntryToMessage(entry)
       if (goalLocalCommandMessage) {
-        messages.push(goalLocalCommandMessage)
+        rememberMessage(goalLocalCommandMessage)
         continue
       }
 
@@ -5833,10 +5839,10 @@ export class SessionService {
       )
       const msg = this.entryToMessage(entry, parentToolUseId)
       if (msg) {
-        messages.push(msg)
+        rememberMessage(msg)
       }
     }
-    return messages
+    return [...messages.values()]
   }
 
   private async pathExists(targetPath: string | null): Promise<boolean> {

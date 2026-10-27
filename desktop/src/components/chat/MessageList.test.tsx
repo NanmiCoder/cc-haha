@@ -712,7 +712,8 @@ describe('MessageList nested tool calls', () => {
     fireEvent.scroll(scroller)
     scroller.scrollTop = 150
     fireEvent.scroll(scroller)
-    expect(container.querySelector('[data-virtual-message-item="appearance-row-1"]')).not.toBeNull()
+    const readingRow = container.querySelector<HTMLElement>('[data-chat-render-item-key="appearance-row-1"]')
+    expect(readingRow).not.toBeNull()
     getHeightsForSession(sessionId).set('appearance-row-100', 987)
     rowHeight = 200
     act(() => {
@@ -725,7 +726,7 @@ describe('MessageList nested tool calls', () => {
     // Row 1 remains the reading anchor, 50px below its top, despite row 0 growing.
     expect(scroller.scrollTop).toBe(250)
     expect(getHeightsForSession(sessionId).has('appearance-row-100')).toBe(false)
-    expect(getHeightsForSession(sessionId).get('appearance-row-1')).toBe(200)
+    expect(getHeightsForSession(sessionId).get(readingRow!.dataset.virtualMessageItem!)).toBe(200)
     act(() => useChatAppearanceStore.setState({ appearance: { font: 'system', fontSize: 14, width: 'standard' } }))
     dispose()
     localStorage.removeItem(CHAT_APPEARANCE_STORAGE_KEY)
