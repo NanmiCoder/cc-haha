@@ -44,6 +44,8 @@ import { useTabStore } from '../../stores/tabStore'
 import { useTrajectoryViewStore } from '../../stores/trajectoryViewStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useTeamStore } from '../../stores/teamStore'
+import { useTeamPlanStore } from '../../stores/teamPlanStore'
+import type { TeamPlanRecord } from '../../../../src/shared/teamPlan'
 import { formatExactMessageTimestamp, formatMessageHoverTime } from '../../lib/formatMessageTimestamp'
 import type { UIMessage } from '../../types/chat'
 import type { MessageEntry } from '../../types/session'
@@ -9710,6 +9712,24 @@ describe('Agent Teams chat projection', () => {
     }).renderItems.some(item => item.kind === 'team_card')).toBe(false)
   })
 
+  it('ends a team the host removed once the lead creates its next one', () => {
+    // A cancelled or ended plan is removed by the desktop, so no TeamDelete
+    // marks it; a lead still leads one team at a time.
+    const create = (name: string, at: number): UIMessage[] => [
+      { id: `${name}-tool`, type: 'tool_use', toolName: 'TeamCreate', toolUseId: name, input: { team_name: name }, timestamp: at },
+      { id: `${name}-result`, type: 'tool_result', toolUseId: name, content: { team_name: name }, isError: false, timestamp: at + 1 },
+    ]
+    const cards = buildRenderModel([...create('first-team', 1), ...create('second-team', 5)], null, {
+      hideTeamCoordinationTools: true,
+    }).renderItems.filter(item => item.kind === 'team_card')
+
+    expect(cards).toMatchObject([
+      { teamName: 'first-team', endedAt: 5 },
+      { teamName: 'second-team' },
+    ])
+    expect(cards[1]).not.toHaveProperty('endedAt')
+  })
+
   it('keeps Team scope active when TeamDelete returns success false', () => {
     const messages: UIMessage[] = [
       {
@@ -10143,6 +10163,76 @@ describe('Agent Teams chat projection', () => {
       title: 'reused-team',
       teamLeadSessionId: ACTIVE_TAB,
     }))
+  })
+
+  it('calls a team the host removed ended, not completed, once the lead forms another', async () => {
+    vi.spyOn(teamsApi, 'get').mockImplementation(() => new Promise(() => {}))
+    vi.spyOn(teamsApi, 'getWorkbench').mockImplementation(() => new Promise(() => {}))
+    const createRun = (name: string, timestamp: number): UIMessage[] => [
+      { id: `${name}-tool`, type: 'tool_use', toolName: 'TeamCreate', toolUseId: name, input: { team_name: name }, timestamp },
+      { id: `${name}-result`, type: 'tool_result', toolUseId: name, content: { success: true, team_name: name }, isError: false, timestamp: timestamp + 1 },
+    ]
+    useChatStore.setState({
+      sessions: {
+        // No TeamDelete: the user cancelled the first team, and the desktop removed it.
+        [ACTIVE_TAB]: makeSessionState({ messages: [...createRun('first-team', 100_000), ...createRun('second-team', 102_000)] }),
+      },
+    })
+    render(<MessageList sessionId={ACTIVE_TAB} />)
+
+    const cards = await screen.findAllByTestId('agent-teams-inline-card')
+    expect(cards).toHaveLength(2)
+    expect(within(cards[0]!).getByText('Ended')).toBeTruthy()
+    expect(within(cards[0]!).queryByText('Completed')).toBeNull()
+    expect(within(cards[1]!).getByText('Forming team')).toBeTruthy()
+  })
+
+  it('calls an interrupted team interrupted, though its tasks read as running', async () => {
+    let resolveWorkbench!: (snapshot: Awaited<ReturnType<typeof teamsApi.getWorkbench>>) => void
+    vi.spyOn(teamsApi, 'get').mockImplementation(() => new Promise(() => {}))
+    vi.spyOn(teamsApi, 'getWorkbench').mockImplementation(() => new Promise((resolve) => { resolveWorkbench = resolve }))
+    useChatStore.setState({
+      sessions: {
+        [ACTIVE_TAB]: makeSessionState({ messages: [
+          { id: 'cut-tool', type: 'tool_use', toolName: 'TeamCreate', toolUseId: 'cut', input: { team_name: 'cut-team' }, timestamp: 100_000 },
+          { id: 'cut-result', type: 'tool_result', toolUseId: 'cut', content: { success: true, team_name: 'cut-team' }, isError: false, timestamp: 100_001 },
+        ] }),
+      },
+    })
+    act(() => {
+      useTeamStore.getState().handleTeamCreated('cut-team', ACTIVE_TAB, { createdAt: 100_000 })
+    })
+    render(<MessageList sessionId={ACTIVE_TAB} />)
+    await act(async () => {
+      resolveWorkbench({
+        version: 'cut', generatedAt: new Date(100_010).toISOString(),
+        team: {
+          name: 'cut-team', leadSessionId: ACTIVE_TAB, leadAgentId: 'team-lead@cut-team', createdAt: '100000',
+          members: [
+            { agentId: 'team-lead@cut-team', name: 'team-lead', role: 'lead', status: 'idle' },
+            { agentId: 'lister@cut-team', name: 'lister', role: 'lister', status: 'idle' },
+          ],
+        },
+        tasks: [{ id: '1', subject: 'List files', description: '', status: 'pending', owner: 'lister', blocks: [], blockedBy: [], taskListId: 'cut-team' }],
+        messages: [],
+      })
+      await Promise.resolve()
+    })
+    const card = await screen.findByTestId('agent-teams-inline-card')
+    await waitFor(() => expect(within(card).getByText('Parallel execution')).toBeTruthy())
+
+    act(() => {
+      useTeamPlanStore.setState({ bySession: { [ACTIVE_TAB]: {
+        plan: { teamName: 'cut-team', state: 'interrupted' } as TeamPlanRecord,
+        loading: false, busy: false, error: null, conflict: false,
+      } } })
+    })
+    try {
+      expect(within(screen.getByTestId('agent-teams-inline-card')).getByText('Interrupted')).toBeTruthy()
+      expect(within(screen.getByTestId('agent-teams-inline-card')).queryByText('Parallel execution')).toBeNull()
+    } finally {
+      useTeamPlanStore.setState({ bySession: {} })
+    }
   })
 })
 

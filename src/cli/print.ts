@@ -359,7 +359,7 @@ import {
   waitForTeammatesToBecomeIdle,
 } from '../utils/teammate.js'
 import { TEAM_LEAD_NAME } from '../utils/swarm/constants.js'
-import { SHUTDOWN_TEAM_PROMPT } from '../utils/swarm/teamShutdownPrompt.js'
+import { formatTeamFinishedPrompt, SHUTDOWN_TEAM_PROMPT } from '../utils/swarm/teamShutdownPrompt.js'
 import {
   readUnreadMessages,
   claimMailboxMessages,
@@ -371,10 +371,11 @@ import {
   partitionLeadMailboxMessages,
   resolveTeammatePermissionRequests,
 } from '../utils/swarm/printLeaderPermissionBridge.js'
-import { removeTeammateFromTeamFile, readTeamFile, getTeamFilePath } from '../utils/swarm/teamHelpers.js'
-import { setLeaderTeamName } from '../utils/tasks.js'
+import { removeTeammateFromTeamFile, readTeamFile, getTeamFilePath, unregisterTeamForSessionCleanup } from '../utils/swarm/teamHelpers.js'
+import { clearLeaderTeamName, setLeaderTeamName } from '../utils/tasks.js'
+import { clearTeammateColors } from '../utils/swarm/teammateLayoutManager.js'
 import { buildTeamRuntimeSnapshot } from '../utils/swarm/teamRuntimeSnapshot.js'
-import { unassignTeammateTasks } from '../utils/tasks.js'
+import { getCanonicalTeamTaskListId, listTasks, unassignTeammateTasks } from '../utils/tasks.js'
 import { getRunningTasks } from '../utils/task/framework.js'
 import { isBackgroundTask } from '../tasks/types.js'
 import { stopTaskFromControlRequest } from '../tasks/stopTask.js'
@@ -521,6 +522,82 @@ export async function takeLeadMailboxBatch(
     { level: 'warn' },
   )
   return { kind: 'batch', messages: unread }
+}
+
+/**
+ * How long an approved team must stay finished before its lead is reminded.
+ * A member is marked idle a moment before its last report reaches the lead's
+ * inbox; reminding inside that gap would shut the team down unread.
+ */
+export const TEAM_FINISHED_SETTLE_MS = 3_000
+
+export type TeamFinishedReminderState = {
+  /** The finished state being watched, and when it was first seen. */
+  pending?: { signature: string; since: number }
+  /** The finished state the lead was already reminded about. */
+  remindedFor?: string
+}
+
+/**
+ * A non-interactive lead is told to shut its team down when its input closes.
+ * A desktop lead's input never closes, so a team it does not end by itself
+ * would stay in its finishing phase indefinitely, every member idle. Once an
+ * approved desktop team (`reviewRequired`) is finished -- every shared task
+ * completed, no member in a turn, and nothing unread in the lead's inbox --
+ * the lead is reminded once. Teammate mail after that (a member's report on
+ * more work, its shutdown approval) or a new task completing starts a new
+ * finished state, which earns a new reminder: a lead that stops after the
+ * members it shut down approve is still left to delete the team.
+ */
+export async function takeTeamFinishedPrompt(
+  state: TeamFinishedReminderState,
+  teamName: string | undefined,
+  now = Date.now(),
+): Promise<QueuedCommand | null> {
+  const team = teamName ? readTeamFile(teamName) : null
+  const members = team?.reviewRequired
+    ? team.members.filter(member => member.agentId !== team.leadAgentId)
+    : []
+  const working = members.some(member => (
+    member.terminated !== true &&
+    (member.isActive !== false || member.autoRetry !== undefined)
+  ))
+  const tasks = team && members.length > 0 && !working
+    ? (await listTasks(getCanonicalTeamTaskListId(team.name))).filter(
+        task => !task.metadata?._internal,
+      )
+    : []
+  if (
+    !team ||
+    tasks.length === 0 ||
+    tasks.some(task => task.status !== 'completed')
+  ) {
+    state.pending = undefined
+    return null
+  }
+
+  const signature = jsonStringify([
+    team.createdAt,
+    tasks.map(task => task.id).sort(),
+  ])
+  if (signature === state.remindedFor) return null
+  if (state.pending?.signature !== signature) {
+    state.pending = { signature, since: now }
+    return null
+  }
+  if (now - state.pending.since < TEAM_FINISHED_SETTLE_MS) return null
+
+  state.pending = undefined
+  state.remindedFor = signature
+  return {
+    mode: 'prompt',
+    value: formatTeamFinishedPrompt(
+      team.name,
+      members.filter(member => member.terminated !== true).map(member => member.name),
+    ),
+    uuid: randomUUID(),
+    isMeta: true,
+  }
 }
 
 // Track message UUIDs received during the current session runtime
@@ -1214,6 +1291,7 @@ function runHeadlessStreaming(
   let inputClosed = false
   let shutdownPromptInjected = false
   const leadMailboxPoll = createLeadMailboxPollState()
+  const teamFinishedReminder: TeamFinishedReminderState = {}
   let heldBackResult: StdoutMessage | null = null
   const deferredAgentNotifications = new TaskNotificationFollowUpBatch()
   let abortController: AbortController | undefined
@@ -2729,6 +2807,10 @@ function runHeadlessStreaming(
             logForDebugging(
               `[print.ts] Team-lead found ${unread.length} unread messages`,
             )
+            // The team moved on; whatever finishes after the lead reads this
+            // settles afresh and earns its own reminder.
+            teamFinishedReminder.pending = undefined
+            teamFinishedReminder.remindedFor = undefined
 
             const partitioned = partitionLeadMailboxMessages(unread)
 
@@ -2828,6 +2910,21 @@ function runHeadlessStreaming(
               '[print.ts] Input closed with active teammates, injecting shutdown prompt',
             )
             enqueue(createShutdownTeamPrompt())
+            void run()
+            return // run() will come back here after processing
+          }
+
+          // A desktop lead's input never closes: remind it once its approved
+          // team has finished instead.
+          const teamFinishedPrompt = await takeTeamFinishedPrompt(
+            teamFinishedReminder,
+            teamName,
+          )
+          if (teamFinishedPrompt) {
+            logForDebugging(
+              '[print.ts] Approved team finished, reminding the lead to shut it down',
+            )
+            enqueue(teamFinishedPrompt)
             void run()
             return // run() will come back here after processing
           }
@@ -3044,6 +3141,18 @@ function runHeadlessStreaming(
           } catch (error) {
             sendControlResponseError(message, error instanceof Error ? error.message : String(error))
           }
+        } else if (message.request.subtype === 'team_runtime_ended') {
+          // The host ended this team and removed its directories (the user
+          // cancelled or ended it). Let go of it as TeamDelete would, or the
+          // lead could never form another team in this session.
+          const endedTeam = message.request.team_name
+          if (getAppState().teamContext?.teamName === endedTeam) {
+            unregisterTeamForSessionCleanup(endedTeam)
+            clearTeammateColors()
+            clearLeaderTeamName()
+            setAppState(prev => ({ ...prev, teamContext: undefined, inbox: { messages: [] } }))
+          }
+          sendControlResponseSuccess(message)
         } else if (message.request.subtype === 'interrupt' || message.request.subtype === 'team_plan_pause') {
           sessionMessageInbox.cancelQueued(dequeueAllMatching)
           if (message.request.subtype === 'team_plan_pause') leadMailboxPoll.held = true

@@ -43,6 +43,15 @@ type TeamPlanState = {
   act: (sessionId: string, action: TeamPlanAction, feedback?: string) => Promise<boolean>
 }
 
+/**
+ * The team of a session whose launch was interrupted. Its tasks still read as
+ * work in progress, but nothing resumes it: it waits for the user to end it.
+ */
+export const interruptedTeamNameOf = (sessionId: string | null | undefined) => (state: TeamPlanState): string | undefined => {
+  const plan = sessionId ? state.bySession[sessionId]?.plan : null
+  return plan?.state === 'interrupted' ? plan.teamName : undefined
+}
+
 export const useTeamPlanStore = create<TeamPlanState>((set, get) => {
   const update = (id: string, fn: (entry: TeamPlanEntry) => TeamPlanEntry) => set(state => ({
     bySession: { ...state.bySession, [id]: fn(state.bySession[id] ?? EMPTY) },

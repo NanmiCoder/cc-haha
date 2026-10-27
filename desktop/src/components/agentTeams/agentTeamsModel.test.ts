@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { TeamMember, TeamWorkbenchSnapshot, TeamWorkbenchTask } from '../../types/team'
 import {
+  endedBeforeAnyMemberJoined,
   formatWorkbenchMessageTime,
   getMemberWorkState,
   getWorkbenchPhase,
@@ -401,6 +402,24 @@ describe('Agent Teams workbench model', () => {
       ...finished,
       deletedAt: '2026-08-08T00:01:00.000Z',
     })).toBe('completed')
+    // A team removed with work left (the user ended it, or /clear) did not complete.
+    expect(getWorkbenchPhase({
+      ...snapshot([task('1', 'completed'), task('2', 'in_progress')]),
+      deletedAt: '2026-08-08T00:01:00.000Z',
+    })).toBe('ended')
+    expect(getWorkbenchPhase({ ...snapshot([]), deletedAt: '2026-08-08T00:01:00.000Z' })).toBe('completed')
+  })
+
+  it('treats a team removed before any member joined as having nothing to report', () => {
+    const lead: TeamMember = { agentId: 'lead@team-a', name: 'team-lead', role: 'team-lead', status: 'idle' }
+    const worker: TeamMember = { agentId: 'worker@team-a', name: 'worker', role: 'worker', status: 'completed' }
+    // A launch that failed before any member started leaves tasks and the lead only.
+    const unstarted = { ...snapshot([task('1', 'pending', [], 'worker')]), team: { ...snapshot([]).team, members: [lead] } }
+    const deletedAt = '2026-08-08T00:01:00.000Z'
+
+    expect(endedBeforeAnyMemberJoined({ ...unstarted, deletedAt })).toBe(true)
+    expect(endedBeforeAnyMemberJoined(unstarted)).toBe(false)
+    expect(endedBeforeAnyMemberJoined({ ...unstarted, deletedAt, team: { ...unstarted.team, members: [lead, worker] } })).toBe(false)
   })
 
   it('narrates protocol payloads instead of leaking their raw JSON into the feed', () => {

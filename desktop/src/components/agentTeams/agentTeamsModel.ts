@@ -7,7 +7,12 @@ import type {
 } from '../../types/team'
 
 export type WorkbenchTaskState = 'blocked' | 'open' | 'running' | 'completed'
-export type WorkbenchPhase = 'forming' | 'running' | 'finishing' | 'completed'
+/**
+ * `ended` is a team that is gone before all of its tasks were completed.
+ * `interrupted` comes from the team's plan, not its tasks: its launch was cut
+ * off, nothing resumes it, and it waits for the user to end it.
+ */
+export type WorkbenchPhase = 'forming' | 'running' | 'finishing' | 'completed' | 'ended' | 'interrupted'
 export type MemberAvatarKey =
   | 'team-lead'
   | 'server-engineer'
@@ -559,8 +564,22 @@ export function currentTaskForMember(
     running[running.length - 1]
 }
 
+/**
+ * A team removed before any member joined it (the user cancelled a plan under
+ * review or a launch that failed) never ran, so it has no run to report.
+ */
+export function endedBeforeAnyMemberJoined(snapshot: TeamWorkbenchSnapshot): boolean {
+  return Boolean(snapshot.deletedAt) &&
+    snapshot.team.members.every((member) => member.agentId === snapshot.team.leadAgentId)
+}
+
+/** How a team that is gone ended: with its work done, or before that. */
+export function endedPhase(snapshot: TeamWorkbenchSnapshot): WorkbenchPhase {
+  return snapshot.tasks.every((task) => task.status === 'completed') ? 'completed' : 'ended'
+}
+
 export function getWorkbenchPhase(snapshot: TeamWorkbenchSnapshot): WorkbenchPhase {
-  if (snapshot.deletedAt) return 'completed'
+  if (snapshot.deletedAt) return endedPhase(snapshot)
   if (snapshot.tasks.length === 0) return 'forming'
   if (snapshot.tasks.every((task) => task.status === 'completed')) return 'finishing'
   return 'running'

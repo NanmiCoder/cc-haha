@@ -3199,6 +3199,23 @@ describe('WebSocket Chat Integration', () => {
     expect(messages.at(-1)?.type).toBe('message_complete')
   }, 15_000)
 
+  it('tells a caller waiting on a control request why the CLI exited', async () => {
+    const sessionId = `chat-control-exit-${crypto.randomUUID()}`
+    let rejection: Promise<string> | undefined
+    await runTurnUntilComplete(sessionId, 'hello', (message) => {
+      if (rejection || message.type === 'connected' || !conversationService.hasSession(sessionId)) return
+      rejection = conversationService.requestControl(sessionId, {
+        subtype: 'mock_exit_with_stderr', code: 3, stderr: 'Error: provider settings are unreadable',
+      }).then(() => 'resolved', (error: Error) => error.message)
+    })
+
+    expect(rejection).toBeDefined()
+    const reason = await rejection!
+    expect(reason).toContain('CLI session exited before the control request completed')
+    expect(reason).toContain('code 3')
+    expect(reason).toContain('Error: provider settings are unreadable')
+  }, 15_000)
+
   it('should handle permission_response without error', async () => {
     const messages: any[] = []
     const ws = new WebSocket(`${wsUrl}/ws/chat-test-4`)

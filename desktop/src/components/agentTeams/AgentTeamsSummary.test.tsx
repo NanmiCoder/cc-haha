@@ -36,4 +36,37 @@ describe('Agent Teams conversation summaries', () => {
     fireEvent.click(card)
     expect(onOpen).toHaveBeenCalledOnce()
   })
+
+  it('shows a team cancelled before any member joined as not started, with no report to open', () => {
+    const onOpen = vi.fn()
+    const cancelled: TeamWorkbenchSnapshot = {
+      ...snapshot,
+      deletedAt: '2026-10-19T00:01:00Z',
+      team: { ...snapshot.team, members: [{ agentId: 'lead', name: 'team-lead', role: 'team-lead', status: 'idle' }] },
+      tasks: [{ id: '1', subject: 'Write notes', description: '', status: 'pending', owner: 'writer', blocks: [], blockedBy: [], taskListId: 'team' }],
+    }
+    render(<AgentTeamsInlineCard snapshot={cancelled} teamName="notes-team" onOpen={onOpen} />)
+    expect(screen.getByText('Not started')).toBeInTheDocument()
+    expect(screen.queryByText('Completed')).not.toBeInTheDocument()
+    expect(screen.getByTestId('agent-teams-inline-card')).toBeDisabled()
+  })
+
+  it('reports a team ended before its work was done as ended, and keeps its report open', () => {
+    const onOpen = vi.fn()
+    const ended: TeamWorkbenchSnapshot = {
+      ...snapshot,
+      deletedAt: '2026-10-19T00:01:00Z',
+      tasks: [
+        { id: '1', subject: 'Read notes', description: '', status: 'completed', owner: 'Reviewer 0', blocks: [], blockedBy: [], taskListId: 'team' },
+        { id: '2', subject: 'Write summary', description: '', status: 'pending', owner: 'Reviewer 1', blocks: [], blockedBy: [], taskListId: 'team' },
+      ],
+    }
+    render(<AgentTeamsStrip snapshot={ended} onOpen={onOpen} compact={false} />)
+    const strip = screen.getByTestId('agent-teams-strip')
+    expect(strip).toHaveTextContent('Ended')
+    expect(strip).not.toHaveTextContent('Completed')
+    expect(strip).toHaveTextContent('1/2')
+    fireEvent.click(strip)
+    expect(onOpen).toHaveBeenCalledOnce()
+  })
 })

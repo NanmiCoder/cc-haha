@@ -232,6 +232,36 @@ describe('AgentTeamsPlanCard', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   })
 
+  it('lets a failed launch be cancelled, after which the card goes away', async () => {
+    vi.mocked(teamPlansApi.get).mockResolvedValue({ plan: { ...fixture(), state: 'launch_failed', launch: { status: 'failed', error: 'CLI session exited before the control request completed' } } })
+    const { container } = render(<AgentTeamsPlanCard sessionId="session" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Review configuration' }))
+    expect(screen.getByRole('button', { name: 'Review again' })).toBeEnabled()
+    vi.mocked(teamPlansApi.act).mockResolvedValue({ plan: { ...fixture(), revision: 2, state: 'cancelled' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel team' }))
+    await waitFor(() => expect(container).toBeEmptyDOMElement())
+    expect(vi.mocked(teamPlansApi.act).mock.calls[0]!.slice(1)).toEqual(['cancel', expect.any(String), undefined])
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  })
+
+  it('lets an interrupted team be ended', async () => {
+    vi.mocked(teamPlansApi.get).mockResolvedValue({ plan: { ...fixture(), state: 'interrupted', launch: { status: 'failed', error: 'The worker runtime was interrupted.' } } })
+    const { container } = render(<AgentTeamsPlanCard sessionId="session" />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Review configuration' }))
+    expect(screen.queryByRole('button', { name: 'Cancel team' })).not.toBeInTheDocument()
+    vi.mocked(teamPlansApi.act).mockResolvedValue({ plan: { ...fixture(), revision: 2, state: 'cancelled' } })
+    fireEvent.click(screen.getByRole('button', { name: 'End team' }))
+    await waitFor(() => expect(container).toBeEmptyDOMElement())
+    expect(vi.mocked(teamPlansApi.act).mock.calls[0]!.slice(1)).toEqual(['end', expect.any(String), undefined])
+  })
+
+  it('shows nothing for a cancelled team plan', async () => {
+    vi.mocked(teamPlansApi.get).mockResolvedValue({ plan: { ...fixture(), state: 'cancelled' } })
+    const { container } = render(<AgentTeamsPlanCard sessionId="session" />)
+    await waitFor(() => expect(useTeamPlanStore.getState().bySession.session?.plan?.state).toBe('cancelled'))
+    expect(container).toBeEmptyDOMElement()
+  })
+
   it('restores review access after a launch failure or new review without reopening the approved dialog', async () => {
     await open()
     vi.mocked(teamPlansApi.act).mockResolvedValue({ plan: { ...fixture(), revision: 2, state: 'launching' } })

@@ -19,6 +19,7 @@ import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextS
 import { useWorkspaceStore, type WorkspaceOrigin } from '../../stores/workspaceStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
+import { interruptedTeamNameOf, useTeamPlanStore } from '../../stores/teamPlanStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useChatAppearanceStore } from '../../stores/chatAppearanceStore'
 import { t as translateNow, useTranslation } from '../../i18n'
@@ -48,6 +49,7 @@ import { WorkspaceChangesFallback } from '@/components/chat/WorkspaceChangesFall
 import { AgentTeamsInlineCard } from '../agentTeams/AgentTeamsSummary'
 import { MEMBER_AVATARS, memberAccentColor } from '../agentTeams/agentTeamsAvatars'
 import {
+  endedPhase,
   getMemberAvatarKey,
   resolveTeamMemberIdentity,
   snapshotWithHistoricalMembers,
@@ -111,6 +113,8 @@ type RenderItem =
       teamName: string
       startedAt: number
       endedAt?: number
+      /** Its lead deleted it, which it does once the work is done. */
+      deletedByLead?: boolean
       coordinationToolCalls: ToolCall[]
     }
 
@@ -1047,6 +1051,7 @@ export function buildRenderModel(
           const deletedTeamCard = ensureTeamCardForCoordination(msg, toolResult)
           if (deletedTeamCard) {
             deletedTeamCard.endedAt = msg.timestamp
+            deletedTeamCard.deletedByLead = true
             deletedTeamCard.coordinationToolCalls.push(msg)
             summarizedTeamDelete = true
           }
@@ -1114,6 +1119,10 @@ export function buildRenderModel(
         canSummarizeCoordinationResult(toolResult)
       ) {
         flushGroup()
+        // A lead leads one team at a time, so a new team means the previous
+        // one ended, even when the host ended it (a cancelled or ended plan)
+        // and no TeamDelete call here says so.
+        if (activeTeamCard && activeTeamCard.endedAt === undefined) activeTeamCard.endedAt = msg.timestamp
         activeTeamCard = {
           kind: 'team_card',
           id: `team-card-${msg.id}`,
@@ -2451,6 +2460,7 @@ export function MessageList({
   const activeTeamStartedAt = useTeamStore((s) => (
     resolvedSessionId ? s.activeTeamStartedAtBySession[resolvedSessionId] : undefined
   ))
+  const interruptedTeamName = useTeamPlanStore(interruptedTeamNameOf(resolvedSessionId))
   const teamSnapshot = useMemo(() => {
     const snapshots = teamWorkbench?.snapshots
     return snapshots?.length
@@ -3906,12 +3916,18 @@ export function MessageList({
                 window.endedAt !== undefined &&
                 item.startedAt <= window.endedAt
               )) ? 'completed' : 'forming'
+              // An ended team's tasks say how it ended. Without its record, a
+              // team its lead deleted is taken as done, and one the host
+              // removed (a cancelled or ended plan) only as ended.
+              const ended = cardSnapshot ? endedPhase(cardSnapshot) : item.deletedByLead ? 'completed' : 'ended'
               return (
               <AgentTeamsInlineCard
                 snapshot={cardSnapshot}
                 teamName={item.teamName}
                 fallbackPhase={fallbackPhase}
-                phaseOverride={item.endedAt !== undefined ? 'completed' : undefined}
+                phaseOverride={item.endedAt !== undefined
+                  ? ended
+                  : cardSnapshot && !cardSnapshot.deletedAt && cardSnapshot.team.name === interruptedTeamName ? 'interrupted' : undefined}
                 onOpen={cardSnapshot
                   ? () => openTeamWorkbench(resolvedSessionId, cardSnapshot.team.name)
                   : undefined}
