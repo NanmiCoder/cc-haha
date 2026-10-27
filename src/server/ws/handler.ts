@@ -749,6 +749,11 @@ const taskNotificationPersistence = new Map<string, Map<string, Promise<void>>>(
 const sessionTranscriptEpochs = new Map<string, number>()
 
 export const handleWebSocket = {
+  // SDK user-message replay retains original images even when the provider
+  // request uses uploaded file references. Ten 5 MiB images plus their envelope
+  // exceed Bun's default 16 MiB frame limit and otherwise reconnect forever,
+  // preventing the following result from reaching the renderer.
+  maxPayloadLength: 64 * 1024 * 1024,
   open(ws: SessionConnection) {
     const { sessionId, channel, sdkToken } = ws.data
 
@@ -833,6 +838,13 @@ export const handleWebSocket = {
         canAcceptPermissionRequest: (message) =>
           canAcceptPermissionRequestDuringStop(sessionId, message),
       })
+      return
+    }
+
+    // Raising the SDK receive budget must not raise the renderer input budget.
+    // The public-access gateway applies its own smaller limit before this handler.
+    if (Buffer.byteLength(rawMessage) > 16 * 1024 * 1024) {
+      ws.close(1009, 'Client message exceeds 16 MiB')
       return
     }
 

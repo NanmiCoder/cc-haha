@@ -80,6 +80,16 @@ This project is maintained in the author's spare time. Corporate or individual s
     </tr>
     <tr>
       <td align="center" valign="middle">
+        <a href="https://moeapi.cloud/register?utm_source=github&amp;utm_campaign=cchaha">
+          <img src="docs/images/sponsors/moeapi-logo.png" width="180" alt="Moe API">
+        </a>
+      </td>
+      <td valign="middle">
+        Thanks to <a href="https://moeapi.cloud/register?utm_source=github&amp;utm_campaign=cchaha">Moe API</a> for sponsoring this project! Moe API is a unified large language model API platform for developers and teams. A single API key provides access to 120+ models, including GPT, Claude, Gemini, Grok, DeepSeek, Kimi, GLM, and Qwen, with native compatibility with OpenAI (Chat / Responses), Anthropic Messages, and Gemini protocols for direct use with cc-haha, Claude Code, Codex, and other tools. Choose from self-operated and enterprise Codex account pools, dedicated Claude Code groups, and self-operated Gemini Pro / Ultra account pools with pay-as-you-go billing. It also supports GPT Image and Gemini image generation, Seedance video generation, and the Moe Draw online image generation site. Global CDN routing serves users in mainland China and overseas; API request and response bodies are not persistently stored on the platform.
+      </td>
+    </tr>
+    <tr>
+      <td align="center" valign="middle">
         <a href="https://www.zuiquanapi.com/"><b>最全 API<br>Zuiquan API Directory</b></a>
       </td>
       <td valign="middle">
