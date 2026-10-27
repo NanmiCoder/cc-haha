@@ -65,6 +65,10 @@ describe('SDK team runtime controls', () => {
     expect(SDKControlRequestSchema().safeParse({ type: 'control_request', request_id: 'snapshot', request: { subtype: 'team_runtime_snapshot', team_name: 'reviewed', created_at: 123 } }).success).toBe(true)
     expect(SDKControlRequestSchema().safeParse({ type: 'control_request', request_id: 'snapshot', request: { subtype: 'team_runtime_snapshot', team_name: 'reviewed' } }).success).toBe(false)
   })
+  test('names the team the host ended', () => {
+    expect(SDKControlRequestSchema().safeParse({ type: 'control_request', request_id: 'ended', request: { subtype: 'team_runtime_ended', team_name: 'reviewed' } }).success).toBe(true)
+    expect(SDKControlRequestSchema().safeParse({ type: 'control_request', request_id: 'ended', request: { subtype: 'team_runtime_ended' } }).success).toBe(false)
+  })
   test('accepts planning pause without ending the SDK session', () => {
     expect(SDKControlRequestSchema().safeParse({ type: 'control_request', request_id: 'pause', request: { subtype: 'team_plan_pause' } }).success).toBe(true)
   })

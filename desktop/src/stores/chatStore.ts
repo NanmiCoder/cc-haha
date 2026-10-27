@@ -1,3 +1,6 @@
+import { useTaskStore } from '@/stores/taskStore'
+import { parseScheduledTaskResult, validScheduledTaskTrigger } from '@/lib/scheduledTask'
+import type { ScheduledTaskTrigger } from '@/types/task'
 import { isInlineImagePath } from '@/lib/attachmentImages'
 import { isSideChatSession } from '@/lib/sideChatSessions'
 import { CHAT_HISTORY_CACHE_BYTES, historyCacheBytes } from '../lib/chatHistoryCache'
@@ -143,6 +146,8 @@ type PendingComputerUsePermissions = Record<string, PendingComputerUsePermission
 export type PerSessionState = {
   messages: UIMessage[]
   chatState: ChatState
+  /** In-memory turn provenance; task notifications are delivered by the task notifier. */
+  scheduledTaskTurn?: boolean
   /**
    * The CLI's own run state (`session_state_changed`). A run stays `running`
    * while it waits on background tasks and through the replies their
@@ -226,6 +231,7 @@ export type PerSessionState = {
   composerPrefill?: {
     text: string
     attachments?: UIAttachment[]
+    mentions?: ComposerMention[]
     sessionReferences?: Array<{ sessionId: string }>
     mode?: ComposerPrefillMode
     nonce: number
@@ -473,12 +479,19 @@ type ChatStore = {
     prefill: {
       text: string
       attachments?: UIAttachment[]
+      mentions?: ComposerMention[]
       sessionReferences?: Array<{ sessionId: string }>
       mode?: ComposerPrefillMode
     },
     /** Retain an edit after its committed rewind outlives the source tab. */
     options?: { restoreMissingSession?: boolean },
   ) => void
+  /**
+   * Drop the last prompt when the CLI never acknowledged it and nothing has
+   * answered it, so an edited copy can replace it. False — and nothing removed
+   * — once the prompt has been confirmed, answered or followed by another turn.
+   */
+  discardUnconfirmedUserMessage: (sessionId: string, messageId: string) => boolean
   clearComposerPrefill: (sessionId: string, nonce?: number) => void
   queueComposerInsertion: (
     sessionId: string,
@@ -2310,6 +2323,17 @@ function buildAgentCompletionNotification(
   }
 }
 
+function isScheduledTaskTurn(session: PerSessionState): boolean {
+  if (session.scheduledTaskTurn === true) return true
+  // A renderer can join an already-running turn through durable history rather
+  // than its live replay. Ignore unconsumed guides when finding that turn.
+  for (let index = session.messages.length - 1; index >= 0; index--) {
+    const message = session.messages[index]
+    if (message?.type === 'user_text' && !message.optimisticQueued) return !!message.scheduledTask
+  }
+  return false
+}
+
 /** Helper: immutably update a specific session within the sessions record */
 function updateSessionIn(
   sessions: Record<string, PerSessionState>,
@@ -2393,22 +2417,30 @@ function summarizeTokenUsageFromHistory(messages: MessageEntry[]): TokenUsage | 
   let cacheReadTokens = 0
   let cacheCreationTokens = 0
   // A reply with thinking + text + a dozen tool_use blocks arrives as fourteen lines that each
-  // repeat the whole `usage` object. Summing per line is the 2.2x inflation the transcript
-  // readers carry; the server stamps `usageKey` so this only has to dedupe on it. Lines with
-  // no key are always counted, matching the transcript readers.
-  const countedUsageKeys = new Set<string>()
+  // carry a `usage` object, and the lines need not agree: the first can be zero/partial with the
+  // final numbers on a later line. Summing per line is the 2.2x inflation, keeping the first
+  // under-counts. The server stamps `usageKey`; per key each field counts at the largest value any
+  // line reported and only the excess is added. Lines with no key are always counted whole.
+  const counted = new Map<string, [number, number, number, number]>()
 
   for (const message of messages) {
     const usage = message.usage
     if (!usage) continue
-    if (message.usageKey) {
-      if (countedUsageKeys.has(message.usageKey)) continue
-      countedUsageKeys.add(message.usageKey)
-    }
-    inputTokens += readUsageToken(usage.input_tokens)
-    outputTokens += readUsageToken(usage.output_tokens)
-    cacheReadTokens += readUsageToken(usage.cache_read_input_tokens)
-    cacheCreationTokens += readUsageToken(usage.cache_creation_input_tokens)
+    const current: [number, number, number, number] = [
+      readUsageToken(usage.input_tokens),
+      readUsageToken(usage.output_tokens),
+      readUsageToken(usage.cache_read_input_tokens),
+      readUsageToken(usage.cache_creation_input_tokens),
+    ]
+    const previous = message.usageKey ? counted.get(message.usageKey) : undefined
+    const total = previous
+      ? (current.map((value, index) => Math.max(value, previous[index]!)) as [number, number, number, number])
+      : current
+    if (message.usageKey) counted.set(message.usageKey, total)
+    inputTokens += total[0] - (previous?.[0] ?? 0)
+    outputTokens += total[1] - (previous?.[1] ?? 0)
+    cacheReadTokens += total[2] - (previous?.[2] ?? 0)
+    cacheCreationTokens += total[3] - (previous?.[3] ?? 0)
   }
 
   if (inputTokens === 0 && outputTokens === 0 && cacheReadTokens === 0 && cacheCreationTokens === 0) {
@@ -3336,6 +3368,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                 historyError: null,
                 awaitingReconnectSync: true,
                 preHydrationSocketGapPending: false,
+                scheduledTaskTurn: undefined,
                 streamingText: '',
                 streamingToolInput: '',
               }
@@ -3524,6 +3557,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           [sessionId]: {
             ...session,
             messages: newMessages,
+            scheduledTaskTurn: false,
             historyPageLoading: false,
             chatState: 'thinking',
             isPreparingTurn: false,
@@ -4536,6 +4570,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             composerPrefill: {
               text: prefill.text,
               attachments: prefill.attachments,
+              ...(prefill.mentions ? { mentions: prefill.mentions } : {}),
               ...(prefill.sessionReferences ? { sessionReferences: prefill.sessionReferences } : {}),
               mode: prefill.mode,
               nonce: Date.now(),
@@ -4544,6 +4579,28 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         },
       }
     })
+  },
+
+  discardUnconfirmedUserMessage: (sessionId, messageId) => {
+    const session = get().sessions[sessionId]
+    if (!session || session.chatState !== 'idle') return false
+    const index = session.messages.findIndex((message) => message.id === messageId)
+    const message = session.messages[index]
+    if (message?.type !== 'user_text' || !message.awaitingReplay || message.transcriptMessageId) return false
+    const answered = session.messages.slice(index + 1).some((later) =>
+      later.type === 'user_text' ||
+      later.type === 'assistant_text' ||
+      later.type === 'tool_use' ||
+      later.type === 'tool_result' ||
+      later.type === 'error')
+    if (answered) return false
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, (current) => ({
+        messages: current.messages.slice(0, index),
+        historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
+      })),
+    }))
+    return true
   },
 
   clearComposerPrefill: (sessionId, nonce) => {
@@ -4734,6 +4791,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
     retiredAgentStreamIdsBySession.delete(sessionId)
     set((s) => ({ sessions: updateSessionIn(s.sessions, sessionId, () => ({
       messages: [],
+      scheduledTaskTurn: undefined,
       activeGoal: null,
       streamingText: '',
       chatState: 'idle',
@@ -5439,6 +5497,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       }
 
       case 'tool_result': {
+        const scheduledResult = parseScheduledTaskResult(findToolUseMessage(get().sessions[sessionId]?.messages ?? [], msg.toolUseId)?.toolName ?? '', msg.content, msg.isError)
+        if (scheduledResult?.kind === 'scheduled_task') {
+          useTaskStore.getState().applyToolResult(scheduledResult)
+          void useTaskStore.getState().fetchTasks()
+        }
         const now = Date.now()
         const pendingParentToolUseId = consumePendingToolParentUseId(sessionId, msg.toolUseId)
         const parentToolUseId = msg.parentToolUseId ?? pendingParentToolUseId
@@ -5668,6 +5731,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         }
         const completedAt = Date.now()
         const wasAgentRunning = session.chatState !== 'idle'
+        const wasScheduledTaskTurn = validScheduledTaskTrigger(msg.scheduledTask) || isScheduledTaskTurn(session)
         const text = `${session.streamingText}${consumePendingDelta(sessionId)}`
         let completionMessages = session.messages
         if (text.trim()) {
@@ -5685,6 +5749,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         if (session.elapsedTimer) clearInterval(session.elapsedTimer)
         update((current) => ({
           messages: finalMessages,
+          scheduledTaskTurn: false,
           tokenUsage: msg.usage,
           chatState: 'idle',
           activeThinkingId: null,
@@ -5699,7 +5764,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
         }))
         useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
-        const notification = wasAgentRunning && appendedCompletionMessage
+        const notification = wasAgentRunning && appendedCompletionMessage && !wasScheduledTaskTurn
           ? buildAgentCompletionNotification(sessionId, finalMessages, text)
           : null
         if (notification) {
@@ -5729,7 +5794,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             ? appendAssistantTextMessage(session.messages, pendingText, Date.now())
             : session.messages
           return {
-            messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration),
+            messages: appendReplayedUserMessage(baseMessages, msg.content, Date.now(), msg.sessionReferences, msg.collaboration, msg.scheduledTask),
+            // A consumed human guide belongs to the existing scheduled turn;
+            // only a new ordinary turn restores ordinary reply notifications.
+            scheduledTaskTurn: validScheduledTaskTrigger(msg.scheduledTask) ||
+              (session.scheduledTaskTurn === true && session.chatState !== 'idle'),
             ...(pendingText.trim() ? { streamingText: '' } : {}),
             activeThinkingId: null,
             replaceHistoryOnCompletion: false,
@@ -5865,6 +5934,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         useTabStore.getState().updateTabTitle(msg.sessionId, msg.title)
         break
       case 'system_notification':
+        if (msg.subtype === 'scheduled_tasks_changed') {
+          void useTaskStore.getState().fetchTasks()
+          break
+        }
         if (msg.subtype === 'session_state_changed') {
           const runState = (msg.data as { state?: unknown } | undefined)?.state
           if (runState === 'running' || runState === 'idle') {
@@ -6516,6 +6589,7 @@ function readRecord(value: unknown): Record<string, unknown> | null {
 
 function normalizeHistoryToolResultContent(content: unknown, toolUseResult: unknown): unknown {
   const result = readRecord(toolUseResult)
+  if (parseScheduledTaskResult('ScheduledTask', result)) return result
   const answers = readRecord(result?.answers)
   if (!result || !answers || !Array.isArray(result.questions)) return content
   return {
@@ -7335,7 +7409,7 @@ export type VisibleTeammateMessage = { from: string; content: string }
  * Teammate turns carry the sender in the tag; keeping it lets the transcript
  * attribute the message instead of rendering it as an anonymous user turn.
  */
-function extractVisibleTeammateMessages(text: string): VisibleTeammateMessage[] {
+export function extractVisibleTeammateMessages(text: string): VisibleTeammateMessage[] {
   const messages: VisibleTeammateMessage[] = []
 
   for (const match of text.matchAll(TEAMMATE_CONTENT_REGEX)) {
@@ -7737,7 +7811,12 @@ export function appendReplayedUserMessage(
   timestamp: number,
   sessionReferences?: Array<{ sessionId: string }>,
   collaboration?: { sourceSessionId: string; messageId?: string },
+  scheduledTask?: ScheduledTaskTrigger,
 ): UIMessage[] {
+  if (validScheduledTaskTrigger(scheduledTask)) {
+    if (messages.some(message => message.type === 'user_text' && message.scheduledTask?.runId === scheduledTask.runId)) return messages
+    return [...messages, { id: `scheduled-run-${scheduledTask.runId}`, type: 'user_text', content, timestamp, scheduledTask }]
+  }
   // The replayed text carries server-appended image-metadata lines that the
   // optimistic message never had. Normalize them away (same as the history
   // mapping) so the dedupe below can match the already-rendered message instead
@@ -8077,6 +8156,9 @@ export function mapHistoryMessagesToUiMessages(
           id: msg.id || nextId(),
           type: 'user_text',
           content: teammateMessages.map((message) => message.content).join('\n\n'),
+          // Preserve envelope occurrences for member-send reconciliation. A
+          // mailbox batch is one model prompt but can acknowledge many sends.
+          modelContent: msg.content,
           ...(msg.id ? { transcriptMessageId: msg.id } : {}),
           ...(sender ? { teammateFrom: sender } : {}),
           timestamp,
@@ -8091,6 +8173,7 @@ export function mapHistoryMessagesToUiMessages(
         content: parsed.content,
         ...(references.length ? { sessionReferences: references } : {}),
         ...(msg.collaboration ? { collaboration: msg.collaboration } : {}),
+        ...(validScheduledTaskTrigger(msg.scheduledTask) ? { scheduledTask: msg.scheduledTask } : {}),
         ...(msg.id ? { transcriptMessageId: msg.id } : {}),
         ...(parsed.modelContent ? { modelContent: parsed.modelContent } : {}),
         ...(parsed.attachments ? { attachments: parsed.attachments } : {}),
@@ -8188,6 +8271,7 @@ export function mapHistoryMessagesToUiMessages(
           id: msg.id || nextId(),
           type: 'user_text',
           content: userContent,
+          ...(validScheduledTaskTrigger(msg.scheduledTask) ? { scheduledTask: msg.scheduledTask } : {}),
           ...(references.length ? { sessionReferences: references } : {}),
           ...(msg.id ? { transcriptMessageId: msg.id } : {}),
           ...(modelContent ? { modelContent } : {}),

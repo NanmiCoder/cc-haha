@@ -96,6 +96,36 @@ describe('Skills API', () => {
     await fs.rm(tmpHome, { recursive: true, force: true })
   })
 
+  it('lists draft slash commands by cwd before a session exists and respects lean', async () => {
+    const cwd = path.join(tmpHome, 'draft project')
+    await fs.mkdir(path.join(cwd, '.git'), { recursive: true })
+    await writeSkill(path.join(cwd, '.claude', 'skills'), 'draft-skill', '---\ndescription: A draft skill\n---\nUse fixtures.')
+    const request = makeRequest(`/api/skills/commands?cwd=${encodeURIComponent(cwd)}`)
+    const response = await handleSkillsApi(request.req, request.url, request.segments)
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    expect(body.commands.some((command: SkillSlashCommand) => command.name === 'draft-skill')).toBe(true)
+    expect(body.commands).toContainEqual(expect.objectContaining({ name: 'debug' }))
+    expect(body.commands.some((command: SkillSlashCommand) => command.name === 'simplify')).toBe(true)
+    const leanRequest = makeRequest(`/api/skills/commands?cwd=${encodeURIComponent(cwd)}&agentProfile=lean`)
+    const leanResponse = await handleSkillsApi(leanRequest.req, leanRequest.url, leanRequest.segments)
+    expect(leanResponse.status).toBe(200)
+    expect((await leanResponse.json()).commands).toEqual(await listSkillSlashCommands(cwd, { includeCompiledIn: false, agentProfile: 'lean' }))
+    expect(getCwdState()).toBe(tmpHome)
+    const post = await handleSkillsApi(new Request(request.url, { method: 'POST' }), request.url, request.segments)
+    expect(post.status).toBe(405)
+  })
+
+  it('rejects invalid draft-command directories without falling back to the server cwd', async () => {
+    const file = path.join(tmpHome, 'not-a-directory')
+    await fs.writeFile(file, 'fixture')
+    for (const cwd of ['relative/path', path.join(tmpHome, 'missing'), file, `${tmpHome}\0bad`]) {
+      const request = makeRequest(`/api/skills/commands?cwd=${encodeURIComponent(cwd)}`)
+      const response = await handleSkillsApi(request.req, request.url, request.segments)
+      expect(response.status).toBe(400)
+    }
+  })
+
   it('isolates concurrent mention requests by project enablement and installed scope', async () => {
     const projectA = path.join(tmpHome, '普通目录 A')
     const projectB = path.join(tmpHome, '普通目录 B')

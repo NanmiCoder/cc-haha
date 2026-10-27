@@ -581,13 +581,20 @@ export const ModelSelector = forwardRef<ModelSelectorHandle, Props>(function Mod
     : null
 
   const selectedRuntimeModel = activeRuntimeSelection
-    ? selectedProviderChoice?.models.find((model) => model.id === activeRuntimeSelection.modelId)
-      ?? {
-        id: activeRuntimeSelection.modelId,
-        name: activeRuntimeSelection.modelId,
-        description: '',
-        context: '',
-      }
+    ? {
+      ...(selectedProviderChoice?.models.find((model) => model.id === activeRuntimeSelection.modelId)
+        // Account defaults can change their 1M marker without changing the
+        // catalog identity. Resolve metadata while retaining the session ID.
+        ?? (activeRuntimeSelection.providerId === DEEPSEEK_ACCOUNT_PROVIDER_ID
+          ? selectedProviderChoice?.models.find((model) => baseModelId(model.id) === baseModelId(activeRuntimeSelection.modelId))
+          : undefined)
+        ?? {
+          name: activeRuntimeSelection.modelId,
+          description: '',
+          context: '',
+        }),
+      id: activeRuntimeSelection.modelId,
+    }
     : null
 
   const selectedRuntimeProvider = activeRuntimeSelection?.providerId

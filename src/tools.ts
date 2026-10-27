@@ -2,6 +2,8 @@ import { filterAgentProfileTools, getAgentProfile } from './utils/agentProfile.j
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { toolMatchesName, type Tool, type Tools } from './Tool.js'
 import { sessionCollaborationTools } from './tools/SessionCollaborationTool/SessionCollaborationTool.js'
+import { ScheduledTaskTool } from './tools/ScheduledTaskTool/ScheduledTaskTool.js'
+import { isDesktopScheduleAvailable } from './tools/ScheduledTaskTool/gate.js'
 import { AgentTool } from './tools/AgentTool/AgentTool.js'
 import { SkillTool } from './tools/SkillTool/SkillTool.js'
 import { BashTool } from './tools/BashTool/BashTool.js'
@@ -237,6 +239,7 @@ export function getAllBaseTools(): Tools {
     ...(isWorktreeModeEnabled() ? [EnterWorktreeTool, ExitWorktreeTool] : []),
     getSendMessageTool(),
     ...sessionCollaborationTools,
+    ScheduledTaskTool,
     ...(ListPeersTool ? [ListPeersTool] : []),
     ...(isAgentSwarmsEnabled()
       ? [getTeamCreateTool(), getTeamPlanTool(), getTeamDeleteTool()]
@@ -245,7 +248,7 @@ export function getAllBaseTools(): Tools {
     ...(process.env.USER_TYPE === 'ant' && REPLTool ? [REPLTool] : []),
     getWorkflowTool(),
     ...(SleepTool ? [SleepTool] : []),
-    ...cronTools,
+    ...(isDesktopScheduleAvailable() ? [] : cronTools),
     ...(RemoteTriggerTool ? [RemoteTriggerTool] : []),
     ...(MonitorTool ? [MonitorTool] : []),
     BriefTool,

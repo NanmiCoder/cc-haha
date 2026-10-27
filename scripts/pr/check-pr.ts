@@ -58,6 +58,10 @@ if (result.checks.desktop) {
   await run(['bun', 'run', 'check:desktop'])
 }
 
+if (result.checks.mobile) {
+  await run(['bun', 'run', 'check:mobile'])
+}
+
 if (result.checks.server) {
   await run(['bun', 'run', 'check:server'])
 }

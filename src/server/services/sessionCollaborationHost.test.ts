@@ -66,6 +66,26 @@ test('streaming output does not broadcast collaboration refreshes until collabor
   })).toBe(true)
 })
 
+test('only an explicit successful root result persists completion, and a stop fences its late result', async () => {
+  const service = new SessionCollaborationService({
+    statePath: join(directory, 'state.json'),
+    now: () => new Date('2026-10-24T01:00:00Z'),
+    sessions: { exists: async () => true, list: async () => [], read: async () => [], create: async () => ({ sessionId: 'unused' }) },
+    runtime: { start: async () => {}, enqueue: async () => {}, stop: async () => {} },
+  })
+  const output = (sessionId: string, message: Record<string, unknown>) => handleSessionCollaborationEvent(service, { type: 'output', sessionId, message })
+  await service.onUserInput('main')
+  expect(await output('main', { type: 'result', is_error: false, parent_tool_use_id: 'agent', uuid: 'child-result' })).toBe(false)
+  expect(await output('main', { type: 'result', uuid: 'incomplete-result' })).toBe(false)
+  expect((await service.listCompletionStates())[0]).toEqual({ id: 'main', state: 'running' })
+  await output('main', { type: 'result', is_error: false, result: 'Done', uuid: 'root-result' })
+  expect((await service.listCompletionStates())[0]).toEqual({ id: 'main', state: 'completed', completedAt: '2026-10-24T01:00:00.000Z' })
+  await handleSessionCollaborationEvent(service, { type: 'stopped', sessionId: 'stopped' })
+  await output('stopped', { type: 'result', is_error: false, result: 'Partial', uuid: 'late-result' })
+  await output('failed', { type: 'result', is_error: true, uuid: 'failed-result' })
+  expect((await service.listCompletionStates()).filter(row => row.completedAt)).toHaveLength(1)
+})
+
 test('host rejects unavailable source workspace explicitly instead of silently choosing another directory', async () => {
   const previous = process.env.CLAUDE_CONFIG_DIR
   process.env.CLAUDE_CONFIG_DIR = directory

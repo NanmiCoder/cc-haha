@@ -10,11 +10,23 @@
  * DELETE /api/scheduled-tasks/:id       — 删除任务
  */
 
-import { CronService, type CronTask } from '../services/cronService.js'
+import { z } from 'zod/v4'
+import { CronService } from '../services/cronService.js'
 import { cronScheduler } from '../services/cronScheduler.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
+import { scheduledTaskEditableSchema } from '../../tools/ScheduledTaskTool/schema.js'
 
 const cronService = new CronService()
+const taskMutationSchema = scheduledTaskEditableSchema.extend({
+  description: z.string().max(32_000).optional(),
+  cron: z.string().trim().min(1).max(200).optional(),
+  recurring: z.boolean().optional(), permanent: z.boolean().optional(),
+  permissionMode: z.string().max(100).optional(), model: z.string().max(200).optional(),
+  providerId: z.string().max(200).nullable().optional(), folderPath: z.string().max(4096).optional(),
+  useWorktree: z.boolean().optional(),
+  notification: z.strictObject({ enabled: z.boolean(), channels: z.array(z.enum(['desktop', 'telegram', 'feishu'])).max(3) }).optional(),
+  expectedRevision: z.number().int().positive().optional(),
+})
 
 export async function handleScheduledTasksApi(
   req: Request,
@@ -96,22 +108,9 @@ export async function handleScheduledTasksApi(
 
     // ── POST /api/scheduled-tasks ─────────────────────────────────────────
     if (method === 'POST' && !taskId) {
-      const body = await parseJsonBody(req)
-      const task = await cronService.createTask({
-        name: body.name as string | undefined,
-        description: body.description as string | undefined,
-        cron: body.cron as string,
-        prompt: body.prompt as string,
-        enabled: body.enabled !== undefined ? (body.enabled as boolean) : undefined,
-        recurring: body.recurring as boolean | undefined,
-        permanent: body.permanent as boolean | undefined,
-        permissionMode: body.permissionMode as string | undefined,
-        model: body.model as string | undefined,
-        providerId: body.providerId as string | null | undefined,
-        folderPath: body.folderPath as string | undefined,
-        useWorktree: body.useWorktree as boolean | undefined,
-        notification: body.notification as CronTask['notification'],
-      })
+      const { expectedRevision: _revision, ...body } = await parseJsonBody(req)
+      if (!body.prompt) throw ApiError.badRequest('prompt is required')
+      const task = await cronService.createTask({ ...body, prompt: body.prompt })
       return Response.json({ task }, { status: 201 })
     }
 
@@ -132,8 +131,8 @@ export async function handleScheduledTasksApi(
 
     // ── PUT /api/scheduled-tasks/:id ──────────────────────────────────────
     if (method === 'PUT' && taskId && !subResource) {
-      const body = await parseJsonBody(req)
-      const task = await cronService.updateTask(taskId, body)
+      const { expectedRevision, ...body } = await parseJsonBody(req)
+      const task = await cronService.updateTask(taskId, body, { expectedRevision })
       return Response.json({ task })
     }
 
@@ -155,10 +154,14 @@ export async function handleScheduledTasksApi(
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-async function parseJsonBody(req: Request): Promise<Record<string, unknown>> {
+async function parseJsonBody(req: Request): Promise<z.infer<typeof taskMutationSchema>> {
+  let value: unknown
   try {
-    return (await req.json()) as Record<string, unknown>
+    value = await req.json()
   } catch {
     throw ApiError.badRequest('Invalid JSON body')
   }
+  const parsed = taskMutationSchema.safeParse(value)
+  if (!parsed.success) throw ApiError.badRequest(parsed.error.issues.map(issue => `${issue.path.join('.')}: ${issue.message}`).join('; ').slice(0, 2000))
+  return parsed.data
 }

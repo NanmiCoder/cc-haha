@@ -408,13 +408,16 @@ export class ImChatRuntime {
         break
 
       case 'permission_request': {
-        runtime.pendingPermissionCount += 1
-        runtime.state = 'permission_pending'
         let pending = this.pendingPermissions.get(chatId)
         if (!pending) {
           pending = new Set()
           this.pendingPermissions.set(chatId, pending)
         }
+        // The server re-announces a request when its auto-answer deadline changes;
+        // the prompt has already been sent, so a repeat must not notify again.
+        if (pending.has(msg.requestId)) break
+        runtime.pendingPermissionCount += 1
+        runtime.state = 'permission_pending'
         pending.add(msg.requestId)
         this.port.setBusy?.(chatId, false)
         // Close the in-flight reply first: the approval prompt is a separate

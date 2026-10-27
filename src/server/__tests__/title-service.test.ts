@@ -507,21 +507,33 @@ describe('titleService', () => {
     expect(upstreamCalls[0].proxy).toBe(systemProxyUrl)
   })
 
-  test('generates titles with the account token when DeepSeek Account is active', async () => {
+  test.each([false, true])('generates titles with the account token when DeepSeek Account is active (thinking retry: %s)', async (retryThinking) => {
     await new ProviderService().activateProvider('deepseek-account')
     await hahaDeepSeekOAuthService.saveTokens({
       token: 'dsh_test_account_token',
       issuer: 'https://platform.deepseek.com',
       deviceId: 'device-1',
     })
-    const calls: Array<{ url: string; headers: Headers }> = []
+    const calls: Array<{ url: string; headers: Headers; model: string }> = []
     globalThis.fetch = (async (input, init) => {
-      calls.push({ url: String(input), headers: new Headers(init?.headers) })
+      const body = JSON.parse(String(init?.body)) as { model: string }
+      calls.push({ url: String(input), headers: new Headers(init?.headers), model: body.model })
+      if (body.model !== 'deepseek-flash') {
+        return Response.json({ error: 'Model Not Exist' }, { status: 400 })
+      }
+      if (retryThinking && calls.length === 1) {
+        return Response.json({ error: 'thinking unsupported' }, { status: 400 })
+      }
       return Response.json({ content: [{ type: 'text', text: '{"title":"Account title"}' }] })
     }) as typeof fetch
 
     await expect(generateTitle('please name this session')).resolves.toBe('Account title')
-    expect(calls).toHaveLength(1)
+    expect(calls).toHaveLength(retryThinking ? 2 : 1)
+    expect(calls.map((call) => call.model)).toEqual(
+      Array(retryThinking ? 2 : 1).fill('deepseek-flash'),
+    )
+    expect((await new ProviderService().getProvider('deepseek-account')).models.haiku)
+      .toBe('deepseek-flash[1m]')
     expect(calls[0]!.url).toBe('https://api.deepseek.com/anthropic/v1/messages')
     expect(calls[0]!.headers.get('x-dsh-auth-token')).toBe('dsh_test_account_token')
     expect(calls[0]!.headers.get('x-api-key')).toBeNull()

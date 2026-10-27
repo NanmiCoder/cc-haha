@@ -11,6 +11,7 @@ import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './ses
  * 确保 Desktop App 与 CLI 的数据完全互通。
  */
 
+import { readScheduledTaskMetadata, scheduledTaskDisplayText, type ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
 import { streamSessionMetadata } from './sessionMetadataReader.js'
 import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
 import { constants, createReadStream, createWriteStream, type Stats } from 'node:fs'
@@ -26,12 +27,15 @@ import { findCanonicalGitRoot } from '../../utils/git.js'
 import { calculateUSDCost, MODEL_COSTS } from '../../utils/modelCost.js'
 import {
   MODEL_CONTEXT_WINDOW_DEFAULT,
+  applyAutoCompactWindowLimit,
   getContextWindowForModel,
   getModelMaxOutputTokens,
   hasKnownContextWindow,
   is1mContextDisabled,
+  isModelWindowKnownForAutoCompact,
 } from '../../utils/context.js'
 import {
+  AUTO_COMPACT_WINDOW_ENV_KEY,
   MODEL_CONTEXT_WINDOWS_ENV_KEY,
   getModelContextWindowFromEnvValue,
 } from '../../utils/model/modelContextWindows.js'
@@ -77,9 +81,13 @@ import type {
 import type { LocalIndexStatus } from './localIndex/types.js'
 import { diagnosticsService } from './diagnosticsService.js'
 import {
+  claimUsageIncrement,
   isBillableUsageRecord,
   isForkInheritedUsageRecord,
   usageRecordKey,
+  type PricedTokens,
+  type UsageIncrement,
+  type UsageLedger,
 } from '../../utils/usageAccounting.js'
 import {
   ProjectSessionHistory,
@@ -228,6 +236,7 @@ export type MessageEntry = {
   sessionReferences?: { sessionId: string }[]
   /** Present when this user-position message was delivered from another session. */
   collaboration?: { sourceSessionId: string; messageId: string }
+  scheduledTask?: ScheduledTaskMetadata
   id: string
   type: 'user' | 'assistant' | 'system' | 'tool_use' | 'tool_result'
   content: unknown
@@ -438,6 +447,7 @@ export type TranscriptContextEstimate = {
 
 /** Raw entry parsed from a single JSONL line */
 type RawEntry = {
+  scheduledTask?: unknown
   type?: string
   subtype?: string
   content?: unknown
@@ -499,18 +509,23 @@ type TranscriptContextAccumulator = {
 }
 
 /**
- * Whether this line's `usage` is the first sighting of its reply.
+ * What this line's `usage` adds to its reply's running total, or null when the line is not
+ * billable (e.g. inherited by a fork).
  *
- * Claude Code writes one JSONL line per content block of an assistant message and repeats the
- * complete `usage` object on every one — a reply with thinking, text and 12 tool_use blocks is
- * 14 lines carrying the same numbers. Summing raw lines overstated real transcripts by 2.2x,
- * which is why `stats.ts` and the activity index both deduplicate; the inspector paths had
- * inherited only the fork check and so reported inflated totals to the context panel.
+ * Claude Code writes one JSONL line per content block of an assistant message, each carrying a
+ * `usage` object — a reply with thinking, text and 12 tool_use blocks is 14 lines. Summing raw
+ * lines overstated real transcripts by 2.2x, while keeping only the first line under-counted
+ * replies whose first line was written with zero/partial usage. Each field is therefore counted at
+ * the largest value any line reported and only the excess is billed.
  *
  * Rules (and the key shape) come from `usageAccounting.ts` so every reader of a transcript
  * agrees about what one session cost.
  */
-function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
+function claimUsageRecord(
+  entry: RawEntry,
+  ledger: UsageLedger,
+  tokens: PricedTokens,
+): UsageIncrement | null {
   const record = entry as unknown as Record<string, unknown>
   const identity = {
     version: record.version,
@@ -519,13 +534,12 @@ function claimUsageRecord(entry: RawEntry, countedKeys: Set<string>): boolean {
     messageId: entry.message?.id,
     forkedFrom: record.forkedFrom,
   }
-  if (!isBillableUsageRecord(identity)) return false
+  if (!isBillableUsageRecord(identity)) return null
   const key = usageRecordKey(identity)
-  if (key === null) return true
-  if (countedKeys.has(key)) return false
-  if (countedKeys.size >= 50_000 || key.length > 4096) throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
-  countedKeys.add(key)
-  return true
+  if (key !== null && !ledger.has(key) && (ledger.size >= 50_000 || key.length > 4096)) {
+    throw new ApiError(413, 'Usage inspection exceeds its record budget', 'HISTORY_INSPECTION_LIMIT')
+  }
+  return claimUsageIncrement(ledger, key, tokens)
 }
 
 function createTranscriptContextAccumulator(): TranscriptContextAccumulator {
@@ -2143,7 +2157,8 @@ export class SessionService {
         }) ?? undefined
       : undefined
 
-    let content = msg.content
+    const scheduledTask = type === 'user' ? readScheduledTaskMetadata(entry.scheduledTask) : undefined
+    let content = scheduledTask ? scheduledTaskDisplayText(msg.content) : msg.content
     let sessionReferences: { sessionId: string }[] | undefined
     let collaboration: { sourceSessionId: string; messageId: string } | undefined
     if (type === 'user') {
@@ -2171,6 +2186,7 @@ export class SessionService {
       content,
       ...(sessionReferences ? { sessionReferences } : {}),
       ...(collaboration ? { collaboration } : {}),
+      ...(scheduledTask ? { scheduledTask } : {}),
       ...(entry.bodyTruncated === true ? { bodyTruncated: true } : {}),
       ...(entry.toolUseResult !== undefined ? { toolUseResult: entry.toolUseResult } : {}),
       timestamp: entry.timestamp || new Date().toISOString(),
@@ -3014,10 +3030,15 @@ export class SessionService {
     return `$${cost > 0.5 ? (Math.round(cost * 100) / 100).toFixed(2) : cost.toFixed(4)}`
   }
 
+  /**
+   * `hints.autoCompactWindow` receives the fallback window of the provider the
+   * session runs on, so the shown window can honour the same cap compaction does.
+   */
   private async getProviderContextWindowForSession(
     sessionId: string,
     model: string,
     launchInfoOverride?: ProviderContextWindowHint | null,
+    hints: { autoCompactWindow?: string } = {},
   ): Promise<number | undefined> {
     const launchInfo = launchInfoOverride ?? await this.getSessionLaunchInfo(sessionId).catch(() => null)
     const providerIds: string[] = []
@@ -3052,8 +3073,17 @@ export class SessionService {
       'ANTHROPIC_DEFAULT_OPUS_MODEL',
     ] as const
 
+    // The provider the session actually runs on is the first one that still
+    // exists: a recorded provider that was deleted hands over to the active one.
+    let sessionProviderAutoCompactWindow: string | undefined
+    let sawSessionProvider = false
     for (const providerId of providerIds) {
       const env = await this.providerService.getProviderRuntimeEnv(providerId).catch(() => null)
+      hints.autoCompactWindow = env?.[AUTO_COMPACT_WINDOW_ENV_KEY]
+      if (env && !sawSessionProvider) {
+        sawSessionProvider = true
+        sessionProviderAutoCompactWindow = hints.autoCompactWindow
+      }
       if (!env && providerId === recordedProviderId) {
         // The provider this session recorded no longer exists (deleted or
         // re-created under a new id). A resumed session is relaunched with the
@@ -3113,6 +3143,10 @@ export class SessionService {
         }
       }
     }
+
+    // Nothing matched: the model is resolved without provider configuration, and
+    // only the provider the session started on may cap it.
+    hints.autoCompactWindow = sessionProviderAutoCompactWindow
 
     // A session without recorded provider metadata always infers from saved
     // providers. When a provider was recorded but could not tell us the window
@@ -3197,17 +3231,23 @@ export class SessionService {
     model: string,
     launchInfo?: ProviderContextWindowHint | null,
   ): Promise<number> {
+    const hints: { autoCompactWindow?: string } = {}
     const providerContextWindow = await this.getProviderContextWindowForSession(
       sessionId,
       model,
       launchInfo,
+      hints,
     )
     if (providerContextWindow !== undefined) {
-      return providerContextWindow
+      return applyAutoCompactWindowLimit(providerContextWindow, hints.autoCompactWindow, true)
     }
 
     try {
-      return getContextWindowForModel(model)
+      return applyAutoCompactWindowLimit(
+        getContextWindowForModel(model),
+        hints.autoCompactWindow,
+        isModelWindowKnownForAutoCompact(model),
+      )
     } catch (err) {
       if (
         err instanceof Error &&
@@ -3400,7 +3440,7 @@ export class SessionService {
     let lastUsageAt: number | null = null
 
     const contextState = createTranscriptContextAccumulator()
-    const countedUsageKeys = new Set<string>()
+    const usageLedger: UsageLedger = new Map()
 
     await this.streamJsonlFile(found.filePath, (entry) => {
       if (typeof entry.message?.model === 'string') {
@@ -3480,34 +3520,43 @@ export class SessionService {
         ? usage.server_tool_use.web_search_requests
         : 0
 
-      // Fork-inherited lines and the repeated usage objects of a multi-block reply are the
-      // same class of over-count; `claimUsageRecord` rejects both.
-      if (!claimUsageRecord(entry, countedUsageKeys)) return
-
-      if (
-        inputTokens === 0 &&
-        outputTokens === 0 &&
-        cacheReadInputTokens === 0 &&
-        cacheCreationInputTokens === 0 &&
-        webSearchRequests === 0
-      ) {
-        return
-      }
+      // Fork-inherited lines are skipped, and the usage objects of a multi-block reply are folded
+      // into one running total so only the part not yet counted is billed.
+      const increment = claimUsageRecord(entry, usageLedger, {
+        inputTokens,
+        outputTokens,
+        cacheReadInputTokens,
+        cacheCreationInputTokens,
+        webSearchRequests,
+      })
+      if (!increment || increment.isEmpty) return
 
       const canonical = getCanonicalName(model)
       if (!Object.prototype.hasOwnProperty.call(MODEL_COSTS, canonical)) {
         hasUnknownModelCost = true
       }
 
-      const costUsage = {
-        input_tokens: inputTokens,
-        output_tokens: outputTokens,
-        cache_read_input_tokens: cacheReadInputTokens,
-        cache_creation_input_tokens: cacheCreationInputTokens,
-        server_tool_use: { web_search_requests: webSearchRequests },
-        speed: usage.speed,
-      } as Parameters<typeof calculateUSDCost>[1]
-      const costUSD = calculateUSDCost(model, costUsage)
+      const priceTokens = (tokens: Required<PricedTokens>) =>
+        calculateUSDCost(model, {
+          input_tokens: tokens.inputTokens,
+          output_tokens: tokens.outputTokens,
+          cache_read_input_tokens: tokens.cacheReadInputTokens,
+          cache_creation_input_tokens: tokens.cacheCreationInputTokens,
+          server_tool_use: { web_search_requests: tokens.webSearchRequests },
+          speed: usage.speed,
+        } as Parameters<typeof calculateUSDCost>[1])
+      // Billed as cost(running total) - cost(already counted) so a prompt-length tier is decided by
+      // the whole reply rather than by whichever fragment arrived last.
+      const costUSD =
+        priceTokens(increment.total) -
+        (increment.previous ? priceTokens(increment.previous) : 0)
+      const {
+        inputTokens: addedInput,
+        outputTokens: addedOutput,
+        cacheReadInputTokens: addedCacheRead,
+        cacheCreationInputTokens: addedCacheCreation,
+        webSearchRequests: addedWebSearch,
+      } = increment.delta
 
       let modelUsage = models.get(model)
       if (!modelUsage) {
@@ -3529,20 +3578,20 @@ export class SessionService {
         models.set(model, modelUsage)
       }
 
-      modelUsage.inputTokens += inputTokens
-      modelUsage.outputTokens += outputTokens
-      modelUsage.cacheReadInputTokens += cacheReadInputTokens
-      modelUsage.cacheCreationInputTokens += cacheCreationInputTokens
-      modelUsage.webSearchRequests += webSearchRequests
+      modelUsage.inputTokens += addedInput
+      modelUsage.outputTokens += addedOutput
+      modelUsage.cacheReadInputTokens += addedCacheRead
+      modelUsage.cacheCreationInputTokens += addedCacheCreation
+      modelUsage.webSearchRequests += addedWebSearch
       modelUsage.costUSD += costUSD
       modelUsage.costDisplay = this.formatCost(modelUsage.costUSD)
 
       totalCostUSD += costUSD
-      totalInputTokens += inputTokens
-      totalOutputTokens += outputTokens
-      totalCacheReadInputTokens += cacheReadInputTokens
-      totalCacheCreationInputTokens += cacheCreationInputTokens
-      totalWebSearchRequests += webSearchRequests
+      totalInputTokens += addedInput
+      totalOutputTokens += addedOutput
+      totalCacheReadInputTokens += addedCacheRead
+      totalCacheCreationInputTokens += addedCacheCreation
+      totalWebSearchRequests += addedWebSearch
 
       if (entry.timestamp) {
         const time = Date.parse(entry.timestamp)

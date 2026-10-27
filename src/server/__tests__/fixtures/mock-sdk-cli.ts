@@ -440,6 +440,11 @@ ws.addEventListener('message', (event) => {
       if (parsed.type === 'control_request' && parsed.request?.subtype === 'mock_exit_after_api_error_ack') {
         process.exit(1)
       }
+      // Dies the way a crashing CLI does: a reason on stderr, no response.
+      if (parsed.type === 'control_request' && parsed.request?.subtype === 'mock_exit_with_stderr') {
+        process.stderr.write(`${parsed.request.stderr}\n`, () => process.exit(parsed.request.code))
+        continue
+      }
 
       if (parsed.type === 'control_request' && parsed.request?.subtype === 'enqueue_session_message') {
         sendInit()
@@ -616,7 +621,7 @@ ws.addEventListener('message', (event) => {
         }
       }
 
-      if (parsed.type === 'control_request' && ['set_model', 'team_runtime_snapshot'].includes(parsed.request?.subtype)) {
+      if (parsed.type === 'control_request' && ['set_model', 'team_runtime_snapshot', 'team_runtime_ended'].includes(parsed.request?.subtype)) {
         emit(ws, { type: 'control_response', response: { subtype: 'success', request_id: parsed.request_id, response: {} }, session_id: sessionId })
         continue
       }

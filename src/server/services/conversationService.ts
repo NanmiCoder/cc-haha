@@ -72,7 +72,7 @@ import {
   resolveStreamToolInputDurationMs,
   SYSTEM_PROXY_URL_ENV,
   type NetworkSettings,
-} from './networkSettings.js'
+  resolveProviderNetworkSettings,} from './networkSettings.js'
 import { readTraceCaptureSettings, traceCaptureService } from './traceCaptureService.js'
 import {
   killWindowsProcessTree,
@@ -207,6 +207,7 @@ type TrackedPermissionRequest = {
   autoAnswerAbortController?: AbortController
   autoAnswerCancelled?: boolean
   autoAnswerCreatedAt?: number
+  autoAnswerDeadline?: number | null
   autoAnswerGeneration?: number
 }
 
@@ -326,6 +327,7 @@ export type PendingPermissionRequest = {
   input: Record<string, unknown>
   description?: string
   displayName?: string
+  autoAnswerDeadline?: number | null
 }
 
 export type TeamWorkerStart = {
@@ -418,14 +420,33 @@ export class ConversationService {
   }
 
   cancelAutoQuestionAnswer(sessionId: string, requestId: string): void {
-    const request = this.sessions.get(sessionId)?.pendingPermissionRequests.get(requestId)
-    if (request?.toolName !== 'AskUserQuestion') return
+    const session = this.sessions.get(sessionId)
+    const request = session?.pendingPermissionRequests.get(requestId)
+    if (request?.toolName !== 'AskUserQuestion' || request.autoAnswerCancelled) return
     this.clearAutoAnswerWait(request)
     request.autoAnswerTimer = undefined
     request.autoAnswerAbortController = undefined
     console.info(`[ConversationService] Automatic answer cancelled by user activity: session=${sessionId} request=${requestId}`)
     request.autoAnswerCancelled = true
     request.autoAnswerGeneration = (request.autoAnswerGeneration ?? 0) + 1
+    request.autoAnswerDeadline = null
+    if (session) this.publishAutoQuestionDeadline(sessionId, session, requestId, request)
+  }
+
+  private publishAutoQuestionDeadline(sessionId: string, session: SessionProcess, requestId: string, request: TrackedPermissionRequest): void {
+    const message = {
+      type: 'control_request', request_id: requestId,
+      request: {
+        subtype: 'can_use_tool', tool_name: request.toolName, tool_use_id: request.toolUseId,
+        input: request.input, description: request.description, display_name: request.displayName,
+        auto_answer_deadline: request.autoAnswerDeadline ?? null,
+      },
+    }
+    this.notifyOutputCallbacks(sessionId, session.outputCallbacks, message)
+    if (session.teamWorker) {
+      const parent = this.sessions.get(session.teamWorker.parentSessionId)
+      if (parent) this.notifyOutputCallbacks(session.teamWorker.parentSessionId, parent.outputCallbacks, message)
+    }
   }
 
   /** Apply setting changes to questions that are already waiting. */
@@ -454,12 +475,16 @@ export class ConversationService {
       const settings = normalizeAutoQuestionSettings(
         (await new SettingsService().getUserSettings()).autoQuestion,
       )
-      if (!settings.enabled || request.autoAnswerCancelled ||
+      if (request.autoAnswerCancelled ||
         (request.autoAnswerGeneration ?? 0) !== generation || this.sessions.get(sessionId) !== session ||
         session.pendingPermissionRequests.get(requestId) !== request) return
-
-      const remainingMs = Math.max(0, (request.autoAnswerCreatedAt ?? Date.now()) +
-        settings.timeoutMinutes * 60_000 - Date.now())
+      request.autoAnswerCreatedAt ??= Date.now()
+      request.autoAnswerDeadline = settings.enabled
+        ? request.autoAnswerCreatedAt + settings.timeoutMinutes * 60_000
+        : null
+      this.publishAutoQuestionDeadline(sessionId, session, requestId, request)
+      if (request.autoAnswerDeadline === null) return
+      const remainingMs = Math.max(0, request.autoAnswerDeadline - Date.now())
       console.info(`[ConversationService] Automatic answer scheduled: session=${sessionId} request=${requestId} remainingMs=${remainingMs}`)
       request.autoAnswerTimer = setTimeout(() => {
         request.autoAnswerTimer = undefined
@@ -1094,7 +1119,15 @@ export class ConversationService {
     sessionId: string,
     session: SessionProcess,
   ): Promise<boolean> {
-    const settings = await loadNetworkSettings()
+    // The session may pin a provider whose proxy override diverges from the
+    // global network settings; the hot update must keep honoring it.
+    const sessionProvider = session.providerId
+      ? await this.providerService.getProvider(session.providerId).catch(() => null)
+      : null
+    const settings = resolveProviderNetworkSettings(
+      await loadNetworkSettings(),
+      sessionProvider?.proxy,
+    )
     const baseEnv = await getProcessEnvWithTerminalShellEnvironment()
     const networkEnv = buildNetworkEnvironment(settings, baseEnv)
     const fingerprint = networkRoutingFingerprint(settings, {
@@ -1400,6 +1433,7 @@ export class ConversationService {
     timeoutMs = 10_000,
     signal?: AbortSignal,
     canSend?: () => boolean,
+    beforeSend?: () => Promise<boolean>,
   ): Promise<Record<string, unknown>> {
     if (signal?.aborted) {
       return Promise.reject(controlRequestAbortReason(signal))
@@ -1414,6 +1448,22 @@ export class ConversationService {
     if (!session) {
       throw new Error('CLI session is not running')
     }
+    if (request.subtype === 'enqueue_scheduled_task') {
+      // Scheduled work starts a user turn through the control channel. A live
+      // CLI must receive changed provider proxy/timeouts just like sendMessage.
+      // Refresh before the durable delivery receipt, and recheck ownership after
+      // the asynchronous settings read so cancellation cannot enqueue stale work.
+      if (signal?.aborted) throw controlRequestAbortReason(signal)
+      if (canSend && !canSend()) throw new Error('Scheduled delivery was cancelled')
+      if (!await this.refreshNetworkEnvironmentBeforeTurn(sessionId, session)) {
+        throw new Error('CLI session is not running')
+      }
+      if (signal?.aborted) throw controlRequestAbortReason(signal)
+      if (this.sessions.get(sessionId) !== session || (canSend && !canSend())) {
+        throw new Error('Scheduled delivery was cancelled')
+      }
+    }
+    if (beforeSend && !await beforeSend()) throw new Error('Scheduled task changed before delivery')
     const responseTimeoutMs = Math.max(1, timeoutMs - (Date.now() - startedAt))
     const requestId = crypto.randomUUID()
     return new Promise((resolve, reject) => {
@@ -1518,6 +1568,7 @@ export class ConversationService {
       input: request.input,
       ...(request.description ? { description: request.description } : {}),
       ...(request.displayName ? { displayName: request.displayName } : {}),
+      ...(request.autoAnswerDeadline !== undefined ? { autoAnswerDeadline: request.autoAnswerDeadline } : {}),
     }))
   }
 
@@ -1628,7 +1679,9 @@ export class ConversationService {
         if (sdkError) {
           void diagnosticsService.recordEvent({
             type: sdkError.type,
-            severity: sdkError.type === 'sdk_api_retry' ? 'warn' : 'error',
+            // A retry the CLI is still attempting is a recoverable state, not an error; the
+            // exhausted request is recorded separately as an error.
+            severity: sdkError.type === 'sdk_api_retry' ? 'info' : 'error',
             sessionId,
             summary: sdkError.summary,
             details: sdkError.details,
@@ -2103,16 +2156,22 @@ export class ConversationService {
       // processes, their messages queue in the lead's mailbox, and the next
       // lead start receives the team snapshot again. Explicit stops (close,
       // delete, /clear) still stop workers through stopSession.
-      this.cancelPendingControlRequests(
-        activeSession,
-        new Error('CLI session exited before the control request completed'),
-      )
       if (activeSession.startupPending) {
+        this.cancelPendingControlRequests(
+          activeSession,
+          new Error('CLI session exited before the control request completed'),
+        )
         activeSession.startupExitCode = code
         return
       }
       await this.waitForProcessOutputDrain(activeSession)
       const exitError = this.buildRuntimeExitMessage(sessionId, code)
+      // A caller waiting on the process (a team member's startup) has to say
+      // why it is gone, not only that it is.
+      this.cancelPendingControlRequests(
+        activeSession,
+        new Error(`CLI session exited before the control request completed. ${exitError}`),
+      )
       void diagnosticsService.recordEvent({
         type: 'cli_runtime_exit',
         severity: cliExitSeverity(code),
@@ -2282,7 +2341,10 @@ export class ConversationService {
       : null
     if (explicitProviderEnv) delete explicitProviderEnv.CC_HAHA_OPENAI_FAST_MODE
     const networkEnv = buildNetworkEnvironment(
-      networkSettingsOverride ?? await loadNetworkSettings(),
+      resolveProviderNetworkSettings(
+        networkSettingsOverride ?? await loadNetworkSettings(),
+        explicitProvider?.proxy,
+      ),
       cleanEnv,
     )
     // The overall-duration cap has to scale with the user's "请求超时" or raising

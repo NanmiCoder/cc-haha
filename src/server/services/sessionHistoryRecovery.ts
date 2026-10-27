@@ -39,9 +39,10 @@ export async function recoverBoundedSessionHistory(options: {
     let database: Database | undefined
     try {
       database = new Database(join(directory, 'state.sqlite'))
-      database.exec('PRAGMA journal_mode=OFF; PRAGMA cache_size=-512; PRAGMA temp_store=FILE; CREATE TABLE usage_keys (id TEXT PRIMARY KEY); CREATE TABLE parents (id TEXT PRIMARY KEY, owner TEXT); CREATE TABLE tools (id TEXT PRIMARY KEY, ordinal INTEGER, json TEXT, legacy INTEGER, name TEXT); CREATE TABLE evidence (id TEXT PRIMARY KEY, ordinal INTEGER, json TEXT, category TEXT); CREATE TABLE notices (id TEXT PRIMARY KEY, ordinal INTEGER, json TEXT); CREATE TABLE teammates (name TEXT PRIMARY KEY)')
+      database.exec('PRAGMA journal_mode=OFF; PRAGMA cache_size=-512; PRAGMA temp_store=FILE; CREATE TABLE usage_keys (id TEXT PRIMARY KEY, input INTEGER, output INTEGER, cache_read INTEGER, cache_creation INTEGER); CREATE TABLE parents (id TEXT PRIMARY KEY, owner TEXT); CREATE TABLE tools (id TEXT PRIMARY KEY, ordinal INTEGER, json TEXT, legacy INTEGER, name TEXT); CREATE TABLE evidence (id TEXT PRIMARY KEY, ordinal INTEGER, json TEXT, category TEXT); CREATE TABLE notices (id TEXT PRIMARY KEY, ordinal INTEGER, json TEXT); CREATE TABLE teammates (name TEXT PRIMARY KEY)')
       database.exec('BEGIN')
-      const usageKey = database.query('INSERT OR IGNORE INTO usage_keys VALUES (?)')
+      const getUsageKey = database.query('SELECT input, output, cache_read, cache_creation FROM usage_keys WHERE id = ?')
+      const saveUsageKey = database.query('INSERT OR REPLACE INTO usage_keys VALUES (?, ?, ?, ?, ?)')
       const saveParent = database.query('INSERT OR REPLACE INTO parents VALUES (?, ?)')
       const getParent = database.query('SELECT owner FROM parents WHERE id = ?')
       const saveTool = database.query('INSERT OR REPLACE INTO tools VALUES (?, ?, ?, ?, ?)')
@@ -92,12 +93,33 @@ export async function recoverBoundedSessionHistory(options: {
         if (rawMessage?.role === 'user' && notifications.length > 0) return
         const message = options.toMessage(entry, owner)
         if (!message) return
-        if (message.usage && (!message.usageKey || usageKey.run(message.usageKey).changes > 0)) {
+        if (message.usage) {
+          // A reply is written as one line per content block and the lines need not agree (the
+          // first can carry zero/partial usage), so count each field at the largest value any line
+          // reported and add only the excess. Lines without a key are always counted whole.
           const amount = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
-          usage.input_tokens += amount(message.usage.input_tokens)
-          usage.output_tokens += amount(message.usage.output_tokens)
-          usage.cache_read_tokens += amount(message.usage.cache_read_input_tokens)
-          usage.cache_creation_tokens += amount(message.usage.cache_creation_input_tokens)
+          const current = {
+            input: amount(message.usage.input_tokens),
+            output: amount(message.usage.output_tokens),
+            cacheRead: amount(message.usage.cache_read_input_tokens),
+            cacheCreation: amount(message.usage.cache_creation_input_tokens),
+          }
+          const previous = message.usageKey
+            ? getUsageKey.get(message.usageKey) as { input: number; output: number; cache_read: number; cache_creation: number } | null
+            : null
+          const total = previous
+            ? {
+                input: Math.max(previous.input, current.input),
+                output: Math.max(previous.output, current.output),
+                cacheRead: Math.max(previous.cache_read, current.cacheRead),
+                cacheCreation: Math.max(previous.cache_creation, current.cacheCreation),
+              }
+            : current
+          if (message.usageKey) saveUsageKey.run(message.usageKey, total.input, total.output, total.cacheRead, total.cacheCreation)
+          usage.input_tokens += total.input - (previous?.input ?? 0)
+          usage.output_tokens += total.output - (previous?.output ?? 0)
+          usage.cache_read_tokens += total.cacheRead - (previous?.cache_read ?? 0)
+          usage.cache_creation_tokens += total.cacheCreation - (previous?.cache_creation ?? 0)
         }
         if (owner || entry.isSidechain === true) return
         const base = { ...message, usage: undefined, toolUseResult: undefined }

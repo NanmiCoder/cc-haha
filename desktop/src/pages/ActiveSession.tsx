@@ -22,6 +22,7 @@ import { useSessionStore } from '../stores/sessionStore'
 import { useChatStore } from '../stores/chatStore'
 import { useCLITaskStore } from '../stores/cliTaskStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../stores/teamStore'
+import { interruptedTeamNameOf, useTeamPlanStore } from '../stores/teamPlanStore'
 import {
   WORKSPACE_BOTTOM_DEFAULT_HEIGHT,
   WORKSPACE_BOTTOM_MAX_HEIGHT,
@@ -52,7 +53,7 @@ import {
   useWorkspaceBrowserEventBridge,
 } from '../components/workbench/WorkspaceSurface'
 import { AgentTeamsStrip } from '../components/agentTeams/AgentTeamsSummary'
-import { snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
+import { endedBeforeAnyMemberJoined, snapshotWithHistoricalMembers } from '../components/agentTeams/agentTeamsModel'
 import {
   SessionActivityPanel,
   type OpenSubagentPayload,
@@ -392,6 +393,7 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
       ? snapshotWithHistoricalMembers(agentTeamsSnapshots, agentTeamsSnapshots.length - 1)
       : undefined
   ), [agentTeamsSnapshots])
+  const interruptedTeamName = useTeamPlanStore(interruptedTeamNameOf(activeTabId))
   const activeTeamStartedAt = useTeamStore((s) => activeTabId
     ? s.activeTeamStartedAtBySession[activeTabId]
     : undefined)
@@ -977,10 +979,11 @@ export function ActiveSession({ sessionId, active = true }: { sessionId?: string
                     isRunning={isActive}
                     compact={showRightPanel}
                   />
-                  {agentTeamsSnapshot ? (
+                  {agentTeamsSnapshot && !endedBeforeAnyMemberJoined(agentTeamsSnapshot) ? (
                     <AgentTeamsStrip
                       snapshot={agentTeamsSnapshot}
                       compact={showRightPanel}
+                      phaseOverride={!agentTeamsSnapshot.deletedAt && interruptedTeamName === agentTeamsSnapshot.team.name ? 'interrupted' : undefined}
                       onOpen={() => useTabStore.getState().openTeamWorkbenchTab(
                         activeTabId,
                         agentTeamsSnapshot.team.name,

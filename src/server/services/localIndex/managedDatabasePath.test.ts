@@ -24,6 +24,7 @@ describe('managed SQLite database paths', () => {
   test.each([
     ['session', 'index-v1.sqlite', openLocalIndexDatabase],
     ['trace', 'trace-index-v1.sqlite', openTraceIndexDatabase],
+    ['custom trace', 'trace-storage-index-v1.sqlite', (options: { path: string, scope: string }) => openTraceIndexDatabase({ ...options, customStorage: true })],
     ['scheduled', 'scheduled-runs-v1.sqlite', openScheduledRunIndex],
   ] as const)(
     'rejects a descendant db-directory symlink before opening the %s database',

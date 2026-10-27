@@ -5,6 +5,7 @@ import { dependentFilesForChangeSet } from './module-graph'
 
 export type ChangeArea =
   | 'desktop'
+  | 'mobile'
   | 'server'
   | 'adapters'
   | 'docs'
@@ -26,6 +27,7 @@ export type ChangePolicyResult = {
   missingTestSignals: string[]
   checks: {
     desktop: boolean
+    mobile: boolean
     server: boolean
     adapters: boolean
     desktopNative: boolean
@@ -46,6 +48,7 @@ const ALLOW_COVERAGE_BASELINE_LABEL = 'allow-coverage-baseline-change'
 
 const areaLabels: Record<ChangeArea, string> = {
   desktop: 'area:desktop',
+  mobile: 'area:mobile',
   server: 'area:server',
   adapters: 'area:adapters',
   docs: 'area:docs',
@@ -184,6 +187,7 @@ const policyPrefixes = [
 ]
 
 const policyExactPaths = new Set([
+  '.easignore',
   '.github/CODEOWNERS',
   '.github/copilot-instructions.md',
   '.github/pull_request_template.md',
@@ -203,6 +207,7 @@ const docsExactPaths = new Set([
 ])
 
 const releaseExactPaths = new Set([
+  '.easignore',
   '.github/workflows/pr-quality.yml',
   '.github/workflows/pr-triage.yml',
   '.github/workflows/release-desktop.yml',
@@ -212,6 +217,9 @@ const releaseExactPaths = new Set([
   'scripts/pr/check-pr.ts',
   'scripts/pr/run-server-tests.ts',
   'scripts/release.ts',
+  'scripts/mobile-release.ts',
+  'scripts/mobile-release.test.ts',
+  '.github/workflows/release-mobile.yml',
   'desktop/electron/tsconfig.json',
   'desktop/scripts/build-macos-arm64.sh',
   'desktop/scripts/build-windows-x64.ps1',
@@ -248,6 +256,10 @@ function areasForPath(path: string): ChangeArea[] {
 
   if (path.startsWith('desktop/') || path.startsWith('native/')) {
     areas.add('desktop')
+  }
+
+  if (path.startsWith('mobile/')) {
+    areas.add('mobile')
   }
 
   if (path.startsWith('src/server/')) {
@@ -448,6 +460,14 @@ export function evaluateChangePolicy(
     missingTestSignals: missingTests,
     checks: {
       desktop: touchesDesktopWeb,
+      mobile: selectionFiles.some((file) => (
+        (file.startsWith('mobile/') && !isAgentInstructionPath(file)) ||
+        file === '.easignore' ||
+        file === 'package.json' || file === 'bun.lock' ||
+        file === 'scripts/pr/run-mobile-checks.ts' ||
+        file === '.github/workflows/pr-quality.yml' ||
+        file === '.github/workflows/nightly-quality.yml'
+      )),
       server: selectionFiles.some((file) => file.startsWith('src/') && !isAgentInstructionPath(file)),
       adapters: selectionFiles.some((file) => file.startsWith('adapters/') && !isAgentInstructionPath(file)),
       desktopNative: touchesDesktopNative,
@@ -513,7 +533,7 @@ function formatSummary(result: ChangePolicyResult) {
     'PR change policy',
     `  Areas: ${result.areas.length ? result.areas.join(', ') : 'none'}`,
     `  Labels: ${result.labels.length ? result.labels.join(', ') : 'none'}`,
-    `  Checks: desktop=${result.checks.desktop}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, providerContract=${result.checks.providerContract}, chatContract=${result.checks.chatContract}, agentFlow=${result.checks.agentFlow}, agentE2e=${result.checks.agentE2e}, persistence=${result.checks.persistence}, policy=${result.checks.policy}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
+    `  Checks: desktop=${result.checks.desktop}, mobile=${result.checks.mobile}, server=${result.checks.server}, adapters=${result.checks.adapters}, desktopNative=${result.checks.desktopNative}, providerContract=${result.checks.providerContract}, chatContract=${result.checks.chatContract}, agentFlow=${result.checks.agentFlow}, agentE2e=${result.checks.agentE2e}, persistence=${result.checks.persistence}, policy=${result.checks.policy}, docs=${result.checks.docs}, coverage=${result.checks.coverage}`,
   ]
 
   if (result.cliCoreOverride) {
@@ -564,6 +584,7 @@ function writeGithubOutputs(result: ChangePolicyResult) {
     blocking_reasons: result.blockingReasons.join(' | '),
     cli_core_override: result.cliCoreOverride ?? '',
     desktop_checks: String(result.checks.desktop),
+    mobile_checks: String(result.checks.mobile),
     server_checks: String(result.checks.server),
     adapter_checks: String(result.checks.adapters),
     desktop_native_checks: String(result.checks.desktopNative),

@@ -48,6 +48,7 @@ import {
   getNetworkProxyFetchOptions,
   loadNetworkSettings,
   type NetworkSettings,
+  resolveProviderNetworkSettings,
 } from '../services/networkSettings.js'
 import { normalizeModelStringForAPI } from '../../utils/model/model.js'
 import {
@@ -258,7 +259,7 @@ export async function handleProxyRequest(req: Request, url: URL): Promise<Respon
 
   const isStream = body.stream === true
   const baseUrl = config.baseUrl.replace(/\/+$/, '')
-  const networkSettings = await loadNetworkSettings()
+  const networkSettings = resolveProviderNetworkSettings(await loadNetworkSettings(), config.proxy)
   const traceContext = buildProxyTraceContext(req, config, body)
   const inboundSessionId = req.headers.get('x-claude-code-session-id')
   const promptCacheKey = resolvePromptCacheKey(body, inboundSessionId)

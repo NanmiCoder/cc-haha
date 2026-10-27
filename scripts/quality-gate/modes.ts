@@ -57,6 +57,16 @@ export function lanesForMode(mode: QualityGateMode, baselineTargets: BaselineTar
       category: 'unit',
     },
     {
+      id: 'mobile-checks',
+      title: 'Mobile checks',
+      description: 'Run mobile typecheck, lint, and deterministic tests with isolated user state.',
+      kind: 'command',
+      command: ['bun', 'run', 'check:mobile'],
+      impactRequiredCheck: 'bun run check:mobile',
+      requiredForModes: ['pr', 'release'],
+      category: 'unit',
+    },
+    {
       id: 'server-checks',
       title: 'Server checks',
       description: 'Run server, provider, runtime, MCP, OAuth, WebSocket, and API tests when server paths changed.',

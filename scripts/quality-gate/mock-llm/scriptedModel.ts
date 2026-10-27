@@ -165,6 +165,15 @@ export function decideReply(request: MockRequest): MockReply {
 
   // A tool just ran: report what came back, the way a model summarises a result.
   const results = blocksOf(last).filter((block) => block.type === 'tool_result')
+  if (prompt.startsWith('MOCK_TEAM_OWNER ')) {
+    const { tool, input } = JSON.parse(prompt.slice('MOCK_TEAM_OWNER '.length)) as { tool: string; input: Record<string, unknown> }
+    const discovered = results.some(block => Array.isArray(block.content) &&
+      block.content.some(reference => reference?.type === 'tool_reference' && reference.tool_name === tool))
+    if (results.length === 0 || discovered) {
+      if (hasTool(request, tool)) return toolUse(tool, input)
+      if (hasTool(request, 'ToolSearch')) return toolUse('ToolSearch', { query: `select:${tool}` })
+    }
+  }
   if (prompt === 'MOCK_LATE_MCP' && !results.some(block => toolResultText(block).includes('LATE_MCP_AVAILABLE'))) {
     const toolName = 'mcp__late_start__echo'
     if (hasTool(request, toolName)) return toolUse(toolName, {})
@@ -200,6 +209,14 @@ export function decideReply(request: MockRequest): MockReply {
   if (last?.role === 'user' && results.length > 0) {
     const result = results[results.length - 1]!
     const body = toolResultText(result).trim()
+    if (prompt.startsWith('MOCK_SCHEDULED_TASK_RESULTS ') && !result.is_error && hasTool(request, 'ScheduledTask')) {
+      try {
+        const parsed = JSON.parse(body)
+        if (parsed.kind === 'scheduled_task_runs' && parsed.operation === 'listed' && parsed.runs?.[0]?.id) {
+          return toolUse('ScheduledTask', { action: 'run', runId: parsed.runs[0].id })
+        }
+      } catch { /* The ordinary error/result response below exposes invalid fixture output. */ }
+    }
     return text(result.is_error ? `The tool failed: ${body}` : `Tool result: ${body}`)
   }
 
@@ -216,6 +233,18 @@ export function decideReply(request: MockRequest): MockReply {
   }
   if (prompt === 'MOCK_SESSION_DELEGATION' && hasTool(request, 'CreateSessions')) {
     return toolUse('CreateSessions', { requestId: 'mock-delegation', sessions: [{ title: 'Independent review', prompt: 'Reply with Ready when you are.' }] })
+  }
+  if (prompt === 'MOCK_SCHEDULED_TASK_CREATE' && hasTool(request, 'ScheduledTask')) {
+    return toolUse('ScheduledTask', {
+      action: 'create', requestId: 'mock-scheduled-task', name: 'Fixture scheduled review', prompt: 'Inspect the disposable fixture.',
+      schedule: { kind: 'once', runAt: '2099-01-01T09:00:00+08:00', timeZone: 'Asia/Shanghai' },
+    })
+  }
+  if (prompt.startsWith('MOCK_SCHEDULED_TASK_RESULTS ') && hasTool(request, 'ScheduledTask')) {
+    return toolUse('ScheduledTask', { action: 'runs', taskId: prompt.slice('MOCK_SCHEDULED_TASK_RESULTS '.length), limit: 5 })
+  }
+  if (prompt.startsWith('MOCK_SCHEDULED_TASK_DELETE ') && hasTool(request, 'ScheduledTask')) {
+    return toolUse('ScheduledTask', { action: 'delete', id: prompt.slice('MOCK_SCHEDULED_TASK_DELETE '.length) })
   }
 
   const cwd = workingDirectoryOf(request)

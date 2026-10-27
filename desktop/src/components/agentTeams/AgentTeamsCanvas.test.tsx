@@ -111,6 +111,43 @@ describe('AgentTeamsCanvas', () => {
     useSettingsStore.setState({ locale: 'en' })
   })
 
+  it.each([undefined, ' Builder@canvas-team '])('connects an active task with recovered or normalized owner %s', (owner) => {
+    const current = snapshot('current')
+    current.tasks[1]!.owner = owner
+    render(<AgentTeamsCanvas {...props({ snapshots: [current], selectedIndex: 0, snapshot: current })} />)
+    expect(screen.getByTestId('agent-teams-canvas-task-2').textContent).toContain('builder')
+    expect(screen.getByTestId('agent-teams-canvas-tether-builder@canvas-team')).toBeTruthy()
+  })
+
+  it('does not describe an ownerless running task as waiting to be claimed', () => {
+    const current = snapshot('current')
+    current.tasks.push(task('5', 'in_progress'))
+    render(<AgentTeamsCanvas {...props({ snapshots: [current], selectedIndex: 0, snapshot: current })} />)
+    const card = screen.getByTestId('agent-teams-canvas-task-5')
+    expect(card.getAttribute('data-state')).toBe('running')
+    expect(card.textContent).toContain('Owner not recorded')
+    expect(card.textContent).not.toContain('Waiting for a teammate')
+  })
+
+  it('removes the current task and tether when its owner is explicitly cleared, then restores a new assignment', () => {
+    const assigned = snapshot('current')
+    const cleared = structuredClone(assigned)
+    cleared.tasks[1]!.owner = ''
+    const { rerender } = render(<AgentTeamsCanvas {...props({ snapshots: [assigned], selectedIndex: 0, snapshot: assigned })} />)
+    expect(screen.getByTestId('agent-teams-canvas-tether-builder@canvas-team')).toBeTruthy()
+
+    rerender(<AgentTeamsCanvas {...props({ snapshots: [assigned, cleared], selectedIndex: 1, snapshot: cleared })} />)
+    expect(screen.queryByTestId('agent-teams-canvas-tether-builder@canvas-team')).toBeNull()
+    expect(screen.getByTestId('agent-teams-canvas-member-builder@canvas-team').textContent).not.toContain('Executing #2')
+    expect(screen.getByTestId('agent-teams-canvas-task-2').textContent).toContain('Owner not recorded')
+
+    const reassigned = structuredClone(cleared)
+    reassigned.tasks[1]!.owner = 'builder'
+    rerender(<AgentTeamsCanvas {...props({ snapshots: [assigned, cleared, reassigned], selectedIndex: 2, snapshot: reassigned })} />)
+    expect(screen.getByTestId('agent-teams-canvas-tether-builder@canvas-team').getAttribute('data-task-id')).toBe('2')
+    expect(screen.getByTestId('agent-teams-canvas-member-builder@canvas-team').textContent).toContain('Executing #2')
+  })
+
   it('renders the fixed formation over horizontal dependency lanes with one node per member', () => {
     const { container } = render(<AgentTeamsCanvas {...props()} />)
 

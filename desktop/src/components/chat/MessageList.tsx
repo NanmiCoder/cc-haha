@@ -1,3 +1,7 @@
+import { getDisclosure } from '@/lib/disclosureMemory'
+import { ScheduledTaskCard } from '@/components/tasks/ScheduledTaskCard'
+import { ScheduledTaskTrigger } from '@/components/tasks/ScheduledTaskTrigger'
+import { parseScheduledTaskResult } from '@/lib/scheduledTask'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { ConversationImageGalleryContext } from '@/components/chat/conversationImageGallery'
 import { resolveConversationImages } from '@/components/chat/conversationImages'
@@ -15,6 +19,7 @@ import { getAnnotationNumbers, useWorkspaceChatContextStore } from '../../stores
 import { useWorkspaceStore, type WorkspaceOrigin } from '../../stores/workspaceStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
+import { interruptedTeamNameOf, useTeamPlanStore } from '../../stores/teamPlanStore'
 import { useUIStore } from '../../stores/uiStore'
 import { useChatAppearanceStore } from '../../stores/chatAppearanceStore'
 import { t as translateNow, useTranslation } from '../../i18n'
@@ -47,6 +52,7 @@ import { getTextOffsetForRange } from './annotations/annotationAnchors'
 import { AgentTeamsInlineCard } from '../agentTeams/AgentTeamsSummary'
 import { MEMBER_AVATARS, memberAccentColor } from '../agentTeams/agentTeamsAvatars'
 import {
+  endedPhase,
   getMemberAvatarKey,
   resolveTeamMemberIdentity,
   snapshotWithHistoricalMembers,
@@ -110,6 +116,8 @@ type RenderItem =
       teamName: string
       startedAt: number
       endedAt?: number
+      /** Its lead deleted it, which it does once the work is done. */
+      deletedByLead?: boolean
       coordinationToolCalls: ToolCall[]
     }
 
@@ -129,6 +137,8 @@ type RewindTurnTarget = {
   messageId: string
   /** The prompt's own transcript id; a live prompt has none until history reloads. */
   transcriptMessageId?: string
+  /** The CLI never acknowledged this prompt, so the transcript may not hold it. */
+  awaitingReplay?: boolean
   userMessageIndex: number
   content: string
   expectedContent: string
@@ -1174,6 +1184,11 @@ export function buildRenderModel(
         continue
       }
       const toolResult = toolResultMap.get(msg.toolUseId)
+      if (toolResult && parseScheduledTaskResult(msg.toolName, toolResult.content, toolResult.isError)) {
+        flushGroup()
+        items.push({ kind: 'message', message: msg })
+        continue
+      }
       let summarizedTeamDelete = false
       if (options.hideTeamCoordinationTools) {
         if (msg.toolName === 'TeamCreate' && lifecycleToolSucceeded(toolResult)) {
@@ -1189,6 +1204,7 @@ export function buildRenderModel(
           const deletedTeamCard = ensureTeamCardForCoordination(msg, toolResult)
           if (deletedTeamCard) {
             deletedTeamCard.endedAt = msg.timestamp
+            deletedTeamCard.deletedByLead = true
             deletedTeamCard.coordinationToolCalls.push(msg)
             summarizedTeamDelete = true
           }
@@ -1256,6 +1272,10 @@ export function buildRenderModel(
         canSummarizeCoordinationResult(toolResult)
       ) {
         flushGroup()
+        // A lead leads one team at a time, so a new team means the previous
+        // one ended, even when the host ended it (a cancelled or ended plan)
+        // and no TeamDelete call here says so.
+        if (activeTeamCard && activeTeamCard.endedAt === undefined) activeTeamCard.endedAt = msg.timestamp
         activeTeamCard = {
           kind: 'team_card',
           id: `team-card-${msg.id}`,
@@ -1436,21 +1456,20 @@ function getBranchableMessageTargets(messages: UIMessage[]): Map<string, Brancha
   return branchableTargets
 }
 
-export function getCompletedTurnTargets(messages: UIMessage[]): RewindTurnTarget[] {
+function collectTurnTargets(messages: UIMessage[]): Array<{ target: RewindTurnTarget; answered: boolean }> {
   let userMessageIndex = -1
-  const completedTurns: RewindTurnTarget[] = []
+  const turns: Array<{ target: RewindTurnTarget; answered: boolean }> = []
   let currentTarget: RewindTurnTarget | null = null
   let hasResponseForCurrentTarget = false
 
   for (const message of messages) {
     if (message.type === 'user_text' && !message.pending) {
-      if (currentTarget && hasResponseForCurrentTarget) {
-        completedTurns.push(currentTarget)
-      }
+      if (currentTarget) turns.push({ target: currentTarget, answered: hasResponseForCurrentTarget })
       userMessageIndex += 1
       currentTarget = {
         messageId: message.id,
         ...(message.transcriptMessageId ? { transcriptMessageId: message.transcriptMessageId } : {}),
+        ...(message.awaitingReplay ? { awaitingReplay: true } : {}),
         userMessageIndex,
         content: message.content,
         expectedContent: message.modelContent ?? message.content,
@@ -1465,11 +1484,25 @@ export function getCompletedTurnTargets(messages: UIMessage[]): RewindTurnTarget
     }
   }
 
-  if (currentTarget && hasResponseForCurrentTarget) {
-    completedTurns.push(currentTarget)
-  }
+  if (currentTarget) turns.push({ target: currentTarget, answered: hasResponseForCurrentTarget })
+  return turns
+}
 
-  return completedTurns
+export function getCompletedTurnTargets(messages: UIMessage[]): RewindTurnTarget[] {
+  return collectTurnTargets(messages).filter((turn) => turn.answered).map((turn) => turn.target)
+}
+
+/**
+ * Prompts that never got a reply — a stop landed before the model answered.
+ * The model has no output to protect there, so these stay editable even though
+ * the server lists no checkpoint for a turn without a response.
+ */
+export function getUnansweredTurnTargets(
+  messages: UIMessage[],
+): Array<{ target: RewindTurnTarget; latest: boolean }> {
+  const turns = collectTurnTargets(messages)
+  return turns.flatMap((turn, index) =>
+    turn.answered ? [] : [{ target: turn.target, latest: index === turns.length - 1 }])
 }
 
 export function getLatestCompletedTurnTarget(messages: UIMessage[]): RewindTurnTarget | null {
@@ -2251,6 +2284,70 @@ function getMessageMetricSignature(message: UIMessage): string {
   }
 }
 
+/**
+ * Move measured heights from rows that disappeared to rows that appeared with
+ * the same reload signature, in order. Rows that kept their key are untouched.
+ *
+ * A transcript reload after a reply, or a checkpoint refresh, can hand the same
+ * messages back under new ids. Heights are keyed by id, so those rows would
+ * fall back to estimates, and in a tool-heavy session the estimates run far
+ * above the collapsed rows that were measured: the same scrollTop then lands
+ * many turns above the tail (#1652, #1662).
+ */
+export function carryMeasuredHeightsToRenamedItems(
+  heights: Map<string, number>,
+  previousKeys: string[],
+  previousSignatures: string[],
+  nextKeys: string[],
+  nextSignatures: string[],
+): number {
+  if (previousKeys.length === 0 || previousKeys === nextKeys) return 0
+  const nextKeySet = new Set(nextKeys)
+  const orphanedHeightsBySignature = new Map<string, number[]>()
+  previousKeys.forEach((key, index) => {
+    if (nextKeySet.has(key)) return
+    const height = heights.get(key)
+    const signature = previousSignatures[index]
+    if (height === undefined || signature === undefined) return
+    const queue = orphanedHeightsBySignature.get(signature)
+    if (queue) queue.push(height)
+    else orphanedHeightsBySignature.set(signature, [height])
+  })
+  if (orphanedHeightsBySignature.size === 0) return 0
+
+  const previousKeySet = new Set(previousKeys)
+  let carried = 0
+  nextKeys.forEach((key, index) => {
+    if (previousKeySet.has(key) || heights.has(key)) return
+    const height = orphanedHeightsBySignature.get(nextSignatures[index] ?? '')?.shift()
+    if (height === undefined) return
+    heights.set(key, height)
+    carried += 1
+  })
+  return carried
+}
+
+// Metric signatures summarize lengths for cheap estimates, not row identity:
+// equal-length Markdown can have different geometry. Include disclosure state
+// because renamed thinking/result rows may remount collapsed after being open.
+function getRenderItemReloadSignature(item: RenderItem): string {
+  if (item.kind !== 'message') return JSON.stringify(item)
+  const message = item.message
+  const expanded = message.type === 'thinking' || message.type === 'tool_result'
+    ? getDisclosure(message.id) ?? false
+    : false
+  return JSON.stringify([{ ...message, id: undefined, timestamp: undefined }, expanded])
+}
+
+function haveSameRenderItemKeys(previous: string[], next: string[]): boolean {
+  if (previous === next) return true
+  if (previous.length !== next.length) return false
+  for (let index = 0; index < next.length; index += 1) {
+    if (previous[index] !== next[index]) return false
+  }
+  return true
+}
+
 function getRenderItemMetricSignature(item: RenderItem): string {
   if (item.kind === 'message') return getMessageMetricSignature(item.message)
   if (item.kind === 'team_card') {
@@ -2529,6 +2626,7 @@ export function MessageList({
   const activeTeamStartedAt = useTeamStore((s) => (
     resolvedSessionId ? s.activeTeamStartedAtBySession[resolvedSessionId] : undefined
   ))
+  const interruptedTeamName = useTeamPlanStore(interruptedTeamNameOf(resolvedSessionId))
   const teamSnapshot = useMemo(() => {
     const snapshots = teamWorkbench?.snapshots
     return snapshots?.length
@@ -2802,7 +2900,12 @@ export function MessageList({
     ) return
 
     virtualItemHeightsRef.current.set(itemKey, measuredHeight)
-    if (hasPendingPermissionCard && shouldAutoScrollRef.current) {
+    // A row changing height while the reader follows the tail moves the bottom.
+    // Re-pin whatever caused it (a permission card, a reloaded transcript
+    // measuring in after the reply, a tool result settling), not only live
+    // output: the content-resize follow below is off once the chat is idle.
+    // Growth the reader just asked for by opening a block stays theirs (#1177).
+    if (shouldAutoScrollRef.current && performance.now() >= disclosureLayoutUntilRef.current) {
       requestLiveFollow()
     }
 
@@ -2810,7 +2913,7 @@ export function MessageList({
     // offsets and restore the reading anchor in the same frame as the new height.
     if (initial) flushMeasuredHeightVersion()
     else flushSync(flushMeasuredHeightVersion)
-  }, [flushMeasuredHeightVersion, hasPendingPermissionCard, requestLiveFollow])
+  }, [flushMeasuredHeightVersion, requestLiveFollow])
 
   const updateAutoScrollState = useCallback(() => {
     // Ignore scroll events triggered by our own programmatic scrolling to
@@ -3189,6 +3292,44 @@ export function MessageList({
     }),
     [renderItemKeys, renderItems],
   )
+  // Compare against the last committed list, so an interrupted render cannot
+  // become the source of measured geometry for a later history reload.
+  const previousRenderItemsRef = useRef<{
+    sessionId: string | null | undefined
+    keys: string[]
+    items: RenderItem[]
+  }>({ sessionId: resolvedSessionId, keys: [], items: [] })
+  useMemo(() => {
+    const previous = previousRenderItemsRef.current
+    if (previous.sessionId !== resolvedSessionId || haveSameRenderItemKeys(previous.keys, renderItemKeys)) return
+    carryMeasuredHeightsToRenamedItems(
+      virtualItemHeightsRef.current,
+      previous.keys,
+      previous.items.map(getRenderItemReloadSignature),
+      renderItemKeys,
+      renderItems.map(getRenderItemReloadSignature),
+    )
+  }, [renderItemKeys, renderItems, resolvedSessionId])
+  useLayoutEffect(() => {
+    previousRenderItemsRef.current = { sessionId: resolvedSessionId, keys: renderItemKeys, items: renderItems }
+  }, [renderItemKeys, renderItems, resolvedSessionId])
+  // A history reload or checkpoint refresh after a reply rewrites the rows while
+  // the chat is idle, where neither the streaming follow nor the message-count
+  // follow runs. A reader who was at the bottom stays there.
+  const lastFollowedRenderItemKeysRef = useRef<{
+    sessionId: string | null | undefined
+    keys: string[]
+  }>({ sessionId: resolvedSessionId, keys: renderItemKeys })
+  useEffect(() => {
+    const previous = lastFollowedRenderItemKeysRef.current
+    lastFollowedRenderItemKeysRef.current = { sessionId: resolvedSessionId, keys: renderItemKeys }
+    // Same rows under the same keys (a streaming delta, a status tick) are
+    // followed by the live paths above; only rows added, removed or renamed
+    // need this one.
+    if (previous.sessionId !== resolvedSessionId || haveSameRenderItemKeys(previous.keys, renderItemKeys)) return
+    if (!shouldAutoScrollRef.current) return
+    requestLiveFollow()
+  }, [renderItemKeys, requestLiveFollow, resolvedSessionId])
   const conversationNavigationItems = useMemo(() => {
     const sources = renderItems.flatMap((item, renderIndex) => item.kind === 'message'
       ? [{
@@ -3554,13 +3695,17 @@ export function MessageList({
     () => new Set(completedTurnTargets.map((target) => target.messageId)),
     [completedTurnTargets],
   )
+  const unansweredTurnTargets = useMemo(
+    () => getUnansweredTurnTargets(deferredMessages),
+    [deferredMessages],
+  )
   const checkpointPreviewOverBudget = workspaceChangesFallback !== null &&
     workspaceChangesFallback.sessionId === resolvedSessionId
   // Past the preview budget the server lists no checkpoints at all, but one
   // rewind still resolves a prompt by its transcript id, so those prompts stay
   // editable. This mode tells the user file undo is unavailable, so the edit
   // rolls back the conversation only.
-  const editTurnCards = useMemo<EditableTurnCard[]>(
+  const completedEditCards = useMemo<EditableTurnCard[]>(
     () => checkpointPreviewOverBudget
       ? completedTurnTargets.flatMap((target) => target.transcriptMessageId
         ? [{
@@ -3573,6 +3718,31 @@ export function MessageList({
         : [])
       : visibleTurnChangeCards,
     [checkpointPreviewOverBudget, completedTurnTargets, visibleTurnChangeCards],
+  )
+  // A prompt stopped before any reply has no checkpoint but nothing to restore
+  // either, so it rewinds the conversation only. One the CLI never
+  // acknowledged is not in the transcript at all: it is dropped locally.
+  // The prompt still being answered is not a stopped one.
+  const unansweredEditCards = useMemo<EditableTurnCard[]>(
+    () => unansweredTurnTargets.flatMap<EditableTurnCard>(({ target, latest }) => {
+      if (latest && turnInProgress) return []
+      const cardTarget = { messageId: target.messageId, expectedContent: target.expectedContent }
+      if (target.transcriptMessageId) {
+        return [{
+          target: cardTarget,
+          checkpoint: {
+            target: { targetUserMessageId: target.transcriptMessageId, userMessageIndex: target.userMessageIndex },
+          },
+          conversationOnly: true,
+        }]
+      }
+      return latest && target.awaitingReplay ? [{ target: cardTarget, unconfirmed: true as const }] : []
+    }),
+    [turnInProgress, unansweredTurnTargets],
+  )
+  const editTurnCards = useMemo(
+    () => unansweredEditCards.length === 0 ? completedEditCards : [...completedEditCards, ...unansweredEditCards],
+    [completedEditCards, unansweredEditCards],
   )
   const editBlockedReason = turnInProgress
     ? t('chat.editMessageWaitForTurn')
@@ -3941,12 +4111,18 @@ export function MessageList({
                 window.endedAt !== undefined &&
                 item.startedAt <= window.endedAt
               )) ? 'completed' : 'forming'
+              // An ended team's tasks say how it ended. Without its record, a
+              // team its lead deleted is taken as done, and one the host
+              // removed (a cancelled or ended plan) only as ended.
+              const ended = cardSnapshot ? endedPhase(cardSnapshot) : item.deletedByLead ? 'completed' : 'ended'
               return (
               <AgentTeamsInlineCard
                 snapshot={cardSnapshot}
                 teamName={item.teamName}
                 fallbackPhase={fallbackPhase}
-                phaseOverride={item.endedAt !== undefined ? 'completed' : undefined}
+                phaseOverride={item.endedAt !== undefined
+                  ? ended
+                  : cardSnapshot && !cardSnapshot.deletedAt && cardSnapshot.team.name === interruptedTeamName ? 'interrupted' : undefined}
                 onOpen={cardSnapshot
                   ? () => openTeamWorkbench(resolvedSessionId, cardSnapshot.team.name)
                   : undefined}
@@ -4087,6 +4263,9 @@ export function MessageList({
             const mountKey = groupMountKeys.keys.get(itemKey) ?? itemKey
             const content = renderTranscriptItem(item, index)
             const railPosition = turnRailPositions[index] ?? 'none'
+            // The prompt editor opens its slash and @ menus upward, past the
+            // row's own box; paint containment would cut them off.
+            const paintContained = !(item.kind === 'message' && editActionByMessageId.get(item.message.id)?.editing)
 
             return virtualTranscriptWindow.enabled ? (
               <MeasuredRenderItem
@@ -4103,7 +4282,7 @@ export function MessageList({
                 key={mountKey}
                 data-chat-render-item-key={itemKey}
                 data-turn-rail={railPosition}
-                className={`${CHAT_RENDER_ITEM_CLASS} chat-render-item--cv ${turnRailClass(railPosition)} ${highlightedNavigationItemKey === itemKey ? 'chat-render-item--navigation-target' : ''}`}
+                className={`${CHAT_RENDER_ITEM_CLASS} ${paintContained ? 'chat-render-item--cv ' : ''}${turnRailClass(railPosition)} ${highlightedNavigationItemKey === itemKey ? 'chat-render-item--navigation-target' : ''}`}
               >
                 {content}
               </div>
@@ -4270,6 +4449,7 @@ export const MessageBlock = memo(function MessageBlock({
 
   switch (message.type) {
     case 'user_text':
+      if (message.scheduledTask) return <ScheduledTaskTrigger trigger={message.scheduledTask} />
       return (
         <SelectableChatMessage
           sessionId={sessionId}
@@ -4317,7 +4497,9 @@ export const MessageBlock = memo(function MessageBlock({
       // No wrapper padding: the row's own `-mx-2 … px-2` already lands its text
       // on the column's left edge, the same as one inside a run.
       return <ThinkingBlock content={message.content} isActive={message.id === activeThinkingId} disclosureKey={message.id} />
-    case 'tool_use':
+    case 'tool_use': {
+      const scheduledResult = toolResult && parseScheduledTaskResult(message.toolName, toolResult.content, toolResult.isError)
+      if (scheduledResult) return <ScheduledTaskCard result={scheduledResult} />
       if (message.toolName === 'AskUserQuestion' && !message.isPending) {
         return (
           <AskUserQuestion
@@ -4353,6 +4535,7 @@ export const MessageBlock = memo(function MessageBlock({
           }
         />
       )
+    }
     case 'tool_result':
       return (
         <ToolResultBlock

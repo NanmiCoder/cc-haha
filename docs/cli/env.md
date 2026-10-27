@@ -59,6 +59,7 @@ AZURE_OPENAI_CODEX_DEPLOYMENT=your_codex_deployment
 | 变量 | 说明 |
 |------|------|
 | `CLAUDE_CONFIG_DIR` | 改用指定配置目录，而不是默认的 `~/.claude`；适合便携模式和隔离测试 |
+| `CC_HAHA_TRACE_DIR` | Agent Trace 的独立存储目录，必须是绝对路径；为空时仍使用配置目录下的 `cc-haha/traces`。详见 [设置](../desktop/settings.md) |
 | `CLAUDE_CODE_FORCE_RECOVERY_CLI` | 设为 `1` 使用简化的 Recovery CLI |
 | `CLAUDE_CODE_SHELL_PREFIX` | 为 Bash 工具增加 Shell 前缀，例如 Windows 下的 `wsl -e bash -lc` |
 | `DISABLE_TELEMETRY` | 设为 `1` 禁用遥测 |
