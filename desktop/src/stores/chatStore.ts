@@ -486,6 +486,12 @@ type ChatStore = {
     /** Retain an edit after its committed rewind outlives the source tab. */
     options?: { restoreMissingSession?: boolean },
   ) => void
+  /**
+   * Drop the last prompt when the CLI never acknowledged it and nothing has
+   * answered it, so an edited copy can replace it. False — and nothing removed
+   * — once the prompt has been confirmed, answered or followed by another turn.
+   */
+  discardUnconfirmedUserMessage: (sessionId: string, messageId: string) => boolean
   clearComposerPrefill: (sessionId: string, nonce?: number) => void
   queueComposerInsertion: (
     sessionId: string,
@@ -4573,6 +4579,28 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         },
       }
     })
+  },
+
+  discardUnconfirmedUserMessage: (sessionId, messageId) => {
+    const session = get().sessions[sessionId]
+    if (!session || session.chatState !== 'idle') return false
+    const index = session.messages.findIndex((message) => message.id === messageId)
+    const message = session.messages[index]
+    if (message?.type !== 'user_text' || !message.awaitingReplay || message.transcriptMessageId) return false
+    const answered = session.messages.slice(index + 1).some((later) =>
+      later.type === 'user_text' ||
+      later.type === 'assistant_text' ||
+      later.type === 'tool_use' ||
+      later.type === 'tool_result' ||
+      later.type === 'error')
+    if (answered) return false
+    set((state) => ({
+      sessions: updateSessionIn(state.sessions, sessionId, (current) => ({
+        messages: current.messages.slice(0, index),
+        historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
+      })),
+    }))
+    return true
   },
 
   clearComposerPrefill: (sessionId, nonce) => {

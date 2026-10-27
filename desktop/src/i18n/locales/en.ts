@@ -3174,6 +3174,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'chat.editResendConversation': 'Roll back conversation and send',
   'chat.editResendFailed': 'Could not resend the edited message. The conversation was not changed. Details: {detail}',
   'chat.editResendPrefilled': 'The conversation was rolled back, but the edited message could not be sent automatically. It is back in the input box.',
+  'chat.editResendStale': 'This message was just acknowledged and can no longer be replaced. Wait a moment and try again.',
   'chat.workspaceChangesFallbackLabel': 'Workspace changed files',
   'chat.workspaceChangesFallbackTitle': 'Current workspace changes ({count})',
   'chat.workspaceChangesFallbackExplanation': 'This conversation is too long for turn previews or file undo. This list shows current workspace changes and may include changes from other turns or outside this conversation.',

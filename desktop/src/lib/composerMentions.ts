@@ -148,6 +148,20 @@ export function composerReferenceToMention(reference: import('../types/composerR
   }
 }
 
+/**
+ * What a pill sends to the model: a skill or plugin its explicit invocation,
+ * a session its `@title`, a file the `@"absolute path"` form the CLI parses.
+ */
+export function mentionModelText(
+  mention: Pick<ComposerMention, 'kind' | 'label' | 'path' | 'modelText'>,
+): string {
+  if (mention.kind === 'session') return `@${mention.label}`
+  if (mention.kind === 'skill' || mention.kind === 'plugin') {
+    return mention.modelText || `Use ${mention.kind} ${JSON.stringify(mention.label)} for this request.`
+  }
+  return `@"${mention.path}"`
+}
+
 /** Only live structured pills grant a session reference; typed @text never does. */
 export function getSessionReferences(text: string, mentions: ComposerMention[]): Array<{ sessionId: string }> {
   return [...new Set(findMentionRanges(text, mentions)

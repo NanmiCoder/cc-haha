@@ -17439,3 +17439,44 @@ describe('chatStore streamed turn against its durable copy (#1476)', () => {
     ])
   })
 })
+
+describe('chatStore discardUnconfirmedUserMessage', () => {
+  const sessionId = 'discard-unconfirmed'
+  const lost: UIMessage = { id: 'lost', type: 'user_text', content: 'Build a pgae', awaitingReplay: true, timestamp: 1 }
+
+  function seed(messages: UIMessage[], chatState: 'idle' | 'thinking' = 'idle') {
+    useChatStore.setState({ ...initialState, sessions: { [sessionId]: makeSession({ chatState, messages }) } })
+  }
+  const messageIds = () => useChatStore.getState().sessions[sessionId]!.messages.map((message) => message.id)
+
+  it('removes the unacknowledged prompt together with the markers that followed it', () => {
+    seed([
+      { id: 'earlier', type: 'user_text', content: 'Hi', transcriptMessageId: 't0', timestamp: 0 },
+      { id: 'earlier-reply', type: 'assistant_text', content: 'Hello', timestamp: 0 },
+      lost,
+      { id: 'stopped', type: 'system', content: 'Stopped', generationStopped: true, timestamp: 2 },
+    ])
+    expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'lost')).toBe(true)
+    expect(messageIds()).toEqual(['earlier', 'earlier-reply'])
+  })
+
+  it.each([
+    ['acknowledged by the CLI', [{ ...lost, awaitingReplay: undefined } as UIMessage]],
+    ['already in the transcript', [{ ...lost, transcriptMessageId: 't1' } as UIMessage]],
+    ['answered by the model', [lost, { id: 'reply', type: 'assistant_text', content: 'Hi', timestamp: 2 } as UIMessage]],
+    ['followed by another turn', [lost, { id: 'next', type: 'user_text', content: 'Next', timestamp: 2 } as UIMessage]],
+  ])('leaves a prompt that is %s untouched', (_name, messages) => {
+    seed(messages)
+    const before = messageIds()
+    expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'lost')).toBe(false)
+    expect(messageIds()).toEqual(before)
+  })
+
+  it('does nothing while the session is running or for an unknown message', () => {
+    seed([lost], 'thinking')
+    expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'lost')).toBe(false)
+    seed([lost])
+    expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'missing')).toBe(false)
+    expect(messageIds()).toEqual(['lost'])
+  })
+})

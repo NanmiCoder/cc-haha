@@ -21,6 +21,7 @@ import {
   getHeightsForSession,
   type VirtualRenderItemMetric,
 } from './virtualHeightCache'
+import { setComposerText, stubRangeGeometry } from './composerTestUtils'
 import { relativizeWorkspacePath } from './CurrentTurnChangeCard'
 import { sessionsApi } from '../../api/sessions'
 import { ApiError } from '../../api/client'
@@ -10417,7 +10418,7 @@ describe('MessageList edit and resend', () => {
   async function openEditorFor(content: string) {
     const bubble = (await screen.findByText(content)).closest('[data-message-shell="user"]') as HTMLElement
     fireEvent.click(await enabledEditButton(bubble))
-    return screen.getByRole('textbox', { name: 'Edited message' }) as HTMLTextAreaElement
+    return screen.getByRole('textbox', { name: 'Edited message' })
   }
 
   function editButtonIn(content: string) {
@@ -10425,13 +10426,17 @@ describe('MessageList edit and resend', () => {
     return within(bubble).getByRole('button', { name: 'Edit and resend' }) as HTMLButtonElement
   }
 
-  function typeAndSend(textbox: HTMLTextAreaElement, text: string) {
-    fireEvent.change(textbox, { target: { value: text } })
+  function typeAndSend(_textbox: HTMLElement, text: string) {
+    setComposerText(text)
     fireEvent.click(screen.getByRole('button', { name: 'Send' }))
   }
 
+  let restoreRangeGeometry = () => {}
+  afterEach(() => { restoreRangeGeometry() })
+
   beforeEach(() => {
     vi.restoreAllMocks()
+    restoreRangeGeometry = stubRangeGeometry()
     resetSessionScrollSnapshotsForTests()
     useSettingsStore.setState({ locale: 'en', chatSendBehavior: 'enter' })
     useUIStore.setState({ toasts: [] })
@@ -10567,13 +10572,80 @@ describe('MessageList edit and resend', () => {
     expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull()
   })
 
+  it('edits a prompt that was stopped before any reply by rewinding the conversation only', async () => {
+    // The server lists no checkpoint for a turn without a response, so the
+    // action must not wait on (or depend on) one.
+    const { sendMessage } = setup([
+      { id: 'user-1', type: 'user_text', content: 'Build a pgae', transcriptMessageId: 'transcript-1', timestamp: 1 },
+      { id: 'stopped-1', type: 'system', content: 'Stopped', generationStopped: true, transcriptMessageId: 'stopped-t', timestamp: 2 },
+    ], [])
+    const rewind = vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(rewindResult({
+      target: { targetUserMessageId: 'transcript-1', userMessageIndex: 0, userMessageCount: 1 },
+    }))
+    render(<MessageList />)
+
+    typeAndSend(await openEditorFor('Build a pgae'), 'Build a page')
+
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(rewind).toHaveBeenNthCalledWith(1, ACTIVE_TAB, {
+      targetUserMessageId: 'transcript-1', userMessageIndex: 0, expectedContent: 'Build a pgae', dryRun: true,
+    })
+    expect(rewind).toHaveBeenNthCalledWith(2, ACTIVE_TAB, {
+      targetUserMessageId: 'transcript-1', userMessageIndex: 0, expectedContent: 'Build a pgae', mode: 'conversation',
+    })
+    expect(sendMessage).toHaveBeenCalledWith(ACTIVE_TAB, 'Build a page', [], expect.objectContaining({ displayContent: 'Build a page' }))
+  })
+
+  it('does not offer edit on the prompt that is still being answered', async () => {
+    setup([
+      { id: 'live-1', type: 'user_text', content: 'Running prompt', transcriptMessageId: 'transcript-1', timestamp: 1 },
+    ], [], { chatState: 'thinking' })
+    render(<MessageList />)
+    await screen.findByText('Running prompt')
+    await act(async () => { await Promise.resolve() })
+    expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull()
+  })
+
+  it('replaces a prompt the CLI never acknowledged without any rewind', async () => {
+    const { sendMessage } = setup([
+      { id: 'live-1', type: 'user_text', content: 'Build a pgae', awaitingReplay: true, timestamp: 1 },
+    ], [])
+    const rewind = vi.spyOn(sessionsApi, 'rewind')
+    render(<MessageList />)
+
+    typeAndSend(await openEditorFor('Build a pgae'), 'Build a page')
+
+    await waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
+    expect(sendMessage).toHaveBeenCalledWith(ACTIVE_TAB, 'Build a page', [], {
+      displayContent: 'Build a page',
+      displayAttachments: [],
+    })
+    expect(rewind).not.toHaveBeenCalled()
+    // The unsent bubble is gone, so the edit is not shown beside its typo.
+    expect(useChatStore.getState().sessions[ACTIVE_TAB]!.messages.map((message) => message.id)).toEqual([])
+    expect(screen.queryByRole('textbox', { name: 'Edited message' })).toBeNull()
+  })
+
+  it('keeps an unacknowledged prompt that a later turn has followed uneditable', async () => {
+    setup([
+      { id: 'live-1', type: 'user_text', content: 'Lost prompt', awaitingReplay: true, timestamp: 1 },
+      { id: 'user-2', type: 'user_text', content: 'Next prompt', transcriptMessageId: 'transcript-2', timestamp: 2 },
+      { id: 'assistant-2', type: 'assistant_text', content: 'Answer', timestamp: 3 },
+    ], [checkpoint('transcript-2', 1, 2)])
+    render(<MessageList />)
+    await enabledEditButton((await screen.findByText('Next prompt')).closest('[data-message-shell="user"]') as HTMLElement)
+    const lost = screen.getByText('Lost prompt').closest('[data-message-shell="user"]') as HTMLElement
+    expect(within(lost).queryByRole('button', { name: 'Edit and resend' })).toBeNull()
+  })
+
   it('resends the latest text-only turn straight away: dry run, conversation rewind, reload, send', async () => {
     const { reloadHistory, sendMessage, queueComposerPrefill } = setup(oneTurn, [checkpoint('user-1', 0, 1)])
     const rewind = vi.spyOn(sessionsApi, 'rewind').mockResolvedValue(rewindResult())
     render(<MessageList />)
 
     const textbox = await openEditorFor('Build a page')
-    expect(textbox.value).toBe('Build a page')
+    expect(textbox.textContent).toBe('Build a page')
     typeAndSend(textbox, 'Build a landing page')
 
     await waitFor(() => expect(sendMessage).toHaveBeenCalledOnce())
@@ -10598,6 +10670,18 @@ describe('MessageList edit and resend', () => {
     expect(screen.queryByRole('textbox', { name: 'Edited message' })).toBeNull()
   })
 
+  it('lets the open editor draw its menus past the row: no paint containment while editing', async () => {
+    setup(oneTurn, [checkpoint('user-1', 0, 1)])
+    render(<MessageList />)
+
+    const row = (await openEditorFor('Build a page')).closest('.chat-render-item') as HTMLElement
+    expect(row.className).not.toContain('chat-render-item--cv')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect((screen.getByText('Build a page').closest('.chat-render-item') as HTMLElement).className)
+      .toContain('chat-render-item--cv')
+  })
+
   it('says how many later turns an older edit deletes, and Cancel changes nothing', async () => {
     const { sendMessage } = setup(threeTurns, [
       checkpoint('user-1', 0, 3), checkpoint('user-2', 1, 3), checkpoint('user-3', 2, 3),
@@ -10617,7 +10701,7 @@ describe('MessageList edit and resend', () => {
     expect(rewind).toHaveBeenCalledOnce()
     expect(rewind.mock.calls[0]![1]).toMatchObject({ dryRun: true })
     expect(sendMessage).not.toHaveBeenCalled()
-    expect((screen.getByRole('textbox', { name: 'Edited message' }) as HTMLTextAreaElement).value)
+    expect(screen.getByRole('textbox', { name: 'Edited message' }).textContent)
       .toBe('First prompt, revised')
     expect(screen.getByText('Second prompt')).toBeTruthy()
   })
@@ -10701,7 +10785,7 @@ describe('MessageList edit and resend', () => {
     ]))
     expect(reloadHistory).not.toHaveBeenCalled()
     expect(sendMessage).not.toHaveBeenCalled()
-    expect((screen.getByRole('textbox', { name: 'Edited message' }) as HTMLTextAreaElement).value)
+    expect(screen.getByRole('textbox', { name: 'Edited message' }).textContent)
       .toBe('Build a landing page')
   })
 
@@ -10715,7 +10799,7 @@ describe('MessageList edit and resend', () => {
     await waitFor(() => expect(useUIStore.getState().toasts).toHaveLength(1))
     expect(rewind).toHaveBeenCalledOnce()
     expect(sendMessage).not.toHaveBeenCalled()
-    expect((screen.getByRole('textbox', { name: 'Edited message' }) as HTMLTextAreaElement).value)
+    expect(screen.getByRole('textbox', { name: 'Edited message' }).textContent)
       .toBe('Build a landing page')
   })
 
@@ -10743,7 +10827,7 @@ describe('MessageList edit and resend', () => {
     render(<MessageList />)
 
     const textbox = await openEditorFor('Build a page')
-    fireEvent.change(textbox, { target: { value: 'Never mind' } })
+    setComposerText('Never mind')
     fireEvent.keyDown(textbox, { key: 'Escape' })
 
     expect(screen.queryByRole('textbox', { name: 'Edited message' })).toBeNull()

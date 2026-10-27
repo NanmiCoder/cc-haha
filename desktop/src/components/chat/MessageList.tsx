@@ -130,6 +130,8 @@ type RewindTurnTarget = {
   messageId: string
   /** The prompt's own transcript id; a live prompt has none until history reloads. */
   transcriptMessageId?: string
+  /** The CLI never acknowledged this prompt, so the transcript may not hold it. */
+  awaitingReplay?: boolean
   userMessageIndex: number
   content: string
   expectedContent: string
@@ -1294,21 +1296,20 @@ function getBranchableMessageTargets(messages: UIMessage[]): Map<string, Brancha
   return branchableTargets
 }
 
-export function getCompletedTurnTargets(messages: UIMessage[]): RewindTurnTarget[] {
+function collectTurnTargets(messages: UIMessage[]): Array<{ target: RewindTurnTarget; answered: boolean }> {
   let userMessageIndex = -1
-  const completedTurns: RewindTurnTarget[] = []
+  const turns: Array<{ target: RewindTurnTarget; answered: boolean }> = []
   let currentTarget: RewindTurnTarget | null = null
   let hasResponseForCurrentTarget = false
 
   for (const message of messages) {
     if (message.type === 'user_text' && !message.pending) {
-      if (currentTarget && hasResponseForCurrentTarget) {
-        completedTurns.push(currentTarget)
-      }
+      if (currentTarget) turns.push({ target: currentTarget, answered: hasResponseForCurrentTarget })
       userMessageIndex += 1
       currentTarget = {
         messageId: message.id,
         ...(message.transcriptMessageId ? { transcriptMessageId: message.transcriptMessageId } : {}),
+        ...(message.awaitingReplay ? { awaitingReplay: true } : {}),
         userMessageIndex,
         content: message.content,
         expectedContent: message.modelContent ?? message.content,
@@ -1323,11 +1324,25 @@ export function getCompletedTurnTargets(messages: UIMessage[]): RewindTurnTarget
     }
   }
 
-  if (currentTarget && hasResponseForCurrentTarget) {
-    completedTurns.push(currentTarget)
-  }
+  if (currentTarget) turns.push({ target: currentTarget, answered: hasResponseForCurrentTarget })
+  return turns
+}
 
-  return completedTurns
+export function getCompletedTurnTargets(messages: UIMessage[]): RewindTurnTarget[] {
+  return collectTurnTargets(messages).filter((turn) => turn.answered).map((turn) => turn.target)
+}
+
+/**
+ * Prompts that never got a reply — a stop landed before the model answered.
+ * The model has no output to protect there, so these stay editable even though
+ * the server lists no checkpoint for a turn without a response.
+ */
+export function getUnansweredTurnTargets(
+  messages: UIMessage[],
+): Array<{ target: RewindTurnTarget; latest: boolean }> {
+  const turns = collectTurnTargets(messages)
+  return turns.flatMap((turn, index) =>
+    turn.answered ? [] : [{ target: turn.target, latest: index === turns.length - 1 }])
 }
 
 export function getLatestCompletedTurnTarget(messages: UIMessage[]): RewindTurnTarget | null {
@@ -3519,13 +3534,17 @@ export function MessageList({
     () => new Set(completedTurnTargets.map((target) => target.messageId)),
     [completedTurnTargets],
   )
+  const unansweredTurnTargets = useMemo(
+    () => getUnansweredTurnTargets(deferredMessages),
+    [deferredMessages],
+  )
   const checkpointPreviewOverBudget = workspaceChangesFallback !== null &&
     workspaceChangesFallback.sessionId === resolvedSessionId
   // Past the preview budget the server lists no checkpoints at all, but one
   // rewind still resolves a prompt by its transcript id, so those prompts stay
   // editable. This mode tells the user file undo is unavailable, so the edit
   // rolls back the conversation only.
-  const editTurnCards = useMemo<EditableTurnCard[]>(
+  const completedEditCards = useMemo<EditableTurnCard[]>(
     () => checkpointPreviewOverBudget
       ? completedTurnTargets.flatMap((target) => target.transcriptMessageId
         ? [{
@@ -3538,6 +3557,31 @@ export function MessageList({
         : [])
       : visibleTurnChangeCards,
     [checkpointPreviewOverBudget, completedTurnTargets, visibleTurnChangeCards],
+  )
+  // A prompt stopped before any reply has no checkpoint but nothing to restore
+  // either, so it rewinds the conversation only. One the CLI never
+  // acknowledged is not in the transcript at all: it is dropped locally.
+  // The prompt still being answered is not a stopped one.
+  const unansweredEditCards = useMemo<EditableTurnCard[]>(
+    () => unansweredTurnTargets.flatMap<EditableTurnCard>(({ target, latest }) => {
+      if (latest && turnInProgress) return []
+      const cardTarget = { messageId: target.messageId, expectedContent: target.expectedContent }
+      if (target.transcriptMessageId) {
+        return [{
+          target: cardTarget,
+          checkpoint: {
+            target: { targetUserMessageId: target.transcriptMessageId, userMessageIndex: target.userMessageIndex },
+          },
+          conversationOnly: true,
+        }]
+      }
+      return latest && target.awaitingReplay ? [{ target: cardTarget, unconfirmed: true as const }] : []
+    }),
+    [turnInProgress, unansweredTurnTargets],
+  )
+  const editTurnCards = useMemo(
+    () => unansweredEditCards.length === 0 ? completedEditCards : [...completedEditCards, ...unansweredEditCards],
+    [completedEditCards, unansweredEditCards],
   )
   const editBlockedReason = turnInProgress
     ? t('chat.editMessageWaitForTurn')
@@ -4052,6 +4096,9 @@ export function MessageList({
             const mountKey = groupMountKeys.keys.get(itemKey) ?? itemKey
             const content = renderTranscriptItem(item, index)
             const railPosition = turnRailPositions[index] ?? 'none'
+            // The prompt editor opens its slash and @ menus upward, past the
+            // row's own box; paint containment would cut them off.
+            const paintContained = !(item.kind === 'message' && editActionByMessageId.get(item.message.id)?.editing)
 
             return virtualTranscriptWindow.enabled ? (
               <MeasuredRenderItem
@@ -4068,7 +4115,7 @@ export function MessageList({
                 key={mountKey}
                 data-chat-render-item-key={itemKey}
                 data-turn-rail={railPosition}
-                className={`${CHAT_RENDER_ITEM_CLASS} chat-render-item--cv ${turnRailClass(railPosition)} ${highlightedNavigationItemKey === itemKey ? 'chat-render-item--navigation-target' : ''}`}
+                className={`${CHAT_RENDER_ITEM_CLASS} ${paintContained ? 'chat-render-item--cv ' : ''}${turnRailClass(railPosition)} ${highlightedNavigationItemKey === itemKey ? 'chat-render-item--navigation-target' : ''}`}
               >
                 {content}
               </div>

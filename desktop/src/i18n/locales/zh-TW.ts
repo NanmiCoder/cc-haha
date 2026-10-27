@@ -3174,6 +3174,7 @@ export const zh: Record<TranslationKey, string> = {
   'chat.editResendConversation': '回滾對話並傳送',
   'chat.editResendFailed': '編輯後重新傳送失敗，對話沒有變化。詳情：{detail}',
   'chat.editResendPrefilled': '對話已回滾，但修改後的訊息沒能自動傳送，已放回輸入框。',
+  'chat.editResendStale': '這則訊息剛被接收，已無法直接取代。請稍候再試。',
   'chat.workspaceChangesFallbackLabel': '工作區變更檔案',
   'chat.workspaceChangesFallbackTitle': '目前工作區變更（{count}）',
   'chat.workspaceChangesFallbackExplanation': '對話過長，無法提供逐輪預覽或檔案復原。此清單顯示目前工作區的累計變更，可能包含其他輪次或對話外的變更。',

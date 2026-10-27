@@ -3175,6 +3175,7 @@ export const jp: Record<TranslationKey, string> = {
   'chat.editResendConversation': '会話を巻き戻して送信',
   'chat.editResendFailed': '編集したメッセージを再送信できませんでした。会話は変更されていません。詳細：{detail}',
   'chat.editResendPrefilled': '会話は巻き戻されましたが、編集したメッセージを自動送信できなかったため、入力欄に戻しました。',
+  'chat.editResendStale': 'このメッセージは直前に受理されたため、置き換えられなくなりました。少し待ってからもう一度お試しください。',
   'chat.workspaceChangesFallbackLabel': 'ワークスペースの変更ファイル',
   'chat.workspaceChangesFallbackTitle': '現在のワークスペースの変更（{count}）',
   'chat.workspaceChangesFallbackExplanation': '会話が長すぎるため、ターンごとのプレビューやファイルの取り消しは利用できません。この一覧は現在のワークスペース全体の変更を示し、他のターンやこの会話外の変更を含む場合があります。',

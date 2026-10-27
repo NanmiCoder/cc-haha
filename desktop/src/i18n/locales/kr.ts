@@ -3177,6 +3177,7 @@ export const kr: Record<TranslationKey, string> = {
   'chat.editResendConversation': '대화를 되돌리고 보내기',
   'chat.editResendFailed': '편집한 메시지를 다시 보내지 못했습니다. 대화는 변경되지 않았습니다. 세부 정보: {detail}',
   'chat.editResendPrefilled': '대화는 되돌렸지만 편집한 메시지를 자동으로 보내지 못해 입력창에 다시 넣었습니다.',
+  'chat.editResendStale': '이 메시지가 방금 접수되어 더 이상 바꿀 수 없습니다. 잠시 후 다시 시도하세요.',
   'chat.workspaceChangesFallbackLabel': '워크스페이스 변경 파일',
   'chat.workspaceChangesFallbackTitle': '현재 워크스페이스 변경 ({count})',
   'chat.workspaceChangesFallbackExplanation': '대화가 너무 길어 턴별 미리보기나 파일 실행 취소를 사용할 수 없습니다. 이 목록은 현재 워크스페이스의 누적 변경을 표시하며 다른 턴이나 이 대화 밖의 변경도 포함할 수 있습니다.',

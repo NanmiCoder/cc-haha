@@ -18,19 +18,30 @@ import {
 type Translate = (key: TranslationKey, params?: Record<string, string | number>) => string
 
 /** The slice of a turn card the edit flow needs: who to rewind, and how. */
-export type EditableTurnCard = {
+export type RewindableTurnCard = {
   target: { messageId: string; expectedContent: string }
   checkpoint: { target: Pick<SessionTurnCheckpoint['target'], 'targetUserMessageId' | 'userMessageIndex'> }
   /** Files are never offered back, whatever the dry run finds: only the conversation rewinds. */
   conversationOnly?: boolean
 }
 
+/**
+ * A prompt stopped before the CLI acknowledged it. The transcript holds
+ * nothing to rewind, so the edit replaces the bubble and sends the new text.
+ */
+export type UnconfirmedTurnCard = {
+  target: { messageId: string; expectedContent: string }
+  unconfirmed: true
+}
+
+export type EditableTurnCard = RewindableTurnCard | UnconfirmedTurnCard
+
 type EditContext = { sessionId: string | null | undefined; active: boolean }
 
 type PendingConfirm = {
   context: EditContext
   messageId: string
-  card: EditableTurnCard
+  card: RewindableTurnCard
   draft: UserMessageEditDraft
   payload: UserMessageResendPayload
   preview: SessionRewindResponse
@@ -155,7 +166,7 @@ export function useUserMessageEditResend({
   const runResend = useCallback(async (
     requestContext: EditContext,
     messageId: string,
-    card: EditableTurnCard,
+    card: RewindableTurnCard,
     draft: UserMessageEditDraft,
     payload: UserMessageResendPayload,
     mode: SessionRewindMode,
@@ -205,6 +216,7 @@ export function useUserMessageEditResend({
         text: draft.text,
         attachments: draft.attachments.filter((attachment) => attachment.sendable),
         ...(draft.sessionReferences.length > 0 ? { sessionReferences: draft.sessionReferences } : {}),
+        ...(draft.mentions?.length ? { mentions: draft.mentions } : {}),
       }, { restoreMissingSession: true })
       addToast({ type: 'warning', message: t('chat.editResendPrefilled') })
     } else if (mode === 'both') {
@@ -221,6 +233,19 @@ export function useUserMessageEditResend({
     const payload = buildUserMessageResendPayload(draft, { contextReferencesOnly })
     if (!payload) return
     draftsRef.current.set(JSON.stringify([sessionId, messageId]), draft)
+
+    if ('unconfirmed' in card) {
+      // Nothing was committed anywhere, so there is nothing to confirm: swap
+      // the bubble for the edit. If the prompt got acknowledged meanwhile the
+      // store refuses, and the editor stays open with the draft.
+      if (!useChatStore.getState().discardUnconfirmedUserMessage(sessionId, messageId)) {
+        useUIStore.getState().addToast({ type: 'warning', message: t('chat.editResendStale') })
+        return
+      }
+      closeEditor(sessionId, messageId)
+      useChatStore.getState().sendMessage(sessionId, payload.content, payload.attachments, payload.options)
+      return
+    }
 
     setSubmitting({ context: requestContext, messageId })
     let preview: SessionRewindResponse
@@ -255,7 +280,7 @@ export function useUserMessageEditResend({
       return
     }
     setConfirm({ context: requestContext, messageId, card, draft, payload, preview, laterTurns, canRestoreCode })
-  }, [blockedReason, context, contextReferencesOnly, disabled, editableCards, isCurrentContext, rewindingTurnId, runResend, sessionId, submittingMessageId, t])
+  }, [blockedReason, closeEditor, context, contextReferencesOnly, disabled, editableCards, isCurrentContext, rewindingTurnId, runResend, sessionId, submittingMessageId, t])
 
   const editActionByMessageId = useMemo(() => {
     const result = new Map<string, UserMessageEditAction>()
