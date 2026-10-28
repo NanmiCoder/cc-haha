@@ -3,6 +3,7 @@ import { ApiError, type ApiClient } from './client'
 import {
   SessionTransport,
   type ConnectionState,
+  type HistoryStore,
   type SocketLike,
   type TransportTimers,
 } from './sessionTransport'
@@ -123,7 +124,8 @@ const history = (
 
 function harness(
   load: ApiClient['history'] = async () => history(),
-  baseline = history()
+  baseline = history(),
+  store?: HistoryStore
 ) {
   const timers = new FakeTimers()
   const sockets: FakeSocket[] = []
@@ -160,6 +162,7 @@ function harness(
     onState: () => {},
     onConnection: (state) => connections.push(state),
     onError: (error) => errors.push(error),
+    history: store,
   })
   transport.start()
   return {
@@ -1184,6 +1187,160 @@ describe('history cursor safety', () => {
     expect(h.transport.state.items.map((i) => i.text)).toEqual(['Fresh'])
     expect(h.transport.historyPage?.page?.sourceVersion).toBe('v2')
     expect(h.errors.at(-1)).toMatchObject({ code: 'HISTORY_PAGE_STALE' })
+    h.transport.dispose()
+  })
+})
+
+describe('history kept across refreshes', () => {
+  const texts = (transport: SessionTransport) =>
+    transport.state.items.map((item) => item.text)
+  const finishTurn = (socket: FakeSocket, prompt: string, answer: string) => {
+    socket.receive({ type: 'user_message_replay', content: prompt })
+    socket.receive({ type: 'content_delta', text: answer })
+    socket.receive({
+      type: 'message_complete',
+      usage: { input_tokens: 1, output_tokens: 1 },
+    })
+  }
+  const memoryStore = (page?: HistoryPage) => {
+    const store = {
+      page,
+      read: () => store.page,
+      write: (next: HistoryPage) => {
+        store.page = next
+      },
+    }
+    return store
+  }
+  const one = entry('u1', 'user', 'One')
+  const first = entry('a1', 'assistant', 'First')
+  const two = entry('u2', 'user', 'Two')
+  const second = entry('a2', 'assistant', 'Second')
+  const three = entry('u3', 'user', 'Three')
+  const third = entry('a3', 'assistant', 'Third')
+
+  test('a finished turn refreshes the newest page without dropping older pages already loaded', async () => {
+    let latest = history([two, second], 'v1', 'c1')
+    const h = harness(
+      async (_id, cursor) =>
+        cursor === 'c1' ? history([one, first], 'v1') : latest,
+      latest
+    )
+    const socket = await h.ready()
+    expect(await h.transport.loadOlder()).toBe('loaded')
+    expect(h.transport.send({ type: 'user_message', content: 'Three' })).toBe(true)
+    finishTurn(socket, 'Three', 'Third')
+    // 电脑上重新读到的最新一页只从 Two 开始，版本和游标链都是新的。
+    latest = history([two, second, three, third], 'v2', 'fresh')
+    h.timers.advance(100)
+    await flush()
+    expect(texts(h.transport)).toEqual(['One', 'First', 'Two', 'Second', 'Three', 'Third'])
+    expect(h.transport.state.items.some((item) => item.id.startsWith('live:'))).toBe(false)
+    expect(h.transport.historyPage?.page?.nextCursor).toBeNull()
+    h.transport.dispose()
+  })
+
+  test('a turn longer than one page is bridged back to the pages already loaded', async () => {
+    const requested: (string | undefined)[] = []
+    let latest = history([two, second], 'v1', 'c1')
+    const older: Record<string, HistoryPage> = {
+      c1: history([entry('u0', 'user', 'Zero'), one, first], 'v1', 'c0'),
+      // 新链往前一页才碰到已加载的 Two。
+      f1: history([two, second], 'v2', 'f0'),
+    }
+    const h = harness(async (_id, cursor) => {
+      requested.push(cursor)
+      return cursor ? older[cursor]! : latest
+    }, latest)
+    const socket = await h.ready()
+    expect(await h.transport.loadOlder()).toBe('loaded')
+    expect(h.transport.send({ type: 'user_message', content: 'Three' })).toBe(true)
+    finishTurn(socket, 'Three', 'Third')
+    latest = history([three, third], 'v2', 'f1')
+    h.timers.advance(100)
+    await flush()
+    expect(texts(h.transport)).toEqual(['Zero', 'One', 'First', 'Two', 'Second', 'Three', 'Third'])
+    expect(requested).not.toContain('f0')
+    // 再往前翻仍沿用最早那条链，版本对得上。
+    expect(h.transport.historyPage?.page?.nextCursor).toBe('c0')
+    older.c0 = history([entry('u-1', 'user', 'Start')], 'v1')
+    expect(await h.transport.loadOlder()).toBe('loaded')
+    expect(texts(h.transport)[0]).toBe('Start')
+    h.transport.dispose()
+  })
+
+  test('a turn larger than one page still reconciles when the newest page no longer holds the prompt', async () => {
+    // 一张大图或大量文件读取让这一轮超过一页：最新一页只剩回复，用户那条消息在更早一页。
+    let latest = history([one, first], 'v1')
+    const older: Record<string, HistoryPage> = {
+      p1: history([two], 'v2', 'p0'),
+      p0: history([one, first], 'v2'),
+    }
+    const h = harness(async (_id, cursor) => (cursor ? older[cursor]! : latest), latest)
+    const socket = await h.ready()
+    expect(h.transport.send({ type: 'user_message', content: 'Two' })).toBe(true)
+    finishTurn(socket, 'Two', 'Second')
+    latest = history([second], 'v2', 'p1')
+    h.timers.advance(100)
+    await flush()
+    expect(texts(h.transport)).toEqual(['One', 'First', 'Two', 'Second'])
+    // 实时条目已经换成电脑上保存的记录，不用等下次重连才整体替换。
+    expect(h.transport.state.items.some((item) => item.id.startsWith('live:'))).toBe(false)
+    h.transport.dispose()
+  })
+
+  test('reopening a conversation shows cached pages at once and keeps them after syncing', async () => {
+    const store = memoryStore(history([one, first, two, second], 'v1', 'c0'))
+    const latest = history([two, second, three, third], 'v2', 'fresh')
+    const h = harness(
+      async (_id, cursor) =>
+        cursor === 'c0' ? history([entry('u0', 'user', 'Zero')], 'v1') : latest,
+      latest,
+      store
+    )
+    // 还没连上电脑就先显示上次读到的内容。
+    expect(texts(h.transport)).toEqual(['One', 'First', 'Two', 'Second'])
+    await h.ready()
+    expect(texts(h.transport)).toEqual(['One', 'First', 'Two', 'Second', 'Three', 'Third'])
+    expect(await h.transport.loadOlder()).toBe('loaded')
+    expect(texts(h.transport)[0]).toBe('Zero')
+    expect(store.page).toBe(h.transport.historyPage!)
+    h.transport.dispose()
+  })
+
+  test('a cached transcript rewritten elsewhere is replaced by the newest page', async () => {
+    const requested: (string | undefined)[] = []
+    const store = memoryStore(history([one, first, two, second], 'v1', 'c0'))
+    const rewritten = history([two, entry('a2b', 'assistant', 'Rewritten')], 'v2', 'fresh')
+    const h = harness(async (_id, cursor) => {
+      requested.push(cursor)
+      return rewritten
+    }, rewritten, store)
+    await h.ready()
+    expect(texts(h.transport)).toEqual(['Two', 'Rewritten'])
+    expect(h.transport.historyPage?.page?.nextCursor).toBe('fresh')
+    expect(requested.filter(Boolean)).toEqual([])
+    expect(store.page).toBe(rewritten)
+    h.transport.dispose()
+  })
+
+  test('a stale cursor replaces the cached chain with the newest page', async () => {
+    const store = memoryStore()
+    let reads = 0
+    const h = harness(
+      async (_id, cursor) => {
+        if (cursor) throw new ApiError('Session history changed', 409, 'HISTORY_CHANGED')
+        return ++reads === 1
+          ? history([two, second], 'v1', 'c1')
+          : history([entry('fresh', 'user', 'Fresh')], 'v2')
+      },
+      history(),
+      store
+    )
+    await h.ready()
+    await h.transport.loadOlder()
+    expect(store.page?.page?.sourceVersion).toBe('v2')
+    expect(store.page?.messages.map((item) => item.id)).toEqual(['fresh'])
     h.transport.dispose()
   })
 })

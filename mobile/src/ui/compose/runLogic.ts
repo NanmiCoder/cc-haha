@@ -17,6 +17,42 @@ export function modeRisk(mode?: string): RunRisk {
   return 'normal'
 }
 
+/**
+ * 点了某一档权限之后怎么办：点当前档不动；切到全权限或自动先确认（和桌面端一样，每次都问），
+ * 其余直接生效。
+ */
+export function modeChange(next: string, current?: string): 'none' | 'confirm' | 'apply' {
+  if (next === (current ?? 'default')) return 'none'
+  return next === 'bypassPermissions' || next === 'auto' ? 'confirm' : 'apply'
+}
+
+/**
+ * 切换前的确认框文案，对齐桌面端「启用跳过权限？」「启用自动模式？」。
+ * 显式切到自动本身就算同意，CLI 不依赖桌面端额外记下的 skipAutoPermissionPrompt。
+ */
+export function modeConfirmation(mode: 'bypassPermissions' | 'auto', workDir?: string) {
+  if (mode === 'auto')
+    return {
+      title: '启用自动模式？',
+      message:
+        '自动模式会减少权限询问，但不能保证绝对安全。\n\n' +
+        '它会检查工具调用中的风险操作和提示词注入，执行认为安全的操作，阻止认为有风险的操作。请仅在隔离环境中使用。',
+      confirm: '启用自动模式',
+      destructive: false,
+    }
+  return {
+    title: '启用全权限？',
+    message:
+      '这将授予对电脑的完全访问权限，之后不再逐项确认：\n' +
+      '· 读取、写入和删除任何文件\n' +
+      '· 执行任意 Shell 命令\n' +
+      '· 安装或移除软件包' +
+      (workDir ? `\n\n目录：${workDir}` : ''),
+    confirm: '启用全权限',
+    destructive: true,
+  }
+}
+
 /** 运行胶囊上的字：模型名，有思考强度时跟一个「 · 高」。 */
 export function runLabel(model?: string, effort?: string | null): string {
   const name = model?.trim() || '电脑默认模型'
@@ -155,6 +191,36 @@ export function effortSegments(input: {
 }): { value: string; label: string }[] {
   if (!input.canSetEffort || !input.authReady) return []
   return (input.efforts ?? []).map((value) => ({ value, label: effortName(value) }))
+}
+
+/* ───────────── 思考强度滑块 ───────────── */
+
+/**
+ * 关掉运行方式底单时要提交的配置：拖动过程中只改底单里的草稿，退出时变了才发一次，
+ * 不让每一下滑动都去改电脑上的配置。底单里强度已不可改（这一轮开始了等）时丢掉草稿。
+ */
+export function effortToCommit<T extends { effortLevel?: string }>(input: {
+  runtime?: T
+  draft?: string
+  blocked?: string
+}): T | null {
+  const { runtime, draft, blocked } = input
+  if (!runtime || !draft || blocked || draft === runtime.effortLevel) return null
+  return { ...runtime, effortLevel: draft }
+}
+
+/** 第 index 档圆点的横坐标：两端各留半个滑块宽，滑块停在档位上时圆心正好压住圆点。 */
+export function effortStopX(index: number, input: { width: number; count: number; thumb: number }): number {
+  const span = Math.max(0, input.width - input.thumb)
+  return input.thumb / 2 + (input.count > 1 ? (span * index) / (input.count - 1) : span / 2)
+}
+
+/** 手指在横坐标 x 时最近的档位，超出两端按两端算。 */
+export function effortStopAt(x: number, input: { width: number; count: number; thumb: number }): number {
+  if (input.count <= 1) return 0
+  const span = Math.max(1, input.width - input.thumb)
+  const ratio = Math.min(1, Math.max(0, (x - input.thumb / 2) / span))
+  return Math.round(ratio * (input.count - 1))
 }
 
 /** 底单里新任务专有的「运行档位」分组。 */

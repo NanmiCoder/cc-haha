@@ -451,12 +451,12 @@ export function FloatingComposer({
             width: 36,
             height: 36,
             borderRadius: 18,
-            backgroundColor: colors.fill,
+            backgroundColor: colors.btn,
             alignItems: 'center',
             justifyContent: 'center',
           }}
         >
-          <Icon name="arrow-up" size={18} color={colors.faint} strokeWidth={2.4} />
+          <Icon name="arrow-up" size={18} color={colors.btnInk} strokeWidth={2.4} />
         </View>
       </Pressable>
     </View>

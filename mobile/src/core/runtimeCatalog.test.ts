@@ -6,6 +6,7 @@ import {
   OFFICIAL_RUNTIME_SOURCES,
   canSetRuntimeEffort,
   contextLabel,
+  currentModelEfforts,
   effortUnavailableReason,
   loadRuntimeDirectory,
   loadRuntimeModels,
@@ -346,13 +347,36 @@ test('model changes preserve fast mode only within the same official OpenAI acco
 })
 
 describe('effort control explanation', () => {
-  const base = { source: { auth: 'ready' as const }, model: {}, catalogReady: true, canSetEffort: true }
+  const base = { source: { auth: 'ready' as const }, canSetEffort: true }
   test('each reason names what the user has to fix', () => {
     expect(effortUnavailableReason({ ...base, source: { auth: 'missing' } })).toContain('请先在电脑上登录')
     expect(effortUnavailableReason({ ...base, source: { auth: 'error' } })).toContain('尚未确认此供应商的授权状态')
     expect(effortUnavailableReason({ ...base, source: undefined })).toContain('供应商已不可用')
-    expect(effortUnavailableReason({ ...base, model: undefined })).toContain('当前模型已不在供应商列表')
     expect(effortUnavailableReason({ ...base, canSetEffort: false })).toContain('沿用电脑默认强度')
     expect(effortUnavailableReason(base)).toBe('当前模型没有可调的思考强度。')
+  })
+})
+
+describe('current model efforts', () => {
+  const models = [
+    { id: 'deepseek-flash', name: 'deepseek-flash', supportedReasoningEfforts: ['low', 'high', 'max'], defaultReasoningEffort: 'high' },
+    { id: 'plain-chat', name: 'plain-chat', supportedReasoningEfforts: [] },
+  ]
+
+  test('uses the listed model, ignoring the 1M context suffix', () => {
+    expect(currentModelEfforts(models, 'deepseek-flash')).toEqual({ efforts: ['low', 'high', 'max'], defaultEffort: 'high' })
+    // 列表里只有不带后缀的那一项：会话里的 [1m] / :1m 仍能拿到它的档位。
+    expect(currentModelEfforts(models, 'deepseek-flash[1m]')).toEqual({ efforts: ['low', 'high', 'max'], defaultEffort: 'high' })
+    expect(currentModelEfforts(models, 'DeepSeek-Flash:1M'.toLowerCase())).toEqual({ efforts: ['low', 'high', 'max'], defaultEffort: 'high' })
+  })
+
+  test('a model missing from the list still gets the generic levels instead of an error', () => {
+    // 和桌面端一致：只去掉少数模型才支持的「超高」，由电脑校验。
+    expect(currentModelEfforts(models, 'custom-model')).toEqual({ efforts: ['low', 'medium', 'high', 'max'] })
+    expect(currentModelEfforts([], 'deepseek-flash[1m]').efforts).toEqual(['low', 'medium', 'high', 'max'])
+  })
+
+  test('a model that declares no adjustable effort has none', () => {
+    expect(currentModelEfforts(models, 'plain-chat').efforts).toEqual([])
   })
 })
