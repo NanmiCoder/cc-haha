@@ -46,12 +46,16 @@ import type { PendingUpload } from '../common/attachment/attachment-types.js'
 import { materializePendingUploadImage } from '../common/attachment/safe-remote-image.js'
 import { isOutsideWorkDir } from './path-safety.js'
 import { createFeishuHttpClient } from './http-client.js'
+import { createFeishuLogger } from './logger.js'
 
 // ---------- init ----------
 
 const config = loadConfig()
+const logger = createFeishuLogger([
+  config.feishu.appId, config.feishu.appSecret, config.feishu.encryptKey, config.feishu.verificationToken,
+])
 if (!config.feishu.appId || !config.feishu.appSecret) {
-  console.error('[Feishu] Missing FEISHU_APP_ID / FEISHU_APP_SECRET. Set env or ~/.claude/adapters.json')
+  logger.error('[Feishu] Missing FEISHU_APP_ID / FEISHU_APP_SECRET. Set env or ~/.claude/adapters.json')
   process.exit(1)
 }
 
@@ -66,6 +70,7 @@ const larkClient = new Lark.Client({
   appType: Lark.AppType.SelfBuild,
   domain: larkDomain,
   httpInstance: sdkHttpClient,
+  logger,
 })
 
 const bridge = new WsBridge(config.serverUrl, 'feishu')
@@ -77,7 +82,7 @@ const { httpClient, defaultWorkDir } = createAdapterClient(config, config.feishu
 const attachmentStore = new AttachmentStore()
 const media = new FeishuMediaService(larkClient, attachmentStore)
 attachmentStore.gc().catch((err) => {
-  console.warn('[Feishu] AttachmentStore.gc failed:', err instanceof Error ? err.message : err)
+  logger.warn('[Feishu] AttachmentStore.gc failed:', err)
 })
 
 // One streaming card lifecycle per chatId (CardKit main + patch fallback).
@@ -177,7 +182,7 @@ async function dispatchOutboundImage(chatId: string, pending: PendingUpload): Pr
 
     const check = checkAttachmentLimit('image', buffer.length, mime)
     if (!check.ok) {
-      console.warn('[Feishu] Outbound image rejected:', check.hint)
+      logger.warn('[Feishu] Outbound image rejected:', check.hint)
       return
     }
 
@@ -185,9 +190,9 @@ async function dispatchOutboundImage(chatId: string, pending: PendingUpload): Pr
     cache.set(pending.id, imageKey)
     await media.sendImageMessage(chatId, imageKey)
   } catch (err) {
-    console.error(
+    logger.error(
       '[Feishu] dispatchOutboundImage failed:',
-      err instanceof Error ? err.message : err,
+      err,
     )
   }
 }
@@ -313,7 +318,7 @@ async function sendText(chatId: string, text: string, replyToMessageId?: string)
     })
     return resp.data?.message_id
   } catch (err) {
-    console.error('[Feishu] Send text error:', err)
+    logger.error('[Feishu] Send text error:', err)
     return undefined
   }
 }
@@ -331,7 +336,7 @@ async function sendCard(chatId: string, card: Record<string, unknown>): Promise<
     })
     return resp.data?.message_id
   } catch (err) {
-    console.error('[Feishu] Send card error:', err)
+    logger.error('[Feishu] Send card error:', err)
     return undefined
   }
 }
@@ -764,7 +769,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
         // 幂等: 预建卡或上一次 content_delta 已经创建了卡片则复用，否则现在创建
         const card = getOrCreateStreamingCard(chatId)
         await card.ensureCreated().catch((err) => {
-          console.error('[Feishu] ensureCreated on content_start failed:', err)
+          logger.error('[Feishu] ensureCreated on content_start failed:', err)
         })
       } else if (msg.blockType === 'tool_use') {
         // 把工具调用起点登记到已存在的卡 —— 让用户看到 "⚙️ 运行中..." 指示。
@@ -788,7 +793,7 @@ async function handleServerMessage(chatId: string, msg: ServerMessage): Promise<
         const card = getOrCreateStreamingCard(chatId)
         // ensureCreated 幂等，已 streaming 时是 no-op
         void card.ensureCreated().catch((err) => {
-          console.error('[Feishu] ensureCreated on delta failed:', err)
+          logger.error('[Feishu] ensureCreated on delta failed:', err)
         })
         card.appendText(msg.text)
 
@@ -1068,7 +1073,7 @@ async function handleMessage(data: any): Promise<void> {
         for (const result of settled) {
           if (result.status === 'rejected') {
             downloadFailures += 1
-            console.error('[Feishu] downloadResource failed:', result.reason)
+            logger.error('[Feishu] downloadResource failed:', result.reason)
             continue
           }
           const local = result.value
@@ -1103,7 +1108,7 @@ async function handleMessage(data: any): Promise<void> {
         }
         if (accepted.length > 0) attachments = accepted
       } catch (err) {
-        console.error('[Feishu] Unexpected attachment pipeline error:', err)
+        logger.error('[Feishu] Unexpected attachment pipeline error:', err)
         await sendText(chatId, '📎 附件处理异常,请稍后重试')
         return
       }
@@ -1124,7 +1129,7 @@ async function handleMessage(data: any): Promise<void> {
     // earlier branches), so they won't leave an empty card behind.
     const card = getOrCreateStreamingCard(chatId)
     void card.ensureCreated().catch((err) => {
-      console.error('[Feishu] pre-create streaming card failed:', err)
+      logger.error('[Feishu] pre-create streaming card failed:', err)
     })
 
     const sent = bridge.sendUserMessage(chatId, effectiveText, attachments)
@@ -1234,28 +1239,27 @@ async function resolveBotOpenId(retries = 3): Promise<void> {
       const openId = resp?.bot?.open_id ?? resp?.data?.bot?.open_id ?? null
       if (openId) {
         botOpenId = openId
-        console.log(`[Feishu] Bot open_id: ${botOpenId}`)
+        logger.info(`[Feishu] Bot open_id: ${botOpenId}`)
         return
       }
     } catch (err) {
       if (i < retries - 1) {
-        console.warn(
+        logger.warn(
           `[Feishu] Could not resolve bot open_id, retrying (${i + 1}/${retries})...`,
-          err instanceof Error ? err.message : err,
+          err,
         )
         await new Promise((r) => setTimeout(r, 2000 * (i + 1)))
       }
     }
   }
-  console.warn('[Feishu] Could not resolve bot open_id (group @mention check may not work)')
+  logger.warn('[Feishu] Could not resolve bot open_id (group @mention check may not work)')
 }
 
 // ---------- start ----------
 
 async function start(): Promise<void> {
-  console.log('[Feishu] Starting bot...')
-  console.log(`[Feishu] Server: ${config.serverUrl}`)
-  console.log(`[Feishu] App ID: ${config.feishu.appId}`)
+  logger.info('[Feishu] Starting bot...')
+  logger.info(`[Feishu] Server: ${config.serverUrl}`)
 
   await resolveBotOpenId()
   if (adapterMigrationLifecycle.isQuiescing) return
@@ -1263,6 +1267,7 @@ async function start(): Promise<void> {
   const dispatcher = new Lark.EventDispatcher({
     encryptKey: config.feishu.encryptKey,
     verificationToken: config.feishu.verificationToken,
+    logger,
   })
 
   dispatcher.register({
@@ -1270,14 +1275,14 @@ async function start(): Promise<void> {
       try {
         await adapterMigrationLifecycle.track(handleMessage(data))
       } catch (err) {
-        console.error('[Feishu] Message handler error:', err)
+        logger.error('[Feishu] Message handler error:', err)
       }
     },
     'card.action.trigger': async (data: any) => {
       try {
         return await adapterMigrationLifecycle.track(handleCardAction(data))
       } catch (err) {
-        console.error('[Feishu] Card action error:', err)
+        logger.error('[Feishu] Card action error:', err)
       }
     },
   } as any)
@@ -1287,20 +1292,21 @@ async function start(): Promise<void> {
     appSecret: config.feishu.appSecret,
     domain: larkDomain,
     httpInstance: sdkHttpClient,
+    logger,
     loggerLevel: Lark.LoggerLevel.info,
   })
 
   await wsClient.start({ eventDispatcher: dispatcher })
-  console.log('[Feishu] Bot is running! (WebSocket connected)')
+  logger.info('[Feishu] Bot is running! (WebSocket connected)')
 }
 
 if (import.meta.main || process.argv.includes('--feishu')) adapterMigrationLifecycle.track(start()).catch((err) => {
-  console.error('[Feishu] Failed to start:', err)
+  logger.error('[Feishu] Failed to start:', err)
   process.exit(1)
 })
 
 if (import.meta.main || process.argv.includes('--feishu')) registerAdapterShutdown(async () => {
-  console.log('[Feishu] Shutting down...')
+  logger.info('[Feishu] Shutting down...')
   bridge.destroy()
   dedup.destroy()
   wsClient?.close({ force: true })
