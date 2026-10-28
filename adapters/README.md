@@ -128,3 +128,14 @@ Agent 流式文本里的 markdown 图片引用 `![alt](path|url|data:)` 会被 `
 非图片类出站(Agent 产的 pdf/zip 等)暂不支持。
 
 设计细节: `docs/superpowers/specs/2026-04-11-im-attachment-support-design.md`。
+
+## 多语言（i18n）
+
+Adapter 的用户可见文案从 `common/locales/{en,vi,zh}.json` 读取，默认 `zh`（保持旧版本行为）。
+
+- 优先级：`ADAPTER_LOCALE` 环境变量 > `~/.claude/adapters.json` 的 `locale` > `zh`
+- 支持 `en`、`vi`、`zh`；也接受 `en-US`、`vi_VN` 这类带地区的标签
+- locale 由 `loadConfig()` 在每个进程启动时统一设置，进程内共享
+- 缺少的 key 依次回退到英文、中文；仍缺失时原样返回 key，不会吞掉文案
+- 新增文案时请同步更新三个 JSON；`common/__tests__/i18n.test.ts` 会校验 key 是否对齐
+- 当前迁移了 `common/` 的共享聊天文案与 Slack adapter；其余平台的专有菜单可以后续增量迁移

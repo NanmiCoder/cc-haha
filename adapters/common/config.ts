@@ -7,6 +7,7 @@
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
+import { normalizeLocale, setLocale, type Locale } from './i18n.js'
 
 export type PairedUser = {
   userId: string | number
@@ -106,6 +107,8 @@ export type SlackConfig = {
 
 export type AdapterConfig = {
   serverUrl: string
+  /** UI language for adapter messages: en | vi | zh (default zh). */
+  locale: Locale
   defaultProjectDir: string
   pairing: PairingState
   allowedProjectRoots: string[]
@@ -147,6 +150,11 @@ function loadFile(): Record<string, any> {
 
 export function loadConfig(): AdapterConfig {
   const file = loadFile()
+  // ADAPTER_LOCALE wins over the file so a launcher can override one run.
+  const locale = normalizeLocale(
+    process.env.ADAPTER_LOCALE || process.env.CLAUDE_ADAPTER_LOCALE || file.locale,
+  ) ?? 'zh'
+  setLocale(locale)
   const tg = file.telegram ?? {}
   const fs_ = file.feishu ?? {}
   const wc = file.wechat ?? {}
@@ -163,6 +171,7 @@ export function loadConfig(): AdapterConfig {
 
   return {
     serverUrl: process.env.ADAPTER_SERVER_URL || file.serverUrl || 'ws://127.0.0.1:3456',
+    locale,
     defaultProjectDir: file.defaultProjectDir || '',
     pairing: {
       code: pairing.code ?? null,
