@@ -1,15 +1,24 @@
-import { useState } from 'react'
-import { Pressable, View } from 'react-native'
+import { useEffect, useRef, useState } from 'react'
+import { Alert, Pressable, View } from 'react-native'
 import { Text } from '../Text'
 import { DetentSheet } from '../DetentSheet'
 import { Button, Callout, Footnote, Icon, InlineError, Segmented, Spinner, useColors } from '../kit'
 import { Glyph } from './glyphs'
+import { EffortSlider } from './EffortSlider'
 import type { ApiClient } from '../../core/client'
 import type { PermissionMode, RuntimeConfig } from '../../core/types'
-import { effortUnavailableReason, runtimeSelection } from '../../core/runtimeCatalog'
+import { currentModelEfforts, effortUnavailableReason } from '../../core/runtimeCatalog'
 import { modes, profileDescription, profileName } from '../modes'
 import { RuntimeSheet, useRuntimeChoice, type Model } from '../RuntimePicker'
-import { effortSegments, modelRowLabel, runSheetReasons, type RunProfile } from './runLogic'
+import {
+  effortSegments,
+  effortToCommit,
+  modeChange,
+  modeConfirmation,
+  modelRowLabel,
+  runSheetReasons,
+  type RunProfile,
+} from './runLogic'
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   const colors = useColors()
@@ -108,6 +117,7 @@ export function RunSheet({
   warning,
   error,
   profile,
+  workDir,
 }: {
   visible: boolean
   onClose(): void
@@ -124,34 +134,76 @@ export function RunSheet({
   error?: string
   /** 新任务页专有：运行档位（完整工具 / 轻量）。 */
   profile?: RunProfile
+  /** 切到全权限时确认框里写明的目录。 */
+  workDir?: string
 }) {
   const colors = useColors()
   const [modelOpen, setModelOpen] = useState(false)
   // 每次打开都重读电脑上的来源和设置，丢掉上一次没保存的选择。
   const [shown, setShown] = useState(visible)
   const [epoch, setEpoch] = useState(0)
+  // 滑动中的思考强度只记在这里，关掉底单时才提交（见 effortToCommit）。
+  const [effortDraft, setEffortDraft] = useState<string>()
   if (shown !== visible) {
     setShown(visible)
-    if (visible) setEpoch(epoch + 1)
+    if (visible) {
+      setEpoch(epoch + 1)
+      setEffortDraft(undefined)
+    }
   }
   const reasons = runSheetReasons({ lean, teams: 'on', disabled })
-  const choice = useRuntimeChoice({ client, initial: runtime, active: visible, epoch })
+  function close() {
+    const next = effortToCommit({ runtime, draft: effortDraft, blocked: reasons.runtime })
+    if (next) onRuntime(next)
+    onClose()
+  }
+  // 确认框开着时这一轮可能已经开始：确认那一刻按最新状态判断，用最新的回调。
+  const latest = useRef({ blocked: reasons.mode, onMode })
+  useEffect(() => {
+    latest.current = { blocked: reasons.mode, onMode }
+  })
+  function chooseMode(next: PermissionMode) {
+    const change = modeChange(next, mode)
+    if (change === 'apply') onMode(next)
+    if (change !== 'confirm') return
+    const copy = modeConfirmation(next === 'auto' ? 'auto' : 'bypassPermissions', workDir)
+    Alert.alert(copy.title, copy.message, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: copy.confirm,
+        style: copy.destructive ? 'destructive' : 'default',
+        onPress: () => {
+          if (!latest.current.blocked) latest.current.onMode(next)
+        },
+      },
+    ])
+  }
+  // 这里只用它查当前供应商和模型的能力；不带强度，改强度时不会重读整个目录、让滑块闪成转圈。
+  const choice = useRuntimeChoice({
+    client,
+    initial: runtime ? { providerId: runtime.providerId, modelId: runtime.modelId } : undefined,
+    active: visible,
+    epoch,
+  })
+  // 模型已经选定：强度档位跟着它走，读不到模型列表时也给通用档位，不让用户先去重选模型。
+  const current =
+    runtime && (choice.catalogReady || choice.error) ? currentModelEfforts(choice.models, runtime.modelId) : undefined
   const efforts = effortSegments({
     canSetEffort: choice.canSetEffort,
     authReady: choice.source?.auth === 'ready',
-    efforts: choice.model?.supportedReasoningEfforts,
+    efforts: current?.efforts,
   })
   const effortWaiting =
     !!runtime && (choice.loading || (!choice.catalogReady && !choice.error && choice.source?.auth === 'ready'))
-  const effortValue = runtime?.effortLevel ?? choice.model?.defaultReasoningEffort
+  const effortValue = runtime?.effortLevel ?? current?.defaultEffort
 
   return (
     <DetentSheet
       visible={visible}
-      onClose={onClose}
+      onClose={close}
       title="运行方式"
       initialDetent="full"
-      footer={<Button title="完成" size="lg" onPress={onClose} />}
+      footer={<Button title="完成" size="lg" onPress={close} />}
     >
       <Section title="权限">
         <View accessibilityRole="radiogroup" accessibilityLabel="权限" style={{ backgroundColor: colors.card, borderRadius: 16, overflow: 'hidden' }}>
@@ -164,9 +216,7 @@ export function RunSheet({
                 description={item.description}
                 selected={(mode ?? 'default') === item.id}
                 disabled={reasons.mode ?? (item.id === 'plan' ? reasons.plan : undefined)}
-                onPress={() => {
-                  if (item.id !== (mode ?? 'default')) onMode(item.id)
-                }}
+                onPress={() => chooseMode(item.id)}
               />
             </View>
           ))}
@@ -204,15 +254,13 @@ export function RunSheet({
 
       <Section title="思考强度">
         {efforts.length ? (
-          <Segmented
+          <EffortSlider
             label="思考强度"
-            height={44}
             disabled={!!reasons.runtime}
             options={efforts}
-            value={effortValue ?? ''}
+            value={effortDraft ?? effortValue ?? ''}
             onChange={(value) => {
-              if (!runtime || !choice.model || choice.source?.auth !== 'ready') return
-              onRuntime({ ...runtime, ...runtimeSelection(runtime.providerId, choice.model, value, false) })
+              if (efforts.some((option) => option.value === value)) setEffortDraft(value)
             }}
           />
         ) : effortWaiting ? (
@@ -221,7 +269,7 @@ export function RunSheet({
           </View>
         ) : (
           <Footnote style={{ paddingTop: 0 }}>
-            {!runtime ? '先选定模型，再调思考强度。' : choice.error || effortUnavailableReason(choice)}
+            {!runtime ? '先选定模型，再调思考强度。' : effortUnavailableReason(choice)}
           </Footnote>
         )}
       </Section>
@@ -253,6 +301,8 @@ export function RunSheet({
         warning={warning}
         onApply={(value, model) => {
           setModelOpen(false)
+          // 换了模型就以新模型的强度为准，之前滑的草稿作废。
+          setEffortDraft(undefined)
           onRuntime(value, model)
         }}
       />

@@ -240,17 +240,15 @@ function CandidateCard({
   )
 }
 
-/** 运行胶囊：盾牌 + 「模型 · 强度」+ ⌄；运行中锁住时置灰带锁。 */
+/**
+ * 运行胶囊：盾牌 + 「模型 · 强度」+ ⌄，不加底色。权限档位不靠颜色区分：全权限换成带感叹号的盾牌，
+ * 切过去时另有确认框。运行中锁住时文字变淡、带锁。
+ */
 function RunPill({ run, onPress }: { run: ChatComposerRun; onPress(): void }) {
   const colors = useColors()
   const inactive = !!run.disabled || !!run.locked
-  const tone =
-    run.risk === 'danger'
-      ? { bg: colors.errSoft, fg: colors.err, label: colors.err }
-      : run.risk === 'attention'
-        ? { bg: colors.attnSoft, fg: colors.attn, label: colors.attnInk }
-        : { bg: colors.fill, fg: colors.ink2, label: colors.ink }
   const muted = !!run.locked
+  const iconColor = muted ? colors.ink3 : colors.ink2
   return (
     <Pressable
       accessibilityRole="button"
@@ -266,19 +264,13 @@ function RunPill({ run, onPress }: { run: ChatComposerRun; onPress(): void }) {
         opacity: run.disabled && !run.locked ? 0.45 : pressed ? 0.7 : 1,
       })}
     >
-      <View
-        style={{
-          height: 34,
-          paddingHorizontal: 10,
-          borderRadius: 17,
-          backgroundColor: muted ? colors.fill : tone.bg,
-          flexDirection: 'row',
-          alignItems: 'center',
-          gap: 6,
-        }}
-      >
-        <Icon name="shield" size={15} color={muted ? colors.ink3 : tone.fg} strokeWidth={2} />
-        <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, fontWeight: '500', color: muted ? colors.ink3 : tone.label }}>
+      <View style={{ height: 34, paddingHorizontal: 6, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+        {run.risk === 'danger' ? (
+          <Glyph name="shield-alert" size={15} color={iconColor} strokeWidth={2} />
+        ) : (
+          <Icon name="shield" size={15} color={iconColor} strokeWidth={2} />
+        )}
+        <Text numberOfLines={1} style={{ flexShrink: 1, fontSize: 13, fontWeight: '500', color: muted ? colors.ink3 : colors.ink }}>
           {run.label}
         </Text>
         {run.locked ? (
@@ -567,11 +559,15 @@ export function ChatComposer({
             accessibilityLabel="添加：技能、命令、材料"
             accessibilityState={{ expanded: bringOpen }}
             onPress={openBring}
-            style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+            style={({ pressed }) => ({
+              width: 44,
+              height: 44,
+              alignItems: 'center',
+              justifyContent: 'center',
+              opacity: pressed ? 0.5 : 1,
+            })}
           >
-            <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.fill, alignItems: 'center', justifyContent: 'center' }}>
-              <Icon name="plus" size={20} color={colors.ink} strokeWidth={2} />
-            </View>
+            <Icon name="plus" size={22} color={colors.ink} strokeWidth={2} />
           </Pressable>
           <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
             {run.locked ? (
@@ -589,12 +585,14 @@ export function ChatComposer({
             onPress={press}
             style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
           >
+            {/* 一直是墨色实心圆：没内容时点了不动，不另外变灰；只有有内容却发不出去（断线、配置待确认）才变淡。 */}
             <View
               style={{
                 width: 36,
                 height: 36,
                 borderRadius: 18,
-                backgroundColor: slot.enabled ? colors.btn : colors.fill,
+                backgroundColor: colors.btn,
+                opacity: slot.kind === 'blocked' ? 0.35 : 1,
                 alignItems: 'center',
                 justifyContent: 'center',
               }}
@@ -602,7 +600,7 @@ export function ChatComposer({
               {slot.kind === 'stop' ? (
                 <Icon name="stop" size={14} color={colors.btnInk} />
               ) : (
-                <Icon name="arrow-up" size={18} color={slot.enabled ? colors.btnInk : colors.faint} strokeWidth={2.4} />
+                <Icon name="arrow-up" size={18} color={colors.btnInk} strokeWidth={2.4} />
               )}
             </View>
           </Pressable>

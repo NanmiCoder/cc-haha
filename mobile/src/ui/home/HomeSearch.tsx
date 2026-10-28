@@ -63,7 +63,8 @@ export function HomeSearch({
           horizontal
           showsHorizontalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
-          style={{ flexGrow: 0, marginTop: 12 }}
+          // ScrollView 默认可收缩：下面结果很多时 Yoga 会按比例把这一行压扁，chip 被裁掉一截。
+          style={{ flexGrow: 0, flexShrink: 0, marginTop: 12 }}
           contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}
         >
           <FilterChip
@@ -89,6 +90,7 @@ export function HomeSearch({
         <ScrollView
           keyboardShouldPersistTaps="handled"
           keyboardDismissMode="on-drag"
+          style={{ flex: 1 }}
           contentContainerStyle={{ paddingHorizontal: 16, paddingTop: 16, paddingBottom: 32 }}
         >
           {results.length ? (

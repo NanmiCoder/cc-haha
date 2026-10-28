@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Pressable, View } from 'react-native'
 import type { ApiClient } from '../core/client'
 import type { RuntimeConfig } from '../core/types'
-import { effortUnavailableReason, runtimeSelection } from '../core/runtimeCatalog'
+import { currentModelEfforts, effortUnavailableReason } from '../core/runtimeCatalog'
 import { useRuntimeChoice } from './RuntimePicker'
 import { Callout, InlineError, Loading, Sheet, TextButton, useColors } from './kit'
 import { ChoiceRow } from './newtask/ChoiceRow'
@@ -22,7 +22,9 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
   const [open, setOpen] = useState(false)
   const [epoch, setEpoch] = useState(0)
   const choice = useRuntimeChoice({ client, initial: runtime, defaultScope, active: open, epoch })
-  const options = choice.canSetEffort ? choice.model?.supportedReasoningEfforts ?? [] : []
+  const current =
+    runtime && (choice.catalogReady || choice.error) ? currentModelEfforts(choice.models, runtime.modelId) : undefined
+  const options = choice.canSetEffort ? (current?.efforts ?? []) : []
   const unavailable = disabled || !client || !runtime
   const waiting = choice.loading || (!choice.catalogReady && !choice.error && choice.source?.auth === 'ready')
   const reason = effortUnavailableReason(choice)
@@ -53,19 +55,20 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
               <ChoiceRow
                 key={value}
                 title={effortName(value)}
-                selected={value === (runtime?.effortLevel ?? choice.model?.defaultReasoningEffort)}
+                selected={value === (runtime?.effortLevel ?? current?.defaultEffort)}
                 disabled={disabled}
                 onPress={() => {
-                  if (!runtime || !choice.model || choice.source?.auth !== 'ready') return
-                  onApply({ ...runtime, ...runtimeSelection(runtime.providerId, choice.model, value, defaultScope) })
+                  if (!runtime || choice.source?.auth !== 'ready') return
+                  // 只换强度，模型 id 原样带回。
+                  onApply({ ...runtime, effortLevel: value })
                   setOpen(false)
                 }}
               />
             ))}
           </View>
-        ) : !choice.error ? (
+        ) : (
           <Callout>{reason}</Callout>
-        ) : null}
+        )}
         {warning ? <Callout>{warning}</Callout> : null}
         <TextButton title="重新读取" disabled={waiting || disabled} onPress={choice.reload} />
       </Sheet>
