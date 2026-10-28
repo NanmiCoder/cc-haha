@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { fixture, now, timestamp, discovery, cli, session, head, base, mergeSha, provenance } from './test-helpers'
+import { fixture, now, timestamp, createdSince, discovery, cli, session, head, base, mergeSha, provenance } from './test-helpers'
 import { execute } from './router'
 import { resolveLayout } from './git'
 
@@ -60,6 +60,78 @@ describe('shared repository identity', () => {
 })
 
 describe('queue, owner and external dispatch', () => {
+  test('fixed inclusive creation boundary rejects old updates and unknown dates without sliding on later scans', () => {
+    const f = setup([])
+    const old = new Date(Date.parse(createdSince) - 1).toISOString()
+    const candidates = [
+      { number: 10, created_at: createdSince },
+      { number: 11, created_at: old },
+      { number: 12, created_at: new Date(Date.parse(createdSince) + 1).toISOString() },
+      { number: 13 },
+    ].map((item) => ({ ...item, title: `Issue ${item.number}`, state: 'open', fingerprint: `fp-${item.number}`, updated_at: timestamp }))
+    f.call({ command: 'observe', scan_id: 'metadata', cursor_before: 'c1', cursor_after: 'c2', complete: true, candidates })
+    f.enqueue(10)
+    f.enqueue(12)
+    f.claim(10)
+    f.claim(12)
+    failure(() => f.enqueue(11), 'created before the fixed')
+    failure(() => f.enqueue(13), 'created_at is unknown')
+    // Admission checks also apply to rows queued before the policy/metadata existed.
+    const db = new Database(f.layout().database)
+    db.query("UPDATE issues SET queue_state = 'queued', branch = 'fix/issue-13-fixture' WHERE number = 13").run()
+    db.close()
+    failure(() => f.claim(13), 'created_at is unknown')
+    const later = now + 30 * 86_400_000
+    f.call({ command: 'observe', scan_id: 'later', cursor_before: 'c2', cursor_after: 'c3', complete: true,
+      candidates: [{ ...candidates[1], fingerprint: 'updated-old-issue', updated_at: new Date(later).toISOString() },
+        { number: 14, title: 'Still in original cohort', state: 'open', fingerprint: 'fp-14', created_at: createdSince, updated_at: new Date(later).toISOString() }] }, later)
+    failure(() => f.enqueue(11), 'created before the fixed')
+    f.enqueue(14)
+    expect(f.call({ command: 'status' }, later).dispatch_policy.created_since).toBe(createdSince)
+    failure(() => f.call({ command: 'configure', created_since: timestamp, reference: 'fixture://rolling-window' }), 'already fixed')
+    const state = f.call({ command: 'status' })
+    expect(state.issues.find((issue: any) => issue.number === 11).dispatch_eligibility).toBe('before_created_since')
+    expect(state.issues.find((issue: any) => issue.number === 13).dispatch_eligibility).toBe('created_at_required')
+    f.call({ command: 'observe', scan_id: 'backfill', cursor_before: 'c3', cursor_after: 'c4', complete: true,
+      candidates: [{ ...candidates[3], created_at: createdSince }] })
+    expect(f.claim(13).run.issue_number).toBe(13)
+  })
+
+  test('reopen admits a fifth issue in the same module while respecting its creation boundary', () => {
+    const f = setup([1, 2, 3, 4, 5])
+    for (const number of [1, 2, 3, 4, 5]) f.enqueue(number, ['shared'])
+    const first = f.claim(1)
+    f.bind(first)
+    f.call({ command: 'retire', ...first.token, executor_stopped: true, outcome: 'not_planned', reference: 'fixture://stopped' })
+    for (const number of [2, 3, 4, 5]) f.claim(number)
+    const reopen = { command: 'reopen', number: 1, owner: 'new-owner', previous_generation: 1,
+      old_executor_stopped: true, reference: 'fixture://stopped', discovery: { ...discovery, sessions: [session] }, adopt: { session, worktree: '/fixture/1' } }
+    const db = new Database(f.layout().database)
+    db.query('UPDATE issues SET created_at = NULL WHERE number = 1').run()
+    failure(() => f.call(reopen), 'created_at is unknown')
+    db.query('UPDATE issues SET created_at = ? WHERE number = 1').run(new Date(Date.parse(createdSince) - 1).toISOString())
+    failure(() => f.call(reopen), 'created before the fixed')
+    db.query('UPDATE issues SET created_at = ? WHERE number = 1').run(createdSince)
+    db.close()
+    expect(f.call(reopen).generation).toBe(2)
+    expect(f.call({ command: 'status' }).runs).toHaveLength(5)
+  })
+
+  test('parallel issues still cannot share an active session, worktree or PR', () => {
+    const f = setup([1, 2])
+    f.enqueue(1, ['shared'])
+    f.enqueue(2, ['shared'])
+    const claim = (number: number, selectedSession: typeof session, worktree: string, pr: number) => f.call({ command: 'claim', number, owner: `owner-${number}`,
+      discovery: { ...discovery, sessions: [selectedSession], prs: [{ number: pr, url: `https://example.invalid/pr/${pr}`, branch: `fix/issue-${number}-fixture` }] },
+      adopt: { session: selectedSession, worktree } })
+    claim(1, session, '/fixture/shared', 101)
+    failure(() => claim(2, session, '/fixture/other', 102), 'UNIQUE constraint failed: runs.session')
+    const other = { ...session, session_id: 'other-session' }
+    failure(() => claim(2, other, '/fixture/shared', 102), 'UNIQUE constraint failed: runs.worktree')
+    failure(() => claim(2, other, '/fixture/other', 101), 'UNIQUE constraint failed: runs.pr_number')
+    expect(f.call({ command: 'status' }).runs).toHaveLength(1)
+  })
+
   test('baseline is mandatory and never queues historical issues', () => {
     const f = fixture()
     fixtures.push(f)
@@ -75,19 +147,18 @@ describe('queue, owner and external dispatch', () => {
     failure(() => f.claim(1), 'Issue is not queued')
   })
 
-  test('module conflict rolls back the run and global slot together', () => {
+  test('different issues in the same module all receive owners without development slots', () => {
     const f = setup()
     f.enqueue(1, ['server'])
     f.enqueue(2, ['server', 'desktop'])
     f.enqueue(3, ['desktop'])
     f.claim(1)
-    failure(() => f.claim(2), 'Resource module:server is occupied')
+    f.claim(2)
     f.claim(3)
     const state = f.call({ command: 'status' })
-    expect(state.runs).toHaveLength(2)
-    expect(state.issues.find((issue: any) => issue.number === 2).queue_state).toBe('queued')
-    expect(state.resources.filter((r: any) => r.name.startsWith('slot:'))).toHaveLength(2)
-    failure(() => f.claim(2), 'Both global execution slots')
+    expect(state.runs).toHaveLength(3)
+    expect(state.issues.find((issue: any) => issue.number === 2)).toMatchObject({ queue_state: 'active', modules: '["desktop","server"]' })
+    expect(state.resources).toHaveLength(0)
   })
 
   test('sending CAS, unknown creation and expired leases never reopen ownership', () => {
@@ -102,7 +173,7 @@ describe('queue, owner and external dispatch', () => {
     const state = f.call({ command: 'status' }, now + 86_400_000)
     expect(state.runs[0].lease_expired).toBe(true)
     expect(state.actions[0].status).toBe('unknown')
-    expect(state.resources.filter((r: any) => r.name.startsWith('slot:'))).toHaveLength(1)
+    expect(state.runs).toHaveLength(1)
     failure(() => f.claim(1), 'Issue is not queued')
     f.call({ command: 'reconcile', ...claimed.token, action_key: claimed.action.action_key, outcome: 'absent', reference: 'fixture://negative-search' })
     failure(() => f.call({ command: 'dispatch-start', ...args }), 'Only pending actions')
@@ -139,7 +210,7 @@ describe('queue, owner and external dispatch', () => {
     expect(f.call({ command: 'status' }).issues[0].delivered).toBe('fp-new')
   })
 
-  test('handoff invalidates late owners, retains slots and rejects unresolved external writes', () => {
+  test('handoff invalidates late owners, retains shared resources and rejects unresolved external writes', () => {
     const f = setup([1])
     f.enqueue(1)
     const claimed = f.claim(1)
@@ -148,13 +219,14 @@ describe('queue, owner and external dispatch', () => {
     f.call({ command: 'dispatch-start', ...claimed.token, action_key: claimed.action.action_key, sender: 'sender' })
     failure(() => f.call(handoff), 'Resolve all external operations')
     f.call({ command: 'bind-session', ...claimed.token, action_key: claimed.action.action_key, sender: 'sender', session, worktree: '/fixture' })
+    f.call({ command: 'smoke-acquire', ...claimed.token })
     const handedOff = f.call(handoff)
     const { run_id, owner, generation } = handedOff
     const token = { run_id, owner, generation }
     expect(token.generation).toBe(2)
     failure(() => f.call({ command: 'progress', ...claimed.token, phase: 'blocked', next_step: 'late', reference: 'fixture://late' }), 'owner/generation changed')
     f.call({ command: 'progress', ...token, phase: 'ci', next_step: 'wait CI', reference: 'fixture://ci' })
-    expect(f.call({ command: 'status' }).resources.every((r: any) => r.generation === 2)).toBe(true)
+    expect(f.call({ command: 'status' }).resources).toEqual([{ name: 'desktop-smoke', run_id, generation: 2 }])
     failure(() => f.call({ command: 'dispatch-start', ...token, action_key: claimed.action.action_key, sender: 'new-sender' }), 'another run/generation')
   })
 
@@ -263,12 +335,9 @@ describe('real CLI and independent processes', () => {
     expect(run('nonsense').output.error.code).toBe('input')
   })
 
-  test('same issue, capacity and modules withstand parallel CLI connections', async () => {
-    const f = setup([1, 2, 3, 4])
-    f.enqueue(1, ['server'])
-    f.enqueue(2, ['server'])
-    f.enqueue(3, ['desktop'])
-    f.enqueue(4, ['other'])
+  test('same issue stays unique while five different issues in one module all claim through parallel CLI connections', async () => {
+    const f = setup([1, 2, 3, 4, 5, 6])
+    for (const number of [1, 2, 3, 4, 5, 6]) f.enqueue(number, ['shared-module'])
     const linked = join(f.root, 'linked')
     f.git('worktree', 'add', '--detach', linked, 'HEAD')
     async function claim(number: number, owner: string, cwd = f.primary) {
@@ -281,11 +350,10 @@ describe('real CLI and independent processes', () => {
     }
     const same = await Promise.all(Array.from({ length: 6 }, (_, index) => claim(1, `owner-${index}`, index % 2 ? linked : f.primary)))
     expect(same.filter((result) => result.ok)).toHaveLength(1)
-    const different = await Promise.all([claim(2, 'owner-2'), claim(3, 'owner-3'), claim(4, 'owner-4')])
-    expect(different.filter((result) => result.ok)).toHaveLength(1)
+    const different = await Promise.all([2, 3, 4, 5, 6].map((number) => claim(number, `owner-${number}`, number % 2 ? linked : f.primary)))
+    expect(different.filter((result) => result.ok)).toHaveLength(5)
     const state = f.call({ command: 'status' })
-    expect(state.runs).toHaveLength(2)
-    expect(state.resources.filter((r: any) => r.name.startsWith('slot:'))).toHaveLength(2)
-    expect(state.resources.filter((r: any) => r.name === 'module:server')).toHaveLength(1)
+    expect(state.runs).toHaveLength(6)
+    expect(state.resources).toHaveLength(0)
   }, 20_000)
 })

@@ -13,6 +13,7 @@ type Issue = {
   number: number; title: string; state: string; fingerprint: string; delivered: string | null
   updated_at: string; queue_state: string; covered_by: number | null; branch: string | null; modules: string
   revision: number; delivered_revision: number
+  created_at: string | null
 }
 type Action = {
   action_key: string; run_id: string; generation: number; kind: string; status: string
@@ -42,6 +43,21 @@ class Router {
     const issue = this.db.query('SELECT * FROM issues WHERE number = ?').get(number) as Issue | null
     ensure(issue, 'issue_missing', `Unknown issue ${number}; observe it first`)
     return issue
+  }
+
+  eligibility(issue: Issue) {
+    const since = this.meta('created_since')
+    if (!since) return 'policy_unconfigured'
+    if (!issue.created_at) return 'created_at_required'
+    return Date.parse(issue.created_at) < Date.parse(since) ? 'before_created_since' : 'eligible'
+  }
+
+  eligible(issue: Issue) {
+    const state = this.eligibility(issue)
+    ensure(state === 'eligible', state, state === 'policy_unconfigured'
+      ? 'Configure the fixed created_since boundary before new dispatch'
+      : state === 'created_at_required' ? 'Issue created_at is unknown; observe real metadata before new dispatch'
+        : 'Issue was created before the fixed created_since boundary')
   }
 
   owned(token: Token) {
@@ -150,7 +166,8 @@ class Router {
         repository_id: this.meta('repository_id'), repository: this.meta('repository'), cursor: this.meta('cursor'),
         baseline: this.meta('baseline') === 'true', recovery_required: this.meta('recovery_required') === 'true',
         main_head: this.meta('main_head') ?? null,
-        issues: this.db.query('SELECT * FROM issues ORDER BY number').all(),
+        dispatch_policy: { created_since: this.meta('created_since') ?? null, max_active: null, same_module: 'parallel_isolated_worktrees' },
+        issues: (this.db.query('SELECT * FROM issues ORDER BY number').all() as Issue[]).map((issue) => ({ ...issue, dispatch_eligibility: this.eligibility(issue) })),
         runs: (this.db.query('SELECT * FROM runs WHERE active = 1 ORDER BY updated_at').all() as Run[]).map((run) => ({
           ...run, session: run.session ? JSON.parse(run.session) : null, lease_expired: run.lease_until <= this.now,
           ...this.context(run),
@@ -168,6 +185,15 @@ class Router {
       return { reconciled: true }
     }
     ensure(this.meta('recovery_required') !== 'true', 'recovery_required', 'Reconcile sessions, PRs and resources, then recovery-confirm before mutations')
+
+    if (command.command === 'configure') {
+      const since = new Date(command.created_since).toISOString()
+      const previous = this.meta('created_since')
+      ensure(!previous || previous === since, 'policy_fixed', 'created_since is already fixed; scans must not move the boundary')
+      this.putMeta('created_since', since)
+      this.event('configure', { created_since: since, reference: command.reference })
+      return { created_since: since, max_active: null, same_module: 'parallel_isolated_worktrees' }
+    }
 
     if (command.command === 'observe-main') {
       this.fresh(command.observed_at)
@@ -193,14 +219,18 @@ class Router {
       let inserted = 0
       for (const candidate of candidates) {
         const priorIssue = this.db.query('SELECT * FROM issues WHERE number = ?').get(candidate.number) as Issue | null
+        const createdAt = candidate.created_at ? new Date(candidate.created_at).toISOString() : null
+        ensure(!priorIssue?.created_at || !createdAt || priorIssue.created_at === createdAt,
+          'created_at_conflict', 'Issue creation time is immutable; reconcile conflicting source metadata')
         // Overlap windows can return older snapshots. Never overwrite new data.
         if (priorIssue && Date.parse(candidate.updated_at) < Date.parse(priorIssue.updated_at)) continue
         const changed = !priorIssue || candidate.fingerprint !== priorIssue.fingerprint || candidate.state !== priorIssue.state
         const revision = priorIssue ? priorIssue.revision + (changed ? 1 : 0) : 1
-        this.db.query(`INSERT INTO issues(number, title, state, fingerprint, updated_at, queue_state, revision)
-          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(number) DO UPDATE SET title = excluded.title,
-          state = excluded.state, fingerprint = excluded.fingerprint, updated_at = excluded.updated_at, revision = excluded.revision`)
-          .run(candidate.number, candidate.title, candidate.state, candidate.fingerprint, candidate.updated_at, command.baseline ? 'baseline' : 'observed', revision)
+        this.db.query(`INSERT INTO issues(number, title, state, fingerprint, updated_at, queue_state, revision, created_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(number) DO UPDATE SET title = excluded.title,
+          state = excluded.state, fingerprint = excluded.fingerprint, updated_at = excluded.updated_at, revision = excluded.revision,
+          created_at = COALESCE(issues.created_at, excluded.created_at)`)
+          .run(candidate.number, candidate.title, candidate.state, candidate.fingerprint, candidate.updated_at, command.baseline ? 'baseline' : 'observed', revision, createdAt)
         if (changed) {
           const eventKey = hash([this.meta('repository_id'), candidate.number, revision])
           const result = this.db.query('INSERT OR IGNORE INTO inbox(event_key, issue_number, fingerprint, payload, consumed, revision) VALUES (?, ?, ?, ?, ?, ?)')
@@ -232,6 +262,7 @@ class Router {
     }
     if (command.command === 'enqueue') {
       const issue = this.issue(command.number)
+      this.eligible(issue)
       ensure(issue.state === 'open' && !issue.covered_by, 'not_eligible', 'Only open, uncovered issues can be queued')
       ensure(command.branch.startsWith(`fix/issue-${command.number}-`) || command.branch.startsWith(`feat/issue-${command.number}-`), 'branch_identity', 'Branch must identify this issue')
       ensure(!issue.branch || issue.branch === command.branch, 'branch_conflict', 'An issue keeps its original branch and PR')
@@ -243,6 +274,7 @@ class Router {
     }
     if (command.command === 'reopen') {
       const issue = this.issue(command.number)
+      this.eligible(issue)
       const previous = this.db.query('SELECT * FROM runs WHERE issue_number = ? ORDER BY rowid DESC LIMIT 1').get(issue.number) as Run | null
       ensure(previous && !previous.active && previous.generation === command.previous_generation && issue.state === 'open' && !issue.covered_by,
         'reopen_conflict', 'Reopen requires the current completed generation and an open, uncovered issue')
@@ -252,13 +284,10 @@ class Router {
       ensure(command.discovery.prs.length === (previous.pr_number ? 1 : 0) && (!previous.pr_number ||
         command.discovery.prs[0].number === previous.pr_number && command.discovery.prs[0].branch === previous.branch),
       'pr_conflict', 'Reopening must retain the original PR and branch')
-      ensure((this.db.query('SELECT count(*) AS n FROM runs WHERE active = 1').get() as any).n < 2, 'capacity', 'Both global execution slots are occupied')
       const run = { ...previous, owner: command.owner, generation: previous.generation + 1, active: 1,
         session: command.adopt ? json(command.adopt.session) : null, worktree: command.adopt?.worktree ?? null }
       this.db.query("UPDATE runs SET active = 1, owner = ?, generation = ?, session = ?, worktree = ?, phase = 'dispatch', next_step = 'Analyze reopened issue; retain original PR', updated_at = ?, lease_until = ? WHERE run_id = ?")
         .run(run.owner, run.generation, run.session, run.worktree, this.now, this.now + command.lease_seconds * 1000, run.run_id)
-      for (const module of JSON.parse(issue.modules)) this.resource(run, `module:${module}`)
-      this.resource(run, this.db.query("SELECT name FROM resources WHERE name = 'slot:1'").get() ? 'slot:2' : 'slot:1')
       this.db.query("UPDATE issues SET queue_state = 'active' WHERE number = ?").run(issue.number)
       this.db.query('DELETE FROM evidence WHERE run_id = ?').run(run.run_id)
       const action = this.queue(run, command.adopt ? 'resume' : 'create', 'reopen', {
@@ -271,6 +300,7 @@ class Router {
     }
     if (command.command === 'claim') {
       const issue = this.issue(command.number)
+      this.eligible(issue)
       ensure(issue.queue_state === 'queued' && issue.state === 'open' && !issue.covered_by, 'not_queued', 'Issue is not queued or already owned')
       this.fresh(command.discovery.observed_at)
       ensure(command.discovery.sessions.length <= 1 && command.discovery.prs.length <= 1, 'existing_execution', 'Multiple existing sessions/PRs require manual reconciliation')
@@ -279,8 +309,6 @@ class Router {
       'existing_execution', 'An existing session must be explicitly adopted with its real worktree')
       const existingPr = command.discovery.prs[0]
       ensure(!existingPr || existingPr.branch === issue.branch, 'pr_conflict', 'Existing PR must use the stable issue branch')
-      const occupied = (this.db.query('SELECT count(*) AS n FROM runs WHERE active = 1').get() as any).n
-      ensure(occupied < 2, 'capacity', 'Both global execution slots are occupied (including blocked/CI/review)')
       const run: Run = {
         run_id: randomUUID(), issue_number: issue.number, owner: command.owner, generation: 1,
         active: 1, phase: command.adopt ? 'working' : 'dispatch', branch: issue.branch!,
@@ -293,9 +321,6 @@ class Router {
         .run(run.run_id, run.issue_number, run.owner, run.generation, 1, run.phase, run.branch, run.updated_at, run.lease_until)
       this.db.query('UPDATE runs SET session = ?, worktree = ?, pr_number = ?, pr_url = ? WHERE run_id = ?')
         .run(run.session, run.worktree, run.pr_number, run.pr_url, run.run_id)
-      for (const module of JSON.parse(issue.modules)) this.resource(run, `module:${module}`)
-      const slot = this.db.query("SELECT name FROM resources WHERE name = 'slot:1'").get() ? 'slot:2' : 'slot:1'
-      this.resource(run, slot)
       this.db.query("UPDATE issues SET queue_state = 'active' WHERE number = ?").run(issue.number)
       const action = this.queue(run, command.adopt ? 'resume' : 'create', 'initial', {
         number: issue.number, branch: issue.branch, fingerprint: issue.fingerprint,
@@ -386,6 +411,28 @@ class Router {
       this.event(c.command, c, run.run_id)
       return { action: this.action(run, action.action_key) }
     }
+    if (command.command === 'observe-external-merge') {
+      ensure(run.pr_number === command.number && run.pr_url === command.url && run.branch === command.branch &&
+        run.head === command.head && run.base === command.base, 'version_mismatch', 'External merge must match the original PR, branch, head and base')
+      ensure(!this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND kind = 'merge' AND status != 'cancelled'").get(run.run_id),
+        'merge_inflight', 'Reconcile the existing merge action; an external observation cannot replace it')
+      this.fresh(command.observed_at)
+      ensure(command.main_sha === this.meta('main_head'), 'base_unobserved', 'External merge ancestry must use the latest observed main')
+      ensure(Date.parse(command.merged_at) <= Date.parse(command.observed_at), 'merge_time', 'Merge cannot occur after its observation')
+      const reopened = this.db.query("SELECT created_at FROM events WHERE run_id = ? AND kind = 'reopen' ORDER BY id DESC LIMIT 1").get(run.run_id) as any
+      ensure(!reopened || Date.parse(command.merged_at) >= reopened.created_at, 'merge_generation', 'Merge predates the reopened generation')
+      const priorPr = this.db.query("SELECT data FROM events WHERE run_id = ? AND kind = 'pr' ORDER BY id DESC LIMIT 1").get(run.run_id) as any
+      if (priorPr) {
+        const pr = JSON.parse(priorPr.data)
+        ensure(Date.parse(command.observed_at) > Date.parse(pr.observed_at) ||
+          Date.parse(command.observed_at) === Date.parse(pr.observed_at) && pr.state === 'merged',
+        'older_observation', 'External merge cannot replace a newer or conflicting PR observation')
+      }
+      const prior = this.db.query("SELECT data FROM events WHERE run_id = ? AND kind = 'external_merge' ORDER BY id DESC LIMIT 1").get(run.run_id) as any
+      ensure(!prior || JSON.parse(prior.data).merge_sha === command.merge_sha, 'merge_conflict', 'Confirmed external merge SHA cannot change')
+      this.saveEvidence(run, 'external_merge', { ...command, merged_at: new Date(command.merged_at).toISOString() })
+      return { recorded: true, merge_sha: command.merge_sha }
+    }
     if (command.command === 'record-pr') {
       ensure(run.branch === command.branch && (!run.pr_number || run.pr_number === command.number), 'pr_conflict', 'Keep the stable branch and original PR')
       this.fresh(command.observed_at)
@@ -400,6 +447,7 @@ class Router {
       }
       this.db.query('UPDATE runs SET pr_number = ?, pr_url = ?, head = ?, base = ?, updated_at = ? WHERE run_id = ?')
         .run(command.number, command.url, command.head, command.base, this.now, run.run_id)
+      if (command.state !== 'merged') this.db.query("DELETE FROM evidence WHERE run_id = ? AND kind = 'external_merge'").run(run.run_id)
       this.saveEvidence(run, 'pr', command)
       return { recorded: true }
     }
@@ -437,7 +485,17 @@ class Router {
     }
     if (command.command === 'complete') {
       const merge = this.db.query("SELECT * FROM outbox WHERE run_id = ? AND generation = ? AND kind = 'merge' AND status = 'sent' ORDER BY rowid DESC LIMIT 1").get(run.run_id, run.generation) as Action | null
-      ensure(merge && JSON.parse(merge.result!).merge_sha === command.merge_sha, 'merge_unconfirmed', 'Verify the merge result before completing the run')
+      let confirmed = !!merge && JSON.parse(merge.result!).merge_sha === command.merge_sha
+      const external = this.db.query("SELECT payload FROM evidence WHERE run_id = ? AND kind = 'external_merge'").get(run.run_id) as any
+      if (!confirmed && external) {
+        const receipt = JSON.parse(external.payload)
+        ensure(receipt.run_id === run.run_id && receipt.owner === run.owner && receipt.generation === run.generation &&
+          receipt.number === run.pr_number && receipt.url === run.pr_url && receipt.branch === run.branch &&
+          receipt.head === run.head && receipt.base === run.base && receipt.merge_sha === command.merge_sha &&
+          receipt.main_sha === this.meta('main_head'), 'merge_unconfirmed', 'External merge receipt no longer matches the current run and main')
+        confirmed = true
+      }
+      ensure(confirmed, 'merge_unconfirmed', 'Verify the merge result before completing the run')
       ensure(!this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND status IN ('pending', 'sending', 'unknown')").get(run.run_id), 'unresolved_dispatch', 'Resolve all external actions before completion')
       const issue = this.issue(run.issue_number)
       ensure(issue.revision === issue.delivered_revision, 'materials_pending', 'Deliver and reconcile new issue material before completion')
@@ -450,7 +508,9 @@ class Router {
     if (command.command === 'retire') {
       ensure(!this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND status IN ('sending', 'unknown')").get(run.run_id), 'unresolved_dispatch', 'Resolve external operations before retiring')
       ensure(!run.pr_number || command.pr_terminal_reference, 'pr_unresolved', 'Retirement requires evidence that the original PR cannot still merge')
-      ensure(!this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND generation = ? AND kind = 'merge' AND status = 'sent'").get(run.run_id, run.generation), 'merge_confirmed', 'Use complete after verifying the confirmed merge')
+      const external = this.db.query(`SELECT 1 FROM events WHERE run_id = ? AND kind = 'external_merge'
+        AND id > COALESCE((SELECT max(id) FROM events WHERE run_id = ? AND kind = 'reopen'), 0) LIMIT 1`).get(run.run_id, run.run_id)
+      ensure(!external && !this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND generation = ? AND kind = 'merge' AND status = 'sent'").get(run.run_id, run.generation), 'merge_confirmed', 'Use complete after verifying the confirmed merge')
       this.db.query("UPDATE outbox SET status = 'cancelled' WHERE run_id = ? AND status = 'pending'").run(run.run_id)
       this.db.query("UPDATE runs SET active = 0, phase = 'complete', next_step = ?, updated_at = ? WHERE run_id = ?").run(command.outcome, this.now, run.run_id)
       this.db.query("UPDATE issues SET queue_state = 'complete' WHERE number = ?").run(run.issue_number)
@@ -462,6 +522,8 @@ class Router {
   }
 
   checkMerge(run: Run) {
+    ensure(!this.db.query("SELECT 1 FROM events WHERE run_id = ? AND kind = 'external_merge'").get(run.run_id),
+      'pr_terminal', 'PR was already observed externally merged; verify completion instead of merging again')
     const issue = this.issue(run.issue_number)
     ensure(issue.state === 'open' && !issue.covered_by, 'issue_closed', 'Issue is closed or covered; do not merge automatically')
     ensure(issue.revision === issue.delivered_revision, 'materials_pending', 'Deliver and reconcile new issue material before merging')
