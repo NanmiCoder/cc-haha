@@ -1,4 +1,5 @@
 import {
+  MODEL_REASONING_EFFORTS,
   getModelReasoningCapabilityOverride,
   resolveModelReasoningProfile,
   type ModelReasoningApiFormat,
@@ -263,10 +264,31 @@ export function runtimeModelSelection(
 }
 
 /** Why the effort control has nothing to offer, in the words shown beside it. */
+/** 去掉 1M 上下文后缀：`x[1m]` 和 `x` 是同一个模型，思考强度一样。 */
+const contextBase = (id: string) => id.replace(/(?:\[1m\]|:1m)$/i, '').trim()
+/** 当前模型不在列表里时给的通用档位，和桌面端一致：去掉只有少数模型支持的「超高」，由电脑校验。 */
+const FALLBACK_EFFORTS: readonly string[] = MODEL_REASONING_EFFORTS.filter((value) => value !== 'xhigh')
+
+/**
+ * 当前模型可调的思考强度，和桌面端模型选择器一致：先按 id 找，再忽略 1M 上下文后缀找；
+ * 列表里没有这个模型也不报错，给通用档位。只有模型明确声明没有可调强度时才为空。
+ */
+export function currentModelEfforts(
+  models: readonly Model[],
+  modelId: string
+): { efforts: string[]; defaultEffort?: string } {
+  const model =
+    models.find((value) => value.id === modelId) ??
+    models.find((value) => contextBase(value.id) === contextBase(modelId))
+  return {
+    efforts: [...(model?.supportedReasoningEfforts ?? FALLBACK_EFFORTS)],
+    ...(model?.defaultReasoningEffort ? { defaultEffort: model.defaultReasoningEffort } : {}),
+  }
+}
+
+/** 思考强度调不了时的原因；模型不在列表里不算（见 currentModelEfforts）。 */
 export function effortUnavailableReason(choice: {
   source?: { auth: RuntimeSource['auth'] }
-  model?: unknown
-  catalogReady: boolean
   canSetEffort: boolean
 }): string {
   return choice.source?.auth === 'missing'
@@ -275,9 +297,7 @@ export function effortUnavailableReason(choice: {
       ? '尚未确认此供应商的授权状态，请重新读取。'
       : !choice.source
         ? '当前供应商已不可用，请重新选择模型。'
-        : !choice.model && choice.catalogReady
-          ? '当前模型已不在供应商列表中，请重新选择模型。'
-          : !choice.canSetEffort
-            ? '此账号的新任务沿用电脑默认强度，可在会话中调整。'
-            : '当前模型没有可调的思考强度。'
+        : !choice.canSetEffort
+          ? '此账号的新任务沿用电脑默认强度，可在会话中调整。'
+          : '当前模型没有可调的思考强度。'
 }

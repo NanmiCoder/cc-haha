@@ -348,6 +348,7 @@ function NewTask({ hostId, initialDir }: { hostId: string; initialDir: string })
         lean={lean}
         disabled={busy ? { mode: '正在创建任务。', runtime: '正在创建任务。' } : undefined}
         profile={{ value: profile, onChange: changeProfile, disabled: busy ? '正在创建任务。' : undefined }}
+        workDir={path || undefined}
       />
 
       <WherePage

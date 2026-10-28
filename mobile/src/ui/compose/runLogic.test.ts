@@ -3,6 +3,11 @@ import {
   composerPlaceholder,
   computerNote,
   effortSegments,
+  effortStopAt,
+  effortToCommit,
+  effortStopX,
+  modeChange,
+  modeConfirmation,
   modeRisk,
   modelRowLabel,
   nextChosenModel,
@@ -172,5 +177,80 @@ describe('nextChosenModel', () => {
   })
   test('原来就没有已选模型时保持为空', () => {
     expect(nextChosenModel({ appliedModelId: 'sonnet', currentModelId: 'sonnet', chosen: null })).toBeNull()
+  })
+})
+
+describe('switching permission mode', () => {
+  test('full access and auto need a confirmation, other modes apply at once', () => {
+    expect(modeChange('bypassPermissions', 'default')).toBe('confirm')
+    expect(modeChange('auto', 'default')).toBe('confirm')
+    expect(modeChange('auto', 'bypassPermissions')).toBe('confirm')
+    expect(modeChange('acceptEdits', 'default')).toBe('apply')
+    // 从全权限、自动退回来不用确认。
+    expect(modeChange('default', 'bypassPermissions')).toBe('apply')
+    expect(modeChange('plan', 'auto')).toBe('apply')
+  })
+
+  test('tapping the current mode does nothing, including the implicit default', () => {
+    expect(modeChange('bypassPermissions', 'bypassPermissions')).toBe('none')
+    expect(modeChange('auto', 'auto')).toBe('none')
+    expect(modeChange('default', undefined)).toBe('none')
+  })
+
+  test('full access confirmation names what it allows and where', () => {
+    const copy = modeConfirmation('bypassPermissions', '/Users/me/project')
+    expect(copy).toMatchObject({ title: '启用全权限？', confirm: '启用全权限', destructive: true })
+    expect(copy.message).toContain('执行任意 Shell 命令')
+    expect(copy.message).toContain('目录：/Users/me/project')
+    expect(modeConfirmation('bypassPermissions').message).not.toContain('目录：')
+  })
+
+  test('auto confirmation warns it is not guaranteed safe', () => {
+    const copy = modeConfirmation('auto', '/Users/me/project')
+    expect(copy).toMatchObject({ title: '启用自动模式？', confirm: '启用自动模式', destructive: false })
+    expect(copy.message).toContain('不能保证绝对安全')
+  })
+})
+
+describe('effort slider geometry', () => {
+  const track = { width: 336, count: 5, thumb: 36 }
+
+  test('stops sit evenly between half a thumb in from each end', () => {
+    expect([0, 1, 2, 3, 4].map((index) => effortStopX(index, track))).toEqual([18, 93, 168, 243, 318])
+  })
+
+  test('a drag or tap lands on the nearest stop and clamps at both ends', () => {
+    expect(effortStopAt(18, track)).toBe(0)
+    expect(effortStopAt(130, track)).toBe(1)
+    expect(effortStopAt(131, track)).toBe(2)
+    expect(effortStopAt(-50, track)).toBe(0)
+    expect(effortStopAt(999, track)).toBe(4)
+  })
+
+  test('every stop maps back to itself', () => {
+    for (let index = 0; index < track.count; index++)
+      expect(effortStopAt(effortStopX(index, track), track)).toBe(index)
+  })
+
+  test('a single option is always that option', () => {
+    expect(effortStopAt(300, { ...track, count: 1 })).toBe(0)
+  })
+})
+
+describe('committing effort when the run sheet closes', () => {
+  const runtime = { providerId: 'deepseek', modelId: 'deepseek-flash[1m]', effortLevel: 'low' }
+
+  test('sliding only changes the draft; closing sends one change with the model untouched', () => {
+    expect(effortToCommit({ runtime, draft: 'high' })).toEqual({ ...runtime, effortLevel: 'high' })
+  })
+
+  test('nothing is sent when the draft is unchanged or was never touched', () => {
+    expect(effortToCommit({ runtime, draft: 'low' })).toBeNull()
+    expect(effortToCommit({ runtime, draft: undefined })).toBeNull()
+    expect(effortToCommit({ runtime: undefined, draft: 'high' })).toBeNull()
+  })
+
+  test('a draft is dropped once effort can no longer be changed', () => {
+    expect(effortToCommit({ runtime, draft: 'high', blocked: '这一轮结束后才能切换。' })).toBeNull()
   })
 })

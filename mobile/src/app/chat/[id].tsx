@@ -1581,6 +1581,7 @@ function ChatSession({
             : undefined
         }
         error={sheetError}
+        workDir={session?.workDir ?? undefined}
       />
       <SelectTextSheet
         visible={panel === 'select'}
