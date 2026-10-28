@@ -85,7 +85,7 @@ cc-haha 是一个**桌面端 Claude Code 工作台**：多会话与全局搜索�
         </a>
       </td>
       <td valign="middle">
-        感谢 <a href="https://moeapi.cloud/register?utm_source=github&amp;utm_campaign=cchaha">Moe API</a> 对本项目的赞助！Moe API 是面向开发者与团队的统一大模型 API 平台，一个 Key 即可接入 GPT、Claude、Gemini、Grok、DeepSeek、Kimi、GLM、Qwen 等 120+ 模型，原生兼容 OpenAI（Chat / Responses）、Anthropic Messages 与 Gemini 协议，可直接用于 cc-haha、Claude Code、Codex 等工具。提供 Codex 自营及企业级号池、Claude Code 专用分组、Gemini 自营 Pro / Ultra 号池等多种分组，按需选择、按量计费；同时支持 GPT Image、Gemini 生图与 Seedance 视频生成，并配套 Moe Draw 在线生图站。全球 CDN 线路，适合中国大陆及海外用户访问；API 请求与响应正文不在平台持久化保存。
+        感谢 <a href="https://moeapi.cloud/register?utm_source=github&amp;utm_campaign=cchaha">Moe API</a> 对本项目的赞助！Moe API 是面向开发者与团队的统一大模型 API 平台，一个 Key 即可接入 GPT、Claude、Gemini、Grok、DeepSeek、Kimi、GLM、Qwen 等 120+ 模型，原生兼容 OpenAI（Chat / Responses）、Anthropic Messages 与 Gemini 协议，可直接用于 cc-haha、Claude Code、Codex 等工具。价格按 1 元 = 1 美元额度计费，Codex 自营号池倍率低至 0.1x，Gemini 自营 0.25x、Grok 0.2x、Claude Code 第三方号池 0.35x、DeepSeek / GLM / Kimi 0.5x 起，并支持 GPT Image、Gemini 生图。支持支付宝、微信扫码充值，余额实时到账；可按需开具发票，余额支持退款，团队采购与报销都方便。全球 CDN 线路，API 请求与响应正文不在平台持久化保存。
       </td>
     </tr>
     <tr>
