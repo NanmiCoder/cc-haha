@@ -1,7 +1,16 @@
-import { expect, spyOn, test } from 'bun:test'
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import sharp from 'sharp'
 import { normalizeImagesForAPI } from './imageValidation.js'
 import * as imageResizer from './imageResizer.js'
+import * as imageProcessor from '../tools/FileReadTool/imageProcessor.js'
+
+let processor: ReturnType<typeof spyOn>
+beforeEach(() => {
+  // Coverage loads the resizer's failure mocks into the same Bun process.
+  // These tests exercise real pixels, so restore the real dependency locally.
+  processor = spyOn(imageProcessor, 'getImageProcessor').mockResolvedValue(sharp)
+})
+afterEach(() => processor.mockRestore())
 
 async function largeImage() {
   const buffer = await sharp({ create: { width: 3000, height: 60, channels: 3, background: '#339966' } }).png().toBuffer()

@@ -8,6 +8,32 @@ import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environ
 import type { Message } from '../../types/message.js'
 import type { ImageBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
 
+const inFixtureProcess = process.env.CC_HAHA_IMAGE_DIMENSIONS_FIXTURE === '1'
+const fixtureTest = inFixtureProcess ? test : test.skip
+
+if (!inFixtureProcess) {
+  test('image request and real CLI fixtures run in an isolated process', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'image-dimensions-worker-'))
+    const child = Bun.spawn([process.execPath, '--no-env-file', 'test', fileURLToPath(import.meta.url)], {
+      cwd: home, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
+      env: createSandboxedTestEnvironment(home, { CC_HAHA_IMAGE_DIMENSIONS_FIXTURE: '1' }),
+    })
+    const timer = setTimeout(() => child.kill('SIGKILL'), 50_000)
+    try {
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+      ])
+      expect(exitCode, stdout + stderr).toBe(0)
+      expect(stderr).toContain('14 pass')
+      expect(stderr).toContain('0 fail')
+    } finally {
+      clearTimeout(timer)
+      if (child.exitCode === null) { child.kill('SIGKILL'); await child.exited }
+      await rm(home, { recursive: true, force: true })
+    }
+  }, 60_000)
+}
+
 const originalEnvironment = { ...process.env }
 const globals = globalThis as typeof globalThis & { MACRO?: { BUILD_TIME: string } }
 const originalMacro = globals.MACRO
@@ -33,6 +59,7 @@ const events = [
 ]
 
 beforeAll(async () => {
+  if (!inFixtureProcess) return
   sandbox = await mkdtemp(join(tmpdir(), 'claude-image-dimensions-'))
   for (const key of Object.keys(process.env)) delete process.env[key]
   Object.assign(process.env, createSandboxedTestEnvironment(sandbox, {
@@ -58,6 +85,7 @@ beforeAll(async () => {
 })
 
 afterAll(async () => {
+  if (!inFixtureProcess) return
   server?.stop(true)
   for (const key of Object.keys(process.env)) delete process.env[key]
   Object.assign(process.env, originalEnvironment)
@@ -123,7 +151,7 @@ async function verifyPixels(block: Block, index: number, width: number, height: 
 
 for (const count of [20, 21]) {
   for (const longEdge of [2000, 2001]) {
-    test(`${count} images at ${longEdge}px use the actual outgoing request count`, async () => {
+    fixtureTest(`${count} images at ${longEdge}px use the actual outgoing request count`, async () => {
       const inputs = await Promise.all(Array.from({ length: count }, (_, index) => image(index, longEdge)))
       const output = await send([createUserMessage({ content: inputs })])
       expect(output).toHaveLength(count)
@@ -135,7 +163,7 @@ for (const count of [20, 21]) {
   }
 }
 
-test('byte-only compression shortcuts still obey the single-image dimension cap at send time', async () => {
+fixtureTest('byte-only compression shortcuts still obey the single-image dimension cap at send time', async () => {
   const { compressImageBlock } = await import('../../utils/imageResizer.js')
   const input = await compressImageBlock(await image(0, 8001))
   const output = await send([createUserMessage({ content: [input] })])
@@ -143,7 +171,7 @@ test('byte-only compression shortcuts still obey the single-image dimension cap 
 })
 
 for (const orientation of [2, 6]) {
-  test(`request resizing preserves EXIF orientation ${orientation} and the displayed pixels`, async () => {
+  fixtureTest(`request resizing preserves EXIF orientation ${orientation} and the displayed pixels`, async () => {
     const fixture = await image(0, 3000, 600, 'jpeg')
     const bytes = await sharp(Buffer.from((fixture.source as { data: string }).data, 'base64'))
       .withMetadata({ orientation }).toBuffer()
@@ -163,7 +191,7 @@ for (const orientation of [2, 6]) {
   })
 }
 
-test('request resizing updates existing original-image coordinate metadata', async () => {
+fixtureTest('request resizing updates existing original-image coordinate metadata', async () => {
   const { maybeResizeAndDownsampleImageBlock, createImageMetadataText } = await import('../../utils/imageResizer.js')
   const input = await maybeResizeAndDownsampleImageBlock(await image(0, 16000, 120))
   await send([createUserMessage({ content: [
@@ -176,7 +204,7 @@ test('request resizing updates existing original-image coordinate metadata', asy
 })
 
 for (const height of [53, 50, 2]) {
-  test(`coordinate notes follow encoded pixels rather than the resize box for a 3000x${height} image`, async () => {
+  fixtureTest(`coordinate notes follow encoded pixels rather than the resize box for a 3000x${height} image`, async () => {
     const input = await image(0, 3000, height)
     const { createImageMetadataText } = await import('../../utils/imageResizer.js')
     const output = await send([createUserMessage({ content: [
@@ -195,7 +223,7 @@ for (const height of [53, 50, 2]) {
   })
 }
 
-test('counts only surviving images after the media cap strips the oldest image', async () => {
+fixtureTest('counts only surviving images after the media cap strips the oldest image', async () => {
   const inputs = await Promise.all(Array.from({ length: 21 }, (_, index) => image(index, 2001)))
   const output = await send([createUserMessage({ content: [
     ...inputs,
@@ -206,7 +234,7 @@ test('counts only surviving images after the media cap strips the oldest image',
   for (let index = 0; index < output.length; index++) await verifyPixels(output[index]!, index + 1, 2001, 30)
 })
 
-test('replayed history plus a new tool result crosses 20 images without changing stored pixels', async () => {
+fixtureTest('replayed history plus a new tool result crosses 20 images without changing stored pixels', async () => {
   const inputs = await Promise.all(Array.from({ length: 21 }, (_, index) => image(index, 3000, 60,
     (['png', 'jpeg', 'webp', 'gif'] as const)[index % 4])))
   const history = [
@@ -230,7 +258,7 @@ test('replayed history plus a new tool result crosses 20 images without changing
   expect(await readFile(path, 'utf8')).toBe(fixture)
 })
 
-test('real CLI resumes a persisted 20-image session and sends 21 compliant images', async () => {
+fixtureTest('real CLI resumes a persisted 20-image session and sends 21 compliant images', async () => {
   const root = fileURLToPath(new URL('../../../', import.meta.url))
   const home = join(sandbox, 'cli')
   const project = join(home, 'project')
