@@ -1,10 +1,39 @@
 import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { codeOwnerLogins, evaluateChangePolicy } from './change-policy'
 
 describe('evaluateChangePolicy', () => {
+  test.each([
+    'scripts/issue-router/cli.ts',
+    'scripts/issue-router/store.ts',
+    'scripts/issue-router/git.ts',
+    'scripts/issue-router/persistence.test.ts',
+    'scripts/issue-router/fixtures/v1.sql',
+    '.agents/workflows/issue-router.md',
+  ])('keeps issue router behavior and its operating contract on policy and persistence checks: %s', (file) => {
+    const result = evaluateChangePolicy([file])
+    expect(result.checks.policy).toBe(true)
+    expect(result.checks.persistence).toBe(true)
+    expect(result.checks.desktop).toBe(false)
+    expect(result.checks.desktopNative).toBe(false)
+    expect(result.checks.server).toBe(false)
+    expect(result.checks.mobile).toBe(false)
+    expect(result.blocked).toBe(false)
+  })
+
+  test('runs issue router regressions in policy and migration tests in persistence checks', () => {
+    const { scripts } = JSON.parse(readFileSync('package.json', 'utf8'))
+    expect(scripts['issue-router']).toBe('bun --no-env-file run scripts/issue-router/cli.ts')
+    expect(scripts['check:issue-router']).toBe('bun --no-env-file test ./scripts/issue-router/')
+    for (const testFile of readdirSync('scripts/issue-router').filter((file) => file.endsWith('.test.ts'))) {
+      expect(scripts['check:policy'].split(/\s+/)).toContain(`./scripts/issue-router/${testFile}`)
+    }
+    const persistence = readFileSync('scripts/quality-gate/persistence-upgrade.ts', 'utf8')
+    expect(persistence).toContain("['bun', '--no-env-file', 'test', './scripts/issue-router/persistence.test.ts']")
+  })
+
   test('validates mobile archive selection changes without desktop packaging', () => {
     const result = evaluateChangePolicy(['.easignore'])
     expect(result.areas).toEqual(['release'])

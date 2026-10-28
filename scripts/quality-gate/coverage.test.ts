@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import {
   buildRootCoverageCommand,
   collectServerTestFiles,
@@ -20,12 +20,15 @@ import {
 } from './coverage'
 
 describe('coverage gate helpers', () => {
-  test('collects root coverage with the transcript classifier build feature enabled', () => {
-    expect(buildRootCoverageCommand('/tmp/coverage', ['src/example.test.ts'])).toEqual([
+  test('collects root coverage with the transcript classifier and an explicit target-root preload', () => {
+    const root = join(tmpdir(), 'cc-haha-coverage-command-fixture')
+    expect(buildRootCoverageCommand('/tmp/coverage', ['src/example.test.ts'], root)).toEqual([
       'bun',
       '--no-env-file',
       '--feature=TRANSCRIPT_CLASSIFIER',
       'test',
+      '--preload',
+      resolve(root, 'preload.ts'),
       '--timeout=20000',
       '--coverage',
       '--coverage-reporter=lcov',
@@ -514,6 +517,44 @@ describe('coverage gate helpers', () => {
 })
 
 describe('coverage subprocess output', () => {
+  test('initializes macros in the real coverage subprocess when bunfig only configures run preloads', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-preload-'))
+    const outputDir = join(root, 'coverage')
+    try {
+      mkdirSync(join(root, 'src'))
+      // This is the repository's bunfig shape. Top-level preloads apply to
+      // `bun run`; `bun test` requires test.preload or an explicit --preload.
+      writeFileSync(join(root, 'bunfig.toml'), 'preload = ["./preload.ts"]\n')
+      writeFileSync(join(root, 'preload.ts'), "globalThis.MACRO = { VERSION: 'coverage-fixture' }\n")
+      writeFileSync(join(root, 'src', 'version.ts'), 'export function version() { return MACRO.VERSION }\n')
+      writeFileSync(join(root, 'src', 'fixture.test.ts'), `
+        import { expect, test } from 'bun:test'
+        import { join } from 'node:path'
+        import { version } from './version'
+        test('coverage macro startup contract', () => {
+          expect(version()).toBe('coverage-fixture')
+          expect(process.env.HOME).toContain('cc-haha-coverage-test-')
+          expect(process.env.CLAUDE_CONFIG_DIR).toBe(join(process.env.HOME!, '.claude'))
+        })
+      `)
+      const command = buildRootCoverageCommand(outputDir, ['src/fixture.test.ts'], root)
+      command[0] = process.execPath
+      const withoutPreload = command.filter((arg, index) => (
+        arg !== '--preload' && command[index - 1] !== '--preload'
+      ))
+      const before = await runCommand(withoutPreload, root, join(root, 'before.log'))
+      expect(before.exitCode).not.toBe(0)
+      expect(before.output).toContain('MACRO is not defined')
+
+      const result = await runCommand(command, root, join(root, 'after.log'))
+      expect(result.exitCode).toBe(0)
+      expect(parseBunTestFileCount(result.output)).toBe(1)
+      expect(hasUsableLcov(readFileSync(join(outputDir, 'root-server', 'lcov.info'), 'utf8'))).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('preserves output when the reporter replaces its destination directory', async () => {
     const root = mkdtempSync(join(tmpdir(), 'cc-haha-coverage-cleanup-'))
     const script = join(root, 'reporter.ts')
