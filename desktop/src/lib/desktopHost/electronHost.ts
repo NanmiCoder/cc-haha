@@ -63,8 +63,6 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     publicAccess: {
       getStatus: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessGetStatus),
       configure: configuration => invoke(ELECTRON_IPC_CHANNELS.publicAccessConfigure, configuration),
-      saveCredential: token => invoke(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, token),
-      deleteCredential: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessDeleteCredential),
       start: consentVersion => invoke(ELECTRON_IPC_CHANNELS.publicAccessStart, consentVersion),
       stop: () => invoke(ELECTRON_IPC_CHANNELS.publicAccessStop),
       setAutoStart: enabled => invoke(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, enabled),

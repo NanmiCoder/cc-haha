@@ -3,7 +3,7 @@ import { Linking, Platform, ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import Constants from 'expo-constants'
 import { useApp, useConnection } from '../state/AppContext'
-import { usePushRegistration } from '../state/PushRegistrationContext'
+import { usePushRegistration, useRetryPushRegistration } from '../state/PushRegistrationContext'
 import { usePreferences } from '../state/PreferencesContext'
 import {
   Footnote,
@@ -35,6 +35,7 @@ import {
 } from '../core/systemPermissions'
 import { getDevicePushToken } from '../state/devicePushToken'
 import { DeliveryCard } from '../ui/settings/DeliveryCard'
+import { ProfileEntry } from '../ui/profile/ProfileEntry'
 import { QuietHoursSheet } from '../ui/settings/QuietHoursSheet'
 import { useSystemPermissions } from '../ui/settings/useSystemPermissions'
 import {
@@ -71,6 +72,7 @@ export default function Settings() {
   const { registry } = useApp()
   const { host, client } = useConnection()
   const push = usePushRegistration(host?.id)
+  const retryPush = useRetryPushRegistration(host?.id)
   const permissions = useSystemPermissions()
   const [busy, setBusy] = useState<Delivery['actions'][number]['kind'] | null>(null)
   const [deliveryError, setDeliveryError] = useState('')
@@ -110,6 +112,7 @@ export default function Settings() {
     try {
       if (kind === 'request') await requestNotifications()
       else if (kind === 'settings') await openNotificationSettings()
+      else if (kind === 'retry') retryPush()
       else {
         if (host && !client) throw new Error('电脑还没连上，稍后再试')
         const outcome = await runTestNotification({
@@ -122,7 +125,7 @@ export default function Settings() {
         setTestNote(outcome.note)
       }
     } catch (e) {
-      setDeliveryError(errorText(e))
+      setDeliveryError(kind === 'test' ? '测试未完成，请检查电脑连接后重试。' : errorText(e))
     } finally {
       setBusy(null)
     }
@@ -174,18 +177,16 @@ export default function Settings() {
         <LargeTitle title="设置" style={{ paddingTop: 12, paddingBottom: 18 }} />
         <InlineError text={preferenceError} style={{ marginBottom: 8 }} />
 
+        <ProfileEntry />
+
         <DeliveryCard
           delivery={delivery}
-          busy={busy}
+          busy={busy ?? (push?.status === 'loading' ? 'retry' : null)}
+          note={testNote || note}
+          error={deliveryError}
           onAction={(kind) => void runAction(kind)}
           onGuide={() => void open(aboutLinks.pushSetup)}
         />
-        {deliveryError ? (
-          <InlineError text={deliveryError} style={{ marginTop: 8 }} />
-        ) : testNote || note ? (
-          <Footnote>{testNote || note}</Footnote>
-        ) : null}
-
         <SectionHeader title="提醒我" />
         <Group>
           {notificationRows.map((item, index) => (
@@ -301,7 +302,7 @@ export default function Settings() {
           />
         </Group>
         <Footnote>
-          点一下会打开系统设置。通知看最上面那张卡；本地网络权限系统不让 App 读取，局域网连不上时会单独提示。
+          在系统设置中管理相机和照片权限。局域网连接需要允许本地网络访问。
         </Footnote>
 
         <SectionHeader title="电脑" />

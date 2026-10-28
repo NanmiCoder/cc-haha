@@ -332,8 +332,6 @@ export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetPreferredSystemLanguages]: noPayload,
   [ELECTRON_IPC_CHANNELS.publicAccessGetStatus]: noPayload,
   [ELECTRON_IPC_CHANNELS.publicAccessConfigure]: isPublicAccessConfiguration,
-  [ELECTRON_IPC_CHANNELS.publicAccessSaveCredential]: value => typeof value === 'string' && value.trim().length > 0 && value.length <= 4096 && !/\s/.test(value.trim()),
-  [ELECTRON_IPC_CHANNELS.publicAccessDeleteCredential]: noPayload,
   // Tracks the shared consent constant so a version bump cannot silently
   // invalidate the payload the renderer actually sends.
   [ELECTRON_IPC_CHANNELS.publicAccessStart]: value => value === PUBLIC_ACCESS_CONSENT_VERSION,

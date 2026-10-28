@@ -103,11 +103,11 @@ export function Welcome({
 
 const steps = [
   { title: '在电脑上打开 cc-haha', hint: '' },
-  { title: '进入 设置 → H5 访问', hint: '同一个 Wi-Fi 用局域网直连，不在一起用公网访问' },
+  { title: '进入 设置 → 手机连接', hint: '同一个 Wi-Fi 用局域网；远程连接先在两端开启 Tailscale' },
   { title: '用手机扫页面上的二维码', hint: '' },
 ]
 
-/** 电脑「设置 → H5 访问」页的示意：侧栏 + 两段说明 + 二维码。只是装饰，读屏跳过。 */
+/** 电脑「设置 → 手机连接」页的示意：侧栏 + 两段说明 + 二维码。只是装饰，读屏跳过。 */
 function SettingsSketch() {
   const colors = useColors()
   const side = (label: string, active?: boolean) => (
@@ -163,7 +163,7 @@ function SettingsSketch() {
         </View>
         {side('通用')}
         {side('模型配置')}
-        {side('H5 访问', true)}
+        {side('手机连接', true)}
         {side('IM 接入')}
       </View>
       <View
@@ -181,7 +181,7 @@ function SettingsSketch() {
           {bar(72)}
           {bar(54)}
           <Text style={{ fontSize: 12, fontWeight: '600', color: colors.ink, marginTop: 6 }}>
-            公网访问
+            Tailscale
           </Text>
           {bar(64)}
         </View>

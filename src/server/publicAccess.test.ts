@@ -10,6 +10,7 @@ afterEach(() => { while (cleanups.length) cleanups.pop()!() })
 function fixture(
   handleApiRequest: (request: Request, url: URL) => Promise<Response> =
     async () => Response.json({ ok: true, env: { API_KEY: 'fake-provider-secret' }, language: 'en' }),
+  origin = 'https://fixture.ngrok-free.app',
 ) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'remote-access-test-'))
   const oldToken = process.env.CC_HAHA_LOCAL_ACCESS_TOKEN
@@ -23,7 +24,7 @@ function fixture(
     handleStatic: async () => new Response('<html>fixture</html>'),
     websocket: { message: (_ws, payload) => { messages.push(payload) } },
   })
-  service.enable('https://fixture.ngrok-free.app')
+  service.enable(origin)
   const base = `http://127.0.0.1:${service.status().port}`
   cleanups.push(() => {
     service.disable()
@@ -34,8 +35,8 @@ function fixture(
   const control = async (route: string, body: unknown = {}, method = 'POST', authorized = true) => service.control(new Request(`http://localhost/api/public-access/${route}`, {
     method, headers: authorized ? { Authorization: 'Bearer fixture-process-credential' } : {}, ...(method === 'GET' ? {} : { body: JSON.stringify(body) }),
   }))
-  const remote = (route: string, body?: unknown, cookie?: string, origin = 'https://fixture.ngrok-free.app') => fetch(`${base}${route}`, {
-    method: body === undefined ? 'GET' : 'POST', headers: { Origin: origin, ...(cookie ? { Cookie: cookie } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'manual',
+  const remote = (route: string, body?: unknown, cookie?: string, requestOrigin = origin) => fetch(`${base}${route}`, {
+    method: body === undefined ? 'GET' : 'POST', headers: { Origin: requestOrigin, ...(cookie ? { Cookie: cookie } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }), redirect: 'manual',
   })
   const pair = async () => {
     const code = await (await control('pairing')).json() as { secret: string }
@@ -53,12 +54,24 @@ function fixture(
     return { claim, response, pending, code }
   }
   const native = (route: string, token: string, init: RequestInit = {}) => fetch(`${base}${route}`, {
-    ...init, headers: { Origin: 'https://fixture.ngrok-free.app', Authorization: `Bearer ${token}`, ...init.headers }, redirect: 'manual',
+    ...init, headers: { Origin: origin, Authorization: `Bearer ${token}`, ...init.headers }, redirect: 'manual',
   })
   return { service, storePath, base, control, remote, pair, pairNative, native, messages, advance: (ms: number) => { clock += ms } }
 }
 
 describe('public transport boundary', () => {
+  test('Tailscale Serve origin retains application pairing, revocation and origin checks behind loopback proxy', async () => {
+    const origin = 'https://workstation.fixture.ts.net:8443'
+    const f = fixture(undefined, origin)
+    // A valid Tailscale identity header is not an application device credential.
+    const headers = { Origin: origin, 'Tailscale-User-Login': 'fixture@example.test' }
+    expect((await fetch(`${f.base}/api/sessions`, { headers })).status).toBe(401)
+    const { claim } = await f.pairNative()
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(200)
+    expect((await f.native('/api/sessions', claim.token, { headers: { Origin: 'https://other.fixture.ts.net' } })).status).toBe(403)
+    await f.control('revoke', { id: claim.deviceId })
+    expect((await f.native('/api/sessions', claim.token)).status).toBe(401)
+  })
   test('custom tunnels use the requested fixed port across restarts without changing device credentials', async () => {
     const f = fixture()
     const { claim } = await f.pairNative()
@@ -393,6 +406,31 @@ test('remote settings retain normalized auto-question settings through the secon
   const f = fixture(async () => Response.json({ autoQuestion: { enabled: true, timeoutMinutes: 5, secret: 'never' }, env: { SECRET: 'never' } }))
   const { claim } = await f.pairNative()
   expect(await (await f.native('/api/settings/user', claim.token)).json()).toEqual({ autoQuestion: { enabled: true, timeoutMinutes: 5 } })
+})
+
+test('profile projection is authenticated and the only desktop preference route available remotely', async () => {
+  const calls: string[] = []
+  const f = fixture(async (request, url) => {
+    calls.push(`${request.method} ${url.pathname}`)
+    return Response.json({ profile: { displayName: 'Fixture', subtitle: '', avatarDataUrl: null } })
+  })
+  const route = '/api/desktop-ui/preferences/profile'
+  expect((await f.remote(route)).status).toBe(401)
+  const { claim } = await f.pairNative()
+  expect((await f.native(route, claim.token)).status).toBe(200)
+  for (const method of ['PUT', 'POST', 'DELETE', 'PATCH']) {
+    expect((await f.native(route, claim.token, { method })).status).toBe(403)
+  }
+  for (const blocked of [
+    '/api/desktop-ui/preferences',
+    '/api/desktop-ui/preferences/sidebar',
+    '/api/desktop-ui/preferences/profile/avatar',
+    '/api/desktop-ui/preferences/profile/extra',
+    '/api/desktop-ui/preferences/profile?include=sidebar',
+    '/api//desktop-ui/preferences/profile',
+    '/api/desktop-ui/preferences/profile/',
+  ]) expect((await f.native(blocked, claim.token)).status).toBe(403)
+  expect(calls).toEqual([`GET ${route}`])
 })
 
 test('push route allowlist refuses extra segments and unsupported methods', () => {

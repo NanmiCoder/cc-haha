@@ -12,6 +12,10 @@ import { settingsApi } from '@/api/settings'
 import { modelsApi } from '@/api/models'
 import type { SavedProvider } from '@/types/provider'
 
+vi.mock('../ActivitySettings', () => ({
+  ActivitySettings: ({ browserMode }: { browserMode?: boolean }) => <div>{browserMode ? 'Connected personal homepage' : 'Editable personal homepage'}</div>,
+}))
+
 const saved: SavedProvider = {
   id: 'fixture-provider', name: 'Fixture provider', presetId: 'custom', baseUrl: 'https://fixture.example', apiKey: '', apiFormat: 'anthropic',
   models: { main: 'fixture-model', haiku: 'fixture-model', sonnet: 'fixture-model', opus: 'fixture-model' },
@@ -60,6 +64,20 @@ it('opens on the list even when the providers page was the last one seen', () =>
   useUIStore.setState({ activeSettingsTab: 'providers' })
   render(<H5Settings />)
   expect(screen.getByTestId('h5-settings-providers')).toBeInTheDocument()
+})
+it('opens the personal homepage from the list in browser mode and returns to settings', () => {
+  render(<H5Settings />)
+  fireEvent.click(screen.getByRole('button', { name: /Personal homepage/ }))
+  expect(screen.getByText('Connected personal homepage')).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: 'All settings' }))
+  expect(screen.getByRole('button', { name: /Personal homepage/ })).toBeInTheDocument()
+})
+it('honours a link to the personal homepage without changing the remembered desktop settings section', () => {
+  useUIStore.setState({ activeSettingsTab: 'general', pendingSettingsTab: 'activity' })
+  render(<H5Settings />)
+  expect(screen.getByText('Connected personal homepage')).toBeInTheDocument()
+  expect(useUIStore.getState().pendingSettingsTab).toBeNull()
+  expect(useUIStore.getState().activeSettingsTab).toBe('general')
 })
 it('honours a link that asks for the providers page', async () => {
   useUIStore.setState({ pendingSettingsTab: 'providers' })

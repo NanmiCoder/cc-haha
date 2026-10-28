@@ -4,6 +4,7 @@
  * Self-check: bun scripts/fixture-server.ts --self-test
  */
 import assert from 'node:assert/strict'
+import { profileFixture } from './profile-fixture'
 import type { ServerWebSocket } from 'bun'
 import type {
   ClientMessage,
@@ -1304,6 +1305,12 @@ export function startFixtureServer({
       }
       const path = url.pathname
       const method = request.method
+      if (path === '/api/desktop-ui/preferences/profile' && method === 'GET')
+        return json({ profile: profileFixture(hostName).profile })
+      if (path === '/api/activity-stats' && method === 'GET') {
+        const { profile: _profile, ...activity } = profileFixture(hostName)
+        return json(activity)
+      }
       if (path === '/api/h5-access/verify')
         return method === 'POST'
           ? json({ ok: true })

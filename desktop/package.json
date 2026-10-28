@@ -21,8 +21,7 @@
       "node_modules/@img/**",
       "node_modules/detect-libc/**",
       "node_modules/semver/**",
-      "src-tauri/binaries/**",
-      "node_modules/@ngrok/**"
+      "src-tauri/binaries/**"
     ],
     "artifactName": "Claude-Code-Haha-${version}-${os}-${arch}.${ext}",
     "npmRebuild": false,
@@ -36,8 +35,7 @@
       "src-tauri/binaries/**",
       "src-tauri/icons/**",
       "src-tauri/resources/preview-agent.js",
-      "package.json",
-      "node_modules/@ngrok/**"
+      "package.json"
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
@@ -94,7 +92,7 @@
     "dev": "vite",
     "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
     "prepare:node-pty": "bun run ./scripts/prepare-node-pty.ts",
-    "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty --external @ngrok/ngrok && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
+    "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
     "build:preview-agent": "bun run ./scripts/build-preview-agent.ts",
     "prepare:ripgrep": "bun run ./scripts/prepare-ripgrep.ts",
     "build:sidecars": "bun run ./scripts/build-sidecars.ts",
@@ -119,7 +117,6 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@ngrok/ngrok": "^1.7.0",
     "@tailwindcss/typography": "^0.5.19",
     "@types/dompurify": "^3.2.0",
     "@xterm/addon-fit": "^0.11.0",

@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
@@ -13,86 +14,88 @@ import { getDevicePushToken } from './devicePushToken'
 import { subscribePermissionDecided } from './notifyPromptGate'
 import { ensureNotificationChannel } from './notificationChannel'
 import { buildDelivery } from './pushRegistrations'
+import { ApiError } from '../core/client'
+import {
+  PushRegistrationRecovery,
+  pushRegistrationFailure,
+  type PushInfo,
+  type PushStage,
+} from './pushRegistrationRecovery'
 
-export type PushStatus =
-  | 'loading'
-  | 'registered'
-  | 'notConfigured'
-  | 'permissionRequired'
-  | 'unsupported'
-  | 'error'
-type Info = { status: PushStatus; error?: string }
-const Context = createContext<Record<string, Info>>({})
+export type { PushStatus, PushIssue, PushInfo } from './pushRegistrationRecovery'
+
+type RetryRegistry = Map<string, () => void>
+const Context = createContext<Record<string, PushInfo>>({})
+const RetryContext = createContext<RetryRegistry>(new Map())
 function RegisterHost({
   id,
   onChange,
+  retries,
 }: {
   id: string
-  onChange(id: string, info: Info): void
+  onChange(id: string, info: PushInfo): void
+  retries: RetryRegistry
 }) {
-  const { client } = useConnection(id)
+  const { client, error: connectionError } = useConnection(id)
   const { preferences, ready, error: preferencesError } = usePreferences()
   useEffect(() => {
-    if (!client || Platform.OS === 'web') return
-    if (!ready || preferencesError) {
-      onChange(
-        id,
-        preferencesError
-          ? { status: 'error', error: preferencesError }
-          : { status: 'loading' }
-      )
+    if (Platform.OS === 'web') return
+    if (!client) {
+      onChange(id, connectionError
+        ? { status: 'error', issue: 'authorization', error: connectionError }
+        : { status: 'loading' })
       return
     }
-    let alive = true
-    let running = false
-    let pending = false
-    let pendingToken: string | undefined
-    let observedToken: string | undefined
-    const controller = new AbortController()
-    function update(info: Info) {
-      if (alive) onChange(id, info)
+    if (!ready || preferencesError) {
+      onChange(id, preferencesError
+        ? { status: 'error', issue: 'storage', error: preferencesError }
+        : { status: 'loading' })
+      return
     }
-    async function register(nativeToken?: string) {
-      if (!alive || controller.signal.aborted) return
-      if (running) {
-        pending = true
-        if (nativeToken) pendingToken = nativeToken
-        return
+    let observedToken: string | undefined
+    const recovery = new PushRegistrationRecovery(async (signal, nativeToken) => {
+      let stage: PushStage = 'permission'
+      const check = () => {
+        if (signal.aborted) throw new ApiError('通知登记已取消', 0, 'ABORTED')
       }
-      running = true
-      update({ status: 'loading' })
       try {
         const permission = await Notifications.getPermissionsAsync()
-        if (controller.signal.aborted) return
+        check()
         if (!permission.granted) {
-          await pushRegistrations.clearRegistrations(client!)
-          update({ status: 'permissionRequired' })
-          return
+          // Revocation proofs remain durable if the computer is offline. A cleanup
+          // failure must not hide the already-known system permission state.
+          try {
+            await pushRegistrations.clearRegistrations(client)
+            return { info: { status: 'permissionRequired' } }
+          } catch (error) {
+            return { info: { ...pushRegistrationFailure(error, 'registration').info, status: 'permissionRequired' } }
+          }
         }
-        const configured = await client!.get<{
-          platforms: { ios: boolean; android: boolean }
-          status: string
-        }>('/api/sessions/mobile-push', { signal: controller.signal })
-        const platform = Platform.OS === 'ios' ? 'ios' : 'android'
-        if (!configured.platforms[platform]) {
-          update({ status: 'notConfigured' })
-          return
-        }
+        stage = 'device'
         const token = nativeToken ?? (await getDevicePushToken())
         observedToken = token
-        if (controller.signal.aborted) return
+        check()
+        stage = 'host'
+        const configured = await client.get<{
+          platforms: { ios: boolean; android: boolean }
+          status: string
+        }>('/api/sessions/mobile-push', { signal })
+        check()
+        const platform = Platform.OS === 'ios' ? 'ios' : 'android'
+        if (typeof configured?.platforms?.[platform] !== 'boolean')
+          throw new ApiError('电脑返回的推送状态无效', 0, 'INVALID_RESPONSE')
+        if (!configured.platforms[platform])
+          return { info: { status: 'notConfigured' } }
         const { decisions, completed, errors } = preferences.notifications
         const { enabled, start, end } = preferences.quietHours
-        // Android：渠道创建成功才声明 split，否则退回旧渠道，不让推送落到不存在的渠道里。
+        // Android only declares split channels after channel creation succeeds.
         let channelsReady = false
         if (platform === 'android')
-          channelsReady = await ensureNotificationChannel().then(
-            () => true,
-            () => false
-          )
-        if (controller.signal.aborted) return
+          channelsReady = await ensureNotificationChannel().then(() => true, () => false)
+        check()
+        stage = 'registration'
         const result = await pushRegistrations.register(
-          client!,
+          client,
           {
             platform,
             token,
@@ -107,48 +110,42 @@ function RegisterHost({
               liveActivityShowCommand: preferences.liveActivityShowCommand,
             }),
           },
-          controller.signal
+          signal
         )
-        if (result.registered && result.id) {
-          update({ status: 'registered' })
-        } else update({ status: 'notConfigured' })
-      } catch (e) {
-        if (!controller.signal.aborted)
-          update({
-            status: 'error',
-            error: e instanceof Error ? e.message : '通知登记失败',
-          })
-      } finally {
-        running = false
-        if (pending && alive) {
-          const token = pendingToken
-          pending = false
-          pendingToken = undefined
-          void register(token)
-        }
+        check()
+        if (result.registered && result.id)
+          return { info: { status: 'registered' } }
+        if (!result.registered && result.status === 'notConfigured')
+          return { info: { status: 'notConfigured' } }
+        throw new ApiError('电脑返回的通知登记结果无效', 0, 'INVALID_RESPONSE')
+      } catch (error) {
+        return pushRegistrationFailure(error, stage)
       }
-    }
-    void register()
+    }, (info) => onChange(id, info))
+    const refresh = () => recovery.refresh()
+    retries.set(id, refresh)
+    recovery.setActive(AppState.currentState === 'active')
     const listener = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void register()
+      recovery.setActive(state === 'active')
     })
-    // 通知引导页里用户刚做完授权选择：立即按新权限登记，不等回到前台。
-    const decided = subscribePermissionDecided(() => void register())
+    const decided = subscribePermissionDecided(refresh)
     const tokens = Notifications.addPushTokenListener((token) => {
       if (typeof token.data === 'string' && token.data !== observedToken) {
         observedToken = token.data
-        void register(token.data)
+        recovery.refresh(token.data)
       }
     })
     return () => {
-      alive = false
-      controller.abort()
+      recovery.stop()
+      if (retries.get(id) === refresh) retries.delete(id)
       listener.remove()
       decided()
       tokens.remove()
     }
   }, [
     client,
+    connectionError,
+    retries,
     id,
     onChange,
     preferences.notifications,
@@ -163,20 +160,31 @@ function RegisterHost({
 }
 export function PushRegistrationProvider({ children }: PropsWithChildren) {
   const { registry } = useApp()
-  const [statuses, setStatuses] = useState<Record<string, Info>>({})
+  const [statuses, setStatuses] = useState<Record<string, PushInfo>>({})
   const [onChange] = useState(
-    () => (id: string, info: Info) =>
+    () => (id: string, info: PushInfo) =>
       setStatuses((current) => ({ ...current, [id]: info }))
   )
+  const [retries] = useState<RetryRegistry>(() => new Map())
   return (
     <Context.Provider value={statuses}>
-      {registry.hosts.map((host) => (
-        <RegisterHost key={host.id} id={host.id} onChange={onChange} />
-      ))}
-      {children}
+      <RetryContext.Provider value={retries}>
+        {registry.hosts.map((host) => (
+          <RegisterHost key={host.id} id={host.id} onChange={onChange} retries={retries} />
+        ))}
+        {children}
+      </RetryContext.Provider>
     </Context.Provider>
   )
 }
 export function usePushRegistration(hostId?: string) {
   return useContext(Context)[hostId ?? '']
+}
+
+/** Explicit retry also rechecks a configured-but-not-yet-registered computer. */
+export function useRetryPushRegistration(hostId?: string) {
+  const retries = useContext(RetryContext)
+  return useCallback(() => {
+    if (hostId) retries.get(hostId)?.()
+  }, [hostId, retries])
 }

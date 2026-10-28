@@ -25,6 +25,7 @@ type SliderProps = {
 class SliderGesture {
   private props: SliderProps = { options: [], selected: -1, disabled: true, onChange() {}, width: 0 }
   private startX = 0
+  private dragging = false
   private index = -1
   readonly x = new Animated.Value(THUMB / 2)
   readonly responder = PanResponder.create({
@@ -34,10 +35,15 @@ class SliderGesture {
     onPanResponderTerminationRequest: () => false,
     onPanResponderGrant: (event) => {
       this.startX = event.nativeEvent.locationX
+      this.dragging = false
       this.x.stopAnimation()
-      this.follow(this.startX)
+      // 点击保留当前位置，松手后再向目标档位过渡；只有拖动才直接跟手。
     },
-    onPanResponderMove: (_event, state) => this.follow(this.startX + state.dx),
+    onPanResponderMove: (_event, state) => {
+      if (!this.enabled()) return
+      if (Math.abs(state.dx) > 3) this.dragging = true
+      if (this.dragging) this.follow(this.startX + state.dx)
+    },
     onPanResponderRelease: (_event, state) => this.commit(this.startX + state.dx),
     onPanResponderTerminate: () => {
       this.release()
@@ -61,7 +67,7 @@ class SliderGesture {
   }
 
   private enabled() {
-    return !this.props.disabled && this.props.width > 0
+    return !this.props.disabled && this.props.width > 0 && this.props.options.length > 0
   }
 
   private geometry() {
@@ -81,6 +87,11 @@ class SliderGesture {
   }
 
   private commit(x: number) {
+    if (!this.enabled()) {
+      this.release()
+      this.settle(true)
+      return
+    }
     const { options, selected, onChange } = this.props
     const index = effortStopAt(x, this.geometry())
     this.release()
@@ -90,6 +101,7 @@ class SliderGesture {
   }
 
   private release() {
+    this.dragging = false
     this.index = -1
     this.onDrag(null)
   }
@@ -120,15 +132,17 @@ export function EffortSlider({
   const [gesture] = useState(() => new SliderGesture(setDragIndex))
   const selected = options.findIndex((option) => option.value === value)
   // 上一次放好滑块时的宽度和档位：宽度刚量好（打开底单、转屏）时直接放到位，只有档位变了才弹过去。
-  const [placed, setPlaced] = useState({ width: 0, selected: -1, animate: false })
-  if (placed.width !== width || placed.selected !== selected)
-    setPlaced({ width, selected, animate: placed.width === width && width > 0 })
+  const count = options.length
+  const [placed, setPlaced] = useState({ width: 0, selected: -1, count, animate: false })
+  if (placed.width !== width || placed.selected !== selected || placed.count !== count)
+    setPlaced({ width, selected, count, animate: placed.width === width && placed.count === count && width > 0 })
   useEffect(() => {
     gesture.sync({ options, selected, disabled: !!disabled, onChange, width })
   })
   useEffect(() => {
     gesture.settle(placed.animate)
   }, [gesture, placed])
+  useEffect(() => () => gesture.x.stopAnimation(), [gesture])
 
   const geometry = { width, count: options.length, thumb: THUMB }
   const showThumb = !!width && (selected >= 0 || dragIndex !== null)

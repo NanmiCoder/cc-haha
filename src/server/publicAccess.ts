@@ -38,6 +38,10 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   const parts = url.pathname.split('/').filter(Boolean)
   if (parts[0] === 'ws') return parts.length === 2 && /^[\w-]{1,64}$/.test(parts[1]!)
   if (parts[0] !== 'api') return false
+  // Only the profile projection is shared with phones, never the full preferences or mutations.
+  if (parts[1] === 'desktop-ui') {
+    return method === 'GET' && url.pathname === '/api/desktop-ui/preferences/profile' && !url.search
+  }
   // Native project selection needs directory names, not the broader filesystem
   // file/search surface. Keep the exact route and its query contract read-only.
   if (parts[1] === 'filesystem') {

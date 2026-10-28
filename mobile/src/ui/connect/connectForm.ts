@@ -62,22 +62,22 @@ export function connectionBlocker(mode: ConnectMode, value: string): string {
   const info = inspectAddress(value)
   if (!info) return ''
   if (mode === 'remote' && info.auth === 'lan')
-    return '这是局域网地址。公网连接请粘贴带配对码的 HTTPS 链接，或切换到「同一个局域网」。'
+    return '这是局域网地址。Tailscale 连接请粘贴电脑生成的 HTTPS 配对链接，或切换到「同一个局域网」。'
   if (mode === 'lan' && info.pairing)
-    return '这是公网配对链接，请切换到「公网链接」后再连接。'
+    return '这是远程配对链接，请切换到「Tailscale」后再连接。'
   return ''
 }
 
 export function formFootnote(mode: ConnectMode, value: string) {
   if (mode === 'remote')
-    return '配对链接会请求电脑授权。请在电脑上核对这台手机并批准，链接过期后需要重新生成。'
+    return '先让手机和电脑登录同一个 Tailscale 账号并保持连接。配对链接会请求电脑授权，链接过期后请在电脑重新生成。'
   if (inspectAddress(value)?.embeddedCredential)
     return '二维码已包含局域网凭据。手机和电脑需要能通过这个地址互相访问。'
-  return '手机和电脑要在同一个网络。令牌在电脑的「设置 → H5 访问」里。'
+  return '手机和电脑要在同一个网络。令牌在电脑的「设置 → 手机连接」里。'
 }
 
 export const addressPlaceholder = (mode: ConnectMode) =>
-  mode === 'remote' ? 'https://…/remote#pair=…' : 'http://192.168.1.10:3456'
+  mode === 'remote' ? 'https://电脑.网络.ts.net/remote#pair=…' : 'http://192.168.1.10:3456'
 
 export const primaryTitle = (mode: ConnectMode) =>
   mode === 'remote' ? '请求电脑授权' : '连接'
@@ -85,7 +85,7 @@ export const primaryTitle = (mode: ConnectMode) =>
 /** 等电脑批准页上的等宽胶囊。 */
 export function remoteBadge(value: string) {
   const info = inspectAddress(value)
-  return info ? `公网 · ${info.hostname}` : '公网'
+  return info ? `远程 · ${info.hostname}` : '远程连接'
 }
 
 /** 连接页的两个入口：默认先开扫码；欢迎页的「手动输入地址」带 `mode=manual` 直接开表单。 */

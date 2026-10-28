@@ -231,7 +231,7 @@ export default function Hosts() {
           <EmptyState
             icon="laptop"
             title="先连接第一台电脑"
-            detail="打开电脑上的 cc-haha，在「设置 → H5 访问」或「公网访问」中获取连接二维码。"
+            detail="打开电脑上的 cc-haha，在「设置 → 手机连接」中选择局域网或 Tailscale，获取连接二维码。"
           />
         )}
         <Group style={{ marginTop: 22 }}>

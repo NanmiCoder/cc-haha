@@ -142,7 +142,7 @@ export function ManualSheet({
           style={{ marginTop: 8 }}
           options={[
             { label: '同一个局域网', value: 'lan' },
-            { label: '公网链接', value: 'remote' },
+            { label: 'Tailscale', value: 'remote' },
           ]}
           onChange={onModeChange}
         />

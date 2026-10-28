@@ -7,6 +7,9 @@ import {
 } from '../../api/desktopUiPreferences'
 import { useTranslation } from '../../i18n'
 import { publicAssetPath } from '../../lib/publicAsset'
+import { isPublicAccessRuntime } from '../../lib/publicAccessRuntime'
+
+type DisplayProfile = DesktopProfilePreferences & { avatarDataUrl?: string | null }
 
 export const DEFAULT_PROFILE: DesktopProfilePreferences = {
   displayName: 'cc-haha',
@@ -17,7 +20,7 @@ export const DEFAULT_PROFILE: DesktopProfilePreferences = {
 
 export const DEFAULT_AVATAR_SRC = publicAssetPath('app-icon.png')
 
-function withProfileDefaults(profile: Partial<DesktopProfilePreferences> | null | undefined): DesktopProfilePreferences {
+function withProfileDefaults(profile: Partial<DisplayProfile> | null | undefined): DisplayProfile {
   return { ...DEFAULT_PROFILE, ...profile }
 }
 
@@ -29,16 +32,18 @@ export function getProfileSubtitleHref(subtitle: string) {
 }
 
 /** Where the profile's picture comes from; null means the page falls back to the app icon. */
-export function getProfileAvatarSource(profile: DesktopProfilePreferences) {
+export function getProfileAvatarSource(profile: DisplayProfile) {
+  if (profile.avatarDataUrl) return profile.avatarDataUrl
   return profile.avatarFile ? getProfileAvatarUrl(profile.avatarUpdatedAt) : null
 }
 
 export type ActivityProfile = ReturnType<typeof useActivityProfile>
 
 /** The identity shown on the usage page and its edit dialog: load, edit, save, avatar upload and removal. */
-export function useActivityProfile() {
+export function useActivityProfile(browserMode = false) {
   const t = useTranslation()
-  const [profile, setProfile] = useState<DesktopProfilePreferences>(DEFAULT_PROFILE)
+  const readOnly = browserMode || isPublicAccessRuntime()
+  const [profile, setProfile] = useState<DisplayProfile>(DEFAULT_PROFILE)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -47,7 +52,7 @@ export function useActivityProfile() {
   const [draftDisplayName, setDraftDisplayName] = useState(DEFAULT_PROFILE.displayName)
   const [draftSubtitle, setDraftSubtitle] = useState(DEFAULT_PROFILE.subtitle)
 
-  const adopt = useCallback((next: DesktopProfilePreferences) => {
+  const adopt = useCallback((next: DisplayProfile) => {
     setProfile(next)
     setDraftDisplayName(next.displayName)
     setDraftSubtitle(next.subtitle)
@@ -57,9 +62,12 @@ export function useActivityProfile() {
     let cancelled = false
     setIsLoading(true)
     setError(null)
-    desktopUiPreferencesApi.getPreferences()
-      .then((result) => {
-        if (!cancelled) adopt(withProfileDefaults(result.preferences.profile))
+    const request = readOnly
+      ? desktopUiPreferencesApi.getProfile().then((result) => withProfileDefaults(result.profile))
+      : desktopUiPreferencesApi.getPreferences().then((result) => withProfileDefaults(result.preferences.profile))
+    request
+      .then((next) => {
+        if (!cancelled) adopt(next)
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err))
@@ -70,9 +78,10 @@ export function useActivityProfile() {
     return () => {
       cancelled = true
     }
-  }, [adopt])
+  }, [adopt, readOnly])
 
   const run = async (work: () => Promise<DesktopProfilePreferences>, afterSave?: () => void) => {
+    if (readOnly) return
     setIsSaving(true)
     setError(null)
     setStatus(null)
@@ -89,6 +98,7 @@ export function useActivityProfile() {
 
   return {
     profile,
+    readOnly,
     error,
     status,
     isLoading,
@@ -99,6 +109,7 @@ export function useActivityProfile() {
     setDraftDisplayName,
     setDraftSubtitle,
     startEdit: () => {
+      if (readOnly) return
       setIsEditing(true)
       setDraftDisplayName(profile.displayName)
       setDraftSubtitle(profile.subtitle)

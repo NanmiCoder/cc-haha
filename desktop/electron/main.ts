@@ -553,8 +553,6 @@ function registerIpcHandlers() {
   })
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessGetStatus, () => getPublicAccessManager().getStatus())
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessConfigure, (_event, payload) => getPublicAccessManager().configure(payload as DesktopPublicAccessConfiguration))
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, (_event, payload) => getPublicAccessManager().saveCredential(payload as string))
-  registerHandler(ELECTRON_IPC_CHANNELS.publicAccessDeleteCredential, () => getPublicAccessManager().deleteCredential())
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStart, (_event, payload) => getPublicAccessManager().start(payload as number))
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessStop, () => getPublicAccessManager().stop())
   registerHandler(ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, (_event, payload) => getPublicAccessManager().setAutoStart(payload as boolean))

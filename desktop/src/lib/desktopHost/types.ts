@@ -4,8 +4,8 @@ import type {
 } from '../../types/settings'
 import type { Locale } from '../../i18n/locale'
 
-// Version 2 adds remote provider management and selected General settings.
-export const PUBLIC_ACCESS_CONSENT_VERSION = 2
+// Version 3 replaces the public tunnel with a user-managed Tailscale connection.
+export const PUBLIC_ACCESS_CONSENT_VERSION = 3
 
 export type DesktopHostKind = 'browser' | 'electron'
 
@@ -391,28 +391,24 @@ export type MigrationStatus = {
 }
 
 export type DesktopPublicAccessConfiguration = {
-  mode: 'ngrok' | 'custom'
+  mode: 'tailscale'
   customUrl: string
   localPort: number
-  ngrokDomain: string
 }
 
 export type DesktopPublicAccessStatus = DesktopPublicAccessConfiguration & {
   state: 'unconfigured' | 'disabled' | 'connecting' | 'online' | 'reconnecting' | 'failed'
-  hasCredential: boolean
   publicUrl: string | null
-  error: 'auth' | 'quota' | 'network' | 'configuration' | null
+  error: 'network' | 'configuration' | 'stop' | null
   autoStart: boolean
   consentVersion: number
-  ngrokUrl: string | null
+  migrationRequired: boolean
 }
 
 export type DesktopHost = {
   publicAccess: {
     getStatus(): Promise<DesktopPublicAccessStatus>
     configure(configuration: DesktopPublicAccessConfiguration): Promise<DesktopPublicAccessStatus>
-    saveCredential(token: string): Promise<DesktopPublicAccessStatus>
-    deleteCredential(): Promise<DesktopPublicAccessStatus>
     start(consentVersion: number): Promise<DesktopPublicAccessStatus>
     stop(): Promise<DesktopPublicAccessStatus>
     setAutoStart(enabled: boolean): Promise<DesktopPublicAccessStatus>

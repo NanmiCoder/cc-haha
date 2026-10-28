@@ -1,39 +1,54 @@
-import { ActivityIndicator, Pressable, View } from 'react-native'
+import { useState } from 'react'
+import { Pressable, View } from 'react-native'
 import Svg, { Circle, Path } from 'react-native-svg'
-import { Button, Chevron, Group, useColors } from '../kit'
+import { Button, Group, Icon, InlineError, Separator, useColors } from '../kit'
 import { Text } from '../Text'
 import type { Delivery, RowTone } from './deliveryModel'
 
-/** 「提醒能不能送到」：一句结论 + 系统通知 / 电脑推送 / 锁屏实时活动各自的状态 + 补救按钮。 */
+/** 设置首页只显示通知状态，诊断和测试按需展开。 */
 export function DeliveryCard({
   delivery,
   busy,
+  note,
+  error,
   onAction,
   onGuide,
 }: {
   delivery: Delivery
-  /** 正在执行的按钮（如开启通知、测试通知已安排）。 */
   busy?: Delivery['actions'][number]['kind'] | null
+  note?: string
+  error?: string
   onAction(kind: Delivery['actions'][number]['kind']): void
   onGuide(): void
 }) {
   const colors = useColors()
+  const [expanded, setExpanded] = useState(false)
   const blocked = delivery.state === 'blocked'
   const tint = blocked ? colors.attn : delivery.state === 'ok' ? colors.ok : colors.ink3
   const soft = blocked ? colors.attnSoft : delivery.state === 'ok' ? colors.okSoft : colors.fill
   return (
-    <Group style={{ padding: 14 }}>
-      <View
-        accessible
-        accessibilityRole="header"
-        accessibilityLabel={`${delivery.title}，${delivery.subtitle}`}
-        style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}
+    <Group>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`通知，${delivery.title}`}
+        accessibilityHint={expanded ? '收起通知详情' : '查看通知状态与测试'}
+        accessibilityState={{ expanded }}
+        onPress={() => setExpanded((value) => !value)}
+        style={({ pressed }) => ({
+          minHeight: 68,
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 12,
+          backgroundColor: pressed ? colors.fill : 'transparent',
+        })}
       >
         <View
           style={{
-            width: 40,
-            height: 40,
-            borderRadius: 20,
+            width: 36,
+            height: 36,
+            borderRadius: 11,
             backgroundColor: soft,
             alignItems: 'center',
             justifyContent: 'center',
@@ -42,147 +57,95 @@ export function DeliveryCard({
           <BellGlyph off={blocked} color={tint} />
         </View>
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-          <Text style={{ fontSize: 16, lineHeight: 21, fontWeight: '600', color: colors.ink }}>
-            {delivery.title}
+          <Text style={{ fontSize: 16, lineHeight: 21, fontWeight: '500', color: colors.ink }}>
+            通知
           </Text>
           <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
-            {delivery.subtitle}
+            {delivery.title}
           </Text>
         </View>
-      </View>
-      <View style={{ marginTop: 10, marginBottom: 12, marginLeft: 52 }}>
-        {delivery.rows.map((row) => {
-          const color = toneColor(row.tone, colors)
-          return (
-            <View
-              key={row.key}
-              accessible
-              accessibilityLabel={`${row.label}，${row.value}`}
-              style={{ height: 34, flexDirection: 'row', alignItems: 'center', gap: 10 }}
-            >
-              <ToneGlyph tone={row.tone} color={color} />
-              <Text style={{ flex: 1, fontSize: 15, color: colors.ink }}>{row.label}</Text>
-              <Text
-                numberOfLines={1}
-                style={{
-                  fontSize: 13,
-                  lineHeight: 18,
-                  color: row.tone === 'bad' || row.tone === 'warn' ? color : colors.ink3,
-                  flexShrink: 1,
-                  maxWidth: '60%',
-                }}
-              >
-                {row.value}
-              </Text>
+        <Icon name={expanded ? 'chevron-down' : 'chevron-right'} size={16} color={colors.chevron} />
+      </Pressable>
+      {expanded && (
+        <>
+          <Separator />
+          <View style={{ padding: 14, gap: 12 }}>
+            <Text style={{ fontSize: 13, lineHeight: 19, color: colors.ink3 }}>
+              {delivery.subtitle}
+            </Text>
+            <View>
+              {delivery.rows.map((row) => {
+                const color = toneColor(row.tone, colors)
+                return (
+                  <View
+                    key={row.key}
+                    accessible
+                    accessibilityLabel={`${row.label}，${row.value}`}
+                    style={{ minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                  >
+                    <ToneGlyph tone={row.tone} color={color} />
+                    <Text style={{ flex: 1, fontSize: 14, color: colors.ink }}>{row.label}</Text>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        lineHeight: 18,
+                        color: row.tone === 'bad' || row.tone === 'warn' ? color : colors.ink3,
+                        flexShrink: 1,
+                        maxWidth: '55%',
+                        textAlign: 'right',
+                      }}
+                    >
+                      {row.value}
+                    </Text>
+                  </View>
+                )
+              })}
             </View>
-          )
-        })}
-      </View>
-      {delivery.actions.map((action) =>
-        action.icon === 'send' ? (
-          <SendButton
-            key={action.kind}
-            title={action.label}
-            busy={busy === action.kind}
-            disabled={busy != null}
-            onPress={() => onAction(action.kind)}
-          />
-        ) : action.look === 'plain' ? (
-          <Button
-            key={action.kind}
-            title={action.label}
-            variant="plain"
-            style={{ marginTop: 6, height: 40 }}
-            disabled={busy != null}
-            onPress={() => onAction(action.kind)}
-          />
-        ) : (
-          <Button
-            key={action.kind}
-            title={action.label}
-            variant={action.look === 'primary' ? 'primary' : 'secondary'}
-            style={{ marginTop: action.kind === delivery.actions[0].kind ? 0 : 6 }}
-            busy={busy === action.kind}
-            disabled={busy != null}
-            onPress={() => onAction(action.kind)}
-          />
-        )
-      )}
-      {delivery.guide && (
-        <Pressable
-          accessibilityRole="link"
-          accessibilityLabel="电脑推送怎么配"
-          onPress={onGuide}
-          style={({ pressed }) => ({
-            marginTop: 6,
-            height: 40,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 2,
-            opacity: pressed ? 0.6 : 1,
-          })}
-        >
-          <Text style={{ fontSize: 14, fontWeight: '500', color: colors.ink2 }}>
-            电脑推送怎么配
-          </Text>
-          <Chevron color={colors.ink2} />
-        </Pressable>
+            {delivery.actions.some((action) => action.kind === 'test') && (
+              <Text style={{ fontSize: 13, lineHeight: 19, color: colors.ink3 }}>
+                发送一条通知，检查手机能否收到提醒。
+              </Text>
+            )}
+            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+              {delivery.actions.map((action) => (
+                <Button
+                  key={action.kind}
+                  title={action.label}
+                  variant={action.look === 'primary' ? 'primary' : action.look === 'plain' ? 'plain' : 'secondary'}
+                  style={{ height: 44, paddingHorizontal: 16 }}
+                  busy={busy === action.kind}
+                  disabled={busy != null}
+                  onPress={() => onAction(action.kind)}
+                />
+              ))}
+              {delivery.guide && (
+                <Pressable
+                  accessibilityRole="link"
+                  accessibilityLabel="推送设置说明"
+                  onPress={onGuide}
+                  style={({ pressed }) => ({
+                    minHeight: 44,
+                    paddingHorizontal: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: pressed ? 0.6 : 1,
+                  })}
+                >
+                  <Text style={{ fontSize: 14, color: colors.ink2 }}>推送设置说明</Text>
+                </Pressable>
+              )}
+            </View>
+            {error ? (
+              <InlineError text={error} />
+            ) : note ? (
+              <Text accessibilityLiveRegion="polite" style={{ fontSize: 13, lineHeight: 20, color: colors.ink2 }}>
+                {note}
+              </Text>
+            ) : null}
+          </View>
+        </>
       )}
     </Group>
-  )
-}
-
-/** 灰底「发一条测试通知」，iOS 设计稿里带 17pt 纸飞机；共享的 Button 只收图标名，所以在这里自己画。 */
-function SendButton({
-  title,
-  busy,
-  disabled,
-  onPress,
-}: {
-  title: string
-  busy: boolean
-  disabled: boolean
-  onPress(): void
-}) {
-  const colors = useColors()
-  return (
-    <Pressable
-      accessibilityRole="button"
-      accessibilityLabel={title}
-      accessibilityState={{ disabled, busy }}
-      disabled={disabled}
-      onPress={onPress}
-      style={({ pressed }) => ({
-        height: 44,
-        borderRadius: 12,
-        backgroundColor: colors.fill,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        opacity: pressed ? 0.7 : disabled && !busy ? 0.45 : 1,
-      })}
-    >
-      {busy ? (
-        <ActivityIndicator size="small" color={colors.ink} />
-      ) : (
-        <Svg
-          width={17}
-          height={17}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke={colors.ink}
-          strokeWidth={2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <Path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
-          <Path d="m21.854 2.147-10.94 10.939" />
-        </Svg>
-      )}
-      <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>{title}</Text>
-    </Pressable>
   )
 }
 
