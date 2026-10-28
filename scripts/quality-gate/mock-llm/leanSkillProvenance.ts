@@ -70,6 +70,17 @@ export async function runLeanSkillProvenanceScenario(rootDir: string, artifactDi
   assert.deepEqual(results.filter(result => result.status === 'failed'), [], 'lean Skill provenance regression')
 }
 
+export function forwardProvenanceRequest(upstreamUrl: string, request: Request, body: string | undefined) {
+  const url = new URL(request.url)
+  const headers = new Headers(request.headers)
+  // Let fetch use the upstream authority. Retaining the gate's Host can route
+  // Bun's loopback request back into this gate instead of reaching the mock LLM.
+  headers.delete('host')
+  return fetch(`${upstreamUrl}${url.pathname}${url.search}`, {
+    method: request.method, headers, body, signal: request.signal,
+  })
+}
+
 async function runCase(rootDir: string, artifactDir: string, testCase: ProvenanceCase) {
   mkdirSync(artifactDir, { recursive: true })
   const sandbox = createQualityGateSandbox({
@@ -191,9 +202,7 @@ async function runCase(rootDir: string, artifactDir: string, testCase: Provenanc
         runningEvents.push('child-request-held')
         await runningRelease
       }
-      return fetch(`${upstream.url}${url.pathname}${url.search}`, {
-        method: request.method, headers: request.headers, body, signal: request.signal,
-      })
+      return forwardProvenanceRequest(upstream.url, request, body)
     },
   }) : undefined
   let stdout = ''
