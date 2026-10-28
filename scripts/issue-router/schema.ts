@@ -4,11 +4,12 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { ensure, type Layout, registerLayout, requireIgnored } from './git'
 
-export const schemaVersion = 3
+export const schemaVersion = 4
 const applicationId = 0x49535254
 
 // v1 is the initial contract; v2 adds lease/identity constraints, v3 versions
-// content transitions. Neither migration nor lease expiry releases ownership.
+// content transitions, v4 records creation metadata and removes development locks.
+// Neither migration nor lease expiry releases ownership.
 const v1 = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE issues (
@@ -59,6 +60,12 @@ function upgradeV2(db: Database) {
     ALTER TABLE issues ADD COLUMN delivered_revision INTEGER NOT NULL DEFAULT 0;
     ALTER TABLE inbox ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
     PRAGMA user_version = 3;`)
+}
+
+function upgradeV3(db: Database) {
+  db.exec(`ALTER TABLE issues ADD COLUMN created_at TEXT;
+    DELETE FROM resources WHERE name GLOB 'slot:*' OR name GLOB 'module:*';
+    PRAGMA user_version = 4;`)
 }
 
 export function checkIdentity(db: Database, layout: Layout) {
@@ -114,6 +121,7 @@ export function initState(layout: Layout, repositoryId: string, repository: stri
       db.exec(v1)
       upgradeV1(db)
       upgradeV2(db)
+      upgradeV3(db)
       db.exec(`PRAGMA application_id = ${applicationId}`)
       const put = db.query('INSERT INTO meta(key, value) VALUES (?, ?)')
       for (const [key, value] of Object.entries({
@@ -140,7 +148,7 @@ export function migrateState(layout: Layout) {
   const db = connect(layout)
   try {
     const previous = version(db)
-    ensure([1, 2, schemaVersion].includes(previous), 'schema_version', `Unsupported schema ${previous}`)
+    ensure([1, 2, 3, schemaVersion].includes(previous), 'schema_version', `Unsupported schema ${previous}`)
     if (previous === schemaVersion) return { schema_version: schemaVersion, migrated: false }
     const backup = backupState(db, layout)
     db.transaction(() => {
@@ -148,6 +156,7 @@ export function migrateState(layout: Layout) {
         upgradeV1(db)
       }
       if (version(db) === 2) upgradeV2(db)
+      if (version(db) === 3) upgradeV3(db)
     }).immediate()
     return { ...backup, schema_version: schemaVersion, migrated: true }
   } finally {
@@ -163,7 +172,7 @@ export function restoreState(layout: Layout, backup: string) {
   const source = new Database(realpathSync(backup), { readonly: true, create: false, strict: true })
   try {
     checkIdentity(source, layout)
-    ensure([1, 2, schemaVersion].includes(version(source)), 'schema_version', 'Unsupported backup schema')
+    ensure([1, 2, 3, schemaVersion].includes(version(source)), 'schema_version', 'Unsupported backup schema')
     mkdirSync(layout.stateRoot, { recursive: true, mode: 0o700 })
     // VACUUM INTO refuses to overwrite an existing nonempty file and includes
     // committed WAL data in a consistent snapshot, unlike a plain file copy.
