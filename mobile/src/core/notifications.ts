@@ -72,7 +72,13 @@ export function notificationEvents(
           requestId: item.requestId,
           kind: 'decision',
           toolName: item.toolName,
-          preview: decisionText(item.toolName, item.preview),
+          // 「锁屏上显示命令」关掉后，本机兜底通知也不露出 Bash 命令原文。
+          preview: decisionText(
+            item.toolName,
+            item.toolName === 'Bash' && !preferences.liveActivityShowCommand
+              ? undefined
+              : item.preview
+          ),
           category:
             item.toolName && !SIMPLE_TOOLS.has(item.toolName)
               ? 'cchahaTool'

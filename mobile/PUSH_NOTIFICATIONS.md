@@ -18,7 +18,7 @@ CC_HAHA_APNS_SANDBOX=false
 
 `SANDBOX=true` 用于开发 APNs 环境，Ad Hoc / TestFlight / 正式分发通常使用生产环境。应以实际签名 entitlement 为准，不能用手机型号判断。普通通知使用 bundle topic；实时活动自动使用 `.push-type.liveactivity` 后缀。实时活动需要用户允许、系统支持及具备正确 entitlement 的原生构建。
 
-Android 使用 `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.json`。当前支持显式 service-account ADC 文件；不自动读取 gcloud 用户登录或云机器元数据。手机必须配置属于同一 Firebase 项目的原生 FCM 文件并获得设备 token。通知 channel 为 `cc-haha`。没有这部分配置不能宣称后台推送可用。
+Android 使用 `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.json`。当前支持显式 service-account ADC 文件；不自动读取 gcloud 用户登录或云机器元数据。手机必须配置属于同一 Firebase 项目的原生 FCM 文件并获得设备 token。通知 channel 默认为 `cc-haha`；登记带 `delivery.channels: 'split'` 时按事件使用 `cc-haha-decisions` / `cc-haha-completed` / `cc-haha-errors`。没有这部分配置不能宣称后台推送可用。
 
 电脑必须保持运行且可连接 Apple / Google。系统免打扰、设备网络、通知权限和系统节流仍会影响展示；接口的 `configured` 仅表明已配置文件，不能证明真机已收到。投递失败显示不含凭据的诊断，APNs / FCM 报废的 token 会移除。
 
@@ -30,6 +30,7 @@ Android 使用 `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.js
 - `PUT /api/sessions/mobile-push` → `{ registered, status: 'registered' | 'notConfigured', id?, expiresAt? }`。
 - `DELETE /api/sessions/mobile-push`，body `{ token: ordinaryDevicePushToken, hostId }` → `{ removed: number }`，幂等删除本手机在此主机的普通通知和关联的实时活动。未配置 provider 时也能删除旧登记。
 - `DELETE /api/sessions/mobile-push/:id`，body `{ token }` 保留单项注销；不匹配返回 404。
+- `POST /api/sessions/mobile-push/test`，body `{ token: ordinaryDevicePushToken, hostId?: string }` → `{ status: 'sent' | 'notConfigured' | 'noRegistration' | 'failed', error? }`。只匹配当前调用者（LAN 为该 token 的归属，远程为已验证的配对设备）自己的普通通知登记，不接受 owner/device ID；`hostId` 给出时只发该主机的登记。发送标题“测试通知 · cc-haha”、正文“电脑推送正常：这条是电脑发给你手机的。”，APNs category 为 `cchahaResult`，data 为 `{ hostId, eventType: 'test' }`（没有 sessionId）。这是用户主动测试，不受通知类别偏好和免打扰限制；Android 在拆分渠道下使用 `cc-haha-completed`。`notConfigured` 表示电脑没有该平台的 APNs / FCM 配置，`noRegistration` 表示没有匹配登记，`failed` 的 `error` 不含 token 或凭据。
 
 普通注册 body：
 
@@ -45,6 +46,23 @@ Android 使用 `GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/service-account.js
   timeZone: 'Asia/Shanghai'
 }
 ```
+
+可选的 `delivery`（普通通知和实时活动登记都可携带，缺省即旧行为）：
+
+```ts
+delivery?: {
+  channels?: 'split',                       // Android：按事件拆分通知渠道
+  timeSensitive?: boolean,                  // iOS：决定类推送使用时间敏感级别
+  liveActivity?: 'running' | 'decisions',   // 实时活动远程更新范围
+  showCommand?: boolean                     // false：实时活动不携带原始命令 / 预览
+}
+```
+
+- 各字段类型严格校验，未知字段被拒绝；随登记保存，再次注册会整体替换（不带 `delivery` 的注册会清除旧值）。旧数据没有该字段也能原样加载。
+- `channels: 'split'`：FCM `channel_id` 按事件选择，等待审批 / 问答 / 计划为 `cc-haha-decisions`，完成为 `cc-haha-completed`，失败和无进展为 `cc-haha-errors`；否则一律 `cc-haha`。手机需要自己创建这三个渠道。
+- `timeSensitive: true`：决定类推送的 aps 带 `"interruption-level": "time-sensitive"`，其他类型保持默认 `active`。
+- `liveActivity: 'decisions'`：只在等待决定时远程更新实时活动；运行中状态不发 `update`，而是对仅在运行的活动发送 `end` 并移除登记，避免远程推送把它重新唤起。缺省或 `'running'` 保持原样。
+- `showCommand: false`：实时活动 `detail` 不含原始命令 / 预览：等待中的 Bash 为“打开 App 查看命令”，其他等待为“需要你做决定”，运行中为空，结束为“本次运行已结束”。
 
 `hostId` 仅用于返回手机后的主机导航，不能建立或改变授权。客户端需要安全保存注册 ID 及原 token，以便重启后、移除主机时或 token 轮换时撤销旧登记。离线注销不能表示成功，应保留待注销记录以重试。注册有效期为 30 天，不超过远程配对的实际期限；实时活动登记最多 8 小时。
 

@@ -6,6 +6,7 @@ import { useDashboard } from '../state/DashboardContext'
 import { usePreferences } from '../state/PreferencesContext'
 import { isQuietTime } from '../state/preferences'
 import { getDevicePushToken } from '../state/devicePushToken'
+import { buildDelivery } from '../state/pushRegistrations'
 import TaskActivity from './TaskActivity.ios'
 import {
   activityBridgeAction,
@@ -102,7 +103,11 @@ export function LiveActivityBridge({
       snapshot.sessions,
       snapshot.activity,
       preferences.notifications.decisions && !quiet,
-      now
+      now,
+      {
+        mode: preferences.liveActivity,
+        showCommand: preferences.liveActivityShowCommand,
+      }
     )
     // Only used to close the card already on the lock screen with its outcome.
     const finished = finishedActivities(
@@ -115,6 +120,10 @@ export function LiveActivityBridge({
       host.id,
       preferences.notifications,
       preferences.quietHours,
+      // 这两项和 timeSensitive 都随登记上报给电脑，切换后需要重新登记。
+      preferences.liveActivity,
+      preferences.liveActivityShowCommand,
+      preferences.timeSensitive,
     ])
     const cancellation = registrationLifetime.current!
     void controller
@@ -155,6 +164,11 @@ export function LiveActivityBridge({
               preferences: { decisions, completed, errors },
               quietHours: { enabled, start, end },
               timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+              delivery: buildDelivery('ios', {
+                timeSensitive: preferences.timeSensitive,
+                liveActivity: preferences.liveActivity,
+                liveActivityShowCommand: preferences.liveActivityShowCommand,
+              }),
             },
             cancellation.signal
           )

@@ -3,7 +3,7 @@ import { Platform, View } from 'react-native'
 import { getStringAsync } from 'expo-clipboard'
 import { randomUUID } from 'expo-crypto'
 import { StatusBar } from 'expo-status-bar'
-import { router, useFocusEffect } from 'expo-router'
+import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import { createApiClient } from '../state/api'
 import { connectHost, pairingMessage } from '../core/connectHost'
 import { useApp } from '../state/AppContext'
@@ -15,11 +15,13 @@ import { PairingView, type PairingState } from '../ui/connect/PairingView'
 import {
   connectionBlocker,
   defaultHostName,
+  initialStage,
   modeForAddress,
   needsToken,
   receivedConnection,
   remoteBadge,
   type ConnectMode,
+  type ConnectStage,
 } from '../ui/connect/connectForm'
 
 /**
@@ -29,7 +31,10 @@ import {
 export default function Connect() {
   const { add, registry } = useApp()
   const { dark } = useTheme()
-  const [stage, setStage] = useState<'scan' | 'form'>('scan')
+  const params = useLocalSearchParams<{ mode?: string }>()
+  const [stage, setStage] = useState<ConnectStage>(() => initialStage(params.mode))
+  // 欢迎页「手动输入地址」直达表单：收起表单就离开本页，不绕去扫码页（还没开过相机）。
+  const [direct, setDirect] = useState(() => initialStage(params.mode) === 'form')
   const [mode, setMode] = useState<ConnectMode>('lan')
   const [name, setName] = useState(defaultHostName)
   const [address, setAddress] = useState('')
@@ -67,10 +72,18 @@ export default function Connect() {
   function closeForm() {
     cancel()
     setError('')
+    setDirect(false)
     setStage('scan')
+  }
+  /** 表单面板自己的收起（下滑 / 点遮罩）。 */
+  function dismissForm() {
+    if (!direct) return closeForm()
+    setStage('scan')
+    close()
   }
   function rescan() {
     cancel()
+    setDirect(false)
     setAddress('')
     setToken('')
     setName(defaultHostName)
@@ -88,6 +101,7 @@ export default function Connect() {
       setToken('')
       setError('')
       setNotice('')
+      setDirect(false)
       setStage('form')
     } catch (e) {
       setNotice(errorText(e))
@@ -193,7 +207,7 @@ export default function Connect() {
       )}
       <ManualSheet
         visible={stage === 'form' && !pairing}
-        onClose={closeForm}
+        onClose={dismissForm}
         mode={mode}
         onModeChange={(value) => {
           setMode(value)

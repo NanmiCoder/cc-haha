@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import { ApiClient, ApiError, type FetchAdapter } from '../core/client'
 import { HostRepository, type Storage } from './storage'
 import {
+  buildDelivery,
   migratePushProofs,
   PushRegistrationCoordinator,
   pushProofKey,
@@ -205,6 +206,36 @@ test('process restart revokes ordinary and Live Activity registrations using the
   expect(api.log.filter((value) => value.startsWith('DELETE'))).toEqual([
     'DELETE:a:/api/sessions/mobile-push',
   ])
+})
+
+test('a host that no longer accepts our credential can still be removed locally', async () => {
+  // 每种回答用一台全新登记过的电脑：401/403 说明电脑不再认这份凭据，仍要能移除；
+  // 其他错误（5xx）必须继续拒绝移除，连接、凭据和登记凭证都保留。
+  for (const [status, removable] of [[401, true], [403, true], [500, false]] as const) {
+    const store = memory(),
+      hosts = new HostRepository(memory(), store),
+      api = server(),
+      coordinator = new PushRegistrationCoordinator(store)
+    await hosts.add(api.client('a').host, 'credential-a')
+    await coordinator.register(api.client('a'), input('a'))
+    expect(migratePushProofs(await store.getItem(pushProofKey('a'))).tokens).toEqual([token])
+    const failing = {
+      host: api.client('a').host,
+      request: (async () => {
+        throw new ApiError('不被接受', status)
+      }) as ApiClient['request'],
+    }
+    const removal = coordinator.removeHost('a', failing, () => hosts.remove('a'))
+    if (removable) {
+      await removal
+      expect(await hosts.credential('a')).toBeNull()
+      expect(await store.getItem(pushProofKey('a'))).toBeNull()
+    } else {
+      await expect(removal).rejects.toThrow('移除未完成')
+      expect(await hosts.credential('a')).toBe('credential-a')
+      expect(migratePushProofs(await store.getItem(pushProofKey('a'))).tokens).toEqual([token])
+    }
+  }
 })
 
 test('removing host A never removes host B proofs, registrations, or metadata', async () => {
@@ -495,4 +526,120 @@ test('single revoke accepts already-removed registrations but propagates other e
   await expect(
     coordinator.unregister(api.client('a'), 'missing', token)
   ).rejects.toThrow('offline')
+})
+
+const iosOptions = {
+  timeSensitive: true,
+  liveActivity: 'running' as const,
+  liveActivityShowCommand: true,
+}
+
+test('delivery payload: Android declares split channels only once they exist, iOS reports its three settings', () => {
+  expect(
+    buildDelivery('android', { ...iosOptions, channelsReady: true })
+  ).toEqual({ channels: 'split' })
+  // 渠道没建成功就不声明，服务端继续用 legacy 渠道。
+  expect(buildDelivery('android', { ...iosOptions })).toBeUndefined()
+  expect(
+    buildDelivery('ios', {
+      timeSensitive: false,
+      liveActivity: 'decisions',
+      liveActivityShowCommand: false,
+    })
+  ).toEqual({
+    timeSensitive: false,
+    liveActivity: 'decisions',
+    showCommand: false,
+  })
+  // iOS 没有 Android 渠道概念，即使误传 channelsReady 也不带 channels。
+  expect(
+    buildDelivery('ios', { ...iosOptions, channelsReady: true })
+  ).not.toHaveProperty('channels')
+})
+
+test('delivery is sent as a top-level field and old fixtures without it still register unchanged', async () => {
+  const store = memory(),
+    api = server(),
+    coordinator = new PushRegistrationCoordinator(store)
+  const delivery = buildDelivery('ios', iosOptions)
+  await coordinator.register(api.client('a'), input('a', { delivery }))
+  expect(api.records.get(`a-notification-${token}`)?.delivery).toEqual(
+    delivery
+  )
+  // 旧数据形状（无 delivery）不被改写。
+  const legacy = input('b')
+  await coordinator.register(api.client('b'), legacy)
+  const stored = api.records.get(`b-notification-${token}`)
+  expect(stored).toEqual(legacy)
+  expect(stored).not.toHaveProperty('delivery')
+})
+
+test('an older desktop that rejects delivery with 400 gets one retry without it, for notification and live activity registrations', async () => {
+  const store = memory(),
+    api = server(),
+    coordinator = new PushRegistrationCoordinator(store)
+  const puts: PushRegistrationInput[] = []
+  api.before(async (method, body) => {
+    if (method !== 'PUT') return
+    puts.push(body)
+    if ('delivery' in body) throw new ApiError('Invalid push registration', 400)
+  })
+  const delivery = buildDelivery('ios', iosOptions)
+  const result = await coordinator.register(
+    api.client('a'),
+    input('a', { delivery })
+  )
+  expect(result.registered).toBe(true)
+  expect(puts).toHaveLength(2)
+  expect(puts[0]!.delivery).toEqual(delivery)
+  expect(puts[1]).not.toHaveProperty('delivery')
+  expect(puts[1]).toEqual(input('a'))
+  const activity = await coordinator.register(
+    api.client('a'),
+    input('a', {
+      kind: 'liveActivity',
+      token: 'b'.repeat(64),
+      deviceToken: token,
+      sessionId: 's',
+      activityId: 'act',
+      name: 'CCHahaTaskActivity',
+      delivery,
+    })
+  )
+  expect(activity.registered).toBe(true)
+  expect(puts.at(-1)).not.toHaveProperty('delivery')
+  expect(puts.at(-1)?.kind).toBe('liveActivity')
+})
+
+test('only a 400 triggers the delivery retry: other failures and a still-rejected retry propagate', async () => {
+  const store = memory(),
+    api = server(),
+    coordinator = new PushRegistrationCoordinator(store)
+  const delivery = buildDelivery('ios', iosOptions)
+  let puts = 0
+  api.before(async (method) => {
+    if (method !== 'PUT') return
+    puts++
+    throw new ApiError('offline', 0, 'NETWORK_ERROR')
+  })
+  await expect(
+    coordinator.register(api.client('a'), input('a', { delivery }))
+  ).rejects.toThrow('offline')
+  expect(puts).toBe(1)
+  puts = 0
+  api.before(async (method) => {
+    if (method !== 'PUT') return
+    puts++
+    throw new ApiError('Invalid push registration', 400)
+  })
+  await expect(
+    coordinator.register(api.client('a'), input('a', { delivery }))
+  ).rejects.toThrow('Invalid push registration')
+  expect(puts).toBe(2)
+  // 本来就没带 delivery 的请求被拒绝时不重试。
+  puts = 0
+  await expect(
+    coordinator.register(api.client('a'), input('a'))
+  ).rejects.toThrow()
+  expect(puts).toBe(1)
 })

@@ -87,3 +87,11 @@ export function remoteBadge(value: string) {
   const info = inspectAddress(value)
   return info ? `公网 · ${info.hostname}` : '公网'
 }
+
+/** 连接页的两个入口：默认先开扫码；欢迎页的「手动输入地址」带 `mode=manual` 直接开表单。 */
+export type ConnectStage = 'scan' | 'form'
+
+export function initialStage(mode?: string | string[]): ConnectStage {
+  const value = Array.isArray(mode) ? mode[0] : mode
+  return value === 'manual' ? 'form' : 'scan'
+}

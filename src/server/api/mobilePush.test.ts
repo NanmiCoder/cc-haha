@@ -52,3 +52,26 @@ test('public listener derives push owner from the authenticated pairing rather t
   await control('revoke', { id: claimed.deviceId })
   expect(remote.isDeviceActive(claimed.deviceId)).toBe(false)
 })
+
+test('push test endpoint is POST-only, owner-scoped, strictly validated and never echoes tokens', async () => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'mobile-push-api-test-'))
+  const sent: { token: string; payload: Record<string, unknown> }[] = []
+  const push = new MobilePushService({ directory, transport: { configured: () => true, send: async delivery => { sent.push(delivery); return 'sent' } }, activities: () => [], summary: async () => null })
+  cleanups.push(() => { void push.stop(); rmSync(directory, { recursive: true, force: true }) })
+  const call = (method: string, data?: unknown, context: ApiRequestContext = {}) => handleMobilePushApi(new Request('http://localhost/api/sessions/mobile-push/test', { method, ...(data === undefined ? {} : { body: JSON.stringify(data) }) }), ['api', 'sessions', 'mobile-push', 'test'], context, push)
+  await handleMobilePushApi(new Request('http://localhost/api/sessions/mobile-push', { method: 'PUT', body: JSON.stringify({ ...body, delivery: { channels: 'split' } }) }), ['api', 'sessions', 'mobile-push'], { remoteDeviceId: 'verified-a' }, push)
+  expect((await call('GET')).status).toBe(405)
+  expect((await call('POST', { token: body.token, owner: 'verified-a' }, { remoteDeviceId: 'verified-a' })).status).toBe(400)
+  expect((await call('POST', { token: 5 })).status).toBe(400)
+  expect((await call('POST', { token: body.token, hostId: '' })).status).toBe(400)
+  const other = await call('POST', { token: body.token }, { remoteDeviceId: 'verified-b' })
+  expect(await other.json()).toEqual({ status: 'noRegistration' })
+  const ok = await call('POST', { token: body.token, hostId: 'phone-host' }, { remoteDeviceId: 'verified-a' })
+  const okText = await ok.text()
+  expect(JSON.parse(okText)).toEqual({ status: 'sent' })
+  expect(okText).not.toContain(body.token)
+  expect(sent).toHaveLength(1)
+  expect((sent[0]!.payload.aps as { alert: { title: string } }).alert.title).toBe('测试通知 · cc-haha')
+  // DELETE on the literal id "test" still means an id-scoped unregister, not the test route.
+  expect((await call('DELETE', { token: body.token }, { remoteDeviceId: 'verified-a' })).status).toBe(404)
+})

@@ -153,6 +153,31 @@ test('only new real waiting requests alert, questions never get tool allow actio
     )[0].category
   ).toBe('cchahaTool')
 })
+test('hiding the command on the lock screen also hides the Bash command in local fallback banners', () => {
+  const bash = {
+    id: 's',
+    activityState: 'waiting' as const,
+    requestId: 'r',
+    toolName: 'Bash',
+    preview: 'curl http://secret.example',
+  }
+  const shown = notificationEvents(null, [bash], prefs, new Date())[0]
+  expect(shown.preview).toContain('curl http://secret.example')
+  const hidden = notificationEvents(
+    null,
+    [bash],
+    { ...prefs, liveActivityShowCommand: false },
+    new Date()
+  )[0]
+  expect(hidden.preview).toBe('想运行命令')
+  const question = notificationEvents(
+    null,
+    [{ ...bash, toolName: 'AskUserQuestion', preview: '要用哪个分支？' }],
+    { ...prefs, liveActivityShowCommand: false },
+    new Date()
+  )[0]
+  expect(question.preview).toContain('要用哪个分支？')
+})
 test('completed alerts require new durable success evidence after the initial baseline', () => {
   const success = { id: 's', activityState: 'idle' as const, terminalOutcome: 'completed' as const, completedAt: 100 }
   expect(

@@ -273,7 +273,7 @@ export function hostStatusLine(
   }
 }
 
-/** HostSheet 头部右侧的短状态。 */
+/** 单个状态词（在线 / 离线 / 授权已失效…），不带网络和同步时间。 */
 export function hostStateName(link: HostLink): { text: string; tone: StatusTone } {
   switch (link) {
     case 'online':

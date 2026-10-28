@@ -243,3 +243,93 @@ test('finished outcomes report success with real duration, errors plainly, and n
     )[0].props.summary
   ).toBe('完成')
 })
+
+const bashWaiting = {
+  id: 'one',
+  activityState: 'waiting' as const,
+  requestId: 'req',
+  toolName: 'Bash',
+  preview: 'rm -rf /Users/secret/project',
+}
+
+test('default options keep the old behaviour: running work shows and the command is visible', () => {
+  const running = [{ id: 'two', activityState: 'running' as const, startedAt: 1, preview: 'bun test' }]
+  expect(taskActivityData(host, sessions, running, true, 100)).toEqual(
+    taskActivityData(host, sessions, running, true, 100, { mode: 'running', showCommand: true })
+  )
+  expect(taskActivityData(host, sessions, running, true, 100)).toMatchObject({
+    status: 'running',
+    detail: 'bun test',
+  })
+  expect(taskActivityData(host, sessions, [bashWaiting], true, 100)?.detail).toBe(
+    '$ rm -rf /Users/secret/project'
+  )
+})
+
+test('decisions mode produces an activity only for waiting work', () => {
+  const options = { mode: 'decisions' as const }
+  const running = [{ id: 'two', activityState: 'running' as const, startedAt: 1 }]
+  expect(taskActivityData(host, sessions, running, true, 100, options)).toBeNull()
+  // running 模式下同样的数据会产生活动，证明上面的 null 来自 mode。
+  expect(taskActivityData(host, sessions, running, true, 100)).not.toBeNull()
+  // 等待的任务排在运行任务前面，仍然显示，并带上整体计数。
+  expect(
+    taskActivityData(host, sessions, [...running, bashWaiting], true, 100, options)
+  ).toMatchObject({ status: 'waiting', sessionId: 'one', activeCount: 2 })
+  // 通知里关掉审批（或处于免打扰）时，decisions 模式什么也不显示。
+  expect(taskActivityData(host, sessions, [...running, bashWaiting], false, 100, options)).toBeNull()
+})
+
+test('hiding the command removes command text from waiting and running props', () => {
+  const options = { showCommand: false }
+  const waiting = taskActivityData(host, sessions, [bashWaiting], true, 100, options)!
+  expect(waiting).toMatchObject({ label: '想运行命令', detail: '打开 App 查看命令' })
+  expect(JSON.stringify(waiting)).not.toContain('rm -rf')
+  expect(JSON.stringify(waiting)).not.toContain('secret')
+  expect(JSON.stringify(waiting)).not.toContain('$ ')
+  // 允许/拒绝仍可用：隐藏的只是命令文本。
+  expect(waiting.allowUrl).toBeDefined()
+
+  const running = taskActivityData(
+    host,
+    sessions,
+    [{ id: 'two', activityState: 'running', startedAt: 1, preview: 'cat /Users/secret/.env' }],
+    true,
+    100,
+    options
+  )!
+  expect(running.detail).toBe('')
+  expect(JSON.stringify(running)).not.toContain('secret')
+
+  // 连接失效后的 stale 版本沿用已经脱敏的内容。
+  expect(JSON.stringify(staleActivityProps(waiting))).not.toContain('rm -rf')
+  // 提问不是命令，仍显示题目。
+  expect(
+    taskActivityData(
+      host,
+      sessions,
+      [{ id: 'one', activityState: 'waiting', requestId: 'r', toolName: 'AskUserQuestion', preview: '旧字段怎么处理？' }],
+      true,
+      100,
+      options
+    )?.detail
+  ).toBe('旧字段怎么处理？')
+})
+
+test('finished activity props never carry command text regardless of the setting', () => {
+  const activity = [
+    {
+      id: 'one',
+      activityState: 'idle' as const,
+      terminalOutcome: 'completed' as const,
+      startedAt: 1_000,
+      completedAt: 2_000,
+      preview: 'rm -rf /Users/secret/project',
+    },
+    { id: 'two', activityState: 'failed' as const, terminalOutcome: 'failed' as const, preview: 'cat /Users/secret/.env' },
+  ]
+  const finished = finishedActivities(host, sessions, activity, 10_000)
+  expect(finished).toHaveLength(2)
+  expect(JSON.stringify(finished)).not.toContain('secret')
+  expect(finished.every((item) => item.props.detail === '')).toBe(true)
+})

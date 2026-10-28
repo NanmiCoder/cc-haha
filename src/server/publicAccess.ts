@@ -56,7 +56,7 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
       (parts[2] === 'authorized-apps' && (method === 'GET' || method === 'PUT')) ||
       (parts[2] === 'open-permission-card' && method === 'POST')
   }
-  if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && method === 'DELETE'
+  if (parts[1] === 'sessions' && parts[2] === 'mobile-push') return parts.length === 3 ? method === 'GET' || method === 'PUT' || method === 'DELETE' : parts.length === 4 && (method === 'DELETE' || (parts[3] === 'test' && method === 'POST'))
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
   if (parts[1] === 'scheduled-tasks') {

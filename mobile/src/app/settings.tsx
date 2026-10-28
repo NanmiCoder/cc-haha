@@ -1,16 +1,18 @@
-import { useCallback, useState } from 'react'
-import { Platform, ScrollView } from 'react-native'
-import { useFocusEffect } from 'expo-router'
-import * as Notifications from 'expo-notifications'
-import { useConnection } from '../state/AppContext'
+import { useState } from 'react'
+import { Linking, Platform, ScrollView, View } from 'react-native'
+import { router } from 'expo-router'
+import Constants from 'expo-constants'
+import { useApp, useConnection } from '../state/AppContext'
 import { usePushRegistration } from '../state/PushRegistrationContext'
 import { usePreferences } from '../state/PreferencesContext'
 import {
   Footnote,
   Group,
+  Icon,
   InlineError,
   LargeTitle,
   ListRow,
+  Mono,
   NavBar,
   ScreenView,
   SectionHeader,
@@ -18,20 +20,40 @@ import {
   Separator,
   Switch,
   useColors,
+  type IconName,
 } from '../ui/kit'
+import { Logo } from '../ui/Logo'
 import { Text } from '../ui/Text'
 import { errorText, useTheme } from '../ui/theme'
-import { QuietHoursSheet } from '../ui/settings/QuietHoursSheet'
-import { AutoAnswerSheet } from '../ui/settings/AutoAnswerSheet'
+import { type } from '../ui/palette'
 import {
-  autoAnswerValue,
-  desktopOnly,
-  nextAutoQuestion,
-  pushFootnote,
-  quietSummary,
-  readAutoQuestion,
-  type AutoQuestion,
-} from '../ui/settings/settingsModel'
+  openAppSettings,
+  openChannelSettings,
+  openNotificationSettings,
+  requestNotificationStatus,
+  scheduleTestNotification,
+} from '../core/systemPermissions'
+import { getDevicePushToken } from '../state/devicePushToken'
+import { DeliveryCard } from '../ui/settings/DeliveryCard'
+import { QuietHoursSheet } from '../ui/settings/QuietHoursSheet'
+import { useSystemPermissions } from '../ui/settings/useSystemPermissions'
+import {
+  aboutLinks,
+  channelFootnote,
+  channelRows,
+  computerSettingsTitle,
+  computersValue,
+  deliveryNote,
+  deliveryStatus,
+  liveActivityValue,
+  permissionLabel,
+  remindFootnote,
+  runTestNotification,
+  versionLabel,
+  type Delivery,
+  type PushTestResult,
+} from '../ui/settings/deliveryModel'
+import { quietSummary } from '../ui/settings/settingsModel'
 
 type NotificationKey = 'decisions' | 'completed' | 'errors'
 const notificationRows: { key: NotificationKey; title: string; detail?: string }[] = [
@@ -40,89 +62,131 @@ const notificationRows: { key: NotificationKey; title: string; detail?: string }
   { key: 'errors', title: '出错或 5 分钟没进展' },
 ]
 
+const platform = Platform.OS === 'ios' ? 'ios' : 'android'
+
 export default function Settings() {
   const colors = useColors()
   const { appearance, setAppearance } = useTheme()
   const { preferences, update, error: preferenceError } = usePreferences()
-  const { host, client, error: connectionError } = useConnection()
+  const { registry } = useApp()
+  const { host, client } = useConnection()
   const push = usePushRegistration(host?.id)
-  const [remote, setRemote] = useState<{
-    hostId: string
-    autoQuestion?: AutoQuestion
-    error?: string
-  } | null>(null)
+  const permissions = useSystemPermissions()
+  const [busy, setBusy] = useState<Delivery['actions'][number]['kind'] | null>(null)
+  const [deliveryError, setDeliveryError] = useState('')
+  const [testNote, setTestNote] = useState('')
   const [notifyError, setNotifyError] = useState('')
   const [appearanceError, setAppearanceError] = useState('')
+  const [linkError, setLinkError] = useState('')
   const [quietOpen, setQuietOpen] = useState(0)
   const [quietVisible, setQuietVisible] = useState(false)
-  const [autoVisible, setAutoVisible] = useState(false)
-  const record = remote?.hostId === host?.id ? remote : null
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!client) return
-      const controller = new AbortController()
-      const hostId = client.host.id
-      client
-        .get<{ autoQuestion?: unknown }>('/api/settings/user', {
-          signal: controller.signal,
+  const delivery = deliveryStatus({
+    platform,
+    permission: permissions.notifications,
+    push,
+    hostName: host?.name,
+    hasHost: Boolean(host),
+    decisions: preferences.notifications.decisions,
+    liveActivity: preferences.liveActivity,
+  })
+  const note = deliveryNote(push)
+  const remind = remindFootnote(permissions.notifications)
+
+  /** 向系统申请通知权限；申请过就记下，不再自动弹引导页。 */
+  async function requestNotifications() {
+    try {
+      await requestNotificationStatus()
+    } finally {
+      await permissions.refresh()
+      void update({ notifyPrompted: true }).catch(() => {})
+    }
+  }
+
+  async function runAction(kind: Delivery['actions'][number]['kind']) {
+    setDeliveryError('')
+    setTestNote('')
+    setBusy(kind)
+    try {
+      if (kind === 'request') await requestNotifications()
+      else if (kind === 'settings') await openNotificationSettings()
+      else {
+        if (host && !client) throw new Error('电脑还没连上，稍后再试')
+        const outcome = await runTestNotification({
+          hostId: host?.id,
+          getToken: getDevicePushToken,
+          postTest: (body) =>
+            client!.post<PushTestResult>('/api/sessions/mobile-push/test', body),
+          scheduleLocal: scheduleTestNotification,
         })
-        .then((settings) => {
-          if (!controller.signal.aborted)
-            setRemote({ hostId, autoQuestion: readAutoQuestion(settings) })
-        })
-        .catch((e) => {
-          if (!controller.signal.aborted) setRemote({ hostId, error: errorText(e) })
-        })
-      return () => controller.abort()
-    }, [client])
-  )
+        setTestNote(outcome.note)
+      }
+    } catch (e) {
+      setDeliveryError(errorText(e))
+    } finally {
+      setBusy(null)
+    }
+  }
 
   async function notify(key: NotificationKey, value: boolean) {
     setNotifyError('')
     try {
-      if (value && Platform.OS !== 'web') {
-        const result = await Notifications.requestPermissionsAsync()
-        if (!result.granted)
-          throw new Error('通知权限未开启，请在系统设置中允许 cc-haha 通知')
-      }
+      // 还能弹授权框就问一次；已经拒绝的由上面的卡片引导去系统设置，开关照常保存。
+      const permission = permissions.notifications
+      if (
+        value &&
+        Platform.OS !== 'web' &&
+        permission?.status !== 'granted' &&
+        (permission?.status === 'undetermined' || permission?.canAskAgain !== false)
+      )
+        await requestNotifications()
       await update({ notifications: { [key]: value } })
     } catch (e) {
       setNotifyError(errorText(e))
     }
   }
 
-  async function saveAutoAnswer(minutes: number) {
-    if (!client || !record?.autoQuestion) throw new Error('还没读到电脑上的设置，请稍后再试')
-    const autoQuestion = nextAutoQuestion(record.autoQuestion, minutes)
-    await client.put('/api/settings/user', { autoQuestion })
-    const hostId = client.host.id
-    setRemote((current) =>
-      current?.hostId === hostId ? { hostId, autoQuestion } : current
-    )
+  async function open(url: string) {
+    setLinkError('')
+    try {
+      await Linking.openURL(url)
+    } catch (e) {
+      setLinkError(errorText(e))
+    }
   }
 
-  const autoValue = !host
-    ? '未连接'
-    : record?.autoQuestion
-      ? autoAnswerValue(record.autoQuestion)
-      : record?.error || connectionError
-        ? '读取失败'
-        : '读取中…'
-  const autoError = host ? connectionError || record?.error : ''
-  const footnote = pushFootnote(push, host?.name)
+  async function openPermission(action: () => Promise<void>) {
+    setLinkError('')
+    try {
+      await action()
+    } catch (e) {
+      setLinkError(errorText(e))
+    }
+  }
 
   return (
     <ScreenView>
-      <NavBar />
+      <NavBar floating />
       <ScrollView
         contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }}
         keyboardShouldPersistTaps="handled"
       >
-        <LargeTitle title="设置" />
+        <LargeTitle title="设置" style={{ paddingTop: 12, paddingBottom: 18 }} />
         <InlineError text={preferenceError} style={{ marginBottom: 8 }} />
 
-        <SectionHeader title="通知我" style={{ paddingTop: 4 }} />
+        <DeliveryCard
+          delivery={delivery}
+          busy={busy}
+          onAction={(kind) => void runAction(kind)}
+          onGuide={() => void open(aboutLinks.pushSetup)}
+        />
+        {deliveryError ? (
+          <InlineError text={deliveryError} style={{ marginTop: 8 }} />
+        ) : testNote || note ? (
+          <Footnote>{testNote || note}</Footnote>
+        ) : null}
+
+        <SectionHeader title="提醒我" />
         <Group>
           {notificationRows.map((item, index) => (
             <ListRowWithSwitch
@@ -134,17 +198,23 @@ export default function Settings() {
               onChange={(value) => void notify(item.key, value)}
             />
           ))}
+          {Platform.OS === 'ios' && (
+            <ListRowWithSwitch
+              first={false}
+              title="专注模式下也提醒审批"
+              detail="标成时效性通知，不被专注模式拦下"
+              value={preferences.timeSensitive}
+              onChange={(value) =>
+                void update({ timeSensitive: value }).catch((e) => setNotifyError(errorText(e)))
+              }
+            />
+          )}
           <Separator />
           <ListRow
             title="勿扰时段"
             accessibilityLabel={`勿扰时段，${quietSummary(preferences.quietHours)}`}
-            value={
-              <Text style={{ fontSize: 15, color: colors.ink3 }}>
-                {quietSummary(preferences.quietHours)}
-              </Text>
-            }
-            chevron
-            style={{ gap: 10 }}
+            value={<Value text={quietSummary(preferences.quietHours)} />}
+            trailing={<Chev />}
             onPress={() => {
               setQuietOpen((count) => count + 1)
               setQuietVisible(true)
@@ -153,28 +223,52 @@ export default function Settings() {
         </Group>
         {notifyError ? (
           <InlineError text={notifyError} style={{ marginTop: 8 }} />
-        ) : footnote ? (
-          <Footnote>{footnote}</Footnote>
+        ) : remind ? (
+          <Footnote>{remind}</Footnote>
         ) : null}
 
-        <SectionHeader title="我不在的时候" />
-        <Group>
-          <ListRow
-            title="提问没人回，AI 代答"
-            subtitle="按推荐选项作答，审批永远不代答"
-            minHeight={58}
-            value={<Text style={{ fontSize: 15, color: colors.ink3 }}>{autoValue}</Text>}
-            chevron
-            disabled={!record?.autoQuestion}
-            style={{ gap: 10 }}
-            onPress={() => setAutoVisible(true)}
-          />
-        </Group>
-        <InlineError text={autoError} style={{ marginTop: 8 }} />
+        {Platform.OS === 'ios' ? (
+          <>
+            <SectionHeader title="锁屏与灵动岛" />
+            <Group>
+              <ListRow
+                title="实时活动"
+                value={<Value text={liveActivityValue(preferences.liveActivity)} />}
+                trailing={<Chev />}
+                onPress={() => router.push('/live-activity')}
+              />
+            </Group>
+            <Footnote>锁屏上的允许和拒绝，都要先解锁才生效。</Footnote>
+          </>
+        ) : (
+          <>
+            <SectionHeader title="声音和震动" />
+            <Group>
+              {channelRows.map((row, index) => (
+                <View key={row.kind}>
+                  {index > 0 && <Separator />}
+                  <ListRow
+                    title={row.title}
+                    accessibilityLabel={`${row.title}，${permissions.channels[row.kind] || '打开系统设置'}`}
+                    value={
+                      permissions.channels[row.kind] ? (
+                        <Value text={permissions.channels[row.kind]} />
+                      ) : undefined
+                    }
+                    trailing={<Chev />}
+                    onPress={() => void openPermission(() => openChannelSettings(row.kind))}
+                  />
+                </View>
+              ))}
+            </Group>
+            <Footnote>{channelFootnote}</Footnote>
+          </>
+        )}
 
         <SectionHeader title="外观" />
         <Segmented
           label="外观"
+          style={{ padding: 3, gap: 0 }}
           value={appearance}
           options={[
             { label: '浅色', value: 'light' },
@@ -188,10 +282,114 @@ export default function Settings() {
         />
         <InlineError text={appearanceError} style={{ marginTop: 8 }} />
 
-        <SectionHeader title="只能在电脑上改" />
-        <Text style={{ paddingHorizontal: 4, fontSize: 14, lineHeight: 22, color: colors.ink3 }}>
-          {desktopOnly}
-        </Text>
+        <SectionHeader title="系统权限" />
+        <Group>
+          <PermissionRow
+            icon="camera"
+            title="相机"
+            detail="扫码连接电脑"
+            value={permissionLabel(permissions.camera)}
+            onPress={() => void openPermission(openAppSettings)}
+          />
+          <Separator inset={48} />
+          <PermissionRow
+            icon="image"
+            title="照片"
+            detail="给电脑发截图和图片"
+            value={permissionLabel(permissions.photos)}
+            onPress={() => void openPermission(openAppSettings)}
+          />
+        </Group>
+        <Footnote>
+          点一下会打开系统设置。通知看最上面那张卡；本地网络权限系统不让 App 读取，局域网连不上时会单独提示。
+        </Footnote>
+
+        <SectionHeader title="电脑" />
+        <Group>
+          {host && (
+            <>
+              <ListRow
+                title={
+                  <Text
+                    numberOfLines={1}
+                    style={{ fontSize: 16, lineHeight: 21, fontWeight: '600', color: colors.ink }}
+                  >
+                    {computerSettingsTitle(host.name)}
+                  </Text>
+                }
+                subtitle={
+                  <Text numberOfLines={1} style={[type.meta, { color: colors.ink3 }]}>
+                    新任务默认模型、AI 代答、定时任务
+                  </Text>
+                }
+                minHeight={64}
+                leading={
+                  <View
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      backgroundColor: colors.fill,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <Icon name="laptop" size={20} color={colors.ink} strokeWidth={1.7} />
+                  </View>
+                }
+                trailing={<Chev />}
+                onPress={() =>
+                  router.push({ pathname: '/computer', params: { host: host.id } })
+                }
+              />
+              <Separator />
+            </>
+          )}
+          <ListRow
+            title="你的电脑"
+            value={<Value text={computersValue(registry.hosts.length)} />}
+            trailing={<Chev />}
+            onPress={() => router.push('/hosts')}
+          />
+        </Group>
+
+        <SectionHeader title="关于" />
+        <Group>
+          <ListRow
+            title={
+              <Text style={{ fontSize: 16, lineHeight: 21, fontWeight: '600', color: colors.ink }}>
+                cc-haha
+              </Text>
+            }
+            subtitle={
+              <Mono style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
+                {versionLabel(Constants.expoConfig?.version, Constants.nativeBuildVersion)}
+              </Mono>
+            }
+            minHeight={64}
+            leading={
+              <View
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 9,
+                  backgroundColor: colors.brandSoft,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Logo size={27} />
+              </View>
+            }
+          />
+          <Separator />
+          <LinkRow title="使用指南" onPress={() => void open(aboutLinks.guide)} />
+          <Separator />
+          <LinkRow title="反馈问题" onPress={() => void open(aboutLinks.issues)} />
+          <Separator />
+          <LinkRow title="开源许可" onPress={() => void open(aboutLinks.license)} />
+        </Group>
+        <InlineError text={linkError} style={{ marginTop: 8 }} />
       </ScrollView>
       <QuietHoursSheet
         key={quietOpen}
@@ -200,15 +398,6 @@ export default function Settings() {
         onClose={() => setQuietVisible(false)}
         onSave={(quietHours) => update({ quietHours })}
       />
-      {record?.autoQuestion && host && (
-        <AutoAnswerSheet
-          visible={autoVisible}
-          hostName={host.name}
-          current={record.autoQuestion}
-          onClose={() => setAutoVisible(false)}
-          onSelect={saveAutoAnswer}
-        />
-      )}
     </ScreenView>
   )
 }
@@ -237,4 +426,60 @@ function ListRowWithSwitch({
       />
     </>
   )
+}
+
+function PermissionRow({
+  icon,
+  title,
+  detail,
+  value,
+  onPress,
+}: {
+  icon: IconName
+  title: string
+  detail: string
+  value: string
+  onPress(): void
+}) {
+  const colors = useColors()
+  return (
+    <ListRow
+      title={title}
+      subtitle={detail}
+      value={value ? <Value text={value} /> : undefined}
+      minHeight={58}
+      accessibilityLabel={value ? `${title}，${value}，打开系统设置` : `${title}，打开系统设置`}
+      leading={<Icon name={icon} size={20} color={colors.ink2} strokeWidth={1.8} />}
+      trailing={<Chev />}
+      onPress={onPress}
+    />
+  )
+}
+
+function LinkRow({ title, onPress }: { title: string; onPress(): void }) {
+  const colors = useColors()
+  return (
+    <ListRow
+      title={title}
+      accessibilityLabel={`${title}，在浏览器中打开`}
+      trailing={<Icon name="external-link" size={15} color={colors.chevron} strokeWidth={2} />}
+      onPress={onPress}
+    />
+  )
+}
+
+/** 设计稿的行尾取值：15pt 次要色，不收缩。 */
+function Value({ text }: { text: string }) {
+  const colors = useColors()
+  return (
+    <Text numberOfLines={1} style={{ fontSize: 15, color: colors.ink3, flexShrink: 0 }}>
+      {text}
+    </Text>
+  )
+}
+
+/** 设计稿的行尾箭头：16pt、2 粗。 */
+function Chev() {
+  const colors = useColors()
+  return <Icon name="chevron-right" size={16} color={colors.chevron} strokeWidth={2} />
 }

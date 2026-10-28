@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react'
 import { Pressable, View } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
-import Svg, { Path } from 'react-native-svg'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../Text'
 import { Icon, IconButton, Mono, StatusGlyph, useColors, type StatusKind } from '../kit'
@@ -49,24 +48,16 @@ function useTone() {
 
 /* ───────────── 顶部浮动按钮 ───────────── */
 
-/** 设计稿的“两条线”菜单图标。 */
-export function MenuGlyph({ color, size = 22 }: { color: string; size?: number }) {
-  return (
-    <Svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round">
-      <Path d="M4 9h16" />
-      <Path d="M4 15h10" />
-    </Svg>
-  )
-}
-
 /** 44pt 白色圆形浮动按钮。 */
 export function FloatButton({
   label,
   onPress,
+  disabled,
   children,
 }: {
   label: string
   onPress(): void
+  disabled?: boolean
   children: ReactNode
 }) {
   const colors = useColors()
@@ -74,6 +65,8 @@ export function FloatButton({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={({ pressed }) => ({
         width: 44,
@@ -83,7 +76,7 @@ export function FloatButton({
         boxShadow: floatShadow(colors.hair),
         alignItems: 'center',
         justifyContent: 'center',
-        opacity: pressed ? 0.7 : 1,
+        opacity: disabled ? 0.4 : pressed ? 0.7 : 1,
       })}
     >
       {children}
@@ -108,7 +101,7 @@ export function FilterPills<T extends string>({
     <View
       accessibilityRole="radiogroup"
       accessibilityLabel="按状态查看"
-      style={{ flexDirection: 'row', gap: 2, marginHorizontal: -6, marginBottom: 4 }}
+      style={{ flexDirection: 'row', gap: 4, marginHorizontal: -6 }}
     >
       {options.map((option) => {
         const selected = option.value === value
@@ -151,12 +144,25 @@ export function FilterPills<T extends string>({
   )
 }
 
-export function SectionTitle({ children }: { children: string }) {
+/** 行首状态标记的固定列：16×24，与设计稿的 .lead 一致。 */
+function Lead({ children }: { children: ReactNode }) {
+  return <View style={{ width: 16, height: 24, alignItems: 'center', justifyContent: 'center' }}>{children}</View>
+}
+
+/** 分组标题（设计稿：上 18、下 6；「项目」下 4，后面紧跟项目行）。 */
+export function SectionTitle({ children, bottom = 6 }: { children: string; bottom?: number }) {
   const colors = useColors()
   return (
     <Text
       accessibilityRole="header"
-      style={{ fontSize: 15, fontWeight: '600', color: colors.ink, paddingTop: 16, paddingBottom: 2 }}
+      style={{
+        fontSize: 15,
+        lineHeight: 18,
+        fontWeight: '600',
+        color: colors.ink,
+        paddingTop: 18,
+        paddingBottom: bottom,
+      }}
     >
       {children}
     </Text>
@@ -184,11 +190,13 @@ export function RecentRow({
   const Sub = line.mono ? Mono : Text
   const body = (
     <>
-      <StatusGlyph status={glyphOf[state]} />
+      <Lead>
+        <StatusGlyph status={glyphOf[state]} />
+      </Lead>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
         <Text
           numberOfLines={1}
-          style={{ fontSize: 16, lineHeight: 22, fontWeight: state === 'review' ? '600' : '500', color: colors.ink }}
+          style={{ fontSize: 16, lineHeight: 23, fontWeight: state === 'review' ? '600' : '500', color: colors.ink }}
         >
           {title(row)}
         </Text>
@@ -204,10 +212,10 @@ export function RecentRow({
         </Sub>
       </View>
       {state === 'running' || state === 'stalled' ? (
-        <View style={{ alignItems: 'flex-end' }}>
+        <View style={{ alignItems: 'flex-end', gap: 2 }}>
           {row.activity?.startedAt ? <Elapsed since={row.activity.startedAt} /> : null}
           {background ? (
-            <Text style={{ fontSize: 12, lineHeight: 18, color: colors.ink3 }}>后台 {background}</Text>
+            <Text style={{ fontSize: 12, lineHeight: 16, color: colors.ink3 }}>后台 {background}</Text>
           ) : null}
         </View>
       ) : (
@@ -219,8 +227,8 @@ export function RecentRow({
     minHeight: 60,
     flexDirection: 'row' as const,
     alignItems: 'flex-start' as const,
-    gap: 10,
-    paddingVertical: 7,
+    gap: 12,
+    paddingVertical: 6,
     paddingHorizontal: 16,
     marginHorizontal: -16,
   }
@@ -249,15 +257,17 @@ export function OfflineRow({ row }: { row: DashboardRow }) {
         minHeight: 60,
         flexDirection: 'row',
         alignItems: 'flex-start',
-        gap: 10,
-        paddingVertical: 7,
+        gap: 12,
+        paddingVertical: 6,
         paddingHorizontal: 16,
         marginHorizontal: -16,
       }}
     >
-      <StatusGlyph status={state === 'waiting' ? 'attention' : 'idle'} />
+      <Lead>
+        <StatusGlyph status={state === 'waiting' ? 'attention' : 'idle'} />
+      </Lead>
       <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <Text numberOfLines={1} style={{ fontSize: 16, lineHeight: 22, fontWeight: '500', color: colors.ink }}>
+        <Text numberOfLines={1} style={{ fontSize: 16, lineHeight: 23, fontWeight: '500', color: colors.ink }}>
           {title(row)}
         </Text>
         <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
@@ -299,7 +309,7 @@ export function ProjectHeader({
           height: 48,
           flexDirection: 'row',
           alignItems: 'center',
-          gap: 10,
+          gap: 12,
           opacity: pressed ? 0.6 : 1,
         })}
       >
@@ -355,8 +365,8 @@ export function ProjectSessionRow({
         minHeight: 44,
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingVertical: 4,
+        gap: 12,
+        paddingVertical: 0,
         paddingLeft: 16,
         paddingRight: 16,
         marginHorizontal: -16,
@@ -391,7 +401,7 @@ export function MoreSessions({ count, onPress }: { count: number; onPress(): voi
       style={({ pressed }) => ({
         minHeight: 44,
         justifyContent: 'center',
-        paddingLeft: 48,
+        paddingLeft: 50,
         marginHorizontal: -16,
         backgroundColor: pressed ? colors.fill : 'transparent',
       })}
@@ -422,7 +432,7 @@ export function FloatingComposer({
         pointerEvents="none"
         colors={[`${colors.bg}00`, `${colors.bg}E6`, colors.bg]}
         locations={[0, 0.45, 1]}
-        style={{ position: 'absolute', left: 0, right: 0, bottom: 0, top: -34 }}
+        style={{ position: 'absolute', left: 0, right: 0, bottom: 0, top: -40 }}
       />
       <Pressable
         accessibilityRole="button"
