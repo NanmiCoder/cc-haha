@@ -705,6 +705,30 @@ describe('ChatInput file mentions', () => {
     expect(message).toMatchObject({ attachments: [expect.objectContaining({ diffSide: 'new', hunkId: 'hunk-1' })] })
   })
 
+  it('restores file mention pills from a draft prefill', async () => {
+    render(<ChatInput compact />)
+    act(() => useChatStore.getState().queueComposerPrefill(sessionId, {
+      text: 'review @README.md please',
+      mentions: [{
+        label: 'README.md',
+        path: '/repo/README.md',
+        isDirectory: false,
+        tokenOrdinal: 0,
+      }],
+    }))
+
+    await waitFor(() => expect(getComposerText()).toBe('review @README.md please'))
+    expect(getComposerElement().querySelector('.composer-mention')).toHaveAttribute(
+      'data-mention-path',
+      '/repo/README.md',
+    )
+
+    fireEvent.keyDown(getComposerElement(), { key: 'Enter' })
+    expect(mocks.wsSend).toHaveBeenCalledWith(sessionId, expect.objectContaining({
+      content: 'review @"/repo/README.md" please',
+    }))
+  })
+
   it('restores an unsent composer draft after the composer unmounts', async () => {
     const { unmount } = render(<ChatInput compact />)
 

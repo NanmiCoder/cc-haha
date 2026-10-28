@@ -14,6 +14,11 @@ sdk.onmessage = async event => {
   for (const line of String(event.data).trim().split('\n')) {
     const message = JSON.parse(line)
     if (message.type === 'control_request') {
+      // A member can die while it starts, as a crashing CLI does: a reason on stderr, no answer.
+      if (message.request?.subtype === 'set_model' && arg('--agent-name') === process.env.FIXTURE_EXIT_ON_SET_MODEL) {
+        process.stderr.write('Error: fixture member could not load its settings\n', () => process.exit(2))
+        continue
+      }
       if (arg('--agent-name') === 'reader') await new Promise(resolve => setTimeout(resolve, 100))
       if (sdk.readyState !== WebSocket.OPEN) continue
       sdk.send(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id: message.request_id, response: {} } }))

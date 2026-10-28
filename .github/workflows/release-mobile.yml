@@ -1,0 +1,103 @@
+name: Release Mobile
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+    secrets:
+      EXPO_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing published release tag (vX.Y.Z)'
+        required: true
+        type: string
+      platform:
+        description: 'Platform to deliver or retry'
+        default: all
+        type: choice
+        options: [all, ios, android]
+      dry_run:
+        description: 'Plan only: no EAS build, submission or release upload'
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+# Serialize deliveries across release tags; never cancel a running store upload.
+concurrency:
+  group: mobile-production-delivery
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      platforms: ${{ steps.inputs.outputs.platforms }}
+    steps:
+      - name: Validate explicit release inputs
+        id: inputs
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          PLATFORM: ${{ inputs.platform || 'all' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Expected an explicit vX.Y.Z release tag'; exit 1; }
+          case "$PLATFORM" in
+            all) echo 'platforms=["ios","android"]' >> "$GITHUB_OUTPUT" ;;
+            ios) echo 'platforms=["ios"]' >> "$GITHUB_OUTPUT" ;;
+            android) echo 'platforms=["android"]' >> "$GITHUB_OUTPUT" ;;
+            *) echo '::error::Unknown mobile platform'; exit 1 ;;
+          esac
+
+  deliver:
+    needs: plan
+    name: Deliver mobile (${{ matrix.platform }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.plan.outputs.platforms) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+      EXPO_PROJECT_ID: ${{ vars.EXPO_PROJECT_ID }}
+      EXPO_OWNER: ${{ vars.EXPO_OWNER }}
+      ASC_APP_ID: ${{ vars.ASC_APP_ID }}
+      MOBILE_RELEASE_TAG: ${{ inputs.release_tag }}
+      MOBILE_RELEASE_PLATFORM: ${{ matrix.platform }}
+      EXPO_NO_DOTENV: '1'
+    steps:
+      - name: Checkout exact published release tag
+        uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.release_tag }}
+          fetch-depth: 0
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: bun install --frozen-lockfile
+      - name: Install APK signature verifier
+        if: matrix.platform == 'android' && inputs.dry_run != true
+        run: sudo apt-get update && sudo apt-get install -y apksigner
+      - name: Plan or deliver changed mobile inputs
+        env:
+          DRY_RUN: ${{ inputs.dry_run == true }}
+        shell: bash
+        run: |
+          args=()
+          if [ "$DRY_RUN" = 'true' ]; then args+=(--dry-run); fi
+          bun --no-env-file run scripts/mobile-release.ts "${args[@]}"

@@ -1374,6 +1374,25 @@ describe('session trace API', () => {
     expect(await fs.readFile(filePath)).toEqual(raw)
   })
 
+  test('reports an invalid trace directory as a configuration error instead of an opaque 500', async () => {
+    const original = process.env.CC_HAHA_TRACE_DIR
+    process.env.CC_HAHA_TRACE_DIR = 'relative/traces'
+    try {
+      for (const route of ['/api/traces', '/api/traces/settings']) {
+        const request = new Request(`http://localhost:3456${route}`)
+        const response = await handleApiRequest(request, new URL(request.url))
+        expect(response.status).toBe(400)
+        expect(await response.json()).toMatchObject({
+          error: 'TRACE_INVALID_STORAGE_DIR',
+          message: expect.stringContaining('absolute directory path'),
+        })
+      }
+    } finally {
+      if (original === undefined) delete process.env.CC_HAHA_TRACE_DIR
+      else process.env.CC_HAHA_TRACE_DIR = original
+    }
+  })
+
   test('serves the session trace overview from the index without rereading the JSONL', async () => {
     const recorded = await traceCaptureService.recordCall({
       sessionId: 'session-trim-api',

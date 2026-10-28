@@ -9,7 +9,7 @@
 import { Node as PMNode, Schema, type DOMOutputSpec } from 'prosemirror-model'
 import type { Command } from 'prosemirror-state'
 import type { ComposerMention } from '../../lib/composerMentions'
-import { findMentionRanges, mentionToken, tokenOccurrences, safeMentionIcon } from '../../lib/composerMentions'
+import { findMentionRanges, mentionModelText, mentionToken, tokenOccurrences, safeMentionIcon } from '../../lib/composerMentions'
 
 export const AT_MENTION_NODE = 'atMention'
 
@@ -200,11 +200,12 @@ export function serializeComposerDoc(doc: PMNode): string {
     if (index > 0) text += '\n'
     block.forEach((inline) => {
       if (inline.type.name === AT_MENTION_NODE) {
-        text += inline.attrs.kind === 'session'
-          ? `@${inline.attrs.label}`
-          : inline.attrs.kind === 'skill' || inline.attrs.kind === 'plugin'
-          ? (inline.attrs.modelText || `Use ${inline.attrs.kind} ${JSON.stringify(inline.attrs.label)} for this request.`)
-          : `@"${inline.attrs.path as string}"`
+        text += mentionModelText({
+          kind: inline.attrs.kind as ComposerMention['kind'],
+          label: inline.attrs.label as string,
+          path: inline.attrs.path as string,
+          modelText: inline.attrs.modelText as string | undefined,
+        })
       } else if (inline.isText) {
         text += inline.text ?? ''
       }

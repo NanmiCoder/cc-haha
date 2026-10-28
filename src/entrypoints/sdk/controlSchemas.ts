@@ -8,6 +8,7 @@
  */
 
 import { z } from 'zod/v4'
+import { scheduledTaskMessageInputSchema } from '../../utils/scheduledTaskMessage.js'
 import { sessionMessageInputSchema } from '../../utils/sessionMessageInbox.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import {
@@ -644,8 +645,10 @@ export const SDKControlElicitationResponseSchema = lazySchema(() =>
 export const SDKControlRequestInnerSchema = lazySchema(() =>
   z.union([
     z.object({ subtype: z.literal('team_runtime_snapshot'), team_name: z.string().min(1), created_at: z.number() }),
+    z.object({ subtype: z.literal('team_runtime_ended'), team_name: z.string().min(1) }),
     z.object({ subtype: z.literal('team_plan_pause') }),
     sessionMessageInputSchema,
+    scheduledTaskMessageInputSchema,
     SDKControlInterruptRequestSchema(),
     SDKControlPermissionRequestSchema(),
     SDKControlInitializeRequestSchema(),

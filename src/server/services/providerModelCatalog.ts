@@ -11,7 +11,9 @@
 import {
   getNetworkProxyFetchOptions,
   loadNetworkSettings,
+  resolveProviderNetworkSettings,
 } from './networkSettings.js'
+import type { ProviderProxyConfig } from '../types/provider.js'
 
 export type FetchedModel = {
   id: string
@@ -42,6 +44,8 @@ export type FetchProviderModelsInput = {
   apiKey: string
   isFullUrl?: boolean
   modelsUrl?: string
+  /** The provider's own proxy override, so the probe reaches it the way chat will. */
+  proxy?: ProviderProxyConfig
 }
 
 // cc-switch's FETCH_TIMEOUT_SECS. Deliberately not networkSettings'
@@ -198,7 +202,7 @@ export async function fetchProviderModels(
     }
   }
 
-  const networkSettings = await loadNetworkSettings()
+  const networkSettings = resolveProviderNetworkSettings(await loadNetworkSettings(), input.proxy)
   const endpointsTried: string[] = []
   let lastStatus: number | undefined
   let lastFailure = ''

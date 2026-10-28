@@ -941,10 +941,13 @@ describe('ProviderService', () => {
           baseUrl: 'https://api.deepseek.com/anthropic',
           runtimeKind: 'deepseek_oauth',
         })
-        expect(provider.models.main).toBe('deepseek-v4-pro[1m]')
-        // The account listing names V4.1 Flash `deepseek-flash`; it does not
-        // list the API-key route's `deepseek-v4-flash`.
-        expect(provider.models.haiku).toBe('deepseek-flash')
+        expect(provider.models).toEqual({
+          main: 'deepseek-flash[1m]',
+          fable: 'deepseek-flash[1m]',
+          haiku: 'deepseek-flash[1m]',
+          sonnet: 'deepseek-flash[1m]',
+          opus: 'deepseek-flash[1m]',
+        })
         expect(provider.modelContextWindows?.['deepseek-flash']).toBe(1_000_000)
       })
 
@@ -989,7 +992,13 @@ describe('ProviderService', () => {
           path.join(tmpDir, 'cc-haha', 'deepseek-oauth.json'),
         )
         expect(env.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic')
-        expect(env.ANTHROPIC_MODEL).toBe('deepseek-v4-pro[1m]')
+        for (const key of [
+          'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL',
+          'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+          'ANTHROPIC_DEFAULT_OPUS_MODEL',
+        ]) {
+          expect(env[key]).toBe('deepseek-flash[1m]')
+        }
         expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
         expect(env.ANTHROPIC_API_KEY).toBe('deepseek-oauth-dummy-key')
         // The previously active OAuth provider's markers are cleared.
@@ -3871,8 +3880,11 @@ describe('Providers API', () => {
       }
     }
     expect((await list()).deepSeekAccountModels).toMatchObject({
-      main: 'deepseek-v4-pro[1m]',
-      haiku: 'deepseek-flash',
+      main: 'deepseek-flash[1m]',
+      fable: 'deepseek-flash[1m]',
+      haiku: 'deepseek-flash[1m]',
+      sonnet: 'deepseek-flash[1m]',
+      opus: 'deepseek-flash[1m]',
     })
 
     const saved = {
@@ -4405,6 +4417,105 @@ describe('ApiSmart preset request contract (offline fixtures)', () => {
 })
 
 /**
+ * OpenRouter speaks Anthropic Messages natively at its own root, so this preset
+ * has to stay a direct connection: the CLI and the connectivity probe must reach
+ * https://openrouter.ai/api/v1/messages — exactly one /v1 — over Bearer, with
+ * ANTHROPIC_API_KEY cleared so no inherited x-api-key rides along, and with the
+ * local proxy staying out of the path entirely. These tests pin that contract
+ * against offline fixtures.
+ */
+describe('OpenRouter preset request contract (offline fixtures)', () => {
+  beforeEach(setup)
+  afterEach(teardown)
+
+  const apiKey = 'sk-or-v1-offline-fixture'
+
+  async function loadPreset() {
+    const { PROVIDER_PRESETS } = await import('../config/providerPresets.js')
+    const preset = PROVIDER_PRESETS.find(item => item.id === 'openrouter')
+    expect(preset).toBeDefined()
+    return preset!
+  }
+
+  async function createProvider() {
+    const preset = await loadPreset()
+    // Exercised through the same API boundary the desktop's save action uses.
+    const { req, url, segments } = makeRequest('POST', '/api/providers', {
+      presetId: preset.id,
+      name: preset.name,
+      baseUrl: preset.baseUrl,
+      apiFormat: preset.apiFormat,
+      apiKey,
+      models: preset.defaultModels,
+    })
+    const result = await handleProvidersApi(req, url, segments)
+    expect(result.status).toBe(201)
+    const saved = await result.json()
+    return { preset, provider: saved.provider as { id: string } }
+  }
+
+  test('activation configures the CLI for a direct Bearer connection, not the local proxy', async () => {
+    const { provider } = await createProvider()
+    const activate = makeRequest('POST', `/api/providers/${provider.id}/activate`)
+    const activated = await handleProvidersApi(activate.req, activate.url, activate.segments)
+    expect(activated.status).toBe(200)
+
+    const env = (await readSettings()).env as Record<string, string>
+    // OpenRouter's Claude Code guide requires the root; the CLI appends /v1/messages.
+    expect(env.ANTHROPIC_BASE_URL).toBe('https://openrouter.ai/api')
+    expect(env.ANTHROPIC_BASE_URL).not.toContain('127.0.0.1')
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe(apiKey)
+    // Left over from an inherited key, this would be read as an Anthropic credential.
+    expect(env.ANTHROPIC_API_KEY).toBe('')
+    expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)).toMatchObject({
+      'anthropic/claude-sonnet-5.5': 1000000,
+      'anthropic/claude-opus-5.5': 1000000,
+    })
+  })
+
+  test('the connectivity probe reaches /api/v1/messages over Bearer and stops after one request', async () => {
+    const preset = await loadPreset()
+    const originalFetch = globalThis.fetch
+    const calls: Array<{ url: string; headers: Headers; body: any }> = []
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        headers: new Headers(init?.headers),
+        body: JSON.parse(String(init?.body)),
+      })
+      return Response.json({
+        id: 'msg-offline', type: 'message', role: 'assistant', model: preset.defaultModels.main,
+        stop_reason: 'end_turn', content: [{ type: 'text', text: 'ok' }],
+        usage: { input_tokens: 3, output_tokens: 1 },
+      })
+    }) as typeof fetch
+    try {
+      const result = await new ProviderService().testProviderConfig({
+        presetId: preset.id,
+        baseUrl: preset.baseUrl,
+        apiKey,
+        modelId: preset.defaultModels.main,
+        apiFormat: preset.apiFormat,
+        authStrategy: preset.authStrategy,
+      })
+      expect(result.connectivity.success).toBe(true)
+      expect(result.connectivity.modelUsed).toBe('anthropic/claude-sonnet-5.5')
+      // An anthropic-format provider reaches OpenRouter directly, so there is no
+      // proxy step to validate and the probe must not fire a second request.
+      expect(result.proxy).toBeUndefined()
+      expect(calls).toHaveLength(1)
+      expect(calls[0].url).toBe('https://openrouter.ai/api/v1/messages')
+      expect(calls[0].headers.get('authorization')).toBe(`Bearer ${apiKey}`)
+      expect(calls[0].headers.get('x-api-key')).toBeNull()
+      expect(calls[0].headers.get('anthropic-version')).toBe('2023-06-01')
+      expect(calls[0].body).toMatchObject({ model: 'anthropic/claude-sonnet-5.5', max_tokens: 16 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+})
+
+/**
  * OpenCode Go binds the wire format to the URL path and does no cross-protocol
  * translation, so one provider record has to reach three different endpoints
  * depending on the model. These tests pin that contract: which URL each model
@@ -4675,11 +4786,11 @@ describe('OpenCode Go preset request contract', () => {
         message: 'Upstream returned no body for stream',
       },
       {
-        name: 'safety stop with no output',
+        name: 'malformed function call with no output',
         stream: false,
-        upstream: [() => Response.json({ candidates: [{ finishReason: 'SAFETY' }] })],
+        upstream: [() => Response.json({ candidates: [{ finishReason: 'MALFORMED_FUNCTION_CALL' }] })],
         status: 502,
-        message: 'Gemini stopped with SAFETY',
+        message: 'Gemini stopped with MALFORMED_FUNCTION_CALL',
       },
       {
         name: 'refused continuation',
@@ -4706,6 +4817,31 @@ describe('OpenCode Go preset request contract', () => {
         expect(reported, name).toContain(message)
         expect(text, name).not.toContain('message_stop')
         expect(call, name).toBe(upstream.length)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('reports a Gemini policy block as a refusal rather than an error the CLI would retry', async () => {
+    const { provider } = await createProvider()
+    const originalFetch = globalThis.fetch
+    try {
+      for (const stream of [false, true]) {
+        let calls = 0
+        globalThis.fetch = (async () => {
+          calls++
+          const body = { candidates: [{ finishReason: 'SAFETY' }] }
+          return stream
+            ? new Response(`data: ${JSON.stringify(body)}\r\n\r\n`, { headers: { 'Content-Type': 'text/event-stream' } })
+            : Response.json(body)
+        }) as unknown as typeof fetch
+        const response = await proxy(provider.id, {
+          model: 'gemini-4-argon-contributor', max_tokens: 32, stream, messages: [{ role: 'user', content: 'hello' }],
+        })
+        expect(response.status, `stream=${stream}`).toBe(200)
+        expect(await response.text(), `stream=${stream}`).toContain('"stop_reason":"refusal"')
+        expect(calls, `stream=${stream}`).toBe(1)
       }
     } finally {
       globalThis.fetch = originalFetch

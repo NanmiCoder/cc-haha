@@ -30,6 +30,7 @@ beforeEach(() => {
   spyOn(ProviderService.prototype, 'activateProvider').mockResolvedValue(undefined)
   spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({ language: 'en', alwaysThinkingEnabled: true, env: { API_KEY: 'fake-never-expose' }, hooks: { dangerous: true } })
   spyOn(SettingsService.prototype, 'updateUserSettings').mockResolvedValue(undefined)
+  spyOn(SettingsService.prototype, 'getAgentTeamsEnabled').mockResolvedValue(true)
   spyOn(conversationService, 'getActiveSessions').mockReturnValue([])
 })
 afterEach(() => mock.restore())
@@ -103,11 +104,30 @@ describe('remote browser API routing', () => {
   })
 
   test('general reads exclude secrets and valid edits including language reset keep exact requested fields', async () => {
-    expect(await (await request('/api/settings/user')).json()).toEqual({ language: 'en', alwaysThinkingEnabled: true })
+    expect(await (await request('/api/settings/user')).json()).toEqual({ language: 'en', alwaysThinkingEnabled: true, agentTeamsEnabled: true })
     const patch = { language: '', chatSendBehavior: 'modifierEnter', workflowKeywordTriggerEnabled: true, alwaysThinkingEnabled: false, outputStyle: 'Learning' }
     const response = await request('/api/settings/user', 'PUT', patch)
     expect(response.status).toBe(200)
     expect(SettingsService.prototype.updateUserSettings).toHaveBeenCalledWith(patch)
+  })
+
+  test('exposes the same team capability as desktop but rejects remote changes before persistence', async () => {
+    for (const enabled of [false, true]) {
+      spyOn(SettingsService.prototype, 'getAgentTeamsEnabled').mockResolvedValue(enabled)
+      const remote = await (await request('/api/settings/user')).json()
+      const desktop = await (await request('/api/settings/user', 'GET', undefined, false)).json()
+      expect(remote.agentTeamsEnabled).toBe(enabled)
+      expect(remote.agentTeamsEnabled).toBe(desktop.agentTeamsEnabled)
+      expect(remote).not.toHaveProperty('env')
+      expect(remote).not.toHaveProperty('hooks')
+      const rejected = await request('/api/settings/user', 'PUT', { agentTeamsEnabled: !enabled })
+      expect(rejected.status).toBe(400)
+      expect(SettingsService.prototype.updateUserSettings).not.toHaveBeenCalled()
+    }
+    // A mixed patch must be rejected as a whole, not partially apply General
+    // preferences while silently ignoring the protected capability switch.
+    expect((await request('/api/settings/user', 'PUT', { language: 'zh-CN', agentTeamsEnabled: false })).status).toBe(400)
+    expect(SettingsService.prototype.updateUserSettings).not.toHaveBeenCalled()
   })
 
   test('rechecks waiting questions after automatic answer settings are saved', async () => {
@@ -124,6 +144,7 @@ describe('remote browser API routing', () => {
       env: { API_KEY: 'fake-never-expose' },
     })
     expect(await (await request('/api/settings/user')).json()).toEqual({
+      agentTeamsEnabled: true,
       autoQuestion: { enabled: true, timeoutMinutes: 10 },
     })
   })

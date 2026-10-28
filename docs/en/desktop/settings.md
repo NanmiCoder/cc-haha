@@ -50,6 +50,8 @@ General covers four areas: appearance and replies, how the agent works, network 
 | Auto-dream | Off by default. After enough sessions have accumulated, it can organize auto-memory in the background, using additional model calls and tokens. |
 | Agent Trace | On by default. New sessions write raw request, response, and status events to a local traces directory. To investigate a failure, open an assistant line in the session's **Trajectory** and switch to its **Raw request** tab; turning it off stops new records, while old ones remain readable. |
 
+To store Agent Trace separately, set `CC_HAHA_TRACE_DIR` to a writable absolute directory before launching the app, such as `D:\HahaTraces` on Windows or `/data/haha-traces` on macOS/Linux, then fully quit and restart the app. JSONL files go directly in that directory; its `cc-haha/db` subdirectory holds the auxiliary index. Other configuration stays in its original location. An empty or unset variable uses the original `cc-haha/traces` under the configuration directory. Switching does not move, merge, or delete existing files, and only records in the current directory appear. Remove the variable and restart to view the default directory again. Invalid paths report an error instead of falling back to writes in the default directory.
+
 ### Network, web search, and notifications
 
 - **System Notifications** are off by default. Enable them and grant OS permission when you need alerts for permission requests, completed replies, or scheduled tasks away from the app.

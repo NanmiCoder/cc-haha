@@ -158,6 +158,37 @@ describe('activity stats token accounting', () => {
     })
   })
 
+  it('counts the final usage of a reply whose first content-block line carried zero output', async () => {
+    const sessionId = 'zero-first-session'
+    const day = dateKey(-1)
+    const line = (uuid: string, parentUuid: string, usage: Record<string, number>) => ({
+      ...assistantEntry(uuid, `${day}T10:00:00.000Z`, usage, { parentUuid }),
+      requestId: 'req_zero_first',
+      message: {
+        id: 'msg_zero_first',
+        role: 'assistant',
+        model: 'claude-test',
+        content: [{ type: 'text', text: uuid }],
+        usage,
+      },
+    })
+    await writeJsonl(projectFile(sessionId), [
+      userEntry('user-1', `${day}T09:59:00.000Z`),
+      line('a1', 'user-1', { input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 1000 }),
+      line('a2', 'a1', { input_tokens: 100, output_tokens: 4, cache_read_input_tokens: 1000 }),
+      line('a3', 'a2', { input_tokens: 100, output_tokens: 250, cache_read_input_tokens: 1000 }),
+    ])
+
+    const stats = await aggregateClaudeCodeStatsForRange('all')
+
+    expect(stats.modelUsage['claude-test']).toMatchObject({
+      inputTokens: 100,
+      outputTokens: 250,
+      cacheReadInputTokens: 1000,
+    })
+    expect(totalForDate(stats.dailyModelTokens, day)).toBe(1350)
+  })
+
   it('counts subagent tokens without counting subagent transcripts as sessions', async () => {
     const today = dateKey(0)
 
@@ -436,12 +467,12 @@ describe('activity stats token accounting', () => {
     }
   })
 
-  it('invalidates pre-v7 stats caches because token aggregates may include inherited fork usage', async () => {
+  it('invalidates pre-v8 stats caches because token aggregates may under-count zero-first replies or include inherited fork usage', async () => {
     await mkdir(tmpConfigDir, { recursive: true })
     await writeFile(
       join(tmpConfigDir, 'stats-cache.json'),
       JSON.stringify({
-        version: 6,
+        version: 7,
         lastComputedDate: dateKey(-1),
         dailyActivity: [{ date: dateKey(-1), messageCount: 1, sessionCount: 1, toolCallCount: 0 }],
         dailyModelTokens: [{ date: dateKey(-1), tokensByModel: { stale: 1 } }],
@@ -460,7 +491,7 @@ describe('activity stats token accounting', () => {
 
     const cache = await loadStatsCache()
 
-    expect(STATS_CACHE_VERSION).toBe(7)
+    expect(STATS_CACHE_VERSION).toBe(8)
     expect(cache.dailyModelTokens).toEqual([])
     expect(cache.toolUsage).toEqual({})
     expect(cache.skillUsage).toEqual({})

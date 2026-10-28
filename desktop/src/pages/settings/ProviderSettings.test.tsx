@@ -36,6 +36,47 @@ const savedProviders: SavedProvider[] = ([
   models: { main: model, haiku: model, sonnet: model, opus: model },
 }))
 
+describe('DeepSeek preset defaults', () => {
+  const originalState = useProviderStore.getState()
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+    useProviderStore.setState(originalState)
+  })
+
+  it('fills and saves all five slots as Flash with 1M enabled', async () => {
+    useProviderStore.setState({ presets: BUNDLED_PROVIDER_PRESETS })
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'new-deepseek', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'DeepSeek' }))
+    expect(dialog.getAllByDisplayValue('deepseek-flash')).toHaveLength(5)
+    const contextCheckboxes = dialog.getAllByRole('checkbox', { name: /1M/ })
+    expect(contextCheckboxes).toHaveLength(5)
+    for (const checkbox of contextCheckboxes) expect(checkbox).toBeChecked()
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-deepseek-key' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      presetId: 'deepseek',
+      models: {
+        main: 'deepseek-flash', fable: 'deepseek-flash', haiku: 'deepseek-flash',
+        sonnet: 'deepseek-flash', opus: 'deepseek-flash',
+      },
+      model1mSupport: { main: true, fable: true, haiku: true, sonnet: true, opus: true },
+    })))
+  })
+})
+
 describe('image generation protocol settings', () => {
   let originalPresets = useProviderStore.getState().presets
   beforeEach(() => {
@@ -171,6 +212,24 @@ describe('active sponsor providers', () => {
       apiKey: 'fake-aruhub-key',
       models: { main: 'claude-opus-5-5', haiku: 'claude-sonnet-5-5', sonnet: 'claude-sonnet-5-5', opus: 'claude-opus-5-5' },
     })))
+  })
+
+  it('fetches models through the proxy mode chosen in the form, not the global one', async () => {
+    const fetchModels = vi.spyOn(providersApi, 'fetchModels').mockResolvedValue({
+      ok: true,
+      endpoint: 'https://modelflare.dev/v1/models',
+      models: [{ id: 'claude-opus-5-5', ownedBy: 'anthropic' }],
+    })
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'Modelflare' }))
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'fake-modelflare-key' } })
+    fireEvent.click(dialog.getByRole('radio', { name: 'Direct' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Fetch models' }))
+    await waitFor(() => expect(fetchModels).toHaveBeenCalledWith({
+      baseUrl: 'https://modelflare.dev', apiKey: 'fake-modelflare-key', proxy: { mode: 'direct' },
+    }))
   })
 
   it('adds Modelflare from the second sponsor pill with badges, model discovery and Claude 5.5 defaults', async () => {
@@ -693,4 +752,68 @@ describe('OpenCode Go provider', () => {
     })))
   })
 
+})
+
+/**
+ * OpenRouter is a one-key aggregation gateway: the user pastes an sk-or- key and
+ * the preset supplies the endpoint, the credential header and the Claude 5.5
+ * defaults. Nothing here may require hand-entering an URL or a format.
+ */
+describe('OpenRouter provider', () => {
+  beforeEach(() => {
+    useSettingsStore.setState({ locale: 'en' })
+    vi.spyOn(useSettingsStore.getState(), 'fetchAll').mockResolvedValue()
+    vi.spyOn(providersApi, 'list').mockResolvedValue({ providers: [], activeId: null })
+    vi.spyOn(providersApi, 'getSettings').mockResolvedValue({})
+    vi.spyOn(providersApi, 'updateSettings').mockResolvedValue({ ok: true })
+  })
+
+  afterEach(() => {
+    cleanup()
+    vi.restoreAllMocks()
+  })
+
+  it('is added with an API key alone, prefilled with the direct endpoint and Claude 5.5 slots', async () => {
+    const create = vi.spyOn(providersApi, 'create').mockImplementation(async (input) => ({
+      provider: { ...input, id: 'saved-openrouter', apiFormat: input.apiFormat ?? 'anthropic' },
+    }))
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'OpenRouter' }))
+
+    // The root, not /api/v1 — the CLI appends /v1/messages itself.
+    expect(dialog.getByDisplayValue('https://openrouter.ai/api')).toBeInTheDocument()
+    // Main and Sonnet share the balanced default; Haiku and Opus stay distinct.
+    expect(dialog.getAllByDisplayValue('anthropic/claude-sonnet-5.5')).toHaveLength(2)
+    expect(dialog.getByDisplayValue('anthropic/claude-haiku-5.5')).toBeInTheDocument()
+    expect(dialog.getByDisplayValue('anthropic/claude-opus-5.5')).toBeInTheDocument()
+
+    fireEvent.change(dialog.getAllByPlaceholderText('sk-...')[0]!, { target: { value: 'sk-or-v1-fake' } })
+    fireEvent.click(dialog.getByRole('button', { name: 'Add' }))
+    await waitFor(() => expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      presetId: 'openrouter',
+      baseUrl: 'https://openrouter.ai/api',
+      apiFormat: 'anthropic',
+      authStrategy: 'auth_token',
+      apiKey: 'sk-or-v1-fake',
+      models: {
+        main: 'anthropic/claude-sonnet-5.5',
+        haiku: 'anthropic/claude-haiku-5.5',
+        sonnet: 'anthropic/claude-sonnet-5.5',
+        opus: 'anthropic/claude-opus-5.5',
+      },
+    })))
+  })
+
+  it('links the key field to the OpenRouter key page', async () => {
+    const open = vi.spyOn(getDesktopHost().shell, 'open').mockResolvedValue()
+    render(<ProviderSettings />)
+    fireEvent.click(await screen.findByRole('button', { name: /Add Model/ }))
+    const dialog = within(screen.getByRole('dialog'))
+    fireEvent.click(dialog.getByRole('button', { name: 'OpenRouter' }))
+
+    fireEvent.click(dialog.getByRole('button', { name: /Get API Key/ }))
+    expect(open).toHaveBeenCalledWith('https://openrouter.ai/settings/keys')
+  })
 })

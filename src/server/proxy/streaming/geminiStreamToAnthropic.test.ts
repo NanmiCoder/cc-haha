@@ -118,8 +118,6 @@ describe('geminiStreamToAnthropic', () => {
       [sse({ error: { code: 429, message: 'Resource exhausted', status: 'RESOURCE_EXHAUSTED' } }), 'Resource exhausted'],
       [sse({ candidates: [{ content: { role: 'model', parts: [{ text: 'partial' }] } }] }), 'without a finish reason'],
       [sse({ candidates: [{ content: { role: 'model', parts: [{ text: 'x' }] }, finishReason: 'MALFORMED_FUNCTION_CALL' }] }), 'MALFORMED_FUNCTION_CALL'],
-      [sse({ candidates: [{ finishReason: 'SAFETY' }] }), 'Gemini stopped with SAFETY'],
-      [sse({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }), 'blocked the request (PROHIBITED_CONTENT)'],
       [sse({ candidates: [{ finishReason: 'CONTINUATION' }] }), 'without a continuation token'],
     ]
     for (const [stream, message] of cases) {
@@ -145,6 +143,26 @@ describe('geminiStreamToAnthropic', () => {
     expect(new TextDecoder().decode((await reader.read()).value)).toContain('message_start')
     await reader.cancel('user stopped')
     expect(upstreamCancelled).toBe('user stopped')
+  })
+
+  test('ends a policy block with no output as a refusal the CLI will not retry', async () => {
+    for (const stream of [
+      sse({ candidates: [{ finishReason: 'SAFETY' }] }),
+      sse({ candidates: [{ finishReason: 'PROHIBITED_CONTENT' }] }),
+      sse({ promptFeedback: { blockReason: 'PROHIBITED_CONTENT' } }),
+    ]) {
+      const output = await events(geminiStreamToAnthropic(stream, MODEL, noContinuation))
+      expect(output.some(event => event.type === 'error')).toBe(false)
+      expect(output.find(event => event.type === 'message_delta')!.delta.stop_reason).toBe('refusal')
+      expect(output.at(-1)).toMatchObject({ type: 'message_stop' })
+    }
+  })
+
+  test('still fails a policy stop that interrupts a tool call', async () => {
+    const output = await events(geminiStreamToAnthropic(sse(
+      { candidates: [{ content: { role: 'model', parts: [{ functionCall: { name: 'Read', args: {} } }] }, finishReason: 'SAFETY' }] },
+    ), MODEL, noContinuation))
+    expect(output.at(-1)).toMatchObject({ type: 'error', error: { message: expect.stringContaining('SAFETY') } })
   })
 
   test('keeps partial text when a safety stop follows visible output', async () => {

@@ -5,17 +5,17 @@ export const DEEPSEEK_ACCOUNT_PROVIDER_ID = 'deepseek-account'
 export const DEEPSEEK_ACCOUNT_PROVIDER_NAME = 'DeepSeek Account'
 
 // The account provider keeps the bundled `deepseek` preset's endpoint shape
-// and capability rules, but the account `/models` listing names its own
-// models: V4.1 Flash is `deepseek-flash`, and `deepseek-v4-flash` is not listed.
+// and capability rules. Both routes use V4.1 Flash as `deepseek-flash`.
 // Keep this mapping in step with DEEPSEEK_ACCOUNT_DEFAULT_MODELS on the server.
 const DEEPSEEK_PRESET_ID = 'deepseek'
 const deepSeekPreset = BUNDLED_PROVIDER_PRESETS.find((preset) => preset.id === DEEPSEEK_PRESET_ID)
 
 export const DEEPSEEK_ACCOUNT_MODEL_MAPPING: ModelMapping = {
-  main: 'deepseek-v4-pro[1m]',
-  haiku: 'deepseek-flash',
-  sonnet: 'deepseek-v4-pro[1m]',
-  opus: 'deepseek-v4-pro[1m]',
+  main: 'deepseek-flash[1m]',
+  fable: 'deepseek-flash[1m]',
+  haiku: 'deepseek-flash[1m]',
+  sonnet: 'deepseek-flash[1m]',
+  opus: 'deepseek-flash[1m]',
 }
 
 export const DEEPSEEK_ACCOUNT_DEFAULT_MODEL_ID = DEEPSEEK_ACCOUNT_MODEL_MAPPING.main

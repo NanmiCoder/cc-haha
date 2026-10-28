@@ -5,6 +5,7 @@ import { useTranslation, type TranslationKey } from '../../i18n'
 import type { TeamMember, TeamWorkbenchSnapshot } from '../../types/team'
 import { MEMBER_AVATARS } from './agentTeamsAvatars'
 import {
+  endedBeforeAnyMemberJoined,
   getMemberAvatarKey,
   getWorkbenchPhase,
   getWorkbenchProgress,
@@ -16,10 +17,13 @@ const MAX_STACKED_AVATARS = 5
 
 /**
  * The app-wide status vocabulary: work under way is `info`, done is `success`.
- * Forming, running and finishing are all a team still at work.
+ * Forming, running and finishing are all a team still at work; a team that
+ * ended before its work was done is neither.
  */
 function phaseTone(phase: WorkbenchPhase): Tone {
-  return phase === 'completed' ? 'success' : 'info'
+  if (phase === 'completed') return 'success'
+  if (phase === 'interrupted') return 'warning'
+  return phase === 'ended' ? 'neutral' : 'info'
 }
 
 function AvatarStack({
@@ -76,13 +80,16 @@ export function AgentTeamsStrip({
   snapshot,
   onOpen,
   compact,
+  phaseOverride,
 }: {
   snapshot: TeamWorkbenchSnapshot
   onOpen: () => void
   compact: boolean
+  /** What the team's plan knows and its tasks cannot show (an interrupted launch). */
+  phaseOverride?: WorkbenchPhase
 }) {
   const t = useTranslation()
-  const phase = getWorkbenchPhase(snapshot)
+  const phase = phaseOverride ?? getWorkbenchPhase(snapshot)
   const progress = getWorkbenchProgress(snapshot)
   const members = snapshot.team.members
 
@@ -145,7 +152,10 @@ export function AgentTeamsInlineCard({
   const phase = phaseOverride ?? (snapshot ? getWorkbenchPhase(snapshot) : fallbackPhase)
   const progress = snapshot ? getWorkbenchProgress(snapshot) : { completed: 0, total: 0 }
   const members = snapshot?.team.members ?? []
-  const canOpen = Boolean(snapshot && onOpen)
+  // A team cancelled before any member joined never ran: it is neither done
+  // nor has a run report to open.
+  const notStarted = snapshot !== undefined && endedBeforeAnyMemberJoined(snapshot)
+  const canOpen = Boolean(snapshot && onOpen && !notStarted)
 
   return (
     <div className="@container mb-5 min-w-0 max-w-full">
@@ -168,8 +178,8 @@ export function AgentTeamsInlineCard({
             <span className="min-w-0 truncate text-[13px] font-medium text-[var(--color-text-primary)]">
               {teamName}
             </span>
-            <Badge tone={phaseTone(phase)} size="xs">
-              {t(`agentTeams.phase.${phase}` as TranslationKey)}
+            <Badge tone={notStarted ? 'neutral' : phaseTone(phase)} size="xs">
+              {notStarted ? t('agentTeams.inline.notStarted') : t(`agentTeams.phase.${phase}` as TranslationKey)}
             </Badge>
           </span>
           {snapshot ? (

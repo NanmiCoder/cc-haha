@@ -3244,6 +3244,35 @@ describe('chatStore history mapping', () => {
     })
   })
 
+  it('counts the final usage of a reply whose first content-block line carried zero output', async () => {
+    const line = (id: string, usage: MessageEntry['usage']) => ({
+      id,
+      type: 'assistant' as const,
+      timestamp: '2026-08-31T00:00:00.000Z',
+      content: [{ type: 'text', text: id }],
+      usage,
+      usageKey: 'msg_zero_first\0req_zero_first',
+    })
+    vi.mocked(sessionsApi.getFullHistory).mockResolvedValueOnce({
+      messages: [
+        line('a1', { input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 1_000 }),
+        line('a2', { input_tokens: 100, output_tokens: 5, cache_read_input_tokens: 1_000 }),
+        line('a3', { input_tokens: 100, output_tokens: 250, cache_read_input_tokens: 1_000 }),
+      ] as never,
+    })
+    useChatStore.setState({
+      sessions: { [TEST_SESSION_ID]: makeSession({ messages: [] }) },
+    })
+
+    await useChatStore.getState().loadHistory(TEST_SESSION_ID)
+
+    expect(useChatStore.getState().sessions[TEST_SESSION_ID]?.tokenUsage).toEqual({
+      input_tokens: 100,
+      output_tokens: 250,
+      cache_read_tokens: 1_000,
+    })
+  })
+
   it('does not replace newer live token usage with a stale cold snapshot', async () => {
     let resolveHistory!: (value: { messages: MessageEntry[] }) => void
     vi.mocked(sessionsApi.getFullHistory).mockReturnValueOnce(new Promise((resolve) => {
@@ -4456,6 +4485,29 @@ describe('chatStore history mapping', () => {
       },
     ])
     expect(mapped[2]).not.toHaveProperty('teammateFrom')
+  })
+
+  it.each([false, true])('preserves mailbox envelopes when projecting a batch (blocks=%s)', (asBlocks) => {
+    const envelopes = [
+      '<teammate-message teammate_id="peer">peer note</teammate-message>',
+      '<teammate-message teammate_id="user">repeat</teammate-message>',
+      '<teammate-message teammate_id="user">repeat</teammate-message>',
+    ]
+    const content = envelopes.join('\n\n')
+    const mapped = mapHistoryMessagesToUiMessages([{
+      id: 'batch',
+      type: 'user',
+      timestamp: '2026-10-26T00:00:00.000Z',
+      content: asBlocks ? [{ type: 'text', text: content }] : content,
+    }], { includeTeammateMessages: true })
+
+    expect(mapped).toHaveLength(1)
+    expect(mapped[0]).toMatchObject({
+      type: 'user_text',
+      transcriptMessageId: 'batch',
+      modelContent: content,
+    })
+    expect(mapped[0]?.type === 'user_text' && mapped[0].content).not.toContain('<teammate-message')
   })
 
   it('preserves source user ids when restoring array-content user prompts', () => {
@@ -14123,6 +14175,8 @@ describe('chatStore history mapping', () => {
       retryDelayMs: 2500,
       errorStatus: 503,
       errorType: 'server_error',
+      errorMessage: 'Upstream service unavailable',
+      requestId: 'req-retry-123',
     })
 
     const retryingSession = useChatStore.getState().sessions[TEST_SESSION_ID]
@@ -14134,6 +14188,8 @@ describe('chatStore history mapping', () => {
       retryDelayMs: 2500,
       errorStatus: 503,
       errorType: 'server_error',
+      errorMessage: 'Upstream service unavailable',
+      requestId: 'req-retry-123',
     })
     expect(updateTabStatusMock).toHaveBeenLastCalledWith(TEST_SESSION_ID, 'running')
 
@@ -17381,5 +17437,46 @@ describe('chatStore streamed turn against its durable copy (#1476)', () => {
       'user_text: again',
       'assistant_text: Done.',
     ])
+  })
+})
+
+describe('chatStore discardUnconfirmedUserMessage', () => {
+  const sessionId = 'discard-unconfirmed'
+  const lost: UIMessage = { id: 'lost', type: 'user_text', content: 'Build a pgae', awaitingReplay: true, timestamp: 1 }
+
+  function seed(messages: UIMessage[], chatState: 'idle' | 'thinking' = 'idle') {
+    useChatStore.setState({ ...initialState, sessions: { [sessionId]: makeSession({ chatState, messages }) } })
+  }
+  const messageIds = () => useChatStore.getState().sessions[sessionId]!.messages.map((message) => message.id)
+
+  it('removes the unacknowledged prompt together with the markers that followed it', () => {
+    seed([
+      { id: 'earlier', type: 'user_text', content: 'Hi', transcriptMessageId: 't0', timestamp: 0 },
+      { id: 'earlier-reply', type: 'assistant_text', content: 'Hello', timestamp: 0 },
+      lost,
+      { id: 'stopped', type: 'system', content: 'Stopped', generationStopped: true, timestamp: 2 },
+    ])
+    expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'lost')).toBe(true)
+    expect(messageIds()).toEqual(['earlier', 'earlier-reply'])
+  })
+
+  it.each([
+    ['acknowledged by the CLI', [{ ...lost, awaitingReplay: undefined } as UIMessage]],
+    ['already in the transcript', [{ ...lost, transcriptMessageId: 't1' } as UIMessage]],
+    ['answered by the model', [lost, { id: 'reply', type: 'assistant_text', content: 'Hi', timestamp: 2 } as UIMessage]],
+    ['followed by another turn', [lost, { id: 'next', type: 'user_text', content: 'Next', timestamp: 2 } as UIMessage]],
+  ])('leaves a prompt that is %s untouched', (_name, messages) => {
+    seed(messages)
+    const before = messageIds()
+    expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'lost')).toBe(false)
+    expect(messageIds()).toEqual(before)
+  })
+
+  it('does nothing while the session is running or for an unknown message', () => {
+    seed([lost], 'thinking')
+    expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'lost')).toBe(false)
+    seed([lost])
+    expect(useChatStore.getState().discardUnconfirmedUserMessage(sessionId, 'missing')).toBe(false)
+    expect(messageIds()).toEqual(['lost'])
   })
 })

@@ -1,8 +1,26 @@
 import { describe, expect, test } from 'bun:test'
 import { consumeSessionMessage, createSessionMessageInbox, sessionMessageInputSchema } from './sessionMessageInbox.js'
+import { getPendingScheduledTask } from './sessionMessageInbox.js'
 import type { QueuedCommand } from '../types/textInputTypes.js'
 
 const message = { subtype: 'enqueue_session_message', message_id: 'stable-message', sender_session_id: 'peer-session', text: '/reset @secret.txt' }
+
+test('scheduled input keeps host provenance without a collaboration sender and clears it after consumption', () => {
+  const commands: any[] = []
+  const inbox = createSessionMessageInbox(command => { commands.push(command) }, () => {})
+  const scheduled_task = { taskId: 'task', runId: 'run', scheduledFor: '2026-10-26T01:00:00Z', taskName: 'Morning check' }
+  try {
+    const input = { subtype: 'enqueue_scheduled_task', message_id: 'scheduled-occurrence', text: '/clear @private', scheduled_task }
+    expect(inbox.accept(input)).toMatchObject({ status: 'queued', duplicate: false })
+    expect(commands[0]).toMatchObject({ value: '/clear @private', skipSlashCommands: true, isMeta: false, origin: { kind: 'channel', server: 'scheduled-task' } })
+    expect(getPendingScheduledTask(commands[0].uuid)).toEqual(scheduled_task)
+    expect(inbox.accept(input).duplicate).toBe(true)
+    expect(() => inbox.accept({ ...input, scheduled_task: { ...scheduled_task, runId: 'other' } })).toThrow()
+    consumeSessionMessage(commands[0].uuid)
+    expect(getPendingScheduledTask(commands[0].uuid)).toBeUndefined()
+    expect(inbox.accept(input)).toMatchObject({ status: 'consumed', duplicate: true })
+  } finally { inbox.dispose() }
+})
 
 describe('session message inbox', () => {
   test('queues safely, deduplicates and acknowledges only at consumption', () => {

@@ -22,7 +22,7 @@ const RESOLUTION_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.m
 const INDEX_BASENAMES = ['index.ts', 'index.tsx', 'index.js', 'index.jsx', 'index.mjs', 'index.cjs'] as const
 const SKIPPED_DIRECTORIES = new Set(['node_modules', '.git', 'dist', 'build', 'coverage', 'artifacts', 'electron-dist', 'build-artifacts', 'target'])
 
-export const GRAPH_SOURCE_ROOTS = ['src', 'desktop/src', 'desktop/electron', 'desktop/sidecars', 'adapters', 'scripts', 'preload.ts'] as const
+export const GRAPH_SOURCE_ROOTS = ['src', 'desktop/src', 'desktop/electron', 'desktop/sidecars', 'adapters', 'mobile/src', 'mobile/plugins', 'mobile/scripts', 'mobile/app.config.ts', 'scripts', 'preload.ts'] as const
 
 /**
  * Matches `import ... from 'x'`, `export ... from 'x'`, bare `import 'x'`,
@@ -233,6 +233,7 @@ export const WIDE_NET_FALLBACK_FILES = [
   'desktop/src/stores/chatStore.ts',
   'desktop/electron/main.ts',
   'adapters/index.ts',
+  'mobile/src/app/index.tsx',
 ]
 
 export function dependentsOf(

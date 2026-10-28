@@ -30,25 +30,41 @@ let socket: WebSocket | undefined
 try {
   const denied = await fetch(`${base}/api/public-access`)
   if (denied.status !== 403) throw new Error('Control plane accepted unauthenticated loopback')
-  const enabled = await (await control('/enable', { publicUrl: origin })).json()
+  let enabled = await (await control('/enable', { publicUrl: origin })).json()
+  const nativeClient = process.env.CC_HAHA_PUBLIC_ACCESS_TEST_CLIENT === 'native'
+  // Reuse a port allocated by this isolated process to exercise a custom
+  // tunnel's stable upstream without competing for a hard-coded machine port.
+  const fixedPort = nativeClient ? enabled.port : undefined
+  if (fixedPort !== undefined) {
+    await control('/disable', {})
+    enabled = await (await control('/enable', { publicUrl: origin, port: fixedPort })).json()
+    if (enabled.port !== fixedPort) throw new Error('Custom tunnel did not bind the requested fixed port')
+  }
   let remote = `http://127.0.0.1:${enabled.port}`
   const code = await (await control('/pairing', {})).json()
   const post = (route: string, body: unknown) => fetch(`${remote}/api/public-access/${route}`, { method: 'POST', headers: { Origin: origin }, body: JSON.stringify(body) })
-  const pending = await (await post('pair', { secret: code.secret, name: 'Smoke phone' })).json()
+  const pending = await (await post('pair', { secret: code.secret, name: 'Smoke phone', ...(nativeClient ? { clientType: 'native' } : {}) })).json()
   await control('/approve', { id: pending.id })
   const claim = await post('claim', pending)
-  const cookie = claim.headers.get('set-cookie')!.split(';')[0]!
+  let authHeaders: Record<string, string>
+  if (nativeClient) {
+    const credential = await claim.json()
+    if (claim.headers.has('set-cookie') || credential.tokenType !== 'Bearer' || !/^native_[A-Za-z0-9_-]{43}$/.test(credential.token)) throw new Error('Native pairing did not issue an isolated bearer credential')
+    authHeaders = { Authorization: `Bearer ${credential.token}` }
+  } else {
+    authHeaders = { Cookie: claim.headers.get('set-cookie')!.split(';')[0]! }
+  }
   for (const route of ['/health', '/api/models', '/api/models/current', '/api/effort', '/api/permissions/mode', '/api/settings/user', '/api/providers/auth-status', '/api/sessions']) {
-    const response = await fetch(`${remote}${route}`, { headers: { Origin: origin, Cookie: cookie } })
+    const response = await fetch(`${remote}${route}`, { headers: { Origin: origin, ...authHeaders } })
     const body = await response.text()
     if (!response.ok) throw new Error(`${route} returned ${response.status}: ${body}`)
     JSON.parse(body)
     if (body.includes('fake-never-expose') || body.includes('ANTHROPIC_API_KEY')) throw new Error(`Secret leaked from ${route}`)
   }
-  const authStatus = await (await fetch(`${remote}/api/providers/auth-status`, { headers: { Origin: origin, Cookie: cookie } })).json()
+  const authStatus = await (await fetch(`${remote}/api/providers/auth-status`, { headers: { Origin: origin, ...authHeaders } })).json()
   if (!authStatus.hasAuth || authStatus.source !== 'original-settings') throw new Error('Remote new-session auth check failed')
   const scopedAuthStatus = async (providerId: string) => {
-    const response = await fetch(`${remote}/api/providers/auth-status?providerId=${encodeURIComponent(providerId)}`, { headers: { Origin: origin, Cookie: cookie } })
+    const response = await fetch(`${remote}/api/providers/auth-status?providerId=${encodeURIComponent(providerId)}`, { headers: { Origin: origin, ...authHeaders } })
     const body = await response.text()
     if (!response.ok) throw new Error(`Provider-scoped auth-status returned ${response.status}: ${body}`)
     if (body.includes('fake-never-expose') || body.includes('fake-remote-provider-key')) throw new Error('Secret leaked from provider-scoped auth-status')
@@ -60,7 +76,7 @@ try {
   const keyedStatus = await scopedAuthStatus(keyedProvider.id)
   if (JSON.stringify(keyedStatus) !== JSON.stringify({ hasAuth: true, source: 'cc-haha-provider', activeProvider: 'Keyed fixture' })) throw new Error(`Provider-scoped auth-status missed the provider key: ${JSON.stringify(keyedStatus)}`)
   const createdResponse = await fetch(`${remote}/api/sessions`, {
-    method: 'POST', headers: { Origin: origin, Cookie: cookie, 'Content-Type': 'application/json' },
+    method: 'POST', headers: { Origin: origin, ...authHeaders, 'Content-Type': 'application/json' },
     body: JSON.stringify({ workDir: process.env.HOME, permissionMode: 'default' }),
   })
   const created = await createdResponse.json()
@@ -81,7 +97,7 @@ try {
   }
   async function connect() {
     const messages: Array<Record<string, any>> = []
-    const ws = new WebSocket(`${remote.replace('http:', 'ws:')}/ws/${created.sessionId}`, { headers: { Origin: origin, Cookie: cookie } })
+    const ws = new WebSocket(`${remote.replace('http:', 'ws:')}/ws/${created.sessionId}`, { headers: { Origin: origin, ...authHeaders } })
     socket = ws
     ws.onmessage = event => messages.push(JSON.parse(String(event.data)))
     await waitFor(() => messages.find(m => m.type === 'permission_requests_snapshot'), 'websocket snapshot')
@@ -99,19 +115,20 @@ try {
   const second = await connect()
   const replay = await waitFor(() => second.messages.find(m => m.type === 'permission_request'), 'replayed approval')
   if (replay.requestId !== approval.requestId) throw new Error('Reconnection replaced pending approval')
-  const secondClosed = new Promise<void>(resolve => { second.ws.onclose = () => resolve() })
+  const secondClosed = new Promise<number>(resolve => { second.ws.onclose = event => resolve(event.code) })
   await control('/disable', {})
-  await secondClosed
+  if (await secondClosed !== 1012) throw new Error('Temporary tunnel shutdown incorrectly invalidated device authorization')
   if (!conversationService.hasSession(created.sessionId)) throw new Error('Disabling remote access terminated active agent')
   if (!conversationService.getPendingPermissionRequests(created.sessionId).some(p => p.requestId === approval.requestId)) throw new Error('Disabling remote access lost pending approval')
-  const restarted = await (await control('/enable', { publicUrl: origin })).json()
+  const restarted = await (await control('/enable', { publicUrl: origin, ...(fixedPort === undefined ? {} : { port: fixedPort }) })).json()
+  if (fixedPort !== undefined && restarted.port !== fixedPort) throw new Error('Custom tunnel upstream changed after restart')
   remote = `http://127.0.0.1:${restarted.port}`
   const third = await connect()
   await waitFor(() => third.messages.find(m => m.type === 'permission_request' && m.requestId === approval.requestId), 'approval after enable')
   third.ws.send(JSON.stringify({ type: 'permission_response', requestId: approval.requestId, allowed: true }))
   await waitFor(() => third.messages.find(m => m.type === 'message_complete'), 'approved tool completion')
   if (await readFile(writePath, 'utf8') !== 'remote-success') throw new Error('Approved mock tool did not finish')
-  const history = await fetch(`${remote}/api/sessions/${created.sessionId}/messages`, { headers: { Origin: origin, Cookie: cookie } })
+  const history = await fetch(`${remote}/api/sessions/${created.sessionId}/messages`, { headers: { Origin: origin, ...authHeaders } })
   const historyText = await history.text()
   if (!history.ok || !historyText.includes('remote-history-fixture')) throw new Error(`History missing prior turn after reconnect: ${historyText}`)
   const thirdClosed = new Promise<void>(resolve => { third.ws.onclose = () => resolve() })
@@ -121,12 +138,14 @@ try {
   const settled = fourth.messages.find(m => m.type === 'permission_requests_snapshot')
   if (settled?.toolRequestIds.includes(approval.requestId)) throw new Error('Completed approval replayed after reconnect')
   const ws = fourth.ws
-  const revoked = new Promise<void>(resolve => { ws.onclose = () => resolve() })
+  const revoked = new Promise<number>(resolve => { ws.onclose = event => resolve(event.code) })
   await control('/revoke', { id: pending.id })
-  await revoked
-  if ((await fetch(`${remote}/api/sessions`, { headers: { Cookie: cookie } })).status !== 401) throw new Error('Revoked device retained API access')
+  if (await revoked !== 1008) throw new Error('Revocation did not reject the paired device')
+  if ((await fetch(`${remote}/api/sessions`, { headers: { Origin: origin, ...authHeaders } })).status !== 401) throw new Error('Revoked device retained API access')
   await control('/disable', {})
   if ((await (await control('')).json()).enabled !== false) throw new Error('Disable did not clear status')
+  // Persist the success marker before explicit exit: Bun can lose captured stdout.
+  await writeFile(path.join(process.env.CLAUDE_CONFIG_DIR!, 'REMOTE_INTEGRATION_PASSED'), 'passed')
   console.log('REMOTE_INTEGRATION_PASSED')
 } finally {
   socket?.close()

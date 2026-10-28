@@ -42,6 +42,9 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       # Agent and skill discovery lists files through ripgrep; without it the
       # runtime suites see every created agent as missing (HTTP 500).
       - name: Install ripgrep
@@ -53,6 +56,10 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install adapter dependencies
         working-directory: adapters
+        run: bun install --frozen-lockfile
+
+      - name: Install mobile dependencies
+        working-directory: mobile
         run: bun install --frozen-lockfile
 
       # Every deterministic lane, unconditionally — no path routing, no dependency
@@ -73,6 +80,8 @@ jobs:
         run: bun run check:adapters
       - name: Desktop lint, tests, and build
         run: bun run check:desktop
+      - name: Mobile typecheck, lint, and tests
+        run: bun run check:mobile
       - name: Electron host checks
         run: bun run check:electron
       - name: Persistence upgrade contracts
@@ -123,4 +132,4 @@ jobs:
       - name: Module graph health
         run: bun test ./scripts/pr/module-graph.test.ts
       - name: Impact report on the full tree
-        run: bun run check:impact --files "$(git ls-files 'src/*' 'desktop/*' 'adapters/*' | head -400 | tr '\n' ',')"
+        run: bun run check:impact --files "$(git ls-files 'src/*' 'desktop/*' 'adapters/*' 'mobile/*' | head -400 | tr '\n' ',')"

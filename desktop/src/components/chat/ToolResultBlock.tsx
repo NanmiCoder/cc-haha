@@ -41,6 +41,7 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
       {/* Status header */}
       <button
         type="button"
+        data-chat-disclosure="true"
         onClick={() => {
         const next = !expanded
         setLocalExpanded(next)
@@ -102,6 +103,7 @@ export const ToolResultBlock = memo(function ToolResultBlock({ content, isError,
             if (disclosureKey) setDisclosure(disclosureKey, next)
           }}
           type="button"
+          data-chat-disclosure="true"
           className="flex h-7 w-full items-center justify-center border-t border-[var(--color-border)] text-[12px] text-[var(--color-text-tertiary)] transition-colors hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text-primary)] focus:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
         >
           {expanded ? t('tool.showLess') : t('tool.showMore', { count: text.length - 200 })}

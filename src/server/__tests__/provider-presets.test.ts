@@ -57,6 +57,34 @@ function makeRequest(
 }
 
 describe('provider presets API', () => {
+  test('exposes Flash with 1M in every DeepSeek slot and carries it into the runtime', async () => {
+    const { req, url, segments } = makeRequest('GET', '/api/providers/presets')
+    const response = await handleProvidersApi(req, url, segments)
+    const { presets } = await response.json()
+    const preset = presets.find((entry: { id: string }) => entry.id === 'deepseek')
+    expect(preset.defaultModels).toEqual({
+      main: 'deepseek-flash[1m]',
+      fable: 'deepseek-flash[1m]',
+      haiku: 'deepseek-flash[1m]',
+      sonnet: 'deepseek-flash[1m]',
+      opus: 'deepseek-flash[1m]',
+    })
+    const env = buildProviderManagedEnv({
+      id: 'deepseek-test', presetId: preset.id, name: preset.name,
+      baseUrl: preset.baseUrl, apiFormat: preset.apiFormat,
+      authStrategy: preset.authStrategy, apiKey: 'fake-deepseek-key',
+      models: preset.defaultModels,
+    })
+    for (const key of [
+      'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_FABLE_MODEL',
+      'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'ANTHROPIC_DEFAULT_OPUS_MODEL',
+    ]) {
+      expect(env[key]).toBe('deepseek-flash[1m]')
+    }
+    expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS)['deepseek-flash']).toBe(1_000_000)
+  })
+
   test('exposes AruHub first among sponsors with signup copy and the new badge', async () => {
     const { req, url, segments } = makeRequest('GET', '/api/providers/presets')
     const response = await handleProvidersApi(req, url, segments)
@@ -214,10 +242,10 @@ describe('provider presets API', () => {
     expect(ollama?.authStrategy).toBe('auth_token_empty_api_key')
     expect(ollama?.defaultModels.main).toBe('qwen3.6:27b')
     expect(deepseek?.authStrategy).toBe('auth_token')
-    expect(deepseek?.defaultModels.main).toBe('deepseek-v4-pro[1m]')
-    expect(deepseek?.defaultModels.haiku).toBe('deepseek-v4-flash')
-    expect(deepseek?.defaultModels.sonnet).toBe('deepseek-v4-pro[1m]')
-    expect(deepseek?.defaultModels.opus).toBe('deepseek-v4-pro[1m]')
+    expect(deepseek?.defaultModels.main).toBe('deepseek-flash[1m]')
+    expect(deepseek?.defaultModels.haiku).toBe('deepseek-flash[1m]')
+    expect(deepseek?.defaultModels.sonnet).toBe('deepseek-flash[1m]')
+    expect(deepseek?.defaultModels.opus).toBe('deepseek-flash[1m]')
     expect(deepseek?.defaultEnv?.CC_HAHA_SEND_DISABLED_THINKING).toBeUndefined()
     expect(deepseek?.defaultEnv).toEqual({})
     expect(zhipu?.baseUrl).toBe('https://open.bigmodel.cn/api/anthropic')
@@ -520,6 +548,88 @@ describe('provider presets API', () => {
       const ids = PROVIDER_PRESETS.map((preset) => preset.id)
       expect(ids.indexOf('opencode-go')).toBeGreaterThan(-1)
       expect(ids.indexOf('opencode-go')).toBeLessThan(ids.indexOf('lmstudio'))
+    })
+  })
+
+  /**
+   * OpenRouter is a pure aggregation gateway: it speaks Anthropic Messages natively
+   * at its own root, so the preset must stay a direct connection (no local proxy,
+   * no per-model routing, no injected env) and let the user pick any namespaced
+   * model id from the live catalog.
+   */
+  describe('OpenRouter preset', () => {
+    const openrouter = PROVIDER_PRESETS.find((preset) => preset.id === 'openrouter')!
+
+    test('publishes a direct Anthropic-native preset with API key signup', () => {
+      expect(openrouter).toBeDefined()
+      expect(openrouter.name).toBe('OpenRouter')
+      expect(openrouter.baseUrl).toBe('https://openrouter.ai/api')
+      expect(openrouter.apiFormat).toBe('anthropic')
+      expect(openrouter.authStrategy).toBe('auth_token')
+      expect(openrouter.needsApiKey).toBe(true)
+      expect(openrouter.websiteUrl).toBe('https://openrouter.ai')
+      expect(openrouter.apiKeyUrl).toBe('https://openrouter.ai/settings/keys')
+      expect(openrouter.isNew).toBe(true)
+      expect(openrouter.deprecated).toBeUndefined()
+      // Claude Code appends /v1/messages itself; an /api/v1 base URL would 404.
+      expect(openrouter.baseUrl).not.toMatch(/\/v1$/)
+    })
+
+    test('stays out of the sponsor row and ships no proxy or routing rules', () => {
+      expect(openrouter.featured).toBeUndefined()
+      expect(openrouter.promoText).toBeUndefined()
+      expect(openrouter.modelApiFormats).toBeUndefined()
+      expect(openrouter.upstreamHeaders).toBeUndefined()
+      // An empty defaultEnv is deliberate: a preset-wide auto-compact window or
+      // subagent pin would be wrong for a catalog spanning many vendors (#1162).
+      expect(openrouter.defaultEnv).toEqual({})
+      expect(providerNeedsProxy(openrouter.apiFormat, undefined)).toBe(false)
+    })
+
+    test('connects straight to OpenRouter with the token and a cleared x-api-key', () => {
+      const env = buildProviderManagedEnv({
+        id: 'openrouter-test', presetId: openrouter.id, name: openrouter.name,
+        baseUrl: openrouter.baseUrl, apiFormat: openrouter.apiFormat,
+        authStrategy: openrouter.authStrategy, apiKey: 'sk-or-offline-fixture',
+        models: openrouter.defaultModels,
+      })
+      expect(env.ANTHROPIC_BASE_URL).toBe('https://openrouter.ai/api')
+      // anthropic-format presets that do not opt out of nested tool-result media
+      // bypass the loopback proxy entirely.
+      expect(env.ANTHROPIC_BASE_URL).not.toContain('127.0.0.1')
+      expect(env.ANTHROPIC_AUTH_TOKEN).toBe('sk-or-offline-fixture')
+      expect(env.ANTHROPIC_API_KEY).toBe('')
+      expect(env.ANTHROPIC_MODEL).toBe('anthropic/claude-sonnet-5.5')
+      expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe('anthropic/claude-opus-5.5')
+      expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('anthropic/claude-sonnet-5.5')
+      expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('anthropic/claude-haiku-5.5')
+      expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)).toMatchObject({
+        'anthropic/claude-sonnet-5.5': 1000000,
+        'anthropic/claude-opus-5.5': 1000000,
+        'anthropic/claude-haiku-5.5': 1000000,
+      })
+      // A preset-wide timeout or compact window here would leak into every other
+      // provider through the managed-env erase list.
+      expect(env.API_TIMEOUT_MS).toBeUndefined()
+      expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
+    })
+
+    test('publishes a context window for every model it offers as a default', () => {
+      for (const model of Object.values(openrouter.defaultModels)) {
+        // Ids carry the author/ namespace, so the built-in table alone cannot
+        // resolve them; the preset must carry the window itself.
+        expect(model).toContain('/')
+        expect(openrouter.modelContextWindows?.[model], model).toBeGreaterThan(0)
+      }
+    })
+
+    test('stays ordered before the local endpoints so the catalog layout is stable', () => {
+      const ids = PROVIDER_PRESETS.map((preset) => preset.id)
+      expect(ids.indexOf('openrouter')).toBeGreaterThan(-1)
+      expect(ids.indexOf('openrouter')).toBeLessThan(ids.indexOf('lmstudio'))
+      expect(PROVIDER_PRESETS.at(-3)?.id).toBe('lmstudio')
+      expect(PROVIDER_PRESETS.at(-2)?.id).toBe('ollama')
+      expect(PROVIDER_PRESETS.at(-1)?.id).toBe('custom')
     })
   })
 

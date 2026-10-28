@@ -22,6 +22,7 @@ Rules closer to the code take precedence. For the directory you are changing, re
 | Chinese and English product/source documentation | [docs/AGENTS.md](docs/AGENTS.md) |
 | React documentation site and build tooling | [site/AGENTS.md](site/AGENTS.md) |
 | CI and quality policy | [.github/AGENTS.md](.github/AGENTS.md), `scripts/pr/`, `scripts/quality-gate/` |
+| GitHub issue routing and shared local task state | [.agents/workflows/issue-router.md](.agents/workflows/issue-router.md) |
 | Desktop releases and auto-update | `release-notes/`, `scripts/release.ts`, [release guide](docs/internals/contributing.md#发版与自动更新) |
 
 ## Implementation Rules

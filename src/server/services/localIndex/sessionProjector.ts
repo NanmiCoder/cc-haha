@@ -46,7 +46,9 @@ import type {
 // 10: project the explicit per-session ChatGPT OAuth Fast selection.
 // 11: Haiku 5.5 gained (prompt-length tiered) pricing; rebuild the persisted per-model dollars.
 // 12: project the immutable conversation agent profile; legacy sessions use standard.
-export const SESSION_SUMMARY_PARSER_VERSION = 12
+// 13: a reply's usage is the per-field maximum over its content-block lines, not its first line;
+//     rebuild the persisted per-model tokens and dollars that under-counted zero-first replies.
+export const SESSION_SUMMARY_PARSER_VERSION = 13
 
 export type SessionSourceCandidate = {
   path: string

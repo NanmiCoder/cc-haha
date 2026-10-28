@@ -422,6 +422,16 @@ describe('ImChatRuntime server stream', () => {
     expect(notices.join('\n')).toContain('req-1')
   })
 
+  it('asks once when the server re-announces the same request with a new auto-answer deadline', async () => {
+    const { runtime, notices } = createRuntime()
+    const request = { type: 'permission_request' as const, requestId: 'ask-1', toolName: 'AskUserQuestion', input: { questions: [] } }
+
+    await runtime.handleServerMessage(CHAT_ID, request)
+    await runtime.handleServerMessage(CHAT_ID, { ...request, autoAnswerDeadline: Date.now() + 60_000 })
+
+    expect(notices.filter(notice => notice.includes('ask-1'))).toHaveLength(1)
+  })
+
   it('routes a numeric reply to the single pending permission request', async () => {
     const { runtime, bridge } = createRuntime()
 

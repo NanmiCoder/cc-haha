@@ -74,6 +74,10 @@ import { resolveAppliedEffort } from "../../utils/effort.js";
 import { isEnvTruthy } from "../../utils/envUtils.js";
 import { errorMessage } from "../../utils/errors.js";
 import { computeFingerprintFromMessages } from "../../utils/fingerprint.js";
+import {
+  normalizeImagesForAPI,
+  replaceInvalidImagesForAPI,
+} from '../../utils/imageValidation.js'
 import { captureAPIRequest, logError } from "../../utils/log.js";
 import {
   createSystemStreamingFallbackMessage,
@@ -86,6 +90,7 @@ import {
   stripToolReferenceBlocksFromUserMessage,
 } from "../../utils/messages.js";
 import {
+  getCanonicalName,
   getDefaultOpusModel,
   getDefaultSonnetModel,
   getSmallFastModel,
@@ -209,7 +214,6 @@ import {
   isToolSearchEnabled,
 } from "src/utils/toolSearch.js";
 import { API_MAX_MEDIA_PER_REQUEST } from "../../constants/apiLimits.js";
-import { prepareRequestImages } from "./requestImages.js";
 import { ADVISOR_BETA_HEADER } from "../../constants/betas.js";
 import {
   formatDeferredToolLine,
@@ -1486,10 +1490,13 @@ async function* queryModel(
     API_MAX_MEDIA_PER_REQUEST,
   );
 
-  // Replace image bytes that cannot be an image and, above the many-image
-  // threshold, downscale every image to the per-image limit the API enforces
-  // there; otherwise one oversized image in history fails every later turn.
-  messagesForAPI = await prepareRequestImages(messagesForAPI);
+  // Bytes that are not an image become a text note first: the dimension pass
+  // below cannot measure them, and history resends them every turn.
+  messagesForAPI = replaceInvalidImagesForAPI(messagesForAPI)
+  const provider = getAPIProvider()
+  messagesForAPI = await normalizeImagesForAPI(messagesForAPI, {
+    countDocuments: provider === 'bedrock' || provider === 'vertex',
+  })
 
   // Instrumentation: Track message count after normalization
   logEvent("tengu_api_after_normalize", {
@@ -1792,7 +1799,7 @@ async function* queryModel(
 
     // Opus 5 and Haiku 5.5 reject disabled thinking above high effort. Preserve
     // the user's explicit thinking choice and use the highest compatible effort.
-    const modelId = options.model.toLowerCase()
+    const modelId = getCanonicalName(options.model)
     if (
       sendsExplicitDisabledThinking &&
       (modelId.includes('claude-opus-5') || modelId.includes('claude-haiku-5-5')) &&

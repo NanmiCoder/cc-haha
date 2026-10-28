@@ -101,6 +101,36 @@ beforeEach(() => {
 })
 
 describe('maybeResizeAndDownsampleImageBuffer', () => {
+  test('checks a small PNG against the request cap even if the processor is unavailable', async () => {
+    processorMode = 'throw'
+    const oversized = makePngHeader(40, 2001)
+    await expect(maybeResizeAndDownsampleImageBuffer(oversized, oversized.length, 'png', 2000))
+      .rejects.toThrow('2000x2000px')
+    const allowed = makePngHeader(40, 2000)
+    const result = await maybeResizeAndDownsampleImageBuffer(allowed, allowed.length, 'png', 2000)
+    expect(result.buffer).toBe(allowed)
+  })
+
+  for (const format of ['png', 'jpeg', 'webp', 'gif']) {
+    test(`encoding failure cannot pass through an oversized ${format}`, async () => {
+      originalPngDimensions = { width: 30, height: 3000, format }
+      outputForOperations = () => { throw new Error('fixture encoder failure') }
+      const buffer = Buffer.alloc(1024, 1)
+      await expect(maybeResizeAndDownsampleImageBuffer(buffer, buffer.length, format, 2000))
+        .rejects.toThrow('2000x2000px')
+    })
+  }
+
+  test('unknown dimensions cannot bypass an explicit request cap', async () => {
+    const buffer = Buffer.from('unknown-image')
+    originalPngDimensions = { format: 'jpeg' }
+    await expect(maybeResizeAndDownsampleImageBuffer(buffer, buffer.length, 'jpeg', 2000))
+      .rejects.toThrow('Unable to verify image dimensions')
+    processorMode = 'throw'
+    await expect(maybeResizeAndDownsampleImageBuffer(buffer, buffer.length, 'jpeg', 2000))
+      .rejects.toThrow('Unable to verify image dimensions')
+  })
+
   test('passes through a tall screenshot when bytes are already within API limits', async () => {
     const imageBuffer = Buffer.alloc(1024, 1)
 

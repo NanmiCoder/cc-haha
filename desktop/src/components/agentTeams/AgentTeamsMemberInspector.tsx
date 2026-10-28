@@ -8,7 +8,6 @@ import {
   getMemberAvatarKey,
   getMemberWorkState,
   getWorkbenchTaskState,
-  inferTaskOwner,
   parseWorkbenchMessageBody,
   resolveMemberModel,
   resolveTeamMemberIdentity,
@@ -99,9 +98,7 @@ function taskBelongsToMember(
   member: TeamMember,
   snapshot: TeamWorkbenchSnapshot,
 ): boolean {
-  if (taskOwnedByMember(task, member)) return true
-  const attribution = inferTaskOwner(task, snapshot)
-  return attribution ? memberMatchesIdentity(member, attribution.identity) : false
+  return taskOwnedByMember(task, member, snapshot)
 }
 
 function visibleSnapshots(
@@ -153,6 +150,13 @@ function deriveTaskHistory(
   const selectedTime = timestampMs(snapshot.generatedAt)
 
   return Array.from(history.values())
+    // A reassignment must not leave the former owner's last frame in the
+    // upcoming/running queue. Replay still shows it before the hand-off, and
+    // the communication history retains the assignment messages.
+    .filter(entry => {
+      const currentTask = tasksById.get(entry.task.id)
+      return currentTask ? taskBelongsToMember(currentTask, member, snapshot) : entry.task.status === 'completed'
+    })
     .map((entry): TaskHistoryEntry => {
       const currentTask = tasksById.get(entry.task.id)
       const task = currentTask && taskBelongsToMember(currentTask, member, snapshot)

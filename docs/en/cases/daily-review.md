@@ -12,13 +12,13 @@ If you want a quick look at yesterday's changes when you open your computer, sav
 ## Before you start
 
 - Connect a model and choose a project whose Git history you can inspect.
-- The desktop app must be open and the computer awake. Missed runs are not replayed; [scheduled tasks](../desktop/schedule.md) run locally.
-- Scheduled tasks use **full permissions**. Choose the narrowest practical working directory and read the prompt below. For an isolated trial, enable the task's worktree option.
+- The desktop app must be open and the computer awake. [Scheduled tasks](../desktop/schedule.md) run locally. New tasks catch up once after resuming, rather than replaying every missed interval. Older independent cron tasks retain their no-catch-up behavior.
+- Open a chat in the target project and check its model, workspace, and permission settings. This example uses **Continue a chat**, inheriting those settings without granting additional permissions.
 
 ## Steps
 
 1. Open **Scheduled → ＋ New task** in the sidebar. Name it `daily-code-review` and describe it as “Review commits from the last 24 hours on workdays.”
-2. Set the repository as **working directory**, choose a configured model, and set frequency to **workdays** at a time when your computer is normally on. Leave notifications off for the first run; turn on desktop or messaging notifications after you trust the output.
+2. Choose **Continue a chat** and select that project chat under **Run in**. Set the repeat frequency to **workdays**, and check the time and time zone. Leave notifications off for the first run; afterwards, choose **Important updates** and desktop or messaging channels.
 3. Paste the prompt. For the first trial, you can change “last 24 hours” to a range you know contains a commit.
 
 ```text
@@ -34,11 +34,13 @@ If you cannot read Git history or run a check, state why. Never call a check “
 
 ## Expected result
 
-The first run leaves a status and full session in the logs. The report should cite traceable findings, explicitly say there were no commits, or say it found no issues. “Code quality looks good” alone is not verifiable.
+The first run leaves a status and result in the logs, and a **Sent by scheduled task** introduction in the original chat. The report should cite traceable findings, explicitly say there were no commits, or say it found no issues. “Code quality looks good” alone is not verifiable.
+
+You can also create the task directly in that chat: “Review using the instructions above every weekday at 9 am, continuing here.” Successful creation produces an editable card and a sidebar clock. Later, ask “Read the latest result for daily-code-review” to retrieve the actual execution record without finding the log yourself.
 
 ## Acceptance and common snags
 
 - Check that cited commits belong to the intended repo and time range. Open one cited file to verify the location and finding.
 - If nothing runs, check that the app is open, the computer awake, the task enabled, and the scheduled time correct.
-- “Review only” is a prompt instruction, not a permission boundary. Full permissions still apply. Keep the working directory narrow, consider an isolated worktree, and inspect the full first run.
+- “Review only” is a prompt instruction, not a permission boundary. Continuing a chat preserves its permissions; older independent tasks retain their previous full-permissions mode. A working directory is not a security sandbox. Inspect the actual tool calls on the first run.
 - Frequent runs increase model use; start with once a day. The [scheduled task reference](../desktop/schedule.md) explains every field and log action.

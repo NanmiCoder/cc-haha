@@ -27,6 +27,7 @@ jobs:
       blocked: ${{ steps.policy.outputs.blocked }}
       blocking_reasons: ${{ steps.policy.outputs.blocking_reasons }}
       desktop_checks: ${{ steps.policy.outputs.desktop_checks }}
+      mobile_checks: ${{ steps.policy.outputs.mobile_checks }}
       server_checks: ${{ steps.policy.outputs.server_checks }}
       adapter_checks: ${{ steps.policy.outputs.adapter_checks }}
       desktop_native_checks: ${{ steps.policy.outputs.desktop_native_checks }}
@@ -152,6 +153,29 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Run desktop checks
         run: bun run check:desktop
+
+  mobile-checks:
+    name: mobile-checks
+    needs: scope-plan
+    if: needs.scope-plan.outputs.mobile_checks == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install root dependencies
+        run: bun install --frozen-lockfile
+      - name: Install mobile dependencies
+        working-directory: mobile
+        run: bun install --frozen-lockfile
+      - name: Run offline mobile checks
+        run: bun run check:mobile
 
   server-checks:
     name: server-checks
@@ -415,6 +439,7 @@ jobs:
       - scope-plan
       - policy-enforcement
       - desktop-checks
+      - mobile-checks
       - server-checks
       - provider-contract-checks
       - chat-contract-checks
@@ -473,6 +498,7 @@ jobs:
           require_success "scope-plan" "${{ needs.scope-plan.result }}"
           require_success "policy-enforcement" "${{ needs.policy-enforcement.result }}"
           require_selected "desktop-checks" "${{ needs.scope-plan.outputs.desktop_checks }}" "${{ needs.desktop-checks.result }}"
+          require_selected "mobile-checks" "${{ needs.scope-plan.outputs.mobile_checks }}" "${{ needs.mobile-checks.result }}"
           require_selected "server-checks" "${{ needs.scope-plan.outputs.server_checks }}" "${{ needs.server-checks.result }}"
           require_selected "provider-contract-checks" "${{ needs.scope-plan.outputs.provider_contract_checks }}" "${{ needs.provider-contract-checks.result }}"
           require_selected "chat-contract-checks" "${{ needs.scope-plan.outputs.chat_contract_checks }}" "${{ needs.chat-contract-checks.result }}"

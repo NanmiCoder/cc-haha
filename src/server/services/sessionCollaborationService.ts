@@ -24,6 +24,9 @@ export type CollaborationMember = {
   state: CollaborationState
   stopped: boolean
   result?: string
+  /** Observed successful root result; absent on historical records with no evidence. */
+  completedAt?: string
+  completionResultId?: string
   /** Display title, attached at snapshot time so tool results render names immediately. */
   title?: string
   runtime?: SessionRuntimeSelection
@@ -39,6 +42,7 @@ export type CollaborationCreateInput = {
   providerId?: string | null
   runtime?: SessionRuntimeSelection
 }
+export type SessionCompletionState = Pick<CollaborationMember, 'state' | 'completedAt'> & { id: string }
 export type CollaborationCreateResult = { sessionId: string; workDir?: string; messageId: string; title?: string; state: CollaborationState; delivery: CollaborationMessage['status']; error?: string; errorCode?: string }
 export type SessionCollaborationDependencies = {
   statePath: string
@@ -140,7 +144,9 @@ export function migrateCollaborationStore(value: unknown): Store {
   for (const [id, member] of Object.entries(source.members)) {
     if (!member || typeof member !== 'object' || member.sessionId !== id || typeof member.rootSessionId !== 'string' ||
       !['queued', 'running', 'idle', 'blocked', 'completed', 'failed', 'stopped'].includes(member.state) ||
-      (member.title !== undefined && typeof member.title !== 'string')) throw new Error('Invalid collaboration member')
+      (member.title !== undefined && typeof member.title !== 'string') ||
+      (member.completedAt !== undefined && (typeof member.completedAt !== 'string' || !Number.isFinite(Date.parse(member.completedAt)))) ||
+      (member.completionResultId !== undefined && typeof member.completionResultId !== 'string')) throw new Error('Invalid collaboration member')
   }
   for (const message of source.messages) {
     if (!message || typeof message.id !== 'string' || typeof message.sourceSessionId !== 'string' ||
@@ -693,6 +699,7 @@ export class SessionCollaborationService {
 
   async send(callerSessionId: string, targetSessionId: string, content: string, messageId?: string): Promise<CollaborationMessage> {
     if (!content?.trim()) throw ApiError.badRequest('content is required')
+    if (callerSessionId === targetSessionId) throw ApiError.badRequest('A session cannot send a message to itself')
     if (!await this.deps.sessions.exists(targetSessionId)) throw ApiError.notFound('Target session not found')
     const message = await this.mutate(() => {
       if (this.ensureMember(callerSessionId).stopped) throw ApiError.conflict('Caller session was stopped; new user input is required')
@@ -721,6 +728,17 @@ export class SessionCollaborationService {
           : member
       }),
       messages: this.store.messages.filter(message => !ids || ids.has(message.targetSessionId) || ids.has(message.sourceSessionId)) })
+  }
+
+  /** Small persisted projection: dashboard polling must not clone messages or hydrate titles. */
+  async listCompletionStates(): Promise<SessionCompletionState[]> {
+    await this.ready
+    await this.tail
+    return Object.values(this.store.members).map(member => ({
+      id: member.sessionId,
+      state: member.state,
+      ...(member.completedAt ? { completedAt: member.completedAt } : {}),
+    }))
   }
 
   async wait(afterRevision: number, sessionIds?: string[], timeoutMs = COLLABORATION_WAIT_DEFAULT_MS, signal?: AbortSignal, callerSessionId?: string): Promise<CollaborationSnapshot> {
@@ -912,9 +930,16 @@ export class SessionCollaborationService {
 
   async onSessionState(sessionId: string, state: CollaborationState, result?: string, eventId?: string): Promise<void> {
     await this.mutate(() => {
-      this.userAdmissions.delete(sessionId)
       const member = this.ensureMember(sessionId)
+      // Replayed terminal events cannot move a completion into another day, or
+      // complete a newer turn that has already started on this session.
+      if (state === 'completed' && eventId && member.completionResultId === eventId) return
+      this.userAdmissions.delete(sessionId)
       const changed = member.state !== state || member.result !== result
+      if (state === 'completed' && !member.stopped && (changed || eventId || !member.completedAt)) {
+        member.completedAt = (this.deps.now?.() ?? new Date()).toISOString()
+        member.completionResultId = eventId
+      }
       if (!member.stopped) member.state = state
       if (result !== undefined) member.result = result
       if (changed && !member.stopped && member.rootSessionId !== sessionId && ['completed', 'blocked', 'failed'].includes(state)) {

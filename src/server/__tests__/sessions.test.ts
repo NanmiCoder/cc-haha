@@ -3964,6 +3964,78 @@ describe('SessionService', () => {
         totalOutputTokens: 5,
       })
   })
+
+  it('shows the provider fallback window as the context window of a session without a running CLI', async () => {
+    // deepseek-v4-flash is 1M in the built-in table. Capping the provider's
+    // fallback window lowers compaction, and the window shown has to follow.
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, 'context-window-cap')
+    const userId = crypto.randomUUID()
+    const assistant = makeAssistantEntry('reply', userId, { input_tokens: 1200, output_tokens: 80 })
+    ;(assistant.message as { model: string }).model = 'deepseek-v4-flash'
+    await writeSessionFile(sanitizePath(workDir), sessionId, [
+      { ...makeUserEntry('hello', userId), sessionId },
+      { ...assistant, sessionId },
+    ])
+
+    const providerService = (service as unknown as {
+      providerService: {
+        listProviders: () => Promise<unknown>
+        getProviderRuntimeEnv: (id: string) => Promise<Record<string, string> | null>
+      }
+    }).providerService
+    // The snapshot cache is keyed on the saved providers, so the capped state
+    // has to be visible there as it is when the user saves the setting.
+    let autoCompactWindow: number | undefined
+    spyOn(providerService, 'listProviders').mockImplementation(async () => ({
+      activeId: 'cap-provider',
+      providers: [{ id: 'cap-provider', models: {}, autoCompactWindow }],
+    }))
+    spyOn(providerService, 'getProviderRuntimeEnv').mockImplementation(async () => (
+      autoCompactWindow === undefined
+        ? {}
+        : { CLAUDE_CODE_AUTO_COMPACT_WINDOW: String(autoCompactWindow) }
+    ))
+
+    const uncapped = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(uncapped?.contextEstimate?.rawMaxTokens).toBe(1_000_000)
+
+    autoCompactWindow = 200_000
+    const capped = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(capped?.contextEstimate?.rawMaxTokens).toBe(200_000)
+  })
+
+  it('caps a session whose recorded provider was deleted with the provider it now runs on', async () => {
+    // A resumed session is relaunched on the active provider when the recorded
+    // one is gone, so the window shown must use the active provider's cap.
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, 'context-window-deleted-provider')
+    const userId = crypto.randomUUID()
+    const assistant = makeAssistantEntry('reply', userId, { input_tokens: 1200, output_tokens: 80 })
+    ;(assistant.message as { model: string }).model = 'deepseek-v4-flash'
+    await writeSessionFile(sanitizePath(workDir), sessionId, [
+      { ...makeSessionMetaEntry(workDir), sessionId, runtimeProviderId: 'deleted-provider' },
+      { ...makeUserEntry('hello', userId), sessionId },
+      { ...assistant, sessionId },
+    ])
+
+    const providerService = (service as unknown as {
+      providerService: {
+        listProviders: () => Promise<unknown>
+        getProviderRuntimeEnv: (id: string) => Promise<Record<string, string> | null>
+      }
+    }).providerService
+    spyOn(providerService, 'listProviders').mockImplementation(async () => ({
+      activeId: 'active-provider',
+      providers: [{ id: 'active-provider', models: {}, autoCompactWindow: 200_000 }],
+    }))
+    spyOn(providerService, 'getProviderRuntimeEnv').mockImplementation(async (id: string) => (
+      id === 'active-provider' ? { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '200000' } : null
+    ))
+
+    const snapshot = await service.getInspectionTranscriptSnapshot(sessionId)
+    expect(snapshot?.contextEstimate?.rawMaxTokens).toBe(200_000)
+  })
 })
 
 // ============================================================================
@@ -4231,6 +4303,54 @@ describe('Sessions API', () => {
       blockLine(),
       blockLine(),
       blockLine(),
+    ])
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
+    expect(res.status).toBe(200)
+    const body = await res.json() as {
+      usage?: {
+        totalInputTokens: number
+        totalOutputTokens: number
+        totalCacheReadInputTokens: number
+        totalCacheCreationInputTokens: number
+      }
+    }
+
+    expect(body.usage?.totalInputTokens).toBe(100)
+    expect(body.usage?.totalOutputTokens).toBe(250)
+    expect(body.usage?.totalCacheReadInputTokens).toBe(1_000)
+    expect(body.usage?.totalCacheCreationInputTokens).toBe(20)
+  })
+
+  it('counts the final usage of a reply whose first content-block line carried zero output', async () => {
+    const workDir = await fs.mkdtemp(path.join(tmpDir, 'api-session-usage-zero-first-'))
+    const sessionId = '33333333-4444-5555-6666-777777777777'
+    const projectDir = '-tmp-api-session-usage-zero-first'
+    // The first line of a reply can be written before the final usage is known; only a later
+    // line carries the real output tokens. Keeping the first line recorded such replies as ~0.
+    const blockLine = (usage: Record<string, number>) => ({
+      parentUuid: null,
+      isSidechain: false,
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-4-7',
+        id: 'msg_zero_first_reply',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'block' }],
+        usage,
+      },
+      uuid: crypto.randomUUID(),
+      timestamp: '2026-01-01T00:02:00.000Z',
+      sessionId,
+      cwd: workDir,
+    })
+    await writeSessionFile(projectDir, sessionId, [
+      makeSessionMetaEntry(workDir),
+      makeUserEntry('go', crypto.randomUUID()),
+      blockLine({ input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 1_000 }),
+      blockLine({ input_tokens: 100, output_tokens: 5, cache_read_input_tokens: 1_000 }),
+      blockLine({ input_tokens: 100, output_tokens: 250, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 20 }),
     ])
 
     const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/inspection?includeContext=0`)
@@ -6396,9 +6516,9 @@ describe('Sessions API', () => {
     ])
   })
 
-  it('POST /api/sessions/:id/rewind should restore a single edited file', async () => {
-    const sessionId = 'bbbbbbbb-bbbb-cccc-dddd-eeeeeeeeeeee'
-    const workDir = path.join(tmpDir, 'single-file-fixture')
+  it.each(['both', 'code'] as const)('POST /api/sessions/:id/rewind restores a single file in %s mode', async (mode) => {
+    const sessionId = crypto.randomUUID()
+    const workDir = path.join(tmpDir, `single-file-fixture-${mode}`)
     const targetFile = path.join(workDir, 'src', 'app.js')
     const userId = crypto.randomUUID()
     const assistantId = crypto.randomUUID()
@@ -6451,7 +6571,7 @@ describe('Sessions API', () => {
     const executeRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userMessageIndex: 0 }),
+      body: JSON.stringify({ userMessageIndex: 0, mode }),
     })
     expect(executeRes.status).toBe(200)
     expect(await fs.readFile(targetFile, 'utf-8')).toBe(
@@ -6459,7 +6579,10 @@ describe('Sessions API', () => {
     )
 
     const remainingMessages = await service.getSessionMessages(sessionId)
-    expect(remainingMessages).toHaveLength(0)
+    expect(remainingMessages.map(message => message.id)).toEqual(mode === 'code' ? [userId, assistantId] : [])
+    const result = await executeRes.json() as { conversation: { messagesRemoved: number }; mode: string }
+    expect(result.mode).toBe(mode)
+    expect(result.conversation.messagesRemoved).toBe(mode === 'code' ? 0 : 2)
   })
 
   it('POST /api/sessions/:id/rewind should reject unsafe tracked paths before any partial restore', async () => {
@@ -9418,7 +9541,7 @@ describe('Sessions API', () => {
 
     const badRes = await fetch(`${baseUrl}/api/sessions/${sessionId}/rewind`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetUserMessageId: userId, mode: 'code' }),
+      body: JSON.stringify({ targetUserMessageId: userId, mode: 'unknown' }),
     })
     expect(badRes.status).toBe(400)
 

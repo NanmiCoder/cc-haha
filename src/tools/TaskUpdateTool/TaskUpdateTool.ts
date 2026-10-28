@@ -1,6 +1,7 @@
 import { feature } from 'bun:bundle'
 import { z } from 'zod/v4'
 import { isTeamExecutionApproved, readTeamPlan } from '../../utils/swarm/teamPlanStore.js'
+import { isValidTeamFile, readTeamFileAsync } from '../../utils/swarm/teamHelpers.js'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js'
@@ -162,6 +163,29 @@ export const TaskUpdateTool = buildTool({
           updatedFields: [],
           error: 'Task not found',
         },
+      }
+    }
+
+    // An assignment wakes only the named teammate. Accepting an invented
+    // name strands work in an inbox nobody reads while its dependents wait.
+    // Historical attribution and unchanged orphan assignments remain editable.
+    if (
+      teamName && owner && owner !== existingTask.owner &&
+      status !== 'deleted' && (status ?? existingTask.status) !== 'completed'
+    ) {
+      const storedTeam = await readTeamFileAsync(teamName)
+      const team = isValidTeamFile(storedTeam) ? storedTeam : null
+      const onRoster = owner === 'team-lead' ||
+        team?.members.some(member => member.name === owner) ||
+        Object.values(context.getAppState().teamContext?.teammates ?? {})
+          .some(member => member.name === owner)
+      if (team && !onRoster) {
+        const plan = await readTeamPlan(teamName).catch(() => null)
+        const staged = plan && ['draft', 'review_pending', 'launching'].includes(plan.state) &&
+          plan.members.some(member => member.name === owner)
+        if (!staged) {
+          return { data: { success: false, taskId, updatedFields: [], error: `No teammate named '${owner}' is currently on team '${teamName}'. Assign an existing teammate or ask the lead to spawn one first.` } }
+        }
       }
     }
 

@@ -1,15 +1,21 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/Button'
-import { TextArea } from '@/components/ui/TextArea'
+import type { ComposerMention } from '@/lib/composerMentions'
 import { useTranslation } from '../../i18n'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { AgentTeamChip } from './AgentTeamChip'
 import { AttachmentGallery } from './AttachmentGallery'
+import { MentionComposer, type MentionComposerHandle } from './MentionComposer'
 import { shouldSubmitOnEnter } from './sendShortcut'
 import type { UserMessageEditDraft } from './userMessageEdit'
+import { useEditorCapabilityTriggers } from './useEditorCapabilityTriggers'
+
+const NO_MENTIONS: ComposerMention[] = []
 
 type Props = {
   initialDraft: UserMessageEditDraft
+  /** Where `/` and `@` look up commands, skills and plugins. */
+  sessionId?: string
   submitting: boolean
   disabled: boolean
   onDraftChange: (draft: UserMessageEditDraft) => void
@@ -17,11 +23,9 @@ type Props = {
   onSubmit: (draft: UserMessageEditDraft) => void
 }
 
-const MIN_ROWS = 2
-const MAX_ROWS = 12
-
 export function UserMessageEditor({
   initialDraft,
+  sessionId,
   submitting,
   disabled,
   onDraftChange,
@@ -31,14 +35,15 @@ export function UserMessageEditor({
   const t = useTranslation()
   const chatSendBehavior = useSettingsStore((state) => state.chatSendBehavior)
   const [draft, setDraft] = useState(initialDraft)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const composerRef = useRef<MentionComposerHandle>(null)
+  const cardRef = useRef<HTMLDivElement>(null)
   const composingRef = useRef(false)
 
   useEffect(() => {
-    const textarea = textareaRef.current
-    if (!textarea) return
-    textarea.focus()
-    textarea.setSelectionRange(textarea.value.length, textarea.value.length)
+    composerRef.current?.focus()
+    composerRef.current?.setSelectionOffsets(initialDraft.text.length)
+    // Opening the editor is the only moment the draft's own length places the caret.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const updateDraft = (next: UserMessageEditDraft) => {
@@ -46,33 +51,52 @@ export function UserMessageEditor({
     onDraftChange(next)
   }
 
+  const mentions = draft.mentions ?? NO_MENTIONS
+  const triggers = useEditorCapabilityTriggers({
+    sessionId,
+    text: draft.text,
+    mentions,
+    composerRef,
+    containerRef: cardRef,
+    onChange: (text, nextMentions) => updateDraft({ ...draft, text, mentions: nextMentions }),
+  })
+
   const unavailableCount = draft.attachments.filter((attachment) => !attachment.sendable).length
   const hasContent = draft.text.trim().length > 0 ||
     draft.attachments.some((attachment) => attachment.sendable)
   const canSubmit = hasContent && !disabled && !submitting
-  const rows = Math.min(MAX_ROWS, Math.max(MIN_ROWS, draft.text.split('\n').length))
 
-  const handleKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-    // The message list reads arrow keys and Space as scroll intent; keystrokes
-    // typed into the editor belong to the editor alone.
-    event.stopPropagation()
-    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return
+  const handleKeyDown = (event: KeyboardEvent): boolean => {
+    if (composingRef.current || event.isComposing || event.keyCode === 229) return false
+    if (triggers.handleKeyDown(event)) return true
     if (event.key === 'Escape') {
       event.preventDefault()
       if (!submitting) onCancel()
-      return
+      return true
     }
     if (shouldSubmitOnEnter(event, chatSendBehavior)) {
       event.preventDefault()
       if (canSubmit) onSubmit(draft)
+      return true
     }
+    return false
   }
+
+  const aria = useMemo(
+    () => ({ ...triggers.comboboxAria, 'aria-label': t('chat.editMessageInputLabel') }),
+    [t, triggers.comboboxAria],
+  )
 
   return (
     <div
+      ref={cardRef}
       data-testid="user-message-editor"
-      className="flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2.5"
+      // The keys typed here belong to the editor; the message list reads arrows
+      // and Space as scroll intent.
+      onKeyDown={(event) => event.stopPropagation()}
+      className="relative flex w-full flex-col gap-2 rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-2.5"
     >
+      {triggers.menus}
       {draft.agentTeam ? (
         <div className="flex">
           <AgentTeamChip onRemove={submitting ? undefined : () => updateDraft({ ...draft, agentTeam: false })} />
@@ -93,17 +117,20 @@ export function UserMessageEditor({
           {t('chat.editAttachmentUnavailable', { count: unavailableCount })}
         </p>
       ) : null}
-      <TextArea
-        ref={textareaRef}
-        aria-label={t('chat.editMessageInputLabel')}
+      <MentionComposer
+        ref={composerRef}
         value={draft.text}
-        rows={rows}
+        mentions={mentions}
         disabled={submitting}
-        onChange={(event) => updateDraft({ ...draft, text: event.target.value })}
+        onChange={(text, nextMentions) => {
+          updateDraft({ ...draft, text, mentions: nextMentions.length > 0 ? nextMentions : undefined })
+          triggers.detectTriggers(text, nextMentions)
+        }}
         onKeyDown={handleKeyDown}
         onCompositionStart={() => { composingRef.current = true }}
         onCompositionEnd={() => { composingRef.current = false }}
-        className="chat-reading-text resize-none"
+        editorClassName="chat-reading-text min-h-[52px] max-h-[320px] overflow-y-auto px-1 py-0.5 text-[var(--color-text-primary)]"
+        aria={aria}
       />
       <div className="flex items-center justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={onCancel} disabled={submitting}>

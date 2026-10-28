@@ -546,8 +546,14 @@ async function handleCurrentModel(req: Request): Promise<Response> {
             ? [...DEFAULT_MODELS]
             : await getStandaloneModelList()
 
+    // A saved account model may omit the default alias's 1M marker. Reuse its
+    // catalog metadata without changing the user's selected model id.
+    const accountModelEntry = isDeepSeekAccountProviderId(activeId)
+      ? availableModels.find((model) => baseModelId(model.id) === baseModelId(currentModelId))
+      : undefined
     const modelEntry = availableModels.find((m) => m.id === lookupId)
       || availableModels.find((m) => m.id === currentModelId)
+      || (accountModelEntry && { ...accountModelEntry, id: currentModelId })
       || {
         id: currentModelId,
         name: currentModelName,
