@@ -26,6 +26,9 @@ e2e-*.png
 # Local/generated artifacts
 artifacts/
 
+# Shared local issue-router state (all worktrees use the primary checkout)
+/.issue-router/
+
 # Desktop build output
 desktop/dist/
 desktop/electron-dist/

@@ -9,6 +9,10 @@ type Check = {
 const rootDir = process.cwd()
 const checks: Check[] = [
   {
+    title: 'Issue router shared SQLite schema migration and consistent backup recovery',
+    command: ['bun', '--no-env-file', 'test', './scripts/issue-router/persistence.test.ts'],
+  },
+  {
     title: 'Desktop scheduled tasks preserve legacy definitions and replay scheduled provenance',
     command: ['bun', 'test', './src/server/services/scheduledTaskRuntime.test.ts', './src/server/services/sessionService.scheduledTask.test.ts'],
   },

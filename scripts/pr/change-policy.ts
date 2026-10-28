@@ -166,6 +166,8 @@ const agentFlowPrefixes = [
 ]
 
 const persistencePrefixes = [
+  'scripts/issue-router/',
+  '.agents/workflows/issue-router.md',
   'src/server/services/persistentStorageMigrations',
   'src/server/__tests__/persistence-upgrade',
   'src/server/services/desktopUiPreferencesService',
@@ -187,6 +189,7 @@ const policyPrefixes = [
 ]
 
 const policyExactPaths = new Set([
+  '.agents/workflows/issue-router.md',
   '.easignore',
   '.github/CODEOWNERS',
   '.github/copilot-instructions.md',
