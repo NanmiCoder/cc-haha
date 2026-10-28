@@ -62,6 +62,20 @@ describe('diagnostic credential redaction', () => {
     expect(redactDiagnosticText(result)).toBe(result)
   })
 
+  test('redacts truncated credential values while retaining the preceding failure context', () => {
+    for (const tail of [
+      "app_secret: 'fixture-truncated-secret",
+      '"token": "fixture-truncated-secret',
+      'password: { nested: ["fixture-truncated-secret"]',
+    ]) {
+      const result = redactDiagnosticText(`AxiosError status: 400 method: POST\n${tail}`)
+      expect(result).not.toContain('fixture-truncated')
+      expect(result).toContain('[REDACTED]')
+      expect(result).toContain('AxiosError status: 400 method: POST')
+      expect(redactDiagnosticText(result)).toBe(result)
+    }
+  })
+
   test('keeps JSON valid when redacting non-string credential values', () => {
     const result = JSON.parse(redactDiagnosticText(JSON.stringify({ app_id: 123456, token: { value: 'hidden' }, password: ['hidden'], status: 400 })))
     expect(result).toEqual({ app_id: '[REDACTED]', token: '[REDACTED]', password: '[REDACTED]', status: 400 })
