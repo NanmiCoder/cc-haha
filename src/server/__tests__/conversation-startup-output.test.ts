@@ -67,8 +67,8 @@ describe('ConversationService startup output', () => {
     )
   }, 10_000)
 
-  // Issue #1475: a team member's Bun died in JSC initialization because the
-  // Windows commit limit was used up; only the raw crash report was shown.
+  // The crash report from issue #1475 does not itself establish that the
+  // machine's commit limit was exhausted.
   const windowsBunCrash = [
     '============================================================',
     'Bun v1.3.14 (0d9b296a) Windows x64 (baseline)',
@@ -94,7 +94,7 @@ describe('ConversationService startup output', () => {
     throw new Error('startup unexpectedly succeeded')
   }
 
-  test('explains a Windows Bun startup crash as exhausted commit memory and keeps the report', async () => {
+  test('keeps a Windows Bun illegal-instruction report without guessing a memory cause', async () => {
     delete process.env.MOCK_SDK_STARTUP_STDOUT
     process.env.MOCK_SDK_STARTUP_STDERR = windowsBunCrash
     process.env.MOCK_SDK_STARTUP_EXIT_CODE = '3'
@@ -103,8 +103,58 @@ describe('ConversationService startup output', () => {
 
     expect(error).toBeInstanceOf(ConversationStartupError)
     expect(error).toMatchObject({ code: 'CLI_START_FAILED' })
-    expect(error.message).toStartWith('CLI runtime crashed during startup (code 3). On Windows this usually means the system has run out of commit memory (RAM + page file).')
+    expect(error.message).toStartWith('CLI runtime crashed during startup (code 3).')
     expect(error.message).toContain('Illegal instruction at address 0x7FF7A70604F0')
+    expect(error.message).not.toContain('commit memory')
+    expect(error.message).not.toContain('page file')
+  }, 10_000)
+
+  test('keeps the reported Bun 1.4.3 segfault and report link without claiming memory exhaustion', async () => {
+    const reportUrl = 'https://bun.report/1.4.3/w_1c6da4a4EggggC+y2jlC6/vklCA2AQ'
+    delete process.env.MOCK_SDK_STARTUP_STDOUT
+    process.env.MOCK_SDK_STARTUP_STDERR = [
+      'Bun v1.4.3 (c6da4a4d3) Windows x64',
+      'Windows v10.26200',
+      'RSS: 83.34 MB | Peak: 83.34 MB | Commit: 66.60 MB | Faults: 20499 | Machine: 33.95 GB',
+      'panic(main thread): Segmentation fault at address 0x8',
+      'oh no: Bun has crashed. This indicates a bug in Bun, not your code.',
+      reportUrl,
+    ].join('\n')
+    process.env.MOCK_SDK_STARTUP_EXIT_CODE = '3'
+
+    const error = await startupFailure()
+
+    expect(error).toMatchObject({ code: 'CLI_START_FAILED' })
+    expect(error.message).toStartWith('CLI runtime crashed during startup (code 3).')
+    expect(error.message).toContain('Bun v1.4.3 (c6da4a4d3) Windows x64')
+    expect(error.message).toContain('panic(main thread): Segmentation fault at address 0x8')
+    expect(error.message).toContain(reportUrl)
+    expect(error.message).not.toContain('commit memory')
+    expect(error.message).not.toContain('page file')
+  }, 10_000)
+
+  test('does not infer a crash or memory cause from exit code 3 alone', async () => {
+    delete process.env.MOCK_SDK_STARTUP_STDOUT
+    process.env.MOCK_SDK_STARTUP_EXIT_CODE = '3'
+
+    const error = await startupFailure()
+
+    expect(error.message).toBe('CLI exited during startup with code 3; no CLI stderr/stdout or SDK error payload was captured before exit.')
+  }, 10_000)
+
+  test('preserves explicit memory-allocation failure evidence without inferring the system commit state', async () => {
+    delete process.env.MOCK_SDK_STARTUP_STDOUT
+    process.env.MOCK_SDK_STARTUP_STDERR = windowsBunCrash.replace(
+      'Illegal instruction at address 0x7FF7A70604F0',
+      'Out of memory: failed to allocate memory',
+    )
+    process.env.MOCK_SDK_STARTUP_EXIT_CODE = '3'
+
+    const error = await startupFailure()
+
+    expect(error.message).toStartWith('CLI runtime crashed during startup (code 3).')
+    expect(error.message).toContain('panic(main thread): Out of memory: failed to allocate memory')
+    expect(error.message).not.toContain('system has run out of commit memory')
   }, 10_000)
 
   test('leaves a Bun crash on other platforms as a plain startup exit', async () => {
