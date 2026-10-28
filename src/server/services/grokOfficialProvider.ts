@@ -3,6 +3,7 @@ import {
   GROK_DEFAULT_MAIN_MODEL,
   GROK_DEFAULT_SONNET_MODEL,
   GROK_MODEL_CATALOG,
+  GROK_MODEL_CATALOG_ENV_KEY,
   getGrokContextWindowForModel,
   getGrokRuntimeModelCatalog,
 } from '../../services/grokAuth/models.js'
@@ -20,7 +21,7 @@ import {
 } from '../types/provider.js'
 import { getHahaGrokOAuthFilePath } from './hahaGrokOAuthService.js'
 
-export { GROK_OFFICIAL_PROVIDER_ID, GROK_OAUTH_FILE_ENV_KEY }
+export { GROK_OFFICIAL_PROVIDER_ID, GROK_OAUTH_FILE_ENV_KEY, GROK_MODEL_CATALOG_ENV_KEY }
 export const GROK_OFFICIAL_PROVIDER_NAME = 'Grok Official'
 export const GROK_OAUTH_PROVIDER_ENV_KEY = 'CC_HAHA_GROK_OAUTH_PROVIDER'
 
@@ -55,10 +56,11 @@ export const GROK_OFFICIAL_PROVIDER: SavedProvider = {
 export function buildGrokOfficialRuntimeEnv(
   models: SavedProvider['models'] = GROK_OFFICIAL_PROVIDER.models,
 ): Record<string, string> {
+  const runtimeCatalog = getGrokRuntimeModelCatalog()
   const runtimeModelContextWindows = {
     ...modelContextWindows,
     ...Object.fromEntries(
-      getGrokRuntimeModelCatalog()
+      runtimeCatalog
         .flatMap((model) =>
           typeof model.contextWindow === 'number' &&
           Number.isFinite(model.contextWindow) &&
@@ -71,6 +73,7 @@ export function buildGrokOfficialRuntimeEnv(
   return {
     [GROK_OAUTH_PROVIDER_ENV_KEY]: '1',
     [GROK_OAUTH_FILE_ENV_KEY]: getHahaGrokOAuthFilePath(),
+    [GROK_MODEL_CATALOG_ENV_KEY]: JSON.stringify(runtimeCatalog),
     [IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY]: 'grok_oauth',
     [IMAGE_GENERATION_PROVIDER_ID_ENV_KEY]: GROK_OFFICIAL_PROVIDER_ID,
     [IMAGE_GENERATION_MODEL_ENV_KEY]: GROK_IMAGE_DEFAULT_MODEL,

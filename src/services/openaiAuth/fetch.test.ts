@@ -85,6 +85,7 @@ describe('buildOpenAICodexFetch', () => {
     process.env.CC_HAHA_OPENAI_FAST_MODE = '0'
     await request()
     expect(bodies.map(body => body.service_tier)).toEqual([undefined, 'priority', undefined])
+    expect(bodies.map(body => body.model)).toEqual(['future-codex-model', 'future-codex-model', 'future-codex-model'])
     expect(bodies[0]).not.toHaveProperty('service_tier')
     expect(bodies[2]).not.toHaveProperty('service_tier')
   })

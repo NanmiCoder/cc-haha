@@ -121,6 +121,7 @@ describe('providerRuntimeEnv', () => {
         ANTHROPIC_AUTH_TOKEN: 'stale-token',
         CC_HAHA_GROK_OAUTH_PROVIDER: '1',
         GROK_OAUTH_FILE: path.join(tmpDir, 'stale-grok-oauth.json'),
+        CC_HAHA_GROK_MODEL_CATALOG: 'stale-grok-catalog',
         DISABLE_AUTOUPDATER: '1',
       },
       tmpDir,
@@ -141,6 +142,7 @@ describe('providerRuntimeEnv', () => {
     expect(env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
     expect(env.CC_HAHA_GROK_OAUTH_PROVIDER).toBeUndefined()
     expect(env.GROK_OAUTH_FILE).toBeUndefined()
+    expect(env.CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
     expect(JSON.parse(env.CLAUDE_CODE_MODEL_CONTEXT_WINDOWS!)).toMatchObject({
       'deepseek-flash': 1000000,
     })

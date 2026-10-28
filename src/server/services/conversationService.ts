@@ -21,6 +21,7 @@ import {
   isOpenAIOfficialProviderId,
 } from './openaiOfficialProvider.js'
 import {
+  GROK_MODEL_CATALOG_ENV_KEY,
   GROK_OAUTH_FILE_ENV_KEY,
   GROK_OAUTH_PROVIDER_ENV_KEY,
 } from './grokOfficialProvider.js'
@@ -2284,6 +2285,7 @@ export class ConversationService {
       'CC_HAHA_OPENAI_FAST_MODE',
       GROK_OAUTH_PROVIDER_ENV_KEY,
       GROK_OAUTH_FILE_ENV_KEY,
+      GROK_MODEL_CATALOG_ENV_KEY,
       DEEPSEEK_OAUTH_PROVIDER_ENV_KEY,
       DEEPSEEK_OAUTH_FILE_ENV_KEY,
       IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,
@@ -2657,6 +2659,7 @@ export class ConversationService {
         OPENAI_CODEX_OAUTH_FILE_ENV_KEY,
         GROK_OAUTH_PROVIDER_ENV_KEY,
         GROK_OAUTH_FILE_ENV_KEY,
+        GROK_MODEL_CATALOG_ENV_KEY,
         DEEPSEEK_OAUTH_PROVIDER_ENV_KEY,
         DEEPSEEK_OAUTH_FILE_ENV_KEY,
         IMAGE_GENERATION_PROVIDER_KIND_ENV_KEY,

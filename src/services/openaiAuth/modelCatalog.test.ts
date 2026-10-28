@@ -120,6 +120,27 @@ describe('OpenAI Codex model catalog', () => {
     expect(models).toEqual(OPENAI_CODEX_MODEL_CATALOG)
   })
 
+  test('forces a new listing through the configured proxy and retains it after a reported failure', async () => {
+    let calls = 0
+    const options = {
+      tokens: { accessToken: 'desktop-token', accountId: 'same-account' },
+      forceRefresh: true, throwOnError: true,
+      resolveProxyUrl: async () => 'http://127.0.0.1:7890',
+      fetchOverride: (async (_url, init) => {
+        calls += 1
+        expect((init as RequestInit & { proxy?: string }).proxy).toBe('http://127.0.0.1:7890')
+        expect(init?.redirect).toBe('error')
+        return calls === 3 ? new Response(null, { status: 503 })
+          : Response.json({ models: [null, { slug: `codex-new-${calls}`, visibility: 'list' }] })
+      }) as typeof fetch,
+    }
+    expect((await getOpenAICodexModelCatalog(options))[0]?.value).toBe('codex-new-1')
+    expect((await getOpenAICodexModelCatalog(options))[0]?.value).toBe('codex-new-2')
+    await expect(getOpenAICodexModelCatalog(options)).rejects.toThrow('HTTP 503')
+    expect((await getOpenAICodexModelCatalog({ ...options, forceRefresh: false }))[0]?.value).toBe('codex-new-2')
+    expect(calls).toBe(3)
+  })
+
   test('falls back to the bundled Codex catalog when the endpoint fails', async () => {
     const models = await getOpenAICodexModelCatalog({
       forceRefresh: true,

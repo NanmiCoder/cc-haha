@@ -8,7 +8,7 @@ import {
   getGrokModelCatalog,
   GROK_MODELS_ENDPOINT,
 } from './modelCatalog.js'
-import { GROK_MODEL_CATALOG } from './models.js'
+import { GROK_MODEL_CATALOG, getGrokRuntimeModelCatalog } from './models.js'
 import { GROK_CLI_VERSION } from './fetch.js'
 import { GROK_OAUTH_FILE_ENV_KEY } from './storage.js'
 
@@ -17,6 +17,7 @@ describe('Grok model catalog', () => {
   let original: string | undefined
 
   beforeEach(async () => {
+    clearGrokModelCatalogCache()
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'grok-models-'))
     original = process.env[GROK_OAUTH_FILE_ENV_KEY]
     process.env[GROK_OAUTH_FILE_ENV_KEY] = path.join(tmpDir, 'tokens.json')
@@ -26,9 +27,73 @@ describe('Grok model catalog', () => {
   })
 
   afterEach(async () => {
+    clearGrokModelCatalogCache()
     if (original === undefined) delete process.env[GROK_OAUTH_FILE_ENV_KEY]
     else process.env[GROK_OAUTH_FILE_ENV_KEY] = original
     await fs.rm(tmpDir, { recursive: true, force: true })
+  })
+
+  test('uses upstream request ids rather than display ids, accepts metadata variants, and deduplicates', async () => {
+    const models = await fetchGrokModelCatalog(async () => Response.json({ data: [
+      { id: 'display-id', model: 'grok-next', name: 'Grok Next' },
+      { modelId: 'grok-next-fast' },
+      { model_id: 'grok-next-small' },
+      { _meta: { model: 'grok-next-meta', name: 'Metadata model' } },
+      { model: 'grok-next' },
+      null,
+    ] }))
+    expect(models.map(model => model.value)).toEqual(['grok-next', 'grok-next-fast', 'grok-next-small', 'grok-next-meta'])
+  })
+
+  test('explicit logout never uses a separately signed-in CLI account', async () => {
+    let calls = 0
+    await expect(getGrokModelCatalog({
+      accessToken: null, forceRefresh: true, throwOnError: true,
+      fetchOverride: async () => { calls += 1; return Response.json({ data: [] }) },
+    })).rejects.toThrow('token is unavailable')
+    expect(calls).toBe(0)
+  })
+
+  test('a late background listing cannot replace refreshed runtime metadata', async () => {
+    let complete!: (response: Response) => void
+    await getGrokModelCatalog({ accessToken: 'desktop',
+      fetchOverride: (() => new Promise<Response>(resolve => { complete = resolve })) as typeof fetch })
+    // Let the background request enter fetch before the user explicitly refreshes.
+    for (let tick = 0; tick < 5; tick += 1) await Promise.resolve()
+    await getGrokModelCatalog({ accessToken: 'desktop', forceRefresh: true,
+      fetchOverride: async () => Response.json({ models: [{ model: 'grok-fresh', context_window: 1000000 }] }) })
+    complete(Response.json({ models: [{ model: 'grok-old', context_window: 500000 }] }))
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(getGrokRuntimeModelCatalog().map(model => [model.value, model.contextWindow])).toEqual([['grok-fresh', 1000000]])
+  })
+
+  test('a 200 error envelope is not a successful model listing', async () => {
+    await expect(getGrokModelCatalog({ accessToken: 'desktop', forceRefresh: true, throwOnError: true,
+      fetchOverride: async () => Response.json({ error: { message: 'temporary failure' } }),
+    })).rejects.toThrow('error response')
+    expect(getGrokRuntimeModelCatalog()).toEqual(GROK_MODEL_CATALOG)
+  })
+
+  test('forces a fresh account listing through the configured proxy and reports failures', async () => {
+    let calls = 0
+    const fetchOverride = (async (_url, init) => {
+      calls += 1
+      expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer desktop-token')
+      expect((init as RequestInit & { proxy?: string }).proxy).toBe('http://127.0.0.1:7890')
+      expect(init?.redirect).toBe('error')
+      return calls === 3 ? new Response(null, { status: 401 }) : Response.json({ models: [{ model: `grok-new-${calls}` }] })
+    }) as typeof fetch
+    const options = { accessToken: 'desktop-token', fetchOverride, forceRefresh: true, throwOnError: true,
+      resolveProxyUrl: async () => 'http://127.0.0.1:7890' }
+    expect((await getGrokModelCatalog(options))[0]?.value).toBe('grok-new-1')
+    expect((await getGrokModelCatalog(options))[0]?.value).toBe('grok-new-2')
+    // The WS consumer also supplies an email key. Explicit credentials remain
+    // authoritative so it sees the listing the settings card just refreshed.
+    expect((await getGrokModelCatalog({ ...options, forceRefresh: false, accountKey: 'fixture@example.test' }))[0]?.value)
+      .toBe('grok-new-2')
+    await expect(getGrokModelCatalog(options)).rejects.toThrow('HTTP 401')
+    expect((await getGrokModelCatalog({ ...options, forceRefresh: false }))[0]?.value).toBe('grok-new-2')
+    expect(calls).toBe(3)
   })
 
   test('normalizes the official models response and filters non-API entries', async () => {

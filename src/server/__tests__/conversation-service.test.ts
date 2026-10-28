@@ -1497,6 +1497,23 @@ describe('ConversationService', () => {
     expect(env.ANTHROPIC_BASE_URL).toBeUndefined()
   })
 
+  test('buildChildEnv replaces inherited Grok catalogs and removes them when selecting another provider', async () => {
+    const original = process.env.CC_HAHA_GROK_MODEL_CATALOG
+    process.env.CC_HAHA_GROK_MODEL_CATALOG = 'stale-parent-catalog'
+    try {
+      const service = new ConversationService() as any
+      const grokEnv = await service.buildChildEnv('/tmp', undefined, { providerId: 'grok-official' })
+      expect(JSON.parse(grokEnv.CC_HAHA_GROK_MODEL_CATALOG).some((entry: { value: string }) => entry.value === 'grok-4.7')).toBe(true)
+      const otherEnv = await service.buildChildEnv('/tmp', undefined, { providerId: 'deepseek-account' })
+      expect(otherEnv.CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
+      const claudeEnv = await service.buildChildEnv('/tmp', undefined, { providerId: null })
+      expect(claudeEnv.CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
+    } finally {
+      if (original === undefined) delete process.env.CC_HAHA_GROK_MODEL_CATALOG
+      else process.env.CC_HAHA_GROK_MODEL_CATALOG = original
+    }
+  })
+
   test('buildChildEnv builds the DeepSeek account env for a session-scoped selection over another active provider', async () => {
     const ccHahaDir = path.join(tmpDir, 'cc-haha')
     await fs.mkdir(ccHahaDir, { recursive: true })

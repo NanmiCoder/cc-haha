@@ -1,4 +1,5 @@
 import { isOpenAIReasoningModel } from '../../shared/modelReasoning.js'
+import { isEnvTruthy } from '../../utils/envUtils.js'
 
 export const OPENAI_DEFAULT_MAIN_MODEL = 'gpt-6-sol'
 export const OPENAI_DEFAULT_SONNET_MODEL = 'gpt-6-sol'
@@ -213,7 +214,10 @@ export function resolveOpenAIReasoningEffortWithPriority(
 }
 
 export function isOpenAIResponsesModel(model: string): boolean {
-  return isOpenAIReasoningModel(model)
+  // The official runtime selects the transport even for newly published IDs
+  // and Claude tier aliases, so capability checks must follow that same route.
+  return isEnvTruthy(process.env.CC_HAHA_OPENAI_OAUTH_PROVIDER) ||
+    isOpenAIReasoningModel(model)
 }
 
 export function resolveOpenAICodexModel(model: string): string {
@@ -221,9 +225,13 @@ export function resolveOpenAICodexModel(model: string): string {
     return process.env.OPENAI_CODEX_MODEL.trim()
   }
 
-  const normalized = model.trim().toLowerCase()
-  if (isOpenAIResponsesModel(normalized)) {
-    return model
+  const requested = model.trim()
+  const normalized = requested.toLowerCase()
+  // A remote catalog may advertise a new naming scheme before this client
+  // ships. Only Claude compatibility aliases need mapping; preserve real IDs.
+  if (normalized && !normalized.startsWith('claude-') &&
+    !['default', 'main', 'haiku', 'sonnet', 'opus', 'fable'].includes(normalized)) {
+    return requested
   }
 
   if (normalized.includes('haiku')) {

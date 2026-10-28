@@ -152,11 +152,15 @@ export function getDeepSeekAccountModelCatalog(options: {
   token: string | null
   fetchOverride?: typeof fetch
   forceRefresh?: boolean
+  throwOnError?: boolean
   /** Resolved per listing request, so a proxy failure only fails that request. */
   resolveProxyUrl?: () => Promise<string | null | undefined>
 }): Promise<readonly DeepSeekAccountModel[]> {
   const { token } = options
-  if (!token) return Promise.resolve(DEEPSEEK_ACCOUNT_MODEL_CATALOG)
+  if (!token) {
+    if (options.forceRefresh && options.throwOnError) return Promise.reject(new Error('DeepSeek account token is unavailable'))
+    return Promise.resolve(DEEPSEEK_ACCOUNT_MODEL_CATALOG)
+  }
   return catalogCache.resolve({
     // Keyed by a digest so a different account never reuses the listing.
     accountKey: createHash('sha256').update(token).digest('hex'),
@@ -167,6 +171,7 @@ export function getDeepSeekAccountModelCatalog(options: {
     ),
     fallback: DEEPSEEK_ACCOUNT_MODEL_CATALOG,
     ...(options.forceRefresh && { forceRefresh: true }),
+    ...(options.throwOnError && { throwOnError: true }),
   })
 }
 

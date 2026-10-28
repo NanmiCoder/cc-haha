@@ -59,13 +59,13 @@ import {
   getOpenAIModelCatalogEntry,
   isOpenAIReasoningEffort,
 } from '../../services/openaiAuth/models.js'
-import { GROK_DEFAULT_MAIN_MODEL } from '../../services/grokAuth/models.js'
-import { getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
-import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
+import { GROK_DEFAULT_MAIN_MODEL, resolveGrokModel } from '../../services/grokAuth/models.js'
+import { getDesktopGrokModelCatalog } from '../services/grokModelCatalog.js'
 import { resolveClaudeOfficialRuntimeModel } from '../services/claudeOfficialRuntime.js'
 import {
   getModelReasoningCapabilityOverride,
   isModelReasoningEffort,
+  MODEL_REASONING_EFFORTS,
   normalizeModelReasoningEffort,
   resolveModelReasoningProfile,
 } from '../../shared/modelReasoning.js'
@@ -5456,18 +5456,18 @@ async function getGrokReasoningEfforts(modelId: string): Promise<{
   defaultEffort?: string
   supportedEfforts: string[]
 }> {
-  const tokens = await hahaGrokOAuthService.ensureFreshTokens()
-  const catalog = await getGrokModelCatalog({
-    ...(tokens?.accessToken ? { accessToken: tokens.accessToken } : {}),
-    accountKey: tokens?.email ?? (tokens ? 'authenticated-default' : 'logged-out'),
-  })
-  const model = catalog.find((entry) => entry.value === modelId)
-    ?? catalog.find((entry) => entry.value === GROK_DEFAULT_MAIN_MODEL)
-    ?? catalog[0]
+  const catalog = await getDesktopGrokModelCatalog()
+  const resolvedModelId = resolveGrokModel(modelId)
+  const model = catalog.find((entry) => entry.value === resolvedModelId)
   return {
-    modelId: model?.value ?? GROK_DEFAULT_MAIN_MODEL,
+    // A refreshed selection can outlive the in-memory catalog. Only known
+    // compatibility aliases may change its ID; another model's metadata must
+    // never turn a concrete saved model into the bundled default.
+    modelId: resolvedModelId,
     ...(model?.reasoningEffort ? { defaultEffort: model.reasoningEffort } : {}),
-    supportedEfforts: model?.reasoningEfforts ?? [],
+    supportedEfforts: model?.supportsReasoningEffort === false
+      ? []
+      : model?.reasoningEfforts ?? [...MODEL_REASONING_EFFORTS],
   }
 }
 

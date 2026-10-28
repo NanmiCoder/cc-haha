@@ -21,6 +21,7 @@ import {
 } from '../services/traceCaptureService.js'
 import type { CreateProviderInput } from '../types/provider.js'
 import { buildComputerUseTools } from '../../vendor/computer-use-mcp/tools.js'
+import { GROK_MODEL_CATALOG, setGrokRuntimeModelCatalog } from '../../services/grokAuth/models.js'
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 
@@ -829,6 +830,32 @@ describe('ProviderService', () => {
     })
 
     describe('Grok Official provider metadata', () => {
+      test('keeps discovered capabilities in launch env and removes stale snapshots from settings', async () => {
+        const catalog = [{
+          value: 'grok-future-release', label: 'Future', description: '',
+          supportsReasoningEffort: true, reasoningEffort: 'low', reasoningEfforts: ['low', 'xhigh', 'max'],
+        }]
+        setGrokRuntimeModelCatalog(catalog)
+        try {
+          const svc = new ProviderService()
+          await svc.updateManagedSettings({ env: {
+            CC_HAHA_GROK_MODEL_CATALOG: 'stale-catalog', USER_CUSTOM_ENV: 'preserved',
+          } })
+          await svc.activateProvider('grok-official')
+          const persistedEnv = (await readSettings()).env as Record<string, string>
+          expect(persistedEnv.CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
+          expect(persistedEnv.USER_CUSTOM_ENV).toBe('preserved')
+          const runtimeEnv = await svc.getProviderRuntimeEnv('grok-official')
+          expect(JSON.parse(runtimeEnv.CC_HAHA_GROK_MODEL_CATALOG!)).toEqual(catalog)
+
+          await svc.updateManagedSettings({ env: { ...persistedEnv, CC_HAHA_GROK_MODEL_CATALOG: 'stale-catalog' } })
+          await svc.activateOfficial()
+          expect(((await readSettings()).env as Record<string, string>).CC_HAHA_GROK_MODEL_CATALOG).toBeUndefined()
+        } finally {
+          setGrokRuntimeModelCatalog(GROK_MODEL_CATALOG)
+        }
+      })
+
       test('normalizes the built-in Grok provider and appends it to legacy provider order', async () => {
         await fs.mkdir(path.join(tmpDir, 'cc-haha'), { recursive: true })
         await fs.writeFile(
