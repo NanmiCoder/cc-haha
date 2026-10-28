@@ -50,10 +50,14 @@ export class PushRegistrationRecovery {
     this.active = active
     this.generation++
     this.clearTimer()
-    if (active) this.refresh()
-    else {
-      this.pending = false
+    if (active) {
+      // A foreground check reads the current native token again.
       this.pendingToken = undefined
+      this.refresh()
+    } else {
+      // Keep the latest rotation queued behind the in-flight request. Ordinary
+      // refreshes still stop here, while a rotated token gets one background try.
+      this.pending = Boolean(this.pendingToken)
       // Let an accepted registration finish. Aborting its signal would ask the
       // coordinator to revoke it, precisely when background push is needed.
     }

@@ -166,6 +166,81 @@ test('backgrounding and unmounting cancel retries while returning to foreground 
   `)
 })
 
+for (const heldStage of ['GET', 'PUT']) {
+  for (const fails of [false, true]) {
+    test(`a queued native rotation drains once after backgrounding during ${heldStage}${fails ? ' even when it fails' : ''}`, () => {
+      runCase(`
+        let release
+        const held = new Promise(resolve => { release = resolve })
+        const configured = { platforms: { android: true, ios: false }, status: 'configured' }
+        const registered = { registered: true, status: 'registered', id: 'fixture-registration' }
+        hostImpl = () => ${heldStage === 'GET'} && hostCalls === 1 ? held : Promise.resolve(configured)
+        registerImpl = () => {
+          if (${heldStage === 'PUT'} && registerCalls === 1) return held
+          if (${fails} && registerCalls === 2) throw new ApiError('offline', 0, 'NETWORK_ERROR')
+          return Promise.resolve(registered)
+        }
+        await render()
+        tokenListener({ data: 'intermediate-token' })
+        tokenListener({ data: 'latest-token' })
+        retry()
+        emit('background')
+        const updates = history.length
+        assert.equal(signals[0].aborted, false)
+        release(${heldStage === 'GET' ? 'configured' : 'registered'})
+        await flush()
+        assert.deepEqual(inputs.map(input => input.token), ['fixture-token', 'latest-token'])
+        assert.equal(tokenCalls, 1, 'queued rotation uses the native token already received')
+        assert.equal(hostCalls, 2)
+        assert.equal(timers.size, 0, 'background rotation must not schedule retries')
+        assert.equal(history.length, updates, 'background completion cannot publish foreground status')
+        await advance(60000)
+        assert.equal(registerCalls, 2)
+        assert.equal(hostCalls, 2)
+      `)
+    })
+  }
+}
+
+test('backgrounding discards an ordinary refresh queued behind an in-flight request', () => {
+  runCase(`
+    let release
+    hostImpl = () => new Promise(resolve => { release = resolve })
+    await render()
+    retry()
+    emit('background')
+    release({ platforms: { android: true, ios: false }, status: 'configured' })
+    await flush()
+    await advance(60000)
+    assert.equal(hostCalls, 1)
+    assert.equal(registerCalls, 1)
+    assert.equal(timers.size, 0)
+  `)
+})
+
+test('unmounting cancels a native rotation queued before backgrounding', () => {
+  runCase(`
+    let release, putSignal
+    registerImpl = signal => {
+      putSignal = signal
+      return new Promise(resolve => { release = resolve })
+    }
+    await render()
+    tokenListener({ data: 'latest-token' })
+    emit('background')
+    const updates = history.length
+    unmount()
+    assert.equal(putSignal.aborted, true, 'stop still requests compensation for the accepted PUT')
+    release({ registered: true, status: 'registered', id: 'fixture-registration' })
+    await flush()
+    await advance(60000)
+    assert.deepEqual(inputs.map(input => input.token), ['fixture-token'])
+    assert.equal(hostCalls, 1)
+    assert.equal(timers.size, 0)
+    assert.equal(history.length, updates)
+  `)
+})
+
 test('a late GET finishes safely but cannot publish stale state or replay a pending old token', () => {
   runCase(`
     let resolveOld
@@ -179,7 +254,7 @@ test('a late GET finishes safely but cannot publish stale state or replay a pend
     resolveOld({ platforms: { android: true, ios: false }, status: 'configured' })
     await flush()
     assert.equal(registerCalls, 2, 'the in-flight attempt may finish before the new foreground check')
-    assert.equal(inputs.at(-1).token, 'fresh-token', 'backgrounding must discard pending stale token work')
+    assert.equal(inputs.at(-1).token, 'fresh-token', 'foregrounding must re-read the latest native token')
     assert.equal(inputs.some(input => input.token === 'stale-pending-token'), false)
     assert.equal(history.filter(info => info.status === 'registered').length, 1, 'only the current foreground result can update status')
     assert.equal(status().status, 'registered')
