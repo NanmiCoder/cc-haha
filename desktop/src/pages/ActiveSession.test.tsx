@@ -1,3 +1,4 @@
+import { ApiError } from '../api/client'
 import { openSideChat } from '@/lib/workspace/openSideChat'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
@@ -22,7 +23,7 @@ const teamApiMocks = vi.hoisted(() => ({
   getTeam: vi.fn(),
   listTeams: vi.fn(),
   getWorkbenchForSession: vi.fn(
-    (): Promise<TeamWorkbenchSessionTimeline> => Promise.reject(new Error('not a team session')),
+    (_sessionId: string): Promise<TeamWorkbenchSessionTimeline> => Promise.reject(new Error('not a team session')),
   ),
   getWorkbench: vi.fn(),
   sendMemberMessage: vi.fn(),
@@ -198,6 +199,44 @@ describe('ActiveSession trajectory view', () => {
     useSessionStore.setState({ sessions: [{ id, title: 'Main', messageCount: 1, createdAt: '', modifiedAt: '', projectPath: '/repo', workDir: '/repo', workDirExists: true }] })
     useChatStore.setState({ sessions: { [id]: { ...createDefaultSessionState(), connectionState: 'connected', historyStatus: 'ready', historyHydrated: true, messages: [{ id: 'm', type: 'assistant_text', content: 'main', timestamp: 1 }] } } })
   }
+
+  it('remembers an absent workbench when returning to an ordinary session and rediscovers on reconnect', async () => {
+    useTeamStore.getState().clearTeam()
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ plan: null })))
+    teamApiMocks.getWorkbenchForSession.mockImplementation(async (sessionId: string) => {
+      throw new ApiError(404, {
+        error: 'NOT_FOUND',
+        message: `No Agent Teams workbench for session: ${sessionId}`,
+      })
+    })
+    const connect = vi.spyOn(useChatStore.getState(), 'connectToSession').mockImplementation(() => {})
+    try {
+      seedSession('ordinary-a')
+      const view = render(<ActiveSession sessionId="ordinary-a" />)
+      await act(async () => {})
+      await act(async () => {
+        seedSession('ordinary-b')
+        view.rerender(<ActiveSession sessionId="ordinary-b" />)
+      })
+      await act(async () => {
+        seedSession('ordinary-a')
+        view.rerender(<ActiveSession sessionId="ordinary-a" />)
+      })
+      expect(teamApiMocks.getWorkbenchForSession.mock.calls).toEqual([
+        ['ordinary-a'], ['ordinary-b'],
+      ])
+      await act(async () => {
+        useChatStore.getState().handleServerMessage('ordinary-a', { type: 'connected', sessionId: 'ordinary-a' })
+      })
+      expect(teamApiMocks.getWorkbenchForSession.mock.calls).toEqual([
+        ['ordinary-a'], ['ordinary-b'], ['ordinary-a'],
+      ])
+      expect(screen.getByRole('heading', { name: 'Main' })).toBeInTheDocument()
+    } finally {
+      connect.mockRestore()
+      useTeamStore.getState().clearTeam()
+    }
+  })
 
   it('retains the known tab title when summary metadata is unavailable', async () => {
     const id = 'history-with-unavailable-summary'

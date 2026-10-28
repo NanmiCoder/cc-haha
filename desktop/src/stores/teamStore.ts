@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { teamsApi } from '../api/teams'
+import { ApiError } from '../api/client'
 import type { TeamTaskAnchor } from '../api/teams'
 import type {
   TeamSummary,
@@ -33,6 +34,7 @@ const MEMBER_POLL_INTERVAL_MS = 1500
 const MEMBER_TRANSCRIPT_MATCH_WINDOW_MS = 120_000
 const WORKBENCH_HISTORY_LIMIT = 200
 const TEAM_DISCOVERY_TTL_MS = 5_000
+const ABSENT_WORKBENCH_TTL_MS = 60_000
 
 /** Generate a synthetic sessionId for team member tabs */
 export const memberSessionId = teamMemberSessionId
@@ -76,6 +78,7 @@ const awaitingMemberReplies = new Map<string, AwaitingMemberReply[]>()
 const teamLifecycleGenerations = new Map<string, number>()
 const teamDiscoveryGenerations = new Map<string, number>()
 const teamDiscoveryCompletedAt = new Map<string, number>()
+const absentWorkbenchCheckedAt = new Map<string, number>()
 const deletedTeamNames = new Set<string>()
 const deletedTeamIncarnations = new Set<string>()
 const deletedTeamLifecycles = new Map<string, {
@@ -1161,6 +1164,11 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
   },
 
   fetchTeamForSession: async (sessionId, options) => {
+    const absentAt = absentWorkbenchCheckedAt.get(sessionId)
+    // Re-entering an ordinary session should not repeat a confirmed missing
+    // lookup. Reconnect forces a fresh read; expiry also recovers missed events.
+    if (!options?.force && absentAt !== undefined && Date.now() - absentAt < ABSENT_WORKBENCH_TTL_MS) return
+    absentWorkbenchCheckedAt.delete(sessionId)
     const known = get().workbenchesBySession[sessionId]
     if (known?.snapshots.length) {
       const latest = known.snapshots.at(-1)!
@@ -1285,9 +1293,23 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
       }))
       syncTeamMemberSessions(detail, latest)
       teamDiscoveryCompletedAt.set(sessionId, Date.now())
-    } catch {
-      // Workbench discovery supplements the session; an ordinary conversation
-      // or a legacy sidecar must still open without an error surface.
+    } catch (err) {
+      // Only this endpoint's explicit absence is cacheable. Other 404s, server
+      // failures and timeouts retain their API diagnostics and remain retryable.
+      if (
+        teamStoreGeneration === storeGeneration &&
+        teamDiscoveryGenerations.get(sessionId) === discoveryGeneration &&
+        get().workbenchesBySession[sessionId] === known &&
+        err instanceof ApiError &&
+        err.status === 404 &&
+        err.body !== null &&
+        typeof err.body === 'object' &&
+        'error' in err.body && err.body.error === 'NOT_FOUND' &&
+        'message' in err.body && err.body.message === `No Agent Teams workbench for session: ${sessionId}`
+      ) {
+        absentWorkbenchCheckedAt.set(sessionId, Date.now())
+      }
+      // Discovery is supplementary; a failure must not prevent chat from opening.
     }
   },
 
@@ -1324,6 +1346,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
       const snapshot: TeamWorkbenchSnapshot = { ...raw, team }
       const sessionId = team.leadSessionId
       if (!sessionId) return
+      absentWorkbenchCheckedAt.delete(sessionId)
 
       set((state) => ({
         activeTeam: team,
@@ -1779,6 +1802,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
     teamLifecycleGenerations.clear()
     teamDiscoveryGenerations.clear()
     teamDiscoveryCompletedAt.clear()
+    absentWorkbenchCheckedAt.clear()
     deletedTeamNames.clear()
     deletedTeamIncarnations.clear()
     deletedTeamLifecycles.clear()
@@ -1838,6 +1862,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
       (teamDiscoveryGenerations.get(leadSessionId) ?? 0) + 1,
     )
     teamDiscoveryCompletedAt.delete(leadSessionId)
+    absentWorkbenchCheckedAt.delete(leadSessionId)
     clearTeamRetryTimers(teamName)
     set((s) => ({
       teams: [
@@ -2076,6 +2101,7 @@ export const useTeamStore = create<TeamStore>((set, get) => ({
         (teamDiscoveryGenerations.get(leadSessionId) ?? 0) + 1,
       )
       teamDiscoveryCompletedAt.delete(leadSessionId)
+      absentWorkbenchCheckedAt.delete(leadSessionId)
     }
     const affectedMemberSessionIds = new Set(matchingTeams.flatMap((team) => (
       team.members.map((member) => memberSessionIdForTeam(team, member))
