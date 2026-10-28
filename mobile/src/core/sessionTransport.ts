@@ -7,6 +7,7 @@ import {
   mergeHistoryPages,
   normalizeHistory,
   parseServerEvent,
+  stitchLatestPage,
 } from './chat'
 import type {
   ChatItem,
@@ -42,6 +43,11 @@ export type TransportTimers = {
   set(callback: () => void, delay: number): unknown
   clear(handle: unknown): void
 }
+/** 这段会话上次读到的历史（含往前翻过的页）。进页面先显示它，再和电脑对齐。 */
+export type HistoryStore = {
+  read(): HistoryPage | undefined
+  write(page: HistoryPage): void
+}
 export type SessionTransportOptions = {
   client: Pick<ApiClient, 'host' | 'history'>
   credential: string
@@ -52,7 +58,10 @@ export type SessionTransportOptions = {
   onConnection(state: ConnectionState): void
   onError(error: Error): void
   timers?: TransportTimers
+  history?: HistoryStore
 }
+/** 最新一页和已加载的历史之间隔着几页以内时补齐，超过就只留最新一页。 */
+const BRIDGE_PAGES = 3
 
 const defaultTimers: TransportTimers = {
   set: (callback, delay) => setTimeout(callback, delay),
@@ -119,6 +128,11 @@ export class SessionTransport {
   start() {
     if (this.#started || this.#disposed) return
     this.#started = true
+    const cached = this.#options.history?.read()
+    if (cached) {
+      this.historyPage = cached
+      this.#publish({ ...this.state, items: normalizeHistory(cached.messages) })
+    }
     this.#connect(false)
   }
 
@@ -320,7 +334,7 @@ export class SessionTransport {
             'HISTORY_PAGE_STALE'
           )
         const merged = mergeHistoryPages(current, older)
-        this.historyPage = merged
+        this.#setHistory(merged)
         this.#publish({
           ...this.state,
           items: [
@@ -471,13 +485,15 @@ export class SessionTransport {
   async #initialHistory(generation: number) {
     const controller = this.#requestController()
     try {
-      const history = await this.#options.client.history(
+      const latest = await this.#options.client.history(
         this.#options.sessionId,
         undefined,
         { signal: controller.signal }
       )
       if (!this.#valid(generation)) return
-      this.historyPage = history
+      const history = await this.#joinLatest(latest, controller.signal)
+      if (!this.#valid(generation)) return
+      this.#setHistory(history)
       this.#historyEpoch++
       const items = normalizeHistory(history.messages)
       this.#hydrating = true
@@ -647,7 +663,15 @@ export class SessionTransport {
         if (attempt < 2) this.#scheduleReconcile(attempt + 1, turnEpoch)
         return
       }
-      this.historyPage = history
+      // 往前翻过的历史留着，只换掉最新的部分。
+      const joined = await this.#joinLatest(history, controller.signal)
+      if (
+        !this.#valid(generation) ||
+        this.state.turnActive ||
+        turnEpoch !== this.#turnEpoch
+      )
+        return
+      this.#setHistory(joined)
       this.#historyEpoch++
       this.#initialOverlapItems = undefined
       const uncertain = this.state.items.filter(
@@ -658,7 +682,10 @@ export class SessionTransport {
               equivalent(saved, item) && !this.#pendingBaseIds.has(saved.id)
           )
       )
-      this.#publish({ ...this.state, items: [...items, ...uncertain] })
+      this.#publish({
+        ...this.state,
+        items: [...normalizeHistory(joined.messages), ...uncertain],
+      })
     } catch (error) {
       if (!this.#valid(generation) || controller.signal.aborted) return
       if (this.#isUnauthorized(error)) this.#requirePairing()
@@ -679,7 +706,8 @@ export class SessionTransport {
       )
       if (!this.#valid(generation) || historyEpoch !== this.#historyEpoch)
         return
-      this.historyPage = history
+      // 会话被改写过，旧的游标链作废，只用最新一页。
+      this.#setHistory(history)
       this.#publish({
         ...this.state,
         items: [
@@ -862,6 +890,41 @@ export class SessionTransport {
   #publish(state: ChatState) {
     this.state = state
     this.#options.onState(state)
+  }
+  #setHistory(page: HistoryPage) {
+    this.historyPage = page
+    this.#options.history?.write(page)
+  }
+  /**
+   * 把重新读到的最新一页接到已加载的历史上。新增超过一页时往前补几页再接；
+   * 最新一页的开头已在已加载范围里却对不上，说明会话被改写，只用最新的。
+   */
+  async #joinLatest(latest: HistoryPage, signal: AbortSignal) {
+    let page = latest
+    for (let bridged = 0; ; bridged++) {
+      const loaded = this.historyPage
+      const joined = stitchLatestPage(loaded, page)
+      if (joined) return joined
+      const cursor = page.page?.nextCursor
+      const first = page.messages[0]?.id
+      if (
+        bridged >= BRIDGE_PAGES ||
+        !cursor ||
+        loaded?.messages.some((entry) => entry.id === first)
+      )
+        return page
+      try {
+        const older = await this.#options.client.history(
+          this.#options.sessionId,
+          cursor,
+          { signal }
+        )
+        page = mergeHistoryPages(page, older)
+      } catch (error) {
+        if (signal.aborted || this.#isUnauthorized(error)) throw error
+        return page
+      }
+    }
   }
   #setConnection(connection: ConnectionState) {
     this.connection = connection

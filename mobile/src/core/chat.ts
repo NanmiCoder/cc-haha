@@ -440,6 +440,49 @@ export function mergeHistoryPages(
   }
 }
 
+/**
+ * 用重新读到的最新一页刷新已经往前翻过的历史，不把翻过的部分丢掉。
+ * 会话只追加时，最新一页的第一条一定落在已加载的范围里：把更早的部分接回去，
+ * 继续沿用原来那条游标链（服务端校验首尾指纹，只追加时它仍然有效）。
+ * 接不上（新增超过一页、或会话被改写）时返回 undefined，由调用方决定补页还是只用最新一页。
+ */
+export function stitchLatestPage(
+  loaded: HistoryPage | undefined,
+  latest: HistoryPage
+): HistoryPage | undefined {
+  const first = latest.messages[0]
+  if (!loaded?.page || !loaded.messages.length || !latest.page?.nextCursor || !first)
+    return latest
+  const start = loaded.messages.findIndex((entry) => entry.id === first.id)
+  if (start < 0) return undefined
+  const overlap = loaded.messages.slice(start)
+  if (
+    overlap.length > latest.messages.length ||
+    overlap.some((entry, index) => entry.id !== latest.messages[index]!.id)
+  )
+    return undefined
+  if (start === 0) return latest
+  const omitted = Math.max(
+    loaded.page.omittedOversizedEntries,
+    latest.page.omittedOversizedEntries
+  )
+  const truncated = !!loaded.page.contentTruncated || !!latest.page.contentTruncated
+  return {
+    messages: [...loaded.messages.slice(0, start), ...latest.messages],
+    taskNotifications: latest.taskNotifications,
+    page: {
+      ...latest.page,
+      nextCursor: loaded.page.nextCursor,
+      hasMore: loaded.page.hasMore,
+      // 再往前翻拿到的页带着游标链的版本，合并时要对得上。
+      sourceVersion: loaded.page.sourceVersion,
+      omittedOversizedEntries: omitted,
+      contentTruncated: truncated,
+      historyComplete: !loaded.page.nextCursor && omitted === 0 && !truncated,
+    },
+  }
+}
+
 export function createChatState(
   sessionId: string,
   history: readonly HistoryEntry[] = []

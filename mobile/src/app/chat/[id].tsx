@@ -1,7 +1,7 @@
 import { serializeComposer, type ComposerReference } from '../../core/composerReferences'
 import { KeyboardViewport } from '../../ui/KeyboardViewport'
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
-import { AppState, FlatList, Platform, Pressable, View } from 'react-native'
+import { AppState, FlatList, Platform, View, type NativeScrollEvent } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router'
 import * as Clipboard from 'expo-clipboard'
@@ -20,6 +20,7 @@ import {
 import { notificationPermissionResponse, runtimeMatches } from '../../core/chatActions'
 import { clearPendingTask, peekPendingTask, pendingTaskDraft } from '../../core/pendingTask'
 import { SessionTransport, type ConnectionState, type SocketLike } from '../../core/sessionTransport'
+import { sessionHistory } from '../../core/historyCache'
 import { shouldReconnectOnResume } from '../../core/resume'
 import { takeSessionStale } from '../../core/sessionStale'
 import {
@@ -68,6 +69,8 @@ import { errorText } from '../../ui/theme'
 import { buildChatRows, visibleChatRows, type ChatRow } from '../../ui/chat/steps'
 import { StepGroup, TurnFold, type StepContext, type StepUi } from '../../ui/chat/StepGroup'
 import { QueuedMessages } from '../../ui/chat/QueuedMessages'
+import { OlderHistoryStatus } from '../../ui/chat/OlderHistoryStatus'
+import { shouldPrefetchOlder } from '../../ui/chat/olderHistory'
 import {
   canFlushQueue,
   clearParkedComposer,
@@ -191,6 +194,8 @@ function ChatSession({
   const [revision, setRevision] = useState(0)
   const [hasOlder, setHasOlder] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [olderFailed, setOlderFailed] = useState(false)
+  const [awayFromLatest, setAwayFromLatest] = useState(false)
   const [branch, setBranch] = useState<string | null>(null)
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
@@ -210,12 +215,13 @@ function ChatSession({
   const list = useRef<FlatList<ChatRow>>(null)
   const follow = useRef(true)
   const scrollMetrics = useRef({ height: 0, offset: 0 })
+  // 列表可视高度和内容高度，决定什么时候提前往前翻。
+  const listSize = useRef({ viewport: 0, content: 0 })
   const holdScroll = useRef(false)
   const olderInFlight = useRef(false)
-  // 自动加载每次只能补一批：停在顶部回弹时不能连续把历史全拉下来。
-  const autoLoadArmed = useRef(true)
-  // 手动加载完后回到顶部，让用户看见刚补进来的更早消息（自动加载则保持阅读位置）。
-  const scrollTopAfterLoad = useRef(false)
+  const olderFailedRef = useRef(false)
+  // 一次拖动里连续自动翻了几批，见 shouldPrefetchOlder。
+  const autoBatches = useRef(0)
   const notificationSeen = useRef(new Set<string>())
   const noticeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const mounted = useRef(true)
@@ -272,6 +278,7 @@ function ChatSession({
       credential,
       sessionId: id,
       platform: Platform.OS === 'web' ? 'web' : 'native',
+      history: sessionHistory.store(hostId, id),
       socketFactory: (options) =>
         Platform.OS === 'web'
           ? (new WebSocket(options.url) as unknown as SocketLike)
@@ -287,6 +294,11 @@ function ChatSession({
         if (alive) {
           connectionRef.current = value
           setConnection(value)
+          // 重新连上后，之前因为断线没翻成的可以再自动翻。
+          if (value === 'ready') {
+            olderFailedRef.current = false
+            setOlderFailed(false)
+          }
           recovery.onConnection(value)
           if (value !== 'ready' && value !== 'syncing' && handoff.current.phase === 'config')
             handoff.current.phase = 'failed'
@@ -325,7 +337,7 @@ function ChatSession({
       channel.dispose()
       if (transport.current === channel) transport.current = null
     }
-  }, [client, credential, id, revision])
+  }, [client, credential, hostId, id, revision])
 
   const ready = connection === 'ready'
   const busy =
@@ -614,51 +626,94 @@ function ChatSession({
     }
   }
   const send = (message: ClientMessage) => dispatch(message)
-  /** 一次翻三页，长会话不用反复点；in-flight 只认 ref，避免连点重复请求。 */
-  function loadOlderBatch(mode: 'auto' | 'manual' = 'manual') {
+  /** 往前翻一批（两页）；in-flight 只认 ref，避免重复请求。补进来的内容由列表顶在上方，阅读位置不动。 */
+  function loadOlderBatch() {
     if (olderInFlight.current) return
     const channel = transport.current
     if (!channel) return
     olderInFlight.current = true
-    autoLoadArmed.current = false
+    olderFailedRef.current = false
     follow.current = false
     holdScroll.current = true
     setLoadingOlder(true)
+    setOlderFailed(false)
     channel
-      .loadOlder(3)
+      .loadOlder(2)
       .then((result) => {
         if (!mounted.current) return
-        if (result === 'unavailable') showNotice('等这台电脑连上后再加载更早的消息。', true)
-        else if (result === 'end') setHasOlder(false)
-        else if (result === 'loaded' && mode === 'manual') {
-          scrollTopAfterLoad.current = true
-          // 没有可见新增（行被合并）时 onContentSizeChange 不会触发，别让它留到下一次。
-          setTimeout(() => {
-            scrollTopAfterLoad.current = false
-          }, 1200)
+        if (result === 'end') setHasOlder(false)
+        else if (result === 'unavailable') {
+          olderFailedRef.current = true
+          setOlderFailed(true)
         }
       })
-      .catch((e) => {
-        if (mounted.current) setError(errorText(e))
+      .catch(() => {
+        olderFailedRef.current = true
+        if (mounted.current) setOlderFailed(true)
       })
       .finally(() => {
         olderInFlight.current = false
         holdScroll.current = false
         follow.current = false
-        if (mounted.current) setLoadingOlder(false)
+        if (!mounted.current) return
+        setLoadingOlder(false)
+        // 整批都并进了已有的折叠行时内容高度不变，不会再有布局回调，这里补一次判断。
+        requestAnimationFrame(() => {
+          if (mounted.current) maybeLoadOlder()
+        })
       })
   }
-  /**
-   * 滚到接近顶部就自动接着翻，按钮仍保留给想手动加载的人。
-   * 一次只触发一批：要等用户先往下离开顶部再回来，回弹时不会连续补页。
-   */
-  function autoLoadOlder(offset: number) {
-    if (offset > 320) {
-      autoLoadArmed.current = true
+  /** 滑近顶部时提前往前翻。只读 ref 和传输层，加载结束的回调里调用也不会读到旧状态。 */
+  function maybeLoadOlder() {
+    if (
+      olderInFlight.current ||
+      olderFailedRef.current ||
+      connectionRef.current !== 'ready' ||
+      !transport.current?.historyPage?.page?.nextCursor ||
+      !shouldPrefetchOlder({
+        ...listSize.current,
+        offset: scrollMetrics.current.offset,
+        following: follow.current,
+        batches: autoBatches.current,
+      })
+    )
       return
+    autoBatches.current++
+    loadOlderBatch()
+  }
+  function trackScroll(value: NativeScrollEvent) {
+    const previous = scrollMetrics.current
+    scrollMetrics.current = { height: value.contentSize.height, offset: value.contentOffset.y }
+    listSize.current.viewport = value.layoutMeasurement.height
+    const distance = value.contentSize.height - value.contentOffset.y - value.layoutMeasurement.height
+    // 贴底时继续跟随；只有用户往上滚才停止跟随。内容变短（一轮结束后整组折叠、
+    // 历史重载）引起的位置回弹不算用户操作；往前补历史时列表自己挪动位置，也不算。
+    if (!holdScroll.current) {
+      const shrank = value.contentSize.height < previous.height - 1
+      if (distance < 150) follow.current = true
+      else if (!shrank && value.contentOffset.y < previous.offset - 1) follow.current = false
     }
-    if (offset >= 160 || !autoLoadArmed.current || olderInFlight.current || !hasOlder || !ready) return
-    loadOlderBatch('auto')
+    const away = distance > value.layoutMeasurement.height
+    if (away !== awayFromLatest) setAwayFromLatest(away)
+    maybeLoadOlder()
+  }
+  function retryOlder() {
+    olderFailedRef.current = false
+    autoBatches.current = 0
+    loadOlderBatch()
+  }
+  /**
+   * 滚到最新处。按量到的内容高度算位置：FlatList 的 scrollToEnd 用单元格估算，
+   * 刚挂载就整批渲染（从缓存打开）时单元格还没量好，会估成 0、停在顶部。
+   */
+  function scrollToLatest(animated: boolean) {
+    const { viewport, content } = listSize.current
+    if (viewport) list.current?.scrollToOffset({ offset: Math.max(0, content - viewport), animated })
+  }
+  function jumpToLatest() {
+    follow.current = true
+    setAwayFromLatest(false)
+    scrollToLatest(true)
   }
   function showNotice(text: string, transient = false) {
     clearTimeout(noticeTimer.current)
@@ -842,6 +897,7 @@ function ChatSession({
   }
   /** 会话记录在别处被改写（回退）后，丢掉本地状态、重新连接并读取历史。 */
   const reloadSession = useCallback(() => {
+    sessionHistory.forget(hostId, id)
     setState(createChatState(id))
     setUi({ expanded: new Set(), open: new Set(), revealed: new Set() })
     setConnection('connecting')
@@ -850,7 +906,7 @@ function ChatSession({
     setTurnClock({})
     setCheckpoints([])
     setRevision((value) => value + 1)
-  }, [id])
+  }, [hostId, id])
   useFocusEffect(
     useCallback(() => {
       if (!takeSessionStale(hostId, id)) return
@@ -1204,152 +1260,139 @@ function ChatSession({
         }
       />
       <KeyboardViewport style={{ flex: 1 }}>
-        <FlatList
-          ref={list}
-          data={rows}
-          extraData={ui}
-          keyExtractor={(row) => row.key}
-          renderItem={renderRow}
-          style={{ flex: 1 }}
-          contentContainerStyle={{
-            paddingHorizontal: 16,
-            paddingTop: 12,
-            paddingBottom: 16,
-            gap: 16,
-            flexGrow: 1,
-            width: '100%',
-            maxWidth: 800,
-            alignSelf: 'center',
-          }}
-          keyboardShouldPersistTaps="handled"
-          // 自动补历史时保持正在阅读的位置；手动按钮补完后会显式回到顶部。
-          maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
-          onScroll={({ nativeEvent: value }) => {
-            // 贴底时继续跟随；只有用户往上滚才停止跟随。内容变短（一轮结束后整组折叠、
-            // 历史重载）引起的位置回弹不算用户操作。
-            if (holdScroll.current) return
-            const previous = scrollMetrics.current
-            const distance =
-              value.contentSize.height - value.contentOffset.y - value.layoutMeasurement.height
-            const shrank = value.contentSize.height < previous.height - 1
-            if (distance < 150) follow.current = true
-            else if (!shrank && value.contentOffset.y < previous.offset - 1) follow.current = false
-            scrollMetrics.current = { height: value.contentSize.height, offset: value.contentOffset.y }
-            autoLoadOlder(value.contentOffset.y)
-          }}
-          scrollEventThrottle={100}
-          onContentSizeChange={() => {
-            if (scrollTopAfterLoad.current) {
-              scrollTopAfterLoad.current = false
-              list.current?.scrollToOffset({ offset: 0, animated: false })
-              return
+        <View style={{ flex: 1 }}>
+          <FlatList
+            ref={list}
+            data={rows}
+            extraData={ui}
+            keyExtractor={(row) => row.key}
+            renderItem={renderRow}
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              paddingHorizontal: 16,
+              paddingTop: 12,
+              paddingBottom: 16,
+              gap: 16,
+              flexGrow: 1,
+              width: '100%',
+              maxWidth: 800,
+              alignSelf: 'center',
+            }}
+            keyboardShouldPersistTaps="handled"
+            // 往前补的历史插在上方时保持正在阅读的那条不动（列表头部由 VirtualizedList 单独计入）。
+            // 第一行常是被页边界切开的半个回合，补页后会并进别的行、换 key，拿它当锚点会失效。
+            maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
+            onLayout={({ nativeEvent }) => {
+              listSize.current.viewport = nativeEvent.layout.height
+              if (follow.current && !holdScroll.current) scrollToLatest(false)
+              maybeLoadOlder()
+            }}
+            onScrollBeginDrag={() => {
+              autoBatches.current = 0
+            }}
+            onScroll={({ nativeEvent }) => trackScroll(nativeEvent)}
+            // 滚动事件有节流，一次快速甩到顶时最后的位置可能收不到；停下时再按最终位置判断一次。
+            onScrollEndDrag={({ nativeEvent }) => trackScroll(nativeEvent)}
+            onMomentumScrollEnd={({ nativeEvent }) => trackScroll(nativeEvent)}
+            scrollEventThrottle={100}
+            onContentSizeChange={(_, height) => {
+              listSize.current.content = height
+              if (follow.current && !holdScroll.current) scrollToLatest(false)
+              maybeLoadOlder()
+            }}
+            // 头部始终挂着，往前补完时只隐藏，列表计算保持位置用的下标才不会变。
+            ListHeaderComponentStyle={hasOlder ? undefined : { display: 'none' }}
+            ListHeaderComponent={
+              <OlderHistoryStatus
+                loading={loadingOlder}
+                failed={olderFailed}
+                ready={ready}
+                onLoad={retryOlder}
+              />
             }
-            if (follow.current && !holdScroll.current) list.current?.scrollToEnd({ animated: false })
-          }}
-          ListHeaderComponent={
-            hasOlder ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="加载更早的消息"
-                accessibilityState={{ disabled: loadingOlder || !ready, busy: loadingOlder }}
-                disabled={loadingOlder || !ready}
-                hitSlop={8}
-                onPress={() => loadOlderBatch('manual')}
-                style={({ pressed }) => ({
-                  alignSelf: 'center',
-                  minHeight: 44,
-                  justifyContent: 'center',
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  gap: 8,
-                  paddingHorizontal: 16,
-                  opacity: loadingOlder ? 0.6 : pressed ? 0.5 : ready ? 1 : 0.45,
-                })}
-              >
-                {loadingOlder ? <Spinner size={14} /> : null}
-                <Text style={{ fontSize: 14, color: colors.ink2 }}>
-                  {loadingOlder ? '正在加载…' : ready ? '加载更早的消息' : '等电脑连接后加载'}
-                </Text>
-              </Pressable>
-            ) : undefined
-          }
-          ListEmptyComponent={
-            ready ? (
-              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 }}>
-                <Text style={{ fontSize: 16, lineHeight: 22, fontWeight: '600', color: colors.ink, textAlign: 'center' }}>
-                  从这里开始
-                </Text>
-                <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink3, textAlign: 'center' }}>
-                  {`说说你想做什么，任务会在 ${host?.name ?? '电脑'} 上执行。下面可以换模型和权限模式。`}
-                </Text>
-              </View>
-            ) : connectionProblem ? undefined : (
-              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-                <Spinner size={20} />
-              </View>
-            )
-          }
-          ListFooterComponent={
-            state.computerUsePermissions.length || (turnSettled && (latest || meta)) ? (
-              <View style={{ gap: 14 }}>
-                {state.computerUsePermissions.map((request) => (
-                  <Card key={request.requestId}>
-                    <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>
-                      操作电脑需要在电脑上确认
-                    </Text>
-                    {request.request.reason ? (
-                      <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
-                        {request.request.reason}
+            ListEmptyComponent={
+              ready ? (
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32, gap: 8 }}>
+                  <Text style={{ fontSize: 16, lineHeight: 22, fontWeight: '600', color: colors.ink, textAlign: 'center' }}>
+                    从这里开始
+                  </Text>
+                  <Text style={{ fontSize: 14, lineHeight: 21, color: colors.ink3, textAlign: 'center' }}>
+                    {`说说你想做什么，任务会在 ${host?.name ?? '电脑'} 上执行。下面可以换模型和权限模式。`}
+                  </Text>
+                </View>
+              ) : connectionProblem ? undefined : (
+                <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+                  <Spinner size={20} />
+                </View>
+              )
+            }
+            ListFooterComponent={
+              state.computerUsePermissions.length || (turnSettled && (latest || meta)) ? (
+                <View style={{ gap: 14 }}>
+                  {state.computerUsePermissions.map((request) => (
+                    <Card key={request.requestId}>
+                      <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>
+                        操作电脑需要在电脑上确认
                       </Text>
-                    ) : null}
-                    <Callout>请在电脑设置里完成全局启用和系统权限授权。</Callout>
-                    <View style={{ flexDirection: 'row', gap: 8 }}>
-                      <Button
-                        title="刷新授权状态"
-                        variant="secondary"
-                        style={{ flex: 1 }}
-                        onPress={reconnect}
-                      />
-                      <Button
-                        title="拒绝本次请求"
-                        variant="danger"
-                        disabled={!ready}
-                        style={{ flex: 1 }}
-                        onPress={() =>
-                          send({
-                            type: 'computer_use_permission_response',
-                            requestId: request.requestId,
-                            response: {
-                              granted: [],
-                              denied: request.request.apps.map((app) => ({
-                                bundleId: app.resolved?.bundleId ?? app.requestedName,
-                                reason: 'user_denied',
-                              })),
-                              flags: {
-                                clipboardRead: false,
-                                clipboardWrite: false,
-                                systemKeyCombos: false,
+                      {request.request.reason ? (
+                        <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
+                          {request.request.reason}
+                        </Text>
+                      ) : null}
+                      <Callout>请在电脑设置里完成全局启用和系统权限授权。</Callout>
+                      <View style={{ flexDirection: 'row', gap: 8 }}>
+                        <Button
+                          title="刷新授权状态"
+                          variant="secondary"
+                          style={{ flex: 1 }}
+                          onPress={reconnect}
+                        />
+                        <Button
+                          title="拒绝本次请求"
+                          variant="danger"
+                          disabled={!ready}
+                          style={{ flex: 1 }}
+                          onPress={() =>
+                            send({
+                              type: 'computer_use_permission_response',
+                              requestId: request.requestId,
+                              response: {
+                                granted: [],
+                                denied: request.request.apps.map((app) => ({
+                                  bundleId: app.resolved?.bundleId ?? app.requestedName,
+                                  reason: 'user_denied',
+                                })),
+                                flags: {
+                                  clipboardRead: false,
+                                  clipboardWrite: false,
+                                  systemKeyCombos: false,
+                                },
+                                userConsented: false,
                               },
-                              userConsented: false,
-                            },
-                          })
-                        }
-                      />
-                    </View>
-                  </Card>
-                ))}
-                {turnSettled ? (
-                  <SessionChangesCard
-                    checkpoint={latest}
-                    onOpen={() => openFiles('changed')}
-                    onUndo={() => openRoute('/changes')}
-                  />
-                ) : null}
-                {meta ? <Mono style={{ fontSize: 12, color: colors.ink3 }}>{meta}</Mono> : null}
-              </View>
-            ) : undefined
-          }
-        />
+                            })
+                          }
+                        />
+                      </View>
+                    </Card>
+                  ))}
+                  {turnSettled ? (
+                    <SessionChangesCard
+                      checkpoint={latest}
+                      onOpen={() => openFiles('changed')}
+                      onUndo={() => openRoute('/changes')}
+                    />
+                  ) : null}
+                  {meta ? <Mono style={{ fontSize: 12, color: colors.ink3 }}>{meta}</Mono> : null}
+                </View>
+              ) : undefined
+            }
+          />
+          {awayFromLatest ? (
+            <View pointerEvents="box-none" style={{ position: 'absolute', left: 0, right: 0, bottom: 12, alignItems: 'center' }}>
+              <FloatingButton icon="arrow-down" label="回到最新" onPress={jumpToLatest} />
+            </View>
+          ) : null}
+        </View>
         {approval ? (
           <>
             {above || caption ? (
