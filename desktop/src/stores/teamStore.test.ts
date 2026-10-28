@@ -1,3 +1,4 @@
+import { ApiError } from '../api/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   memberSessionId,
@@ -1483,6 +1484,120 @@ describe('teamStore workbench timeline', () => {
 
   afterEach(() => {
     useTeamStore.getState().clearTeam()
+  })
+
+  function absentWorkbench(sessionId = 'lead-session') {
+    return new ApiError(404, {
+      error: 'NOT_FOUND',
+      message: `No Agent Teams workbench for session: ${sessionId}`,
+    })
+  }
+
+  it('backs off confirmed absence per session, then discovers a workbench after expiry', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000)
+    try {
+      getWorkbenchForSessionMock.mockRejectedValue(absentWorkbench())
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      now.mockReturnValue(60_999)
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(1)
+      getWorkbenchForSessionMock.mockRejectedValueOnce(absentWorkbench('other-session'))
+      await useTeamStore.getState().fetchTeamForSession('other-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+      const snapshot = workbench('new-v1', 'in_progress')
+      getWorkbenchForSessionMock.mockResolvedValue({
+        sessionId: 'lead-session', teamName: 'team-workbench', source: 'live', snapshots: [snapshot],
+      })
+      now.mockReturnValue(61_000)
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(3)
+      expect(useTeamStore.getState().workbenchesBySession['lead-session']?.snapshots).toEqual([snapshot])
+      now.mockReturnValue(66_000)
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(4)
+    } finally {
+      now.mockRestore()
+    }
+  })
+
+  it.each([
+    new ApiError(500, { error: 'INTERNAL_ERROR', message: 'unavailable' }),
+    new ApiError(404, { error: 'NOT_FOUND', message: 'Unknown API route' }),
+    new ApiError(404, { error: 'NOT_FOUND', message: 'No Agent Teams workbench for session: other-session' }),
+    new ApiError(403, { error: 'FORBIDDEN', message: 'denied' }),
+    new TypeError('Failed to fetch'),
+    new Error('Request timed out after 120s'),
+  ])('does not cache a discovery failure as absence: %s', async (error) => {
+    getWorkbenchForSessionMock.mockRejectedValueOnce(error).mockResolvedValueOnce({
+      sessionId: 'lead-session', teamName: 'team-workbench', source: 'live',
+      snapshots: [workbench('v1', 'pending')],
+    })
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+    expect(useTeamStore.getState().teamNameBySession['lead-session']).toBe('team-workbench')
+  })
+
+  it('invalidates absence on reconnect, team creation and store reset', async () => {
+    getWorkbenchForSessionMock.mockRejectedValue(absentWorkbench())
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    await useTeamStore.getState().fetchTeamForSession('lead-session', { force: true })
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+    getTeamMock.mockRejectedValue(new Error('not ready'))
+    getWorkbenchMock.mockRejectedValue(new Error('not ready'))
+    useTeamStore.getState().handleTeamCreated('team-workbench', 'lead-session')
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(3)
+    useTeamStore.getState().clearTeam()
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(4)
+  })
+
+  it('clears cached absence when a named workbench update arrives', async () => {
+    getWorkbenchForSessionMock.mockRejectedValueOnce(absentWorkbench())
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    getWorkbenchMock.mockResolvedValueOnce(workbench('v1', 'pending'))
+    await useTeamStore.getState().fetchWorkbench('team-workbench')
+    getWorkbenchForSessionMock.mockResolvedValueOnce({
+      sessionId: 'lead-session', teamName: 'team-workbench', source: 'live',
+      snapshots: [workbench('v2', 'completed')],
+    })
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+    expect(useTeamStore.getState().workbenchesBySession['lead-session']?.snapshots.at(-1)?.version).toBe('v2')
+  })
+
+  it('does not retain a previous absence when forced discovery fails transiently', async () => {
+    getWorkbenchForSessionMock.mockRejectedValueOnce(absentWorkbench())
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    getWorkbenchForSessionMock.mockRejectedValueOnce(new ApiError(500, { message: 'unavailable' }))
+    await useTeamStore.getState().fetchTeamForSession('lead-session', { force: true })
+    await useTeamStore.getState().fetchTeamForSession('lead-session')
+    expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('does not let a stale missing response suppress discovery after creation or reset', async () => {
+    for (const invalidate of [
+      () => useTeamStore.getState().handleTeamCreated('team-workbench', 'lead-session'),
+      () => useTeamStore.getState().clearTeam(),
+    ]) {
+      useTeamStore.getState().clearTeam()
+      const pending = deferred<never>()
+      getWorkbenchForSessionMock.mockReset().mockReturnValueOnce(pending.promise)
+      getTeamMock.mockRejectedValue(new Error('not ready'))
+      getWorkbenchMock.mockRejectedValue(new Error('not ready'))
+      const discovery = useTeamStore.getState().fetchTeamForSession('lead-session')
+      invalidate()
+      pending.reject(absentWorkbench())
+      await discovery
+      getWorkbenchForSessionMock.mockResolvedValueOnce({
+        sessionId: 'lead-session', teamName: 'team-workbench', source: 'live',
+        snapshots: [workbench('v1', 'pending')],
+      })
+      await useTeamStore.getState().fetchTeamForSession('lead-session')
+      expect(getWorkbenchForSessionMock).toHaveBeenCalledTimes(2)
+      expect(useTeamStore.getState().teamNameBySession['lead-session']).toBe('team-workbench')
+    }
   })
 
   it('keeps each member model through the roster read instead of dropping it', async () => {

@@ -30,6 +30,7 @@ import {
 import { hahaOpenAIOAuthService } from './hahaOpenAIOAuthService.js'
 import { hahaOAuthService } from './hahaOAuthService.js'
 import {
+  GROK_MODEL_CATALOG_ENV_KEY,
   GROK_OFFICIAL_PROVIDER,
   isGrokOfficialProviderId,
 } from './grokOfficialProvider.js'
@@ -575,13 +576,17 @@ export class ProviderService {
       for (const key of getManagedEnvKeys()) {
         delete cleanedEnv[key]
       }
+      const providerEnv = this.buildManagedEnv(provider)
+      // Discovered capabilities belong to this server's launch snapshot, not
+      // persisted settings that outlive the authenticated catalog cache.
+      delete providerEnv[GROK_MODEL_CATALOG_ENV_KEY]
 
       return {
         settings: {
           ...settings,
           env: {
             ...cleanedEnv,
-            ...this.buildManagedEnv(provider),
+            ...providerEnv,
           },
         },
         result: undefined,

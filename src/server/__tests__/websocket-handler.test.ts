@@ -36,6 +36,8 @@ import * as sideChatRegistry from '../services/sideChatRegistry.js'
 import { activeBackgroundTaskIds } from '../ws/agentTaskState.js'
 import * as teleportApi from '../../utils/teleport/api.js'
 import { resetSettingsCache, setSessionSettingsCache } from '../../utils/settings/settingsCache.js'
+import { clearGrokModelCatalogCache, getGrokModelCatalog } from '../../services/grokAuth/modelCatalog.js'
+import { hahaGrokOAuthService } from '../services/hahaGrokOAuthService.js'
 
 function makeClientSocket(sessionId: string, clientKind: 'full' | 'pet' = 'full') {
   const sent: string[] = []
@@ -97,6 +99,83 @@ function mockSavedDeepSeekProvider(): void {
 async function flushMicrotasks(count = 12): Promise<void> {
   for (let index = 0; index < count; index++) await Promise.resolve()
 }
+
+describe('WebSocket Grok catalog runtime selection', () => {
+  afterEach(() => {
+    __resetWebSocketHandlerStateForTests()
+    clearGrokModelCatalogCache()
+    mock.restore()
+  })
+
+  it('preserves a newly discovered model through WS selection and cold-cache session restoration', async () => {
+    const sessionId = `grok-future-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    const launchInfo = {
+      filePath: '/tmp/grok-future.jsonl', projectDir: '/tmp', workDir: '/tmp',
+      transcriptMessageCount: 0, customTitle: null,
+      runtimeProviderId: 'grok-official', runtimeModelId: 'grok-4.7', effortLevel: 'high',
+    }
+    spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => launchInfo)
+    spyOn(sessionService, 'appendSessionMetadata').mockImplementation(async (_id, metadata) => { Object.assign(launchInfo, metadata) })
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    spyOn(ProviderService.prototype, 'listProviders').mockResolvedValue({ providers: [], activeId: 'grok-official', providerOrder: [] })
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+    spyOn(SettingsService.prototype, 'getPermissionMode').mockResolvedValue('default')
+    const credentials = spyOn(hahaGrokOAuthService, 'ensureFreshTokens').mockResolvedValue({
+      accessToken: 'desktop-grok-test-token', refreshToken: null, expiresAt: null, email: 'grok@example.test',
+    })
+    await getGrokModelCatalog({
+      accessToken: 'desktop-grok-test-token', forceRefresh: true, throwOnError: true,
+      fetchOverride: (async () => Response.json({ models: [{
+        id: 'grok-future-release', reasoningEffort: 'low', reasoningEfforts: ['low', 'xhigh'],
+      }] })) as typeof fetch,
+    })
+
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'set_runtime_config', providerId: 'grok-official', modelId: 'grok-future-release', effortLevel: 'xhigh',
+    }))
+    for (let attempt = 0; attempt < 30 && !ws.sent.some(payload => JSON.parse(payload).type === 'runtime_config_applied'); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({
+      type: 'runtime_config_applied', modelId: 'grok-future-release', effortLevel: 'xhigh',
+    }))
+    expect(launchInfo).toMatchObject({ runtimeModelId: 'grok-future-release', effortLevel: 'xhigh' })
+    expect(await getRuntimeSettings(sessionId)).toMatchObject({ model: 'grok-future-release', effort: 'xhigh' })
+
+    __resetWebSocketHandlerStateForTests()
+    clearGrokModelCatalogCache()
+    credentials.mockResolvedValue(null)
+    expect(await getRuntimeSettings(sessionId)).toMatchObject({ model: 'grok-future-release', effort: 'xhigh' })
+  })
+
+  it('keeps a concrete uncatalogued ID and its legal effort on a cold WS selection', async () => {
+    const sessionId = `grok-cold-${crypto.randomUUID()}`
+    const ws = makeClientSocket(sessionId)
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue(null)
+    spyOn(sessionService, 'appendSessionMetadata').mockResolvedValue()
+    spyOn(conversationService, 'getSessionWorkDir').mockReturnValue('/tmp')
+    spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    spyOn(ProviderService.prototype, 'listProviders').mockResolvedValue({ providers: [], activeId: 'grok-official', providerOrder: [] })
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+    spyOn(SettingsService.prototype, 'getPermissionMode').mockResolvedValue('default')
+    spyOn(hahaGrokOAuthService, 'ensureFreshTokens').mockResolvedValue(null)
+    clearGrokModelCatalogCache()
+    handleWebSocket.open(ws)
+    handleWebSocket.message(ws, JSON.stringify({
+      type: 'set_runtime_config', providerId: 'grok-official', modelId: 'grok-new-cold-model', effortLevel: 'max',
+    }))
+    for (let attempt = 0; attempt < 30 && !ws.sent.some(payload => JSON.parse(payload).type === 'runtime_config_applied'); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
+    expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual(expect.objectContaining({
+      type: 'runtime_config_applied', modelId: 'grok-new-cold-model', effortLevel: 'max',
+    }))
+    expect(await getRuntimeSettings(sessionId)).toMatchObject({ model: 'grok-new-cold-model', effort: 'max' })
+  })
+})
 
 describe('translateCliMessage usage mapping', () => {
   afterEach(() => {

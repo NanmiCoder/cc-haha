@@ -4,9 +4,12 @@ import { createServer } from 'node:net'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { gunzipSync } from 'node:zlib'
+import { inspect } from 'node:util'
 import { handleDiagnosticsApi } from '../api/diagnostics.js'
 import { DiagnosticsService, diagnosticsService, getOpenLogDirCommand } from '../services/diagnosticsService.js'
 import { createSandboxedTestEnvironment } from '../../../scripts/pr/test-environment.js'
+import { appendHostDiagnostic } from '../../../desktop/electron/services/sidecarManager.js'
+import { createFeishuLogger } from '../../../adapters/feishu/logger.js'
 
 let tmpDir: string
 let originalConfigDir: string | undefined
@@ -582,6 +585,105 @@ describe('DiagnosticsService', () => {
     expect(hostLog).not.toContain('ELECTRON_SECRET')
     expect(hostLog).not.toContain('/Users/alice')
     expect(Buffer.byteLength(hostLog)).toBeLessThanOrEqual(256 * 1024 + 64)
+  })
+
+  test('rescans legacy JSON and escaped Axios logs when exporting without altering the source', async () => {
+    const service = new DiagnosticsService()
+    const credentials = {
+      app_id: 'fixture-export-app', APP_SECRET: 'fixture-export-secret',
+      nested: { token: 'fixture-export-token', API_KEY: 'fixture-export-key', password: 'fixture-export-password', Authorization: 'Basic fixture-export-auth' },
+    }
+    const raw = `AxiosError: Request failed with status code 400\nmethod: post\npath: /open-apis/auth/v3/tenant_access_token/internal\n${JSON.stringify(credentials, null, 2)}\ndata: ${JSON.stringify(JSON.stringify(credentials))}\n    at request (adapter.ts:42:7)\n`
+    await fs.mkdir(service.getLogDir(), { recursive: true })
+    await fs.writeFile(service.getElectronHostPath(), raw)
+    const bundle = await service.exportBundle()
+    const archive = await fs.readFile(bundle.path)
+    const hostLog = readTarEntry(archive, 'electron-host.log')
+    for (const secret of ['fixture-export-app', 'fixture-export-secret', 'fixture-export-token', 'fixture-export-key', 'fixture-export-password', 'fixture-export-auth']) {
+      expect(hostLog).not.toContain(secret)
+    }
+    for (const safe of ['AxiosError', 'post', '400', '/open-apis/auth/v3/tenant_access_token/internal', 'adapter.ts:42:7']) {
+      expect(hostLog).toContain(safe)
+    }
+    expect(await fs.readFile(service.getElectronHostPath(), 'utf-8')).toBe(raw)
+    expect(readTarEntry(archive, 'README.txt')).toContain('Review every file before sharing')
+  })
+
+  test('carries a real Feishu SDK failure through child stdio, host persistence and diagnostic export', async () => {
+    const service = new DiagnosticsService()
+    const child = Bun.spawn([
+      process.execPath, '--no-env-file',
+      path.resolve(import.meta.dir, '../../../adapters/feishu/__tests__/fixtures/safe-logging.ts'),
+    ], {
+      env: createSandboxedTestEnvironment(path.join(tmpDir, 'adapter-home'), {
+        FEISHU_APP_ID: 'issue1720-fixture-app-id', FEISHU_APP_SECRET: 'issue1720-fixture-app-secret',
+        FEISHU_ENCRYPT_KEY: 'issue1720-fixture-encrypt-key', FEISHU_VERIFICATION_TOKEN: 'issue1720-fixture-verification-token',
+      }),
+      stdout: 'pipe', stderr: 'pipe',
+    })
+    const capture = async (stream: ReadableStream<Uint8Array>, channel: string) => {
+      const reader = stream.getReader()
+      const decoder = new TextDecoder()
+      let output = ''
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        const chunk = decoder.decode(value, { stream: true })
+        output += chunk
+        appendHostDiagnostic(service.getElectronHostPath(), `[claude-adapters:feishu] [${channel}] ${chunk}`, { homeDir: tmpDir })
+      }
+      return output
+    }
+    const [stdout, stderr, code] = await Promise.all([capture(child.stdout, 'stdout'), capture(child.stderr, 'stderr'), child.exited])
+    expect({ code, stderr: code ? stderr : '' }).toEqual({ code: 0, stderr: '' })
+    expect(stdout).toContain('TOKEN_REQUESTS=1')
+    const persisted = await fs.readFile(service.getElectronHostPath(), 'utf-8')
+    const bundle = await service.exportBundle()
+    const exported = readTarEntry(await fs.readFile(bundle.path), 'electron-host.log')
+    for (const surface of [stdout + stderr, persisted, exported]) {
+      for (const secret of ['issue1720-fixture-app-id', 'issue1720-fixture-app-secret', 'issue1720-fixture-encrypt-key', 'issue1720-fixture-verification-token', 'fixture-authorization', 'fixture-url-query', 'fixture-request-body', 'fixture-response-body']) expect(surface).not.toContain(secret)
+      for (const safe of ['/open-apis/auth/v3/tenant_access_token/internal', 'POST', '400', 'ERR_BAD_REQUEST']) expect(surface).toContain(safe)
+    }
+  })
+
+  test('redacts prose, inspect strings and full headers across logging and legacy export', async () => {
+    const service = new DiagnosticsService()
+    const inputs = [
+      "Error: Can't complete request\n{ token: 'fixture-prose-secret', status: 400 }",
+      inspect({ password: 'start\n' + 'fixture-multiline-secret'.repeat(8), status: 400 }),
+      inspect({ app_secret: `begin'fixture-backtick-secret"end`, status: 400 }),
+      'Cookie: first=fixture-cookie-one; session=fixture-cookie-two\nstatus: 400',
+      ...['null', 'true', 'false', 'true-user'].map(name => `Cookie: ${name}=fixture-cookie-one; session=fixture-cookie-two\nstatus: 400`),
+      'Authorization: Digest username="fixture-user", response="fixture-digest-secret"\nstatus: 400',
+    ]
+    const output: string[] = []
+    const capture = spyOn(console, 'error').mockImplementation((...args) => { output.push(args.join(' ')) })
+    try {
+      for (const input of inputs) createFeishuLogger().error(new Error(input))
+    } finally { capture.mockRestore() }
+    for (const line of output) appendHostDiagnostic(service.getElectronHostPath(), line, { homeDir: tmpDir })
+    const persisted = await fs.readFile(service.getElectronHostPath(), 'utf-8')
+    const exported = readTarEntry(await fs.readFile((await service.exportBundle()).path), 'electron-host.log')
+    await fs.writeFile(service.getElectronHostPath(), inputs.join('\n'))
+    const legacy = readTarEntry(await fs.readFile((await service.exportBundle()).path), 'electron-host.log')
+    for (const surface of [output.join('\n'), persisted, exported, legacy]) {
+      for (const secret of ['fixture-prose-secret', 'fixture-multiline-secret', 'fixture-backtick-secret', 'fixture-cookie-one', 'fixture-cookie-two', 'fixture-user', 'fixture-digest-secret']) expect(surface).not.toContain(secret)
+      expect(surface).toContain("Can't complete request")
+      expect(surface).toContain('status: 400')
+    }
+  })
+
+  test('retains safe diagnostics after repeated host writes and export of redacted headers', async () => {
+    const service = new DiagnosticsService()
+    appendHostDiagnostic(service.getElectronHostPath(), 'AxiosError: request failed\nCookie: session=fixture-session-cookie\nstatus: 400\nmethod: POST\npath: /open-apis/auth/v3/tenant_access_token/internal\n at request (adapter.ts:42:7)')
+    const firstWrite = await fs.readFile(service.getElectronHostPath(), 'utf-8')
+    const exported = readTarEntry(await fs.readFile((await service.exportBundle()).path), 'electron-host.log')
+    appendHostDiagnostic(service.getElectronHostPath(), 'following event')
+    const secondWrite = await fs.readFile(service.getElectronHostPath(), 'utf-8')
+    for (const surface of [firstWrite, exported, secondWrite]) {
+      expect(surface).not.toContain('fixture-session-cookie')
+      for (const safe of ['status: 400', 'method: POST', 'path: /open-apis/auth/v3/tenant_access_token/internal', 'adapter.ts:42:7']) expect(surface).toContain(safe)
+    }
   })
 
   test('bounds active diagnostic surfaces and recent exports under the advertised directory cap', async () => {
