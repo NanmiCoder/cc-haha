@@ -39,6 +39,9 @@ describe('image processor module loading', () => {
     expect(await processor(buffer).metadata()).toMatchObject({ width: 4, height: 3, format: 'png' })
     expect(await getImageCreator()).toBe(creator)
     expect(await getImageProcessor()).toBe(processor)
+    const requestProcessor = await getImageProcessor({ requireAutoOrient: true })
+    expect(typeof requestProcessor(buffer).autoOrient).toBe('function')
+    expect(await requestProcessor(buffer).autoOrient!().metadata()).toMatchObject({ width: 4, height: 3 })
   })
 
   test('loads both bundled image APIs from the executable installation instead of the project', async () => {
@@ -58,6 +61,8 @@ describe('image processor module loading', () => {
     const processor = await getImageProcessor()
     const creator = await getImageCreator()
     expect(processor(Buffer.alloc(0))).toBe('packaged-sharp-fixture')
+    const requestProcessor = await getImageProcessor({ requireAutoOrient: true })
+    expect(requestProcessor(Buffer.alloc(0))).toBe('packaged-sharp-fixture')
     expect(creator({ create: {
       width: 1, height: 1, channels: 3, background: { r: 0, g: 0, b: 0 },
     } })).toBe('packaged-sharp-fixture')
