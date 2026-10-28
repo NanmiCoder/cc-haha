@@ -72,7 +72,7 @@ import {
 } from './services/nativeAppearance'
 import { createRendererUrlMatcher, installMicrophonePermissions } from './services/microphonePermissions'
 import { resolveRendererEntry } from './services/rendererEntry'
-import { installRendererLifecycle } from './services/rendererLifecycle'
+import { installRendererLifecycle, showRendererRecoveryFailure } from './services/rendererLifecycle'
 import { writeWindowSmokeSnapshot } from './services/windowSmoke'
 import { loadAndRevealMainWindow } from './services/windowStartup'
 import {
@@ -988,10 +988,8 @@ async function createMainWindow() {
     },
     onRecoveryExhausted: detail => {
       console.error(`[desktop] Electron renderer recovery exhausted: ${detail}`)
-      dialog.showErrorBox(
-        '界面恢复失败 / Interface Recovery Failed',
-        `桌面界面意外退出或持续无响应，自动恢复未能解决问题。请重启应用；如果问题持续存在，请附上诊断日志反馈。\n\nThe desktop interface exited unexpectedly or remained unresponsive, and automatic recovery did not resolve it. Restart the app and include diagnostics when reporting the problem.\n\n${detail}`,
-      )
+      void showRendererRecoveryFailure({ window, isQuitting: () => isQuitting, dialog, app, detail })
+        .catch(error => recordRendererDiagnostic(`[recovery-dialog-failed] ${String(error)}`))
     },
   })
   writeWindowSmokeSnapshot(mainWindow, 'after-create')
