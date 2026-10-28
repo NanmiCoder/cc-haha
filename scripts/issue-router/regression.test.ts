@@ -1,4 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
+import { Database } from 'bun:sqlite'
 import { fixture, provenance, head, base, now, session, discovery, mergeSha } from './test-helpers'
 
 const fixtures: ReturnType<typeof fixture>[] = []
@@ -12,6 +13,118 @@ function owned() {
   const claimed = f.claim(1)
   f.bind(claimed)
   return { f, claimed }
+}
+
+function externalMerge() {
+  const { f, claimed } = owned()
+  f.evidence(claimed.token, 101)
+  f.call({ command: 'observe-main', ...provenance, sha: mergeSha, previous: base, descendant_verified: true })
+  const receipt = { command: 'observe-external-merge', ...claimed.token, ...provenance,
+    observed_at: new Date(now + 300).toISOString(), number: 101, url: 'https://example.invalid/pr/101',
+    branch: claimed.run.branch, head, base, state: 'merged', merge_sha: mergeSha,
+    merged_at: new Date(now + 200).toISOString(), merged_by: 'fixture-maintainer', main_sha: mergeSha,
+    ancestry_verified: true, ancestry_reference: 'fixture://main-contains-merge' }
+  const complete = { command: 'complete', ...claimed.token, merge_sha: mergeSha,
+    main_ci_reference: 'fixture://main-ci-success', scenario_reference: 'fixture://original-scenario-passed' }
+  return { f, claimed, receipt, complete }
+}
+
+test('external merge receipt completes without a merge outbox or fabricated sending action', () => {
+  const { f, receipt, complete } = externalMerge()
+  expect(f.call(receipt)).toMatchObject({ recorded: true, merge_sha: mergeSha })
+  const db = new Database(f.layout().database)
+  expect(db.query("SELECT count(*) AS n FROM outbox WHERE kind = 'merge'").get()).toEqual({ n: 0 })
+  expect(db.query("SELECT count(*) AS n FROM events WHERE kind IN ('dispatch-start', 'merge_acquire') AND data LIKE '%merge:%'").get()).toEqual({ n: 0 })
+  db.close()
+  expect(f.call({ command: 'status' }).resources).toHaveLength(0)
+  expect(() => f.call({ command: 'retire', run_id: receipt.run_id, owner: receipt.owner, generation: receipt.generation,
+    executor_stopped: true, outcome: 'closed', reference: 'fixture://closed', pr_terminal_reference: receipt.reference })).toThrow('Use complete')
+  expect(() => f.call({ ...complete, main_ci_reference: '' })).toThrow()
+  expect(() => f.call({ ...complete, scenario_reference: '' })).toThrow()
+  expect(f.call(complete)).toEqual({ completed: true })
+})
+
+test('external merge receipt rejects wrong identity, stale generation and conflicting merge SHA', () => {
+  const { f, receipt, complete } = externalMerge()
+  for (const wrong of [{ number: 102 }, { url: 'https://example.invalid/pr/102' }, { branch: 'fix/issue-1-other' },
+    { head: 'd'.repeat(40) }, { base: 'd'.repeat(40) }]) {
+    expect(() => f.call({ ...receipt, ...wrong })).toThrow('original PR')
+  }
+  expect(() => f.call({ ...receipt, generation: 2 })).toThrow('owner/generation changed')
+  expect(() => f.call({ ...receipt, owner: 'late-owner' })).toThrow('owner/generation changed')
+  expect(() => f.call({ ...receipt, main_sha: 'd'.repeat(40) })).toThrow('latest observed main')
+  expect(() => f.call({ ...receipt, merged_at: new Date(now + 400).toISOString() })).toThrow('after its observation')
+  f.call(receipt)
+  expect(() => f.call({ ...receipt, merge_sha: 'd'.repeat(40), observed_at: new Date(now + 500).toISOString() })).toThrow('Confirmed external merge SHA')
+  expect(() => f.call({ ...complete, merge_sha: 'd'.repeat(40) })).toThrow('receipt no longer matches')
+})
+
+test('external merge receipt cannot cover an unknown merge', () => {
+  const { f, claimed } = owned()
+  f.evidence(claimed.token, 101)
+  const action = f.acquire(claimed.token).action
+  f.call({ command: 'dispatch-start', ...claimed.token, action_key: action.action_key, sender: 'sender' })
+  f.call({ command: 'dispatch-unknown', ...claimed.token, action_key: action.action_key, sender: 'sender', reference: 'fixture://unknown-merge' })
+  expect(() => f.call({ command: 'observe-external-merge', ...claimed.token, ...provenance,
+    observed_at: new Date(now + 300).toISOString(), number: 101, url: 'https://example.invalid/pr/101',
+    branch: claimed.run.branch, head, base, state: 'merged', merge_sha: mergeSha,
+    merged_at: new Date(now + 200).toISOString(), merged_by: 'fixture-maintainer', main_sha: mergeSha,
+    ancestry_verified: true, ancestry_reference: 'fixture://main-contains-merge' })).toThrow('existing merge action')
+  const db = new Database(f.layout().database)
+  expect(db.query('SELECT status FROM outbox WHERE action_key = ?').get(action.action_key)).toEqual({ status: 'unknown' })
+  db.close()
+})
+
+test('external merge receipt cannot bypass an unresolved resume', () => {
+  const sample = externalMerge()
+  sample.f.call(sample.receipt)
+  sample.f.call({ command: 'observe', scan_id: 'new', cursor_before: 'c1', cursor_after: 'c2', complete: true,
+    candidates: [{ number: 1, title: 'New acceptance', state: 'open', fingerprint: 'new', updated_at: provenance.observed_at }] })
+  const resume = sample.f.call({ command: 'consume', ...sample.claimed.token }).action
+  sample.f.call({ command: 'dispatch-start', ...sample.claimed.token, action_key: resume.action_key, sender: 'sender' })
+  sample.f.call({ command: 'dispatch-unknown', ...sample.claimed.token, action_key: resume.action_key, sender: 'sender', reference: 'fixture://unknown-resume' })
+  expect(() => sample.f.call(sample.complete)).toThrow('Resolve all external actions')
+})
+
+test('external merge receipt is invalid after main or PR observations change', () => {
+  const { f, claimed, receipt, complete } = externalMerge()
+  f.call(receipt)
+  const nextMain = 'd'.repeat(40)
+  f.call({ command: 'observe-main', ...provenance, observed_at: new Date(now + 500).toISOString(),
+    sha: nextMain, previous: mergeSha, descendant_verified: true })
+  expect(() => f.call(complete)).toThrow('receipt no longer matches')
+  f.call({ ...receipt, main_sha: nextMain, observed_at: new Date(now + 600).toISOString() })
+  f.call({ command: 'record-pr', ...claimed.token, ...provenance, observed_at: new Date(now + 700).toISOString(),
+    number: 101, url: receipt.url, branch: receipt.branch, state: 'open', head, base: nextMain })
+  expect(() => f.call(complete)).toThrow('Verify the merge result')
+  expect(() => f.call({ command: 'retire', ...claimed.token, executor_stopped: true, outcome: 'closed',
+    reference: 'fixture://closed', pr_terminal_reference: receipt.reference })).toThrow('Use complete')
+  expect(() => f.call({ ...receipt, base: nextMain, main_sha: nextMain })).toThrow('newer or conflicting')
+})
+
+for (const reopen of [false, true]) {
+  test(`external merge receipt is not inherited by ${reopen ? 'reopened generations' : 'handoff'}`, () => {
+    const { f, claimed, receipt, complete } = externalMerge()
+    f.call(receipt)
+    let next: any
+    if (reopen) {
+      f.call(complete)
+      next = f.call({ command: 'reopen', number: 1, owner: 'new-owner', previous_generation: 1,
+        old_executor_stopped: true, reference: 'fixture://stopped', discovery: { ...discovery, sessions: [session],
+          prs: [{ number: 101, url: receipt.url, branch: receipt.branch }] }, adopt: { session, worktree: '/fixture' } }, now + 1000)
+    } else {
+      next = f.call({ command: 'handoff', ...claimed.token, new_owner: 'new-owner', old_executor_stopped: true,
+        stopped_reference: 'fixture://stopped', session, worktree: '/fixture' })
+    }
+    const token = { run_id: next.run_id, owner: next.owner, generation: next.generation }
+    f.call({ command: 'dispatch-start', ...token, action_key: next.action.action_key, sender: 'sender' })
+    f.call({ command: 'ack', ...token, action_key: next.action.action_key, sender: 'sender', reference: 'fixture://delivered' })
+    expect(() => f.call({ ...complete, ...token })).toThrow('Verify the merge result')
+    expect(() => f.call(receipt)).toThrow('owner/generation changed')
+    if (reopen) expect(() => f.call({ ...receipt, ...token, observed_at: new Date(now + 1100).toISOString() })).toThrow('predates the reopened')
+    else expect(() => f.call({ command: 'retire', ...token, executor_stopped: true, outcome: 'closed',
+      reference: 'fixture://closed', pr_terminal_reference: receipt.reference })).toThrow('Use complete')
+  })
 }
 
 test('repeated content transitions A→B→A→B each reach the original session exactly once', () => {

@@ -97,6 +97,7 @@ PR、验证、审查和 CI 都由适配器查询后规范化记录，CLI 不联�
 | --- | --- | --- |
 | observe-main | sha/previous/descendant_verified=true + source/reference/observed_at | previous 与本库已知 main CAS；适配器查询真实 main ref，并用 Git/GitHub compare 验证新 tip 是旧 tip 的后代；首次 previous=null |
 | record-pr | number/url/branch/state/head/base + source/reference/observed_at | state 为 open/closed/merged；base 是刚查询并确认已集成的真实 main；PR 分支/编号固定，head/base 变化清空旧证据、取消未发送 merge、释放旧 merge 名额 |
+| observe-external-merge | number/url/branch/state=merged/head/base/merge_sha/merged_at/merged_by/main_sha/ancestry_verified=true/ancestry_reference + provenance | 仅记录已发生的外部合并事实；匹配原 PR 与当前 token，不能替代既有未对账 merge 动作，不创建发送动作或合并授权 |
 | validation | head/base + provenance + checks:[{name,result}] | result 为 passed/failed/not_run/skipped，merge 要求每项 passed；必须列出 check:impact 选中检查和 verify 的实际结果 |
 | review | head/base + provenance + reviewer/independent=true/verdict | 独立上下文只读审查该版本，verdict 为 approved/changes_requested |
 | ci | head/base + provenance + complete=true/tested_sha/association/association_reference/checks | 见下面 CI 规范，需真正查询全部本轮状态，不能只报一个 success |
@@ -187,6 +188,10 @@ CI 失败回到原执行者、原 PR，同一版本同一次失败不重复派�
 当前 head 的 CI 全绿后，执行者向管家报告准确 PR、head/base 和 CI 证据，等待管家通过唯一协调入口授予该 PR 与 expected_head 的一个 main 合并名额，不能自行授权。前一个 PR 合入后，后一个重新检查最新 main；必要时集成、检查业务交叉影响、复验、更新原 PR 并等待新 CI。只有当前版本的验证、独立审查和必需 CI 满足要求，才由已获该次授权的执行者携带 expected_head 条件执行 merge，不绕过仓库保护；head 变化须重新核对授权。head 条件不能锁 base；自动合并启用前还要核实服务端最新分支要求或 merge queue，不能用本地串行假装约束了所有人工并发写入。
 
 合并结果未知时查询 PR merged 状态与 merge SHA，再对账。合入后执行者继续跟踪 main 的 CI 到终态，并验证原用户场景，保存真实证据；两者满足后才 complete 和结束任务。失败保持原 issue 的负责人并处理相关问题、报告阻塞，不自动回滚或另开重复实现。若发现外部已经合并，如实记录实际 actor、时间、head、merge SHA 和来源，继续合入后核验，不补造历史合并授权或发送动作，也不再次合并；CLI 无对应对账能力时保留 owner 并交管家协调修复。未交接的工作区不清理，完成后按授权由所属会话归档。
+
+外部合并且没有既有 merge 动作时，使用 observe-external-merge。适配器重新读取 GitHub 的真实 merged 状态、merge SHA、actor 和时间，并用 Git/GitHub compare 核实 merge 是当前 main 的祖先；source/reference 和 ancestry_reference 指向这些真实结果，不能由 issue 文本提供。先 observe-main 登记最新 main，再传 main_sha；head/base 仍使用该 run 原先记录的 PR 版本，不能为适应当前 main 而猜改版本。CLI 校验这些规范化事实的身份、版本与新鲜度，不联网替代适配器查询。
+
+该命令复用 schema 4 的 evidence/events，不迁移数据库、不创建 outbox 或 main-merge 资源。随后 complete 仍要求 main_ci_reference、scenario_reference、最新材料交付和全部外部动作已解决。main/PR 版本变化会使凭据失效，handoff/reopen 不继承凭据；重新观察也不能把早于本次 reopen 的旧合并当作新完成依据。有 sending/unknown 等既有 merge 动作时仍沿原 reconcile 路径对账，不允许外部事实覆盖它。
 
 ## 交接和启用验收
 

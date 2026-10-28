@@ -411,6 +411,28 @@ class Router {
       this.event(c.command, c, run.run_id)
       return { action: this.action(run, action.action_key) }
     }
+    if (command.command === 'observe-external-merge') {
+      ensure(run.pr_number === command.number && run.pr_url === command.url && run.branch === command.branch &&
+        run.head === command.head && run.base === command.base, 'version_mismatch', 'External merge must match the original PR, branch, head and base')
+      ensure(!this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND kind = 'merge' AND status != 'cancelled'").get(run.run_id),
+        'merge_inflight', 'Reconcile the existing merge action; an external observation cannot replace it')
+      this.fresh(command.observed_at)
+      ensure(command.main_sha === this.meta('main_head'), 'base_unobserved', 'External merge ancestry must use the latest observed main')
+      ensure(Date.parse(command.merged_at) <= Date.parse(command.observed_at), 'merge_time', 'Merge cannot occur after its observation')
+      const reopened = this.db.query("SELECT created_at FROM events WHERE run_id = ? AND kind = 'reopen' ORDER BY id DESC LIMIT 1").get(run.run_id) as any
+      ensure(!reopened || Date.parse(command.merged_at) >= reopened.created_at, 'merge_generation', 'Merge predates the reopened generation')
+      const priorPr = this.db.query("SELECT data FROM events WHERE run_id = ? AND kind = 'pr' ORDER BY id DESC LIMIT 1").get(run.run_id) as any
+      if (priorPr) {
+        const pr = JSON.parse(priorPr.data)
+        ensure(Date.parse(command.observed_at) > Date.parse(pr.observed_at) ||
+          Date.parse(command.observed_at) === Date.parse(pr.observed_at) && pr.state === 'merged',
+        'older_observation', 'External merge cannot replace a newer or conflicting PR observation')
+      }
+      const prior = this.db.query("SELECT data FROM events WHERE run_id = ? AND kind = 'external_merge' ORDER BY id DESC LIMIT 1").get(run.run_id) as any
+      ensure(!prior || JSON.parse(prior.data).merge_sha === command.merge_sha, 'merge_conflict', 'Confirmed external merge SHA cannot change')
+      this.saveEvidence(run, 'external_merge', { ...command, merged_at: new Date(command.merged_at).toISOString() })
+      return { recorded: true, merge_sha: command.merge_sha }
+    }
     if (command.command === 'record-pr') {
       ensure(run.branch === command.branch && (!run.pr_number || run.pr_number === command.number), 'pr_conflict', 'Keep the stable branch and original PR')
       this.fresh(command.observed_at)
@@ -425,6 +447,7 @@ class Router {
       }
       this.db.query('UPDATE runs SET pr_number = ?, pr_url = ?, head = ?, base = ?, updated_at = ? WHERE run_id = ?')
         .run(command.number, command.url, command.head, command.base, this.now, run.run_id)
+      if (command.state !== 'merged') this.db.query("DELETE FROM evidence WHERE run_id = ? AND kind = 'external_merge'").run(run.run_id)
       this.saveEvidence(run, 'pr', command)
       return { recorded: true }
     }
@@ -462,7 +485,17 @@ class Router {
     }
     if (command.command === 'complete') {
       const merge = this.db.query("SELECT * FROM outbox WHERE run_id = ? AND generation = ? AND kind = 'merge' AND status = 'sent' ORDER BY rowid DESC LIMIT 1").get(run.run_id, run.generation) as Action | null
-      ensure(merge && JSON.parse(merge.result!).merge_sha === command.merge_sha, 'merge_unconfirmed', 'Verify the merge result before completing the run')
+      let confirmed = !!merge && JSON.parse(merge.result!).merge_sha === command.merge_sha
+      const external = this.db.query("SELECT payload FROM evidence WHERE run_id = ? AND kind = 'external_merge'").get(run.run_id) as any
+      if (!confirmed && external) {
+        const receipt = JSON.parse(external.payload)
+        ensure(receipt.run_id === run.run_id && receipt.owner === run.owner && receipt.generation === run.generation &&
+          receipt.number === run.pr_number && receipt.url === run.pr_url && receipt.branch === run.branch &&
+          receipt.head === run.head && receipt.base === run.base && receipt.merge_sha === command.merge_sha &&
+          receipt.main_sha === this.meta('main_head'), 'merge_unconfirmed', 'External merge receipt no longer matches the current run and main')
+        confirmed = true
+      }
+      ensure(confirmed, 'merge_unconfirmed', 'Verify the merge result before completing the run')
       ensure(!this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND status IN ('pending', 'sending', 'unknown')").get(run.run_id), 'unresolved_dispatch', 'Resolve all external actions before completion')
       const issue = this.issue(run.issue_number)
       ensure(issue.revision === issue.delivered_revision, 'materials_pending', 'Deliver and reconcile new issue material before completion')
@@ -475,7 +508,9 @@ class Router {
     if (command.command === 'retire') {
       ensure(!this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND status IN ('sending', 'unknown')").get(run.run_id), 'unresolved_dispatch', 'Resolve external operations before retiring')
       ensure(!run.pr_number || command.pr_terminal_reference, 'pr_unresolved', 'Retirement requires evidence that the original PR cannot still merge')
-      ensure(!this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND generation = ? AND kind = 'merge' AND status = 'sent'").get(run.run_id, run.generation), 'merge_confirmed', 'Use complete after verifying the confirmed merge')
+      const external = this.db.query(`SELECT 1 FROM events WHERE run_id = ? AND kind = 'external_merge'
+        AND id > COALESCE((SELECT max(id) FROM events WHERE run_id = ? AND kind = 'reopen'), 0) LIMIT 1`).get(run.run_id, run.run_id)
+      ensure(!external && !this.db.query("SELECT 1 FROM outbox WHERE run_id = ? AND generation = ? AND kind = 'merge' AND status = 'sent'").get(run.run_id, run.generation), 'merge_confirmed', 'Use complete after verifying the confirmed merge')
       this.db.query("UPDATE outbox SET status = 'cancelled' WHERE run_id = ? AND status = 'pending'").run(run.run_id)
       this.db.query("UPDATE runs SET active = 0, phase = 'complete', next_step = ?, updated_at = ? WHERE run_id = ?").run(command.outcome, this.now, run.run_id)
       this.db.query("UPDATE issues SET queue_state = 'complete' WHERE number = ?").run(run.issue_number)
@@ -487,6 +522,8 @@ class Router {
   }
 
   checkMerge(run: Run) {
+    ensure(!this.db.query("SELECT 1 FROM events WHERE run_id = ? AND kind = 'external_merge'").get(run.run_id),
+      'pr_terminal', 'PR was already observed externally merged; verify completion instead of merging again')
     const issue = this.issue(run.issue_number)
     ensure(issue.state === 'open' && !issue.covered_by, 'issue_closed', 'Issue is closed or covered; do not merge automatically')
     ensure(issue.revision === issue.delivered_revision, 'materials_pending', 'Deliver and reconcile new issue material before merging')

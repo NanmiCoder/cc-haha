@@ -70,6 +70,11 @@ export const commandSchema = z.discriminatedUnion('command', [
     session, worktree: text,
   }),
   command('record-pr', { ...token, ...versioned, number, url: z.url(), branch: text, state: z.enum(['open', 'closed', 'merged']) }),
+  command('observe-external-merge', {
+    ...token, ...versioned, number, url: z.url(), branch: text, state: z.literal('merged'),
+    merge_sha: sha, merged_at: time, merged_by: key, main_sha: sha,
+    ancestry_verified: z.literal(true), ancestry_reference: text,
+  }),
   command('validation', {
     ...token, ...versioned, checks: z.array(z.strictObject({ name: key, result: z.enum(['passed', 'failed', 'not_run', 'skipped']) })).min(1),
   }),
