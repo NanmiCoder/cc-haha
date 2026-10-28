@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fixture, now, session } from './test-helpers'
+import { fixture, now, timestamp, createdSince, session } from './test-helpers'
 
 const fixtures: ReturnType<typeof fixture>[] = []
 afterEach(() => { for (const f of fixtures.splice(0)) f.cleanup() })
@@ -13,7 +13,8 @@ function legacy(version = 1) {
   mkdirSync(layout.stateRoot)
   const db = new Database(layout.database)
   db.exec(readFileSync(join(import.meta.dir, 'fixtures/v1.sql'), 'utf8'))
-  if (version === 2) db.exec(readFileSync(join(import.meta.dir, 'fixtures/v2.sql'), 'utf8'))
+  if (version >= 2) db.exec(readFileSync(join(import.meta.dir, 'fixtures/v2.sql'), 'utf8'))
+  if (version === 3) db.exec(readFileSync(join(import.meta.dir, 'fixtures/v3.sql'), 'utf8'))
   db.query('INSERT INTO meta VALUES (?, ?)').run('primary', layout.primary)
   db.query('INSERT INTO meta VALUES (?, ?)').run('common_dir', layout.commonDir)
   db.close()
@@ -25,7 +26,7 @@ describe('issue router persistence upgrade', () => {
     const f = legacy()
     expect(() => f.call({ command: 'status' })).toThrow('requires explicit migrate')
     const migrated = f.call({ command: 'migrate' })
-    expect(migrated.schema_version).toBe(3)
+    expect(migrated.schema_version).toBe(4)
     expect(migrated.migrated).toBe(true)
     const old = new Database(migrated.backup, { readonly: true })
     expect(old.query('PRAGMA user_version').get()).toEqual({ user_version: 1 })
@@ -35,15 +36,15 @@ describe('issue router persistence upgrade', () => {
     expect(state.cursor).toBe('legacy-cursor')
     expect(state.runs[0]).toMatchObject({ run_id: 'legacy-run', owner: 'legacy-owner', generation: 3, lease_expired: true })
     expect(state.actions[0].status).toBe('unknown')
-    expect(state.resources).toHaveLength(2)
-    expect(f.call({ command: 'migrate' })).toEqual({ schema_version: 3, migrated: false })
+    expect(state.resources).toHaveLength(0)
+    expect(f.call({ command: 'migrate' })).toEqual({ schema_version: 4, migrated: false })
     expect(() => f.call({ command: 'dispatch-start', run_id: 'legacy-run', owner: 'legacy-owner', generation: 3, action_key: 'legacy-action', sender: 'new-sender' })).toThrow('Only pending actions')
   })
 
   test('frozen v2 upgrades content delivery conservatively without resending an unknown action', () => {
     const f = legacy(2)
     const result = f.call({ command: 'migrate' })
-    expect(result.schema_version).toBe(3)
+    expect(result.schema_version).toBe(4)
     const snapshot = new Database(result.backup, { readonly: true })
     expect(snapshot.query('PRAGMA user_version').get()).toEqual({ user_version: 2 })
     snapshot.close()
@@ -56,6 +57,44 @@ describe('issue router persistence upgrade', () => {
     const action = f.call({ command: 'consume', ...token }).action
     expect(JSON.parse(action.payload).revision).toBe(1)
     expect(action.kind).toBe('resume')
+  })
+
+  test('v3 migration preserves all 101 issues and the active 1704 owner, then explicit policy waits for creation metadata', () => {
+    const f = legacy(3)
+    const runId = '53175620-20c9-44dc-8583-14e6e8616603'
+    const before = new Database(f.layout().database)
+    const original = before.query('SELECT * FROM runs WHERE run_id = ?').get(runId)
+    before.close()
+    const migrated = f.call({ command: 'migrate' })
+    expect(migrated.schema_version).toBe(4)
+    const backup = new Database(migrated.backup, { readonly: true })
+    expect(backup.query('PRAGMA user_version').get()).toEqual({ user_version: 3 })
+    expect(backup.query('SELECT * FROM runs WHERE run_id = ?').get(runId)).toEqual(original)
+    backup.close()
+    const db = new Database(f.layout().database)
+    expect(db.query('SELECT * FROM runs WHERE run_id = ?').get(runId)).toEqual(original)
+    expect((db.query("SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'one_active_%'").all() as any[]).map((row) => row.name).sort())
+      .toEqual(['one_active_pr', 'one_active_run', 'one_active_session', 'one_active_worktree'])
+    db.close()
+    let state = f.call({ command: 'status' })
+    expect(state.issues).toHaveLength(101)
+    expect(state.dispatch_policy.created_since).toBeNull()
+    expect(state.runs[0]).toMatchObject({ run_id: runId, owner: 'fixture-active-owner', generation: 3, phase: 'working' })
+    expect(state.actions[0].status).toBe('unknown')
+    expect(state.resources.map((resource: any) => resource.name)).toEqual(['desktop-smoke', 'main-merge'])
+    expect(() => f.enqueue(1)).toThrow('Configure the fixed')
+    f.call({ command: 'configure', created_since: createdSince, reference: 'fixture://user-fixed-policy' })
+    expect(() => f.enqueue(1)).toThrow('created_at is unknown')
+    const token = { run_id: runId, owner: 'fixture-active-owner', generation: 3 }
+    f.call({ command: 'progress', ...token, phase: 'working', next_step: 'continue original task', reference: 'fixture://existing-owner' })
+    f.call({ command: 'observe', scan_id: 'metadata-backfill', cursor_before: 'legacy-cursor', cursor_after: 'metadata-cursor', complete: true,
+      candidates: [{ number: 1, title: 'History 1', state: 'open', fingerprint: 'history-1', created_at: createdSince, updated_at: timestamp }] })
+    f.enqueue(1, ['server'])
+    expect(f.claim(1).run.issue_number).toBe(1)
+    state = f.call({ command: 'status' })
+    expect(state.issues).toHaveLength(101)
+    expect(state.runs.find((run: any) => run.run_id === runId)).toMatchObject(token)
+    expect(state.dispatch_policy.created_since).toBe(createdSince)
   })
 
   test('consistent WAL backup restores queue, outbox and cursor with an explicit recovery barrier', () => {
