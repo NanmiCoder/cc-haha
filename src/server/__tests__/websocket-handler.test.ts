@@ -10,6 +10,7 @@ import {
   __resetWebSocketHandlerStateForTests,
   __resolveRuntimeRestartWorkDirForTests,
   closeSessionConnection,
+  ensureCliSessionStartedForControl,
   getActiveSessionIds,
   getSessionTurnState,
   getRuntimeSettings,
@@ -581,6 +582,114 @@ describe('WebSocket handler session isolation', () => {
     expect(persist).not.toHaveBeenCalled()
     expect(setMode).not.toHaveBeenCalled()
   })
+
+  for (const startupSource of ['user_message', 'prewarm_session', 'control'] as const) {
+    it(`applies an inactive permission switch before ${startupSource} startup`, async () => {
+      const prewarmFirst = startupSource === 'prewarm_session'
+      const sessionId = `inactive-permission-race-${crypto.randomUUID()}`
+      const ws = makeClientSocket(sessionId)
+      const workDir = process.env.TMPDIR || '/tmp'
+      const launchInfo = {
+        filePath: `${workDir}/permission-session.jsonl`, projectDir: workDir, workDir,
+        transcriptMessageCount: prewarmFirst ? 0 : 4, customTitle: 'Permission fixture',
+        permissionMode: 'default', runtimeProviderId: 'deepseek', runtimeModelId: 'deepseek-v4-pro',
+      }
+      let running = false
+      let runtimeMode = 'default'
+      let recordedMode = 'default'
+      let metadataStarted = false
+      let holdPrewarmRead = prewarmFirst
+      let releaseMetadata!: () => void
+      let releasePrewarm!: () => void
+      const pendingMetadata = new Promise<void>(resolve => { releaseMetadata = resolve })
+      const pendingPrewarm = new Promise<void>(resolve => { releasePrewarm = resolve })
+      const sentModes: string[] = []
+      let pendingControl: Promise<void> | undefined
+
+      mockSavedDeepSeekProvider()
+      spyOn(ProviderService.prototype, 'getProvider').mockResolvedValue(null)
+      spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+      spyOn(sessionService, 'getCustomTitle').mockResolvedValue('Permission fixture')
+      spyOn(sessionService, 'getSessionWorkDir').mockResolvedValue(workDir)
+      spyOn(sessionService, 'getSessionLaunchInfo').mockImplementation(async () => {
+        if (holdPrewarmRead) {
+          holdPrewarmRead = false
+          await pendingPrewarm
+        }
+        return { ...launchInfo }
+      })
+      spyOn(sessionService, 'appendSessionMetadata').mockImplementation(async (_id, metadata) => {
+        metadataStarted = true
+        await pendingMetadata
+        Object.assign(launchInfo, metadata)
+      })
+      spyOn(conversationService, 'hasSession').mockImplementation(() => running)
+      spyOn(conversationService, 'getSessionWorkDir').mockReturnValue(workDir)
+      spyOn(conversationService, 'getSessionPermissionMode').mockImplementation(() => recordedMode)
+      spyOn(conversationService, 'startSession').mockImplementation(async (_id, _cwd, _url, options) => {
+        running = true
+        runtimeMode = options?.permissionMode || 'default'
+        recordedMode = runtimeMode
+      })
+      spyOn(conversationService, 'setPermissionMode').mockImplementation(async (_id, mode) => {
+        runtimeMode = mode
+        return true
+      })
+      spyOn(conversationService, 'recordSessionPermissionMode').mockImplementation((_id, mode) => {
+        recordedMode = mode
+        return true
+      })
+      spyOn(conversationService, 'getPendingPermissionRequests').mockReturnValue([])
+      spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+      spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+      spyOn(conversationService, 'sendMessage').mockImplementation(async () => {
+        sentModes.push(runtimeMode)
+        return true
+      })
+
+      try {
+        handleWebSocket.open(ws)
+        // Opening a blank tab prewarms it; restoring history waits for the user.
+        // Hold the prewarm's first metadata read before it registers startup.
+        if (prewarmFirst) handleWebSocket.message(ws, JSON.stringify({ type: 'prewarm_session' }))
+        handleWebSocket.message(ws, JSON.stringify({ type: 'set_permission_mode', mode: 'bypassPermissions' }))
+        await flushMicrotasks(30)
+        expect(metadataStarted).toBe(true)
+
+        if (prewarmFirst) {
+          releasePrewarm()
+        } else if (startupSource === 'control') {
+          pendingControl = ensureCliSessionStartedForControl(sessionId, new URL('http://127.0.0.1:1/api/sessions/control'))
+        } else {
+          handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Continue with the selected permission mode' }))
+        }
+        await flushMicrotasks(100)
+        const modesBeforePersistence = [...sentModes]
+        const runningBeforePersistence = running
+        releaseMetadata()
+        await flushMicrotasks(100)
+        await pendingControl
+        expect(ws.sent.map(payload => JSON.parse(payload))).toContainEqual({
+          type: 'permission_mode_changed', mode: 'bypassPermissions',
+        })
+        // Background startup must also honor the mode shown before user input.
+        if (startupSource !== 'user_message') {
+          handleWebSocket.message(ws, JSON.stringify({ type: 'user_message', content: 'Use the confirmed permission mode' }))
+          await flushMicrotasks(100)
+        }
+        expect(runningBeforePersistence).toBe(false)
+        expect(modesBeforePersistence).toEqual([])
+        expect(sentModes).toEqual(['bypassPermissions'])
+        expect(runtimeMode).toBe('bypassPermissions')
+        expect(ws.sent.map(payload => JSON.parse(payload)).filter(message => message.type === 'error')).toEqual([])
+      } finally {
+        releasePrewarm()
+        releaseMetadata()
+        await flushMicrotasks(100)
+        await pendingControl
+      }
+    })
+  }
 
   it('gives pet clients only sanitized state and denies privileged client messages', () => {
     const sessionId = `pet-capability-${crypto.randomUUID()}`

@@ -18,6 +18,7 @@ import { UPSTREAM_ERROR_TRIGGER, UPSTREAM_REFUSAL_TRIGGER } from './scriptedMode
 export type MockAgentScenario = { id: string; title: string }
 
 export const MOCK_ONLY_SCENARIOS: readonly MockAgentScenario[] = [
+  { id: 'mock-cold-permission-switch', title: 'A cold permission switch reaches the real CLI before its first tool call' },
   { id: 'mock-team-task-owner', title: 'Real task tools reject an unknown teammate and recover with a valid assignment' },
   { id: 'mock-openrouter-required-thinking', title: 'OpenRouter Claude defaults preserve compatible thinking and effort through the real CLI' },
   { id: 'mock-deepseek-web-search', title: 'DeepSeek standalone search returns summaries through the real CLI to the model' },
@@ -96,6 +97,43 @@ export function createMockOnlyRunners(
   searchRequests: MockLlmServer['searchRequests'] = [],
 ): Record<string, LiveScenarioRunner> {
   return {
+    async 'mock-cold-permission-switch'(ctx) {
+      const sessionId = await ctx.createSession()
+      const socket = await ctx.openSocket(sessionId)
+      // Outside the workspace, but still inside the disposable config fixture.
+      const target = join(ctx.configDir, `cold-permission-${sessionId}.txt`)
+      const deniedTarget = join(ctx.configDir, `default-permission-${sessionId}.txt`)
+      const writePrompt = (filePath: string) => `MOCK_TEAM_OWNER ${JSON.stringify({
+        tool: 'Write', input: { file_path: filePath, content: 'PERMISSION_MODE_REACHED_CLI' },
+      })}`
+      try {
+        ctx.pinRuntime(socket)
+        socket.send({ type: 'set_permission_mode', mode: 'bypassPermissions' })
+        socket.send({ type: 'prewarm_session' })
+        const since = requests.length
+        socket.send({ type: 'user_message', content: writePrompt(target) })
+        const settled = await socket.waitFor(message =>
+          ['permission_request', 'message_complete', 'error'].includes(message.type),
+        ctx.stepTimeoutMs, 'first tool after cold permission switch')
+        if (settled.type !== 'message_complete' || !existsSync(target) ||
+          readFileSync(target, 'utf8') !== 'PERMISSION_MODE_REACHED_CLI' ||
+          !toolResultsSentUpstream(requests, since).some(result => !result.is_error)) {
+          throw new Error(`The bypass turn did not write without approval: ${JSON.stringify(settled)}`)
+        }
+
+        const resetStart = socket.messages.length
+        socket.send({ type: 'set_permission_mode', mode: 'default' })
+        await socket.waitFor(message => message.type === 'permission_mode_changed' && message.mode === 'default',
+          ctx.stepTimeoutMs, 'return to default permission mode', resetStart)
+        socket.send({ type: 'user_message', content: writePrompt(deniedTarget) })
+        const request = await socket.waitFor(message => message.type === 'permission_request',
+          ctx.stepTimeoutMs, 'default mode asks again', resetStart)
+        socket.send({ type: 'permission_response', requestId: request.requestId, allowed: false })
+        await socket.waitFor(message => message.type === 'message_complete',
+          ctx.stepTimeoutMs, 'denied default-mode turn', resetStart)
+        if (existsSync(deniedTarget)) throw new Error('Default mode unexpectedly kept bypass permissions')
+      } finally { socket.close() }
+    },
     async 'mock-team-task-owner'(ctx) {
       const sessionId = await ctx.createSession()
       const teamName = `owner-${sessionId}`
