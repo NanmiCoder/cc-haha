@@ -1269,6 +1269,26 @@ describe('history kept across refreshes', () => {
     h.transport.dispose()
   })
 
+  test('a turn larger than one page still reconciles when the newest page no longer holds the prompt', async () => {
+    // 一张大图或大量文件读取让这一轮超过一页：最新一页只剩回复，用户那条消息在更早一页。
+    let latest = history([one, first], 'v1')
+    const older: Record<string, HistoryPage> = {
+      p1: history([two], 'v2', 'p0'),
+      p0: history([one, first], 'v2'),
+    }
+    const h = harness(async (_id, cursor) => (cursor ? older[cursor]! : latest), latest)
+    const socket = await h.ready()
+    expect(h.transport.send({ type: 'user_message', content: 'Two' })).toBe(true)
+    finishTurn(socket, 'Two', 'Second')
+    latest = history([second], 'v2', 'p1')
+    h.timers.advance(100)
+    await flush()
+    expect(texts(h.transport)).toEqual(['One', 'First', 'Two', 'Second'])
+    // 实时条目已经换成电脑上保存的记录，不用等下次重连才整体替换。
+    expect(h.transport.state.items.some((item) => item.id.startsWith('live:'))).toBe(false)
+    h.transport.dispose()
+  })
+
   test('reopening a conversation shows cached pages at once and keeps them after syncing', async () => {
     const store = memoryStore(history([one, first, two, second], 'v1', 'c0'))
     const latest = history([two, second, three, third], 'v2', 'fresh')

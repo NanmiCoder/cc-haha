@@ -621,18 +621,21 @@ export class SessionTransport {
 
   async #reconcile(generation: number, turnEpoch: number, attempt: number) {
     const controller = this.#requestController()
+    const stale = () =>
+      !this.#valid(generation) ||
+      this.state.turnActive ||
+      turnEpoch !== this.#turnEpoch
     try {
-      const history = await this.#options.client.history(
+      const latest = await this.#options.client.history(
         this.#options.sessionId,
         undefined,
         { signal: controller.signal }
       )
-      if (
-        !this.#valid(generation) ||
-        this.state.turnActive ||
-        turnEpoch !== this.#turnEpoch
-      )
-        return
+      if (stale()) return
+      // 先接回已加载的历史再对账：这一轮超过一页（大图、读了很多文件）时，用户那条消息
+      // 不在最新一页里，只拿最新一页比永远对不上，界面会一直停在实时状态，直到下次重连整体替换。
+      const history = await this.#joinLatest(latest, controller.signal)
+      if (stale()) return
       const items = normalizeHistory(history.messages)
       const live = this.state.items.filter(
         (item) =>
@@ -663,15 +666,7 @@ export class SessionTransport {
         if (attempt < 2) this.#scheduleReconcile(attempt + 1, turnEpoch)
         return
       }
-      // 往前翻过的历史留着，只换掉最新的部分。
-      const joined = await this.#joinLatest(history, controller.signal)
-      if (
-        !this.#valid(generation) ||
-        this.state.turnActive ||
-        turnEpoch !== this.#turnEpoch
-      )
-        return
-      this.#setHistory(joined)
+      this.#setHistory(history)
       this.#historyEpoch++
       this.#initialOverlapItems = undefined
       const uncertain = this.state.items.filter(
@@ -682,10 +677,7 @@ export class SessionTransport {
               equivalent(saved, item) && !this.#pendingBaseIds.has(saved.id)
           )
       )
-      this.#publish({
-        ...this.state,
-        items: [...normalizeHistory(joined.messages), ...uncertain],
-      })
+      this.#publish({ ...this.state, items: [...items, ...uncertain] })
     } catch (error) {
       if (!this.#valid(generation) || controller.signal.aborted) return
       if (this.#isUnauthorized(error)) this.#requirePairing()

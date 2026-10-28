@@ -108,6 +108,9 @@ type RewindPreview = {
   target: { targetUserMessageId: string }
   conversation: { messagesRemoved: number }
 }
+/** 离最新处（倒置列表的起点）不到这么远就算停在最新处。 */
+const LATEST_SLOP = 120
+
 const toggle = (set: ReadonlySet<string>, key: string) => {
   const next = new Set(set)
   if (next.has(key)) next.delete(key)
@@ -196,6 +199,8 @@ function ChatSession({
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [olderFailed, setOlderFailed] = useState(false)
   const [awayFromLatest, setAwayFromLatest] = useState(false)
+  // 停在最新处附近：这时不开「保持阅读位置」，新内容由倒置列表自然贴底。
+  const [atLatest, setAtLatest] = useState(true)
   const [branch, setBranch] = useState<string | null>(null)
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
@@ -212,12 +217,12 @@ function ChatSession({
   const clockRef = useRef<{ active: boolean; startedAt?: number; live: boolean } | undefined>(undefined)
   const connectionRef = useRef<ConnectionState>('connecting')
   const transport = useRef<SessionTransport | null>(null)
+  // 消息流是倒置列表：offset 0 就是最新处。打开会话、键盘弹起、输入框变高、流式输出变长时
+  // 由原生保持在底部，不需要 JS 算位置补滚动（那样会和原生尺寸变化赛跑，滚不到底）。
   const list = useRef<FlatList<ChatRow>>(null)
-  const follow = useRef(true)
-  const scrollMetrics = useRef({ height: 0, offset: 0 })
-  // 列表可视高度和内容高度，决定什么时候提前往前翻。
+  // 离最新处的距离，以及列表可视高度和内容高度：决定什么时候提前往前翻。
+  const scrollMetrics = useRef({ offset: 0 })
   const listSize = useRef({ viewport: 0, content: 0 })
-  const holdScroll = useRef(false)
   const olderInFlight = useRef(false)
   const olderFailedRef = useRef(false)
   // 一次拖动里连续自动翻了几批，见 shouldPrefetchOlder。
@@ -373,7 +378,7 @@ function ChatSession({
     if (!next || !canFlushQueue(queueGate, focused.current)) return
     if (dispatch(next.message, () => {})) {
       setQueue((items) => items.filter((item) => item.id !== next.id))
-      follow.current = true
+      showLatest()
     }
   })
   useEffect(() => {
@@ -428,7 +433,7 @@ function ChatSession({
     if (!item || !ready || state.turnActive || waitingForDecision || pendingUser) return
     if (dispatch(item.message)) {
       setQueue((items) => items.filter((value) => value.id !== itemId))
-      follow.current = true
+      showLatest()
     }
   }
   /** 立即把排队消息插进正在运行的一轮；这一轮刚好结束时退回普通发送。 */
@@ -437,12 +442,12 @@ function ChatSession({
     if (!item) return
     if (transport.current?.steer(item.message)) {
       setQueue((items) => items.filter((value) => value.id !== itemId))
-      follow.current = true
+      showLatest()
       return
     }
     if (!state.turnActive && dispatch(item.message)) {
       setQueue((items) => items.filter((value) => value.id !== itemId))
-      follow.current = true
+      showLatest()
       return
     }
     showNotice('现在还不能引导，等上一条确认或当前决定处理完再试。', true)
@@ -626,15 +631,13 @@ function ChatSession({
     }
   }
   const send = (message: ClientMessage) => dispatch(message)
-  /** 往前翻一批（两页）；in-flight 只认 ref，避免重复请求。补进来的内容由列表顶在上方，阅读位置不动。 */
+  /** 往前翻一批（两页）；in-flight 只认 ref，避免重复请求。更早的内容接在倒置列表末尾（画面顶部），阅读位置不动。 */
   function loadOlderBatch() {
     if (olderInFlight.current) return
     const channel = transport.current
     if (!channel) return
     olderInFlight.current = true
     olderFailedRef.current = false
-    follow.current = false
-    holdScroll.current = true
     setLoadingOlder(true)
     setOlderFailed(false)
     channel
@@ -653,8 +656,6 @@ function ChatSession({
       })
       .finally(() => {
         olderInFlight.current = false
-        holdScroll.current = false
-        follow.current = false
         if (!mounted.current) return
         setLoadingOlder(false)
         // 整批都并进了已有的折叠行时内容高度不变，不会再有布局回调，这里补一次判断。
@@ -663,17 +664,18 @@ function ChatSession({
         })
       })
   }
-  /** 滑近顶部时提前往前翻。只读 ref 和传输层，加载结束的回调里调用也不会读到旧状态。 */
+  /** 滑近顶部（已加载的最早内容）时提前往前翻。只读 ref 和传输层，加载结束的回调里调用也不会读到旧状态。 */
   function maybeLoadOlder() {
+    const { viewport, content } = listSize.current
     if (
       olderInFlight.current ||
       olderFailedRef.current ||
       connectionRef.current !== 'ready' ||
       !transport.current?.historyPage?.page?.nextCursor ||
       !shouldPrefetchOlder({
-        ...listSize.current,
-        offset: scrollMetrics.current.offset,
-        following: follow.current,
+        viewport,
+        content,
+        toOldest: Math.max(0, content - viewport - scrollMetrics.current.offset),
         batches: autoBatches.current,
       })
     )
@@ -682,18 +684,12 @@ function ChatSession({
     loadOlderBatch()
   }
   function trackScroll(value: NativeScrollEvent) {
-    const previous = scrollMetrics.current
-    scrollMetrics.current = { height: value.contentSize.height, offset: value.contentOffset.y }
-    listSize.current.viewport = value.layoutMeasurement.height
-    const distance = value.contentSize.height - value.contentOffset.y - value.layoutMeasurement.height
-    // 贴底时继续跟随；只有用户往上滚才停止跟随。内容变短（一轮结束后整组折叠、
-    // 历史重载）引起的位置回弹不算用户操作；往前补历史时列表自己挪动位置，也不算。
-    if (!holdScroll.current) {
-      const shrank = value.contentSize.height < previous.height - 1
-      if (distance < 150) follow.current = true
-      else if (!shrank && value.contentOffset.y < previous.offset - 1) follow.current = false
-    }
-    const away = distance > value.layoutMeasurement.height
+    const offset = value.contentOffset.y
+    scrollMetrics.current = { offset }
+    listSize.current = { viewport: value.layoutMeasurement.height, content: value.contentSize.height }
+    const near = offset < LATEST_SLOP
+    if (near !== atLatest) setAtLatest(near)
+    const away = offset > value.layoutMeasurement.height
     if (away !== awayFromLatest) setAwayFromLatest(away)
     maybeLoadOlder()
   }
@@ -702,19 +698,22 @@ function ChatSession({
     autoBatches.current = 0
     loadOlderBatch()
   }
-  /**
-   * 滚到最新处。按量到的内容高度算位置：FlatList 的 scrollToEnd 用单元格估算，
-   * 刚挂载就整批渲染（从缓存打开）时单元格还没量好，会估成 0、停在顶部。
-   */
-  function scrollToLatest(animated: boolean) {
-    const { viewport, content } = listSize.current
-    if (viewport) list.current?.scrollToOffset({ offset: Math.max(0, content - viewport), animated })
+  /** 回到最新处（倒置列表的起点）：发消息、点「回到最新」时用。 */
+  function showLatest(animated = true) {
+    list.current?.scrollToOffset({ offset: 0, animated })
   }
   function jumpToLatest() {
-    follow.current = true
     setAwayFromLatest(false)
-    scrollToLatest(true)
+    showLatest()
   }
+  // 列表往往在连上电脑之前就量好了尺寸；连上之后没有新的布局或滚动事件，要补一次判断，
+  // 否则不满一屏的会话会停在「加载更早的消息」上不动。
+  const prefetchWhenReady = useEffectEvent(() => maybeLoadOlder())
+  useEffect(() => {
+    if (!ready) return
+    const frame = requestAnimationFrame(() => prefetchWhenReady())
+    return () => cancelAnimationFrame(frame)
+  }, [ready])
   function showNotice(text: string, transient = false) {
     clearTimeout(noticeTimer.current)
     setNotice(text)
@@ -766,7 +765,6 @@ function ChatSession({
         setAttachments([])
         setTeam(false)
         drafts.delete(draftKey)
-        follow.current = true
         setError('')
         return
       }
@@ -778,7 +776,7 @@ function ChatSession({
         drafts.delete(draftKey)
         clearPendingTask(hostId, id)
         handoff.current.phase = 'done'
-        follow.current = true
+        showLatest()
         setNotice('')
       }
     } catch (e) {
@@ -939,6 +937,8 @@ function ChatSession({
       ),
     [state.items, state.turnActive, turnClock, ui.open]
   )
+  // 倒置列表从最新的一行排起。
+  const latestFirst = useMemo(() => [...rows].reverse(), [rows])
   const waitingKey = state.permissions.map((request) => request.toolUseId ?? '').join('\n')
   const runningBackgroundKey = backgroundCount
     ? backgroundTasks
@@ -1263,15 +1263,17 @@ function ChatSession({
         <View style={{ flex: 1 }}>
           <FlatList
             ref={list}
-            data={rows}
+            inverted
+            data={latestFirst}
             extraData={ui}
             keyExtractor={(row) => row.key}
             renderItem={renderRow}
             style={{ flex: 1 }}
+            // 倒置后 paddingTop 在画面底部、paddingBottom 在画面顶部。
             contentContainerStyle={{
               paddingHorizontal: 16,
-              paddingTop: 12,
-              paddingBottom: 16,
+              paddingTop: 16,
+              paddingBottom: 12,
               gap: 16,
               flexGrow: 1,
               width: '100%',
@@ -1279,12 +1281,12 @@ function ChatSession({
               alignSelf: 'center',
             }}
             keyboardShouldPersistTaps="handled"
-            // 往前补的历史插在上方时保持正在阅读的那条不动（列表头部由 VirtualizedList 单独计入）。
-            // 第一行常是被页边界切开的半个回合，补页后会并进别的行、换 key，拿它当锚点会失效。
-            maintainVisibleContentPosition={{ minIndexForVisible: 1 }}
+            // 往上翻着看时，最新那条还在变长（流式输出、一轮结束后折叠）也不挪动正在看的内容；
+            // 锚点跳过正在变化的最新一行（列表头部由 VirtualizedList 单独计入）。停在最新处时不开，
+            // 新内容自然贴底。
+            maintainVisibleContentPosition={atLatest ? undefined : { minIndexForVisible: 1 }}
             onLayout={({ nativeEvent }) => {
               listSize.current.viewport = nativeEvent.layout.height
-              if (follow.current && !holdScroll.current) scrollToLatest(false)
               maybeLoadOlder()
             }}
             onScrollBeginDrag={() => {
@@ -1297,12 +1299,11 @@ function ChatSession({
             scrollEventThrottle={100}
             onContentSizeChange={(_, height) => {
               listSize.current.content = height
-              if (follow.current && !holdScroll.current) scrollToLatest(false)
               maybeLoadOlder()
             }}
-            // 头部始终挂着，往前补完时只隐藏，列表计算保持位置用的下标才不会变。
-            ListHeaderComponentStyle={hasOlder ? undefined : { display: 'none' }}
-            ListHeaderComponent={
+            // 倒置列表的尾部在画面顶部。头尾始终挂着、没内容时只隐藏，保持位置用的下标才不会变。
+            ListFooterComponentStyle={hasOlder ? undefined : { display: 'none' }}
+            ListFooterComponent={
               <OlderHistoryStatus
                 loading={loadingOlder}
                 failed={olderFailed}
@@ -1326,50 +1327,53 @@ function ChatSession({
                 </View>
               )
             }
-            ListFooterComponent={
-              state.computerUsePermissions.length || (turnSettled && (latest || meta)) ? (
-                <View style={{ gap: 14 }}>
-                  {state.computerUsePermissions.map((request) => (
-                    <Card key={request.requestId}>
-                      <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>
-                        操作电脑需要在电脑上确认
+            // 头部在画面底部，紧挨着最新一条：操作电脑的确认、本轮改动和用时。
+            ListHeaderComponentStyle={
+              state.computerUsePermissions.length || (turnSettled && (latest || meta)) ? undefined : { display: 'none' }
+            }
+            ListHeaderComponent={
+              <View style={{ gap: 14 }}>
+                {state.computerUsePermissions.map((request) => (
+                  <Card key={request.requestId}>
+                    <Text style={{ fontSize: 15, fontWeight: '600', color: colors.ink }}>
+                      操作电脑需要在电脑上确认
+                    </Text>
+                    {request.request.reason ? (
+                      <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
+                        {request.request.reason}
                       </Text>
-                      {request.request.reason ? (
-                        <Text style={{ fontSize: 14, lineHeight: 20, color: colors.ink2 }}>
-                          {request.request.reason}
-                        </Text>
-                      ) : null}
-                      <Callout>请在电脑设置里完成全局启用和系统权限授权。</Callout>
-                      <View style={{ flexDirection: 'row', gap: 8 }}>
-                        <Button
-                          title="刷新授权状态"
-                          variant="secondary"
-                          style={{ flex: 1 }}
-                          onPress={reconnect}
-                        />
-                        <Button
-                          title="拒绝本次请求"
-                          variant="danger"
-                          disabled={!ready}
-                          style={{ flex: 1 }}
-                          onPress={() =>
-                            send({
-                              type: 'computer_use_permission_response',
-                              requestId: request.requestId,
-                              response: {
-                                granted: [],
-                                denied: request.request.apps.map((app) => ({
-                                  bundleId: app.resolved?.bundleId ?? app.requestedName,
-                                  reason: 'user_denied',
-                                })),
-                                flags: {
-                                  clipboardRead: false,
-                                  clipboardWrite: false,
-                                  systemKeyCombos: false,
-                                },
-                                userConsented: false,
+                    ) : null}
+                    <Callout>请在电脑设置里完成全局启用和系统权限授权。</Callout>
+                    <View style={{ flexDirection: 'row', gap: 8 }}>
+                      <Button
+                        title="刷新授权状态"
+                        variant="secondary"
+                        style={{ flex: 1 }}
+                        onPress={reconnect}
+                      />
+                      <Button
+                        title="拒绝本次请求"
+                        variant="danger"
+                        disabled={!ready}
+                        style={{ flex: 1 }}
+                        onPress={() =>
+                          send({
+                            type: 'computer_use_permission_response',
+                            requestId: request.requestId,
+                            response: {
+                              granted: [],
+                              denied: request.request.apps.map((app) => ({
+                                bundleId: app.resolved?.bundleId ?? app.requestedName,
+                                reason: 'user_denied',
+                              })),
+                              flags: {
+                                clipboardRead: false,
+                                clipboardWrite: false,
+                                systemKeyCombos: false,
                               },
-                            })
+                              userConsented: false,
+                            },
+                          })
                           }
                         />
                       </View>
@@ -1384,7 +1388,6 @@ function ChatSession({
                   ) : null}
                   {meta ? <Mono style={{ fontSize: 12, color: colors.ink3 }}>{meta}</Mono> : null}
                 </View>
-              ) : undefined
             }
           />
           {awayFromLatest ? (
