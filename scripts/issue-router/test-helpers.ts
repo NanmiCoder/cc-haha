@@ -8,6 +8,7 @@ import type { Token } from './commands'
 
 export const now = Date.parse('2026-10-28T03:00:00Z')
 export const timestamp = new Date(now).toISOString()
+export const createdSince = '2026-10-23T04:01:01.000Z'
 export const head = 'a'.repeat(40)
 export const base = 'b'.repeat(40)
 export const mergeSha = 'c'.repeat(40)
@@ -43,11 +44,13 @@ export function fixture(separate = false) {
     return execute(input, primary, at) as any
   }
   function init() {
-    return call({ command: 'init', repository_id: '12345', repository: 'Fixture/repo', required_checks: ['pr-quality-gate'] })
+    const result = call({ command: 'init', repository_id: '12345', repository: 'Fixture/repo', required_checks: ['pr-quality-gate'] })
+    call({ command: 'configure', created_since: createdSince, reference: 'fixture://fixed-dispatch-policy' })
+    return result
   }
   function observe(numbers: number[], baseline = true, cursor = 'c1', before = '') {
     return call({ command: 'observe', scan_id: cursor, cursor_before: before, cursor_after: cursor, complete: true, baseline,
-      candidates: numbers.map((number) => ({ number, title: `Issue ${number}`, state: 'open', fingerprint: `fp-${number}`, updated_at: timestamp })),
+      candidates: numbers.map((number) => ({ number, title: `Issue ${number}`, state: 'open', fingerprint: `fp-${number}`, updated_at: timestamp, created_at: timestamp })),
     })
   }
   function enqueue(number: number, modules = [`module-${number}`]) {

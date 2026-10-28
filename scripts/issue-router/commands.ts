@@ -10,7 +10,7 @@ const token = { run_id: key, owner: key, generation: number }
 const command = <T extends string, S extends z.ZodRawShape>(name: T, fields: S) => z.strictObject({ command: z.literal(name), ...fields })
 const observation = z.strictObject({
   number, title: text, state: z.enum(['open', 'closed']), fingerprint: key,
-  updated_at: time, is_pr: z.boolean().default(false),
+  updated_at: time, created_at: time.optional(), is_pr: z.boolean().default(false),
 })
 const provenance = {
   source: text, reference: text, observed_at: time,
@@ -30,6 +30,7 @@ export const commandSchema = z.discriminatedUnion('command', [
     required_checks: z.array(key).min(1).default(['pr-quality-gate']),
   }),
   command('status', {}),
+  command('configure', { created_since: time, reference: text }),
   command('observe-main', { ...provenance, sha, previous: sha.nullable(), descendant_verified: z.literal(true) }),
   command('backup', {}),
   command('migrate', {}),
