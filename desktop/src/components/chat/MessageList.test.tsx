@@ -5971,6 +5971,121 @@ describe('MessageList nested tool calls', () => {
     expect(scrollTop).toBe(260)
   })
 
+  it.each([['switch', true], ['remount', true], ['switch', false], ['remount', false]] as const)('restores the visible virtual row and pixel offset after %s (evicted=%s) and late measurements (#1704)', async (mode, evicted) => {
+    const sessionA = `viewport-anchor-${mode}-${evicted}`
+    const sessionB = `${sessionA}-other`
+    dropSession(sessionA)
+    const messages: UIMessage[] = Array.from({ length: 180 }, (_, index) => ({
+      id: `anchor-row-${index}`, type: 'assistant_text', content: `Reply ${index}`, timestamp: index,
+    }))
+    // Model the DOM's spacer + mounted rows, independently of virtual offsets.
+    const heights = new Map(messages.map((message, index) => [message.id, 180.25 + index % 5 * 45]))
+    for (const [key, height] of heights) getHeightsForSession(sessionA).set(key, height)
+    const rowHeight = (node: Element) => heights.get((node as HTMLElement).dataset.chatRenderItemKey!) ?? 0
+    const nodeHeight = (node: Element) => node.hasAttribute('data-virtual-spacer') ? parseFloat((node as HTMLElement).style.height) : rowHeight(node)
+    const scrollTops = new WeakMap<HTMLElement, number>()
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('chat-scroll-area') ? 400 : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.classList.contains('chat-scroll-area') ? 32 + [...this.firstElementChild!.children].reduce((sum, node) => sum + nodeHeight(node), 0) : 0
+    })
+    vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(function (this: HTMLElement) { return scrollTops.get(this) ?? 0 })
+    vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(function (this: HTMLElement, value: number) {
+      scrollTops.set(this, Math.max(0, Math.min(value, this.scrollHeight - this.clientHeight)))
+    })
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('chat-scroll-area')) return { top: 100, bottom: 500, height: 400, width: 800 } as DOMRect
+      const scroller = this.closest<HTMLElement>('.chat-scroll-area')
+      if (!scroller || !this.dataset.chatRenderItemKey) return { top: 0, bottom: 0, height: 0, width: 800 } as DOMRect
+      let top = 116 - scroller.scrollTop
+      for (const sibling of this.parentElement!.children) {
+        if (sibling === this) break
+        top += nodeHeight(sibling)
+      }
+      const height = rowHeight(this)
+      return { top, bottom: top + height, height, width: 800 } as DOMRect
+    })
+    const observers = new Map<Element, ResizeObserverCallback>()
+    vi.stubGlobal('ResizeObserver', class {
+      targets: Element[] = []
+      constructor(private callback: ResizeObserverCallback) {}
+      observe(target: Element) { this.targets.push(target); observers.set(target, this.callback) }
+      disconnect() { this.targets.forEach((target) => observers.delete(target)) }
+      unobserve(target: Element) { observers.delete(target) }
+    })
+    useChatStore.setState({ sessions: {
+      [sessionA]: makeSessionState({ messages }),
+      [sessionB]: makeSessionState({ messages: [{ id: 'other-row', type: 'assistant_text', content: 'Other conversation', timestamp: 1 }] }),
+    } })
+    let view = render(<MessageList sessionId={sessionA} />)
+    const scroller = () => view.container.querySelector<HTMLElement>('.chat-scroll-area')!
+    const visibleAnchor = () => {
+      const top = scroller().getBoundingClientRect().top
+      const row = [...scroller().querySelectorAll<HTMLElement>('[data-chat-render-item-key]')]
+        .find((node) => node.getBoundingClientRect().bottom > top)!
+      return { key: row?.dataset.chatRenderItemKey, offset: row?.getBoundingClientRect().top - top }
+    }
+    await waitForProgrammaticScrollReset()
+    fireEvent.wheel(scroller(), { deltaY: -100 })
+    scroller().scrollTop = 16 + [...heights.values()].slice(0, 80).reduce((sum, height) => sum + height, 0) + 75.25
+    fireEvent.scroll(scroller())
+    let before = visibleAnchor()
+    expect(before).toEqual({ key: 'anchor-row-80', offset: -75.25 })
+    expect(view.container.querySelectorAll('[data-virtual-message-item]').length).toBeLessThan(180)
+    const switchTo = (sessionId: string) => {
+      if (mode === 'remount') { view.unmount(); view = render(<MessageList sessionId={sessionId} />) }
+      else view.rerender(<MessageList sessionId={sessionId} />)
+    }
+    // Layout can land immediately before leaving, before its ResizeObserver or
+    // native scroll event. The departure snapshot must read the outgoing DOM.
+    heights.set('anchor-row-79', heights.get('anchor-row-79')! + 44)
+    before = visibleAnchor()
+    switchTo(sessionB)
+    // Scroll snapshots outlive the real height-cache LRU boundary.
+    if (evicted) {
+      for (let index = 0; index < 17; index++) getHeightsForSession(`${sessionA}-eviction-${index}`)
+      expect(getHeightsForSession(sessionA).size).toBe(0)
+    }
+    switchTo(sessionA)
+    expect(visibleAnchor().key).toBe(before.key)
+    expect(Math.abs(visibleAnchor().offset - before.offset)).toBeLessThanOrEqual(1)
+    // Async Markdown/image layout arrives after the old 250ms restore window.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)) })
+    const rowAbove = [...scroller().querySelectorAll<HTMLElement>('[data-virtual-message-item]')]
+      .find((row) => row.dataset.chatRenderItemKey !== before.key)!
+    const grow = (row: HTMLElement) => {
+      const height = rowHeight(row) + 240.5
+      heights.set(row.dataset.chatRenderItemKey!, height)
+      act(() => observers.get(row)?.([{ target: row, borderBoxSize: [{ blockSize: height }], contentRect: { height } } as unknown as ResizeObserverEntry], {} as ResizeObserver))
+    }
+    grow(rowAbove)
+    expect(visibleAnchor().key).toBe(before.key)
+    expect(Math.abs(visibleAnchor().offset - before.offset)).toBeLessThanOrEqual(1)
+    // Focus can enter from the external navigator via Tab/Shift+Tab: there is
+    // no keydown on the scroller before the browser scrolls its focused row.
+    // Both focus navigation and wheel gestures must release restoration.
+    if (evicted) fireEvent.wheel(scroller(), { deltaY: 150 })
+    else {
+      rowAbove.tabIndex = 0
+      act(() => rowAbove.focus())
+    }
+    const manualPosition = scroller().scrollTop + 150
+    scroller().scrollTop = manualPosition
+    fireEvent.scroll(scroller())
+    expect(scroller().scrollTop).toBe(manualPosition)
+    grow(rowAbove)
+    expect(scroller().scrollTop).toBe(manualPosition)
+    fireEvent.click(screen.getByRole('button', { name: 'Latest' }))
+    await waitForProgrammaticScrollReset()
+    fireEvent.scroll(scroller())
+    switchTo(sessionB)
+    switchTo(sessionA)
+    await waitForProgrammaticScrollReset()
+    expect(scroller().scrollHeight - scroller().scrollTop - scroller().clientHeight).toBeLessThanOrEqual(1)
+    dropSession(sessionA)
+  })
+
   it('restores a session scroll position when switching back to a tab', async () => {
     const scrollIntoView = vi.fn()
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
