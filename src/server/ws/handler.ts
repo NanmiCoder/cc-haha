@@ -2178,27 +2178,24 @@ async function handleSetPermissionMode(
     sendMessage(ws, { type: 'error', message: 'Plan mode is unavailable in lean sessions. Choose another permission mode.', code: 'LEAN_CAPABILITY_UNAVAILABLE' })
     return
   }
-  const pendingStartup = sessionStartupPromises.get(sessionId)
-
-  if (pendingStartup) {
-    await enqueueRuntimeTransition(sessionId, async () => {
+  // Cold sessions must participate in the same transition queue: a following
+  // turn or prewarm must not start with stale metadata while this write waits.
+  await enqueueRuntimeTransition(sessionId, async () => {
+    const pendingStartup = sessionStartupPromises.get(sessionId)
+    if (pendingStartup) {
       await pendingStartup.catch(() => undefined)
       if (!conversationService.hasSession(sessionId)) return
-      await applyPermissionModeToActiveSession(ws, sessionId, message.mode)
-    })
-    return
-  }
-
-  if (!conversationService.hasSession(sessionId)) {
-    if (await persistSessionPermissionMode(sessionId, message.mode)) {
-      sendMessage(ws, { type: 'permission_mode_changed', mode: message.mode })
     }
-    return
-  }
 
-  await enqueueRuntimeTransition(sessionId, () =>
-    applyPermissionModeToActiveSession(ws, sessionId, message.mode),
-  )
+    if (!conversationService.hasSession(sessionId)) {
+      if (await persistSessionPermissionMode(sessionId, message.mode)) {
+        sendMessage(ws, { type: 'permission_mode_changed', mode: message.mode })
+      }
+      return
+    }
+
+    await applyPermissionModeToActiveSession(ws, sessionId, message.mode)
+  })
 }
 
 const BYPASS_CAPABILITY_UNAVAILABLE =
@@ -3946,6 +3943,12 @@ async function ensureCliSessionStarted(
   sessionId: string,
   reason: 'user_message' | 'prewarm_session',
 ): Promise<void> {
+  // Wait before registering startup; a transition may itself await an existing
+  // startup. Registering a startup that waits on that transition would deadlock.
+  while (runtimeTransitionPromises.has(sessionId)) {
+    await runtimeTransitionPromises.get(sessionId)
+  }
+
   const pendingStartup = sessionStartupPromises.get(sessionId)
   if (pendingStartup) {
     await pendingStartup
@@ -3988,6 +3991,10 @@ export async function ensureCliSessionStartedForControl(
   sessionId: string,
   requestUrl: URL,
 ): Promise<void> {
+  while (runtimeTransitionPromises.has(sessionId)) {
+    await runtimeTransitionPromises.get(sessionId)
+  }
+
   const pendingStartup = sessionStartupPromises.get(sessionId)
   if (pendingStartup) {
     await pendingStartup
