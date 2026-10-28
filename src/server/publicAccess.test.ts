@@ -403,6 +403,11 @@ test('push route allowlist refuses extra segments and unsupported methods', () =
   expect(allowed('/api/sessions/mobile-push/id', 'GET')).toBe(false)
   expect(allowed('/api/sessions/mobile-push/id/extra', 'DELETE')).toBe(false)
   expect(allowed('/api/sessions/mobile-push', 'POST')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/test', 'POST')).toBe(true)
+  expect(allowed('/api/sessions/mobile-push/test', 'GET')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/test', 'PUT')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/id', 'POST')).toBe(false)
+  expect(allowed('/api/sessions/mobile-push/test/extra', 'POST')).toBe(false)
 })
 
 test('paired phones can browse directories without gaining file/search/write routes', async () => {

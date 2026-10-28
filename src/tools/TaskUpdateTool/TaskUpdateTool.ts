@@ -10,6 +10,7 @@ import {
   getTaskCompletedHookMessage,
 } from '../../utils/hooks.js'
 import { lazySchema } from '../../utils/lazySchema.js'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import {
   deleteTaskWithCommit,
   getTask,
@@ -97,7 +98,9 @@ export const TaskUpdateTool = buildTool({
     return DESCRIPTION
   },
   async prompt() {
-    return PROMPT
+    return getAgentProfile() === 'lean'
+      ? 'Update a task by taskId. Read its latest state first. Set in_progress when starting and completed only when fully done and verified; leave incomplete or blocked work in_progress. Use deleted to remove an obsolete task. You may also edit details and dependencies. Metadata is merged; null deletes a key.'
+      : PROMPT
   },
   get inputSchema(): InputSchema {
     return inputSchema()
@@ -451,7 +454,7 @@ export const TaskUpdateTool = buildTool({
         '\n\nTask completed. Call TaskList now to find your next available task or see if your work unblocked others.'
     }
 
-    if (verificationNudgeNeeded) {
+    if (verificationNudgeNeeded && getAgentProfile() !== 'lean') {
       resultContent += `\n\nNOTE: You just closed out 3+ tasks and none of them was a verification step. Before writing your final summary, spawn the verification agent (subagent_type="${VERIFICATION_AGENT_TYPE}"). You cannot self-assign PARTIAL by listing caveats in your summary — only the verifier issues a verdict.`
     }
 

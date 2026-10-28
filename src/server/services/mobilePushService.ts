@@ -6,18 +6,24 @@ import type { PushTransport, MobilePushPlatform, PushDelivery } from './mobilePu
 import type { MobileSessionActivity } from './mobileSessionActivity.js'
 
 export type MobileActivity = MobileSessionActivity
-export type PushInput = { platform: MobilePushPlatform; token: string; deviceToken?: string; hostId: string; hostName?: string; kind?: 'notification' | 'liveActivity'; sessionId?: string; activityId?: string; name?: string; preferences: { decisions: boolean; completed: boolean; errors: boolean }; quietHours: { enabled: boolean; start: string; end: string }; timeZone: string }
+export type PushDeliveryOptions = { channels?: 'split'; timeSensitive?: boolean; liveActivity?: 'running' | 'decisions'; showCommand?: boolean }
+export type PushInput = { platform: MobilePushPlatform; token: string; deviceToken?: string; hostId: string; hostName?: string; kind?: 'notification' | 'liveActivity'; sessionId?: string; activityId?: string; name?: string; preferences: { decisions: boolean; completed: boolean; errors: boolean }; delivery?: PushDeliveryOptions; quietHours: { enabled: boolean; start: string; end: string }; timeZone: string }
 export type PushOwner = { remoteDeviceId?: string; remoteDeviceExpiresAt?: number }
 type Registration = Omit<PushInput, 'token' | 'deviceToken'> & { id: string; kind: 'notification' | 'liveActivity'; tokenHash: string; parentDeviceTokenHash: string; encryptedToken: string; owner: string; expiresAt: number }
 type Stored = Record<string, unknown> & { version: 1; registrations: Registration[] }
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
 const safeString = (value: unknown, max: number) => typeof value === 'string' && value.length > 0 && value.length <= max && !/[\u0000-\u001f]/.test(value)
-const inputKeys = ['platform', 'hostId', 'hostName', 'kind', 'sessionId', 'activityId', 'name', 'preferences', 'quietHours', 'timeZone']
+const inputKeys = ['platform', 'hostId', 'hostName', 'kind', 'sessionId', 'activityId', 'name', 'preferences', 'delivery', 'quietHours', 'timeZone']
+const deliveryKeys = ['channels', 'timeSensitive', 'liveActivity', 'showCommand']
+const validDelivery = (value: unknown) => record(value) && Object.keys(value).every(key => deliveryKeys.includes(key)) &&
+  (value.channels === undefined || value.channels === 'split') && (value.timeSensitive === undefined || typeof value.timeSensitive === 'boolean') &&
+  (value.liveActivity === undefined || value.liveActivity === 'running' || value.liveActivity === 'decisions') && (value.showCommand === undefined || typeof value.showCommand === 'boolean')
+const androidChannel = (delivery: PushDeliveryOptions | undefined, event: 'decision' | 'completed' | 'error') => delivery?.channels === 'split' ? event === 'decision' ? 'cc-haha-decisions' : event === 'completed' ? 'cc-haha-completed' : 'cc-haha-errors' : 'cc-haha'
 const time = (value: unknown) => typeof value === 'string' && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)
 
 export function validatePushInput(value: unknown): value is PushInput {
-  if (!record(value) || Object.keys(value).some(key => !['platform', 'token', 'deviceToken', 'hostId', 'hostName', 'kind', 'sessionId', 'activityId', 'name', 'preferences', 'quietHours', 'timeZone'].includes(key))) return false
+  if (!record(value) || Object.keys(value).some(key => !['platform', 'token', 'deviceToken', 'hostId', 'hostName', 'kind', 'sessionId', 'activityId', 'name', 'preferences', 'delivery', 'quietHours', 'timeZone'].includes(key))) return false
   if (value.platform !== 'ios' && value.platform !== 'android') return false
   if (typeof value.token !== 'string' || !(value.platform === 'ios' ? /^[a-fA-F0-9]{64,512}$/ : /^[A-Za-z0-9_:\-]{32,4096}$/).test(value.token)) return false
   if (value.deviceToken !== undefined && (typeof value.deviceToken !== 'string' || !/^[a-fA-F0-9]{64,512}$/.test(value.deviceToken))) return false
@@ -25,6 +31,7 @@ export function validatePushInput(value: unknown): value is PushInput {
   if (value.kind !== undefined && value.kind !== 'notification' && value.kind !== 'liveActivity') return false
   if (value.kind === 'liveActivity' && (value.platform !== 'ios' || value.name !== 'CCHahaTaskActivity' || typeof value.deviceToken !== 'string' || !safeString(value.sessionId, 128) || !safeString(value.activityId, 256))) return false
   if (!record(value.preferences) || Object.keys(value.preferences).length !== 3 || !['decisions', 'completed', 'errors'].every(key => typeof value.preferences![key] === 'boolean')) return false
+  if (value.delivery !== undefined && !validDelivery(value.delivery)) return false
   if (!record(value.quietHours) || Object.keys(value.quietHours).length !== 3 || typeof value.quietHours.enabled !== 'boolean' || !time(value.quietHours.start) || !time(value.quietHours.end)) return false
   if (!safeString(value.timeZone, 80)) return false
   try { new Intl.DateTimeFormat('en-US', { timeZone: value.timeZone as string }).format() } catch { return false }
@@ -107,7 +114,8 @@ export class MobilePushService {
     const tokenHash = hash(input.token), id = hash(`${owner}:${kind}:${tokenHash}`)
     const expiresAt = Math.min(this.now() + (kind === 'liveActivity' ? 8 * 3600000 : 30 * 86400000), context.remoteDeviceExpiresAt ?? Infinity)
     const { token, deviceToken, ...rest } = input
-    const registration: Registration = { ...this.stored!.registrations.find(row => row.id === id), ...rest, kind, id, owner, tokenHash, parentDeviceTokenHash: hash(deviceToken ?? token), encryptedToken: this.encrypt(token), expiresAt }
+    const { delivery: _previousDelivery, ...existing } = this.stored!.registrations.find(row => row.id === id) ?? {} as Partial<Registration>
+    const registration: Registration = { ...existing, ...rest, kind, id, owner, tokenHash, parentDeviceTokenHash: hash(deviceToken ?? token), encryptedToken: this.encrypt(token), expiresAt }
     const remaining = this.stored!.registrations.filter(row => row.id !== id && !(row.owner === owner && row.kind === kind && (kind === 'notification' ? row.platform === input.platform : row.activityId === input.activityId)))
     if (remaining.length >= 64) throw new Error('Mobile push device limit reached')
     this.stored!.registrations = [...remaining, registration]; this.persist()
@@ -133,6 +141,29 @@ export class MobilePushService {
       this.persist()
     }
     return removed.length
+  }
+  /** Explicit test from the phone: bypasses preferences and quiet hours, never reveals tokens. */
+  async sendTest(token: string, hostId: string | undefined, context: PushOwner): Promise<{ status: 'sent' | 'notConfigured' | 'noRegistration' | 'failed'; error?: string }> {
+    this.load()
+    const tokenHash = hash(token)
+    const owner = context.remoteDeviceId ? `remote:${context.remoteDeviceId}` : `lan:${tokenHash}`
+    const rows = this.stored!.registrations.filter(row => row.kind === 'notification' && row.owner === owner && row.tokenHash === tokenHash && (hostId === undefined || row.hostId === hostId) && row.expiresAt > this.now())
+    if (!rows.length) return { status: this.status().status === 'notConfigured' ? 'notConfigured' : 'noRegistration' }
+    const configured = rows.filter(row => this.deps.transport.configured(row.platform))
+    if (!configured.length) return { status: 'notConfigured' }
+    let failed = false
+    for (const row of configured) {
+      const title = '测试通知 · cc-haha', body = '电脑推送正常：这条是电脑发给你手机的。'
+      const data = { hostId: row.hostId, eventType: 'test' }
+      const payload = row.platform === 'ios'
+        ? { aps: { alert: { title, body }, sound: 'default', category: 'cchahaResult' }, ...data }
+        : { notification: { title, body }, data, android: { priority: 'high', notification: { channel_id: androidChannel(row.delivery, 'completed') } } }
+      try {
+        const result = await this.deps.transport.send({ platform: row.platform, kind: 'notification', token: this.decrypt(row.encryptedToken), payload } satisfies PushDelivery)
+        if (result === 'invalidToken') { this.stored!.registrations = this.stored!.registrations.filter(item => item !== row); this.previous.delete(row.id); this.persist(); failed = true }
+      } catch { failed = true }
+    }
+    return failed ? { status: 'failed', error: '系统推送投递失败，请检查电脑的 APNs / FCM 配置与网络。' } : { status: 'sent' }
   }
   start(remoteActive: (id: string) => boolean) {
     this.remoteActive = remoteActive
@@ -191,25 +222,33 @@ export class MobilePushService {
           const title = summary?.title?.slice(0, 100) || 'cc-haha 会话'
           const data = { hostId: registration.hostId, sessionId: activity.id, ...(activity.requestId ? { requestId: activity.requestId } : {}), eventType: event ?? activity.activityState }
           const tool = activity.activityState === 'waiting' && activity.requestId && activity.toolName && registration.preferences.decisions && !inQuietHours(registration, this.now()) && !(typeof activity.autoAnswerDeadline === 'number' && activity.autoAnswerDeadline <= this.now()) && !['AskUserQuestion', 'ExitPlanMode', 'ComputerUse'].includes(activity.toolName)
-          const body = event === 'decision' ? activity.preview || '需要你做决定' : event === 'error' ? activity.stalled ? '超过 5 分钟没有进展，请打开查看' : '任务遇到错误，请打开查看' : '任务已完成'
+          // 隐私开关也管锁屏上的普通通知：只有 Bash 的 preview 是命令原文，其他工具的 preview 本来就是通用占位。
+          const hideCommand = registration.delivery?.showCommand === false && activity.toolName === 'Bash'
+          const body = event === 'decision' ? hideCommand ? '打开 App 查看命令' : activity.preview || '需要你做决定' : event === 'error' ? activity.stalled ? '超过 5 分钟没有进展，请打开查看' : '任务遇到错误，请打开查看' : '任务已完成'
           let payload: Record<string, unknown>
           if (registration.kind === 'liveActivity') {
             const base = `cchaha:///chat/${encodeURIComponent(activity.id)}?host=${encodeURIComponent(registration.hostId)}`
             const request = activity.requestId ? `&requestId=${encodeURIComponent(activity.requestId)}` : ''
-            const ended = activity.activityState === 'idle' || activity.activityState === 'review' || activity.activityState === 'failed'
+            const terminal = activity.activityState === 'idle' || activity.activityState === 'review' || activity.activityState === 'failed'
+            // 'decisions' mode keeps remote pushes from reviving a running-only activity: end it instead.
+            const decisionsOnly = registration.delivery?.liveActivity === 'decisions' && activity.activityState === 'running'
+            const ended = terminal || decisionsOnly
             const completed = hasSuccessfulCompletion(activity)
-            const unknownEnd = ended && !completed && activity.activityState !== 'failed'
+            const unknownEnd = terminal && !completed && activity.activityState !== 'failed'
             const timestamp = Math.floor(this.now() / 1000)
-            payload = { aps: { timestamp, event: ended ? 'end' : 'update', 'stale-date': unknownEnd ? timestamp - 1 : timestamp + 90, ...(ended ? { 'dismissal-date': timestamp + (unknownEnd ? 0 : 60) } : {}), 'content-state': { name: 'CCHahaTaskActivity', props: JSON.stringify({ hostId: registration.hostId, hostName: registration.hostName ?? '电脑', sessionId: activity.id, title, detail: activity.preview ?? (activity.activityState === 'running' ? '正在运行' : '本次运行已结束'), status: completed ? 'completed' : unknownEnd ? 'running' : activity.activityState, ...(unknownEnd ? { connectionState: 'stale' } : {}), activeCount: current.filter(row => row.activityState === 'running' || row.activityState === 'waiting').length, requestId: activity.requestId, openUrl: base + request, ...(tool ? { allowUrl: `${base}${request}&notificationAction=allow`, denyUrl: `${base}${request}&notificationAction=deny` } : {}) }) } } }
-          } else if (registration.platform === 'ios') payload = { aps: { alert: { title, body }, sound: 'default', category: tool ? 'cchahaTool' : event === 'decision' ? 'cchahaDecision' : 'cchahaResult' }, ...data }
-          else payload = { notification: { title, body }, data, android: { priority: 'high', notification: { channel_id: 'cc-haha' } } }
+            const detail = registration.delivery?.showCommand === false
+              ? activity.activityState === 'waiting' ? activity.toolName === 'Bash' ? '打开 App 查看命令' : '需要你做决定' : activity.activityState === 'running' ? '' : '本次运行已结束'
+              : activity.preview ?? (activity.activityState === 'running' ? '正在运行' : '本次运行已结束')
+            payload = { aps: { timestamp, event: ended ? 'end' : 'update', 'stale-date': unknownEnd ? timestamp - 1 : timestamp + 90, ...(ended ? { 'dismissal-date': timestamp + (unknownEnd || decisionsOnly ? 0 : 60) } : {}), 'content-state': { name: 'CCHahaTaskActivity', props: JSON.stringify({ hostId: registration.hostId, hostName: registration.hostName ?? '电脑', sessionId: activity.id, title, detail: detail, status: completed ? 'completed' : unknownEnd ? 'running' : activity.activityState, ...(unknownEnd ? { connectionState: 'stale' } : {}), activeCount: current.filter(row => row.activityState === 'running' || row.activityState === 'waiting').length, requestId: activity.requestId, openUrl: base + request, ...(tool ? { allowUrl: `${base}${request}&notificationAction=allow`, denyUrl: `${base}${request}&notificationAction=deny` } : {}) }) } } }
+          } else if (registration.platform === 'ios') payload = { aps: { alert: { title, body }, sound: 'default', category: tool ? 'cchahaTool' : event === 'decision' ? 'cchahaDecision' : 'cchahaResult', ...(event === 'decision' && registration.delivery?.timeSensitive === true ? { 'interruption-level': 'time-sensitive' } : {}) }, ...data }
+          else payload = { notification: { title, body }, data, android: { priority: 'high', notification: { channel_id: androidChannel(registration.delivery, event === 'decision' || event === 'completed' || event === 'error' ? event : 'completed') } } }
           try {
             const result = await this.deps.transport.send({ platform: registration.platform, kind: registration.kind, token: this.decrypt(registration.encryptedToken), payload } satisfies PushDelivery)
             if (generation !== this.generation) return
             this.retries.delete(retryKey)
             if (registration.kind === 'liveActivity') this.liveDeliveredAt.set(registration.id, this.now())
             this.lastError = undefined
-            if (result === 'invalidToken' || registration.kind === 'liveActivity' && ['idle', 'review', 'failed'].includes(activity.activityState)) { this.stored!.registrations = this.stored!.registrations.filter(row => row !== registration); this.previous.delete(registration.id); this.persist(); break }
+            if (result === 'invalidToken' || registration.kind === 'liveActivity' && (['idle', 'review', 'failed'].includes(activity.activityState) || registration.delivery?.liveActivity === 'decisions' && activity.activityState === 'running')) { this.stored!.registrations = this.stored!.registrations.filter(row => row !== registration); this.previous.delete(registration.id); this.persist(); break }
           } catch {
             this.retries.set(retryKey, { signature, event: event ?? 'activity', activity, attempts: (retry?.attempts ?? 0) + 1, nextAt: this.now() + 5000 * 2 ** (retry?.attempts ?? 0) })
             this.lastError = '系统推送投递失败，请检查电脑的 APNs / FCM 配置与网络。'

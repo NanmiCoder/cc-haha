@@ -21,6 +21,7 @@ import {
 import { errorText } from '../ui/theme'
 import { hostCheckBadge, hostCheckLine } from '../ui/home/homeModel'
 import { StatusDot, useNow, useToneColor } from '../ui/home/parts'
+import { connectionAddress, removeConfirmText } from '../ui/computer/computerModel'
 import { useHostCheck } from '../ui/home/useHostCheck'
 
 const actionWidth = 84
@@ -74,12 +75,7 @@ function HostRow({
   const badge = hostCheckBadge(check)
   const tone =
     check.state === 'online' ? 'ok' : check.state === 'unauthorized' ? 'err' : 'faint'
-  let address = host.url
-  try {
-    address = new URL(host.url).host
-  } catch {
-    /* 已保存的地址都校验过，这里只是展示兜底。 */
-  }
+  const address = connectionAddress(host)
   return (
     <View style={{ backgroundColor: colors.err }}>
       <Pressable
@@ -170,20 +166,17 @@ export default function Hosts() {
   const [refresh, setRefresh] = useState(0)
   const [busy, setBusy] = useState(false)
   function removeHost(host: Host) {
-    Alert.alert(
-      `移除「${host.name}」？`,
-      '将注销这台电脑的手机通知并删除手机连接。电脑上的会话会保留。已登记推送时，需要连接电脑完成注销；失败可重试。',
-      [
-        { text: '取消', style: 'cancel' },
-        {
-          text: '移除连接',
-          style: 'destructive',
-          onPress: () => {
-            void remove(host.id).catch((e) => setError(errorText(e)))
-          },
+    const text = removeConfirmText(host.name)
+    Alert.alert(text.title, text.message, [
+      { text: '取消', style: 'cancel' },
+      {
+        text: '移除连接',
+        style: 'destructive',
+        onPress: () => {
+          void remove(host.id).catch((e) => setError(errorText(e)))
         },
-      ]
-    )
+      },
+    ])
   }
   async function selectHost(host: Host) {
     if (busy) return
@@ -200,7 +193,7 @@ export default function Hosts() {
   }
   return (
     <ScreenView>
-      <NavBar title="你的电脑" />
+      <NavBar floating title="你的电脑" />
       <ScrollView
         refreshControl={
           <RefreshControl

@@ -2,7 +2,8 @@ import { useEffect, useRef } from 'react'
 import { AppState, Platform } from 'react-native'
 import { router, useRootNavigationState } from 'expo-router'
 import * as Notifications from 'expo-notifications'
-import { AndroidImportance } from 'expo-notifications'
+import { channelTriggerFor } from './channelIds'
+import { ensureNotificationChannel } from './notificationChannel'
 import { usePushRegistration } from './PushRegistrationContext'
 import { useApp } from './AppContext'
 import { usePreferences } from './PreferencesContext'
@@ -66,12 +67,7 @@ export function NotificationBridge() {
           options: { opensAppToForeground: true },
         },
       ]),
-      Platform.OS === 'android'
-        ? Notifications.setNotificationChannelAsync('cc-haha', {
-            name: '任务与审批',
-            importance: AndroidImportance.HIGH,
-          })
-        : Promise.resolve(),
+      ensureNotificationChannel(),
     ]).catch(() => {})
   }, [])
   useEffect(() => {
@@ -138,7 +134,7 @@ export function NotificationBridge() {
                 eventType: event.kind,
               },
             },
-            trigger: null,
+            trigger: channelTriggerFor(Platform.OS, event.kind),
           }),
       })
       .catch(() => {})

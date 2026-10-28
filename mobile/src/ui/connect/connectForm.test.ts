@@ -3,6 +3,7 @@ import {
   addressPlaceholder,
   connectionBlocker,
   formFootnote,
+  initialStage,
   modeForAddress,
   needsToken,
   primaryTitle,
@@ -83,5 +84,16 @@ describe('manual connect fields', () => {
   test('the approval page shows the public domain', () => {
     expect(remoteBadge(pairLink)).toBe('公网 · cc.example.com')
     expect(remoteBadge('')).toBe('公网')
+  })
+})
+
+describe('connect entry stage', () => {
+  test('mode=manual opens the manual form directly, anything else starts at the scanner', () => {
+    expect(initialStage('manual')).toBe('form')
+    expect(initialStage(['manual'])).toBe('form')
+    expect(initialStage(undefined)).toBe('scan')
+    expect(initialStage('')).toBe('scan')
+    expect(initialStage('scan')).toBe('scan')
+    expect(initialStage(['scan', 'manual'])).toBe('scan')
   })
 })

@@ -36,6 +36,23 @@ function sourceFiles(dir: string, found: string[] = []): string[] {
 }
 
 describe('lean mode copy', () => {
+  it.each([
+    ['en', ['web search', 'web fetch', 'sub-agents', 'task lists'], ['MCP', 'Agent Teams', 'plan mode']],
+    ['zh', ['联网搜索', '网页抓取', '子 Agent', '任务清单'], ['MCP', '智能体团队', '计划模式']],
+    ['zh-TW', ['網路搜尋', '網頁擷取', '子 Agent', '任務清單'], ['MCP', '智慧體團隊', '計劃模式']],
+    ['jp', ['Web検索', 'ページ取得', 'サブエージェント', 'タスクリスト'], ['MCP', 'エージェントチーム', 'プランモード']],
+    ['kr', ['웹 검색', '웹 페이지 가져오기', '하위 에이전트', '할 일 목록'], ['MCP', '에이전트 팀', '계획 모드']],
+  ])('%s describes the expanded tools and remaining limits', (locale, available, unavailable) => {
+    const strings = LOCALES[locale as string]!
+    for (const capability of available as string[]) {
+      expect(strings['agentProfile.available']).toContain(capability)
+      expect(strings['agentProfile.unavailable']).not.toContain(capability)
+    }
+    for (const capability of unavailable as string[]) {
+      expect(strings['agentProfile.unavailable']).toContain(capability)
+    }
+  })
+
   it.each(Object.keys(LOCALES))('%s names the mode with one word everywhere it is named', (locale) => {
     const strings = LOCALES[locale]!
     for (const key of NAMING_KEYS) {

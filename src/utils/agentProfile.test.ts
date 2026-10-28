@@ -25,14 +25,14 @@ describe('experimental agent profile', () => {
 
   test('lean intersects core tools without adding denied or unavailable tools', () => {
     setAgentProfile('lean')
-    const tools = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'PowerShell', 'Agent', 'Skill', 'WebFetch', 'mcp__fixture__read', 'TaskCreate']
+    const tools = ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'PowerShell', 'Agent', 'Skill', 'WebFetch', 'WebSearch', 'SendMessage', 'TaskOutput', 'TaskStop', 'TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TodoWrite', 'mcp__fixture__read', 'TeamCreate', 'EnterPlanMode']
       .map(name => ({ name, marker: name }))
     expect(filterAgentProfileTools(tools).map(tool => tool.name)).toEqual([
-      'Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'PowerShell', 'Skill',
+      'Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash', 'PowerShell', 'Agent', 'Skill', 'WebFetch', 'WebSearch', 'SendMessage', 'TaskOutput', 'TaskStop', 'TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TodoWrite',
     ])
     const permitted = tools.filter(tool => tool.name !== 'Write' && tool.name !== 'PowerShell')
     expect(filterAgentProfileTools(permitted).map(tool => tool.name)).toEqual([
-      'Read', 'Grep', 'Glob', 'Edit', 'Bash', 'Skill',
+      'Read', 'Grep', 'Glob', 'Edit', 'Bash', 'Agent', 'Skill', 'WebFetch', 'WebSearch', 'SendMessage', 'TaskOutput', 'TaskStop', 'TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TodoWrite',
     ])
     expect(filterAgentProfileTools([])).toEqual([])
     expect(filterAgentProfileTools([{ name: 'Read', isMcp: true }, { name: 'Bash', mcpInfo: {} }])).toEqual([])
@@ -61,10 +61,10 @@ describe('experimental agent profile', () => {
     expect(validateAgentProfileInitialize({ systemPrompt: 'custom', agents: {} })).toBeUndefined()
   })
 
-  test('lean rejects SDK subagent messages without changing standard control behavior', () => {
+  test('lean permits SDK subagent messages, stopping and interruption', () => {
     expect(validateAgentProfileControlRequest('send_agent_message')).toBeUndefined()
     setAgentProfile('lean')
-    expect(validateAgentProfileControlRequest('send_agent_message')).toContain('resuming subagents')
+    expect(validateAgentProfileControlRequest('send_agent_message')).toBeUndefined()
     expect(validateAgentProfileControlRequest('stop_task')).toBeUndefined()
     expect(validateAgentProfileControlRequest('interrupt')).toBeUndefined()
   })

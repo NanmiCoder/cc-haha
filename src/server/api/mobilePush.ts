@@ -7,6 +7,15 @@ export async function handleMobilePushApi(req: Request, segments: string[], cont
   try {
     if (segments.length === 3 && req.method === 'GET') return Response.json(service.status())
     if (segments.length !== 3 && segments.length !== 4) throw ApiError.notFound('Mobile push route not found')
+    if (segments.length === 4 && segments[3] === 'test' && req.method === 'POST') {
+      const raw = await req.text()
+      if (raw.length > 4096) throw ApiError.badRequest('Mobile push test request is too large')
+      let body: unknown
+      try { body = JSON.parse(raw) } catch { throw ApiError.badRequest('Invalid push test request') }
+      const input = body as Record<string, unknown>
+      if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(input).some(key => key !== 'token' && key !== 'hostId') || typeof input.token !== 'string' || !input.token || input.hostId !== undefined && (typeof input.hostId !== 'string' || !input.hostId)) throw ApiError.badRequest('Device token required')
+      return Response.json(await service.sendTest(input.token, input.hostId as string | undefined, context))
+    }
     if (req.method !== 'PUT' && req.method !== 'DELETE') return Response.json({ error: 'METHOD_NOT_ALLOWED' }, { status: 405 })
     const raw = await req.text()
     if (raw.length > 16384) throw ApiError.badRequest('Mobile push registration is too large')

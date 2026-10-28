@@ -10,6 +10,9 @@ import * as Notifications from 'expo-notifications'
 import { pushRegistrations, useApp, useConnection } from './AppContext'
 import { usePreferences } from './PreferencesContext'
 import { getDevicePushToken } from './devicePushToken'
+import { subscribePermissionDecided } from './notifyPromptGate'
+import { ensureNotificationChannel } from './notificationChannel'
+import { buildDelivery } from './pushRegistrations'
 
 export type PushStatus =
   | 'loading'
@@ -80,6 +83,14 @@ function RegisterHost({
         if (controller.signal.aborted) return
         const { decisions, completed, errors } = preferences.notifications
         const { enabled, start, end } = preferences.quietHours
+        // Android：渠道创建成功才声明 split，否则退回旧渠道，不让推送落到不存在的渠道里。
+        let channelsReady = false
+        if (platform === 'android')
+          channelsReady = await ensureNotificationChannel().then(
+            () => true,
+            () => false
+          )
+        if (controller.signal.aborted) return
         const result = await pushRegistrations.register(
           client!,
           {
@@ -89,6 +100,12 @@ function RegisterHost({
             preferences: { decisions, completed, errors },
             quietHours: { enabled, start, end },
             timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+            delivery: buildDelivery(platform, {
+              channelsReady,
+              timeSensitive: preferences.timeSensitive,
+              liveActivity: preferences.liveActivity,
+              liveActivityShowCommand: preferences.liveActivityShowCommand,
+            }),
           },
           controller.signal
         )
@@ -115,6 +132,8 @@ function RegisterHost({
     const listener = AppState.addEventListener('change', (state) => {
       if (state === 'active') void register()
     })
+    // 通知引导页里用户刚做完授权选择：立即按新权限登记，不等回到前台。
+    const decided = subscribePermissionDecided(() => void register())
     const tokens = Notifications.addPushTokenListener((token) => {
       if (typeof token.data === 'string' && token.data !== observedToken) {
         observedToken = token.data
@@ -125,6 +144,7 @@ function RegisterHost({
       alive = false
       controller.abort()
       listener.remove()
+      decided()
       tokens.remove()
     }
   }, [
@@ -133,6 +153,9 @@ function RegisterHost({
     onChange,
     preferences.notifications,
     preferences.quietHours,
+    preferences.timeSensitive,
+    preferences.liveActivity,
+    preferences.liveActivityShowCommand,
     ready,
     preferencesError,
   ])

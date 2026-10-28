@@ -349,3 +349,169 @@ test('Live Activity counts waiting work and never restores expired or preference
     expect(typeof props.denyUrl === 'string').toBe(reason === 'enabled')
   }
 })
+
+const androidToken = 'f'.repeat(64)
+const android = (extra: Partial<PushInput> = {}) => input({ platform: 'android', token: androidToken, ...extra })
+const channelOf = (delivery: PushDelivery) => ((delivery.payload.android as { notification: { channel_id: string } }).notification.channel_id)
+const live = (extra: Partial<PushInput> = {}) => input({ kind: 'liveActivity', deviceToken: 'b'.repeat(64), sessionId: 's', activityId: 'activity-a', name: 'CCHahaTaskActivity', ...extra })
+const props = (delivery: PushDelivery) => JSON.parse(((delivery.payload.aps as Record<string, unknown>)['content-state'] as { props: string }).props) as Record<string, unknown>
+
+test('delivery validation is strict and optional', () => {
+  expect(validatePushInput(input())).toBe(true)
+  expect(validatePushInput(input({ delivery: {} }))).toBe(true)
+  expect(validatePushInput(input({ delivery: { channels: 'split', timeSensitive: true, liveActivity: 'decisions', showCommand: false } }))).toBe(true)
+  for (const delivery of [{ channels: 'merged' }, { timeSensitive: 'yes' }, { liveActivity: 'all' }, { showCommand: 0 }, { extra: true }, [], 'split', null]) {
+    expect(validatePushInput({ ...input(), delivery })).toBe(false)
+  }
+})
+
+test('old registration store without delivery migration loads unchanged and behaves as before', async () => {
+  const f = fixture()
+  f.service.register(input(), {}); f.service.register(android({ token: 'e'.repeat(64), hostId: 'other' }), { remoteDeviceId: 'device-a' })
+  const file = path.join(f.directory, 'mobile-push.json')
+  const oldFixture = JSON.parse(readFileSync(file, 'utf8'))
+  expect(oldFixture.registrations.every((row: Record<string, unknown>) => !('delivery' in row))).toBe(true)
+  expect(migrateMobilePushStore(oldFixture)).toEqual(oldFixture)
+  const next = new MobilePushService({ directory: f.directory, transport: f.transport, activities: async () => [{ id: 's', activityState: 'waiting', requestId: 'q', toolName: 'AskUserQuestion' }], summary: async () => null, now: () => Date.parse('2026-10-24T04:00:01Z') })
+  next.start(() => true)
+  await next.tick(); await next.stop()
+  const ios = f.sent.find(row => row.platform === 'ios')!, droid = f.sent.find(row => row.platform === 'android')!
+  expect(ios.payload.aps).toEqual({ alert: { title: 'cc-haha 会话', body: '需要你做决定' }, sound: 'default', category: 'cchahaDecision' })
+  expect(channelOf(droid)).toBe('cc-haha')
+})
+
+test('delivery preferences persist with the registration, survive reload, and are cleared by an old-style re-registration', () => {
+  const f = fixture()
+  const delivery = { channels: 'split', timeSensitive: true, liveActivity: 'decisions', showCommand: false } as const
+  const registered = f.service.register(input({ delivery }), {})
+  const file = path.join(f.directory, 'mobile-push.json')
+  expect(JSON.parse(readFileSync(file, 'utf8')).registrations[0].delivery).toEqual(delivery)
+  const next = new MobilePushService({ directory: f.directory, transport: f.transport, activities: () => [], summary: async () => null })
+  expect(migrateMobilePushStore(JSON.parse(readFileSync(file, 'utf8'))).registrations[0]!.delivery).toEqual(delivery)
+  expect(next.register(input({ delivery: { timeSensitive: false } }), {}).id).toBe(registered.id)
+  expect(JSON.parse(readFileSync(file, 'utf8')).registrations[0].delivery).toEqual({ timeSensitive: false })
+  expect(next.register(input(), {}).id).toBe(registered.id)
+  expect('delivery' in JSON.parse(readFileSync(file, 'utf8')).registrations[0]).toBe(false)
+  void next.stop()
+})
+
+test('Android split channels route decisions, completions and errors; default keeps cc-haha', async () => {
+  for (const split of [true, false]) {
+    const f = fixture()
+    f.service.register(android(split ? { delivery: { channels: 'split' } } : {}), {})
+    f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
+    f.state([{ id: 's', activityState: 'waiting', requestId: 'q', toolName: 'AskUserQuestion' }]); await f.service.tick()
+    f.state([{ id: 's', activityState: 'running', stalled: true }]); await f.service.tick()
+    f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
+    f.state([completed()]); await f.service.tick()
+    expect(f.sent.map(row => (row.payload.data as { eventType: string }).eventType)).toEqual(['decision', 'error', 'completed'])
+    expect(f.sent.map(channelOf)).toEqual(split ? ['cc-haha-decisions', 'cc-haha-errors', 'cc-haha-completed'] : ['cc-haha', 'cc-haha', 'cc-haha'])
+  }
+  const failed = fixture()
+  failed.service.register(android({ delivery: { channels: 'split' } }), {})
+  failed.state([{ id: 's', activityState: 'running' }]); await failed.service.tick()
+  failed.state([{ id: 's', activityState: 'failed' }]); await failed.service.tick()
+  expect(channelOf(failed.sent[0]!)).toBe('cc-haha-errors')
+})
+
+test('iOS time-sensitive interruption applies only to decision pushes', async () => {
+  const f = fixture()
+  f.service.register(input({ delivery: { timeSensitive: true } }), {})
+  f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
+  f.state([{ id: 's', activityState: 'waiting', requestId: 'q1', toolName: 'Bash' }]); await f.service.tick()
+  f.state([{ id: 's', activityState: 'waiting', requestId: 'q2', toolName: 'AskUserQuestion' }]); await f.service.tick()
+  f.state([{ id: 's', activityState: 'running', stalled: true }]); await f.service.tick()
+  f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
+  f.state([completed()]); await f.service.tick()
+  expect(f.sent.map(row => (row.payload.aps as Record<string, unknown>)['interruption-level'])).toEqual(['time-sensitive', 'time-sensitive', undefined, undefined])
+  const off = fixture()
+  off.service.register(input({ delivery: { timeSensitive: false } }), {})
+  off.state([{ id: 's', activityState: 'running' }]); await off.service.tick()
+  off.state([{ id: 's', activityState: 'waiting', requestId: 'q1', toolName: 'Bash' }]); await off.service.tick()
+  expect('interruption-level' in (off.sent[0]!.payload.aps as object)).toBe(false)
+})
+
+test('Live Activity decisions mode ends a running-only activity instead of updating it', async () => {
+  const f = fixture()
+  f.service.register(live({ delivery: { liveActivity: 'decisions' } }), {})
+  f.state([{ id: 's', activityState: 'waiting', requestId: 'q', toolName: 'Bash', preview: 'rm -rf build' }]); await f.service.tick()
+  expect(f.sent[0]!.payload.aps).toMatchObject({ event: 'update' })
+  f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
+  expect(f.sent).toHaveLength(2)
+  expect(f.sent[1]!.payload.aps).toMatchObject({ event: 'end' })
+  expect(JSON.parse(readFileSync(path.join(f.directory, 'mobile-push.json'), 'utf8')).registrations).toEqual([])
+  const running = fixture()
+  running.service.register(live({ delivery: { liveActivity: 'decisions' } }), {})
+  running.state([{ id: 's', activityState: 'running' }]); await running.service.tick()
+  expect(running.sent.map(row => (row.payload.aps as Record<string, unknown>).event)).toEqual(['end'])
+  const normal = fixture()
+  normal.service.register(live({ delivery: { liveActivity: 'running' } }), {})
+  normal.state([{ id: 's', activityState: 'running' }]); await normal.service.tick()
+  expect(normal.sent.map(row => (row.payload.aps as Record<string, unknown>).event)).toEqual(['update'])
+})
+
+test('Live Activity showCommand=false hides the raw command and preview', async () => {
+  for (const hidden of [true, false]) {
+    const f = fixture()
+    f.service.register(live(hidden ? { delivery: { showCommand: false } } : {}), {})
+    f.state([{ id: 's', activityState: 'running', preview: 'secret-run-preview' }]); await f.service.tick()
+    f.state([{ id: 's', activityState: 'waiting', requestId: 'q', toolName: 'Bash', preview: 'curl http://secret.example' }]); await f.service.tick()
+    f.state([{ id: 's', activityState: 'waiting', requestId: 'p', toolName: 'Edit', preview: 'secret/path.ts' }]); await f.service.tick()
+    const details = f.sent.map(row => props(row).detail)
+    expect(details).toEqual(hidden ? ['', '打开 App 查看命令', '需要你做决定'] : ['secret-run-preview', 'curl http://secret.example', 'secret/path.ts'])
+    expect(JSON.stringify(f.sent.map(row => row.payload)).includes('secret')).toBe(!hidden)
+  }
+})
+
+test('showCommand=false also hides the raw Bash command in the regular notification body', async () => {
+  for (const hidden of [true, false]) {
+    for (const make of [input, android]) {
+      const f = fixture()
+      f.service.register(make(hidden ? { delivery: { showCommand: false } } : {}), {})
+      f.state([{ id: 's', activityState: 'running' }]); await f.service.tick()
+      f.state([{ id: 's', activityState: 'waiting', requestId: 'q', toolName: 'Bash', preview: 'curl http://secret.example' }]); await f.service.tick()
+      const payload = f.sent[0]!.payload
+      const body = (payload.aps ? (payload.aps as { alert: { body: string } }).alert : (payload.notification as { body: string })).body
+      expect(body).toBe(hidden ? '打开 App 查看命令' : 'curl http://secret.example')
+      expect(JSON.stringify(payload).includes('secret')).toBe(!hidden)
+    }
+  }
+})
+
+test('explicit push test bypasses preferences and quiet hours, honours ownership and channels, and leaks no credentials', async () => {
+  const f = fixture()
+  const quiet = { quietHours: { enabled: true, start: '00:00', end: '23:59' }, preferences: { decisions: false, completed: false, errors: false } }
+  f.service.register(input({ ...quiet, delivery: { channels: 'split', timeSensitive: true } }), { remoteDeviceId: 'device-a' })
+  f.service.register(android({ ...quiet, hostId: 'host-b', delivery: { channels: 'split' } }), { remoteDeviceId: 'device-a' })
+  f.service.register(input({ token: 'c'.repeat(64) }), { remoteDeviceId: 'device-b' })
+  expect(await f.service.sendTest(input().token, undefined, { remoteDeviceId: 'device-b' })).toEqual({ status: 'noRegistration' })
+  expect(await f.service.sendTest(input().token, 'wrong-host', { remoteDeviceId: 'device-a' })).toEqual({ status: 'noRegistration' })
+  expect(await f.service.sendTest(input().token, undefined, {})).toEqual({ status: 'noRegistration' })
+  expect(f.sent).toHaveLength(0)
+  expect(await f.service.sendTest(input().token, 'local-phone-host-a', { remoteDeviceId: 'device-a' })).toEqual({ status: 'sent' })
+  expect(f.sent[0]!.payload).toEqual({ aps: { alert: { title: '测试通知 · cc-haha', body: '电脑推送正常：这条是电脑发给你手机的。' }, sound: 'default', category: 'cchahaResult' }, hostId: 'local-phone-host-a', eventType: 'test' })
+  expect(await f.service.sendTest(androidToken, undefined, { remoteDeviceId: 'device-a' })).toEqual({ status: 'sent' })
+  expect(f.sent[1]!.payload).toMatchObject({ notification: { title: '测试通知 · cc-haha' }, android: { notification: { channel_id: 'cc-haha-completed' } } })
+  const lan = fixture()
+  lan.service.register(input(), {})
+  expect(await lan.service.sendTest(input().token, undefined, {})).toEqual({ status: 'sent' })
+})
+
+test('explicit push test reports notConfigured and failures without credentials', async () => {
+  const off = fixture(false)
+  expect(await off.service.sendTest(input().token, undefined, {})).toEqual({ status: 'notConfigured' })
+  const f = fixture()
+  f.service.register(input(), {})
+  let configured = false
+  const broken = new MobilePushService({ directory: f.directory, transport: { configured: () => configured, send: async () => { throw new Error(`APNs rejected ${input().token} bearer secret-jwt`) } }, activities: () => [], summary: async () => null })
+  expect(await broken.sendTest(input().token, undefined, {})).toEqual({ status: 'notConfigured' })
+  configured = true
+  const result = await broken.sendTest(input().token, undefined, {})
+  expect(result.status).toBe('failed')
+  expect(JSON.stringify(result)).not.toContain(input().token)
+  expect(JSON.stringify(result)).not.toContain('secret-jwt')
+  const invalid = new MobilePushService({ directory: f.directory, transport: { configured: () => true, send: async () => 'invalidToken' }, activities: () => [], summary: async () => null })
+  expect((await invalid.sendTest(input().token, undefined, {})).status).toBe('failed')
+  expect(await invalid.sendTest(input().token, undefined, {})).toEqual({ status: 'noRegistration' })
+  void broken.stop(); void invalid.stop()
+})

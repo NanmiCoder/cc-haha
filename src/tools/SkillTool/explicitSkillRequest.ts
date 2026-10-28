@@ -1,4 +1,24 @@
 import type { Message } from '../../types/message.js'
+import type { ToolUseContext } from '../../Tool.js'
+
+/** Snapshot only the current human request, without copying it into the model context. */
+export function getSkillSelectionMessages(
+  context: Pick<ToolUseContext, 'messages' | 'agentId' | 'skillSelectionState'>,
+): readonly Message[] {
+  if (context.skillSelectionState !== undefined) return context.skillSelectionState.messages
+  // Legacy child transcripts may have unmarked model-authored role=user messages.
+  if (context.agentId) return []
+  const current: Message[] = []
+  const messages = context.messages ?? []
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!
+    const input = getHumanInput(message)
+    if (!input) continue
+    current.unshift(message)
+    if (!input.queuedMidTurn) break
+  }
+  return current
+}
 
 /**
  * Only the human's current request can select skills: the latest human prompt

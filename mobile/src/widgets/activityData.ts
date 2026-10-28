@@ -75,10 +75,30 @@ export function activityUrl(
   return `cchaha:///chat/${encodeURIComponent(sessionId)}?${query}`
 }
 
+/**
+ * 锁屏实时活动的显示偏好（设置页「锁屏与灵动岛」）。
+ *
+ * 注意：这两项只约束手机本地生成的内容。电脑端 APNs 会用同一个 activity 的
+ * push token 远程覆盖 content-state（见 PUSH_NOTIFICATIONS.md），内容由服务端
+ * `mobilePushService` 拼出，手机无法过滤。要让它也生效，服务端需要：
+ * 1. 实时活动登记（PUT /api/sessions/mobile-push）接受并保存 `liveActivity` 与
+ *    `showCommand`（目前校验要求 preferences 恰好 3 个键、顶层键白名单，多发会被拒）；
+ * 2. 实时活动推送里：mode 为 decisions 时，非 waiting 状态不发 update，
+ *    运行转等待之外的变化改发 end；showCommand 为 false 时，detail 不再用
+ *    `activity.preview`（Bash 命令），改为 '打开 App 查看命令' / ''。
+ */
+export type LiveActivityOptions = {
+  /** running：有任务在跑就显示；decisions：只在等你决定时显示。默认 running。 */
+  mode?: 'running' | 'decisions'
+  /** 锁屏上是否显示命令文本。默认 true。 */
+  showCommand?: boolean
+}
+
 /** 等待态的等宽详情：命令带 “$ ”，提问是题目，计划提示去看全文。 */
-function waitingDetail(item: MobileActivity) {
+function waitingDetail(item: MobileActivity, showCommand: boolean) {
   const preview = item.preview?.trim()
-  if (item.toolName === 'Bash') return preview ? `$ ${preview}` : '打开 App 查看命令'
+  if (item.toolName === 'Bash')
+    return showCommand && preview ? `$ ${preview}` : '打开 App 查看命令'
   if (item.toolName === 'AskUserQuestion') return preview || '需要你补充信息'
   if (item.toolName === 'ExitPlanMode') return '打开 App 看完整计划'
   // 其他工具的 preview 是服务端的通用占位，不重复显示。
@@ -96,11 +116,19 @@ export function taskActivityData(
   sessions: Session[],
   activity: MobileActivity[],
   decisions: boolean,
-  now: number
+  now: number,
+  options: LiveActivityOptions = {}
 ): TaskActivityProps | null {
+  const { mode = 'running', showCommand = true } = options
+  const waitingItem = activity.find(
+    (item) => decisions && item.activityState === 'waiting'
+  )
+  // decisions 模式下运行中的任务不产生活动；返回 null 会让控制器结束已有的那张。
   const candidate =
-    activity.find((item) => decisions && item.activityState === 'waiting') ??
-    activity.find((item) => item.activityState === 'running')
+    waitingItem ??
+    (mode === 'running'
+      ? activity.find((item) => item.activityState === 'running')
+      : undefined)
   if (!candidate) return null
   const session = sessions.find((item) => item.id === candidate.id)
   if (!session) return null
@@ -117,10 +145,13 @@ export function taskActivityData(
     sessionId: session.id,
     hostName: host.name,
     title: (session.title || '进行中的任务').slice(0, 90),
-    detail: (waiting ? waitingDetail(candidate) : candidate.preview || '').slice(
-      0,
-      160
-    ),
+    // 运行态的 preview 可能是命令；隐藏命令时运行态不显示详情。
+    detail: (waiting
+      ? waitingDetail(candidate, showCommand)
+      : showCommand
+        ? candidate.preview || ''
+        : ''
+    ).slice(0, 160),
     status: waiting ? 'waiting' : 'running',
     activeCount: activeCount(activity),
     ...(waiting ? { label: decisionLabel(candidate.toolName) } : {}),

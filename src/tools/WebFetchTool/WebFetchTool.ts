@@ -3,10 +3,11 @@ import { buildTool, type ToolDef } from '../../Tool.js'
 import type { PermissionUpdate } from '../../types/permissions.js'
 import { formatFileSize } from '../../utils/format.js'
 import { lazySchema } from '../../utils/lazySchema.js'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { getRuleByContentsForTool } from '../../utils/permissions/permissions.js'
 import { isPreapprovedHost } from './preapproved.js'
-import { DESCRIPTION, WEB_FETCH_TOOL_NAME } from './prompt.js'
+import { DESCRIPTION, getWebFetchPrompt, WEB_FETCH_TOOL_NAME } from './prompt.js'
 import {
   getToolUseSummary,
   renderToolResultMessage,
@@ -179,6 +180,9 @@ export const WebFetchTool = buildTool({
     }
   },
   async prompt(_options) {
+    if (getAgentProfile() === 'lean') {
+      return `WebFetch cannot access authenticated or private URLs. ${getWebFetchPrompt()}`
+    }
     // Always include the auth warning regardless of whether ToolSearch is
     // currently in the tools list. Conditionally toggling this prefix based
     // on ToolSearch availability caused the tool description to flicker

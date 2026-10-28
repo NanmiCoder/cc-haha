@@ -1,4 +1,4 @@
-import { filterAgentProfileTools, validateAgentProfileControlRequest, validateAgentProfileInitialize } from '../utils/agentProfile.js'
+import { filterAgentProfileTools, getAgentProfile, validateAgentProfileControlRequest, validateAgentProfileInitialize } from '../utils/agentProfile.js'
 import { createSessionMessageInbox, isPendingSessionMessage, sessionMessageUuid } from '../utils/sessionMessageInbox.js'
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle'
@@ -277,7 +277,7 @@ import {
   toInternalMessages,
   toSDKRateLimitInfo,
 } from 'src/utils/messages/mappers.js'
-import { createModelSwitchBreadcrumbs } from 'src/utils/messages.js'
+import { createModelSwitchBreadcrumbs, createUserMessage } from 'src/utils/messages.js'
 import { PrintPartialOutputTracker } from './partialOutput.js'
 import { collectContextData } from 'src/commands/context/context-noninteractive.js'
 import { getSessionUsageSnapshot } from 'src/cost-tracker.js'
@@ -4263,7 +4263,12 @@ function runHeadlessStreaming(
               isLocalAgentTask(task) &&
               !isMainSessionTask(task)
             ) {
-              queuePendingMessage(agentId, content, setAppState)
+              queuePendingMessage(
+                agentId,
+                content,
+                setAppState,
+                getAgentProfile() === 'lean' ? [createUserMessage({ content, origin: { kind: 'human' } })] : undefined,
+              )
               sendControlResponseSuccess(message, {
                 agent_id: agentId,
                 delivery: 'queued',

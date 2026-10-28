@@ -3,6 +3,7 @@ export const GROK_DEFAULT_SONNET_MODEL = GROK_DEFAULT_MAIN_MODEL
 export const GROK_DEFAULT_HAIKU_MODEL = GROK_DEFAULT_MAIN_MODEL
 export const GROK_DEFAULT_MODEL = GROK_DEFAULT_MAIN_MODEL
 export const GROK_DEFAULT_CONTEXT_WINDOW = 500_000
+export const GROK_MODEL_CATALOG_ENV_KEY = 'CC_HAHA_GROK_MODEL_CATALOG'
 
 export type GrokModelCatalogEntry = {
   value: string
@@ -71,7 +72,54 @@ export function setGrokRuntimeModelCatalog(
 }
 
 export function getGrokRuntimeModelCatalog(): readonly GrokModelCatalogEntry[] {
+  if (
+    runtimeCatalog === GROK_MODEL_CATALOG &&
+    process.env.CC_HAHA_GROK_OAUTH_PROVIDER === '1'
+  ) {
+    return parseRuntimeModelCatalog(process.env[GROK_MODEL_CATALOG_ENV_KEY]) ?? runtimeCatalog
+  }
   return runtimeCatalog
+}
+
+// A server's in-memory discovery does not survive the CLI process boundary.
+// Read its launch snapshot only until this process accepts its own live catalog.
+function parseRuntimeModelCatalog(raw: string | undefined): GrokModelCatalogEntry[] | undefined {
+  if (!raw) return undefined
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed) || !parsed.length) return undefined
+    const models: GrokModelCatalogEntry[] = []
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return undefined
+      const record = entry as Record<string, unknown>
+      if (typeof record.value !== 'string' || !record.value.trim()) return undefined
+      if (record.label !== undefined && typeof record.label !== 'string') return undefined
+      if (record.description !== undefined && typeof record.description !== 'string') return undefined
+      if (record.supportsReasoningEffort !== undefined && typeof record.supportsReasoningEffort !== 'boolean') return undefined
+      if (record.reasoningEffort !== undefined && (typeof record.reasoningEffort !== 'string' || !record.reasoningEffort.trim())) return undefined
+      if (record.reasoningEfforts !== undefined && (
+        !Array.isArray(record.reasoningEfforts) ||
+        !record.reasoningEfforts.every((effort) => typeof effort === 'string' && !!effort.trim())
+      )) return undefined
+      if (record.contextWindow !== undefined && (
+        typeof record.contextWindow !== 'number' || !Number.isFinite(record.contextWindow) || record.contextWindow <= 0
+      )) return undefined
+      if (record.source !== undefined && record.source !== 'official' && record.source !== 'cli') return undefined
+      models.push({
+        value: record.value,
+        label: record.label ?? record.value,
+        description: record.description ?? '',
+        ...(record.contextWindow !== undefined && { contextWindow: record.contextWindow }),
+        ...(record.source !== undefined && { source: record.source }),
+        ...(record.supportsReasoningEffort !== undefined && { supportsReasoningEffort: record.supportsReasoningEffort }),
+        ...(record.reasoningEffort !== undefined && { reasoningEffort: record.reasoningEffort }),
+        ...(record.reasoningEfforts !== undefined && { reasoningEfforts: record.reasoningEfforts }),
+      })
+    }
+    return models
+  } catch {
+    return undefined
+  }
 }
 
 const EXPLICIT_MODELS = new Set(GROK_MODEL_CATALOG.map((entry) => entry.value))

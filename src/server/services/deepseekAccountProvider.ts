@@ -132,12 +132,13 @@ export async function resolveDeepSeekAccountRequestHeaders(): Promise<
  * cached listing answers at once, since `/api/models` gates the first paint.
  */
 export async function listDeepSeekAccountModels(
-  options?: { forceRefresh?: boolean },
+  options?: { forceRefresh?: boolean; throwOnError?: boolean },
 ): Promise<readonly DeepSeekAccountModel[]> {
   const tokens = await hahaDeepSeekOAuthService.loadTokens()
   return getDeepSeekAccountModelCatalog({
     token: tokens && isInferenceEligibleGrant(tokens) ? tokens.token : null,
     ...(options?.forceRefresh && { forceRefresh: true }),
+    ...(options?.throwOnError && { throwOnError: true }),
     // Same network proxy as the account's sign-in and status requests.
     resolveProxyUrl: async () => (await hahaDeepSeekOAuthService.getRequestOptions()).proxyUrl,
   })

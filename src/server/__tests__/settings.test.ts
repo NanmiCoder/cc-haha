@@ -14,6 +14,7 @@ import { handleStatusApi, resetUsage, addUsage } from '../api/status.js'
 import { ProviderService } from '../services/providerService.js'
 import { clearDeepSeekAccountModelCatalogCache } from '../../services/deepseekAuth/modelCatalog.js'
 import { hahaOAuthService } from '../services/hahaOAuthService.js'
+import * as claudeModelCatalog from '../services/claudeModelCatalog.js'
 import { hahaOpenAIOAuthService } from '../services/hahaOpenAIOAuthService.js'
 import {
   clearOpenAICodexModelCatalogCache,
@@ -999,6 +1000,14 @@ describe('POST /api/settings/session-cleanup', () => {
 describe('Models API', () => {
   beforeEach(setup)
   afterEach(teardown)
+  let claudeCatalogSpy: ReturnType<typeof spyOn<typeof claudeModelCatalog, 'getDesktopClaudeModelCatalog'>>
+  beforeEach(() => {
+    // These cases exercise settings/defaults. Real catalog wiring is covered by
+    // models.catalog.test.ts; fake OAuth tokens must never reach a public host.
+    claudeCatalogSpy = spyOn(claudeModelCatalog, 'getDesktopClaudeModelCatalog')
+      .mockResolvedValue(claudeModelCatalog.CLAUDE_MODEL_CATALOG)
+  })
+  afterEach(() => claudeCatalogSpy.mockRestore())
 
   it('GET /api/models should return available models', async () => {
     const { req, url, segments } = makeRequest('GET', '/api/models')

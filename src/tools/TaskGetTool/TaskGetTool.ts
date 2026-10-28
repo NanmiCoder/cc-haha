@@ -1,6 +1,7 @@
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef } from '../../Tool.js'
 import { lazySchema } from '../../utils/lazySchema.js'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import {
   getTask,
   getTaskListId,
@@ -43,7 +44,9 @@ export const TaskGetTool = buildTool({
     return DESCRIPTION
   },
   async prompt() {
-    return PROMPT
+    return getAgentProfile() === 'lean'
+      ? 'Read a task by taskId to get its description, status and dependencies. Read the latest state before updating it; complete its dependencies before starting work.'
+      : PROMPT
   },
   get inputSchema(): InputSchema {
     return inputSchema()

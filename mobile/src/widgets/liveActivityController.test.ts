@@ -4,7 +4,8 @@ import {
   type ActivityFactory,
   type ActivityInstance,
 } from './liveActivityController'
-import type { TaskActivityProps } from './activityData'
+import { taskActivityData, type TaskActivityProps } from './activityData'
+import type { Host, Session } from '../core/types'
 const props = (hostId: string): TaskActivityProps => ({
   hostId,
   sessionId: 'session',
@@ -290,4 +291,38 @@ test('finished entries for other sessions, or a session that is live again, do n
     { props: finishedProps('session', 'completed'), dismissAt: 9_000 },
   ])
   expect(log).toEqual(['start:a', 'update:a'])
+})
+
+test('decisions mode ends the lock-screen activity once the approval is handled and the task keeps running', async () => {
+  const log: string[] = []
+  const controller = new TaskActivityController(factory(log), () => 100)
+  const host: Host = { id: 'a', name: 'a', auth: 'lan', url: 'http://127.0.0.1:3456' }
+  const sessions = [{ id: 'session', title: 'task' }] as Session[]
+  const options = { mode: 'decisions' as const }
+  const register = async () => {
+    log.push('register')
+    return async () => {
+      log.push('unregister')
+    }
+  }
+  const waiting = taskActivityData(
+    host,
+    sessions,
+    [{ id: 'session', activityState: 'waiting', requestId: 'r', toolName: 'Bash' }],
+    true,
+    100,
+    options
+  )
+  await controller.sync(waiting, register, 'k')
+  const running = taskActivityData(
+    host,
+    sessions,
+    [{ id: 'session', activityState: 'running', startedAt: 1 }],
+    true,
+    100,
+    options
+  )
+  expect(running).toBeNull()
+  await controller.sync(running, register, 'k')
+  expect(log).toEqual(['start:a', 'register', 'end:a', 'unregister'])
 })

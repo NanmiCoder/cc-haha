@@ -143,9 +143,9 @@ export function TaskRow({
 export function TimeLabel({ text, unread }: { text: string; unread?: boolean }) {
   const colors = useColors()
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, height: 22 }}>
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, height: 23 }}>
       {unread ? <Dot color={colors.run} size={8} /> : null}
-      <Text style={{ fontSize: 13, lineHeight: 22, color: colors.ink3 }}>{text}</Text>
+      <Text style={{ fontSize: 13, lineHeight: 23, color: colors.ink3 }}>{text}</Text>
     </View>
   )
 }
@@ -155,7 +155,7 @@ export function Elapsed({ since, style }: { since: number; style?: StyleProp<Tex
   const colors = useColors()
   const now = useNow(1000)
   return (
-    <Mono style={[{ fontSize: 13, lineHeight: 22, color: colors.ink2 }, style]}>
+    <Mono style={[{ fontSize: 13, lineHeight: 23, color: colors.ink2 }, style]}>
       {elapsedLabel(since, now)}
     </Mono>
   )

@@ -6,7 +6,16 @@ export type Preferences = Record<string, unknown> & {
   appearance: Appearance
   notifications: { decisions: boolean; completed: boolean; errors: boolean }
   quietHours: { enabled: boolean; start: string; end: string }
+  /** 锁屏实时活动：有任务在跑就显示，还是只在等你决定时显示。 */
+  liveActivity: LiveActivityMode
+  /** 锁屏上是否显示命令内容；关掉后只写「想运行命令」。 */
+  liveActivityShowCommand: boolean
+  /** 已经给过「开启通知」引导页，不再自动弹。 */
+  notifyPrompted: boolean
+  /** iOS：审批提醒标成时效性通知，专注模式下也送达。 */
+  timeSensitive: boolean
 }
+export type LiveActivityMode = 'running' | 'decisions'
 export type PreferencesPatch = Omit<
   Partial<Preferences>,
   'notifications' | 'quietHours'
@@ -71,6 +80,11 @@ export function migratePreferences(raw: string | null): Preferences {
       start: time(quiet.start, '23:00'),
       end: time(quiet.end, '08:00'),
     },
+    // 后加的三项：旧数据没有时取默认值（保持原有行为：运行中也显示、显示命令、没引导过）。
+    liveActivity: value.liveActivity === 'decisions' ? 'decisions' : 'running',
+    liveActivityShowCommand: value.liveActivityShowCommand !== false,
+    notifyPrompted: value.notifyPrompted === true,
+    timeSensitive: value.timeSensitive !== false,
   }
 }
 export class PreferencesRepository {

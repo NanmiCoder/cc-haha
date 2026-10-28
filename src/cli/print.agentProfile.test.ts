@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, expect, mock, spyOn, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -16,6 +16,10 @@ const { Stream } = await import('../utils/stream.js')
 const { getDefaultAppState } = await import('../state/AppStateStore.js')
 const { clearCommandQueue } = await import('../utils/messageQueueManager.js')
 const { setIsInteractive, getIsInteractive } = await import('../bootstrap/state.js')
+const sessionStorage = await import('../utils/sessionStorage.js')
+const localAgentTask = await import('../tasks/LocalAgentTask/LocalAgentTask.js')
+const agentToolUtils = await import('../tools/AgentTool/agentToolUtils.js')
+const agentRunner = await import('../tools/AgentTool/runAgent.js')
 const wasInteractive = getIsInteractive()
 setIsInteractive(false)
 afterAll(() => {
@@ -27,7 +31,7 @@ afterAll(() => {
   rmSync(home, { recursive: true, force: true })
 })
 
-test('lean rejects SDK subagent resume at the streaming control boundary', async () => {
+test('lean permits ordinary SDK subagent follow-ups while preserving unavailable capability boundaries', async () => {
   setAgentProfile('lean')
   clearCommandQueue()
   const input = new Stream<string>()
@@ -47,9 +51,36 @@ test('lean rejects SDK subagent resume at the streaming control boundary', async
       subtype: 'send_agent_message', agent_id: 'old-agent', content: 'continue',
     })).toMatchObject({
       subtype: 'error', request_id: 'resume-agent',
-      error: '--agent-profile lean does not support SDK send_agent_message or resuming subagents.',
+      error: 'No transcript found for agent ID: old-agent',
     })
     expect(state.tasks).toEqual({})
+
+    spyOn(sessionStorage, 'getAgentTranscript').mockResolvedValue({ messages: [], contentReplacements: [] })
+    const metadata = spyOn(sessionStorage, 'readAgentMetadata').mockResolvedValue({ agentType: 'general-purpose' })
+    spyOn(localAgentTask, 'registerAsyncAgent').mockImplementation(params => ({ agentId: params.agentId, abortController: new AbortController() }) as never)
+    let lifecycle: Parameters<typeof agentToolUtils.runAsyncAgentLifecycle>[0] | undefined
+    spyOn(agentToolUtils, 'runAsyncAgentLifecycle').mockImplementation(async params => { lifecycle = params })
+    const runner = spyOn(agentRunner, 'runAgent').mockImplementation(async function* () {})
+    expect(await request('resume-builtin', {
+      subtype: 'send_agent_message', agent_id: 'a0123456789abcdef', content: 'continue',
+    })).toMatchObject({ subtype: 'success', request_id: 'resume-builtin', response: { delivery: 'resumed' } })
+    lifecycle?.makeStream(undefined)
+    expect(runner.mock.calls[0]?.[0].agentDefinition.getSystemPrompt({ toolUseContext: {} as never })).toContain('You are a subagent completing the assigned task')
+
+    metadata.mockResolvedValueOnce({ agentType: 'custom-sentinel' })
+    expect(await request('resume-custom', {
+      subtype: 'send_agent_message', agent_id: 'a1123456789abcdef', content: 'continue',
+    })).toMatchObject({ subtype: 'error', request_id: 'resume-custom', error: expect.stringContaining('unavailable in lean mode') })
+    expect(runner).toHaveBeenCalledTimes(1)
+
+    state = { ...state, tasks: {
+      'a0123456789abcdef': { type: 'local_agent', agentId: 'a0123456789abcdef', status: 'running', pendingMessages: [] } as never,
+    } }
+    expect(await request('message-running', {
+      subtype: 'send_agent_message', agent_id: 'a0123456789abcdef', content: 'check tests too',
+    })).toMatchObject({ subtype: 'success', response: { delivery: 'queued' } })
+    expect(localAgentTask.drainPendingMessages('a0123456789abcdef', () => state, update => { state = update(state) })).toEqual(['check tests too'])
+    state = { ...state, tasks: {} }
     expect(await request('plan', { subtype: 'set_permission_mode', mode: 'plan' })).toMatchObject({ subtype: 'error', request_id: 'plan' })
     // Lean has no MCP runtime: adding servers over the control channel is refused,
     // while clearing the dynamic set stays harmless.
@@ -79,5 +110,6 @@ test('lean rejects SDK subagent resume at the streaming control boundary', async
     await iterator.return?.()
     clearCommandQueue()
     setAgentProfile(originalProfile)
+    mock.restore()
   }
 })

@@ -15,6 +15,14 @@ export type PushRegistrationInput = {
   preferences: { decisions: boolean; completed: boolean; errors: boolean }
   quietHours: { enabled: boolean; start: string; end: string }
   timeZone: string
+  /** 告诉电脑这台手机怎么投递（渠道、时效性通知、锁屏活动过滤）；旧版电脑不认识。 */
+  delivery?: PushDelivery
+}
+export type PushDelivery = {
+  channels?: 'split'
+  timeSensitive?: boolean
+  liveActivity?: 'running' | 'decisions'
+  showCommand?: boolean
 }
 export type PushRegistrationResult = {
   registered: boolean
@@ -22,6 +30,28 @@ export type PushRegistrationResult = {
   id?: string
 }
 export type PushRegistrationProofs = { version: 1; tokens: string[] }
+
+/**
+ * 登记时附带的投递方式。Android 只声明渠道已拆分（调用方必须先创建好渠道才传
+ * channelsReady）；iOS 带上时效性通知和锁屏活动的过滤设置。
+ */
+export function buildDelivery(
+  platform: 'ios' | 'android',
+  options: {
+    channelsReady?: boolean
+    timeSensitive: boolean
+    liveActivity: 'running' | 'decisions'
+    liveActivityShowCommand: boolean
+  }
+): PushDelivery | undefined {
+  if (platform === 'android')
+    return options.channelsReady ? { channels: 'split' } : undefined
+  return {
+    timeSensitive: options.timeSensitive,
+    liveActivity: options.liveActivity,
+    showCommand: options.liveActivityShowCommand,
+  }
+}
 export const pushProofKey = (hostId: string) => `cc-haha.push.${hostId}`
 
 /** This record belongs in SecureStore, never the public host metadata or AsyncStorage. */
@@ -92,10 +122,22 @@ export class PushRegistrationCoordinator {
       }
       // Logical cancellation must not hide a successful write. Let this bounded PUT
       // settle, then compensate before the next registration/removal enters the queue.
-      const result = await client.request<PushRegistrationResult>(
-        '/api/sessions/mobile-push',
-        { method: 'PUT', body: input, timeoutMs: 8000 }
-      )
+      const put = (body: PushRegistrationInput) =>
+        client.request<PushRegistrationResult>('/api/sessions/mobile-push', {
+          method: 'PUT',
+          body,
+          timeoutMs: 8000,
+        })
+      let result: PushRegistrationResult
+      try {
+        result = await put(input)
+      } catch (error) {
+        // 旧版电脑严格校验登记字段，遇到 delivery 会整体回 400：去掉后重试一次。
+        if (!(input.delivery && error instanceof ApiError && error.status === 400))
+          throw error
+        const { delivery: _delivery, ...legacy } = input
+        result = await put(legacy)
+      }
       if (result.registered && !result.id)
         throw new ApiError('服务器未返回通知登记编号', 0, 'INVALID_RESPONSE')
       if (signal?.aborted || this.blocked.has(hostId)) {
@@ -175,12 +217,20 @@ export class PushRegistrationCoordinator {
     const proof = migratePushProofs(
       await this.secrets.getItem(pushProofKey(client.host.id))
     )
-    for (const token of proof.tokens)
-      await client.request<{ removed: number }>('/api/sessions/mobile-push', {
-        method: 'DELETE',
-        body: { token, hostId: client.host.id },
-        timeoutMs: 6000,
-      })
+    for (const token of proof.tokens) {
+      try {
+        await client.request<{ removed: number }>('/api/sessions/mobile-push', {
+          method: 'DELETE',
+          body: { token, hostId: client.host.id },
+          timeoutMs: 6000,
+        })
+      } catch (error) {
+        // 电脑已经不认这份凭据（重新配对后旧条目、电脑清了授权）：远程撤销不可能成功，
+        // 若因此拒绝移除，这台失效的电脑会永远删不掉。登记留在那台电脑上，它也再不会收到手机的请求。
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403)) return
+        throw error
+      }
+    }
   }
   private async deleteOne(client: PushClient, id: string, token: string) {
     try {

@@ -102,4 +102,48 @@ describe('mobile preferences forward migration', () => {
       errors: true,
     })
   })
+  test('upgrades a pre-0.1.1 saved file: new fields default to the old behaviour', () => {
+    const old = JSON.stringify({
+      version: 1,
+      appearance: 'light',
+      notifications: { decisions: true, completed: false, errors: true },
+      quietHours: { enabled: true, start: '22:00', end: '07:00' },
+    })
+    const migrated = migratePreferences(old)
+    expect(migrated.liveActivity).toBe('running')
+    expect(migrated.liveActivityShowCommand).toBe(true)
+    expect(migrated.notifyPrompted).toBe(false)
+    expect(migrated.timeSensitive).toBe(true)
+    expect(migrated.notifications.completed).toBe(false)
+    expect(migrated.quietHours.start).toBe('22:00')
+    expect(migratePreferences(JSON.stringify(migrated))).toEqual(migrated)
+  })
+  test('keeps saved live activity choices and ignores unknown values', () => {
+    const kept = migratePreferences(
+      '{"liveActivity":"decisions","liveActivityShowCommand":false,"notifyPrompted":true}'
+    )
+    expect(kept.liveActivity).toBe('decisions')
+    expect(kept.liveActivityShowCommand).toBe(false)
+    expect(kept.notifyPrompted).toBe(true)
+    expect(migratePreferences('{"liveActivity":"bogus"}').liveActivity).toBe('running')
+    expect(migratePreferences('{"timeSensitive":false}').timeSensitive).toBe(false)
+  })
+  test('updating one new field does not disturb the others', async () => {
+    const values = new Map<string, string>()
+    const repository = new PreferencesRepository({
+      getItem: async (key) => values.get(key) ?? null,
+      setItem: async (key, value) => {
+        values.set(key, value)
+      },
+      removeItem: async (key) => {
+        values.delete(key)
+      },
+    })
+    await repository.update({ notifyPrompted: true })
+    await repository.update({ liveActivity: 'decisions' })
+    const result = await repository.load()
+    expect(result.notifyPrompted).toBe(true)
+    expect(result.liveActivity).toBe('decisions')
+    expect(result.liveActivityShowCommand).toBe(true)
+  })
 })

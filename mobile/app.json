@@ -8,7 +8,7 @@
         "projectId": "4e75f835-1b64-463c-a196-cc181b4c83ec"
       }
     },
-    "version": "0.1.0",
+    "version": "0.1.1",
     "orientation": "portrait",
     "scheme": "cchaha",
     "userInterfaceStyle": "automatic",
@@ -16,6 +16,9 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yunce.cchaha.mobile",
+      "entitlements": {
+        "com.apple.developer.usernotifications.time-sensitive": true
+      },
       "infoPlist": {
         "NSLocalNetworkUsageDescription": "连接同一局域网中运行 cc-haha 的电脑。",
         "NSAppTransportSecurity": {
