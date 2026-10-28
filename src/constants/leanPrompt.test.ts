@@ -35,7 +35,7 @@ describe('lean system prompt', () => {
     expect(text).toContain('only when the user explicitly selects it (/name, $name or the skill picker)')
     expect(text).toContain('A skill supplies instructions, not extra tools or permission.')
     // Unavailable capabilities are named once, as unavailable, never as something to use.
-    expect(text).toContain('Web, browser, connector, task-management, plan-mode and subagent tools are not available')
+    expect(text).toContain('Browser, connector, plan-mode and agent-team tools are not available')
     expect(text).not.toMatch(/dedicated plan mode|\/skill or \$skill/)
   })
 
@@ -49,5 +49,24 @@ describe('lean system prompt', () => {
     expect(text).not.toContain('Additional working directories')
     expect(text).not.toContain('Respond in')
     expect(text).not.toContain('Fixture memory')
+    expect(text).not.toContain('Delegate independent work')
+    expect(text).not.toContain('Track complex, multi-step work')
+    expect(text).not.toContain('Use web tools')
+  })
+
+  test('guides delegation, progress tracking and sources only for available capabilities', () => {
+    const text = buildLeanSystemPrompt({
+      ...context, toolNames: ['Agent', 'TaskCreate', 'WebSearch'],
+    }).join('\n')
+    expect(text).toContain('Delegate independent work')
+    expect(text).toContain('review and integrate')
+    expect(text).toContain('Track complex, multi-step work')
+    expect(text).toContain('skip trivial tasks')
+    expect(text).toContain('cite the sources used')
+    expect(text).not.toContain('subagent tools are not available')
+    const legacy = buildLeanSystemPrompt({ ...context, toolNames: ['TodoWrite', 'WebFetch'] }).join('\n')
+    expect(legacy).toContain('Track complex, multi-step work')
+    expect(legacy).toContain('Use web tools')
+    expect(legacy).not.toContain('Delegate independent work')
   })
 })

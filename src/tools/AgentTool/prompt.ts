@@ -1,4 +1,5 @@
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { getSubscriptionType } from '../../utils/auth.js'
 import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
 import { isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
@@ -72,6 +73,11 @@ export async function getPrompt(
   const effectiveAgents = allowedAgentTypes
     ? agentDefinitions.filter(a => allowedAgentTypes.includes(a.agentType))
     : agentDefinitions
+
+  if (getAgentProfile() === 'lean') {
+    return `Delegate an independent task to a subagent with a separate context. Provide the task, relevant context, and a short description. Available types:\n${effectiveAgents.map(agent => `- ${agent.agentType}: ${agent.whenToUse}`).join('\n')}
+Use foreground execution when you need the result before proceeding. Set run_in_background to true when you can continue independent work; completion is reported automatically. TaskOutput retrieves or waits for results, TaskStop stops a running task, and SendMessage continues an agent by ID or name with its context preserved. Summarize the result for the user. Subagents use the lean tool set and existing permissions.`
+  }
 
   // Fork subagent feature: when enabled, insert the "When to fork" section
   // (fork semantics, directive-style prompts) and swap in fork-aware examples.

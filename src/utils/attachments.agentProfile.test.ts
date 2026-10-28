@@ -36,7 +36,7 @@ test('lean suppresses peripheral producers before they load or consume external 
   for (const label of [
     'plan_mode', 'plan_mode_exit', 'mcp_resources', 'mcp_instructions_delta', 'agent_mentions', 'agent_listing_delta',
     'deferred_tools_delta', 'dynamic_skill', 'skill_listing', 'skill_discovery',
-    'teammate_mailbox', 'team_context', 'agent_pending_messages', 'todo_reminders',
+    'teammate_mailbox', 'team_context', 'todo_reminders',
     'workflow_keyword_request', 'workflow_size_guideline_change', 'ultra_effort_enter',
   ]) {
     expect(await getAttachmentsForTesting.produce(label, load)).toEqual([])
@@ -47,11 +47,11 @@ test('lean suppresses peripheral producers before they load or consume external 
   expect(load).toHaveBeenCalledTimes(1)
 })
 
-test('lean keeps user input, memory, hooks, permission and background result producers', async () => {
+test('lean keeps user input, memory, hooks, permission, subagent messages and background results', async () => {
   setAgentProfile('lean')
   const load = mock(async () => [{ type: 'fixture' }])
   const labels = ['at_mentioned_files', 'nested_memory', 'changed_files', 'async_hook_responses',
-    'auto_mode', 'queued_commands', 'unified_tasks', 'critical_system_reminder']
+    'auto_mode', 'queued_commands', 'unified_tasks', 'critical_system_reminder', 'agent_pending_messages']
   for (const label of labels) {
     expect(await getAttachmentsForTesting.produce(label, load)).toEqual([{ type: 'fixture' }])
   }

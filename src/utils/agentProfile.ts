@@ -9,7 +9,14 @@ export type AgentProfile = 'standard' | 'lean'
 
 export const AGENT_PROFILES = {
   standard: { toolNames: null, mcp: true },
-  lean: { toolNames: ['Bash', 'PowerShell', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'Skill'], mcp: false },
+  lean: {
+    toolNames: [
+      'Bash', 'PowerShell', 'Read', 'Glob', 'Grep', 'Edit', 'Write', 'Skill',
+      'Agent', 'SendMessage', 'TaskOutput', 'TaskStop', 'WebSearch', 'WebFetch',
+      'TaskCreate', 'TaskGet', 'TaskUpdate', 'TaskList', 'TodoWrite',
+    ],
+    mcp: false,
+  },
 } as const
 
 export const LEAN_MCP_UNAVAILABLE = '--agent-profile lean does not use MCP servers.'
@@ -82,9 +89,6 @@ export function validateAgentProfileControlRequest(
 ): string | undefined {
   if (agentProfile === 'lean' && subtype === 'set_permission_mode' && request?.mode === 'plan') {
     return '--agent-profile lean does not support plan mode.'
-  }
-  if (agentProfile === 'lean' && subtype === 'send_agent_message') {
-    return '--agent-profile lean does not support SDK send_agent_message or resuming subagents.'
   }
   if (agentProfile === 'lean' && subtype === 'mcp_set_servers' &&
     request?.servers && typeof request.servers === 'object' && Object.keys(request.servers).length > 0) {

@@ -7,7 +7,7 @@ import { startMockLlmServer } from '../../../scripts/quality-gate/mock-llm/serve
 
 const root = join(import.meta.dir, '..', '..', '..')
 const MARKER = 'LEAN_SKILL_AT_FILE_MARKER_91c2'
-const LEAN_TOOLS = ['Bash', 'Edit', 'Glob', 'Grep', 'Read', 'Skill', 'Write']
+const LEAN_TOOLS = ['Agent', 'Bash', 'Edit', 'Glob', 'Grep', 'Read', 'SendMessage', 'Skill', 'TaskOutput', 'TaskStop', 'TodoWrite', 'WebFetch', 'Write']
 
 /** Runs the real CLI once on `/fixture-skill @README.md` and returns the first agent request sent upstream. */
 async function firstAgentRequest(profile: 'standard' | 'lean') {
@@ -15,6 +15,10 @@ async function firstAgentRequest(profile: 'standard' | 'lean') {
   const workDir = join(home, 'project')
   const skillDir = join(workDir, '.claude', 'skills', 'fixture-skill')
   mkdirSync(skillDir, { recursive: true })
+  mkdirSync(join(home, '.claude'), { recursive: true })
+  // Pin optional search availability; this case exercises the legacy checklist
+  // and skill attachment path, not a provider-dependent web capability.
+  writeFileSync(join(home, '.claude', 'settings.json'), JSON.stringify({ webSearch: { mode: 'disabled' } }))
   writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: fixture-skill\ndescription: fixture\n---\nSKILL_BODY: review $ARGUMENTS')
   writeFileSync(join(workDir, 'README.md'), `# readme\n${MARKER}\n`)
   const requests: Array<{ tools?: Array<{ name?: string }>, messages?: unknown }> = []

@@ -9,6 +9,7 @@ import { getCommand, getSkillToolCommands, hasCommand } from '../../commands.js'
 import {
   DEFAULT_AGENT_PROMPT,
   enhanceSystemPromptWithEnvDetails,
+  getSystemPrompt,
 } from '../../constants/prompts.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import { getSystemContext, getUserContext } from '../../context.js'
@@ -42,6 +43,7 @@ import type {
   UserMessage,
 } from '../../types/message.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
+import { filterAgentProfileTools, getAgentProfile, isAgentProfileMcpEnabled } from '../../utils/agentProfile.js'
 import { AbortError } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
 import {
@@ -84,6 +86,8 @@ import { getTeammateContext } from '../../utils/teammateContext.js'
 import { filterToolsForAgent, resolveAgentTools } from './agentToolUtils.js'
 import { createDenialTrackingState } from '../../utils/permissions/denialTracking.js'
 import { type AgentDefinition, isBuiltInAgent } from './loadAgentsDir.js'
+import { resolveLeanAgentDefinition } from './leanAgents.js'
+import { getSkillSelectionMessages } from '../SkillTool/explicitSkillRequest.js'
 
 export function resolveSubagentThinkingConfig(
   parentThinkingConfig: ToolUseContext['options']['thinkingConfig'],
@@ -176,9 +180,9 @@ export async function initializeAgentMcpServers(
   cleanup: () => Promise<void>
 }> {
   // If no agent-specific servers defined, return parent clients as-is
-  if (!agentDefinition.mcpServers?.length) {
+  if (!isAgentProfileMcpEnabled() || !agentDefinition.mcpServers?.length) {
     return {
-      clients: parentClients,
+      clients: isAgentProfileMcpEnabled() ? parentClients : [],
       tools: [],
       cleanup: async () => {},
     }
@@ -350,9 +354,12 @@ export async function* runAgent({
   extraMetadata,
   workflow,
   onQueryProgress,
+  skillSelectionMessages,
 }: {
   agentDefinition: AgentDefinition
   promptMessages: Message[]
+  /** Human authorization carried separately from model-authored child messages. */
+  skillSelectionMessages?: readonly Message[]
   toolUseContext: ToolUseContext
   canUseTool: CanUseToolFn
   isAsync: boolean
@@ -439,6 +446,9 @@ export async function* runAgent({
   onQueryProgress?: () => void
 }): AsyncGenerator<Message, void> {
   // Track subagent usage for feature discovery
+
+  const lean = getAgentProfile() === 'lean'
+  if (lean) agentDefinition = resolveLeanAgentDefinition(agentDefinition.agentType)
 
   const appState = toolUseContext.getAppState()
   const permissionMode = appState.toolPermissionContext.mode
@@ -631,15 +641,21 @@ export async function* runAgent({
     }
   }
 
-  const resolvedTools = useExactTools
+  const profileTools = filterAgentProfileTools(availableTools)
+  const resolvedTools = useExactTools && !lean
     ? availableTools
-    : resolveAgentTools(agentDefinition, availableTools, isAsync).resolvedTools
+    : resolveAgentTools(agentDefinition, profileTools, isAsync).resolvedTools
 
   const additionalWorkingDirectories = Array.from(
     appState.toolPermissionContext.additionalWorkingDirectories.keys(),
   )
 
-  const agentSystemPrompt = override?.systemPrompt
+  const agentSystemPrompt = lean
+    ? asSystemPrompt([
+        ...await getSystemPrompt(resolvedTools, resolvedAgentModel, additionalWorkingDirectories),
+        agentDefinition.getSystemPrompt({ toolUseContext }),
+      ])
+    : override?.systemPrompt
     ? override.systemPrompt
     : asSystemPrompt(
         await getAgentSystemPrompt(
@@ -709,7 +725,7 @@ export async function* runAgent({
   }
 
   // Preload skills from agent frontmatter
-  const skillsToPreload = agentDefinition.skills ?? []
+  const skillsToPreload = lean ? [] : agentDefinition.skills ?? []
   if (skillsToPreload.length > 0) {
     const allSkills = await getSkillToolCommands(getProjectRoot())
 
@@ -856,6 +872,12 @@ export async function* runAgent({
       agentDefinition.criticalSystemReminder_EXPERIMENTAL,
     contentReplacementState,
   })
+
+  if (lean) {
+    agentToolUseContext.skillSelectionState = {
+      messages: skillSelectionMessages ?? getSkillSelectionMessages(toolUseContext),
+    }
+  }
 
   if (isBackgrounded) {
     const foregroundSetAppState = agentToolUseContext.setAppState

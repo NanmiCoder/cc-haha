@@ -1,8 +1,12 @@
 import { feature } from 'bun:bundle'
+import { getAgentProfile } from '../../utils/agentProfile.js'
 
 export const DESCRIPTION = 'Send a message to another agent'
 
 export function getPrompt(): string {
+  if (getAgentProfile() === 'lean') {
+    return 'Send follow-up instructions to an ordinary subagent started in this session. Use its agent ID or name as to and plain text as message. A running agent receives the message at its next tool round; a completed or stopped agent resumes in the background with its saved context. Completion is reported automatically. Use TaskOutput to retrieve results and TaskStop to stop a running agent.'
+  }
   const udsRow = feature('UDS_INBOX')
     ? `\n| \`"uds:/path/to.sock"\` | Local Claude session's socket (same machine; use \`ListPeers\`) |
 | \`"bridge:session_..."\` | Remote Control peer session (cross-machine; use \`ListPeers\`) |`

@@ -18,6 +18,7 @@ import { assembleToolPool } from '../../tools.js';
 import { asAgentId } from '../../types/ids.js';
 import { createAbortController } from '../../utils/abortController.js';
 import { runWithAgentContext } from '../../utils/agentContext.js';
+import { getAgentProfile } from '../../utils/agentProfile.js'
 import { isAgentSwarmsEnabled } from '../../utils/agentSwarmsEnabled.js';
 import { getCwd, runWithCwdOverride } from '../../utils/cwd.js';
 import { logForDebugging } from '../../utils/debug.js';
@@ -55,6 +56,7 @@ import { buildForkedMessages, buildWorktreeNotice, FORK_AGENT, isForkSubagentEna
 import type { AgentDefinition } from './loadAgentsDir.js';
 import { filterAgentsByMcpRequirements, hasRequiredMcpServers, isBuiltInAgent } from './loadAgentsDir.js';
 import { getPrompt } from './prompt.js';
+import { getAgentDefinitionsForProfile } from './leanAgents.js'
 import { runAgent } from './runAgent.js';
 import { reserveSubagentSlot } from './subagentConcurrency.js';
 import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorMessage, renderToolUseMessage, renderToolUseProgressMessage, renderToolUseRejectedMessage, renderToolUseTag, userFacingName, userFacingNameBackgroundColor } from './UI.js';
@@ -111,7 +113,7 @@ const fullInputSchema = lazySchema(() => {
 // (field type collapses to `unknown`). The ternary return produces a union
 // type, but call() destructures via the explicit AgentToolInput type below
 // which always includes all optional fields.
-export const inputSchema = lazySchema(() => {
+const standardInputSchema = lazySchema(() => {
   const schema = feature('KAIROS') ? fullInputSchema() : fullInputSchema().omit({
     cwd: true
   });
@@ -127,6 +129,16 @@ export const inputSchema = lazySchema(() => {
     run_in_background: true
   }) : schema;
 });
+const leanInputSchema = lazySchema(() => {
+  const schema = baseInputSchema().extend({
+    subagent_type: z.enum(['general-purpose', 'Explore']).optional().describe('general-purpose for implementation or research; Explore for read-only research'),
+    name: z.string().optional().describe('Short name for addressing this subagent with SendMessage'),
+  }).strict()
+  return isBackgroundTasksDisabled ? schema.omit({ run_in_background: true }) : schema
+})
+export function inputSchema() {
+  return getAgentProfile() === 'lean' ? leanInputSchema() : standardInputSchema()
+}
 type InputSchema = ReturnType<typeof inputSchema>;
 
 // Explicit type widens the schema inference to always include all optional
@@ -219,7 +231,7 @@ export const AgentTool = buildTool({
     }
 
     // Filter agents: first by MCP requirements, then by permission rules
-    const agentsWithMcpRequirementsMet = filterAgentsByMcpRequirements(agents, mcpServersWithTools);
+    const agentsWithMcpRequirementsMet = filterAgentsByMcpRequirements(getAgentDefinitionsForProfile(agents), mcpServersWithTools);
     const filteredAgents = filterDeniedAgents(agentsWithMcpRequirementsMet, toolPermissionContext, AGENT_TOOL_NAME);
 
     // Use inline env check instead of coordinatorModule to avoid circular
@@ -257,6 +269,10 @@ export const AgentTool = buildTool({
 
     // Get app state for permission mode and agent filtering
     const appState = toolUseContext.getAppState();
+    const lean = getAgentProfile() === 'lean'
+    if (lean && (team_name || spawnMode || isolation || cwd)) {
+      throw new Error('Lean mode supports ordinary subagents only; team, permission-mode, isolation, and cwd overrides are unavailable.')
+    }
     const permissionMode = appState.toolPermissionContext.mode;
     // In-process teammates get a no-op setAppState; setAppStateForTasks
     // reaches the root store so task registration/progress/kill stay visible.
@@ -270,7 +286,7 @@ export const AgentTool = buildTool({
     // Teammates (in-process or tmux) passing `name` would trigger spawnTeammate()
     // below, but TeamFile.members is a flat array with one leadAgentId — nested
     // teammates land in the roster with no provenance and confuse the lead.
-    const teamName = resolveTeamName({
+    const teamName = lean ? undefined : resolveTeamName({
       team_name
     }, appState);
     if (isTeammate() && teamName && name) {
@@ -333,7 +349,7 @@ export const AgentTool = buildTool({
     // - subagent_type set: use it (explicit wins)
     // - subagent_type omitted, gate on: fork path (undefined)
     // - subagent_type omitted, gate off: default general-purpose
-    const effectiveType = subagent_type ?? (isForkSubagentEnabled() ? undefined : GENERAL_PURPOSE_AGENT.agentType);
+    const effectiveType = subagent_type ?? (!lean && isForkSubagentEnabled() ? undefined : GENERAL_PURPOSE_AGENT.agentType);
     const isForkPath = effectiveType === undefined;
     let selectedAgent: AgentDefinition;
     if (isForkPath) {
@@ -349,7 +365,7 @@ export const AgentTool = buildTool({
       selectedAgent = FORK_AGENT;
     } else {
       // Filter agents to exclude those denied via Agent(AgentName) syntax
-      const allAgents = toolUseContext.options.agentDefinitions.activeAgents;
+      const allAgents = getAgentDefinitionsForProfile(toolUseContext.options.agentDefinitions.activeAgents);
       const {
         allowedAgentTypes
       } = toolUseContext.options.agentDefinitions;
@@ -524,7 +540,7 @@ export const AgentTool = buildTool({
         });
       }
       promptMessages = buildForkedMessages(prompt, assistantMessage);
-    } else {
+    } else if (!lean) {
       try {
         const additionalWorkingDirectories = Array.from(appState.toolPermissionContext.additionalWorkingDirectories.keys());
 
@@ -552,6 +568,8 @@ export const AgentTool = buildTool({
       promptMessages = [createUserMessage({
         content: prompt
       })];
+    } else {
+      promptMessages = [createUserMessage({ content: prompt, origin: { kind: 'coordinator' } })]
     }
     const metadata = {
       prompt,
@@ -714,6 +732,14 @@ export const AgentTool = buildTool({
         worktreeBranch
       };
     };
+    const registerAgentName = (agentId: string) => {
+      if (!name) return
+      rootSetAppState(prev => {
+        const next = new Map(prev.agentNameRegistry)
+        next.set(name, asAgentId(agentId))
+        return { ...prev, agentNameRegistry: next }
+      })
+    }
     if (shouldRunAsync) {
       const asyncAgentId = earlyAgentId;
       const agentBackgroundTask = registerAsyncAgent({
@@ -729,19 +755,9 @@ export const AgentTool = buildTool({
         ownerAgentId: toolUseContext.agentId
       });
 
-      // Register name → agentId for SendMessage routing. Post-registerAsyncAgent
-      // so we don't leave a stale entry if spawn fails. Sync agents skipped —
-      // coordinator is blocked, so SendMessage routing doesn't apply.
-      if (name) {
-        rootSetAppState(prev => {
-          const next = new Map(prev.agentNameRegistry);
-          next.set(name, asAgentId(asyncAgentId));
-          return {
-            ...prev,
-            agentNameRegistry: next
-          };
-        });
-      }
+      // Register only after task creation succeeds so a failed spawn cannot
+      // replace an existing SendMessage address.
+      registerAgentName(asyncAgentId)
 
       // Wrap async agent execution in agent context for analytics attribution
       const asyncAgentContext = {
@@ -964,6 +980,7 @@ export const AgentTool = buildTool({
                 const backgroundedTaskId = foregroundTaskId;
                 wasBackgrounded = true;
                 toolUseContext.abortController.signal.removeEventListener('abort', abortFromParent);
+                if (lean) registerAgentName(syncAgentId)
 
                 // Workload: inherited via ALS at `void` invocation time,
                 // same as the async-from-start path above.
@@ -1300,6 +1317,12 @@ export const AgentTool = buildTool({
             }, ...agentResult.content];
           }
         }
+        // Lean foreground agents can be continued from their transcript.
+        // Publish the name only after success; errors and cancellation must
+        // not replace a previously usable address with an incomplete run.
+        if (lean && !syncAgentError && !agentAbortController.signal.aborted) {
+          registerAgentName(syncAgentId)
+        }
         return {
           data: {
             status: 'completed' as const,
@@ -1407,12 +1430,13 @@ The agent is now running and will receive instructions via mailbox.`
         type: 'text' as const,
         text: '(Subagent completed but returned no output.)'
       }];
-      // One-shot built-ins (Explore, Plan) are never continued via SendMessage
-      // — the agentId hint and <usage> block are dead weight (~135 chars ×
+      // Standard-mode one-shot built-ins (Explore, Plan) omit the agentId
+      // hint and <usage> block as dead weight (~135 chars ×
       // 34M Explore runs/week ≈ 1-2 Gtok/week). Telemetry doesn't parse this
       // block (it uses logEvent in finalizeAgentTool), so dropping is safe.
+      // Lean Explore supports SendMessage follow-ups and needs its address.
       // agentType is optional for resume compat — missing means show trailer.
-      if (data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !worktreeInfoText) {
+      if (getAgentProfile() !== 'lean' && data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !worktreeInfoText) {
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
@@ -1444,6 +1468,8 @@ duration_ms: ${data.totalDurationMs}</usage>`
   renderToolUseErrorMessage,
   renderGroupedToolUse: renderGroupedAgentToolUse
 } satisfies ToolDef<InputSchema, Output, Progress>);
+// buildTool spreads the definition; retain profile selection until schema use.
+Object.defineProperty(AgentTool, 'inputSchema', { get: inputSchema, enumerable: true, configurable: true })
 function resolveTeamName(input: {
   team_name?: string;
 }, appState: {
