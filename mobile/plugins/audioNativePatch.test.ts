@@ -36,6 +36,7 @@ function method(source: string, signature: string): string {
   throw new Error(`Incomplete native method: ${signature}`)
 }
 
+// Give cold CI compilation its 30-second process budget plus setup overhead.
 beforeAll(() => {
   if (!compiler) return
   scratch = mkdtempSync(join(tmpdir(), 'mobile-audio-native-patch-'))
@@ -57,7 +58,7 @@ beforeAll(() => {
   binary = join(scratch, process.platform === 'win32' ? 'capture.exe' : 'capture')
   writeFileSync(file, harness)
   execFileSync(compiler, ['-std=c++20', '-pthread', '-I', join(root, 'common/cpp'), file, '-o', binary], { stdio: ['ignore', 'pipe', 'pipe'], timeout: 30000 })
-})
+}, 35000)
 
 afterAll(() => {
   if (scratch) rmSync(scratch, { recursive: true, force: true })
