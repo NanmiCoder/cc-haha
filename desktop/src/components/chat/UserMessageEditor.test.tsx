@@ -197,6 +197,35 @@ describe('UserMessageEditor', () => {
       })
     }
 
+    it.each(['/', '@'])('opens "%s" below an editor near the transcript top and inserts a skill pill', async (trigger) => {
+      useSettingsStore.setState({ locale: 'en' })
+      seedSession()
+      const { onDraftChange } = renderEditor({ sessionId: 'session-1', initialDraft: { text: '', attachments: [], sessionReferences: [] } })
+      const card = screen.getByTestId('user-message-editor')
+      const viewport = card.parentElement!
+      viewport.style.overflowY = 'auto'
+      vi.spyOn(HTMLElement.prototype, 'offsetParent', 'get').mockImplementation(function (this: HTMLElement) {
+        return this.parentElement?.closest('[data-testid="user-message-editor"]') ?? null
+      })
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+        if (this === card) return new DOMRect(100, 140, 600, 120)
+        if (this === viewport) return new DOMRect(0, 128, 1000, 592)
+        return new DOMRect()
+      })
+
+      setComposerText(trigger, 1)
+      const option = await screen.findByRole('option', { name: /frontend-design|Frontend Design/ })
+      const menu = screen.getByRole('listbox').parentElement!
+      expect(menu.classList.contains('top-full')).toBe(true)
+      expect(parseFloat(menu.style.maxHeight)).toBeGreaterThan(400)
+
+      fireEvent.click(option)
+      await waitFor(() => expect(getComposerElement().querySelector('[data-mention-kind="skill"]')).not.toBeNull())
+      expect(onDraftChange).toHaveBeenLastCalledWith(expect.objectContaining({
+        mentions: [expect.objectContaining({ kind: 'skill', id: 'frontend-design' })],
+      }))
+    })
+
     it('shows the pill a reloaded skill prompt had and sends it again with its own text', () => {
       useSettingsStore.setState({ locale: 'en' })
       const { onSubmit } = renderEditor({
