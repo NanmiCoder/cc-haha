@@ -261,6 +261,13 @@ import {
   ElicitationCompleteNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js'
 import { disableStaleMcpReconnect } from './mcpReconnectState.js'
+import {
+  computerUsePermissionContext,
+  createComputerUseMcpRefresh,
+  isComputerUseRuntimeTool,
+  readComputerUseRefreshConfiguration,
+} from './computerUseMcpRefresh.js'
+import { COMPUTER_USE_MCP_SERVER_NAME, isComputerUseMCPServer } from '../utils/computerUse/common.js'
 import { getMcpPrefix } from 'src/services/mcp/mcpStringUtils.js'
 import {
   commandBelongsToServer,
@@ -342,6 +349,7 @@ import {
 import { asSessionId } from 'src/types/ids.js'
 import { jsonStringify } from '../utils/slowOperations.js'
 import { skillChangeDetector } from '../utils/skills/skillChangeDetector.js'
+import { invalidateComputerUseSkillGate } from '../utils/computerUse/skillGate.js'
 import { getCommands, clearCommandsCache } from '../commands.js'
 import { filterCommandsForHeadlessMode } from '../commands/headless.js'
 import {
@@ -681,6 +689,7 @@ export async function runHeadless(
     jsonSchema: Record<string, unknown> | undefined
     permissionPromptToolName: string | undefined
     allowedTools: string[] | undefined
+    computerUse?: boolean
     thinkingConfig: ThinkingConfig | undefined
     maxTurns: number | undefined
     maxBudgetUsd: number | undefined
@@ -1262,6 +1271,7 @@ function runHeadlessStreaming(
     permissionPromptToolName: string | undefined
     hostPermissionPromptAvailable?: boolean
     allowedTools: string[] | undefined
+    computerUse?: boolean
     thinkingConfig: ThinkingConfig | undefined
     maxTurns: number | undefined
     maxBudgetUsd: number | undefined
@@ -1767,17 +1777,46 @@ function runHeadlessStreaming(
     configs: {},
   }
 
+  const computerUseMcp = createComputerUseMcpRefresh({
+    readConfiguration: () => readComputerUseRefreshConfiguration(options.computerUse === true),
+    snapshot: () => ({
+      clients: uniqBy([...getAppState().mcp.clients, ...mcpClients], 'name'),
+      tools: getAppState().mcp.tools,
+    }),
+    connect: async (config, reconnect) => {
+      if (reconnect) return reconnectMcpServerImpl(COMPUTER_USE_MCP_SERVER_NAME, config)
+      const client = await connectToServer(COMPUTER_USE_MCP_SERVER_NAME, config)
+      return { client, tools: client.type === 'connected' ? await fetchToolsForClient(client) : [] }
+    },
+    retire: client => clearServerCache(COMPUTER_USE_MCP_SERVER_NAME, client.config),
+    publish: (client, currentTools, allowedTools) => {
+      // Startup and SDK pools can retain old objects after a configuration
+      // change. Keep one authoritative owner in AppState for this builtin.
+      mcpClients = mcpClients.filter(existing => !isComputerUseMCPServer(existing.name))
+      setAppState(prev => ({
+        ...prev,
+        toolPermissionContext: computerUsePermissionContext(prev.toolPermissionContext, allowedTools),
+        mcp: {
+          ...prev.mcp,
+          clients: [...prev.mcp.clients.filter(existing => !isComputerUseMCPServer(existing.name)), ...(client ? [client] : [])],
+          tools: [...prev.mcp.tools.filter(tool => !isComputerUseRuntimeTool(tool)), ...currentTools],
+        },
+      }))
+    },
+    onError: error => logForDebugging(`[Computer Use MCP] Refresh failed: ${errorMessage(error)}`),
+  })
+
   // Shared tool assembly for ask() and the get_context_usage control request.
   // Closes over the mutable sdkTools/dynamicMcpState bindings so both call
   // sites see late-connecting servers.
   const buildAllTools = (appState: AppState): Tools => {
     const assembledTools = assembleToolPool(
       appState.toolPermissionContext,
-      appState.mcp.tools,
+      [...appState.mcp.tools.filter(tool => !isComputerUseRuntimeTool(tool)), ...computerUseMcp.tools()],
     )
     let allTools = uniqBy(
       mergeAndFilterTools(
-        [...tools, ...sdkTools, ...dynamicMcpState.tools],
+        [...tools, ...sdkTools, ...dynamicMcpState.tools].filter(tool => !isComputerUseRuntimeTool(tool)),
         assembledTools,
         appState.toolPermissionContext.mode,
       ),
@@ -2301,11 +2340,23 @@ function runHeadlessStreaming(
           // per-server by main.tsx (mirrors useManageMCPConnections). Reading
           // fresh per-command means late-connecting servers are visible on the
           // next turn. registerElicitationHandlers is idempotent (tracking set).
+          // Settings can change after prewarm or any earlier turn. Reconcile
+          // the builtin before taking the per-query inventory, even when the
+          // config file did not exist when the CLI started watching skills.
+          const computerUseWasAvailable = computerUseMcp.tools().length > 0
+          await computerUseMcp.sync()
+          if (computerUseWasAvailable !== (computerUseMcp.tools().length > 0)) {
+            // The config may have been created after skill watchers started;
+            // make both explicit Skill calls and the menu fresh in this turn.
+            invalidateComputerUseSkillGate()
+            clearCommandsCache()
+            currentCommands = filterCommandsForHeadlessMode(await getCommands(cwd()))
+          }
           const appState = getAppState()
           const allMcpClients = [
             ...appState.mcp.clients,
-            ...sdkClients,
-            ...dynamicMcpState.clients,
+            ...sdkClients.filter(client => !isComputerUseMCPServer(client.name)),
+            ...dynamicMcpState.clients.filter(client => !isComputerUseMCPServer(client.name)),
           ]
           registerElicitationHandlers(allMcpClients)
           // Channel handlers for servers allowlisted via --channels at

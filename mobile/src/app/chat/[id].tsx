@@ -1276,6 +1276,9 @@ function ChatSession({
               paddingBottom: 12,
               gap: 16,
               flexGrow: 1,
+              // Inversion flips the main axis: put spare space below the
+              // oldest message on screen, keeping short conversations at top.
+              justifyContent: 'flex-end',
               width: '100%',
               maxWidth: 800,
               alignSelf: 'center',

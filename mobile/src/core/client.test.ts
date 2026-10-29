@@ -241,7 +241,7 @@ describe('host-scoped API transport', () => {
     const fetch: FetchAdapter = async (url, init) => {
       calls.push({
         url,
-        body: init.body ? JSON.parse(init.body) : undefined,
+        body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
         headers: init.headers,
       })
       if (url.endsWith('/pair'))
@@ -287,7 +287,7 @@ describe('host-scoped API transport', () => {
     const calls: { url: string; body?: string }[] = []
     const client = new ApiClient(lan, 'fake', {
       fetch: async (url, init) => {
-        calls.push({ url, body: init.body })
+        calls.push({ url, body: typeof init.body === 'string' ? init.body : undefined })
         return response({})
       },
     })
@@ -303,5 +303,80 @@ describe('host-scoped API transport', () => {
     expect(calls[1].url).toBe(
       `${lan.url}/api/sessions/session-id/messages?cursor=opaque%2F%2B%3D%3D`
     )
+  })
+
+  test('raw binary uploads preserve only the selected bytes and retain host-scoped transport controls', async () => {
+    const calls: { url: string; init: Parameters<FetchAdapter>[1] }[] = []
+    const client = new ApiClient(remote, 'voice-fixture-token', {
+      fetch: async (url, init) => {
+        calls.push({ url, init })
+        return response({ text: 'hello' })
+      },
+    })
+    const backing = new Uint8Array([99, 82, 73, 70, 70, 88])
+    await client.request('/api/voice/transcribe', {
+      method: 'POST', rawBody: backing.subarray(1, 5), contentType: 'audio/wav',
+    })
+    backing.fill(0)
+    expect(calls[0].init.body).toBeInstanceOf(ArrayBuffer)
+    expect(Array.from(new Uint8Array(calls[0].init.body as ArrayBuffer))).toEqual([82, 73, 70, 70])
+    expect(calls[0]).toMatchObject({
+      url: `${remote.url}/api/voice/transcribe`,
+      init: {
+        method: 'POST', redirect: 'error', credentials: 'omit',
+        headers: { Accept: 'application/json', 'Content-Type': 'audio/wav', Authorization: 'Bearer voice-fixture-token', Origin: remote.url },
+      },
+    })
+    await client.post('/api/sessions', { workDir: '/fixture' })
+    expect(calls[1].init.body).toBe('{"workDir":"/fixture"}')
+    expect(calls[1].init.headers['Content-Type']).toBe('application/json')
+  })
+
+  test('does not accept an ambiguous JSON and raw body or an unsafe path for binary uploads', async () => {
+    let calls = 0
+    const client = new ApiClient(lan, 'fixture', {
+      fetch: async () => {
+        calls++
+        return response({})
+      },
+    })
+    await expect(client.request('/api/voice/transcribe', {
+      method: 'POST', body: {}, rawBody: new Uint8Array([1]), contentType: 'audio/wav',
+    })).rejects.toMatchObject({ code: 'INVALID_BODY' })
+    await expect(client.request('//other.invalid/upload', {
+      method: 'POST', rawBody: new Uint8Array([1]), contentType: 'audio/wav',
+    })).rejects.toMatchObject({ code: 'INVALID_PATH' })
+    expect(calls).toBe(0)
+  })
+
+  test('binary uploads refuse redirected response bodies and forward active cancellation', async () => {
+    let bodyRead = false
+    const redirected = new ApiClient(remote, 'fixture', {
+      fetch: async () => response({}, 200, {
+        redirected: true,
+        text: async () => {
+          bodyRead = true
+          return '{}'
+        },
+      }),
+    })
+    await expect(redirected.request('/api/voice/transcribe', {
+      method: 'POST', rawBody: new Uint8Array([1]), contentType: 'audio/wav',
+    })).rejects.toMatchObject({ code: 'REDIRECT_BLOCKED' })
+    expect(bodyRead).toBe(false)
+    const controller = new AbortController()
+    let transportSignal: AbortSignal | undefined
+    const waiting = new ApiClient(lan, 'fixture', {
+      fetch: async (_url, init) => {
+        transportSignal = init.signal
+        return new Promise((_resolve, reject) => init.signal.addEventListener('abort', () => reject(new Error('fixture abort')), { once: true }))
+      },
+    })
+    const request = waiting.request('/api/voice/transcribe', {
+      method: 'POST', rawBody: new Uint8Array([1]), contentType: 'audio/wav', signal: controller.signal,
+    })
+    controller.abort()
+    await expect(request).rejects.toMatchObject({ code: 'ABORTED' })
+    expect(transportSignal?.aborted).toBe(true)
   })
 })

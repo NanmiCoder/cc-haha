@@ -80,9 +80,6 @@ export function runCapsuleA11y(run: Pick<RunCapsule, 'label' | 'risk' | 'locked'
   return `运行方式：${run.label}${riskNote[run.risk]}${run.locked ? '，运行中不可改' : ''}`
 }
 
-/** 锁住时胶囊旁边的说明（C7）。 */
-export const runLockedNote = '运行中不能换模型'
-
 /* ───────────── 发送位 ───────────── */
 
 export type SendSlot = {

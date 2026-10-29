@@ -26,8 +26,13 @@ export function ComputerUseConsent({ computer }: { computer: ComputerUse }) {
   )
 }
 
-/** 运行方式底单里「操作电脑」那一行：开关、说明、授权提示。 */
-export function ComputerUseRow({ computer, reason }: { computer: ComputerUse; reason?: string }) {
+/** The row selects a skill for this message; the consent below remains global. */
+export function ComputerUseRow({ computer, selected, onSelected, reason }: {
+  computer: ComputerUse
+  selected: boolean
+  onSelected(value: boolean): void
+  reason?: string
+}) {
   const colors = useColors()
   return (
     <View>
@@ -35,14 +40,17 @@ export function ComputerUseRow({ computer, reason }: { computer: ComputerUse; re
         <View style={{ flex: 1, gap: 2, paddingVertical: 8 }}>
           <Text style={{ fontSize: 16, color: colors.ink }}>操作电脑</Text>
           <Text style={{ fontSize: 13, lineHeight: 18, color: colors.ink3 }}>
-            {computerNote({ supported: computer.supported, reason })}
+            {computer.enabled && !reason ? '只对这条消息生效，发送后收起；电脑操作授权仍有效。' : computerNote({ supported: computer.supported, reason })}
           </Text>
         </View>
         <Switch
           label="操作电脑"
-          value={computer.enabled}
+          value={selected}
           disabled={computer.supported !== true || computer.busy || !!reason}
-          onValueChange={computer.toggle}
+          onValueChange={(value) => {
+            if (value) computer.selectForMessage(() => onSelected(true))
+            else onSelected(false)
+          }}
         />
       </View>
       {computer.error && !computer.consentOpen ? (
