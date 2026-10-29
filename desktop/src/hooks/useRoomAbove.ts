@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 /** Gap kept between the overlay's top edge and the edge that would clip it. */
 const EDGE_GAP = 8
+/** Matches the menus' `mb-2` / `mt-2` gap from their containing card. */
+const MENU_GAP = 8
+
+type MenuSide = 'top' | 'bottom'
 
 const CLIPPING_OVERFLOW = /^(hidden|clip|auto|scroll)$/
 
@@ -107,9 +111,13 @@ function observeMove(element: Element, onMove: () => void): () => void {
  * `bottom-full` pins the overlay's bottom edge, so capping its height never
  * moves the edge it is measured from. `undefined` until measured — and under
  * jsdom, which lays nothing out — so the CSS cap applies alone.
+ *
+ * Inline message editors can sit at either end of a scrollable transcript.
+ * With `allowBelow`, choose the roomier side and measure from the containing
+ * card, independently of the menu's current side or asynchronously loaded rows.
  */
-export function useRoomAbove<T extends HTMLElement>(): [(node: T | null) => void, number | undefined] {
-  const [room, setRoom] = useState<number>()
+export function useRoomAbove<T extends HTMLElement>({ allowBelow = false }: { allowBelow?: boolean } = {}): [(node: T | null) => void, number | undefined, MenuSide] {
+  const [position, setPosition] = useState<{ room: number | undefined, side: MenuSide }>({ room: undefined, side: 'top' })
   const nodeRef = useRef<T | null>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
 
@@ -122,8 +130,13 @@ export function useRoomAbove<T extends HTMLElement>(): [(node: T | null) => void
     const clip = clippingAncestor(node)
     const measure = () => {
       const top = Math.max(0, clip?.getBoundingClientRect().top ?? 0)
-      const next = Math.max(0, Math.floor(node.getBoundingClientRect().bottom - top - EDGE_GAP))
-      setRoom((current) => (current === next ? current : next))
+      const anchor = allowBelow ? node.offsetParent?.getBoundingClientRect() : undefined
+      const above = Math.max(0, Math.floor((anchor ? anchor.top - MENU_GAP : node.getBoundingClientRect().bottom) - top - EDGE_GAP))
+      const bottom = Math.min(view.innerHeight, clip?.getBoundingClientRect().bottom ?? view.innerHeight)
+      const below = anchor ? Math.max(0, Math.floor(bottom - anchor.bottom - MENU_GAP - EDGE_GAP)) : 0
+      const side = below > above ? 'bottom' : 'top'
+      const room = side === 'bottom' ? below : above
+      setPosition((current) => (current.room === room && current.side === side ? current : { room, side }))
     }
 
     measure()
@@ -134,11 +147,13 @@ export function useRoomAbove<T extends HTMLElement>(): [(node: T | null) => void
     const observer = view.ResizeObserver ? new view.ResizeObserver(measure) : null
     if (node.offsetParent) observer?.observe(node.offsetParent)
     if (clip) observer?.observe(clip)
+    if (allowBelow) view.addEventListener('scroll', measure, true)
     cleanupRef.current = () => {
       stopWatchingMoves()
       observer?.disconnect()
+      if (allowBelow) view.removeEventListener('scroll', measure, true)
     }
-  }, [])
+  }, [allowBelow])
 
   const measuredRef = useCallback((node: T | null) => {
     nodeRef.current = node
@@ -155,5 +170,5 @@ export function useRoomAbove<T extends HTMLElement>(): [(node: T | null) => void
     }
   }, [watchNode])
 
-  return [measuredRef, room]
+  return [measuredRef, position.room, position.side]
 }

@@ -97,9 +97,9 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-function Overlay() {
-  const [roomRef, room] = useRoomAbove<HTMLDivElement>()
-  return <div ref={roomRef} data-testid="overlay" data-room={room ?? 'unmeasured'} />
+function Overlay({ allowBelow = false }: { allowBelow?: boolean }) {
+  const [roomRef, room, side] = useRoomAbove<HTMLDivElement>({ allowBelow })
+  return <div ref={roomRef} data-testid="overlay" data-room={room ?? 'unmeasured'} data-side={side} />
 }
 
 /** A page that clips its overflow, holding a positioned composer the overlay opens above. */
@@ -116,6 +116,45 @@ function Page({ clips = true, children }: { clips?: boolean; children: ReactNode
 const room = () => screen.getByTestId('overlay').dataset.room
 
 describe('useRoomAbove', () => {
+  it.each([
+    { top: 120, bottom: 240, side: 'bottom', available: 444 },
+    { top: 500, bottom: 620, side: 'top', available: 384 },
+  ])('opens on the roomier side of an inline editor at $top', ({ top, bottom, side, available }) => {
+    // A stopped first turn is edited just under the transcript header. Capping
+    // a bottom-full menu there used to leave only a thin, unusable strip.
+    setRect('page', { top: 100, bottom: 700 })
+    setRect('composer', { top, bottom })
+    render(<Page><Overlay allowBelow /></Page>)
+
+    expect(screen.getByTestId('overlay').dataset.side).toBe(side)
+    expect(room()).toBe(String(available))
+  })
+
+  it('bounds the room by both the clipping panel and the viewport', () => {
+    setRect('page', { top: -100, bottom: 2000 })
+    setRect('composer', { top: 120, bottom: 240 })
+    render(<Page><Overlay allowBelow /></Page>)
+
+    expect(room()).toBe(String(window.innerHeight - 240 - 16))
+  })
+
+  it('reselects the side and height when an inline editor grows or scrolls', () => {
+    setRect('page', { top: 100, bottom: 700 })
+    setRect('composer', { top: 120, bottom: 240, width: 600, height: 120 })
+    render(<Page><Overlay allowBelow /></Page>)
+    expect(screen.getByTestId('overlay').dataset.side).toBe('bottom')
+
+    setRect('composer', { top: 450, bottom: 650, width: 600, height: 200 })
+    notifyResizeObservers()
+    expect(screen.getByTestId('overlay').dataset.side).toBe('top')
+    expect(room()).toBe('334')
+
+    setRect('composer', { top: 110, bottom: 310, width: 600, height: 200 })
+    act(() => { screen.getByTestId('page').dispatchEvent(new Event('scroll')) })
+    expect(screen.getByTestId('overlay').dataset.side).toBe('bottom')
+    expect(room()).toBe('374')
+  })
+
   it('leaves the room from the overlay bottom edge to the top of the clipping page, less an 8px gap', () => {
     // The #1587 layout: the page starts under the 52px tab bar and the slash
     // menu's bottom edge sits 8px above a composer centred on the page.
