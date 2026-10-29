@@ -1164,7 +1164,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.title': '設定',
   'settings.tab.providers': '模型設定',
   'settings.tab.permissions': '許可權',
-  'settings.tab.activity': '個人主頁',
+  'settings.tab.activity': 'Token 用量',
   'settings.tab.general': '通用',
   'settings.general.pageDescription': '外觀、語言與 Agent 的預設行為。',
   "settings.tab.h5Access": "手機連線",
@@ -1315,7 +1315,7 @@ export const zh: Record<TranslationKey, string> = {
   'pet.window.untitledSession': '未命名任務',
 
   // Settings > Usage
-  'settings.activity.title': '個人主頁',
+  'settings.activity.title': 'Token 用量',
   'settings.activity.profileTitle': '個人資料',
   'settings.activity.avatarAlt': '{name} 的頭像',
   'settings.activity.profilePrivacy': '僅本地',

@@ -1162,7 +1162,7 @@ export const zh: Record<TranslationKey, string> = {
   'settings.title': '设置',
   'settings.tab.providers': '模型配置',
   'settings.tab.permissions': '权限',
-  'settings.tab.activity': '个人主页',
+  'settings.tab.activity': 'Token 用量',
   'settings.tab.general': '通用',
   'settings.general.pageDescription': '外观、语言和 Agent 的默认行为。',
   "settings.tab.h5Access": "手机连接",
@@ -1313,7 +1313,7 @@ export const zh: Record<TranslationKey, string> = {
   'pet.window.untitledSession': '未命名任务',
 
   // Settings > Usage
-  'settings.activity.title': '个人主页',
+  'settings.activity.title': 'Token 用量',
   'settings.activity.profileTitle': '个人资料',
   'settings.activity.avatarAlt': '{name} 的头像',
   'settings.activity.profilePrivacy': '仅本地',
