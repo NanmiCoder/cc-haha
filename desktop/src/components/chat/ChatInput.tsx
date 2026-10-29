@@ -1882,6 +1882,7 @@ export function ChatInput({ variant = 'default', compact = false, sessionId, vis
                   sessionId={activeTabId}
                   chatState={chatState}
                   messageCount={messageCount}
+                  contentRevision={sessionState?.historyMutationEpoch ?? 0}
                   runtimeSelectionKey={runtimeSelectionKey}
                   fallbackModelLabel={runtimeModelLabel}
                   compact={useCompactControls}
