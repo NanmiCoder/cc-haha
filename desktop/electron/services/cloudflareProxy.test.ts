@@ -92,17 +92,22 @@ describe('Cloudflare proxy transport', () => {
     const transport = await start(proxy)
     const payload = Buffer.alloc(2 * 1024 * 1024, 0xa5)
     const socket = connectAddress(transport.edgeAddresses[0]!, 1024)
-    const receiving = readBytes(socket, payload.length)
     await once(socket, 'connect')
-    const drained = once(socket, 'drain')
-    expect(socket.write(payload)).toBe(false)
     socket.pause()
-    await new Promise(resolve => setTimeout(resolve, 10))
-    socket.resume()
-    await drained
+    expect(socket.isPaused()).toBe(true)
+    const receiving = readBytes(socket, payload.length)
+    // A runtime may flush the entire write immediately without emitting drain.
+    const drained = socket.write(payload) ? undefined : once(socket, 'drain')
+    const resuming = new Promise<void>(resolve => {
+      setTimeout(() => {
+        socket.resume()
+        resolve()
+      }, 10)
+    })
+    const [received] = await Promise.all([receiving, drained, resuming])
     // Vitest deep equality enumerates millions of Buffer entries and can
     // exhaust the test deadline. Native equality still checks every byte.
-    expect((await receiving).equals(payload)).toBe(true)
+    expect(received.equals(payload)).toBe(true)
     socket.destroy()
   })
 
