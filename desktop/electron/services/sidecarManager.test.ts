@@ -374,6 +374,30 @@ describe('Electron sidecar manager', () => {
     }
   })
 
+  it('redacts JSON and escaped multiline adapter credentials before writing the host log', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cc-haha-feishu-host-'))
+    const logPath = path.join(dir, 'electron-host.log')
+    const credentials = {
+      app_id: 'fixture-app-id', AppSecret: 'fixture-app-secret',
+      nested: { TOKEN: 'fixture-token', api_key: 'fixture-api-key', Password: 'fixture-password', Authorization: 'Basic fixture-auth' },
+    }
+    const json = JSON.stringify(credentials)
+    const error = `AxiosError: Request failed with status code 400\n  method: 'post', status: 400,\n  url: '/open-apis/auth/v3/tenant_access_token/internal',\n  data: ${JSON.stringify(json)}\n  at request (adapter.ts:42:7)`
+    try {
+      appendHostDiagnostic(logPath, `[claude-adapters:feishu] [stdout] ${json}`)
+      appendHostDiagnostic(logPath, `[claude-adapters:feishu] [stderr] ${error}`)
+      const contents = readFileSync(logPath, 'utf-8')
+      for (const secret of ['fixture-app-id', 'fixture-app-secret', 'fixture-token', 'fixture-api-key', 'fixture-password', 'fixture-auth']) {
+        expect(contents).not.toContain(secret)
+      }
+      for (const safe of ['[stdout]', '[stderr]', 'AxiosError', 'post', '400', '/open-apis/auth/v3/tenant_access_token/internal', 'adapter.ts:42:7']) {
+        expect(contents).toContain(safe)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('creates the Electron diagnostics directory with private permissions', () => {
     if (process.platform === 'win32') return
     const dir = mkdtempSync(path.join(tmpdir(), 'cc-haha-electron-host-mode-'))

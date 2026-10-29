@@ -2,7 +2,6 @@ import { expect, test } from 'bun:test'
 import { dailyCron } from './operations'
 import {
   dayTimeLabel,
-  editableSchedule,
   isClockValid,
   latestByTask,
   latestRunLine,
@@ -14,6 +13,8 @@ import {
   runDuration,
   runResultLine,
   scheduleParts,
+  taskScheduleParts,
+  taskNextRunLabel,
   type RunSummary,
 } from './schedulesView'
 
@@ -28,7 +29,7 @@ const run = (patch: Partial<RunSummary>): RunSummary => ({
   ...patch,
 })
 
-test('only daily and weekday HH:mm crons are understood', () => {
+test('schedule captions cover desktop frequencies without changing their meaning', () => {
   expect(parseDailyCron('0 9 * * *')).toEqual({ hour: 9, minute: 0, weekdays: false })
   expect(parseDailyCron('30 23 * * 1-5')).toEqual({ hour: 23, minute: 30, weekdays: true })
   for (const cron of ['0 10 * * 1', '*/15 * * * *', '0 9 1 * *', '60 9 * * *', '0 24 * * *', ''])
@@ -37,7 +38,10 @@ test('only daily and weekday HH:mm crons are understood', () => {
   expect(scheduleParts('0 18 * * 5')).toEqual({ repeat: '每周五', time: '18:00' })
   expect(scheduleParts('0 10 * * 1,3,5')).toEqual({ repeat: '每周一、三、五', time: '10:00' })
   expect(scheduleParts('0 10 * * 0,6')).toEqual({ repeat: '每周六、日', time: '10:00' })
-  expect(scheduleParts('*/15 * * * *')).toBeNull()
+  expect(scheduleParts('*/15 * * * *')).toEqual({ repeat: '每 15 分钟', time: '' })
+  expect(scheduleParts('30 */4 * * *')).toEqual({ repeat: '每 4 小时', time: '第 30 分钟' })
+  expect(scheduleParts('0 9 28 * *')).toEqual({ repeat: '每月 28 号', time: '09:00' })
+  expect(scheduleParts('0 9 1,15 * *')).toBeNull()
 })
 
 test('next run rolls to tomorrow once today has passed, and skips weekends for workdays', () => {
@@ -161,13 +165,20 @@ test('time validation matches the cron builder exactly', () => {
     })())
 })
 
-test('editing keeps a known schedule and starts custom crons from daily 09:00', () => {
-  expect(editableSchedule('30 23 * * *')).toEqual({ weekdays: false, time: '23:30', custom: false })
-  expect(editableSchedule('5 9 * * 1-5')).toEqual({ weekdays: true, time: '09:05', custom: false })
-  expect(editableSchedule('0 10 * * 1')).toEqual({ weekdays: false, time: '09:00', custom: true })
-  // Round trip through the cron builder used by create/save.
-  const edit = editableSchedule('5 9 * * 1-5')
-  expect(dailyCron(edit.time, edit.weekdays)).toBe('5 9 * * 1-5')
+test('explicit plans display their own timezone and use server occurrences, including one-time completion', () => {
+  const schedule = { kind: 'once' as const, runAt: '2035-10-27T01:00:00Z', timeZone: 'Asia/Shanghai' }
+  const task = { id: 'once', prompt: 'check', cron: '', schedule, createdAt: 0 }
+  expect(taskScheduleParts(task)).toEqual({ repeat: '仅一次', time: '2035-10-27 09:00' })
+  const now = new Date('2035-10-26T00:00:00Z')
+  expect(nextRunAt(task, now)).toEqual(new Date(schedule.runAt))
+  expect(nextRunAt({ ...task, scheduleState: 'completed' }, now)).toBeNull()
+  expect(nextRunAt({ ...task, enabled: false }, now)).toBeNull()
+  expect(nextRunAt({ ...task, schedule: { kind: 'cron', expression: '0 9 * * *', timeZone: 'America/New_York' }, nextRunAt: Date.parse('2035-10-26T13:00:00Z') }, now)).toEqual(new Date('2035-10-26T13:00:00Z'))
+  // An older computer without an occurrence must not be guessed using the phone's timezone.
+  expect(nextRunAt({ ...task, schedule: undefined, cron: '0 9 * * *' }, now)).toBeNull()
+  const boundary = new Date('2035-10-26T23:00:00Z')
+  expect(taskNextRunLabel(task, new Date(schedule.runAt), boundary)).toBe('今天 09:00')
+  expect(latestRunLine(run({}), task, boundary).text.endsWith('下次今天 09:00')).toBe(true)
 })
 
 test('latest run per task keeps the newest start', () => {

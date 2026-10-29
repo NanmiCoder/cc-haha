@@ -5,7 +5,6 @@ import {
   BookOpen,
   Bot,
   Box,
-  ChartNoAxesColumn,
   HeartPulse,
   Info,
   MessageSquare,
@@ -18,6 +17,7 @@ import {
   Server,
   SlidersHorizontal,
   SquareTerminal,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../i18n'
@@ -51,6 +51,7 @@ export function Settings() {
 type SettingsNavEntry = { tab: SettingsTab; icon: LucideIcon; label: TranslationKey }
 
 const SETTINGS_NAV: SettingsNavEntry[] = [
+  { tab: 'activity', icon: UserRound, label: 'settings.tab.activity' },
   { tab: 'providers', icon: Server, label: 'settings.tab.providers' },
   { tab: 'general', icon: SlidersHorizontal, label: 'settings.tab.general' },
   { tab: 'voice', icon: Mic, label: 'settings.tab.voice' },
@@ -64,7 +65,6 @@ const SETTINGS_NAV: SettingsNavEntry[] = [
   { tab: 'plugins', icon: Puzzle, label: 'settings.tab.plugins' },
   { tab: 'pets', icon: PawPrint, label: 'settings.tab.pets' },
   { tab: 'computerUse', icon: MousePointer2, label: 'settings.tab.computerUse' },
-  { tab: 'activity', icon: ChartNoAxesColumn, label: 'settings.tab.activity' },
   { tab: 'diagnostics', icon: HeartPulse, label: 'settings.tab.diagnostics' },
 ]
 

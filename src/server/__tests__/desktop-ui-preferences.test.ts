@@ -788,6 +788,46 @@ describe('desktop UI preferences API', () => {
     })
   })
 
+  test('reads a profile projection with an inline avatar without other desktop preferences', async () => {
+    const service = new DesktopUiPreferencesService()
+    await service.updateProfilePreferences({ displayName: 'Local Operator', subtitle: 'operator.example' })
+    await service.updateProjectDisplayName({ projectKey: '/private/workspace', displayName: 'Private project' })
+    await service.updateProfileAvatar(new Uint8Array([255, 216, 255]), 'image/jpeg')
+    const before = await readDesktopUiFile()
+    const request = makeRequest('GET', '/api/desktop-ui/preferences/profile')
+    const response = await handleDesktopUiApi(request.req, request.url, request.segments)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Cache-Control')).toBe('no-store')
+    expect(await response.json()).toEqual({
+      profile: { displayName: 'Local Operator', subtitle: 'operator.example', avatarDataUrl: 'data:image/jpeg;base64,/9j/' },
+    })
+    expect(await readDesktopUiFile()).toEqual(before)
+  })
+
+  test('reads a default profile when no profile or avatar has been saved', async () => {
+    const request = makeRequest('GET', '/api/desktop-ui/preferences/profile')
+    const response = await handleDesktopUiApi(request.req, request.url, request.segments)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({
+      profile: { displayName: 'cc-haha', subtitle: 'github.com/NanmiCoder/cc-haha', avatarDataUrl: null },
+    })
+  })
+
+  test('keeps the profile readable when its managed avatar is missing or exceeds the upload limit', async () => {
+    const service = new DesktopUiPreferencesService()
+    await service.updateProfileAvatar(new Uint8Array([255, 216, 255]), 'image/jpeg')
+    const avatarPath = path.join(tmpDir, 'cc-haha', 'profile', 'avatar.jpg')
+    await fs.unlink(avatarPath)
+    const read = async () => {
+      const request = makeRequest('GET', '/api/desktop-ui/preferences/profile')
+      return handleDesktopUiApi(request.req, request.url, request.segments)
+    }
+    expect(await (await read()).json()).toMatchObject({ profile: { avatarDataUrl: null } })
+    await fs.writeFile(avatarPath, new Uint8Array(2_000_001))
+    expect(await (await read()).json()).toMatchObject({ profile: { avatarDataUrl: null } })
+  })
+
   test('persists profile preferences and avatar uploads through the API', async () => {
     const profileReq = makeRequest('PUT', '/api/desktop-ui/preferences/profile', {
       displayName: '  Local Operator  ',

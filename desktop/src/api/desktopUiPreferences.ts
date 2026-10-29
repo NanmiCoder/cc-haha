@@ -16,6 +16,12 @@ export type DesktopProfilePreferences = {
   avatarUpdatedAt: string | null
 }
 
+export type SharedProfile = {
+  displayName: string
+  subtitle: string
+  avatarDataUrl: string | null
+}
+
 export type DesktopPetPreferences = {
   enabled: boolean
   selectedPetId: string
@@ -57,6 +63,10 @@ export type ProjectDisplayNameUpdateResponse = {
 }
 
 export const desktopUiPreferencesApi = {
+  getProfile() {
+    return api.get<{ profile: SharedProfile }>('/api/desktop-ui/preferences/profile')
+  },
+
   getPreferences() {
     return api.get<DesktopUiPreferencesResponse>('/api/desktop-ui/preferences')
   },

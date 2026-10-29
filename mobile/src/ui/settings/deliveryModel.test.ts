@@ -18,6 +18,7 @@ import {
   runTestNotification,
   testNotificationContent,
   noPushTokenNote,
+  noHostTestNote,
   testNotificationNote,
   versionLabel,
   type DeliveryInput,
@@ -66,20 +67,42 @@ describe('system permission mapping', () => {
 })
 
 describe('delivery card', () => {
+  test('missing push build configuration is not blamed on computer connectivity or notification permission', () => {
+    const push = { status: 'unsupported', issue: 'deviceNotConfigured' } as const
+    const card = deliveryStatus(input({ push }))
+    expect(card.title).toBe('此版本暂不支持后台推送')
+    expect(card.rows[1].value).toBe('当前版本暂不支持')
+    expect(deliveryNote(push)).toContain('无需重复修改手机通知权限')
+    expect(deliveryNote(push)).not.toContain('检查连接')
+    expect(card.actions.some((action) => action.kind === 'retry')).toBe(false)
+  })
+
+  test('temporary network and phone service failures offer a recheck with distinct explanations', () => {
+    for (const issue of ['network', 'deviceUnavailable'] as const) {
+      const push = { status: 'error', issue } as const
+      expect(deliveryStatus(input({ push })).actions.some((action) => action.kind === 'retry')).toBe(true)
+    }
+    expect(deliveryNote({ status: 'error', issue: 'deviceUnavailable' })).toContain('手机暂时无法连接系统推送服务')
+    expect(deliveryNote({ status: 'error', issue: 'authorization' })).toContain('授权已失效')
+    expect(deliveryNote({ status: 'unsupported', issue: 'hostUnsupported' })).toContain('更新电脑端')
+    expect(deliveryNote({ status: 'error', issue: 'storage' })).toContain('无法保存')
+    expect(deliveryNote({ status: 'notConfigured' })).toContain('测试手机通知不能验证电脑推送')
+  })
+
   test('everything on: leaving the app still gets reminders', () => {
     const card = deliveryStatus(input())
     expect(card.state).toBe('ok')
-    expect(card.title).toBe('离开 App 也能收到提醒')
+    expect(card.title).toBe('通知已就绪')
     expect(card.rows.map((row) => row.key)).toEqual(['system', 'push', 'live'])
     expect(values()).toEqual([
       '系统通知:已允许:ok',
-      '电脑推送:MacBook Pro 已配好:ok',
+      '电脑推送:MacBook Pro 已开启:ok',
       '锁屏实时活动:已开启:ok',
     ])
-    expect(card.subtitle).toBe('三环都通了')
-    // iOS 的测试按钮带纸飞机
+    expect(card.subtitle).toBe('离开 App 后也可接收电脑发来的提醒。')
+    // 测试仅由详情里的按钮触发
     expect(card.actions).toEqual([
-      { kind: 'test', label: '发一条测试通知', look: 'secondary', icon: 'send' },
+      { kind: 'test', label: '测试通知', look: 'secondary' },
     ])
     expect(card.guide).toBe(false)
   })
@@ -87,19 +110,17 @@ describe('delivery card', () => {
   test('iOS: lock screen not confirmed keeps the first two rings only in the subtitle', () => {
     const card = deliveryStatus(input({ decisions: false }))
     expect(card.state).toBe('ok')
-    expect(card.subtitle).toBe('系统通知和电脑推送都通了')
+    expect(card.subtitle).toBe('离开 App 后也可接收电脑发来的提醒。')
   })
 
-  test('Android has two rings and names FCM', () => {
+  test('Android shows system and computer status without provider jargon', () => {
     const card = deliveryStatus(input({ platform: 'android' }))
     expect(card.rows.map((row) => row.key)).toEqual(['system', 'push'])
-    expect(card.rows[1].value).toBe('MacBook Pro 已配好 FCM')
+    expect(card.rows[1].value).toBe('MacBook Pro 已开启')
     expect(card.state).toBe('ok')
-    expect(card.title).toBe('离开 App 也能收到提醒')
-    expect(card.subtitle).toBe('两环都通了')
-    // Android 的测试按钮没有图标（S4）
-    expect(card.actions).toEqual([{ kind: 'test', label: '发一条测试通知', look: 'secondary' }])
-    expect(card.actions[0].icon).toBeUndefined()
+    expect(card.title).toBe('通知已就绪')
+    expect(card.subtitle).toBe('离开 App 后也可接收电脑发来的提醒。')
+    expect(card.actions).toEqual([{ kind: 'test', label: '测试通知', look: 'secondary' }])
   })
 
   test('system notifications denied: blocked, only the settings button remains', () => {
@@ -110,15 +131,15 @@ describe('delivery card', () => {
       })
     )
     expect(card.state).toBe('blocked')
-    expect(card.title).toBe('离开 App 后收不到提醒')
-    expect(card.subtitle).toBe('打开 App 时照常能看到')
+    expect(card.title).toBe('通知未开启')
+    expect(card.subtitle).toBe('开启系统通知，才能在离开 App 后收到提醒。')
     expect(values({ permission: { status: 'denied', canAskAgain: false }, push: { status: 'permissionRequired' } })).toEqual([
       '系统通知:已关闭:bad',
       '电脑推送:要先允许系统通知:warn',
       '锁屏实时活动:只在 App 打开时更新:off',
     ])
     expect(card.actions).toEqual([
-      { kind: 'settings', label: '去系统设置打开通知', look: 'primary' },
+      { kind: 'settings', label: '打开系统设置', look: 'primary' },
     ])
   })
 
@@ -137,7 +158,7 @@ describe('delivery card', () => {
       input({ permission: { status: 'undetermined', canAskAgain: true } })
     )
     expect(card.state).toBe('blocked')
-    expect(card.subtitle).toBe('先开启系统通知')
+    expect(card.subtitle).toBe('开启系统通知，才能在离开 App 后收到提醒。')
     expect(card.rows[0]).toMatchObject({ value: '还没开启', tone: 'warn' })
     expect(card.actions).toEqual([{ kind: 'request', label: '开启通知', look: 'primary' }])
   })
@@ -145,7 +166,7 @@ describe('delivery card', () => {
   test('desktop without APNs / FCM: blocked, shows the setup guide', () => {
     const card = deliveryStatus(input({ push: { status: 'notConfigured' } }))
     expect(card.state).toBe('blocked')
-    expect(card.rows[1]).toMatchObject({ value: 'MacBook Pro 还没配', tone: 'warn' })
+    expect(card.rows[1]).toMatchObject({ value: 'MacBook Pro 未设置', tone: 'warn' })
     expect(card.guide).toBe(true)
     // 系统通知是通的，测试按钮仍可用
     expect(card.actions[0].kind).toBe('test')
@@ -155,7 +176,7 @@ describe('delivery card', () => {
     const row = (status: PushState) =>
       deliveryStatus(input({ push: { status } })).rows[1]
     expect(row('unsupported')).toMatchObject({ value: '这台设备暂不支持', tone: 'warn' })
-    expect(row('error')).toMatchObject({ value: '没能登记', tone: 'bad' })
+    expect(row('error')).toMatchObject({ value: '连接失败', tone: 'bad' })
     expect(row('loading')).toMatchObject({ value: '检查中…', tone: 'off' })
     expect(deliveryStatus(input({ push: undefined })).rows[1].value).toBe('检查中…')
   })
@@ -175,7 +196,8 @@ describe('delivery card', () => {
   test('no computer connected: cannot be reached', () => {
     const card = deliveryStatus(input({ hasHost: false, hostName: undefined, push: undefined }))
     expect(card.state).toBe('blocked')
-    expect(card.subtitle).toBe('还没连接电脑')
+    expect(card.title).toBe('还未连接电脑')
+    expect(card.subtitle).toBe('连接电脑后，可接收任务提醒。')
     expect(card.rows[1]).toMatchObject({ value: '还没连接电脑', tone: 'off' })
     expect(card.guide).toBe(false)
   })
@@ -189,9 +211,9 @@ describe('delivery card', () => {
   })
 
   test('footnotes: only failed or unsupported push needs an extra line', () => {
-    expect(deliveryNote({ status: 'error', error: 'offline' })).toBe('offline')
-    expect(deliveryNote({ status: 'error' })).toContain('没能登记')
-    expect(deliveryNote({ status: 'unsupported' })).toContain('登记不了')
+    expect(deliveryNote({ status: 'error', error: 'APNs 403' })).toBe('无法连接电脑推送，请检查连接后重试。')
+    expect(deliveryNote({ status: 'error' })).toContain('检查连接')
+    expect(deliveryNote({ status: 'unsupported' })).toContain('暂不支持电脑推送')
     expect(deliveryNote({ status: 'registered' })).toBe('')
     expect(deliveryNote(undefined)).toBe('')
     expect(remindFootnote({ status: 'denied', canAskAgain: false })).toContain('App 打开时')
@@ -204,8 +226,8 @@ describe('delivery card', () => {
 describe('settings summaries and copy', () => {
   test('local fallback note says it only tests the system banner', () => {
     expect(testNotificationContent.title).toBe('测试通知 · cc-haha')
-    expect(testNotificationNote).toContain('还不支持远程测试')
-    expect(testNotificationNote).toContain('只能测试这台手机的系统通知横幅')
+    expect(testNotificationNote).toContain('升级电脑端')
+    expect(testNotificationNote).toContain('只测试手机通知，未验证电脑推送')
   })
 
   test('live activity row, computer count and version', () => {
@@ -227,6 +249,22 @@ describe('settings summaries and copy', () => {
 })
 
 describe('remote test notification', () => {
+  test('a build missing push configuration only tests the phone and explains that limitation', async () => {
+    let local = 0
+    let remote = 0
+    const result = await runTestNotification({
+      hostId: 'fixture',
+      getToken: async () => { throw { code: 'NOT_CONFIGURED' } },
+      postTest: async () => { remote++; return { status: 'sent' } },
+      scheduleLocal: async () => { local++ },
+    })
+    expect(result.via).toBe('local')
+    expect(result.note).toContain('此版本暂不支持后台推送')
+    expect(result.note).toContain('未验证电脑推送')
+    expect(local).toBe(1)
+    expect(remote).toBe(0)
+  })
+
   const results = {
     sent: pushTestNote({ status: 'sent' }),
     notConfigured: pushTestNote({ status: 'notConfigured' }),
@@ -234,13 +272,13 @@ describe('remote test notification', () => {
   }
 
   test('every server status has its own sentence', () => {
-    expect(results.sent).toBe('已发出，几秒内应该收到（App 在前台时不显示横幅，请先切到后台）')
-    expect(results.notConfigured).toContain('电脑还没配推送')
-    expect(results.noRegistration).toContain('这台手机还没登记到电脑')
+    expect(results.sent).toBe('电脑已发送测试通知，请回到手机主屏幕查看。')
+    expect(results.notConfigured).toContain('电脑推送尚未设置')
+    expect(results.noRegistration).toContain('电脑还未识别这台手机')
     expect(new Set(Object.values(results)).size).toBe(3)
-    expect(pushTestNote({ status: 'failed', error: 'APNs 403' })).toBe('APNs 403')
-    expect(pushTestNote({ status: 'failed' })).toContain('没有发出去')
-    expect(pushTestNote({ status: 'failed', error: '  ' })).toContain('没有发出去')
+    expect(pushTestNote({ status: 'failed', error: 'APNs 403' })).toBe('测试通知发送失败，请检查电脑推送设置后重试。')
+    expect(pushTestNote({ status: 'failed' })).toContain('发送失败')
+    expect(pushTestNote({ status: 'failed', error: '  ' })).toContain('发送失败')
   })
 
   const deps = (overrides: Partial<Parameters<typeof runTestNotification>[0]> = {}) => {
@@ -299,7 +337,8 @@ describe('remote test notification', () => {
     })
     const outcome = await runTestNotification(d)
     expect(outcome).toEqual({ via: 'local', note: noPushTokenNote })
-    expect(outcome.note).not.toContain('Firebase')
+    expect(outcome.note).not.toMatch(/Firebase|FCM|APNs|凭据/)
+    expect(outcome.note).toContain('未验证电脑推送')
     expect(calls).toEqual(['local'])
   })
 
@@ -322,7 +361,7 @@ describe('remote test notification', () => {
 
   test('no computer connected: only the local banner is possible', async () => {
     const { calls, deps: d } = deps({ hostId: undefined })
-    expect(await runTestNotification(d)).toEqual({ via: 'local', note: testNotificationNote })
+    expect(await runTestNotification(d)).toEqual({ via: 'local', note: noHostTestNote })
     expect(calls).toEqual(['local'])
   })
 })
@@ -360,7 +399,7 @@ describe('android channel rows', () => {
       ['completed', '任务完成'],
       ['errors', '出错或卡住'],
     ])
-    expect(channelFootnote).toBe('每一类是一个系统通知渠道，点进去在系统里改声音和震动。')
+    expect(channelFootnote).toBe('点选提醒类型，在系统设置中调整声音和震动。')
   })
 })
 

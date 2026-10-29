@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { ApiClient } from './client'
 import { connectHost, pairingMessage, type ConnectPhase } from './connectHost'
+import { buildSocketOptions } from './connection'
 
 function fixture(
   replies: unknown[],
@@ -107,6 +108,39 @@ test('native pairing waits for approval and accepts only the native Bearer contr
   expect(requests[1].body).toEqual({ id: 'pair', claimSecret: 'claim' })
   expect(result.credential).toBe('native_fake')
   expect(JSON.stringify(result.host)).not.toContain('fake-secret')
+})
+
+test.each(['ios', 'android'])('Tailscale Serve on a custom HTTPS port preserves native pairing and socket authorization on %s', async (platform) => {
+  const origin = 'https://workstation.fixture.ts.net:8443'
+  const requests: Parameters<typeof fixture>[1] = []
+  const phases: ConnectPhase[] = []
+  const result = await connectHost({
+    ...input(), platform, value: `${origin}/remote#pair=fake-secret`,
+    onStatus: (_value, phase) => phases.push(phase),
+  }, {
+    now: () => 100,
+    client: fixture([
+      { id: 'pair', claimSecret: 'claim' },
+      { status: 'approved', token: 'native_fake', tokenType: 'Bearer', deviceId: 'device', expiresAt: 200 },
+    ], requests),
+  })
+  expect(phases).toEqual(['requesting', 'approval'])
+  expect(requests.map(request => request.path)).toEqual(['/api/public-access/pair', '/api/public-access/claim'])
+  expect(requests[0].body).toMatchObject({ clientType: 'native', name: `cc-haha App · ${platform}` })
+  expect(result.host).toMatchObject({ url: origin, auth: 'remote' })
+  expect(JSON.stringify(result.host)).not.toContain('fake-secret')
+  expect(buildSocketOptions(result.host, result.credential, 'session', 'native')).toEqual({
+    url: 'wss://workstation.fixture.ts.net:8443/ws/session',
+    headers: { Authorization: 'Bearer native_fake', Origin: origin },
+  })
+})
+
+test('Tailscale HTTP addresses and a bare Serve origin cannot bypass device pairing', async () => {
+  const client = () => { throw new Error('must not contact') }
+  for (const value of ['http://100.101.102.103:17463', 'http://workstation.fixture.ts.net']) {
+    await expect(connectHost({ ...input(), value }, { client })).rejects.toThrow('HTTPS')
+  }
+  await expect(connectHost({ ...input(), value: 'https://workstation.fixture.ts.net' }, { client })).rejects.toThrow('完整配对链接')
 })
 
 test.each([

@@ -1,9 +1,8 @@
 import { parseCronExpression } from '../../utils/cron.js'
 import { ApiError } from '../middleware/errorHandler.js'
 
-export type TaskSchedule =
-  | { kind: 'once'; runAt: string; timeZone: string }
-  | { kind: 'cron'; expression: string; timeZone: string }
+import type { TaskSchedule } from '../../shared/taskSchedule.js'
+export type { TaskSchedule } from '../../shared/taskSchedule.js'
 
 const formatters = new Map<string, Intl.DateTimeFormat>()
 function formatter(timeZone: string): Intl.DateTimeFormat {

@@ -11,11 +11,13 @@ const { getStatsMock } = vi.hoisted(() => ({
 
 const {
   getPreferencesMock,
+  getProfileMock,
   updateProfilePreferencesMock,
   uploadProfileAvatarMock,
   deleteProfileAvatarMock,
 } = vi.hoisted(() => ({
   getPreferencesMock: vi.fn(),
+  getProfileMock: vi.fn(),
   updateProfilePreferencesMock: vi.fn(),
   uploadProfileAvatarMock: vi.fn(),
   deleteProfileAvatarMock: vi.fn(),
@@ -30,6 +32,7 @@ vi.mock('../api/activityStats', () => ({
 vi.mock('../api/desktopUiPreferences', () => ({
   desktopUiPreferencesApi: {
     getPreferences: getPreferencesMock,
+    getProfile: getProfileMock,
     updateProfilePreferences: updateProfilePreferencesMock,
     uploadProfileAvatar: uploadProfileAvatarMock,
     deleteProfileAvatar: deleteProfileAvatarMock,
@@ -105,6 +108,8 @@ describe('ActivitySettings', () => {
     getStatsMock.mockReset()
     getStatsMock.mockResolvedValue(activityResponse)
     getPreferencesMock.mockReset()
+    getProfileMock.mockReset()
+    getProfileMock.mockResolvedValue({ profile: { displayName: 'Connected profile', subtitle: 'From my computer', avatarDataUrl: 'data:image/png;base64,fixture' } })
     updateProfilePreferencesMock.mockReset()
     uploadProfileAvatarMock.mockReset()
     deleteProfileAvatarMock.mockReset()
@@ -197,6 +202,7 @@ describe('ActivitySettings', () => {
     await flushActivityLoad()
 
     expect(getStatsMock).toHaveBeenCalledWith('all')
+    expect(screen.getByRole('heading', { name: 'Personal homepage' })).toBeInTheDocument()
     expect(screen.getByText('cc-haha')).toBeInTheDocument()
     expect(screen.getByAltText('cc-haha avatar')).toHaveAttribute('src', '/app-icon.png')
     expect(screen.getByAltText('cc-haha avatar')).toHaveClass('scale-[1.28]')
@@ -392,16 +398,30 @@ describe('ActivitySettings', () => {
     expect(screen.queryByText('Selected day')).not.toBeInTheDocument()
   })
 
-  it('keeps the profile edit control out of screenshots until hover or keyboard focus', async () => {
+  it('makes profile editing discoverable without requiring hover', async () => {
     render(<ActivitySettings />)
 
     await flushActivityLoad()
 
     const editButton = screen.getByRole('button', { name: 'Edit profile' })
-    expect(editButton).toHaveClass('opacity-0')
-    expect(editButton).toHaveClass('group-hover/activity-profile:opacity-100')
-    expect(editButton).toHaveClass('focus-visible:opacity-100')
-    expect(editButton.closest('.group\\/activity-profile')).not.toBeNull()
+    expect(editButton).not.toHaveClass('opacity-0')
+    fireEvent.click(editButton)
+    expect(screen.getByRole('dialog', { name: 'Edit profile' })).toBeInTheDocument()
+  })
+
+  it('reads the connected profile projection in a browser without fetching private settings or exposing edit actions', async () => {
+    render(<ActivitySettings browserMode />)
+    await flushActivityLoad()
+
+    expect(getProfileMock).toHaveBeenCalledOnce()
+    expect(getPreferencesMock).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: 'Connected profile' })).toBeInTheDocument()
+    expect(screen.getByAltText('Connected profile avatar')).toHaveAttribute('src', 'data:image/png;base64,fixture')
+    expect(screen.getByAltText('Connected profile avatar')).toHaveClass('object-cover')
+    expect(screen.getByText('Usage from the connected computer. Edit your profile in the desktop app.')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Edit profile' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Share image' })).toBeEnabled()
+    expect(updateProfilePreferencesMock).not.toHaveBeenCalled()
   })
 
   it('places heatmap month labels by week without collisions or overhang', async () => {

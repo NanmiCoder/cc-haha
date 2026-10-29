@@ -29,24 +29,22 @@ describe('electron desktop host', () => {
   })
 
   it('routes public access through validated local IPC without exposing management in browsers', async () => {
-    const invoke = vi.fn().mockResolvedValue({ hasCredential: true })
+    const invoke = vi.fn().mockResolvedValue({ state: 'disabled' })
     const host = createElectronHost({ invoke, subscribe: vi.fn() })
-    await host.publicAccess.saveCredential('fixture-ngrok-token')
     await host.publicAccess.start(PUBLIC_ACCESS_CONSENT_VERSION)
     await host.publicAccess.setAutoStart(false)
     await host.publicAccess.stop()
-    expect(invoke).toHaveBeenNthCalledWith(1, ELECTRON_IPC_CHANNELS.publicAccessSaveCredential, 'fixture-ngrok-token')
-    expect(invoke).toHaveBeenNthCalledWith(2, ELECTRON_IPC_CHANNELS.publicAccessStart, PUBLIC_ACCESS_CONSENT_VERSION)
-    expect(invoke).toHaveBeenNthCalledWith(3, ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, false)
-    expect(invoke).toHaveBeenNthCalledWith(4, ELECTRON_IPC_CHANNELS.publicAccessStop, undefined)
+    expect(invoke).toHaveBeenNthCalledWith(1, ELECTRON_IPC_CHANNELS.publicAccessStart, PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(invoke).toHaveBeenNthCalledWith(2, ELECTRON_IPC_CHANNELS.publicAccessSetAutoStart, false)
+    expect(invoke).toHaveBeenNthCalledWith(3, ELECTRON_IPC_CHANNELS.publicAccessStop, undefined)
     const { browserHost } = await import('./browserHost')
     await expect(browserHost.publicAccess.getStatus()).rejects.toThrow('desktop app runtime')
   })
 
-  it('carries custom tunnel configuration through validated IPC and rejects unsafe local targets', async () => {
+  it('carries Tailscale Serve configuration through validated IPC and rejects unsafe local targets', async () => {
     const invoke = vi.fn().mockResolvedValue(null)
     const host = createElectronHost({ invoke, subscribe: vi.fn() })
-    const configuration = { mode: 'custom' as const, customUrl: 'https://relay.example.test', localPort: 17463, ngrokDomain: '' }
+    const configuration = { mode: 'tailscale' as const, customUrl: 'https://desktop.example.ts.net', localPort: 17463 }
     await host.publicAccess.configure(configuration)
     expect(invoke).toHaveBeenCalledWith(ELECTRON_IPC_CHANNELS.publicAccessConfigure, configuration)
     await expect(host.publicAccess.configure({ ...configuration, customUrl: 'http://relay.example.test' })).rejects.toThrow('Invalid Electron IPC payload')

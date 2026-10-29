@@ -1,6 +1,7 @@
 import { classifyPermission } from '../../state/notifyPromptGate'
 import type { LiveActivityMode } from '../../state/preferences'
 import type { PushState } from './settingsModel'
+import type { PushIssue } from '../../state/PushRegistrationContext'
 
 /** 系统通知权限；null 表示还没读到。 */
 export type NotificationPermission = 'granted' | 'denied' | 'undetermined'
@@ -33,12 +34,10 @@ export type DeliveryRow = {
   tone: RowTone
 }
 export type DeliveryAction = {
-  kind: 'request' | 'settings' | 'test'
+  kind: 'request' | 'settings' | 'test' | 'retry'
   label: string
   /** primary=墨色主按钮，secondary=灰底按钮，plain=无底文字按钮。 */
   look: 'primary' | 'secondary' | 'plain'
-  /** 按钮文字前的小图标；设计稿里只有 iOS 的「发一条测试通知」带纸飞机。 */
-  icon?: 'send'
 }
 export type Delivery = {
   /** checking=还在读状态，ok=离开 App 也能收到，blocked=离开 App 收不到。 */
@@ -54,7 +53,7 @@ export type Delivery = {
 export type DeliveryInput = {
   platform: 'ios' | 'android'
   permission: PermissionSnapshot | null
-  push: { status: PushState; error?: string } | undefined
+  push: { status: PushState; error?: string; issue?: PushIssue } | undefined
   /** 没有已连接的电脑时为 undefined。 */
   hostName: string | undefined
   hasHost: boolean
@@ -75,21 +74,31 @@ function pushRow(input: DeliveryInput): DeliveryRow {
   const base = { key: 'push', label: '电脑推送' } as const
   if (!input.hasHost) return { ...base, value: '还没连接电脑', tone: 'off' }
   const name = input.hostName ?? '这台电脑'
+  if (input.push?.issue === 'deviceNotConfigured')
+    return { ...base, value: '当前版本暂不支持', tone: 'warn' }
+  if (input.push?.issue === 'deviceUnavailable')
+    return { ...base, value: '手机推送服务暂不可用', tone: 'warn' }
+  if (input.push?.issue === 'hostUnsupported')
+    return { ...base, value: '需更新电脑端', tone: 'warn' }
+  if (input.push?.issue === 'authorization')
+    return { ...base, value: '需重新连接电脑', tone: 'warn' }
+  if (input.push?.issue === 'storage')
+    return { ...base, value: '登记信息无法保存', tone: 'bad' }
   switch (input.push?.status) {
     case 'registered':
       return {
         ...base,
-        value: `${name} 已配好${input.platform === 'android' ? ' FCM' : ''}`,
+        value: `${name} 已开启`,
         tone: 'ok',
       }
     case 'notConfigured':
-      return { ...base, value: `${name} 还没配`, tone: 'warn' }
+      return { ...base, value: `${name} 未设置`, tone: 'warn' }
     case 'permissionRequired':
       return { ...base, value: '要先允许系统通知', tone: 'warn' }
     case 'unsupported':
       return { ...base, value: '这台设备暂不支持', tone: 'warn' }
     case 'error':
-      return { ...base, value: '没能登记', tone: 'bad' }
+      return { ...base, value: '连接失败', tone: 'bad' }
     default:
       return { ...base, value: '检查中…', tone: 'off' }
   }
@@ -111,13 +120,6 @@ export function liveActivityRow(input: DeliveryInput): DeliveryRow {
   }
 }
 
-/** 全部环节都通了说「N 环都通了」；iOS 的锁屏实时活动不确定时只认前两环。 */
-function okSubtitle(rows: DeliveryRow[]) {
-  if (rows.every((row) => row.tone === 'ok'))
-    return rows.length >= 3 ? '三环都通了' : '两环都通了'
-  return '系统通知和电脑推送都通了'
-}
-
 export function deliveryStatus(input: DeliveryInput): Delivery {
   const system = systemRow(input.permission)
   const push = pushRow(input)
@@ -133,16 +135,19 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
       actions.push({ kind: 'request', label: '开启通知', look: 'primary' })
     actions.push({
       kind: 'settings',
-      label: '去系统设置打开通知',
+      label: '打开系统设置',
       look: permission.canAskAgain ? 'plain' : 'primary',
     })
   } else if (permission?.status === 'granted')
     actions.push({
       kind: 'test',
-      label: '发一条测试通知',
+      label: '测试通知',
       look: 'secondary',
-      icon: input.platform === 'ios' ? 'send' : undefined,
     })
+  if (permission?.status === 'granted' && input.hasHost &&
+    (input.push?.status === 'notConfigured' || (input.push?.status === 'error' &&
+      input.push.issue !== 'authorization' && input.push.issue !== 'storage')))
+    actions.push({ kind: 'retry', label: '重新检查', look: 'plain' })
 
   const guide = input.hasHost && input.push?.status === 'notConfigured'
   // 系统通知没开时结论已定，不必等推送登记；已允许才要等登记结果。
@@ -154,8 +159,8 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
   if (checking)
     return {
       state: 'checking',
-      title: '正在检查提醒',
-      subtitle: '稍等一下',
+      title: '正在检查通知',
+      subtitle: '正在获取系统权限和电脑推送状态。',
       rows,
       actions,
       guide,
@@ -163,21 +168,30 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
   if (permission?.status === 'granted' && input.push?.status === 'registered')
     return {
       state: 'ok',
-      title: '离开 App 也能收到提醒',
-      subtitle: okSubtitle(rows),
+      title: '通知已就绪',
+      subtitle: '离开 App 后也可接收电脑发来的提醒。',
       rows,
       actions,
       guide,
     }
   return {
     state: 'blocked',
-    title: '离开 App 后收不到提醒',
-    subtitle:
-      permission?.status === 'undetermined'
-        ? '先开启系统通知'
+    title:
+      permission.status !== 'granted'
+        ? '通知未开启'
         : !input.hasHost
-          ? '还没连接电脑'
-          : '打开 App 时照常能看到',
+          ? '还未连接电脑'
+          : input.push?.issue === 'deviceNotConfigured'
+            ? '此版本暂不支持后台推送'
+          : input.push?.status === 'notConfigured'
+            ? '电脑推送未设置'
+            : '推送暂不可用',
+    subtitle:
+      permission.status !== 'granted'
+        ? '开启系统通知，才能在离开 App 后收到提醒。'
+        : !input.hasHost
+          ? '连接电脑后，可接收任务提醒。'
+          : '暂时只能在 App 内查看提醒。',
     rows,
     actions,
     guide,
@@ -186,10 +200,24 @@ export function deliveryStatus(input: DeliveryInput): Delivery {
 
 /** 卡片下的补充说明：只有登记失败、设备不支持这两种需要多说一句。 */
 export function deliveryNote(
-  push: { status: PushState; error?: string } | undefined
+  push: DeliveryInput['push']
 ) {
-  if (push?.status === 'error') return push.error || '没能登记远程通知，请检查电脑连接。'
-  if (push?.status === 'unsupported') return '这台设备暂时登记不了远程通知。'
+  if (push?.issue === 'deviceNotConfigured')
+    return '此版本暂不支持后台推送，请在 App 内查看任务提醒。无需重复修改手机通知权限。'
+  if (push?.issue === 'deviceUnavailable')
+    return '手机暂时无法连接系统推送服务，请检查网络后重新检查。'
+  if (push?.issue === 'authorization')
+    return '电脑连接授权已失效，请在「你的电脑」中重新连接。'
+  if (push?.issue === 'hostUnsupported')
+    return '这台电脑的版本不支持推送登记，请更新电脑端。'
+  if (push?.issue === 'storage')
+    return '手机无法保存推送登记信息，请重启 App 后重新检查。'
+  if (push?.issue === 'unknown')
+    return '推送登记未完成，请重新检查。'
+  if (push?.status === 'notConfigured')
+    return '这台电脑尚未启用推送服务。目前可在 App 内查看提醒，测试手机通知不能验证电脑推送。'
+  if (push?.status === 'error') return '无法连接电脑推送，请检查连接后重试。'
+  if (push?.status === 'unsupported') return '当前设备或安装版本暂不支持电脑推送。'
   return ''
 }
 
@@ -210,8 +238,10 @@ export const testNotificationContent = {
 }
 
 /** 电脑还不支持远程测试（旧版桌面没有接口）时退回本地通知，要说清它只测了系统横幅。 */
-export const noPushTokenNote = `这个安装包拿不到系统推送凭据（没有配置 FCM / APNs，或者设备不支持），电脑推送这条链路没法测，已改发一条本地通知（${TEST_NOTIFICATION_DELAY_SECONDS} 秒后，回到主屏幕才会看到横幅）。`
-export const testNotificationNote = `这台电脑的版本还不支持远程测试，已改发一条本地通知（${TEST_NOTIFICATION_DELAY_SECONDS} 秒后，回到主屏幕才会看到横幅）。它只能测试这台手机的系统通知横幅，电脑推送要等一次真实提醒才能确认。`
+const localTestInstruction = `请回到手机主屏幕，${TEST_NOTIFICATION_DELAY_SECONDS} 秒后查看通知。此次只测试手机通知，未验证电脑推送。`
+export const noPushTokenNote = `暂时无法测试电脑推送。${localTestInstruction}`
+export const testNotificationNote = `请升级电脑端后再测试推送。${localTestInstruction}`
+export const noHostTestNote = `还未连接电脑。${localTestInstruction}`
 
 /** `POST /api/sessions/mobile-push/test` 的返回。 */
 export type PushTestResult = {
@@ -223,13 +253,13 @@ export type PushTestResult = {
 export function pushTestNote(result: PushTestResult): string {
   switch (result.status) {
     case 'sent':
-      return '已发出，几秒内应该收到（App 在前台时不显示横幅，请先切到后台）'
+      return '电脑已发送测试通知，请回到手机主屏幕查看。'
     case 'notConfigured':
-      return '电脑还没配推送，发不出去。点上面的「电脑推送怎么配」看怎么配。'
+      return '电脑推送尚未设置，请查看「推送设置说明」。'
     case 'noRegistration':
-      return '这台手机还没登记到电脑，请稍等片刻或重新打开 App 后再试。'
+      return '电脑还未识别这台手机，请重新连接后再试。'
     default:
-      return result.error?.trim() || '推送没有发出去，请稍后重试。'
+      return '测试通知发送失败，请检查电脑推送设置后重试。'
   }
 }
 
@@ -254,15 +284,17 @@ export async function runTestNotification(deps: {
 }): Promise<TestNotificationOutcome> {
   if (!deps.hostId) {
     await deps.scheduleLocal()
-    return { via: 'local', note: testNotificationNote }
+    return { via: 'local', note: noHostTestNote }
   }
   let token: string
   try {
     token = await deps.getToken()
-  } catch {
+  } catch (error) {
     // 拿不到系统推送凭据（没配 FCM / APNs 的安装包、模拟器、断网）：电脑那条链路没法测，
     // 只测本机横幅，并如实说明，不把原生层的英文报错甩给用户。
     await deps.scheduleLocal()
+    if ((error as { code?: string } | null)?.code === 'NOT_CONFIGURED')
+      return { via: 'local', note: `此版本暂不支持后台推送。${localTestInstruction}` }
     return { via: 'local', note: noPushTokenNote }
   }
   try {
@@ -311,7 +343,7 @@ export const channelRows = [
   { kind: 'errors', title: '出错或卡住' },
 ] as const
 
-export const channelFootnote = '每一类是一个系统通知渠道，点进去在系统里改声音和震动。'
+export const channelFootnote = '点选提醒类型，在系统设置中调整声音和震动。'
 
 /** 电脑组首行：英文名后补一个空格（MacBook Pro 的设置），中文名直接相连（书房电脑的设置）。 */
 export function computerSettingsTitle(name: string | undefined) {

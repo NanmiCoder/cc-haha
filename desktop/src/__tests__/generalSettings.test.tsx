@@ -1246,12 +1246,12 @@ describe('Settings > General tab', () => {
     expect(slider.closest('.settings-zoom-control')).toHaveStyle({ '--settings-zoom-range-progress': '40%' })
   })
 
-  it('opens the Token usage tab from Settings navigation above Diagnostics', () => {
+  it('opens the personal homepage from the first Settings navigation entry', () => {
     render(<Settings />)
 
-    const usageTab = screen.getByText('Token usage')
-    const diagnosticsTab = screen.getByText('Diagnostics')
-    expect((usageTab.compareDocumentPosition(diagnosticsTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    const usageTab = screen.getByText('Personal homepage')
+    const modelTab = screen.getByRole('button', { name: 'Model Settings' })
+    expect((usageTab.compareDocumentPosition(modelTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
 
     fireEvent.click(usageTab)
 
@@ -1631,19 +1631,36 @@ describe('Settings > General tab', () => {
     expect(desktopNotificationsMock.openDesktopNotificationSettings).toHaveBeenCalledTimes(1)
   })
 
+  it('starts phone onboarding with LAN and keeps advanced fields out of the first step', async () => {
+    useSettingsStore.setState({ h5Access: { enabled: true, token: 'onboarding-fixture-token', tokenPreview: 'onboarding…token', allowedOrigins: [], publicBaseUrl: 'http://192.168.1.10:3456', fixedPort: null, disconnectGraceSeconds: 30 } })
+    useUIStore.setState({ activeSettingsTab: 'h5Access' })
+    render(<Settings />)
+    expect(screen.getByRole('tab', { name: 'Same Wi-Fi' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByLabelText('Fixed port')).not.toBeVisible()
+    expect(await screen.findByAltText('H5 access QR code')).toBeVisible()
+    expect(screen.getByText('onboarding…token')).not.toBeVisible()
+    fireEvent.click(screen.getByText('Advanced connection settings'))
+    expect(screen.getByLabelText('Fixed port')).toBeVisible()
+    fireEvent.click(screen.getByRole('tab', { name: 'Away from home' }))
+    expect(screen.getByLabelText('Fixed port')).not.toBeVisible()
+    fireEvent.click(screen.getByRole('tab', { name: 'Same Wi-Fi' }))
+    expect(screen.getByLabelText('Fixed port')).toBeVisible()
+  })
+
   it('moves H5 access out of General into its own Settings tab', () => {
     render(<Settings />)
 
     fireEvent.click(screen.getByText('General'))
-    expect(screen.queryByRole('region', { name: 'H5 Access' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: 'Phone connection' })).not.toBeInTheDocument()
 
     const generalTab = screen.getByRole('button', { name: 'General' })
-    const h5Tab = screen.getByRole('button', { name: 'H5 Access' })
+    const h5Tab = screen.getByRole('button', { name: 'Phone connection' })
     expect((generalTab.compareDocumentPosition(h5Tab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
     fireEvent.click(h5Tab)
 
-    const section = screen.getByRole('region', { name: 'H5 Access' })
-    expect(within(section).getByLabelText('Enable H5 access')).not.toBeChecked()
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
+    expect(within(section).getByLabelText('Enable local connection')).not.toBeChecked()
     expect(within(section).getByText('Disabled')).toBeInTheDocument()
     expect(within(section).queryByText('Token preview')).not.toBeInTheDocument()
     expect(within(section).queryByRole('button', { name: 'Regenerate token' })).not.toBeInTheDocument()
@@ -1664,15 +1681,16 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
 
-    fireEvent.click(within(section).getByLabelText('Enable H5 access'))
-    const dialog = screen.getByRole('dialog', { name: 'Enable LAN H5 access?' })
-    expect(within(dialog).getByText(/desktop H5 app on your LAN address and port/i)).toBeInTheDocument()
+    fireEvent.click(within(section).getByLabelText('Enable local connection'))
+    const dialog = screen.getByRole('dialog', { name: 'Enable local connection?' })
+    expect(within(dialog).getByText(/Anyone with the connection QR code or link/i)).toBeInTheDocument()
 
     await act(async () => {
-      fireEvent.click(within(dialog).getByRole('button', { name: 'Enable H5 access' }))
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Enable local connection' }))
     })
 
     expect(useSettingsStore.getState().enableH5Access).toHaveBeenCalledTimes(1)
@@ -1694,12 +1712,13 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
-    fireEvent.click(within(section).getByLabelText('Enable H5 access'))
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
+    fireEvent.click(within(section).getByLabelText('Enable local connection'))
 
     await act(async () => {
-      fireEvent.click(within(screen.getByRole('dialog', { name: 'Enable LAN H5 access?' })).getByRole('button', { name: 'Enable H5 access' }))
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Enable local connection?' })).getByRole('button', { name: 'Enable local connection' }))
     })
 
     await within(section).findByAltText('H5 access QR code')
@@ -1730,8 +1749,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     expect(within(section).getByText('Generate a token to create the QR code.')).toBeInTheDocument()
     expect(within(section).getByText('Click Generate token to create a QR link that can be scanned.')).toBeInTheDocument()
@@ -1759,8 +1779,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     // No enable/regenerate click this session: everything comes from the
     // persisted token, so a desktop restart no longer loses the QR code.
@@ -1785,8 +1806,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Fixed port'), {
       target: { value: '28670' },
     })
@@ -1816,8 +1838,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Fixed port'), {
       target: { value: '99' },
     })
@@ -1841,8 +1864,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Fixed port'), {
       target: { value: '5061' },
     })
@@ -1865,8 +1889,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Disconnect grace (sec)'), {
       target: { value: '600' },
     })
@@ -1896,8 +1921,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Disconnect grace (sec)'), {
       target: { value: '2' },
     })
@@ -1929,8 +1955,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     const note = within(section).getByTestId('h5-access-fixed-port-restart-note')
     expect(note.textContent).toContain('28670')
@@ -1951,12 +1978,13 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
-    fireEvent.click(within(section).getByLabelText('Enable H5 access'))
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
+    fireEvent.click(within(section).getByLabelText('Enable local connection'))
 
     await act(async () => {
-      fireEvent.click(within(screen.getByRole('dialog', { name: 'Enable LAN H5 access?' })).getByRole('button', { name: 'Enable H5 access' }))
+      fireEvent.click(within(screen.getByRole('dialog', { name: 'Enable local connection?' })).getByRole('button', { name: 'Enable local connection' }))
     })
 
     fireEvent.click(within(section).getByRole('button', { name: 'Show token' }))
@@ -1978,8 +2006,9 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    fireEvent.click(screen.getByText('Phone connection'))
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     expect(within(section).getByLabelText('Access host / IP')).toHaveValue('https://phone.example/app')
     await act(async () => {
@@ -1997,9 +2026,10 @@ describe('Settings > General tab', () => {
     useSettingsStore.setState({ h5AccessError: 'H5 unavailable' })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
+    fireEvent.click(screen.getByText('Phone connection'))
 
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     expect(within(section).getByText('H5 unavailable')).toBeInTheDocument()
   })
 
@@ -2017,9 +2047,10 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
+    fireEvent.click(screen.getByText('Phone connection'))
 
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     expect(within(section).getByLabelText('Current port')).toHaveValue('54064')
     fireEvent.change(within(section).getByLabelText('Access host / IP'), {
       target: { value: '192.168.1.100' },
@@ -2050,9 +2081,10 @@ describe('Settings > General tab', () => {
     })
     render(<Settings />)
 
-    fireEvent.click(screen.getByText('H5 Access'))
+    fireEvent.click(screen.getByText('Phone connection'))
 
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Access host / IP'), {
       target: { value: 'https://phone.example/app' },
     })
@@ -2088,9 +2120,10 @@ describe('Settings > General tab', () => {
       },
     })
     render(<Settings />)
-    fireEvent.click(screen.getByText('H5 Access'))
+    fireEvent.click(screen.getByText('Phone connection'))
 
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     const banner = within(section).getByTestId('h5-access-stale-host-banner')
     expect(banner).toBeInTheDocument()
     expect(banner.textContent).toContain('192.168.1.207')
@@ -2125,9 +2158,10 @@ describe('Settings > General tab', () => {
       },
     })
     render(<Settings />)
-    fireEvent.click(screen.getByText('H5 Access'))
+    fireEvent.click(screen.getByText('Phone connection'))
 
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     expect(within(section).getByTestId('h5-access-proxy-note')).toBeInTheDocument()
     expect(within(section).queryByTestId('h5-access-stale-host-banner')).toBeNull()
   })
@@ -2158,9 +2192,10 @@ describe('Settings > General tab', () => {
       }),
     })
     render(<Settings />)
-    fireEvent.click(screen.getByText('H5 Access'))
+    fireEvent.click(screen.getByText('Phone connection'))
 
-    const section = screen.getByRole('region', { name: 'H5 Access' })
+    const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Access host / IP'), {
       target: { value: '10.255.255.254' },
     })

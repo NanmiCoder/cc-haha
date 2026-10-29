@@ -1,6 +1,7 @@
 import type { ApiClient } from './client'
 import type { HistoryEntry } from './types'
 import { formatDuration } from './dashboard'
+import type { TaskExecution, TaskNotificationConfig, TaskNotificationPolicy, TaskSchedule } from '../../../src/shared/taskSchedule'
 
 export type RewindMode = 'both' | 'conversation' | 'code'
 export type Checkpoint = {
@@ -254,6 +255,16 @@ export type ScheduledTask = {
   lastFiredAt?: string
   createdAt: number
   permissionMode?: string
+  schedule?: TaskSchedule
+  execution?: TaskExecution
+  revision?: number
+  nextRunAt?: number
+  scheduleState?: 'active' | 'paused' | 'completed'
+  model?: string
+  providerId?: string | null
+  useWorktree?: boolean
+  notificationPolicy?: TaskNotificationPolicy
+  notification?: TaskNotificationConfig
 }
 export type TaskRun = {
   id: string

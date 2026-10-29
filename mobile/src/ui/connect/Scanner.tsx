@@ -187,7 +187,7 @@ export function Scanner({
               textAlign: 'center',
             }}
           >
-            {'在电脑的 cc-haha 里打开\n「设置 → H5 访问」或「公网访问」'}
+            {'在电脑的 cc-haha 里打开\n「设置 → 手机连接」，选择局域网或 Tailscale'}
           </Text>
           {notice ? (
             // Absolutely placed under the copy so the scan frame never jumps.

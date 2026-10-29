@@ -1,46 +1,40 @@
 import { describe, expect, it } from 'vitest'
-import { isNgrokDevOrigin, isPublicAccessConfiguration, normalizeNgrokDomain, normalizePublicAccessOrigin } from './publicAccessConfiguration'
+import { buildTailscaleServeCommand, isPublicAccessConfiguration, normalizePublicAccessOrigin, normalizeTailscaleOrigin } from './publicAccessConfiguration'
 
-describe('external tunnel configuration', () => {
-  it('preserves HTTPS IP and port origins and canonicalizes domain names', () => {
-    expect(normalizePublicAccessOrigin(' https://Relay.Example.test/ ')).toBe('https://relay.example.test')
-    expect(normalizePublicAccessOrigin('https://203.0.113.25:8443')).toBe('https://203.0.113.25:8443')
-    expect(normalizePublicAccessOrigin('https://[2001:db8::25]')).toBe('https://[2001:db8::25]')
+describe('Tailscale Serve configuration', () => {
+  it('accepts private Serve HTTPS roots and preserves an alternate HTTPS port', () => {
+    expect(normalizeTailscaleOrigin(' https://Desktop.Example.ts.net/ ')).toBe('https://desktop.example.ts.net')
+    expect(normalizeTailscaleOrigin('https://desktop.example.ts.net:8443')).toBe('https://desktop.example.ts.net:8443')
+    expect(normalizeTailscaleOrigin('https://desktop.example.ts.net:443/')).toBe('https://desktop.example.ts.net')
   })
 
-  it('rejects URLs that would send credentials to a path, redirect, or insecure origin', () => {
-    for (const value of [undefined, null, '', 'http://relay.test', 'https:relay.test', 'https://u:p@relay.test', 'https://@relay.test', 'https://relay.test/path', 'https://relay.test/?', 'https://relay.test/#', 'https://relay.test/?token=secret', 'https://relay.test\\path', 'https://relay.\ntest', 'https://' + 'x'.repeat(2048)]) {
-      expect(normalizePublicAccessOrigin(value)).toBeNull()
+  it('rejects public lookalikes, raw CGNAT addresses, paths and credentials', () => {
+    for (const value of [undefined, null, '', 'http://desktop.example.ts.net', 'https:desktop.example.ts.net', 'http://100.101.102.103:17463', 'https://100.101.102.103', 'https://relay.example.com', 'https://ts.net', 'https://tailnet.ts.net', 'https://desktop.example.ts.net.evil.test', 'https://bad_label.example.ts.net', 'https://-bad.example.ts.net', 'https://desktop.example.ts.net:0', 'https://desktop.example.ts.net:65536', 'https://desktop.example.ts.net.', 'https://user:pass@desktop.example.ts.net', 'https://@desktop.example.ts.net', 'https://desktop.example.ts.net/remote', 'https://desktop.example.ts.net/?', 'https://desktop.example.ts.net/#', 'https://desktop.example.ts.net?token=secret', 'https://desktop.example.ts.net\\path', 'https://desktop.exa\nmple.ts.net']) {
+      expect(normalizeTailscaleOrigin(value)).toBeNull()
     }
   })
 
-  it('accepts only the public origin and fixed port, never a different local binding or commands', () => {
-    const config = { mode: 'custom', customUrl: 'https://relay.example.test', localPort: 17463, ngrokDomain: '' }
+  it('keeps legacy HTTPS parsing separate from the active Tailscale allowlist', () => {
+    expect(normalizePublicAccessOrigin('https://legacy.example.test:8443')).toBe('https://legacy.example.test:8443')
+    expect(normalizePublicAccessOrigin('https://[2001:db8::25]')).toBe('https://[2001:db8::25]')
+    expect(normalizePublicAccessOrigin('https://' + 'x'.repeat(2048))).toBeNull()
+    expect(normalizeTailscaleOrigin('https://legacy.example.test:8443')).toBeNull()
+  })
+
+  it('accepts only a Serve origin and nonprivileged loopback port without shell controls', () => {
+    const config = { mode: 'tailscale', customUrl: 'https://desktop.example.ts.net', localPort: 17463 }
     expect(isPublicAccessConfiguration(config)).toBe(true)
-    expect(isPublicAccessConfiguration({ mode: 'ngrok', customUrl: '', localPort: 17463, ngrokDomain: '' })).toBe(true)
-    for (const patch of [{ mode: 'cloudflare' }, { customUrl: '' }, { localPort: 1023 }, { localPort: 65536 }, { localPort: NaN }, { localPort: '17463' }, { localPort: 17463.5 }, { localHost: '0.0.0.0' }, { command: 'tunnel start' }]) {
+    expect(isPublicAccessConfiguration({ ...config, customUrl: '' })).toBe(true)
+    for (const patch of [{ mode: 'ngrok' }, { mode: 'custom' }, { customUrl: 'https://relay.example.test' }, { localPort: 1023 }, { localPort: 65536 }, { localPort: NaN }, { localPort: '17463' }, { localPort: 17463.5 }, { localHost: '0.0.0.0' }, { command: 'tunnel start' }, { ngrokDomain: '' }]) {
       expect(isPublicAccessConfiguration({ ...config, ...patch })).toBe(false)
     }
   })
 
-  it('requires a complete HTTPS registered domain with no nonstandard port, IP or wildcard', () => {
-    expect(normalizeNgrokDomain(' https://Registered.Example.test/ ')).toBe('https://registered.example.test')
-    for (const value of [undefined, null, '', 'registered.example.test', 'http://registered.example.test', 'https://registered.example.test:8443', 'https://127.0.0.1', 'https://[::1]', 'https://localhost', 'https://*.example.test', 'https://bad_label.example.test', 'https://registered.example.test/path', 'https://registered.example.test?token=x']) {
-      expect(normalizeNgrokDomain(value)).toBeNull()
-    }
-    const config = { mode: 'ngrok', customUrl: '', localPort: 17463, ngrokDomain: '' }
-    expect(isPublicAccessConfiguration({ ...config, ngrokDomain: 'https://registered.example.test' })).toBe(true)
-    for (const ngrokDomain of [undefined, null, 'registered.example.test', 'http://registered.example.test', 'https://registered.example.test:8443']) {
-      expect(isPublicAccessConfiguration({ ...config, ngrokDomain })).toBe(false)
-    }
-  })
-
-  it('identifies only assigned account dev domains as automatically reusable', () => {
-    for (const value of ['https://assigned-name.ngrok-free.app', 'https://assigned-name.ngrok-free.dev/']) {
-      expect(isNgrokDevOrigin(value)).toBe(true)
-    }
-    for (const value of [null, '', 'https://random.ngrok.app', 'https://random.ngrok.io', 'https://ngrok-free.dev', 'https://name.ngrok-free.app.evil.test', 'https://nested.name.ngrok-free.dev', 'https://name.ngrok-free.app:8443', 'http://name.ngrok-free.dev']) {
-      expect(isNgrokDevOrigin(value)).toBe(false)
-    }
+  it('generates only safe loopback Serve commands with the selected HTTPS port', () => {
+    expect(buildTailscaleServeCommand(17463)).toBe('tailscale serve --bg http://127.0.0.1:17463')
+    expect(buildTailscaleServeCommand(18321, 'https://desktop.example.ts.net:8443')).toBe('tailscale serve --bg --https=8443 http://127.0.0.1:18321')
+    expect(buildTailscaleServeCommand(17463, 'https://desktop.example.ts.net:443')).toBe('tailscale serve --bg http://127.0.0.1:17463')
+    for (const port of [0, 80, 65536, 17463.5, NaN, '17463;id']) expect(buildTailscaleServeCommand(port as number)).toBeNull()
+    for (const origin of ['https://example.com', 'https://desktop.example.ts.net/remote', 'https://desktop.example.ts.net;id']) expect(buildTailscaleServeCommand(17463, origin)).toBeNull()
   })
 })

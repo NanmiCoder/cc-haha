@@ -2,6 +2,7 @@
  * Scheduled Tasks REST API
  *
  * GET    /api/scheduled-tasks           — 获取任务列表
+ * GET    /api/scheduled-tasks/notification-capabilities — 通知渠道配置状态
  * POST   /api/scheduled-tasks           — 创建任务
  * GET    /api/scheduled-tasks/runs      — 获取所有任务的最近执行记录
  * GET    /api/scheduled-tasks/:id/runs  — 获取指定任务的执行记录
@@ -15,6 +16,7 @@ import { CronService } from '../services/cronService.js'
 import { cronScheduler } from '../services/cronScheduler.js'
 import { ApiError, errorResponse } from '../middleware/errorHandler.js'
 import { scheduledTaskEditableSchema } from '../../tools/ScheduledTaskTool/schema.js'
+import { getScheduledTaskNotificationCapabilities } from '../services/scheduledTaskNotificationCapabilities.js'
 
 const cronService = new CronService()
 const taskMutationSchema = scheduledTaskEditableSchema.extend({
@@ -37,6 +39,13 @@ export async function handleScheduledTasksApi(
     const method = req.method
     const taskId = segments[2] // /api/scheduled-tasks/:id  or "runs"
     const subResource = segments[3] // /api/scheduled-tasks/:id/runs
+
+    if (taskId === 'notification-capabilities') {
+      if (method !== 'GET' || segments.length !== 3 || _url.search) {
+        throw new ApiError(405, 'Notification capabilities are read-only', 'METHOD_NOT_ALLOWED')
+      }
+      return Response.json(await getScheduledTaskNotificationCapabilities())
+    }
 
     // ── GET /api/scheduled-tasks/runs ────────────────────────────────────
     if (method === 'GET' && taskId === 'runs' && subResource) {

@@ -26,20 +26,21 @@ type Props = {
  */
 export function TokenHero({ profile, totalTokens, activeDays, locale }: Props) {
   const t = useTranslation()
-  const { displayName, subtitle, avatarFile } = profile.profile
-  const avatarSrc = getProfileAvatarSource(profile.profile) ?? DEFAULT_AVATAR_SRC
+  const { displayName, subtitle } = profile.profile
+  const customAvatar = getProfileAvatarSource(profile.profile)
+  const avatarSrc = customAvatar ?? DEFAULT_AVATAR_SRC
   const href = getProfileSubtitleHref(subtitle)
   const total = formatTokenAmount(totalTokens, locale)
   const dayLabel = t(activeDays === 1 ? 'settings.activity.activeDaysOne' : 'settings.activity.activeDaysOther', { count: activeDays })
 
   return (
     <div className="group/activity-profile flex flex-wrap items-end justify-between gap-x-10 gap-y-8">
-      <div className="flex min-w-0 items-center gap-6">
-        <div className="h-32 w-32 shrink-0 overflow-hidden rounded-full bg-[var(--color-surface)] shadow-[0_0_0_6px_var(--color-surface),0_0_0_7px_var(--color-outline)]">
+      <div className="flex w-full min-w-0 items-center gap-4 @[560px]:w-auto @[560px]:gap-6">
+        <div className="h-16 w-16 shrink-0 overflow-hidden rounded-full bg-[var(--color-surface)] shadow-[0_0_0_6px_var(--color-surface),0_0_0_7px_var(--color-outline)] @[560px]:h-32 @[560px]:w-32">
           <img
             src={avatarSrc}
             alt={t('settings.activity.avatarAlt', { name: displayName })}
-            className={avatarFile ? 'h-full w-full object-cover' : DEFAULT_AVATAR_CLASS}
+            className={customAvatar ? 'h-full w-full object-cover' : DEFAULT_AVATAR_CLASS}
             onError={(event) => {
               event.currentTarget.src = DEFAULT_AVATAR_SRC
               event.currentTarget.className = DEFAULT_AVATAR_CLASS
@@ -51,16 +52,15 @@ export function TokenHero({ profile, totalTokens, activeDays, locale }: Props) {
             <h3 className="min-w-0 break-words text-[22px] font-semibold leading-snug tracking-[-0.01em] text-[var(--color-text-primary)]">
               {displayName}
             </h3>
-            <IconButton
+            {!profile.readOnly && <IconButton
               icon={<Pencil size={14} strokeWidth={1.75} aria-hidden="true" />}
               label={t('settings.activity.editProfile')}
               size="sm"
               tone="muted"
               disabledStyle="hide"
-              className="opacity-0 group-hover/activity-profile:opacity-100 focus-visible:opacity-100"
               onClick={profile.startEdit}
               disabled={profile.isLoading}
-            />
+            />}
           </div>
           {href ? (
             <a

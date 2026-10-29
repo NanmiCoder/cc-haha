@@ -385,7 +385,7 @@ async function handleModelsList(): Promise<Response> {
   if (await resolveClaudeOfficialRuntimeModel()) {
     return Response.json({ models: await getDesktopClaudeModelCatalog(), provider: null })
   }
-  return Response.json({ models: await getStandaloneModelList(), provider: null })
+  return Response.json({ models: await getStandaloneModelList(), provider: null, runtimeSource: 'standalone' })
 }
 
 // The models one built-in OAuth provider's account can use, whichever provider

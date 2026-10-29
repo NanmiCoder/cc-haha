@@ -63,16 +63,16 @@ export async function connectHost(
   if (host.auth === 'lan') {
     if (!credential)
       throw new Error(
-        '请输入电脑「设置 → H5 访问」中的访问令牌，或扫描完整二维码。'
+        '请输入电脑「设置 → 手机连接」中的访问令牌，或扫描完整二维码。'
       )
     input.onStatus('正在验证局域网连接…', 'verifying')
     await dependencies.client(host, credential).verify({ signal: input.signal })
   } else {
     if (input.platform === 'web')
-      throw new Error('公网配对需要使用原生 App。浏览器预览仅支持局域网。')
+      throw new Error('远程配对需要使用原生 App。浏览器预览仅支持局域网。')
     if (!parsed.pairSecret)
       throw new Error(
-        '请在电脑「设置 → 公网访问」生成并扫描配对二维码，或粘贴完整配对链接。'
+        '请在电脑「设置 → 手机连接 → 外出连接」生成并扫描二维码，或粘贴完整配对链接。'
       )
     const client = dependencies.client(host, '')
     input.onStatus('正在请求电脑授权…', 'requesting')
