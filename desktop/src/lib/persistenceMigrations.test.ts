@@ -6,10 +6,28 @@ import {
 } from './persistenceMigrations'
 import { WORKSPACE_STORAGE_VERSION } from './workspace/storageKey'
 import { CHAT_APPEARANCE_STORAGE_KEY, DEFAULT_CHAT_APPEARANCE } from './chatAppearance'
+import { PREVENT_SLEEP_STORAGE_KEY } from './preventSleepPreference'
 
 describe('desktop persistence migrations', () => {
   beforeEach(() => {
     window.localStorage.clear()
+  })
+
+  test('upgrades a frozen schema-6 install with prevent sleep off and preserves existing preferences', () => {
+    localStorage.setItem(DESKTOP_PERSISTENCE_VERSION_KEY, '6')
+    localStorage.setItem('cc-haha-theme', 'ink-blue')
+    localStorage.setItem('unrelated-user-key', 'keep')
+    expect(runDesktopPersistenceMigrations().migratedKeys).toContain(PREVENT_SLEEP_STORAGE_KEY)
+    expect(localStorage.getItem(PREVENT_SLEEP_STORAGE_KEY)).toBe('0')
+    expect(localStorage.getItem('cc-haha-theme')).toBe('ink-blue')
+    expect(localStorage.getItem('unrelated-user-key')).toBe('keep')
+    expect(runDesktopPersistenceMigrations().migratedKeys).not.toContain(PREVENT_SLEEP_STORAGE_KEY)
+    localStorage.setItem(PREVENT_SLEEP_STORAGE_KEY, '1')
+    runDesktopPersistenceMigrations()
+    expect(localStorage.getItem(PREVENT_SLEEP_STORAGE_KEY)).toBe('1')
+    localStorage.setItem(PREVENT_SLEEP_STORAGE_KEY, 'true')
+    runDesktopPersistenceMigrations()
+    expect(localStorage.getItem(PREVENT_SLEEP_STORAGE_KEY)).toBe('0')
   })
 
   test('upgrades a frozen schema-4 install with reading defaults without changing zoom or theme', () => {

@@ -9,6 +9,15 @@ import {
 } from './capabilities'
 
 describe('Electron IPC capabilities', () => {
+  it('accepts only boolean power preferences and denies the pet renderer access', () => {
+    const channel = ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning
+    expect(validateElectronIpcPayload(channel, true)).toBe(true)
+    expect(validateElectronIpcPayload(channel, false)).toBe(true)
+    for (const payload of [undefined, null, 'true', 1, {}, { enabled: true }]) {
+      expect(validateElectronIpcPayload(channel, payload)).toBe(false)
+    }
+    expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)
+  })
   it('validates migration paths and identities and keeps migration IPC unavailable to pet windows', () => {
     expect(validateElectronIpcPayload(ELECTRON_IPC_CHANNELS.migrationPrepare, { targetDir: 'D:\\cc-haha-data' })).toBe(true)
     for (const payload of [undefined, {}, { targetDir: '' }, { targetDir: '   ' }, { targetDir: 2 }, { targetDir: 'bad\u0000path' }, { targetDir: 'D:\\data', sourceDir: 'C:\\data' }]) {

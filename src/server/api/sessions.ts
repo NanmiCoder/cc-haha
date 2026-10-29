@@ -165,7 +165,7 @@ export async function handleSessionsApi(
       }
       return Response.json({ sessions: sessionId === 'mobile-status'
         ? await getMobileSessionActivity()
-        : listLiveSessionActivity() })
+        : listLiveSessionActivity({ includeTeamWorkers: url.searchParams.get('includeTeamWorkers') === '1' }) })
     }
 
     // Special collection route: /api/sessions/recent-projects

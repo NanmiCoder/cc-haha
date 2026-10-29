@@ -77,6 +77,11 @@ export const browserHost: DesktopHost = {
       unsupported('Native commands')
     },
   },
+  power: {
+    async setPreventSleepWhileRunning() {
+      unsupported('Preventing system sleep')
+    },
+  },
   clipboard: {
     async readText() {
       if (typeof navigator !== 'undefined' && navigator.clipboard?.readText) {

@@ -430,6 +430,9 @@ export type DesktopHost = {
   commands: {
     invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>
   }
+  power: {
+    setPreventSleepWhileRunning(enabled: boolean): Promise<void>
+  }
   clipboard: {
     readText(): Promise<string>
     writeText(text: string): Promise<void>

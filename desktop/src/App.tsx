@@ -9,6 +9,7 @@ import { installHiddenSessionRelease } from './stores/hiddenSessionRelease'
 import { installSessionTabLimit } from './stores/sessionTabLimit'
 import { useMobileShellLayout } from './components/mobile/mobileShellLayout'
 import { isDesktopRuntime } from './lib/desktopRuntime'
+import { usePowerSettingsStore } from './stores/powerSettingsStore'
 
 export function App() {
   return isPublicAccessRuntime()
@@ -18,6 +19,9 @@ export function App() {
 
 function ConnectedApp() {
   useScheduledTaskDesktopNotifications()
+  useEffect(() => {
+    if (isDesktopRuntime()) void usePowerSettingsStore.getState().restore().catch(() => {})
+  }, [])
   const shellLayout = useMobileShellLayout(isDesktopRuntime())
   useEffect(
     () => installHiddenSessionRelease(useChatStore, {

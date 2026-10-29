@@ -5,6 +5,7 @@ export const ELECTRON_IPC_CHANNELS = {
   publicAccessStop: 'desktop:public-access:stop',
   publicAccessSetAutoStart: 'desktop:public-access:set-auto-start',
   appGetVersion: 'desktop:app:get-version',
+  powerSetPreventSleepWhileRunning: 'desktop:power:set-prevent-sleep-while-running',
   appGetLocalePreference: 'desktop:app:get-locale-preference',
   appSetLocalePreference: 'desktop:app:set-locale-preference',
   appGetPreferredSystemLanguages: 'desktop:app:get-preferred-system-languages',

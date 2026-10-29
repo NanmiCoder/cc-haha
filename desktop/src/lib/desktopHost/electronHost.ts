@@ -96,6 +96,9 @@ export function createElectronHost(bridge: ElectronHostBridge): DesktopHost {
     commands: {
       invoke: (command, args) => invoke(ELECTRON_IPC_CHANNELS.commandInvoke, { command, args }),
     },
+    power: {
+      setPreventSleepWhileRunning: enabled => invoke(ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning, enabled),
+    },
     clipboard: {
       readText: () => invoke(ELECTRON_IPC_CHANNELS.clipboardReadText),
       writeText: text => invoke(ELECTRON_IPC_CHANNELS.clipboardWriteText, text),
