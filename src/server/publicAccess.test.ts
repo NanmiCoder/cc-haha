@@ -393,6 +393,14 @@ test('remote scheduled task routes stay restricted to the scheduler contract', (
   for (const [path, method] of [['/api/scheduled-tasks', 'DELETE'], ['/api/scheduled-tasks/runs', 'POST'], ['/api/scheduled-tasks/id/run', 'PUT'], ['/api/scheduled-tasks/id/runs/extra', 'GET'], ['/api/scheduled-tasks/id/unknown', 'POST']]) expect(allowed(path!, method!)).toBe(false)
 })
 
+test('remote notification readiness is an exact read-only scheduler resource', () => {
+  const endpoint = '/api/scheduled-tasks/notification-capabilities'
+  const allowed = (path: string, method = 'GET') => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed(endpoint)).toBe(true)
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) expect(allowed(endpoint, method)).toBe(false)
+  for (const path of [endpoint + '/extra', endpoint + '/', endpoint + '?include=secrets', '/api/adapters']) expect(allowed(path)).toBe(false)
+})
+
 test('session status exposes only the authenticated device expiry', async () => {
   const f = fixture()
   const { claim } = await f.pairNative()

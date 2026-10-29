@@ -76,3 +76,12 @@ test('an unavailable explicit provider fails without silently switching to the a
   expect(await executeScheduledSessionTask(request, endpoint)).toMatchObject({ status: 'failed', error: expect.stringContaining('unavailable') })
   expect(sessionService.createSession).not.toHaveBeenCalled()
 })
+
+test('omitted runtime with native desktop defaults does not become an explicit OAuth selection', async () => {
+  spyOn(ProviderService.prototype, 'listProviders').mockResolvedValue({ providers: [], activeId: null, providerOrder: [] })
+  expect(await executeScheduledSessionTask(input(), endpoint)).toMatchObject({ status: 'completed' })
+  const metadata = (sessionService.appendSessionMetadata as ReturnType<typeof spyOn>).mock.calls[0]?.[1]
+  expect(metadata).not.toHaveProperty('runtimeProviderId')
+  expect(metadata).not.toHaveProperty('runtimeModelId')
+  expect(globalThis.fetch).not.toHaveBeenCalled()
+})

@@ -18,7 +18,7 @@ import { Button } from '@/components/ui/Button'
 import { PromptEditor } from './PromptEditor'
 import { DayOfWeekPicker } from './DayOfWeekPicker'
 import { useTranslation } from '../../i18n'
-import { describeCron, isValidCron, parseCron, type FrequencyKey } from '../../lib/cronDescribe'
+import { buildCron, describeCron, isValidCron, parseCron, type FrequencyKey } from '@/lib/cronDescribe'
 import { getSessionSeedWorkDir } from '../../lib/sessionWorkspace'
 import type { CronTask, TaskNotificationPolicy } from '../../types/task'
 
@@ -33,37 +33,6 @@ type Props = {
 const MINUTE_INTERVALS = [5, 10, 15, 20, 30]
 const HOUR_INTERVALS = [1, 2, 3, 4, 6, 8, 12]
 const MINUTE_OFFSETS = [0, 15, 30, 45]
-
-function buildCron(
-  freq: FrequencyKey,
-  time: string,
-  opts: {
-    minuteInterval: number
-    hourInterval: number
-    minuteOffset: number
-    selectedDays: number[]
-    monthDay: number
-    customCron: string
-  },
-): string {
-  const [hours, minutes] = time.split(':').map(Number)
-  switch (freq) {
-    case 'everyNMinutes':
-      return `*/${opts.minuteInterval} * * * *`
-    case 'everyNHours':
-      return `${opts.minuteOffset} */${opts.hourInterval} * * *`
-    case 'daily':
-      return `${minutes} ${hours} * * *`
-    case 'weekdays':
-      return `${minutes} ${hours} * * 1-5`
-    case 'specificDays':
-      return `${minutes} ${hours} * * ${[...opts.selectedDays].sort((a, b) => a - b).join(',')}`
-    case 'monthly':
-      return `${minutes} ${hours} ${opts.monthDay} * *`
-    case 'customCron':
-      return opts.customCron.trim()
-  }
-}
 
 export function NewTaskModal({ open, onClose, editTask }: Props) {
   const t = useTranslation()

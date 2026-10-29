@@ -93,25 +93,4 @@ export function taskIsAttached(task: CronTask, sessionId: string): boolean {
     task.scheduleState !== 'completed'
 }
 
-export function dateTimeInZone(value: string, timeZone: string): string {
-  try {
-    const parts = new Intl.DateTimeFormat('sv-SE', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date(value))
-    const get = (type: string) => parts.find(p => p.type === type)?.value
-    return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`
-  } catch { return '' }
-}
-
-/** Reject nonexistent wall times (DST gaps) rather than silently moving a task. */
-export function zonedDateTimeToIso(value: string, timeZone: string): string | null {
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value)) return null
-  const wall = Date.parse(`${value}:00Z`)
-  if (!Number.isFinite(wall)) return null
-  let candidate = wall
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const displayed = dateTimeInZone(new Date(candidate).toISOString(), timeZone)
-    if (!displayed) return null
-    if (displayed === value) return new Date(candidate).toISOString()
-    candidate += wall - Date.parse(`${displayed}:00Z`)
-  }
-  return null
-}
+export { dateTimeInZone, zonedDateTimeToIso } from '../../../src/shared/taskSchedule'

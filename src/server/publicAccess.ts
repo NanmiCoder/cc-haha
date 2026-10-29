@@ -64,6 +64,8 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
   if (parts[1] === 'scheduled-tasks') {
+    if (parts[2] === 'notification-capabilities') return method === 'GET' &&
+      url.pathname === '/api/scheduled-tasks/notification-capabilities' && !url.search
     if (parts.length === 2) return method === 'GET' || method === 'POST'
     if (parts[2] === 'runs') return method === 'GET' && (parts.length === 3 || parts.length === 4)
     if (parts.length === 3) return method === 'PUT' || method === 'DELETE'

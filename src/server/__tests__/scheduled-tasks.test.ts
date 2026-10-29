@@ -478,6 +478,23 @@ describe('Scheduled Tasks API', () => {
     expect(body.tasks).toEqual([])
   })
 
+  it('exposes notification readiness without exposing or mutating adapter configuration', async () => {
+    const config = { telegram: { botToken: 'fake-secret', allowedUsers: [7] }, feishu: { appId: 'private-app', appSecret: 'private-secret', pairedUsers: [{ userId: 'private-user' }] }, futureField: { keep: true } }
+    const file = path.join(tmpDir, 'adapters.json')
+    const original = JSON.stringify(config)
+    await fs.writeFile(file, original)
+    const url = new URL('http://localhost/api/scheduled-tasks/notification-capabilities')
+    const segments = ['api', 'scheduled-tasks', 'notification-capabilities']
+    const response = await handleScheduledTasksApi(new Request(url), url, segments)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ channels: { desktop: true, feishu: true, telegram: true } })
+    for (const method of ['POST', 'PUT', 'DELETE']) {
+      const denied = await handleScheduledTasksApi(new Request(url, { method }), url, segments)
+      expect(denied.status).toBe(405)
+    }
+    expect(await fs.readFile(file, 'utf8')).toBe(original)
+  })
+
   it('should create a task via POST', async () => {
     const req = new Request('http://localhost/api/scheduled-tasks', {
       method: 'POST',

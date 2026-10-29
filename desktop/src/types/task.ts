@@ -1,16 +1,8 @@
 // Source: src/server/services/cronService.ts
 
-export type TaskNotificationConfig = {
-  enabled: boolean
-  channels: ('desktop' | 'telegram' | 'feishu')[]
-}
+import type { TaskSchedule, TaskExecution, TaskNotificationPolicy, TaskNotificationConfig } from '../../../src/shared/taskSchedule'
+export type { TaskSchedule, TaskExecution, TaskNotificationPolicy, TaskNotificationConfig } from '../../../src/shared/taskSchedule'
 
-export type TaskSchedule =
-  | { kind: 'once'; runAt: string; timeZone: string }
-  | { kind: 'cron'; expression: string; timeZone: string }
-
-export type TaskExecution = { kind: 'session'; targetSessionId: string } | { kind: 'new-session' }
-export type TaskNotificationPolicy = 'important' | 'all' | 'failed' | 'none'
 export type ScheduledTaskTrigger = { taskId: string; runId: string; scheduledFor: string; taskName: string }
 
 type TaskOptions = {

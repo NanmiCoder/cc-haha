@@ -64,7 +64,7 @@ export function ScheduleList({ hostId }: { hostId: string }) {
       try {
         return await client.request(schedulePath(task.id), {
           method: 'PUT',
-          body: { enabled: value },
+          body: { enabled: value, ...(task.revision === undefined ? {} : { expectedRevision: task.revision }) },
           signal,
         })
       } catch (e) {
@@ -96,7 +96,7 @@ export function ScheduleList({ hostId }: { hostId: string }) {
       >
         <LargeTitle
           title="定时任务"
-          subtitle={`${host?.name ?? '电脑'} 开着、cc-haha 在运行时，按电脑的本地时间执行`}
+          subtitle={`${host?.name ?? '电脑'} 开着、cc-haha 在运行时，按计划指定的时区执行`}
           style={{ paddingBottom: 16 }}
         />
         <InlineError text={connectionError || resource.error} style={{ marginBottom: 12 }} />
@@ -125,13 +125,13 @@ export function ScheduleList({ hostId }: { hostId: string }) {
                 </View>
               ))}
             </Group>
-            <Footnote style={{ paddingTop: 10 }}>执行内容和高级配置在电脑上改。</Footnote>
+            <Footnote style={{ paddingTop: 10 }}>点开任务可修改执行计划。执行内容可在电脑上继续编辑。</Footnote>
           </>
         ) : tasks ? (
           <EmptyState
             icon="clock"
             title="还没有定时任务"
-            detail="添加后，由这台电脑按自己的本地时间执行。"
+            detail="选一个时间，到点后由这台电脑执行。"
             action={
               <View style={{ alignItems: 'center' }}>
                 <Button title="新建" icon="plus" onPress={openCreate} disabled={!client} />

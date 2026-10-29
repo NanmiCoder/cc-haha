@@ -5,6 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { profileFixture } from './profile-fixture'
+import { isValidCron, type TaskSchedule } from '../../src/shared/taskSchedule'
 import type { ServerWebSocket } from 'bun'
 import type {
   ClientMessage,
@@ -97,6 +98,19 @@ function object(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function fixturePlan(value: unknown): TaskSchedule | undefined | null {
+  if (value === undefined) return undefined
+  const data = object(value)
+  if (typeof data.timeZone !== 'string') return null
+  let plan: TaskSchedule
+  if (data.kind === 'once' && typeof data.runAt === 'string') plan = { kind: 'once', runAt: data.runAt, timeZone: data.timeZone }
+  else if (data.kind === 'cron' && typeof data.expression === 'string') plan = { kind: 'cron', expression: data.expression, timeZone: data.timeZone }
+  else return null
+  try { new Intl.DateTimeFormat('en', { timeZone: plan.timeZone }) } catch { return null }
+  if (plan.kind === 'cron') return isValidCron(plan.expression) ? plan : null
+  return /(Z|[+-]\d{2}:\d{2})$/.test(plan.runAt) && Number.isFinite(Date.parse(plan.runAt)) ? plan : null
+}
+
 export function startFixtureServer({
   port = 3457,
   quiet = false,
@@ -123,6 +137,11 @@ export function startFixtureServer({
   let computerUse = { enabled: false, authorizedApps: [], grantFlags: { clipboardRead: false, clipboardWrite: false, systemKeyCombos: false } }
   const scheduledTasks = new Map<string, ScheduledTask>()
   const scheduledRuns: TaskRun[] = []
+  const scheduledSnapshot = (task: ScheduledTask): ScheduledTask => ({
+    ...task,
+    ...(task.schedule?.kind === 'once' && task.enabled !== false ? { nextRunAt: Date.parse(task.schedule.runAt) } : {}),
+    scheduleState: task.enabled === false ? (task.scheduleState === 'completed' ? 'completed' : 'paused') : 'active',
+  })
   const branches = new Set(['main', 'feat/qr-pair', 'fix/ws-replay'])
   const providers: Record<string, unknown>[] = [
     {
@@ -1518,6 +1537,10 @@ export function startFixtureServer({
         )
       if (path.startsWith('/api/scheduled-tasks')) {
         const [, , , taskId, action] = path.split('/')
+        if (taskId === 'notification-capabilities') {
+          if (method !== 'GET' || action || url.search) return fail('Notification capabilities are read-only', 405, 'METHOD_NOT_ALLOWED')
+          return json({ channels: { desktop: true, feishu: false, telegram: false } })
+        }
         if (taskId === 'runs' && method === 'GET') {
           if (action) {
             const run = scheduledRuns.find((run) => run.id === action)
@@ -1545,29 +1568,41 @@ export function startFixtureServer({
           })
         }
         if (!taskId && method === 'GET')
-          return json({ tasks: [...scheduledTasks.values()] })
+          return json({ tasks: [...scheduledTasks.values()].map(scheduledSnapshot) })
         if (!taskId && method === 'POST') {
+          const plan = fixturePlan(body.schedule)
+          if (plan === null) return fail('Invalid schedule')
+          if (plan) {
+            if (plan.kind === 'once' && Date.parse(plan.runAt) <= Date.now()) return fail('One-time task must be scheduled in the future')
+          }
           if (
             typeof body.prompt !== 'string' ||
             !body.prompt.trim() ||
-            typeof body.cron !== 'string' ||
-            body.cron.trim().split(/\s+/).length !== 5
+            (!plan && (typeof body.cron !== 'string' || body.cron.trim().split(/\s+/).length !== 5))
           )
             return fail('A prompt and five-field cron are required')
           const task: ScheduledTask = {
             id: crypto.randomUUID(),
             name: typeof body.name === 'string' ? body.name : undefined,
             prompt: body.prompt,
-            cron: body.cron,
+            cron: plan?.kind === 'cron' ? plan.expression : typeof body.cron === 'string' ? body.cron : '',
             enabled: body.enabled !== false,
-            recurring: body.recurring === true,
+            recurring: plan ? plan.kind === 'cron' : body.recurring === true,
             permanent: body.permanent === true,
             folderPath:
               typeof body.folderPath === 'string' ? body.folderPath : undefined,
             createdAt: Date.now(),
+            revision: 1,
+            ...(plan ? { schedule: plan } : {}),
+            ...(body.execution ? { execution: body.execution as ScheduledTask['execution'] } : {}),
+            ...(body.notificationPolicy ? { notificationPolicy: body.notificationPolicy as ScheduledTask['notificationPolicy'] } : {}),
+            ...(body.notification ? { notification: body.notification as ScheduledTask['notification'] } : {}),
+            ...(typeof body.model === 'string' ? { model: body.model } : {}),
+            ...(body.providerId === null || typeof body.providerId === 'string' ? { providerId: body.providerId } : {}),
+            ...(typeof body.useWorktree === 'boolean' ? { useWorktree: body.useWorktree } : {}),
           }
           scheduledTasks.set(task.id, task)
-          return json({ task }, 201)
+          return json({ task: scheduledSnapshot(task) }, 201)
         }
         const task = taskId ? scheduledTasks.get(taskId) : undefined
         if (!task) return fail('Scheduled task not found', 404, 'NOT_FOUND')
@@ -1611,11 +1646,21 @@ export function startFixtureServer({
           return json({ ok: true })
         }
         if (!action && method === 'PUT') {
+          if (body.expectedRevision !== undefined && body.expectedRevision !== (task.revision ?? 1)) return fail('Task was changed; reload before updating', 409, 'CONFLICT')
+          if (body.schedule !== undefined) {
+            const plan = fixturePlan(body.schedule)
+            if (!plan) return fail('Invalid schedule')
+            if (plan.kind === 'once' && Date.parse(plan.runAt) <= Date.now()) return fail('One-time task must be scheduled in the future')
+            task.schedule = plan
+            task.cron = plan.kind === 'cron' ? plan.expression : ''
+            task.recurring = plan.kind === 'cron'
+          }
           for (const key of ['name', 'prompt', 'cron', 'folderPath'] as const)
             if (typeof body[key] === 'string') task[key] = body[key]
           for (const key of ['enabled', 'recurring', 'permanent'] as const)
             if (typeof body[key] === 'boolean') task[key] = body[key]
-          return json({ task })
+          task.revision = (task.revision ?? 1) + 1
+          return json({ task: scheduledSnapshot(task) })
         }
         if (!action && method === 'DELETE') {
           scheduledTasks.delete(task.id)
