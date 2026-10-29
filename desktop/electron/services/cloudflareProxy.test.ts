@@ -91,14 +91,18 @@ describe('Cloudflare proxy transport', () => {
     const proxy = await createConnectProxy(echoPort)
     const transport = await start(proxy)
     const payload = Buffer.alloc(2 * 1024 * 1024, 0xa5)
-    const socket = connectAddress(transport.edgeAddresses[0]!)
+    const socket = connectAddress(transport.edgeAddresses[0]!, 1024)
     const receiving = readBytes(socket, payload.length)
     await once(socket, 'connect')
-    socket.write(payload)
+    const drained = once(socket, 'drain')
+    expect(socket.write(payload)).toBe(false)
     socket.pause()
     await new Promise(resolve => setTimeout(resolve, 10))
     socket.resume()
-    expect(await receiving).toEqual(payload)
+    await drained
+    // Vitest deep equality enumerates millions of Buffer entries and can
+    // exhaust the test deadline. Native equality still checks every byte.
+    expect((await receiving).equals(payload)).toBe(true)
     socket.destroy()
   })
 
@@ -316,9 +320,10 @@ async function createConnectProxy(targetPort: number, onConnect: (request: http.
   return `http://127.0.0.1:${await listen(proxy)}`
 }
 
-function connectAddress(address: string): net.Socket {
+function connectAddress(address: string, highWaterMark?: number): net.Socket {
   const [host, port] = address.split(':')
-  return track(net.connect(Number(port), host))
+  const options = { port: Number(port), host, highWaterMark }
+  return track(net.connect(options))
 }
 
 async function echo(address: string, message: string, responseBytes = Buffer.byteLength(message)): Promise<string> {
