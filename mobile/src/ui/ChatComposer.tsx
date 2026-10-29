@@ -387,7 +387,7 @@ export function ChatComposer({
     referenceState.current = { references, onReferences }
   }, [references, onReferences])
   const trigger = composerTrigger(draft, selection.start, selection.end)
-  const showCandidates = !bringOpen && !disabled && !!trigger
+  const showCandidates = !voice.live && !bringOpen && !disabled && !!trigger
   const needsCatalog = bringOpen || showCandidates
   const providerId = runtime?.providerId
   const hasRuntime = !!runtime
@@ -566,6 +566,9 @@ export function ChatComposer({
           placeholderTextColor={colors.ink3}
           {...(Platform.OS === 'web' ? { rows: 1 } : {})}
           style={{
+            // Keep the draft and caret mounted while the recording surface
+            // takes its place; completion restores this same editable field.
+            display: voice.live ? 'none' : 'flex',
             minHeight: 44,
             maxHeight: 136,
             paddingHorizontal: 10,

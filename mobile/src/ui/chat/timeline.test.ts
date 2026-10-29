@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { test } from 'bun:test'
 
-test('short conversations start at the top while the inverted timeline keeps its latest offset and chronological reading order', () => {
+test.each(['ios', 'android'])('%s: short conversations keep both messages mounted without native clipping', (platform) => {
   // Execute the real screen with native views substituted, as in the other
   // mobile UI tests. Browser geometry separately checks the resulting layout.
   const script = `
@@ -22,7 +22,7 @@ test('short conversations start at the top while the inverted timeline keeps its
       useEffectEvent: fn => fn,
     }))
     mock.module(${JSON.stringify(import.meta.resolve('react-native'))}, () => ({
-      View: 'View', FlatList: 'FlatList', Platform: { OS: 'ios' }, AppState: {},
+      View: 'View', FlatList: 'FlatList', Platform: { OS: ${JSON.stringify(platform)} }, AppState: {},
     }))
     mock.module(${JSON.stringify(import.meta.resolve('react-native-safe-area-context'))}, () => ({ useSafeAreaInsets: () => ({ top: 44, bottom: 34 }) }))
     mock.module(${JSON.stringify(import.meta.resolve('expo-router'))}, () => ({
@@ -80,7 +80,20 @@ test('short conversations start at the top while the inverted timeline keeps its
     assert.equal(list.contentContainerStyle.justifyContent, 'flex-end', 'the first message must sit below the navigation bar, not beside the composer')
     assert.equal(list.data.length, 1)
     assert.equal(list.data[0].item.id, 'u1')
-    items = [...items, { id: 'a1', type: 'assistant', text: 'hi' }, { id: 'u2', type: 'user', text: 'again' }]
+    // Android defaults to detaching clipped native children. During a stack
+    // transition, an inverted/flex-end cell can be laid out outside the old
+    // clipping rectangle and only reattached after the first scroll.
+    items = [items[0], { id: 'a1', type: 'assistant', text: 'hi' }]
+    list = timeline()
+    assert.deepEqual(list.data.map(row => row.item.id), ['a1', 'u1'], 'both short messages are mounted before any scroll or older-history request')
+    const nativeClipping = list.removeClippedSubviews ?? (${JSON.stringify(platform)} === 'android')
+    assert.equal(nativeClipping, false, 'short cached conversations must not wait for an Android scroll to reattach the first message')
+    // A fresh screen instance (returning from the task list) has the same
+    // complete history and must not depend on an onScroll side effect.
+    const reopened = timeline()
+    assert.deepEqual(reopened.data.map(row => row.item.id), ['a1', 'u1'])
+    assert.equal(reopened.removeClippedSubviews ?? (${JSON.stringify(platform)} === 'android'), false)
+    items = [...items, { id: 'u2', type: 'user', text: 'again' }]
     list = timeline()
     assert.deepEqual(list.data.filter(row => row.kind === 'message').map(row => row.item.id).reverse(), ['u1', 'a1', 'u2'])
     assert.equal(list.maintainVisibleContentPosition, undefined, 'at latest, native inversion continues tracking newly appended content')

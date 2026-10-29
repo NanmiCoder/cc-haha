@@ -29,29 +29,39 @@ export function voiceClock(seconds: number) {
 function VoiceTrace({ voice }: { voice: ComposerVoiceDictation }) {
   const colors = useColors()
   const [levels, setLevels] = useState<number[]>([])
-  const [width, setWidth] = useState(80)
+  const [width, setWidth] = useState(280)
   const { phase, getLevel } = voice
   useEffect(() => {
     if (phase !== 'recording') return
     const timer = setInterval(() => {
       const measured = getLevel()
       const level = Number.isFinite(measured) ? Math.max(0, Math.min(1, measured)) : 0
-      setLevels(previous => [...previous.slice(-63), level])
+      setLevels(previous => [...previous.slice(-119), level])
     }, 80)
     return () => clearInterval(timer)
   }, [getLevel, phase])
-  const count = Math.max(1, Math.floor(width / 5))
+  const count = Math.max(1, Math.min(120, Math.floor((width + 2) / 6)))
   const values = Array.from({ length: count }, (_, index) => levels[levels.length - count + index] ?? 0)
   return (
     <View
       accessible
       accessibilityRole="image"
-      accessibilityLabel="麦克风音量"
+      accessibilityLabel={phase === 'transcribing' ? '已录制的声音波形' : '麦克风音量'}
       onLayout={event => setWidth(event.nativeEvent.layout.width)}
-      style={{ flex: 1, minWidth: 20, height: 32, flexDirection: 'row', alignItems: 'center', overflow: 'hidden', gap: 2, opacity: voice.phase === 'transcribing' ? 0.45 : 1 }}
+      style={{ height: 72, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', overflow: 'hidden', gap: 2, opacity: phase === 'transcribing' ? 0.45 : 1 }}
     >
       {values.map((level, index) => (
-        <View key={index} style={{ width: 3, height: 2 + Math.pow(level, 0.65) * 26, borderRadius: 2, backgroundColor: colors.ink2 }} />
+        <View
+          key={index}
+          testID="voice-wave-bar"
+          style={{
+            width: 4,
+            height: 3 + Math.pow(level, 0.65) * 61,
+            borderRadius: 2,
+            backgroundColor: colors.run,
+            opacity: 0.2 + 0.8 * (index / Math.max(1, count - 1)),
+          }}
+        />
       ))}
     </View>
   )
@@ -68,39 +78,58 @@ export function VoiceRecordingBar({ voice, canSend }: { voice: ComposerVoiceDict
   }, [phase])
   const transcribing = voice.phase === 'transcribing'
   const starting = voice.phase === 'starting'
-  const elapsed = voice.phase === 'recording' ? Math.max(0, (now - voice.startedAt) / 1000) : 0
+  const elapsed = starting ? 0 : Math.max(0, (now - voice.startedAt) / 1000)
   const remaining = Math.max(0, voice.limitSeconds - elapsed)
-  const countingDown = voice.phase === 'recording' && remaining <= Math.min(15, voice.limitSeconds / 3)
-  const label = starting ? '准备录音…' : transcribing ? (voice.sendRequested ? '转写后发送…' : '转写中…') : countingDown ? `剩余 ${voiceClock(Math.ceil(remaining))}` : voiceClock(elapsed)
+  const countingDown = phase === 'recording' && voice.limitSeconds > 0 && remaining <= Math.min(15, voice.limitSeconds / 3)
+  const label = starting ? '准备麦克风…' : transcribing ? (voice.sendRequested ? '转写后发送…' : '正在转成文字…') : '正在聆听'
   return (
-    <View accessibilityLabel="语音录音控制" style={{ minHeight: 44, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-      <Pressable accessibilityRole="button" accessibilityLabel="取消语音输入" onPress={voice.cancel} style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}>
-        <Icon name="x" size={20} color={colors.ink2} />
-      </Pressable>
-      <VoiceTrace voice={voice} />
-      <Mono accessibilityLiveRegion="polite" style={{ fontSize: 12, color: countingDown ? colors.attn : colors.ink3 }}>{label}</Mono>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="停止录音并转成文字"
-        accessibilityState={{ disabled: transcribing, busy: starting || transcribing }}
-        disabled={transcribing}
-        onPress={voice.stop}
-        style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
-      >
-        {starting || transcribing ? <Spinner size={16} /> : <Icon name="stop" size={14} color={colors.ink2} />}
-      </Pressable>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="转写后发送"
-        accessibilityState={{ disabled: !canSend || starting || voice.sendRequested, busy: transcribing && voice.sendRequested }}
-        disabled={!canSend || starting || voice.sendRequested}
-        onPress={voice.stopAndSend}
-        style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center', opacity: !canSend || starting ? 0.35 : 1 }}
-      >
-        <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: colors.btn, alignItems: 'center', justifyContent: 'center' }}>
-          {transcribing && voice.sendRequested ? <Spinner size={16} color={colors.btnInk} /> : <Icon name="arrow-up" size={18} color={colors.btnInk} strokeWidth={2.4} />}
+    <View testID="voice-recording-panel" accessibilityLabel="语音录音控制" style={{ padding: 10, gap: 12 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {starting || transcribing
+            ? <Spinner size={14} color={colors.run} />
+            : <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.run }} />}
+          <Text accessibilityLiveRegion="polite" style={{ flexShrink: 1, fontSize: 14, lineHeight: 20, fontWeight: '500', color: colors.run }}>{label}</Text>
         </View>
-      </Pressable>
+        <Mono style={{ fontSize: 13, color: countingDown ? colors.attn : colors.ink3 }}>
+          {countingDown ? `剩余 ${voiceClock(Math.ceil(remaining))}` : voiceClock(elapsed)}
+        </Mono>
+      </View>
+      <View style={{ paddingHorizontal: 12, borderRadius: 14, backgroundColor: colors.runTint }}>
+        <VoiceTrace voice={voice} />
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="取消语音输入"
+          onPress={voice.cancel}
+          style={({ pressed }) => ({ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.fill, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.6 : 1 })}
+        >
+          <Icon name="x" size={20} color={colors.ink2} />
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="停止录音并转成文字"
+          accessibilityHint="转写文字会放回输入框，可以编辑后再发送"
+          accessibilityState={{ disabled: starting || transcribing, busy: starting || transcribing }}
+          disabled={starting || transcribing}
+          onPress={voice.stop}
+          style={({ pressed }) => ({ flex: 1, minHeight: 44, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 22, backgroundColor: colors.fill, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: starting || transcribing ? 0.5 : pressed ? 0.6 : 1 })}
+        >
+          <Icon name="check" size={18} color={colors.ink} />
+          <Text style={{ fontSize: 14, lineHeight: 20, fontWeight: '500', color: colors.ink }}>完成</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="转写后发送"
+          accessibilityState={{ disabled: !canSend || starting || voice.sendRequested, busy: transcribing && voice.sendRequested }}
+          disabled={!canSend || starting || voice.sendRequested}
+          onPress={voice.stopAndSend}
+          style={({ pressed }) => ({ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.btn, alignItems: 'center', justifyContent: 'center', opacity: !canSend || starting ? 0.35 : pressed ? 0.7 : 1 })}
+        >
+          {transcribing && voice.sendRequested ? <Spinner size={16} color={colors.btnInk} /> : <Icon name="arrow-up" size={20} color={colors.btnInk} strokeWidth={2.4} />}
+        </Pressable>
+      </View>
     </View>
   )
 }

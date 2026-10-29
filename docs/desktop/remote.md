@@ -1,27 +1,36 @@
 ---
 title: 手机 App、H5 与 IM 接力
 nav_title: 手机与 IM
-description: 用手机 App 或浏览器扫码连接电脑，或者从微信、飞书直接对话。
+description: 从手机连接入口用浏览器扫码接力，了解手机 App 发布状态与外出连接方法。
 order: 9
 ---
 
 # 手机 App、H5 与 IM 接力
 
-电脑上跑着的任务，想在手机上看进度、追加一句话，可以使用手机 App、浏览器或 IM：
+电脑上跑着的任务，想在手机上看进度、追加一句话，可以从桌面左侧 **手机连接** 进入，也可从 **设置 → 手机连接** 进入。目前可直接用手机浏览器扫码连接，无需等待手机 App 发布。
 
-- **手机 App** — iOS、Android 客户端扫码连接电脑，在手机上查看任务和处理审批。
-- **H5 访问** — 手机浏览器打开同一套界面，会话、消息、附件、权限按钮都在。
-- **IM 接入** — 在微信、钉钉、WhatsApp、Telegram、飞书里直接和 Claude 对话。
+## cc-haha 手机 App 安装状态
 
-这些方式都需要你的电脑开着、应用在跑。任务在电脑上执行；局域网直接连接，远程使用你自己的 Tailscale 网络，IM 则通过对应平台。手机 App 和 H5 共用下方的远程配对入口。
+| 手机上的打开方式 | 当前状态 | 如何使用 |
+|---|---|---|
+| cc-haha Android App | 正式签名 APK 待发布 | 下载入口将在发布后提供 |
+| cc-haha iPhone / iPad App | TestFlight 邀请待开放 | 安装邀请将在开放后提供 |
+| 手机浏览器（H5） | 现在可用 | 点击「先用浏览器连接」，按下方步骤开启连接并扫码 |
+
+「先用浏览器连接」会切换到 **同一 Wi-Fi**，需要你阅读提示并主动开启连接。手机和电脑在同一个可信 Wi-Fi 时，无需安装 Tailscale；外出、使用蜂窝网络或其他 Wi-Fi 时，才需要下方的 **Tailscale 远程连接**。
+
+这些方式都需要电脑开着、cc-haha 正在运行且未休眠。任务始终在电脑上执行。Tailscale 负责外出时的设备联网，cc-haha 手机 App 和浏览器负责查看任务与处理审批。
+
+想直接在微信、钉钉、WhatsApp、Telegram 或飞书里对话，可使用本页最后的 **IM 接入**。
 
 ## H5 访问
 
 ### 开启
 
-1. 打开 **设置 → 手机连接 → 同一 Wi-Fi**。
-2. 打开「开启局域网连接」，读一遍风险提示后确认。
-3. 用手机 App 扫描二维码，也可以用手机相机扫码后在浏览器打开，或复制扫码链接到自己的设备。
+1. 点击桌面左侧 **手机连接**（也可从 **设置 → 手机连接** 进入）。
+2. 点击「先用浏览器连接」，或选择 **同一 Wi-Fi**。
+3. 打开「开启局域网连接」，读一遍风险提示后确认。
+4. 用手机相机扫码，在常用的 Safari、Chrome 或系统浏览器中打开；也可复制扫码链接到自己的设备。
 
 如果旧配置缺少已保存的令牌，点「生成令牌」后再扫码。
 
@@ -69,16 +78,42 @@ H5 默认关闭，它也不是公开服务。开启前先确认你在自己信�
 
 同一局域网继续使用上面的扫码连接。离开家或办公室后，通过 **Tailscale** 把手机和电脑接入自己的私人网络，再连接 cc-haha。无需购买服务器、申请域名或配置 ngrok；Tailscale 负责设备间的网络通路，cc-haha 负责手机配对与访问授权。
 
-### 1. 连接两台设备
+### 1. 下载 Tailscale，连接电脑和手机
 
-按照 [Tailscale 官方入门指南](https://tailscale.com/docs/how-to/quickstart) 在电脑和手机安装 Tailscale，登录你自己的同一个账号，并确认两台设备都已连接。手机首次使用时需要允许添加 VPN 配置。
+电脑和手机各安装一次 **Tailscale**。按设备选择下面的官方下载入口，无需再去官网查找安装包：
+
+| 设备 | 下载 / 安装 | 安装后怎么做 |
+|---|---|---|
+| macOS 电脑 | [下载 macOS 安装包（.pkg）](https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg) | 双击安装包，按提示安装并打开 Tailscale；推荐使用这个独立安装版 |
+| Windows 电脑 | [下载 Windows 安装包（.exe）](https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe) | 双击安装，安装器会自动选择适合系统的版本；安装时保持联网 |
+| Android 手机 | [下载 Android 安装包（.apk）](https://pkgs.tailscale.com/stable/tailscale-android-universal-latest.apk) · [Google Play 安装](https://play.google.com/store/apps/details?id=com.tailscale.ipn) | 用手机打开下载链接；安装 APK 时，按系统提示允许当前浏览器安装应用 |
+| iPhone / iPad | [前往 App Store 安装](https://apps.apple.com/us/app/tailscale/id1470499037?ls=1) | 在手机上打开链接，点「获取」安装；需 Apple 账号所在商店地区提供该应用 |
+
+在电脑上阅读本页时，可以用手机浏览器打开本指南，再点对应的手机安装入口。桌面端 **手机连接 → 外出连接** 也提供按系统分类的 Tailscale 下载入口。
+
+这些安装包由 Tailscale 官方提供，链接会下载当前稳定版。Android APK 需要手动更新；可以使用 Google Play 时，商店安装更便于自动更新。其他系统、旧系统或特殊安装需求，查看 [Tailscale 官方下载页](https://tailscale.com/download) 和 [官方安装指南](https://tailscale.com/docs/install)。
+
+iPhone / iPad 目前通过 App Store 安装，Tailscale 没有提供适用于普通用户的独立 IPA 安装包。若提示「所在地区不可用」，这是商店地区的限制，详见 [Tailscale 官方说明](https://github.com/tailscale/tailscale/issues/19625)。同一 Wi-Fi 下仍可使用上方无需 Tailscale 的连接方式。
+
+安装完成后，在电脑和手机上打开 Tailscale，**用同一个账号登录，并让两端都保持已连接状态**。首次使用时按系统提示允许添加 VPN 配置；macOS 还可能提示启用网络扩展。账号注册与登录帮助见 [官方入门指南](https://tailscale.com/docs/how-to/quickstart)。
 
 这里使用 **Tailscale Serve**，地址只供私人网络中的授权设备访问。无需开启面向整个互联网的 Funnel，也无需配置出口节点或子网路由。完整原理见 [Serve 官方指南](https://tailscale.com/docs/features/tailscale-serve)。
 
 ### 2. 配置电脑入口
 
-1. 打开桌面的 **设置 → 手机连接 → 外出连接**。保留默认本机端口 `17463`，或选择未被占用的端口。
-2. 在电脑终端先运行 `tailscale serve status`，查看已有转发。没有使用 HTTPS `443` 的服务时，运行下面的命令；已有服务时使用后面的其他端口示例，避免覆盖原配置。
+下面的命令**只在电脑运行**，手机无需运行命令。先准备好命令窗口：
+
+- **macOS：** 按 `⌘ + 空格`，搜索「终端」并打开。在 Tailscale 的 **Settings → CLI integration → Show me how → Install Now** 安装命令行入口，按提示输入电脑管理员密码，再回到终端。已有 App Store 版的用户，可将下方命令开头的 `tailscale` 替换为 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`。详见 [macOS 命令行说明](https://tailscale.com/docs/reference/tailscale-cli?tab=macos)。
+- **Windows：** 从开始菜单搜索并打开 **PowerShell**。如果安装 Tailscale 前已经打开过 PowerShell，关闭后重新打开，再粘贴命令。详见 [Windows 命令行说明](https://tailscale.com/docs/reference/tailscale-cli?tab=windows)。
+
+1. 打开桌面的 **手机连接 → 外出连接**。保留默认本机端口 `17463`，或选择未被占用的端口。
+2. 在电脑的命令窗口先粘贴下面这条命令，按回车查看已有转发：
+
+   ```sh
+   tailscale serve status
+   ```
+
+   没有使用 HTTPS `443` 的服务时，再运行下面的命令；已有服务时使用后面的其他端口示例，避免覆盖原配置。
 
    ```sh
    tailscale serve --bg http://127.0.0.1:17463
@@ -98,12 +133,10 @@ tailscale serve --bg --https=8443 http://127.0.0.1:17463
 
 此时填写的地址也必须带上 `:8443`，例如 `https://my-computer.example.ts.net:8443`。保持根路径转发，不要只转发 `/remote`；页面、API 和 WebSocket 都要经过同一个入口。[Serve 命令参考](https://tailscale.com/docs/reference/tailscale-cli/serve)
 
-**macOS 提示找不到 `tailscale` 命令时：** 独立安装版可在 Tailscale 的 Settings → CLI integration 中安装命令行入口；App Store 版可将上述命令开头的 `tailscale` 替换为 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`。Windows 和 Linux 安装后的命令行用法见 [官方 CLI 指南](https://tailscale.com/docs/reference/tailscale-cli?tab=macos)。这些命令在电脑运行，手机只需保持 Tailscale 连接。
-
 ### 3. 扫码配对并确认
 
 1. 保持手机 Tailscale 已连接。先关闭 Wi-Fi、使用蜂窝网络验证远程路径。
-2. 在 cc-haha 手机 App 扫描桌面的配对二维码；浏览器用户可用手机相机扫码，在常用浏览器中打开。
+2. 用手机相机扫描桌面的配对二维码，在常用浏览器中打开；使用 cc-haha 手机 App 时，也可在 App 内扫码。
 3. 在桌面确认这部手机。配对成功后，手机会保存连接，可以查看任务和处理审批。
 
 从 ngrok 升级后，旧远程配置不会自动启动；之前配置过 Tailscale HTTPS 地址的用户也需要重新确认开启。旧 ngrok 地址不能用于 Tailscale，请生成新的二维码配对。局域网配置和已有电脑会话不受影响。

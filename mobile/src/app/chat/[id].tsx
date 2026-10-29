@@ -66,7 +66,7 @@ import {
   type ActionMenuItem,
 } from '../../ui/kit'
 import { errorText } from '../../ui/theme'
-import { buildChatRows, visibleChatRows, type ChatRow } from '../../ui/chat/steps'
+import { buildChatRows, toggleGroupOpen, visibleChatRows, type ChatRow } from '../../ui/chat/steps'
 import { StepGroup, TurnFold, type StepContext, type StepUi } from '../../ui/chat/StepGroup'
 import { QueuedMessages } from '../../ui/chat/QueuedMessages'
 import { OlderHistoryStatus } from '../../ui/chat/OlderHistoryStatus'
@@ -204,7 +204,7 @@ function ChatSession({
   const [branch, setBranch] = useState<string | null>(null)
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
-  const [ui, setUi] = useState<StepUi>(() => ({ expanded: new Set(), open: new Set(), revealed: new Set() }))
+  const [ui, setUi] = useState<StepUi>(() => ({ expanded: new Set(), open: new Set(), closed: new Set(), revealed: new Set() }))
   const [turnClock, setTurnClock] = useState<{ startedAt?: number; endedAt?: number; live?: boolean }>({})
   // 进页面时已经在跑的一轮，用电脑给的开始时间，和首页一致。
   const { snapshot: dashboard } = useDashboard()
@@ -897,7 +897,7 @@ function ChatSession({
   const reloadSession = useCallback(() => {
     sessionHistory.forget(hostId, id)
     setState(createChatState(id))
-    setUi({ expanded: new Set(), open: new Set(), revealed: new Set() })
+    setUi({ expanded: new Set(), open: new Set(), closed: new Set(), revealed: new Set() })
     setConnection('connecting')
     connectionRef.current = 'connecting'
     clockRef.current = undefined
@@ -961,7 +961,7 @@ function ChatSession({
     []
   )
   const toggleOpen = useCallback(
-    (key: string) => setUi((value) => ({ ...value, open: toggle(value.open, key) })),
+    (key: string, live = false) => setUi((value) => toggleGroupOpen(value, key, live)),
     []
   )
   const reveal = useCallback(
@@ -1264,6 +1264,11 @@ function ChatSession({
           <FlatList
             ref={list}
             inverted
+            // Android's native clipping can detach transformed cells during
+            // entry/layout and only reattach them on scroll. A two-message
+            // conversation must show its first message without that gesture.
+            // Keep FlatList virtualization, without the extra native clipping.
+            removeClippedSubviews={false}
             data={latestFirst}
             extraData={ui}
             keyExtractor={(row) => row.key}
