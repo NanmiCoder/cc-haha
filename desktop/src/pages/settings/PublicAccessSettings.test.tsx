@@ -126,14 +126,59 @@ it('explains migrated settings without automatically starting or exposing an old
   expect(screen.queryByLabelText('ngrok Authtoken')).not.toBeInTheDocument()
 })
 
-it('opens the official installation and product connection guides', async () => {
+it.each([
+  ['macOS (.pkg)', 'https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg'],
+  ['Windows (.exe)', 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe'],
+  ['Android (APK)', 'https://pkgs.tailscale.com/stable/tailscale-android-universal-latest.apk'],
+  ['Google Play', 'https://play.google.com/store/apps/details?id=com.tailscale.ipn'],
+  ['iPhone / iPad (App Store)', 'https://apps.apple.com/us/app/tailscale/id1470499037?ls=1'],
+  ['Other systems / official website', 'https://tailscale.com/download'],
+  ['Connection guide', 'https://cchaha.ai/desktop/remote'],
+])('opens the official %s entry without configuring or starting remote access', async (name, url) => {
   render(<PublicAccessSettings />)
   await waitFor(() => expect(addressInput()).not.toBeDisabled())
-  fireEvent.click(screen.getByRole('button', { name: 'Install Tailscale' }))
-  await waitFor(() => expect(mocks.open).toHaveBeenCalledWith('https://tailscale.com/docs/how-to/quickstart'))
-  await waitFor(() => expect(screen.getByRole('button', { name: 'Connection guide' })).not.toBeDisabled())
-  fireEvent.click(screen.getByRole('button', { name: 'Connection guide' }))
-  await waitFor(() => expect(mocks.open).toHaveBeenCalledWith('https://cchaha.ai/desktop/remote'))
+  fireEvent.click(screen.getByRole('button', { name }))
+  await waitFor(() => expect(mocks.open).toHaveBeenCalledWith(url))
+  expect(mocks.configure).not.toHaveBeenCalled()
+  expect(mocks.start).not.toHaveBeenCalled()
+  expect(mocks.pairing).not.toHaveBeenCalled()
+})
+
+it('offers phone installation QR codes on demand, separately from connection pairing', async () => {
+  mocks.qr.mockImplementation(async (url: string) => `data:image/png;base64,${url.includes('.apk') ? 'android' : 'ios'}`)
+  render(<PublicAccessSettings />)
+  await waitFor(() => expect(addressInput()).not.toBeDisabled())
+  expect(mocks.qr).not.toHaveBeenCalled()
+  const toggle = screen.getByRole('button', { name: 'Scan to install on your phone' })
+  expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  fireEvent.click(toggle)
+  expect(toggle).toHaveAttribute('aria-expanded', 'true')
+  expect(await screen.findByAltText('Download Tailscale for Android')).toHaveAttribute('src', 'data:image/png;base64,android')
+  expect(await screen.findByAltText('Install Tailscale from the App Store')).toHaveAttribute('src', 'data:image/png;base64,ios')
+  expect(mocks.qr.mock.calls.map(call => call[0])).toEqual([
+    'https://pkgs.tailscale.com/stable/tailscale-android-universal-latest.apk',
+    'https://apps.apple.com/us/app/tailscale/id1470499037?ls=1',
+  ])
+  expect(screen.queryByAltText('Scan to pair this phone')).not.toBeInTheDocument()
+  expect(mocks.open).not.toHaveBeenCalled()
+  expect(mocks.pairing).not.toHaveBeenCalled()
+  fireEvent.click(toggle)
+  expect(screen.queryByAltText('Download Tailscale for Android')).not.toBeInTheDocument()
+})
+
+it('keeps phone installation failures local and lets the user retry', async () => {
+  mocks.qr.mockRejectedValueOnce(new Error('private upstream details'))
+  render(<PublicAccessSettings />)
+  const toggle = screen.getByRole('button', { name: 'Scan to install on your phone' })
+  fireEvent.click(toggle)
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not create installation QR codes')
+  expect(screen.queryByText('private upstream details')).not.toBeInTheDocument()
+  fireEvent.click(toggle)
+  fireEvent.click(toggle)
+  await screen.findByAltText('Download Tailscale for Android')
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  expect(mocks.configure).not.toHaveBeenCalled()
+  expect(mocks.start).not.toHaveBeenCalled()
 })
 
 it('keeps each connection method focused and preserves a remote draft when switching methods', async () => {
@@ -151,6 +196,26 @@ it('keeps each connection method focused and preserves a remote draft when switc
   expect(screen.queryByLabelText('ngrok Authtoken')).not.toBeInTheDocument()
 })
 
+it('starts with cc-haha installation and moves browser users to LAN without enabling either connection', async () => {
+  render(<H5AccessSettings />)
+  const installation = screen.getByRole('heading', { name: 'Get cc-haha on your phone' })
+  const lan = screen.getByRole('tab', { name: 'Same Wi-Fi' })
+  expect(installation.compareDocumentPosition(lan) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(screen.getByRole('button', { name: 'Download Android APK' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Join TestFlight beta' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('tab', { name: 'Away from home' }))
+  await waitFor(() => expect(addressInput()).not.toBeDisabled())
+  fireEvent.change(addressInput(), { target: { value: address } })
+  fireEvent.click(screen.getByRole('button', { name: 'Use phone browser' }))
+  expect(lan).toHaveAttribute('aria-selected', 'true')
+  expect(lan).toHaveFocus()
+  expect(screen.getByRole('switch', { name: 'Enable local connection' })).not.toBeChecked()
+  expect(mocks.configure).not.toHaveBeenCalled()
+  expect(mocks.start).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('tab', { name: 'Away from home' }))
+  expect(addressInput()).toHaveValue(address)
+})
+
 it('presents installation, the runnable command, its returned address and pairing in order', async () => {
   render(<PublicAccessSettings />)
   const install = screen.getByRole('heading', { name: 'Install on both devices' })
@@ -163,6 +228,8 @@ it('presents installation, the runnable command, its returned address and pairin
   }
   expect(screen.getByText('Paste the HTTPS address returned by the command above.')).toBeVisible()
   expect(screen.getByText(/First run tailscale serve status/)).toBeVisible()
+  expect(screen.getByText(/search for Terminal with Command/)).toBeVisible()
+  expect(screen.getByText(/Settings → CLI integration/)).toBeVisible()
   expect(screen.getByText(/Enable the entry to show a QR code/)).toBeVisible()
   expect(screen.getByText('Port already in use or command not found?').closest('details')).not.toHaveAttribute('open')
   await waitFor(() => expect(addressInput()).not.toBeDisabled())

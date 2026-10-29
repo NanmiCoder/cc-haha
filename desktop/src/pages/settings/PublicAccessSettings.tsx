@@ -18,6 +18,15 @@ import {
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useTranslation } from '@/i18n'
 
+// Official stable aliases follow releases without pinning users to an old installer.
+const tailscaleDownloads = {
+  mac: 'https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg',
+  windows: 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe',
+  android: 'https://pkgs.tailscale.com/stable/tailscale-android-universal-latest.apk',
+  googlePlay: 'https://play.google.com/store/apps/details?id=com.tailscale.ipn',
+  ios: 'https://apps.apple.com/us/app/tailscale/id1470499037?ls=1',
+}
+
 export function PublicAccessSettings() {
   const t = useTranslation()
   const host = getDesktopHost()
@@ -28,6 +37,10 @@ export function PublicAccessSettings() {
   const [copiedCommand, setCopiedCommand] = useState(false)
   const [localPort, setLocalPort] = useState(String(DEFAULT_PUBLIC_ACCESS_PORT))
   const portId = useId()
+  const installQrId = useId()
+  const [showInstallQr, setShowInstallQr] = useState(false)
+  const [installQrs, setInstallQrs] = useState<{ android: string, ios: string } | null>(null)
+  const [installQrError, setInstallQrError] = useState(false)
   const initialized = useRef(false)
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -39,6 +52,19 @@ export function PublicAccessSettings() {
   const [consent, setConsent] = useState(false)
   const [qr, setQr] = useState<string | null>(null)
   const [expiresAt, setExpiresAt] = useState<number | null>(null)
+  useEffect(() => {
+    if (!showInstallQr) return
+    let active = true
+    setInstallQrs(null)
+    setInstallQrError(false)
+    void Promise.all([
+      QRCode.toDataURL(tailscaleDownloads.android, { margin: 1, width: 160 }),
+      QRCode.toDataURL(tailscaleDownloads.ios, { margin: 1, width: 160 }),
+    ]).then(([android, ios]) => {
+      if (active) setInstallQrs({ android, ios })
+    }).catch(() => { if (active) setInstallQrError(true) })
+    return () => { active = false }
+  }, [showInstallQr])
   useEffect(() => {
     if (host.kind !== 'electron' || !bridge) return
     let active = true
@@ -167,8 +193,39 @@ export function PublicAccessSettings() {
             {t('publicAccess.stepInstall')}
           </h4>
           <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.tailscaleSetup')}</p>
+          <div role="group" aria-label={t('publicAccess.installComputer')} className="space-y-2">
+            <p className="text-xs font-medium text-[var(--color-text-primary)]">{t('publicAccess.installComputer')}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.mac))}>{t('publicAccess.downloadMac')}</Button>
+              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.windows))}>{t('publicAccess.downloadWindows')}</Button>
+            </div>
+          </div>
+          <div role="group" aria-label={t('publicAccess.installPhone')} className="space-y-2">
+            <p className="text-xs font-medium text-[var(--color-text-primary)]">{t('publicAccess.installPhone')}</p>
+            <div className="flex flex-wrap gap-2">
+              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.android))}>{t('publicAccess.downloadAndroid')}</Button>
+              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.googlePlay))}>{t('publicAccess.googlePlay')}</Button>
+              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.ios))}>{t('publicAccess.downloadIos')}</Button>
+              <Button size="base" variant="secondary" aria-expanded={showInstallQr} aria-controls={installQrId} onClick={() => setShowInstallQr(value => !value)}>{t('publicAccess.phoneInstallQr')}</Button>
+            </div>
+            <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.phoneInstallHint')}</p>
+          </div>
+          {showInstallQr && <div id={installQrId} className="space-y-2 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] p-3">
+            <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.phoneInstallQrHint')}</p>
+            {installQrError ? <p role="alert" className="text-xs text-[var(--color-error)]">{t('publicAccess.phoneInstallQrError')}</p> : installQrs ? <div className="flex flex-wrap gap-4">
+              <figure className="space-y-1">
+                <img src={installQrs.android} width={160} height={160} alt={t('publicAccess.androidInstallQrAlt')} className="rounded-[var(--radius-sm)]" />
+                <figcaption className="text-xs text-[var(--color-text-primary)]">{t('publicAccess.downloadAndroid')}</figcaption>
+              </figure>
+              <figure className="space-y-1">
+                <img src={installQrs.ios} width={160} height={160} alt={t('publicAccess.iosInstallQrAlt')} className="rounded-[var(--radius-sm)]" />
+                <figcaption className="text-xs text-[var(--color-text-primary)]">{t('publicAccess.downloadIos')}</figcaption>
+              </figure>
+            </div> : <p role="status" className="text-xs text-[var(--color-text-secondary)]">{t('common.loading')}</p>}
+          </div>}
+          <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">{t('publicAccess.installSourceHint')}</p>
           <div className="flex flex-wrap gap-2">
-            <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open('https://tailscale.com/docs/how-to/quickstart'))}>{t('publicAccess.installGuide')}</Button>
+            <Button size="base" variant="link" disabled={busy} onClick={() => void run(() => host.shell.open('https://tailscale.com/download'))}>{t('publicAccess.installGuide')}</Button>
             <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open('https://cchaha.ai/desktop/remote'))}>{t('publicAccess.connectionGuide')}</Button>
           </div>
           {status?.migrationRequired && <p role="status" className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.migrationNotice')}</p>}
@@ -186,6 +243,8 @@ export function PublicAccessSettings() {
               setCopiedCommand(true)
             })}>{t(copiedCommand ? 'publicAccess.commandCopied' : 'publicAccess.copyCommand')}</Button>
           </div>
+          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.terminalHint')}</p>
+          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.macCliHint')}</p>
           <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.runCommandHint')}</p>
           <code className="block break-all rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-primary)]">{command ?? '—'}</code>
           <details className="text-xs text-[var(--color-text-secondary)]">

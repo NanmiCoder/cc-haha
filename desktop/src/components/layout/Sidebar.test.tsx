@@ -70,6 +70,7 @@ vi.mock('../../i18n', () => ({
       'sidebar.scheduled': 'Scheduled',
       'sidebar.extensions': 'Extension Market',
       'sidebar.settings': 'Settings',
+      'settings.tab.h5Access': 'Phone connection',
       'sidebar.searchPlaceholder': 'Search sessions',
       'sidebar.noSessions': 'No sessions',
       'sidebar.noMatching': 'No matching sessions',
@@ -240,6 +241,7 @@ vi.mock('./ProjectEditorModal', () => ({
 }))
 
 import { Sidebar } from './Sidebar'
+import { browserHost } from '@/lib/desktopHost/browserHost'
 import { useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useTabStore } from '../../stores/tabStore'
@@ -475,7 +477,7 @@ describe('Sidebar', () => {
     window.localStorage.removeItem(PROJECT_SORT_STORAGE_KEY)
 
     useTabStore.setState({ tabs: [], activeTabId: null })
-    useUIStore.setState({ newSessionDraft: null })
+    useUIStore.setState({ newSessionDraft: null, activeSettingsTab: 'providers', pendingSettingsTab: null })
     useSessionStore.setState({
       sessions: [],
       projectHistory: {},
@@ -2519,6 +2521,32 @@ describe('Sidebar', () => {
         expect.objectContaining({ sessionId: '__market__', title: 'Extension Market', type: 'market' }),
       ]),
     )
+  })
+
+  it.each([true, false])('opens phone connection directly from the desktop sidebar (expanded=%s)', (expanded) => {
+    const previousHost = window.desktopHost
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    useUIStore.setState({ sidebarOpen: expanded, activeSettingsTab: 'providers', pendingSettingsTab: 'about' })
+    try {
+      render(<Sidebar />)
+      fireEvent.click(screen.getByRole('button', { name: 'Phone connection' }))
+      expect(useUIStore.getState().activeSettingsTab).toBe('h5Access')
+      expect(useUIStore.getState().pendingSettingsTab).toBe('h5Access')
+      expect(useTabStore.getState().activeTabId).toBe('__settings__')
+      expect(screen.getByRole('button', { name: 'Phone connection' })).toHaveAttribute('aria-current', 'page')
+      expect(screen.getByRole('button', { name: 'Settings' })).not.toHaveAttribute('aria-current')
+      fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+      expect(useUIStore.getState().activeSettingsTab).toBe('general')
+      expect(useUIStore.getState().pendingSettingsTab).toBeNull()
+      expect(screen.getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-current', 'page')
+    } finally {
+      window.desktopHost = previousHost
+    }
+  })
+
+  it('keeps the desktop phone setup entry out of the browser sidebar', () => {
+    render(<Sidebar />)
+    expect(screen.queryByRole('button', { name: 'Phone connection' })).not.toBeInTheDocument()
   })
 
   it('shows a loading state instead of an empty session list while initial fetch is pending', () => {

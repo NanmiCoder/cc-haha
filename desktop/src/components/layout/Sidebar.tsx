@@ -1,6 +1,6 @@
 import { SessionScheduleMark } from '@/components/tasks/SessionScheduleMark'
 import { forwardRef, useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { Bell, CalendarClock, Check, ChevronRight, Clock, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, SquarePen, Store, X } from 'lucide-react'
+import { Bell, CalendarClock, Check, ChevronRight, Clock, Ellipsis, Folder, FolderOpen, FolderPlus, GitBranch, ListChecks, Pin, PinOff, Plus, RefreshCw, RotateCcw, Search, Settings, Smartphone, SquarePen, Store, X } from 'lucide-react'
 import { releaseWorkspaceSession } from '../../lib/workspace/releaseSession'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useUIStore } from '../../stores/uiStore'
@@ -154,6 +154,9 @@ export function Sidebar({
   const closeModal = useUIStore((s) => s.closeModal)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
+  const activeSettingsTab = useUIStore((s) => s.activeSettingsTab)
+  const showPhoneConnection = getDesktopHost().isDesktop
+  const phoneConnectionActive = showPhoneConnection && activeTabId === SETTINGS_TAB_ID && activeSettingsTab === 'h5Access'
   // Only which sessions are running or waiting, never the session map itself:
   // that changes on every streamed token of every session, and re-rendering the
   // whole project tree for each one kept the window busy while long runs
@@ -1086,6 +1089,19 @@ export function Sidebar({
         >
           {t('sidebar.scheduled')}
         </NavItem>
+        {showPhoneConnection && <NavItem
+          active={phoneConnectionActive}
+          collapsed={!expanded}
+          label={t('settings.tab.h5Access')}
+          onClick={() => {
+            useUIStore.getState().setPendingSettingsTab('h5Access')
+            useUIStore.getState().setActiveSettingsTab('h5Access')
+            useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
+          }}
+          icon={<Smartphone size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
+        >
+          {t('settings.tab.h5Access')}
+        </NavItem>}
         <NavItem
           active={activeTabId === MARKET_TAB_ID || activeTabId === CONNECTORS_TAB_ID}
           collapsed={!expanded}
@@ -1479,10 +1495,14 @@ export function Sidebar({
         >
           <div className={expanded ? 'flex min-w-0 flex-1' : 'flex'}>
           <NavItem
-            active={activeTabId === SETTINGS_TAB_ID}
+            active={activeTabId === SETTINGS_TAB_ID && !phoneConnectionActive}
             collapsed={!expanded}
             label={t('sidebar.settings')}
             onClick={() => {
+              if (showPhoneConnection && activeSettingsTab === 'h5Access') {
+                useUIStore.getState().setPendingSettingsTab(null)
+                useUIStore.getState().setActiveSettingsTab('general')
+              }
               useTabStore.getState().openTab(SETTINGS_TAB_ID, t('sidebar.settings'), 'settings')
             }}
             icon={<Settings size={16} strokeWidth={ICON_STROKE} aria-hidden="true" />}
@@ -2233,6 +2253,7 @@ function NavItem({
     <button
       onClick={onClick}
       aria-label={label}
+      aria-current={active ? 'page' : undefined}
       title={collapsed ? label : undefined}
       className={`
         group/nav flex items-center text-[13px] transition-colors duration-150
