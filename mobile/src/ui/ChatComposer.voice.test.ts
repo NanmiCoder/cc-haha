@@ -58,6 +58,13 @@ test('the actual composer wires microphone, recording controls, transcript feedb
     assert.equal(nodes.some(node => node.props?.accessibilityLabel?.startsWith('运行方式：')), false)
     assert.equal(nodes.find(node => node.type === 'TextInput').props.editable, false)
     assert.equal(nodes.find(node => node.type === 'TextInput').props.value, '原来的草稿')
+    // Recording owns the composer: an empty, disabled editor used to take up
+    // space while the waveform was squeezed between three toolbar buttons.
+    assert.equal(nodes.find(node => node.type === 'TextInput').props.style.display, 'none')
+    const panel = nodes.find(node => node.props?.testID === 'voice-recording-panel')
+    assert.ok(panel, 'recording has its own full-width surface')
+    assert.notEqual(panel.props.style.flexDirection, 'row', 'the trace and actions must not share one narrow row')
+    assert.ok(nodes.some(node => node.type === 'Text' && node.props.children === '正在聆听'))
     button(nodes, '停止录音并转成文字').props.onPress()
     button(nodes, '转写后发送').props.onPress()
     button(nodes, '取消语音输入').props.onPress()
@@ -74,6 +81,8 @@ test('the actual composer wires microphone, recording controls, transcript feedb
     assert.equal(button(render(), '转写后发送').props.disabled, true)
     voice = { ...voice, phase: 'idle', live: false, pendingText: '待插入的识别文字', issue: { code: 'permission', message: '请允许麦克风' } }
     nodes = render()
+    assert.notEqual(nodes.find(node => node.type === 'TextInput').props.style.display, 'none')
+    assert.equal(nodes.find(node => node.type === 'TextInput').props.value, '原来的草稿')
     assert.ok(nodes.some(node => node.type === 'Text' && node.props.children === '待插入的识别文字'))
     button(nodes, '插入转写文字').props.onPress()
     assert.equal(inserted, 1)

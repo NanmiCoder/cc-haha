@@ -26,7 +26,7 @@ import { Text } from '../Text'
 import { Message } from '../Message'
 import { StepGroup, TurnFold, type StepContext, type StepUi } from '../chat/StepGroup'
 import { StatusCaption } from '../chat/StatusCaption'
-import { visibleChatRows, type ChatRow } from '../chat/steps'
+import { toggleGroupOpen, visibleChatRows, type ChatRow } from '../chat/steps'
 import { ConfirmSheet } from './ConfirmSheet'
 import { agentStatusText, clock } from './activityView'
 import { subagentHeader, subagentRunView } from './subagentView'
@@ -123,7 +123,7 @@ export function SubagentRun({
   if (resource.value && live !== running) setRunning(live)
   const now = useNow(live)
   const view = subagentRunView(resource.value?.output ?? null, live)
-  const [ui, setUi] = useState<StepUi>({ expanded: new Set(), open: new Set(), revealed: new Set() })
+  const [ui, setUi] = useState<StepUi>({ expanded: new Set(), open: new Set(), closed: new Set(), revealed: new Set() })
   const context: StepContext = {
     workDir: undefined,
     waiting: new Set(),
@@ -266,7 +266,7 @@ export function SubagentRun({
                 context={context}
                 ui={ui}
                 onToggleStep={(key) => setUi((value) => ({ ...value, expanded: toggle(value.expanded, key) }))}
-                onToggleOpen={(key) => setUi((value) => ({ ...value, open: toggle(value.open, key) }))}
+                onToggleOpen={(key, live) => setUi((value) => toggleGroupOpen(value, key, live))}
                 onReveal={(key) => setUi((value) => ({ ...value, revealed: toggle(value.revealed, key) }))}
               />
             )
