@@ -90,4 +90,15 @@ describe('isValidCron', () => {
     expect(isValidCron('0 0 1 1 0')).toBe(true)
     expect(isValidCron('59 23 31 12 7')).toBe(true)
   })
+
+  it('uses the scheduler grammar so a schedule accepted on either client can run', () => {
+    // The old client-only validator accepted zero steps, reversed ranges and
+    // single-value steps, all of which the scheduler rejects.
+    for (const cron of ['*/0 * * * *', '0 9 * * 5-1', '0/2 9 * * *']) {
+      expect(isValidCron(cron), cron).toBe(false)
+    }
+    for (const cron of ['0-30/10 9 * * *', '0 9 * * 5-7', '*/5,30 9 * * *']) {
+      expect(isValidCron(cron), cron).toBe(true)
+    }
+  })
 })

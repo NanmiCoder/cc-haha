@@ -39,15 +39,21 @@ async function resolveTarget(input: ScheduledSessionTaskInput): Promise<string> 
   const providerId = source || task.providerId !== undefined
     ? task.providerId
     : (await new ProviderService().listProviders()).activeId
+  // A task with no explicit selection follows the same desktop defaults as a
+  // normal new chat. In native settings/env mode there is no catalogued OAuth
+  // identity to validate or persist. Explicit null still means Claude OAuth.
+  const followsNativeDefaults = !source && task.providerId === undefined && task.model === undefined && providerId == null
   const inherited = source ? await getCollaborationRuntime(source) : { providerId: providerId ?? null, modelId: task.model ?? 'default' }
-  const runtime = await validateSessionRuntime(await resolveSessionRuntime({ model: task.model, providerId }, inherited))
+  const runtime = followsNativeDefaults ? undefined : await validateSessionRuntime(await resolveSessionRuntime({ model: task.model, providerId }, inherited))
   const permissionMode = sourceInfo?.permissionMode ?? task.permissionMode ?? await new SettingsService().getPermissionMode()
   if (!await input.canSend()) throw new Error('Scheduled task changed before session creation')
   const created = await sessionService.createSession(workDir, task.useWorktree ? { worktree: true } : undefined, permissionMode)
   await sessionService.appendSessionMetadata(created.sessionId, {
     workDir: created.workDir, customTitle: task.name || task.prompt.slice(0, 80), permissionMode,
-    runtimeProviderId: runtime.providerId, runtimeModelId: runtime.modelId,
-    effortLevel: runtime.effortLevel, openAIFastMode: runtime.openAIFastMode ?? false,
+    ...(runtime ? {
+      runtimeProviderId: runtime.providerId, runtimeModelId: runtime.modelId,
+      effortLevel: runtime.effortLevel, openAIFastMode: runtime.openAIFastMode ?? false,
+    } : {}),
   })
   return created.sessionId
 }

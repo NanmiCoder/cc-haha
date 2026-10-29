@@ -2,6 +2,7 @@ import type { DashboardRow, MobileActivity } from '../../core/dashboard'
 import type { DashboardFailure } from '../../core/dashboardSync'
 import type { ScheduledTask } from '../../core/operations'
 import type { Host, Session } from '../../core/types'
+import { nextRunAt } from '../../core/schedulesView'
 
 /* ───────────── 项目 ───────────── */
 
@@ -381,10 +382,10 @@ const weekdayNames = ['周日', '周一', '周二', '周三', '周四', '周五'
 
 /** “3 个开启 · 下次 18:00”；有任何一个开启的任务算不出时间时只显示数量。 */
 export function scheduleSummary(tasks: ScheduledTask[], now: Date) {
-  const enabled = tasks.filter((task) => task.enabled !== false)
+  const enabled = tasks.filter((task) => task.enabled !== false && task.scheduleState !== 'completed')
   if (!tasks.length) return '未设置'
-  if (!enabled.length) return '全部暂停'
-  const runs = enabled.map((task) => nextCronRun(task.cron, now))
+  if (!enabled.length) return tasks.every(task => task.scheduleState === 'completed') ? '全部完成' : '全部暂停'
+  const runs = enabled.map((task) => task.schedule || task.nextRunAt !== undefined ? nextRunAt(task, now) : nextCronRun(task.cron, now))
   if (runs.some((run) => !run)) return `${enabled.length} 个开启`
   const next = new Date(Math.min(...runs.map((run) => run!.getTime())))
   const time = `${pad(next.getHours())}:${pad(next.getMinutes())}`

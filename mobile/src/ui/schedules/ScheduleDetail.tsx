@@ -3,11 +3,12 @@ import { ScrollView, View } from 'react-native'
 import { router } from 'expo-router'
 import { useConnection } from '../../state/AppContext'
 import type { ScheduledTask, TaskRun } from '../../core/operations'
+import type { scheduleUpdate } from '../../core/scheduleDraft'
 import {
   newestFirst,
-  nextDayLabel,
   nextRunAt,
   projectLabel,
+  taskNextRunLabel,
   type RunSummary,
 } from '../../core/schedulesView'
 import { useFocusedResource } from '../../core/useFocusedResource'
@@ -122,7 +123,7 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
     )
   const name = task.name || '未命名任务'
   const enabled = switches.value(task.id, task.enabled !== false)
-  const next = enabled ? nextRunAt(task.cron, new Date(now)) : null
+  const next = enabled ? nextRunAt(task, new Date(now)) : null
   const toggle = (value: boolean) => {
     if (!client) return
     void resource.run(async (signal) => {
@@ -130,7 +131,7 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
       try {
         return await client.request(schedulePath(task.id), {
           method: 'PUT',
-          body: { enabled: value },
+          body: { enabled: value, ...(task.revision === undefined ? {} : { expectedRevision: task.revision }) },
           signal,
         })
       } catch (e) {
@@ -158,11 +159,11 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
       }
     )
   }
-  const saveCron = (cron: string) => {
+  const saveSchedule = (update: NonNullable<ReturnType<typeof scheduleUpdate>>) => {
     if (!client) return
     void resource.run(
       (signal) =>
-        client.request(schedulePath(task.id), { method: 'PUT', body: { cron }, signal }),
+        client.request(schedulePath(task.id), { method: 'PUT', body: update, signal }),
       () => setEditing(false)
     )
   }
@@ -194,11 +195,11 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
               {name}
             </Text>
             <ScheduleLine
-              cron={task.cron}
+              task={task}
               size={14}
               extras={[
-                projectLabel(task.folderPath),
-                enabled ? (next ? `下次${nextDayLabel(next, new Date(now))}` : '') : '已暂停',
+                task.execution?.kind === 'session' ? '已有会话' : projectLabel(task.folderPath),
+                task.scheduleState === 'completed' ? '已完成' : enabled ? (next ? `下次${taskNextRunLabel(task, next, new Date(now))}` : '') : '已暂停',
               ]}
             />
           </View>
@@ -273,10 +274,10 @@ export function ScheduleDetail({ hostId, id }: { hostId: string; id: string }) {
       <EditTimeSheet
         key={editKey}
         visible={editing}
-        cron={task.cron}
+        task={task}
         busy={resource.busy}
         error={editing ? resource.error : ''}
-        onSave={saveCron}
+        onSave={saveSchedule}
         onClose={() => setEditing(false)}
       />
       <RunResultSheet run={result} onClose={() => setResult(null)} />

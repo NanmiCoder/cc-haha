@@ -1,6 +1,7 @@
 import type { PropsWithChildren } from 'react'
 import { Pressable, TextInput, View, type StyleProp, type ViewStyle } from 'react-native'
-import { isClockValid, scheduleParts, type Tone } from '../../core/schedulesView'
+import { isClockValid, taskScheduleParts, type Tone } from '../../core/schedulesView'
+import type { ScheduledTask } from '../../core/operations'
 import { monoFont } from '../palette'
 import { Dot, Icon, Mono, useColors } from '../kit'
 import { Text } from '../Text'
@@ -21,23 +22,23 @@ export function useToneColor() {
 
 /** “工作日 09:00 · 项目 · …”，时间用等宽；读不懂的 cron 原样等宽显示。 */
 export function ScheduleLine({
-  cron,
+  task,
   extras,
   size = 13,
   color,
 }: {
-  cron: string
+  task: Pick<ScheduledTask, 'cron' | 'schedule'>
   extras: string[]
   size?: number
   color?: string
 }) {
   const colors = useColors()
-  const parts = scheduleParts(cron)
-  const tail = extras.filter(Boolean).map((item) => ` · ${item}`).join('')
+  const parts = taskScheduleParts(task)
+  const tail = [task.schedule?.timeZone, ...extras].filter(Boolean).map((item) => ` · ${item}`).join('')
   return (
     <Text numberOfLines={1} style={{ fontSize: size, lineHeight: size + 5, color: color ?? colors.ink2 }}>
       {parts ? `${parts.repeat} ` : null}
-      <Mono style={{ fontSize: size }}>{parts ? parts.time : cron}</Mono>
+      <Mono style={{ fontSize: size }}>{parts ? parts.time : task.schedule?.kind === 'cron' ? task.schedule.expression : task.cron}</Mono>
       {tail}
     </Text>
   )
@@ -94,7 +95,7 @@ export function TimeField({
   const invalid = !isClockValid(value)
   return (
     <TextInput
-      accessibilityLabel="电脑本地时间（HH:mm）"
+      accessibilityLabel="执行时间（HH:mm）"
       accessibilityHint={invalid ? '请输入有效时间，例如 09:00' : undefined}
       value={value}
       onChangeText={onChangeText}
