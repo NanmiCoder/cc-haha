@@ -1,27 +1,36 @@
 ---
 title: Mobile App, H5, and IM
 nav_title: Phone and IM
-description: Scan to connect your mobile app or browser to your computer, or chat from WeChat, Feishu, or Telegram.
+description: Open Phone connection to continue tasks in a browser, check mobile app availability, and set up access away from home.
 order: 9
 ---
 
 # Mobile App, H5, and IM
 
-A task is running on your computer and you want to check on it, or add one more instruction, from your phone. Use the mobile app, a browser, or IM:
+A task is running on your computer and you want to check on it, or add one more instruction, from your phone. Open **Phone connection** in the desktop's left sidebar, or go to **Settings → Phone connection**. You can connect with your phone's browser now, while the mobile app is awaiting release.
 
-- **Mobile app** — scan to connect the iOS or Android client, check tasks, and respond to approvals.
-- **H5 Access** — open the same interface in a mobile browser: sessions, messages, attachments, permission buttons, all of it.
-- **IM Adapters** — talk to Claude directly inside WeChat, DingTalk, WhatsApp, Telegram, or Feishu.
+## cc-haha mobile app availability
 
-All of these require your computer to be on with the app running. Tasks execute on your computer. Use a direct connection on the LAN, your own Tailscale network remotely, or the respective IM platform. The mobile app and H5 share the remote pairing entry described below.
+| How to open cc-haha on your phone | Availability | How to get started |
+|---|---|---|
+| cc-haha Android app | Officially signed APK awaiting release | A download will be provided after release |
+| cc-haha iPhone / iPad app | TestFlight invitations not yet open | An installation invitation will be provided when testing opens |
+| Phone browser (H5) | Available now | Select **Use phone browser**, then enable the connection and scan as described below |
+
+**Use phone browser** selects **Same Wi-Fi**. You still need to read the notice and enable the connection yourself. When your phone and computer share a trusted Wi-Fi network, no Tailscale installation is needed. Use **Tailscale remote access** below when connecting over cellular data or another Wi-Fi network.
+
+Keep the computer on, awake, and running cc-haha. Tasks always execute on the computer. Tailscale connects your devices while away; the cc-haha mobile app and browser let you check tasks and respond to approvals.
+
+To chat from WeChat, DingTalk, WhatsApp, Telegram, or Feishu, see **IM Adapters** at the end of this page.
 
 ## H5 Access
 
 ### Turning it on
 
-1. Open **Settings → Phone connection → Same Wi-Fi**.
-2. Turn on **Enable local connection** and confirm after reading the warning.
-3. Scan the QR code with the phone app, or use your phone camera to open it in a browser. You can also copy the launch URL to your own device.
+1. Open **Phone connection** in the desktop's left sidebar, or go to **Settings → Phone connection**.
+2. Select **Use phone browser**, or choose **Same Wi-Fi**.
+3. Turn on **Enable local connection** and confirm after reading the warning.
+4. Scan the QR code with your phone camera and open it in your usual Safari, Chrome, or system browser. You can also copy the launch URL to your own device.
 
 If an older configuration has no saved token, click **Generate token** to show a new QR code.
 
@@ -69,16 +78,42 @@ Provider website login, configuration import, and desktop administration remain 
 
 Keep using LAN scanning when your devices share a local network. Away from home or the office, connect your phone and computer through your own **Tailscale** network, then connect cc-haha. You do not need to rent a server, register a domain, or configure ngrok. Tailscale handles connectivity; cc-haha still handles phone pairing and authorization.
 
-### 1. Connect both devices
+### 1. Download Tailscale and connect both devices
 
-Follow the [official Tailscale quickstart](https://tailscale.com/docs/how-to/quickstart) to install Tailscale on your computer and phone. Sign in with the same account you own on both devices and connect them. Your phone asks for permission to add a VPN configuration the first time.
+Install **Tailscale** once on your computer and once on your phone. Choose the official download for each device below:
+
+| Device | Download / install | What to do next |
+|---|---|---|
+| macOS computer | [Download macOS installer (.pkg)](https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg) | Open the package, follow the installer, and open Tailscale; this standalone version is recommended |
+| Windows computer | [Download Windows installer (.exe)](https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe) | Run the installer; it selects the right version for your system automatically. Keep an internet connection during installation |
+| Android phone | [Download Android installer (.apk)](https://pkgs.tailscale.com/stable/tailscale-android-universal-latest.apk) · [Install from Google Play](https://play.google.com/store/apps/details?id=com.tailscale.ipn) | Open the link on your phone; for an APK, allow your browser to install apps when Android asks |
+| iPhone / iPad | [Install from the App Store](https://apps.apple.com/us/app/tailscale/id1470499037?ls=1) | Open the link on your phone and tap **Get**; the app must be available in your Apple account's store region |
+
+If you are reading on a computer, open this guide in your phone's browser to use its installation link. **Phone connection → Away from home** in the desktop app also provides Tailscale downloads grouped by platform.
+
+Tailscale hosts these installers, and the download links resolve to the current stable release. Android APK installations require manual updates; Google Play is easier for automatic updates when available. For other platforms, older systems, or special installation requirements, see the [official download page](https://tailscale.com/download) and [installation guide](https://tailscale.com/docs/install).
+
+For iPhone and iPad, the supported installation path is the App Store; Tailscale does not provide a standalone IPA for general installation. If the store says the app is unavailable in your region, see [Tailscale's explanation](https://github.com/tailscale/tailscale/issues/19625). You can still use the same-Wi-Fi connection above without Tailscale.
+
+After installing, open Tailscale on your computer and phone, **sign in with the same account, and keep both connected**. Allow the VPN configuration when prompted; macOS may also ask you to enable a network extension. See the [official quickstart](https://tailscale.com/docs/how-to/quickstart) for account and sign-in help.
 
 Use **Tailscale Serve** to make the address available to authorized devices in your private network. You do not need public Funnel access, an exit node, or a subnet router. See the [Serve guide](https://tailscale.com/docs/features/tailscale-serve) for how this works.
 
 ### 2. Configure the computer
 
-1. Open **Settings → Phone connection → Away from home**. Keep the default local port, `17463`, or select an unused port.
-2. In a terminal on the computer, run `tailscale serve status` first. If HTTPS port `443` is unused, run the command below. If another Serve service already uses it, use the alternative port example below to preserve that service.
+Run the following commands **on the computer only**; no commands are needed on the phone. Prepare a command window first:
+
+- **macOS:** press `⌘ + Space`, search for **Terminal**, and open it. In Tailscale, open **Settings → CLI integration → Show me how → Install Now**, enter your computer's administrator password when prompted, then return to Terminal. If you already use the App Store version, replace `tailscale` at the start of each command below with `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. See the [macOS CLI instructions](https://tailscale.com/docs/reference/tailscale-cli?tab=macos).
+- **Windows:** search for **PowerShell** in the Start menu and open it. If PowerShell was open before you installed Tailscale, close and reopen it before pasting commands. See the [Windows CLI instructions](https://tailscale.com/docs/reference/tailscale-cli?tab=windows).
+
+1. Open **Phone connection → Away from home** in the desktop app. Keep the default local port, `17463`, or select an unused port.
+2. Paste the following command into the computer's command window and press Enter to check existing forwards:
+
+   ```sh
+   tailscale serve status
+   ```
+
+   If HTTPS port `443` is unused, run the command below. If another Serve service already uses it, use the alternative port example below to preserve that service.
 
    ```sh
    tailscale serve --bg http://127.0.0.1:17463
@@ -98,12 +133,10 @@ tailscale serve --bg --https=8443 http://127.0.0.1:17463
 
 Include `:8443` in the app's address too, such as `https://my-computer.example.ts.net:8443`. Forward the root path, not just `/remote`: pages, API requests, and WebSocket connections share this entry. See the [Serve command reference](https://tailscale.com/docs/reference/tailscale-cli/serve).
 
-**If macOS cannot find `tailscale`:** the standalone app can install CLI integration from Tailscale Settings → CLI integration. With the App Store app, replace `tailscale` at the start of each command with `/Applications/Tailscale.app/Contents/MacOS/Tailscale`. See the [official CLI guide](https://tailscale.com/docs/reference/tailscale-cli?tab=macos) for Windows and Linux usage too. Run these commands on the computer; the phone only needs its Tailscale connection.
-
 ### 3. Scan and approve
 
 1. Keep Tailscale connected on the phone. Turn off Wi-Fi and use cellular data to check the remote path.
-2. Scan the desktop pairing QR code in the cc-haha mobile app. Browser users can scan with the phone camera and open their usual browser.
+2. Scan the desktop pairing QR code with your phone camera and open your usual browser. When using the cc-haha mobile app, you can also scan from inside the app.
 3. Approve the phone on the desktop. Once paired, the phone saves the connection and can show tasks and approvals.
 
 After upgrading from ngrok, the old remote entry does not start automatically. Previously configured Tailscale HTTPS addresses also need fresh consent before enabling. An old ngrok address cannot connect through Tailscale; generate a new QR code to pair. LAN configuration and existing computer sessions are unaffected.

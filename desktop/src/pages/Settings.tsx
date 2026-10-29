@@ -75,11 +75,13 @@ export function DesktopSettings() {
   const activeTab = useUIStore((s) => s.activeSettingsTab)
   const setActiveTab = useUIStore((s) => s.setActiveSettingsTab)
   const pendingSettingsTab = useUIStore((s) => s.pendingSettingsTab)
+  const contentRef = useRef<HTMLDivElement>(null)
   const t = useTranslation()
 
   useEffect(() => {
     if (!pendingSettingsTab) return
     setActiveTab(pendingSettingsTab)
+    if (contentRef.current) contentRef.current.scrollTop = 0
     useUIStore.getState().setPendingSettingsTab(null)
   }, [pendingSettingsTab, setActiveTab])
 
@@ -115,7 +117,7 @@ export function DesktopSettings() {
             700px cap left explorer-style panes (memory, skills) cramped in the
             middle of an empty page. One width for every pane, so switching
             panes never moves the header. */}
-        <div className="flex-1 min-w-0 overflow-y-auto [scrollbar-gutter:stable]">
+        <div ref={contentRef} className="flex-1 min-w-0 overflow-y-auto [scrollbar-gutter:stable]">
           <div data-testid="settings-page-frame" className="mx-auto w-full max-w-[1120px] px-10 pt-9 pb-[72px]">
             {activeTab === 'providers' && <ProviderSettings />}
             {activeTab === 'activity' && <ActivitySettings />}
