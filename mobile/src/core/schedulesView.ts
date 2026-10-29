@@ -1,10 +1,10 @@
 import { formatDuration } from './dashboard'
-import type { TaskRun } from './operations'
+import type { ScheduledTask, TaskRun } from './operations'
+import { dateTimeInZone, parseCron } from '../../../src/shared/taskSchedule'
 
 /**
- * 定时任务页面的展示逻辑。电脑只告诉我们 cron 和运行记录；
- * “下次运行”只对手机端能可靠推算的两种计划（每天 / 工作日 HH:mm）给出，
- * 其他 cron 一律返回空，界面上不显示，避免猜错。
+ * Scheduled plans use their explicit timezone and the server's next occurrence.
+ * Legacy string helpers remain available for older callers and fixtures.
  */
 
 export type DailySchedule = { hour: number; minute: number; weekdays: boolean }
@@ -61,25 +61,20 @@ export function isClockValid(time: string) {
   return !!match && Number(match[1]) <= 23 && Number(match[2]) <= 59
 }
 
-/** 编辑执行时间的初始值：能读懂就沿用，读不懂（自定义 cron）就从每天 09:00 开始。 */
-export function editableSchedule(cron: string) {
-  const parsed = parseDailyCron(cron)
-  return parsed
-    ? { weekdays: parsed.weekdays, time: `${pad(parsed.hour)}:${pad(parsed.minute)}`, custom: false }
-    : { weekdays: false, time: '09:00', custom: true }
-}
-
-/** “工作日 / 09:00” 两段，便于时间用等宽字体；不是每天/工作日时返回空。 */
+/** Separate recurrence and clock captions; preserve unknown expressions verbatim. */
 export function scheduleParts(cron: string) {
   const parsed = parseDailyCron(cron)
   if (!parsed) {
     const weekly = parseWeeklyCron(cron)
-    return weekly
-      ? {
+    if (weekly) return {
           repeat: `每周${weekly.days.map((day) => weekdayDigits[day]).join('、')}`,
           time: `${pad(weekly.hour)}:${pad(weekly.minute)}`,
         }
-      : null
+    const parsed = parseCron(cron)
+    if (parsed.frequency === 'monthly') return { repeat: `每月 ${parsed.monthDay} 号`, time: parsed.time }
+    if (parsed.frequency === 'everyNMinutes') return { repeat: `每 ${parsed.minuteInterval} 分钟`, time: '' }
+    if (parsed.frequency === 'everyNHours') return { repeat: `每 ${parsed.hourInterval} 小时`, time: parsed.minuteOffset ? `第 ${parsed.minuteOffset} 分钟` : '整点' }
+    return null
   }
   return {
     repeat: parsed.weekdays ? '工作日' : '每天',
@@ -90,7 +85,12 @@ export function scheduleParts(cron: string) {
 const isWorkday = (date: Date) => date.getDay() >= 1 && date.getDay() <= 5
 
 /** 下一次触发时间（手机本地时区）；算不出时返回 null。 */
-export function nextRunAt(cron: string, now = new Date()): Date | null {
+export function nextRunAt(cron: string | ScheduledTask, now = new Date()): Date | null {
+  if (typeof cron !== 'string') {
+    if (cron.enabled === false || cron.scheduleState === 'completed') return null
+    const at = cron.nextRunAt ?? (cron.schedule?.kind === 'once' ? Date.parse(cron.schedule.runAt) : NaN)
+    return Number.isFinite(at) && at > now.getTime() ? new Date(at) : null
+  }
   const parsed = parseDailyCron(cron)
   if (!parsed) {
     const weekly = parseWeeklyCron(cron)
@@ -153,10 +153,22 @@ export function nextDayLabel(value: Date, now = new Date()) {
   return `${value.getMonth() + 1}/${value.getDate()}`
 }
 
+/** The next occurrence caption uses the plan's timezone, like its clock above it. */
+export function taskNextRunLabel(task: ScheduledTask, next: Date, now = new Date()) {
+  if (!task.schedule) return `${nextDayLabel(next, now)} ${clockLabel(next)}`
+  const wall = dateTimeInZone(next.toISOString(), task.schedule.timeZone)
+  const today = dateTimeInZone(now.toISOString(), task.schedule.timeZone)
+  const offset = (Date.parse(wall.slice(0, 10)) - Date.parse(today.slice(0, 10))) / 86400000
+  const date = new Date(`${wall}:00Z`)
+  const day = offset === 0 ? (date.getUTCHours() >= 18 ? '今晚' : '今天') : offset === 1 ? '明天'
+    : offset > 1 && offset < 7 ? weekdayNames[date.getUTCDay()] : `${date.getUTCMonth() + 1}/${date.getUTCDate()}`
+  return `${day} ${wall.slice(11)}`
+}
+
 /** 列表里每个任务的“最近运行”一行。 */
 export function latestRunLine(
   run: RunSummary | undefined,
-  cron: string,
+  cron: string | ScheduledTask,
   now = new Date()
 ): { tone: Tone; text: string } {
   if (!run) return { tone: 'none', text: '还没有执行记录' }
@@ -170,8 +182,13 @@ export function latestRunLine(
   const next = nextRunAt(cron, now)
   return {
     tone: 'ok',
-    text: next ? `${at} 完成 · 下次${nextDayLabel(next, now)} ${clockLabel(next)}` : `${at} 完成`,
+    text: next ? `${at} 完成 · 下次${typeof cron === 'string' ? `${nextDayLabel(next, now)} ${clockLabel(next)}` : taskNextRunLabel(cron, next, now)}` : `${at} 完成`,
   }
+}
+
+export function taskScheduleParts(task: Pick<ScheduledTask, 'cron' | 'schedule'>) {
+  if (task.schedule?.kind === 'once') return { repeat: '仅一次', time: dateTimeInZone(task.schedule.runAt, task.schedule.timeZone).replace('T', ' ') }
+  return scheduleParts(task.schedule?.expression ?? task.cron)
 }
 
 const firstLine = (text?: string) =>

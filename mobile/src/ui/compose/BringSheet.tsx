@@ -8,6 +8,7 @@ import { Glyph } from './glyphs'
 import { ConnectorIcon } from '../ConnectorIcon'
 import type { ApiClient } from '../../core/client'
 import type { ComposerCandidate, ComposerReference } from '../../core/composerReferences'
+import { computerUseReference, isComputerUseReference } from '../../core/computerUse'
 import type { RecentItem } from '../../core/recentSkills'
 import { recentRepository } from './recentStore'
 import { useBringExtras } from './useBringExtras'
@@ -16,6 +17,7 @@ import {
   assembleBringItems,
   bringEntries,
   bringEntryTitle,
+  bringItemFromReference,
   connectorSectionTitle,
   doneLabel,
   groupItems,
@@ -404,6 +406,7 @@ export function BringSheet({
   team,
   onTeam,
   computer,
+  onComputerSelected,
 }: {
   visible: boolean
   onClose(): void
@@ -423,6 +426,7 @@ export function BringSheet({
   team: boolean
   onTeam(value: boolean): void
   computer: ComputerUse
+  onComputerSelected(value: boolean): void
 }) {
   const colors = useColors()
   const input = useRef<ComponentRef<typeof TextInput>>(null)
@@ -712,6 +716,15 @@ export function BringSheet({
                 onTeam={onTeam}
                 lean={lean}
                 computer={computer}
+                computerSelected={selected.some((item) => item.reference && isComputerUseReference(item.reference))}
+                onComputerSelected={(value) => {
+                  setSelected((previous) => value
+                    ? previous.some((item) => item.reference && isComputerUseReference(item.reference))
+                      ? previous
+                      : [...previous, bringItemFromReference({ ...computerUseReference })]
+                    : previous.filter((item) => !item.reference || !isComputerUseReference(item.reference)))
+                  onComputerSelected(value)
+                }}
                 accepted={teamAccepted}
                 onAccept={() => setTeamAccepted(true)}
               />

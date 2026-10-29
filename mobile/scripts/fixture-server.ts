@@ -5,6 +5,9 @@
  */
 import assert from 'node:assert/strict'
 import { profileFixture } from './profile-fixture'
+import { validateVoiceWav } from '../../src/server/services/voice/wav'
+import { encodeVoiceWav } from '../src/core/voiceWav'
+import { isValidCron, type TaskSchedule } from '../../src/shared/taskSchedule'
 import type { ServerWebSocket } from 'bun'
 import type {
   ClientMessage,
@@ -97,6 +100,19 @@ function object(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function fixturePlan(value: unknown): TaskSchedule | undefined | null {
+  if (value === undefined) return undefined
+  const data = object(value)
+  if (typeof data.timeZone !== 'string') return null
+  let plan: TaskSchedule
+  if (data.kind === 'once' && typeof data.runAt === 'string') plan = { kind: 'once', runAt: data.runAt, timeZone: data.timeZone }
+  else if (data.kind === 'cron' && typeof data.expression === 'string') plan = { kind: 'cron', expression: data.expression, timeZone: data.timeZone }
+  else return null
+  try { new Intl.DateTimeFormat('en', { timeZone: plan.timeZone }) } catch { return null }
+  if (plan.kind === 'cron') return isValidCron(plan.expression) ? plan : null
+  return /(Z|[+-]\d{2}:\d{2})$/.test(plan.runAt) && Number.isFinite(Date.parse(plan.runAt)) ? plan : null
+}
+
 export function startFixtureServer({
   port = 3457,
   quiet = false,
@@ -123,6 +139,11 @@ export function startFixtureServer({
   let computerUse = { enabled: false, authorizedApps: [], grantFlags: { clipboardRead: false, clipboardWrite: false, systemKeyCombos: false } }
   const scheduledTasks = new Map<string, ScheduledTask>()
   const scheduledRuns: TaskRun[] = []
+  const scheduledSnapshot = (task: ScheduledTask): ScheduledTask => ({
+    ...task,
+    ...(task.schedule?.kind === 'once' && task.enabled !== false ? { nextRunAt: Date.parse(task.schedule.runAt) } : {}),
+    scheduleState: task.enabled === false ? (task.scheduleState === 'completed' ? 'completed' : 'paused') : 'active',
+  })
   const branches = new Set(['main', 'feat/qr-pair', 'fix/ws-replay'])
   const providers: Record<string, unknown>[] = [
     {
@@ -1294,6 +1315,25 @@ export function startFixtureServer({
           ? undefined
           : fail('WebSocket upgrade failed')
       }
+      // Deterministic transcription boundary for microphone UI smoke tests.
+      // Validate real WAV bytes but never load a speech model or user assets.
+      if (url.pathname === '/api/voice/catalog' && request.method === 'GET')
+        return json({
+          supported: true,
+          preferences: { enabled: true, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
+          providers: [{ info: { id: 'sensevoice-local', name: 'Fixture 本机语音', location: 'local', languages: ['auto', 'zh', 'en'] }, preparation: { phase: 'ready' } }],
+          limits: { maxAudioSeconds: 120, maxAudioBytes: 4 * 1024 * 1024 },
+        })
+      if (url.pathname === '/api/voice/transcribe' && request.method === 'POST') {
+        try {
+          const wav = new Uint8Array(await request.arrayBuffer())
+          const { audioSeconds } = validateVoiceWav(wav)
+          await Bun.sleep(250)
+          return json({ text: '语音转写测试文字（本地 fixture）', audioSeconds, inferenceSeconds: 0 })
+        } catch {
+          return fail('Fixture expects mono PCM16 16 kHz WAV', 400, 'voice/invalid-audio')
+        }
+      }
       let body: Record<string, unknown> = {}
       if (['POST', 'PUT', 'PATCH'].includes(request.method)) {
         const raw = await request.text()
@@ -1518,6 +1558,10 @@ export function startFixtureServer({
         )
       if (path.startsWith('/api/scheduled-tasks')) {
         const [, , , taskId, action] = path.split('/')
+        if (taskId === 'notification-capabilities') {
+          if (method !== 'GET' || action || url.search) return fail('Notification capabilities are read-only', 405, 'METHOD_NOT_ALLOWED')
+          return json({ channels: { desktop: true, feishu: false, telegram: false } })
+        }
         if (taskId === 'runs' && method === 'GET') {
           if (action) {
             const run = scheduledRuns.find((run) => run.id === action)
@@ -1545,29 +1589,41 @@ export function startFixtureServer({
           })
         }
         if (!taskId && method === 'GET')
-          return json({ tasks: [...scheduledTasks.values()] })
+          return json({ tasks: [...scheduledTasks.values()].map(scheduledSnapshot) })
         if (!taskId && method === 'POST') {
+          const plan = fixturePlan(body.schedule)
+          if (plan === null) return fail('Invalid schedule')
+          if (plan) {
+            if (plan.kind === 'once' && Date.parse(plan.runAt) <= Date.now()) return fail('One-time task must be scheduled in the future')
+          }
           if (
             typeof body.prompt !== 'string' ||
             !body.prompt.trim() ||
-            typeof body.cron !== 'string' ||
-            body.cron.trim().split(/\s+/).length !== 5
+            (!plan && (typeof body.cron !== 'string' || body.cron.trim().split(/\s+/).length !== 5))
           )
             return fail('A prompt and five-field cron are required')
           const task: ScheduledTask = {
             id: crypto.randomUUID(),
             name: typeof body.name === 'string' ? body.name : undefined,
             prompt: body.prompt,
-            cron: body.cron,
+            cron: plan?.kind === 'cron' ? plan.expression : typeof body.cron === 'string' ? body.cron : '',
             enabled: body.enabled !== false,
-            recurring: body.recurring === true,
+            recurring: plan ? plan.kind === 'cron' : body.recurring === true,
             permanent: body.permanent === true,
             folderPath:
               typeof body.folderPath === 'string' ? body.folderPath : undefined,
             createdAt: Date.now(),
+            revision: 1,
+            ...(plan ? { schedule: plan } : {}),
+            ...(body.execution ? { execution: body.execution as ScheduledTask['execution'] } : {}),
+            ...(body.notificationPolicy ? { notificationPolicy: body.notificationPolicy as ScheduledTask['notificationPolicy'] } : {}),
+            ...(body.notification ? { notification: body.notification as ScheduledTask['notification'] } : {}),
+            ...(typeof body.model === 'string' ? { model: body.model } : {}),
+            ...(body.providerId === null || typeof body.providerId === 'string' ? { providerId: body.providerId } : {}),
+            ...(typeof body.useWorktree === 'boolean' ? { useWorktree: body.useWorktree } : {}),
           }
           scheduledTasks.set(task.id, task)
-          return json({ task }, 201)
+          return json({ task: scheduledSnapshot(task) }, 201)
         }
         const task = taskId ? scheduledTasks.get(taskId) : undefined
         if (!task) return fail('Scheduled task not found', 404, 'NOT_FOUND')
@@ -1611,11 +1667,21 @@ export function startFixtureServer({
           return json({ ok: true })
         }
         if (!action && method === 'PUT') {
+          if (body.expectedRevision !== undefined && body.expectedRevision !== (task.revision ?? 1)) return fail('Task was changed; reload before updating', 409, 'CONFLICT')
+          if (body.schedule !== undefined) {
+            const plan = fixturePlan(body.schedule)
+            if (!plan) return fail('Invalid schedule')
+            if (plan.kind === 'once' && Date.parse(plan.runAt) <= Date.now()) return fail('One-time task must be scheduled in the future')
+            task.schedule = plan
+            task.cron = plan.kind === 'cron' ? plan.expression : ''
+            task.recurring = plan.kind === 'cron'
+          }
           for (const key of ['name', 'prompt', 'cron', 'folderPath'] as const)
             if (typeof body[key] === 'string') task[key] = body[key]
           for (const key of ['enabled', 'recurring', 'permanent'] as const)
             if (typeof body[key] === 'boolean') task[key] = body[key]
-          return json({ task })
+          task.revision = (task.revision ?? 1) + 1
+          return json({ task: scheduledSnapshot(task) })
         }
         if (!action && method === 'DELETE') {
           scheduledTasks.delete(task.id)
@@ -2180,6 +2246,15 @@ async function selfTest() {
   const sockets: WebSocket[] = []
   try {
     assert.equal((await fetch(`${base}/api/sessions`)).status, 401)
+    const voiceCatalog = await (await fetch(`${base}/api/voice/catalog`, { headers })).json() as { supported: boolean }
+    assert.equal(voiceCatalog.supported, true)
+    const voiceBytes = encodeVoiceWav(new Float32Array(8_000).fill(0.25))
+    const voiceResponse = await fetch(`${base}/api/voice/transcribe`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'audio/wav' }, body: Uint8Array.from(voiceBytes).buffer,
+    })
+    assert.equal(voiceResponse.status, 200)
+    assert.deepEqual(await voiceResponse.json(), { text: '语音转写测试文字（本地 fixture）', audioSeconds: 0.5, inferenceSeconds: 0 })
+    assert.equal((await fetch(`${base}/api/voice/transcribe`, { method: 'POST', headers, body: '{}' })).status, 400)
     assert.deepEqual(
       await (
         await fetch(`${base}/api/h5-access/verify`, { method: 'POST', headers })

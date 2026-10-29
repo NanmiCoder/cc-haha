@@ -16,7 +16,7 @@ import {
   useColors,
 } from '../kit'
 
-/** 选项目：电脑默认目录 · 最近项目 · 手动输入路径。 */
+/** 新会话必须明确项目：最近项目或手动输入电脑路径。 */
 export function ProjectPickerSheet({
   visible,
   value,
@@ -46,16 +46,9 @@ export function ProjectPickerSheet({
   return (
     <Sheet visible={visible} onClose={onClose} title="选择项目">
       <Group>
-        <ListRow
-          title="电脑默认目录"
-          subtitle="不指定项目，在电脑的用户目录里执行"
-          trailing={check(value === null)}
-          accessibilityLabel="电脑默认目录"
-          onPress={() => onPick(null)}
-        />
-        {projects.map((project) => (
+        {projects.map((project, index) => (
           <View key={project.realPath}>
-            <Separator />
+            {index > 0 ? <Separator /> : null}
             <ListRow
               title={project.projectName}
               subtitle={

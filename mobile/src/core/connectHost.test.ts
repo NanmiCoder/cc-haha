@@ -15,7 +15,7 @@ function fixture(
       fetch: async (url, init) => {
         requests.push({
           path: new URL(url).pathname,
-          body: init.body ? JSON.parse(init.body) : undefined,
+          body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined,
           authorization: init.headers.Authorization,
         })
         return {

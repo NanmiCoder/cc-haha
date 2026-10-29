@@ -22,14 +22,18 @@ import {
 import { BringSheet, type MaterialKind } from './compose/BringSheet'
 import { Glyph } from './compose/glyphs'
 import type { ComputerUse } from '../core/useComputerUse'
+import { isComputerUseReference, withComputerUseReference } from '../core/computerUse'
 import {
   composerPlaceholder,
   runCapsuleA11y,
-  runLockedNote,
   runShortcut,
   sendSlot,
   type RunCapsule,
 } from './compose/runLogic'
+import { ImagePreview } from './chat/ImagePreview'
+import { attachmentImageSelection, attachmentImageUri, type ImagePreviewSelection } from './chat/attachmentPreview'
+import { useVoiceDictation } from '../core/useVoiceDictation'
+import { VoiceFeedback, VoiceMicrophone, VoiceRecordingBar } from './compose/VoiceInput'
 
 /** web 预览里模拟 iPhone 的 Home 指示条高度，原生端用真实安全区。 */
 export function useBottomInset() {
@@ -104,7 +108,7 @@ function Pill({
   )
 }
 
-function AttachmentChip({ attachment, onRemove }: { attachment: ComposerAttachment; onRemove(): void }) {
+function AttachmentChip({ attachment, onRemove, onPreview }: { attachment: ComposerAttachment; onRemove(): void; onPreview(): void }) {
   const colors = useColors()
   const remove = (
     <Pressable
@@ -128,14 +132,16 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ComposerAttachme
       <Icon name="x" size={10} color={colors.bg} strokeWidth={3.5} />
     </Pressable>
   )
-  if (attachment.type === 'image' && attachment.uri)
+  const uri = attachmentImageUri(attachment)
+  if (uri)
     return (
       <View style={{ width: 52, height: 52 }}>
-        <Image
-          accessibilityLabel={attachment.name}
-          source={{ uri: attachment.uri }}
-          style={{ width: 52, height: 52, borderRadius: 12, backgroundColor: colors.fill }}
-        />
+        <Pressable accessibilityRole="button" accessibilityLabel={`预览 ${attachment.name}`} onPress={onPreview}>
+          <Image
+            source={{ uri }}
+            style={{ width: 52, height: 52, borderRadius: 12, backgroundColor: colors.fill }}
+          />
+        </Pressable>
         {remove}
       </View>
     )
@@ -330,7 +336,7 @@ export function ChatComposer({
   onAttachments(value: ComposerAttachment[]): void
   team: boolean
   onTeam(value: boolean): void
-  /** 「操作电脑」的状态与动作（useComputerUse）：输入框上的「电脑」胶囊和「＋」里的开关共用。 */
+  /** Computer authorization; the current message's selection lives in references. */
   computer: ComputerUse
   lean: boolean
   empty: boolean
@@ -360,6 +366,26 @@ export function ChatComposer({
   const [catalogError, setCatalogError] = useState('')
   const [loading, setLoading] = useState(false)
   const [picking, setPicking] = useState<MaterialKind | null>(null)
+  const [preview, setPreview] = useState<ImagePreviewSelection | null>(null)
+  const voiceCanSend = !disabled && (!busy || queueing)
+  const voice = useVoiceDictation({
+    client,
+    contextKey: `${client?.host.id ?? ''}:${sessionId ?? 'new'}:${workDir ?? ''}`,
+    draft,
+    selection,
+    blocked: disabled || !!picking,
+    canSend: voiceCanSend,
+    onDraft: (text, cursor) => {
+      onDraft(text)
+      setSelection({ start: cursor, end: cursor })
+    },
+    onSubmit: onSend,
+    focus: () => requestAnimationFrame(() => input.current?.focus()),
+  })
+  const referenceState = useRef({ references, onReferences })
+  useEffect(() => {
+    referenceState.current = { references, onReferences }
+  }, [references, onReferences])
   const trigger = composerTrigger(draft, selection.start, selection.end)
   const showCandidates = !bringOpen && !disabled && !!trigger
   const needsCatalog = bringOpen || showCandidates
@@ -437,7 +463,7 @@ export function ChatComposer({
     setBringOpen(true)
   }
 
-  const chips = attachments.length > 0 || references.length > 0 || team || (computer.enabled && !lean)
+  const chips = attachments.length > 0 || references.length > 0 || team
   return (
     <View
       onLayout={(event) => onHeight?.(event.nativeEvent.layout.height)}
@@ -487,21 +513,26 @@ export function ChatComposer({
             style={{ flexGrow: 0 }}
             contentContainerStyle={{ alignItems: 'center', gap: 10, paddingTop: 8, paddingBottom: 2, paddingLeft: 10, paddingRight: 14 }}
           >
-            {attachments.map((attachment) => (
+            {attachments.map((attachment, index) => (
               <AttachmentChip
                 key={attachment.id}
                 attachment={attachment}
                 onRemove={() => onAttachments(attachments.filter((value) => value.id !== attachment.id))}
+                onPreview={() => {
+                  Keyboard.dismiss()
+                  setPreview(attachmentImageSelection(attachments, index))
+                }}
               />
             ))}
             {references.map((reference) => (
               <Pill
                 key={`${reference.kind}:${reference.id}`}
-                label={`@${reference.displayName || reference.name}`}
-                accessibilityLabel={`移除技能 ${reference.displayName || reference.name}`}
+                label={isComputerUseReference(reference) ? '操作电脑' : `@${reference.displayName || reference.name}`}
+                accessibilityLabel={isComputerUseReference(reference) ? '移除 操作电脑' : `移除技能 ${reference.displayName || reference.name}`}
                 onPress={() =>
                   onReferences(references.filter((value) => value.kind !== reference.kind || value.id !== reference.id))
                 }
+                icon={isComputerUseReference(reference) ? <Glyph name="monitor" size={14} color={colors.run} strokeWidth={2} /> : undefined}
               />
             ))}
             {team ? (
@@ -512,15 +543,6 @@ export function ChatComposer({
                 icon={<Icon name="users" size={14} color={colors.run} strokeWidth={2} />}
               />
             ) : null}
-            {computer.enabled && !lean ? (
-              <Pill
-                label="操作电脑"
-                accessibilityLabel="操作电脑已开启，打开「＋」查看"
-                removable={false}
-                onPress={() => setBringOpen(true)}
-                icon={<Glyph name="monitor" size={14} color={colors.run} strokeWidth={2} />}
-              />
-            ) : null}
           </ScrollView>
         ) : null}
         <TextInput
@@ -528,8 +550,9 @@ export function ChatComposer({
           accessibilityLabel={sessionId ? '消息' : '新任务内容'}
           value={draft}
           multiline
-          editable={!disabled}
+          editable={!disabled && !voice.live}
           onChangeText={(value) => {
+            voice.edited()
             const cursor = Math.min(value.length, Math.max(0, selection.end + value.length - draft.length))
             onDraft(value)
             setSelection({ start: cursor, end: cursor })
@@ -553,7 +576,8 @@ export function ChatComposer({
             color: colors.ink,
           }}
         />
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
+        <VoiceFeedback voice={voice} blocked={disabled} onError={onError} />
+        {voice.live ? <VoiceRecordingBar voice={voice} canSend={voiceCanSend} /> : <View style={{ flexDirection: 'row', alignItems: 'center', gap: 2 }}>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="添加：技能、命令、材料"
@@ -570,13 +594,16 @@ export function ChatComposer({
             <Icon name="plus" size={22} color={colors.ink} strokeWidth={2} />
           </Pressable>
           <View style={{ flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
-            {run.locked ? (
-              <Text numberOfLines={1} style={{ flexShrink: 0, textAlign: 'right', fontSize: 12, lineHeight: 16, color: colors.ink3 }}>
-                {runLockedNote}
-              </Text>
-            ) : null}
             <RunPill run={run} onPress={onOpenRun} />
           </View>
+          <VoiceMicrophone
+            blocked={!client || disabled || !!picking}
+            onPress={() => {
+              input.current?.blur()
+              Keyboard.dismiss()
+              void voice.start()
+            }}
+          />
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={slot.label}
@@ -604,7 +631,7 @@ export function ChatComposer({
               )}
             </View>
           </Pressable>
-        </View>
+        </View>}
       </View>
       <BringSheet
         visible={bringOpen}
@@ -622,6 +649,10 @@ export function ChatComposer({
         team={team}
         onTeam={onTeam}
         computer={computer}
+        onComputerSelected={(value) => {
+          const current = referenceState.current
+          current.onReferences(withComputerUseReference(current.references, value))
+        }}
         onApply={(next) => {
           onDraft(next.draft)
           onReferences(next.references)
@@ -630,6 +661,7 @@ export function ChatComposer({
           requestAnimationFrame(() => input.current?.focus())
         }}
       />
+      {preview ? <ImagePreview {...preview} onClose={() => setPreview(null)} /> : null}
     </View>
   )
 }

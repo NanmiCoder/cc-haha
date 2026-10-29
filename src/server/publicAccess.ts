@@ -52,6 +52,18 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   // connector action (authenticate, prepare, remove…) and every workflow
   // mutation or run detail remain desktop-only.
   if (parts[1] === 'connectors' || parts[1] === 'workflows') return parts.length === 2 && method === 'GET'
+  if (parts[1] === 'voice') {
+    // Phones reuse the host's prepared recognizer. Download, deletion and
+    // shared preference changes stay on the desktop's settings surface.
+    if (method === 'GET') {
+      return !url.search && (url.pathname === '/api/voice/catalog' ||
+        /^\/api\/voice\/providers\/[^/]+\/status$/.test(url.pathname))
+    }
+    return method === 'POST' && url.pathname === '/api/voice/transcribe' &&
+      [...url.searchParams.keys()].every(key =>
+        (key === 'provider' || key === 'language') && url.searchParams.getAll(key).length === 1,
+      )
+  }
   if (parts[1] === 'skills') return parts.length === 3 &&
     (parts[2] === 'mentions' || parts[2] === 'commands') && method === 'GET'
   if (parts[1] === 'computer-use') {
@@ -64,6 +76,8 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   if (parts[1] === 'providers') return remoteProviderRouteAllowed(parts, method)
   if (parts[1] === 'settings') return remoteSettingsRouteAllowed(parts, method)
   if (parts[1] === 'scheduled-tasks') {
+    if (parts[2] === 'notification-capabilities') return method === 'GET' &&
+      url.pathname === '/api/scheduled-tasks/notification-capabilities' && !url.search
     if (parts.length === 2) return method === 'GET' || method === 'POST'
     if (parts[2] === 'runs') return method === 'GET' && (parts.length === 3 || parts.length === 4)
     if (parts.length === 3) return method === 'PUT' || method === 'DELETE'

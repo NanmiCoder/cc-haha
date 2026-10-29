@@ -89,7 +89,7 @@ export function MessageMenu({
         >
           <ScrollView scrollEnabled={layout.height > bubbleHeight} bounces={false}>
             {user ? (
-              <UserBubble item={item} text={text} team={item.text.includes('<agent-team-request>')} />
+              <UserBubble item={item} text={text} team={text !== item.text} />
             ) : (
               <View style={{ paddingHorizontal: 14, paddingVertical: 12 }}>
                 <Markdown text={text || '附件消息'} selectable={false} />

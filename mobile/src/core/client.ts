@@ -21,9 +21,12 @@ export class ApiError extends Error {
 export type RequestOptions = {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   body?: unknown
+  rawBody?: Uint8Array
+  contentType?: string
   signal?: AbortSignal
   timeoutMs?: number
 }
+type RequestControlOptions = Pick<RequestOptions, 'signal' | 'timeoutMs'>
 export type FetchResponse = {
   ok: boolean
   status: number
@@ -36,7 +39,7 @@ export type FetchAdapter = (
   init: {
     method: string
     headers: Record<string, string>
-    body?: string
+    body?: string | ArrayBuffer
     signal: AbortSignal
     redirect: 'error'
     credentials: 'omit'
@@ -73,6 +76,8 @@ export class ApiClient {
     const url = new URL(path, this.host.url)
     if (url.origin !== this.host.url)
       throw new ApiError('禁止跨主机请求', 0, 'CROSS_ORIGIN')
+    if (options.body !== undefined && options.rawBody !== undefined)
+      throw new ApiError('请求不能同时包含 JSON 和二进制数据', 0, 'INVALID_BODY')
     const controller = new AbortController()
     let timedOut = false
     const timeoutMs = options.timeoutMs ?? this.#timeoutMs
@@ -93,12 +98,20 @@ export class ApiClient {
         headers: {
           Accept: 'application/json',
           ...connectionHeaders(this.host, this.#credential),
-          ...(options.body !== undefined
-            ? { 'Content-Type': 'application/json' }
-            : {}),
+          ...(options.rawBody !== undefined
+            ? { 'Content-Type': options.contentType ?? 'application/octet-stream' }
+            : options.body !== undefined
+              ? { 'Content-Type': 'application/json' }
+              : {}),
         },
         body:
-          options.body === undefined ? undefined : JSON.stringify(options.body),
+          options.rawBody !== undefined
+            // Copy just this view, including its byte offset and length. An
+            // ArrayBuffer is supported by Expo's iOS/Android fetch transport.
+            ? new Uint8Array(options.rawBody).buffer
+            : options.body === undefined
+              ? undefined
+              : JSON.stringify(options.body),
         signal: controller.signal,
         redirect: 'error',
         credentials: 'omit',
@@ -159,13 +172,13 @@ export class ApiClient {
       options.signal?.removeEventListener('abort', abort)
     }
   }
-  get<T>(path: string, options?: Omit<RequestOptions, 'body' | 'method'>) {
+  get<T>(path: string, options?: RequestControlOptions) {
     return this.request<T>(path, options)
   }
   post<T>(
     path: string,
     body?: unknown,
-    options?: Omit<RequestOptions, 'body' | 'method'>
+    options?: RequestControlOptions
   ) {
     return this.request<T>(path, { ...options, method: 'POST', body })
   }
@@ -176,7 +189,7 @@ export class ApiClient {
     return this.request<T>(path, { method: 'DELETE' })
   }
   async verify(
-    options?: Omit<RequestOptions, 'body' | 'method'>
+    options?: RequestControlOptions
   ): Promise<{ ok: true }> {
     if (this.host.auth === 'lan')
       return this.post<{ ok: true }>(
@@ -204,7 +217,7 @@ export class ApiClient {
   history(
     id: string,
     cursor?: string,
-    options?: Omit<RequestOptions, 'body' | 'method'>
+    options?: RequestControlOptions
   ) {
     return this.get<HistoryPage>(
       `/api/sessions/${encodeURIComponent(id)}/messages${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,

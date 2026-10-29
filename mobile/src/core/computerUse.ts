@@ -1,4 +1,27 @@
 import type { ApiClient } from './client'
+import { mergeComposerReferences, type ComposerReference } from './composerReferences'
+
+/** An explicit per-message request, separate from the computer's global grant. */
+export const computerUseReference: ComposerReference = {
+  kind: 'skill',
+  id: 'computer-use',
+  name: 'computer-use',
+  displayName: '操作电脑',
+  description: '这条消息使用操作电脑',
+  source: 'bundled',
+  modelText: 'Use the Skill tool with skill: "computer-use" for this request.',
+}
+
+export function isComputerUseReference(reference: Pick<ComposerReference, 'kind' | 'id'>) {
+  return reference.kind === 'skill' && reference.id === computerUseReference.id
+}
+
+export function withComputerUseReference(references: ComposerReference[], selected: boolean) {
+  return selected
+    ? mergeComposerReferences(references, [{ ...computerUseReference }])
+    : references.filter((reference) => !isComputerUseReference(reference))
+}
+
 export type ComposerComputerUse = {
   supported: boolean
   engine?: string

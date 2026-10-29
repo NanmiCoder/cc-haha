@@ -34,6 +34,7 @@ const icons = {
   x: [['path', 'M18 6 6 18'], ['path', 'm6 6 12 12']],
   plus: [['path', 'M5 12h14'], ['path', 'M12 5v14']],
   'arrow-up': [['path', 'm5 12 7-7 7 7'], ['path', 'M12 19V5']],
+  mic: [['rect', 9, 2, 6, 12, 3], ['path', 'M5 10v2a7 7 0 0 0 14 0v-2'], ['path', 'M12 19v3'], ['path', 'M8 22h8']],
   'arrow-down': [['path', 'M12 5v14'], ['path', 'm19 12-7 7-7-7']],
   check: [['path', 'M20 6 9 17l-5-5']],
   pencil: [

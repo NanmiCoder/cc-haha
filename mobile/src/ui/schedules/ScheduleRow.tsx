@@ -25,7 +25,7 @@ export function ScheduleRow({
 }) {
   const colors = useColors()
   const name = task.name || '未命名任务'
-  const line = latestRunLine(run, task.cron, now)
+  const line = latestRunLine(run, task, now)
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14 }}>
       <Pressable
@@ -41,8 +41,8 @@ export function ScheduleRow({
           {name}
         </Text>
         <ScheduleLine
-          cron={task.cron}
-          extras={[projectLabel(task.folderPath), enabled ? '' : '已暂停']}
+          task={task}
+          extras={[task.execution?.kind === 'session' ? '已有会话' : projectLabel(task.folderPath), task.scheduleState === 'completed' ? '已完成' : enabled ? '' : '已暂停']}
           color={enabled ? colors.ink2 : colors.ink3}
         />
         {enabled && <DotLine tone={line.tone} text={line.text} />}

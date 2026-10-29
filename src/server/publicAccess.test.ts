@@ -1,8 +1,14 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { PublicAccessServer, isPublicBusinessPathAllowed, migratePublicAccessStore } from './publicAccess.js'
+import { handleVoiceApi } from './api/voice.js'
+import { FakeProvider, makeWav, memoryPreferencesStore } from './services/voice/__tests__/fakeProvider.js'
+import { VoiceServiceError } from './services/voice/errors.js'
+import { VoiceProviderRegistry } from './services/voice/registry.js'
+import { VOICE_LIMITS, type SpeechProvider } from './services/voice/types.js'
+import { VoiceService } from './services/voice/voiceService.js'
 
 const cleanups: Array<() => void> = []
 afterEach(() => { while (cleanups.length) cleanups.pop()!() })
@@ -393,6 +399,14 @@ test('remote scheduled task routes stay restricted to the scheduler contract', (
   for (const [path, method] of [['/api/scheduled-tasks', 'DELETE'], ['/api/scheduled-tasks/runs', 'POST'], ['/api/scheduled-tasks/id/run', 'PUT'], ['/api/scheduled-tasks/id/runs/extra', 'GET'], ['/api/scheduled-tasks/id/unknown', 'POST']]) expect(allowed(path!, method!)).toBe(false)
 })
 
+test('remote notification readiness is an exact read-only scheduler resource', () => {
+  const endpoint = '/api/scheduled-tasks/notification-capabilities'
+  const allowed = (path: string, method = 'GET') => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed(endpoint)).toBe(true)
+  for (const method of ['POST', 'PUT', 'PATCH', 'DELETE']) expect(allowed(endpoint, method)).toBe(false)
+  for (const path of [endpoint + '/extra', endpoint + '/', endpoint + '?include=secrets', '/api/adapters']) expect(allowed(path)).toBe(false)
+})
+
 test('session status exposes only the authenticated device expiry', async () => {
   const f = fixture()
   const { claim } = await f.pairNative()
@@ -592,4 +606,175 @@ test('paired browsers keep the full agent view while connectors stay projected',
   const { cookie } = await f.pair()
   expect(await (await f.remote('/api/agents', undefined, cookie)).json()).toEqual({ activeAgents: [full], allAgents: [full] })
   expect(JSON.stringify(await (await f.remote('/api/connectors', undefined, cookie)).json())).not.toContain('authUrl')
+})
+
+describe('paired phone voice input', () => {
+  function voiceFixture(provider: SpeechProvider) {
+    const preferences = memoryPreferencesStore({ language: 'zh' })
+    const service = new VoiceService({
+      registry: new VoiceProviderRegistry().register(provider),
+      preferences,
+    })
+    const calls: string[] = []
+    const f = fixture(async (request, url) => {
+      calls.push(`${request.method} ${url.pathname}`)
+      return handleVoiceApi(request, url, url.pathname.split('/').filter(Boolean), service)
+    })
+    return { ...f, preferences, calls }
+  }
+
+  test('exposes only exact voice catalog, provider status and transcription routes', () => {
+    const allowed = (route: string, method: string) =>
+      isPublicBusinessPathAllowed(new URL(route, 'https://fixture.example'), method)
+    for (const [route, method] of [
+      ['/api/voice/catalog', 'GET'],
+      ['/api/voice/providers/sensevoice-local/status', 'GET'],
+      ['/api/voice/transcribe', 'POST'],
+      ['/api/voice/transcribe?provider=sensevoice-local&language=zh', 'POST'],
+    ]) expect(allowed(route!, method!)).toBe(true)
+    for (const [route, method] of [
+      ['/api/voice/catalog', 'POST'],
+      ['/api/voice/catalog/extra', 'GET'],
+      ['/api/voice/catalog?extra=true', 'GET'],
+      ['/api//voice/catalog', 'GET'],
+      ['/api/voice/providers/sensevoice-local/status', 'PUT'],
+      ['/api/voice/providers/sensevoice-local/status/extra', 'GET'],
+      ['/api/voice/providers/sensevoice-local/status?extra=true', 'GET'],
+      ['/api/voice/providers/sensevoice-local/prepare', 'POST'],
+      ['/api/voice/providers/sensevoice-local/cancel', 'POST'],
+      ['/api/voice/providers/sensevoice-local/assets', 'DELETE'],
+      ['/api/voice/preferences', 'GET'],
+      ['/api/voice/preferences', 'PUT'],
+      ['/api/voice/transcribe', 'GET'],
+      ['/api/voice/transcribe/extra', 'POST'],
+      ['/api/voice/transcribe?downloadSource=mirror', 'POST'],
+      ['/api/voice/transcribe?provider=one&provider=two', 'POST'],
+      ['/api/voice/transcribe?language=zh&language=en', 'POST'],
+    ]) expect(allowed(route!, method!)).toBe(false)
+  })
+
+  test('a native bearer reaches the real voice service with unchanged WAV bytes and loses access after revocation', async () => {
+    const provider = new FakeProvider({ id: 'sensevoice-local', text: '手机语音结果' })
+    const transcribe = spyOn(provider, 'transcribe')
+    cleanups.push(() => transcribe.mockRestore())
+    const f = voiceFixture(provider)
+    const wav = makeWav(0.25)
+    wav.set([0, 255, 128, 65], 44)
+    const upload = { method: 'POST', headers: { 'Content-Type': 'audio/wav' }, body: wav as BodyInit }
+    const route = '/api/voice/transcribe?provider=sensevoice-local&language=en'
+
+    expect((await fetch(`${f.base}/api/voice/catalog`)).status).toBe(401)
+    expect((await f.native(route, 'native_invalid', upload)).status).toBe(401)
+    const { claim } = await f.pairNative()
+    expect((await f.native(route, claim.token, {
+      ...upload, headers: { ...upload.headers, Origin: 'https://other.example' },
+    })).status).toBe(403)
+    expect(f.calls).toEqual([])
+
+    const catalog = await f.native('/api/voice/catalog', claim.token)
+    expect(catalog.status).toBe(200)
+    expect(await catalog.json()).toMatchObject({
+      supported: true,
+      preferences: { providerId: 'sensevoice-local', language: 'zh' },
+      limits: VOICE_LIMITS,
+    })
+    const status = '/api/voice/providers/sensevoice-local/status'
+    expect(await (await f.native(status, claim.token)).json()).toMatchObject({ preparation: { phase: 'unprepared' } })
+    provider.installed = true
+    expect(await (await f.native(status, claim.token)).json()).toMatchObject({ preparation: { phase: 'ready' } })
+    const response = await f.native(route, claim.token, upload)
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ text: '手机语音结果', audioSeconds: 0.25, inferenceSeconds: 0.25 })
+    expect(transcribe.mock.calls[0]?.[0]).toEqual(wav)
+    expect(provider.transcribeCalls).toEqual([{ bytes: wav.byteLength, language: 'en' }])
+    expect(f.preferences.current.language).toBe('zh')
+
+    const beforeBlocked = f.calls.length
+    for (const [route, method] of [
+      ['/api/voice/preferences', 'PUT'],
+      ['/api/voice/providers/sensevoice-local/prepare', 'POST'],
+      ['/api/voice/providers/sensevoice-local/cancel', 'POST'],
+      ['/api/voice/providers/sensevoice-local/assets', 'DELETE'],
+    ]) expect((await f.native(route!, claim.token, { method })).status).toBe(403)
+    expect(f.calls).toHaveLength(beforeBlocked)
+    expect(provider.prepareCalls).toBe(0)
+    expect(provider.removeCalls).toBe(0)
+    await f.control('revoke', { id: claim.deviceId })
+    expect((await f.native('/api/voice/catalog', claim.token)).status).toBe(401)
+    expect((await f.native(route, claim.token, upload)).status).toBe(401)
+    expect(f.calls).toHaveLength(beforeBlocked)
+  })
+
+  test('preserves voice readiness, format, size, language and provider error responses', async () => {
+    const provider = new FakeProvider({ id: 'sensevoice-local' })
+    const f = voiceFixture(provider)
+    const { claim } = await f.pairNative()
+    // Early size rejections leave upload bytes unread; isolate each socket so
+    // it cannot affect the next error-response assertion.
+    const upload = (body: Uint8Array, query = '') => f.native(`/api/voice/transcribe${query}`, claim.token, {
+      method: 'POST', headers: { 'Content-Type': 'audio/wav', Connection: 'close' }, body: body as BodyInit,
+    })
+    const notReady = await upload(makeWav(0.25))
+    expect(notReady.status).toBe(409)
+    expect(await notReady.json()).toMatchObject({ error: 'voice/not-ready' })
+    provider.installed = true
+    for (const bytes of [new TextEncoder().encode('compressed audio is not WAV'), new Uint8Array(VOICE_LIMITS.maxAudioBytes + 1)]) {
+      const invalid = await upload(bytes)
+      expect(invalid.status).toBe(400)
+      expect(await invalid.json()).toMatchObject({ error: 'voice/invalid-audio' })
+    }
+    expect((await upload(makeWav(0.25), '?language=fr')).status).toBe(400)
+    const unknown = await upload(makeWav(0.25), '?provider=missing')
+    expect(unknown.status).toBe(404)
+    expect(await unknown.json()).toMatchObject({ error: 'voice/unknown-provider' })
+    expect(provider.transcribeCalls).toEqual([])
+    provider.transcribeError = new Error('fixture recognizer failed')
+    const failed = await upload(makeWav(0.25))
+    expect(failed.status).toBe(500)
+    expect(await failed.json()).toMatchObject({ error: 'voice/failed' })
+  })
+
+  test('passes cancellation from the authenticated gateway Request to the transcription provider', async () => {
+    const entered = Promise.withResolvers<void>()
+    const cancelled = Promise.withResolvers<void>()
+    let providerSignal: AbortSignal | undefined
+    const provider: SpeechProvider = {
+      info: { id: 'sensevoice-local', name: 'Fixture', location: 'local', languages: ['auto', 'zh'] },
+      transcribe: async (_wav, _options, signal) => {
+        providerSignal = signal
+        entered.resolve()
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            cancelled.resolve()
+            reject(signal.reason)
+          }, { once: true })
+        })
+      },
+    }
+    const f = voiceFixture(provider)
+    const { claim } = await f.pairNative()
+    const controller = new AbortController()
+    const request = new Request(`${f.base}/api/voice/transcribe`, {
+      method: 'POST',
+      headers: {
+        Origin: 'https://fixture.ngrok-free.app',
+        Authorization: `Bearer ${claim.token}`,
+        'Content-Type': 'audio/wav',
+      },
+      body: makeWav(0.25) as BodyInit,
+      signal: controller.signal,
+    })
+    // Pin Request.signal forwarding separately from the binary HTTP round-trip.
+    const response = f.service.fetch(request, {} as never)
+    try {
+      await entered.promise
+      controller.abort(new VoiceServiceError('voice/failed', 'Fixture transcription cancelled'))
+      await cancelled.promise
+      expect(providerSignal).toBe(request.signal)
+      expect(providerSignal?.aborted).toBe(true)
+      expect((await response)?.status).toBe(500)
+    } finally {
+      controller.abort()
+    }
+  }, 5000)
 })
