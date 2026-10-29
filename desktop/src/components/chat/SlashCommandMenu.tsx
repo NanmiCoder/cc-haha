@@ -80,6 +80,7 @@ type SlashCommandMenuProps = {
   showKeyboardHints: boolean
   isSearching?: boolean
   references?: ComposerReferenceCandidate[]
+  allowBelow?: boolean
 }
 
 export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps>(
@@ -94,11 +95,12 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
       showKeyboardHints,
       references = [],
       isSearching = false,
+      allowBelow = false,
     },
     ref,
   ) {
     const t = useTranslation()
-    const [roomRef, roomAbove] = useRoomAbove<HTMLDivElement>()
+    const [roomRef, room, side] = useRoomAbove<HTMLDivElement>({ allowBelow })
     const setMenuRef = useCallback((node: HTMLDivElement | null) => {
       roomRef(node)
       if (typeof ref === 'function') ref(node)
@@ -152,8 +154,8 @@ export const SlashCommandMenu = forwardRef<HTMLDivElement, SlashCommandMenuProps
       <div
         ref={setMenuRef}
         onMouseDown={event => event.preventDefault()}
-        style={{ maxHeight: roomAbove }}
-        className="absolute bottom-full left-0 right-0 z-[var(--z-dropdown)] mb-2 flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]"
+        style={{ maxHeight: room }}
+        className={`absolute ${side === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'} left-0 right-0 z-[var(--z-dropdown)] flex flex-col overflow-hidden rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] shadow-[var(--shadow-dropdown)]`}
       >
         {isSearching ? <div className={`${COMPOSER_MENU_SECTION} px-3 pt-2.5`}>
           {t('chat.slashSearchResults')}

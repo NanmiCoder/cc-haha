@@ -1163,7 +1163,7 @@ export const en = {
   'settings.title': 'Settings',
   'settings.tab.providers': 'Model Settings',
   'settings.tab.permissions': 'Permissions',
-  'settings.tab.activity': 'Personal homepage',
+  'settings.tab.activity': 'Token usage',
   'settings.tab.general': 'General',
   'settings.general.pageDescription': 'Appearance, language, and the defaults Agent sessions start with.',
   "settings.tab.h5Access": "Phone connection",
@@ -1315,7 +1315,7 @@ Row 9, all 8 cells: continuing from straight down, turning left through lower-le
   'pet.window.untitledSession': 'Untitled task',
 
   // Settings > Usage
-  'settings.activity.title': 'Personal homepage',
+  'settings.activity.title': 'Token usage',
   'settings.activity.profileTitle': 'Profile',
   'settings.activity.avatarAlt': '{name} avatar',
   'settings.activity.profilePrivacy': 'Local only',

@@ -1164,7 +1164,7 @@ export const jp: Record<TranslationKey, string> = {
   'settings.title': '設定',
   'settings.tab.providers': 'モデル設定',
   'settings.tab.permissions': '権限',
-  'settings.tab.activity': 'マイページ',
+  'settings.tab.activity': 'トークン使用量',
   'settings.tab.general': '一般',
   'settings.general.pageDescription': '外観、言語、Agent の既定の動作。',
   "settings.tab.h5Access": "スマートフォン接続",
@@ -1316,7 +1316,7 @@ export const jp: Record<TranslationKey, string> = {
   'pet.window.untitledSession': '無題のタスク',
 
   // Settings > Usage
-  'settings.activity.title': 'マイページ',
+  'settings.activity.title': 'トークン使用量',
   'settings.activity.profileTitle': 'プロフィール',
   'settings.activity.avatarAlt': '{name} のアバター',
   'settings.activity.profilePrivacy': 'ローカルのみ',

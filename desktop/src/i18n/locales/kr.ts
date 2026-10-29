@@ -1166,7 +1166,7 @@ export const kr: Record<TranslationKey, string> = {
   'settings.title': '설정',
   'settings.tab.providers': '모델 설정',
   'settings.tab.permissions': '권한',
-  'settings.tab.activity': '마이 페이지',
+  'settings.tab.activity': '토큰 사용량',
   'settings.tab.general': '일반',
   'settings.general.pageDescription': '모양, 언어, 그리고 Agent의 기본 동작.',
   "settings.tab.h5Access": "휴대폰 연결",
@@ -1318,7 +1318,7 @@ export const kr: Record<TranslationKey, string> = {
   'pet.window.untitledSession': '제목 없는 작업',
 
   // Settings > Usage
-  'settings.activity.title': '마이 페이지',
+  'settings.activity.title': '토큰 사용량',
   'settings.activity.profileTitle': '프로필',
   'settings.activity.avatarAlt': '{name} 아바타',
   'settings.activity.profilePrivacy': '로컬 전용',

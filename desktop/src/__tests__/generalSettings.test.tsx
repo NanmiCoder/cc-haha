@@ -1246,12 +1246,12 @@ describe('Settings > General tab', () => {
     expect(slider.closest('.settings-zoom-control')).toHaveStyle({ '--settings-zoom-range-progress': '40%' })
   })
 
-  it('opens the personal homepage from the first Settings navigation entry', () => {
+  it('opens the Token usage tab from Settings navigation above Diagnostics', () => {
     render(<Settings />)
 
-    const usageTab = screen.getByText('Personal homepage')
-    const modelTab = screen.getByRole('button', { name: 'Model Settings' })
-    expect((usageTab.compareDocumentPosition(modelTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
+    const usageTab = screen.getByText('Token usage')
+    const diagnosticsTab = screen.getByText('Diagnostics')
+    expect((usageTab.compareDocumentPosition(diagnosticsTab) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0).toBe(true)
 
     fireEvent.click(usageTab)
 

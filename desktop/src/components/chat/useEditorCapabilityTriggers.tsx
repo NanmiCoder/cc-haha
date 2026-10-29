@@ -40,7 +40,7 @@ type Options = {
   text: string
   mentions: ComposerMention[]
   composerRef: RefObject<MentionComposerHandle>
-  /** The card the menus open above; clicks inside it are not "outside". */
+  /** The card the menus attach to; clicks inside it are not "outside". */
   containerRef: RefObject<HTMLDivElement>
   onChange: (text: string, mentions: ComposerMention[]) => void
 }
@@ -257,6 +257,7 @@ export function useEditorCapabilityTriggers({ sessionId, text, mentions, compose
           cwd={workDir}
           filter={atFilter}
           browseReferences
+          allowBelow
           references={visibleReferences}
           referencesLoading={references.loading}
           referencesError={references.error}
@@ -282,6 +283,7 @@ export function useEditorCapabilityTriggers({ sessionId, text, mentions, compose
           onSelect={selectSlashCommand}
           onHighlight={setSlashIndex}
           showKeyboardHints
+          allowBelow
         />
       ) : null}
     </>
