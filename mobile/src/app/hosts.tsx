@@ -231,7 +231,7 @@ export default function Hosts() {
           <EmptyState
             icon="laptop"
             title="先连接第一台电脑"
-            detail="打开电脑上的 cc-haha，在「设置 → 手机连接」中选择局域网或 Tailscale，获取连接二维码。"
+            detail="打开电脑上的 cc-haha，在「设置 → 手机连接」中开启局域网，或选择 Cloudflare 快速连接 / 固定域名，再用手机扫码。"
           />
         )}
         <Group style={{ marginTop: 22 }}>

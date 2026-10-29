@@ -1,5 +1,6 @@
 import { chmod, copyFile, mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { assertPreparedCloudflared } from './prepare-cloudflared'
 import { assertWindowsConsoleSubsystem } from './assert-windows-console-subsystem'
 import {
   getBundledRipgrepName,
@@ -36,6 +37,10 @@ const targetTriple =
   (await detectHostTriple())
 
 const bunTarget = mapTargetTripleToBun(targetTriple)
+
+// Dependency preparation is explicit in release/local packaging entry points.
+// Required native checks must never fetch executables from the public network.
+await assertPreparedCloudflared({ desktopRoot, targetTriple })
 
 // 编译前先扫一遍 src/ 把所有缺失的 ant-internal 模块在磁盘上 stub 出来。
 // 见 desktop/scripts/scan-missing-imports.ts。

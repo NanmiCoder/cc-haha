@@ -187,7 +187,7 @@ export function Scanner({
               textAlign: 'center',
             }}
           >
-            {'在电脑的 cc-haha 里打开\n「设置 → 手机连接」，选择局域网或 Tailscale'}
+            {'在电脑的 cc-haha 里打开\n「设置 → 手机连接」，选择局域网或 Cloudflare 外出连接'}
           </Text>
           {notice ? (
             // Absolutely placed under the copy so the scan frame never jumps.

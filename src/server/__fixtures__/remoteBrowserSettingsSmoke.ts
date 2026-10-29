@@ -4,7 +4,7 @@ import { startServer, stopServerRuntimeForShutdown } from '../index.js'
 import { H5AccessService } from '../services/h5AccessService.js'
 import { ProviderService } from '../services/providerService.js'
 
-const origin = 'https://fixture.ngrok-free.app'
+const origin = 'https://fixture.trycloudflare.com'
 const nativeFetch = globalThis.fetch
 globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(input instanceof Request ? input.url : String(input))

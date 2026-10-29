@@ -24,6 +24,8 @@ cd desktop
 bun install
 ```
 
+首次运行桌面开发版或 `check:native` 前，在 `desktop/` 运行一次 `bun run prepare:cloudflared`。它下载固定版本的官方连接程序、校验 SHA-256，并放入被 Git 忽略的本机缓存；普通用户的安装包已包含该程序。原生检查只验证和使用已有缓存，不会下载；跨平台构建可传 `--target-triple` 选择目标平台。
+
 如果改动涉及 `adapters/`，或者要运行 `check:adapters` / `check:native`，安装 adapter 依赖：
 
 ```bash

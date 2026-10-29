@@ -60,7 +60,7 @@ const LANGUAGE_NEUTRAL: Record<string, string[]> = {
   'pages/settings/ChatAppearanceSettings.tsx': ['px', '${}px'], // unit
   'pages/settings/GeneralSettings.tsx': ['http://127.0.0.1:7890', 'tvly-...'], // example proxy, key format
   'pages/settings/ProviderSettings.tsx': ['OpenAI Chat', 'OpenAI Responses', 'sk-...'], // API format names, key format
-  'pages/settings/PublicAccessSettings.tsx': ['/remote', 'https://computer.tailnet.ts.net'], // URL path and example address
+  'pages/settings/PublicAccessSettings.tsx': ['/remote', 'https://phone.example.com'], // URL path and example address
 }
 
 /** Untranslated text that needs a wider change first. Keep this short; each entry says why. */

@@ -84,6 +84,7 @@ rm -f "${DESKTOP_DIR}/tsconfig.tsbuildinfo"
 rm -rf "${DESKTOP_DIR}/src-tauri/binaries/claude-sidecar-"*
 
 echo "[build-linux] Building sidecars for ${TARGET_TRIPLE}..."
+(cd "${DESKTOP_DIR}" && SIDECAR_TARGET_TRIPLE="${TARGET_TRIPLE}" bun run prepare:cloudflared)
 (cd "${DESKTOP_DIR}" && SIDECAR_TARGET_TRIPLE="${TARGET_TRIPLE}" bun run build:sidecars)
 
 echo "[build-linux] Building renderer and Electron main/preload bundles..."

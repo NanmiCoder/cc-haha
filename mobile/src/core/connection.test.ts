@@ -48,6 +48,13 @@ describe('desktop connection contracts', () => {
     })
   })
 
+  test.each(['https://workstation-fixture.trycloudflare.com', 'https://phone.fixture.example:8443'])('accepts a Cloudflare pairing origin without a VPN address: %s', origin => {
+    const parsed = parseConnectionInput(`${origin}/remote#pair=fixture-pair`)
+    expect(parsed).toEqual({ url: origin, auth: 'remote', pairSecret: 'fixture-pair' })
+    expect(buildSocketOptions({ ...remote, url: parsed.url }, 'native_fixture', 'session', 'native'))
+      .toEqual({ url: `${origin.replace('https:', 'wss:')}/ws/session`, headers: { Authorization: 'Bearer native_fixture', Origin: origin } })
+  })
+
   test.each([
     'http://10.0.0.4:3456',
     'http://172.16.0.4',

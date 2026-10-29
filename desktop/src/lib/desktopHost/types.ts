@@ -4,8 +4,8 @@ import type {
 } from '../../types/settings'
 import type { Locale } from '../../i18n/locale'
 
-// Version 3 replaces the public tunnel with a user-managed Tailscale connection.
-export const PUBLIC_ACCESS_CONSENT_VERSION = 3
+// Version 4 requires fresh consent for the Cloudflare public connection modes.
+export const PUBLIC_ACCESS_CONSENT_VERSION = 4
 
 export type DesktopHostKind = 'browser' | 'electron'
 
@@ -391,15 +391,19 @@ export type MigrationStatus = {
 }
 
 export type DesktopPublicAccessConfiguration = {
-  mode: 'tailscale'
+  mode: 'quick' | 'named'
   customUrl: string
   localPort: number
+  /** Write-only. Omitted or empty retains the saved named-tunnel token. */
+  tunnelToken?: string
 }
 
-export type DesktopPublicAccessStatus = DesktopPublicAccessConfiguration & {
+export type DesktopPublicAccessStatus = Omit<DesktopPublicAccessConfiguration, 'tunnelToken'> & {
   state: 'unconfigured' | 'disabled' | 'connecting' | 'online' | 'reconnecting' | 'failed'
   publicUrl: string | null
-  error: 'network' | 'configuration' | 'stop' | null
+  error: 'network' | 'configuration' | 'stop' | 'runtime' | 'proxy' | null
+  tokenSet: boolean
+  phase: 'preparing' | 'connecting' | 'checking' | null
   autoStart: boolean
   consentVersion: number
   migrationRequired: boolean

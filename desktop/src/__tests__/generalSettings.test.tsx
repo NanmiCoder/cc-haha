@@ -1631,11 +1631,12 @@ describe('Settings > General tab', () => {
     expect(desktopNotificationsMock.openDesktopNotificationSettings).toHaveBeenCalledTimes(1)
   })
 
-  it('starts phone onboarding with LAN and keeps advanced fields out of the first step', async () => {
+  it('starts phone onboarding with Cloudflare and keeps LAN advanced fields out of the first step', async () => {
     useSettingsStore.setState({ h5Access: { enabled: true, token: 'onboarding-fixture-token', tokenPreview: 'onboarding…token', allowedOrigins: [], publicBaseUrl: 'http://192.168.1.10:3456', fixedPort: null, disconnectGraceSeconds: 30 } })
     useUIStore.setState({ activeSettingsTab: 'h5Access' })
     render(<Settings />)
-    expect(screen.getByRole('tab', { name: 'Same Wi-Fi' })).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByRole('tab', { name: 'Away from home' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: 'Same Wi-Fi' }))
     expect(screen.getByLabelText('Fixed port')).not.toBeVisible()
     expect(await screen.findByAltText('H5 access QR code')).toBeVisible()
     expect(screen.getByText('onboarding…token')).not.toBeVisible()
@@ -1659,6 +1660,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(h5Tab)
 
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     expect(within(section).getByLabelText('Enable local connection')).not.toBeChecked()
     expect(within(section).getByText('Disabled')).toBeInTheDocument()
@@ -1683,6 +1685,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     fireEvent.click(within(section).getByLabelText('Enable local connection'))
@@ -1714,6 +1717,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.click(within(section).getByLabelText('Enable local connection'))
 
@@ -1751,6 +1755,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     expect(within(section).getByText('Generate a token to create the QR code.')).toBeInTheDocument()
@@ -1781,6 +1786,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     // No enable/regenerate click this session: everything comes from the
@@ -1808,6 +1814,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Fixed port'), {
       target: { value: '28670' },
@@ -1840,6 +1847,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Fixed port'), {
       target: { value: '99' },
@@ -1866,6 +1874,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Fixed port'), {
       target: { value: '5061' },
@@ -1891,6 +1900,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Disconnect grace (sec)'), {
       target: { value: '600' },
@@ -1923,6 +1933,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Disconnect grace (sec)'), {
       target: { value: '2' },
@@ -1957,6 +1968,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     const note = within(section).getByTestId('h5-access-fixed-port-restart-note')
@@ -1980,6 +1992,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.click(within(section).getByLabelText('Enable local connection'))
 
@@ -2008,6 +2021,7 @@ describe('Settings > General tab', () => {
 
     fireEvent.click(screen.getByText('Phone connection'))
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
 
     expect(within(section).getByLabelText('Access host / IP')).toHaveValue('https://phone.example/app')
@@ -2029,6 +2043,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByText('Phone connection'))
 
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     expect(within(section).getByText('H5 unavailable')).toBeInTheDocument()
   })
@@ -2050,6 +2065,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByText('Phone connection'))
 
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     expect(within(section).getByLabelText('Current port')).toHaveValue('54064')
     fireEvent.change(within(section).getByLabelText('Access host / IP'), {
@@ -2084,6 +2100,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByText('Phone connection'))
 
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Access host / IP'), {
       target: { value: 'https://phone.example/app' },
@@ -2123,6 +2140,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByText('Phone connection'))
 
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     const banner = within(section).getByTestId('h5-access-stale-host-banner')
     expect(banner).toBeInTheDocument()
@@ -2161,6 +2179,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByText('Phone connection'))
 
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     expect(within(section).getByTestId('h5-access-proxy-note')).toBeInTheDocument()
     expect(within(section).queryByTestId('h5-access-stale-host-banner')).toBeNull()
@@ -2195,6 +2214,7 @@ describe('Settings > General tab', () => {
     fireEvent.click(screen.getByText('Phone connection'))
 
     const section = screen.getByRole('region', { name: 'Phone connection' })
+    fireEvent.click(within(section).getByRole('tab', { name: 'Same Wi-Fi' }))
     fireEvent.click(within(section).getByText('Advanced connection settings'))
     fireEvent.change(within(section).getByLabelText('Access host / IP'), {
       target: { value: '10.255.255.254' },

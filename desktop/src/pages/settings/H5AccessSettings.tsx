@@ -21,6 +21,7 @@ import {
 import { useUIStore } from '../../stores/uiStore'
 import { isBrowserSafePort } from '../../lib/browserSafePort'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { getDesktopHost } from '@/lib/desktopHost'
 
 /**
  * The H5 access panel: the settings tab that exposes the desktop app's built-in
@@ -140,7 +141,7 @@ export function H5AccessSettings() {
     updateH5AccessSettings,
   } = useSettingsStore()
   const t = useTranslation()
-  const [connectionMethod, setConnectionMethod] = useState<'lan' | 'remote'>('lan')
+  const [connectionMethod, setConnectionMethod] = useState<'lan' | 'remote'>(() => getDesktopHost().kind === 'electron' ? 'remote' : 'lan')
   const connectionMethodsId = useId()
   const connectionMethodsRef = useRef<HTMLDivElement>(null)
   const addToast = useUIStore((s) => s.addToast)
@@ -283,11 +284,6 @@ export function H5AccessSettings() {
           title={t('settings.tab.h5Access')}
           description={t('settings.general.h5AccessDescription')}
         />
-
-        <MobileAppInstall connectionMethodsId={connectionMethodsId} onUseBrowser={() => {
-          setConnectionMethod('lan')
-          connectionMethodsRef.current?.querySelector<HTMLButtonElement>('[role="tab"]')?.focus()
-        }} />
 
         <div id={connectionMethodsId} ref={connectionMethodsRef} className="mt-6">
           <SegmentedControl
@@ -593,6 +589,13 @@ export function H5AccessSettings() {
         </div>
         <div role="tabpanel" aria-label={t('settings.general.h5ConnectionRemote')} hidden={connectionMethod !== 'remote'}>
           <PublicAccessSettings />
+        </div>
+        <div className="mt-8">
+          <MobileAppInstall connectionMethodsId={connectionMethodsId} onUseBrowser={() => {
+            setConnectionMethod('lan')
+            connectionMethodsRef.current?.querySelector<HTMLButtonElement>('[role="tab"]')?.focus()
+            connectionMethodsRef.current?.scrollIntoView?.({ block: 'start' })
+          }} />
         </div>
       </section>
 

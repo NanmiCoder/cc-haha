@@ -27,5 +27,6 @@ it('offers a working browser connection action while native distribution is pend
   expect(button).not.toBeDisabled()
   fireEvent.click(button)
   expect(onUseBrowser).toHaveBeenCalledTimes(1)
-  expect(screen.getByText(/Tailscale is needed only for Away from home/)).toBeVisible()
+  expect(screen.getByText(/Same-Wi-Fi and Cloudflare connections/)).toBeVisible()
+  expect(screen.getByText(/No extra VPN app is needed/)).toBeVisible()
 })

@@ -9,7 +9,7 @@ order: 5
 
 A long task is running on your computer and you need to step away. Open **Phone connection** in the desktop's left sidebar and scan with your phone browser to see the same session, answer questions, and respond to permission requests. The work still runs on the computer.
 
-The officially signed cc-haha Android APK is awaiting release, and iOS TestFlight invitations are not yet open. The browser flow below is available now, with no mobile app installation required. Tailscale is also unnecessary on the same Wi-Fi.
+The officially signed cc-haha Android APK is awaiting release, and iOS TestFlight invitations are not yet open. The browser flow below is available now, with no mobile app installation required. Connect directly on the same Wi-Fi, or use the desktop-managed Cloudflare tunnel while away; no phone VPN is needed.
 
 ## Before you start
 
@@ -39,4 +39,4 @@ Phone and desktop show the same session. A message sent from the phone appears i
 - If the phone cannot connect, check that the app is still running, the computer is awake, and the devices can reach each other. Then check the IP and port shown in Settings. Changing Wi-Fi may change the address.
 - The QR code and link contain access credentials. Do not post them in chats or public screenshots. If exposed, **regenerate the token** on the desktop; the old link stops working.
 - H5 supports sessions and some settings, but not the desktop workspace, embedded terminal, or Computer Use authorization UI. Review diffs and use desktop-only controls back on the computer.
-- Away from home or on cellular data, follow [Tailscale remote access](../desktop/remote.md#tailscale-remote-access) to connect both devices and pair your phone. Keep the local-network link within your trusted LAN.
+- Away from home or on cellular data, follow [Cloudflare remote connection](../desktop/remote.md#cloudflare-remote-connection) to enable the desktop tunnel and pair your phone. Keep the local-network link within your trusted LAN.

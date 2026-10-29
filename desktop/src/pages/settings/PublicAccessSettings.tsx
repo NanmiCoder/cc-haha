@@ -3,11 +3,13 @@ import QRCode from 'qrcode'
 import { publicAccessApi, type PublicAccessServerStatus } from '@/api/publicAccess'
 import { getDesktopHost } from '@/lib/desktopHost'
 import { PUBLIC_ACCESS_CONSENT_VERSION } from '@/lib/desktopHost/types'
-import { buildTailscaleServeCommand, DEFAULT_PUBLIC_ACCESS_PORT, normalizeTailscaleOrigin } from '@/lib/desktopHost/publicAccessConfiguration'
+import { DEFAULT_PUBLIC_ACCESS_PORT, isCloudflareTunnelToken, normalizePublicAccessOrigin } from '@/lib/desktopHost/publicAccessConfiguration'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { Button } from '@/components/ui/Button'
 import { StatusDot } from '@/components/ui/Badge'
 import { Input } from '@/components/ui/Input'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
+import { useUIStore } from '@/stores/uiStore'
 import {
   SettingsBlock,
   SettingsGroup,
@@ -18,14 +20,8 @@ import {
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { useTranslation } from '@/i18n'
 
-// Official stable aliases follow releases without pinning users to an old installer.
-const tailscaleDownloads = {
-  mac: 'https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg',
-  windows: 'https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe',
-  android: 'https://pkgs.tailscale.com/stable/tailscale-android-universal-latest.apk',
-  googlePlay: 'https://play.google.com/store/apps/details?id=com.tailscale.ipn',
-  ios: 'https://apps.apple.com/us/app/tailscale/id1470499037?ls=1',
-}
+const CLOUDFLARE_DASHBOARD = 'https://dash.cloudflare.com/?to=/:account/tunnels'
+const CLOUDFLARE_GUIDE = 'https://developers.cloudflare.com/tunnel/get-started/'
 
 export function PublicAccessSettings() {
   const t = useTranslation()
@@ -33,14 +29,12 @@ export function PublicAccessSettings() {
   const bridge = host.publicAccess
   const [status, setStatus] = useState<Awaited<ReturnType<typeof bridge.getStatus>> | null>(null)
   const [server, setServer] = useState<PublicAccessServerStatus | null>(null)
+  const [mode, setMode] = useState<'quick' | 'named'>('quick')
   const [customUrl, setCustomUrl] = useState('')
-  const [copiedCommand, setCopiedCommand] = useState(false)
+  const [tunnelToken, setTunnelToken] = useState('')
+  const [serviceCopied, setServiceCopied] = useState(false)
   const [localPort, setLocalPort] = useState(String(DEFAULT_PUBLIC_ACCESS_PORT))
   const portId = useId()
-  const installQrId = useId()
-  const [showInstallQr, setShowInstallQr] = useState(false)
-  const [installQrs, setInstallQrs] = useState<{ android: string, ios: string } | null>(null)
-  const [installQrError, setInstallQrError] = useState(false)
   const initialized = useRef(false)
   const [busy, setBusy] = useState(false)
   const [stopping, setStopping] = useState(false)
@@ -53,19 +47,6 @@ export function PublicAccessSettings() {
   const [qr, setQr] = useState<string | null>(null)
   const [expiresAt, setExpiresAt] = useState<number | null>(null)
   useEffect(() => {
-    if (!showInstallQr) return
-    let active = true
-    setInstallQrs(null)
-    setInstallQrError(false)
-    void Promise.all([
-      QRCode.toDataURL(tailscaleDownloads.android, { margin: 1, width: 160 }),
-      QRCode.toDataURL(tailscaleDownloads.ios, { margin: 1, width: 160 }),
-    ]).then(([android, ios]) => {
-      if (active) setInstallQrs({ android, ios })
-    }).catch(() => { if (active) setInstallQrError(true) })
-    return () => { active = false }
-  }, [showInstallQr])
-  useEffect(() => {
     if (host.kind !== 'electron' || !bridge) return
     let active = true
     const refresh = async () => {
@@ -76,6 +57,7 @@ export function PublicAccessSettings() {
         if (active && generation === actionGeneration.current && sequence === refreshSequence.current) {
           if (!initialized.current) {
             initialized.current = true
+            setMode(next.mode)
             setCustomUrl(next.customUrl ?? '')
             setLocalPort(String(next.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT))
           }
@@ -85,7 +67,7 @@ export function PublicAccessSettings() {
       } catch { if (active && generation === actionGeneration.current && sequence === refreshSequence.current) setError(true) }
     }
     void refresh()
-    const timer = setInterval(() => void refresh(), 3000)
+    const timer = setInterval(() => void refresh(), 1000)
     return () => { active = false; actionGeneration.current += 1; pendingPairing.current = false; clearInterval(timer) }
   }, [bridge, host.kind])
   useEffect(() => {
@@ -102,7 +84,15 @@ export function PublicAccessSettings() {
       if (generation !== actionGeneration.current) return
       const [next, details] = await Promise.all([bridge.getStatus(), publicAccessApi.get()])
       if (generation === actionGeneration.current) { setStatus(next); setServer(details) }
-    } catch { if (generation === actionGeneration.current) setError(true) }
+    } catch {
+      if (generation === actionGeneration.current) {
+        setError(true)
+        try {
+          const next = await bridge.getStatus()
+          if (generation === actionGeneration.current) setStatus(next)
+        } catch { /* A later status poll can recover the connection controls. */ }
+      }
+    }
     finally {
       if (generation === actionGeneration.current) {
         // Discard polls started while this operation was still in flight.
@@ -147,27 +137,33 @@ export function PublicAccessSettings() {
     } catch { setError(true) }
     finally { actionGeneration.current += 1; setStopping(false); setBusy(false) }
   }
-  const normalizedUrl = normalizeTailscaleOrigin(customUrl) ?? ''
+  const normalizedUrl = normalizePublicAccessOrigin(customUrl) ?? ''
   const port = Number(localPort)
   const validPort = Number.isInteger(port) && port >= 1024 && port <= 65535
-  const validConfiguration = !!normalizedUrl && validPort
-  const command = buildTailscaleServeCommand(port, customUrl.trim() || undefined)
-  const configuration = { mode: 'tailscale' as const, customUrl: normalizedUrl, localPort: port }
-  const configurationChanged = configuration.mode !== status?.mode || configuration.customUrl !== (status?.customUrl ?? '') || configuration.localPort !== (status?.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT)
+  const tokenDraft = tunnelToken.trim()
+  const validToken = tokenDraft ? isCloudflareTunnelToken(tokenDraft) : status?.tokenSet === true
+  const validConfiguration = validPort && (mode === 'quick' || (!!normalizedUrl && validToken))
+  const configuration = { mode, customUrl: mode === 'quick' ? '' : normalizedUrl, localPort: port }
+  const configurationChanged = configuration.mode !== status?.mode || configuration.customUrl !== (status?.customUrl ?? '') ||
+    configuration.localPort !== (status?.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT) || !!tunnelToken.trim() ||
+    (status?.state === 'unconfigured' && status.error === 'configuration')
   const start = () => run(async (generation) => {
     if (!validConfiguration) return
     setConsent(false)
     if (configurationChanged) {
-      const saved = await bridge.configure(configuration)
+      const saved = await bridge.configure({ ...configuration, ...(mode === 'named' && tunnelToken.trim() ? { tunnelToken: tunnelToken.trim() } : {}) })
       if (generation !== actionGeneration.current) return
       if (saved.mode !== configuration.mode || saved.customUrl !== configuration.customUrl ||
-          saved.localPort !== configuration.localPort) {
+          saved.localPort !== configuration.localPort || (mode === 'named' && !saved.tokenSet)) {
         throw new Error('Public access configuration was not saved')
       }
+      setTunnelToken('')
+      setStatus(saved)
     }
     setQr(null)
     setExpiresAt(null)
     pendingPairing.current = true
+    setStatus(previous => previous ? { ...previous, state: 'connecting', phase: 'preparing', error: null } : previous)
     const next = await bridge.start(PUBLIC_ACCESS_CONSENT_VERSION)
     if (generation !== actionGeneration.current) return
     setStatus(next)
@@ -176,138 +172,109 @@ export function PublicAccessSettings() {
     unconfigured: t('publicAccess.unconfigured'), disabled: t('publicAccess.disabled'), connecting: t('publicAccess.connecting'),
     online: t('publicAccess.gatewayReady'), reconnecting: t('publicAccess.reconnecting'), failed: t('publicAccess.failed'),
   }
+  const phaseLabels = {
+    preparing: t('publicAccess.preparing'), connecting: t('publicAccess.connecting'), checking: t('publicAccess.checking'),
+  }
   const errorLabels = {
-    network: t('publicAccess.networkError'), configuration: t('publicAccess.customConfigurationError'), stop: t('publicAccess.stopError'),
+    network: t('publicAccess.networkError'), configuration: t('publicAccess.customConfigurationError'), stop: t('publicAccess.stopError'), runtime: t('publicAccess.runtimeError'), proxy: t('publicAccess.proxyError'),
   }
   const online = status?.state === 'online'
   const stopUnconfirmed = status?.error === 'stop'
   const running = online || status?.state === 'connecting' || status?.state === 'reconnecting' || stopUnconfirmed
-  const configured = !!normalizeTailscaleOrigin(status?.customUrl)
+  const configured = status?.mode === 'quick' || (!!normalizePublicAccessOrigin(status?.customUrl) && status?.tokenSet === true)
   const privacy = t('publicAccess.privacy')
+  const serviceUrl = `http://127.0.0.1:${localPort}`
+  const statusLabel = status ? status.phase && (status.state === 'connecting' || status.state === 'reconnecting')
+    ? phaseLabels[status.phase] : stateLabels[status.state] : t('common.loading')
   return <SettingsSection title={t('publicAccess.title')} description={t('publicAccess.intro')}>
     <div className="space-y-4">
       <SettingsGroup>
-        <SettingsBlock className="space-y-2">
-          <h4 className="flex items-center gap-2 text-[13px] font-semibold text-[var(--color-text-primary)]">
-            <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-surface-container)] text-[11px]">1</span>
-            {t('publicAccess.stepInstall')}
-          </h4>
-          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.tailscaleSetup')}</p>
-          <div role="group" aria-label={t('publicAccess.installComputer')} className="space-y-2">
-            <p className="text-xs font-medium text-[var(--color-text-primary)]">{t('publicAccess.installComputer')}</p>
-            <div className="flex flex-wrap gap-2">
-              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.mac))}>{t('publicAccess.downloadMac')}</Button>
-              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.windows))}>{t('publicAccess.downloadWindows')}</Button>
-            </div>
-          </div>
-          <div role="group" aria-label={t('publicAccess.installPhone')} className="space-y-2">
-            <p className="text-xs font-medium text-[var(--color-text-primary)]">{t('publicAccess.installPhone')}</p>
-            <div className="flex flex-wrap gap-2">
-              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.android))}>{t('publicAccess.downloadAndroid')}</Button>
-              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.googlePlay))}>{t('publicAccess.googlePlay')}</Button>
-              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(tailscaleDownloads.ios))}>{t('publicAccess.downloadIos')}</Button>
-              <Button size="base" variant="secondary" aria-expanded={showInstallQr} aria-controls={installQrId} onClick={() => setShowInstallQr(value => !value)}>{t('publicAccess.phoneInstallQr')}</Button>
-            </div>
-            <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.phoneInstallHint')}</p>
-          </div>
-          {showInstallQr && <div id={installQrId} className="space-y-2 rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] p-3">
-            <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.phoneInstallQrHint')}</p>
-            {installQrError ? <p role="alert" className="text-xs text-[var(--color-error)]">{t('publicAccess.phoneInstallQrError')}</p> : installQrs ? <div className="flex flex-wrap gap-4">
-              <figure className="space-y-1">
-                <img src={installQrs.android} width={160} height={160} alt={t('publicAccess.androidInstallQrAlt')} className="rounded-[var(--radius-sm)]" />
-                <figcaption className="text-xs text-[var(--color-text-primary)]">{t('publicAccess.downloadAndroid')}</figcaption>
-              </figure>
-              <figure className="space-y-1">
-                <img src={installQrs.ios} width={160} height={160} alt={t('publicAccess.iosInstallQrAlt')} className="rounded-[var(--radius-sm)]" />
-                <figcaption className="text-xs text-[var(--color-text-primary)]">{t('publicAccess.downloadIos')}</figcaption>
-              </figure>
-            </div> : <p role="status" className="text-xs text-[var(--color-text-secondary)]">{t('common.loading')}</p>}
-          </div>}
-          <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">{t('publicAccess.installSourceHint')}</p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="base" variant="link" disabled={busy} onClick={() => void run(() => host.shell.open('https://tailscale.com/download'))}>{t('publicAccess.installGuide')}</Button>
-            <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open('https://cchaha.ai/desktop/remote'))}>{t('publicAccess.connectionGuide')}</Button>
-          </div>
+        <SettingsBlock className="space-y-3">
+          <SegmentedControl
+            label={t('publicAccess.method')}
+            value={mode}
+            onChange={setMode}
+            items={[
+              { value: 'quick', label: t('publicAccess.quick'), disabled: busy || running || !status },
+              { value: 'named', label: t('publicAccess.named'), disabled: busy || running || !status },
+            ]}
+          />
+          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t(mode === 'quick' ? 'publicAccess.quickHint' : 'publicAccess.namedHint')}</p>
+          {mode === 'quick' && <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">{t('publicAccess.quickAddressHint')}</p>}
           {status?.migrationRequired && <p role="status" className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.migrationNotice')}</p>}
         </SettingsBlock>
-      </SettingsGroup>
-      <SettingsGroup>
-        <SettingsBlock className="space-y-2">
-          <div className="flex items-center justify-between gap-3">
-            <h4 className="flex items-center gap-2 text-[13px] font-semibold text-[var(--color-text-primary)]">
-              <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-surface-container)] text-[11px]">2</span>
-              {t('publicAccess.stepConfigure')}
-            </h4>
-            <Button size="base" variant="secondary" disabled={!command || busy || !status} onClick={() => void run(async () => {
-              if (!command || !await copyTextToClipboard(command)) throw new Error('copy')
-              setCopiedCommand(true)
-            })}>{t(copiedCommand ? 'publicAccess.commandCopied' : 'publicAccess.copyCommand')}</Button>
-          </div>
-          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.terminalHint')}</p>
-          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.macCliHint')}</p>
-          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.runCommandHint')}</p>
-          <code className="block break-all rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-3 py-2 text-xs text-[var(--color-text-primary)]">{command ?? '—'}</code>
-          <details className="text-xs text-[var(--color-text-secondary)]">
-            <summary className="cursor-pointer">{t('publicAccess.commandHelp')}</summary>
-            <p className="mt-2 leading-5">{t('publicAccess.commandHint')}</p>
-          </details>
+        {mode === 'named' && <>
+          <SettingsBlock className="space-y-3">
+            <h4 className="text-[13px] font-semibold text-[var(--color-text-primary)]">{t('publicAccess.namedGuide')}</h4>
+            <ol className="list-decimal space-y-2 pl-4 text-xs leading-5 text-[var(--color-text-secondary)]">
+              <li>{t('publicAccess.namedStepAccount')}</li>
+              <li>{t('publicAccess.namedStepCreate')}</li>
+              <li>{t('publicAccess.namedStepRoute')}</li>
+              <li>{t('publicAccess.namedStepToken')}</li>
+            </ol>
+            <div className="flex flex-wrap gap-2">
+              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(CLOUDFLARE_DASHBOARD))}>{t('publicAccess.namedControlPanel')}</Button>
+              <Button size="base" variant="link" disabled={busy} onClick={() => void run(() => host.shell.open(CLOUDFLARE_GUIDE))}>{t('publicAccess.namedDocs')}</Button>
+            </div>
+          </SettingsBlock>
+          <SettingsRow title={t('publicAccess.namedService')} description={t('publicAccess.namedServiceHint')}>
+            <code className="break-all text-xs text-[var(--color-text-primary)]">{serviceUrl}</code>
+            <Button size="base" variant="secondary" disabled={!validPort} onClick={() => void run(async () => {
+              if (!await copyTextToClipboard(serviceUrl)) throw new Error('copy')
+              setServiceCopied(true)
+            })}>{t(serviceCopied ? 'publicAccess.serviceCopied' : 'publicAccess.copyService')}</Button>
+          </SettingsRow>
+          <SettingsRow title={t('publicAccess.customUrl')} description={running ? t('publicAccess.stopToChange') : t('publicAccess.customHint')}>
+            <Input
+              aria-label={t('publicAccess.customUrl')}
+              type="url"
+              size="md"
+              autoComplete="off"
+              spellCheck={false}
+              placeholder="https://phone.example.com"
+              containerClassName="w-full sm:w-[280px]"
+              value={customUrl}
+              error={customUrl && !normalizedUrl ? t('publicAccess.customUrlError') : undefined}
+              disabled={busy || running || !status}
+              onChange={(event) => setCustomUrl(event.target.value)}
+            />
+          </SettingsRow>
+          <SettingsRow title={t('publicAccess.namedToken')} description={status?.tokenSet ? t('publicAccess.namedTokenSaved') : t('publicAccess.namedTokenHint')}>
+            <Input
+              aria-label={t('publicAccess.namedToken')}
+              type="password"
+              size="md"
+              autoComplete="new-password"
+              spellCheck={false}
+              containerClassName="w-full sm:w-[280px]"
+              value={tunnelToken}
+              error={tokenDraft && !validToken ? t('publicAccess.namedTokenError') : undefined}
+              disabled={busy || running || !status}
+              onChange={(event) => setTunnelToken(event.target.value)}
+            />
+          </SettingsRow>
+        </>}
+        <SettingsBlock>
           <details className="text-xs text-[var(--color-text-secondary)]">
             <summary className="cursor-pointer">{t('publicAccess.portSettings')}</summary>
             <div className="mt-2 max-w-[240px] space-y-2">
               <label htmlFor={portId}>{t('publicAccess.localPort')}</label>
-              <Input
-                id={portId}
-                aria-describedby={!validPort ? 'public-access-port-error' : undefined}
-                aria-invalid={!validPort}
-                type="number"
-                min={1024}
-                max={65535}
-                step={1}
-                size="md"
-                value={localPort}
-                disabled={busy || running}
-                onChange={(event) => { setLocalPort(event.target.value); setCopiedCommand(false) }}
-              />
-              {!validPort && <p id="public-access-port-error" role="alert" className="text-[var(--color-error)]">{t('publicAccess.localPortError')}</p>}
+              <Input id={portId} type="number" min={1024} max={65535} step={1} size="md" value={localPort}
+                error={!validPort ? t('publicAccess.localPortError') : undefined} disabled={busy || running}
+                onChange={(event) => { setLocalPort(event.target.value); setServiceCopied(false) }} />
             </div>
           </details>
         </SettingsBlock>
-        <SettingsRow title={t('publicAccess.customUrl')} description={running ? t('publicAccess.stopToChange') : t('publicAccess.customHint')}>
-          <Input
-            aria-label={t('publicAccess.customUrl')}
-            aria-describedby={customUrl && !normalizedUrl ? 'public-access-url-error' : undefined}
-            aria-invalid={!!customUrl && !normalizedUrl}
-            type="url"
-            size="md"
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="https://computer.tailnet.ts.net"
-            containerClassName="w-full sm:w-[280px]"
-            value={customUrl}
-            disabled={busy || running || !status}
-            onChange={(event) => { setCustomUrl(event.target.value); setCopiedCommand(false) }}
-          />
-        </SettingsRow>
-        {customUrl && !normalizedUrl && <SettingsBlock>
-          <p id="public-access-url-error" role="alert" className="text-xs text-[var(--color-error)]">{t('publicAccess.customUrlError')}</p>
-        </SettingsBlock>}
       </SettingsGroup>
       <SettingsGroup>
-        <SettingsBlock className="space-y-1.5">
-          <h4 className="flex items-center gap-2 text-[13px] font-semibold text-[var(--color-text-primary)]">
-            <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--color-surface-container)] text-[11px]">3</span>
-            {t('publicAccess.stepPair')}
-          </h4>
-          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.pairSetupHint')}</p>
-        </SettingsBlock>
         <SettingsRow
           title={(
             <span className="inline-flex items-center gap-2">
               <StatusDot tone={online ? 'success' : status?.state === 'failed' ? 'danger' : status?.state === 'connecting' || status?.state === 'reconnecting' ? 'info' : 'neutral'} />
-              <span role="status">{status ? stateLabels[status.state] : t('common.loading')}</span>
+              <span role="status">{statusLabel}</span>
             </span>
           )}
-          description={online ? t('publicAccess.customStatusHint') : undefined}
+          description={online ? t('publicAccess.customStatusHint') : t('publicAccess.pairSetupHint')}
         >
           <Button size="base" disabled={busy || !status || !validConfiguration || running} onClick={() => { if (status?.consentVersion === PUBLIC_ACCESS_CONSENT_VERSION && !configurationChanged) void start(); else setConsent(true) }}>{t('publicAccess.enable')}</Button>
           <Button size="base" variant="secondary" disabled={stopping || (busy && status?.state !== 'connecting' && status?.state !== 'reconnecting') || !status || status.state === 'unconfigured' || status.state === 'disabled'} onClick={() => void stop()}>{t('publicAccess.disable')}</Button>
@@ -355,7 +322,9 @@ export function PublicAccessSettings() {
           disabled={busy || stopUnconfirmed || !configured || configurationChanged || status?.consentVersion !== PUBLIC_ACCESS_CONSENT_VERSION}
           onChange={(checked) => void run(() => bridge.setAutoStart(checked))}
         />
-        <SettingsBlock>
+        <SettingsBlock className="space-y-2">
+          <p className="text-xs leading-5 text-[var(--color-text-secondary)]">{t('publicAccess.proxyHint')}</p>
+          <Button size="base" variant="link" onClick={() => useUIStore.getState().setActiveSettingsTab('general')}>{t('publicAccess.proxySettings')}</Button>
           <details className="text-xs text-[var(--color-text-secondary)]">
             <summary className="cursor-pointer">{t('publicAccess.privacyTitle')}</summary>
             <p className="mt-2 whitespace-pre-line leading-6 text-[var(--color-text-tertiary)]">{privacy}</p>

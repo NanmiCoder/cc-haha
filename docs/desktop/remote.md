@@ -17,9 +17,9 @@ order: 9
 | cc-haha iPhone / iPad App | TestFlight 邀请待开放 | 安装邀请将在开放后提供 |
 | 手机浏览器（H5） | 现在可用 | 点击「先用浏览器连接」，按下方步骤开启连接并扫码 |
 
-「先用浏览器连接」会切换到 **同一 Wi-Fi**，需要你阅读提示并主动开启连接。手机和电脑在同一个可信 Wi-Fi 时，无需安装 Tailscale；外出、使用蜂窝网络或其他 Wi-Fi 时，才需要下方的 **Tailscale 远程连接**。
+「先用浏览器连接」会切换到 **同一 Wi-Fi**，需要你阅读提示并主动开启连接。手机和电脑在同一个可信 Wi-Fi 时可以直接连接；外出、使用蜂窝网络或其他 Wi-Fi 时，使用下方的 **Cloudflare 外出连接**。两种方式都无需在手机上额外安装 VPN。
 
-这些方式都需要电脑开着、cc-haha 正在运行且未休眠。任务始终在电脑上执行。Tailscale 负责外出时的设备联网，cc-haha 手机 App 和浏览器负责查看任务与处理审批。
+这些方式都需要电脑开着、cc-haha 正在运行且未休眠。任务始终在电脑上执行。Cloudflare 隧道负责外出时的网络通路，cc-haha 手机 App 和浏览器负责查看任务与处理审批。
 
 想直接在微信、钉钉、WhatsApp、Telegram 或飞书里对话，可使用本页最后的 **IM 接入**。
 
@@ -43,7 +43,7 @@ order: 9
 拿到这条链接的人就能访问你桌面上暴露出来的能力。所以：
 
 - 不要把带令牌的链接贴进群聊、公开 Issue、日志截图或任何公开页面。
-- 只在可信网络里开。离开局域网后，使用下方的「Tailscale 远程连接」，通过 HTTPS 和逐设备配对连接。
+- 只在可信网络里开。离开局域网后，使用下方的「Cloudflare 外出连接」，通过 HTTPS 和逐设备配对连接。
 - 怀疑泄露了就点「重新生成令牌」。旧二维码和旧令牌会立刻失效——只是关掉再打开 H5 不会换令牌。
 
 不用的时候关掉。关掉会立即拒绝远程访问，但令牌保留着，下次开还是同一个。
@@ -56,7 +56,7 @@ H5 默认关闭，它也不是公开服务。开启前先确认你在自己信�
 
 「访问主机 / IP」填电脑当前的局域网 IP，比如 `192.168.1.20`，端口用当前服务端口。换了 Wi-Fi 或插拔网线之后原 IP 可能失效，页面会提示你切到可用的那个。
 
-局域网 H5 也接受完整 URL，并需要配置「允许的来源」。这仍然是原有的 H5 令牌访问方式。要从其他网络连接手机 App 或浏览器，请使用下方的「Tailscale 远程连接」，将 Serve 接到独立的受限网关，不要直接映射桌面主服务端口。
+局域网 H5 也接受完整 URL，并需要配置「允许的来源」。这仍然是原有的 H5 令牌访问方式。要从其他网络连接手机 App 或浏览器，请使用下方的「Cloudflare 外出连接」，由桌面自动接到独立受限网关，不要直接映射桌面主服务端口。
 
 通常无需填写 IP 或端口；开启后直接扫码。需要手动配置时，展开下方的「高级连接设置」。其中的**固定端口**用于保持局域网地址稳定，或配合局域网防火墙和反向代理。端口要在 1024–65535 之间，改完重启应用才生效——页面会告诉你现在还跑在哪个端口上。它与下方远程入口的本机端口相互独立。
 
@@ -74,96 +74,70 @@ H5 默认关闭，它也不是公开服务。开启前先确认你在自己信�
 
 供应商网页登录、配置文件导入和桌面专用管理仍在电脑上完成。桌面工作区、内嵌终端、原生「打开方式」、Computer Use 授权和桌面宠物不在 H5 里。终端暂未开放：它目前由 Electron 管理，远程终端需要单独支持连接恢复、设备授权和撤销，不能直接复用桌面 IPC。
 
-## Tailscale 远程连接
+## Cloudflare 外出连接
 
-同一局域网继续使用上面的扫码连接。离开家或办公室后，通过 **Tailscale** 把手机和电脑接入自己的私人网络，再连接 cc-haha。无需购买服务器、申请域名或配置 ngrok；Tailscale 负责设备间的网络通路，cc-haha 负责手机配对与访问授权。
+离开家或办公室后，使用 **Cloudflare** 连接这台电脑。桌面端自动运行连接程序，手机 App 和浏览器都不需要另外安装 VPN。手机请求经过 Cloudflare，再到达 cc-haha 的独立受限网关；配对、访问授权和任务执行仍由你的电脑处理。
 
-### 1. 下载 Tailscale，连接电脑和手机
+打开 **手机连接** 时默认显示 **外出连接 → 快速连接**。选择方式只会显示配置，连接默认关闭，需要你主动开启并确认访问说明。
 
-电脑和手机各安装一次 **Tailscale**。按设备选择下面的官方下载入口，无需再去官网查找安装包：
+### 快速连接：无需账号或域名
 
-| 设备 | 下载 / 安装 | 安装后怎么做 |
-|---|---|---|
-| macOS 电脑 | [下载 macOS 安装包（.pkg）](https://pkgs.tailscale.com/stable/Tailscale-latest-macos.pkg) | 双击安装包，按提示安装并打开 Tailscale；推荐使用这个独立安装版 |
-| Windows 电脑 | [下载 Windows 安装包（.exe）](https://pkgs.tailscale.com/stable/tailscale-setup-latest.exe) | 双击安装，安装器会自动选择适合系统的版本；安装时保持联网 |
-| Android 手机 | [下载 Android 安装包（.apk）](https://pkgs.tailscale.com/stable/tailscale-android-universal-latest.apk) · [Google Play 安装](https://play.google.com/store/apps/details?id=com.tailscale.ipn) | 用手机打开下载链接；安装 APK 时，按系统提示允许当前浏览器安装应用 |
-| iPhone / iPad | [前往 App Store 安装](https://apps.apple.com/us/app/tailscale/id1470499037?ls=1) | 在手机上打开链接，点「获取」安装；需 Apple 账号所在商店地区提供该应用 |
+1. 打开桌面左侧 **手机连接**，保持 **外出连接 → 快速连接**。
+2. 点击 **开启连接**，首次开启时阅读并确认访问说明。
+3. 等待页面完成准备、连接和公网入口检查。显示 **连接已就绪** 后会自动给出配对二维码，无需复制命令或手动填写地址。
+4. 用手机相机或 cc-haha App 扫码。浏览器用户在常用的 Safari、Chrome 或系统浏览器中打开。
+5. 在电脑上核对并批准这部手机，配对后即可查看任务和处理审批。
 
-在电脑上阅读本页时，可以用手机浏览器打开本指南，再点对应的手机安装入口。桌面端 **手机连接 → 外出连接** 也提供按系统分类的 Tailscale 下载入口。
+快速连接会分配临时的 `https://随机名称.trycloudflare.com` 地址。**每次重新建立隧道，地址都会改变，需要重新扫码**；短暂断网后在同一条隧道内重连不等于重新配对。Cloudflare 将 Quick Tunnel 定位为临时开发与测试入口，不保证持续可用，详见 [Quick Tunnel 官方说明](https://developers.cloudflare.com/tunnel/get-started/quick-tunnels/)。需要重启后保持地址时，使用下方的固定域名方式。
 
-这些安装包由 Tailscale 官方提供，链接会下载当前稳定版。Android APK 需要手动更新；可以使用 Google Play 时，商店安装更便于自动更新。其他系统、旧系统或特殊安装需求，查看 [Tailscale 官方下载页](https://tailscale.com/download) 和 [官方安装指南](https://tailscale.com/docs/install)。
+“连接已就绪”表示电脑已经验证公网入口可达，不能代替手机所在网络的验证。建议关闭手机 Wi-Fi、使用蜂窝网络扫码测试。
 
-iPhone / iPad 目前通过 App Store 安装，Tailscale 没有提供适用于普通用户的独立 IPA 安装包。若提示「所在地区不可用」，这是商店地区的限制，详见 [Tailscale 官方说明](https://github.com/tailscale/tailscale/issues/19625)。同一 Wi-Fi 下仍可使用上方无需 Tailscale 的连接方式。
+### 固定域名：使用你创建的隧道
 
-安装完成后，在电脑和手机上打开 Tailscale，**用同一个账号登录，并让两端都保持已连接状态**。首次使用时按系统提示允许添加 VPN 配置；macOS 还可能提示启用网络扩展。账号注册与登录帮助见 [官方入门指南](https://tailscale.com/docs/how-to/quickstart)。
+此方式需要 Cloudflare 账号，以及已经添加到 Cloudflare 的自有域名。cc-haha 负责运行连接程序，你只需在 Cloudflare 创建隧道和配置域名。
 
-这里使用 **Tailscale Serve**，地址只供私人网络中的授权设备访问。无需开启面向整个互联网的 Funnel，也无需配置出口节点或子网路由。完整原理见 [Serve 官方指南](https://tailscale.com/docs/features/tailscale-serve)。
+1. 在桌面 **手机连接 → 外出连接** 选择 **固定域名**。页面会显示要转发的 **Cloudflare Service URL**，默认是 `http://127.0.0.1:17463`。如果修改了下方的本机端口，以页面显示的实际地址为准。
+2. 点击 **打开 Cloudflare**，在 **Networking → Tunnels** 创建一个 **cloudflared** 隧道，并复制设置页提供的 **Tunnel Token**。无需在终端运行安装命令；只复制其中的 Token，不要粘贴整条命令。
+3. 在该隧道中添加 **Published application** 路由，选择你要使用的域名，例如 `phone.example.com`。Service 使用 **HTTP**，URL 填写第 1 步显示的本机地址。
+4. 回到 cc-haha，填写 **固定 HTTPS 地址**（例如 `https://phone.example.com`）和 **Tunnel Token**，然后点击 **开启连接**。
+5. 等待入口检查通过，用手机扫码，并在电脑批准配对。
 
-### 2. 配置电脑入口
+固定 HTTPS 地址只填写协议和域名，不要添加 `/remote`、其他路径、查询参数或登录信息。Cloudflare 应转发整个入口，页面、API 和 WebSocket 才能经过同一地址。完整配置步骤见 [Cloudflare 官方指南](https://developers.cloudflare.com/tunnel/get-started/)。
 
-下面的命令**只在电脑运行**，手机无需运行命令。先准备好命令窗口：
+Tunnel Token 只保存在这台电脑上，设置页不会回显。再次编辑时留空表示保留已保存的 Token；需要替换时填写新值。固定域名保持不变、手机授权仍有效时，桌面重启并恢复隧道后，手机可以使用已保存的连接重新访问。
 
-- **macOS：** 按 `⌘ + 空格`，搜索「终端」并打开。在 Tailscale 的 **Settings → CLI integration → Show me how → Install Now** 安装命令行入口，按提示输入电脑管理员密码，再回到终端。已有 App Store 版的用户，可将下方命令开头的 `tailscale` 替换为 `/Applications/Tailscale.app/Contents/MacOS/Tailscale`。详见 [macOS 命令行说明](https://tailscale.com/docs/reference/tailscale-cli?tab=macos)。
-- **Windows：** 从开始菜单搜索并打开 **PowerShell**。如果安装 Tailscale 前已经打开过 PowerShell，关闭后重新打开，再粘贴命令。详见 [Windows 命令行说明](https://tailscale.com/docs/reference/tailscale-cli?tab=windows)。
+### 网络代理与连接失败
 
-1. 打开桌面的 **手机连接 → 外出连接**。保留默认本机端口 `17463`，或选择未被占用的端口。
-2. 在电脑的命令窗口先粘贴下面这条命令，按回车查看已有转发：
+Cloudflare 连接使用 **设置 → 通用 → 网络代理** 中保存的方式：直连、系统代理或手动代理。连接过程和公网入口检查遵循同一代理选择；修改代理后，关闭并重新开启外出连接。
 
-   ```sh
-   tailscale serve status
-   ```
+- **直连**：不使用系统或继承的代理设置。
+- **系统代理**：按系统当前的代理或 PAC 规则选择路径。
+- **手动代理**：填写可用的 HTTP/HTTPS 代理地址，需要认证时使用包含有效认证信息的代理地址。
 
-   没有使用 HTTPS `443` 的服务时，再运行下面的命令；已有服务时使用后面的其他端口示例，避免覆盖原配置。
-
-   ```sh
-   tailscale serve --bg http://127.0.0.1:17463
-   ```
-
-3. 首次运行可能给出一个网页链接。按提示为自己的 Tailscale 网络启用 HTTPS；若提示 DNS 配置缺失，按 [官方 HTTPS 指南](https://tailscale.com/docs/how-to/set-up-https-certificates) 开启 MagicDNS 和 HTTPS Certificates。Serve 会管理证书，无需手动下载证书文件。
-4. 复制命令输出的 HTTPS 地址，例如 `https://my-computer.example.ts.net`，粘贴到桌面的 **Tailscale HTTPS 地址**。使用你自己的实际地址，不要添加 `/remote`、查询参数或配对码，也不要填 `http://100.x.x.x`。
-5. 阅读访问说明，开启连接入口。**本机入口已就绪**只表示 cc-haha 已开始接受连接，不代表手机到电脑的网络已经验证。
-
-命令中的 `17463` 必须与页面上的本机端口一致。它连接的是 cc-haha 提供的独立受限网关，不是桌面主服务端口。应用显示的命令会随所填端口更新。
-
-如果 HTTPS `443` 已被另一项 Serve 服务使用，可选择另一个未使用的端口，例如：
-
-```sh
-tailscale serve --bg --https=8443 http://127.0.0.1:17463
-```
-
-此时填写的地址也必须带上 `:8443`，例如 `https://my-computer.example.ts.net:8443`。保持根路径转发，不要只转发 `/remote`；页面、API 和 WebSocket 都要经过同一个入口。[Serve 命令参考](https://tailscale.com/docs/reference/tailscale-cli/serve)
-
-### 3. 扫码配对并确认
-
-1. 保持手机 Tailscale 已连接。先关闭 Wi-Fi、使用蜂窝网络验证远程路径。
-2. 用手机相机扫描桌面的配对二维码，在常用浏览器中打开；使用 cc-haha 手机 App 时，也可在 App 内扫码。
-3. 在桌面确认这部手机。配对成功后，手机会保存连接，可以查看任务和处理审批。
-
-从 ngrok 升级后，旧远程配置不会自动启动；之前配置过 Tailscale HTTPS 地址的用户也需要重新确认开启。旧 ngrok 地址不能用于 Tailscale，请生成新的二维码配对。局域网配置和已有电脑会话不受影响。
-
-### 常见问题
+电脑上的代理只处理电脑到 Cloudflare 的连接，不会替手机开启 VPN。手机网络仍需要能够访问分配的公网域名。Cloudflare 在中国不同运营商和蜂窝网络中的表现需要实际验证。
 
 | 现象 | 检查什么 |
 |---|---|
-| 电脑显示入口就绪，手机仍连接失败 | 两边 Tailscale 是否都已连接、是否属于同一个私人网络；HTTPS 地址和端口是否与 Serve 输出一致；电脑上的 cc-haha 是否仍在运行 |
-| 地址打不开或证书报错 | 检查 MagicDNS、HTTPS Certificates 和 `tailscale serve status`；不要用 `100.x.x.x` 代替完整的 HTTPS 域名 |
-| 开启 Tailscale 后另一个 VPN 断开 | 手机系统通常只允许一个 VPN 同时启用，参见 [Tailscale 的 VPN 兼容说明](https://tailscale.com/docs/reference/faq/other-vpns) |
-| 能连上，但流式回复慢 | 用 `tailscale status` / `tailscale ping` 判断是直连还是中继；中继线路会影响延迟。国内运营商和蜂窝网络需要实际验证，不能仅凭局域网速度判断。[连接类型](https://tailscale.com/docs/reference/connection-types) |
-| 退到后台后没有系统通知 | Tailscale 只负责网络连接，后台推送仍需独立配置；重新打开 App 后同步任务状态 |
+| 一直处于连接中或显示网络错误 | 电脑网络、保存的代理模式，以及系统代理或手动代理是否可用；修改后重新开启连接 |
+| 提示代理连接失败 | 代理地址、端口、认证信息及代理是否允许连接 Cloudflare；不要把模型服务商专用代理误当作全局代理 |
+| 固定域名连接失败 | Tunnel Token、HTTPS 域名，以及 Cloudflare 路由的 Service URL 是否与页面上的本机地址一致 |
+| 电脑显示就绪，手机仍打不开 | 用手机蜂窝网络测试该域名；确认电脑仍在运行、联网且未休眠 |
+| 快速连接重启后旧地址失效 | 回到桌面使用新二维码；希望长期保留地址时改用固定域名 |
+| 退到后台后没有系统通知 | 隧道只负责联网，后台推送仍需独立配置；重新打开 App 后同步任务状态 |
+
+官方连接器数据面使用出站 `7844` 端口；受限网络或代理可能阻止它，HTTP/2 不代表数据面改用 `443`。详细说明见 [Cloudflare 连接排障](https://developers.cloudflare.com/tunnel/troubleshooting/)。
 
 ### 配对、关闭与恢复
 
-二维码中的配对材料 5 分钟有效且只能使用一次；手机访问凭据默认有效 30 天。不要分享二维码。桌面可以单独撤销手机，或关闭远程入口立即断开远程连接；已经运行的任务会继续执行。
+二维码中的配对材料 5 分钟有效且只能使用一次；手机访问凭据默认有效 30 天。不要分享二维码。桌面可以单独撤销手机，或关闭连接立即断开远程访问；已经运行的任务会继续执行。
 
-网络恢复且 HTTPS 地址保持不变时，手机 App 会用已保存的凭据重连并同步会话。临时断网或重启入口不等于授权失效，不需要因此重新扫码。授权到期或被撤销后需要重新配对，当前不会自动延长 30 天有效期。
+手机 App 把凭据保存在系统安全存储中，浏览器使用安全 Cookie。不同浏览器、无痕窗口和域名之间不会共享授权；若扫码器先打开内置浏览器，请先切换到常用浏览器再配对。授权到期或被撤销后需要重新配对，当前不会自动延长 30 天有效期。
 
-手机 App 把凭据保存在系统安全存储中。浏览器使用安全 Cookie，有效期内再次扫码不会消耗新二维码。不同浏览器、无痕窗口和域名之间不会共享授权；若扫码器先打开内置浏览器，请先切换到常用浏览器再配对。
+**随桌面启动恢复连接** 默认关闭。开启后只恢复已确认的 Cloudflare 连接；快速模式重建后会产生新地址，需要重新扫码，固定域名方式则沿用原地址。电脑必须保持开机、联网且未休眠。
 
-远程入口支持上述供应商与通用设置。任意本机目录浏览及路径式文件预览仍需在桌面操作；会话内的文件和审查接口继续可用。
+从旧远程配置升级后，连接不会自动启动。请主动选择 Cloudflare 方式、开启连接，并使用新二维码配对；局域网配置、电脑会话和用户数据会保留。
 
-“随桌面启动恢复连接入口”默认关闭，打开后只恢复 cc-haha 的本机入口。`--bg` 让 Serve 保留配置并在 Tailscale 重启后恢复；电脑和手机仍须连接 Tailscale，电脑必须保持开机、联网且未休眠。退出 cc-haha 或电脑休眠期间无法连接，也无法执行新任务。[Serve 重启行为](https://tailscale.com/docs/reference/tailscale-cli/serve#effects-of-rebooting-and-restarting)
-
-关闭 cc-haha 入口不会删除你的 Tailscale 配置。若也要停止默认 HTTPS `443` 的转发，在电脑运行 `tailscale serve --https=443 off`；用过 `8443` 时换成 `--https=8443`。不要使用 `tailscale serve reset`，它会清空其他 Serve 配置。
+手机配对和授权限制继续生效。流量经过 Cloudflare，HTTPS 保护传输，但不代表端到端加密。远程入口支持上述供应商与通用设置；会话内的文件和审查接口继续可用，桌面专用能力仍在电脑上操作。
 
 ## IM 接入
 

@@ -1,4 +1,4 @@
-import { PublicAccessManager } from './services/publicAccess'
+import { PublicAccessManager, readPublicAccessControlResponse } from './services/publicAccess'
 import type { DesktopPublicAccessConfiguration } from '../src/lib/desktopHost/types'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, Notification, powerSaveBlocker, screen, session, systemPreferences, WebContentsView, webContents } from 'electron'
 import { autoUpdater } from 'electron-updater'
@@ -273,6 +273,7 @@ function getPublicAccessManager() {
   if (publicAccessManager) return publicAccessManager
   let queue: Promise<unknown> = Promise.resolve()
   publicAccessManager = new PublicAccessManager({
+    desktopRoot: unpackedRoot(),
     directory: path.join(getAppMode(app).activeConfigDir ?? app.getPath('userData'), 'cc-haha', 'public-access'),
     backend: {
       request<T>(route: string, method: string, body?: unknown): Promise<T> {
@@ -287,8 +288,7 @@ function getPublicAccessManager() {
             body: body === undefined ? undefined : JSON.stringify(body),
             signal: AbortSignal.timeout(10_000),
           })
-          if (!response.ok) throw new Error('Public access configuration failed')
-          return await response.json() as T
+          return await readPublicAccessControlResponse<T>(response)
         })
         queue = operation
         return operation
@@ -1077,7 +1077,6 @@ app.whenReady().then(async () => {
       }
     } else console.error('[desktop] failed to start Electron server sidecar', error)
   }
-  await getPublicAccessManager().restore().catch(() => {})
   await installApplicationMenu(app, () => mainWindow)
   if (shouldInstallTray(process.platform)) {
     trayController = await installTray({
@@ -1107,6 +1106,10 @@ app.whenReady().then(async () => {
     }
     void createMainWindow()
   })
+
+  // A saved tunnel can wait on cloudflared and public network verification.
+  // Finish local startup first so its settings and stop controls stay available.
+  if (!isQuitting) void getPublicAccessManager().restore().catch(() => {})
 })
 
 app.on('window-all-closed', () => {

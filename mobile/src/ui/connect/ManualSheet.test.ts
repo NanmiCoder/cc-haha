@@ -39,7 +39,8 @@ test('scanner connection form retains native parent boundaries as fields and key
       {},
       { address: 'http://127.0.0.1:3457/?h5Token=fixture-only' },
       { address: 'http://127.0.0.1:3457/?h5Token=fixture-only', busy: true },
-      { mode: 'remote', address: 'https://fixture.invalid/#pair=fixture-only' },
+      { mode: 'remote', address: 'https://fixture-phone.trycloudflare.com/remote#pair=fixture-only' },
+      { mode: 'remote', address: 'https://phone.fixture.example:8443/remote#pair=fixture-only' },
     ]) {
       for (keyboard of [false, true]) {
         const sheet = ManualSheet({ ...base, ...state })
@@ -51,6 +52,10 @@ test('scanner connection form retains native parent boundaries as fields and key
         assert.equal(surface.props.children[1].type, 'Group')
         assert.equal(surface.props.children[0].props.value, state.mode ?? 'lan')
         assert.equal(surface.props.children[0].props.disabled, state.busy ?? false)
+        assert.deepEqual(surface.props.children[0].props.options, [
+          { label: '同一个局域网', value: 'lan' },
+          { label: '远程连接', value: 'remote' },
+        ])
         if (keyboard) assert.equal(surface.props.style.minHeight, 0)
         rendered.push({ keyboard, busy: state.busy ?? false, mode: state.mode ?? 'lan' })
       }
@@ -59,7 +64,7 @@ test('scanner connection form retains native parent boundaries as fields and key
   `
   try {
     execFileSync(process.execPath, ['-e', script], { cwd: dir, encoding: 'utf8' })
-    expect(JSON.parse(readFileSync(report, 'utf8'))).toHaveLength(8)
+    expect(JSON.parse(readFileSync(report, 'utf8'))).toHaveLength(10)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

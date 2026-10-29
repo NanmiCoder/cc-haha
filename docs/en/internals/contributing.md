@@ -24,6 +24,8 @@ cd desktop
 bun install
 ```
 
+Before your first desktop development run or `check:native`, run `bun run prepare:cloudflared` from `desktop/`. It downloads the pinned official connector, verifies SHA-256, and stages it in the Git-ignored local cache; distributed apps already include it. Native checks only validate and use that cache and do not download it. Cross-platform builds can select a target with `--target-triple`.
+
 If your change touches `adapters/`, or if you run `check:adapters` / `check:native`, install adapter dependencies:
 
 ```bash

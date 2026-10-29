@@ -103,7 +103,7 @@ export function Welcome({
 
 const steps = [
   { title: '在电脑上打开 cc-haha', hint: '' },
-  { title: '进入 设置 → 手机连接', hint: '同一个 Wi-Fi 用局域网；远程连接先在两端开启 Tailscale' },
+  { title: '进入 设置 → 手机连接', hint: '同一个 Wi-Fi 用局域网；外出选择 Cloudflare 快速连接或固定域名' },
   { title: '用手机扫页面上的二维码', hint: '' },
 ]
 
@@ -181,7 +181,7 @@ function SettingsSketch() {
           {bar(72)}
           {bar(54)}
           <Text style={{ fontSize: 12, fontWeight: '600', color: colors.ink, marginTop: 6 }}>
-            Tailscale
+            Cloudflare
           </Text>
           {bar(64)}
         </View>

@@ -36,7 +36,7 @@ describe('Electron IPC capabilities', () => {
     }
   })
 
-  it('restricts Tailscale consent to validated desktop IPC and retires credential channels', () => {
+  it('restricts public tunnel consent to validated desktop IPC and retires credential channels', () => {
     for (const channel of ['desktop:public-access:save-credential', 'desktop:public-access:delete-credential']) {
       expect(isElectronIpcChannel(channel)).toBe(false)
     }
@@ -49,11 +49,12 @@ describe('Electron IPC capabilities', () => {
     }
   })
 
-  it('accepts only a root Tailscale HTTPS origin and a fixed local port', () => {
+  it('accepts only typed Cloudflare configuration and a fixed local port', () => {
     const channel = ELECTRON_IPC_CHANNELS.publicAccessConfigure
-    const configuration = { mode: 'tailscale', customUrl: 'https://desktop.example.ts.net:8443', localPort: 17463 }
+    const configuration = { mode: 'named', customUrl: 'https://phone.example.test', localPort: 17463 }
     expect(validateElectronIpcPayload(channel, configuration)).toBe(true)
-    for (const value of [undefined, {}, { ...configuration, customUrl: 'http://desktop.example.ts.net' }, { ...configuration, customUrl: 'https://public.example.com' }, { ...configuration, customUrl: 'https://desktop.example.ts.net/remote' }, { ...configuration, customUrl: 'https://user:password@desktop.example.ts.net' }, { ...configuration, localPort: 80 }, { ...configuration, localPort: '17463' }, { ...configuration, mode: 'ngrok' }, { ...configuration, localHost: '0.0.0.0' }, { ...configuration, command: 'tailscale up' }]) {
+    expect(validateElectronIpcPayload(channel, { mode: 'quick', customUrl: '', localPort: 17463 })).toBe(true)
+    for (const value of [undefined, {}, { ...configuration, customUrl: 'http://phone.example.test' }, { ...configuration, customUrl: 'https://phone.example.test/remote' }, { ...configuration, customUrl: 'https://user:password@phone.example.test' }, { ...configuration, localPort: 80 }, { ...configuration, localPort: '17463' }, { ...configuration, mode: 'ngrok' }, { ...configuration, mode: 'tailscale' }, { ...configuration, localHost: '0.0.0.0' }, { ...configuration, command: 'cloudflared tunnel run' }]) {
       expect(validateElectronIpcPayload(channel, value)).toBe(false)
     }
     expect(isElectronIpcChannelAllowedForPetWindow(channel)).toBe(false)

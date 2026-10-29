@@ -121,6 +121,10 @@ Write-Step "Building sidecars for $targetTriple..."
 Push-Location $desktopDir
 try {
   $env:SIDECAR_TARGET_TRIPLE = $targetTriple
+  & bun run prepare:cloudflared
+  if ($LASTEXITCODE -ne 0) {
+    throw "[build-windows-x64] prepare:cloudflared failed (exit $LASTEXITCODE)"
+  }
   & bun run build:sidecars
   if ($LASTEXITCODE -ne 0) {
     throw "[build-windows-x64] build:sidecars failed (exit $LASTEXITCODE)"

@@ -25,7 +25,7 @@ export function MobileAppInstall({ connectionMethodsId, onUseBrowser }: MobileAp
           <Button size="base" aria-controls={connectionMethodsId} onClick={onUseBrowser}>{t('mobileApp.useBrowser')}</Button>
         </SettingsRow>
         <SettingsBlock>
-          <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">{t('mobileApp.tailscaleHint')}</p>
+          <p className="text-xs leading-5 text-[var(--color-text-tertiary)]">{t('mobileApp.connectionHint')}</p>
         </SettingsBlock>
       </SettingsGroup>
     </SettingsSection>
