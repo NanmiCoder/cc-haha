@@ -85,7 +85,9 @@ test('desktop host dispatches independent sessions, exchanges messages, exposes 
     const change = await api(`/api/session-collaboration/${root.sessionId}/model-changes`, {
       requestId: 'after-turn-change', mode: 'after_turn', selections: [{ sessionId: children[0].sessionId, runtime: { providerId: alternateId, modelId: 'mock-opus' } }],
     })
-    expect(['pending', 'applied']).toContain(change.state)
+    // The route does not wait: when the child's turn ends while the change is
+    // being recorded, the change is already applying when the route answers.
+    expect(['pending', 'applying', 'applied']).toContain(change.state)
     const changed = await eventually(() => api(`/api/session-collaboration/${root.sessionId}/delegation`), value => value.changes.some((item: any) => item.id === change.id && item.state === 'applied'), 'after-turn provider applied')
     expect(changed.sessions.find((item: any) => item.sessionId === children[0].sessionId)?.runtime).toMatchObject({ providerId: alternateId, modelId: 'mock-opus' })
     const listed = await api('/api/sessions')
