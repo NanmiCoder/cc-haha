@@ -3,7 +3,7 @@ import QRCode from 'qrcode'
 import { publicAccessApi, type PublicAccessServerStatus } from '@/api/publicAccess'
 import { getDesktopHost } from '@/lib/desktopHost'
 import { PUBLIC_ACCESS_CONSENT_VERSION, type DesktopPublicAccessStatus } from '@/lib/desktopHost/types'
-import { DEFAULT_PUBLIC_ACCESS_PORT, findCloudflareTunnelToken, normalizePublicAccessOrigin } from '@/lib/desktopHost/publicAccessConfiguration'
+import { DEFAULT_PUBLIC_ACCESS_PORT, findCloudflareTunnelToken } from '@/lib/desktopHost/publicAccessConfiguration'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { Button } from '@/components/ui/Button'
 import { StatusDot } from '@/components/ui/Badge'
@@ -38,7 +38,6 @@ export function PublicAccessSettings() {
   }, [])
   const [server, setServer] = useState<PublicAccessServerStatus | null>(null)
   const [mode, setMode] = useState<'quick' | 'named'>('quick')
-  const [customUrl, setCustomUrl] = useState('')
   const [tunnelToken, setTunnelToken] = useState('')
   const [serviceCopied, setServiceCopied] = useState(false)
   const [localPort, setLocalPort] = useState(String(DEFAULT_PUBLIC_ACCESS_PORT))
@@ -66,7 +65,6 @@ export function PublicAccessSettings() {
           if (!initialized.current) {
             initialized.current = true
             setMode(next.mode)
-            setCustomUrl(next.customUrl ?? '')
             setLocalPort(String(next.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT))
           }
           updateStatus(next)
@@ -162,13 +160,13 @@ export function PublicAccessSettings() {
       if (generation === actionGeneration.current) { actionGeneration.current += 1; setStopping(false); setBusy(false) }
     }
   }
-  const normalizedUrl = normalizePublicAccessOrigin(customUrl) ?? ''
   const port = Number(localPort)
   const validPort = Number.isInteger(port) && port >= 1024 && port <= 65535
   const tokenDraft = tunnelToken.trim() ? findCloudflareTunnelToken(tunnelToken) : null
   const validToken = tokenDraft ? tokenDraft.status === 'found' : status?.tokenSet === true
-  const validConfiguration = validPort && (mode === 'quick' || (!!normalizedUrl && validToken))
-  const configuration = { mode, customUrl: mode === 'quick' ? '' : normalizedUrl, localPort: port }
+  const validConfiguration = validPort && (mode === 'quick' || validToken)
+  // A named tunnel's hostname comes from its Cloudflare route; keep any address saved by older versions.
+  const configuration = { mode, customUrl: mode === 'quick' ? '' : status?.customUrl ?? '', localPort: port }
   const configurationChanged = configuration.mode !== status?.mode || configuration.customUrl !== (status?.customUrl ?? '') ||
     configuration.localPort !== (status?.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT) || !!tunnelToken.trim() ||
     (status?.state === 'unconfigured' && status.error === 'configuration')
@@ -179,7 +177,8 @@ export function PublicAccessSettings() {
       const saved = await bridge.configure({ ...configuration, ...(mode === 'named' && tokenDraft?.status === 'found' ? { tunnelToken: tokenDraft.token } : {}) })
       if (generation !== actionGeneration.current) return
       if (saved.mode !== configuration.mode || saved.customUrl !== configuration.customUrl ||
-          saved.localPort !== configuration.localPort || (mode === 'named' && !saved.tokenSet)) {
+          saved.localPort !== configuration.localPort || (mode === 'named' && !saved.tokenSet) ||
+          (mode === 'named' && tokenDraft?.status === 'found' && saved.tunnelId !== tokenDraft.tunnelId)) {
         throw new Error('Public access configuration was not saved')
       }
       setTunnelToken('')
@@ -198,18 +197,18 @@ export function PublicAccessSettings() {
     online: t('publicAccess.gatewayReady'), reconnecting: t('publicAccess.reconnecting'), failed: t('publicAccess.failed'),
   }
   const phaseLabels = {
-    preparing: t('publicAccess.preparing'), connecting: t('publicAccess.connecting'), checking: t('publicAccess.checking'),
+    preparing: t('publicAccess.preparing'), connecting: t('publicAccess.connecting'), routing: t('publicAccess.routing'), checking: t('publicAccess.checking'),
   }
-  const savedOrigin = normalizePublicAccessOrigin(status?.customUrl)
+  const savedServiceUrl = `http://127.0.0.1:${status?.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT}`
   const errorLabels = {
     network: t('publicAccess.networkError'), configuration: t('publicAccess.customConfigurationError'), stop: t('publicAccess.stopError'), runtime: t('publicAccess.runtimeError'), proxy: t('publicAccess.proxyError'),
     token: t('publicAccess.tokenRejectedError'),
-    route: t('publicAccess.routeMissingError', { host: savedOrigin ? new URL(savedOrigin).hostname : '', service: `http://127.0.0.1:${status?.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT}` }),
+    route: t('publicAccess.routeMissingError', { service: savedServiceUrl }),
   }
   const online = status?.state === 'online'
   const stopUnconfirmed = status?.error === 'stop'
   const running = online || status?.state === 'connecting' || status?.state === 'reconnecting' || stopUnconfirmed
-  const configured = status?.mode === 'quick' || (!!savedOrigin && status?.tokenSet === true)
+  const configured = status?.mode === 'quick' || status?.tokenSet === true
   const privacy = t('publicAccess.privacy')
   const serviceUrl = `http://127.0.0.1:${localPort}`
   const statusLabel = status ? status.phase && (status.state === 'connecting' || status.state === 'reconnecting')
@@ -237,36 +236,14 @@ export function PublicAccessSettings() {
             <ol className="list-decimal space-y-2 pl-4 text-xs leading-5 text-[var(--color-text-secondary)]">
               <li>{t('publicAccess.namedStepAccount')}</li>
               <li>{t('publicAccess.namedStepCreate')}</li>
-              <li>{t('publicAccess.namedStepRoute')}</li>
               <li>{t('publicAccess.namedStepToken')}</li>
+              <li>{t('publicAccess.namedStepRoute')}</li>
             </ol>
             <div className="flex flex-wrap gap-2">
               <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(() => host.shell.open(CLOUDFLARE_DASHBOARD))}>{t('publicAccess.namedControlPanel')}</Button>
               <Button size="base" variant="link" disabled={busy} onClick={() => void run(() => host.shell.open(CLOUDFLARE_GUIDE))}>{t('publicAccess.namedDocs')}</Button>
             </div>
           </SettingsBlock>
-          <SettingsRow title={t('publicAccess.namedService')} description={t('publicAccess.namedServiceHint')}>
-            <code className="break-all text-xs text-[var(--color-text-primary)]">{serviceUrl}</code>
-            <Button size="base" variant="secondary" disabled={busy || stopping || !validPort} onClick={() => void run(async () => {
-              if (!await copyTextToClipboard(serviceUrl)) throw new Error('copy')
-              setServiceCopied(true)
-            })}>{t(serviceCopied ? 'publicAccess.serviceCopied' : 'publicAccess.copyService')}</Button>
-          </SettingsRow>
-          <SettingsRow title={t('publicAccess.customUrl')} description={running ? t('publicAccess.stopToChange') : t('publicAccess.customHint')}>
-            <Input
-              aria-label={t('publicAccess.customUrl')}
-              type="url"
-              size="md"
-              autoComplete="off"
-              spellCheck={false}
-              placeholder="https://phone.example.com"
-              containerClassName="w-full sm:w-[280px]"
-              value={customUrl}
-              error={customUrl && !normalizedUrl ? t('publicAccess.customUrlError') : undefined}
-              disabled={busy || running || !status}
-              onChange={(event) => setCustomUrl(event.target.value)}
-            />
-          </SettingsRow>
           <SettingsRow title={t('publicAccess.namedToken')} description={!status?.tokenSet ? t('publicAccess.namedTokenHint')
             : status.tunnelId ? t('publicAccess.namedTokenSavedTunnel', { id: status.tunnelId }) : t('publicAccess.namedTokenSaved')}>
             <Input
@@ -283,6 +260,13 @@ export function PublicAccessSettings() {
               disabled={busy || running || !status}
               onChange={(event) => setTunnelToken(event.target.value)}
             />
+          </SettingsRow>
+          <SettingsRow title={t('publicAccess.namedService')} description={t('publicAccess.namedServiceHint')}>
+            <code className="break-all text-xs text-[var(--color-text-primary)]">{serviceUrl}</code>
+            <Button size="base" variant="secondary" disabled={busy || stopping || !validPort} onClick={() => void run(async () => {
+              if (!await copyTextToClipboard(serviceUrl)) throw new Error('copy')
+              setServiceCopied(true)
+            })}>{t(serviceCopied ? 'publicAccess.serviceCopied' : 'publicAccess.copyService')}</Button>
           </SettingsRow>
         </>}
         <SettingsBlock>
@@ -305,7 +289,8 @@ export function PublicAccessSettings() {
               <span role="status">{statusLabel}</span>
             </span>
           )}
-          description={online ? t('publicAccess.customStatusHint') : t('publicAccess.pairSetupHint')}
+          description={online ? t('publicAccess.customStatusHint')
+            : status?.phase === 'routing' ? t('publicAccess.routingHint', { service: savedServiceUrl }) : t('publicAccess.pairSetupHint')}
         >
           <Button size="base" disabled={busy || !status || !validConfiguration || running} onClick={() => { if (status?.consentVersion === PUBLIC_ACCESS_CONSENT_VERSION && !configurationChanged) void start(); else setConsent(true) }}>{t('publicAccess.enable')}</Button>
           <Button size="base" variant="secondary" disabled={stopping || !status || status.state === 'unconfigured' || status.state === 'disabled'} onClick={() => void stop()}>{t('publicAccess.disable')}</Button>
