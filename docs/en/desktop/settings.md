@@ -67,9 +67,9 @@ To store Agent Trace separately, set `CC_HAHA_TRACE_DIR` to a writable absolute 
 
 Product screenshots in this guide consistently use the **Pure White** theme so the interface can be compared without palette changes.
 
-## H5 Access
+## Phone connection
 
-Continue the same session in your phone's browser. Off by default. See [Phone (H5) and IM](./remote.md).
+Open Settings → Phone connection to continue the same session in the phone app or a browser. Use a direct LAN connection on the same Wi-Fi, or choose Cloudflare Quick connection or Fixed domain while away. Connections are off by default and must be enabled; remote connections also require approving the phone's pairing request on the computer. See [Phone (H5) and IM](./remote.md) for the steps.
 
 ## IM Adapters
 

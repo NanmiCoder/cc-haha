@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import { publicAccessApi, type PublicAccessServerStatus } from '@/api/publicAccess'
 import { getDesktopHost } from '@/lib/desktopHost'
-import { PUBLIC_ACCESS_CONSENT_VERSION } from '@/lib/desktopHost/types'
+import { PUBLIC_ACCESS_CONSENT_VERSION, type DesktopPublicAccessStatus } from '@/lib/desktopHost/types'
 import { DEFAULT_PUBLIC_ACCESS_PORT, isCloudflareTunnelToken, normalizePublicAccessOrigin } from '@/lib/desktopHost/publicAccessConfiguration'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { Button } from '@/components/ui/Button'
@@ -27,7 +27,15 @@ export function PublicAccessSettings() {
   const t = useTranslation()
   const host = getDesktopHost()
   const bridge = host.publicAccess
-  const [status, setStatus] = useState<Awaited<ReturnType<typeof bridge.getStatus>> | null>(null)
+  const [status, setStatus] = useState<DesktopPublicAccessStatus | null>(null)
+  const latestStatus = useRef<DesktopPublicAccessStatus | null>(null)
+  const pairingRevision = useRef(0)
+  const updateStatus = useCallback((next: DesktopPublicAccessStatus) => {
+    const previous = latestStatus.current
+    if (previous?.state === 'online' && (next.state !== 'online' || previous.publicUrl !== next.publicUrl)) pairingRevision.current += 1
+    latestStatus.current = next
+    setStatus(next)
+  }, [])
   const [server, setServer] = useState<PublicAccessServerStatus | null>(null)
   const [mode, setMode] = useState<'quick' | 'named'>('quick')
   const [customUrl, setCustomUrl] = useState('')
@@ -61,7 +69,7 @@ export function PublicAccessSettings() {
             setCustomUrl(next.customUrl ?? '')
             setLocalPort(String(next.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT))
           }
-          setStatus(next)
+          updateStatus(next)
           setServer(details)
         }
       } catch { if (active && generation === actionGeneration.current && sequence === refreshSequence.current) setError(true) }
@@ -69,7 +77,7 @@ export function PublicAccessSettings() {
     void refresh()
     const timer = setInterval(() => void refresh(), 1000)
     return () => { active = false; actionGeneration.current += 1; pendingPairing.current = false; clearInterval(timer) }
-  }, [bridge, host.kind])
+  }, [bridge, host.kind, updateStatus])
   useEffect(() => {
     if (!expiresAt) return
     const timer = setTimeout(() => { setQr(null); setExpiresAt(null) }, Math.max(0, expiresAt - Date.now()))
@@ -83,13 +91,13 @@ export function PublicAccessSettings() {
       await action(generation)
       if (generation !== actionGeneration.current) return
       const [next, details] = await Promise.all([bridge.getStatus(), publicAccessApi.get()])
-      if (generation === actionGeneration.current) { setStatus(next); setServer(details) }
+      if (generation === actionGeneration.current) { updateStatus(next); setServer(details) }
     } catch {
       if (generation === actionGeneration.current) {
         setError(true)
         try {
           const next = await bridge.getStatus()
-          if (generation === actionGeneration.current) setStatus(next)
+          if (generation === actionGeneration.current) updateStatus(next)
         } catch { /* A later status poll can recover the connection controls. */ }
       }
     }
@@ -100,18 +108,29 @@ export function PublicAccessSettings() {
         setBusy(false)
       }
     }
-  }, [bridge])
+  }, [bridge, updateStatus])
+  const isCurrentPairing = useCallback((publicUrl: string, generation: number, revision: number) =>
+    generation === actionGeneration.current && revision === pairingRevision.current && latestStatus.current?.state === 'online' && latestStatus.current.publicUrl === publicUrl, [])
   const showPairing = useCallback(async (publicUrl: string, generation: number) => {
+    const revision = pairingRevision.current
+    if (!isCurrentPairing(publicUrl, generation, revision)) return
+    pairingOrigin.current = null
+    setQr(null)
+    setExpiresAt(null)
     const pair = await publicAccessApi.pairing()
-    if (generation !== actionGeneration.current) return
+    if (!isCurrentPairing(publicUrl, generation, revision)) return
+    if (typeof pair.secret !== 'string' || !pair.secret || !Number.isFinite(pair.expiresAt) || pair.expiresAt <= Date.now()) throw new Error('Invalid pairing code')
     const url = new URL('/remote', publicUrl)
     url.hash = new URLSearchParams({ pair: pair.secret }).toString()
     const image = await QRCode.toDataURL(url.toString(), { margin: 1, width: 192 })
-    if (generation !== actionGeneration.current) return
+    if (!isCurrentPairing(publicUrl, generation, revision)) return
+    const current = await bridge.getStatus()
+    if (!isCurrentPairing(publicUrl, generation, revision) || current.state !== 'online' || current.publicUrl !== publicUrl || pair.expiresAt <= Date.now()) return
     pairingOrigin.current = publicUrl
     setQr(image)
     setExpiresAt(pair.expiresAt)
-  }, [])
+    return url.toString()
+  }, [bridge, isCurrentPairing])
   useEffect(() => {
     if (status?.state !== 'online' || status.publicUrl !== pairingOrigin.current) {
       setQr(null)
@@ -124,18 +143,24 @@ export function PublicAccessSettings() {
   if (host.kind !== 'electron' || !bridge) return null
   const stop = async () => {
     if (stopping) return
-    actionGeneration.current += 1
+    const generation = ++actionGeneration.current
     pendingPairing.current = false
+    pairingOrigin.current = null
+    setQr(null)
+    setExpiresAt(null)
     setStopping(true)
     setBusy(true)
     setError(false)
     try {
-      setStatus(await bridge.stop())
-      setQr(null)
-      setExpiresAt(null)
-      setServer(await publicAccessApi.get())
-    } catch { setError(true) }
-    finally { actionGeneration.current += 1; setStopping(false); setBusy(false) }
+      const next = await bridge.stop()
+      if (generation !== actionGeneration.current) return
+      updateStatus(next)
+      const details = await publicAccessApi.get()
+      if (generation === actionGeneration.current) setServer(details)
+    } catch { if (generation === actionGeneration.current) setError(true) }
+    finally {
+      if (generation === actionGeneration.current) { actionGeneration.current += 1; setStopping(false); setBusy(false) }
+    }
   }
   const normalizedUrl = normalizePublicAccessOrigin(customUrl) ?? ''
   const port = Number(localPort)
@@ -158,15 +183,15 @@ export function PublicAccessSettings() {
         throw new Error('Public access configuration was not saved')
       }
       setTunnelToken('')
-      setStatus(saved)
+      updateStatus(saved)
     }
     setQr(null)
     setExpiresAt(null)
     pendingPairing.current = true
-    setStatus(previous => previous ? { ...previous, state: 'connecting', phase: 'preparing', error: null } : previous)
+    if (latestStatus.current) updateStatus({ ...latestStatus.current, state: 'connecting', phase: 'preparing', error: null })
     const next = await bridge.start(PUBLIC_ACCESS_CONSENT_VERSION)
     if (generation !== actionGeneration.current) return
-    setStatus(next)
+    updateStatus(next)
   })
   const stateLabels = {
     unconfigured: t('publicAccess.unconfigured'), disabled: t('publicAccess.disabled'), connecting: t('publicAccess.connecting'),
@@ -219,7 +244,7 @@ export function PublicAccessSettings() {
           </SettingsBlock>
           <SettingsRow title={t('publicAccess.namedService')} description={t('publicAccess.namedServiceHint')}>
             <code className="break-all text-xs text-[var(--color-text-primary)]">{serviceUrl}</code>
-            <Button size="base" variant="secondary" disabled={!validPort} onClick={() => void run(async () => {
+            <Button size="base" variant="secondary" disabled={busy || stopping || !validPort} onClick={() => void run(async () => {
               if (!await copyTextToClipboard(serviceUrl)) throw new Error('copy')
               setServiceCopied(true)
             })}>{t(serviceCopied ? 'publicAccess.serviceCopied' : 'publicAccess.copyService')}</Button>
@@ -277,7 +302,7 @@ export function PublicAccessSettings() {
           description={online ? t('publicAccess.customStatusHint') : t('publicAccess.pairSetupHint')}
         >
           <Button size="base" disabled={busy || !status || !validConfiguration || running} onClick={() => { if (status?.consentVersion === PUBLIC_ACCESS_CONSENT_VERSION && !configurationChanged) void start(); else setConsent(true) }}>{t('publicAccess.enable')}</Button>
-          <Button size="base" variant="secondary" disabled={stopping || (busy && status?.state !== 'connecting' && status?.state !== 'reconnecting') || !status || status.state === 'unconfigured' || status.state === 'disabled'} onClick={() => void stop()}>{t('publicAccess.disable')}</Button>
+          <Button size="base" variant="secondary" disabled={stopping || !status || status.state === 'unconfigured' || status.state === 'disabled'} onClick={() => void stop()}>{t('publicAccess.disable')}</Button>
         </SettingsRow>
         {(error || status?.error) && (
           <SettingsBlock>
@@ -288,7 +313,12 @@ export function PublicAccessSettings() {
           <SettingsBlock className="space-y-3">
             <p className="break-all rounded-[var(--radius-sm)] bg-[var(--color-surface-container)] px-2 py-1 font-mono text-xs text-[var(--color-text-primary)]">{status.publicUrl}/remote</p>
             <div className="flex flex-wrap gap-2">
-              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(async () => { if (!await copyTextToClipboard(`${status.publicUrl}/remote`)) throw new Error('copy') })}>{t('publicAccess.copy')}</Button>
+              <Button size="base" variant="secondary" disabled={busy} onClick={() => void run(async generation => {
+                const publicUrl = status.publicUrl!
+                const revision = pairingRevision.current
+                const link = await showPairing(publicUrl, generation)
+                if (link && isCurrentPairing(publicUrl, generation, revision) && !await copyTextToClipboard(link)) throw new Error('copy')
+              })}>{t('publicAccess.copy')}</Button>
               <Button size="base" disabled={busy} onClick={() => void run((generation) => showPairing(status.publicUrl!, generation))}>{t('publicAccess.pairPhone')}</Button>
             </div>
             {qr && (

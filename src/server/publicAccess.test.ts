@@ -597,6 +597,22 @@ test('remote phones read the connector and workflow lists only', () => {
   ]) expect(allowed(path!, method!)).toBe(false)
 })
 
+test('remote phones can review a submitted team plan but not drive its members', () => {
+  const allowed = (path: string, method: string) => isPublicBusinessPathAllowed(new URL(path, 'https://fixture.test'), method)
+  expect(allowed('/api/teams/session/s1/plan', 'GET')).toBe(true)
+  expect(allowed('/api/teams/taskboard/plan', 'PATCH')).toBe(true)
+  expect(allowed('/api/teams/%E4%BB%BB%E5%8A%A1/plan', 'PATCH')).toBe(true)
+  for (const action of ['approve', 'return', 'cancel', 'retry', 'end'])
+    expect(allowed(`/api/teams/taskboard/plan/${action}`, 'POST')).toBe(true)
+  for (const [path, method] of [
+    ['/api/teams/taskboard/plan', 'POST'], ['/api/teams/taskboard/plan', 'PUT'], ['/api/teams/taskboard/plan', 'DELETE'],
+    ['/api/teams/taskboard/plan/approve', 'PATCH'], ['/api/teams/taskboard/plan/launch', 'POST'],
+    // 路由器只看第 5 段动作名，多出来的段会被当成同一个动作，不能借此绕过。
+    ['/api/teams/taskboard/plan/approve/extra', 'POST'],
+    ['/api/teams/taskboard', 'DELETE'], ['/api/teams/taskboard/members/m1/messages', 'POST'],
+  ]) expect(allowed(path!, method!)).toBe(false)
+})
+
 test('paired phones get connector, workflow and agent lists without credentials, errors or local paths', async () => {
   const f = fixture(async (_request, url) => {
     if (url.pathname === '/api/connectors') return Response.json({ items: [fixtureConnector] })

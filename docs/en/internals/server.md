@@ -69,7 +69,7 @@ CLAUDE_H5_DIST_DIR=/absolute/path/to/desktop/dist \
 | `CLAUDE_H5_PUBLIC_BASE_URL` | Fixed public server URL |
 | `CLAUDE_H5_AUTO_PUBLIC_URL=1` | Try to derive a LAN URL while H5 access is enabled |
 
-Configure the H5 token and exact allowed browser origins in **Settings → H5 Access**. Treat the token like an API key and regenerate it to revoke existing browser access.
+Configure the H5 token and exact allowed browser origins in **Settings → Phone connection → Same Wi-Fi**. Treat the token like an API key and regenerate it to revoke existing browser access.
 
 ## Access control
 

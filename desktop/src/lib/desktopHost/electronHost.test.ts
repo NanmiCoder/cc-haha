@@ -54,7 +54,7 @@ describe('electron desktop host', () => {
     await expect(browserHost.publicAccess.getStatus()).rejects.toThrow('desktop app runtime')
   })
 
-  it('carries Tailscale Serve configuration through validated IPC and rejects unsafe local targets', async () => {
+  it('carries Cloudflare tunnel configuration through validated IPC and rejects unsafe local targets', async () => {
     const invoke = vi.fn().mockResolvedValue(null)
     const host = createElectronHost({ invoke, subscribe: vi.fn() })
     const configuration = { mode: 'named' as const, customUrl: 'https://phone.example.test', localPort: 17463 }

@@ -25,6 +25,20 @@ const tokenInput = () => screen.getByLabelText('Tunnel Token')
 const enableButton = () => screen.getByRole('button', { name: 'Enable connection' })
 const chooseNamed = () => fireEvent.click(screen.getByRole('radio', { name: 'Fixed domain' }))
 const confirm = async () => fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Agree and enable connection' }))
+const copyPairingButton = () => screen.getByRole('button', { name: 'Copy pairing link' })
+const qrImage = () => screen.queryByAltText('Scan to pair this phone')
+const onlineStatus = () => ({ ...savedStatus(), state: 'online', publicUrl: quickAddress })
+const mockOnline = () => {
+  const online = onlineStatus()
+  mocks.getStatus.mockResolvedValue(online)
+  mocks.get.mockResolvedValue({ enabled: true, port: 17463, publicUrl: online.publicUrl, pending: [], devices: [] })
+  return online
+}
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(complete => { resolve = complete })
+  return { promise, resolve }
+}
 
 beforeEach(() => {
   vi.resetAllMocks()
@@ -54,7 +68,230 @@ beforeEach(() => {
   mocks.qr.mockResolvedValue('data:image/png;base64,fake')
   mocks.copy.mockResolvedValue(true)
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.clearAllMocks() })
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); vi.clearAllMocks() })
+
+it.each(['quick', 'named'] as const)('copies a complete %s pairing link that the mobile scanner can use', async mode => {
+  const publicUrl = mode === 'quick' ? quickAddress : fixedAddress
+  mocks.getStatus.mockResolvedValue({ ...savedStatus(mode), state: 'online', publicUrl })
+  mocks.get.mockResolvedValue({ enabled: true, port: 17463, publicUrl, pending: [], devices: [] })
+  mocks.pairing.mockResolvedValue({ secret: 'fixture+pair/encoded', expiresAt: Date.now() + 300000 })
+  render(<PublicAccessSettings />)
+  fireEvent.click(await screen.findByRole('button', { name: /^Copy (?:address|pairing link)$/ }))
+  await waitFor(() => expect(mocks.copy).toHaveBeenCalledTimes(1))
+
+  const copied = mocks.copy.mock.calls[0]![0] as string
+  const parsed = new URL(copied)
+  expect(parsed.origin).toBe(publicUrl)
+  expect(parsed.pathname).toBe('/remote')
+  expect(parsed.search).toBe('')
+  expect([...new URLSearchParams(parsed.hash.slice(1))]).toEqual([['pair', 'fixture+pair/encoded']])
+  expect(mocks.qr).toHaveBeenCalledWith(copied, expect.any(Object))
+  expect(mocks.pairing).toHaveBeenCalledTimes(1)
+  expect(document.body.textContent).not.toContain('fixture+pair/encoded')
+})
+
+it('replaces an earlier QR with the same fresh link written to the clipboard', async () => {
+  mockOnline()
+  render(<PublicAccessSettings />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect a phone' }))
+  await screen.findByAltText('Scan to pair this phone')
+  mocks.pairing.mockResolvedValue({ secret: 'fresh-after-consumption', expiresAt: Date.now() + 300000 })
+  await waitFor(() => expect(copyPairingButton()).not.toBeDisabled())
+  fireEvent.click(copyPairingButton())
+  await waitFor(() => expect(mocks.copy).toHaveBeenCalledTimes(1))
+
+  const expected = `${quickAddress}/remote#pair=fresh-after-consumption`
+  expect(mocks.pairing).toHaveBeenCalledTimes(2)
+  expect(mocks.qr).toHaveBeenLastCalledWith(expected, expect.any(Object))
+  expect(mocks.copy).toHaveBeenCalledWith(expected)
+  expect(qrImage()).toBeInTheDocument()
+})
+
+it('hides an expired QR and creates a fresh code when copying afterwards', async () => {
+  vi.useFakeTimers()
+  mockOnline()
+  mocks.pairing.mockResolvedValue({ secret: 'expires-soon', expiresAt: Date.now() + 1000 })
+  await act(async () => { render(<PublicAccessSettings />) })
+  await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect a phone' })) })
+  expect(qrImage()).toBeInTheDocument()
+  await act(async () => { await vi.advanceTimersByTimeAsync(1001) })
+  expect(qrImage()).not.toBeInTheDocument()
+
+  mocks.pairing.mockResolvedValue({ secret: 'fresh-after-expiry', expiresAt: Date.now() + 300000 })
+  await act(async () => { fireEvent.click(copyPairingButton()) })
+  expect(mocks.copy).toHaveBeenCalledWith(`${quickAddress}/remote#pair=fresh-after-expiry`)
+  expect(mocks.pairing).toHaveBeenCalledTimes(2)
+  expect(qrImage()).toBeInTheDocument()
+})
+
+it.each(['request', 'encoding'] as const)('removes the old QR after a pairing %s failure and retries with a new code', async failure => {
+  mockOnline()
+  render(<PublicAccessSettings />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect a phone' }))
+  await screen.findByAltText('Scan to pair this phone')
+  await waitFor(() => expect(copyPairingButton()).not.toBeDisabled())
+  if (failure === 'request') mocks.pairing.mockRejectedValueOnce(new Error('private pairing failure'))
+  else mocks.qr.mockRejectedValueOnce(new Error('private encoding failure'))
+  fireEvent.click(copyPairingButton())
+  expect(qrImage()).not.toBeInTheDocument()
+  await screen.findByRole('alert')
+  expect(qrImage()).not.toBeInTheDocument()
+  expect(mocks.copy).not.toHaveBeenCalled()
+  expect(document.body.textContent).not.toContain('private')
+
+  mocks.pairing.mockResolvedValue({ secret: 'retry-fresh', expiresAt: Date.now() + 300000 })
+  await waitFor(() => expect(copyPairingButton()).not.toBeDisabled())
+  fireEvent.click(copyPairingButton())
+  await waitFor(() => expect(mocks.copy).toHaveBeenCalledWith(`${quickAddress}/remote#pair=retry-fresh`))
+  expect(mocks.qr).toHaveBeenLastCalledWith(`${quickAddress}/remote#pair=retry-fresh`, expect.any(Object))
+  expect(qrImage()).toBeInTheDocument()
+})
+
+it.each([
+  ['request', 'stop'], ['request', 'origin'], ['request', 'unmount'],
+  ['encoding', 'stop'], ['encoding', 'origin'], ['encoding', 'unmount'],
+  ['status', 'stop'], ['status', 'origin'], ['status', 'unmount'],
+] as const)('discards a late pairing %s result after %s without copying or showing its QR', async (phase, cancellation) => {
+  const online = mockOnline()
+  const pollTimer = vi.spyOn(globalThis, 'setInterval')
+  const pair = deferred<{ secret: string, expiresAt: number }>()
+  const image = deferred<string>()
+  const verification = deferred<ReturnType<typeof onlineStatus>>()
+  let checking = false
+  if (phase === 'request') mocks.pairing.mockReturnValueOnce(pair.promise)
+  if (phase === 'encoding') mocks.qr.mockReturnValueOnce(image.promise)
+  if (phase === 'status') mocks.qr.mockImplementationOnce(async () => {
+    mocks.getStatus.mockImplementationOnce(() => { checking = true; return verification.promise })
+    return 'data:image/png;base64,pending'
+  })
+  const view = render(<PublicAccessSettings />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Copy pairing link' }))
+  await waitFor(() => {
+    if (phase === 'request') expect(mocks.pairing).toHaveBeenCalledTimes(1)
+    else if (phase === 'encoding') expect(mocks.qr).toHaveBeenCalledTimes(1)
+    else expect(checking).toBe(true)
+  })
+
+  if (cancellation === 'stop') {
+    const stop = screen.getByRole('button', { name: 'Turn off' })
+    expect(stop).not.toBeDisabled()
+    fireEvent.click(stop)
+    await screen.findByText('Off')
+  } else if (cancellation === 'origin') {
+    const changed = { ...online, publicUrl: fixedAddress }
+    mocks.getStatus.mockResolvedValue(changed)
+    mocks.get.mockResolvedValue({ enabled: true, port: 17463, publicUrl: fixedAddress, pending: [], devices: [] })
+    const poll = pollTimer.mock.calls.find(call => call[1] === 1000)![0] as () => void
+    await act(async () => { poll() })
+    await screen.findByText(`${fixedAddress}/remote`)
+  } else view.unmount()
+
+  await act(async () => {
+    if (phase === 'request') pair.resolve({ secret: 'late-code', expiresAt: Date.now() + 300000 })
+    else if (phase === 'encoding') image.resolve('data:image/png;base64,late')
+    else verification.resolve(online)
+  })
+  expect(mocks.copy).not.toHaveBeenCalled()
+  expect(qrImage()).not.toBeInTheDocument()
+  expect(mocks.qr).toHaveBeenCalledTimes(phase === 'request' ? 0 : 1)
+})
+
+it('checks the live gateway after encoding even before a changed origin reaches the status poll', async () => {
+  const online = mockOnline()
+  const image = deferred<string>()
+  mocks.qr.mockReturnValueOnce(image.promise)
+  render(<PublicAccessSettings />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Copy pairing link' }))
+  await waitFor(() => expect(mocks.qr).toHaveBeenCalledTimes(1))
+  mocks.getStatus.mockResolvedValue({ ...online, publicUrl: fixedAddress })
+  await act(async () => { image.resolve('data:image/png;base64,old-origin') })
+  await screen.findByText(`${fixedAddress}/remote`)
+  expect(mocks.copy).not.toHaveBeenCalled()
+  expect(qrImage()).not.toBeInTheDocument()
+})
+
+it.each(['connection', 'origin'] as const)('discards a code when the %s changes and restores the same address before encoding finishes', async change => {
+  const online = mockOnline()
+  const pollTimer = vi.spyOn(globalThis, 'setInterval')
+  const image = deferred<string>()
+  mocks.qr.mockReturnValueOnce(image.promise)
+  render(<PublicAccessSettings />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Copy pairing link' }))
+  await waitFor(() => expect(mocks.qr).toHaveBeenCalledTimes(1))
+  const poll = pollTimer.mock.calls.find(call => call[1] === 1000)![0] as () => void
+  mocks.getStatus.mockResolvedValue(change === 'origin'
+    ? { ...online, publicUrl: fixedAddress }
+    : { ...online, state: 'reconnecting', publicUrl: null })
+  await act(async () => { poll() })
+  expect(screen.queryByText(`${quickAddress}/remote`)).not.toBeInTheDocument()
+  mocks.getStatus.mockResolvedValue(online)
+  await act(async () => { poll() })
+  expect(screen.getByText(`${quickAddress}/remote`)).toBeInTheDocument()
+
+  await act(async () => { image.resolve('data:image/png;base64,old-connection') })
+  expect(mocks.copy).not.toHaveBeenCalled()
+  expect(qrImage()).not.toBeInTheDocument()
+})
+
+it('hides an existing QR as soon as shutdown starts, before the gateway confirms it', async () => {
+  const online = mockOnline()
+  const stopped = { ...online, state: 'disabled', publicUrl: null }
+  const stop = deferred<typeof stopped>()
+  render(<PublicAccessSettings />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Connect a phone' }))
+  await screen.findByAltText('Scan to pair this phone')
+  mocks.stop.mockReturnValueOnce(stop.promise)
+  fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
+  expect(qrImage()).not.toBeInTheDocument()
+  expect(mocks.stop).toHaveBeenCalledTimes(1)
+  await act(async () => { mocks.getStatus.mockResolvedValue(stopped); stop.resolve(stopped) })
+  expect(screen.getByRole('status')).toHaveTextContent('Off')
+})
+
+it.each(['failed', 'disabled'] as const)('does not strand a %s shutdown when other connection controls are clicked', async outcome => {
+  const online = { ...savedStatus('named'), state: 'online', publicUrl: fixedAddress }
+  const result = { ...online, state: outcome, publicUrl: null, error: outcome === 'failed' ? 'stop' : null }
+  const closing = deferred<typeof result>()
+  mocks.getStatus.mockResolvedValue(online)
+  mocks.get.mockResolvedValue({
+    enabled: true, port: 17463, publicUrl: fixedAddress,
+    pending: [{ id: 'new-phone', name: 'New phone' }],
+    devices: [{ id: 'old-phone', name: 'Old phone', createdAt: 1, expiresAt: Date.now() + 10000 }],
+  })
+  mocks.stop.mockReturnValueOnce(closing.promise)
+  render(<PublicAccessSettings />)
+  await screen.findByText('Connection ready')
+  fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
+  for (const name of ['Open Cloudflare', 'Official setup guide', 'Copy service address', 'Copy pairing link', 'Connect a phone', 'Approve', 'Reject', 'Revoke']) {
+    fireEvent.click(screen.getByRole('button', { name }))
+  }
+  act(() => { screen.getByRole('switch', { name: 'Restore connection when the desktop starts' }).click() })
+  await act(async () => {
+    mocks.getStatus.mockResolvedValue(result)
+    closing.resolve(result)
+  })
+
+  if (outcome === 'failed') {
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Turn off' })).not.toBeDisabled())
+    fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
+  }
+  await screen.findByText('Off')
+  expect(mocks.copy).not.toHaveBeenCalled()
+  expect(mocks.open).not.toHaveBeenCalled()
+  expect(mocks.pairing).not.toHaveBeenCalled()
+  expect(mocks.approve).not.toHaveBeenCalled()
+  expect(mocks.reject).not.toHaveBeenCalled()
+  expect(mocks.revoke).not.toHaveBeenCalled()
+  expect(mocks.setAutoStart).not.toHaveBeenCalled()
+
+  fireEvent.click(enableButton())
+  await screen.findByAltText('Scan to pair this phone')
+  fireEvent.click(screen.getByRole('button', { name: 'Turn off' }))
+  await screen.findByText('Off')
+  expect(mocks.start).toHaveBeenCalledTimes(1)
+  expect(mocks.stop).toHaveBeenCalledTimes(outcome === 'failed' ? 3 : 2)
+  expect(enableButton()).not.toBeDisabled()
+})
 
 it('starts a quick connection after consent, without an account, address, token or installation steps', async () => {
   render(<PublicAccessSettings />)
@@ -201,20 +438,26 @@ it('enters phone connection on Quick and keeps the LAN path available without en
   expect(mocks.start).not.toHaveBeenCalled()
 })
 
-it('puts the quick connection action before pending app installation entries', async () => {
+it.each(['Away from home', 'Same Wi-Fi'])('prepares the phone before desktop connection controls for %s', async method => {
   render(<H5AccessSettings />)
   await waitFor(() => expect(enableButton()).not.toBeDisabled())
+  fireEvent.click(screen.getByRole('tab', { name: method }))
   const installation = screen.getByRole('heading', { name: 'Get cc-haha on your phone' })
-  expect(enableButton().compareDocumentPosition(installation) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-  expect(screen.getByRole('radio', { name: 'Quick connection' })).toHaveAttribute('aria-checked', 'true')
+  const methods = screen.getByRole('tablist', { name: 'Connection method' })
+  expect(installation.compareDocumentPosition(methods) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  const desktop = screen.getByRole('heading', { name: 'Then set up this computer' })
+  expect(installation.compareDocumentPosition(desktop) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(desktop.compareDocumentPosition(methods) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect(screen.getByRole('tab', { name: method })).toHaveAttribute('aria-selected', 'true')
   expect(mocks.start).not.toHaveBeenCalled()
+  expect(mocks.configure).not.toHaveBeenCalled()
 })
 
 it('moves phone-browser users to LAN and focuses its tab without enabling access', async () => {
   render(<H5AccessSettings />)
   await waitFor(() => expect(enableButton()).not.toBeDisabled())
   const lan = screen.getByRole('tab', { name: 'Same Wi-Fi' })
-  const methods = screen.getByRole('tablist', { name: 'Connection method' }).parentElement!
+  const methods = document.getElementById(screen.getByRole('button', { name: 'Use phone browser' }).getAttribute('aria-controls')!)!
   const scrollIntoView = vi.fn()
   methods.scrollIntoView = scrollIntoView
   expect(screen.getByRole('button', { name: 'Download Android APK' })).toBeDisabled()

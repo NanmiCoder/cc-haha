@@ -65,6 +65,13 @@ exit 0
         await writeExecutable(path.join(fakeBinDir, command), '#!/bin/bash\nexit 0\n')
       }
 
+      // Read shell fakes through Bash so fresh temporary executables are not
+      // launched directly, while preserving their child-process exit behavior.
+      const shellEnvironment = path.join(fixtureRoot, 'fake-command-env.sh')
+      await writeFile(shellEnvironment, ['uname', 'bun', 'node', 'codesign', 'hdiutil']
+        .map(command => `${command}() { /bin/bash "\${TEST_FAKE_BIN_DIR}/${command}" "$@"; }`)
+        .join('\n'), 'utf8')
+
       expect(await Promise.all([
         exists(path.join(fixtureRoot, 'node_modules')),
         exists(path.join(desktopDir, 'node_modules')),
@@ -78,6 +85,8 @@ exit 0
         env: {
           ...process.env,
           PATH: `${fakeBinDir}:${process.env.PATH ?? ''}`,
+          BASH_ENV: shellEnvironment,
+          TEST_FAKE_BIN_DIR: fakeBinDir,
           MAC_TARGETS: 'zip',
           SIGN_BUILD: '0',
           TEST_REPO_ROOT: fixtureRoot,

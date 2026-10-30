@@ -285,20 +285,28 @@ export function H5AccessSettings() {
           description={t('settings.general.h5AccessDescription')}
         />
 
-        <div id={connectionMethodsId} ref={connectionMethodsRef} className="mt-6">
-          <SegmentedControl
-            as="tablist"
-            label={t('settings.general.h5ConnectionMethod')}
-            value={connectionMethod}
-            onChange={setConnectionMethod}
-            items={[
-              { value: 'lan', label: t('settings.general.h5ConnectionLocal'), icon: <Wifi size={15} aria-hidden="true" /> },
-              { value: 'remote', label: t('settings.general.h5ConnectionRemote'), icon: <Globe size={15} aria-hidden="true" /> },
-            ]}
-          />
-          <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
-            {t(connectionMethod === 'lan' ? 'settings.general.h5ConnectionLocalHint' : 'settings.general.h5ConnectionRemoteHint')}
-          </p>
+        <MobileAppInstall connectionMethodsId={connectionMethodsId} onUseBrowser={() => {
+          setConnectionMethod('lan')
+          connectionMethodsRef.current?.querySelector<HTMLButtonElement>('[role="tab"]')?.focus()
+          connectionMethodsRef.current?.scrollIntoView?.({ block: 'start' })
+        }} />
+
+        <div id={connectionMethodsId} ref={connectionMethodsRef}>
+          <SettingsSection title={t('settings.general.h5DesktopSetupTitle')} description={t('settings.general.h5DesktopSetupHint')}>
+            <SegmentedControl
+              as="tablist"
+              label={t('settings.general.h5ConnectionMethod')}
+              value={connectionMethod}
+              onChange={setConnectionMethod}
+              items={[
+                { value: 'lan', label: t('settings.general.h5ConnectionLocal'), icon: <Wifi size={15} aria-hidden="true" /> },
+                { value: 'remote', label: t('settings.general.h5ConnectionRemote'), icon: <Globe size={15} aria-hidden="true" /> },
+              ]}
+            />
+            <p className="mt-2 text-xs leading-5 text-[var(--color-text-tertiary)]">
+              {t(connectionMethod === 'lan' ? 'settings.general.h5ConnectionLocalHint' : 'settings.general.h5ConnectionRemoteHint')}
+            </p>
+          </SettingsSection>
         </div>
         <div role="tabpanel" aria-label={t('settings.general.h5ConnectionLocal')} hidden={connectionMethod !== 'lan'}>
           <SettingsSection title={t('publicAccess.lanTitle')} description={t('publicAccess.lanHint')}>
@@ -589,13 +597,6 @@ export function H5AccessSettings() {
         </div>
         <div role="tabpanel" aria-label={t('settings.general.h5ConnectionRemote')} hidden={connectionMethod !== 'remote'}>
           <PublicAccessSettings />
-        </div>
-        <div className="mt-8">
-          <MobileAppInstall connectionMethodsId={connectionMethodsId} onUseBrowser={() => {
-            setConnectionMethod('lan')
-            connectionMethodsRef.current?.querySelector<HTMLButtonElement>('[role="tab"]')?.focus()
-            connectionMethodsRef.current?.scrollIntoView?.({ block: 'start' })
-          }} />
         </div>
       </section>
 

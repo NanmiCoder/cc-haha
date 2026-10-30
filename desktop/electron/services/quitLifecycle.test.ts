@@ -111,7 +111,7 @@ describe('Electron quit lifecycle', () => {
     },
   )
 
-  it('still waits for the server if ngrok cleanup rejects asynchronously', async () => {
+  it('still waits for the server if public access cleanup rejects asynchronously', async () => {
     const fixture = quitFixture(undefined, false, true)
     fixture.requestQuit()
     await settle()

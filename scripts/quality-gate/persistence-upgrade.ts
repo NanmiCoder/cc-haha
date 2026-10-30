@@ -67,7 +67,7 @@ const checks: Check[] = [
     command: ['bun', 'test', './src/server/publicAccess.test.ts', '--test-name-pattern', 'old store migration'],
   },
   {
-    title: 'Private remote access settings migrate from legacy tunnels to Tailscale',
+    title: 'Private remote access settings migrate from legacy tunnels to Cloudflare',
     command: ['bun', 'run', 'test', '--', '--run', 'electron/services/publicAccess.test.ts', '-t', 'migrat'],
     cwd: 'desktop',
   },

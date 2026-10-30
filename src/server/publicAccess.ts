@@ -86,6 +86,12 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   if (method === 'PUT' && ['/api/models/current', '/api/effort'].includes('/' + parts.join('/'))) return true
   if (method === 'GET' && ['/api/settings/user', '/api/permissions/mode', '/api/providers/auth-status'].includes('/' + parts.join('/'))) return true
   if (['sessions', 'conversations'].includes(parts[1] ?? '')) return true
+  // A submitted team waits on a human review of its plan; the phone must be
+  // able to finish it. Members, messages and team deletion stay desktop-only.
+  if (parts[1] === 'teams' && parts.length >= 4 && parts[3] === 'plan') {
+    if (parts.length === 4) return method === 'PATCH'
+    return parts.length === 5 && method === 'POST' && ['approve', 'return', 'cancel', 'retry', 'end'].includes(parts[4]!)
+  }
   // Agent 只有列表和单项两种 GET；路由器会忽略单项名字后面多出来的段，所以多出来的段不能放行。
   if (parts[1] === 'agents') return method === 'GET' && parts.length <= 3
   return method === 'GET' && ['models', 'effort', 'search', 'tasks', 'teams', 'activity-stats'].includes(parts[1] ?? '')

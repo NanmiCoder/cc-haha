@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Pressable, View } from 'react-native'
 import type { ApiClient } from '../core/client'
 import type { RuntimeConfig } from '../core/types'
@@ -10,13 +10,15 @@ import { Text } from './Text'
 import { effortName } from './modes'
 
 /** Shared composer control: changing effort never changes provider or model. */
-export function EffortControl({ client, runtime, onApply, disabled, defaultScope = false, warning }: {
+export function EffortControl({ client, runtime, onApply, disabled, defaultScope = false, warning, trigger }: {
   client: ApiClient | null
   runtime?: RuntimeConfig
   onApply(value: RuntimeConfig): void
   disabled?: boolean
   defaultScope?: boolean
   warning?: string
+  /** 换掉默认的「思考 · 高」小胶囊，例如放进设置列表的一行；选择弹层不变。 */
+  trigger?(control: { open(): void; disabled: boolean; label: string }): ReactNode
 }) {
   const colors = useColors()
   const [open, setOpen] = useState(false)
@@ -29,14 +31,15 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
   const waiting = choice.loading || (!choice.catalogReady && !choice.error && choice.source?.auth === 'ready')
   const reason = effortUnavailableReason(choice)
 
+  const show = () => { setEpoch((value) => value + 1); setOpen(true) }
   return (
     <>
-      <Pressable
+      {trigger ? trigger({ open: show, disabled: Boolean(unavailable), label: effortName(runtime?.effortLevel) }) : <Pressable
         accessibilityRole="button"
         accessibilityLabel={`思考强度：${effortName(runtime?.effortLevel)}`}
         accessibilityState={{ disabled: Boolean(unavailable), expanded: open }}
         disabled={unavailable}
-        onPress={() => { setEpoch((value) => value + 1); setOpen(true) }}
+        onPress={show}
         style={({ pressed }) => ({
           minHeight: 36, paddingHorizontal: 10, borderRadius: 12,
           alignItems: 'center', justifyContent: 'center', backgroundColor: colors.fill,
@@ -46,7 +49,7 @@ export function EffortControl({ client, runtime, onApply, disabled, defaultScope
         <Text numberOfLines={1} style={{ fontSize: 13, color: colors.ink2 }}>
           思考 · {effortName(runtime?.effortLevel)}
         </Text>
-      </Pressable>
+      </Pressable>}
       <Sheet visible={open} onClose={() => setOpen(false)} title="思考强度">
         <InlineError text={choice.error} />
         {waiting ? <Loading /> : options.length && choice.source?.auth === 'ready' ? (
