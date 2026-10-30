@@ -3,7 +3,7 @@ import QRCode from 'qrcode'
 import { publicAccessApi, type PublicAccessServerStatus } from '@/api/publicAccess'
 import { getDesktopHost } from '@/lib/desktopHost'
 import { PUBLIC_ACCESS_CONSENT_VERSION, type DesktopPublicAccessStatus } from '@/lib/desktopHost/types'
-import { DEFAULT_PUBLIC_ACCESS_PORT, isCloudflareTunnelToken, normalizePublicAccessOrigin } from '@/lib/desktopHost/publicAccessConfiguration'
+import { DEFAULT_PUBLIC_ACCESS_PORT, findCloudflareTunnelToken, normalizePublicAccessOrigin } from '@/lib/desktopHost/publicAccessConfiguration'
 import { copyTextToClipboard } from '@/lib/clipboard'
 import { Button } from '@/components/ui/Button'
 import { StatusDot } from '@/components/ui/Badge'
@@ -165,8 +165,8 @@ export function PublicAccessSettings() {
   const normalizedUrl = normalizePublicAccessOrigin(customUrl) ?? ''
   const port = Number(localPort)
   const validPort = Number.isInteger(port) && port >= 1024 && port <= 65535
-  const tokenDraft = tunnelToken.trim()
-  const validToken = tokenDraft ? isCloudflareTunnelToken(tokenDraft) : status?.tokenSet === true
+  const tokenDraft = tunnelToken.trim() ? findCloudflareTunnelToken(tunnelToken) : null
+  const validToken = tokenDraft ? tokenDraft.status === 'found' : status?.tokenSet === true
   const validConfiguration = validPort && (mode === 'quick' || (!!normalizedUrl && validToken))
   const configuration = { mode, customUrl: mode === 'quick' ? '' : normalizedUrl, localPort: port }
   const configurationChanged = configuration.mode !== status?.mode || configuration.customUrl !== (status?.customUrl ?? '') ||
@@ -176,7 +176,7 @@ export function PublicAccessSettings() {
     if (!validConfiguration) return
     setConsent(false)
     if (configurationChanged) {
-      const saved = await bridge.configure({ ...configuration, ...(mode === 'named' && tunnelToken.trim() ? { tunnelToken: tunnelToken.trim() } : {}) })
+      const saved = await bridge.configure({ ...configuration, ...(mode === 'named' && tokenDraft?.status === 'found' ? { tunnelToken: tokenDraft.token } : {}) })
       if (generation !== actionGeneration.current) return
       if (saved.mode !== configuration.mode || saved.customUrl !== configuration.customUrl ||
           saved.localPort !== configuration.localPort || (mode === 'named' && !saved.tokenSet)) {
@@ -200,13 +200,16 @@ export function PublicAccessSettings() {
   const phaseLabels = {
     preparing: t('publicAccess.preparing'), connecting: t('publicAccess.connecting'), checking: t('publicAccess.checking'),
   }
+  const savedOrigin = normalizePublicAccessOrigin(status?.customUrl)
   const errorLabels = {
     network: t('publicAccess.networkError'), configuration: t('publicAccess.customConfigurationError'), stop: t('publicAccess.stopError'), runtime: t('publicAccess.runtimeError'), proxy: t('publicAccess.proxyError'),
+    token: t('publicAccess.tokenRejectedError'),
+    route: t('publicAccess.routeMissingError', { host: savedOrigin ? new URL(savedOrigin).hostname : '', service: `http://127.0.0.1:${status?.localPort ?? DEFAULT_PUBLIC_ACCESS_PORT}` }),
   }
   const online = status?.state === 'online'
   const stopUnconfirmed = status?.error === 'stop'
   const running = online || status?.state === 'connecting' || status?.state === 'reconnecting' || stopUnconfirmed
-  const configured = status?.mode === 'quick' || (!!normalizePublicAccessOrigin(status?.customUrl) && status?.tokenSet === true)
+  const configured = status?.mode === 'quick' || (!!savedOrigin && status?.tokenSet === true)
   const privacy = t('publicAccess.privacy')
   const serviceUrl = `http://127.0.0.1:${localPort}`
   const statusLabel = status ? status.phase && (status.state === 'connecting' || status.state === 'reconnecting')
@@ -264,7 +267,8 @@ export function PublicAccessSettings() {
               onChange={(event) => setCustomUrl(event.target.value)}
             />
           </SettingsRow>
-          <SettingsRow title={t('publicAccess.namedToken')} description={status?.tokenSet ? t('publicAccess.namedTokenSaved') : t('publicAccess.namedTokenHint')}>
+          <SettingsRow title={t('publicAccess.namedToken')} description={!status?.tokenSet ? t('publicAccess.namedTokenHint')
+            : status.tunnelId ? t('publicAccess.namedTokenSavedTunnel', { id: status.tunnelId }) : t('publicAccess.namedTokenSaved')}>
             <Input
               aria-label={t('publicAccess.namedToken')}
               type="password"
@@ -273,7 +277,9 @@ export function PublicAccessSettings() {
               spellCheck={false}
               containerClassName="w-full sm:w-[280px]"
               value={tunnelToken}
-              error={tokenDraft && !validToken ? t('publicAccess.namedTokenError') : undefined}
+              hint={tokenDraft?.status === 'found' ? t('publicAccess.namedTokenFound', { id: tokenDraft.tunnelId }) : undefined}
+              error={tokenDraft?.status === 'missing' ? t('publicAccess.namedTokenMissing')
+                : tokenDraft?.status === 'ambiguous' ? t('publicAccess.namedTokenAmbiguous') : undefined}
               disabled={busy || running || !status}
               onChange={(event) => setTunnelToken(event.target.value)}
             />

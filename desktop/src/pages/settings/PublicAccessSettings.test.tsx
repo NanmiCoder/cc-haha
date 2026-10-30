@@ -8,7 +8,7 @@ import { useSettingsStore } from '@/stores/settingsStore'
 import { useUIStore } from '@/stores/uiStore'
 
 const mocks = vi.hoisted(() => ({
-  status: { state: 'disabled', publicUrl: null, error: null, autoStart: false, consentVersion: 0, mode: 'quick', customUrl: '', localPort: 17463, tokenSet: false, phase: null, migrationRequired: false },
+  status: { state: 'disabled', publicUrl: null, error: null, autoStart: false, consentVersion: 0, mode: 'quick', customUrl: '', localPort: 17463, tokenSet: false, tunnelId: null, phase: null, migrationRequired: false },
   getStatus: vi.fn(), configure: vi.fn(), start: vi.fn(), stop: vi.fn(), setAutoStart: vi.fn(),
   open: vi.fn(), get: vi.fn(), pairing: vi.fn(), approve: vi.fn(), reject: vi.fn(), revoke: vi.fn(), qr: vi.fn(), copy: vi.fn(),
 }))
@@ -19,6 +19,11 @@ vi.mock('@/lib/clipboard', () => ({ copyTextToClipboard: mocks.copy }))
 vi.mock('qrcode', () => ({ default: { toDataURL: mocks.qr } }))
 const quickAddress = 'https://computer-fixture.trycloudflare.com'
 const fixedAddress = 'https://phone.example.com'
+// The shape cloudflared decodes, with fabricated values.
+const tunnelId = '0d9c6c2e-4f5a-4b7e-9c1d-2e3f4a5b6c7d'
+const tunnelCredential = (id = tunnelId) => btoa(JSON.stringify({ a: '0123456789abcdef0123456789abcdef', t: id, s: btoa('fake-tunnel-secret-for-tests') }))
+const credential = tunnelCredential()
+const installCommand = `brew install cloudflared && \n\nsudo cloudflared service install ${credential}`
 const savedStatus = (mode: 'quick' | 'named' = 'quick') => ({ ...mocks.status, mode, customUrl: mode === 'named' ? fixedAddress : '', tokenSet: mode === 'named', consentVersion: PUBLIC_ACCESS_CONSENT_VERSION })
 const addressInput = () => screen.getByLabelText('Fixed HTTPS address')
 const tokenInput = () => screen.getByLabelText('Tunnel Token')
@@ -322,7 +327,8 @@ it('guides fixed-domain setup, copies the exact gateway address, and saves a mas
   chooseNamed()
   expect(enableButton()).toBeDisabled()
   expect(screen.getByText(/Networking → Tunnels/)).toBeVisible()
-  expect(screen.getByText(/Published application route/)).toBeVisible()
+  expect(screen.getByText(/add a Published application/)).toBeVisible()
+  expect(screen.getByText(/You don't need to run it/)).toBeVisible()
   expect(screen.getByText('http://127.0.0.1:17463')).toBeVisible()
   fireEvent.click(screen.getByText('Change local port'))
   fireEvent.change(screen.getByLabelText('Local gateway port'), { target: { value: '18321' } })
@@ -339,14 +345,15 @@ it('guides fixed-domain setup, copies the exact gateway address, and saves a mas
   fireEvent.change(addressInput(), { target: { value: fixedAddress } })
   expect(enableButton()).toBeDisabled()
   expect(tokenInput()).toHaveAttribute('type', 'password')
-  fireEvent.change(tokenInput(), { target: { value: 'eyJhIjoiZmFrZS10dW5uZWwtdG9rZW4tZm9yLXRlc3RzIn0' } })
+  fireEvent.change(tokenInput(), { target: { value: installCommand } })
+  expect(screen.getByText(`Found tunnel ${tunnelId}`)).toBeVisible()
   fireEvent.click(enableButton())
   await confirm()
   await screen.findByAltText('Scan to pair this phone')
-  expect(mocks.configure).toHaveBeenCalledWith({ mode: 'named', customUrl: fixedAddress, localPort: 18321, tunnelToken: 'eyJhIjoiZmFrZS10dW5uZWwtdG9rZW4tZm9yLXRlc3RzIn0' })
+  expect(mocks.configure).toHaveBeenCalledWith({ mode: 'named', customUrl: fixedAddress, localPort: 18321, tunnelToken: credential })
   expect(mocks.qr).toHaveBeenCalledWith(`${fixedAddress}/remote#pair=one-time`, expect.any(Object))
   expect(tokenInput()).toHaveValue('')
-  expect(screen.queryByText('eyJhIjoiZmFrZS10dW5uZWwtdG9rZW4tZm9yLXRlc3RzIn0')).not.toBeInTheDocument()
+  expect(document.body.textContent).not.toContain(credential)
 })
 
 it.each([
@@ -357,7 +364,7 @@ it.each([
   await waitFor(() => expect(enableButton()).not.toBeDisabled())
   chooseNamed()
   fireEvent.change(addressInput(), { target: { value: url } })
-  fireEvent.change(tokenInput(), { target: { value: 'eyJhIjoiZmFrZS10dW5uZWwtdG9rZW4tZm9yLXRlc3RzIn0' } })
+  fireEvent.change(tokenInput(), { target: { value: credential } })
   expect(enableButton()).toBeDisabled()
   expect(screen.getByRole('alert')).toHaveTextContent('Enter a full HTTPS address')
   expect(mocks.configure).not.toHaveBeenCalled()
@@ -376,16 +383,43 @@ it('reuses a saved fixed-domain token without returning it to the input or requi
   expect(mocks.configure).not.toHaveBeenCalled()
 })
 
-it('rejects a pasted installation command instead of treating it as a Tunnel Token', async () => {
+it.each([
+  ['no token', 'cloudflared service install private-token', 'No Tunnel Token found'],
+  ['tokens for two tunnels', `${installCommand}\ncloudflared tunnel run --token ${tunnelCredential('7f1e2d3c-4b5a-4c6d-8e7f-0a1b2c3d4e5f')}`, 'tokens for different tunnels'],
+])('refuses a paste with %s before saving or starting', async (_case, pasted, message) => {
   render(<PublicAccessSettings />)
   await waitFor(() => expect(enableButton()).not.toBeDisabled())
   chooseNamed()
   fireEvent.change(addressInput(), { target: { value: fixedAddress } })
-  fireEvent.change(tokenInput(), { target: { value: 'cloudflared service install private-token' } })
-  expect(screen.getByRole('alert')).toHaveTextContent('Paste a valid Tunnel Token')
+  fireEvent.change(tokenInput(), { target: { value: pasted } })
+  expect(screen.getByRole('alert')).toHaveTextContent(message)
+  expect(screen.queryByText(/Found tunnel/)).not.toBeInTheDocument()
   expect(enableButton()).toBeDisabled()
   expect(mocks.configure).not.toHaveBeenCalled()
   expect(mocks.start).not.toHaveBeenCalled()
+})
+
+it('names the tunnel whose token is saved so it can be matched in Cloudflare', async () => {
+  mocks.getStatus.mockResolvedValue({ ...savedStatus('named'), tunnelId })
+  render(<PublicAccessSettings />)
+  expect(await screen.findByText(`The token for tunnel ${tunnelId} is saved on this computer. Leave this blank to keep it, or paste a new command to replace it.`)).toBeVisible()
+})
+
+it('tells the user to copy a fresh command when Cloudflare rejects the saved token', async () => {
+  mocks.getStatus.mockResolvedValue({ ...savedStatus('named'), tunnelId, state: 'failed', error: 'token' })
+  render(<PublicAccessSettings />)
+  const alert = await screen.findByRole('alert')
+  expect(alert).toHaveTextContent('Cloudflare rejected this Tunnel Token')
+  expect(alert).toHaveTextContent('Add a replica')
+  await waitFor(() => expect(enableButton()).not.toBeDisabled())
+})
+
+it('names the exact route to add when the tunnel does not send the fixed domain to this computer', async () => {
+  mocks.getStatus.mockResolvedValue({ ...savedStatus('named'), localPort: 18321, state: 'failed', error: 'route' })
+  render(<PublicAccessSettings />)
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'none of its routes send phone.example.com to http://127.0.0.1:18321. In that tunnel\'s Routes in Cloudflare, add a Published application with hostname phone.example.com and Service URL http://127.0.0.1:18321.',
+  )
 })
 
 it('preserves the fixed-domain draft when switching to quick mode and back', async () => {

@@ -3,13 +3,15 @@ import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { PublicAccessManager, PUBLIC_ACCESS_CONSENT_VERSION, classifyPublicAccessError, migratePublicAccessSettings, readPublicAccessControlResponse } from './publicAccess'
-import { CloudflareTunnelError, type CloudflareTunnelExit, type CloudflareTunnelOptions } from './cloudflareTunnel'
+import { CloudflareTunnelError, type CloudflareTunnelExit, type CloudflareTunnelOptions, type CloudflareTunnelRoute } from './cloudflareTunnel'
 
 const directories: string[] = []
 const managers: PublicAccessManager[] = []
 const quick = { mode: 'quick' as const, customUrl: '', localPort: 17463 }
 const fakeToken = 'eyJhIjoiZmFrZS1maXh0dXJlLXRva2VuIiwicyI6ImZha2UifQ=='
 const named = { mode: 'named' as const, customUrl: 'https://phone.example.test', localPort: 17463, tunnelToken: fakeToken }
+const tunnelId = '0d9c6c2e-4f5a-4b7e-9c1d-2e3f4a5b6c7d'
+const credential = btoa(JSON.stringify({ a: '0123456789abcdef0123456789abcdef', t: tunnelId, s: btoa('fake-tunnel-secret-for-tests') }))
 
 afterEach(async () => {
   await Promise.all(managers.splice(0).map(manager => manager.dispose()))
@@ -37,15 +39,19 @@ function fixture(saved?: unknown) {
   })
   const exits = new Set<(exit: CloudflareTunnelExit) => void>()
   const stop = vi.fn(async () => {})
+  let routes: CloudflareTunnelRoute[] | null = null
+  const publishedRoutes = vi.fn(async (_waitMs: number) => routes)
   const startTunnel = vi.fn(async (options: CloudflareTunnelOptions) => ({
     url: options.mode === 'named' ? options.publicUrl! : 'https://fixture-phone.trycloudflare.com',
+    publishedRoutes,
     stop,
     onExit(callback: (exit: CloudflareTunnelExit) => void) { exits.add(callback); return () => { exits.delete(callback) } },
   }))
   const manager = new PublicAccessManager({ directory, backend: { request: request as never }, startTunnel })
   managers.push(manager)
-  return { directory, file, request, manager, startTunnel, stop,
+  return { directory, file, request, manager, startTunnel, stop, publishedRoutes,
     reachable(value: boolean) { reachable = value }, proxy(value: string | null) { proxyUrl = value },
+    routes(value: CloudflareTunnelRoute[] | null) { routes = value },
     exit() { for (const callback of [...exits]) callback({ code: 1, signal: null }) },
   }
 }
@@ -166,6 +172,62 @@ describe('Cloudflare gateway lifecycle', () => {
     expect(f.startTunnel).toHaveBeenCalledTimes(2)
   })
 
+  it('names the saved tunnel without exposing its credential', async () => {
+    const f = fixture()
+    expect(f.manager.getStatus().tunnelId).toBeNull()
+    await f.manager.configure({ ...named, tunnelToken: credential })
+    expect(f.manager.getStatus()).toMatchObject({ tokenSet: true, tunnelId })
+    expect(JSON.stringify(f.manager.getStatus())).not.toContain(credential)
+    await f.manager.configure({ ...named, tunnelToken: fakeToken })
+    expect(f.manager.getStatus()).toMatchObject({ tokenSet: true, tunnelId: null })
+  })
+
+  it('reports a token Cloudflare refuses and does not retry it as a network outage', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    await f.manager.configure(named)
+    f.startTunnel.mockRejectedValueOnce(new CloudflareTunnelError('token', 'fixture refusal'))
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'failed', error: 'token', publicUrl: null })
+    expect(f.request).toHaveBeenLastCalledWith('/disable', 'POST')
+    await advance(60000)
+    expect(f.startTunnel).toHaveBeenCalledTimes(1)
+  })
+
+  it('explains an unreachable fixed domain whose tunnel has no route to this gateway, without retrying', async () => {
+    vi.useFakeTimers()
+    const f = fixture()
+    await f.manager.configure(named)
+    f.reachable(false)
+    f.routes([{ hostname: 'other.example.test', service: 'http://127.0.0.1:17463' }, { service: 'http_status:404' }])
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'failed', error: 'route', publicUrl: null })
+    expect(f.publishedRoutes).toHaveBeenCalledWith(5000)
+    expect(f.stop).toHaveBeenCalledTimes(1)
+    await advance(60000)
+    expect(f.startTunnel).toHaveBeenCalledTimes(1)
+    f.reachable(true)
+    f.routes([{ hostname: 'phone.example.test', service: 'http://127.0.0.1:17463' }])
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', error: null })
+  })
+
+  it.each([
+    ['routes are unknown', null],
+    ['the route already reaches this gateway', [{ hostname: 'phone.example.test', service: 'http://localhost:17463' }]],
+  ])('keeps retrying an unreachable fixed domain when %s', async (_case, routes) => {
+    vi.useFakeTimers()
+    const f = fixture()
+    await f.manager.configure(named)
+    f.reachable(false)
+    f.routes(routes)
+    await f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'reconnecting', error: 'network' })
+    f.reachable(true)
+    await advance(1000)
+    expect(f.manager.getStatus()).toMatchObject({ state: 'online', error: null })
+  })
+
   it('fails a fixed-port mismatch without launching a connector', async () => {
     const f = fixture()
     f.request.mockResolvedValueOnce({ port: 32123 })
@@ -196,7 +258,7 @@ describe('Cloudflare gateway lifecycle', () => {
     const signal = f.startTunnel.mock.calls[0]![0].signal!
     const stopping = f.manager[action]()
     expect(signal.aborted).toBe(true)
-    finish({ url: 'https://late.trycloudflare.com', stop: f.stop, onExit: () => () => {} })
+    finish({ url: 'https://late.trycloudflare.com', stop: f.stop, publishedRoutes: f.publishedRoutes, onExit: () => () => {} })
     await Promise.all([connecting, stopping])
     expect(f.stop).toHaveBeenCalled()
     expect(f.manager.getStatus()).toMatchObject({ state: 'disabled', publicUrl: null })
@@ -249,7 +311,7 @@ describe('Cloudflare gateway lifecycle', () => {
     await entering
     let disposed = false
     const disposing = f.manager.dispose().then(() => { disposed = true })
-    finishStartup({ url: 'https://late.trycloudflare.com', stop: f.stop, onExit: () => () => {} })
+    finishStartup({ url: 'https://late.trycloudflare.com', stop: f.stop, publishedRoutes: f.publishedRoutes, onExit: () => () => {} })
     await closeStarted
     for (let index = 0; index < 30; index++) await Promise.resolve()
     const disposedBeforeShutdown = disposed
@@ -288,7 +350,7 @@ describe('Cloudflare gateway lifecycle', () => {
     await f.manager.stop()
     const second = f.manager.start(PUBLIC_ACCESS_CONSENT_VERSION)
     expect(f.startTunnel).toHaveBeenCalledTimes(1)
-    finish({ url: 'https://cancelled.trycloudflare.com', stop: f.stop, onExit: () => () => {} })
+    finish({ url: 'https://cancelled.trycloudflare.com', stop: f.stop, publishedRoutes: f.publishedRoutes, onExit: () => () => {} })
     await Promise.all([first, second])
     expect(f.stop).toHaveBeenCalledTimes(1)
     expect(f.startTunnel).toHaveBeenCalledTimes(2)
@@ -350,6 +412,8 @@ describe('Cloudflare gateway lifecycle', () => {
 
 it('classifies actionable failures without using provider messages as UI content', () => {
   expect(classifyPublicAccessError(new CloudflareTunnelError('proxy', 'fake'))).toBe('proxy')
+  expect(classifyPublicAccessError(new CloudflareTunnelError('token', 'fake'))).toBe('token')
+  expect(classifyPublicAccessError(new CloudflareTunnelError('route', 'fake'))).toBe('route')
   expect(classifyPublicAccessError(new Error('EADDRINUSE'))).toBe('configuration')
   expect(classifyPublicAccessError(new Error('connection refused'))).toBe('network')
 })

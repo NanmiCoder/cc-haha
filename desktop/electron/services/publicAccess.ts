@@ -1,8 +1,8 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { PUBLIC_ACCESS_CONSENT_VERSION, type DesktopPublicAccessConfiguration, type DesktopPublicAccessStatus } from '../../src/lib/desktopHost/types'
-import { DEFAULT_PUBLIC_ACCESS_PORT, isPublicAccessConfiguration, normalizePublicAccessOrigin } from '../../src/lib/desktopHost/publicAccessConfiguration'
-import { CloudflareTunnelError, startCloudflareTunnel, type CloudflareTunnel } from './cloudflareTunnel'
+import { DEFAULT_PUBLIC_ACCESS_PORT, isPublicAccessConfiguration, normalizePublicAccessOrigin, readCloudflareTunnelToken } from '../../src/lib/desktopHost/publicAccessConfiguration'
+import { CloudflareTunnelError, routesReachGateway, startCloudflareTunnel, type CloudflareTunnel } from './cloudflareTunnel'
 export { PUBLIC_ACCESS_CONSENT_VERSION } from '../../src/lib/desktopHost/types'
 
 export type PublicAccessStatus = DesktopPublicAccessStatus
@@ -15,6 +15,10 @@ type Settings = Record<string, unknown> & Omit<DesktopPublicAccessConfiguration,
 }
 type Backend = { request<T>(route: string, method: string, body?: unknown): Promise<T> }
 type Options = { directory: string, backend: Backend, desktopRoot?: string, startTunnel?: typeof startCloudflareTunnel }
+const CONTROLLED_ERRORS = ['runtime', 'network', 'configuration', 'proxy', 'token', 'route'] as const
+type ControlledError = typeof CONTROLLED_ERRORS[number]
+// Cloudflare normally pushes a dashboard tunnel's routes right after registration.
+const ROUTE_WAIT_MS = 5_000
 
 /** Retired private-network consent never silently becomes permission to publish a public tunnel. */
 export function migratePublicAccessSettings(raw: unknown): Settings {
@@ -45,8 +49,8 @@ export function migratePublicAccessSettings(raw: unknown): Settings {
 }
 
 export function classifyPublicAccessError(error: unknown): NonNullable<PublicAccessStatus['error']> {
-  if (error && typeof error === 'object' && 'code' in error && ['runtime', 'network', 'configuration', 'proxy'].includes(String(error.code))) {
-    return error.code as 'runtime' | 'network' | 'configuration' | 'proxy'
+  if (error && typeof error === 'object' && 'code' in error && (CONTROLLED_ERRORS as readonly string[]).includes(String(error.code))) {
+    return error.code as ControlledError
   }
   return /configuration|invalid|consent|eaddrinuse|address already in use/i.test(String(error instanceof Error ? error.message : error)) ? 'configuration' : 'network'
 }
@@ -64,7 +68,7 @@ export async function readPublicAccessControlResponse<T>(response: Response): Pr
 export class PublicAccessManager {
   private settings: Settings
   private readonly file: string
-  private status: Omit<PublicAccessStatus, 'mode' | 'customUrl' | 'localPort' | 'tokenSet' | 'migrationRequired'>
+  private status: Omit<PublicAccessStatus, 'mode' | 'customUrl' | 'localPort' | 'tokenSet' | 'tunnelId' | 'migrationRequired'>
   private generation = 0
   private wanted = false
   private disposed = false
@@ -96,7 +100,8 @@ export class PublicAccessManager {
 
   getStatus(): PublicAccessStatus {
     const { mode, customUrl, localPort, migrationRequired } = this.settings
-    return { ...this.status, mode, customUrl, localPort, migrationRequired, tokenSet: !!this.settings.tunnelToken }
+    return { ...this.status, mode, customUrl, localPort, migrationRequired, tokenSet: !!this.settings.tunnelToken,
+      tunnelId: readCloudflareTunnelToken(this.settings.tunnelToken)?.tunnelId ?? null }
   }
 
   private isConfigured() { return this.settings.mode === 'quick' || !!(this.settings.customUrl && this.settings.tunnelToken) }
@@ -198,7 +203,13 @@ export class PublicAccessManager {
         if (!this.current(generation)) return this.getStatus()
         if (result.ok === true) { verified = true; break }
       }
-      if (!verified) throw new CloudflareTunnelError(proxyUrl ? 'proxy' : 'network', 'The public hostname does not reach this remote gateway')
+      if (!verified) {
+        // A missing or misdirected route is not a network outage, so it is not retried.
+        const routes = this.settings.mode === 'named' ? await tunnel.publishedRoutes(ROUTE_WAIT_MS) : null
+        if (!this.current(generation)) return this.getStatus()
+        if (routes && !routesReachGateway(routes, tunnel.url, port)) throw new CloudflareTunnelError('route', 'The tunnel publishes no route from this hostname to the gateway')
+        throw new CloudflareTunnelError(proxyUrl ? 'proxy' : 'network', 'The public hostname does not reach this remote gateway')
+      }
       Object.assign(this.status, { publicUrl: tunnel.url, state: 'online', phase: null })
       this.retryCount = 0
     } catch (error) {
