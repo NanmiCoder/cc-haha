@@ -4019,14 +4019,23 @@ export async function ensureCliSessionStartedForControl(
     const workDir = await resolveSessionWorkDir(sessionId)
     lastResolvedStartupWorkDirs.set(sessionId, workDir)
     const runtimeSettings = await getRuntimeSettings(sessionId)
-    const protocol = requestUrl.protocol === 'https:' ? 'wss:' : 'ws:'
-    const authority = requestUrl.hostname === '0.0.0.0'
-      ? `127.0.0.1${requestUrl.port ? `:${requestUrl.port}` : ''}`
-      : requestUrl.host
-    const sdkUrl = new URL(
-      `${protocol}//${authority}/sdk/${encodeURIComponent(sessionId)}`,
-    )
-    sdkUrl.searchParams.set('token', crypto.randomUUID())
+    // A control request can arrive through the paired-phone listener, whose
+    // host the CLI cannot connect back to (/sdk needs a local, unpaired
+    // socket). A client watching this session already knows the local endpoint.
+    const watcher = activeSessions.get(sessionId)?.values().next().value as SessionConnection | undefined
+    let sdkUrl: URL
+    if (watcher) {
+      sdkUrl = new URL(buildSdkWebSocketUrl(watcher, sessionId))
+    } else {
+      const protocol = requestUrl.protocol === 'https:' ? 'wss:' : 'ws:'
+      const authority = requestUrl.hostname === '0.0.0.0'
+        ? `127.0.0.1${requestUrl.port ? `:${requestUrl.port}` : ''}`
+        : requestUrl.host
+      sdkUrl = new URL(
+        `${protocol}//${authority}/sdk/${encodeURIComponent(sessionId)}`,
+      )
+      sdkUrl.searchParams.set('token', crypto.randomUUID())
+    }
 
     console.log(`[WS] Starting CLI for ${sessionId} due to agent_message`)
     await conversationService.startSession(

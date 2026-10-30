@@ -159,6 +159,8 @@ export type ChatState = {
   usage?: TokenUsage
   error?: { message: string; code: string; retryable?: boolean }
   title?: string
+  /** 电脑推来的团队方案变化（planId:revision:state）；变了就重新读取方案。 */
+  teamPlanSignal?: string
   nextId: number
   activeTextId?: string
   activeThinkingId?: string

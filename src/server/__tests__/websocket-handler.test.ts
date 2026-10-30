@@ -770,6 +770,34 @@ describe('WebSocket handler session isolation', () => {
     })
   }
 
+  it('starts a control-requested CLI on the local endpoint even when the request came through the phone listener', async () => {
+    const sessionId = `control-remote-start-${crypto.randomUUID()}`
+    const phoneUrl = new URL('https://phone-tunnel.fixture.test/api/teams/taskboard/plan/approve')
+    const sdkUrls: string[] = []
+    spyOn(ProviderService.prototype, 'getProvider').mockResolvedValue(null)
+    spyOn(SettingsService.prototype, 'getUserSettings').mockResolvedValue({})
+    spyOn(sessionService, 'getSessionWorkDir').mockResolvedValue('/fixture/control-remote-start')
+    spyOn(sessionService, 'getSessionLaunchInfo').mockResolvedValue(null)
+    spyOn(conversationService, 'hasSession').mockReturnValue(false)
+    spyOn(conversationService, 'onOutput').mockImplementation(() => {})
+    spyOn(conversationService, 'removeOutputCallback').mockImplementation(() => {})
+    spyOn(conversationService, 'startSession').mockImplementation(async (_id, _cwd, url) => {
+      sdkUrls.push(url)
+    })
+
+    // Nobody watching: keep the request's own host (desktop calls are local).
+    await ensureCliSessionStartedForControl(sessionId, new URL('http://127.0.0.1:3456/api/teams/t/plan/approve'))
+    // The phone has the session open while it approves through the tunnel.
+    const ws = makeClientSocket(sessionId)
+    ;(ws.data as { serverPort: number }).serverPort = 4321
+    handleWebSocket.open(ws)
+    await ensureCliSessionStartedForControl(sessionId, phoneUrl)
+
+    expect(sdkUrls).toHaveLength(2)
+    expect(sdkUrls[0]!.startsWith(`ws://127.0.0.1:3456/sdk/${sessionId}?token=`)).toBe(true)
+    expect(sdkUrls[1]!.startsWith(`ws://127.0.0.1:4321/sdk/${sessionId}?token=`)).toBe(true)
+  })
+
   it('gives pet clients only sanitized state and denies privileged client messages', () => {
     const sessionId = `pet-capability-${crypto.randomUUID()}`
     const ws = makeClientSocket(sessionId, 'pet')

@@ -32,6 +32,10 @@ import {
 } from '../../core/operations'
 import type { ChatItem, ChatState, ClientMessage, PermissionMode, Session } from '../../core/types'
 import { Approval } from '../../ui/Approval'
+import { teamPlanSurface, teamRuntime } from '../../core/teamPlan'
+import { useTeamPlan } from '../../ui/team/useTeamPlan'
+import { TeamPlanCard } from '../../ui/team/TeamPlanCard'
+import { TeamPlanSheet } from '../../ui/team/TeamPlanSheet'
 import { ChatComposer } from '../../ui/ChatComposer'
 import { Message, type BubbleLayout } from '../../ui/Message'
 import { type Model } from '../../ui/RuntimePicker'
@@ -472,6 +476,22 @@ function ChatSession({
   const computer = useComputerUse(client)
   const sendRaw = useCallback((message: ClientMessage) => transport.current?.send(message) ?? false, [])
   useEffect(() => registerSessionSender(id, sendRaw), [id, sendRaw])
+  // 队长提交团队后只有人确认才会开工：手机上也要能处理。和桌面端一样放在输入框上方，
+  // 不占输入框——追加成员时原有成员还在跑，用户仍要能停止、能和队长说话。
+  const teamPlan = useTeamPlan({
+    client,
+    sessionId: id,
+    ready,
+    signal: state.teamPlanSignal,
+    turnActive: state.turnActive,
+  })
+  const teamSurface = teamPlanSurface(teamPlan.plan)
+  // 每份新提交的方案从底部自动弹出一次；关掉后从卡片再打开。开关放在页面上，
+  // 卡片随输入框或审批切换重挂载时不会把它关掉或重复弹出。
+  const reviewPlanId = teamSurface === 'review' ? teamPlan.plan?.planId : undefined
+  const [teamSheet, setTeamSheet] = useState<{ planId?: string; open: boolean }>({ open: false })
+  if (reviewPlanId && teamSheet.planId !== reviewPlanId) setTeamSheet({ planId: reviewPlanId, open: true })
+  const teamSheetOpen = !!reviewPlanId && teamSheet.planId === reviewPlanId && teamSheet.open
   const activity = useSessionActivity({
     client,
     host: { id: hostId },
@@ -1061,6 +1081,16 @@ function ChatSession({
         正在等电脑确认新的运行配置…
       </Callout>
     ) : null,
+    teamPlan.plan && teamSurface ? (
+      <TeamPlanCard
+        key={`team:${teamPlan.plan.planId}`}
+        plan={teamPlan.plan}
+        surface={teamSurface}
+        team={teamPlan}
+        ready={ready}
+        onOpen={() => setTeamSheet({ planId: teamPlan.plan?.planId, open: true })}
+      />
+    ) : null,
   ].filter(Boolean)
   const runStartedAt = state.turnActive
     ? turnClock.live
@@ -1468,6 +1498,18 @@ function ChatSession({
           />
         )}
       </KeyboardViewport>
+      {teamPlan.plan && teamSurface === 'review' ? (
+        <TeamPlanSheet
+          key={teamPlan.plan.planId}
+          visible={teamSheetOpen}
+          onClose={() => setTeamSheet((value) => ({ ...value, open: false }))}
+          plan={teamPlan.plan}
+          team={teamPlan}
+          client={client}
+          ready={ready}
+          leaderRuntime={runtime ? teamRuntime(runtime) : undefined}
+        />
+      ) : null}
       <ActionMenu
         visible={panel === 'menu'}
         onClose={() => setPanel(null)}
