@@ -2,6 +2,7 @@ import { getSideChat, isSideChatId, sideChatSummary } from './sideChatRegistry.j
 import { splitSessionReferenceContext } from './sessionReferenceContext.js'
 import { parseSessionCollaborationEnvelope } from '../../utils/sessionCollaborationEnvelope.js'
 import { isShutdownTeamPrompt } from '../../utils/swarm/teamShutdownPrompt.js'
+import { isTeamLeadNotice } from '../../utils/swarm/teamLeadNotice.js'
 import { readHistoryContexts } from './sessionHistoryContext.js'
 import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './sessionHistoryRecovery.js'
 /**
@@ -2372,6 +2373,7 @@ export class SessionService {
     if (role === 'user') {
       return (
         isShutdownTeamPrompt(content) ||
+        isTeamLeadNotice(content) ||
         shouldHideCommandMetadataContent(content) ||
         this.isTaskNotificationContent(content)
       )
