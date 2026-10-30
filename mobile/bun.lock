@@ -31,7 +31,7 @@
         "react": "19.3.0",
         "react-dom": "19.3.0",
         "react-native": "0.88.0",
-        "react-native-audio-api": "0.13.0",
+        "react-native-audio-api": "0.13.6",
         "react-native-image-viewing": "0.2.2",
         "react-native-safe-area-context": "~5.10.1",
         "react-native-screens": "~4.30.0",
@@ -48,7 +48,7 @@
     },
   },
   "patchedDependencies": {
-    "react-native-audio-api@0.13.0": "patches/react-native-audio-api@0.13.0.patch",
+    "react-native-audio-api@0.13.6": "patches/react-native-audio-api@0.13.6.patch",
   },
   "packages": {
     "2g": ["2g@1.0.1", "https://registry.npmmirror.com/2g/-/2g-1.0.1.tgz", { "peerDependencies": { "typescript": ">=5.8.0" }, "optionalPeers": ["typescript"], "bin": { "2g": "bin/cli.js" } }, "sha512-+uViadKOS/wwR4pFu5g8TPn3QHpKqoX19JHCnp8k/3cLpImdcXozwvZA6Q/5PeW3AcU8neL8faaMidBcv7o8CA=="],
@@ -1293,7 +1293,7 @@
 
     "react-native": ["react-native@0.88.0", "https://registry.npmmirror.com/react-native/-/react-native-0.88.0.tgz", { "dependencies": { "@react-native/asset-utils": "0.88.0", "@react-native/codegen": "0.88.0", "@react-native/community-cli-plugin": "0.88.0", "@react-native/gradle-plugin": "0.88.0", "@react-native/normalize-colors": "0.88.0", "@react-native/virtualized-lists": "0.88.0", "anser": "^1.4.9", "ansi-regex": "^5.0.0", "base64-js": "^1.5.1", "flow-enums-runtime": "^0.0.6", "flow-parser": "0.327.0", "hermes-compiler": "260318099.0.4", "invariant": "^2.2.4", "memoize-one": "^5.0.0", "metro-runtime": "^0.87.1", "metro-source-map": "^0.87.1", "nullthrows": "^1.1.1", "pretty-format": "^29.7.0", "promise": "^8.3.0", "react-devtools-core": "^6.1.5", "react-refresh": "^0.14.0", "regenerator-runtime": "^0.13.2", "scheduler": "0.28.0", "semver": "^7.1.3", "stacktrace-parser": "^0.1.10", "tinyglobby": "^0.2.15", "whatwg-fetch": "^3.0.0", "ws": "^7.5.10", "yargs": "^17.6.2" }, "peerDependencies": { "@types/react": "^19.1.1", "react": "^19.3.0" }, "optionalPeers": ["@types/react"], "bin": { "react-native": "cli.js" } }, "sha512-v/wee0nYWcammMYBnSat/e3WY/5iaf9YQOMcBrfKT/wPApPPlHp94hgZovBtwhMuthR01yc/8cGn0FpFTE/C4A=="],
 
-    "react-native-audio-api": ["react-native-audio-api@0.13.0", "https://registry.npmmirror.com/react-native-audio-api/-/react-native-audio-api-0.13.0.tgz", { "dependencies": { "semver": "^7.7.3" }, "peerDependencies": { "react": "*", "react-native": "*", "react-native-worklets": ">= 0.6.0" }, "optionalPeers": ["react-native-worklets"], "bin": { "setup-rn-audio-api-web": "scripts/setup-rn-audio-api-web.js" } }, "sha512-hqKBYgoo8DBf6fwHxDyi5aes6niGfWwM9ZAecH4ABTHarSNv+F39Z9FgTix2tLkyPTvRF8skuKzGU6PkzVE7vw=="],
+    "react-native-audio-api": ["react-native-audio-api@0.13.6", "https://registry.npmmirror.com/react-native-audio-api/-/react-native-audio-api-0.13.6.tgz", { "dependencies": { "semver": "^7.7.3" }, "peerDependencies": { "react": "*", "react-native": "*", "react-native-worklets": ">= 0.7.0" }, "optionalPeers": ["react-native-worklets"], "bin": { "setup-rn-audio-api-web": "scripts/setup-rn-audio-api-web.js" } }, "sha512-055JlxTaajdzcJCzyd+xnH1pJawNkt2NZ3RNoI2vv1QxYRh257W/dcDky/qf4/VMEFdpZFuFfVW1hv75OEh3gA=="],
 
     "react-native-drawer-layout": ["react-native-drawer-layout@4.2.12", "https://registry.npmmirror.com/react-native-drawer-layout/-/react-native-drawer-layout-4.2.12.tgz", { "dependencies": { "color": "^4.2.3", "use-latest-callback": "^0.2.4" }, "peerDependencies": { "react": ">= 18.2.0", "react-native": "*", "react-native-gesture-handler": ">= 2.0.0", "react-native-reanimated": ">= 2.0.0" } }, "sha512-qYmntEctkMSodN7pnC2llV21nswImLFPHJeT3PJXSJqZdU4jzDATR8iVi66sXkrtoOLJ2+EvXxgd7sMMpV4ViA=="],
 
