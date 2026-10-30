@@ -52,6 +52,18 @@ export function isPublicBusinessPathAllowed(url: URL, method: string): boolean {
   // connector action (authenticate, prepare, remove…) and every workflow
   // mutation or run detail remain desktop-only.
   if (parts[1] === 'connectors' || parts[1] === 'workflows') return parts.length === 2 && method === 'GET'
+  if (parts[1] === 'voice') {
+    // Phones reuse the host's prepared recognizer. Download, deletion and
+    // shared preference changes stay on the desktop's settings surface.
+    if (method === 'GET') {
+      return !url.search && (url.pathname === '/api/voice/catalog' ||
+        /^\/api\/voice\/providers\/[^/]+\/status$/.test(url.pathname))
+    }
+    return method === 'POST' && url.pathname === '/api/voice/transcribe' &&
+      [...url.searchParams.keys()].every(key =>
+        (key === 'provider' || key === 'language') && url.searchParams.getAll(key).length === 1,
+      )
+  }
   if (parts[1] === 'skills') return parts.length === 3 &&
     (parts[2] === 'mentions' || parts[2] === 'commands') && method === 'GET'
   if (parts[1] === 'computer-use') {
@@ -110,12 +122,15 @@ type Dependencies = {
   serverPort: () => number
   storePath?: string
   now?: () => number
+  resolveProxy?: () => Promise<{ proxyUrl: string | null }>
+  verifyGateway?: (origin: string, gatewayId: string) => Promise<boolean>
 }
 
 /** The listener, not attacker-controlled headers, establishes the remote trust boundary. */
 export class PublicAccessServer {
   private server: Server<RemoteData> | null = null
   private publicUrl: string | null = null
+  private gatewayId: string | null = null
   private stored: Stored = { version: 1, devices: [] }
   private loaded = false
   private pairing: { hash: string, expiresAt: number } | null = null
@@ -155,6 +170,7 @@ export class PublicAccessServer {
       enabled: this.server !== null,
       port: this.server?.port ?? null,
       publicUrl: this.publicUrl,
+      gatewayId: this.gatewayId,
       pending: [...this.pending.values()].filter(p => p.status === 'pending').map(({ id, name }) => ({ id, name })),
       devices: this.stored.devices.map(({ id, name, createdAt, expiresAt }) => ({ id, name, createdAt, expiresAt })),
     }
@@ -215,6 +231,7 @@ export class PublicAccessServer {
     this.load()
     if (publicUrl !== undefined) this.setOrigin(publicUrl)
     if (this.server) return this.status()
+    this.gatewayId = secret()
     this.server = Bun.serve<RemoteData>({
       hostname: '127.0.0.1', port: port ?? 0, idleTimeout: 0, maxRequestBodySize: 16 * 1024 * 1024,
       fetch: (req, server) => this.fetch(req, server),
@@ -248,6 +265,7 @@ export class PublicAccessServer {
     const listener = this.server
     this.server = null
     this.publicUrl = null
+    this.gatewayId = null
     this.pairing = null
     this.pending.clear()
     this.rates.clear()
@@ -266,6 +284,12 @@ export class PublicAccessServer {
       this.load()
       const route = new URL(request.url).pathname.split('/').filter(Boolean).slice(2).join('/')
       if ((route === 'status' || route === '') && request.method === 'GET') return json(this.status())
+      if (route === 'network' && request.method === 'GET') {
+        try {
+          if (!this.deps.resolveProxy) throw new Error('Network settings unavailable')
+          return json(await this.deps.resolveProxy())
+        } catch { return json({ error: 'Network proxy unavailable', code: 'proxy' }, 503) }
+      }
       const input = request.method === 'GET' ? {} : await this.readInput(request)
       if (route === 'enable' && request.method === 'POST') {
         if (input.publicUrl !== undefined && typeof input.publicUrl !== 'string') throw new Error('HTTPS origin required')
@@ -273,6 +297,10 @@ export class PublicAccessServer {
         return json(this.enable(input.publicUrl as string | undefined, input.port as number | undefined))
       }
       if (route === 'origin' && request.method === 'PUT') { this.setOrigin(input.publicUrl); return json(this.status()) }
+      if (route === 'verify' && request.method === 'POST') {
+        if (!this.server || !this.publicUrl || !this.gatewayId || !this.deps.verifyGateway) return json({ ok: false })
+        return json({ ok: await this.deps.verifyGateway(this.publicUrl, this.gatewayId) })
+      }
       if (route === 'disable' && request.method === 'POST') return json(this.disable())
       if (route === 'pairing' && request.method === 'POST') {
         if (!this.server || !this.publicUrl) return json({ error: 'Remote access is not ready' }, 409)
@@ -318,7 +346,7 @@ export class PublicAccessServer {
       if ((request.method !== 'GET' && request.method !== 'HEAD') || url.pathname.startsWith('/ws/')) {
         if (origin !== this.publicUrl) return json({ error: 'Origin required' }, 403)
       }
-      if (url.pathname === '/health' && request.method === 'GET') return json({ status: 'ok' })
+      if (url.pathname === '/health' && request.method === 'GET') return json({ status: 'ok', gatewayId: this.gatewayId })
       const route = url.pathname.split('/').filter(Boolean).join('/')
       if (route.startsWith('api/public-access/')) {
         if (!this.rate('pairing-global', 180)) return json({ error: 'Too many requests' }, 429)

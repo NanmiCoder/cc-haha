@@ -11,7 +11,7 @@ import { errorText } from '../ui/theme'
 
 /**
  * 「操作电脑」开关的状态与动作。它控制的是连着的这台电脑（所有会话共用），不是下一条消息。
- * 页面用 `enabled` 决定输入框上要不要显示「电脑」胶囊；运行方式底单用其余字段画开关和授权流程。
+ * 输入框的本条选择另存为 computer-use 技能引用；全局授权不会因发送或移除引用而关闭。
  */
 export function useComputerUse(client: ApiClient | null) {
   const [status, setStatus] = useState<ComposerComputerUse | null>(null)
@@ -25,13 +25,18 @@ export function useComputerUse(client: ApiClient | null) {
   const generation = useRef(0)
   const mutating = useRef(false)
   const mounted = useRef(true)
+  const pendingSelection = useRef<(() => void) | null>(null)
   useEffect(() => {
     mounted.current = true
     return () => {
       mounted.current = false
+      pendingSelection.current = null
     }
   }, [])
-  useEffect(() => () => permissionRequest.current?.abort(), [client])
+  useEffect(() => () => {
+    permissionRequest.current?.abort()
+    pendingSelection.current = null
+  }, [client])
   useEffect(() => {
     if (!client) return
     const controller = new AbortController()
@@ -55,7 +60,7 @@ export function useComputerUse(client: ApiClient | null) {
   const refresh = useCallback(() => setEpoch((value) => value + 1), [])
 
   async function apply(enabled: boolean) {
-    if (!client || !status || busy) return
+    if (!client || !status || busy || mutating.current) return
     readRequest.current?.abort()
     generation.current++
     mutating.current = true
@@ -68,6 +73,9 @@ export function useComputerUse(client: ApiClient | null) {
       setStatus({ ...status, enabled })
       setConsent(false)
       setPermission(enabled && needsComputerPermission(status))
+      const selected = pendingSelection.current
+      pendingSelection.current = null
+      if (enabled) selected?.()
     } catch (e) {
       if (mounted.current) setError(errorText(e))
     } finally {
@@ -97,7 +105,7 @@ export function useComputerUse(client: ApiClient | null) {
   }
 
   return {
-    /** 已开启：输入框显示「电脑」胶囊。 */
+    /** 全局授权状态，与本条消息的技能选择独立。 */
     enabled: status?.enabled ?? false,
     /** 这台电脑是否支持；还没读到时是 null。 */
     supported: status ? status.supported : (null as boolean | null),
@@ -108,6 +116,15 @@ export function useComputerUse(client: ApiClient | null) {
     /** 开启前的确认单是否打开。 */
     consentOpen: consent,
     refresh,
+    /** Already-consented computers can be selected without another prompt. */
+    selectForMessage(onSelected: () => void) {
+      if (!client || !status?.supported || busy) return
+      if (status.enabled) onSelected()
+      else {
+        pendingSelection.current = onSelected
+        setConsent(true)
+      }
+    },
     /** 打开开关要先经过确认；关闭立即生效。 */
     toggle(next: boolean) {
       if (next) setConsent(true)
@@ -115,7 +132,10 @@ export function useComputerUse(client: ApiClient | null) {
     },
     confirmConsent: () => void apply(true),
     cancelConsent() {
-      if (!busy) setConsent(false)
+      if (!busy) {
+        pendingSelection.current = null
+        setConsent(false)
+      }
     },
     openPermissionCard,
   }

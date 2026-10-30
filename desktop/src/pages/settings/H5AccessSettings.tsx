@@ -1,5 +1,6 @@
 import { PublicAccessSettings } from './PublicAccessSettings'
-import { useState, useEffect, useMemo } from 'react'
+import { MobileAppInstall } from './MobileAppInstall'
+import { useState, useEffect, useMemo, useRef, useId } from 'react'
 import QRCode from 'qrcode'
 import { Copy, Eye, EyeOff, PowerOff, QrCode, RotateCw, Wifi, Globe } from 'lucide-react'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -20,6 +21,7 @@ import {
 import { useUIStore } from '../../stores/uiStore'
 import { isBrowserSafePort } from '../../lib/browserSafePort'
 import { copyTextToClipboard } from '@/lib/clipboard'
+import { getDesktopHost } from '@/lib/desktopHost'
 
 /**
  * The H5 access panel: the settings tab that exposes the desktop app's built-in
@@ -139,7 +141,9 @@ export function H5AccessSettings() {
     updateH5AccessSettings,
   } = useSettingsStore()
   const t = useTranslation()
-  const [connectionMethod, setConnectionMethod] = useState<'lan' | 'remote'>('lan')
+  const [connectionMethod, setConnectionMethod] = useState<'lan' | 'remote'>(() => getDesktopHost().kind === 'electron' ? 'remote' : 'lan')
+  const connectionMethodsId = useId()
+  const connectionMethodsRef = useRef<HTMLDivElement>(null)
   const addToast = useUIStore((s) => s.addToast)
   const [h5PublicBaseUrlDraft, setH5PublicBaseUrlDraft] = useState(extractH5AccessAddressDraft(h5Access.publicBaseUrl))
   const [h5FixedPortDraft, setH5FixedPortDraft] = useState(h5Access.fixedPort != null ? String(h5Access.fixedPort) : '')
@@ -281,7 +285,7 @@ export function H5AccessSettings() {
           description={t('settings.general.h5AccessDescription')}
         />
 
-        <div className="mt-6">
+        <div id={connectionMethodsId} ref={connectionMethodsRef} className="mt-6">
           <SegmentedControl
             as="tablist"
             label={t('settings.general.h5ConnectionMethod')}
@@ -585,6 +589,13 @@ export function H5AccessSettings() {
         </div>
         <div role="tabpanel" aria-label={t('settings.general.h5ConnectionRemote')} hidden={connectionMethod !== 'remote'}>
           <PublicAccessSettings />
+        </div>
+        <div className="mt-8">
+          <MobileAppInstall connectionMethodsId={connectionMethodsId} onUseBrowser={() => {
+            setConnectionMethod('lan')
+            connectionMethodsRef.current?.querySelector<HTMLButtonElement>('[role="tab"]')?.focus()
+            connectionMethodsRef.current?.scrollIntoView?.({ block: 'start' })
+          }} />
         </div>
       </section>
 

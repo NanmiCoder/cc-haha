@@ -36,7 +36,7 @@ import {
   ConversationStartupError,
   conversationService,
 } from '../services/conversationService.js'
-import { endTeamsForParent, hasActiveTeamWorkForParent, noteLeadUserMessage } from '../services/teamPlanRuntime.js'
+import { endTeamsForParent, hasActiveTeamWorkForParent, listTeamPlanRuntimeParentIds, noteLeadUserMessage } from '../services/teamPlanRuntime.js'
 import { computerUseApprovalService } from '../services/computerUseApprovalService.js'
 import {
   sessionService,
@@ -572,21 +572,30 @@ export type LiveSessionActivity = {
  * Every session that is working or waiting on the user right now, in one
  * answer. The phone's session list has to sort sessions it never opened a
  * socket to, and asking each one would cost a request per row. Team workers
- * are left out: their requests already surface on the lead.
+ * are left out by default: their requests already surface on the lead. The
+ * power aggregate also counts team runtime work, including retry backoff.
  */
-export function listLiveSessionActivity(): LiveSessionActivity[] {
+export function listLiveSessionActivity(options: { includeTeamWorkers?: boolean } = {}): LiveSessionActivity[] {
   const ids = new Set<string>([
     ...conversationService.getActiveSessions(),
     ...activeUserTurns.keys(),
     ...activeCliRuns,
     ...legacyQueuedSessionChats,
+    // Independent workers can keep working after their lead CLI exits.
+    ...(options.includeTeamWorkers ? listTeamPlanRuntimeParentIds() : []),
   ])
   const live: LiveSessionActivity[] = []
   for (const id of ids) {
-    if (conversationService.isTeamWorkerSession(id)) continue
+    // Power management must see workers even when their lead's turn is idle.
+    // The phone/pet projection still hides them by default.
+    if (!options.includeTeamWorkers && conversationService.isTeamWorkerSession(id)) continue
     const activityState = getSessionChatActivityState(id)
     if (activityState === 'running' || activityState === 'waiting') {
       live.push({ id, activityState })
+    } else if (options.includeTeamWorkers && hasActiveTeamWorkForParent(id)) {
+      // TeamPlanRuntime starts workers outside this handler's turn observer.
+      // Its own lifecycle also covers automatic continuation between turns.
+      live.push({ id, activityState: 'running' })
     }
   }
   return live

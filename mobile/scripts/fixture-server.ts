@@ -5,6 +5,8 @@
  */
 import assert from 'node:assert/strict'
 import { profileFixture } from './profile-fixture'
+import { validateVoiceWav } from '../../src/server/services/voice/wav'
+import { encodeVoiceWav } from '../src/core/voiceWav'
 import { isValidCron, type TaskSchedule } from '../../src/shared/taskSchedule'
 import type { ServerWebSocket } from 'bun'
 import type {
@@ -1313,6 +1315,25 @@ export function startFixtureServer({
           ? undefined
           : fail('WebSocket upgrade failed')
       }
+      // Deterministic transcription boundary for microphone UI smoke tests.
+      // Validate real WAV bytes but never load a speech model or user assets.
+      if (url.pathname === '/api/voice/catalog' && request.method === 'GET')
+        return json({
+          supported: true,
+          preferences: { enabled: true, providerId: 'sensevoice-local', language: 'auto', downloadSource: 'auto' },
+          providers: [{ info: { id: 'sensevoice-local', name: 'Fixture 本机语音', location: 'local', languages: ['auto', 'zh', 'en'] }, preparation: { phase: 'ready' } }],
+          limits: { maxAudioSeconds: 120, maxAudioBytes: 4 * 1024 * 1024 },
+        })
+      if (url.pathname === '/api/voice/transcribe' && request.method === 'POST') {
+        try {
+          const wav = new Uint8Array(await request.arrayBuffer())
+          const { audioSeconds } = validateVoiceWav(wav)
+          await Bun.sleep(250)
+          return json({ text: '语音转写测试文字（本地 fixture）', audioSeconds, inferenceSeconds: 0 })
+        } catch {
+          return fail('Fixture expects mono PCM16 16 kHz WAV', 400, 'voice/invalid-audio')
+        }
+      }
       let body: Record<string, unknown> = {}
       if (['POST', 'PUT', 'PATCH'].includes(request.method)) {
         const raw = await request.text()
@@ -2225,6 +2246,15 @@ async function selfTest() {
   const sockets: WebSocket[] = []
   try {
     assert.equal((await fetch(`${base}/api/sessions`)).status, 401)
+    const voiceCatalog = await (await fetch(`${base}/api/voice/catalog`, { headers })).json() as { supported: boolean }
+    assert.equal(voiceCatalog.supported, true)
+    const voiceBytes = encodeVoiceWav(new Float32Array(8_000).fill(0.25))
+    const voiceResponse = await fetch(`${base}/api/voice/transcribe`, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'audio/wav' }, body: Uint8Array.from(voiceBytes).buffer,
+    })
+    assert.equal(voiceResponse.status, 200)
+    assert.deepEqual(await voiceResponse.json(), { text: '语音转写测试文字（本地 fixture）', audioSeconds: 0.5, inferenceSeconds: 0 })
+    assert.equal((await fetch(`${base}/api/voice/transcribe`, { method: 'POST', headers, body: '{}' })).status, 400)
     assert.deepEqual(
       await (
         await fetch(`${base}/api/h5-access/verify`, { method: 'POST', headers })

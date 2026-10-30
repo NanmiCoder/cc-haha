@@ -238,9 +238,10 @@ describe('live session activity for the phone session list', () => {
     mock.restore()
   })
 
-  async function getLiveStatus(): Promise<Array<{ id: string; activityState: string }>> {
+  async function getLiveStatus(includeTeamWorkers = false): Promise<Array<{ id: string; activityState: string }>> {
     const { handleSessionsApi } = await import('../api/sessions.js')
     const url = new URL('http://127.0.0.1/api/sessions/live-status')
+    if (includeTeamWorkers) url.searchParams.set('includeTeamWorkers', '1')
     const response = await handleSessionsApi(new Request(url), url, ['api', 'sessions', 'live-status'])
     expect(response.status).toBe(200)
     const body = (await response.json()) as { sessions: Array<{ id: string; activityState: string }> }
@@ -286,6 +287,18 @@ describe('live session activity for the phone session list', () => {
 
     expect(live).toContainEqual({ id: lead, activityState: 'waiting' })
     expect(live.some((entry) => entry.id === worker)).toBe(false)
+  })
+
+  it('includes independently tracked worker turns only for the prevent-sleep query', async () => {
+    const lead = 'power-idle-lead'
+    const worker = 'power-running-worker'
+    __markActiveTurnForTests(worker)
+    spyOn(conversationService, 'getActiveSessions').mockReturnValue([lead, worker])
+    spyOn(conversationService, 'isTeamWorkerSession').mockImplementation((id: string) => id === worker)
+    expect(await getLiveStatus()).toEqual([])
+    expect(await getLiveStatus(true)).toEqual([{ id: worker, activityState: 'running' }])
+    __settleActiveTurnForTests(worker, { type: 'result' })
+    expect(await getLiveStatus(true)).toEqual([])
   })
 
   it('mobile dashboard includes failed sessions and safe permission summaries without tool input', async () => {

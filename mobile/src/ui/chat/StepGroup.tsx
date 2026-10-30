@@ -9,10 +9,9 @@ import {
   groupTail,
   editDiff,
   formatInput,
+  groupIsOpen,
   outputTail,
   stepInput,
-  stepsBehindCaption,
-  summarizeActivity,
   type ChatRow,
   type StepState,
 } from './steps'
@@ -30,6 +29,8 @@ export type StepContext = {
 export type StepUi = {
   expanded: ReadonlySet<string>
   open: ReadonlySet<string>
+  /** 手动收起的运行中步骤组，不随下一步的流式更新重新展开。 */
+  closed: ReadonlySet<string>
   /** 不再使用（摘要行取代了“前面还有 N 步”）；保留字段让聊天页的 state 形状不变。 */
   revealed: ReadonlySet<string>
 }
@@ -363,8 +364,8 @@ export const TurnFold = memo(function TurnFold({
 })
 
 /**
- * 工具调用在消息流里是一行灰字摘要“已读 3 个文件 · 运行 2 条命令 ›”，点一下在原地展开成
- * 步骤时间线。进行中的组同样是摘要行，当前这一步由顶栏下方的状态行显示，这里不重复。
+ * 运行中在消息流里展开完整步骤时间线，包含正在执行的一步；读者仍可手动收起。
+ * 结束后的历史组默认折成“已读 3 个文件 · 运行 2 条命令 ›”，点一下在原地展开。
  */
 export const StepGroup = memo(function StepGroup({
   row,
@@ -377,17 +378,15 @@ export const StepGroup = memo(function StepGroup({
   context: StepContext
   ui: StepUi
   onToggleStep(id: string): void
-  onToggleOpen(key: string): void
+  onToggleOpen(key: string, live?: boolean): void
   /** @deprecated 不再需要“前面还有 N 步”；保留是为了聊天页接线不变。 */
   onReveal?(key: string): void
 }) {
   const colors = useColors()
-  const open = ui.open.has(row.key)
+  const open = groupIsOpen(ui, row.key, row.live)
   const states = new Map(row.steps.map((item) => [item, stepState(item, row.live, context)] as const))
-  const shown = row.live
-    ? stepsBehindCaption(row.steps, (item) => states.get(item) === 'running')
-    : row.steps
-  const segments = shown.length === row.steps.length ? row.segments : summarizeActivity(shown)
+  const shown = row.steps
+  const segments = row.segments
   const tail = groupTail(shown.map((item) => states.get(item) ?? 'done'))
   const label = activityLabel(segments)
   const divider = row.turnEnd ? (
@@ -402,7 +401,7 @@ export const StepGroup = memo(function StepGroup({
         accessibilityLabel={[label, tail?.text].filter(Boolean).join('，')}
         accessibilityHint={open ? '收起步骤' : '展开步骤'}
         accessibilityState={{ expanded: open }}
-        onPress={() => onToggleOpen(row.key)}
+        onPress={() => onToggleOpen(row.key, row.live)}
         hitSlop={4}
         style={({ pressed }) => ({
           minHeight: 32,

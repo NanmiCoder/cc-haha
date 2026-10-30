@@ -107,6 +107,12 @@ jobs:
           SIDECAR_TARGET_TRIPLE: ${{ matrix.target_triple }}
         run: bun run prepare:ripgrep
 
+      - name: Prepare bundled Cloudflare connector
+        working-directory: desktop
+        env:
+          SIDECAR_TARGET_TRIPLE: ${{ matrix.target_triple }}
+        run: bun run prepare:cloudflared
+
       - name: Build sidecars
         working-directory: desktop
         env:

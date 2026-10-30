@@ -2922,6 +2922,7 @@ async function run(): Promise<CommanderCommand> {
         jsonSchema,
         permissionPromptToolName: options.permissionPromptTool,
         allowedTools,
+        computerUse: options.computerUse !== false,
         thinkingConfig,
         maxTurns: options.maxTurns,
         maxBudgetUsd: options.maxBudgetUsd,

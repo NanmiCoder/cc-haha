@@ -62,22 +62,22 @@ export function connectionBlocker(mode: ConnectMode, value: string): string {
   const info = inspectAddress(value)
   if (!info) return ''
   if (mode === 'remote' && info.auth === 'lan')
-    return '这是局域网地址。Tailscale 连接请粘贴电脑生成的 HTTPS 配对链接，或切换到「同一个局域网」。'
+    return '这是局域网地址。远程连接请粘贴电脑生成的 HTTPS 配对链接，或切换到「同一个局域网」。'
   if (mode === 'lan' && info.pairing)
-    return '这是远程配对链接，请切换到「Tailscale」后再连接。'
+    return '这是远程配对链接，请切换到「远程连接」后再连接。'
   return ''
 }
 
 export function formFootnote(mode: ConnectMode, value: string) {
   if (mode === 'remote')
-    return '先让手机和电脑登录同一个 Tailscale 账号并保持连接。配对链接会请求电脑授权，链接过期后请在电脑重新生成。'
+    return '在电脑的「外出连接」中开启 Cloudflare，选择快速连接或固定域名后扫码，再在电脑上批准。二维码过期或快速连接重建后，请重新扫码。'
   if (inspectAddress(value)?.embeddedCredential)
     return '二维码已包含局域网凭据。手机和电脑需要能通过这个地址互相访问。'
   return '手机和电脑要在同一个网络。令牌在电脑的「设置 → 手机连接」里。'
 }
 
 export const addressPlaceholder = (mode: ConnectMode) =>
-  mode === 'remote' ? 'https://电脑.网络.ts.net/remote#pair=…' : 'http://192.168.1.10:3456'
+  mode === 'remote' ? 'https://xxxx.trycloudflare.com/remote#pair=…' : 'http://192.168.1.10:3456'
 
 export const primaryTitle = (mode: ConnectMode) =>
   mode === 'remote' ? '请求电脑授权' : '连接'

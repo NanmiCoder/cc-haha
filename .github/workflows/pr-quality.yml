@@ -333,6 +333,14 @@ jobs:
       - name: Install adapter dependencies
         working-directory: adapters
         run: bun install --frozen-lockfile
+      - name: Cache Cloudflare connector build dependency
+        uses: actions/cache@v4
+        with:
+          path: desktop/src-tauri/binaries/cloudflared-*
+          key: cloudflared-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('desktop/scripts/prepare-cloudflared.ts', 'desktop/scripts/cloudflared-licenses/*') }}
+      - name: Prepare bundled Cloudflare connector build dependency
+        working-directory: desktop
+        run: bun run prepare:cloudflared
       - name: Run desktop native checks
         run: bun run check:native
 

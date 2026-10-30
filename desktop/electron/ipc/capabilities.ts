@@ -327,6 +327,7 @@ const localePreference: Validator = value =>
 
 export const ELECTRON_IPC_VALIDATORS = {
   [ELECTRON_IPC_CHANNELS.appGetVersion]: noPayload,
+  [ELECTRON_IPC_CHANNELS.powerSetPreventSleepWhileRunning]: booleanPayload,
   [ELECTRON_IPC_CHANNELS.appGetLocalePreference]: noPayload,
   [ELECTRON_IPC_CHANNELS.appSetLocalePreference]: localePreference,
   [ELECTRON_IPC_CHANNELS.appGetPreferredSystemLanguages]: noPayload,

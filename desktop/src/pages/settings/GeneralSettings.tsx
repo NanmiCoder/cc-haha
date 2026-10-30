@@ -48,6 +48,7 @@ import { ChatAppearanceSettings } from './ChatAppearanceSettings'
 import { DataMigrationSettings } from './DataMigrationSettings'
 import { TabBehaviorSettings } from './TabBehaviorSettings'
 import { LeanModeSettings } from './LeanModeSettings'
+import { PreventSleepSettings } from './PreventSleepSettings'
 
 /**
  * The General settings panel — the largest of the seven, and the one most often
@@ -1228,6 +1229,8 @@ export function GeneralSettings() {
           )}
         </SettingsGroup>
       </SettingsSection>
+
+      <PreventSleepSettings />
 
       <SettingsSection title={t('settings.general.networkTitle')} description={t('settings.general.networkDescription')}>
         <SettingsGroup>

@@ -17,14 +17,17 @@ const lanQr =
   'http://192.168.1.10:3456/?serverUrl=http%3A%2F%2F192.168.1.10%3A3456&h5Token=fake-lan'
 
 describe('manual connect mode', () => {
-  test('a Tailscale Serve QR switches mode without asking for a LAN token and keeps its port', () => {
-    const link = 'https://workstation.fixture.ts.net:8443/remote#pair=fake-secret'
-    expect(receivedConnection(link)).toEqual({ address: link, name: 'workstation.fixture.ts.net', mode: 'remote' })
+  test.each(['https://workstation-fixture.trycloudflare.com', 'https://phone.fixture.example:8443'])('a Cloudflare QR switches mode without asking for a LAN token: %s', origin => {
+    const link = `${origin}/remote#pair=fake-secret`
+    expect(receivedConnection(link)).toEqual({ address: link, name: new URL(origin).hostname, mode: 'remote' })
     expect(modeForAddress(link, 'lan')).toBe('remote')
     expect(needsToken('remote', link)).toBe(false)
     expect(shouldMaskAddress(link)).toBe(true)
     expect(connectionBlocker('remote', link)).toBe('')
-    expect(formFootnote('remote', link)).toContain('同一个 Tailscale 账号')
+    expect(formFootnote('remote', link)).toContain('快速连接或固定域名')
+    expect(formFootnote('remote', link)).toContain('再在电脑上批准')
+    expect(formFootnote('remote', link)).toContain('重建后，请重新扫码')
+    expect(formFootnote('remote', link)).not.toContain('Tailscale')
   })
   test('a pasted #pair= link switches to public and a LAN QR switches back', () => {
     expect(modeForAddress(pairLink, 'lan')).toBe('remote')
@@ -72,9 +75,9 @@ describe('manual connect fields', () => {
       '手机和电脑要在同一个网络。令牌在电脑的「设置 → 手机连接」里。'
     )
     expect(formFootnote('lan', lanQr)).toContain('二维码已包含局域网凭据')
-    expect(formFootnote('remote', pairLink)).toContain('请求电脑授权')
+    expect(formFootnote('remote', pairLink)).toContain('再在电脑上批准')
     expect(addressPlaceholder('lan')).toBe('http://192.168.1.10:3456')
-    expect(addressPlaceholder('remote')).toBe('https://电脑.网络.ts.net/remote#pair=…')
+    expect(addressPlaceholder('remote')).toBe('https://xxxx.trycloudflare.com/remote#pair=…')
     expect(primaryTitle('lan')).toBe('连接')
     expect(primaryTitle('remote')).toBe('请求电脑授权')
   })

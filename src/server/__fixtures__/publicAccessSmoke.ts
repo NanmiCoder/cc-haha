@@ -6,7 +6,7 @@ import { conversationService } from '../services/conversationService.js'
 import { ProviderService } from '../services/providerService.js'
 import { sessionService } from '../services/sessionService.js'
 
-const origin = 'https://fixture.ngrok-free.app'
+const origin = 'https://fixture.trycloudflare.com'
 const requestFetch = globalThis.fetch
 // A real route must not silently contact a model/provider during this smoke.
 globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {

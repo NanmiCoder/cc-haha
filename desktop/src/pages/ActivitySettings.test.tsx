@@ -202,7 +202,7 @@ describe('ActivitySettings', () => {
     await flushActivityLoad()
 
     expect(getStatsMock).toHaveBeenCalledWith('all')
-    expect(screen.getByRole('heading', { name: 'Personal homepage' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Token usage' })).toBeInTheDocument()
     expect(screen.getByText('cc-haha')).toBeInTheDocument()
     expect(screen.getByAltText('cc-haha avatar')).toHaveAttribute('src', '/app-icon.png')
     expect(screen.getByAltText('cc-haha avatar')).toHaveClass('scale-[1.28]')

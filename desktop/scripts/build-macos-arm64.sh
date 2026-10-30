@@ -171,6 +171,7 @@ else
 fi
 
 echo "[build-macos-arm64] Building sidecars for ${TARGET_TRIPLE}..."
+(cd "${DESKTOP_DIR}" && SIDECAR_TARGET_TRIPLE="${TARGET_TRIPLE}" bun run prepare:cloudflared)
 (cd "${DESKTOP_DIR}" && SIDECAR_TARGET_TRIPLE="${TARGET_TRIPLE}" bun run build:sidecars)
 
 echo "[build-macos-arm64] Building renderer and Electron main/preload bundles..."

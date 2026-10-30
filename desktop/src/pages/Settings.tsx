@@ -5,6 +5,7 @@ import {
   BookOpen,
   Bot,
   Box,
+  ChartNoAxesColumn,
   HeartPulse,
   Info,
   MessageSquare,
@@ -17,7 +18,6 @@ import {
   Server,
   SlidersHorizontal,
   SquareTerminal,
-  UserRound,
   type LucideIcon,
 } from 'lucide-react'
 import { useTranslation, type TranslationKey } from '../i18n'
@@ -51,7 +51,6 @@ export function Settings() {
 type SettingsNavEntry = { tab: SettingsTab; icon: LucideIcon; label: TranslationKey }
 
 const SETTINGS_NAV: SettingsNavEntry[] = [
-  { tab: 'activity', icon: UserRound, label: 'settings.tab.activity' },
   { tab: 'providers', icon: Server, label: 'settings.tab.providers' },
   { tab: 'general', icon: SlidersHorizontal, label: 'settings.tab.general' },
   { tab: 'voice', icon: Mic, label: 'settings.tab.voice' },
@@ -65,6 +64,7 @@ const SETTINGS_NAV: SettingsNavEntry[] = [
   { tab: 'plugins', icon: Puzzle, label: 'settings.tab.plugins' },
   { tab: 'pets', icon: PawPrint, label: 'settings.tab.pets' },
   { tab: 'computerUse', icon: MousePointer2, label: 'settings.tab.computerUse' },
+  { tab: 'activity', icon: ChartNoAxesColumn, label: 'settings.tab.activity' },
   { tab: 'diagnostics', icon: HeartPulse, label: 'settings.tab.diagnostics' },
 ]
 
@@ -75,11 +75,13 @@ export function DesktopSettings() {
   const activeTab = useUIStore((s) => s.activeSettingsTab)
   const setActiveTab = useUIStore((s) => s.setActiveSettingsTab)
   const pendingSettingsTab = useUIStore((s) => s.pendingSettingsTab)
+  const contentRef = useRef<HTMLDivElement>(null)
   const t = useTranslation()
 
   useEffect(() => {
     if (!pendingSettingsTab) return
     setActiveTab(pendingSettingsTab)
+    if (contentRef.current) contentRef.current.scrollTop = 0
     useUIStore.getState().setPendingSettingsTab(null)
   }, [pendingSettingsTab, setActiveTab])
 
@@ -115,7 +117,7 @@ export function DesktopSettings() {
             700px cap left explorer-style panes (memory, skills) cramped in the
             middle of an empty page. One width for every pane, so switching
             panes never moves the header. */}
-        <div className="flex-1 min-w-0 overflow-y-auto [scrollbar-gutter:stable]">
+        <div ref={contentRef} className="flex-1 min-w-0 overflow-y-auto [scrollbar-gutter:stable]">
           <div data-testid="settings-page-frame" className="mx-auto w-full max-w-[1120px] px-10 pt-9 pb-[72px]">
             {activeTab === 'providers' && <ProviderSettings />}
             {activeTab === 'activity' && <ActivitySettings />}

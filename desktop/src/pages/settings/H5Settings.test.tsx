@@ -65,14 +65,14 @@ it('opens on the list even when the providers page was the last one seen', () =>
   render(<H5Settings />)
   expect(screen.getByTestId('h5-settings-providers')).toBeInTheDocument()
 })
-it('opens the personal homepage from the list in browser mode and returns to settings', () => {
+it('opens the token usage page from the list in browser mode and returns to settings', () => {
   render(<H5Settings />)
-  fireEvent.click(screen.getByRole('button', { name: /Personal homepage/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Token usage/ }))
   expect(screen.getByText('Connected personal homepage')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'All settings' }))
-  expect(screen.getByRole('button', { name: /Personal homepage/ })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /Token usage/ })).toBeInTheDocument()
 })
-it('honours a link to the personal homepage without changing the remembered desktop settings section', () => {
+it('honours a link to the token usage page without changing the remembered desktop settings section', () => {
   useUIStore.setState({ activeSettingsTab: 'general', pendingSettingsTab: 'activity' })
   render(<H5Settings />)
   expect(screen.getByText('Connected personal homepage')).toBeInTheDocument()

@@ -54,7 +54,7 @@ function server() {
     | undefined
   const fetch: FetchAdapter = async (url, options) => {
     const path = new URL(url).pathname
-    const body = JSON.parse(options.body ?? '{}')
+    const body = JSON.parse(typeof options.body === 'string' ? options.body : '{}')
     await before?.(options.method, body, path)
     log.push(`${options.method}:${body.hostId ?? 'single'}:${path}`)
     let status = 200

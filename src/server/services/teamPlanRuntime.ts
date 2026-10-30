@@ -1075,6 +1075,11 @@ export function isTeamPlanRuntimeActive(planId: string): boolean {
   return !!launch && !launch.stopped
 }
 
+/** Runtime ownership outlives a lead CLI; callers still check whether its team has work. */
+export function listTeamPlanRuntimeParentIds(): string[] {
+  return [...new Set([...launches.values()].map(launch => launch.parentId))]
+}
+
 /** Whether a lead's approved team has a member mid-turn (keeps an unattended lead alive). */
 export function hasActiveTeamWorkForParent(parentSessionId: string): boolean {
   for (const launch of launches.values()) {

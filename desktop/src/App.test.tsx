@@ -16,6 +16,8 @@ vi.mock('./stores/hiddenSessionRelease', () => ({ installHiddenSessionRelease })
 
 import { App } from './App'
 import { useChatStore } from './stores/chatStore'
+import { usePowerSettingsStore } from './stores/powerSettingsStore'
+import { browserHost } from './lib/desktopHost/browserHost'
 
 describe('App', () => {
   afterEach(() => {
@@ -23,6 +25,21 @@ describe('App', () => {
     shell.layout = 'desktop'
     installHiddenSessionRelease.mockClear()
     uninstallHiddenSessionRelease.mockClear()
+    Reflect.deleteProperty(window, 'desktopHost')
+    vi.restoreAllMocks()
+  })
+
+  it('restores the power preference when the desktop app starts without opening settings', () => {
+    window.desktopHost = { ...browserHost, kind: 'electron', isDesktop: true }
+    const restore = vi.spyOn(usePowerSettingsStore.getState(), 'restore').mockResolvedValue(undefined)
+    render(<App />)
+    expect(restore).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not restore native power settings in a browser', () => {
+    const restore = vi.spyOn(usePowerSettingsStore.getState(), 'restore').mockResolvedValue(undefined)
+    render(<App />)
+    expect(restore).not.toHaveBeenCalled()
   })
 
   // Without it, a tab closed with "Keep running" — or a session the phone has

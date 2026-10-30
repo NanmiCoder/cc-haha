@@ -86,7 +86,20 @@
         {
           "photosPermission": "选择图片和截图，作为任务材料发送到你连接的电脑。",
           "cameraPermission": "拍摄照片，作为任务材料发送到你连接的电脑。",
-          "microphonePermission": false
+          "microphonePermission": "仅在你点击语音输入后录音，音频会发送到你连接的电脑进行转写。"
+        }
+      ],
+      [
+        "react-native-audio-api",
+        {
+          "iosMicrophonePermission": "仅在你点击语音输入后录音，音频会发送到你连接的电脑进行转写。",
+          "iosBackgroundMode": false,
+          "androidPermissions": [
+            "android.permission.RECORD_AUDIO"
+          ],
+          "androidForegroundService": false,
+          "androidFSTypes": [],
+          "disableFFmpeg": true
         }
       ]
     ],

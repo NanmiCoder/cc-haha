@@ -9,7 +9,8 @@ import { runSheetReasons, teamNote } from './runLogic'
 import { useTeamsSetting } from './useTeamsSetting'
 
 /**
- * 「＋」里「运行方式」那一组：Agent 团队（只对下一条消息生效）和操作电脑（整台电脑的开关）。
+ * 「＋」里「运行方式」那一组：Agent 团队和操作电脑都选择进下一条消息。
+ * 操作电脑的全局授权只在首次启用时确认，与本条选择独立。
  * 和桌面端一致，这两个开关属于「这次带什么」，不放在模型和权限的底单里。
  * `visible` 为真时重新读取电脑上的团队设置和电脑授权状态。
  */
@@ -20,6 +21,8 @@ export function RunToggles({
   onTeam,
   lean,
   computer,
+  computerSelected,
+  onComputerSelected,
   accepted,
   onAccept,
 }: {
@@ -29,6 +32,8 @@ export function RunToggles({
   onTeam(value: boolean): void
   lean: boolean
   computer: ComputerUse
+  computerSelected: boolean
+  onComputerSelected(value: boolean): void
   /** 费用确认已经点过「使用团队」。状态在「＋」底单这一层，进二级页、搜索再返回不会重置。 */
   accepted: boolean
   onAccept(): void
@@ -67,7 +72,7 @@ export function RunToggles({
           <Switch label="Agent 团队" value={team} disabled={!!reasons.team} onValueChange={toggleTeam} />
         </View>
         <View style={{ height: 1, backgroundColor: colors.hair, marginLeft: 14 }} />
-        <ComputerUseRow computer={computer} />
+        <ComputerUseRow computer={computer} selected={computerSelected} onSelected={onComputerSelected} />
       </View>
       <Sheet visible={teamConsent} onClose={() => setTeamConsent(false)} title="使用 Agent 团队">
         <Text style={{ fontSize: 15, lineHeight: 23, color: colors.ink }}>

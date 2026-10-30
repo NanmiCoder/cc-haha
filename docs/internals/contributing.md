@@ -24,6 +24,16 @@ cd desktop
 bun install
 ```
 
+首次运行桌面开发版或 `check:native` 前，在 `desktop/` 运行一次 `bun run prepare:cloudflared`。它下载固定版本的官方连接程序、校验 SHA-256，并放入被 Git 忽略的本机缓存；普通用户的安装包已包含该程序。原生检查只验证和使用已有缓存，不会下载；跨平台构建可传 `--target-triple` 选择目标平台。
+
+下载会显示进度，单次最多 10 分钟，连续 60 秒没有进展会中止，临时网络错误最多尝试 3 次。构建命令使用终端的 `HTTPS_PROXY` / `https_proxy`，不会读取桌面应用内的代理设置；需要代理时，在同一终端设置，例如：
+
+```bash
+HTTPS_PROXY=http://127.0.0.1:7890 bun run prepare:cloudflared
+```
+
+请将示例地址改为自己的 HTTP 代理地址。如果当前网络无法下载，可以从报错中的官方地址下载对应版本和平台的文件，再用 `CC_HAHA_CLOUDFLARED_ARCHIVE=/绝对路径/下载文件 bun run prepare:cloudflared` 导入。离线导入仍会校验固定的 SHA-256，不接受其他版本或未校验的可执行文件。
+
 如果改动涉及 `adapters/`，或者要运行 `check:adapters` / `check:native`，安装 adapter 依赖：
 
 ```bash

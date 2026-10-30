@@ -42,7 +42,7 @@ test('checkpoint APIs bind to host, exact message and explicit rewind mode', asy
     'fixture-only',
     {
       fetch: async (url, options) => {
-        calls.push({ url, body: options.body })
+        calls.push({ url, body: typeof options.body === 'string' ? options.body : undefined })
         return {
           ok: true,
           status: 200,
