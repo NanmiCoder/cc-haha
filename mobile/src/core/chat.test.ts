@@ -255,6 +255,38 @@ describe('real WebSocket event state transitions', () => {
     expect(state.items.map((item) => item.text)).toEqual(['Compacted context'])
   })
 
+  test('team plan updates for this session signal a re-read; others and malformed ones do not', () => {
+    const update = (patch: Record<string, unknown> = {}) =>
+      parseServerEvent(JSON.stringify({
+        type: 'team_plan_updated', teamName: 'taskboard', sessionId: 'session',
+        planId: 'p1', incarnationId: 'i1', revision: 2, state: 'review_pending', ...patch,
+      }))
+    expect(update({ revision: '2' })).toBeNull()
+    expect(update({ sessionId: undefined })).toBeNull()
+    const pending = run([update()!])
+    expect(pending.teamPlanSignal).toBe('p1:2:review_pending')
+    // 同一版本重复推送不产生新状态，避免无谓地重读。
+    expect(chatReducer(pending, update()!)).toBe(pending)
+    expect(chatReducer(pending, update({ revision: 3, state: 'launching' })!).teamPlanSignal).toBe('p1:3:launching')
+    expect(chatReducer(pending, update({ sessionId: 'other', revision: 9 })!)).toBe(pending)
+    expect(pending.items).toEqual([])
+  })
+
+  test('a deleted team of this session signals a re-read, since its plan is gone too', () => {
+    const deleted = (patch: Record<string, unknown> = {}) =>
+      parseServerEvent(JSON.stringify({ type: 'team_deleted', teamName: 'taskboard', incarnationId: 'i1', leadSessionId: 'session', ...patch }))
+    expect(deleted({ teamName: 7 })).toBeNull()
+    const pending = run([parseServerEvent(JSON.stringify({
+      type: 'team_plan_updated', teamName: 'taskboard', sessionId: 'session',
+      planId: 'p1', incarnationId: 'i1', revision: 2, state: 'review_pending',
+    }))!])
+    const gone = chatReducer(pending, deleted()!)
+    expect(gone.teamPlanSignal).not.toBe(pending.teamPlanSignal)
+    expect(chatReducer(gone, deleted()!)).toBe(gone)
+    expect(chatReducer(pending, deleted({ leadSessionId: 'other' })!)).toBe(pending)
+    expect(gone.items).toEqual([])
+  })
+
   test('unknown or malformed task notifications cannot remove active IDs', () => {
     const state = run([
       {

@@ -202,6 +202,19 @@ export function parseServerEvent(raw: unknown): ServerEvent | null {
     case 'task_update':
       valid = string(v.taskId) && string(v.status)
       break
+    case 'team_plan_updated':
+      valid =
+        string(v.sessionId) &&
+        string(v.planId) &&
+        typeof v.revision === 'number' &&
+        string(v.state)
+      break
+    case 'team_deleted':
+      valid =
+        string(v.teamName) &&
+        (v.leadSessionId === undefined || string(v.leadSessionId)) &&
+        (v.incarnationId === undefined || string(v.incarnationId))
+      break
   }
   return valid ? (value as ServerEvent) : null
 }
@@ -920,6 +933,18 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
       return event.sessionId === state.sessionId
         ? { ...state, title: event.title }
         : state
+    // 方案本身走 REST 读取；这里只记下“变了”，让审批入口重新读一次。
+    case 'team_plan_updated': {
+      if (event.sessionId !== state.sessionId) return state
+      const signal = `${event.planId}:${event.revision}:${event.state}`
+      return signal === state.teamPlanSignal ? state : { ...state, teamPlanSignal: signal }
+    }
+    // 团队目录被删时方案也没了；删得太快时电脑来不及推 team_plan_updated，只有这一条。
+    case 'team_deleted': {
+      if (event.leadSessionId && event.leadSessionId !== state.sessionId) return state
+      const signal = `deleted:${event.teamName}:${event.incarnationId ?? event.createdAt ?? ''}`
+      return signal === state.teamPlanSignal ? state : { ...state, teamPlanSignal: signal }
+    }
     case 'system_notification': {
       const data = record(event.data)
       const taskId = string(data?.task_id) ? data.task_id.trim() : ''

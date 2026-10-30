@@ -15,6 +15,7 @@ import type {
   PermissionMode,
 } from '../../src/server/ws/events'
 import type { HistoryEntry, Session } from '../src/core/types'
+import type { TeamPlanRecord } from '../src/core/teamPlan'
 import type {
   BackgroundTask,
   Checkpoint,
@@ -145,6 +146,47 @@ export function startFixtureServer({
     scheduleState: task.enabled === false ? (task.scheduleState === 'completed' ? 'completed' : 'paused') : 'active',
   })
   const branches = new Set(['main', 'feat/qr-pair', 'fix/ws-replay'])
+  /** Agent 团队方案（每个会话至多一份），由 team / team-failed / team-interrupted 场景放入。 */
+  const teamPlans = new Map<string, TeamPlanRecord>()
+  function seedTeamPlan(sessionId: string, state: TeamPlanRecord['state']) {
+    const runtime = (modelId: string, effortLevel?: string) => ({ providerId: activeId, modelId, ...(effortLevel ? { effortLevel } : {}) })
+    const plan: TeamPlanRecord = {
+      schemaVersion: 1,
+      planId: `fixture-team-${Date.now()}`,
+      sessionId,
+      teamName: 'taskboard-team',
+      incarnationId: 'fixture-incarnation',
+      revision: 2,
+      state,
+      workDir: FIXTURE_ROOT,
+      leaderRuntime: runtime(currentModel),
+      agentCatalog: {
+        'general-purpose': { systemPrompt: '', description: '通用成员，能读写代码、跑命令' },
+        reviewer: { systemPrompt: '', description: '只读审查，指出问题不改代码' },
+      },
+      members: [
+        { id: 'backend', name: 'backend-dev', agentType: 'general-purpose', difficulty: 'medium', reason: '独立实现 FastAPI + SQLite CRUD 与 pytest 测试', prompt: '你负责 FastAPI 后端。先读 CONTRACT.md，按约定实现 /api/tasks 的增删改查，写 pytest 覆盖排序与校验。完成后把接口说明发给 frontend-dev。', runtime: runtime(currentModel), suggestedRuntime: runtime(currentModel) },
+        { id: 'frontend', name: 'frontend-dev', agentType: 'general-purpose', difficulty: 'medium', reason: 'React + Vite 单页，列表、筛选和编辑表单', prompt: '你负责 React + Vite 前端。等 backend-dev 的接口说明，再实现任务列表、筛选和编辑表单。', runtime: runtime(currentModel), suggestedRuntime: runtime(currentModel) },
+        { id: 'qa', name: 'qa-reviewer', agentType: 'reviewer', difficulty: 'low', reason: '端到端跑一遍，核对契约与边界输入', prompt: '前后端都完成后，启动两个服务做端到端检查，列出与 CONTRACT.md 不符的地方。', runtime: runtime(MODELS[1]!.id, 'high'), suggestedRuntime: runtime(currentModel) },
+      ],
+      tasks: [
+        { id: 't1', subject: '实现后端 API 与测试', description: 'FastAPI + SQLite，覆盖创建、更新、删除和排序。', ownerId: 'backend', dependencies: [] },
+        { id: 't2', subject: '实现前端页面', description: '任务列表、状态筛选、编辑表单。', ownerId: 'frontend', dependencies: ['t1'] },
+        { id: 't3', subject: '端到端验收', ownerId: 'qa', dependencies: ['t1', 't2'] },
+      ],
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      ...(state === 'launch_failed' ? { launch: { status: 'failed' as const, error: 'Teammate frontend-dev failed to start: CLI exited with code 1\nstderr: fixture provider rejected the model' } } : {}),
+      ...(state === 'interrupted' ? { launch: { status: 'failed' as const, error: 'The worker runtime was interrupted. Started work will not be replayed.' } } : {}),
+    }
+    teamPlans.set(sessionId, plan)
+    announceTeamPlan(plan)
+  }
+  function announceTeamPlan(plan: TeamPlanRecord) {
+    const session = sessions.get(plan.sessionId)
+    if (session)
+      emit(session, { type: 'team_plan_updated', teamName: plan.teamName, sessionId: plan.sessionId, planId: plan.planId, incarnationId: plan.incarnationId, revision: plan.revision, state: plan.state })
+  }
   const providers: Record<string, unknown>[] = [
     {
       id: activeId,
@@ -1435,6 +1477,46 @@ export function startFixtureServer({
         if (!sessions.has(id)) return fail('Session not found', 404, 'NOT_FOUND')
         return json({ tasks: fixtureTasks(id) })
       }
+      const planSession = path.match(/^\/api\/teams\/session\/([^/]+)\/plan$/)
+      if (planSession && method === 'GET')
+        return json({ plan: teamPlans.get(decodeURIComponent(planSession[1]!)) ?? null })
+      const planAction = path.match(/^\/api\/teams\/([^/]+)\/plan(?:\/(approve|return|cancel|retry|end))?$/)
+      if (planAction && (method === 'PATCH' || (method === 'POST' && planAction[2]))) {
+        const plan = teamPlans.get(String(body.sessionId))
+        if (!plan || plan.teamName !== decodeURIComponent(planAction[1]!) || plan.planId !== body.planId)
+          return fail('Plan not found', 404, 'TEAM_PLAN_CONFLICT')
+        if (plan.revision !== body.expectedRevision)
+          return fail('Plan changed; refresh before continuing', 409, 'TEAM_PLAN_CONFLICT')
+        const next: TeamPlanRecord = { ...plan, revision: plan.revision + 1, updatedAt: Date.now() }
+        if (method === 'PATCH') {
+          if (plan.state !== 'review_pending') return fail('Plan is not editable', 409, 'TEAM_PLAN_CONFLICT')
+          for (const edit of (Array.isArray(body.members) ? body.members : []).map(object)) {
+            next.members = next.members.map((member) => member.id !== edit.id ? member : {
+              ...member,
+              ...(typeof edit.agentType === 'string' ? { agentType: edit.agentType } : {}),
+              ...(edit.runtime ? { runtime: object(edit.runtime) as TeamPlanRecord['leaderRuntime'], runtimeSource: 'human' } : {}),
+            })
+          }
+          for (const edit of (Array.isArray(body.tasks) ? body.tasks : []).map(object))
+            next.tasks = next.tasks.map((task) => task.id === edit.id ? { ...task, ownerId: String(edit.ownerId) } : task)
+        } else {
+          const action = planAction[2]!
+          const allowed: Record<string, TeamPlanRecord['state'][]> = {
+            approve: ['review_pending'], return: ['review_pending', 'draft'], cancel: ['review_pending', 'launch_failed', 'draft'], retry: ['launch_failed'], end: ['interrupted'],
+          }
+          if (!allowed[action]!.includes(plan.state)) return fail(`Cannot ${action} a ${plan.state} plan`, 409, 'TEAM_PLAN_CONFLICT')
+          if (action === 'approve' && next.tasks.some((task) => !next.members.some((member) => member.id === task.ownerId)))
+            return fail('Every task needs an assigned member', 400, 'TEAM_PLAN_CONFLICT')
+          if (action === 'approve' && next.members.some((member) => !next.tasks.some((task) => task.ownerId === member.id)))
+            return fail('Every member needs an assigned task', 400, 'TEAM_PLAN_CONFLICT')
+          next.state = action === 'approve' ? 'running' : action === 'return' ? 'draft' : action === 'retry' ? 'review_pending' : 'cancelled'
+          if (action === 'retry') delete next.launch
+          if (typeof body.feedback === 'string') next.feedback = body.feedback
+        }
+        teamPlans.set(plan.sessionId, next)
+        announceTeamPlan(next)
+        return json({ plan: next })
+      }
       const teamSession = path.match(/^\/api\/teams\/session\/([^/]+)\/workbench$/)
       if (teamSession && method === 'GET') {
         const id = decodeURIComponent(teamSession[1]!)
@@ -2152,12 +2234,19 @@ export function startFixtureServer({
             'failed',
             'stalled',
             'edit',
+            'team',
+            'team-failed',
+            'team-interrupted',
           ].includes(String(body.kind))
         )
           return fail(
-            'Specify an existing sessionId and approval/question/plan/edit/idle/failed/stalled kind'
+            'Specify an existing sessionId and approval/question/plan/edit/idle/failed/stalled/team/team-failed/team-interrupted kind'
           )
         stop(session)
+        if (String(body.kind).startsWith('team')) {
+          seedTeamPlan(session.summary.id, body.kind === 'team' ? 'review_pending' : body.kind === 'team-failed' ? 'launch_failed' : 'interrupted')
+          return json({ ok: true, sessionId: session.summary.id, ...mobileActivity(session) })
+        }
         delete session.stalled
         if (body.kind === 'failed') session.terminalOutcome = 'failed'
         else if (body.kind === 'stalled') {

@@ -44,6 +44,8 @@ test.each(['ios', 'android'])('%s: short conversations keep both messages mounte
     const views = [
       [${JSON.stringify(import.meta.resolve('../KeyboardViewport'))}, ['KeyboardViewport']],
       [${JSON.stringify(import.meta.resolve('../Approval'))}, ['Approval']],
+      [${JSON.stringify(import.meta.resolve('../team/TeamPlanCard'))}, ['TeamPlanCard']],
+      [${JSON.stringify(import.meta.resolve('../team/TeamPlanSheet'))}, ['TeamPlanSheet']],
       [${JSON.stringify(import.meta.resolve('../ChatComposer'))}, ['ChatComposer']],
       [${JSON.stringify(import.meta.resolve('../Message'))}, ['Message']],
       [${JSON.stringify(import.meta.resolve('../compose/RunSheet'))}, ['RunSheet']],
@@ -59,6 +61,7 @@ test.each(['ios', 'android'])('%s: short conversations keep both messages mounte
     ]
     for (const [path, names] of views) mock.module(path, () => Object.fromEntries(names.map(name => [name, name])))
     mock.module(${JSON.stringify(import.meta.resolve('../activity/useNow'))}, () => ({ useNow: () => 1 }))
+    mock.module(${JSON.stringify(import.meta.resolve('../team/useTeamPlan'))}, () => ({ useTeamPlan: () => ({ plan: null, pending: null, error: '' }) }))
     mock.module(${JSON.stringify(import.meta.resolve('./ContextSheet'))}, () => ({
       ContextMenuHeader: 'ContextMenuHeader', ContextSheet: 'ContextSheet', useContextInspection: () => ({}),
     }))
