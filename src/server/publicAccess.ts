@@ -404,7 +404,7 @@ export class PublicAccessServer {
         }
         if (!this.rate(`api:${device.id}`, 1200)) return json({ error: 'Too many requests' }, 429)
         if (url.pathname.startsWith('/ws/')) {
-          const upgraded = server.upgrade(request, { data: { sessionId: url.pathname.split('/').pop()!, connectedAt: this.now(), channel: 'client', clientKind: 'full', sdkToken: null, serverPort: this.deps.serverPort(), serverHost: '127.0.0.1', remoteDeviceId: device.id } })
+          const upgraded = server.upgrade(request, { data: { sessionId: url.pathname.split('/').pop()!, connectedAt: this.now(), channel: 'client', clientKind: 'full', sdkToken: null, serverPort: this.deps.serverPort(), serverHost: '127.0.0.1', remoteDeviceId: device.id, mediaRefs: url.searchParams.get('media') === 'ref' } })
           return upgraded ? undefined : json({ error: 'Upgrade failed' }, 400)
         }
         const response = await this.deps.handleApiRequest(request, url, { remoteBrowser: true, remoteDeviceId: device.id, remoteDeviceExpiresAt: device.expiresAt })

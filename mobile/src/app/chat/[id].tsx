@@ -73,6 +73,8 @@ import {
 import { errorText } from '../../ui/theme'
 import { buildChatRows, toggleGroupOpen, visibleChatRows, type ChatRow } from '../../ui/chat/steps'
 import { StepGroup, TurnFold, type StepContext, type StepUi } from '../../ui/chat/StepGroup'
+import { ToolImageLoaderContext } from '../../ui/chat/toolImageContext'
+import { createToolImageLoader } from '../../core/toolImages'
 import { QueuedMessages } from '../../ui/chat/QueuedMessages'
 import { OlderHistoryStatus } from '../../ui/chat/OlderHistoryStatus'
 import { shouldPrefetchOlder } from '../../ui/chat/olderHistory'
@@ -153,6 +155,8 @@ function ChatSession({
   notificationRequestId?: string
 }) {
   const { client, host, credential, error: connectionError } = useConnection(hostId)
+  // 工具结果里的图片按引用下载，缓存跟着这台电脑的连接走。
+  const toolImages = useMemo(() => (client ? createToolImageLoader(client) : null), [client])
   const { drafts } = useApp()
   const colors = useColors()
   const insets = useSafeAreaInsets()
@@ -1018,7 +1022,7 @@ function ChatSession({
       row.kind === 'message' ? (
         <Message item={row.item} onLongPress={longPress} />
       ) : row.kind === 'turn' ? (
-        <TurnFold label={row.label} open={ui.open.has(row.key)} onToggle={() => toggleOpen(row.key)} />
+        <TurnFold label={row.label} images={row.images} open={ui.open.has(row.key)} onToggle={() => toggleOpen(row.key)} />
       ) : (
         <StepGroup
           row={row}
@@ -1288,6 +1292,7 @@ function ChatSession({
         : undefined
 
   return (
+    <ToolImageLoaderContext.Provider value={toolImages}>
     <ScreenView>
       <NavBar
         floating
@@ -1694,5 +1699,6 @@ function ChatSession({
         onConfirm={() => void resendEdit()}
       />
     </ScreenView>
+    </ToolImageLoaderContext.Provider>
   )
 }

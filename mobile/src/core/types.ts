@@ -116,6 +116,21 @@ export type ChatItem = {
   awaitingReplay?: boolean
   /** Agent 团队里发来这条消息的成员（只在成员页显示）。 */
   teammateFrom?: string
+  /** 工具结果里的图片（读取截图等）。 */
+  images?: ToolImage[]
+}
+/**
+ * 工具结果里的一张图。电脑按引用给出地址，用到时才下载；
+ * 不支持引用的旧版电脑仍会内联 base64，直接显示。
+ */
+export type ToolImage = {
+  mimeType: string
+  /** 电脑上的读取地址（/api/sessions/:id/tool-images/...）。 */
+  url?: string
+  /** 旧版电脑内联的 base64。 */
+  data?: string
+  width?: number
+  height?: number
 }
 /** 子 Agent 最近的一步工具调用（实时事件里能拿到的部分）。 */
 export type SubagentStep = {

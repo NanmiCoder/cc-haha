@@ -57,6 +57,25 @@ describe('step grouping', () => {
     expect(group.kind === 'steps' && activityLabel(group.segments)).toBe('思考 · 已读 1 个文件 · 运行 1 条命令')
   })
 
+  test('a finished turn keeps the screenshots it read visible on its fold line', () => {
+    const shot = { mimeType: 'image/png', url: '/api/sessions/s/tool-images/r1/0', width: 1920, height: 1139 }
+    const items: ChatItem[] = [
+      user('u1'),
+      { ...tool('r1', 'Read', { file_path: '/tmp/todo/shot-final.png' }), images: [shot] },
+      tool('b1', 'Bash', { command: 'ls' }),
+      assistant('a1'),
+    ]
+    const settled = buildChatRows(items, false)
+    expect(rowKinds(settled)).toEqual(['message', 'turn', 'steps', 'message'])
+    const fold = settled[1]
+    expect(fold.kind === 'turn' && fold.images).toEqual([{ image: shot, name: 'shot-final.png' }])
+    // While the turn runs there is no fold; the step group shows the image itself.
+    expect(buildChatRows(items, true).some((row) => row.kind === 'turn')).toBe(false)
+    // Turns without images carry no image list.
+    const plain = buildChatRows([user('u1'), tool('b1', 'Bash', {}), assistant('a1')], false)
+    expect(plain.find((row) => row.kind === 'turn')).not.toHaveProperty('images')
+  })
+
   test('only groups after the last user message are live while the turn runs', () => {
     const items = [
       user('u1'),

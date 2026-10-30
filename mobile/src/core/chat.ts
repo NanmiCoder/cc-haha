@@ -4,6 +4,7 @@ import type {
   HistoryEntry,
   HistoryPage,
   ServerEvent,
+  ToolImage,
 } from './types'
 import {
   applyImageMetadata,
@@ -220,6 +221,32 @@ export function parseServerEvent(raw: unknown): ServerEvent | null {
   return valid ? (value as ServerEvent) : null
 }
 
+const TOOL_IMAGE_URL = /^\/api\/sessions\/[^/?#]+\/tool-images\/[^/?#]+\/\d+$/
+
+/** 工具结果里的图片：电脑给的引用，或旧版电脑内联的 base64。 */
+export function toolResultImages(value: unknown): ToolImage[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((block): ToolImage[] => {
+    const b = record(block)
+    const source = record(b?.source)
+    if (b?.type !== 'image' || !source || !string(source.media_type)) return []
+    const size = {
+      ...(typeof source.width === 'number' && source.width > 0 ? { width: source.width } : {}),
+      ...(typeof source.height === 'number' && source.height > 0 ? { height: source.height } : {}),
+    }
+    if (source.type === 'ref' && string(source.url) && TOOL_IMAGE_URL.test(source.url))
+      return [{ mimeType: source.media_type, url: source.url, ...size }]
+    if (source.type === 'base64' && string(source.data))
+      return [{ mimeType: source.media_type, data: source.data }]
+    return []
+  })
+}
+
+function resultImages(value: unknown): { images?: ToolImage[] } {
+  const images = toolResultImages(value)
+  return images.length ? { images } : {}
+}
+
 function resultText(value: unknown): string {
   if (string(value)) return value
   if (Array.isArray(value))
@@ -399,6 +426,7 @@ export function normalizeHistory(
         const result = {
           result: block.content,
           text: resultText(block.content),
+          ...resultImages(block.content),
           isError: block.is_error === true,
           pending: false,
         }
@@ -770,6 +798,7 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
       const patch = {
         result: event.content,
         text: resultText(event.content),
+        ...resultImages(event.content),
         isError: event.isError,
         pending: false,
       }

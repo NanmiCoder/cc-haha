@@ -52,7 +52,7 @@ describe('desktop connection contracts', () => {
     const parsed = parseConnectionInput(`${origin}/remote#pair=fixture-pair`)
     expect(parsed).toEqual({ url: origin, auth: 'remote', pairSecret: 'fixture-pair' })
     expect(buildSocketOptions({ ...remote, url: parsed.url }, 'native_fixture', 'session', 'native'))
-      .toEqual({ url: `${origin.replace('https:', 'wss:')}/ws/session`, headers: { Authorization: 'Bearer native_fixture', Origin: origin } })
+      .toEqual({ url: `${origin.replace('https:', 'wss:')}/ws/session?media=ref`, headers: { Authorization: 'Bearer native_fixture', Origin: origin } })
   })
 
   test.each([
@@ -101,13 +101,13 @@ describe('desktop connection contracts', () => {
     expect(
       buildSocketOptions(remote, 'native-token', 'session-id', 'native')
     ).toEqual({
-      url: 'wss://fixture.invalid/ws/session-id',
+      url: 'wss://fixture.invalid/ws/session-id?media=ref',
       headers: { Authorization: 'Bearer native-token', Origin: remote.url },
     })
     expect(
       buildSocketOptions(lan, 'fake-token', 'session-id', 'native')
     ).toEqual({
-      url: 'ws://192.168.1.12:3456/ws/session-id',
+      url: 'ws://192.168.1.12:3456/ws/session-id?media=ref',
       headers: { Authorization: 'Bearer fake-token', Origin: '' },
     })
   })
@@ -143,7 +143,7 @@ describe('desktop connection contracts', () => {
 
   test('only the LAN browser preview uses the existing token query contract', () => {
     expect(buildSocketOptions(lan, 'fake-token', 'session-id', 'web')).toEqual({
-      url: 'ws://192.168.1.12:3456/ws/session-id?token=fake-token',
+      url: 'ws://192.168.1.12:3456/ws/session-id?media=ref&token=fake-token',
     })
     expect(() =>
       buildSocketOptions(remote, 'native-token', 'session-id', 'web')

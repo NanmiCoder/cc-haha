@@ -15,6 +15,7 @@ import { recoverBoundedSessionHistory, type SessionHistoryRecovery } from './ses
 import { readScheduledTaskMetadata, scheduledTaskDisplayText, type ScheduledTaskMetadata } from '../../utils/scheduledTaskMessage.js'
 import { streamSessionMetadata } from './sessionMetadataReader.js'
 import { HISTORY_SEMANTIC_RECORD_BYTES, HISTORY_PAGE_BYTES, displayPreview, readBoundedHistoryPage, streamBoundedHistory, withHistoryReadBudget, type HistoryPageInfo } from './boundedSessionHistory.js'
+import { measureEntryWithMediaRefs, projectMessageMedia } from './toolImageMedia.js'
 import { constants, createReadStream, createWriteStream, type Stats } from 'node:fs'
 import { createHash } from 'node:crypto'
 import * as fs from 'node:fs/promises'
@@ -4421,7 +4422,11 @@ export class SessionService {
     return { entries: visibleEntries, contextScanBytes: context.scannedBytes }
   }
 
-  async getSessionHistoryPage(sessionId: string, options: { cursor?: string; limit?: number; signal?: AbortSignal; full?: boolean; projectContext?: boolean } = {}): Promise<{
+  async getSessionHistoryPage(sessionId: string, options: {
+    cursor?: string; limit?: number; signal?: AbortSignal; full?: boolean; projectContext?: boolean
+    /** Replace tool-result image bytes with references and page by the projected size. */
+    mediaRefs?: boolean
+  } = {}): Promise<{
     messages: MessageEntry[]
     taskNotifications: SessionTaskNotification[]
     page: HistoryPageInfo
@@ -4439,7 +4444,8 @@ export class SessionService {
       }
       throw ApiError.notFound(`Session not found: ${sessionId}`)
     }
-    const result = await readBoundedHistoryPage(found.filePath, options)
+    const mediaRefs = options.mediaRefs === true && !options.full
+    const result = await readBoundedHistoryPage(found.filePath, mediaRefs ? { ...options, measure: measureEntryWithMediaRefs } : options)
     // A referenced-session read only needs the records on this page. Building
     // the ownership index scans the transcript from the start, which is what
     // stalls the shared server while a model pages backward.
@@ -4447,7 +4453,12 @@ export class SessionService {
       ? { entries: result.entries.map(item => item.entry as RawEntry), contextScanBytes: 0 }
       : await this.projectHistoryPageEntries(found.filePath, result, options.signal)
     const entries = result.entries.map(item => item.entry as RawEntry)
-    const response = { messages: this.entriesToMessages(projection.entries), taskNotifications: this.taskNotificationsFromEntries(entries), page: { ...result.page, contextScanBytes: projection.contextScanBytes } }
+    const messages = this.entriesToMessages(projection.entries)
+    const response = {
+      messages: mediaRefs ? messages.map(message => projectMessageMedia(message, sessionId)) : messages,
+      taskNotifications: this.taskNotificationsFromEntries(entries),
+      page: { ...result.page, contextScanBytes: projection.contextScanBytes },
+    }
     // The full-history path is already bounded by the reader's own byte budget,
     // so only the single-record page path needs the "one oversized record"
     // envelope check.

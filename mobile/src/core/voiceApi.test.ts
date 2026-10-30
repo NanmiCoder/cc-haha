@@ -52,7 +52,8 @@ test('transcription sends raw WAV with encoded provider/language and a cold-star
     }
     const client = new ApiClient(host, 'fixture-token', { fetch, timeoutMs: 1 })
     expect(await transcribeVoice(client, bytes, { providerId: 'provider /+?', language: 'zh' })).toEqual(transcript)
-    expect(timeouts).toEqual([240_000])
+    // Waiting for the answer and reading its body both keep the cold-start budget.
+    expect(timeouts).toEqual([240_000, 240_000])
   } finally { timer.mockRestore() }
 })
 
