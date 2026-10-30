@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ComponentRef } from 'react'
-import {
-  Keyboard,
-  KeyboardAvoidingView,
-  Platform,
-  View,
-  useWindowDimensions,
-  type ViewProps,
-} from 'react-native'
-import { bottomAlignedKeyboardOffset, keyboardOverlap } from './keyboardLayout'
+import { Dimensions, Keyboard, Platform, View, type ViewProps } from 'react-native'
+import { IOS_KEYBOARD_EVENTS, iosKeyboardInset, keyboardOverlap } from './keyboardLayout'
 
 /** Android edge-to-edge windows can overlay the IME even with adjustResize enabled. */
 function AndroidKeyboardViewport({ style, onLayout, ...props }: ViewProps) {
@@ -52,22 +45,35 @@ function AndroidKeyboardViewport({ style, onLayout, ...props }: ViewProps) {
   )
 }
 
-/** Every caller fills its screen to the bottom, including native iOS page sheets. */
-function IosKeyboardViewport({ onLayout, ...props }: ViewProps) {
-  const { height: windowHeight } = useWindowDimensions()
-  const [frame, setFrame] = useState({ y: 0, height: windowHeight })
-  return (
-    <KeyboardAvoidingView
-      {...props}
-      behavior="padding"
-      keyboardVerticalOffset={bottomAlignedKeyboardOffset(windowHeight, frame)}
-      onLayout={(event) => {
-        const { y, height } = event.nativeEvent.layout
-        setFrame((previous) => previous.y === y && previous.height === height ? previous : { y, height })
-        onLayout?.(event)
-      }}
-    />
-  )
+/**
+ * Every caller fills its screen to the bottom, including native iOS page sheets.
+ * React Native's KeyboardAvoidingView only follows WillShow/WillHide, so a keyboard that
+ * comes back from another app at a transitional height left the composer stranded.
+ */
+function IosKeyboardViewport({ style, ...props }: ViewProps) {
+  const [bottom, setBottom] = useState(() => {
+    // A nested sheet can mount while the keyboard is already up.
+    const metrics = Keyboard.metrics()
+    return metrics
+      ? iosKeyboardInset('keyboardDidShow', { endCoordinates: metrics }, Dimensions.get('window').height) ?? 0
+      : 0
+  })
+  const current = useRef(bottom)
+
+  useEffect(() => {
+    const subscriptions = IOS_KEYBOARD_EVENTS.map((name) =>
+      Keyboard.addListener(name, (event) => {
+        const next = iosKeyboardInset(name, event, Dimensions.get('window').height)
+        if (next === null || next === current.current) return
+        current.current = next
+        if (name.startsWith('keyboardWill')) Keyboard.scheduleLayoutAnimation(event)
+        setBottom(next)
+      }),
+    )
+    return () => subscriptions.forEach((subscription) => subscription.remove())
+  }, [])
+
+  return <View {...props} style={[style, { paddingBottom: bottom }]} />
 }
 
 /** Keep input and footer together inside the space above the software keyboard. */
