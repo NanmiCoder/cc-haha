@@ -23,11 +23,13 @@ export type SubagentRunView = {
  */
 export function subagentRunView(
   output: Pick<SubagentOutput, 'messages' | 'result' | 'truncated'> | null,
-  running: boolean
+  running: boolean,
+  /** 团队成员页：显示成员之间的消息。 */
+  options: { teammates?: 'show' } = {}
 ): SubagentRunView {
   if (!output) return { prompt: null, rows: [], current: null, truncated: false, empty: true }
-  const items = normalizeHistory(output.messages ?? [])
-  const prompt = items.find((item) => item.type === 'user') ?? null
+  const items = normalizeHistory(output.messages ?? [], options)
+  const prompt = items.find((item) => item.type === 'user' && !item.teammateFrom) ?? null
   const result = output.result?.trim()
   const body: ChatItem[] =
     !items.length && !running && result

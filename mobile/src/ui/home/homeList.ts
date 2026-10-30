@@ -179,7 +179,7 @@ export function recentLine(
 export function waitingShort(activity?: MobileActivity) {
   const kind = decisionKind(activity)
   if (kind === 'question') return '在问你'
-  if (kind === 'plan') return '等你确认'
+  if (kind === 'plan' || kind === 'team') return '等你确认'
   return '等你决定'
 }
 

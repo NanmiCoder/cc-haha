@@ -32,7 +32,7 @@ import {
 } from '../../core/operations'
 import type { ChatItem, ChatState, ClientMessage, PermissionMode, Session } from '../../core/types'
 import { Approval } from '../../ui/Approval'
-import { teamPlanSurface, teamRuntime } from '../../core/teamPlan'
+import { teamLaunchNotice, teamPlanSurface, teamRuntime } from '../../core/teamPlan'
 import { useTeamPlan } from '../../ui/team/useTeamPlan'
 import { TeamPlanCard } from '../../ui/team/TeamPlanCard'
 import { TeamPlanSheet } from '../../ui/team/TeamPlanSheet'
@@ -42,7 +42,7 @@ import { type Model } from '../../ui/RuntimePicker'
 import { RunSheet } from '../../ui/compose/RunSheet'
 import { nextChosenModel, runCapsule } from '../../ui/compose/runLogic'
 import { useComputerUse } from '../../core/useComputerUse'
-import { useSessionActivity } from '../../core/sessionActivity'
+import { teamMembersAllStopped, useSessionActivity } from '../../core/sessionActivity'
 import { registerSessionSender } from '../../core/sessionSender'
 import { ActivityCapsule } from '../../ui/activity/ActivityCapsule'
 import { ActivitySheet } from '../../ui/activity/ActivitySheet'
@@ -65,6 +65,7 @@ import {
   NavBar,
   ScreenView,
   Spinner,
+  Toast,
   goBack,
   useColors,
   type ActionMenuItem,
@@ -492,6 +493,23 @@ function ChatSession({
   const [teamSheet, setTeamSheet] = useState<{ planId?: string; open: boolean }>({ open: false })
   if (reviewPlanId && teamSheet.planId !== reviewPlanId) setTeamSheet({ planId: reviewPlanId, open: true })
   const teamSheetOpen = !!reviewPlanId && teamSheet.planId === reviewPlanId && teamSheet.open
+  // 确认后审阅卡就消失了：顶栏下方说一句「正在启动」，顶部胶囊接着显示进度。
+  const [seenPlan, setSeenPlan] = useState(teamPlan.plan)
+  const [teamToast, setTeamToast] = useState('')
+  if (seenPlan !== teamPlan.plan) {
+    const text = teamLaunchNotice(seenPlan, teamPlan.plan)
+    setSeenPlan(teamPlan.plan)
+    if (text) setTeamToast(text)
+  }
+  useEffect(() => {
+    if (!teamToast) return
+    const timer = setTimeout(() => setTeamToast(''), 2600)
+    return () => clearTimeout(timer)
+  }, [teamToast])
+  const teamLaunching =
+    teamPlan.plan?.state === 'launching'
+      ? (teamPlan.plan.approvedSnapshot?.members ?? teamPlan.plan.members).length
+      : undefined
   const activity = useSessionActivity({
     client,
     host: { id: hostId },
@@ -502,7 +520,13 @@ function ChatSession({
     pendingApprovals: state.permissions.length,
     workDir: session?.workDir ?? undefined,
     send: sendRaw,
+    teamPlan: teamPlan.plan,
   })
+  // 队长这一轮结束了、已确认的成员还在跑：停止照样要给（同桌面的 background 停止）。
+  const teamWorking =
+    !state.turnActive &&
+    (teamPlan.plan?.state === 'launching' || teamPlan.plan?.state === 'running') &&
+    !teamMembersAllStopped(activity.team)
 
   // 分支只用于副标题与菜单；取不到就只显示项目名。
   useEffect(() => {
@@ -1278,6 +1302,7 @@ function ChatSession({
               tone={activity.tone}
               active={activity.active}
               visible={activity.capsuleVisible}
+              launching={teamLaunching !== undefined}
               onPress={() => openPanel('activity')}
             />
             <FloatingButton
@@ -1289,6 +1314,7 @@ function ChatSession({
           </View>
         }
       />
+      <Toast text={teamToast} top={menuTop + 8} />
       <KeyboardViewport style={{ flex: 1 }}>
         <View style={{ flex: 1 }}>
           <FlatList
@@ -1480,6 +1506,7 @@ function ChatSession({
             lean={lean}
             empty={!hasItems}
             busy={busy}
+            background={teamWorking}
             queueing={busy}
             disabled={!ready || state.configPending || workspaceMissing || working}
             run={runCapsule({
@@ -1558,6 +1585,11 @@ function ChatSession({
           // 和「停止这段会话」一样：停下来就不再自动追加，排队的内容回到输入框由用户决定要不要发。
           if (state.turnActive && dispatch({ type: 'stop_generation' })) withdrawQueued()
         }}
+        launching={teamLaunching}
+        onOpenMember={(_team, member) => {
+          setPanel(null)
+          router.push({ pathname: '/member', params: { host: hostId, id, agent: member.id } })
+        }}
       />
       <MessageMenu
         item={selected?.item ?? null}
@@ -1592,8 +1624,12 @@ function ChatSession({
       <ConfirmSheet
         visible={panel === 'stop'}
         onClose={closePanel}
-        title="停止这段会话？"
-        message="当前生成和后台任务都会停下，已经改好的文件会保留。"
+        title={teamWorking ? '停止团队？' : '停止这段会话？'}
+        message={
+          teamWorking
+            ? '成员会停在当前步骤，已经改好的文件会保留。之后发一条消息，团队就从这里接着做。'
+            : '当前生成和后台任务都会停下，已经改好的文件会保留。'
+        }
         confirmLabel="停止"
         destructive
         disabled={!ready}

@@ -1337,6 +1337,40 @@ export function Callout({
   )
 }
 
+/**
+ * 顶栏下方的一句短提示（几秒后由调用方清掉），用在点完按钮、界面上原本什么都不会变的时候。
+ * 不挡触摸；读屏会念出来。
+ */
+export function Toast({ text, top }: { text: string; top: number }) {
+  const colors = useColors()
+  useEffect(() => {
+    if (text) AccessibilityInfo.announceForAccessibility(text)
+  }, [text])
+  if (!text) return null
+  return (
+    <View pointerEvents="none" style={{ position: 'absolute', top, left: 16, right: 16, alignItems: 'center', zIndex: 20 }}>
+      <View
+        accessibilityLiveRegion="polite"
+        style={{
+          minHeight: 40,
+          paddingLeft: 12,
+          paddingRight: 16,
+          paddingVertical: 9,
+          borderRadius: 20,
+          backgroundColor: colors.btn,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+          boxShadow: '0 6px 20px rgba(20,19,17,0.18)',
+        }}
+      >
+        <Icon name="check" size={16} color={colors.btnInk} strokeWidth={2.6} />
+        <Text style={{ flexShrink: 1, fontSize: 14, lineHeight: 20, fontWeight: '500', color: colors.btnInk }}>{text}</Text>
+      </View>
+    </View>
+  )
+}
+
 /** 行内错误：同一错误只在一处出现。 */
 export function InlineError({ text, style }: { text?: string; style?: StyleProp<ViewStyle> }) {
   if (!text) return null

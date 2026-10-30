@@ -13,6 +13,7 @@ import {
   restoreImageReplay,
 } from './chatComposer'
 import { reduceSubagents } from './subagentLive'
+import { isTeammateEnvelope, teammateMessages } from './teammateEnvelope'
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -233,7 +234,11 @@ function resultText(value: unknown): string {
 }
 
 /** Normalizes real transcript blocks; never synthesizes an assistant answer. */
-export function normalizeHistory(entries: readonly HistoryEntry[]): ChatItem[] {
+export function normalizeHistory(
+  entries: readonly HistoryEntry[],
+  /** 成员之间的消息：队长主对话里不算用户发言（hide），成员页显示正文（show）。 */
+  options: { teammates?: 'hide' | 'show' } = {}
+): ChatItem[] {
   const items: ChatItem[] = []
   const seen = new Set<string>()
   for (const entry of entries) {
@@ -242,6 +247,25 @@ export function normalizeHistory(entries: readonly HistoryEntry[]): ChatItem[] {
     const blocks = Array.isArray(entry.content)
       ? entry.content
       : [entry.content]
+    const envelope =
+      entry.type === 'user' &&
+      blocks.every((block) => string(block) || (record(block)?.type === 'text' && string(record(block)?.text)))
+        ? teammateMessages(blocks.map((block) => (string(block) ? block : record(block)!.text)).join('\n'))
+        : null
+    if (envelope) {
+      if (options.teammates === 'show')
+        envelope.forEach((message, index) =>
+          items.push({
+            id: `${entry.id}:${index}`,
+            sourceMessageId: entry.id,
+            timestamp: entry.timestamp,
+            type: 'user',
+            text: message.text,
+            teammateFrom: message.from,
+          })
+        )
+      continue
+    }
     if (
       entry.type === 'user' &&
       blocks.some((block) => record(block)?.type === 'image') &&
@@ -810,6 +834,13 @@ function reduceChat(state: ChatState, event: ServerEvent): ChatState {
       return { ...next, status: permissionStatus(next) }
     }
     case 'user_message_replay': {
+      // 成员发给队长的消息开启了队长的新一轮，但不是用户发言（和桌面端一致）。
+      if (isTeammateEnvelope(event.content))
+        return {
+          ...clearActive(state),
+          turnActive: true,
+          status: state.status === 'idle' ? ('thinking' as const) : state.status,
+        }
       const restored = restoreFileReferences(event.content)
       let matchedText = restored.text
       let metadata: { path?: string }[] = []

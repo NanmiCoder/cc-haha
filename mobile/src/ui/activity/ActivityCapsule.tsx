@@ -8,7 +8,8 @@ const SHADOW = '0 1px 2px rgba(28,25,23,0.06), 0 2px 8px rgba(28,25,23,0.07)'
 
 /**
  * 顶栏右侧的活动胶囊：转圈 + 完成数/总数，子 Agent/后台在跑时角上叠个数；
- * 等你批准时变琥珀色带「!」。没有任务也没有在跑的东西时不渲染。点开运行中底单。
+ * 等你批准时变琥珀色带「!」；团队刚确认、成员还在就位时显示「启动中」。
+ * 没有任务也没有在跑的东西时不渲染。点开运行中底单。
  */
 export function ActivityCapsule({
   progress,
@@ -17,6 +18,7 @@ export function ActivityCapsule({
   onPress,
   active = runningCount > 0,
   visible = runningCount > 0 || progress.total > 0,
+  launching = false,
 }: {
   progress: ActivityProgress
   runningCount: number
@@ -26,15 +28,18 @@ export function ActivityCapsule({
   active?: boolean
   /** 默认：有任务或有东西在跑。整合者可传入 `activity.capsuleVisible`。 */
   visible?: boolean
+  /** 团队方案已确认、成员还没就位：没有任务也要出现。 */
+  launching?: boolean
 }) {
   const colors = useColors()
-  if (!visible || (runningCount === 0 && progress.total === 0)) return null
   const attention = tone === 'attention'
-  const badge = capsuleBadge({ progress, runningCount })
+  const starting = launching && !attention
+  if (!starting && (!visible || (runningCount === 0 && progress.total === 0))) return null
+  const badge = starting ? null : capsuleBadge({ progress, runningCount })
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={capsuleLabel({ progress, runningCount, tone, active })}
+      accessibilityLabel={capsuleLabel({ progress, runningCount, tone, active, launching })}
       onPress={onPress}
       style={({ pressed }) => ({ height: 44, justifyContent: 'center', opacity: pressed ? 0.7 : 1 })}
     >
@@ -66,16 +71,20 @@ export function ActivityCapsule({
           >
             <Text style={{ fontSize: 13, lineHeight: 18, fontWeight: '600', color: colors.card }}>!</Text>
           </View>
-        ) : active ? (
+        ) : active || starting ? (
           <Spinner size={16} thickness={2.4} />
         ) : (
           <Icon name="list-checks" size={16} color={colors.ink2} />
         )}
-        <Mono
-          style={{ fontSize: 14, fontWeight: '600', color: attention ? colors.attnInk : colors.ink }}
-        >
-          {capsuleText({ progress, runningCount })}
-        </Mono>
+        {starting ? (
+          <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink }}>启动中</Text>
+        ) : (
+          <Mono
+            style={{ fontSize: 14, fontWeight: '600', color: attention ? colors.attnInk : colors.ink }}
+          >
+            {capsuleText({ progress, runningCount })}
+          </Mono>
+        )}
       </View>
       {badge !== null ? (
         <View

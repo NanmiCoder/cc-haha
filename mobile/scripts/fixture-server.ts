@@ -1509,9 +1509,19 @@ export function startFixtureServer({
             return fail('Every task needs an assigned member', 400, 'TEAM_PLAN_CONFLICT')
           if (action === 'approve' && next.members.some((member) => !next.tasks.some((task) => task.ownerId === member.id)))
             return fail('Every member needs an assigned task', 400, 'TEAM_PLAN_CONFLICT')
-          next.state = action === 'approve' ? 'running' : action === 'return' ? 'draft' : action === 'retry' ? 'review_pending' : 'cancelled'
+          // 和真实服务端一样：确认后先是 launching，成员就位后再变成 running。
+          next.state = action === 'approve' ? 'launching' : action === 'return' ? 'draft' : action === 'retry' ? 'review_pending' : 'cancelled'
           if (action === 'retry') delete next.launch
           if (typeof body.feedback === 'string') next.feedback = body.feedback
+          if (action === 'approve') {
+            const launching = next
+            setTimeout(() => {
+              if (teamPlans.get(launching.sessionId) !== launching) return
+              const running: TeamPlanRecord = { ...launching, state: 'running', revision: launching.revision + 1, updatedAt: Date.now() }
+              teamPlans.set(running.sessionId, running)
+              announceTeamPlan(running)
+            }, 3000)
+          }
         }
         teamPlans.set(plan.sessionId, next)
         announceTeamPlan(next)

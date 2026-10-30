@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { ApiClient } from '../../core/client'
-import { loadTaskList, loadTeam, loadMemberTranscript, taskState, teamMessageText, memberState, memberTasks, teamMembers, type TaskInfo, type TeamMember, type TeamWorkbenchSnapshot } from './activityData'
+import { loadTaskList, loadTeam, loadMemberHistory, taskState, teamMessageText, memberState, memberTasks, teamMembers, type TaskInfo, type TeamMember, type TeamWorkbenchSnapshot } from './activityData'
 const task = (patch: Partial<TaskInfo>): TaskInfo => ({ id: '1', subject: '任务', description: '', status: 'pending', blocks: [], blockedBy: [], taskListId: 'session', ...patch })
 const member = (patch: Partial<TeamMember>): TeamMember => ({ agentId: 'qa@team', name: 'qa', agentType: 'QA', status: 'running', ...patch })
 const snapshot = (members: TeamMember[], incarnationId = 'first') => ({ version: '1', generatedAt: '', tasks: [], messages: [], team: { name: 'team/a', incarnationId, leadSessionId: 'session/a', createdAt: 1, members } }) as TeamWorkbenchSnapshot
@@ -37,8 +37,14 @@ test('real API paths encode identity and distinguish absent team from failure', 
   expect(fixture.paths[0]).toContain('/api/tasks/lists/s%2Fa')
   expect(await loadTeam(client({}, 404).api, 's', new AbortController().signal)).toBeNull()
   await expect(loadTeam(client({ error: 'offline' }, 500).api, 's', new AbortController().signal)).rejects.toThrow()
-  const transcript = client({ messages: [{ id: 'm', type: 'assistant', timestamp: '', content: 'verified result' }] })
-  expect(await loadMemberTranscript(transcript.api, snapshot([member({})]), member({}), new AbortController().signal)).toContain('verified result')
+  const transcript = client({ messages: [
+    // The runtime sets the member's model with /model before its first prompt.
+    { id: 'c1', type: 'user', timestamp: '', content: '<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>deepseek-flash[1m]</command-args>' },
+    { id: 'c2', type: 'user', timestamp: '', content: [{ type: 'text', text: '<local-command-stdout>Set model to deepseek-flash[1m]</local-command-stdout>' }] },
+    { id: 'm', type: 'assistant', timestamp: '', content: 'verified result' },
+  ] })
+  const history = await loadMemberHistory(transcript.api, snapshot([member({})]).team, 'qa@team', new AbortController().signal)
+  expect(history.map((entry) => entry.content)).toEqual(['verified result'])
   expect(transcript.paths[0]).toContain('/api/teams/team%2Fa/members/qa%40team/transcript?')
   expect(transcript.paths[0]).toContain('incarnationId=first')
   expect(transcript.paths[0]).toContain('leadSessionId=session%2Fa')

@@ -11,6 +11,8 @@ export type MobileActivity = {
   completedAt?: number
   terminalOutcome?: 'completed' | 'failed' | 'stopped'
   stalled?: boolean
+  /** 不是工具审批的决定：队长提交的团队方案在等你确认。 */
+  decision?: 'team_plan'
 }
 export type DashboardRow = { session: Session; activity?: MobileActivity }
 export function groupDashboard(
