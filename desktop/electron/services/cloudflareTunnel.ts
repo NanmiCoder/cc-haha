@@ -7,7 +7,7 @@ import { resolveHostTriple } from './sidecarManager'
 import { startCloudflareProxyTransport } from './cloudflareProxy'
 
 export type CloudflareTunnelPhase = 'starting' | 'registering' | 'ready'
-export type CloudflareTunnelErrorCode = 'runtime' | 'network' | 'configuration' | 'proxy'
+export type CloudflareTunnelErrorCode = 'runtime' | 'network' | 'configuration' | 'proxy' | 'token' | 'route'
 
 export class CloudflareTunnelError extends Error {
   constructor(
@@ -32,8 +32,12 @@ export type CloudflareTunnelOptions = {
 }
 
 export type CloudflareTunnelExit = { code: number | null, signal: NodeJS.Signals | null }
+/** One ingress rule of the configuration Cloudflare pushes to a dashboard-managed tunnel. */
+export type CloudflareTunnelRoute = { hostname?: string, service?: string }
 export type CloudflareTunnel = {
   url: string
+  /** The latest pushed ingress rules, or null when none arrived within the wait. */
+  publishedRoutes(waitMs: number): Promise<CloudflareTunnelRoute[] | null>
   stop(): Promise<void>
   onExit(callback: (exit: CloudflareTunnelExit) => void): () => void
 }
@@ -53,6 +57,13 @@ const PROXY_ENVIRONMENT = /^(?:https?_proxy|all_proxy|no_proxy)$/i
 const CLOUDFLARE_ENVIRONMENT = /^(?:TUNNEL_|CLOUDFLARED_|NO_AUTOUPDATE$)/i
 const QUICK_URL = /https:\/\/(?!api\.)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.trycloudflare\.com(?![a-z0-9.-])/i
 const LOG_WINDOW_BYTES = 16 * 1024
+const MAX_LOG_LINE_BYTES = 256 * 1024
+// cloudflared logs every edge refusal of the registration RPC with this message and retries forever.
+const SERVER_REFUSAL = /\bRegister tunnel error from server side\b/
+// A second refusal before any registration rules out a one-off edge hiccup.
+const TOKEN_REFUSALS = 2
+// zerolog's console writer prints string fields with Go's strconv.Quote.
+const PUSHED_CONFIGURATION = /\bUpdated to new configuration\b.*?\bconfig=("(?:[^"\\]|\\.)*")/
 const DEFAULT_START_TIMEOUT_MS = 30_000
 const DEFAULT_STOP_TIMEOUT_MS = 2_000
 
@@ -98,7 +109,7 @@ function validateOptions(options: CloudflareTunnelOptions): string | undefined {
   }
   if (options.mode === 'quick') return undefined
   if (typeof options.token !== 'string' || !/^[A-Za-z0-9_+/=-]{20,8192}$/.test(options.token)) {
-    throw new CloudflareTunnelError('configuration', 'A Cloudflare Tunnel Token is required')
+    throw new CloudflareTunnelError('token', 'A Cloudflare Tunnel Token is required')
   }
   try {
     const origin = new URL(options.publicUrl ?? '')
@@ -129,6 +140,34 @@ function isLoopbackService(value: string): boolean {
     return parsed.protocol === 'http:' && ['127.0.0.1', '[::1]'].includes(parsed.hostname) &&
       !!parsed.port && !parsed.search && !parsed.hash && !parsed.username && !parsed.password
   } catch { return false }
+}
+
+/** Ingress rules from one connector log line announcing a configuration pushed by Cloudflare. */
+export function readPublishedRoutes(line: string): CloudflareTunnelRoute[] | null {
+  const quoted = line.match(PUSHED_CONFIGURATION)?.[1]
+  if (!quoted) return null
+  try {
+    const configuration: unknown = JSON.parse(JSON.parse(quoted) as string)
+    const ingress = configuration && typeof configuration === 'object' ? (configuration as { ingress?: unknown }).ingress : undefined
+    if (!Array.isArray(ingress)) return null
+    return ingress.filter((rule): rule is Record<string, unknown> => !!rule && typeof rule === 'object').map(rule => ({
+      ...(typeof rule.hostname === 'string' && rule.hostname ? { hostname: rule.hostname } : {}),
+      ...(typeof rule.service === 'string' ? { service: rule.service } : {}),
+    }))
+  } catch { return null }
+}
+
+/** Whether any pushed rule sends the public hostname to this computer's plain-HTTP gateway. */
+export function routesReachGateway(routes: CloudflareTunnelRoute[], publicUrl: string, localPort: number): boolean {
+  const host = new URL(publicUrl).hostname
+  return routes.some(route => {
+    const pattern = route.hostname?.toLowerCase()
+    if (pattern && pattern !== host && !(pattern.startsWith('*.') && host.endsWith(pattern.slice(1)))) return false
+    try {
+      const service = new URL(route.service ?? '')
+      return service.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(service.hostname) && Number(service.port) === localPort
+    } catch { return false }
+  })
 }
 
 /**
@@ -276,13 +315,34 @@ export async function startCloudflareTunnel(
     let quickUrl: string | undefined
     let registered = false
     let startupErrorCode: CloudflareTunnelErrorCode | undefined
+    let refusals = 0
+    let partialLine = ''
+    let routes: CloudflareTunnelRoute[] | null = null
+    const routeWaiters = new Set<() => void>()
+    const releaseRouteWaiters = () => { for (const release of [...routeWaiters]) release() }
+    const onLines = (data: Buffer | string) => {
+      const lines = (partialLine + String(data)).split('\n')
+      partialLine = lines.pop()!
+      if (partialLine.length > MAX_LOG_LINE_BYTES) partialLine = ''
+      for (const line of lines) {
+        if (!registered && SERVER_REFUSAL.test(line)) refusals++
+        const pushed = readPublishedRoutes(line)
+        if (pushed) { routes = pushed; releaseRouteWaiters() }
+      }
+    }
     const onData = (data: Buffer | string) => {
-      if (stopping || startupSettled) return
+      if (stopping) return
+      if (options.mode === 'named') onLines(data)
+      if (startupSettled) return
       logWindow = (logWindow + String(data)).slice(-LOG_WINDOW_BYTES)
       quickUrl ??= logWindow.match(QUICK_URL)?.[0]
       registered ||= /\bRegistered tunnel connection\b/.test(logWindow)
-      if (/provided.*token.*not valid|invalid tunnel token|failed to parse tunnel token/i.test(logWindow)) startupErrorCode = 'configuration'
+      if (/provided.*token.*not valid|invalid tunnel token|failed to parse tunnel token/i.test(logWindow)) startupErrorCode = 'token'
       if (/incorrect usage|flag provided but not defined|unknown flag|unknown command/i.test(logWindow)) startupErrorCode = 'runtime'
+      if (!registered && refusals >= TOKEN_REFUSALS) {
+        reject(new CloudflareTunnelError('token', 'Cloudflare refused this tunnel token'))
+        return
+      }
       if (registered && (namedUrl || quickUrl)) {
         startupSettled = true
         clearTimeout(startupTimer)
@@ -296,6 +356,7 @@ export async function startCloudflareTunnel(
       exited = true
       exitInfo = { code, signal }
       resolveExit()
+      releaseRouteWaiters()
       reject(new CloudflareTunnelError(startupErrorCode ?? (options.proxyUrl ? 'proxy' : 'network'), 'Cloudflare disconnected before the connection was ready'))
       if (!stopping) for (const callback of exitCallbacks) {
         try { callback(exitInfo) } catch { /* Keep other lifecycle observers informed. */ }
@@ -322,6 +383,17 @@ export async function startCloudflareTunnel(
     if (exited || options.signal?.aborted) throw options.signal?.aborted ? aborted() : new CloudflareTunnelError('network', 'Cloudflare disconnected before the connection was ready')
     return {
       url,
+      async publishedRoutes(waitMs) {
+        if (!routes && !exited && waitMs > 0) {
+          let timer: ReturnType<typeof setTimeout> | undefined
+          await new Promise<void>(resolve => {
+            const release = () => { clearTimeout(timer); routeWaiters.delete(release); resolve() }
+            routeWaiters.add(release)
+            timer = setTimeout(release, waitMs)
+          })
+        }
+        return routes
+      },
       stop,
       onExit(callback) {
         exitCallbacks.add(callback)

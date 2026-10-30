@@ -304,3 +304,12 @@ test('search also matches the full working directory, like the previous home', (
   expect(matchesQuery(r, 'mobile')).toBe(true)
   expect(matchesQuery(r, '不相关')).toBe(false)
 })
+
+test('a team plan waiting for approval is its own decision, opened from the session', () => {
+  const team: MobileActivity = { id: 's', activityState: 'waiting', decision: 'team_plan', preview: '要追加的成员等你确认' }
+  expect(decisionKind(team)).toBe('team')
+  expect(decisionAction(team)).toBe('要追加的成员等你确认')
+  expect(decisionAction({ ...team, preview: undefined })).toBe('团队组好了，等你确认')
+  // Never mistaken for a tool approval the list could allow or deny.
+  expect(decisionKind({ ...team, requestId: 'r', toolName: 'Bash' })).toBe('team')
+})

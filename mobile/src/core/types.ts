@@ -114,6 +114,8 @@ export type ChatItem = {
    * 回放随后才到；保留这个标记才能对上原来那条，而不是再追加一个重复气泡。
    */
   awaitingReplay?: boolean
+  /** Agent 团队里发来这条消息的成员（只在成员页显示）。 */
+  teammateFrom?: string
 }
 /** 子 Agent 最近的一步工具调用（实时事件里能拿到的部分）。 */
 export type SubagentStep = {

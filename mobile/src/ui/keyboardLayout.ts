@@ -9,10 +9,42 @@ export function keyboardOverlap(
   return Math.min(viewport.height, Math.max(0, viewport.screenY + viewport.height - keyboardTop))
 }
 
-/** Native iOS modal layout is window-relative, but keyboard frames are screen-relative. */
-export function bottomAlignedKeyboardOffset(
+/**
+ * Third-party keyboards resize without another WillShow, and switching apps (an input
+ * method opening its own app for dictation) can deliver a transitional frame first.
+ * Follow every event so the latest frame wins and the Did events settle it.
+ */
+export const IOS_KEYBOARD_EVENTS = [
+  'keyboardWillShow',
+  'keyboardWillChangeFrame',
+  'keyboardWillHide',
+  'keyboardDidShow',
+  'keyboardDidChangeFrame',
+  'keyboardDidHide',
+] as const
+
+export type IosKeyboardEventName = (typeof IOS_KEYBOARD_EVENTS)[number]
+
+export type IosKeyboardFrameEvent = {
+  endCoordinates: { screenY: number; height: number }
+  isEventFromThisApp?: boolean
+}
+
+/**
+ * Bottom inset for a viewport that reaches the bottom of the window, as every caller
+ * does (native iOS page sheets included): the part of the keyboard inside the window.
+ * `null` means the event must not move the viewport.
+ */
+export function iosKeyboardInset(
+  name: IosKeyboardEventName,
+  event: IosKeyboardFrameEvent,
   windowHeight: number,
-  frame: { y: number; height: number },
-): number {
-  return Math.max(0, windowHeight - frame.y - frame.height)
+): number | null {
+  if (name === 'keyboardWillHide' || name === 'keyboardDidHide') return 0
+  // iOS also reports another app's keyboard while this app switches out and back.
+  if (event.isEventFromThisApp === false) return null
+  const { screenY, height } = event.endCoordinates
+  // Bounded by the keyboard's own height: with Prefer Cross-Fade Transitions iOS
+  // reports screenY 0 for a docked keyboard.
+  return Math.max(0, Math.min(height, windowHeight - screenY))
 }

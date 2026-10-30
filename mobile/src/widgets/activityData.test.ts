@@ -173,6 +173,9 @@ test('waiting labels and the single action follow the decision type', () => {
   })
   expect(waiting('Edit').allowUrl).toBeDefined()
   expect(waiting('ComputerUse').actionLabel).toBe('打开处理')
+  const team = taskActivityData(host, sessions, [{ id: 'one', activityState: 'waiting', decision: 'team_plan', preview: '团队组好了，等你确认' }], true, 100)!
+  expect(team).toMatchObject({ status: 'waiting', detail: '团队组好了，等你确认', actionLabel: '查看并配置' })
+  expect(team.allowUrl).toBeUndefined()
 })
 
 test('running work exposes the real start time for a live timer and never a fake step', () => {

@@ -1,5 +1,4 @@
 import { ApiError, type ApiClient } from '../../core/client'
-import { normalizeHistory } from '../../core/chat'
 import type { HistoryEntry } from '../../core/types'
 // Minimal read-only wire contracts from server/api/{agents,teams}. Keep service
 // implementations out of the mobile TypeScript and native module graphs.
@@ -97,14 +96,28 @@ export function teamMembers(timeline: TeamWorkbenchSessionTimeline) {
   const current = new Set(latest.team.members.map((member) => member.agentId))
   return [...members.values()].map((member) => current.has(member.agentId) && !latest.deletedAt ? member : { ...member, activity: 'exited' as const })
 }
-export async function loadMemberTranscript(client: ApiClient, snapshot: { team: Pick<TeamWorkbenchSnapshot['team'], 'name' | 'incarnationId' | 'leadSessionId'> }, member: Pick<TeamMember, 'agentId'>, signal: AbortSignal) {
-  const params = new URLSearchParams({ incremental: 'true' })
-  if (snapshot.team.leadSessionId) params.set('leadSessionId', snapshot.team.leadSessionId)
-  if (snapshot.team.incarnationId) params.set('incarnationId', snapshot.team.incarnationId)
-  const response = await client.get<{ messages: HistoryEntry[] }>(`/api/teams/${encodeURIComponent(snapshot.team.name)}/members/${encodeURIComponent(member.agentId)}/transcript?${params}`, { signal })
-  return normalizeHistory(response.messages)
-    .map((message) => message.text || (message.result ? JSON.stringify(message.result) : ''))
-    .filter(Boolean).join('\n\n')
+const LOCAL_COMMAND = /^\s*(?:<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat)>[\s\S]*?<\/\1>\s*)+$/
+
+/** 成员启动时 runtime 替它执行的本地命令（/model 及其输出）：不是它做的事，原样显示只是一堆标签。 */
+export function isLocalCommandEntry(entry: HistoryEntry) {
+  if (entry.type !== 'user') return false
+  const text =
+    typeof entry.content === 'string'
+      ? entry.content
+      : Array.isArray(entry.content)
+        ? entry.content.map((block: { type?: string; text?: string }) => (block?.type === 'text' ? (block.text ?? '') : '')).join('')
+        : ''
+  return LOCAL_COMMAND.test(text)
+}
+
+/** 一个成员最近的执行记录（原始条目，由页面和主对话走同一套归一化）。 */
+export async function loadMemberHistory(client: ApiClient, team: { name: string; incarnationId?: string; leadSessionId?: string }, agentId: string, signal: AbortSignal) {
+  const params = new URLSearchParams()
+  if (team.leadSessionId) params.set('leadSessionId', team.leadSessionId)
+  if (team.incarnationId) params.set('incarnationId', team.incarnationId)
+  const query = params.toString()
+  const response = await client.get<{ messages?: HistoryEntry[] }>(`/api/teams/${encodeURIComponent(team.name)}/members/${encodeURIComponent(agentId)}/transcript${query ? `?${query}` : ''}`, { signal })
+  return (response.messages ?? []).filter((entry) => !isLocalCommandEntry(entry))
 }
 
 /** Team protocol envelopes describe status; do not expose their JSON as a message. */

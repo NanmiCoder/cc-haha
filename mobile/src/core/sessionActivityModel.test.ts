@@ -10,6 +10,8 @@ import {
   commandRows,
   createActivityFetcher,
   deriveActivity,
+  memberMark,
+  teamMembersAllStopped,
   planTasks,
   pollDelay,
   sectionSummaries,
@@ -104,10 +106,19 @@ describe('任务清单', () => {
     expect(deriveActivity(data({ tasks: bare })).progress.active).toBe('做事')
     expect(deriveActivity(data()).progress).toEqual({ done: 0, total: 0 })
   })
-  test('会话没有任务清单时，用团队任务看板', () => {
+  test('团队在跑时进度看团队看板，任务不再单列（挂到成员名下）', () => {
     const team = timeline([member({})], [info({ id: 'x', status: 'completed' }), info({ id: 'y' })])
     expect(deriveActivity(data({ team })).progress).toMatchObject({ done: 1, total: 2 })
-    expect(deriveActivity(data({ team, tasks })).progress.total).toBe(4)
+    const model = deriveActivity(data({ team, tasks }))
+    expect(model.progress).toMatchObject({ done: 1, total: 2 })
+    expect(model.tasks).toEqual([])
+  })
+  test('团队已归档：回到会话自己的清单', () => {
+    const archived = timeline([member({})], [info({ id: 'x' })], { source: 'archive' })
+    const model = deriveActivity(data({ team: archived, tasks }))
+    expect(model.progress.total).toBe(4)
+    expect(model.tasks).toHaveLength(4)
+    expect(deriveActivity(data({ team: archived })).progress.total).toBe(1)
   })
 })
 
@@ -211,6 +222,13 @@ describe('胶囊可见性', () => {
     expect(deriveActivity(data({ tasks: [info({})] }), { turnActive: true }).active).toBe(true)
     expect(deriveActivity(data({ background: [bg({})] })).active).toBe(true)
   })
+  test('队长这一轮已结束、成员还在干活：胶囊照样出现并转圈', () => {
+    const working = deriveActivity(data({ team: timeline([member({ activity: 'active' })]) }))
+    expect(working).toMatchObject({ active: true, capsuleVisible: true, runningCount: 0 })
+    // 只有队长自己在跑不算：那是这段会话本身，由 turnActive 负责。
+    const leadOnly = deriveActivity(data({ team: timeline([member({ agentId: 'lead@team', name: 'team-lead', activity: 'active' })]) }))
+    expect(leadOnly).toMatchObject({ active: false, capsuleVisible: false })
+  })
 })
 
 describe('团队', () => {
@@ -236,7 +254,63 @@ describe('团队', () => {
       ['reviewer', '等待依赖', undefined, 'wait'],
       ['qa', '空闲', undefined, 'idle'],
     ])
-    expect(team?.summary).toBe('4 人 · builder 工作中')
+    expect(team?.summary).toBe('team · 0/2 完成')
+  })
+  test('任务跟着负责人走：成员名下是它认领的看板任务，队长名下是会话自己的清单', () => {
+    const board = [
+      info({ id: '1', owner: 'backend-dev', status: 'completed', subject: '设计数据模型' }),
+      info({ id: '2', owner: 'backend-dev@team', status: 'in_progress', subject: '实现 CRUD 接口', activeForm: '写路由' }),
+      info({ id: '3', owner: 'frontend-dev', status: 'completed', subject: '搭页面骨架' }),
+      info({ id: '4', owner: 'frontend-dev', blockedBy: ['2', '3'], subject: '接入接口' }),
+      info({ id: '5', subject: '补 README' }),
+      info({ id: '6', owner: 'someone-gone', subject: '旧成员的任务' }),
+    ]
+    const own = [info({ id: '1', subject: '拆分团队方案', status: 'completed' })]
+    const team = teamModel(
+      timeline(
+        [
+          member({ agentId: 'frontend-dev@team', name: 'frontend-dev', activity: 'idle', model: 'deepseek-v4.1-flash' }),
+          member({ agentId: 'backend-dev@team', name: 'backend-dev', activity: 'active' }),
+          member({ agentId: 'lead@team', name: 'team-lead', activity: 'idle' }),
+        ],
+        board
+      ),
+      own
+    )!
+    // 队长排第一；名下是自己的清单（没有看板编号，免得和 #1 混淆）。
+    expect(team.members.map((row) => [row.name, row.mark, row.tasks.map((task) => task.ref ?? task.title)])).toEqual([
+      ['队长', '队', ['拆分团队方案']],
+      ['frontend-dev', 'FD', ['3', '4']],
+      ['backend-dev', 'BD', ['1', '2']],
+    ])
+    const frontend = team.members[1]!
+    expect(frontend).toMatchObject({ model: 'deepseek-v4.1-flash', state: '等待依赖', tone: 'wait' })
+    // 只列还没完成的前置任务。
+    expect(frontend.tasks[1]).toMatchObject({ key: 'team:4', state: 'waiting', waitingOn: ['2'] })
+    expect(team.members[2]!.tasks[1]).toMatchObject({ state: 'active', detail: '写路由' })
+    expect(team.unassigned.map((task) => task.ref)).toEqual(['5', '6'])
+    expect(team.progress).toEqual({ done: 2, total: 6 })
+    expect(team.summary).toBe('team · 2/6 完成')
+  })
+  test('成员头像取名字里前两个词的首字母，同队里不重复', () => {
+    expect(['backend-dev', 'qa_reviewer', 'reviewer', 'team lead', 'x'].map((name) => memberMark(name))).toEqual(['BD', 'QR', 'RE', 'TL', 'X'])
+    expect(memberMark('reviewer', new Set(['RE']))).toBe('RV')
+    const team = teamModel(timeline([member({ agentId: 'r1', name: 'researcher' }), member({ agentId: 'r2', name: 'reviewer' })]))
+    expect(team?.members.map((row) => row.mark)).toEqual(['RE', 'RV'])
+  })
+  test('成员都已停止或退出才算整组停下；队长不算，没有名单不算', () => {
+    const team = (states: string[]) => ({ members: [{ lead: true, state: '工作中' }, ...states.map((state) => ({ lead: false, state }))] as never })
+    expect(teamMembersAllStopped(team(['已停止', '已退出']))).toBe(true)
+    expect(teamMembersAllStopped(team(['已停止', '空闲']))).toBe(false)
+    expect(teamMembersAllStopped(team([]))).toBe(false)
+    expect(teamMembersAllStopped(null)).toBe(false)
+  })
+  test('成员页：团队收尾归档后仍能找到成员（已退出）', () => {
+    const archived = timeline([member({ activity: 'active' })], [info({ id: '1', owner: 'builder', status: 'completed' })], { source: 'archive' }, '2026-10-30T09:59:12Z')
+    expect(teamModel(archived)).toBeNull()
+    const team = teamModel(archived, [], { ended: true })
+    expect(team?.members.map((row) => [row.name, row.state, row.tasks.map((task) => task.state)])).toEqual([['builder', '已退出', ['done']]])
+    expect(teamModel({ ...archived, snapshots: [] }, [], { ended: true })).toBeNull()
   })
   test('归档、已删除、没有快照的团队不属于运行中', () => {
     expect(teamModel(null)).toBeNull()
@@ -454,6 +528,46 @@ describe('ActivityStore 轮询', () => {
     const before = h.calls.length
     await h.store.refresh({ forceTeam: true })
     expect(h.calls[before]?.team).toBe(true)
+  })
+
+  test('团队方案状态一变（刚确认）就连团队一起重读，不等团队探测的间隔', async () => {
+    const h = harness()
+    h.store.configure(config({ turnActive: true, teamPlanKey: 'p1:review_pending' }))
+    await settle()
+    await h.timers.advance(ACTIVE_POLL_MS)
+    expect(h.calls.at(-1)?.team).toBe(false)
+    const before = h.calls.length
+    h.store.configure(config({ turnActive: true, teamPlanKey: 'p1:launching', teamLaunching: true }))
+    await settle()
+    expect(h.calls).toHaveLength(before + 1)
+    expect(h.calls.at(-1)?.team).toBe(true)
+  })
+
+  test('团队启动中：队长空闲也按间隔轮询，每次都读团队；就位后照常', async () => {
+    const h = harness()
+    h.store.configure(config({ teamPlanKey: 'p1:launching', teamLaunching: true }))
+    await settle()
+    await h.timers.advance(ACTIVE_POLL_MS * 2)
+    expect(h.calls).toHaveLength(3)
+    expect(h.calls.every((call) => call.team)).toBe(true)
+    h.set({ team: timeline([member({ activity: 'active' })]) })
+    h.store.configure(config({ teamPlanKey: 'p1:running' }))
+    await settle()
+    expect(h.store.getSnapshot().team).not.toBeNull()
+    expect(h.timers.pending).toBe(1)
+  })
+
+  test('页面不可见时方案变了：回到前台的那次补读带上团队', async () => {
+    const h = harness()
+    h.store.configure(config({ turnActive: true, teamPlanKey: 'p1:review_pending' }))
+    await settle()
+    await h.timers.advance(ACTIVE_POLL_MS)
+    h.store.configure(config({ turnActive: true, visible: false, teamPlanKey: 'p1:running' }))
+    const before = h.calls.length
+    h.store.configure(config({ turnActive: true, teamPlanKey: 'p1:running' }))
+    await settle()
+    expect(h.calls).toHaveLength(before + 1)
+    expect(h.calls.at(-1)?.team).toBe(true)
   })
 
   test('团队存在就每次都读；一部分失败时保留旧数据并报告', async () => {

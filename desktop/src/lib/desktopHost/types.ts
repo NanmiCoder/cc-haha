@@ -401,8 +401,11 @@ export type DesktopPublicAccessConfiguration = {
 export type DesktopPublicAccessStatus = Omit<DesktopPublicAccessConfiguration, 'tunnelToken'> & {
   state: 'unconfigured' | 'disabled' | 'connecting' | 'online' | 'reconnecting' | 'failed'
   publicUrl: string | null
-  error: 'network' | 'configuration' | 'stop' | 'runtime' | 'proxy' | null
+  /** `token`: Cloudflare refused the saved credential. `route`: the tunnel publishes no route from this hostname to the local gateway. */
+  error: 'network' | 'configuration' | 'stop' | 'runtime' | 'proxy' | 'token' | 'route' | null
   tokenSet: boolean
+  /** The tunnel UUID inside the saved token, which is also visible in the Cloudflare dashboard. */
+  tunnelId: string | null
   phase: 'preparing' | 'connecting' | 'checking' | null
   autoStart: boolean
   consentVersion: number

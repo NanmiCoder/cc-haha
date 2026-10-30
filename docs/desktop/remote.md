@@ -97,14 +97,14 @@ H5 默认关闭，它也不是公开服务。开启前先确认你在自己信�
 此方式需要 Cloudflare 账号，以及已经添加到 Cloudflare 的自有域名。cc-haha 负责运行连接程序，你只需在 Cloudflare 创建隧道和配置域名。
 
 1. 在桌面 **手机连接 → 外出连接** 选择 **固定域名**。页面会显示要转发的 **Cloudflare Service URL**，默认是 `http://127.0.0.1:17463`。如果修改了下方的本机端口，以页面显示的实际地址为准。
-2. 点击 **打开 Cloudflare**，在 **Networking → Tunnels** 创建一个 **cloudflared** 隧道，并复制设置页提供的 **Tunnel Token**。无需在终端运行安装命令；只复制其中的 Token，不要粘贴整条命令。
-3. 在该隧道中添加 **Published application** 路由，选择你要使用的域名，例如 `phone.example.com`。Service 使用 **HTTP**，URL 填写第 1 步显示的本机地址。
-4. 回到 cc-haha，填写 **固定 HTTPS 地址**（例如 `https://phone.example.com`）和 **Tunnel Token**，然后点击 **开启连接**。
+2. 点击 **打开 Cloudflare**，在 **Networking → Tunnels** 创建隧道。创建后页面会给出安装命令，复制其中任意一条即可。**不要在终端运行这些命令**：cc-haha 自带连接程序，执行 `cloudflared service install` 反而会在电脑上多装一个开机常驻的系统服务。
+3. 在这条隧道的 **Routes** 中添加 **Published application**，选择你要使用的域名，例如 `phone.example.com`。**Service URL** 原样填写第 1 步显示的本机地址，保留 `http://`，不要改成 `https://`。
+4. 回到 cc-haha，填写 **固定 HTTPS 地址**（例如 `https://phone.example.com`），把复制的命令粘贴到 **Tunnel Token**。页面会从命令里取出 Token，并显示识别到的隧道 ID，可以和 Cloudflare 页面上的 Tunnel ID 对照。然后点击 **开启连接**。
 5. 等待入口检查通过，用手机扫码，并在电脑批准配对。
 
 固定 HTTPS 地址只填写协议和域名，不要添加 `/remote`、其他路径、查询参数或登录信息。Cloudflare 应转发整个入口，页面、API 和 WebSocket 才能经过同一地址。完整配置步骤见 [Cloudflare 官方指南](https://developers.cloudflare.com/tunnel/get-started/)。
 
-Tunnel Token 只保存在这台电脑上，设置页不会回显。再次编辑时留空表示保留已保存的 Token；需要替换时填写新值。固定域名保持不变、手机授权仍有效时，桌面重启并恢复隧道后，手机可以使用已保存的连接重新访问。
+cc-haha 只保存命令里的 Token，不会执行命令；Token 只保存在这台电脑上，设置页不会回显。再次编辑时留空表示保留已保存的 Token；需要替换时粘贴新的命令。如果离开了 Cloudflare 的创建页面，可以在隧道详情页点 **Add a replica** 重新复制命令。固定域名保持不变、手机授权仍有效时，桌面重启并恢复隧道后，手机可以使用已保存的连接重新访问。
 
 ### 网络代理与连接失败
 
@@ -120,7 +120,9 @@ Cloudflare 连接使用 **设置 → 通用 → 网络代理** 中保存的方�
 |---|---|
 | 一直处于连接中或显示网络错误 | 电脑网络、保存的代理模式，以及系统代理或手动代理是否可用；修改后重新开启连接 |
 | 提示代理连接失败 | 代理地址、端口、认证信息及代理是否允许连接 Cloudflare；不要把模型服务商专用代理误当作全局代理 |
-| 固定域名连接失败 | Tunnel Token、HTTPS 域名，以及 Cloudflare 路由的 Service URL 是否与页面上的本机地址一致 |
+| 提示 Cloudflare 拒绝了 Tunnel Token | Token 属于别的隧道、已被轮换，或隧道已删除；在隧道详情页点 **Add a replica** 复制新的命令重新粘贴 |
+| 提示隧道路由没有转到本机 | 这条隧道的 Routes 里要有 Published application：域名与固定 HTTPS 地址一致，Service URL 与页面上的本机地址一致；也要确认粘贴的是同一条隧道的命令 |
+| 固定域名连接失败 | HTTPS 域名的 DNS 是否已生效，以及电脑网络和代理是否可用 |
 | 电脑显示就绪，手机仍打不开 | 用手机蜂窝网络测试该域名；确认电脑仍在运行、联网且未休眠 |
 | 快速连接重启后旧地址失效 | 回到桌面使用新二维码；希望长期保留地址时改用固定域名 |
 | 退到后台后没有系统通知 | 隧道只负责联网，后台推送仍需独立配置；重新打开 App 后同步任务状态 |

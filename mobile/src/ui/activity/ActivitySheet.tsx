@@ -8,6 +8,7 @@ import {
   type PlanTask,
   type StepLine,
   type SubagentRow,
+  type TeamModel,
   type TeamRow,
 } from '../../core/sessionActivityModel'
 import type { BackgroundTask } from '../../core/operations'
@@ -17,6 +18,7 @@ import { EmptyState, Icon, InlineError, Mono, Spinner, useColors, type IconName 
 import { Text } from '../Text'
 import { ConfirmSheet } from './ConfirmSheet'
 import { TaskOutputSheet } from './TaskOutputSheet'
+import { MemberCard, UnassignedCard } from './TeamMembers'
 import { agentStatusText, clock } from './activityView'
 import { useNow } from './useNow'
 
@@ -24,9 +26,9 @@ type Group = 'tasks' | 'subagents' | 'team' | 'commands'
 type Confirm = { ids: string[]; all?: boolean; subject?: string }
 
 /**
- * 运行中底单：标题行「运行中 · 32:35」+ 右上「全部停止」，下面按 任务 → 子 Agent →
- * 团队 → 后台命令分组，组标题粘顶、可折叠。半高放不下，所以有任务时默认只展开
- * 任务和后台命令，子 Agent 和团队点开再看。
+ * 运行中底单：标题行「运行中 · 32:35」+ 右上「全部停止」，下面按 任务 → 团队 →
+ * 子 Agent → 后台命令分组，组标题粘顶、可折叠。半高放不下，所以有任务或团队时子 Agent
+ * 默认折起。有团队时任务都挂在各自成员名下（队长名下是会话自己的清单），不再单列。
  */
 export function ActivitySheet({
   visible,
@@ -37,6 +39,8 @@ export function ActivitySheet({
   host,
   sessionId,
   onStopTurn,
+  launching,
+  onOpenMember,
 }: {
   visible: boolean
   onClose(): void
@@ -50,6 +54,10 @@ export function ActivitySheet({
   sessionId?: string
   /** 「全部停止」确认后额外调用，用来同时停掉主 Agent 这一轮。 */
   onStopTurn?(): void
+  /** 团队方案已确认、成员还没出现时，正在启动的成员数。 */
+  launching?: number
+  /** 点成员卡：底单先关闭，再由整合者打开它的执行记录。 */
+  onOpenMember?(team: TeamModel, member: TeamRow): void
 }) {
   const colors = useColors()
   const { client } = useConnection(host.id)
@@ -60,6 +68,8 @@ export function ActivitySheet({
     setDetail(null)
     onClose()
   }
+  // 团队启动中和胶囊一样算在跑。
+  const active = activity.active || !!launching
   const running = [...activity.subagents, ...activity.commands].filter((row) => row.status === 'running')
   const allStopping = running.length > 0 && running.every((row) => row.stopping)
   const stop = () => {
@@ -81,11 +91,11 @@ export function ActivitySheet({
           accessibilityRole="header"
           style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingLeft: 4 }}
         >
-          {activity.active ? <Spinner size={15} thickness={2.4} /> : null}
+          {active ? <Spinner size={15} thickness={2.4} /> : null}
           <Text style={{ fontSize: 17, lineHeight: 22, fontWeight: '600', color: colors.ink }}>
-            {activity.active ? '运行中' : '任务'}
+            {active ? '运行中' : '任务'}
           </Text>
-          {activity.active && elapsed ? (
+          {active && elapsed ? (
             <Mono style={{ fontSize: 15, color: colors.ink2 }}>{elapsed}</Mono>
           ) : null}
         </View>
@@ -121,6 +131,15 @@ export function ActivitySheet({
         }}
         onStop={(row) => setConfirm({ ids: [row.id], subject: row.command })}
         onOpenOutput={sessionId ? setDetail : undefined}
+        launching={launching}
+        onOpenMember={
+          onOpenMember
+            ? (team, member) => {
+                close()
+                onOpenMember(team, member)
+              }
+            : undefined
+        }
       />
       {/* 嵌套的弹层放在绝对定位的零尺寸容器里：它们要挂在这张底单下面才能叠出来，又不能占一格 gap。 */}
       <View pointerEvents="box-none" style={{ position: 'absolute', width: 0, height: 0 }}>
@@ -156,19 +175,24 @@ function Content({
   onOpenAgent,
   onStop,
   onOpenOutput,
+  launching,
+  onOpenMember,
 }: {
   activity: SessionActivity
   onOpenAgent(task: BackgroundTask): void
   onStop(row: CommandRow): void
   onOpenOutput?(task: BackgroundTask): void
+  launching?: number
+  onOpenMember?(team: TeamModel, member: TeamRow): void
 }) {
   const now = useNow(activity.runningCount > 0)
   const summaries = sectionSummaries(activity)
   const hasTasks = activity.tasks.length > 0
-  // 半高放不下全部：有任务时子 Agent 和团队默认折起来。
+  const team = activity.team
+  // 半高放不下全部：有任务或团队时子 Agent 默认折起来。
   const [open, setOpen] = useState<Partial<Record<Group, boolean>>>({})
   const isOpen = (group: Group) =>
-    open[group] ?? (group === 'subagents' || group === 'team' ? !hasTasks : true)
+    open[group] ?? (group === 'subagents' ? !(hasTasks || team || launching) : true)
   const toggle = (group: Group) => setOpen((value) => ({ ...value, [group]: !isOpen(group) }))
   const children: React.ReactNode[] = []
   const stickyHeaderIndices: number[] = []
@@ -195,6 +219,28 @@ function Content({
         <TaskCard tasks={activity.tasks} />
       </>
     )
+  // 有团队时任务都在成员名下，团队顶上任务的位置。
+  if (team || launching)
+    section(
+      'team',
+      '团队',
+      team ? summaries.team : '启动中',
+      <>
+        {team?.progress.total ? <ProgressBar done={team.progress.done} total={team.progress.total} /> : null}
+        <View style={{ gap: 8 }}>
+          {team?.members.map((member) => (
+            <MemberCard
+              key={member.id}
+              row={member}
+              onOpen={!member.lead && onOpenMember ? () => onOpenMember(team, member) : undefined}
+            />
+          ))}
+          {team?.unassigned.length ? <UnassignedCard tasks={team.unassigned} /> : null}
+          {/* 队长先建团队再提交方案：启动中时团队里可能只有队长，占位行接在已有成员后面。 */}
+          {launching ? <LaunchingCard count={launching} /> : null}
+        </View>
+      </>
+    )
   if (activity.subagents.length)
     section(
       'subagents',
@@ -206,8 +252,6 @@ function Content({
         ))}
       </View>
     )
-  if (activity.team)
-    section('team', `团队`, summaries.team, <TeamCard members={activity.team.members} />)
   if (activity.commands.length)
     section(
       'commands',
@@ -490,39 +534,17 @@ function StepRow({ step, current }: { step: StepLine; current: boolean }) {
 
 /* ───────────── 团队 ───────────── */
 
-function TeamCard({ members }: { members: TeamRow[] }) {
+/** 方案确认后、成员出现在团队里之前的占位。 */
+function LaunchingCard({ count }: { count: number }) {
   const colors = useColors()
   return (
-    <View style={[card(colors), { paddingVertical: 2 }]}>
-      {members.map((member, index) => {
-        const tint = member.tone === 'run' ? colors.runTint : colors.fill
-        const ink = member.tone === 'run' ? colors.run : member.tone === 'err' ? colors.err : colors.ink3
-        const icon: IconName = member.lead ? 'users' : member.tone === 'wait' ? 'clock' : 'cpu'
-        return (
-          <View key={member.id}>
-            {index > 0 ? <View style={{ height: 1, marginLeft: 44, backgroundColor: colors.hair }} /> : null}
-            <View
-              accessible
-              accessibilityLabel={[member.name, member.state, member.detail].filter(Boolean).join('，')}
-              style={{ minHeight: 52, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', gap: 12 }}
-            >
-              <View
-                style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: tint, alignItems: 'center', justifyContent: 'center' }}
-              >
-                <Icon name={icon} size={15} color={member.tone === 'run' ? colors.run : colors.ink2} />
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text numberOfLines={1} style={{ fontSize: 15, lineHeight: 20, fontWeight: '500', color: colors.ink }}>
-                  {member.name}
-                </Text>
-                <Text numberOfLines={1} style={{ fontSize: 13, lineHeight: 17, color: ink }}>
-                  {[member.state, member.detail].filter(Boolean).join(' · ')}
-                </Text>
-              </View>
-            </View>
-          </View>
-        )
-      })}
+    <View
+      accessible
+      accessibilityLabel={`${count} 名成员正在就位`}
+      style={[card(colors), { minHeight: 52, paddingHorizontal: 14, flexDirection: 'row', alignItems: 'center', gap: 10 }]}
+    >
+      <Spinner size={18} thickness={2.4} />
+      <Text style={{ fontSize: 15, color: colors.ink }}>{`${count} 名成员正在就位`}</Text>
     </View>
   )
 }

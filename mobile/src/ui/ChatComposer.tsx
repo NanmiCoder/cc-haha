@@ -313,6 +313,7 @@ export function ChatComposer({
   lean,
   empty,
   busy,
+  background = false,
   queueing = false,
   disabled,
   run,
@@ -341,6 +342,8 @@ export function ChatComposer({
   lean: boolean
   empty: boolean
   busy: boolean
+  /** 这一轮已结束、团队成员还在跑：没内容时这个键是停止。 */
+  background?: boolean
   queueing?: boolean
   disabled: boolean
   run: ChatComposerRun
@@ -422,6 +425,7 @@ export function ChatComposer({
   const slot = sendSlot({
     hasContent,
     busy,
+    background,
     queueing,
     disabled,
     picking: !!picking,

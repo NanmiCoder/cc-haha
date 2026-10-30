@@ -77,6 +77,20 @@ export function teamPlanSurface(plan: TeamPlanRecord | null | undefined): TeamPl
   }
 }
 
+/**
+ * 方案刚被确认（等你确认 → 启动中/运行中）时的一句提示。确认后审阅卡就消失了，
+ * 不给这一句屏幕上什么都没有。打开会话时方案早已在跑、或换了一份方案，都不算刚确认。
+ */
+export function teamLaunchNotice(
+  previous: Pick<TeamPlanRecord, 'planId' | 'state'> | null | undefined,
+  next: Pick<TeamPlanRecord, 'planId' | 'state' | 'members' | 'parentPlanId' | 'approvedSnapshot'> | null | undefined
+) {
+  if (!previous || !next || previous.planId !== next.planId || previous.state !== 'review_pending') return null
+  if (next.state !== 'launching' && next.state !== 'running') return null
+  const count = (next.approvedSnapshot?.members ?? next.members).length
+  return next.parentPlanId ? `已确认，正在加入 ${count} 名成员` : `已确认，正在启动 ${count} 名成员`
+}
+
 /** 批准前要补齐的地方，和电脑上的启动校验一致：每项任务有负责人，每个成员有任务。 */
 export function teamPlanReview(plan: Pick<TeamPlanRecord, 'members' | 'tasks'>) {
   const unassigned = plan.tasks.filter((task) => !plan.members.some((member) => member.id === task.ownerId))

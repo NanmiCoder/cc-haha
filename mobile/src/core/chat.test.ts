@@ -582,3 +582,42 @@ describe('paged transcript normalization', () => {
     expect(mergeHistoryPages(current, older).page?.historyComplete).toBe(false)
   })
 })
+
+describe('Agent 团队成员之间的消息', () => {
+  // Shapes from a real DeepSeek Flash team run: the member's report reaches the
+  // lead as an envelope; idle notices carry a JSON lifecycle body.
+  const report = '<teammate-message teammate_id="builder">\ntodo.py 写好了，add/list/done 都能用。\n</teammate-message>'
+  const idle = '<teammate-message teammate_id="tester">\n{"type":"idle_notification","from":"tester","idleReason":"available","result":"Task complete"}\n</teammate-message>'
+
+  test('队长的主对话不把它当成用户发言：历史记录和实时回放都不出气泡', () => {
+    const history = normalizeHistory([
+      entry('u1', 'user', '做一个待办'),
+      entry('t1', 'user', report),
+      entry('t2', 'user', [{ type: 'text', text: idle }]),
+      entry('a1', 'assistant', [{ type: 'text', text: '两个成员都完成了。' }]),
+    ])
+    expect(history.map((item) => [item.type, item.text])).toEqual([
+      ['user', '做一个待办'],
+      ['assistant', '两个成员都完成了。'],
+    ])
+    const replayed = chatReducer(createChatState('session'), { type: 'user_message_replay', content: report })
+    expect(replayed.items).toEqual([])
+    // 队长开始处理这条消息：这一轮照样算在跑。
+    expect(replayed.turnActive).toBe(true)
+  })
+
+  test('成员页显示正文和发送者，生命周期通知不显示', () => {
+    const lead = '<teammate-message teammate_id="team-lead">\n#1 好了，开始 #2。\n</teammate-message>'
+    const items = normalizeHistory([entry('p', 'user', '你是 tester。'), entry('m1', 'user', lead), entry('m2', 'user', idle)], { teammates: 'show' })
+    expect(items.map((item) => [item.text, item.teammateFrom])).toEqual([
+      ['你是 tester。', undefined],
+      ['#1 好了，开始 #2。', 'team-lead'],
+    ])
+  })
+
+  test('普通消息里只是提到标签名，照常显示', () => {
+    const text = '解释一下 <teammate-message 这个标签是做什么的'
+    expect(normalizeHistory([entry('u', 'user', text)])[0]?.text).toBe(text)
+    expect(chatReducer(createChatState('session'), { type: 'user_message_replay', content: text }).items).toHaveLength(1)
+  })
+})

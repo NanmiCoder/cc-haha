@@ -97,14 +97,14 @@ Quick connection assigns a temporary `https://random-name.trycloudflare.com` add
 This method requires a Cloudflare account and a domain already added to Cloudflare. cc-haha runs the connector; you create the tunnel and its hostname route in Cloudflare.
 
 1. In **Phone connection → Away from home**, choose **Fixed domain**. The page shows the **Cloudflare Service URL**, normally `http://127.0.0.1:17463`. If you change the local port below, use the updated address shown on the page.
-2. Click **Open Cloudflare**. Under **Networking → Tunnels**, create a **cloudflared** tunnel and copy its **Tunnel Token** from the setup page. You do not need to run the installation command in a terminal. Copy only the Token, not the full command.
-3. Add a **Published application** route to that tunnel. Choose a hostname such as `phone.example.com`. Select **HTTP** for the Service and enter the local address from step 1.
-4. Back in cc-haha, enter the **Fixed HTTPS address**, such as `https://phone.example.com`, and the **Tunnel Token**. Click **Enable connection**.
+2. Click **Open Cloudflare**. Under **Networking → Tunnels**, create a tunnel. Cloudflare then shows install commands; copy any one of them. **Do not run these commands in a terminal**: cc-haha includes the connector, and `cloudflared service install` would add a system service that starts with the computer.
+3. In that tunnel's **Routes**, add a **Published application**. Choose a hostname such as `phone.example.com`. Enter the local address from step 1 as the **Service URL** exactly as shown. Keep `http://`; do not change it to `https://`.
+4. Back in cc-haha, enter the **Fixed HTTPS address**, such as `https://phone.example.com`, and paste the copied command into **Tunnel Token**. The page takes the token out of the command and shows the tunnel ID it found, so you can compare it with the Tunnel ID in Cloudflare. Click **Enable connection**.
 5. Once the entry check succeeds, scan with your phone and approve pairing on the computer.
 
 Enter only the HTTPS scheme and hostname. Do not append `/remote`, another path, a query, or sign-in credentials. Forward the whole origin in Cloudflare so pages, APIs, and WebSockets share the same entry. See the [official Cloudflare setup guide](https://developers.cloudflare.com/tunnel/get-started/) for the full steps.
 
-The Tunnel Token is saved only on this computer and is never returned to the settings field. Leave the field blank to keep a saved Token, or enter a new value to replace it. With the hostname unchanged and the phone authorization still valid, the phone can reuse its saved connection after the desktop restarts and the tunnel resumes.
+cc-haha saves only the token from the command and never runs the command. The token is saved only on this computer and is never returned to the settings field. Leave the field blank to keep a saved token, or paste a new command to replace it. If you have left Cloudflare's creation page, click **Add a replica** on the tunnel's page to copy a command again. With the hostname unchanged and the phone authorization still valid, the phone can reuse its saved connection after the desktop restarts and the tunnel resumes.
 
 ### Network proxy and connection failures
 
@@ -120,7 +120,9 @@ The computer's proxy handles its connection to Cloudflare; it does not enable a 
 |---|---|
 | Connection keeps waiting or reports a network error | The computer's network, saved proxy mode, and proxy availability; restart the connection after changing settings |
 | Proxy connection failed | Proxy address, port, credentials, and whether it allows Cloudflare connections; provider-specific proxy settings are separate from the global network proxy |
-| Fixed domain fails | Tunnel Token, HTTPS hostname, and whether the Cloudflare route's Service URL matches the local address shown in cc-haha |
+| Cloudflare rejected the Tunnel Token | The token belongs to another tunnel, was rotated, or the tunnel was deleted. Click **Add a replica** on the tunnel's page and paste the new command |
+| The tunnel's routes don't reach this computer | The tunnel's Routes need a Published application whose hostname matches the fixed HTTPS address and whose Service URL matches the local address in cc-haha. Also check that you pasted the command for the same tunnel |
+| Fixed domain fails | Whether DNS for the HTTPS hostname has taken effect, and whether the computer's network and proxy work |
 | Computer says ready but phone cannot open the entry | Test the hostname on cellular data, and confirm the computer is running, online, and awake |
 | An old quick address stops working after restart | Scan the new code on the desktop, or use a fixed domain to keep a long-lived address |
 | No system notification while backgrounded | The tunnel provides connectivity; background push needs separate configuration. Reopen the app to synchronize task state |

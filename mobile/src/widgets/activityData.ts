@@ -97,6 +97,7 @@ export type LiveActivityOptions = {
 /** 等待态的等宽详情：命令带 “$ ”，提问是题目，计划提示去看全文。 */
 function waitingDetail(item: MobileActivity, showCommand: boolean) {
   const preview = item.preview?.trim()
+  if (item.decision === 'team_plan') return preview || '团队组好了，等你确认'
   if (item.toolName === 'Bash')
     return showCommand && preview ? `$ ${preview}` : '打开 App 查看命令'
   if (item.toolName === 'AskUserQuestion') return preview || '需要你补充信息'
@@ -158,11 +159,13 @@ export function taskActivityData(
     ...(waiting && !canAnswer
       ? {
           actionLabel:
-            candidate.toolName === 'AskUserQuestion'
-              ? '去回答'
-              : candidate.toolName === 'ExitPlanMode'
-                ? '看完整计划'
-                : '打开处理',
+            candidate.decision === 'team_plan'
+              ? '查看并配置'
+              : candidate.toolName === 'AskUserQuestion'
+                ? '去回答'
+                : candidate.toolName === 'ExitPlanMode'
+                  ? '看完整计划'
+                  : '打开处理',
         }
       : {}),
     ...(!waiting && finite(candidate.startedAt)

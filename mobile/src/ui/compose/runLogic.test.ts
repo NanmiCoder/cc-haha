@@ -66,6 +66,12 @@ describe('send slot', () => {
     expect(sendSlot({ ...idle, canStop: true })).toMatchObject({ kind: 'idle' })
   })
 
+  test('approved team members still working after the turn: an empty box stops them, content sends right away', () => {
+    expect(sendSlot({ ...idle, background: true, canStop: true })).toEqual({ kind: 'stop', enabled: true, label: '停止' })
+    expect(sendSlot({ ...idle, background: true })).toMatchObject({ kind: 'idle' })
+    expect(sendSlot({ ...idle, background: true, canStop: true, hasContent: true })).toEqual({ kind: 'send', enabled: true, label: '发送' })
+  })
+
   test('stopping stays available even when the composer itself is locked', () => {
     expect(sendSlot({ ...idle, busy: true, canStop: true, disabled: true })).toMatchObject({ kind: 'stop', enabled: true })
   })

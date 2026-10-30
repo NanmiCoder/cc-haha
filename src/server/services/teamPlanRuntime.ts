@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { isValidTeamMemberName, teamPlanRecordSchema, type TeamPlanRecord, type TeamPlanMember, type TeamPlanTask } from '../../shared/teamPlan.js'
 import { conversationService } from './conversationService.js'
 import type { TeamPlanLeaderNotice } from './teamPlanService.js'
+import { teamLaunchFailedNotice, teamLaunchedNotice, teamPlanNotice, teamStoppedNotice } from '../../utils/swarm/teamLeadNotice.js'
 import { ProviderService } from './providerService.js'
 import { CLAUDE_OFFICIAL_PROVIDER_ID } from '../types/provider.js'
 import { normalizeExplicitClaudeOfficialModelId } from './claudeOfficialRuntime.js'
@@ -718,10 +719,8 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
   if (plan?.state === 'launch_failed' && !failedLaunchesNoticed.has(`${plan.planId}:${plan.revision}`)) {
     failedLaunchesNoticed.add(`${plan.planId}:${plan.revision}`)
     const error = plan.launch?.error?.trim()
-    const reason = error ? `\nWhat failed: ${error.length > LAUNCH_ERROR_NOTICE_CHARS ? `${error.slice(0, LAUNCH_ERROR_NOTICE_CHARS)}…` : error}` : ''
-    await conversationService.sendMessage(parentSessionId, plan.parentPlanId
-      ? `[Team runtime notice] The members you proposed to add to your team ${plan.teamName} did not start. Members already running are not affected. The user can review the plan and start it again, or cancel it, from the team card; do not spawn those members yourself.${reason}`
-      : `[Team runtime notice] Your team ${plan.teamName} did not start, so none of its members is running. The user can review the plan and start it again, or cancel the team, from the team card; do not create the team again yourself.${reason}`)
+    const failure = error && error.length > LAUNCH_ERROR_NOTICE_CHARS ? `${error.slice(0, LAUNCH_ERROR_NOTICE_CHARS)}…` : error
+    await conversationService.sendMessage(parentSessionId, teamLaunchFailedNotice(plan.teamName, !!plan.parentPlanId, failure))
   }
   for (const launch of launches.values()) {
     if (launch.parentId !== parentSessionId || launch.stopped) continue
@@ -750,15 +749,10 @@ export async function noteLeadUserMessage(parentSessionId: string): Promise<void
         ? `- ${label}: ${open.map(task => `#${task.id} ${task.subject} (${task.status})`).join('; ')}`
         : `- ${label}: no unfinished task`
     })
-    await conversationService.sendMessage(parentSessionId, [
-      stoppedByUser
-        ? `[Team runtime notice] The user's Stop also stopped your team ${launch.plan.teamName}. These members are stopped and keep their work so far:`
-        : stoppedByRestart
-          ? `[Team runtime notice] The app restarted, which stopped these members of your team ${launch.plan.teamName}. They keep their work so far:`
-          : `[Team runtime notice] These members of your team ${launch.plan.teamName} stopped on an error and keep their work so far:`,
-      ...lines,
-      'A stopped member does nothing until it is messaged: if the work should go on, SendMessage each member that still has work, and it resumes from its saved conversation where it left off. Do not spawn replacements or redo their tasks. If a woken member fails again with the same error (a usage limit, billing, the network), tell the user instead of retrying. If the user wants the team to stay stopped, leave them.',
-    ].join('\n'))
+    await conversationService.sendMessage(
+      parentSessionId,
+      teamStoppedNotice(launch.plan.teamName, stoppedByUser ? 'user' : stoppedByRestart ? 'restart' : 'error', lines),
+    )
   }
 }
 
@@ -912,10 +906,7 @@ export async function launchTeamPlanRuntime(plan: TeamPlanRecord): Promise<{ mem
     launch.running = true
     startSupervisor(launch)
     const waitingNames = members.filter(member => waiting.has(member.id)).map(member => member.name)
-    const waitingNote = waitingNames.length > 0
-      ? ` Every task of ${waitingNames.join(', ')} waits on other tasks: such a member gets its instructions automatically once one of its tasks is ready. Messages sent to it before that wait in its inbox and arrive with those instructions. Each member is told to send its result to the members whose tasks depend on it before completing, so forward a result yourself only when a member says one is missing.`
-      : ''
-    await conversationService.sendMessage(plan.sessionId, `Approved team ${plan.teamName} is running. Members and their shared tasks are ready.${waitingNote} Continue coordinating the approved team; do not spawn these members again. Members report back automatically when they finish or fail; you do not need to poll or wait in a loop.`)
+    await conversationService.sendMessage(plan.sessionId, teamLaunchedNotice(plan.teamName, waitingNames))
     return { memberIds }
   } catch (error) {
     await stopTeamPlanRuntime(plan.planId)
@@ -1047,12 +1038,7 @@ export async function rehydrateTeamPlanRuntimesForSession(sessionId: string): Pr
 export async function notifyTeamPlanLeader(plan: TeamPlanRecord, kind: TeamPlanLeaderNotice): Promise<void> {
   // Approval wakes the leader only after launch's readiness barrier and snapshot.
   if (kind === 'approved' || !conversationService.hasSession(plan.sessionId)) return
-  await conversationService.sendMessage(plan.sessionId, {
-    returned: `The user returned team plan ${plan.teamName} for revision. No members were launched. Feedback: ${plan.feedback ?? 'Revise the team proposal.'}`,
-    cancelled: `The user cancelled team plan ${plan.teamName}. Do not launch its members. Wait for new user instructions.`,
-    removed: `The user cancelled team plan ${plan.teamName} before any member started, and the team was removed. You no longer lead a team. Wait for new user instructions.`,
-    ended: `The user ended team ${plan.teamName}: its members were stopped and the team was removed. You no longer lead a team. Wait for new user instructions.`,
-  }[kind])
+  await conversationService.sendMessage(plan.sessionId, teamPlanNotice(kind, plan.teamName, plan.feedback))
 }
 
 export class TeamPlanExecutionInterruptedError extends Error {

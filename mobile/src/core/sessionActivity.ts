@@ -46,6 +46,8 @@ export type UseSessionActivityOptions = {
   live?: Record<string, SubagentLive>
   /** 工作目录，用于把步骤里的路径显示成相对路径。 */
   workDir?: string | null
+  /** 团队方案的 planId 与状态；确认、启动、结束时立刻重读团队。 */
+  teamPlan?: { planId: string; state: string } | null
 }
 
 export type SessionActivity = SessionActivityModel & {
@@ -78,6 +80,7 @@ export function useSessionActivity({
   pendingApprovals = 0,
   live,
   workDir,
+  teamPlan,
 }: UseSessionActivityOptions): SessionActivity {
   const focused = useIsFocused()
   const appActive = useAppActive()
@@ -99,9 +102,11 @@ export function useSessionActivity({
   useEffect(() => () => store?.dispose(), [store])
   const backgroundKey = backgroundTaskIds.join('\n')
   const visible = focused && appActive
+  const teamPlanKey = teamPlan ? `${teamPlan.planId}:${teamPlan.state}` : ''
+  const teamLaunching = teamPlan?.state === 'launching'
   useEffect(() => {
-    store?.configure({ enabled: enabled && !!client, visible, turnActive, backgroundKey })
-  }, [store, enabled, client, visible, turnActive, backgroundKey])
+    store?.configure({ enabled: enabled && !!client, visible, turnActive, backgroundKey, teamPlanKey, teamLaunching })
+  }, [store, enabled, client, visible, turnActive, backgroundKey, teamPlanKey, teamLaunching])
   const data = useSyncExternalStore(
     store ? store.subscribe : noopSubscribe,
     store ? store.getSnapshot : emptySnapshot

@@ -34,9 +34,9 @@ test.each(['ios', 'android'])('%s: short conversations keep both messages mounte
     }))
     mock.module(${JSON.stringify(import.meta.resolve('../../state/DashboardContext'))}, () => ({ useDashboard: () => ({ snapshot: null }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../../core/useComputerUse'))}, () => ({ useComputerUse: () => ({ enabled: false }) }))
-    mock.module(${JSON.stringify(import.meta.resolve('../../core/sessionActivity'))}, () => ({ useSessionActivity: () => ({ runningCount: 0 }) }))
+    mock.module(${JSON.stringify(import.meta.resolve('../../core/sessionActivity'))}, () => ({ teamMembersAllStopped: () => false, useSessionActivity: () => ({ runningCount: 0 }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../kit'))}, () => ({
-      ...Object.fromEntries(['ActionMenu', 'Button', 'Callout', 'Card', 'FloatingButton', 'InlineError', 'Mono', 'NavBar', 'ScreenView', 'Spinner'].map(name => [name, name])),
+      ...Object.fromEntries(['ActionMenu', 'Button', 'Callout', 'Card', 'FloatingButton', 'InlineError', 'Mono', 'NavBar', 'ScreenView', 'Spinner', 'Toast'].map(name => [name, name])),
       goBack() {}, useColors: () => ({}),
     }))
     mock.module(${JSON.stringify(import.meta.resolve('../Text'))}, () => ({ Text: 'Text' }))

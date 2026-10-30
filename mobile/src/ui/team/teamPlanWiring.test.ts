@@ -1,14 +1,14 @@
 import { execFileSync } from 'node:child_process'
 import { test } from 'bun:test'
 
-test('the real chat page keeps the composer and Stop while a team plan waits, and pops the sheet once per plan', () => {
+test('the real chat page keeps the composer and Stop while a team plan waits, pops the sheet once per plan, and confirms an approval', () => {
   // Same harness as the other real-chat-page tests: native views become strings,
   // hooks are deterministic, and useTeamPlan returns whatever plan the case sets.
   const script = `
     import { mock } from 'bun:test'
     import assert from 'node:assert/strict'
     const React = require(${JSON.stringify(import.meta.resolve('react'))})
-    let cursor = 0, slots = [], running = false, plan = null
+    let cursor = 0, slots = [], running = false, plan = null, membersStopped = false
     const native = { send() { return true }, scrollToOffset() {} }
     mock.module(${JSON.stringify(import.meta.resolve('react'))}, () => ({
       ...React, default: React,
@@ -28,9 +28,9 @@ test('the real chat page keeps the composer and Stop while a team plan waits, an
     mock.module(${JSON.stringify(import.meta.resolve('../../state/AppContext'))}, () => ({ useApp: () => ({ drafts: new Map() }), useConnection: () => ({ client: null, host: { name: 'Fixture', auth: 'lan' } }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../../state/DashboardContext'))}, () => ({ useDashboard: () => ({ snapshot: null }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../../core/useComputerUse'))}, () => ({ useComputerUse: () => ({ enabled: true }) }))
-    mock.module(${JSON.stringify(import.meta.resolve('../../core/sessionActivity'))}, () => ({ useSessionActivity: () => ({ runningCount: 0 }) }))
+    mock.module(${JSON.stringify(import.meta.resolve('../../core/sessionActivity'))}, () => ({ teamMembersAllStopped: () => membersStopped, useSessionActivity: () => ({ runningCount: 0 }) }))
     mock.module(${JSON.stringify(import.meta.resolve('../kit'))}, () => ({
-      ...Object.fromEntries(['ActionMenu', 'Button', 'Callout', 'Card', 'FloatingButton', 'InlineError', 'Mono', 'NavBar', 'ScreenView', 'Spinner'].map(name => [name, name])),
+      ...Object.fromEntries(['ActionMenu', 'Button', 'Callout', 'Card', 'FloatingButton', 'InlineError', 'Mono', 'NavBar', 'ScreenView', 'Spinner', 'Toast'].map(name => [name, name])),
       goBack() {}, useColors: () => ({}),
     }))
     mock.module(${JSON.stringify(import.meta.resolve('../Text'))}, () => ({ Text: 'Text' }))
@@ -62,6 +62,12 @@ test('the real chat page keeps the composer and Stop while a team plan waits, an
       if (!node || typeof node !== 'object') return
       if (node.type === type) return node
       for (const child of [node.props?.children].flat(Infinity)) { const match = find(child, type); if (match) return match }
+    }
+    function findAll(node, type, out = []) {
+      if (!node || typeof node !== 'object') return out
+      if (node.type === type) out.push(node)
+      for (const child of [node.props?.children].flat(Infinity)) findAll(child, type, out)
+      return out
     }
     function page() { cursor = 0; const screen = Chat(); return screen.type(screen.props) }
     const review = (patch = {}) => ({ planId: 'p1', revision: 2, state: 'review_pending', teamName: 'taskboard', members: [], tasks: [], ...patch })
@@ -97,6 +103,35 @@ test('the real chat page keeps the composer and Stop while a team plan waits, an
     tree = page()
     assert.equal(find(tree, 'TeamPlanSheet'), undefined)
     assert.equal(find(find(tree, 'ChatComposer').props.above, 'TeamPlanCard'), undefined)
+
+    // Approving: the review card goes away, so a toast says so, the capsule shows the
+    // launch and the activity sheet holds a placeholder until members appear.
+    plan = review({ planId: 'p4' })
+    tree = page()
+    plan = review({ planId: 'p4', state: 'launching', members: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] })
+    page()
+    tree = page()
+    assert.equal(find(tree, 'Toast')?.props.text, '已确认，正在启动 3 名成员')
+    assert.equal(find(find(tree, 'NavBar').props.right, 'ActivityCapsule')?.props.launching, true)
+    assert.equal(find(tree, 'ActivitySheet')?.props.launching, 3)
+    assert.equal(find(find(tree, 'ChatComposer').props.above, 'TeamPlanCard'), undefined)
+    plan = review({ planId: 'p4', state: 'running', members: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] })
+    tree = page()
+    assert.equal(find(find(tree, 'NavBar').props.right, 'ActivityCapsule')?.props.launching, false)
+    assert.equal(find(tree, 'ActivitySheet')?.props.launching, undefined)
+
+    // The lead's turn ended while approved members still work: the composer key
+    // offers Stop (it pauses the team); once every member stopped, it does not.
+    running = false
+    tree = page()
+    assert.equal(find(tree, 'ChatComposer').props.background, true)
+    assert.ok(findAll(tree, 'ConfirmSheet').some((sheet) => sheet.props.title === '停止团队？'))
+    membersStopped = true
+    tree = page()
+    assert.equal(find(tree, 'ChatComposer').props.background, false)
+    membersStopped = false
+    running = true
+    assert.equal(find(page(), 'ChatComposer').props.background, false, 'a running turn already offers Stop')
 
     // A failed launch is a card above the composer without the sheet.
     running = false
