@@ -23,7 +23,7 @@ describe('PR quality workflow', () => {
     const setupBunStepCount = workflow.match(/uses: oven-sh\/setup-bun@v2/g)?.length ?? 0
     const versionFileCount = workflow.match(/bun-version-file: package\.json/g)?.length ?? 0
 
-    expect(packageJson.packageManager).toBe('bun@1.4.3')
+    expect(packageJson.packageManager).toBe('bun@1.4.4')
     expect(setupBunStepCount).toBeGreaterThan(0)
     expect(versionFileCount).toBe(setupBunStepCount)
     expect(workflow).not.toContain('bun-version:')
