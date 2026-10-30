@@ -9,6 +9,15 @@ describe('xxHash64Seeded', () => {
     expect(xxHash64Seeded(encoder.encode('a'), 0n).toString(16)).toBe('d24ec4f1a98c6e5b')
     expect(xxHash64Seeded(encoder.encode('hello world'), 0n).toString(16)).toBe('45ab6734b21e6968')
   })
+
+  test('Bun.hash.xxHash64 matches the JS implementation with the CCH seed', () => {
+    const seed = 0x6E52736AC806831En
+    const samples = ['', 'a', 'abc', 'hello world', '中文请求体', 'x'.repeat(31), 'y'.repeat(32), 'z'.repeat(100003)]
+    for (const s of samples) {
+      const bytes = encoder.encode(s)
+      expect(BigInt(Bun.hash.xxHash64(bytes, seed))).toBe(xxHash64Seeded(bytes, seed))
+    }
+  })
 })
 
 describe('signClaudeCodeCCHInString', () => {
