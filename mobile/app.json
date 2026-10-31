@@ -14,6 +14,7 @@
     "userInterfaceStyle": "automatic",
     "icon": "./assets/icon.png",
     "ios": {
+      "icon": "./assets/icon-ios.png",
       "supportsTablet": true,
       "bundleIdentifier": "com.yunce.cchaha.mobile",
       "entitlements": {
