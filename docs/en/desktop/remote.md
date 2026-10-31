@@ -7,15 +7,17 @@ order: 9
 
 # Mobile App, H5, and IM
 
-A task is running on your computer and you want to check on it, or add one more instruction, from your phone. Open **Phone connection** in the desktop's left sidebar, or go to **Settings → Phone connection**. You can connect with your phone's browser now, while the mobile app is awaiting release.
+A task is running on your computer and you want to check on it, or add one more instruction, from your phone. Open **Phone connection** in the desktop's left sidebar, or go to **Settings → Phone connection**. You can install the cc-haha mobile app, or connect with your phone's browser.
 
 ## cc-haha mobile app availability
 
 | How to open cc-haha on your phone | Availability | How to get started |
 |---|---|---|
-| cc-haha Android app | Officially signed APK awaiting release | A download will be provided after release |
-| cc-haha iPhone / iPad app | TestFlight invitations not yet open | An installation invitation will be provided when testing opens |
+| cc-haha Android app | Available; a signed APK ships with every desktop release | Download `cc-haha-mobile-*.apk` from [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest) and install it |
+| cc-haha iPhone / iPad app | TestFlight public beta | Install TestFlight from the App Store, then open the [public link](https://testflight.apple.com/join/Nd49JrWZ) |
 | Phone browser (H5) | Available now | Select **Use phone browser**, then enable the connection and scan as described below |
+
+The mobile app works with desktop v0.7.6 or later. Its interface is currently Chinese only.
 
 **Use phone browser** selects **Same Wi-Fi**. You still need to read the notice and enable the connection yourself. Connect directly when your phone and computer share a trusted Wi-Fi network. Use **Cloudflare remote connection** below over cellular data or another Wi-Fi network. Neither method needs another VPN app on the phone.
 

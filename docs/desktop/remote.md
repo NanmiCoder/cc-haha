@@ -7,15 +7,17 @@ order: 9
 
 # 手机 App、H5 与 IM 接力
 
-电脑上跑着的任务，想在手机上看进度、追加一句话，可以从桌面左侧 **手机连接** 进入，也可从 **设置 → 手机连接** 进入。目前可直接用手机浏览器扫码连接，无需等待手机 App 发布。
+电脑上跑着的任务，想在手机上看进度、追加一句话，可以从桌面左侧 **手机连接** 进入，也可从 **设置 → 手机连接** 进入。可以安装 cc-haha 手机 App，也可以直接用手机浏览器扫码连接。
 
 ## cc-haha 手机 App 安装状态
 
 | 手机上的打开方式 | 当前状态 | 如何使用 |
 |---|---|---|
-| cc-haha Android App | 正式签名 APK 待发布 | 下载入口将在发布后提供 |
-| cc-haha iPhone / iPad App | TestFlight 邀请待开放 | 安装邀请将在开放后提供 |
+| cc-haha Android App | 已发布，正式签名 APK 随每个桌面端版本发布 | 在 [GitHub Releases](https://github.com/NanmiCoder/cc-haha/releases/latest) 下载 `cc-haha-mobile-*.apk` 安装 |
+| cc-haha iPhone / iPad App | TestFlight 公开测试 | 先在 App Store 安装 TestFlight，再打开[公开链接](https://testflight.apple.com/join/Nd49JrWZ)加入 |
 | 手机浏览器（H5） | 现在可用 | 点击「先用浏览器连接」，按下方步骤开启连接并扫码 |
+
+手机 App 需要配合桌面端 v0.7.6 或更新版本使用，界面目前只有中文。
 
 「先用浏览器连接」会切换到 **同一 Wi-Fi**，需要你阅读提示并主动开启连接。手机和电脑在同一个可信 Wi-Fi 时可以直接连接；外出、使用蜂窝网络或其他 Wi-Fi 时，使用下方的 **Cloudflare 外出连接**。两种方式都无需在手机上额外安装 VPN。
 

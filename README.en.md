@@ -1,7 +1,7 @@
 # cc-haha
 
 <p align="center">
-  <img src="docs/images/readme-cover-en.jpg" alt="cc-haha — Source-available desktop for Claude Code" width="960">
+  <img src="docs/images/readme/cover-en.webp" alt="cc-haha — Claude Code for desktop and mobile" width="960">
 </p>
 
 <div align="center">
@@ -19,7 +19,7 @@
 
 </div>
 
-cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, an Agent Teams workbench, dynamic Workflow orchestration, model trace, Computer Use, skill marketplace, colour themes, desktop pets, H5 remote access, IM integration, and scheduled tasks, all in one app. **On macOS, Computer Use can operate other apps without taking over your physical mouse or keyboard.**
+cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: multi-session workspaces, global search, branch / Worktree launch, diff review, built-in browser preview, GUI permission approval, any model — Claude, ChatGPT, Grok, presets, or local endpoints — image generation, visual MCP & SubAgent managers, an Agent Teams workbench, dynamic Workflow orchestration, model trace, Computer Use, skill marketplace, colour themes, desktop pets, mobile app and H5 remote access, IM integration, and scheduled tasks, all in one app. **On macOS, Computer Use can operate other apps without taking over your physical mouse or keyboard.** The companion Android / iPhone app pairs with your computer by QR code, so you can approve actions and start tasks away from your desk.
 
 <p align="center"><b>Platinum Sponsor · Modelflare</b></p>
 
@@ -36,23 +36,49 @@ cc-haha is a **desktop Claude Code workspace** for macOS, Windows, and Linux: mu
 <p><sub><b>Special offers:</b> a single top-up of US$20 unlocks the GPT discount group at a 0.015x price multiplier, and a single top-up of US$50 unlocks the Claude discount group at a 0.03x multiplier. Register via <a href="https://modelflare.dev/sign-up?utm_source=github&amp;utm_campaign=cchaha">this exclusive link</a> to get started.</sub></p>
 
 <p align="center">
-  <a href="#desktop-preview">Desktop Preview</a> · <a href="#install-the-desktop-app">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#more-documentation">More Docs</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#user-group">User Group</a>
+  <a href="#feature-preview">Feature Preview</a> · <a href="#install">Install</a> · <a href="#desktop-highlights">Highlights</a> · <a href="#more-documentation">More Docs</a> · <a href="#sponsorship--partnership">Sponsorship</a> · <a href="#user-group">User Group</a>
 </p>
 
 ---
 
-## Desktop Preview
+## Feature Preview
 
 <p align="center">
   <a href="https://github.com/NanmiCoder/cc-haha/releases"><img src="https://img.shields.io/badge/⬇_Download_Desktop-macOS_%7C_Windows_%7C_Linux-FF7A00?style=for-the-badge" alt="Download Desktop"></a>
+  <a href="https://github.com/NanmiCoder/cc-haha/releases/latest"><img src="https://img.shields.io/badge/Android-APK-3DDC84?style=for-the-badge&logo=android&logoColor=white" alt="Download the Android APK"></a>
+  <a href="https://testflight.apple.com/join/Nd49JrWZ"><img src="https://img.shields.io/badge/iOS-TestFlight-1F1A17?style=for-the-badge&logo=apple&logoColor=white" alt="Install the iOS app with TestFlight"></a>
 </p>
 
-<p align="center">
-  <a href="https://cdn.zizhi1.com/cc-haha/site/cchaha-film-1080p-v2.mp4"><img src="docs/images/readme-film-cover-en.webp" width="720" alt="Watch the 62-second cc-haha film"></a>
-  <br><sub>A 62-second film made with Claude, with no narration. Opens the video in your browser.</sub>
-</p>
-
-Start here: [install the app](docs/en/start/install.md) → [connect a model](docs/en/start/models.md) → [run your first session](docs/en/start/first-session.md) → [explore settings](docs/en/desktop/settings.md) → [try real workflows](docs/en/cases/index.md). For hands-free cross-app work on macOS, follow the [Computer Use guide](docs/en/desktop/computer-use.md).
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/images/readme/mobile-en.webp" width="100%" alt="Mobile app: approve actions, answer questions, and start new tasks away from your computer">
+      <br><sub><a href="docs/en/desktop/remote.md">Mobile app</a></sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/images/readme/agent-teams-en.webp" width="100%" alt="Agent Teams: the lead splits the work and members run in parallel">
+      <br><sub><a href="docs/en/internals/agent.md">Agent Teams</a></sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/images/readme/computer-use-en.webp" width="100%" alt="Computer Use: the agent drives other apps with its own virtual cursor while your mouse and keyboard stay yours">
+      <br><sub><a href="docs/en/desktop/computer-use.md">Computer Use</a></sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/images/readme/models-en.webp" width="100%" alt="Models: sign in to Claude, ChatGPT, or Grok, use presets for DeepSeek, Kimi, GLM and more, or run Ollama and LM Studio locally">
+      <br><sub><a href="docs/en/start/models.md">Models</a></sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/images/readme/workbench-en.webp" width="100%" alt="Desktop workbench: parallel sessions, built-in browser preview, and file-by-file diff review">
+      <br><sub><a href="docs/en/desktop/workspace.md">Desktop workbench</a></sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/images/readme/skills-en.webp" width="100%" alt="Skills Market: browse curated ClawHub and SkillHub skills with their source and security scan status in plain view">
+      <br><sub><a href="docs/en/desktop/skills.md">Skills Market</a></sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -103,25 +129,14 @@ This project is maintained in the author's spare time. Corporate or individual s
 
 ---
 
-## Install the Desktop App
+## Install
 
 1. Download the macOS / Windows / Linux desktop installer from [Releases](https://github.com/NanmiCoder/cc-haha/releases).
 2. On first launch, configure your model provider, API key, and default model in Settings.
 3. Public macOS releases require signing and notarization. Draft or unsigned temporary builds may still need one-time manual approval. Unsigned Windows installers may show SmartScreen; click "More info" -> "Run anyway". See the [desktop installation guide](docs/en/start/install.md).
+4. Mobile (optional; the app interface is currently Chinese only): on Android, download `cc-haha-mobile-*.apk` from Releases; on iPhone, install TestFlight and open the [public link](https://testflight.apple.com/join/Nd49JrWZ). The mobile app needs desktop v0.7.6 or later. Pair it by scanning the QR code under **Phone connection** in the desktop app: connect directly on the same Wi-Fi, or through Cloudflare when you are away. See [Mobile app and remote connection](docs/en/desktop/remote.md).
 
 Release trust and privacy: [Code signing policy](docs/en/start/code-signing.md) · [Privacy and network access](docs/en/start/privacy.md)
-
-## Run the CLI from Source
-
-For users who want to debug the underlying CLI, server, or local development flow:
-
-```bash
-bun install
-cp .env.example .env
-./bin/claude-haha
-```
-
-See [environment variables](docs/en/cli/env.md) and [CLI setup](docs/en/cli/index.md) for more configuration options.
 
 ---
 
@@ -180,7 +195,7 @@ If this project helps you, consider buying me a coffee — every bit of support 
 - **Model trace**: every model request is logged locally with status and timing — search and filter to diagnose stuck or failed calls.
 - **Computer Use**: let the agent take screenshots, click, type, and control desktop apps after authorization; the native macOS runtime does not take over your physical mouse or keyboard.
 - **Desktop pets**: Dada, Huhu, Bubu, and Huihui change what they do with the task at hand — or raise one of your own (off by default).
-- **H5 remote access**: scan a QR code to continue the session in your phone browser; locking the screen won't kill a running task.
+- **Mobile app and H5**: pair the Android / iPhone app with your computer by QR code to approve tool calls, answer questions, start new tasks, review changes, and stop work from your phone, or connect from the phone browser. Tasks always run on the computer, so locking the phone won't interrupt them.
 - **IM integration**: chat, switch projects, and approve actions through Telegram / Feishu / WeChat / DingTalk / WhatsApp / WeCom / QQ / Slack.
 - **Scheduled tasks and usage stats**: run planned tasks in their own sessions and track local token usage trends.
 
@@ -193,7 +208,7 @@ Full documentation site: <https://cchaha.ai>
 | Section | Documents |
 |------|------|
 | **Getting started** | [What this is](docs/en/start/index.md) · [Download and install](docs/en/start/install.md) · [Connect a model provider](docs/en/start/models.md) · [Your first session](docs/en/start/first-session.md) · [Troubleshooting](docs/en/start/troubleshooting.md) |
-| **Desktop features** | [Feature overview](docs/en/desktop/index.md) · [Computer Use](docs/en/desktop/computer-use.md) · [Desktop pets](docs/en/desktop/pets.md) · [Phone H5 and IM relay](docs/en/desktop/remote.md) |
+| **Desktop features** | [Feature overview](docs/en/desktop/index.md) · [Computer Use](docs/en/desktop/computer-use.md) · [Desktop pets](docs/en/desktop/pets.md) · [Mobile app, H5, and IM relay](docs/en/desktop/remote.md) |
 | **IM integrations** | [Overview and pairing](docs/en/im/index.md) · [Feishu](docs/en/im/feishu.md) · [Telegram](docs/en/im/telegram.md) · [WeChat](docs/en/im/wechat.md) · [DingTalk](docs/en/im/dingtalk.md) · [WhatsApp](docs/en/im/whatsapp.md) · [WeCom](docs/en/im/wecom.md) · [QQ](docs/en/im/qq.md) · [Slack](docs/en/im/slack.md) |
 | **CLI** | [Install and run](docs/en/cli/index.md) · [Command reference](docs/en/cli/reference.md) · [Environment variables](docs/en/cli/env.md) |
 | **Internals** | [Desktop architecture](docs/en/internals/desktop.md) · [Multi-agent system](docs/en/internals/agent.md) · [Skills system](docs/en/internals/skills.md) · [Memory system](docs/en/internals/memory.md) · [Computer Use architecture](docs/en/internals/computer-use.md) · [Local server and API](docs/en/internals/server.md) · [Channel system](docs/en/internals/channel.md) · [Project structure](docs/en/internals/structure.md) · [Contributing and quality gates](docs/en/internals/contributing.md) |
