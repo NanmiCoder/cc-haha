@@ -34,6 +34,18 @@ curl http://127.0.0.1:3456/health
 
 `/health` 是启动探针，始终公开，不代表其他接口已通过认证。
 
+## 启动顺序
+
+`Bun.serve` 先完成端口监听，之后才开始本地索引初始化：
+
+1. 端口绑定并开始接收请求。
+2. 后台按优先级启动本地索引投影与全文检索回填。
+3. 需要索引的 REST 请求在 `fetch` 内等待 `localIndexCoordinator.start()`；`/health` 不等待任何子系统。
+
+这样安排是因为打开 SQLite、读取 `source_files` 这些步骤在第一个 `await` 之前同步执行。若把它们放在 `Bun.serve` 之前，端口在整个同步初始化期间都不监听，宿主探针会把「还没 bind」误判成「进程已死」。
+
+索引重建是可续跑的：每份 transcript 单独提交事务，进程重启后已提交的部分不会重做。首次启动遇到 parser 版本升级（例如 v12 → v13）会全量重投影，耗时随数据量线性增长。这段过程会打印 `[local-index]` 前缀的分阶段日志：`opening`、`opened`、`rebuilding <n> sources`、`discovery start`、节流后的 `projected <done>/<total>`、`discovery complete`、`activity backfill start/complete`。日志写 stdout，桌面端会把它收进启动失败弹窗的 `Recent server logs`。
+
 ## 启动参数
 
 | 参数 | 环境变量 | 默认值 | 说明 |

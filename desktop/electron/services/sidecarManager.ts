@@ -281,8 +281,36 @@ export async function waitForServer(host: string, port: number, timeoutMs = SERV
     await sleep(150)
   }
 
-  const reason = lastError ? `: ${lastError.message}` : ''
-  throw new Error(`desktop server did not report healthy at ${healthUrl} within ${Math.round(timeoutMs / 1000)} seconds${reason}`)
+  // Which failure this is decides what the user can do about it: a port that
+  // never opened means the sidecar is still before its bind, while an open port
+  // with a silent /health means the event loop is busy (typically a local index
+  // rebuild). Collapsing both into one message sent every reader of #1746 down
+  // the wrong path.
+  const listening = await isPortListening(host, port)
+  const reason = lastError ? ` (last probe: ${lastError.message})` : ''
+  if (listening) {
+    throw new Error(
+      `desktop server is listening on ${host}:${port} but did not answer ${healthUrl} within ${Math.round(timeoutMs / 1000)} seconds; the process is alive and may still be rebuilding its local index${reason}`,
+    )
+  }
+  throw new Error(
+    `desktop server never started listening on ${host}:${port} within ${Math.round(timeoutMs / 1000)} seconds; the process may still be initializing${reason}`,
+  )
+}
+
+/** Best-effort TCP connect probe: distinguishes "not bound yet" from "busy". */
+async function isPortListening(host: string, port: number): Promise<boolean> {
+  return await new Promise<boolean>(resolve => {
+    const socket = net.connect({ host, port })
+    const settle = (listening: boolean) => {
+      socket.removeAllListeners()
+      socket.destroy()
+      resolve(listening)
+    }
+    socket.setTimeout(500, () => settle(false))
+    socket.once('connect', () => settle(true))
+    socket.once('error', () => settle(false))
+  })
 }
 
 async function assertServerHealth(healthUrl: string, timeoutMs: number): Promise<void> {

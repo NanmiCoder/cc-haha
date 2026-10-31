@@ -71,6 +71,10 @@ The renderer must not import Electron directly, and must not assemble arbitrary 
 
 The server can bind a LAN-reachable address for H5, but the desktop renderer always talks to the loopback control address. H5, remote access, and pet windows each pass their own token and capability limits. A running local server does not make every caller trusted.
 
+The health check polls `/health` with a 30-second total timeout. A timeout no longer kills the sidecar: the process stays owned by `startingServer`, so the next `getServerUrl()` call (a user retry, or the renderer's recovery request) keeps probing **the same** process instead of spawning a new one. A slow start caused by a local index rebuild or a busy event loop can therefore finish; each timeout would otherwise reset that progress. Only three things terminate the child: an explicit quit or stop (`stopAll` / `stopAllAndWait`), the child exiting on its own, and an explicit "restart server" action.
+
+Timeout messages distinguish two states: a port that never started listening (`never started listening on <host>:<port>`, usually still initializing the index) and a port that is listening but does not answer `/health` (`is listening on <host>:<port> but did not answer`, event loop blocked by long work). Both append the last probe error, and neither contains the `Recent server logs:` marker, so they render as the message body of the startup-failure dialog.
+
 ### Sidecar entry point
 
 `desktop/sidecars/claude-sidecar.ts` is the single entry point:

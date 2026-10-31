@@ -34,6 +34,18 @@ Response shape:
 
 `/health` is an always-public startup probe. A successful response does not prove that another endpoint is authenticated.
 
+## Startup order
+
+`Bun.serve` finishes binding the port before local index startup begins:
+
+1. The port is bound and starts accepting requests.
+2. Background work starts the session projection first, then the full-text backfill.
+3. REST requests that need the index await `localIndexCoordinator.start()` inside `fetch`; `/health` waits for no subsystem.
+
+The order matters because opening SQLite and scanning `source_files` run synchronously before the first `await` in the coordinator. Running them ahead of `Bun.serve` left the port unbound for the whole synchronous pass, so a host probe saw "not bound yet" and reported it as "the process is dead".
+
+Index rebuilds are resumable: every transcript commits its own transaction, so work already committed survives a restart. The first launch after a parser version bump (for example v12 → v13) re-projects every transcript, which scales with transcript volume. That pass logs `[local-index]` phase lines: `opening`, `opened`, `rebuilding <n> sources`, `discovery start`, throttled `projected <done>/<total>`, `discovery complete`, and `activity backfill start/complete`. The lines go to stdout, which the desktop host captures into the `Recent server logs` section of its startup-failure dialog.
+
 ## Startup options
 
 | Option | Environment variable | Default | Description |
