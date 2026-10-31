@@ -15,7 +15,7 @@ import { sessionsApi, type SessionRewindMode, type SessionTurnCheckpoint, type W
 import { listPendingPermissions, useChatStore } from '../../stores/chatStore'
 import { useSessionStore } from '../../stores/sessionStore'
 import { useSideChatStore } from '../../stores/sideChatStore'
-import { useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
+import { getAnnotationNumbers, useWorkspaceChatContextStore } from '../../stores/workspaceChatContextStore'
 import { useWorkspaceStore, type WorkspaceOrigin } from '../../stores/workspaceStore'
 import { SETTINGS_TAB_ID, useTabStore } from '../../stores/tabStore'
 import { teamTaskWindowsForSnapshot, useTeamStore } from '../../stores/teamStore'
@@ -46,6 +46,9 @@ import { describeRewindResult, getApiErrorMessage, rewindToTurnCheckpoint } from
 import { useUserMessageEditResend, type EditableTurnCard } from './useUserMessageEditResend'
 import type { UserMessageEditAction } from './UserMessage'
 import { WorkspaceChangesFallback } from '@/components/chat/WorkspaceChangesFallback'
+import { ChatAnnotationEditor } from './annotations/ChatAnnotationEditor'
+import { ChatAnnotationMarks, type ChatAnnotationMark } from './annotations/ChatAnnotationMarks'
+import { getTextOffsetForRange } from './annotations/annotationAnchors'
 import { AgentTeamsInlineCard } from '../agentTeams/AgentTeamsSummary'
 import { MEMBER_AVATARS, memberAccentColor } from '../agentTeams/agentTeamsAvatars'
 import {
@@ -162,11 +165,26 @@ type ChatSelectionState = {
   text: string
   x: number
   y: number
+  /** The live selection, kept so an annotation can record exact character offsets. */
+  range: Range
 }
 
 type SelectionPointer = {
   clientX: number
   clientY: number
+}
+
+/**
+ * What the annotation editor is currently open on: a new annotation captured
+ * from the selection menu, or an existing one reached through its badge.
+ */
+type AnnotationEditorState = {
+  annotationId?: string
+  quote: string
+  note: string
+  startOffset?: number
+  endOffset?: number
+  anchorRect: DOMRect
 }
 
 // Business errors whose raw message carries evidence worth keeping under the
@@ -223,6 +241,7 @@ function getChatSelectionFromContainer(
   return {
     ...getChatSelectionPosition(range, root, selection, pointer),
     text,
+    range,
   }
 }
 
@@ -231,6 +250,22 @@ function getSelectionPointer(event: SelectionPointer): SelectionPointer {
     clientX: event.clientX,
     clientY: event.clientY,
   }
+}
+
+/** Where to hang the annotation editor when the selection reports no area. */
+function getSelectionMenuAnchorRect(selection: ChatSelectionState): DOMRect {
+  const height = CHAT_SELECTION_MENU_HEIGHT
+  return {
+    left: selection.x,
+    top: selection.y - height,
+    right: selection.x + CHAT_SELECTION_MENU_WIDTH,
+    bottom: selection.y,
+    width: CHAT_SELECTION_MENU_WIDTH,
+    height,
+    x: selection.x,
+    y: selection.y - height,
+    toJSON: () => ({}),
+  } as DOMRect
 }
 
 function isPrimarySelectionPointer(event: Pick<PointerEvent, 'button' | 'ctrlKey' | 'pointerType'>) {
@@ -243,11 +278,13 @@ function isKeyboardSelectionKey(event: KeyboardEvent) {
 
 function ChatSelectionMenu({
   selection,
+  onAnnotate,
   onAdd,
   onSideChat,
   popoverRef,
 }: {
   selection: ChatSelectionState | null
+  onAnnotate: () => void
   onAdd: () => void
   onSideChat?: () => void
   popoverRef: { current: HTMLDivElement | null }
@@ -259,6 +296,7 @@ function ChatSelectionMenu({
       onMouseDown={event => { if (event.button === 0 && !event.ctrlKey) event.preventDefault() }}
       className="fixed z-[var(--z-popover)] inline-flex max-w-[calc(100vw-24px)] items-center rounded-[var(--radius-lg)] border border-[var(--color-border)] bg-[var(--color-surface-container-lowest)] p-1 shadow-[var(--shadow-overlay)]"
       style={{ left: selection.x, top: selection.y }}>
+      <Button variant="ghost" onClick={onAnnotate}>{t('chat.annotateSelection')}</Button>
       <Button variant="ghost" onClick={onAdd}>{t('chat.addSelectionToChat')}</Button>
       {onSideChat && <Button variant="ghost" onClick={onSideChat}>{t('chat.askSelectionInSideChat')}</Button>}
     </div>, document.body,
@@ -572,12 +610,34 @@ function SelectableChatMessage({
   const selectionUpdateAuthorizedRef = useRef(false)
   const selectionUpdateFrameRef = useRef<number | null>(null)
   const addReference = useWorkspaceChatContextStore((state) => state.addReference)
+  const updateReference = useWorkspaceChatContextStore((state) => state.updateReference)
+  const removeReference = useWorkspaceChatContextStore((state) => state.removeReference)
+  const sessionReferences = useWorkspaceChatContextStore((state) =>
+    sessionId ? state.referencesBySession[sessionId] : undefined,
+  )
   const [selectionMenu, setSelectionMenu] = useState<(ChatSelectionState & { sessionId: string }) | null>(null)
+  const [annotationEditor, setAnnotationEditor] = useState<AnnotationEditorState | null>(null)
   const currentSelectionMenu = selectionMenu?.sessionId === sessionId ? selectionMenu : null
   const t = useTranslation()
   const sourceName = role === 'assistant'
     ? t('chat.assistantMessageReference')
     : t('chat.userMessageReference')
+
+  // Only the annotations this message owns, numbered the same way the request
+  // and the composer chips number them.
+  const messageAnnotations = useMemo<ChatAnnotationMark[]>(() => {
+    if (!sessionReferences) return []
+    const numbers = getAnnotationNumbers(sessionReferences)
+    return sessionReferences
+      .filter((reference) => numbers.has(reference.id) && reference.messageId === messageId)
+      .map((reference) => ({
+        id: reference.id,
+        number: numbers.get(reference.id)!,
+        quote: reference.quote ?? '',
+        startOffset: reference.startOffset,
+        endOffset: reference.endOffset,
+      }))
+  }, [sessionReferences, messageId])
 
   const cancelPendingSelectionMenuUpdate = useCallback(() => {
     selectionGestureEpochRef.current += 1
@@ -592,6 +652,7 @@ function SelectableChatMessage({
   useLayoutEffect(() => {
     cancelPendingSelectionMenuUpdate()
     setSelectionMenu(null)
+    setAnnotationEditor(null)
     lastSelectionPointerRef.current = null
     selectionStartedInsideRef.current = false
     selectionUpdateAuthorizedRef.current = false
@@ -723,16 +784,106 @@ function SelectableChatMessage({
     clearWindowSelection()
   }, [messageId, role, currentSelectionMenu, sessionId, sourceName])
 
+  /**
+   * Opens the editor on the passage the user just selected. Nothing reaches the
+   * store until they save: dismissing the editor must leave the composer exactly
+   * as it was.
+   */
+  const startAnnotation = useCallback(() => {
+    if (!sessionId || !currentSelectionMenu) return
+    const root = rootRef.current
+    // Read every offset before clearing the selection, so the range is still the
+    // one the user dragged.
+    const offsets = root ? getTextOffsetForRange(root, currentSelectionMenu.range) : null
+    const selectionRect = currentSelectionMenu.range.getBoundingClientRect()
+    const anchorRect = selectionRect.width || selectionRect.height
+      ? selectionRect
+      : getSelectionMenuAnchorRect(currentSelectionMenu)
+    setSelectionMenu(null)
+    setAnnotationEditor({
+      quote: currentSelectionMenu.text,
+      note: '',
+      startOffset: offsets?.start,
+      endOffset: offsets?.end,
+      anchorRect,
+    })
+    clearWindowSelection()
+  }, [currentSelectionMenu, sessionId])
+
+  const saveAnnotation = useCallback((note: string) => {
+    if (!sessionId || !annotationEditor) return
+    if (annotationEditor.annotationId) {
+      updateReference(sessionId, annotationEditor.annotationId, { note })
+    } else {
+      addReference(sessionId, {
+        kind: 'chat-selection',
+        path: `chat://${role}/${messageId}`,
+        name: sourceName,
+        quote: annotationEditor.quote,
+        sourceRole: role,
+        messageId,
+        note,
+        startOffset: annotationEditor.startOffset,
+        endOffset: annotationEditor.endOffset,
+      })
+    }
+    setAnnotationEditor(null)
+  }, [addReference, annotationEditor, messageId, role, sessionId, sourceName, updateReference])
+
+  const deleteAnnotation = useCallback(() => {
+    if (!sessionId || !annotationEditor?.annotationId) return
+    removeReference(sessionId, annotationEditor.annotationId)
+    setAnnotationEditor(null)
+  }, [annotationEditor, removeReference, sessionId])
+
+  const activateAnnotation = useCallback((mark: ChatAnnotationMark, anchorRect: DOMRect) => {
+    const reference = sessionReferences?.find((candidate) => candidate.id === mark.id)
+    if (!reference) return
+    setAnnotationEditor({
+      annotationId: reference.id,
+      quote: mark.quote,
+      note: reference.note ?? '',
+      startOffset: reference.startOffset,
+      endOffset: reference.endOffset,
+      anchorRect,
+    })
+  }, [sessionReferences])
+
+  const dismissAnnotationEditor = useCallback(() => {
+    setAnnotationEditor(null)
+  }, [])
+
   return (
     <div
       ref={rootRef}
       data-chat-selectable-message={role}
+      className="relative"
       onKeyDown={(event) => {
         if (event.key === 'Escape') setSelectionMenu(null)
       }}
     >
       {children}
-      <ChatSelectionMenu selection={currentSelectionMenu} onAdd={addCurrentSelectionToChat} onSideChat={isLean ? undefined : askSelectionInSideChat} popoverRef={selectionMenuRef} />
+      {messageAnnotations.length > 0 && (
+        <ChatAnnotationMarks annotations={messageAnnotations} onActivate={activateAnnotation} />
+      )}
+      <ChatSelectionMenu
+        selection={currentSelectionMenu}
+        onAnnotate={startAnnotation}
+        onAdd={addCurrentSelectionToChat}
+        onSideChat={isLean ? undefined : askSelectionInSideChat}
+        popoverRef={selectionMenuRef}
+      />
+      {annotationEditor && (
+        <ChatAnnotationEditor
+          key={annotationEditor.annotationId ?? 'new-annotation'}
+          anchorRect={annotationEditor.anchorRect}
+          quote={annotationEditor.quote}
+          initialNote={annotationEditor.note}
+          onSave={saveAnnotation}
+          onDelete={annotationEditor.annotationId ? deleteAnnotation : undefined}
+          onClose={dismissAnnotationEditor}
+        />
+      )}
     </div>
   )
 }

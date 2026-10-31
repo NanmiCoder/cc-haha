@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   formatWorkspaceReferenceLocation,
   formatWorkspaceReferencePrompt,
+  getAnnotationNumbers,
   useWorkspaceChatContextStore,
 } from './workspaceChatContextStore'
 
@@ -140,6 +141,149 @@ describe('workspaceChatContextStore', () => {
     expect(prompt).toContain('```\nUse the workspace panel selection menu.\n```')
     expect(prompt).not.toContain('@"chat://assistant/assistant-1"')
     expect(prompt).not.toContain('Referenced workspace context:')
+  })
+
+  it('serializes an annotated chat selection as a numbered annotation with its note', () => {
+    const prompt = formatWorkspaceReferencePrompt([
+      {
+        id: 'chat-ref-1',
+        kind: 'chat-selection',
+        path: 'chat://assistant/assistant-1',
+        name: 'Assistant message',
+        messageId: 'assistant-1',
+        sourceRole: 'assistant',
+        quote: 'The order is reversed.',
+        note: 'Move this after the user text.',
+      },
+    ])
+
+    expect(prompt).toContain('Annotated chat context:')
+    expect(prompt).toContain('[Annotation 1]')
+    expect(prompt).toContain('[Annotation 1 end]')
+    expect(prompt).toContain('The order is reversed.')
+    expect(prompt).toContain('Comment: Move this after the user text.')
+    expect(prompt).not.toContain('Referenced chat context:')
+  })
+
+  it('numbers multiple annotations in reference order', () => {
+    const prompt = formatWorkspaceReferencePrompt([
+      {
+        id: 'chat-ref-1', kind: 'chat-selection', path: 'chat://assistant/a', name: 'Assistant message',
+        messageId: 'a', sourceRole: 'assistant', quote: 'First quote', note: 'First note',
+      },
+      {
+        id: 'chat-ref-2', kind: 'chat-selection', path: 'chat://assistant/b', name: 'Assistant message',
+        messageId: 'b', sourceRole: 'assistant', quote: 'Second quote', note: 'Second note',
+      },
+    ])
+
+    expect(prompt).toContain('[Annotation 1]')
+    expect(prompt).toContain('[Annotation 2]')
+    expect(prompt.indexOf('First quote')).toBeLessThan(prompt.indexOf('Second quote'))
+    expect(prompt.indexOf('[Annotation 1]')).toBeLessThan(prompt.indexOf('[Annotation 2]'))
+  })
+
+  it('keeps the plain chat context format byte-for-byte when no annotation has a note', () => {
+    const prompt = formatWorkspaceReferencePrompt([
+      {
+        id: 'chat-ref-1',
+        kind: 'chat-selection',
+        path: 'chat://assistant/assistant-1',
+        name: 'Assistant message',
+        messageId: 'assistant-1',
+        sourceRole: 'assistant',
+        quote: 'Use the workspace panel selection menu.',
+      },
+    ])
+
+    expect(prompt).toBe(
+      'Referenced chat context:\nAssistant message:\n```\nUse the workspace panel selection menu.\n```',
+    )
+  })
+
+  it('mixes plain and annotated chat selections without disturbing either section', () => {
+    const prompt = formatWorkspaceReferencePrompt([
+      {
+        id: 'plain', kind: 'chat-selection', path: 'chat://assistant/a', name: 'Assistant message',
+        messageId: 'a', sourceRole: 'assistant', quote: 'Plain quote',
+      },
+      {
+        id: 'annotated', kind: 'chat-selection', path: 'chat://assistant/b', name: 'Assistant message',
+        messageId: 'b', sourceRole: 'assistant', quote: 'Annotated quote', note: 'Do this instead',
+      },
+    ])
+
+    expect(prompt).toContain('Referenced chat context:\nAssistant message:\n```\nPlain quote\n```')
+    expect(prompt).toContain('Annotated chat context:')
+    expect(prompt).toContain('[Annotation 1]\nAssistant message:\n```\nAnnotated quote\n```\nComment: Do this instead\n[Annotation 1 end]')
+    expect(prompt.match(/\[Annotation 1\]/g)).toHaveLength(1)
+  })
+
+  it('updates an annotation note in place without changing its id or position', () => {
+    const store = useWorkspaceChatContextStore.getState()
+    store.addReference('session-annotate', {
+      kind: 'chat-selection', path: 'chat://assistant/a', name: 'Assistant message',
+      messageId: 'a', sourceRole: 'assistant', quote: 'Quote', note: 'First note',
+    })
+    store.addReference('session-annotate', {
+      kind: 'file', path: 'src/App.tsx', name: 'App.tsx',
+    })
+    const [annotation, file] = useWorkspaceChatContextStore.getState().referencesBySession['session-annotate']!
+
+    store.updateReference('session-annotate', annotation!.id, { note: 'Edited note' })
+
+    const references = useWorkspaceChatContextStore.getState().referencesBySession['session-annotate']!
+    expect(references).toHaveLength(2)
+    expect(references[0]!.id).toBe(annotation!.id)
+    expect(references[0]!.note).toBe('Edited note')
+    expect(references[1]!.id).toBe(file!.id)
+  })
+
+  it('keeps the annotation identity stable when only its note changes', () => {
+    const store = useWorkspaceChatContextStore.getState()
+    const input = {
+      kind: 'chat-selection' as const, path: 'chat://assistant/a', name: 'Assistant message',
+      messageId: 'a', sourceRole: 'assistant' as const, quote: 'Quote', startOffset: 4, endOffset: 9,
+    }
+    store.addReference('session-annotate', { ...input, note: 'First note' })
+    const firstId = useWorkspaceChatContextStore.getState().referencesBySession['session-annotate']![0]!.id
+
+    store.updateReference('session-annotate', firstId, { note: 'Second note' })
+
+    const references = useWorkspaceChatContextStore.getState().referencesBySession['session-annotate']!
+    expect(references).toHaveLength(1)
+    expect(references[0]!.id).toBe(firstId)
+  })
+
+  it('numbers annotations the same way the prompt does', () => {
+    const references = [
+      {
+        id: 'plain', kind: 'chat-selection' as const, path: 'chat://assistant/a', name: 'Assistant message',
+        messageId: 'a', sourceRole: 'assistant' as const, quote: 'Plain quote',
+      },
+      {
+        id: 'first', kind: 'chat-selection' as const, path: 'chat://assistant/b', name: 'Assistant message',
+        messageId: 'b', sourceRole: 'assistant' as const, quote: 'First', note: 'One',
+      },
+      {
+        id: 'file', kind: 'file' as const, path: 'src/App.tsx', name: 'App.tsx',
+      },
+      {
+        id: 'second', kind: 'chat-selection' as const, path: 'chat://assistant/c', name: 'Assistant message',
+        messageId: 'c', sourceRole: 'assistant' as const, quote: 'Second', note: 'Two',
+      },
+    ]
+
+    const numbers = getAnnotationNumbers(references)
+    expect(numbers.get('first')).toBe(1)
+    expect(numbers.get('second')).toBe(2)
+    expect(numbers.has('plain')).toBe(false)
+    expect(numbers.has('file')).toBe(false)
+
+    // The badges in the transcript and the request's [Annotation N] blocks are
+    // the same list, so their order has to come from one place.
+    const prompt = formatWorkspaceReferencePrompt(references)
+    expect(prompt.indexOf('First')).toBeLessThan(prompt.indexOf('Second'))
   })
 
   it('does not add prompt text for plain file attachments', () => {

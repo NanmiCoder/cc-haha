@@ -59,9 +59,22 @@ type Props = {
   attachments: AttachmentPreview[]
   variant?: 'composer' | 'message'
   onRemove?: (id: string) => void
+  /**
+   * Reopen an annotation for editing, anchored on the chip that was clicked.
+   * `annotationNumbers` carries the shared numbering (transcript badge, request
+   * block) so the chip cannot number an annotation differently from the rest.
+   */
+  annotationNumbers?: ReadonlyMap<string, number>
+  onActivate?: (id: string, anchorRect: DOMRect) => void
 }
 
-export function AttachmentGallery({ attachments, variant = 'message', onRemove }: Props) {
+export function AttachmentGallery({
+  attachments,
+  variant = 'message',
+  onRemove,
+  annotationNumbers,
+  onActivate,
+}: Props) {
   const t = useTranslation()
   const [activeImageIndex, setActiveImageIndex] = useState<number | null>(null)
   const [openWith, setOpenWith] = useState<{ items: OpenWithItem[]; anchor: DOMRect; triggerEl: HTMLElement } | null>(null)
@@ -367,6 +380,18 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
             isAbsoluteLocalPath(attachment.path) &&
             desktopHost.isDesktop &&
             desktopHost.capabilities.shell
+          const annotationNote = attachment.referenceKind === 'chat-selection'
+            ? attachment.note?.trim()
+            : undefined
+          // A selected-text chip with a note is an annotation: the composer lets
+          // the user reopen it. A plain quote has no note to edit, so it stays inert.
+          const annotationNumber = attachment.id ? annotationNumbers?.get(attachment.id) : undefined
+          const canEditAnnotation =
+            attachment.referenceKind === 'chat-selection' &&
+            annotationNote !== undefined && annotationNote !== '' &&
+            annotationNumber !== undefined &&
+            !!onActivate &&
+            !!attachment.id
 
           const fileVisual = (
             <>
@@ -381,6 +406,11 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block min-w-0 max-w-[260px] truncate text-[13px] font-medium leading-5 text-[var(--color-text-primary)]">
+                  {annotationNumber !== undefined && (
+                    <span className="mr-1.5 inline-flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-[var(--color-brand)] px-1 align-[1px] text-[11px] font-semibold leading-none tabular-nums text-[var(--color-on-primary)]">
+                      {annotationNumber}
+                    </span>
+                  )}
                   {attachment.name}{lineLabel}
                 </span>
                 <span className="block truncate text-[11px] leading-4 text-[var(--color-text-tertiary)]">
@@ -440,7 +470,16 @@ export function AttachmentGallery({ attachments, variant = 'message', onRemove }
                 'rounded-[var(--radius-lg)] bg-[var(--color-surface-container-lowest)] px-2.5 py-1.5 text-[var(--color-text-secondary)]',
               ].join(' ')}
             >
-              {fileVisual}
+              {canEditAnnotation ? (
+                <button
+                  type="button"
+                  aria-label={t('chat.annotationEditLabel', { number: annotationNumber })}
+                  onClick={(event) => onActivate!(attachment.id!, event.currentTarget.getBoundingClientRect())}
+                  className="flex min-w-0 items-center gap-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus)]"
+                >
+                  {fileVisual}
+                </button>
+              ) : fileVisual}
               {onRemove && attachment.id && (
                 <IconButton
                   icon={<X size={14} strokeWidth={1.75} aria-hidden="true" />}
