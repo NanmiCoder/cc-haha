@@ -27,6 +27,7 @@ import { Icon, type IconName } from './icons'
 import { useTheme, type Colors } from './theme'
 import { monoFont, type } from './palette'
 import type { DiffLine } from '../core/operations'
+import { simulatedPhoneChrome } from './webChrome'
 
 export { Icon, type IconName } from './icons'
 export { type } from './palette'
@@ -84,7 +85,7 @@ export function InlineCode({ children }: { children: React.ReactNode }) {
 
 /* ───────────── 屏幕与导航 ───────────── */
 
-/** 顶部安全区 + 背景。web 预览额外模拟 54pt 状态栏高度（与设计稿一致）。 */
+/** 顶部安全区 + 背景。开发用的网页预览额外模拟 54pt 状态栏高度（与设计稿一致）。 */
 export function ScreenView({
   children,
   background,
@@ -96,7 +97,7 @@ export function ScreenView({
       edges={['top', 'left', 'right']}
       style={[
         { flex: 1, backgroundColor: background ?? colors.bg },
-        Platform.OS === 'web' && { paddingTop: 54 },
+        simulatedPhoneChrome && { paddingTop: 54 },
         style,
       ]}
     >
@@ -1920,7 +1921,7 @@ export function PageSheet({
         edges={Platform.OS === 'ios' ? ['left', 'right'] : ['top', 'left', 'right']}
         style={[
           { flex: 1, backgroundColor: background ?? colors.bg },
-          Platform.OS === 'web' && { paddingTop: 54 },
+          simulatedPhoneChrome && { paddingTop: 54 },
         ]}
       >
         <View style={{ height: 56, flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16 }}>

@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { router } from 'expo-router'
 import { ScrollView, View } from 'react-native'
 import { useConnection } from '../state/AppContext'
+import { isH5 } from '../state/h5'
 import { loadProfileOverview } from '../core/profile'
 import { useFocusedResource } from '../core/useFocusedResource'
 import type { ApiClient } from '../core/client'
@@ -14,7 +15,11 @@ export default function Profile() {
   const colors = useColors()
   return (
     <ScreenView background={colors.card}>
-      <NavBar floating title="个人主页" right={<FloatingButton icon="laptop" label="切换电脑" onPress={() => router.push('/hosts')} />} />
+      <NavBar
+        floating
+        title="个人主页"
+        right={isH5 ? undefined : <FloatingButton icon="laptop" label="切换电脑" onPress={() => router.push('/hosts')} />}
+      />
       {!host ? (
         <EmptyState icon="laptop" title="连接电脑后查看个人主页" detail="头像、昵称和使用记录来自你连接的电脑。" action={<Button title="连接电脑" onPress={() => router.push('/connect')} />} />
       ) : !client ? (

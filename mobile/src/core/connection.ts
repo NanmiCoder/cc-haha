@@ -150,6 +150,11 @@ export function parseConnectionInput(input: string): ParsedConnection {
   return { url: normalizeHostUrl(raw, auth), auth }
 }
 
+/** The origin requests go to; see {@link Host.page} for the H5 page's own computer. */
+export function hostOrigin(host: Host): string {
+  return host.page ? new URL(host.url).origin : normalizeHostUrl(host.url, host.auth)
+}
+
 export function connectionHeaders(
   host: Host,
   credential: string
@@ -158,7 +163,7 @@ export function connectionHeaders(
   const headers: Record<string, string> = {}
   if (token) headers.Authorization = `Bearer ${token}`
   if (host.auth === 'remote')
-    headers.Origin = normalizeHostUrl(host.url, 'remote')
+    headers.Origin = host.page ? hostOrigin(host) : normalizeHostUrl(host.url, 'remote')
   return headers
 }
 
@@ -170,16 +175,19 @@ export function buildSocketOptions(
 ): { url: string; headers?: Record<string, string> } {
   if (!sessionId || sessionId.length > 256 || /[\s/\\?#]/.test(sessionId))
     throw new ConnectionError('会话标识无效')
-  if (!secret(credential)) throw new ConnectionError('缺少连接凭据')
-  const url = new URL(normalizeHostUrl(host.url, host.auth))
+  const token = secret(credential)
+  // A browser page served by the computer itself (H5) may have no token: its
+  // device cookie or the loopback address authenticates the socket instead.
+  if (!token && platform !== 'web') throw new ConnectionError('缺少连接凭据')
+  const url = new URL(hostOrigin(host))
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   url.pathname = `/ws/${encodeURIComponent(sessionId)}`
   // Tool images arrive as references; the bytes are fetched only when drawn.
   url.searchParams.set('media', 'ref')
   if (platform === 'web') {
-    if (host.auth === 'remote')
+    if (host.auth === 'remote' && token)
       throw new ConnectionError('远程凭据需要原生 App，浏览器预览不支持此连接')
-    url.searchParams.set('token', credential)
+    if (token) url.searchParams.set('token', token)
     return { url: url.toString() }
   }
   const headers = connectionHeaders(host, credential)

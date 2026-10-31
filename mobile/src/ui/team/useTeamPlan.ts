@@ -1,10 +1,15 @@
 import { useEffect, useMemo, useSyncExternalStore } from 'react'
-import { randomUUID } from 'expo-crypto'
+import { Platform } from 'react-native'
+import { getRandomValues, randomUUID } from 'expo-crypto'
+import { randomRequestId } from '../../core/requestId'
 import type { ApiClient } from '../../core/client'
 import type { TeamPlanAction, TeamPlanEdit } from '../../core/teamPlan'
 import { TeamPlanSync, type TeamPlanSnapshot } from '../../core/teamPlanSync'
 
 const EMPTY: TeamPlanSnapshot = { plan: null, pending: null, error: '' }
+// The browser's own crypto: on a plain-http H5 page it has getRandomValues but no randomUUID.
+const newRequestId = () =>
+  randomRequestId(Platform.OS === 'web' ? globalThis.crypto : { randomUUID, getRandomValues })
 const idle = () => () => {}
 
 /**
@@ -24,7 +29,7 @@ export function useTeamPlan({
   signal?: string
   turnActive: boolean
 }) {
-  const sync = useMemo(() => (client ? new TeamPlanSync(client, sessionId, randomUUID) : null), [client, sessionId])
+  const sync = useMemo(() => (client ? new TeamPlanSync(client, sessionId, newRequestId) : null), [client, sessionId])
   const snapshot = useSyncExternalStore(sync?.subscribe ?? idle, () => sync?.snapshot ?? EMPTY)
   useEffect(() => {
     if (!sync || !ready) return

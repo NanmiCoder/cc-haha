@@ -10,6 +10,7 @@ import { DashboardProvider } from '../state/DashboardContext'
 import { PreferencesProvider } from '../state/PreferencesContext'
 import { useTheme } from '../ui/theme'
 import { Platform, View } from 'react-native'
+import { useEffect } from 'react'
 import { Text } from '../ui/Text'
 import Constants, { ExecutionEnvironment } from 'expo-constants'
 
@@ -20,8 +21,20 @@ if (Platform.OS === 'web' && typeof document !== 'undefined') {
   document.head.appendChild(style)
 }
 
+/** 浏览器地址栏、状态栏和整页底色跟着当前外观走，不然深色下会露出浅色的边。 */
+function useWebChromeColor(background: string, dark: boolean) {
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', background)
+    document.documentElement.style.backgroundColor = background
+    document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+    document.body.style.backgroundColor = background
+  }, [background, dark])
+}
+
 function Navigation() {
   const { colors, dark } = useTheme()
+  useWebChromeColor(colors.bg, dark)
   const [loaded, error] = useFonts({
     GeistMono: require('../../assets/fonts/GeistMono.ttf'),
   })

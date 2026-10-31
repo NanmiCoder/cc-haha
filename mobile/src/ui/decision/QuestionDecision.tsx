@@ -16,6 +16,7 @@ import {
 import { CountdownPill, NoteInput, SubmittedRow, webNoOutline } from './parts'
 import { changeQuestionFlow, initialQuestionFlow } from './questionFlow'
 import { backQuestionStep, primaryQuestionStep, questionPageModel, questionPromptLabel } from './questionPage'
+import { simulatedPhoneChrome } from '../webChrome'
 
 /**
  * AI 代答倒计时。只在服务端宣布过代答（autoAnswerDeadline 为数字或 null）时才有值；
@@ -257,7 +258,7 @@ export function QuestionPage({
     >
       <SafeAreaView
         edges={['top', 'left', 'right']}
-        style={[{ flex: 1, backgroundColor: colors.bg }, Platform.OS === 'web' && { paddingTop: 54 }]}
+        style={[{ flex: 1, backgroundColor: colors.bg }, simulatedPhoneChrome && { paddingTop: 54 }]}
       >
         <KeyboardViewport style={{ flex: 1 }}>
           <View accessibilityViewIsModal role="dialog" aria-label="回答提问" style={{ flex: 1 }}>
@@ -555,7 +556,7 @@ export function QuestionDecision(props: Omit<QuestionPageProps, 'visible' | 'onC
   const [open, setOpen] = useState(false)
   const colors = useColors()
   const insets = useSafeAreaInsets()
-  const bottom = Platform.OS === 'web' ? 34 : Math.max(insets.bottom, 12)
+  const bottom = simulatedPhoneChrome ? 34 : Math.max(insets.bottom, 12)
   const { clock, interact } = useQuestionClock(props.request)
   const count = readQuestions(props.input).length
   return (

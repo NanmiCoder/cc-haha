@@ -96,6 +96,11 @@ jobs:
         working-directory: adapters
         run: bun install
 
+      - name: Install mobile dependencies
+        working-directory: mobile
+        # `bun run build` exports the phone app (mobile/) into dist/m: it is the H5 for phones.
+        run: bun install --frozen-lockfile
+
       - name: Verify Windows legacy data recovery
         if: matrix.smoke_platform == 'windows'
         working-directory: desktop

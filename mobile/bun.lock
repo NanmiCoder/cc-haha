@@ -49,6 +49,7 @@
   },
   "patchedDependencies": {
     "react-native-audio-api@0.13.6": "patches/react-native-audio-api@0.13.6.patch",
+    "expo-router@58.0.25": "patches/expo-router@58.0.25.patch",
   },
   "packages": {
     "2g": ["2g@1.0.1", "https://registry.npmmirror.com/2g/-/2g-1.0.1.tgz", { "peerDependencies": { "typescript": ">=5.8.0" }, "optionalPeers": ["typescript"], "bin": { "2g": "bin/cli.js" } }, "sha512-+uViadKOS/wwR4pFu5g8TPn3QHpKqoX19JHCnp8k/3cLpImdcXozwvZA6Q/5PeW3AcU8neL8faaMidBcv7o8CA=="],

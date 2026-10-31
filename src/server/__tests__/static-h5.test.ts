@@ -67,3 +67,48 @@ describe('handleStaticH5Request media types', () => {
     expect(await get('/..%2f..%2fetc/passwd')).toBeNull()
   })
 })
+
+describe('handleStaticH5Request phone app under /m', () => {
+  beforeEach(async () => {
+    await fs.mkdir(path.join(distDir, 'm', '_expo', 'static', 'js', 'web'), { recursive: true })
+    await fs.mkdir(path.join(distDir, 'm', 'assets', 'assets', 'fonts'), { recursive: true })
+    await fs.writeFile(path.join(distDir, 'm', 'index.html'), '<!doctype html><title>phone</title>')
+    await fs.writeFile(path.join(distDir, 'm', '_expo', 'static', 'js', 'web', 'entry-abc.js'), 'void 0')
+    await fs.writeFile(path.join(distDir, 'm', 'assets', 'assets', 'fonts', 'GeistMono.abc.ttf'), Buffer.from([0x00]))
+  })
+
+  it('answers a reload of any phone route with the phone app, not the desktop app', async () => {
+    for (const route of ['/m', '/m/', '/m/chat/session-1', '/m/settings']) {
+      const res = await get(route)
+      expect(await res?.text()).toContain('phone')
+    }
+    // Routes outside the phone app keep the desktop document.
+    expect(await (await get('/remote'))?.text()).toContain('app')
+    expect(await (await get('/mobile'))?.text()).toContain('app')
+  })
+
+  it('does not turn a missing phone asset into an HTML page', async () => {
+    expect(await get('/m/_expo/static/js/web/missing.js')).toBeNull()
+  })
+
+  it('caches the hashed phone bundles and fonts immutably, with real media types', async () => {
+    const script = await get('/m/_expo/static/js/web/entry-abc.js')
+    expect(script?.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    const font = await get('/m/assets/assets/fonts/GeistMono.abc.ttf')
+    expect(font?.headers.get('content-type')).toBe('font/ttf')
+    expect(font?.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    expect((await get('/m/'))?.headers.get('cache-control')).toBe('no-store')
+  })
+
+  it('sends a phone back to the entry when the phone app is not built, instead of a desktop page that cannot boot there', async () => {
+    await fs.rm(path.join(distDir, 'm'), { recursive: true, force: true })
+    for (const route of ['/m', '/m/', '/m/chat/session-1']) {
+      const res = await get(route)
+      expect(res?.status).toBe(302)
+      expect(res?.headers.get('location')).toBe('/')
+    }
+    // The desktop app's own probe for the phone build still sees a plain miss.
+    expect(await get('/m/h5.json')).toBeNull()
+    expect(await (await get('/'))?.text()).toContain('app')
+  })
+})

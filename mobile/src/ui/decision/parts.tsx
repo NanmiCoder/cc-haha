@@ -13,14 +13,15 @@ import Svg, { Circle, Path } from 'react-native-svg'
 import { HaloDot, Mono, Spinner, useColors } from '../kit'
 import { Text } from '../Text'
 import { monoFont } from '../palette'
+import { simulatedPhoneChrome } from '../webChrome'
 
 /** web 的 textarea 自带 focus ring（outline-style:auto 不受宽度影响），由我们自己画描边。 */
 export const webNoOutline = (Platform.OS === 'web' ? { outlineStyle: 'none' } : {}) as object
 
-/** 底部安全区；web 预览按 iPhone 的 34pt Home 指示条模拟（与 ScreenView 的 47pt 顶部一致）。 */
+/** 底部安全区；网页预览按 iPhone 的 34pt Home 指示条模拟（与 ScreenView 的 47pt 顶部一致）。 */
 export function useBottomInset() {
   const insets = useSafeAreaInsets()
-  return Platform.OS === 'web' ? Math.max(insets.bottom, 34) : Math.max(insets.bottom, 16)
+  return simulatedPhoneChrome ? Math.max(insets.bottom, 34) : Math.max(insets.bottom, 16)
 }
 
 /** “需要你决定”的底座：card 背景、顶部圆角 26、向上投影。 */

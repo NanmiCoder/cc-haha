@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../ui/Text'
 import { useApp, useConnection } from '../state/AppContext'
 import { useDashboard } from '../state/DashboardContext'
+import { isH5, reconnectH5 } from '../state/h5'
 import { groupDashboard, type DashboardRow } from '../core/dashboard'
 import { EmptyState, Icon, InlineError, Loading, ScreenView, useColors } from '../ui/kit'
 import { Logo } from '../ui/Logo'
@@ -192,9 +193,9 @@ export default function Home() {
                 onOpen={() =>
                   router.push({ pathname: '/computer', params: { host: host.id } })
                 }
-                onSwitch={() => router.push('/hosts')}
+                onSwitch={isH5 ? undefined : () => router.push('/hosts')}
                 onReconnect={() => void refresh()}
-                onRepair={() => router.push('/connect')}
+                onRepair={() => (isH5 ? reconnectH5(host.auth === 'remote') : router.push('/connect'))}
               />
             </View>
           ) : null}

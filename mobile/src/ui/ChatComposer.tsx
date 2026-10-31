@@ -34,17 +34,20 @@ import { ImagePreview } from './chat/ImagePreview'
 import { attachmentImageSelection, attachmentImageUri, type ImagePreviewSelection } from './chat/attachmentPreview'
 import { useVoiceDictation } from '../core/useVoiceDictation'
 import { VoiceFeedback, VoiceMicrophone, VoiceRecordingBar } from './compose/VoiceInput'
+import { simulatedPhoneChrome } from './webChrome'
+import { subscribeWebKeyboard } from './webKeyboard'
 
-/** web 预览里模拟 iPhone 的 Home 指示条高度，原生端用真实安全区。 */
+/** 网页预览里模拟 iPhone 的 Home 指示条高度，原生端和 H5 用真实安全区。 */
 export function useBottomInset() {
   const insets = useSafeAreaInsets()
-  return Platform.OS === 'web' ? Math.max(insets.bottom, 34) : Math.max(insets.bottom, 12)
+  return simulatedPhoneChrome ? Math.max(insets.bottom, 34) : Math.max(insets.bottom, 12)
 }
 
 /** 键盘弹起时输入框贴着键盘，不再留 Home 指示条的空隙。 */
 function useKeyboardVisible() {
   const [visible, setVisible] = useState(false)
   useEffect(() => {
+    if (Platform.OS === 'web') return subscribeWebKeyboard(setVisible)
     const show = Keyboard.addListener(
       Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
       () => setVisible(true)

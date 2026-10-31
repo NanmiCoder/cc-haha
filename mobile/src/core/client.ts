@@ -1,4 +1,4 @@
-import { connectionHeaders, normalizeHostUrl } from './connection'
+import { connectionHeaders, hostOrigin } from './connection'
 import type {
   CreateSessionInput,
   HistoryPage,
@@ -45,11 +45,18 @@ export type FetchAdapter = (
     body?: string | ArrayBuffer
     signal: AbortSignal
     redirect: 'error'
-    credentials: 'omit'
+    credentials: FetchCredentials
   }
 ) => Promise<FetchResponse>
+/**
+ * `omit` everywhere except the H5 page the computer serves itself: there a
+ * remote browser is authenticated by its device cookie, which only a
+ * same-origin request carries.
+ */
+export type FetchCredentials = 'omit' | 'same-origin'
 export type ApiClientOptions = {
   fetch?: FetchAdapter
+  credentials?: FetchCredentials
   /** Until the computer answers (response headers). */
   timeoutMs?: number
   /** Reading the body once the computer has answered. */
@@ -70,15 +77,17 @@ export class ApiClient {
   #fetch: FetchAdapter
   #timeoutMs: number
   #bodyTimeoutMs: number
+  #credentials: FetchCredentials
   constructor(host: Host, credential: string, options: ApiClientOptions = {}) {
     this.host = Object.freeze({
       ...host,
-      url: normalizeHostUrl(host.url, host.auth),
+      url: hostOrigin(host),
     })
     this.#credential = credential
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.#timeoutMs = options.timeoutMs ?? 15000
     this.#bodyTimeoutMs = options.bodyTimeoutMs ?? BODY_TIMEOUT_MS
+    this.#credentials = options.credentials ?? 'omit'
     connectionHeaders(this.host, credential)
     Object.freeze(this)
   }
@@ -183,7 +192,7 @@ export class ApiClient {
               : JSON.stringify(options.body),
         signal: controller.signal,
         redirect: 'error',
-        credentials: 'omit',
+        credentials: this.#credentials,
       })
       // Defense in depth for injected adapters. Never consume data from redirected responses.
       if (
@@ -236,6 +245,10 @@ export class ApiClient {
   async verify(
     options?: RequestControlOptions
   ): Promise<{ ok: true }> {
+    // An H5 page opened on the computer itself is trusted by its loopback
+    // address and has no token to verify; any authenticated read proves it.
+    if (this.host.auth === 'lan' && !this.#credential)
+      return this.get<unknown>('/api/status', options).then(() => ({ ok: true as const }))
     if (this.host.auth === 'lan')
       return this.post<{ ok: true }>(
         '/api/h5-access/verify',

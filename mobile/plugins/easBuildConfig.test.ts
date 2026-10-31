@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import appConfig, { withEasProject } from '../app.config'
+import appConfig, { H5_BASE_PATH, withEasProject, withH5Build } from '../app.config'
 import app from '../app.json'
 import eas from '../eas.json'
 
@@ -52,4 +52,16 @@ test('production builds use remote credentials, increasing build numbers, and in
     android: { buildType: 'apk' },
   })
   expect(eas.build.production).not.toHaveProperty('developmentClient')
+})
+
+test('only the desktop H5 export is served under a base path, and native builds are untouched', () => {
+  const base = { name: 'fixture', slug: 'fixture', web: { bundler: 'metro' as const }, extra: { feature: true } }
+  expect(withH5Build(base, {})).toBe(base)
+  const h5 = withH5Build(base, { EXPO_PUBLIC_CC_HAHA_H5: '1' })
+  expect(h5.experiments?.baseUrl).toBe(H5_BASE_PATH)
+  expect(h5.web).toMatchObject({ bundler: 'metro', lang: 'zh-CN' })
+  expect(h5.extra).toEqual({ feature: true })
+  // The server's fallback for /m/* reloads is keyed to the same path.
+  const server = readFileSync(join(import.meta.dir, '..', '..', 'src', 'server', 'staticH5.ts'), 'utf8')
+  expect(server).toContain(`MOBILE_H5_BASE_PATH = '${H5_BASE_PATH}'`)
 })

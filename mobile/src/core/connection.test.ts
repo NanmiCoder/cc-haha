@@ -155,4 +155,16 @@ describe('desktop connection contracts', () => {
       buildSocketOptions(lan, 'fake-token', '../other', 'native')
     ).toThrow('标识')
   })
+
+  test('an H5 page without a token lets the browser cookie or loopback authenticate the socket', () => {
+    // Remote browser: the device cookie rides along on a same-origin socket.
+    expect(buildSocketOptions(remote, '', 'session-id', 'web')).toEqual({
+      url: 'wss://fixture.invalid/ws/session-id?media=ref',
+    })
+    expect(buildSocketOptions(lan, '', 'session-id', 'web')).toEqual({
+      url: 'ws://192.168.1.12:3456/ws/session-id?media=ref',
+    })
+    // Native clients still have nothing else to authenticate with.
+    expect(() => buildSocketOptions(remote, '', 'session-id', 'native')).toThrow('凭据')
+  })
 })

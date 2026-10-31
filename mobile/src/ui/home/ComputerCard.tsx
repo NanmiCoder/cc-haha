@@ -30,7 +30,8 @@ export function ComputerCard({
   /** 公网配对到期时间（毫秒时间戳）；读不到就不传。 */
   expiresAt?: number
   onOpen(): void
-  onSwitch(): void
+  /** 没有别的电脑可换时不传（网页版只连接打开它的电脑）。 */
+  onSwitch?: () => void
   onReconnect(): void
   onRepair(): void
 }) {
@@ -145,6 +146,7 @@ export function ComputerCard({
           <View style={{ flexDirection: 'row', gap: 8 }}>
             {view.buttons.map((button) =>
               button === 'switch' ? (
+                onSwitch ? (
                 <Button
                   key={button}
                   title="换一台电脑"
@@ -152,6 +154,7 @@ export function ComputerCard({
                   onPress={onSwitch}
                   style={{ flex: 1 }}
                 />
+                ) : null
               ) : (
                 <Button key={button} title="重新连接" onPress={onReconnect} style={{ flex: 1 }} />
               )

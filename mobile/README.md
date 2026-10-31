@@ -39,6 +39,8 @@ bun run android
 
 Android 必须使用独立构建：`plugins/withPinnedWebSockets.js` 关闭 WebSocket 的自动跨地址重定向；Expo Go 不具备该保护，代码会阻止其连接。网页 `bun run web` 仅用于布局和协议检查，凭据仅保存在页面内存；刷新后需重新连接，不能替代原生验收。
 
+同一套界面也是手机浏览器的 H5：桌面 `bun run build` 调用 `bun run export:h5`，以 `EXPO_PUBLIC_CC_HAHA_H5=1` 导出到 `desktop/dist/m`，由桌面服务端托管在 `/m/`。H5 只连接托管它的电脑（`src/state/h5.ts`），沿用桌面 H5 入口验证过的令牌或远程设备 Cookie；扫码、多台电脑、推送和锁屏实时活动不进入 H5，文件改为浏览器下载。expo-router 在子路径下会把 `/member`、`/models` 误剥成 `/ember`、`/odels`，`patches/expo-router@58.0.25.patch` 修正了这一点；升级 expo-router 时用 `src/core/h5BasePath.test.ts` 确认是否还需要它。
+
 Release 模拟器构建可运行 `bunx expo run:ios --configuration Release`。直接调用 `xcodebuild` 时应保留正常的模拟器代码签名；完全关闭签名会使 SecureStore / Keychain 不能保存连接凭据。模拟器 `.app` 不能作为手机 IPA 安装。
 
 Android 本地测试包：

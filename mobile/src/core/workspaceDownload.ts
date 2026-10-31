@@ -1,3 +1,4 @@
+import type { FetchCredentials } from './client'
 import { connectionHeaders } from './connection'
 import type { Host } from './types'
 
@@ -16,7 +17,8 @@ export async function downloadWorkspaceFile(
   sessionId: string,
   path: string,
   adapter: DownloadFetch,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  credentials: FetchCredentials = 'omit'
 ) {
   const url = new URL(
     `/api/sessions/${encodeURIComponent(sessionId)}/workspace/download?path=${encodeURIComponent(path)}`,
@@ -25,7 +27,7 @@ export async function downloadWorkspaceFile(
   const response = await adapter(url.toString(), {
     headers: connectionHeaders(host, credential),
     redirect: 'error',
-    credentials: 'omit',
+    credentials,
     signal,
   })
   if (

@@ -3,6 +3,7 @@ import { Alert, Pressable, ScrollView, View } from 'react-native'
 import { router, useLocalSearchParams } from 'expo-router'
 import { Text } from '../ui/Text'
 import { useApp, useConnection } from '../state/AppContext'
+import { isH5 } from '../state/h5'
 import type { Host, PermissionMode } from '../core/types'
 import {
   EmptyState,
@@ -142,24 +143,26 @@ function ComputerBody({ host }: { host: Host }) {
               </Text>
             </View>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="切换电脑"
-            onPress={() => router.push('/hosts')}
-            style={({ pressed }) => ({
-              height: 34,
-              paddingHorizontal: 12,
-              borderRadius: 17,
-              backgroundColor: colors.fill,
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 4,
-              opacity: pressed ? 0.6 : 1,
-            })}
-          >
-            <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink }}>切换</Text>
-            <Icon name="chevron-down" size={14} color={colors.ink} strokeWidth={2.4} />
-          </Pressable>
+          {isH5 ? null : (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="切换电脑"
+              onPress={() => router.push('/hosts')}
+              style={({ pressed }) => ({
+                height: 34,
+                paddingHorizontal: 12,
+                borderRadius: 17,
+                backgroundColor: colors.fill,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 4,
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <Text style={{ fontSize: 14, fontWeight: '600', color: colors.ink }}>切换</Text>
+              <Icon name="chevron-down" size={14} color={colors.ink} strokeWidth={2.4} />
+            </Pressable>
+          )}
         </View>
         <InlineError text={connectionError || firstError} style={{ marginTop: 8 }} />
 
@@ -257,25 +260,29 @@ function ComputerBody({ host }: { host: Host }) {
           </View>
         </Group>
 
-        <Group style={{ marginTop: 28 }}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={`从这台手机移除 ${host.name}`}
-            disabled={removing}
-            onPress={removeHost}
-            style={({ pressed }) => ({
-              minHeight: 52,
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: pressed ? colors.fill : 'transparent',
-              opacity: removing ? 0.45 : 1,
-            })}
-          >
-            <Text style={{ fontSize: 16, color: colors.err }}>从这台手机移除</Text>
-          </Pressable>
-        </Group>
-        <InlineError text={removeError} style={{ marginTop: 8 }} />
-        <Footnote>只删掉手机上的连接和推送登记，电脑上的会话都还在。</Footnote>
+        {isH5 ? null : (
+          <>
+            <Group style={{ marginTop: 28 }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`从这台手机移除 ${host.name}`}
+                disabled={removing}
+                onPress={removeHost}
+                style={({ pressed }) => ({
+                  minHeight: 52,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: pressed ? colors.fill : 'transparent',
+                  opacity: removing ? 0.45 : 1,
+                })}
+              >
+                <Text style={{ fontSize: 16, color: colors.err }}>从这台手机移除</Text>
+              </Pressable>
+            </Group>
+            <InlineError text={removeError} style={{ marginTop: 8 }} />
+            <Footnote>只删掉手机上的连接和推送登记，电脑上的会话都还在。</Footnote>
+          </>
+        )}
       </ScrollView>
       <PermissionSheet
         visible={permissionOpen}

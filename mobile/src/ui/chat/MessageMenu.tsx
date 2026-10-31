@@ -1,11 +1,12 @@
 import { Fragment } from 'react'
-import { Modal, Platform, Pressable, ScrollView, View, useWindowDimensions } from 'react-native'
+import { Modal, Pressable, ScrollView, View, useWindowDimensions } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Text } from '../Text'
 import type { ChatItem } from '../../core/types'
 import { visibleMessageText } from '../../core/chatComposer'
 import { Icon, Spinner, useColors, type IconName } from '../kit'
 import { Markdown, UserBubble, type BubbleLayout } from '../Message'
+import { simulatedPhoneChrome } from '../webChrome'
 
 export type MessageAction = {
   key: 'copy' | 'select' | 'edit' | 'fork'
@@ -48,7 +49,7 @@ export function MessageMenu({
     (total, action, index) => total + itemHeight(action) + (index ? (action.group ? 6 : 0.5) : 0),
     0
   )
-  const top = Math.max(insets.top, Platform.OS === 'web' ? 54 : 0) + 12
+  const top = Math.max(insets.top, simulatedPhoneChrome ? 54 : 0) + 12
   const bottom = Math.max(insets.bottom, 16) + 12
   const gap = 10
   const available = screenHeight - top - bottom - menuHeight - gap

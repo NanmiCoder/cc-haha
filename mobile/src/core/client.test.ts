@@ -28,6 +28,29 @@ const response = (
 })
 
 describe('host-scoped API transport', () => {
+  test('the H5 page sends same-origin cookies and no Authorization when it has no token', async () => {
+    const calls: { url: string; init: Parameters<FetchAdapter>[1] }[] = []
+    const fetch: FetchAdapter = async (url, init) => {
+      calls.push({ url, init })
+      return response(url.endsWith('/api/public-access/session') ? { authenticated: true } : {})
+    }
+    // Remote browser on the gateway: the HttpOnly device cookie authenticates.
+    const cookie = new ApiClient(remote, '', { fetch, credentials: 'same-origin' })
+    await cookie.verify()
+    expect(calls[0]!.url).toBe(`${remote.url}/api/public-access/session`)
+    expect(calls[0]!.init.credentials).toBe('same-origin')
+    expect(calls[0]!.init.headers.Authorization).toBeUndefined()
+    // A page opened on the computer itself has no token to verify; any authenticated read proves it.
+    const loopback = new ApiClient({ ...lan, url: 'http://127.0.0.1:3456' }, '', { fetch })
+    await loopback.verify()
+    expect(calls[1]!.url).toBe('http://127.0.0.1:3456/api/status')
+    expect(calls[1]!.init.method).toBe('GET')
+    // A LAN token still goes to the token check, and native clients never send cookies.
+    await new ApiClient(lan, 'lan-token', { fetch }).verify()
+    expect(calls[2]!.url).toBe(`${lan.url}/api/h5-access/verify`)
+    expect(calls[2]!.init.credentials).toBe('omit')
+  })
+
   test('concurrent clients keep their own destination and credential', async () => {
     const calls: { url: string; init: Parameters<FetchAdapter>[1] }[] = []
     const fetch: FetchAdapter = async (url, init) => {

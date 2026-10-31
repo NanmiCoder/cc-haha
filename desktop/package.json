@@ -32,6 +32,7 @@
       "dist/**",
       "electron-dist/**",
       "node_modules/node-pty/**",
+      "dist/m/assets/node_modules/**",
       "src-tauri/binaries/**",
       "src-tauri/icons/**",
       "src-tauri/resources/preview-agent.js",
@@ -90,7 +91,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build",
+    "build": "bun run build:preview-agent && node ./node_modules/typescript/bin/tsc -b && node ./node_modules/vite/bin/vite.js build && bun run build:h5-mobile",
+    "build:h5-mobile": "bun ../mobile/scripts/export-h5.ts ./dist/m",
     "prepare:node-pty": "bun run ./scripts/prepare-node-pty.ts",
     "build:electron": "bun run prepare:node-pty && bun build ./electron/main.ts --outfile ./electron-dist/main.cjs --target node --format cjs --external electron --external node-pty && bun build ./electron/preload.ts --outfile ./electron-dist/preload.cjs --target node --format cjs --external electron && bun build ./electron/pet-preload.ts --outfile ./electron-dist/pet-preload.cjs --target node --format cjs --external electron && bun build ./electron/preview-preload.ts --outfile ./electron-dist/preview-preload.cjs --target node --format cjs --external electron",
     "build:preview-agent": "bun run ./scripts/build-preview-agent.ts",

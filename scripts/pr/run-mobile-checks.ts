@@ -18,9 +18,12 @@ export async function runMobileChecks(root = join(import.meta.dir, '..', '..')) 
   const home = mkdtempSync(join(tmpdir(), 'cc-haha-mobile-checks-'))
   try {
     const env = mobileCheckEnvironment(home)
-    for (const command of ['typecheck', 'lint', 'test']) {
+    // The last step builds the phone H5 the desktop serves (mobile/scripts/export-h5.ts),
+    // so a change that breaks the web export fails here rather than in a desktop build.
+    const commands = [['typecheck'], ['lint'], ['test'], ['export:h5', join(home, 'h5')]]
+    for (const [command, ...args] of commands) {
       console.log(`[mobile-checks] ${command}`)
-      const child = Bun.spawn([process.execPath, '--no-env-file', 'run', command], {
+      const child = Bun.spawn([process.execPath, '--no-env-file', 'run', command!, ...args], {
         cwd: join(root, 'mobile'),
         env,
         stdout: 'inherit',

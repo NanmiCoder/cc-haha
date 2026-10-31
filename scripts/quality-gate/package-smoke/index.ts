@@ -1024,6 +1024,9 @@ function inspectMacosArtifacts(rootDir: string, report: PackageSmokeReport, opti
   addPresenceCheck(report, rootDir, 'macOS app executable', hostExecutable)
   addPresenceCheck(report, rootDir, 'macOS app.asar', join(resourcesDir, 'app.asar'))
   addPresenceCheck(report, rootDir, 'macOS unpacked H5 shell', join(unpackedDir, 'dist', 'index.html'))
+  // Phones get the phone app the desktop build exports into dist/m (mobile/scripts/export-h5.ts).
+  addPresenceCheck(report, rootDir, 'macOS phone H5 app', join(unpackedDir, 'dist', 'm', 'index.html'))
+  addPresenceCheck(report, rootDir, 'macOS phone H5 marker', join(unpackedDir, 'dist', 'm', 'h5.json'))
   addInstalledUpdateMetadataCheck(
     report,
     rootDir,

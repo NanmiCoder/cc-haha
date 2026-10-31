@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta httpEquiv="X-UA-Compatible" content="IE=edge" />
+    <!--
+      viewport-fit=cover 必须写在标记里：iOS WebKit 只在解析文档时读一次，
+      之后用 JS 改不生效。没有它 env(safe-area-inset-*) 全是 0，刘海和
+      Home 指示条下面会露出浏览器自己的灰条。
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#F4F3F0" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="format-detection" content="telephone=no" />
+    <title>%WEB_TITLE%</title>
+    <!-- The `react-native-web` recommended style reset: https://necolas.github.io/react-native-web/docs/setup/#root-element -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #F4F3F0;
+        /* 整页不滚动：滚动都在应用自己的列表里，避免 iOS 橡皮筋把整页拖走。 */
+        overscroll-behavior: none;
+        -webkit-text-size-adjust: 100%;
+        -webkit-tap-highlight-color: transparent;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #0F0F0E;
+        }
+      }
+      body {
+        overflow: hidden;
+      }
+      /* 跟随可见区域：软键盘弹起时整个应用缩到键盘上方（见下方脚本）。 */
+      #root {
+        display: flex;
+        height: var(--cc-viewport-height, 100%);
+        flex: 1;
+      }
+    </style>
+    <script>
+      /*
+        手机浏览器的两处修正，和桌面 H5 的 touchH5.ts 同一套做法：
+        1. iOS 里字号小于 16px 的输入框获得焦点会放大整页且不缩回，锁定缩放比例。
+        2. 软键盘弹起时 iOS 不缩小布局视口，而是把整页往上推。把可见高度写进
+           --cc-viewport-height，让应用缩到键盘上方，再把被推走的滚动位置拉回 0。
+      */
+      (function () {
+        try {
+          var nav = window.navigator
+          var ios = /iPad|iPhone|iPod/.test(nav.userAgent) ||
+            (nav.platform === 'MacIntel' && nav.maxTouchPoints > 1)
+          if (ios) {
+            var meta = document.querySelector('meta[name="viewport"]')
+            if (meta) meta.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover')
+          }
+          var viewport = window.visualViewport
+          if (!viewport) return
+          var root = document.documentElement
+          var sync = function () {
+            var height = viewport.height
+            if (!(height > 0)) return
+            root.style.setProperty('--cc-viewport-height', Math.round(height) + 'px')
+            var keyboard = window.innerHeight - height > 80
+            if (keyboard) root.setAttribute('data-keyboard', '')
+            else root.removeAttribute('data-keyboard')
+            if (keyboard && (window.scrollX !== 0 || window.scrollY !== 0)) window.scrollTo(0, 0)
+          }
+          viewport.addEventListener('resize', sync)
+          viewport.addEventListener('scroll', sync)
+          sync()
+          if (ios) {
+            window.addEventListener('focusout', function () {
+              window.requestAnimationFrame(function () {
+                var active = document.activeElement
+                if (active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName)) return
+                if (window.scrollX !== 0 || window.scrollY !== 0) window.scrollTo(0, 0)
+              })
+            })
+          }
+        } catch (_) {
+          /* 修正失败时仍按默认的整页高度显示。 */
+        }
+      })()
+    </script>
+  </head>
+
+  <body>
+    <noscript>请启用 JavaScript 后再打开 cc-haha。</noscript>
+    <div id="root"></div>
+  </body>
+</html>

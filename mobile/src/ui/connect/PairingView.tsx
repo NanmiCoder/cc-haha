@@ -1,8 +1,9 @@
-import { Platform, View } from 'react-native'
+import { View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { Button, Icon, InlineError, Mono, Spinner, useColors } from '../kit'
 import { Text } from '../Text'
 import { PulseRing } from './motion'
+import { simulatedPhoneChrome } from '../webChrome'
 
 export type PairingState =
   | { badge: string; phase: 'waiting' | 'saving' }
@@ -24,7 +25,7 @@ export function PairingView({
   const colors = useColors()
   const insets = useSafeAreaInsets()
   // iOS card-style modals report no top inset; keep the layout off the card edge.
-  const top = Platform.OS === 'web' ? 47 : Math.max(insets.top, 12)
+  const top = simulatedPhoneChrome ? 47 : Math.max(insets.top, 12)
   const failed = state.phase === 'failed'
   return (
     <View style={{ flex: 1, backgroundColor: colors.bg, paddingTop: top }}>

@@ -13,6 +13,9 @@ const mocks = vi.hoisted(() => ({
   initializeDesktopServerUrl: vi.fn(),
   isTauriRuntime: false,
   layout: 'desktop' as 'desktop' | 'phone' | 'tablet',
+  mobileHandoff: 'unavailable' as 'checking' | 'leaving' | 'unavailable',
+  mobileHandoffReady: [] as boolean[],
+  mobileHandoffEligible: [] as boolean[],
   fetchAll: vi.fn(),
   restoreTabs: vi.fn(),
   connectToSession: vi.fn(),
@@ -39,6 +42,7 @@ vi.mock('../../lib/desktopRuntime', () => ({
   isDesktopRuntime: () => mocks.isTauriRuntime,
   isH5ConnectionRequiredError: (error: unknown) =>
     error instanceof Error && error.name === 'H5ConnectionRequiredError',
+  readStoredH5Connection: () => ({ serverUrl: null, token: null }),
 }))
 
 vi.mock('../../stores/settingsStore', () => ({
@@ -48,6 +52,17 @@ vi.mock('../../stores/settingsStore', () => ({
 
 vi.mock('../mobile/mobileShellLayout', () => ({
   useMobileShellLayout: () => mocks.layout,
+}))
+
+// The probe and redirect have their own suite; here only what the shell shows
+// while it runs, and when it is allowed to start.
+vi.mock('../mobile/mobileH5Handoff', () => ({
+  phoneAppCanAuthenticate: () => true,
+  useMobileH5Handoff: ({ ready, eligible }: { ready: boolean; eligible: () => boolean }) => {
+    mocks.mobileHandoffReady.push(ready)
+    if (ready) mocks.mobileHandoffEligible.push(eligible())
+    return mocks.mobileHandoff
+  },
 }))
 
 // The phone and tablet frame has its own suite against real stores; here only
@@ -161,6 +176,9 @@ describe('AppShell boot flow', () => {
     })
     mocks.isTauriRuntime = false
     mocks.layout = 'desktop'
+    mocks.mobileHandoff = 'unavailable'
+    mocks.mobileHandoffReady = []
+    mocks.mobileHandoffEligible = []
     mocks.initializeDesktopServerUrl.mockResolvedValue('http://127.0.0.1:3456')
     mocks.fetchAll.mockResolvedValue(undefined)
     mocks.restoreTabs.mockResolvedValue(undefined)
@@ -558,6 +576,31 @@ describe('AppShell boot flow', () => {
       expect(resolveProjectDisplayName('/workspace/project')).toBe('Mobile alias')
     })
     expect(mocks.getDesktopUiPreferences).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a phone for the phone app only after the connection is ready, without flashing the built-in shell', async () => {
+    mocks.layout = 'phone'
+    mocks.mobileHandoff = 'leaving'
+
+    render(<AppShell />)
+
+    await waitFor(() => expect(mocks.mobileHandoffEligible.at(-1)).toBe(true))
+    // Before bootstrap finished it was never asked to decide.
+    expect(mocks.mobileHandoffReady[0]).toBe(false)
+    expect(screen.getByText('app.launching')).toBeInTheDocument()
+    expect(screen.queryByTestId('mobile-shell-stub')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('sidebar-shell')).not.toBeInTheDocument()
+  })
+
+  it('never hands a desktop window to the phone app', async () => {
+    mocks.layout = 'desktop'
+    mocks.mobileHandoff = 'leaving'
+
+    render(<AppShell />)
+
+    await screen.findByText('content loaded')
+    expect(mocks.mobileHandoffEligible.length).toBeGreaterThan(0)
+    expect(mocks.mobileHandoffEligible.every((eligible) => !eligible)).toBe(true)
   })
 
   it('hands a touch tablet to the mobile shell instead of the desktop chrome', async () => {

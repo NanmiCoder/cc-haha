@@ -18,6 +18,8 @@ import {
 import { LockScreenPreview } from '../ui/liveActivity/LockScreenPreview'
 import { Text } from '../ui/Text'
 import { errorText } from '../ui/theme'
+import { Redirect } from 'expo-router'
+import { isH5 } from '../state/h5'
 
 const MODES: { value: LiveActivityMode; title: string; detail: string }[] = [
   {
@@ -32,12 +34,17 @@ const MODES: { value: LiveActivityMode; title: string; detail: string }[] = [
   },
 ]
 
+/** 锁屏实时活动只属于原生 App；网页版只连接打开它的这台电脑，直接回首页。 */
+export default function LiveActivitySettingsRoute() {
+  return isH5 ? <Redirect href="/" /> : <LiveActivitySettings />
+}
+
 /**
  * 锁屏与灵动岛：实时活动什么时候出现、是否露出命令。
  * 实时活动总开关在系统设置里，JS 读不到它的状态（expo-widgets 没有对应接口），
  * 所以这里只提供入口，不假装知道开没开。
  */
-export default function LiveActivitySettings() {
+function LiveActivitySettings() {
   const colors = useColors()
   const { preferences, update } = usePreferences()
   const [error, setError] = useState('')
