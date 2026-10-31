@@ -3,7 +3,7 @@
   "version": "999.0.0-local",
   "private": true,
   "type": "module",
-  "packageManager": "bun@1.4.3",
+  "packageManager": "bun@1.4.4",
   "bin": {
     "claude-haha": "./bin/claude-haha"
   },
