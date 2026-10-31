@@ -3234,6 +3234,8 @@ export const jp: Record<TranslationKey, string> = {
   'chat.dismiss': '閉じる',
   'chat.stopTitle': '生成を停止 (Cmd+.)',
   'chat.generationStopped': '停止しました',
+  'chat.backgroundContinue': 'バックグラウンドタスクの結果を受けて自動的に続行：{summary}',
+  'chat.backgroundContinueGeneric': 'バックグラウンドタスクが終了したため自動的に続行',
   'chat.jumpToLatest': '最新',
   'chat.memorySavedTitle': '{count} 件のメモリファイルを保存しました',
   'chat.memorySavedFromToolsTitle': '{count} 件のメモリ項目を保存しました',

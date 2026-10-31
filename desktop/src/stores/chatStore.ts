@@ -218,6 +218,13 @@ export type PerSessionState = {
   pendingBackgroundTaskStopFailures?: Record<string, string>
   stopAllSubagentsRequested?: boolean
   awaitingReconnectSync?: boolean
+  /**
+   * Summaries of background tasks that reached a terminal state since the last
+   * turn started. When the CLI then re-enters the model on its own (no send,
+   * no replayed user message), they explain the reply that would otherwise
+   * appear from nowhere. Cleared when any turn starts or completes.
+   */
+  pendingBackgroundNotices?: string[]
   /** A socket gap started before this history lifecycle finished hydration. */
   preHydrationSocketGapPending?: boolean
   historyBootstrapDisabled?: boolean
@@ -1559,13 +1566,21 @@ function dropDuplicateTranscriptTextMessages(messages: UIMessage[]): UIMessage[]
   return changed ? deduped : messages
 }
 
-function collapseDuplicateStoppedStatuses(messages: UIMessage[]): UIMessage[] {
+type SystemNoticeMessage = Extract<UIMessage, { type: 'system' }>
+
+/** Live and restored copies of the same notice sit next to each other. */
+function isSameSystemNoticeKind(a: SystemNoticeMessage, b: SystemNoticeMessage): boolean {
+  return (a.generationStopped === true && b.generationStopped === true) ||
+    (a.backgroundContinue === true && b.backgroundContinue === true)
+}
+
+export function collapseDuplicateSystemNotices(messages: UIMessage[]): UIMessage[] {
   let changed = false
   const collapsed: UIMessage[] = []
   for (const message of messages) {
     const previous = collapsed.at(-1)
-    if (message.type === 'system' && message.generationStopped &&
-      previous?.type === 'system' && previous.generationStopped) {
+    if (message.type === 'system' && previous?.type === 'system' &&
+      isSameSystemNoticeKind(message, previous)) {
       changed = true
       if (message.transcriptMessageId && !previous.transcriptMessageId) {
         collapsed[collapsed.length - 1] = message
@@ -1707,7 +1722,7 @@ function mergeRestoredHistoryIntoLiveMessages(
   messages: UIMessage[],
   restoredMessages: UIMessage[],
 ): UIMessage[] {
-  return collapseDuplicateStoppedStatuses(mergeRestoredTerminalGoalEvents(
+  return collapseDuplicateSystemNotices(mergeRestoredTerminalGoalEvents(
     mergeRestoredParentToolMessages(
       dropDuplicateTranscriptTextMessages(
         mergeRestoredTranscriptMessageIds(messages, restoredMessages),
@@ -2184,7 +2199,7 @@ function mergeColdRestoredHistoryIntoLiveMessages(
     ordered.push(...(beforeRows.get(index)?.reverse() ?? []))
     if (index < restoredCount) ordered.push(merged[index]!)
   }
-  return collapseDuplicateStoppedStatuses(ordered)
+  return collapseDuplicateSystemNotices(ordered)
 }
 
 function needsTranscriptIdHydrationRetry(session: PerSessionState | undefined): boolean {
@@ -3559,6 +3574,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             messages: newMessages,
             scheduledTaskTurn: false,
             historyPageLoading: false,
+            pendingBackgroundNotices: [],
             chatState: 'thinking',
             isPreparingTurn: false,
             historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
@@ -4804,6 +4820,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
       streamingFallback: null,
       replaceHistoryOnCompletion: false,
       queuedUserMessages: [],
+      pendingBackgroundNotices: [],
     })) }))
   },
 
@@ -5196,6 +5213,8 @@ export const useChatStore = create<ChatStore>((setState, get) => {
         if (msg.blockType === 'text') {
           update((s) => ({
             ...(pendingText !== s.streamingText ? { streamingText: pendingText } : {}),
+            messages: withBackgroundContinueNotice(s, s.messages, Date.now()),
+            pendingBackgroundNotices: [],
             chatState: 'streaming',
             activeThinkingId: null,
             apiRetry: null,
@@ -5207,9 +5226,10 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           const toolUseId = msg.toolUseId ?? null
           const toolName = msg.toolName ?? 'unknown'
           update((s) => ({
+            pendingBackgroundNotices: [],
             ...(toolUseId
               ? {
-                  messages: upsertToolUseMessage(s.messages, toolUseId, (existing) => ({
+                  messages: upsertToolUseMessage(withBackgroundContinueNotice(s, s.messages, Date.now()), toolUseId, (existing) => ({
                     id: existing?.id ?? nextId(),
                     type: 'tool_use',
                     toolName,
@@ -5435,7 +5455,11 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           }
           const id = nextId()
           return {
-            messages: [...base, { id, type: 'thinking', content: msg.text, timestamp: Date.now() }],
+            messages: [
+              ...withBackgroundContinueNotice(s, base, Date.now()),
+              { id, type: 'thinking', content: msg.text, timestamp: Date.now() },
+            ],
+            pendingBackgroundNotices: [],
             chatState: 'thinking',
             activeThinkingId: id,
             streamingText: '',
@@ -5761,6 +5785,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
           apiRetry: null,
           streamingFallback: null,
           replaceHistoryOnCompletion: false,
+          pendingBackgroundNotices: [],
           historyMutationEpoch: (current.historyMutationEpoch ?? 0) + 1,
         }))
         useTabStore.getState().updateTabStatus(sessionId, hasRunningBackgroundAgents ? 'running' : 'idle')
@@ -5803,6 +5828,7 @@ export const useChatStore = create<ChatStore>((setState, get) => {
             activeThinkingId: null,
             replaceHistoryOnCompletion: false,
             stopAllSubagentsRequested: false,
+            pendingBackgroundNotices: [],
             historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
           }
         })
@@ -6247,6 +6273,17 @@ export const useChatStore = create<ChatStore>((setState, get) => {
                       }
                     : {}),
                 },
+                ...(accepted &&
+                (taskEvent.status === 'completed' ||
+                  taskEvent.status === 'failed' ||
+                  taskEvent.status === 'stopped')
+                  ? {
+                      pendingBackgroundNotices: [
+                        ...(session.pendingBackgroundNotices ?? []),
+                        taskEvent.summary ?? task?.description ?? '',
+                      ],
+                    }
+                  : {}),
                 historyMutationEpoch: (session.historyMutationEpoch ?? 0) + 1,
               }
               }),
@@ -6552,6 +6589,52 @@ function shouldHideCommandMetadataContent(content: unknown): boolean {
 function isTaskNotificationContent(content: unknown): boolean {
   const textBlocks = extractHistoryTextBlocks(content)
   return textBlocks.length > 0 && textBlocks.every((text) => extractTaskNotificationXml(text) !== null)
+}
+
+/** Every notification in a block: settled agents are batched into one prompt. */
+function extractAllTaskNotificationXml(text: string): string[] {
+  return [...text.matchAll(/<task-notification>\s*[\s\S]*?<\/task-notification>/gi)].map((match) => match[0])
+}
+
+function taskNotificationSummaries(content: unknown): string[] {
+  return extractHistoryTextBlocks(content)
+    .flatMap((text) => extractAllTaskNotificationXml(text))
+    .map((xml) => readXmlTag(xml, 'summary') ?? '')
+}
+
+/**
+ * The line shown where a hidden <task-notification> turn sits. The model did
+ * not speak on its own: a background task finished (or was stopped) and the
+ * CLI handed its result back. Without the line the reply looks like it came
+ * from nowhere, long after the task card scrolled away, which reads as the
+ * model "waking up" after the chat went idle.
+ */
+function buildBackgroundContinueNotice(summaries: string[]): string {
+  const unique = [...new Set(summaries.map((summary) => summary.trim()).filter(Boolean))]
+  return unique.length > 0
+    ? t('chat.backgroundContinue', { summary: unique.join(' · ') })
+    : t('chat.backgroundContinueGeneric')
+}
+
+/**
+ * Prepend the notice to a turn the client did not start. A send or a replayed
+ * user message puts the session in a non-idle state (and clears the pending
+ * notices) before any output, so an idle session receiving output right after
+ * terminal task notifications is the CLI re-entering the model by itself.
+ */
+function withBackgroundContinueNotice(
+  session: PerSessionState,
+  messages: UIMessage[],
+  timestamp: number,
+): UIMessage[] {
+  if (session.chatState !== 'idle' || !session.pendingBackgroundNotices?.length) return messages
+  return [...messages, {
+    id: nextId(),
+    type: 'system',
+    content: buildBackgroundContinueNotice(session.pendingBackgroundNotices),
+    backgroundContinue: true,
+    timestamp,
+  }]
 }
 
 function extractTaskNotificationXml(text: string): string | null {
@@ -8048,11 +8131,22 @@ export function mapHistoryMessagesToUiMessages(
   let pendingGoalCommand: { name: string; args: string } | null = null
 
   for (const msg of messages) {
-    // A task notification is a system-injected prompt: the background task
-    // cards already stand for it. What the assistant does in the turn that
-    // answers it (thinking, text, tool calls) is ordinary transcript content
-    // and stays visible.
-    if (msg.type === 'user' && isTaskNotificationContent(msg.content)) continue
+    // A task notification is a system-injected prompt. Its XML is never shown,
+    // but the turn it opens is: a one-line notice says which background task
+    // handed its result back, so the reply that follows has a visible cause.
+    // What the assistant does in that turn (thinking, text, tool calls) is
+    // ordinary transcript content and stays visible.
+    if (msg.type === 'user' && isTaskNotificationContent(msg.content)) {
+      uiMessages.push({
+        id: msg.id || nextId(),
+        type: 'system',
+        content: buildBackgroundContinueNotice(taskNotificationSummaries(msg.content)),
+        backgroundContinue: true,
+        ...(msg.id ? { transcriptMessageId: msg.id } : {}),
+        timestamp: new Date(msg.timestamp).getTime(),
+      })
+      continue
+    }
     if (msg.type === 'user') {
       const commandDisplayText = getCommandMetadataDisplayText(msg.content)
       if (commandDisplayText) {
