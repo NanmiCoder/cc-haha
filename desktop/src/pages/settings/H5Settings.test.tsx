@@ -52,6 +52,15 @@ it('shows one grouped list: connection, provider, phone-editable preferences, an
   expect(desktopOnly).toHaveTextContent('MCP')
   expect(within(desktopOnly).queryAllByRole('button')).toHaveLength(0)
 })
+it('explains thinking mode and Ultracode on the browser settings list too', () => {
+  render(<H5Settings />)
+  const thinking = screen.getByRole('button', { name: 'What is thinking mode?' })
+  expect(thinking.previousElementSibling).toHaveTextContent('Enable thinking mode')
+  expect(screen.getByRole('button', { name: 'What is Ultracode?' })).toBeInTheDocument()
+  fireEvent.click(thinking)
+  expect(screen.getByRole('dialog', { name: 'What is thinking mode?' })).toHaveTextContent('non-thinking mode')
+})
+
 it('opens the model provider page from the list and comes back', async () => {
   useUIStore.setState({ activeSettingsTab: 'general' })
   render(<H5Settings />)

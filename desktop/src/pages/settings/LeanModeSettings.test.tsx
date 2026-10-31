@@ -58,4 +58,13 @@ describe('LeanModeSettings feedback', () => {
     expect(toggle).not.toBeDisabled()
     expect(screen.getByRole('status')).toHaveTextContent('已开启')
   })
+
+  it('explains lean mode from a help button that leaves the switch alone', () => {
+    render(<LeanModeSettings />)
+    const toggle = screen.getByRole('switch', { name: '启用精简模式' })
+    fireEvent.click(screen.getByRole('button', { name: '精简模式是什么？' }))
+    expect(screen.getByRole('dialog', { name: '精简模式是什么？' })).toHaveTextContent('用不了 MCP 连接器')
+    expect(toggle).not.toBeChecked()
+    expect(settingsApi.updateUser).not.toHaveBeenCalled()
+  })
 })

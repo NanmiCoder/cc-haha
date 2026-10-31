@@ -122,6 +122,29 @@ describe('SettingsSwitchRow', () => {
     render(<SettingsSwitchRow title="Enable" checked onChange={() => {}} disabled />)
     expect(screen.getByRole('switch', { name: 'Enable' })).toBeDisabled()
   })
+
+  it('puts the help slot beside the title without folding it into the switch name', () => {
+    const onChange = vi.fn()
+    render(
+      <SettingsSwitchRow
+        title="Enable Auto-dream"
+        help={<button type="button">What is Auto-dream?</button>}
+        checked={false}
+        onChange={onChange}
+      />,
+    )
+    const help = screen.getByRole('button', { name: 'What is Auto-dream?' })
+    expect(help.previousElementSibling).toHaveTextContent('Enable Auto-dream')
+    expect(screen.getByRole('switch', { name: 'Enable Auto-dream' })).toBeInTheDocument()
+    fireEvent.click(help)
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  it('keeps the title markup unchanged when there is no help', () => {
+    const { container } = render(<SettingsSwitchRow title="Enable" checked onChange={() => {}} />)
+    const title = screen.getByText('Enable')
+    expect(title.parentElement).toBe(container.querySelector('.min-w-0.flex-1'))
+  })
 })
 
 describe('SettingsPill', () => {
