@@ -135,6 +135,12 @@ Product Design 0.1.55、Sites 0.1.62、Deep Research 0.1.15、Finances 0.1.0、O
 
 Atlassian 采用当前官方 v2/mcp，Webflow 采用当前 /mcp。Airtable 公开授权元数据包含 registration_endpoint、none、S256。Asana v2、HubSpot、Box 要求预注册客户端，暂未收录；Vercel 和 Wix 的通用客户端互操作边界未核实，不以市场展示替代可接入证据。
 
+### Keenable 增补（2026-10-31）
+
+- **Keenable**：`https://api.keenable.ai/mcp-public?keenable_title=cc-haha`；{"type": "none"}。[官方文档](https://docs.keenable.ai/mcp-server)。`/mcp-public` 是匿名入口，与 `/mcp` 提供相同工具，但不发布 OAuth 发现元数据，客户端不会先提示登录（[官方配置示例](https://docs.keenable.ai/integrations/antigravity)）。不带 `X-API-Key` 时服务按公共匿名额度应答，[认证说明](https://docs.keenable.ai/authentication)给出的匿名额度为每个 IP 每小时 1000 次、每秒 10 次。工具为 `search_web_pages`、`fetch_page_content`。
+
+匿名调用以 `X-Keenable-Title` 标明来源应用；[API 参考](https://docs.keenable.ai/api-reference#authentication)说明无法设置请求头时用 `?keenable_title=` 传同一值。`none` 认证不生成请求头，因此写在 endpoint 查询参数中，不含任何凭据。API Key 只提高额度；当前 recipe 没有可选密钥形态，与 Exa、Context7 一样只收录匿名方式。2026-10-31 在 macOS ARM64 用 `createRemoteConnectorBridge().check()` 匿名连接（内存凭据桩，未访问钥匙串）：tools/list 返回 2 个工具，同一连接调用 `search_web_pages` 两次，各返回 10 条结果。
+
 ## 国内目录补充（2026-09-14，10 家供应商）
 
 以下配置核验于供应商官网、公开文档与官网提供的静态资源，没有使用真实账号、注册 OAuth 客户端或调用业务工具。公共 WorkBuddy 包仅作为发现线索，最终以供应商通用客户端配置为准；同一供应商的专题服务没有拆成多个品牌来增加数量。

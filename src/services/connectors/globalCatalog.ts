@@ -184,5 +184,19 @@ export const GLOBAL_ENTRIES: RemoteCatalogEntry[] = [
       "type": "oauth"
     },
     "region": "global"
+  },
+  {
+    "id": "keenable",
+    "name": "Keenable",
+    "category": "search",
+    "description": "搜索网页并读取页面正文，辅助资料研究。",
+    "example": "搜索近期关于 MCP 协议的技术文章，并列出来源链接。",
+    "requirements": "无需 API Key，使用官方匿名访问额度，按 IP 限流（每秒 10 次、每小时 1000 次）；超出时服务会返回限制。",
+    "source": "https://docs.keenable.ai/mcp-server",
+    "endpoint": "https://api.keenable.ai/mcp-public?keenable_title=cc-haha",
+    "auth": {
+      "type": "none"
+    },
+    "region": "global"
   }
 ]

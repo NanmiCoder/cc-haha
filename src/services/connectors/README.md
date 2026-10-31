@@ -1,6 +1,6 @@
 # Desktop office connectors
 
-The application ships 55 entries: 46 service connectors and 9 skill tool bundles.
+The application ships 56 entries: 47 service connectors and 9 skill tool bundles.
 Service connectors use either a pinned native CLI or an official remote MCP
 endpoint. Tool bundles contain pinned upstream skills and supporting files.
 `pluginBridge.ts` reuses plugin caching, marketplace registration, enablement,
@@ -151,9 +151,9 @@ field is established for their exact status commands.
 
 ## Expanded directory and remote MCP connectors
 
-The desktop directory contains 46 services across office, productivity,
+The desktop directory contains 47 services across office, productivity,
 development, search, maps, data, design, finance and legal research. The original
-three CLI adapters are joined by 43 official HTTP MCP endpoints documented in
+three CLI adapters are joined by 44 official HTTP MCP endpoints documented in
 `research.md` and `remoteCatalog.ts`. GLM search additionally follows
 https://docs.bigmodel.cn/cn/coding-plan/mcp/search-mcp-server and requires the
 appropriate Coding Plan key. Directory presence does not mean a service account
@@ -189,7 +189,7 @@ asset provenance is recorded in desktop/public/connectors/SOURCES.md.
 
 ## 2026-09-14：服务与工具目录
 
-当前内置 55 项：22 个国内服务、24 个全球服务，以及 9 个技能工具包（其中 4 个在插件目录展示，5 个在技能目录展示）。此前增补的服务按供应商和工作流归类，不把同一家数据平台的多个子接口重复计为多家服务。
+当前内置 56 项：22 个国内服务、25 个全球服务，以及 9 个技能工具包（其中 4 个在插件目录展示，5 个在技能目录展示）。此前增补的服务按供应商和工作流归类，不把同一家数据平台的多个子接口重复计为多家服务。
 
 目录是随应用发布的只读定义：
 
