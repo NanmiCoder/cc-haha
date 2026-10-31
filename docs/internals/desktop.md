@@ -75,6 +75,10 @@ Renderer 不应直接导入 Electron，也不应自行拼接任意 IPC channel�
 
 Server 可绑定局域网可访问地址以支持 H5，但桌面 Renderer 使用 loopback 控制地址。H5、远程访问和宠物窗口分别经过其对应的 Token 与能力限制，不能因为本地 Server 已启动就假定所有来源都可信。
 
+健康检查是 `/health` 轮询，总超时 30 秒。超时不会杀掉 sidecar：进程仍由 `startingServer` 持有，下一次 `getServerUrl()`（例如用户点「重试」或渲染进程的恢复请求）会继续探测**同一个**进程，而不是重新 spawn。这样本地索引重建或事件循环繁忙导致的慢启动可以一直跑完，不会每次超时都把进度清零。只有三种情况会终止它：用户退出或显式停止（`stopAll` / `stopAllAndWait`）、子进程自己 exit、以及显式「重启服务」。
+
+超时文案区分两种状态：端口未监听（`never started listening on <host>:<port>`，多半还在初始化索引）与端口已监听但 `/health` 未应答（`is listening on <host>:<port> but did not answer`，事件循环被长任务阻塞）。两者都会附加最后一次探测的具体错误，但都不包含 `Recent server logs:` 标记，因此会完整显示在启动失败弹窗的正文里。
+
 ### Sidecar 入口
 
 `desktop/sidecars/claude-sidecar.ts` 是统一入口：

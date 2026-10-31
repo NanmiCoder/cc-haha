@@ -84,6 +84,10 @@ type ServerStartState = {
   child: SidecarChild
   adapterChildren: SidecarChild[]
   childStopped: boolean
+  readonly port: number
+  readonly url: string
+  readonly logs: string[]
+  readonly generation: number
   readonly failure: Error | null
   failurePromise: Promise<never>
   fail: (error: Error) => void
@@ -96,16 +100,31 @@ type ActiveServer = {
   startedAt: number
 }
 
-function createServerStartState(child: SidecarChild): ServerStartState {
+type ServerStartInput = {
+  child: SidecarChild
+  port: number
+  url: string
+  logs: string[]
+  generation: number
+}
+
+function createServerStartState(input: ServerStartInput): ServerStartState {
   let failure: Error | null = null
   let rejectFailure!: (error: Error) => void
   const failurePromise = new Promise<never>((_resolve, reject) => {
     rejectFailure = reject
   })
+  // A retained start state outlives the call that raced it, so its rejection
+  // must never surface as an unhandled rejection (#1746).
+  void failurePromise.catch(() => undefined)
   return {
-    child,
+    child: input.child,
     adapterChildren: [],
     childStopped: false,
+    port: input.port,
+    url: input.url,
+    logs: input.logs,
+    generation: input.generation,
     get failure() {
       return failure
     },
@@ -183,8 +202,22 @@ export class ElectronServerRuntime {
     if (this.server) return this.server.url
     if (this.startPromise) return await this.startServer()
     this.assertRestartCircuitAllowsStart()
-    if (this.startupError && !this.restartAfterExit) throw new Error(this.startupError)
+    // A retained start state means the sidecar is alive but not healthy yet
+    // (typically a local index rebuild). Retrying must resume probing it, not
+    // replay the previous timeout error or spawn a second process (#1746).
+    if (this.startupError && !this.restartAfterExit && !this.hasReusablePendingStart()) {
+      throw new Error(this.startupError)
+    }
     return await this.startServer()
+  }
+
+  /** Whether a previously spawned sidecar is still alive and worth re-probing. */
+  private hasReusablePendingStart(): boolean {
+    const pending = this.startingServer
+    return pending !== null &&
+      pending.generation === this.lifecycleGeneration &&
+      !pending.failure &&
+      !pending.childStopped
   }
 
   getLocalAccessToken(): string {
@@ -357,6 +390,13 @@ export class ElectronServerRuntime {
   }
 
   private async startServerOnce(generation: number): Promise<string> {
+    // A sidecar from a previous, timed-out attempt is still alive. Probing it
+    // again is the whole recovery: the local index rebuild that made it slow is
+    // cumulative, so the same process finishes it instead of restarting from
+    // zero (#1746).
+    const pending = this.hasReusablePendingStart() ? this.startingServer : null
+    if (pending) return await this.awaitPendingServer(pending)
+
     // Prefer the configured fixed port, then the previous run's port, so
     // phone bookmarks / QR codes / reverse proxies survive restarts (#767).
     const port = await this.deps.reserveServerPort(
@@ -365,7 +405,6 @@ export class ElectronServerRuntime {
     )
     const url = `http://${SERVER_CONTROL_HOST}:${port}`
     const logs: string[] = []
-    let startState: ServerStartState | null = null
     const env = this.withServerAccessTokens(await this.resolveSidecarBaseEnv())
     this.assertCurrentGeneration(generation)
     const plan = createServerPlan({
@@ -378,15 +417,37 @@ export class ElectronServerRuntime {
         : env,
     })
 
+    let startState: ServerStartState
     try {
       const child = this.deps.spawnSidecar(plan)
-      startState = createServerStartState(child)
+      startState = createServerStartState({ child, port, url, logs, generation })
       this.startingServer = startState
       this.captureLogs(child, 'claude-server', logs, (code, signal) => {
         this.handleServerExit(child, code, signal, logs)
       }, error => {
         this.handleServerError(child, error, logs)
       })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.deps.appendHostDiagnostic(this.diagnosticsFile, `[claude-server] [startup-error] ${message}`)
+      this.startupError = formatStartupError(message, logs)
+      throw new Error(this.startupError)
+    }
+
+    return await this.awaitPendingServer(startState)
+  }
+
+  /**
+   * Wait for an already spawned sidecar to report healthy. A startup timeout is
+   * a retryable state, not a reason to kill the process: the child stays owned
+   * by `startingServer` so the next `getServerUrl()` re-probes it (#1746).
+   */
+  private async awaitPendingServer(startState: ServerStartState): Promise<string> {
+    const { child, port, url, logs, generation } = startState
+
+    try {
+      this.assertCurrentGeneration(generation)
+      this.startingServer = startState
       await Promise.race([
         this.deps.waitForServer(SERVER_CONTROL_HOST, port, SERVER_STARTUP_TIMEOUT_MS),
         startState.failurePromise,
@@ -409,26 +470,33 @@ export class ElectronServerRuntime {
         ])
       }
       if (startState.failure) throw startState.failure
+      this.startingServer = null
       this.onServerReady?.()
       return url
     } catch (error) {
-      if (startState) {
+      if (startState.failure) {
+        // The child reported its own failure; it is already gone.
+        if (this.startingServer === startState) this.startingServer = null
+        throw new Error(this.startupError ?? startState.failure.message)
+      }
+      if (this.server?.child === child) {
+        // Published, but adapter startup failed. Keep the previous contract of
+        // tearing down rather than advertising a URL without its adapters.
+        this.server = null
         this.stopAdaptersForStart(startState)
-        if (this.server?.child === startState.child) this.server = null
         if (!startState.childStopped) {
           startState.childStopped = true
-          this.deps.killSidecar(startState.child)
+          this.deps.killSidecar(child)
         }
-      }
-      if (startState?.failure) {
-        throw new Error(this.startupError ?? startState.failure.message)
+        if (this.startingServer === startState) this.startingServer = null
+      } else if (!this.hasReusablePendingStart()) {
+        if (this.startingServer === startState) this.startingServer = null
+        this.stopAdaptersForStart(startState)
       }
       const message = error instanceof Error ? error.message : String(error)
       this.deps.appendHostDiagnostic(this.diagnosticsFile, `[claude-server] [startup-error] ${message}`)
       this.startupError = formatStartupError(message, logs)
       throw new Error(this.startupError)
-    } finally {
-      if (this.startingServer === startState) this.startingServer = null
     }
   }
 
@@ -608,7 +676,12 @@ export class ElectronServerRuntime {
     }
     this.restartAfterExit = true
     this.startupError = formatStartupError(message, logs)
-    if (starting) this.startingServer?.fail(new Error(message))
+    if (starting) {
+      // The process is gone; a later retry must spawn a fresh one instead of
+      // re-probing (and then killing) the dead child.
+      this.startingServer!.childStopped = true
+      this.startingServer!.fail(new Error(message))
+    }
     if (failedServer && !starting) {
       const now = this.deps.now()
       if (now - failedServer.startedAt >= AUTOMATIC_RESTART_STABLE_MS) {

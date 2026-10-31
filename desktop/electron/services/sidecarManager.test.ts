@@ -815,12 +815,22 @@ describe('Electron sidecar manager', () => {
     const port = await listen(server)
 
     try {
+      // The port is open, so the failure is a busy event loop rather than a
+      // missing bind; the message has to say which one (#1746).
       await expect(waitForServer('127.0.0.1', port, 300)).rejects.toThrow(
-        /desktop server did not report healthy at http:\/\/127\.0\.0\.1:\d+\/health/,
+        /is listening on 127\.0\.0\.1:\d+ but did not answer/,
       )
     } finally {
       await close(server)
     }
+  })
+
+  it('reports a never-bound port as not listening instead of unhealthy', async () => {
+    const port = await reserveLocalPort('127.0.0.1')
+
+    await expect(waitForServer('127.0.0.1', port, 300)).rejects.toThrow(
+      /never started listening on 127\.0\.0\.1:\d+/,
+    )
   })
 
   it('isolates health probes from the shared HTTP connection pool', async () => {

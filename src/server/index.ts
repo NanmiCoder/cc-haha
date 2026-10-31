@@ -284,11 +284,12 @@ export function startServer(port = PORT, host = HOST) {
   if (!migrationMaintenance.isActive) getMobilePushService().start(id => [...publicAccessServers].some(remote => remote.isDeviceActive(id)))
   let server: ReturnType<typeof Bun.serve<WebSocketData>>
 
-  // Open SQLite before the first REST request. Discovery still runs in the
-  // background; without this, getPublicStatus() reports `off` and the sidebar
-  // falls through to a full JSONL scan that can exceed the 120s client timeout.
-  if (!migrationMaintenance.isActive) void localIndexCoordinator.start().catch(() => undefined)
-
+  // Index startup runs after `Bun.serve` (see below), never before it. Opening
+  // SQLite and scanning `source_files` happen before the first `await` inside
+  // `localIndexCoordinator.start()`, so doing that here kept the port unbound
+  // for the whole synchronous pass — every host probe then looked like a dead
+  // sidecar (issue #1746). Requests that need the index still await it in the
+  // `fetch` handler.
   try {
     server = Bun.serve<WebSocketData>({
       port,

@@ -1437,6 +1437,61 @@ describe('local index coordinator', () => {
     await restarted.stop()
   })
 
+  it('logs the startup timeline and names a pending parser rebuild', async () => {
+    const lines: string[] = []
+    const index = createFakeIndex([candidate(1), candidate(2)])
+    // Both sources were projected by an older parser, so the fingerprint
+    // comparison forces a full re-projection on the next start (#1746).
+    for (const source of index.listSources()) source.parserVersion = 12
+    const coordinator = createLocalIndexCoordinator({
+      resolveMode: () => ({ mode: 'on', warningCode: null }),
+      resolveScope: () => '/tmp/config',
+      resolveDatabasePath: () => '/tmp/config/index.sqlite',
+      openDatabase: () => fakeDatabase(() => {}),
+      createIndex: () => index,
+      createProjector: () => ({
+        async projectSource() {
+          return {
+            kind: 'indexed',
+            action: 'unchanged',
+            projection: {
+              summary: {
+                title: 'existing',
+                createdAt: '2026-01-01T00:00:00.000Z',
+                modifiedAt: '2026-01-01T00:00:00.000Z',
+                messageCount: 1,
+                workDir: null,
+              },
+              indexedBytes: 1,
+              pendingTailBytes: 0,
+              malformedLineCount: 0,
+            },
+            work: { maxBufferedChunks: 0, maxBufferedBytes: 0 },
+          }
+        },
+        async deleteSource() {
+          return { kind: 'deleted' }
+        },
+      }),
+      discoverSources: async () => [candidate(1), candidate(2)],
+      log: line => lines.push(line),
+    })
+
+    await coordinator.start()
+    // Committed rows already serve `ready`; wait for the background generation
+    // to finish so the phase-completion lines exist.
+    await waitFor(() => lines.some(line => line.startsWith('discovery complete')))
+    await coordinator.stop()
+
+    expect(lines[0]).toMatch(/^opening .*index\.sqlite$/)
+    expect(lines).toContainEqual(expect.stringMatching(/^opened in \d+ ms$/))
+    expect(lines).toContain(`rebuilding 2 sources (parser v12 → v${SESSION_SUMMARY_PARSER_VERSION})`)
+    expect(lines).toContainEqual(expect.stringMatching(/^discovery start \(2 known sources\)$/))
+    expect(lines).toContainEqual(expect.stringMatching(
+      /^discovery complete: 2 discovered, 2 indexed, 0 degraded in \d+ ms$/,
+    ))
+  })
+
   it('keeps old rows when discovery fails transiently and exposes a sanitized degraded state', async () => {
     const existing = candidate(1)
     const index = createFakeIndex([existing])
