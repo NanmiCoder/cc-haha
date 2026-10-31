@@ -503,9 +503,10 @@ it('moves phone-browser users to LAN and focuses its tab without enabling access
   const methods = document.getElementById(screen.getByRole('button', { name: 'Use phone browser' }).getAttribute('aria-controls')!)!
   const scrollIntoView = vi.fn()
   methods.scrollIntoView = scrollIntoView
-  expect(screen.getByRole('button', { name: 'Download Android APK' })).toBeDisabled()
-  expect(screen.getByRole('button', { name: 'Join TestFlight beta' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Download from GitHub' })).not.toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Join TestFlight beta' })).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: 'Use phone browser' }))
+  expect(mocks.open).not.toHaveBeenCalled()
   expect(lan).toHaveAttribute('aria-selected', 'true')
   expect(lan).toHaveFocus()
   expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' })
