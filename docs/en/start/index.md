@@ -34,7 +34,7 @@ If you'd rather stay in the terminal, the CLI is still there: see [Command line]
 
 **Runs on a schedule.** Tidy up logs every morning, audit dependencies every week — set a job on a schedule and it clocks in on its own, leaving a record of each run.
 
-**Follows you to your phone.** Turn on H5 access, scan a QR code, and pick the conversation back up on your phone. Or connect Telegram, Feishu, or WeChat and drive it from a chat window.
+**Follows you to your phone.** Install the cc-haha app on Android or iPhone and pair it by scanning the QR code under **Phone connection** in the desktop app. Away from your computer, you can approve commands, answer questions, and start new tasks; without the app, scan the code with your phone's browser instead. Or connect Telegram, Feishu, or WeChat and drive it from a chat window. See [Mobile app and remote connection](../desktop/remote.md).
 
 ## Three commitments
 

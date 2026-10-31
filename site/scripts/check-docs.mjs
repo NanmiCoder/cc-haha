@@ -269,6 +269,57 @@ async function checkLocaleRedirect() {
   return problems
 }
 
+/**
+ * 首页文案里写死的文档路由和手机 App 下载地址。文档改名会让路由变成死链；
+ * 下载地址以桌面端设置页的 mobileAppLinks.ts 为准，换 TestFlight 链接时两边要一起改。
+ */
+async function checkLandingContent(routes) {
+  const problems = []
+  const landingPath = 'site/src/pages/home/landingContent.ts'
+  const appLinksPath = 'desktop/src/pages/settings/mobileAppLinks.ts'
+  const landing = await fs.readFile(path.join(paths.repoDir, landingPath), 'utf8')
+  const appLinks = await fs.readFile(path.join(paths.repoDir, appLinksPath), 'utf8')
+
+  const landingRoutes = [...landing.matchAll(/\broute:\s*'([^']+)'/g)].map((match) => match[1])
+  if (landingRoutes.length === 0) {
+    problems.push(`${landingPath}: 读不出任何 route，首页链接校验失效`)
+  }
+  for (const route of landingRoutes) {
+    if (!routes.has(normalizeRoute(route))) {
+      problems.push(`${landingPath}: 首页链接 ${route} 没有对应的文档页`)
+    }
+  }
+
+  // 英文首页的标题和描述写在四个地方：HTML 骨架、静态路由、页面运行时、首页文案。
+  const shell = await fs.readFile(path.join(paths.siteDir, 'index.html'), 'utf8')
+  const homePage = await fs.readFile(path.join(paths.siteDir, 'src/pages/home/HomePage.tsx'), 'utf8')
+  const staticOutput = await fs.readFile(path.join(paths.siteDir, 'scripts/prepare-static-output.mjs'), 'utf8')
+  const shellTitle = shell.match(/<title>([^<]+)<\/title>/)?.[1]
+  const shellDescription = shell.match(/<meta name="description" content="([^"]+)">/)?.[1]
+  if (!shellTitle || !shellDescription) {
+    problems.push('site/index.html: 读不出 <title> 或 description，首页元信息防漂移校验失效')
+  } else {
+    if (!homePage.includes(`'${shellTitle}'`)) problems.push(`site/src/pages/home/HomePage.tsx: 英文页标题与 index.html 的「${shellTitle}」不一致`)
+    if (!staticOutput.includes(`'${shellTitle}'`)) problems.push(`site/scripts/prepare-static-output.mjs: /en 标题与 index.html 的「${shellTitle}」不一致`)
+    const heroDescriptions = [...landing.matchAll(/description: \['([^']+)', '([^']+)'\]/g)].map((match) => `${match[1]} ${match[2]}`)
+    if (!heroDescriptions.includes(shellDescription)) problems.push(`${landingPath}: 英文首屏描述与 index.html 的 description 不一致`)
+    if (!staticOutput.includes(`'${shellDescription}'`)) problems.push('site/scripts/prepare-static-output.mjs: /en 描述与 index.html 的 description 不一致')
+  }
+
+  for (const key of ['android', 'testFlight']) {
+    const pattern = new RegExp(`\\b${key}:\\s*'([^']+)'`)
+    const site = landing.match(pattern)?.[1]
+    const app = appLinks.match(pattern)?.[1]
+    if (!site || !app) {
+      problems.push(`${landingPath} / ${appLinksPath}: 读不出 ${key} 下载地址，防漂移校验失效`)
+    } else if (site !== app) {
+      problems.push(`${landingPath}: ${key} 下载地址 ${site} 与 ${appLinksPath} 的 ${app} 不一致`)
+    }
+  }
+
+  return problems
+}
+
 async function main() {
   const { records } = await generateDocsManifest()
   const readmes = await Promise.all([
@@ -290,6 +341,7 @@ async function main() {
     ...records.map((record) => record.path),
   ])
   const problems = [...await checkLocaleRedirect()]
+  problems.push(...await checkLandingContent(routes))
   problems.push(...await checkReadmeImages(readmes))
   problems.push(...checkAppScreenshotReferences([
     ...readmes,
