@@ -12,6 +12,29 @@ import { resolveUpstreamHeaders } from '../proxy/upstreamHeaders.js'
 let tmpDir: string
 let originalConfigDir: string | undefined
 
+for (const baseUrl of ['https://api.minimax.io/anthropic', 'https://api.minimaxi.com/anthropic']) {
+  test(`new MiniMax defaults propagate while saved legacy/custom mappings survive: ${baseUrl}`, () => {
+    const preset = PROVIDER_PRESETS.find(p => p.id === 'minimax')!
+    const provider = {
+      id: 'minimax-fixture', name: 'MiniMax', presetId: preset.id,
+      apiKey: 'fake-key', authStrategy: preset.authStrategy, apiFormat: preset.apiFormat,
+      baseUrl, models: preset.defaultModels,
+    }
+    expect(buildProviderManagedEnv(provider)).toMatchObject({
+      ANTHROPIC_BASE_URL: baseUrl,
+      ANTHROPIC_MODEL: 'MiniMax-M3.1-Flash[1m]',
+      ANTHROPIC_DEFAULT_SONNET_MODEL_SUPPORTED_CAPABILITIES: 'thinking,required_thinking,effort,adaptive_thinking,xhigh_effort,max_effort',
+      ANTHROPIC_DEFAULT_OPUS_MODEL: 'MiniMax-M3[1m]',
+    })
+    expect(buildProviderManagedEnv({ ...provider, models: {
+      main: 'MiniMax-M2.7', haiku: 'custom-background', sonnet: 'MiniMax-M2.5', opus: 'custom-primary',
+    } })).toMatchObject({
+      ANTHROPIC_MODEL: 'MiniMax-M2.7', ANTHROPIC_DEFAULT_HAIKU_MODEL: 'custom-background',
+      ANTHROPIC_DEFAULT_SONNET_MODEL: 'MiniMax-M2.5', ANTHROPIC_DEFAULT_OPUS_MODEL: 'custom-primary',
+    })
+  })
+}
+
 test.each(['gemini_native', 'xai_images'] as const)('keeps a preset image protocol %s through runtime configuration', protocol => {
   const preset = ProviderPresetSchema.parse({
     ...PROVIDER_PRESETS.find(p => p.id === 'apismart')!,
@@ -276,7 +299,13 @@ describe('provider presets API', () => {
       { region: 'global_en', baseUrl: 'https://api.minimax.io/anthropic' },
     ])
     expect(minimax?.authStrategy).toBe('auth_token')
-    expect(minimax?.defaultModels.main).toBe('MiniMax-M3[1m]')
+    expect(minimax?.defaultModels).toEqual({
+      main: 'MiniMax-M3.1-Flash[1m]',
+      haiku: 'MiniMax-M3.1-Flash[1m]',
+      sonnet: 'MiniMax-M3.1-Flash[1m]',
+      opus: 'MiniMax-M3[1m]',
+    })
+    expect(minimax?.modelContextWindows?.['MiniMax-M3.1-Flash']).toBe(1000000)
     expect(minimax?.defaultEnv?.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined()
     expect(minimax?.defaultEnv).toEqual({})
     expect(minimax?.modelContextWindows?.['MiniMax-M3']).toBe(1000000)
@@ -368,7 +397,7 @@ describe('provider presets API', () => {
     expect(kimi?.modelContextWindows?.k3).toBe(262144)
     expect(kimi?.modelContextWindows?.['kimi-for-coding']).toBe(262144)
     expect(kimi?.modelContextWindows?.['kimi-for-coding-highspeed']).toBe(262144)
-    expect(minimax?.apiKeyUrl).toBe('https://platform.minimaxi.com/subscribe/token-plan?code=1TG2Cseab2&source=link')
+    expect(minimax?.apiKeyUrl).toBe('https://platform.minimaxi.com')
     // Retired: no referral link, no promo copy, no featured slot.
     expect(shengsuanyun?.apiKeyUrl).toBeUndefined()
     expect(shengsuanyun?.promoText).toBeUndefined()

@@ -743,6 +743,14 @@ async function handleOpenaiChat(
 ): Promise<Response> {
   const knownDeepSeekHost = shouldUseDeepSeekReasoningCompat(baseUrl)
   const reasoningProfile = resolveModelReasoningProfile(body.model, 'openai_chat')
+  const upstreamUrl = new URL(baseUrl)
+  const host = upstreamUrl.hostname
+  const directMiniMax = ['api.minimax.io', 'api.minimaxi.com'].includes(host)
+  const currentMiniMax = reasoningProfile?.family === 'minimax' &&
+    /^(?:minimax\/)?minimax-m3(?:\.1-flash(?::free|-free)?)?$/i.test(body.model)
+  const miniMaxRoute = currentMiniMax && (directMiniMax || host === 'openrouter.ai' ||
+    (host === 'opencode.ai' && upstreamUrl.pathname.startsWith('/zen')))
+  const flash = miniMaxRoute && /m3\.1-flash/i.test(body.model)
   const url = buildOpenaiEndpoint(baseUrl, 'chat/completions')
   const imageContentMode = imageContentModeOverride ?? getOpenAIChatImageContentMode(url, body.model)
   const unsupportedReasoningFields = new Set([
@@ -751,11 +759,25 @@ async function handleOpenaiChat(
   ])
   let transformed = anthropicToOpenaiChat(body, {
     ...requestOptions,
-    roundTripReasoningContent: knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4',
+    roundTripReasoningContent: knownDeepSeekHost || reasoningProfile?.family === 'deepseek-v4' || miniMaxRoute,
     passThinkingToggle: knownDeepSeekHost && !unsupportedReasoningFields.has('thinking'),
     passReasoningEffort: !unsupportedReasoningFields.has('reasoning_effort'),
     imageContentMode,
   })
+  if (miniMaxRoute) {
+    if (flash && !['low', 'medium', 'high', 'xhigh', 'max'].includes(transformed.reasoning_effort ?? '')) {
+      transformed.reasoning_effort = 'max'
+    }
+    if (directMiniMax) {
+      // Native MiniMax separates reasoning from text and uses adaptive thinking.
+      transformed.reasoning_split = true
+      transformed.thinking = { type: !flash && body.thinking?.type === 'disabled' ? 'disabled' : 'adaptive' }
+    } else if (host === 'openrouter.ai' && transformed.reasoning_effort) {
+      // OpenRouter's normalized envelope tops out at xhigh, not native max.
+      transformed.reasoning = { effort: transformed.reasoning_effort === 'max' ? 'xhigh' : transformed.reasoning_effort }
+      delete transformed.reasoning_effort
+    }
+  }
   if (traceContext) {
     traceContext.protocolTrace = new ProtocolTraceObserver('openai_chat', transformed,
       resolveRequestCompatibility(body, { ...requestOptions, protocol: 'openai_chat' }).outputBudget)

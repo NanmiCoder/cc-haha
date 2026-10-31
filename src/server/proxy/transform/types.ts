@@ -59,6 +59,8 @@ export type OpenAIChatRequest = {
   tools?: OpenAITool[]
   tool_choice?: unknown
   reasoning_effort?: OpenAIReasoningEffort
+  reasoning?: { effort: OpenAIReasoningEffort }
+  reasoning_split?: boolean
   thinking?: { type: string }
   parallel_tool_calls?: boolean
   response_format?: { type: 'json_schema'; json_schema: { name: string; description?: string; schema: Record<string, unknown>; strict: boolean } }
