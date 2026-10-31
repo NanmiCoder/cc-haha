@@ -2,7 +2,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSy
 import path from 'node:path'
 import { PUBLIC_ACCESS_CONSENT_VERSION, type DesktopPublicAccessConfiguration, type DesktopPublicAccessStatus } from '../../src/lib/desktopHost/types'
 import { DEFAULT_PUBLIC_ACCESS_PORT, isPublicAccessConfiguration, normalizePublicAccessOrigin, readCloudflareTunnelToken } from '../../src/lib/desktopHost/publicAccessConfiguration'
-import { CloudflareTunnelError, routesReachGateway, startCloudflareTunnel, type CloudflareTunnel } from './cloudflareTunnel'
+import { CloudflareTunnelError, publishedGatewayOrigin, startCloudflareTunnel, type CloudflareTunnel } from './cloudflareTunnel'
 export { PUBLIC_ACCESS_CONSENT_VERSION } from '../../src/lib/desktopHost/types'
 
 export type PublicAccessStatus = DesktopPublicAccessStatus
@@ -73,6 +73,8 @@ export class PublicAccessManager {
   private wanted = false
   private disposed = false
   private pending: Promise<PublicAccessStatus> | null = null
+  /** What `start` callers await: the attempt's outcome, or its first wait for a Cloudflare route. */
+  private pendingResult: Promise<PublicAccessStatus> | null = null
   private pendingGeneration = 0
   private controller: AbortController | null = null
   private tunnel: CloudflareTunnel | null = null
@@ -104,7 +106,7 @@ export class PublicAccessManager {
       tunnelId: readCloudflareTunnelToken(this.settings.tunnelToken)?.tunnelId ?? null }
   }
 
-  private isConfigured() { return this.settings.mode === 'quick' || !!(this.settings.customUrl && this.settings.tunnelToken) }
+  private isConfigured() { return this.settings.mode === 'quick' || !!this.settings.tunnelToken }
   private current(generation: number) { return generation === this.generation && !this.disposed }
 
   async configure(configuration: DesktopPublicAccessConfiguration) {
@@ -150,7 +152,7 @@ export class PublicAccessManager {
     if (this.stopping || this.stopUnconfirmed) return Promise.reject(new Error('Remote gateway stop must be confirmed before enabling access'))
     if (consentVersion !== PUBLIC_ACCESS_CONSENT_VERSION || !this.isConfigured() || this.status.state === 'unconfigured' && this.status.error === 'configuration') return Promise.reject(new Error('Configuration and current consent required'))
     if (this.pending) {
-      if (this.pendingGeneration === this.generation) return this.pending
+      if (this.pendingGeneration === this.generation) return this.pendingResult!
       const generation = this.generation
       return this.pending.then(() => this.current(generation) ? this.start(consentVersion) : this.getStatus())
     }
@@ -162,15 +164,37 @@ export class PublicAccessManager {
     this.wanted = true
     if (this.retry) clearTimeout(this.retry)
     this.retry = null
-    const operation = this.connect(++this.generation)
+    let routeWaitStarted!: () => void
+    const routeWait = new Promise<void>(resolve => { routeWaitStarted = resolve })
+    const operation = this.connect(++this.generation, routeWaitStarted)
+    const result = Promise.race([operation, routeWait.then(() => this.getStatus())])
     this.pending = operation
+    this.pendingResult = result
     this.pendingGeneration = this.generation
-    const clear = () => { if (this.pending === operation) this.pending = null }
+    const clear = () => { if (this.pending === operation) { this.pending = null; this.pendingResult = null } }
     void operation.then(clear, clear)
-    return operation
+    return result
   }
 
-  private async connect(generation: number) {
+  /**
+   * A dashboard tunnel's setup wizard offers its route step only after it sees this connector,
+   * so the connector stays registered until a pushed route sends a hostname to the gateway.
+   */
+  private async waitForRoute(tunnel: CloudflareTunnel, port: number, generation: number, signal: AbortSignal, onWait: () => void) {
+    let routes = await tunnel.publishedRoutes(null, { timeoutMs: ROUTE_WAIT_MS, signal })
+    while (this.current(generation)) {
+      const origin = routes && publishedGatewayOrigin(routes, port, this.settings.customUrl || undefined)
+      if (origin) { this.status.error = null; return origin }
+      Object.assign(this.status, { phase: 'routing', error: routes?.some(route => route.hostname) ? 'route' : null })
+      onWait()
+      const next = await tunnel.publishedRoutes(routes, { signal })
+      if (next === routes && this.current(generation)) throw new CloudflareTunnelError('network', 'Cloudflare disconnected while waiting for a route')
+      routes = next
+    }
+    return null
+  }
+
+  private async connect(generation: number, onRouteWait: () => void) {
     const controller = new AbortController()
     this.controller = controller
     Object.assign(this.status, { state: this.retryCount ? 'reconnecting' : 'connecting', error: null, phase: 'preparing', publicUrl: null })
@@ -181,7 +205,7 @@ export class PublicAccessManager {
       const { proxyUrl } = await this.options.backend.request<{ proxyUrl: string | null }>('/network', 'GET')
       if (!this.current(generation)) return this.getStatus()
       const tunnel = await (this.options.startTunnel ?? startCloudflareTunnel)({
-        mode: this.settings.mode, localPort: port, publicUrl: this.settings.customUrl || undefined,
+        mode: this.settings.mode, localPort: port,
         token: this.settings.mode === 'named' ? this.settings.tunnelToken : undefined,
         proxyUrl: proxyUrl || undefined, signal: controller.signal,
         onPhase: () => { if (this.current(generation)) this.status.phase = 'connecting' },
@@ -194,7 +218,9 @@ export class PublicAccessManager {
       }
       this.tunnel = tunnel
       this.unsubscribe = tunnel.onExit(() => { if (this.current(generation) && this.wanted) void this.recoverAfterExit() })
-      await this.options.backend.request('/origin', 'PUT', { publicUrl: tunnel.url })
+      const publicUrl = tunnel.url ?? await this.waitForRoute(tunnel, port, generation, controller.signal, onRouteWait)
+      if (!publicUrl || !this.current(generation)) return this.getStatus()
+      await this.options.backend.request('/origin', 'PUT', { publicUrl })
       if (!this.current(generation)) return this.getStatus()
       this.status.phase = 'checking'
       let verified = false
@@ -203,14 +229,8 @@ export class PublicAccessManager {
         if (!this.current(generation)) return this.getStatus()
         if (result.ok === true) { verified = true; break }
       }
-      if (!verified) {
-        // A missing or misdirected route is not a network outage, so it is not retried.
-        const routes = this.settings.mode === 'named' ? await tunnel.publishedRoutes(ROUTE_WAIT_MS) : null
-        if (!this.current(generation)) return this.getStatus()
-        if (routes && !routesReachGateway(routes, tunnel.url, port)) throw new CloudflareTunnelError('route', 'The tunnel publishes no route from this hostname to the gateway')
-        throw new CloudflareTunnelError(proxyUrl ? 'proxy' : 'network', 'The public hostname does not reach this remote gateway')
-      }
-      Object.assign(this.status, { publicUrl: tunnel.url, state: 'online', phase: null })
+      if (!verified) throw new CloudflareTunnelError(proxyUrl ? 'proxy' : 'network', 'The public hostname does not reach this remote gateway')
+      Object.assign(this.status, { publicUrl, state: 'online', phase: null })
       this.retryCount = 0
     } catch (error) {
       if (error instanceof CloudflareTunnelError && error.retryStop) {

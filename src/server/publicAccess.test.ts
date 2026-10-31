@@ -355,6 +355,18 @@ describe('public transport boundary', () => {
     }
   })
 
+  test('native sockets opt into tool image references and image reads stay on the session surface', async () => {
+    const f = fixture()
+    const { claim } = await f.pairNative()
+    const upgrades: Array<{ mediaRefs?: boolean }> = []
+    const server = { upgrade: (_request: Request, options: { data: { mediaRefs?: boolean } }) => { upgrades.push(options.data); return true } }
+    const headers = { Origin: 'https://fixture.trycloudflare.com', Authorization: `Bearer ${claim.token}` }
+    await f.service.fetch(new Request(`${f.base}/ws/fixture?media=ref`, { headers }), server as never)
+    await f.service.fetch(new Request(`${f.base}/ws/fixture`, { headers }), server as never)
+    expect(upgrades.map(data => data.mediaRefs)).toEqual([true, false])
+    expect(isPublicBusinessPathAllowed(new URL('https://x/api/sessions/s/tool-images/toolu_1/0?variant=full'), 'GET')).toBe(true)
+  })
+
   test('rejected or expired native pairings never issue a bearer token', async () => {
     const f = fixture()
     const code = await (await f.control('pairing')).json()

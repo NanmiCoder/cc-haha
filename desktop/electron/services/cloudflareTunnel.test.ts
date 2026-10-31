@@ -9,9 +9,9 @@ import { type spawn } from 'node:child_process'
 import {
   CloudflareTunnelError,
   cloudflareProcessEnvironment,
+  publishedGatewayOrigin,
   readPublishedRoutes,
   resolveBundledCloudflared,
-  routesReachGateway,
   startCloudflareTunnel,
   type CloudflareTunnel,
   type CloudflareTunnelDependencies,
@@ -166,12 +166,12 @@ describe('Quick Tunnel readiness', () => {
 describe('named tunnels and proxy routing', () => {
   const token = 'eyJ-fake-credential-only-for-a-test'
 
-  it('uses the configured HTTPS origin and keeps the token out of process arguments and errors', async () => {
+  it('is ready once registered, before any hostname is routed, and keeps the token out of process arguments and errors', async () => {
     const f = fixture()
-    const pending = f.start({ mode: 'named', token, publicUrl: 'https://Pocket.Example.com/' })
+    const pending = f.start({ mode: 'named', token })
     await f.spawned()
     f.child.stderr.write('Registered tunnel connection\n')
-    expect((await pending).url).toBe('https://pocket.example.com')
+    expect((await pending).url).toBeNull()
     const [, args, processOptions] = f.spawnFn.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv }]
     expect(args.at(-1)).toBe('run')
     expect(args).not.toContain('--url')
@@ -179,14 +179,9 @@ describe('named tunnels and proxy routing', () => {
     expect(processOptions.env.TUNNEL_TOKEN).toBe(token)
   })
 
-  it.each([
-    { options: { token: '', publicUrl: 'https://pocket.example.com' }, code: 'token' },
-    { options: { token: 'cloudflared service install mytoken', publicUrl: 'https://pocket.example.com' }, code: 'token' },
-    { options: { token, publicUrl: 'http://pocket.example.com' }, code: 'configuration' },
-    { options: { token, publicUrl: 'https://pocket.example.com/path' }, code: 'configuration' },
-  ])('rejects incomplete fixed-domain configuration before starting a process: %j', async ({ options, code }) => {
+  it.each(['', 'cloudflared service install mytoken'])('rejects a missing or non-credential token before starting a process: %j', async value => {
     const f = fixture()
-    await expect(f.start({ mode: 'named', ...options })).rejects.toMatchObject({ code })
+    await expect(f.start({ mode: 'named', token: value })).rejects.toMatchObject({ code: 'token' })
     expect(f.spawnFn).not.toHaveBeenCalled()
   })
 
@@ -194,7 +189,7 @@ describe('named tunnels and proxy routing', () => {
     const transport = { edgeAddresses: ['127.0.0.1:18301', '127.0.0.1:18302'], quickServiceUrl: 'http://127.0.0.1:18303/private-path', stop: vi.fn(async () => {}) }
     const startProxyTransport = vi.fn(async () => transport)
     const f = fixture({ startProxyTransport })
-    const pending = f.start({ mode, token, publicUrl: 'https://pocket.example.com', proxyUrl: 'http://127.0.0.1:7890' })
+    const pending = f.start({ mode, token, proxyUrl: 'http://127.0.0.1:7890' })
     await f.spawned()
     f.child.stderr.write('https://abc.trycloudflare.com\nRegistered tunnel connection\n')
     const tunnel = await pending
@@ -258,7 +253,7 @@ describe('connector cancellation and exit', () => {
 
   it('classifies an unparseable token as a token error without echoing it', async () => {
     const f = fixture()
-    const pending = f.start({ mode: 'named', token: 'fake-base64-token-for-this-test', publicUrl: 'https://pocket.example.com' })
+    const pending = f.start({ mode: 'named', token: 'fake-base64-token-for-this-test' })
     const outcome = pending.catch((error: unknown) => error)
     await f.spawned()
     f.child.stderr.write('Provided Tunnel token is not valid: fake-base64-token-for-this-test\n')
@@ -369,7 +364,7 @@ describe('named tunnel diagnostics', () => {
   it('stops a connector Cloudflare keeps refusing and blames the token instead of the network', async () => {
     const f = fixture({ timeoutMs: 60_000 })
     const settled = vi.fn()
-    const outcome = f.start({ mode: 'named', token, publicUrl: 'https://pocket.example.com' }).catch((error: unknown) => { settled(); return error })
+    const outcome = f.start({ mode: 'named', token }).catch((error: unknown) => { settled(); return error })
     await f.spawned()
     f.child.stderr.write(refusal)
     await new Promise(resolve => setTimeout(resolve, 5))
@@ -381,36 +376,60 @@ describe('named tunnel diagnostics', () => {
 
   it('accepts a connector that registers after a single refusal', async () => {
     const f = fixture()
-    const pending = f.start({ mode: 'named', token, publicUrl: 'https://pocket.example.com' })
+    const pending = f.start({ mode: 'named', token })
     await f.spawned()
     f.child.stderr.write(refusal)
     f.child.stderr.write('2026-10-30T08:46:23Z INF Registered tunnel connection connIndex=0 location=sjc10 protocol=http2\n')
-    expect((await pending).url).toBe('https://pocket.example.com')
+    await expect(pending).resolves.toMatchObject({ url: null })
   })
 
   // Shape of cloudflared's zerolog console line, with the config string quoted by strconv.Quote.
   const pushedConfiguration = String.raw`2026-10-30T08:46:22Z INF Updated to new configuration config="{\"ingress\":[{\"hostname\":\"phone.example.com\",\"originRequest\":{},\"service\":\"http://127.0.0.1:17463\"},{\"service\":\"http_status:404\"}],\"warp-routing\":{\"enabled\":false}}" version=3`
 
+  // A dashboard tunnel created moments ago: only the catch-all rule, no hostname yet.
+  const unroutedConfiguration = String.raw`2026-10-30T08:46:21Z INF Updated to new configuration config="{\"ingress\":[{\"service\":\"http_status:404\"}],\"warp-routing\":{\"enabled\":false}}" version=1`
+
   it('reads the routes Cloudflare pushes to a named connector after it is ready', async () => {
     const f = fixture()
-    const pending = f.start({ mode: 'named', token, publicUrl: 'https://phone.example.com' })
+    const pending = f.start({ mode: 'named', token })
     await f.spawned()
     f.child.stderr.write('Registered tunnel connection\n')
     const tunnel = await pending
-    const routes = tunnel.publishedRoutes(1_000)
+    const routes = tunnel.publishedRoutes(null, { timeoutMs: 1_000 })
     f.child.stderr.write(pushedConfiguration.slice(0, 90))
     f.child.stderr.write(`${pushedConfiguration.slice(90)}\n`)
     expect(await routes).toEqual([{ hostname: 'phone.example.com', service: 'http://127.0.0.1:17463' }, { service: 'http_status:404' }])
   })
 
-  it('reports unknown routes when none arrive in time or the connector exits', async () => {
+  it('wakes a route waiter when a hostname is published while the connector stays registered', async () => {
     const f = fixture()
-    const pending = f.start({ mode: 'named', token, publicUrl: 'https://phone.example.com' })
+    const pending = f.start({ mode: 'named', token })
+    await f.spawned()
+    f.child.stderr.write(`Registered tunnel connection\n${unroutedConfiguration}\n`)
+    const tunnel = await pending
+    const initial = await tunnel.publishedRoutes(null, { timeoutMs: 1_000 })
+    expect(initial).toEqual([{ service: 'http_status:404' }])
+    const settled = vi.fn()
+    const next = tunnel.publishedRoutes(initial).then(routes => { settled(); return routes })
+    await new Promise(resolve => setTimeout(resolve, 5))
+    expect(settled).not.toHaveBeenCalled()
+    expect(f.child.kill).not.toHaveBeenCalled()
+    f.child.stderr.write(`${pushedConfiguration}\n`)
+    expect(await next).toEqual([{ hostname: 'phone.example.com', service: 'http://127.0.0.1:17463' }, { service: 'http_status:404' }])
+  })
+
+  it('reports unchanged routes when the wait times out, is aborted, or the connector exits', async () => {
+    const f = fixture()
+    const pending = f.start({ mode: 'named', token })
     await f.spawned()
     f.child.stderr.write('Registered tunnel connection\n')
     const tunnel = await pending
-    expect(await tunnel.publishedRoutes(5)).toBeNull()
-    const waiting = tunnel.publishedRoutes(60_000)
+    expect(await tunnel.publishedRoutes(null, { timeoutMs: 5 })).toBeNull()
+    const cancel = new AbortController()
+    const cancelled = tunnel.publishedRoutes(null, { signal: cancel.signal })
+    cancel.abort()
+    expect(await cancelled).toBeNull()
+    const waiting = tunnel.publishedRoutes(null)
     f.child.emit('exit', 1, null)
     expect(await waiting).toBeNull()
   })
@@ -423,16 +442,28 @@ describe('named tunnel diagnostics', () => {
   })
 
   it.each([
-    [[{ hostname: 'phone.example.com', service: 'http://127.0.0.1:17463' }], true],
-    [[{ hostname: 'PHONE.example.com', service: 'http://localhost:17463/' }], true],
-    [[{ hostname: '*.example.com', service: 'http://127.0.0.1:17463' }], true],
-    [[{ service: 'http://127.0.0.1:17463' }], true],
-    [[{ hostname: 'phone.example.com', service: 'https://localhost:17463' }], false],
-    [[{ hostname: 'phone.example.com', service: 'http://127.0.0.1:8080' }], false],
-    [[{ hostname: 'phone.example.com', service: 'http://192.168.1.5:17463' }], false],
-    [[{ hostname: 'other.example.com', service: 'http://127.0.0.1:17463' }, { service: 'http_status:404' }], false],
-    [[], false],
-  ])('decides whether pushed routes reach the local gateway: %j', (routes, expected) => {
-    expect(routesReachGateway(routes, 'https://phone.example.com', 17463)).toBe(expected)
+    [[{ hostname: 'phone.example.com', service: 'http://127.0.0.1:17463' }], 'https://phone.example.com'],
+    [[{ hostname: 'PHONE.example.com', service: 'http://localhost:17463/' }], 'https://phone.example.com'],
+    [[{ hostname: 'blog.example.com', service: 'http://127.0.0.1:2368' }, { hostname: 'phone.example.com', service: 'http://127.0.0.1:17463' }], 'https://phone.example.com'],
+    [[{ hostname: '*.example.com', service: 'http://127.0.0.1:17463' }], null],
+    [[{ service: 'http://127.0.0.1:17463' }], null],
+    [[{ hostname: 'phone.example.com', service: 'https://localhost:17463' }], null],
+    [[{ hostname: 'phone.example.com', service: 'http://127.0.0.1:8080' }], null],
+    [[{ hostname: 'phone.example.com', service: 'http://192.168.1.5:17463' }], null],
+    [[{ hostname: 'phone.example.com:8443', service: 'http://127.0.0.1:17463' }], null],
+    [[{ service: 'http_status:404' }], null],
+    [[], null],
+  ])('finds the hostname whose pushed route reaches the local gateway: %j', (routes, expected) => {
+    expect(publishedGatewayOrigin(routes, 17463)).toBe(expected)
+  })
+
+  it.each([
+    [[{ hostname: 'other.example.com', service: 'http://127.0.0.1:17463' }, { hostname: 'phone.example.com', service: 'http://127.0.0.1:17463' }], 'https://phone.example.com'],
+    [[{ hostname: '*.example.com', service: 'http://127.0.0.1:17463' }], 'https://phone.example.com'],
+    [[{ service: 'http://127.0.0.1:17463' }], 'https://phone.example.com'],
+    [[{ hostname: 'other.example.com', service: 'http://127.0.0.1:17463' }], 'https://other.example.com'],
+    [[{ hostname: 'phone.example.com', service: 'http://127.0.0.1:8080' }], null],
+  ])('prefers an address saved by an older version when a gateway route covers it: %j', (routes, expected) => {
+    expect(publishedGatewayOrigin(routes, 17463, 'https://phone.example.com')).toBe(expected)
   })
 })

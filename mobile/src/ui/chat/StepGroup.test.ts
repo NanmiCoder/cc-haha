@@ -10,6 +10,7 @@ test('live tool groups show every step inline and keep the reader disclosure cho
     mock.module(${JSON.stringify(import.meta.resolve('../kit'))}, () => ({
       DiffView: 'DiffView', HaloDot: 'HaloDot', Icon: 'Icon', Mono: 'Mono', Spinner: 'Spinner', useColors: () => ({}),
     }))
+    mock.module(${JSON.stringify(import.meta.resolve('./ToolImages'))}, () => ({ ToolImageStrip: 'ToolImageStrip' }))
     const { StepGroup } = require(${JSON.stringify(import.meta.resolve('./StepGroup'))})
     const { chatReducer, createChatState } = require(${JSON.stringify(import.meta.resolve('../../core/chat'))})
     const { buildChatRows, toggleGroupOpen } = require(${JSON.stringify(import.meta.resolve('./steps'))})
@@ -67,6 +68,27 @@ test('live tool groups show every step inline and keep the reader disclosure cho
     ui = { expanded: new Set(), open: new Set(), closed: new Set() }
     const onlyCurrent = { ...group(), key: 'steps:current', live: true, steps: [{ id: 'current', type: 'tool', toolName: 'Bash', toolUseId: 'current', pending: true, input: { command: 'bun lint' } }] }
     assert.ok(labels(render(onlyCurrent)).includes('运行 bun lint'), 'the first unfinished tool must not vanish')
+
+    // A screenshot the agent read: under its step while open, under the summary once folded.
+    state = createChatState('screenshot')
+    ui = { expanded: new Set(), open: new Set(), closed: new Set() }
+    const shot = { type: 'image', source: { type: 'ref', media_type: 'image/png', url: '/api/sessions/s/tool-images/read-shot/0', width: 1920, height: 1139 } }
+    event({ type: 'content_start', blockType: 'tool_use', toolName: 'Read', toolUseId: 'read-shot' })
+    event({ type: 'tool_use_complete', toolName: 'Read', toolUseId: 'read-shot', input: { file_path: '/tmp/todo/shot-final.png' } })
+    event({ type: 'tool_result', toolUseId: 'read-shot', content: [shot], isError: false })
+    event({ type: 'content_start', blockType: 'tool_use', toolName: 'Bash', toolUseId: 'after-shot' })
+    const strips = nodes => nodes.filter(node => node.type === 'ToolImageStrip')
+    let open = render()
+    assert.equal(strips(open).length, 1, 'the live group shows the image under its step')
+    assert.deepEqual(strips(open)[0].props.images, [{ image: { mimeType: 'image/png', url: '/api/sessions/s/tool-images/read-shot/0', width: 1920, height: 1139 }, name: 'shot-final.png' }])
+    const order = open.filter(node => node.type === 'ToolImageStrip' || /^(读取|运行)/.test(node.props?.accessibilityLabel ?? ''))
+    assert.deepEqual(order.map(node => node.type === 'ToolImageStrip' ? 'strip' : node.props.accessibilityLabel.split(' ')[0]), ['读取', 'strip', '运行'])
+    event({ type: 'tool_result', toolUseId: 'after-shot', content: 'ok', isError: false })
+    event({ type: 'status', state: 'idle' })
+    const folded = render()
+    assert.equal(disclosure(folded).props.accessibilityState.expanded, false)
+    assert.equal(strips(folded).length, 1, 'a folded group keeps its images visible under the summary')
+    assert.equal(strips(folded)[0].props.images[0].name, 'shot-final.png')
   `
   try {
     execFileSync(process.execPath, ['--no-env-file', '-e', script], { stdio: ['ignore', 'pipe', 'pipe'] })

@@ -480,6 +480,7 @@ export function startServer(port = PORT, host = HOST) {
               sdkToken: null,
               serverPort,
               serverHost: localConnectHost,
+              mediaRefs: url.searchParams.get('media') === 'ref',
             },
           })
           if (upgraded) return undefined

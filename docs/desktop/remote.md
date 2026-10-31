@@ -96,13 +96,13 @@ H5 默认关闭，它也不是公开服务。开启前先确认你在自己信�
 
 此方式需要 Cloudflare 账号，以及已经添加到 Cloudflare 的自有域名。cc-haha 负责运行连接程序，你只需在 Cloudflare 创建隧道和配置域名。
 
-1. 在桌面 **手机连接 → 外出连接** 选择 **固定域名**。页面会显示要转发的 **Cloudflare Service URL**，默认是 `http://127.0.0.1:17463`。如果修改了下方的本机端口，以页面显示的实际地址为准。
+1. 在桌面 **手机连接 → 外出连接** 选择 **固定域名**。
 2. 点击 **打开 Cloudflare**，在 **Networking → Tunnels** 创建隧道。创建后页面会给出安装命令，复制其中任意一条即可。**不要在终端运行这些命令**：cc-haha 自带连接程序，执行 `cloudflared service install` 反而会在电脑上多装一个开机常驻的系统服务。
-3. 在这条隧道的 **Routes** 中添加 **Published application**，选择你要使用的域名，例如 `phone.example.com`。**Service URL** 原样填写第 1 步显示的本机地址，保留 `http://`，不要改成 `https://`。
-4. 回到 cc-haha，填写 **固定 HTTPS 地址**（例如 `https://phone.example.com`），把复制的命令粘贴到 **Tunnel Token**。页面会从命令里取出 Token，并显示识别到的隧道 ID，可以和 Cloudflare 页面上的 Tunnel ID 对照。然后点击 **开启连接**。
-5. 等待入口检查通过，用手机扫码，并在电脑批准配对。
+3. 回到 cc-haha，把复制的命令粘贴到 **Tunnel Token**。页面会从命令里取出 Token，并显示识别到的隧道 ID，可以和 Cloudflare 页面上的 Tunnel ID 对照。点击 **开启连接**，状态变为 **等待 Cloudflare 路由**；此时 Cloudflare 页面的 Connection Status 会显示已连接，**Continue** 变为可点。
+4. 在 Cloudflare 点击 **Continue**，添加 **Published application**：选择你要使用的域名，例如 `phone.example.com`；**Service URL** 原样填写 cc-haha 页面显示的本机地址，默认是 `http://127.0.0.1:17463`，保留 `http://`，不要改成 `https://`，也不要加路径。
+5. 保存后 cc-haha 会自动识别这个域名并检查入口。检查通过后用手机扫码，并在电脑批准配对。
 
-固定 HTTPS 地址只填写协议和域名，不要添加 `/remote`、其他路径、查询参数或登录信息。Cloudflare 应转发整个入口，页面、API 和 WebSocket 才能经过同一地址。完整配置步骤见 [Cloudflare 官方指南](https://developers.cloudflare.com/tunnel/get-started/)。
+Cloudflare 的创建向导要先看到连接程序在线，才会进入选择域名这一步，所以要先在 cc-haha 开启连接，再回到 Cloudflare 配置路由。不需要在 cc-haha 填写域名：它以隧道路由里 Service URL 指向本机地址的那个域名为准。如果这条隧道还有其他路由、但没有一条转到本机地址，页面会提示检查 Service URL。完整配置步骤见 [Cloudflare 官方指南](https://developers.cloudflare.com/tunnel/get-started/)。
 
 cc-haha 只保存命令里的 Token，不会执行命令；Token 只保存在这台电脑上，设置页不会回显。再次编辑时留空表示保留已保存的 Token；需要替换时粘贴新的命令。如果离开了 Cloudflare 的创建页面，可以在隧道详情页点 **Add a replica** 重新复制命令。固定域名保持不变、手机授权仍有效时，桌面重启并恢复隧道后，手机可以使用已保存的连接重新访问。
 
@@ -121,7 +121,7 @@ Cloudflare 连接使用 **设置 → 通用 → 网络代理** 中保存的方�
 | 一直处于连接中或显示网络错误 | 电脑网络、保存的代理模式，以及系统代理或手动代理是否可用；修改后重新开启连接 |
 | 提示代理连接失败 | 代理地址、端口、认证信息及代理是否允许连接 Cloudflare；不要把模型服务商专用代理误当作全局代理 |
 | 提示 Cloudflare 拒绝了 Tunnel Token | Token 属于别的隧道、已被轮换，或隧道已删除；在隧道详情页点 **Add a replica** 复制新的命令重新粘贴 |
-| 提示隧道路由没有转到本机 | 这条隧道的 Routes 里要有 Published application：域名与固定 HTTPS 地址一致，Service URL 与页面上的本机地址一致；也要确认粘贴的是同一条隧道的命令 |
+| 一直显示等待 Cloudflare 路由 | 在 Cloudflare 这条隧道的 Routes 中添加 Published application，Service URL 与页面上的本机地址一致；也要确认粘贴的是同一条隧道的命令 |
 | 固定域名连接失败 | HTTPS 域名的 DNS 是否已生效，以及电脑网络和代理是否可用 |
 | 电脑显示就绪，手机仍打不开 | 用手机蜂窝网络测试该域名；确认电脑仍在运行、联网且未休眠 |
 | 快速连接重启后旧地址失效 | 回到桌面使用新二维码；希望长期保留地址时改用固定域名 |

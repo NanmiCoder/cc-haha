@@ -133,7 +133,7 @@ for (const origin of ['https://workstation-fixture.trycloudflare.com', 'https://
     expect(result.host).toMatchObject({ url: origin, auth: 'remote' })
     expect(JSON.stringify(result.host)).not.toContain('fake-secret')
     expect(buildSocketOptions(result.host, result.credential, 'session', 'native')).toEqual({
-      url: `${origin.replace('https:', 'wss:')}/ws/session`,
+      url: `${origin.replace('https:', 'wss:')}/ws/session?media=ref`,
       headers: { Authorization: 'Bearer native_fake', Origin: origin },
     })
 

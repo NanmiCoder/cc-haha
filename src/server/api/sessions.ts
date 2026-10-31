@@ -32,6 +32,7 @@ import { handleSideChatsRoute } from './sideChats.js'
 import * as path from 'node:path'
 import { handleSideQuestionRoute } from './sideQuestions.js'
 import { sessionService } from '../services/sessionService.js'
+import { loadRenderedToolImage } from '../services/toolImageMedia.js'
 import { projectSessionBackgroundActivity, readSessionBackgroundTaskOutputFromTranscript } from '../services/sessionBackgroundActivity.js'
 import { getMobileSessionActivity } from '../services/mobileSessionActivityRuntime.js'
 import { conversationService } from '../services/conversationService.js'
@@ -227,6 +228,17 @@ export async function handleSessionsApi(
         )
       }
       return await getSessionMessages(req, sessionId, url)
+    }
+
+    if (subResource === 'tool-images') {
+      if (req.method !== 'GET') {
+        return Response.json(
+          { error: 'METHOD_NOT_ALLOWED', message: `Method ${req.method} not allowed` },
+          { status: 405 }
+        )
+      }
+      if (segments.length !== 6) throw ApiError.notFound('Tool image not found')
+      return await getToolImage(sessionId, segments[4], segments[5], url)
     }
 
     if (subResource === 'history-recovery' && req.method === 'GET') {
@@ -568,13 +580,39 @@ async function getSessionMessages(req: Request, sessionId: string, url: URL): Pr
   // A full read always starts from the tail; mixing it with a cursor would
   // silently turn it back into a paged read with a larger budget.
   if (mode === 'full' && cursor) throw ApiError.badRequest('mode=full does not take a cursor')
+  const media = url.searchParams.get('media')
+  if (media !== null && media !== 'ref') throw ApiError.badRequest('Invalid history media mode')
+  if (media === 'ref' && mode === 'full') throw ApiError.badRequest('media=ref is only available for paged history')
   return Response.json(await sessionService.getSessionHistoryPage(sessionId, {
     cursor,
     // `mode=full` returns the whole transcript up to the reader's byte budget in
     // one response so the desktop timeline never stitches pages together.
     full: mode === 'full',
+    // Remote clients fetch tool images by reference instead of inline base64.
+    mediaRefs: media === 'ref',
     signal: req.signal,
   }))
+}
+
+async function getToolImage(sessionId: string, rawToolUseId: string | undefined, rawIndex: string | undefined, url: URL): Promise<Response> {
+  let toolUseId = ''
+  try { toolUseId = decodeURIComponent(rawToolUseId ?? '') } catch { /* rejected below */ }
+  // Subagent results use `parent/child` scoped ids.
+  if (!/^[\w./:-]{1,300}$/.test(toolUseId) || !/^\d{1,2}$/.test(rawIndex ?? '')) throw ApiError.badRequest('Invalid tool image reference')
+  const variant = url.searchParams.get('variant') ?? 'thumb'
+  if (variant !== 'thumb' && variant !== 'full') throw ApiError.badRequest('Invalid tool image variant')
+  const image = await loadRenderedToolImage(sessionId, toolUseId, Number(rawIndex), variant, async () =>
+    (await sessionService.findSessionFile(sessionId))?.filePath ?? null)
+  if (!image) throw ApiError.notFound('Tool image not found')
+  return new Response(new Uint8Array(image.bytes), {
+    headers: {
+      'Content-Type': image.mediaType,
+      'Content-Length': String(image.bytes.length),
+      // A tool result never changes once recorded.
+      'Cache-Control': 'private, max-age=86400',
+      'X-Content-Type-Options': 'nosniff',
+    },
+  })
 }
 
 async function getSessionTrace(req: Request, sessionId: string, url: URL): Promise<Response> {

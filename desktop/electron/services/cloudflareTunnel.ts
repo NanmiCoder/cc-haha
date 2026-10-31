@@ -24,7 +24,6 @@ export class CloudflareTunnelError extends Error {
 export type CloudflareTunnelOptions = {
   mode: 'quick' | 'named'
   localPort: number
-  publicUrl?: string
   token?: string
   proxyUrl?: string
   signal?: AbortSignal
@@ -34,10 +33,15 @@ export type CloudflareTunnelOptions = {
 export type CloudflareTunnelExit = { code: number | null, signal: NodeJS.Signals | null }
 /** One ingress rule of the configuration Cloudflare pushes to a dashboard-managed tunnel. */
 export type CloudflareTunnelRoute = { hostname?: string, service?: string }
+export type CloudflareTunnelRouteWait = { timeoutMs?: number, signal?: AbortSignal }
 export type CloudflareTunnel = {
-  url: string
-  /** The latest pushed ingress rules, or null when none arrived within the wait. */
-  publishedRoutes(waitMs: number): Promise<CloudflareTunnelRoute[] | null>
+  /** The Quick Tunnel address. A named tunnel's hostname comes from its published routes. */
+  url: string | null
+  /**
+   * The latest pushed ingress rules (null before any arrive). Waits until they are no longer
+   * `seen`, the wait times out or is aborted, or the connector exits.
+   */
+  publishedRoutes(seen: CloudflareTunnelRoute[] | null, wait?: CloudflareTunnelRouteWait): Promise<CloudflareTunnelRoute[] | null>
   stop(): Promise<void>
   onExit(callback: (exit: CloudflareTunnelExit) => void): () => void
 }
@@ -102,23 +106,13 @@ function aborted(): Error {
   return error
 }
 
-function validateOptions(options: CloudflareTunnelOptions): string | undefined {
+function validateOptions(options: CloudflareTunnelOptions) {
   if ((options.mode !== 'quick' && options.mode !== 'named') ||
     !Number.isInteger(options.localPort) || options.localPort < 1024 || options.localPort > 65535) {
     throw new CloudflareTunnelError('configuration', 'Invalid Cloudflare connection configuration')
   }
-  if (options.mode === 'quick') return undefined
-  if (typeof options.token !== 'string' || !/^[A-Za-z0-9_+/=-]{20,8192}$/.test(options.token)) {
+  if (options.mode === 'named' && (typeof options.token !== 'string' || !/^[A-Za-z0-9_+/=-]{20,8192}$/.test(options.token))) {
     throw new CloudflareTunnelError('token', 'A Cloudflare Tunnel Token is required')
-  }
-  try {
-    const origin = new URL(options.publicUrl ?? '')
-    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
-      throw new Error('Invalid origin')
-    }
-    return origin.origin
-  } catch {
-    throw new CloudflareTunnelError('configuration', 'A fixed HTTPS address is required')
   }
 }
 
@@ -157,17 +151,38 @@ export function readPublishedRoutes(line: string): CloudflareTunnelRoute[] | nul
   } catch { return null }
 }
 
-/** Whether any pushed rule sends the public hostname to this computer's plain-HTTP gateway. */
-export function routesReachGateway(routes: CloudflareTunnelRoute[], publicUrl: string, localPort: number): boolean {
-  const host = new URL(publicUrl).hostname
-  return routes.some(route => {
-    const pattern = route.hostname?.toLowerCase()
-    if (pattern && pattern !== host && !(pattern.startsWith('*.') && host.endsWith(pattern.slice(1)))) return false
-    try {
-      const service = new URL(route.service ?? '')
-      return service.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(service.hostname) && Number(service.port) === localPort
-    } catch { return false }
-  })
+function reachesGateway(route: CloudflareTunnelRoute, localPort: number): boolean {
+  try {
+    const service = new URL(route.service ?? '')
+    return service.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(service.hostname) && Number(service.port) === localPort
+  } catch { return false }
+}
+
+function hostnameOrigin(hostname: string): string | null {
+  try {
+    const url = new URL(`https://${hostname}`)
+    return url.hostname === hostname.toLowerCase() && !url.port ? url.origin : null
+  } catch { return null }
+}
+
+/**
+ * The HTTPS origin whose pushed route sends traffic to this computer's plain-HTTP gateway.
+ * `preferred` wins when a matching rule covers it, including a wildcard or catch-all rule.
+ */
+export function publishedGatewayOrigin(routes: CloudflareTunnelRoute[], localPort: number, preferred?: string): string | null {
+  const gatewayRoutes = routes.filter(route => reachesGateway(route, localPort))
+  if (preferred) {
+    const host = new URL(preferred).hostname
+    if (gatewayRoutes.some(route => {
+      const pattern = route.hostname?.toLowerCase()
+      return !pattern || pattern === host || (pattern.startsWith('*.') && host.endsWith(pattern.slice(1)))
+    })) return preferred
+  }
+  for (const route of gatewayRoutes) {
+    const origin = route.hostname && !route.hostname.includes('*') ? hostnameOrigin(route.hostname) : null
+    if (origin) return origin
+  }
+  return null
 }
 
 /**
@@ -179,7 +194,7 @@ export async function startCloudflareTunnel(
   options: CloudflareTunnelOptions,
   dependencies: CloudflareTunnelDependencies = {},
 ): Promise<CloudflareTunnel> {
-  const namedUrl = validateOptions(options)
+  validateOptions(options)
   if (options.signal?.aborted) throw aborted()
   const binary = dependencies.binaryPath ?? resolveBundledCloudflared(dependencies.desktopRoot ?? process.cwd())
   try {
@@ -200,12 +215,12 @@ export async function startCloudflareTunnel(
   let exitInfo: CloudflareTunnelExit | undefined
   let startupSettled = false
   let startupTimer: ReturnType<typeof setTimeout> | undefined
-  let resolveStartup!: (url: string) => void
+  let resolveStartup!: (url: string | null) => void
   let rejectStartup!: (error: Error) => void
   let resolveExit!: () => void
   const exitCallbacks = new Set<(exit: CloudflareTunnelExit) => void>()
   const exit = new Promise<void>(resolve => { resolveExit = resolve })
-  const startup = new Promise<string>((resolve, reject) => { resolveStartup = resolve; rejectStartup = reject })
+  const startup = new Promise<string | null>((resolve, reject) => { resolveStartup = resolve; rejectStartup = reject })
   // A spawn or proxy setup failure can happen before startup is awaited.
   void startup.catch(() => {})
 
@@ -343,11 +358,11 @@ export async function startCloudflareTunnel(
         reject(new CloudflareTunnelError('token', 'Cloudflare refused this tunnel token'))
         return
       }
-      if (registered && (namedUrl || quickUrl)) {
+      if (registered && (options.mode === 'named' || quickUrl)) {
         startupSettled = true
         clearTimeout(startupTimer)
         phase(options, 'ready')
-        resolveStartup(namedUrl ?? quickUrl!)
+        resolveStartup(options.mode === 'quick' ? quickUrl! : null)
       }
     }
 
@@ -383,13 +398,19 @@ export async function startCloudflareTunnel(
     if (exited || options.signal?.aborted) throw options.signal?.aborted ? aborted() : new CloudflareTunnelError('network', 'Cloudflare disconnected before the connection was ready')
     return {
       url,
-      async publishedRoutes(waitMs) {
-        if (!routes && !exited && waitMs > 0) {
+      async publishedRoutes(seen, wait = {}) {
+        if (routes === seen && !exited && !wait.signal?.aborted && (wait.timeoutMs === undefined || wait.timeoutMs > 0)) {
           let timer: ReturnType<typeof setTimeout> | undefined
           await new Promise<void>(resolve => {
-            const release = () => { clearTimeout(timer); routeWaiters.delete(release); resolve() }
+            const release = () => {
+              clearTimeout(timer)
+              routeWaiters.delete(release)
+              wait.signal?.removeEventListener('abort', release)
+              resolve()
+            }
             routeWaiters.add(release)
-            timer = setTimeout(release, waitMs)
+            wait.signal?.addEventListener('abort', release, { once: true })
+            if (wait.timeoutMs !== undefined) timer = setTimeout(release, wait.timeoutMs)
           })
         }
         return routes

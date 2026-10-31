@@ -557,6 +557,33 @@ describe('paged transcript normalization', () => {
     ).toBe('user')
   })
 
+  test('keeps tool-result images from references and from older computers that inline them', () => {
+    const ref = { type: 'image', source: { type: 'ref', media_type: 'image/png', url: '/api/sessions/s/tool-images/toolu_shot/0', bytes: 1692780, width: 1920, height: 1139 } }
+    const inline = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGk=' } }
+    const items = normalizeHistory([
+      entry('a', 'tool_use', [{ type: 'tool_use', id: 'toolu_shot', name: 'Read', input: { file_path: '/tmp/shot.png' } }]),
+      entry('r', 'tool_result', [{ type: 'tool_result', tool_use_id: 'toolu_shot', content: [ref, inline, { type: 'text', text: 'note' }] }]),
+    ])
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({
+      toolName: 'Read',
+      text: 'note',
+      images: [
+        { mimeType: 'image/png', url: '/api/sessions/s/tool-images/toolu_shot/0', width: 1920, height: 1139 },
+        { mimeType: 'image/png', data: 'aGk=' },
+      ],
+    })
+    // A reference may only point at the tool-image route.
+    const hostile = { type: 'image', source: { type: 'ref', media_type: 'image/png', url: 'https://evil.example/x.png' } }
+    const live = run([
+      { type: 'tool_use_complete', toolUseId: 't', toolName: 'Read', input: {} },
+      { type: 'tool_result', toolUseId: 't', content: [ref, hostile], isError: false },
+    ])
+    expect(live.items[0]?.images).toEqual([{ mimeType: 'image/png', url: '/api/sessions/s/tool-images/toolu_shot/0', width: 1920, height: 1139 }])
+    const textOnly = run([{ type: 'tool_result', toolUseId: 'x', content: [{ type: 'text', text: 'plain' }], isError: false }])
+    expect(textOnly.items[0]).not.toHaveProperty('images')
+  })
+
   test('prepends older pages, deduplicates overlap and enforces source version', () => {
     const one = entry('one', 'user', 'First')
     const two = entry('two', 'assistant', 'Second')
