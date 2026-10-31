@@ -368,6 +368,14 @@ export function ChatComposer({
   const input = useRef<ComponentRef<typeof TextInput>>(null)
   const [bringOpen, setBringOpen] = useState(false)
   const [selection, setSelection] = useState({ start: draft.length, end: draft.length })
+  // 网页版只在输入框自己挪光标（插入候选、语音、底单）时才把光标交给输入框：
+  // 打字时每次都设光标，浏览器会打断拼音等输入法的组合输入。原生端照常受控。
+  const [caret, setCaret] = useState<{ start: number; end: number } | null>(null)
+  const moveCaret = (position: number) => {
+    const next = { start: position, end: position }
+    setSelection(next)
+    setCaret(next)
+  }
   const [candidates, setCandidates] = useState<ComposerCandidate[]>([])
   const [catalogError, setCatalogError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -383,7 +391,7 @@ export function ChatComposer({
     canSend: voiceCanSend,
     onDraft: (text, cursor) => {
       onDraft(text)
-      setSelection({ start: cursor, end: cursor })
+      moveCaret(cursor)
     },
     onSubmit: onSend,
     focus: () => requestAnimationFrame(() => input.current?.focus()),
@@ -440,7 +448,7 @@ export function ChatComposer({
     const next = insertComposerCandidate(draft, showCandidates ? trigger : null, candidate)
     onDraft(next.text)
     if (candidate.reference) onReferences(mergeComposerReferences(references, [candidate.reference]))
-    setSelection({ start: next.cursor, end: next.cursor })
+    moveCaret(next.cursor)
     requestAnimationFrame(() => input.current?.focus())
   }
   async function pick(kind: MaterialKind) {
@@ -563,12 +571,20 @@ export function ChatComposer({
             const cursor = Math.min(value.length, Math.max(0, selection.end + value.length - draft.length))
             onDraft(value)
             setSelection({ start: cursor, end: cursor })
+            setCaret(null)
           }}
-          selection={{
-            start: Math.min(selection.start, draft.length),
-            end: Math.min(selection.end, draft.length),
+          selection={
+            Platform.OS === 'web'
+              ? caret ?? undefined
+              : {
+                  start: Math.min(selection.start, draft.length),
+                  end: Math.min(selection.end, draft.length),
+                }
+          }
+          onSelectionChange={({ nativeEvent }) => {
+            setSelection(nativeEvent.selection)
+            setCaret(null)
           }}
-          onSelectionChange={({ nativeEvent }) => setSelection(nativeEvent.selection)}
           placeholder={composerPlaceholder({ queueing, empty })}
           placeholderTextColor={colors.ink3}
           {...(Platform.OS === 'web' ? { rows: 1 } : {})}
@@ -666,7 +682,7 @@ export function ChatComposer({
         onApply={(next) => {
           onDraft(next.draft)
           onReferences(next.references)
-          setSelection({ start: next.draft.length, end: next.draft.length })
+          moveCaret(next.draft.length)
           setBringOpen(false)
           requestAnimationFrame(() => input.current?.focus())
         }}
