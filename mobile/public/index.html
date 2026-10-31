@@ -36,7 +36,10 @@
       body {
         overflow: hidden;
       }
-      /* 跟随可见区域：软键盘弹起时整个应用缩到键盘上方（见下方脚本）。 */
+      /*
+        跟随可见区域：软键盘弹起时整个应用缩到键盘上方。
+        --cc-viewport-height 由 src/ui/webKeyboard.ts 写入。
+      */
       #root {
         display: flex;
         height: var(--cc-viewport-height, 100%);
@@ -45,10 +48,10 @@
     </style>
     <script>
       /*
-        手机浏览器的两处修正，和桌面 H5 的 touchH5.ts 同一套做法：
-        1. iOS 里字号小于 16px 的输入框获得焦点会放大整页且不缩回，锁定缩放比例。
-        2. 软键盘弹起时 iOS 不缩小布局视口，而是把整页往上推。把可见高度写进
-           --cc-viewport-height，让应用缩到键盘上方，再把被推走的滚动位置拉回 0。
+        iOS 手机浏览器的两处修正，和桌面 H5 的 touchH5.ts 同一套做法：
+        1. 字号小于 16px 的输入框获得焦点会放大整页且不缩回，锁定缩放比例。
+        2. 软键盘收起后页面可能停在被推上去的位置，焦点离开输入框时拉回 0。
+        键盘弹起时的适配在 src/ui/webKeyboard.ts。
       */
       (function () {
         try {
@@ -58,23 +61,6 @@
           if (ios) {
             var meta = document.querySelector('meta[name="viewport"]')
             if (meta) meta.setAttribute('content', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover')
-          }
-          var viewport = window.visualViewport
-          if (!viewport) return
-          var root = document.documentElement
-          var sync = function () {
-            var height = viewport.height
-            if (!(height > 0)) return
-            root.style.setProperty('--cc-viewport-height', Math.round(height) + 'px')
-            var keyboard = window.innerHeight - height > 80
-            if (keyboard) root.setAttribute('data-keyboard', '')
-            else root.removeAttribute('data-keyboard')
-            if (keyboard && (window.scrollX !== 0 || window.scrollY !== 0)) window.scrollTo(0, 0)
-          }
-          viewport.addEventListener('resize', sync)
-          viewport.addEventListener('scroll', sync)
-          sync()
-          if (ios) {
             window.addEventListener('focusout', function () {
               window.requestAnimationFrame(function () {
                 var active = document.activeElement
