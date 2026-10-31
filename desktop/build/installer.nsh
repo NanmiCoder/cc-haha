@@ -286,6 +286,17 @@ FunctionEnd
 !macroend
 !endif
 
+; electron-builder's IS_POWERSHELL_AVAILABLE runs Get-ExecutionPolicy in
+; Windows PowerShell 5.1. When setup inherits a PowerShell 7 PSModulePath (it
+; was started from pwsh, or by an app or tool running in pwsh), 5.1 tries to
+; load PowerShell 7's Microsoft.PowerShell.Security, the command fails, and
+; setup treats PowerShell as unavailable. The tasklist fallback then cannot see
+; executable paths and tells the user to close the running app manually.
+; Removing the variable lets every PowerShell child build its own default path.
+!macro CcHahaUseDefaultPowerShellModulePath
+  System::Call 'kernel32::SetEnvironmentVariable(w "PSModulePath", p 0)'
+!macroend
+
 !macro CcHahaFindInstallProcess _FILE _RETURN
   ${If} $IsPowerShellAvailable == 0
     nsExec::ExecToStack '"$PowerShellPath" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\check-install-processes.ps1" -InstallDir "$INSTDIR" -ProcessName "${_FILE}" -Action Find -InstallerPid "$pid" -InstallerParentPid "$1"'
@@ -304,17 +315,19 @@ FunctionEnd
   ${EndIf}
   ${If} $IsPowerShellAvailable != 0
     Delete "$PLUGINSDIR\cc-haha-processes.csv"
-    !ifdef INSTALL_MODE_PER_ALL_USERS
-      nsExec::Exec '"$CmdPath" /D /C tasklist /FO CSV /NH > "$PLUGINSDIR\cc-haha-processes.csv"'
-    !else
-      nsExec::Exec '"$CmdPath" /D /C tasklist /FI "USERNAME eq %USERNAME%" /FO CSV /NH > "$PLUGINSDIR\cc-haha-processes.csv"'
-    !endif
+    ; No USERNAME filter: it makes tasklist look up the owner of every process,
+    ; and that lookup can block forever, which froze setup and the silent
+    ; uninstaller with no message. Image names are all this fallback matches; a
+    ; same-named process of another user only makes it block setup with the
+    ; close-manually message, the fail-closed direction. The timeout turns any
+    ; other stall into the enumeration-failed message below.
+    nsExec::Exec /TIMEOUT=30000 '"$CmdPath" /D /C tasklist /FO CSV /NH > "$PLUGINSDIR\cc-haha-processes.csv"'
     Pop ${_RETURN}
     ${If} ${_RETURN} != 0
       StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable and tasklist process enumeration failed (exit code ${_RETURN}); blocking setup."
       StrCpy ${_RETURN} 0
     ${Else}
-      nsExec::Exec '"$SYSDIR\findstr.exe" /I /L /C:"${_FILE}" /C:"claude-sidecar-x86_64-pc-windows-msvc.exe" /C:"claude-sidecar-aarch64-pc-windows-msvc.exe" /C:"claude-sidecar.exe" /C:"OpenConsole.exe" /C:"winpty-agent.exe" /C:"rg.exe" "$PLUGINSDIR\cc-haha-processes.csv"'
+      nsExec::Exec /TIMEOUT=30000 '"$SYSDIR\findstr.exe" /I /L /C:"${_FILE}" /C:"claude-sidecar-x86_64-pc-windows-msvc.exe" /C:"claude-sidecar-aarch64-pc-windows-msvc.exe" /C:"claude-sidecar.exe" /C:"OpenConsole.exe" /C:"winpty-agent.exe" /C:"rg.exe" "$PLUGINSDIR\cc-haha-processes.csv"'
       Pop ${_RETURN}
       ${If} ${_RETURN} == 0
         StrCpy $ccHahaProcessDiagnostic "PowerShell unavailable; the main app, a known sidecar, or a bundled terminal/search helper is running with an unknown path. Close it manually."
@@ -353,6 +366,7 @@ FunctionEnd
 
 !macro customCheckAppRunning
   InitPluginsDir
+  !insertmacro CcHahaUseDefaultPowerShellModulePath
   !insertmacro IS_POWERSHELL_AVAILABLE
   ${If} $IsPowerShellAvailable == 0
     ; `File` aborts setup when a security tool blocks the .ps1 write (#1486);
